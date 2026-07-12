@@ -26,9 +26,9 @@ where
     object.insert(
         "projection_source".to_string(),
         json!({
-            "kind": "runtime_ledger",
-            "record_kind": "receipt",
-            "path": ledger.path,
+            "kind": "isolated_offline",
+            "record_kind": "ephemeral_trace",
+            "durable": false,
             "req_id": object.get("req_id").cloned().unwrap_or(Value::Null)
         }),
     );
@@ -48,12 +48,13 @@ mod tests {
     fn projection_preserves_current_flat_payload_shape() {
         let projected = project_semantic_payload(
             json!({"req_id": "req-1", "status": "ok"}),
-            LedgerProjection::written("runs/ledger.jsonl"),
+            LedgerProjection::skipped("isolated_offline_projection"),
         )
         .expect("projection");
 
         assert_eq!(projected["status"], "ok");
-        assert_eq!(projected["ledger"]["written"], true);
+        assert_eq!(projected["ledger"]["written"], false);
+        assert_eq!(projected["projection_source"]["kind"], "isolated_offline");
         assert_eq!(projected["projection_source"]["req_id"], "req-1");
     }
 

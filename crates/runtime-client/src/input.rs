@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
-use crate::{RuntimeClient, RuntimeClientError, RuntimeClientResult};
+use crate::{RuntimeClient, RuntimeClientError, RuntimeClientResult, RuntimeDebugSession};
 use actingcommand_contract::{InputAction, LeaseToken};
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, SyncSender};
@@ -16,11 +16,47 @@ struct ProxyState {
     heartbeat_failure: Option<RuntimeClientError>,
 }
 
+#[derive(Clone)]
+enum RuntimeInputAuthority {
+    Client(RuntimeClient),
+    Debug(RuntimeDebugSession),
+}
+
+impl RuntimeInputAuthority {
+    fn acquire_lease(&self, instance_alias: &str) -> RuntimeClientResult<LeaseToken> {
+        match self {
+            Self::Client(client) => client.acquire_lease(instance_alias),
+            Self::Debug(session) => session.acquire_lease(instance_alias),
+        }
+    }
+
+    fn renew_lease(&self, token: &LeaseToken) -> RuntimeClientResult<LeaseToken> {
+        match self {
+            Self::Client(client) => client.renew_lease(token),
+            Self::Debug(session) => session.renew_lease(token),
+        }
+    }
+
+    fn input(&self, token: &LeaseToken, action: InputAction) -> RuntimeClientResult<()> {
+        match self {
+            Self::Client(client) => client.input(token, action),
+            Self::Debug(session) => session.input(token, action).map(|_| ()),
+        }
+    }
+
+    fn release_lease(&self, token: &LeaseToken) -> RuntimeClientResult<()> {
+        match self {
+            Self::Client(client) => client.release_lease(token),
+            Self::Debug(session) => session.release_lease(token),
+        }
+    }
+}
+
 /// Connection-scoped write lease that sends typed input commands to the resident Runtime.
 ///
 /// This proxy owns no device backend. Device-specific adapters belong outside runtime-client.
 pub struct RuntimeInputProxy {
-    client: RuntimeClient,
+    authority: RuntimeInputAuthority,
     state: Arc<Mutex<ProxyState>>,
     stop: Option<SyncSender<()>>,
     heartbeat: Option<JoinHandle<()>>,
@@ -29,11 +65,38 @@ pub struct RuntimeInputProxy {
 
 impl RuntimeInputProxy {
     pub fn connect(client: RuntimeClient, instance_alias: &str) -> RuntimeClientResult<Self> {
-        Self::connect_with_heartbeat(client, instance_alias, DEFAULT_RUNTIME_HEARTBEAT_INTERVAL)
+        Self::connect_authority(
+            RuntimeInputAuthority::Client(client),
+            instance_alias,
+            DEFAULT_RUNTIME_HEARTBEAT_INTERVAL,
+        )
+    }
+
+    pub fn connect_debug(
+        session: RuntimeDebugSession,
+        instance_alias: &str,
+    ) -> RuntimeClientResult<Self> {
+        Self::connect_authority(
+            RuntimeInputAuthority::Debug(session),
+            instance_alias,
+            DEFAULT_RUNTIME_HEARTBEAT_INTERVAL,
+        )
     }
 
     pub fn connect_with_heartbeat(
         client: RuntimeClient,
+        instance_alias: &str,
+        heartbeat_interval: Duration,
+    ) -> RuntimeClientResult<Self> {
+        Self::connect_authority(
+            RuntimeInputAuthority::Client(client),
+            instance_alias,
+            heartbeat_interval,
+        )
+    }
+
+    fn connect_authority(
+        authority: RuntimeInputAuthority,
         instance_alias: &str,
         heartbeat_interval: Duration,
     ) -> RuntimeClientResult<Self> {
@@ -43,19 +106,24 @@ impl RuntimeInputProxy {
                 "connect_runtime_input_proxy",
             ));
         }
-        let token = client.acquire_lease(instance_alias)?;
+        let token = authority.acquire_lease(instance_alias)?;
         let state = Arc::new(Mutex::new(ProxyState {
             token,
             heartbeat_failure: None,
         }));
         let (stop, receiver) = mpsc::sync_channel(1);
         let thread_state = Arc::clone(&state);
-        let thread_client = client.clone();
+        let thread_authority = authority.clone();
         let heartbeat = thread::Builder::new()
             .name("actingcommand-runtime-heartbeat".to_string())
             .spawn(move || {
                 let result = catch_unwind(AssertUnwindSafe(|| {
-                    heartbeat_loop(&thread_client, &thread_state, &receiver, heartbeat_interval)
+                    heartbeat_loop(
+                        &thread_authority,
+                        &thread_state,
+                        &receiver,
+                        heartbeat_interval,
+                    )
                 }));
                 if result.is_err() {
                     let mut state = match thread_state.lock() {
@@ -75,14 +143,14 @@ impl RuntimeInputProxy {
                     "runtime_input_proxy_heartbeat_spawn_failed",
                     "start_runtime_heartbeat",
                 );
-                return Err(match client.release_lease(&lock_proxy(&state)?.token) {
+                return Err(match authority.release_lease(&lock_proxy(&state)?.token) {
                     Ok(()) => spawn_error,
                     Err(release_error) => spawn_error.with_related(release_error),
                 });
             }
         };
         Ok(Self {
-            client,
+            authority,
             state,
             stop: Some(stop),
             heartbeat: Some(heartbeat),
@@ -108,7 +176,7 @@ impl RuntimeInputProxy {
                 "proxy_input",
             ));
         }
-        self.client.input(&state.token, action)
+        self.authority.input(&state.token, action)
     }
 
     pub fn close(&mut self) -> RuntimeClientResult<()> {
@@ -148,7 +216,7 @@ impl RuntimeInputProxy {
                 if let Some(error) = &state.heartbeat_failure {
                     merge_failure(&mut failure, error.clone());
                 }
-                if let Err(error) = self.client.release_lease(&state.token) {
+                if let Err(error) = self.authority.release_lease(&state.token) {
                     merge_failure(&mut failure, error);
                 }
             }
@@ -170,7 +238,7 @@ impl Drop for RuntimeInputProxy {
 }
 
 fn heartbeat_loop(
-    client: &RuntimeClient,
+    authority: &RuntimeInputAuthority,
     state: &Mutex<ProxyState>,
     stop: &Receiver<()>,
     heartbeat_interval: Duration,
@@ -183,7 +251,7 @@ fn heartbeat_loop(
                     Ok(state) => state,
                     Err(_) => return,
                 };
-                match client.renew_lease(&state.token) {
+                match authority.renew_lease(&state.token) {
                     Ok(token) => state.token = token,
                     Err(error) => {
                         state.heartbeat_failure = Some(error);

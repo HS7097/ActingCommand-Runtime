@@ -112,7 +112,7 @@
             summary
                 .pointer("/projection_source/kind")
                 .and_then(Value::as_str),
-            Some("runtime_ledger")
+            Some("runtime_global_ledger")
         );
         assert_eq!(
             summary
@@ -145,7 +145,7 @@
             .expect("relative evidence path");
         assert!(temp.path().join(evidence_relative_path).is_file());
         let events = zip_text(&mut archive, "logs/events.jsonl");
-        assert!(events.contains("runtime_ledger"));
+        assert!(!events.trim().is_empty());
         let diagnostics: Value = serde_json::from_reader(
             archive
                 .by_name("logs/diagnostics.json")

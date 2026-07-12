@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
-use actingcommand_contract::{LabError, LabResult};
+use actingcommand_contract::{LabError, LabResult, ProjectedEvent};
 use actingcommand_ledger::{LastResortError, LedgerRead, LedgerRecord, LightEvent, SessionHeader};
 use serde::{Serialize, de::DeserializeOwned};
+use serde_json::Value;
 use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone)]
@@ -96,7 +97,26 @@ impl LedgerLastResort {
 }
 
 #[derive(Debug, Clone)]
-pub struct LedgerReadback(LedgerRead);
+pub(crate) struct RuntimeLedgerProjection {
+    correlation_id: String,
+    events: Vec<Value>,
+}
+
+impl RuntimeLedgerProjection {
+    pub(crate) fn correlation_id(&self) -> &str {
+        &self.correlation_id
+    }
+
+    pub(crate) fn events(&self) -> &[Value] {
+        &self.events
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct LedgerReadback {
+    storage: LedgerRead,
+    runtime_projection: Option<RuntimeLedgerProjection>,
+}
 
 impl LedgerReadback {
     pub fn new(
@@ -105,27 +125,67 @@ impl LedgerReadback {
         records: Vec<LedgerRecordEntry>,
         skipped_corrupt_lines: usize,
     ) -> Self {
-        Self(LedgerRead {
-            header: header.map(LedgerSessionHeader::into_storage),
-            events: events
+        Self {
+            storage: LedgerRead {
+                header: header.map(LedgerSessionHeader::into_storage),
+                events: events
+                    .into_iter()
+                    .map(LedgerEventEntry::into_storage)
+                    .collect(),
+                records: records
+                    .into_iter()
+                    .map(LedgerRecordEntry::into_storage)
+                    .collect(),
+                skipped_corrupt_lines,
+            },
+            runtime_projection: None,
+        }
+    }
+
+    pub fn new_runtime(
+        header: Option<LedgerSessionHeader>,
+        events: Vec<LedgerEventEntry>,
+        records: Vec<LedgerRecordEntry>,
+        correlation_id: impl Into<String>,
+        projected_events: Vec<ProjectedEvent>,
+    ) -> LabResult<Self> {
+        let mut readback = Self::new(header, events, records, 0);
+        readback.runtime_projection = Some(RuntimeLedgerProjection {
+            correlation_id: correlation_id.into(),
+            events: projected_events
                 .into_iter()
-                .map(LedgerEventEntry::into_storage)
-                .collect(),
-            records: records
-                .into_iter()
-                .map(LedgerRecordEntry::into_storage)
-                .collect(),
-            skipped_corrupt_lines,
-        })
+                .map(|event| {
+                    serde_json::to_value(event).map_err(|error| {
+                        LabError::package_invalid(format!(
+                            "failed to encode Runtime projected event: {error}"
+                        ))
+                    })
+                })
+                .collect::<LabResult<Vec<_>>>()?,
+        });
+        Ok(readback)
     }
 
     #[cfg(test)]
     pub(crate) fn from_storage(readback: LedgerRead) -> Self {
-        Self(readback)
+        let projected_events = actingcommand_ledger::project_light_events(&readback)
+            .into_iter()
+            .collect::<Vec<_>>();
+        Self {
+            storage: readback,
+            runtime_projection: Some(RuntimeLedgerProjection {
+                correlation_id: "test-runtime-correlation".to_string(),
+                events: projected_events,
+            }),
+        }
     }
 
     pub(crate) fn storage(&self) -> &LedgerRead {
-        &self.0
+        &self.storage
+    }
+
+    pub(crate) fn runtime_projection(&self) -> Option<&RuntimeLedgerProjection> {
+        self.runtime_projection.as_ref()
     }
 }
 

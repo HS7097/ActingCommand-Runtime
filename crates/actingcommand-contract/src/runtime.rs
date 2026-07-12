@@ -698,6 +698,110 @@ pub struct ResourceAuthoringEvent {
     failure_code: Option<String>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RuntimeDebugOperation {
+    LabRun,
+    Observe,
+    Do,
+    Ensure,
+    Wait,
+}
+
+impl RuntimeDebugOperation {
+    pub const fn event_action(self) -> crate::EventAction {
+        match self {
+            Self::LabRun => crate::EventAction::RuntimeDebugLabRun,
+            Self::Observe => crate::EventAction::RuntimeDebugObserve,
+            Self::Do => crate::EventAction::RuntimeDebugDo,
+            Self::Ensure => crate::EventAction::RuntimeDebugEnsure,
+            Self::Wait => crate::EventAction::RuntimeDebugWait,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RuntimeDebugPhase {
+    Requested,
+    Progress,
+    Completed,
+    Failed,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RuntimeDebugEvent {
+    operation: RuntimeDebugOperation,
+    phase: RuntimeDebugPhase,
+    effect_disposition: EffectDisposition,
+}
+
+impl RuntimeDebugEvent {
+    pub fn requested(operation: RuntimeDebugOperation) -> Self {
+        Self {
+            operation,
+            phase: RuntimeDebugPhase::Requested,
+            effect_disposition: EffectDisposition::NotPerformed,
+        }
+    }
+
+    pub fn progress(operation: RuntimeDebugOperation) -> Self {
+        Self {
+            operation,
+            phase: RuntimeDebugPhase::Progress,
+            effect_disposition: EffectDisposition::NotPerformed,
+        }
+    }
+
+    pub fn completed(
+        operation: RuntimeDebugOperation,
+        effect_disposition: EffectDisposition,
+    ) -> Self {
+        Self {
+            operation,
+            phase: RuntimeDebugPhase::Completed,
+            effect_disposition,
+        }
+    }
+
+    pub fn failed(operation: RuntimeDebugOperation, effect_disposition: EffectDisposition) -> Self {
+        Self {
+            operation,
+            phase: RuntimeDebugPhase::Failed,
+            effect_disposition,
+        }
+    }
+
+    pub fn validate(&self) -> RuntimeContractResult<()> {
+        if matches!(
+            self.phase,
+            RuntimeDebugPhase::Requested | RuntimeDebugPhase::Progress
+        ) && self.effect_disposition != EffectDisposition::NotPerformed
+        {
+            return Err(RuntimeContractError::new("invalid_runtime_debug_event"));
+        }
+        if self.phase == RuntimeDebugPhase::Progress
+            && self.operation != RuntimeDebugOperation::LabRun
+        {
+            return Err(RuntimeContractError::new("invalid_runtime_debug_event"));
+        }
+        Ok(())
+    }
+
+    pub const fn operation(&self) -> RuntimeDebugOperation {
+        self.operation
+    }
+
+    pub const fn phase(&self) -> RuntimeDebugPhase {
+        self.phase
+    }
+
+    pub const fn effect_disposition(&self) -> EffectDisposition {
+        self.effect_disposition
+    }
+}
+
 impl ResourceAuthoringEvent {
     pub fn new(
         phase: ResourceAuthoringPhase,
@@ -1321,6 +1425,9 @@ pub enum RuntimeOperation {
     RecordAuthoringEvent {
         event: ResourceAuthoringEvent,
     },
+    RecordDebugEvent {
+        event: RuntimeDebugEvent,
+    },
 }
 
 impl RuntimeOperation {
@@ -1362,6 +1469,7 @@ impl RuntimeOperation {
             Self::DebugPackage { request } => request.validate(),
             Self::ExportEvidence { request } => request.validate(),
             Self::RecordAuthoringEvent { event } => event.validate(),
+            Self::RecordDebugEvent { event } => event.validate(),
             Self::AcquireLease { instance_alias, .. }
             | Self::ObserveReadonly { instance_alias }
             | Self::SafeReset { instance_alias, .. }
@@ -1448,6 +1556,9 @@ impl fmt::Debug for RuntimeOperation {
             Self::RecordAuthoringEvent { .. } => {
                 "RuntimeOperation::RecordAuthoringEvent(<redacted>)"
             }
+            Self::RecordDebugEvent { .. } => {
+                "RuntimeOperation::RecordDebugEvent(<typed-debug-event>)"
+            }
         })
     }
 }
@@ -1508,6 +1619,11 @@ impl RuntimeRequest {
             return Err(RuntimeContractError::new(
                 "invalid_resource_authoring_origin",
             ));
+        }
+        if matches!(self.operation, RuntimeOperation::RecordDebugEvent { .. })
+            && (self.actor != EventActor::Lab || self.source != EventSource::Lab)
+        {
+            return Err(RuntimeContractError::new("invalid_runtime_debug_origin"));
         }
         if matches!(
             self.operation,
@@ -1831,6 +1947,9 @@ pub enum RuntimeResult {
     },
     AuthoringEventRecorded {
         phase: ResourceAuthoringPhase,
+    },
+    DebugEventRecorded {
+        phase: RuntimeDebugPhase,
     },
 }
 

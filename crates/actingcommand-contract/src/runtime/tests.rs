@@ -215,6 +215,55 @@ fn package_debug_contract_is_lab_only_bounded_and_redacted() {
 }
 
 #[test]
+fn runtime_debug_events_are_strict_and_require_lab_origin() {
+    let mut invalid_progress =
+        serde_json::to_value(RuntimeDebugEvent::progress(RuntimeDebugOperation::LabRun))
+            .expect("debug event JSON");
+    invalid_progress["operation"] = serde_json::json!("observe");
+    let invalid_progress: RuntimeDebugEvent =
+        serde_json::from_value(invalid_progress).expect("debug event wire");
+    assert_eq!(
+        invalid_progress
+            .validate()
+            .expect_err("only Lab run can report progress")
+            .code(),
+        "invalid_runtime_debug_event"
+    );
+
+    let mut invalid_effect =
+        serde_json::to_value(RuntimeDebugEvent::requested(RuntimeDebugOperation::Observe))
+            .expect("debug event JSON");
+    invalid_effect["effect_disposition"] = serde_json::json!("performed");
+    let invalid_effect: RuntimeDebugEvent =
+        serde_json::from_value(invalid_effect).expect("debug event wire");
+    assert_eq!(
+        invalid_effect
+            .validate()
+            .expect_err("request cannot claim an effect")
+            .code(),
+        "invalid_runtime_debug_event"
+    );
+
+    let ids = issuer();
+    let wrong_origin = RuntimeRequest::new(
+        ids.mint_request_id().expect("request"),
+        ids.mint_correlation_id().expect("correlation"),
+        None,
+        EventActor::Cli,
+        EventSource::Cli,
+        1,
+        RuntimeOperation::RecordDebugEvent {
+            event: RuntimeDebugEvent::completed(
+                RuntimeDebugOperation::Observe,
+                EffectDisposition::NotPerformed,
+            ),
+        },
+    )
+    .expect_err("non-Lab debug event must fail");
+    assert_eq!(wrong_origin.code(), "invalid_runtime_debug_origin");
+}
+
+#[test]
 fn package_debug_summary_round_trips_as_a_closed_result() {
     let summary = PackageDebugSummary::new(
         "task",

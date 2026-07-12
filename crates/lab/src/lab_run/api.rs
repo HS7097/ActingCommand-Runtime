@@ -65,7 +65,7 @@ fn run_lab<P: LabPorts>(
                 out: output_zip_path,
                 output_zip_sha256,
                 ledger: LabRunLedgerResponse {
-                    projection_source: "runtime_ledger".to_string(),
+                    projection_source: "runtime_global_ledger".to_string(),
                     path: completed.ledger_path.display().to_string(),
                     terminal_receipt: completed.record_type,
                 },

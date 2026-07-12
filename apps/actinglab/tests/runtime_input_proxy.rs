@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 use actingcommand_contract::{
-    CaptureSequenceSpec, EventActor, EventQuery, EventSource, EventType, IdentifierIssuer,
-    InstanceId, PackageDebugRequest, ProjectionProfile, RetentionClass,
-    RuntimeEvidenceExportRequest, RuntimeResult, TaskOutcome,
+    CaptureSequenceSpec, EventAction, EventActor, EventQuery, EventSource, EventType,
+    IdentifierIssuer, InstanceId, PackageDebugRequest, ProjectionPayload, ProjectionProfile,
+    RetentionClass, RuntimeEvidenceExportRequest, RuntimeResult, TaskOutcome,
 };
 use actingcommand_device::{
     CaptureBackend, CaptureBackendName, DeviceResult, Frame, InputBackend, PixelFormat,
@@ -846,7 +846,7 @@ fn runtime_debug_session_exports_verified_debug_full_capture_evidence() {
 }
 
 #[test]
-fn production_tap_target_uses_runtime_capture_and_fenced_input() {
+fn production_do_uses_runtime_capture_and_fenced_input() {
     let root = TempDir::new().expect("tempdir");
     let runtime_root = root.path().join("runtime");
     let resources = root.path().join("resources");
@@ -880,13 +880,7 @@ fn production_tap_target_uses_runtime_capture_and_fenced_input() {
             "--json",
             "--instance",
             "ak.cn",
-            "--resource-root",
-            resources.to_str().expect("resource root"),
-            "--game",
-            "ark",
-            "--server",
-            "cn",
-            "tap-target",
+            "do",
             "home_button",
             "--capture",
             "--zip",
@@ -900,7 +894,7 @@ fn production_tap_target_uses_runtime_capture_and_fenced_input() {
         .env_remove("ACTINGLAB_SESSION_STATE_DIR")
         .env_remove("ACTINGCOMMAND_TEST_FAKE_TOUCH_LOG")
         .output()
-        .expect("run actinglab tap-target");
+        .expect("run actinglab do");
 
     assert!(
         output.status.success(),
@@ -915,7 +909,7 @@ fn production_tap_target_uses_runtime_capture_and_fenced_input() {
             .and_then(Value::as_str),
         Some("runtime_proxy")
     );
-    assert_eq!(state.captures.load(Ordering::Acquire), 1);
+    assert_eq!(state.captures.load(Ordering::Acquire), 2);
     assert_eq!(state.taps.load(Ordering::Acquire), 1);
     host.close().expect("close host");
 }
@@ -1509,30 +1503,59 @@ fn production_lab_run_routes_device_effects_through_runtime_only() {
     ))
     .expect("Runtime client");
     let events = client
-        .query_events(
-            EventQuery {
-                instance_id: Some(instance_id),
-                ..EventQuery::default()
-            },
-            ProjectionProfile::Forensic,
-        )
+        .query_events(EventQuery::default(), ProjectionProfile::Forensic)
         .expect("Runtime events");
-    let event_types = events
+    let terminal = events
+        .iter()
+        .find(|event| {
+            event.event_type == EventType::TaskFailed
+                && matches!(
+                    &event.payload,
+                    ProjectionPayload::Full(payload)
+                        if payload.action() == EventAction::RuntimeDebugLabRun
+                )
+        })
+        .expect("Runtime Lab run terminal");
+    let correlation = *terminal
+        .links
+        .correlation_id()
+        .expect("Runtime Lab run correlation");
+    let correlated = events
+        .iter()
+        .filter(|event| event.links.correlation_id() == Some(&correlation))
+        .collect::<Vec<_>>();
+    let event_types = correlated
         .iter()
         .map(|event| event.event_type)
         .collect::<Vec<_>>();
     assert_event_order(
         &event_types,
         &[
+            EventType::CommandReceived,
+            EventType::TaskRequested,
+            EventType::TaskStarted,
+            EventType::CommandValidated,
+            EventType::LabRequest,
+            EventType::CaptureRequested,
+            EventType::CaptureCompleted,
             EventType::LeaseRequested,
             EventType::LeaseGranted,
             EventType::InputIntent,
             EventType::InputCommitted,
             EventType::LeaseReleased,
+            EventType::TaskFailed,
         ],
     );
-    assert!(event_types.contains(&EventType::CaptureRequested));
-    assert!(event_types.contains(&EventType::CaptureCompleted));
+    let actions = correlated
+        .iter()
+        .filter_map(|event| match &event.payload {
+            ProjectionPayload::Full(payload) => Some(payload.action()),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert!(actions.contains(&EventAction::RuntimeDebugPackage));
+    assert!(actions.contains(&EventAction::RuntimeDebugLabRun));
+    assert_no_file_named(&run_root, "ledger.jsonl");
 
     drop(client);
     host.close().expect("close host");
@@ -1547,6 +1570,23 @@ fn assert_event_order(actual: &[EventType], expected: &[EventType]) {
             .position(|actual_type| actual_type == expected_type)
             .unwrap_or_else(|| panic!("missing Runtime event {expected_type:?} in {actual:?}"));
         cursor += offset + 1;
+    }
+}
+
+fn assert_no_file_named(root: &Path, name: &str) {
+    if !root.exists() {
+        return;
+    }
+    for entry in fs::read_dir(root).expect("read output tree") {
+        let path = entry.expect("output entry").path();
+        if path.is_dir() {
+            assert_no_file_named(&path, name);
+        } else {
+            assert_ne!(
+                path.file_name().and_then(|value| value.to_str()),
+                Some(name)
+            );
+        }
     }
 }
 

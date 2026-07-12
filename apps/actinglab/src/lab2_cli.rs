@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 use actingcommand_contract::{
-    CorrelationId, EventQuery, InputAction, ProjectionProfile, RuntimeResult,
+    CorrelationId, EffectDisposition, EventQuery, InputAction, ProjectionProfile,
+    RuntimeDebugEvent, RuntimeDebugOperation, RuntimeResult,
 };
 use actingcommand_ledger::{
     EvidenceStore, IdIssuer, IdKind, ProjectionRequest, ProjectionVerbosity, error_projection,
@@ -117,6 +118,7 @@ fn run_runtime_observe(global: &GlobalOptions, flags: &FlagArgs) -> CliOutcome<V
     let (evaluator, detector) = super::contained_resources::recognition_pipeline(&resources)?;
     let graph = super::contained_resources::navigation_graph(&resources)?;
     let session = begin_runtime_debug_session()?;
+    start_runtime_debug_operation(&session, RuntimeDebugOperation::Observe)?;
     let result = (|| -> CliOutcome<Value> {
         let loaded_scene = load_runtime_lab2_scene(&session, &instance)?;
         let outcome = detect_current_page(&evaluator, &detector, &loaded_scene.scene)?;
@@ -149,7 +151,7 @@ fn run_runtime_observe(global: &GlobalOptions, flags: &FlagArgs) -> CliOutcome<V
         attach_env_resolved(&mut payload, &Vec::<env_detection::ResolvedEnvValue>::new());
         Ok(payload)
     })();
-    finish_runtime_debug_result(&session, flags, result)
+    finish_runtime_debug_result(&session, RuntimeDebugOperation::Observe, flags, result)
 }
 
 fn run_runtime_do(
@@ -162,9 +164,10 @@ fn run_runtime_do(
     reject_mixed_online_and_offline_scene(flags, "do")?;
     let resources = super::contained_resources::load(flags, "do")?;
     let (evaluator, detector) = super::contained_resources::recognition_pipeline(&resources)?;
+    guard_evaluable_target(&evaluator, target, "do")?;
     let session = begin_runtime_debug_session()?;
+    start_runtime_debug_operation(&session, RuntimeDebugOperation::Do)?;
     let result = (|| -> CliOutcome<Value> {
-        guard_evaluable_target(&evaluator, target, "do")?;
         let loaded_scene = load_runtime_lab2_scene(&session, instance)?;
         let before = detect_current_page(&evaluator, &detector, &loaded_scene.scene)?;
         let evaluation = evaluator
@@ -254,7 +257,7 @@ fn run_runtime_do(
         attach_env_resolved(&mut payload, &Vec::<env_detection::ResolvedEnvValue>::new());
         Ok(payload)
     })();
-    finish_runtime_debug_result(&session, flags, result)
+    finish_runtime_debug_result(&session, RuntimeDebugOperation::Do, flags, result)
 }
 
 fn run_runtime_ensure(
@@ -268,9 +271,10 @@ fn run_runtime_ensure(
     let resources = super::contained_resources::load(flags, "ensure")?;
     let (evaluator, detector) = super::contained_resources::recognition_pipeline(&resources)?;
     let graph = super::contained_resources::navigation_graph(&resources)?;
-    let target_page = canonical_navigation_page(&graph, to);
     let session = begin_runtime_debug_session()?;
+    start_runtime_debug_operation(&session, RuntimeDebugOperation::Ensure)?;
     let result = (|| -> CliOutcome<Value> {
+        let target_page = canonical_navigation_page(&graph, to);
         let scene = load_runtime_lab2_scene(&session, instance)?;
         let start = detect_current_page(&evaluator, &detector, &scene.scene)?;
         if start.matched && start.page == target_page {
@@ -355,7 +359,7 @@ fn run_runtime_ensure(
             "arbitration": runtime_scheduler_projection(true),
         }))
     })();
-    finish_runtime_debug_result(&session, flags, result)
+    finish_runtime_debug_result(&session, RuntimeDebugOperation::Ensure, flags, result)
 }
 
 fn run_runtime_wait(global: &GlobalOptions, flags: &FlagArgs) -> CliOutcome<Value> {
@@ -363,28 +367,31 @@ fn run_runtime_wait(global: &GlobalOptions, flags: &FlagArgs) -> CliOutcome<Valu
     let instance = lab2_instance(global, flags);
     let resources = super::contained_resources::load(flags, "wait")?;
     let (evaluator, detector) = super::contained_resources::recognition_pipeline(&resources)?;
-    let timeout = parse_optional_duration_ms(flags, "--timeout-ms", 5_000)?;
-    let poll = parse_optional_duration_ms(flags, "--poll-ms", 200)?;
     let session = begin_runtime_debug_session()?;
-    let result = if let Some(page) = wait_page_target(flags) {
-        let graph = super::contained_resources::navigation_graph(&resources)?;
-        let page = canonical_navigation_page(&graph, &page);
-        runtime_wait_for_page(
-            &session, &instance, &evaluator, &detector, &page, timeout, poll,
-        )
-    } else if let Some(target) = flags.optional("--stable").filter(|value| value != "true") {
-        runtime_wait_for_stable_target(&session, &instance, &evaluator, &target, timeout, poll)
-    } else {
-        Err(CliError::usage(
-            "wait requires --page <page> or --stable <target>",
-        ))
-    };
+    start_runtime_debug_operation(&session, RuntimeDebugOperation::Wait)?;
+    let result = (|| -> CliOutcome<Value> {
+        let timeout = parse_optional_duration_ms(flags, "--timeout-ms", 5_000)?;
+        let poll = parse_optional_duration_ms(flags, "--poll-ms", 200)?;
+        if let Some(page) = wait_page_target(flags) {
+            let graph = super::contained_resources::navigation_graph(&resources)?;
+            let page = canonical_navigation_page(&graph, &page);
+            runtime_wait_for_page(
+                &session, &instance, &evaluator, &detector, &page, timeout, poll,
+            )
+        } else if let Some(target) = flags.optional("--stable").filter(|value| value != "true") {
+            runtime_wait_for_stable_target(&session, &instance, &evaluator, &target, timeout, poll)
+        } else {
+            Err(CliError::usage(
+                "wait requires --page <page> or --stable <target>",
+            ))
+        }
+    })();
     let result = result.map(|mut payload| {
         payload["instance"] = json!(instance);
         payload["arbitration"] = runtime_scheduler_projection(false);
         payload
     });
-    finish_runtime_debug_result(&session, flags, result)
+    finish_runtime_debug_result(&session, RuntimeDebugOperation::Wait, flags, result)
 }
 
 struct RuntimeNavigationContext<'a> {
@@ -727,9 +734,40 @@ fn execute_runtime_debug_input(
 
 fn finish_runtime_debug_result(
     session: &RuntimeDebugSession,
+    operation: RuntimeDebugOperation,
     flags: &FlagArgs,
     result: CliOutcome<Value>,
 ) -> CliOutcome<Value> {
+    let terminal = match &result {
+        Ok(payload) => RuntimeDebugEvent::completed(
+            operation,
+            if payload.get("executed").and_then(Value::as_bool) == Some(true) {
+                EffectDisposition::Performed
+            } else {
+                EffectDisposition::NotPerformed
+            },
+        ),
+        Err(_) => RuntimeDebugEvent::failed(
+            operation,
+            match operation {
+                RuntimeDebugOperation::Do | RuntimeDebugOperation::Ensure => {
+                    EffectDisposition::Indeterminate
+                }
+                _ => EffectDisposition::NotPerformed,
+            },
+        ),
+    };
+    if let Err(ledger_error) = session.record_event(terminal) {
+        return Err(match result {
+            Ok(_) => CliError::device(format!(
+                "Runtime terminal ledger append failed: {ledger_error}"
+            )),
+            Err(error) => CliError::device(format!(
+                "{}; Runtime terminal ledger append also failed: {ledger_error}",
+                error.message
+            )),
+        });
+    }
     let events = session
         .query_events(ProjectionProfile::Lab)
         .map_err(|error| CliError::device(format!("Runtime debug projection failed: {error}")))?;
@@ -766,6 +804,16 @@ fn finish_runtime_debug_result(
             Err(error.with_details(details))
         }
     }
+}
+
+fn start_runtime_debug_operation(
+    session: &RuntimeDebugSession,
+    operation: RuntimeDebugOperation,
+) -> CliOutcome<()> {
+    session
+        .record_event(RuntimeDebugEvent::requested(operation))
+        .map(|_| ())
+        .map_err(|error| CliError::device(format!("Runtime debug request append failed: {error}")))
 }
 
 fn runtime_scheduler_projection(write_requested: bool) -> Value {

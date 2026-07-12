@@ -2,7 +2,11 @@
 
 use super::{
     CliError, CliOutcome, FlagArgs, GlobalOptions, device_config_for_instance, effective_adb_path,
-    effective_run_root, read_user_config,
+    effective_run_root, read_user_config, runtime_state_root,
+};
+use actingcommand_contract::{
+    EffectDisposition, EventActor, EventSource, PackageDebugRequest, RuntimeDebugEvent,
+    RuntimeDebugOperation,
 };
 use actingcommand_device::CaptureBackendChoice;
 use actingcommand_lab::{
@@ -10,23 +14,93 @@ use actingcommand_lab::{
     LabRunRequest, LabRunSelectedDevice, LabValidateRequest, MemorySampleSource,
 };
 use actingcommand_pack_containment::{ContainmentError, Sha256Hash};
+use actingcommand_runtime_client::{RuntimeClient, RuntimeClientConfig, RuntimeDebugSession};
 use serde::Serialize;
 use serde_json::Value;
-use std::env;
 use std::io::Read;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
+use std::{env, fs};
 
 const GIT_COMMIT_TIMEOUT: Duration = Duration::from_secs(3);
 
 pub(super) fn run_lab_run(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
     let flags = FlagArgs::parse(args)?;
     let (request, config) = lab_run_request(global, &flags)?;
-    let mut lab = super::env_detection::build_control_lab(config)?;
-    serialize_response(lab.lab_run(request)?)
+    let session = begin_runtime_lab_run(&flags, &request.zip_path)?;
+    let result = (|| {
+        let mut lab = super::env_detection::build_control_lab(config, session.clone())?;
+        lab.lab_run(request)
+    })();
+    match result {
+        Ok(response) => {
+            let effect = if response.executed_step_count == 0 {
+                EffectDisposition::NotPerformed
+            } else {
+                EffectDisposition::Performed
+            };
+            session
+                .record_event(RuntimeDebugEvent::completed(
+                    RuntimeDebugOperation::LabRun,
+                    effect,
+                ))
+                .map_err(runtime_debug_error)?;
+            serialize_response(response)
+        }
+        Err(error) => match session.record_event(RuntimeDebugEvent::failed(
+            RuntimeDebugOperation::LabRun,
+            EffectDisposition::Indeterminate,
+        )) {
+            Ok(_) => Err(error),
+            Err(ledger_error) => Err(CliError::device(format!(
+                "{}; Runtime terminal ledger append also failed: {ledger_error}",
+                error.message
+            ))),
+        },
+    }
+}
+
+fn begin_runtime_lab_run(
+    flags: &FlagArgs,
+    package_path: &std::path::Path,
+) -> CliOutcome<RuntimeDebugSession> {
+    let expected_sha256 = flags
+        .optional("--expected-sha256")
+        .filter(|value| value != "true")
+        .ok_or_else(|| {
+            CliError::usage(
+                "lab run requires --expected-sha256 <sha256> from an external trust source",
+            )
+        })?;
+    let package_path = fs::canonicalize(package_path).map_err(|error| {
+        CliError::package_invalid(format!(
+            "failed to canonicalize Lab package {}: {error}",
+            package_path.display()
+        ))
+    })?;
+    let request = PackageDebugRequest::new(package_path.display().to_string(), expected_sha256)
+        .map_err(|error| CliError::package_invalid(error.to_string()))?;
+    let session = RuntimeClient::connect(RuntimeClientConfig::new(
+        runtime_state_root()?,
+        EventActor::Lab,
+        EventSource::Lab,
+    ))
+    .and_then(|client| client.begin_debug_session())
+    .map_err(runtime_debug_error)?;
+    session
+        .debug_package(request)
+        .map_err(runtime_debug_error)?;
+    session
+        .record_event(RuntimeDebugEvent::requested(RuntimeDebugOperation::LabRun))
+        .map_err(runtime_debug_error)?;
+    Ok(session)
+}
+
+fn runtime_debug_error(error: impl std::fmt::Display) -> CliError {
+    CliError::device(format!("Runtime Lab debug operation failed: {error}"))
 }
 
 fn lab_run_request(

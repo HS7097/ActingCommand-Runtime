@@ -114,20 +114,21 @@
         ],
         "instance": "default",
         "ledger": {
-          "path": "<PATH>",
-          "written": true
+          "reason": "isolated_offline_projection",
+          "written": false
         },
         "matched": true,
         "page": "arknights/home",
         "projection_source": {
-          "kind": "runtime_ledger",
-          "path": "<PATH>",
-          "record_kind": "receipt",
+          "durable": false,
+          "kind": "isolated_offline",
+          "record_kind": "ephemeral_trace",
           "req_id": "<REQ_ID>"
         },
         "reco_id": "<RECO_ID>",
         "req_id": "<REQ_ID>",
-        "standby": false
+        "standby": false,
+        "trace_record_count": 2
       },
       "ok": true,
       "runtime_version": "runtime-embedded-p1g",
@@ -155,17 +156,18 @@
           "error": "package_invalid",
           "instance": "default",
           "ledger": {
-            "path": "<PATH>",
-            "written": true
+            "reason": "isolated_offline_projection",
+            "written": false
           },
           "projection_source": {
-            "kind": "runtime_ledger",
-            "path": "<PATH>",
-            "record_kind": "receipt",
+            "durable": false,
+            "kind": "isolated_offline",
+            "record_kind": "ephemeral_trace",
             "req_id": "<REQ_ID>"
           },
           "req_id": "<REQ_ID>",
-          "state": "failed"
+          "state": "failed",
+          "trace_record_count": 1
         },
         "message": "fatal containment error: hash mismatch for instance semantic_readonly: expected <SHA256>, actual <SHA256>"
       },
@@ -338,24 +340,25 @@
         "executed": false,
         "instance": "default",
         "ledger": {
-          "path": "<PATH>",
-          "written": true
+          "reason": "isolated_offline_projection",
+          "written": false
         },
         "point": {
           "x": 12,
           "y": 23
         },
         "projection_source": {
-          "kind": "runtime_ledger",
-          "path": "<PATH>",
-          "record_kind": "receipt",
+          "durable": false,
+          "kind": "isolated_offline",
+          "record_kind": "ephemeral_trace",
           "req_id": "<REQ_ID>"
         },
         "reco_id": "<RECO_ID>",
         "req_id": "<REQ_ID>",
         "safety_gate": "navigation_only_default",
         "status": "planned",
-        "target": "home_button"
+        "target": "home_button",
+        "trace_record_count": 3
       },
       "ok": true,
       "runtime_version": "runtime-embedded-p1g",
@@ -411,17 +414,18 @@
           "error": "target_not_visible",
           "instance": "default",
           "ledger": {
-            "path": "<PATH>",
-            "written": true
+            "reason": "isolated_offline_projection",
+            "written": false
           },
           "projection_source": {
-            "kind": "runtime_ledger",
-            "path": "<PATH>",
-            "record_kind": "receipt",
+            "durable": false,
+            "kind": "isolated_offline",
+            "record_kind": "ephemeral_trace",
             "req_id": "<REQ_ID>"
           },
           "req_id": "<REQ_ID>",
-          "state": "failed"
+          "state": "failed",
+          "trace_record_count": 2
         },
         "message": "target 'home_button' did not pass recognition: color failed"
       },
@@ -442,13 +446,13 @@
         "from": "arknights/home",
         "instance": "default",
         "ledger": {
-          "path": "<PATH>",
-          "written": true
+          "reason": "isolated_offline_projection",
+          "written": false
         },
         "projection_source": {
-          "kind": "runtime_ledger",
-          "path": "<PATH>",
-          "record_kind": "receipt",
+          "durable": false,
+          "kind": "isolated_offline",
+          "record_kind": "ephemeral_trace",
           "req_id": "<REQ_ID>"
         },
         "reco_id": "<RECO_ID>",
@@ -477,7 +481,8 @@
         ],
         "safety_gate": "navigation_only_default",
         "status": "planned",
-        "to": "arknights/target"
+        "to": "arknights/target",
+        "trace_record_count": 3
       },
       "ok": true,
       "runtime_version": "runtime-embedded-p1g",
@@ -505,17 +510,18 @@
           "error": "validation_failed",
           "instance": "default",
           "ledger": {
-            "path": "<PATH>",
-            "written": true
+            "reason": "isolated_offline_projection",
+            "written": false
           },
           "projection_source": {
-            "kind": "runtime_ledger",
-            "path": "<PATH>",
-            "record_kind": "receipt",
+            "durable": false,
+            "kind": "isolated_offline",
+            "record_kind": "ephemeral_trace",
             "req_id": "<REQ_ID>"
           },
           "req_id": "<REQ_ID>",
-          "state": "failed"
+          "state": "failed",
+          "trace_record_count": 2
         },
         "message": "no navigation route from 'arknights/home' to 'arknights/missing'"
       },
@@ -539,9 +545,13 @@
         "hash_source": "self_computed_provenance_only",
         "input_sha256": "<INPUT_SHA256>",
         "ledger_event": {
+          "entry_count": 3,
           "event_type": "package.validate.ok",
-          "path": "<PATH>",
-          "written": true
+          "instance": "package-validate",
+          "module": "module",
+          "reason": "offline_resource_tooling_projection",
+          "task_count": 1,
+          "written": false
         },
         "manifest": {
           "schema_version": "0.2"
@@ -718,8 +728,8 @@
       "data": {
         "executed_step_count": 0,
         "ledger": {
-          "path": "<PATH>",
-          "projection_source": "runtime_ledger",
+          "path": "runtime-global-ledger/<CORRELATION_ID>",
+          "projection_source": "runtime_global_ledger",
           "terminal_receipt": "finish_ok"
         },
         "ok": true,
@@ -768,13 +778,13 @@
         "instance": "fixture:5555",
         "instance_id": "<IID>",
         "ledger": {
-          "path": "<PATH>",
-          "written": true
+          "reason": "isolated_offline_projection",
+          "written": false
         },
         "projection_source": {
-          "kind": "runtime_ledger",
-          "path": "<PATH>",
-          "record_kind": "receipt",
+          "durable": false,
+          "kind": "isolated_offline",
+          "record_kind": "ephemeral_trace",
           "req_id": "<REQ_ID>"
         },
         "req_id": "<REQ_ID>",
@@ -805,7 +815,8 @@
         "status": "detected",
         "steps": [],
         "steps_executed": false,
-        "task": "detect_resolution"
+        "task": "detect_resolution",
+        "trace_record_count": 2
       },
       "ok": true,
       "runtime_version": "runtime-embedded-p1g",
@@ -833,17 +844,18 @@
           "error": "validation_failed",
           "instance": "fixture:5555",
           "ledger": {
-            "path": "<PATH>",
-            "written": true
+            "reason": "isolated_offline_projection",
+            "written": false
           },
           "projection_source": {
-            "kind": "runtime_ledger",
-            "path": "<PATH>",
-            "record_kind": "receipt",
+            "durable": false,
+            "kind": "isolated_offline",
+            "record_kind": "ephemeral_trace",
             "req_id": "<REQ_ID>"
           },
           "req_id": "<REQ_ID>",
-          "state": "failed"
+          "state": "failed",
+          "trace_record_count": 1
         },
         "message": "env detector 'missing_detector' was not found"
       },
@@ -874,13 +886,13 @@
           }
         ],
         "ledger": {
-          "path": "<PATH>",
-          "written": true
+          "reason": "isolated_offline_projection",
+          "written": false
         },
         "projection_source": {
-          "kind": "runtime_ledger",
-          "path": "<PATH>",
-          "record_kind": "receipt",
+          "durable": false,
+          "kind": "isolated_offline",
+          "record_kind": "ephemeral_trace",
           "req_id": "<REQ_ID>"
         },
         "req_id": "<REQ_ID>",
@@ -888,7 +900,8 @@
         "schema_version": "env-resolve-command.v1",
         "source_result": "<PATH>",
         "status": "resolved",
-        "task": "detect_resolution"
+        "task": "detect_resolution",
+        "trace_record_count": 2
       },
       "ok": true,
       "runtime_version": "runtime-embedded-p1g",
@@ -928,17 +941,18 @@
           "error": "validation_failed",
           "instance": "fixture:5555",
           "ledger": {
-            "path": "<PATH>",
-            "written": true
+            "reason": "isolated_offline_projection",
+            "written": false
           },
           "projection_source": {
-            "kind": "runtime_ledger",
-            "path": "<PATH>",
-            "record_kind": "receipt",
+            "durable": false,
+            "kind": "isolated_offline",
+            "record_kind": "ephemeral_trace",
             "req_id": "<REQ_ID>"
           },
           "req_id": "<REQ_ID>",
-          "state": "failed"
+          "state": "failed",
+          "trace_record_count": 1
         },
         "message": "env detection result <PATH>\\resources\\env-detection\\<IID>\\result.json is missing; run detect first"
       },

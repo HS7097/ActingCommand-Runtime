@@ -25,7 +25,7 @@ use actingcommand_execution_kernel::{
 };
 use actingcommand_ledger::{
     CommitProof, EvidenceStore, IdIssuer, IdKind, LastResortError, LedgerRecord, LedgerRecordKind,
-    LightEvent, SessionHeader, commit_then_record, project_light_events,
+    LightEvent, SessionHeader, commit_then_record,
 };
 #[cfg(test)]
 use actingcommand_ledger::{LabLedger, LabLogError};

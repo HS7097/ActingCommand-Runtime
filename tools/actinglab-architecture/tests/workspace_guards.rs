@@ -1383,8 +1383,8 @@ fn c5_online_lab_run_effects_are_instance_bound_and_runtime_owned() {
     }
     for required in [
         "AppCaptureAuthority::RuntimeByInstance",
-        "RuntimeInputBackend::connect",
-        "request.instance_alias",
+        "RuntimeInputBackend::connect_debug",
+        "RuntimeDebugSession",
     ] {
         assert!(
             app_environment.contains(required),
@@ -1412,9 +1412,9 @@ fn c5_online_lab_run_effects_are_instance_bound_and_runtime_owned() {
         }
     }
     for required in [
-        "client.acquire_lease",
-        "client.release_lease",
-        "self.client.input",
+        "authority.acquire_lease",
+        "authority.release_lease",
+        "self.authority.input",
     ] {
         assert!(
             runtime_input.contains(required),
@@ -1837,6 +1837,64 @@ fn c6_local_lab2_arbitrator_is_retired() {
             "Lab2 must use Runtime IPC rather than opening production device authority: {forbidden}"
         );
     }
+}
+
+#[test]
+fn c7_lab_has_no_production_ledger_writer_authority() {
+    let root = workspace_root();
+    let mut files = Vec::new();
+    collect_rust_files(&root.join("apps/actinglab/src"), &mut files);
+    collect_rust_files(&root.join("crates/lab/src"), &mut files);
+    let mut violations = Vec::new();
+    for path in files {
+        if path
+            .components()
+            .any(|component| component.as_os_str() == "tests")
+        {
+            continue;
+        }
+        let source = fs::read_to_string(&path)
+            .unwrap_or_else(|error| panic!("read {}: {error}", path.display()));
+        let display = path
+            .strip_prefix(&root)
+            .unwrap_or(&path)
+            .display()
+            .to_string();
+        for constructor in ["LabLedger::create(", "LabLedger::create_runtime_shard("] {
+            if source.contains(constructor) {
+                violations.push(format!(
+                    "{display}: Lab regained a durable local ledger writer via {constructor}"
+                ));
+            }
+        }
+    }
+    assert!(
+        violations.is_empty(),
+        "Lab local-ledger authority violations:\n{}",
+        violations.join("\n")
+    );
+
+    let main =
+        fs::read_to_string(root.join("apps/actinglab/src/main.rs")).expect("read ActingLab main");
+    let lab2 = fs::read_to_string(root.join("apps/actinglab/src/lab2_cli.rs"))
+        .expect("read ActingLab Lab2 adapter");
+    let lab_run = fs::read_to_string(root.join("apps/actinglab/src/lab_run.rs"))
+        .expect("read ActingLab run adapter");
+    assert!(
+        main.contains("local_ledger_retired"),
+        "legacy local ledger command must remain a fail-loud tombstone"
+    );
+    assert!(
+        lab2.contains("RuntimeDebugEvent::requested")
+            && lab2.contains("RuntimeDebugEvent::completed")
+            && lab2.contains("RuntimeDebugEvent::failed"),
+        "online Lab2 operations must project typed lifecycle events through Runtime"
+    );
+    assert!(
+        lab_run.contains("RuntimeDebugOperation::LabRun")
+            && lab_run.contains("record_event(RuntimeDebugEvent::"),
+        "Lab run lifecycle must be recorded through the Runtime debug correlation"
+    );
 }
 
 fn cargo_metadata_args() -> [&'static str; 4] {

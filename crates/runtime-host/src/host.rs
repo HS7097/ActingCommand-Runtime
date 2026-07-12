@@ -24,7 +24,8 @@ use actingcommand_contract::{
     PackageDebugSummary, RUNTIME_INFO_FILE, ReadonlyObservation, RecognitionPayloadDraft,
     RecognitionVerdict, RequestId, ResourceAuthoringEvent, ResourceAuthoringPayloadDraft,
     ResourceAuthoringPhase, RetentionClass, RuntimeCaptureBackend, RuntimeControlPlaneStatus,
-    RuntimeErrorCode, RuntimeErrorProjection, RuntimeEventBatch, RuntimeEvidenceExportRequest,
+    RuntimeDebugEvent, RuntimeDebugOperation, RuntimeDebugPhase, RuntimeErrorCode,
+    RuntimeErrorProjection, RuntimeEventBatch, RuntimeEvidenceExportRequest,
     RuntimeEvidenceExportSummary, RuntimeEvidenceScreenshotCounts, RuntimeInfo,
     RuntimeInstanceStatus, RuntimeMonitorPolicy, RuntimeOperation, RuntimePayloadDraft,
     RuntimeReceipt, RuntimeReceiptState, RuntimeRequest, RuntimeResult, RuntimeSubscriptionRequest,
@@ -726,6 +727,9 @@ impl HostShared {
             RuntimeOperation::RecordAuthoringEvent { event } => {
                 self.record_authoring_event(validated, event)
             }
+            RuntimeOperation::RecordDebugEvent { event } => {
+                self.record_debug_event(validated, event)
+            }
         }
     }
 
@@ -1286,6 +1290,134 @@ impl HostShared {
             state: RuntimeReceiptState::Completed,
             terminal: Some(terminal(&persisted)),
             result: RuntimeResult::AuthoringEventRecorded {
+                phase: event.phase(),
+            },
+        })
+    }
+
+    fn record_debug_event(
+        &self,
+        validated: &ValidatedRuntimeRequest<'_>,
+        event: &RuntimeDebugEvent,
+    ) -> Result<OperationSuccess, RequestFailure> {
+        let context = lock(&self.debug_runs, "read_runtime_debug_event_context")?
+            .get(&validated.correlation_id())
+            .cloned();
+        if event.operation() == RuntimeDebugOperation::LabRun && context.is_none() {
+            return Err(RequestFailure::request(
+                RuntimeHostError::request(
+                    "runtime_debug_context_missing",
+                    "record_runtime_debug_event",
+                    RuntimeErrorCode::InvalidRequest,
+                ),
+                RuntimeReceiptState::Denied,
+                None,
+            ));
+        }
+        let links = context.as_ref().map_or_else(
+            || validated.event_links(None, None, None),
+            |context| validated.task_event_links(context.task_id, context.run_id),
+        );
+        let action = event.operation().event_action();
+        let persisted = match (event.operation(), event.phase()) {
+            (_, RuntimeDebugPhase::Requested) => self.append_event(
+                EventSeverity::Info,
+                EventSource::Lab,
+                OriginModule::Actinglab,
+                EventActor::Lab,
+                links,
+                ClientPayloadDraft::lab_request(action, AuditInput::new()),
+            )?,
+            (RuntimeDebugOperation::LabRun, RuntimeDebugPhase::Progress) => self.append_event(
+                EventSeverity::Info,
+                EventSource::Lab,
+                OriginModule::Actinglab,
+                EventActor::Lab,
+                links,
+                TaskPayloadDraft::step_finished(action, AuditInput::new()),
+            )?,
+            (RuntimeDebugOperation::LabRun, RuntimeDebugPhase::Completed) => self.append_event(
+                EventSeverity::Info,
+                EventSource::Runtime,
+                OriginModule::Runtime,
+                EventActor::Runtime,
+                links,
+                TaskPayloadDraft::completed(action, event.effect_disposition(), AuditInput::new()),
+            )?,
+            (RuntimeDebugOperation::LabRun, RuntimeDebugPhase::Failed) => self.append_event(
+                EventSeverity::Error,
+                EventSource::Runtime,
+                OriginModule::Runtime,
+                EventActor::Runtime,
+                links,
+                TaskPayloadDraft::failed(
+                    action,
+                    DiagnosticCode::RuntimeDiagnostic,
+                    event.effect_disposition(),
+                    AuditInput::new(),
+                ),
+            )?,
+            (_, RuntimeDebugPhase::Completed) => self.append_event(
+                EventSeverity::Info,
+                EventSource::Runtime,
+                OriginModule::Runtime,
+                EventActor::Runtime,
+                links,
+                CommandPayloadDraft::validated(
+                    action,
+                    event.effect_disposition(),
+                    AuditInput::new(),
+                ),
+            )?,
+            (_, RuntimeDebugPhase::Failed) => self.append_event(
+                EventSeverity::Error,
+                EventSource::Runtime,
+                OriginModule::Runtime,
+                EventActor::Runtime,
+                links,
+                CommandPayloadDraft::rejected(
+                    action,
+                    DiagnosticCode::CommandRejected,
+                    event.effect_disposition(),
+                    AuditInput::new(),
+                ),
+            )?,
+            (_, RuntimeDebugPhase::Progress) => {
+                return Err(RequestFailure::request(
+                    RuntimeHostError::request(
+                        "runtime_debug_event_invalid",
+                        "record_runtime_debug_event",
+                        RuntimeErrorCode::InvalidRequest,
+                    ),
+                    RuntimeReceiptState::Denied,
+                    None,
+                ));
+            }
+        };
+        if event.operation() == RuntimeDebugOperation::LabRun {
+            let outcome = match event.phase() {
+                RuntimeDebugPhase::Completed => Some(TaskOutcome::Success),
+                RuntimeDebugPhase::Failed => Some(TaskOutcome::Failure),
+                _ => None,
+            };
+            if let Some(outcome) = outcome {
+                let mut debug_runs = lock(&self.debug_runs, "update_runtime_debug_run_outcome")?;
+                let context = debug_runs
+                    .get_mut(&validated.correlation_id())
+                    .ok_or_else(|| {
+                        RequestFailure::poison_without_terminal(RuntimeHostError::fatal(
+                            "runtime_debug_context_missing_after_terminal",
+                            "record_runtime_debug_event",
+                            RuntimeErrorCode::RuntimeFatal,
+                        ))
+                    })?;
+                context.terminal_outcome = Some(outcome);
+            }
+        }
+        Ok(OperationSuccess {
+            state: RuntimeReceiptState::Completed,
+            terminal: Some(terminal(&persisted)),
+            result: RuntimeResult::DebugEventRecorded {
                 phase: event.phase(),
             },
         })

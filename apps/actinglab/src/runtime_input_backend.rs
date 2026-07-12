@@ -2,7 +2,9 @@
 
 use actingcommand_contract::InputAction;
 use actingcommand_device::{DeviceError, DeviceErrorSeverity, DeviceResult, InputBackend};
-use actingcommand_runtime_client::{RuntimeClient, RuntimeClientError, RuntimeInputProxy};
+use actingcommand_runtime_client::{
+    RuntimeClient, RuntimeClientError, RuntimeDebugSession, RuntimeInputProxy,
+};
 
 /// Lab compatibility adapter for the Runtime's typed input proxy.
 ///
@@ -14,6 +16,15 @@ pub(super) struct RuntimeInputBackend {
 impl RuntimeInputBackend {
     pub(super) fn connect(client: RuntimeClient, instance_alias: &str) -> DeviceResult<Self> {
         RuntimeInputProxy::connect(client, instance_alias)
+            .map(|proxy| Self { proxy })
+            .map_err(device_error)
+    }
+
+    pub(super) fn connect_debug(
+        session: RuntimeDebugSession,
+        instance_alias: &str,
+    ) -> DeviceResult<Self> {
+        RuntimeInputProxy::connect_debug(session, instance_alias)
             .map(|proxy| Self { proxy })
             .map_err(device_error)
     }

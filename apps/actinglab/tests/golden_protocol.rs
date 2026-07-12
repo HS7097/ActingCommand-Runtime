@@ -201,10 +201,12 @@ fn normalizer_replaces_only_dynamic_protocol_fields() {
         "detector_id": "detect_resolution",
         "generated_at_unix_ms": 123,
         "instance_id": "envinst_abcdef",
+        "correlation_id": "correlation_abcdef",
         "source_result": "detect_resolution@123",
         "input_sha256": "0123456789abcdef",
         "message": "hash mismatch: expected 0000000000000000000000000000000000000000000000000000000000000000, actual ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
         "path": temp.path().join("result.json").display().to_string(),
+        "ledger_path": "runtime-global-ledger/correlation_abcdef",
         "schema_version": "0.2",
         "confidence": 0.9876543
     });
@@ -215,6 +217,7 @@ fn normalizer_replaces_only_dynamic_protocol_fields() {
     assert_eq!(value["reco_id"], "<RECO_ID>");
     assert_eq!(value["generated_at_unix_ms"], "<TIME>");
     assert_eq!(value["instance_id"], "<IID>");
+    assert_eq!(value["correlation_id"], "<CORRELATION_ID>");
     assert_eq!(value["source_result"], "detect_resolution@<TIME>");
     assert_eq!(value["input_sha256"], "<INPUT_SHA256>");
     assert_eq!(
@@ -222,6 +225,10 @@ fn normalizer_replaces_only_dynamic_protocol_fields() {
         "hash mismatch: expected <SHA256>, actual <SHA256>"
     );
     assert_eq!(value["path"], "<PATH>");
+    assert_eq!(
+        value["ledger_path"],
+        "runtime-global-ledger/<CORRELATION_ID>"
+    );
     assert_eq!(value["detector_id"], "detect_resolution");
     assert_eq!(value["schema_version"], "0.2");
     assert_eq!(value["confidence"], 0.9876543);
@@ -364,6 +371,10 @@ fn normalize_string(text: &mut String, root: &Path, key: Option<&str>) {
             *text = "<LEASE_ID>".to_string();
             return;
         }
+        Some("correlation_id") => {
+            *text = "<CORRELATION_ID>".to_string();
+            return;
+        }
         Some("output_zip_sha256") => {
             *text = "<OUTPUT_SHA256>".to_string();
             return;
@@ -374,6 +385,14 @@ fn normalize_string(text: &mut String, root: &Path, key: Option<&str>) {
         }
         Some("instance_id") if text.starts_with("envinst_") => {
             *text = "<IID>".to_string();
+            return;
+        }
+        Some(field)
+            if path_field(field)
+                && (text.starts_with("runtime-global-ledger/correlation_")
+                    || text.starts_with("runtime-global-ledger\\correlation_")) =>
+        {
+            *text = "runtime-global-ledger/<CORRELATION_ID>".to_string();
             return;
         }
         Some(field) if path_field(field) && Path::new(text).is_absolute() => {

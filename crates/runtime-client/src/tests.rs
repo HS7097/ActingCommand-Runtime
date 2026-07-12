@@ -4,10 +4,10 @@ use super::*;
 use actingcommand_contract::{
     CaptureSequenceSpec, EventActor, EventQuery, EventSource, EventType, IdentifierIssuer,
     InputAction, InstanceId, LeasePriority, LeaseQueuePolicy, ProjectionProfile,
-    ResourceAuthoringEvent, ResourceAuthoringPhase, RuntimeCaptureBackend, RuntimeErrorCode,
-    RuntimeErrorProjection, RuntimeMonitorPolicy, RuntimeOperation, RuntimeReceipt,
-    RuntimeReceiptState, RuntimeRequest, RuntimeResult, RuntimeSubscriptionRequest,
-    SubscriptionCursor,
+    ResourceAuthoringEvent, ResourceAuthoringPhase, RuntimeCaptureBackend, RuntimeDebugEvent,
+    RuntimeDebugOperation, RuntimeErrorCode, RuntimeErrorProjection, RuntimeMonitorPolicy,
+    RuntimeOperation, RuntimeReceipt, RuntimeReceiptState, RuntimeRequest, RuntimeResult,
+    RuntimeSubscriptionRequest, SubscriptionCursor,
 };
 use actingcommand_device::{
     CaptureBackend, CaptureBackendName, DeviceError, DeviceResult, Frame, InputBackend, PixelFormat,
@@ -489,6 +489,34 @@ fn debug_session_correlates_runtime_capture_scheduler_input_and_release() {
     }
     assert_eq!(state.capture_opens.load(Ordering::Acquire), 1);
     assert_eq!(state.inputs.load(Ordering::Acquire), 1);
+    drop(client);
+    host.close().expect("close host");
+}
+
+#[test]
+fn lab_run_debug_event_requires_a_verified_package_context() {
+    let root = TempDir::new().expect("tempdir");
+    let state = Arc::new(FakeState::default());
+    let host = host(&root, state, 1_000);
+    let client = lab_client(&root);
+    let session = client.begin_debug_session().expect("debug session");
+
+    let error = session
+        .record_event(RuntimeDebugEvent::requested(RuntimeDebugOperation::LabRun))
+        .expect_err("Lab run must be admitted through debug-package containment");
+
+    assert_eq!(error.code(), "runtime_request_rejected");
+    assert_eq!(
+        error.projection().expect("Runtime rejection").code,
+        RuntimeErrorCode::InvalidRequest
+    );
+    assert!(
+        session
+            .query_events(ProjectionProfile::Forensic)
+            .expect("debug events")
+            .iter()
+            .all(|event| event.event_type != EventType::LabRequest)
+    );
     drop(client);
     host.close().expect("close host");
 }

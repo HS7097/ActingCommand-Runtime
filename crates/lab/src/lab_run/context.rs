@@ -989,11 +989,16 @@ impl<'a, L: LedgerSink> LabRunContext<'a, L> {
             .map_err(|err| self.ledger_failure(err.message, "ledger_projection_sync"))?;
         let readback = L::read_run_session(&self.ledger_session)
             .map_err(|err| self.ledger_failure(err.message, "ledger_projection_read"))?;
+        let runtime_projection = readback.runtime_projection().ok_or_else(|| {
+            CliError::package_invalid(
+                "Lab result projection is missing Runtime global-ledger facts",
+            )
+        })?;
         let read = readback.storage();
-        let events = project_light_events(read);
+        let events = runtime_projection.events().to_vec();
         if events.is_empty() {
             return Err(CliError::package_invalid(
-                "runtime ledger projection has no events",
+                "Runtime global-ledger projection has no events",
             ));
         }
         let mut recognition = Vec::new();
@@ -1026,9 +1031,10 @@ impl<'a, L: LedgerSink> LabRunContext<'a, L> {
             }
         }
         let projection_source = json!({
-            "kind": "runtime_ledger",
-            "ledger_path": ledger_path.display().to_string(),
-            "event_count": read.events.len(),
+            "kind": "runtime_global_ledger",
+            "correlation_id": runtime_projection.correlation_id(),
+            "logical_stream": ledger_path.display().to_string(),
+            "event_count": runtime_projection.events().len(),
             "record_count": read.records.len(),
             "skipped_corrupt_lines": read.skipped_corrupt_lines
         });

@@ -7,9 +7,10 @@ use actingcommand_contract::{
     IdentifierIssuer, InputAction, IssuedCorrelationId, LeaseQueuePolicy, LeaseQueueStatus,
     LeaseToken, OwnerEpoch, PackageDebugRequest, ProjectedEvent, ProjectionProfile,
     RUNTIME_INFO_FILE, RequestId, ResourceAuthoringEvent, RuntimeControlPlaneStatus,
-    RuntimeEventBatch, RuntimeEvidenceExportRequest, RuntimeInfo, RuntimeMonitorInstanceStatus,
-    RuntimeMonitorPolicy, RuntimeMonitorRegistryStatus, RuntimeOperation, RuntimeReceipt,
-    RuntimeRequest, RuntimeResult, RuntimeSubscriptionRequest, TerminalEvent,
+    RuntimeDebugEvent, RuntimeEventBatch, RuntimeEvidenceExportRequest, RuntimeInfo,
+    RuntimeMonitorInstanceStatus, RuntimeMonitorPolicy, RuntimeMonitorRegistryStatus,
+    RuntimeOperation, RuntimeReceipt, RuntimeRequest, RuntimeResult, RuntimeSubscriptionRequest,
+    TerminalEvent,
 };
 use serde::Serialize;
 use std::fmt;
@@ -129,6 +130,7 @@ pub struct RuntimeAuthoringSession {
 }
 
 /// Correlation-scoped Lab adapter for Runtime-owned capture, scheduling, input, and ledger facts.
+#[derive(Clone)]
 pub struct RuntimeDebugSession {
     client: RuntimeClient,
     correlation: IssuedCorrelationId,
@@ -894,6 +896,21 @@ impl RuntimeDebugSession {
         }
     }
 
+    pub fn renew_lease(&self, token: &LeaseToken) -> RuntimeClientResult<LeaseToken> {
+        let receipt = self.client.execute_receipt_with_correlation(
+            "debug_renew_lease",
+            RuntimeOperation::RenewLease {
+                token: token.clone(),
+            },
+            self.correlation,
+            None,
+        )?;
+        match receipt.result() {
+            Some(RuntimeResult::LeaseRenewed { token }) => Ok(token.clone()),
+            _ => Err(self.client.unexpected_result("debug_renew_lease")),
+        }
+    }
+
     pub fn input(&self, token: &LeaseToken, action: InputAction) -> RuntimeClientResult<ActionId> {
         let response_timeout = {
             let connection = self.client.connection("debug_runtime_input")?;
@@ -930,6 +947,28 @@ impl RuntimeDebugSession {
             }) if *instance_id == token.instance_id() && *lease_id == token.lease_id() => Ok(()),
             _ => Err(self.client.unexpected_result("debug_release_lease")),
         }
+    }
+
+    pub fn record_event(&self, event: RuntimeDebugEvent) -> RuntimeClientResult<TerminalEvent> {
+        event.validate().map_err(|_| {
+            RuntimeClientError::fatal("runtime_debug_event_invalid", "record_runtime_debug_event")
+        })?;
+        let expected_phase = event.phase();
+        let receipt = self.client.execute_receipt_with_correlation(
+            "record_runtime_debug_event",
+            RuntimeOperation::RecordDebugEvent { event },
+            self.correlation,
+            None,
+        )?;
+        if !matches!(
+            receipt.result(),
+            Some(RuntimeResult::DebugEventRecorded { phase }) if *phase == expected_phase
+        ) {
+            return Err(self.client.unexpected_result("record_runtime_debug_event"));
+        }
+        receipt
+            .terminal()
+            .ok_or_else(|| self.client.unexpected_result("record_runtime_debug_event"))
     }
 
     pub fn query_events(

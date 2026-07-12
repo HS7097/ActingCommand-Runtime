@@ -104,6 +104,11 @@ fn prepare_recognition_input_with_config(
     require_pages: bool,
     config: &super::UserConfig,
 ) -> CliOutcome<PreparedReadonlyInput> {
+    if flags.bool("--capture") {
+        return Err(CliError::usage(
+            "legacy semantic --capture is retired; use observe/do/ensure/wait so one Runtime debug correlation owns capture, input, and ledger facts",
+        ));
+    }
     let resources = super::contained_resources::load(flags, "readonly")?;
     if require_pages {
         super::contained_resources::recognition_pipeline(&resources)?;
