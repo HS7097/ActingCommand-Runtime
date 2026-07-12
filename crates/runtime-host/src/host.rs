@@ -15,25 +15,29 @@ use actingcommand_artifact_store::{
 use actingcommand_contract::{
     ApplicationLifecycleAction, ApplicationPayload, ApplicationPayloadDraft, ArtifactIssuePolicy,
     ArtifactKind, ArtifactProducer, ArtifactRedactionState, AuditInput, CapturePayloadDraft,
-    CaptureSequence, CaptureSequenceSpec, ClientPayloadDraft, CommandPayloadDraft, CorrelationId,
-    DiagnosticCode, EffectDisposition, EventAction, EventActor, EventDraft, EventLinksDraft,
-    EventPayload, EventQuery, EventSeverity, EventSource, EventType, EvidenceCompleteness,
-    InputAction, InputPayload, InputPayloadDraft, InstanceId, IssuedMonitorProbe,
-    IssuedReadOnlyCaptureCapability, IssuedRunId, IssuedTaskId, LeaseId, LeasePayloadDraft,
-    LeaseQueuePolicy, LeaseToken, MAX_INSTANCE_ALIAS_BYTES, MonitorPayloadDraft,
-    MonitorRecoveryCoordinationReason, OriginModule, PackageDebugLayout, PackageDebugRequest,
-    PackageDebugSummary, RUNTIME_INFO_FILE, ReadonlyObservation, RecognitionPayloadDraft,
-    RecognitionVerdict, RequestId, ResourceAuthoringEvent, ResourceAuthoringPayloadDraft,
-    ResourceAuthoringPhase, RetentionClass, RuntimeCaptureBackend, RuntimeControlPlaneStatus,
-    RuntimeDebugEvent, RuntimeDebugOperation, RuntimeDebugPhase, RuntimeErrorCode,
-    RuntimeErrorProjection, RuntimeEventBatch, RuntimeEvidenceExportRequest,
-    RuntimeEvidenceExportSummary, RuntimeEvidenceScreenshotCounts, RuntimeInfo,
-    RuntimeInstanceStatus, RuntimeMonitorPolicy, RuntimeOperation, RuntimePayloadDraft,
-    RuntimeReceipt, RuntimeReceiptState, RuntimeRequest, RuntimeResult, RuntimeSubscriptionRequest,
-    SchedulerPayloadDraft, TaskOutcome, TaskPayloadDraft, TerminalEvent, ValidatedRuntimeRequest,
+    CaptureSequence, CaptureSequenceSpec, ClientPayloadDraft, CommandPayloadDraft,
+    ContainedTaskRequest, CorrelationId, DiagnosticCode, EffectDisposition, EventAction,
+    EventActor, EventDraft, EventLinksDraft, EventPayload, EventQuery, EventSeverity, EventSource,
+    EventType, EvidenceCompleteness, InputAction, InputPayload, InputPayloadDraft, InstanceId,
+    IssuedActionId, IssuedFrameId, IssuedMonitorProbe, IssuedReadOnlyCaptureCapability,
+    IssuedRunId, IssuedTaskId, LeaseId, LeasePayloadDraft, LeaseQueuePolicy, LeaseToken,
+    MAX_INSTANCE_ALIAS_BYTES, MonitorPayloadDraft, MonitorRecoveryCoordinationReason, OriginModule,
+    PackageDebugLayout, PackageDebugRequest, PackageDebugSummary, RUNTIME_INFO_FILE,
+    ReadonlyObservation, RecognitionPayloadDraft, RecognitionVerdict, RequestId,
+    ResourceAuthoringEvent, ResourceAuthoringPayloadDraft, ResourceAuthoringPhase, RetentionClass,
+    RuntimeCaptureBackend, RuntimeControlPlaneStatus, RuntimeDebugEvent, RuntimeDebugOperation,
+    RuntimeDebugPhase, RuntimeErrorCode, RuntimeErrorProjection, RuntimeEventBatch,
+    RuntimeEvidenceExportRequest, RuntimeEvidenceExportSummary, RuntimeEvidenceScreenshotCounts,
+    RuntimeInfo, RuntimeInstanceStatus, RuntimeMonitorPolicy, RuntimeOperation,
+    RuntimePayloadDraft, RuntimeReceipt, RuntimeReceiptState, RuntimeRequest, RuntimeResult,
+    RuntimeSubscriptionRequest, SchedulerPayloadDraft, TaskOutcome, TaskPayloadDraft,
+    TerminalEvent, ValidatedRuntimeRequest,
 };
-use actingcommand_device::CaptureBackendName;
-use actingcommand_execution_kernel::{ExecutionBackendProvider, ExecutionKernel, decide_monitor};
+use actingcommand_device::{CaptureBackendName, Frame};
+use actingcommand_execution_kernel::{
+    ContainedTaskRunError, ContainedTaskRuntime, ContainedTaskTrace, ExecutionBackendProvider,
+    ExecutionKernel, ExternalExpectedSha256, PreparedContainedTask, decide_monitor,
+};
 use actingcommand_ledger::critical::{
     CriticalActionReport, CriticalEventPlan, CriticalExecutionError, CriticalOperation,
     DefiniteEffectDisposition, LeaseTransitionTarget, execute_critical,
@@ -718,6 +722,18 @@ impl HostShared {
                 instance_alias,
                 *holder_id,
                 *action,
+                connection_id,
+            ),
+            RuntimeOperation::RunContainedTask {
+                instance_alias,
+                holder_id,
+                request: task_request,
+            } => self.run_contained_task(
+                request,
+                validated,
+                instance_alias,
+                *holder_id,
+                task_request,
                 connection_id,
             ),
             RuntimeOperation::Input { token, action } => {
@@ -3651,6 +3667,212 @@ impl HostShared {
         })
     }
 
+    fn run_contained_task(
+        &self,
+        original: &RuntimeRequest,
+        request: &ValidatedRuntimeRequest<'_>,
+        instance_alias: &str,
+        holder_id: actingcommand_contract::HolderId,
+        task_request: &ContainedTaskRequest,
+        connection_id: ConnectionId,
+    ) -> Result<OperationSuccess, RequestFailure> {
+        let resolved = self.resolve_instance(instance_alias)?;
+        let prepared = prepare_contained_task(instance_alias, task_request)?;
+        self.append_request_lifecycle(
+            original,
+            request,
+            resolved.instance_id(),
+            EventAction::RuntimeTaskRun,
+        )?;
+        let task_id = self
+            .events
+            .issuer()
+            .mint_task_id()
+            .map_err(|_| RequestFailure::poison_without_terminal(runtime_identifier_error()))?;
+        let run_id = self
+            .events
+            .issuer()
+            .mint_run_id()
+            .map_err(|_| RequestFailure::poison_without_terminal(runtime_identifier_error()))?;
+        let acquired = self.acquire_lease(
+            request,
+            original.request_id(),
+            instance_alias,
+            holder_id,
+            connection_id,
+        )?;
+        let RuntimeResult::LeaseGranted { token } = acquired.result else {
+            return Err(RequestFailure::poison_without_terminal(
+                RuntimeHostError::fatal(
+                    "contained_task_lease_result_invalid",
+                    "run_contained_task",
+                    RuntimeErrorCode::RuntimeFatal,
+                ),
+            ));
+        };
+        let mut runtime = RuntimeContainedTask {
+            host: self,
+            request,
+            token: &token,
+            instance_alias,
+            connection_id,
+            task_id,
+            run_id,
+            last_frame_id: None,
+            step_actions: BTreeMap::new(),
+            finalizing: None,
+        };
+        let execution = prepared.run(&mut runtime);
+        let finalizing = runtime.finalizing;
+        drop(runtime);
+        let outcome = match execution {
+            Ok(outcome) => outcome,
+            Err(ContainedTaskRunError::Boundary(mut failure)) => {
+                if !failure.poison_runtime {
+                    let event = self.append_contained_task_terminal(
+                        request,
+                        &token,
+                        ContainedTaskTerminalDraft {
+                            task_id,
+                            run_id,
+                            outcome: TaskOutcome::Failure,
+                            intent_already_recorded: finalizing.is_some(),
+                            diagnostic: diagnostic_for_projection(failure.error.projection()),
+                        },
+                    )?;
+                    failure.terminal = Some(terminal(&event));
+                }
+                return Err(self.cleanup_composite_failure(token, connection_id, failure));
+            }
+            Err(ContainedTaskRunError::Task(error)) => {
+                let event = self.append_contained_task_terminal(
+                    request,
+                    &token,
+                    ContainedTaskTerminalDraft {
+                        task_id,
+                        run_id,
+                        outcome: TaskOutcome::Failure,
+                        intent_already_recorded: finalizing.is_some(),
+                        diagnostic: DiagnosticCode::RuntimeDiagnostic,
+                    },
+                )?;
+                let failure = RequestFailure::request(
+                    RuntimeHostError::request(
+                        error.code(),
+                        "run_contained_task",
+                        RuntimeErrorCode::BackendOperationFailed,
+                    ),
+                    RuntimeReceiptState::Failed,
+                    Some(terminal(&event)),
+                );
+                return Err(self.cleanup_composite_failure(token, connection_id, failure));
+            }
+        };
+        if finalizing != Some(outcome.outcome) {
+            return Err(self.cleanup_composite_failure(
+                token,
+                connection_id,
+                RequestFailure::poison_without_terminal(RuntimeHostError::fatal(
+                    "contained_task_finalizing_state_invalid",
+                    "run_contained_task",
+                    RuntimeErrorCode::RuntimeFatal,
+                )),
+            ));
+        }
+        let task_terminal = self.append_contained_task_terminal(
+            request,
+            &token,
+            ContainedTaskTerminalDraft {
+                task_id,
+                run_id,
+                outcome: outcome.outcome,
+                intent_already_recorded: true,
+                diagnostic: DiagnosticCode::RuntimeDiagnostic,
+            },
+        )?;
+        match self.release_lease(request, original.request_id(), &token, connection_id) {
+            Ok(_) => Ok(OperationSuccess {
+                state: RuntimeReceiptState::Completed,
+                terminal: Some(terminal(&task_terminal)),
+                result: RuntimeResult::ContainedTaskCompleted {
+                    run_id: *run_id.transport(),
+                    task_id: *task_id.transport(),
+                    outcome: outcome.outcome,
+                    final_page: outcome.final_page,
+                    executed_steps: outcome.executed_steps,
+                },
+            }),
+            Err(failure) => Err(self.cleanup_composite_failure(token, connection_id, failure)),
+        }
+    }
+
+    fn append_contained_task_terminal(
+        &self,
+        request: &ValidatedRuntimeRequest<'_>,
+        token: &LeaseToken,
+        draft: ContainedTaskTerminalDraft,
+    ) -> Result<PersistedEvent, RequestFailure> {
+        let links = self
+            .events
+            .request_links(
+                request,
+                Some(token.instance_id()),
+                Some(token.lease_id()),
+                None,
+            )
+            .with_task_id(draft.task_id)
+            .with_run_id(draft.run_id);
+        if !draft.intent_already_recorded {
+            self.append_event(
+                EventSeverity::Info,
+                EventSource::Runtime,
+                OriginModule::Runtime,
+                EventActor::Runtime,
+                links.clone(),
+                TaskPayloadDraft::terminal_intent(EventAction::RuntimeTaskRun, AuditInput::new()),
+            )?;
+        }
+        match draft.outcome {
+            TaskOutcome::Success => self.append_event(
+                EventSeverity::Info,
+                EventSource::Runtime,
+                OriginModule::Runtime,
+                EventActor::Runtime,
+                links,
+                TaskPayloadDraft::completed(
+                    EventAction::RuntimeTaskRun,
+                    EffectDisposition::Performed,
+                    AuditInput::new(),
+                ),
+            ),
+            TaskOutcome::Failure => self.append_event(
+                EventSeverity::Error,
+                EventSource::Runtime,
+                OriginModule::Runtime,
+                EventActor::Runtime,
+                links,
+                TaskPayloadDraft::failed(
+                    EventAction::RuntimeTaskRun,
+                    draft.diagnostic,
+                    EffectDisposition::Indeterminate,
+                    AuditInput::new(),
+                ),
+            ),
+            TaskOutcome::Cancelled => self.append_event(
+                EventSeverity::Warning,
+                EventSource::Runtime,
+                OriginModule::Runtime,
+                EventActor::Runtime,
+                links,
+                TaskPayloadDraft::cancelled(
+                    EventAction::RuntimeTaskRun,
+                    EffectDisposition::Indeterminate,
+                    AuditInput::new(),
+                ),
+            ),
+        }
+    }
+
     fn issue_readonly_capability(
         &self,
         instance_id: InstanceId,
@@ -5037,6 +5259,330 @@ impl HostShared {
     }
 }
 
+#[derive(Clone, Copy)]
+struct ContainedTaskTerminalDraft {
+    task_id: IssuedTaskId,
+    run_id: IssuedRunId,
+    outcome: TaskOutcome,
+    intent_already_recorded: bool,
+    diagnostic: DiagnosticCode,
+}
+
+struct RuntimeContainedTask<'a> {
+    host: &'a HostShared,
+    request: &'a ValidatedRuntimeRequest<'a>,
+    token: &'a LeaseToken,
+    instance_alias: &'a str,
+    connection_id: ConnectionId,
+    task_id: IssuedTaskId,
+    run_id: IssuedRunId,
+    last_frame_id: Option<IssuedFrameId>,
+    step_actions: BTreeMap<u32, (IssuedActionId, String)>,
+    finalizing: Option<TaskOutcome>,
+}
+
+impl RuntimeContainedTask<'_> {
+    fn links(&self) -> EventLinksDraft {
+        self.host
+            .events
+            .request_links(
+                self.request,
+                Some(self.token.instance_id()),
+                Some(self.token.lease_id()),
+                None,
+            )
+            .with_task_id(self.task_id)
+            .with_run_id(self.run_id)
+    }
+
+    fn append_task(
+        &self,
+        severity: EventSeverity,
+        links: EventLinksDraft,
+        payload: TaskPayloadDraft,
+    ) -> Result<(), RequestFailure> {
+        self.host
+            .append_event(
+                severity,
+                EventSource::Runtime,
+                OriginModule::Runtime,
+                EventActor::Runtime,
+                links,
+                payload,
+            )
+            .map(|_| ())
+    }
+}
+
+impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
+    type Error = RequestFailure;
+
+    fn capture(&mut self) -> Result<Frame, Self::Error> {
+        let frame_id = self
+            .host
+            .events
+            .issuer()
+            .mint_frame_id()
+            .map_err(|_| RequestFailure::poison_without_terminal(runtime_identifier_error()))?;
+        let links = self.links().with_frame_id(frame_id);
+        self.host.append_event(
+            EventSeverity::Info,
+            EventSource::Device,
+            OriginModule::Capture,
+            EventActor::Runtime,
+            links.clone(),
+            CapturePayloadDraft::requested(EventAction::CaptureObserve, AuditInput::new()),
+        )?;
+        match self.host.execution.capture(self.instance_alias) {
+            Ok(frame) => {
+                self.last_frame_id = Some(frame_id);
+                Ok(frame)
+            }
+            Err(error) => {
+                let runtime_error =
+                    RuntimeHostError::execution("run_contained_task_capture", &error);
+                let failed = self.host.append_event(
+                    EventSeverity::Error,
+                    EventSource::Device,
+                    OriginModule::Capture,
+                    EventActor::Runtime,
+                    links,
+                    CapturePayloadDraft::failed(
+                        EventAction::CaptureObserve,
+                        DiagnosticCode::CaptureFailed,
+                        EffectDisposition::NotPerformed,
+                        AuditInput::new(),
+                    ),
+                )?;
+                Err(RequestFailure {
+                    state: RuntimeReceiptState::Failed,
+                    terminal: Some(terminal(&failed)),
+                    poison_runtime: runtime_error.is_fatal(),
+                    error: Box::new(runtime_error),
+                })
+            }
+        }
+    }
+
+    fn input(&mut self, action: InputAction) -> Result<(), Self::Error> {
+        let success = self
+            .host
+            .input(self.request, self.token, &action, self.connection_id)?;
+        if matches!(success.result, RuntimeResult::InputCommitted { .. }) {
+            Ok(())
+        } else {
+            Err(RequestFailure::poison_without_terminal(
+                RuntimeHostError::fatal(
+                    "contained_task_input_result_invalid",
+                    "run_contained_task",
+                    RuntimeErrorCode::RuntimeFatal,
+                ),
+            ))
+        }
+    }
+
+    fn record(&mut self, trace: ContainedTaskTrace) -> Result<(), Self::Error> {
+        match trace {
+            ContainedTaskTrace::PackageAdmitted { .. } => self.append_task(
+                EventSeverity::Info,
+                self.links(),
+                TaskPayloadDraft::requested(EventAction::RuntimeTaskRun, AuditInput::new()),
+            ),
+            ContainedTaskTrace::RunStarted => self.append_task(
+                EventSeverity::Info,
+                self.links(),
+                TaskPayloadDraft::started(EventAction::RuntimeTaskRun, AuditInput::new()),
+            ),
+            ContainedTaskTrace::CaptureCompleted { width, height } => {
+                let frame_id = self.last_frame_id.ok_or_else(|| {
+                    RequestFailure::poison_without_terminal(RuntimeHostError::fatal(
+                        "contained_task_frame_identity_missing",
+                        "run_contained_task",
+                        RuntimeErrorCode::RuntimeFatal,
+                    ))
+                })?;
+                self.host
+                    .append_event(
+                        EventSeverity::Info,
+                        EventSource::Device,
+                        OriginModule::Capture,
+                        EventActor::Runtime,
+                        self.links().with_frame_id(frame_id),
+                        CapturePayloadDraft::completed(
+                            EventAction::CaptureObserve,
+                            EffectDisposition::NotPerformed,
+                            width,
+                            height,
+                            AuditInput::new(),
+                        ),
+                    )
+                    .map(|_| ())
+            }
+            ContainedTaskTrace::RecognitionCompleted {
+                page_label,
+                width,
+                height,
+            } => {
+                let frame_id = self.last_frame_id.ok_or_else(|| {
+                    RequestFailure::poison_without_terminal(RuntimeHostError::fatal(
+                        "contained_task_frame_identity_missing",
+                        "run_contained_task",
+                        RuntimeErrorCode::RuntimeFatal,
+                    ))
+                })?;
+                let recognition_id =
+                    self.host
+                        .events
+                        .issuer()
+                        .mint_recognition_id()
+                        .map_err(|_| {
+                            RequestFailure::poison_without_terminal(runtime_identifier_error())
+                        })?;
+                let links = self
+                    .links()
+                    .with_frame_id(frame_id)
+                    .with_recognition_id(recognition_id);
+                self.host.append_event(
+                    EventSeverity::Info,
+                    EventSource::Runtime,
+                    OriginModule::Recognition,
+                    EventActor::Runtime,
+                    links.clone(),
+                    RecognitionPayloadDraft::requested(
+                        EventAction::RecognitionObserve,
+                        AuditInput::new(),
+                    ),
+                )?;
+                self.host
+                    .append_event(
+                        EventSeverity::Info,
+                        EventSource::Runtime,
+                        OriginModule::Recognition,
+                        EventActor::Runtime,
+                        links,
+                        RecognitionPayloadDraft::completed(
+                            EventAction::RecognitionObserve,
+                            EffectDisposition::NotPerformed,
+                            width,
+                            height,
+                            if page_label.is_some() {
+                                RecognitionVerdict::PageMatched
+                            } else {
+                                RecognitionVerdict::PageUnmatched
+                            },
+                            AuditInput::new(),
+                        ),
+                    )
+                    .map(|_| ())
+            }
+            ContainedTaskTrace::StepStarted {
+                step_index,
+                operation_label,
+                ..
+            } => {
+                let action_id = self.host.events.issuer().mint_action_id().map_err(|_| {
+                    RequestFailure::poison_without_terminal(runtime_identifier_error())
+                })?;
+                if self
+                    .step_actions
+                    .insert(step_index, (action_id, operation_label))
+                    .is_some()
+                {
+                    return Err(RequestFailure::poison_without_terminal(
+                        RuntimeHostError::fatal(
+                            "contained_task_step_identity_reused",
+                            "run_contained_task",
+                            RuntimeErrorCode::RuntimeFatal,
+                        ),
+                    ));
+                }
+                self.append_task(
+                    EventSeverity::Info,
+                    self.links().with_action_id(action_id),
+                    TaskPayloadDraft::step_started(EventAction::RuntimeTaskRun, AuditInput::new()),
+                )
+            }
+            ContainedTaskTrace::EffectIntent {
+                step_index,
+                operation_label,
+                action,
+            } => {
+                action.validate().map_err(|_| {
+                    RequestFailure::poison_without_terminal(RuntimeHostError::fatal(
+                        "contained_task_effect_invalid",
+                        "run_contained_task",
+                        RuntimeErrorCode::RuntimeFatal,
+                    ))
+                })?;
+                validate_contained_task_step(&self.step_actions, step_index, &operation_label)
+            }
+            ContainedTaskTrace::EffectCompleted {
+                step_index,
+                operation_label,
+            } => validate_contained_task_step(&self.step_actions, step_index, &operation_label),
+            ContainedTaskTrace::StepFinished {
+                step_index,
+                operation_label,
+                ..
+            } => {
+                validate_contained_task_step(&self.step_actions, step_index, &operation_label)?;
+                let (action_id, _) = self.step_actions.remove(&step_index).ok_or_else(|| {
+                    RequestFailure::poison_without_terminal(RuntimeHostError::fatal(
+                        "contained_task_step_identity_missing",
+                        "run_contained_task",
+                        RuntimeErrorCode::RuntimeFatal,
+                    ))
+                })?;
+                self.append_task(
+                    EventSeverity::Info,
+                    self.links().with_action_id(action_id),
+                    TaskPayloadDraft::step_finished(EventAction::RuntimeTaskRun, AuditInput::new()),
+                )
+            }
+            ContainedTaskTrace::Finalizing { outcome } => {
+                if self.finalizing.replace(outcome).is_some() || !self.step_actions.is_empty() {
+                    return Err(RequestFailure::poison_without_terminal(
+                        RuntimeHostError::fatal(
+                            "contained_task_finalizing_state_invalid",
+                            "run_contained_task",
+                            RuntimeErrorCode::RuntimeFatal,
+                        ),
+                    ));
+                }
+                self.append_task(
+                    EventSeverity::Info,
+                    self.links(),
+                    TaskPayloadDraft::terminal_intent(
+                        EventAction::RuntimeTaskRun,
+                        AuditInput::new(),
+                    ),
+                )
+            }
+        }
+    }
+}
+
+fn validate_contained_task_step(
+    steps: &BTreeMap<u32, (IssuedActionId, String)>,
+    step_index: u32,
+    operation_label: &str,
+) -> Result<(), RequestFailure> {
+    if steps
+        .get(&step_index)
+        .is_some_and(|(_, expected)| expected == operation_label)
+    {
+        Ok(())
+    } else {
+        Err(RequestFailure::poison_without_terminal(
+            RuntimeHostError::fatal(
+                "contained_task_step_identity_mismatch",
+                "run_contained_task",
+                RuntimeErrorCode::RuntimeFatal,
+            ),
+        ))
+    }
+}
+
 struct RuntimeArtifactEventSink<'a> {
     ledger: &'a GlobalLedger,
     events: &'a RuntimeEvents,
@@ -5559,6 +6105,49 @@ fn inspect_debug_package(request: &PackageDebugRequest) -> RuntimeHostResult<Pac
         bundle.navigation_path().is_some(),
     )
     .map_err(|_| debug_package_error("debug_package_summary_invalid"))
+}
+
+fn prepare_contained_task(
+    instance_alias: &str,
+    request: &ContainedTaskRequest,
+) -> Result<PreparedContainedTask, RequestFailure> {
+    let path = Path::new(request.package_path());
+    if !path.is_absolute() {
+        return Err(contained_task_package_failure(
+            "contained_task_path_not_absolute",
+        ));
+    }
+    let path = fs::canonicalize(path)
+        .map_err(|_| contained_task_package_failure("contained_task_package_open_failed"))?;
+    let metadata = fs::metadata(&path)
+        .map_err(|_| contained_task_package_failure("contained_task_package_metadata_failed"))?;
+    if !metadata.is_file() || metadata.len() > DEFAULT_MAX_COMPRESSED_BYTES {
+        return Err(contained_task_package_failure(
+            "contained_task_package_size_invalid",
+        ));
+    }
+    let bytes = fs::read(&path)
+        .map_err(|_| contained_task_package_failure("contained_task_package_read_failed"))?;
+    let expected = ExternalExpectedSha256::parse_hex(request.expected_sha256())
+        .map_err(|_| contained_task_package_failure("contained_task_package_hash_invalid"))?;
+    PreparedContainedTask::load(instance_alias, &bytes, expected)
+        .map_err(|error| contained_task_package_failure(error.code()))
+}
+
+fn contained_task_package_failure(code: &'static str) -> RequestFailure {
+    RequestFailure::request(
+        RuntimeHostError::request(code, "run_contained_task", RuntimeErrorCode::PackageInvalid),
+        RuntimeReceiptState::Denied,
+        None,
+    )
+}
+
+fn runtime_identifier_error() -> RuntimeHostError {
+    RuntimeHostError::fatal(
+        "runtime_identifier_issue_failed",
+        "run_contained_task",
+        RuntimeErrorCode::RuntimeFatal,
+    )
 }
 
 fn runtime_evidence_documents(

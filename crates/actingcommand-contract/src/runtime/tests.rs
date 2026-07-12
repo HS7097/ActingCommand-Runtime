@@ -181,6 +181,30 @@ fn application_lifecycle_request_is_instance_scoped_and_carries_no_application_i
 }
 
 #[test]
+fn contained_task_request_carries_only_runtime_resolved_instance_and_verified_package_identity() {
+    let ids = IdentifierIssuer::new().expect("identifier issuer");
+    let request = ContainedTaskRequest::new(
+        "C:/sealed/neutral-task.zip",
+        "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+    )
+    .expect("contained task request");
+    let operation = RuntimeOperation::run_contained_task(
+        "neutral.instance",
+        ids.mint_holder_id().expect("holder"),
+        request,
+    );
+
+    operation.validate().expect("valid operation");
+    let encoded = serde_json::to_value(&operation).expect("serialize operation");
+    assert_eq!(encoded["operation"], "run_contained_task");
+    assert_eq!(encoded["instance_alias"], "neutral.instance");
+    assert!(encoded.get("game").is_none());
+    assert!(encoded.get("server").is_none());
+    assert!(encoded.get("application_id").is_none());
+    assert!(!format!("{operation:?}").contains("neutral-task.zip"));
+}
+
+#[test]
 fn package_debug_contract_is_lab_only_bounded_and_redacted() {
     let private_path = r"C:\private\resource-package.zip";
     let expected = "a".repeat(64);

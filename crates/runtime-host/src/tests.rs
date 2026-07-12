@@ -6,14 +6,14 @@ use crate::monitor::MONITOR_FILE_NAME;
 use crate::time::unix_ms_now;
 use actingcommand_artifact_store::read_projected_verified;
 use actingcommand_contract::{
-    ApplicationLifecycleAction, CaptureSequenceSpec, EffectDisposition, EventActor, EventPayload,
-    EventQuery, EventSource, EventType, IdentifierIssuer, InputAction, InstanceId,
-    IssuedCorrelationId, LeasePriority, LeaseQueuePolicy, LeaseQueueStatus, LeaseToken,
+    ApplicationLifecycleAction, CaptureSequenceSpec, ContainedTaskRequest, EffectDisposition,
+    EventActor, EventPayload, EventQuery, EventSource, EventType, IdentifierIssuer, InputAction,
+    InstanceId, IssuedCorrelationId, LeasePriority, LeaseQueuePolicy, LeaseQueueStatus, LeaseToken,
     MonitorDiagnosis, MonitorDisposition, MonitorObservation, MonitorPayload,
     MonitorRecoveryCoordinationReason, MonitorRecoveryKind, OriginModule, ProjectionPayload,
     ProjectionProfile, RUNTIME_INFO_FILE, ResourceAuthoringEvent, ResourceAuthoringPhase,
     RuntimeCaptureBackend, RuntimeErrorCode, RuntimeMonitorPolicy, RuntimeOperation,
-    RuntimeReceipt, RuntimeReceiptState, RuntimeRequest, RuntimeResult,
+    RuntimeReceipt, RuntimeReceiptState, RuntimeRequest, RuntimeResult, TaskOutcome,
 };
 use actingcommand_device::{
     CaptureBackend, CaptureBackendName, DeviceError, DeviceResult, Frame, InputBackend, PixelFormat,
@@ -21,13 +21,14 @@ use actingcommand_device::{
 use actingcommand_scheduler::{ConnectionId, SchedulerConfig};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self, OpenOptions};
-use std::io::Write;
+use std::io::{Cursor, Write};
 use std::net::TcpStream;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Barrier};
 use std::thread;
 use std::time::{Duration, Instant};
 use tempfile::TempDir;
+use zip::{ZipWriter, write::FileOptions};
 
 #[derive(Default)]
 struct FakeState {
@@ -42,6 +43,7 @@ struct FakeState {
     capture_close_count: AtomicUsize,
     fail_capture: AtomicBool,
     fail_capture_on: AtomicUsize,
+    transition_capture_after_input: AtomicBool,
     monitor_observation_count: AtomicUsize,
     monitor_mode: AtomicUsize,
     application_count: AtomicUsize,
@@ -121,10 +123,20 @@ impl CaptureBackend for FakeCapture {
         {
             return Err(DeviceError::fatal("injected capture failure"));
         }
+        let first = if self
+            .state
+            .transition_capture_after_input
+            .load(Ordering::Acquire)
+            && self.state.input_count.load(Ordering::Acquire) > 0
+        {
+            [0, 0, 255]
+        } else {
+            [255, 0, 0]
+        };
         Frame::from_pixels(
             2,
             1,
-            vec![255, 0, 0, 0, 255, 0],
+            [first.as_slice(), &[0, 255, 0]].concat(),
             PixelFormat::Rgb8,
             CaptureBackendName::AdbScreencap,
         )
@@ -479,6 +491,81 @@ fn host_with_state(root: &TempDir, alias: &str, state: Arc<FakeState>) -> Runtim
         Arc::new(FakeProvider::one(alias, instance_id(), state)),
     )
     .expect("runtime host")
+}
+
+fn neutral_contained_task_package() -> Vec<u8> {
+    let cursor = Cursor::new(Vec::new());
+    let mut zip = ZipWriter::new(cursor);
+    let options = FileOptions::default().compression_method(zip::CompressionMethod::Stored);
+    let files: &[(&str, &[u8])] = &[
+        (
+            "control.json",
+            br#"{
+                "schema_version":"Lab-1y.control.v1",
+                "package_id":"neutral.semantic.task",
+                "execution_mode":"navigable_route",
+                "game":"neutral",
+                "server":"test",
+                "resolution":{"width":2,"height":1},
+                "entry_task_id":"task",
+                "capture_interval_ms":1,
+                "step_timeout_ms":50,
+                "timeout_ms":1000,
+                "max_steps":2
+            }"#,
+        ),
+        (
+            "resources/manifest.json",
+            br#"{"schema_version":"0.3","entry_task_id":"task"}"#,
+        ),
+        (
+            "resources/operations/task/task.json",
+            br#"{
+                "schema_version":"0.6",
+                "task_id":"task",
+                "game":"neutral",
+                "server_scope":["test"],
+                "coordinate_space":{"width":2,"height":1},
+                "entry_page":"home",
+                "target_page":"terminal",
+                "operations":[{
+                    "id":"open_terminal",
+                    "from":"home",
+                    "to":"terminal",
+                    "click":{"kind":"point","x":1,"y":0}
+                }]
+            }"#,
+        ),
+        (
+            "resources/recognition/neutral.test.pack.json",
+            br#"{
+                "schema_version":"0.3",
+                "game":"neutral",
+                "server":"test",
+                "coordinate_space":{"width":2,"height":1},
+                "defaults":{"color_max_distance":0.0},
+                "targets":[
+                    {"type":"color","id":"page/home","region":{"x":0,"y":0,"width":1,"height":1},"expected":[255,0,0]},
+                    {"type":"color","id":"page/terminal","region":{"x":0,"y":0,"width":1,"height":1},"expected":[0,0,255]}
+                ]
+            }"#,
+        ),
+        (
+            "resources/recognition/neutral.test.pages.json",
+            br#"{
+                "schema_version":"0.3",
+                "pages":[
+                    {"id":"neutral/home","required":["page/home"],"optional":[],"forbidden":[]},
+                    {"id":"neutral/terminal","required":["page/terminal"],"optional":[],"forbidden":[]}
+                ]
+            }"#,
+        ),
+    ];
+    for (path, contents) in files {
+        zip.start_file(*path, options).expect("zip entry");
+        zip.write_all(contents).expect("zip content");
+    }
+    zip.finish().expect("finish zip").into_inner()
 }
 
 fn wait_until(timeout: Duration, mut predicate: impl FnMut() -> bool) {
@@ -2082,6 +2169,63 @@ fn application_lifecycle_is_denied_while_another_client_holds_the_instance() {
     assert_eq!(owner.send(&release).state(), RuntimeReceiptState::Completed);
     drop(owner);
     drop(contender);
+    host.close().expect("close host");
+}
+
+#[test]
+fn runtime_executes_neutral_contained_task_without_lab_ownership() {
+    let root = TempDir::new().expect("tempdir");
+    let package = root.path().join("neutral-task.zip");
+    let bytes = neutral_contained_task_package();
+    fs::write(&package, &bytes).expect("write package");
+    let expected = actingcommand_pack_containment::Sha256Hash::digest(&bytes).to_string();
+    let state = Arc::new(FakeState::default());
+    state
+        .transition_capture_after_input
+        .store(true, Ordering::Release);
+    let host = host_with_state(&root, "neutral.instance", Arc::clone(&state));
+    let mut client = TestClient::connect(&host);
+    let correlation = client.ids.mint_correlation_id().expect("correlation");
+    let correlation_id = *correlation.transport();
+    let request = client.request_with_correlation(
+        correlation,
+        RuntimeOperation::run_contained_task(
+            "neutral.instance",
+            client.ids.mint_holder_id().expect("holder"),
+            ContainedTaskRequest::new(package.display().to_string(), expected)
+                .expect("task request"),
+        ),
+    );
+
+    let receipt = client.send(&request);
+    assert_eq!(receipt.state(), RuntimeReceiptState::Completed);
+    assert!(matches!(
+        receipt.result(),
+        Some(RuntimeResult::ContainedTaskCompleted {
+            outcome: TaskOutcome::Success,
+            final_page: Some(page),
+            executed_steps: 1,
+            ..
+        }) if page == "neutral/terminal"
+    ));
+    assert_eq!(state.input_count.load(Ordering::Acquire), 1);
+    assert_eq!(state.capture_count.load(Ordering::Acquire), 2);
+    let event_types = event_types_for_correlation(&mut client, correlation_id);
+    for required in [
+        EventType::TaskRequested,
+        EventType::TaskStarted,
+        EventType::CaptureCompleted,
+        EventType::RecognitionCompleted,
+        EventType::TaskStepStarted,
+        EventType::InputIntent,
+        EventType::InputCommitted,
+        EventType::TaskStepFinished,
+        EventType::TaskTerminalIntent,
+        EventType::TaskCompleted,
+    ] {
+        assert!(event_types.contains(&required), "missing {required:?}");
+    }
+    drop(client);
     host.close().expect("close host");
 }
 

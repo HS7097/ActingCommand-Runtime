@@ -3,10 +3,10 @@
 use crate::ipc::{DEFAULT_RUNTIME_MAX_FRAME_BYTES, exchange};
 use crate::{RuntimeClientError, RuntimeClientResult};
 use actingcommand_contract::{
-    ActionId, ApplicationLifecycleAction, CaptureSequenceSpec, CorrelationId, EventActor,
-    EventQuery, EventSource, IdentifierIssuer, InputAction, IssuedCorrelationId, LeaseQueuePolicy,
-    LeaseQueueStatus, LeaseToken, OwnerEpoch, PackageDebugRequest, ProjectedEvent,
-    ProjectionProfile, RUNTIME_INFO_FILE, RequestId, ResourceAuthoringEvent,
+    ActionId, ApplicationLifecycleAction, CaptureSequenceSpec, ContainedTaskRequest, CorrelationId,
+    EventActor, EventQuery, EventSource, IdentifierIssuer, InputAction, IssuedCorrelationId,
+    LeaseQueuePolicy, LeaseQueueStatus, LeaseToken, OwnerEpoch, PackageDebugRequest,
+    ProjectedEvent, ProjectionProfile, RUNTIME_INFO_FILE, RequestId, ResourceAuthoringEvent,
     RuntimeControlPlaneStatus, RuntimeDebugEvent, RuntimeEventBatch, RuntimeEvidenceExportRequest,
     RuntimeInfo, RuntimeMonitorInstanceStatus, RuntimeMonitorPolicy, RuntimeMonitorRegistryStatus,
     RuntimeOperation, RuntimeReceipt, RuntimeRequest, RuntimeResult, RuntimeSubscriptionRequest,
@@ -468,6 +468,35 @@ impl RuntimeClient {
             }) if *completed == action
         ) {
             return Err(self.unexpected_result("application_lifecycle"));
+        }
+        self.flow_output(receipt, correlation_id)
+    }
+
+    pub fn run_contained_task(
+        &self,
+        instance_alias: &str,
+        request: ContainedTaskRequest,
+    ) -> RuntimeClientResult<RuntimeFlowOutput> {
+        let connection = self.connection("run_contained_task")?;
+        let correlation = connection.ids.mint_correlation_id().map_err(|_| {
+            RuntimeClientError::fatal("runtime_identifier_issue_failed", "run_contained_task")
+        })?;
+        let holder = connection.ids.mint_holder_id().map_err(|_| {
+            RuntimeClientError::fatal("runtime_identifier_issue_failed", "run_contained_task")
+        })?;
+        let correlation_id = *correlation.transport();
+        drop(connection);
+        let receipt = self.execute_receipt_with_correlation(
+            "run_contained_task",
+            RuntimeOperation::run_contained_task(instance_alias, holder, request),
+            correlation,
+            None,
+        )?;
+        if !matches!(
+            receipt.result(),
+            Some(RuntimeResult::ContainedTaskCompleted { .. })
+        ) {
+            return Err(self.unexpected_result("run_contained_task"));
         }
         self.flow_output(receipt, correlation_id)
     }

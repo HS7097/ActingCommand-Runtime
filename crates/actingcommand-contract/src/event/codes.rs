@@ -81,6 +81,7 @@ closed_code!(EventAction {
     RuntimeReadonlyAdmit => "runtime.readonly_admit",
     RuntimeReadonlyObserve => "runtime.readonly_observe",
     RuntimeCaptureSequence => "runtime.capture_sequence",
+    RuntimeTaskRun => "runtime.task_run",
     RuntimeDebugPackage => "runtime.debug_package",
     RuntimeDebugLabRun => "runtime.debug_lab_run",
     RuntimeDebugObserve => "runtime.debug_observe",
@@ -148,6 +149,8 @@ closed_code!(DiagnosticCode {
 
 closed_code!(RecognitionVerdict {
     FrameDecoded => "frame_decoded",
+    PageMatched => "page_matched",
+    PageUnmatched => "page_unmatched",
 });
 
 closed_code!(CapturePressureState {

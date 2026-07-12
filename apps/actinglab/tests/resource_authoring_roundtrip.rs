@@ -140,7 +140,6 @@ fn recorded_resource_is_deterministically_packaged_and_runs_from_containment() {
     let package_one = root.path().join("daily-check-1.zip");
     let package_two = root.path().join("daily-check-2.zip");
     let evidence = root.path().join("evidence.zip");
-    let run_root = root.path().join("runs");
     fs::write(&config, "{}").expect("config");
     fs::create_dir_all(repo.join("ours/operations")).expect("operations root");
     fs::create_dir_all(repo.join("ours/recognition")).expect("recognition root");
@@ -329,8 +328,6 @@ fn recorded_resource_is_deterministically_packaged_and_runs_from_containment() {
             "--json",
             "--instance",
             "ak",
-            "--run-root",
-            path(&run_root),
             "--game",
             "arknights",
             "--server",

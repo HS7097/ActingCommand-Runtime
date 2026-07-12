@@ -551,6 +551,10 @@ impl RunStateMachine {
         self.terminal.as_ref()
     }
 
+    pub const fn completed_steps(&self) -> u32 {
+        self.completed_steps
+    }
+
     fn require_executing(&self, operation_id: &str) -> Result<(), RunDecisionError> {
         match self.executing_operation.as_deref() {
             Some(executing) if executing == operation_id => Ok(()),

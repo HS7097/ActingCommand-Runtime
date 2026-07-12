@@ -3,9 +3,14 @@
 #[path = "../../../tests/support/c4_runtime.rs"]
 mod support;
 
+use actingcommand_pack_containment::Sha256Hash;
 use serde_json::Value;
+use std::fs;
+use std::io::{Cursor, Write};
+use std::path::Path;
 use std::process::Command;
 use tempfile::TempDir;
+use zip::{ZipWriter, write::FileOptions};
 
 #[test]
 fn c4_runtime_child_process() {
@@ -164,6 +169,141 @@ fn actingctl_status_monitor_and_stream_are_runtime_backed() {
     );
     runtime.assert_alive();
     runtime.stop_clean();
+}
+
+#[test]
+fn actingctl_runs_neutral_contained_task_without_lab_and_runtime_survives_client_exit() {
+    let root = TempDir::new().expect("tempdir");
+    let frame = root.path().join("sealed.png");
+    support::write_sealed_frame(&frame);
+    let package = root.path().join("neutral-task.zip");
+    let expected_sha256 = write_neutral_contained_task_package(&package);
+    let mut runtime = support::RuntimeChild::spawn_for_instance(
+        root.path(),
+        "c4_runtime_child_process",
+        "neutral.instance",
+    );
+    runtime.wait_ready(root.path());
+
+    let output = run_json(
+        env!("CARGO_BIN_EXE_actingctl"),
+        [
+            "task-run",
+            "--state-root",
+            root.path().to_str().expect("state root"),
+            "--instance",
+            "neutral.instance",
+            "--package",
+            package.to_str().expect("package path"),
+            "--expected-sha256",
+            &expected_sha256,
+        ],
+    );
+
+    assert_eq!(
+        output["receipt"]["result"]["kind"],
+        "contained_task_completed"
+    );
+    assert_eq!(
+        output["receipt"]["result"]["final_page"],
+        "neutral/terminal"
+    );
+    assert_eq!(output["receipt"]["result"]["executed_steps"], 1);
+    assert_eq!(
+        support::backend_events(root.path()),
+        ["capture_open", "capture", "open", "tap", "capture"]
+    );
+    runtime.assert_alive();
+    runtime.stop_clean();
+    assert_eq!(
+        support::backend_events(root.path()),
+        [
+            "capture_open",
+            "capture",
+            "open",
+            "tap",
+            "capture",
+            "capture_close",
+            "close"
+        ]
+    );
+}
+
+fn write_neutral_contained_task_package(path: &Path) -> String {
+    let cursor = Cursor::new(Vec::new());
+    let mut zip = ZipWriter::new(cursor);
+    let options = FileOptions::default().compression_method(zip::CompressionMethod::Stored);
+    let files: &[(&str, &[u8])] = &[
+        (
+            "control.json",
+            br#"{
+                "schema_version":"Lab-1y.control.v1",
+                "package_id":"neutral.semantic.task",
+                "execution_mode":"navigable_route",
+                "game":"neutral",
+                "server":"test",
+                "resolution":{"width":2,"height":1},
+                "entry_task_id":"task",
+                "capture_interval_ms":1,
+                "step_timeout_ms":50,
+                "timeout_ms":1000,
+                "max_steps":2
+            }"#,
+        ),
+        (
+            "resources/manifest.json",
+            br#"{"schema_version":"0.3","entry_task_id":"task"}"#,
+        ),
+        (
+            "resources/operations/task/task.json",
+            br#"{
+                "schema_version":"0.6",
+                "task_id":"task",
+                "game":"neutral",
+                "server_scope":["test"],
+                "coordinate_space":{"width":2,"height":1},
+                "entry_page":"home",
+                "target_page":"terminal",
+                "operations":[{
+                    "id":"open_terminal",
+                    "from":"home",
+                    "to":"terminal",
+                    "click":{"kind":"point","x":1,"y":0}
+                }]
+            }"#,
+        ),
+        (
+            "resources/recognition/neutral.test.pack.json",
+            br#"{
+                "schema_version":"0.3",
+                "game":"neutral",
+                "server":"test",
+                "coordinate_space":{"width":2,"height":1},
+                "defaults":{"color_max_distance":0.0},
+                "targets":[
+                    {"type":"color","id":"page/home","region":{"x":0,"y":0,"width":1,"height":1},"expected":[255,0,0]},
+                    {"type":"color","id":"page/terminal","region":{"x":0,"y":0,"width":1,"height":1},"expected":[0,0,255]}
+                ]
+            }"#,
+        ),
+        (
+            "resources/recognition/neutral.test.pages.json",
+            br#"{
+                "schema_version":"0.3",
+                "pages":[
+                    {"id":"neutral/home","required":["page/home"],"optional":[],"forbidden":[]},
+                    {"id":"neutral/terminal","required":["page/terminal"],"optional":[],"forbidden":[]}
+                ]
+            }"#,
+        ),
+    ];
+    for (entry, contents) in files {
+        zip.start_file(*entry, options).expect("zip entry");
+        zip.write_all(contents).expect("zip contents");
+    }
+    let bytes = zip.finish().expect("finish zip").into_inner();
+    fs::write(path, &bytes).expect("write neutral contained package");
+    Sha256Hash::digest(&bytes).to_string()
 }
 
 fn run_json<const N: usize>(binary: &str, arguments: [&str; N]) -> Value {

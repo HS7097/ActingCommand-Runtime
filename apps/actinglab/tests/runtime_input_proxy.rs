@@ -1502,7 +1502,6 @@ fn production_lab_run_routes_device_effects_through_runtime_only() {
     let config_path = root.path().join("actinglab.json");
     let package_path = root.path().join("runtime-owned-lab.zip");
     let result_path = root.path().join("result.zip");
-    let run_root = root.path().join("runs");
     let adb_marker = root.path().join("forbidden-adb-invoked");
     fs::write(&config_path, "{}").expect("write config");
     write_runtime_owned_lab_package(&package_path);
@@ -1512,6 +1511,7 @@ fn production_lab_run_routes_device_effects_through_runtime_only() {
     );
     let forbidden_adb = write_forbidden_adb(root.path(), &adb_marker);
     let state = Arc::new(FakeState::default());
+    state.transition_after_tap.store(true, Ordering::Release);
     let instance_id = *IdentifierIssuer::new()
         .expect("identifier issuer")
         .mint_instance_id()
@@ -1532,8 +1532,6 @@ fn production_lab_run_routes_device_effects_through_runtime_only() {
             "--json",
             "--instance",
             "ak.cn",
-            "--run-root",
-            run_root.to_str().expect("run root"),
             "--game",
             "ark",
             "--server",
@@ -1556,21 +1554,20 @@ fn production_lab_run_routes_device_effects_through_runtime_only() {
         .output()
         .expect("run actinglab lab run");
 
-    assert!(
-        !output.status.success(),
-        "successor suggestion must be visible"
-    );
+    assert!(output.status.success(), "Runtime-owned task must complete");
     let envelope = serde_json::from_slice::<Value>(&output.stdout).expect("CLI JSON");
     assert_eq!(
-        envelope.pointer("/error/code").and_then(Value::as_str),
-        Some("successor_suggested"),
+        envelope
+            .pointer("/data/runtime_flow/receipt/result/kind")
+            .and_then(Value::as_str),
+        Some("contained_task_completed"),
         "unexpected Lab run response: {envelope}"
     );
     assert_eq!(
         envelope
-            .pointer("/error/details/suggestion/task_id")
+            .pointer("/data/runtime_flow/receipt/result/final_page")
             .and_then(Value::as_str),
-        Some("return_home")
+        Some("arknights/terminal")
     );
     assert!(result_path.is_file());
     assert_eq!(state.taps.load(Ordering::Acquire), 1);
@@ -1593,11 +1590,11 @@ fn production_lab_run_routes_device_effects_through_runtime_only() {
     let terminal = events
         .iter()
         .find(|event| {
-            event.event_type == EventType::TaskFailed
+            event.event_type == EventType::TaskCompleted
                 && matches!(
                     &event.payload,
                     ProjectionPayload::Full(payload)
-                        if payload.action() == EventAction::RuntimeDebugLabRun
+                        if payload.action() == EventAction::RuntimeTaskRun
                 )
         })
         .expect("Runtime Lab run terminal");
@@ -1617,18 +1614,21 @@ fn production_lab_run_routes_device_effects_through_runtime_only() {
         &event_types,
         &[
             EventType::CommandReceived,
-            EventType::TaskRequested,
-            EventType::TaskStarted,
             EventType::CommandValidated,
-            EventType::LabRequest,
-            EventType::CaptureRequested,
-            EventType::CaptureCompleted,
             EventType::LeaseRequested,
             EventType::LeaseGranted,
+            EventType::TaskRequested,
+            EventType::TaskStarted,
+            EventType::CaptureRequested,
+            EventType::CaptureCompleted,
+            EventType::RecognitionCompleted,
+            EventType::TaskStepStarted,
             EventType::InputIntent,
             EventType::InputCommitted,
+            EventType::TaskStepFinished,
+            EventType::TaskTerminalIntent,
+            EventType::TaskCompleted,
             EventType::LeaseReleased,
-            EventType::TaskFailed,
         ],
     );
     let actions = correlated
@@ -1638,9 +1638,7 @@ fn production_lab_run_routes_device_effects_through_runtime_only() {
             _ => None,
         })
         .collect::<Vec<_>>();
-    assert!(actions.contains(&EventAction::RuntimeDebugPackage));
-    assert!(actions.contains(&EventAction::RuntimeDebugLabRun));
-    assert_no_file_named(&run_root, "ledger.jsonl");
+    assert!(actions.contains(&EventAction::RuntimeTaskRun));
 
     drop(client);
     host.close().expect("close host");
@@ -1655,23 +1653,6 @@ fn assert_event_order(actual: &[EventType], expected: &[EventType]) {
             .position(|actual_type| actual_type == expected_type)
             .unwrap_or_else(|| panic!("missing Runtime event {expected_type:?} in {actual:?}"));
         cursor += offset + 1;
-    }
-}
-
-fn assert_no_file_named(root: &Path, name: &str) {
-    if !root.exists() {
-        return;
-    }
-    for entry in fs::read_dir(root).expect("read output tree") {
-        let path = entry.expect("output entry").path();
-        if path.is_dir() {
-            assert_no_file_named(&path, name);
-        } else {
-            assert_ne!(
-                path.file_name().and_then(|value| value.to_str()),
-                Some(name)
-            );
-        }
     }
 }
 

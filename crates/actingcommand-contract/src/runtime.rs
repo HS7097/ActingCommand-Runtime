@@ -43,6 +43,7 @@ pub const MAX_RUNTIME_CAPTURE_SEQUENCE_FRAMES: u16 = 60;
 pub const MAX_RUNTIME_CAPTURE_SEQUENCE_INTERVAL_MS: u64 = 5_000;
 pub const MAX_RUNTIME_CAPTURE_SEQUENCE_WAIT_MS: u64 = 60_000;
 pub const MAX_DEBUG_PACKAGE_PATH_BYTES: usize = 32 * 1024;
+pub const MAX_CONTAINED_TASK_PATH_BYTES: usize = 32 * 1024;
 pub const MAX_EVIDENCE_OUTPUT_PATH_BYTES: usize = 32 * 1024;
 pub const MAX_RUNTIME_SUBSCRIPTION_WAIT_MS: u64 = 30_000;
 pub const MAX_RUNTIME_SUBSCRIPTION_EVENTS: u16 = 256;
@@ -949,6 +950,56 @@ impl fmt::Debug for PackageDebugRequest {
 
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+pub struct ContainedTaskRequest {
+    package_path: String,
+    expected_sha256: String,
+}
+
+impl ContainedTaskRequest {
+    pub fn new(
+        package_path: impl Into<String>,
+        expected_sha256: impl Into<String>,
+    ) -> RuntimeContractResult<Self> {
+        let request = Self {
+            package_path: package_path.into(),
+            expected_sha256: expected_sha256.into(),
+        };
+        request.validate()?;
+        Ok(request)
+    }
+
+    pub fn validate(&self) -> RuntimeContractResult<()> {
+        if self.package_path.trim().is_empty()
+            || self.package_path.len() > MAX_CONTAINED_TASK_PATH_BYTES
+            || self.package_path.contains('\0')
+        {
+            return Err(RuntimeContractError::new("invalid_contained_task_path"));
+        }
+        validate_sha256_hex(&self.expected_sha256)
+            .map_err(|_| RuntimeContractError::new("invalid_contained_task_hash"))
+    }
+
+    pub fn package_path(&self) -> &str {
+        &self.package_path
+    }
+
+    pub fn expected_sha256(&self) -> &str {
+        &self.expected_sha256
+    }
+}
+
+impl fmt::Debug for ContainedTaskRequest {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("ContainedTaskRequest")
+            .field("package_path", &"<redacted-path>")
+            .field("expected_sha256", &"<redacted-hash>")
+            .finish()
+    }
+}
+
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct RuntimeEvidenceExportRequest {
     output_path: String,
     task_outcome: TaskOutcome,
@@ -1428,6 +1479,11 @@ pub enum RuntimeOperation {
         holder_id: HolderId,
         action: ApplicationLifecycleAction,
     },
+    RunContainedTask {
+        instance_alias: String,
+        holder_id: HolderId,
+        request: ContainedTaskRequest,
+    },
     Input {
         token: LeaseToken,
         action: InputAction,
@@ -1492,6 +1548,18 @@ impl RuntimeOperation {
         }
     }
 
+    pub fn run_contained_task(
+        instance_alias: impl Into<String>,
+        holder_id: IssuedHolderId,
+        request: ContainedTaskRequest,
+    ) -> Self {
+        Self::RunContainedTask {
+            instance_alias: instance_alias.into(),
+            holder_id: *holder_id.transport(),
+            request,
+        }
+    }
+
     pub fn validate(&self) -> RuntimeContractResult<()> {
         match self {
             Self::Health
@@ -1539,6 +1607,14 @@ impl RuntimeOperation {
                 token.validate()?;
                 action.validate()
             }
+            Self::RunContainedTask {
+                instance_alias,
+                request,
+                ..
+            } => {
+                validate_instance_alias(instance_alias)?;
+                request.validate()
+            }
         }
     }
 
@@ -1550,6 +1626,7 @@ impl RuntimeOperation {
             | Self::CaptureSequence { instance_alias, .. }
             | Self::SafeReset { instance_alias, .. }
             | Self::ApplicationLifecycle { instance_alias, .. }
+            | Self::RunContainedTask { instance_alias, .. }
             | Self::ConfigureMonitor { instance_alias, .. }
             | Self::ClearMonitor { instance_alias } => Some(instance_alias),
             _ => None,
@@ -1588,6 +1665,7 @@ impl fmt::Debug for RuntimeOperation {
             Self::ApplicationLifecycle { .. } => {
                 "RuntimeOperation::ApplicationLifecycle(<redacted>)"
             }
+            Self::RunContainedTask { .. } => "RuntimeOperation::RunContainedTask(<redacted>)",
             Self::Input { .. } => "RuntimeOperation::Input(<redacted>)",
             Self::QueryEvents { .. } => "RuntimeOperation::QueryEvents(<typed-query>)",
             Self::SubscribeEvents { .. } => "RuntimeOperation::SubscribeEvents(<typed-query>)",
@@ -1974,6 +2052,14 @@ pub enum RuntimeResult {
         action_id: ActionId,
         action: ApplicationLifecycleAction,
     },
+    ContainedTaskCompleted {
+        run_id: RunId,
+        task_id: crate::TaskId,
+        outcome: TaskOutcome,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        final_page: Option<String>,
+        executed_steps: u32,
+    },
     InputCommitted {
         action_id: ActionId,
     },
@@ -2097,6 +2183,19 @@ impl RuntimeReceipt {
             Some(RuntimeResult::EventBatch { batch }) => batch.validate()?,
             Some(RuntimeResult::PackageDebugCompleted { summary }) => summary.validate()?,
             Some(RuntimeResult::EvidenceExportCompleted { summary }) => summary.validate()?,
+            Some(RuntimeResult::ContainedTaskCompleted {
+                outcome,
+                final_page,
+                executed_steps,
+                ..
+            }) if *outcome != TaskOutcome::Success
+                || *executed_steps > 1_000
+                || final_page
+                    .as_deref()
+                    .is_some_and(|value| value.is_empty() || value.len() > 256) =>
+            {
+                return Err(RuntimeContractError::new("invalid_contained_task_result"));
+            }
             _ => {}
         }
         Ok(())

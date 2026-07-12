@@ -24,11 +24,13 @@ version = "0.1.0"
 dependencies = [
  "actingcommand-contract",
  "actingcommand-device",
+ "actingcommand-pack-containment",
  "actingcommand-runtime-client",
  "actingcommand-runtime-host",
  "actingcommand-scheduler",
  "serde_json",
  "tempfile",
+ "zip",
 ]
 
 [[package]]
@@ -289,6 +291,7 @@ dependencies = [
  "serde",
  "serde_json",
  "tempfile",
+ "zip",
 ]
 
 [[package]]

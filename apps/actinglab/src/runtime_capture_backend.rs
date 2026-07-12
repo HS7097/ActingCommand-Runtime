@@ -12,7 +12,7 @@ use actingcommand_device::{
 use actingcommand_lab::{
     CaptureBackendObservation, CaptureBackendReport, CaptureBackendRequest, LabError,
 };
-use actingcommand_runtime_client::{RuntimeClient, RuntimeClientConfig, RuntimeDebugSession};
+use actingcommand_runtime_client::{RuntimeClient, RuntimeClientConfig};
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
@@ -113,33 +113,6 @@ pub(super) fn open_runtime_capture(
     Ok(Box::new(backend))
 }
 
-pub(super) fn open_runtime_debug_capture(
-    session: RuntimeDebugSession,
-    state_root: PathBuf,
-    request: CaptureBackendRequest,
-) -> Result<Box<dyn CaptureBackend>, LabError> {
-    let instance_alias = request
-        .instance_alias
-        .ok_or_else(|| LabError::device("Runtime debug capture requires an instance alias"))?;
-    let mut backend = RuntimeDebugCaptureBackend {
-        session,
-        state_root,
-        instance_alias,
-        requested: request.config.requested,
-        observation: request.observation,
-        pending_frame: None,
-    };
-    let started = Instant::now();
-    let frame = backend
-        .capture_runtime_frame()
-        .map_err(|error| LabError::device(error.to_string()))?;
-    backend
-        .publish_report(frame.backend_name, started.elapsed().as_millis())
-        .map_err(|error| LabError::device(error.to_string()))?;
-    backend.pending_frame = Some(frame);
-    Ok(Box::new(backend))
-}
-
 struct RuntimeObservationCaptureBackend {
     client: RuntimeClient,
     endpoint: RuntimeCaptureEndpoint,
@@ -189,66 +162,6 @@ impl RuntimeObservationCaptureBackend {
                     backend: used,
                     ok: true,
                     message: "Runtime observation completed".to_string(),
-                    elapsed_ms: Some(elapsed_ms),
-                    cached: false,
-                    channel_order_contract: channel_order_contract(used),
-                    vendor_stdio: Vec::new(),
-                }],
-            })
-            .map_err(|error| DeviceError::fatal(error.to_string()))
-    }
-}
-
-struct RuntimeDebugCaptureBackend {
-    session: RuntimeDebugSession,
-    state_root: PathBuf,
-    instance_alias: String,
-    requested: CaptureBackendChoice,
-    observation: Option<CaptureBackendObservation>,
-    pending_frame: Option<Frame>,
-}
-
-impl CaptureBackend for RuntimeDebugCaptureBackend {
-    fn capture(&mut self) -> DeviceResult<Frame> {
-        if let Some(frame) = self.pending_frame.take() {
-            return Ok(frame);
-        }
-        let started = Instant::now();
-        let frame = self.capture_runtime_frame()?;
-        self.publish_report(frame.backend_name, started.elapsed().as_millis())?;
-        Ok(frame)
-    }
-}
-
-impl RuntimeDebugCaptureBackend {
-    fn capture_runtime_frame(&self) -> DeviceResult<Frame> {
-        let receipt = self
-            .session
-            .observe_readonly(&self.instance_alias)
-            .map_err(|error| DeviceError::fatal(error.to_string()))?;
-        let observation = match receipt.result() {
-            Some(RuntimeResult::ReadonlyObservationCompleted { observation }) => observation,
-            _ => {
-                return Err(DeviceError::fatal(
-                    "Runtime returned an invalid debug observation receipt",
-                ));
-            }
-        };
-        frame_from_observation(&self.state_root, observation)
-    }
-
-    fn publish_report(&self, used: CaptureBackendName, elapsed_ms: u128) -> DeviceResult<()> {
-        let Some(observation) = &self.observation else {
-            return Ok(());
-        };
-        observation
-            .record(CaptureBackendReport {
-                requested: self.requested,
-                used,
-                attempts: vec![CaptureBackendAttempt {
-                    backend: used,
-                    ok: true,
-                    message: "Runtime debug observation completed".to_string(),
                     elapsed_ms: Some(elapsed_ms),
                     cached: false,
                     channel_order_contract: channel_order_contract(used),

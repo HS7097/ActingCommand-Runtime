@@ -359,6 +359,26 @@ fn normalize_string(text: &mut String, root: &Path, key: Option<&str>) {
             *text = "<RECO_ID>".to_string();
             return;
         }
+        Some("event_id") => {
+            *text = "<EVENT_ID>".to_string();
+            return;
+        }
+        Some("request_id") => {
+            *text = "<REQUEST_ID>".to_string();
+            return;
+        }
+        Some("task_id") => {
+            *text = "<TASK_ID>".to_string();
+            return;
+        }
+        Some("frame_id") => {
+            *text = "<FRAME_ID>".to_string();
+            return;
+        }
+        Some("recognition_id") => {
+            *text = "<RECOGNITION_ID>".to_string();
+            return;
+        }
         Some("run_id") => {
             *text = "<RUN_ID>".to_string();
             return;
@@ -385,6 +405,10 @@ fn normalize_string(text: &mut String, root: &Path, key: Option<&str>) {
         }
         Some("instance_id") if text.starts_with("envinst_") => {
             *text = "<IID>".to_string();
+            return;
+        }
+        Some("instance_id") if text.starts_with("instance_") => {
+            *text = "<INSTANCE_ID>".to_string();
             return;
         }
         Some(field)
@@ -680,6 +704,17 @@ impl Fixture {
             base.push(path.as_os_str().to_os_string());
         };
         let mut args = common();
+        if name == "lab_run_success" {
+            args = vec![
+                os("--json"),
+                os("--resource-root"),
+                self.resource_root.clone().into_os_string(),
+                os("--game"),
+                os("ark"),
+                os("--server"),
+                os("cn"),
+            ];
+        }
 
         match name {
             "recognize_success" => {
@@ -767,8 +802,6 @@ impl Fixture {
                 args.extend([
                     os("--instance"),
                     os("fixture:5555"),
-                    os("--capture-backend"),
-                    os("adb"),
                     os("lab"),
                     os("run"),
                     os("--zip"),

@@ -20,11 +20,13 @@ use std::time::{Duration, Instant};
 const CHILD_MODE_ENV: &str = "ACTINGCOMMAND_C4_TEST_CHILD";
 const CHILD_ROOT_ENV: &str = "ACTINGCOMMAND_C4_TEST_ROOT";
 const CHILD_INSTANCE_ENV: &str = "ACTINGCOMMAND_C4_TEST_INSTANCE";
+const CHILD_INSTANCE_ALIAS_ENV: &str = "ACTINGCOMMAND_C4_TEST_INSTANCE_ALIAS";
 const CHILD_STOP_ENV: &str = "ACTINGCOMMAND_C4_TEST_STOP";
 const BACKEND_EVENTS_FILE: &str = "sealed-c4-backend.log";
 
 struct FileBackend {
     events_path: PathBuf,
+    frame_path: PathBuf,
     closed: bool,
 }
 
@@ -60,7 +62,8 @@ impl Drop for FileCaptureBackend {
 
 impl InputBackend for FileBackend {
     fn tap(&mut self, _x: i32, _y: i32) -> DeviceResult<()> {
-        self.record("unexpected_tap")
+        write_frame(&self.frame_path, [0, 0, 255])?;
+        self.record("tap")
     }
 
     fn long_tap(&mut self, _x: i32, _y: i32, _duration_ms: u64) -> DeviceResult<()> {
@@ -100,6 +103,7 @@ impl InputBackend for FileBackend {
 }
 
 struct FileProvider {
+    instance_alias: String,
     instance_id: InstanceId,
     events_path: PathBuf,
     frame_path: PathBuf,
@@ -107,20 +111,21 @@ struct FileProvider {
 
 impl ExecutionBackendProvider for FileProvider {
     fn instance_aliases(&self) -> Vec<String> {
-        vec!["ak.cn".to_string()]
+        vec![self.instance_alias.clone()]
     }
 
     fn resolve(&self, instance_alias: &str) -> Option<ResolvedExecutionInstance> {
-        (instance_alias == "ak.cn")
+        (instance_alias == self.instance_alias)
             .then(|| ResolvedExecutionInstance::new(self.instance_id, "<sealed-c4-process>"))
     }
 
     fn open_input(&self, instance_alias: &str) -> DeviceResult<Box<dyn InputBackend>> {
-        if instance_alias != "ak.cn" {
+        if instance_alias != self.instance_alias {
             return Err(DeviceError::fatal("sealed C4 instance mismatch"));
         }
         let backend = FileBackend {
             events_path: self.events_path.clone(),
+            frame_path: self.frame_path.clone(),
             closed: false,
         };
         backend.record("open")?;
@@ -128,7 +133,7 @@ impl ExecutionBackendProvider for FileProvider {
     }
 
     fn open_capture(&self, instance_alias: &str) -> DeviceResult<Box<dyn CaptureBackend>> {
-        if instance_alias != "ak.cn" {
+        if instance_alias != self.instance_alias {
             return Err(DeviceError::fatal("sealed C4 instance mismatch"));
         }
         record_event(&self.events_path, "capture_open")?;
@@ -169,6 +174,10 @@ pub struct RuntimeChild {
 
 impl RuntimeChild {
     pub fn spawn(root: &Path, child_test_name: &str) -> Self {
+        Self::spawn_for_instance(root, child_test_name, "ak.cn")
+    }
+
+    pub fn spawn_for_instance(root: &Path, child_test_name: &str, instance_alias: &str) -> Self {
         let stop_path = root.join("stop-runtime");
         let instance_id = *IdentifierIssuer::new()
             .expect("identifier issuer")
@@ -188,6 +197,7 @@ impl RuntimeChild {
                 CHILD_INSTANCE_ENV,
                 serde_json::to_string(&instance_id).expect("instance JSON"),
             )
+            .env(CHILD_INSTANCE_ALIAS_ENV, instance_alias)
             .env(CHILD_STOP_ENV, &stop_path)
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -288,6 +298,7 @@ pub fn run_child_if_requested() -> bool {
         &env::var(CHILD_INSTANCE_ENV).expect("child instance id"),
     )
     .expect("parse child instance id");
+    let instance_alias = env::var(CHILD_INSTANCE_ALIAS_ENV).expect("child instance alias");
     let stop_path = PathBuf::from(env::var_os(CHILD_STOP_ENV).expect("child stop path"));
     let host = RuntimeHost::start(
         RuntimeHostConfig::new(&root, b"c4-process-acceptance-salt")
@@ -299,6 +310,7 @@ pub fn run_child_if_requested() -> bool {
                 ..SchedulerConfig::default()
             }),
         Arc::new(FileProvider {
+            instance_alias,
             instance_id,
             events_path: root.join(BACKEND_EVENTS_FILE),
             frame_path: root.join("sealed.png"),
@@ -319,16 +331,19 @@ pub fn run_child_if_requested() -> bool {
 }
 
 pub fn write_sealed_frame(path: &Path) {
+    write_frame(path, [255, 0, 0]).expect("write sealed frame");
+}
+
+fn write_frame(path: &Path, first_pixel: [u8; 3]) -> DeviceResult<()> {
     let frame = Frame::from_pixels(
         2,
         1,
-        vec![255, 0, 0, 0, 255, 0],
+        vec![first_pixel[0], first_pixel[1], first_pixel[2], 0, 255, 0],
         PixelFormat::Rgb8,
         CaptureBackendName::AdbScreencap,
-    )
-    .expect("sealed frame");
-    fs::write(path, frame.encode_png_fast().expect("sealed frame PNG"))
-        .expect("write sealed frame");
+    )?;
+    fs::write(path, frame.encode_png_fast()?)
+        .map_err(|error| DeviceError::fatal(format!("write sealed frame: {error}")))
 }
 
 pub fn backend_events(root: &Path) -> Vec<String> {

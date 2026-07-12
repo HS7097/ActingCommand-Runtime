@@ -8,6 +8,7 @@
 #![forbid(unsafe_code)]
 
 mod bundle;
+mod contained_task;
 mod drive;
 mod environment;
 mod error;
@@ -21,6 +22,7 @@ mod run;
 mod session;
 
 pub use bundle::*;
+pub use contained_task::*;
 pub use drive::*;
 pub use environment::*;
 pub use error::*;

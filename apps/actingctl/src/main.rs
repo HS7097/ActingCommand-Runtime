@@ -4,7 +4,9 @@
 
 #![forbid(unsafe_code)]
 
-use actingcommand_contract::{CaptureSequenceSpec, EventActor, EventSource, RuntimeMonitorPolicy};
+use actingcommand_contract::{
+    CaptureSequenceSpec, ContainedTaskRequest, EventActor, EventSource, RuntimeMonitorPolicy,
+};
 use actingcommand_runtime_client::{RuntimeClient, RuntimeClientConfig};
 use serde_json::Value;
 use std::env;
@@ -73,6 +75,19 @@ fn run(arguments: Vec<OsString>) -> Result<Value, ActingctlError> {
                 .capture_sequence(instance()?, spec)
                 .map_err(ActingctlError::runtime)?,
         ),
+        Command::TaskRun {
+            package,
+            expected_sha256,
+        } => {
+            let package = std::fs::canonicalize(package).map_err(|_| ActingctlError::Package)?;
+            let request = ContainedTaskRequest::new(package.display().to_string(), expected_sha256)
+                .map_err(|_| ActingctlError::Usage)?;
+            serde_json::to_value(
+                client
+                    .run_contained_task(instance()?, request)
+                    .map_err(ActingctlError::runtime)?,
+            )
+        }
     }
     .map_err(|_| ActingctlError::Output)?;
     Ok(output)
@@ -96,9 +111,17 @@ enum Command {
     Reset,
     Status,
     MonitorStatus,
-    MonitorSet { policy: RuntimeMonitorPolicy },
+    MonitorSet {
+        policy: RuntimeMonitorPolicy,
+    },
     MonitorClear,
-    Stream { spec: CaptureSequenceSpec },
+    Stream {
+        spec: CaptureSequenceSpec,
+    },
+    TaskRun {
+        package: PathBuf,
+        expected_sha256: String,
+    },
 }
 
 impl Invocation {
@@ -111,6 +134,8 @@ impl Invocation {
         let mut interval_ms = None;
         let mut expected_page = None;
         let mut frame_count = None;
+        let mut package = None;
+        let mut expected_sha256 = None;
         let mut recovery_enabled = false;
         let mut index = 1;
         while index < arguments.len() {
@@ -130,6 +155,12 @@ impl Invocation {
                 }
                 "--max-frames" => {
                     frame_count = Some(require_u16(&arguments, &mut index)?);
+                }
+                "--package" => {
+                    package = Some(PathBuf::from(require_value(&arguments, &mut index)?));
+                }
+                "--expected-sha256" => {
+                    expected_sha256 = Some(require_text(&arguments, &mut index)?);
                 }
                 "--recover" => recovery_enabled = true,
                 _ => return Err(ActingctlError::Usage),
@@ -158,6 +189,10 @@ impl Invocation {
                     interval_ms.unwrap_or(250),
                 )
                 .map_err(|_| ActingctlError::Usage)?,
+            },
+            "task-run" => Command::TaskRun {
+                package: package.ok_or(ActingctlError::Usage)?,
+                expected_sha256: expected_sha256.ok_or(ActingctlError::Usage)?,
             },
             _ => return Err(ActingctlError::Usage),
         };
@@ -205,6 +240,7 @@ fn require_u16(arguments: &[OsString], index: &mut usize) -> Result<u16, Actingc
 enum ActingctlError {
     Usage,
     Runtime(actingcommand_runtime_client::RuntimeClientError),
+    Package,
     Output,
 }
 
@@ -218,8 +254,9 @@ impl fmt::Display for ActingctlError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Usage => formatter
-                .write_str("usage: actingctl <observe|reset|status|monitor-status|monitor-set|monitor-clear|stream> --state-root <path> [--instance <id>]"),
+                .write_str("usage: actingctl <observe|reset|status|monitor-status|monitor-set|monitor-clear|stream|task-run> --state-root <path> [--instance <id>] [--package <zip> --expected-sha256 <hash>]"),
             Self::Runtime(error) => error.fmt(formatter),
+            Self::Package => formatter.write_str("failed to resolve contained task package"),
             Self::Output => formatter.write_str("failed to write JSON output"),
         }
     }
@@ -298,5 +335,24 @@ mod tests {
         .map(OsString::from)
         .collect();
         assert!(Invocation::parse(stream).is_ok());
+    }
+
+    #[test]
+    fn contained_task_command_requires_external_hash_and_runtime_instance_only() {
+        let args = [
+            "task-run",
+            "--state-root",
+            "state",
+            "--instance",
+            "neutral.instance",
+            "--package",
+            "neutral-task.zip",
+            "--expected-sha256",
+            "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        ]
+        .into_iter()
+        .map(OsString::from)
+        .collect();
+        assert!(Invocation::parse(args).is_ok());
     }
 }

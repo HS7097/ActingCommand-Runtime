@@ -6,10 +6,11 @@ use actingcommand_contract::{
     ApplicationLifecycleAction, CLI_SCHEMA_VERSION, Envelope, EventActor, EventSource,
     LabError as CliError, LabErrorClass as ErrorKind, LedgerProjection,
 };
+#[cfg(test)]
+use actingcommand_device::DeviceTarget;
 use actingcommand_device::{
-    AdbConfig, AdbPathSource, CaptureBackendChoice, CaptureBackendConfig, CaptureBackendName,
-    DeviceTarget, Frame, InputBackend, MaaTouchConfig, PixelFormat, TouchBackendChoice,
-    TouchBackendConfig, combine_operation_and_close, resolve_adb_path,
+    AdbPathSource, CaptureBackendChoice, CaptureBackendName, Frame, InputBackend, PixelFormat,
+    TouchBackendChoice, combine_operation_and_close, resolve_adb_path,
     vendor_stdio_session_diagnostic,
 };
 use actingcommand_lab::{
@@ -48,7 +49,6 @@ use zip::{ZipWriter, write::FileOptions};
 mod contained_resources;
 mod drive_cli;
 mod env_detection;
-mod frame_store;
 mod lab2_cli;
 mod lab_run;
 mod maa_task_graph;
@@ -10156,28 +10156,28 @@ fn device_config_for_instance(
         None => resolve_instance_id(global, config)?,
     };
     let instance = config.instances.get(&instance_id);
+    #[cfg(test)]
     let mut target = DeviceTarget::default();
+    #[cfg(test)]
     if let Some(serial) = instance.and_then(|instance| instance.serial.clone()) {
         target.serial = Some(serial);
     } else if global.instance.as_deref() == Some(instance_id.as_str()) && instance.is_none() {
         target.serial = Some(instance_id.clone());
     }
     let capture_backend = effective_capture_backend_choice(global, &instance_id, instance)?;
+    #[cfg(test)]
     let touch_backend = effective_touch_backend_choice(global, &instance_id, instance)?;
     let resolved_adb = effective_adb_path_for_instance(config, instance)?;
     enforce_path_adb_target_boundary(&resolved_adb, instance, capture_backend)?;
-    let adb = AdbConfig {
-        adb_path: resolved_adb.path.clone(),
-        ..Default::default()
-    };
     Ok(DeviceRuntimeConfig {
         instance_alias: instance_id,
         runtime_state_root: runtime_state_root()?,
-        adb,
+        #[cfg(test)]
         target,
         adb_source: resolved_adb.source,
         adb_warning: resolved_adb.warning,
         capture_backend,
+        #[cfg(test)]
         touch_backend,
     })
 }
@@ -10186,29 +10186,16 @@ fn device_config_for_instance(
 struct DeviceRuntimeConfig {
     instance_alias: String,
     runtime_state_root: PathBuf,
-    adb: AdbConfig,
+    #[cfg(test)]
     target: DeviceTarget,
     adb_source: AdbPathSource,
     adb_warning: Option<String>,
     capture_backend: CaptureBackendChoice,
+    #[cfg(test)]
     touch_backend: TouchBackendChoice,
 }
 
 impl DeviceRuntimeConfig {
-    fn capture_backend_config(&self) -> CaptureBackendConfig {
-        CaptureBackendConfig::new(self.adb.clone(), self.target.clone())
-            .with_requested(self.capture_backend)
-    }
-
-    fn touch_backend_config(&self) -> TouchBackendConfig {
-        TouchBackendConfig::new(
-            self.adb.clone(),
-            self.target.clone(),
-            MaaTouchConfig::default(),
-        )
-        .with_requested(self.touch_backend)
-    }
-
     fn runtime_capture_endpoint(&self) -> runtime_capture_backend::RuntimeCaptureEndpoint {
         runtime_capture_backend::RuntimeCaptureEndpoint::new(
             self.instance_alias.clone(),
@@ -10235,6 +10222,7 @@ fn effective_capture_backend_choice(
     })
 }
 
+#[cfg(test)]
 fn effective_touch_backend_choice(
     global: &GlobalOptions,
     instance_id: &str,
@@ -10814,10 +10802,6 @@ fn set_instance_value(config: &mut UserConfig, key: &str, value: &str) -> CliOut
         other => return Err(CliError::usage(format!("unknown instance field: {other}"))),
     }
     Ok(())
-}
-
-fn effective_adb_path(config: &UserConfig) -> CliOutcome<actingcommand_device::ResolvedAdbPath> {
-    resolve_adb_path(config.adb_path.as_deref()).map_err(|err| CliError::device(err.to_string()))
 }
 
 fn effective_adb_path_for_instance(

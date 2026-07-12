@@ -145,22 +145,6 @@ pub(super) fn build_readonly_lab_for_capture(
     build_app_lab(UserConfig::default(), None, authority, None)
 }
 
-pub(super) fn build_control_lab(
-    config: UserConfig,
-    session: RuntimeDebugSession,
-) -> CliOutcome<Lab<AppLabPorts>> {
-    let state_root = runtime_state_root()?;
-    build_app_lab(
-        config,
-        None,
-        AppCaptureAuthority::RuntimeByInstance {
-            state_root,
-            session: session.clone(),
-        },
-        Some(session),
-    )
-}
-
 pub(super) fn build_drive_lab(
     config: UserConfig,
     instance_alias: Option<&str>,
@@ -645,10 +629,6 @@ fn combine_device_results(
 enum AppCaptureAuthority {
     Disabled,
     Runtime(super::runtime_capture_backend::RuntimeCaptureEndpoint),
-    RuntimeByInstance {
-        state_root: PathBuf,
-        session: RuntimeDebugSession,
-    },
 }
 
 pub(super) struct AppCaptureFactory {
@@ -664,14 +644,6 @@ impl CaptureBackendFactory for AppCaptureFactory {
             AppCaptureAuthority::Runtime(endpoint) => {
                 super::runtime_capture_backend::open_runtime_capture(endpoint.clone(), request)
             }
-            AppCaptureAuthority::RuntimeByInstance {
-                state_root,
-                session,
-            } => super::runtime_capture_backend::open_runtime_debug_capture(
-                session.clone(),
-                state_root.clone(),
-                request,
-            ),
         }
     }
 }
