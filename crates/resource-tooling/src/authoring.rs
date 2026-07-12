@@ -305,6 +305,37 @@ pub fn publish_authoring_draft(
     publish_authoring_draft_inner(request, draft, validator, events, None)
 }
 
+/// Materialize a developer draft without publishing it or emitting Runtime events.
+pub fn materialize_authoring_draft(target_root: &Path, draft: &AuthoringDraft) -> LabResult<()> {
+    let parent = target_root.parent().ok_or_else(|| {
+        authoring_error(
+            "authoring_target_has_no_parent",
+            "materialization target must have a parent directory",
+        )
+    })?;
+    fs::create_dir_all(parent).map_err(|error| {
+        io_error(
+            "authoring_target_parent_create_failed",
+            "create materialization target parent",
+            parent,
+            error,
+        )
+    })?;
+    let target_root = resolve_publish_target(target_root)?;
+    if !target_root.exists() {
+        fs::create_dir(&target_root).map_err(|error| {
+            io_error(
+                "authoring_target_create_failed",
+                "create materialization target",
+                &target_root,
+                error,
+            )
+        })?;
+    }
+    reject_materialization_symlinks(&target_root, draft)?;
+    apply_draft(&target_root, draft)
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum FaultPoint {
     AfterOldTreeMoved,
@@ -547,6 +578,35 @@ fn apply_draft(candidate_root: &Path, draft: &AuthoringDraft) -> LabResult<()> {
             AuthoringFileSource::Copy { source, .. } => read_source_file(source)?,
         };
         write_new_file(&destination, &bytes)?;
+    }
+    Ok(())
+}
+
+fn reject_materialization_symlinks(root: &Path, draft: &AuthoringDraft) -> LabResult<()> {
+    let paths = std::iter::once(draft.replace_scope())
+        .chain(draft.files().iter().map(AuthoringFile::relative_path));
+    for relative in paths {
+        let mut current = root.to_path_buf();
+        for component in relative.components() {
+            current.push(component.as_os_str());
+            if !current.exists() {
+                break;
+            }
+            let metadata = fs::symlink_metadata(&current).map_err(|error| {
+                io_error(
+                    "authoring_metadata_failed",
+                    "inspect materialization path",
+                    &current,
+                    error,
+                )
+            })?;
+            if metadata.file_type().is_symlink() {
+                return Err(authoring_error(
+                    "authoring_symlink_rejected",
+                    format!("resource authoring rejects symlink {}", current.display()),
+                ));
+            }
+        }
     }
     Ok(())
 }
@@ -1211,6 +1271,35 @@ mod tests {
                 .map_err(|error| LabError::usage(error.to_string()))?;
             AuthoringValidationReport::new(vec!["draft_schema".to_string()])
         }
+    }
+
+    #[test]
+    fn materialize_replaces_only_the_draft_scope_and_preserves_create_if_missing_files() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let root = temp.path().join("draft-output");
+        let source = temp.path().join("frame.png");
+        fs::write(&source, b"png").expect("source");
+
+        materialize_authoring_draft(&root, &draft(&source)).expect("first materialization");
+        assert!(root.join("operations/task-a/task.json").is_file());
+        assert_eq!(
+            fs::read(root.join("operations/task-a/assets/frame.png")).expect("asset"),
+            b"png"
+        );
+        fs::write(root.join("operations/task-a/stale.txt"), b"stale").expect("stale file");
+        fs::write(
+            root.join("operations/resources.json"),
+            br#"{"schema_version":"1.0","resources":[{"id":"keep"}]}"#,
+        )
+        .expect("resources");
+
+        materialize_authoring_draft(&root, &draft(&source)).expect("second materialization");
+        assert!(!root.join("operations/task-a/stale.txt").exists());
+        assert!(
+            fs::read_to_string(root.join("operations/resources.json"))
+                .expect("resources")
+                .contains("keep")
+        );
     }
 
     #[test]
