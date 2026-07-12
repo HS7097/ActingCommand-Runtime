@@ -59,6 +59,7 @@ pub mod recovery_exec;
 mod resource_authoring;
 mod resource_convert;
 mod runtime_capture_backend;
+mod runtime_debug;
 mod runtime_input_backend;
 mod runtime_session_adapter;
 mod runtime_slice_cli;
@@ -5844,6 +5845,7 @@ fn run_lab(sub: &str, global: &GlobalOptions, args: &[String]) -> CliOutcome<Val
             lab_run::run_lab_run(global, args)
         }
         "validate" => lab_run::run_lab_validate(args),
+        "debug-package" => runtime_debug::run_package_debug(args),
         "start" => {
             require_runtime(global)?;
             let flags = FlagArgs::parse(args)?;
@@ -11936,22 +11938,6 @@ fn command_capabilities() -> Vec<Value> {
             "available",
         ),
         command_cap("session request devices", ["running_runtime"], "available"),
-        command_cap("session request lease", ["running_runtime"], "available"),
-        command_cap(
-            "session request lease wait",
-            ["running_runtime"],
-            "available",
-        ),
-        command_cap(
-            "session request lease touch",
-            ["running_runtime"],
-            "available",
-        ),
-        command_cap(
-            "session request lease list",
-            ["running_runtime"],
-            "available",
-        ),
         command_cap("session request record", ["running_runtime"], "available"),
         command_cap(
             "session request capture",
@@ -12129,10 +12115,6 @@ fn command_capabilities() -> Vec<Value> {
         command_cap("session capture diagnose", ["device"], "available"),
         command_cap("session recover", ["device"], "available"),
         command_cap("session recover --stale-capture", ["device"], "available"),
-        command_cap("session lease", ["offline"], "available"),
-        command_cap("session lease wait", ["offline"], "available"),
-        command_cap("session lease list", ["offline"], "available"),
-        command_cap("session lease touch", ["offline"], "available"),
         command_cap(
             "session lease run",
             ["running_runtime", "lab_lease"],
@@ -12169,15 +12151,9 @@ fn command_capabilities() -> Vec<Value> {
         command_cap("scheduler resume", ["running_runtime"], "reserved"),
         command_cap("scheduler start", ["running_runtime"], "reserved"),
         command_cap("scheduler stop", ["running_runtime"], "reserved"),
-        command_cap("lab status", ["offline"], "available"),
-        command_cap("lab lease", ["offline", "lab_lease"], "available"),
-        command_cap("lab lease list", ["offline", "lab_lease"], "available"),
-        command_cap("lab lease status", ["offline", "lab_lease"], "available"),
-        command_cap("lab lease touch", ["offline", "lab_lease"], "available"),
-        command_cap("lab lease wait", ["offline", "lab_lease"], "available"),
-        command_cap("lab preempt", ["offline", "lab_lease"], "available"),
-        command_cap("lab release", ["offline", "lab_lease"], "available"),
+        command_cap("lab status", ["running_runtime"], "available"),
         command_cap("lab receipt", ["offline"], "available"),
+        command_cap("lab debug-package", ["running_runtime"], "available"),
         command_cap("lab validate", ["offline"], "available"),
         command_cap("lab run", ["device"], "available"),
         command_cap("capture", ["device"], "available"),
@@ -20033,18 +20009,16 @@ mod tests {
     }
 
     #[test]
-    fn lab_lease_capabilities_are_available() {
+    fn retired_session_and_lab_lease_authority_is_not_advertised() {
         let commands = command_capabilities();
-        for command_name in [
+        for name in [
             "session lease",
             "session lease list",
             "session lease touch",
             "session lease wait",
-            "session request lease",
             "session request lease list",
             "session request lease touch",
             "session request lease wait",
-            "lab status",
             "lab lease",
             "lab lease list",
             "lab lease status",
@@ -20053,17 +20027,18 @@ mod tests {
             "lab preempt",
             "lab release",
         ] {
-            let command = commands
-                .iter()
-                .find(|command| {
-                    command.get("command").and_then(Value::as_str) == Some(command_name)
-                })
-                .unwrap_or_else(|| panic!("{command_name} capability"));
-            assert_eq!(
-                command.get("status").and_then(Value::as_str),
-                Some("available")
+            assert!(
+                commands.iter().all(|command| command["command"] != name),
+                "retired Lab authority must not be advertised: {name}"
             );
         }
+        assert!(commands.iter().any(|command| {
+            command["command"] == "lab status" && command["needs"] == json!(["running_runtime"])
+        }));
+        assert!(commands.iter().any(|command| {
+            command["command"] == "lab debug-package"
+                && command["needs"] == json!(["running_runtime"])
+        }));
     }
 
     #[test]
@@ -20383,7 +20358,6 @@ mod tests {
             "session request contract",
             "session request api",
             "session request devices",
-            "session request lease",
             "session request record",
             "session request capture",
             "session request capture-diagnose",
@@ -20406,7 +20380,6 @@ mod tests {
             "session request lab-run",
             "session request package-run",
             "session request operation-run",
-            "session lease",
             "ledger show",
             "ledger events",
             "ledger receipts",

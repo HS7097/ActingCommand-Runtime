@@ -40,6 +40,7 @@ pub const MAX_READONLY_OBSERVATION_ARTIFACT_BYTES: u64 = 64 * 1024 * 1024;
 pub const MAX_RUNTIME_CAPTURE_SEQUENCE_FRAMES: u16 = 60;
 pub const MAX_RUNTIME_CAPTURE_SEQUENCE_INTERVAL_MS: u64 = 5_000;
 pub const MAX_RUNTIME_CAPTURE_SEQUENCE_WAIT_MS: u64 = 60_000;
+pub const MAX_DEBUG_PACKAGE_PATH_BYTES: usize = 32 * 1024;
 
 pub type RuntimeContractResult<T> = Result<T, RuntimeContractError>;
 
@@ -770,6 +771,155 @@ impl ReadonlyObservationOutcome {
 }
 
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PackageDebugRequest {
+    package_path: String,
+    expected_sha256: String,
+}
+
+impl PackageDebugRequest {
+    pub fn new(
+        package_path: impl Into<String>,
+        expected_sha256: impl Into<String>,
+    ) -> RuntimeContractResult<Self> {
+        let request = Self {
+            package_path: package_path.into(),
+            expected_sha256: expected_sha256.into(),
+        };
+        request.validate()?;
+        Ok(request)
+    }
+
+    pub fn validate(&self) -> RuntimeContractResult<()> {
+        if self.package_path.trim().is_empty()
+            || self.package_path.len() > MAX_DEBUG_PACKAGE_PATH_BYTES
+            || self.package_path.contains('\0')
+        {
+            return Err(RuntimeContractError::new("invalid_debug_package_path"));
+        }
+        validate_sha256_hex(&self.expected_sha256)
+            .map_err(|_| RuntimeContractError::new("invalid_debug_package_hash"))
+    }
+
+    pub fn package_path(&self) -> &str {
+        &self.package_path
+    }
+
+    pub fn expected_sha256(&self) -> &str {
+        &self.expected_sha256
+    }
+}
+
+impl fmt::Debug for PackageDebugRequest {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("PackageDebugRequest")
+            .field("package_path", &"<redacted-path>")
+            .field("expected_sha256", &"<redacted-hash>")
+            .finish()
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PackageDebugLayout {
+    Lab,
+    Module,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PackageDebugSummary {
+    task_id: String,
+    verified_sha256: String,
+    layout: PackageDebugLayout,
+    entry_count: u32,
+    resident_bytes: u64,
+    task_count: u32,
+    has_recognition_pack: bool,
+    has_pages: bool,
+    has_navigation: bool,
+}
+
+impl PackageDebugSummary {
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        task_id: impl Into<String>,
+        verified_sha256: impl Into<String>,
+        layout: PackageDebugLayout,
+        entry_count: u32,
+        resident_bytes: u64,
+        task_count: u32,
+        has_recognition_pack: bool,
+        has_pages: bool,
+        has_navigation: bool,
+    ) -> RuntimeContractResult<Self> {
+        let summary = Self {
+            task_id: task_id.into(),
+            verified_sha256: verified_sha256.into(),
+            layout,
+            entry_count,
+            resident_bytes,
+            task_count,
+            has_recognition_pack,
+            has_pages,
+            has_navigation,
+        };
+        summary.validate()?;
+        Ok(summary)
+    }
+
+    pub fn validate(&self) -> RuntimeContractResult<()> {
+        if self.task_id.trim().is_empty()
+            || self.task_id.len() > MAX_INSTANCE_ALIAS_BYTES
+            || self.entry_count == 0
+            || self.resident_bytes == 0
+            || self.task_count == 0
+        {
+            return Err(RuntimeContractError::new("invalid_debug_package_summary"));
+        }
+        validate_sha256_hex(&self.verified_sha256)
+            .map_err(|_| RuntimeContractError::new("invalid_debug_package_summary"))
+    }
+
+    pub fn task_id(&self) -> &str {
+        &self.task_id
+    }
+
+    pub fn verified_sha256(&self) -> &str {
+        &self.verified_sha256
+    }
+
+    pub const fn layout(&self) -> PackageDebugLayout {
+        self.layout
+    }
+
+    pub const fn entry_count(&self) -> u32 {
+        self.entry_count
+    }
+
+    pub const fn resident_bytes(&self) -> u64 {
+        self.resident_bytes
+    }
+
+    pub const fn task_count(&self) -> u32 {
+        self.task_count
+    }
+
+    pub const fn has_recognition_pack(&self) -> bool {
+        self.has_recognition_pack
+    }
+
+    pub const fn has_pages(&self) -> bool {
+        self.has_pages
+    }
+
+    pub const fn has_navigation(&self) -> bool {
+        self.has_navigation
+    }
+}
+
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "operation", rename_all = "snake_case", deny_unknown_fields)]
 pub enum RuntimeOperation {
     Health,
@@ -822,6 +972,9 @@ pub enum RuntimeOperation {
         query: EventQuery,
         profile: ProjectionProfile,
     },
+    DebugPackage {
+        request: PackageDebugRequest,
+    },
     RecordAuthoringEvent {
         event: ResourceAuthoringEvent,
     },
@@ -862,6 +1015,7 @@ impl RuntimeOperation {
             | Self::PollQueuedLease { .. }
             | Self::CancelQueuedLease { .. }
             | Self::QueryEvents { .. } => Ok(()),
+            Self::DebugPackage { request } => request.validate(),
             Self::RecordAuthoringEvent { event } => event.validate(),
             Self::AcquireLease { instance_alias, .. }
             | Self::ObserveReadonly { instance_alias }
@@ -943,6 +1097,7 @@ impl fmt::Debug for RuntimeOperation {
             Self::SafeReset { .. } => "RuntimeOperation::SafeReset(<redacted>)",
             Self::Input { .. } => "RuntimeOperation::Input(<redacted>)",
             Self::QueryEvents { .. } => "RuntimeOperation::QueryEvents(<typed-query>)",
+            Self::DebugPackage { .. } => "RuntimeOperation::DebugPackage(<redacted>)",
             Self::RecordAuthoringEvent { .. } => {
                 "RuntimeOperation::RecordAuthoringEvent(<redacted>)"
             }
@@ -1006,6 +1161,11 @@ impl RuntimeRequest {
             return Err(RuntimeContractError::new(
                 "invalid_resource_authoring_origin",
             ));
+        }
+        if matches!(self.operation, RuntimeOperation::DebugPackage { .. })
+            && (self.actor != EventActor::Lab || self.source != EventSource::Lab)
+        {
+            return Err(RuntimeContractError::new("invalid_runtime_debug_origin"));
         }
         self.operation.validate()?;
         Ok(ValidatedRuntimeRequest { request: self })
@@ -1120,6 +1280,7 @@ pub enum RuntimeErrorCode {
     RecognitionFailed,
     BackendOpenFailed,
     BackendOperationFailed,
+    PackageInvalid,
     LedgerFailure,
 }
 
@@ -1283,6 +1444,9 @@ pub enum RuntimeResult {
     Events {
         events: Vec<ProjectedEvent>,
     },
+    PackageDebugCompleted {
+        summary: PackageDebugSummary,
+    },
     AuthoringEventRecorded {
         phase: ResourceAuthoringPhase,
     },
@@ -1385,6 +1549,7 @@ impl RuntimeReceipt {
                 observation.validate()?
             }
             Some(RuntimeResult::CaptureSequenceCompleted { sequence }) => sequence.validate()?,
+            Some(RuntimeResult::PackageDebugCompleted { summary }) => summary.validate()?,
             _ => {}
         }
         Ok(())
@@ -1500,6 +1665,17 @@ fn validate_point(x: i32, y: i32) -> RuntimeContractResult<()> {
 fn validate_duration(duration_ms: u64) -> RuntimeContractResult<()> {
     if !(1..=MAX_INPUT_DURATION_MS).contains(&duration_ms) {
         return Err(RuntimeContractError::new("invalid_input_duration"));
+    }
+    Ok(())
+}
+
+fn validate_sha256_hex(value: &str) -> RuntimeContractResult<()> {
+    if value.len() != 64
+        || !value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    {
+        return Err(RuntimeContractError::new("invalid_sha256"));
     }
     Ok(())
 }

@@ -477,6 +477,83 @@ fn run_actinglab_output<const N: usize>(
 }
 
 #[test]
+fn lab_package_debug_is_a_correlated_runtime_request_without_device_authority() {
+    let root = TempDir::new().expect("tempdir");
+    let runtime_root = root.path().join("runtime");
+    let local_app_data = root.path().join("local-app-data");
+    let config_path = root.path().join("actinglab.json");
+    fs::write(&config_path, "{}").expect("write config");
+    let package = root.path().join("debug-package.zip");
+    write_runtime_owned_lab_package(&package);
+    let expected_sha256 = format!("{:x}", Sha256::digest(fs::read(&package).expect("package")));
+    let state = Arc::new(FakeState::default());
+    let instance_id = *IdentifierIssuer::new()
+        .expect("identifier issuer")
+        .mint_instance_id()
+        .expect("instance id")
+        .transport();
+    let host = RuntimeHost::start(
+        RuntimeHostConfig::new(&runtime_root, b"actinglab-runtime-package-debug-test"),
+        Arc::new(FakeProvider {
+            instance_id,
+            state: Arc::clone(&state),
+            frame_size: 2,
+        }),
+    )
+    .expect("runtime host");
+
+    let output = run_actinglab_json(
+        &config_path,
+        &runtime_root,
+        &local_app_data,
+        [
+            "--json",
+            "lab",
+            "debug-package",
+            "--zip",
+            package.to_str().expect("package path"),
+            "--expected-sha256",
+            &expected_sha256,
+        ],
+    );
+    assert_eq!(output["data"]["authority"], "runtime");
+    assert_eq!(output["data"]["summary"]["task_id"], "task");
+    assert_eq!(
+        output["data"]["summary"]["verified_sha256"],
+        expected_sha256
+    );
+    assert_eq!(
+        output["data"]["terminal_receipt"]["correlation_id"],
+        output["data"]["correlation_id"]
+    );
+    assert!(
+        output["data"]["events"]
+            .as_array()
+            .is_some_and(|events| !events.is_empty())
+    );
+    assert_eq!(state.captures.load(Ordering::Acquire), 0);
+    assert_eq!(state.taps.load(Ordering::Acquire), 0);
+
+    let (_, failure) = run_actinglab_failure_json(
+        &config_path,
+        &runtime_root,
+        &local_app_data,
+        [
+            "--json",
+            "lab",
+            "debug-package",
+            "--zip",
+            package.to_str().expect("package path"),
+            "--expected-sha256",
+            &"0".repeat(64),
+        ],
+    );
+    assert_eq!(failure["ok"], false);
+    assert_eq!(host.runtime_info().pid(), std::process::id());
+    host.close().expect("close host");
+}
+
+#[test]
 fn production_tap_target_uses_runtime_capture_and_fenced_input() {
     let root = TempDir::new().expect("tempdir");
     let runtime_root = root.path().join("runtime");

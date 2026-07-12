@@ -162,6 +162,83 @@ fn runtime_request_debug_redacts_alias_key_and_text() {
 }
 
 #[test]
+fn package_debug_contract_is_lab_only_bounded_and_redacted() {
+    let private_path = r"C:\private\resource-package.zip";
+    let expected = "a".repeat(64);
+    let debug_request = PackageDebugRequest::new(private_path, &expected).expect("debug request");
+    let debug = format!("{debug_request:?}");
+    assert!(!debug.contains(private_path));
+    assert!(!debug.contains(&expected));
+
+    let ids = issuer();
+    let request = RuntimeRequest::new(
+        ids.mint_request_id().expect("request"),
+        ids.mint_correlation_id().expect("correlation"),
+        None,
+        EventActor::Lab,
+        EventSource::Lab,
+        1,
+        RuntimeOperation::DebugPackage {
+            request: debug_request,
+        },
+    )
+    .expect("Lab package debug request");
+    assert!(request.validate().is_ok());
+
+    let ids = issuer();
+    let wrong_origin = RuntimeRequest::new(
+        ids.mint_request_id().expect("request"),
+        ids.mint_correlation_id().expect("correlation"),
+        None,
+        EventActor::Cli,
+        EventSource::Cli,
+        1,
+        RuntimeOperation::DebugPackage {
+            request: PackageDebugRequest::new(private_path, &expected).expect("debug request"),
+        },
+    )
+    .expect_err("non-Lab package debug must fail");
+    assert_eq!(wrong_origin.code(), "invalid_runtime_debug_origin");
+
+    assert_eq!(
+        PackageDebugRequest::new(private_path, "A".repeat(64))
+            .expect_err("uppercase hash")
+            .code(),
+        "invalid_debug_package_hash"
+    );
+    assert_eq!(
+        PackageDebugRequest::new("", &expected)
+            .expect_err("empty path")
+            .code(),
+        "invalid_debug_package_path"
+    );
+}
+
+#[test]
+fn package_debug_summary_round_trips_as_a_closed_result() {
+    let summary = PackageDebugSummary::new(
+        "task",
+        "b".repeat(64),
+        PackageDebugLayout::Lab,
+        3,
+        128,
+        1,
+        true,
+        true,
+        false,
+    )
+    .expect("summary");
+    let result = RuntimeResult::PackageDebugCompleted {
+        summary: summary.clone(),
+    };
+    let encoded = serde_json::to_string(&result).expect("serialize");
+    let decoded: RuntimeResult = serde_json::from_str(&encoded).expect("deserialize");
+    assert_eq!(decoded, result);
+    assert_eq!(summary.task_id(), "task");
+    assert_eq!(summary.entry_count(), 3);
+}
+
+#[test]
 fn every_input_variant_validates_bounds_and_maps_to_a_schema_action() {
     let actions = [
         InputAction::Tap { x: 1, y: 2 },

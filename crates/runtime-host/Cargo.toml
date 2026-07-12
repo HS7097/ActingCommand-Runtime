@@ -14,6 +14,7 @@ actingcommand-contract = { workspace = true }
 actingcommand-device = { workspace = true }
 actingcommand-execution-kernel = { workspace = true }
 actingcommand-ledger = { workspace = true }
+actingcommand-pack-containment = { workspace = true }
 actingcommand-scheduler = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

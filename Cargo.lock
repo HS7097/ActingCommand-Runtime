@@ -284,6 +284,7 @@ dependencies = [
  "actingcommand-device",
  "actingcommand-execution-kernel",
  "actingcommand-ledger",
+ "actingcommand-pack-containment",
  "actingcommand-scheduler",
  "serde",
  "serde_json",

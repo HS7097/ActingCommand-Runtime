@@ -18,7 +18,8 @@ use actingcommand_contract::{
     InputPayload, InputPayloadDraft, InstanceId, IssuedMonitorProbe,
     IssuedReadOnlyCaptureCapability, LeaseId, LeasePayloadDraft, LeaseQueuePolicy, LeaseToken,
     MAX_INSTANCE_ALIAS_BYTES, MonitorPayloadDraft, MonitorRecoveryCoordinationReason, OriginModule,
-    RUNTIME_INFO_FILE, ReadonlyObservation, RecognitionPayloadDraft, RecognitionVerdict, RequestId,
+    PackageDebugLayout, PackageDebugRequest, PackageDebugSummary, RUNTIME_INFO_FILE,
+    ReadonlyObservation, RecognitionPayloadDraft, RecognitionVerdict, RequestId,
     ResourceAuthoringEvent, ResourceAuthoringPayloadDraft, ResourceAuthoringPhase, RetentionClass,
     RuntimeCaptureBackend, RuntimeControlPlaneStatus, RuntimeErrorCode, RuntimeErrorProjection,
     RuntimeInfo, RuntimeInstanceStatus, RuntimeMonitorPolicy, RuntimeOperation,
@@ -32,6 +33,10 @@ use actingcommand_ledger::critical::{
     DefiniteEffectDisposition, LeaseTransitionTarget, execute_critical,
 };
 use actingcommand_ledger::{GlobalLedger, GlobalLedgerConfig, PersistedEvent};
+use actingcommand_pack_containment::{
+    Containment, DEFAULT_MAX_COMPRESSED_BYTES, InstanceId as ContainmentInstanceId, PackageLayout,
+    Sha256Hash,
+};
 use actingcommand_scheduler::{
     CancelledQueuedLease, ConnectionId, LeasePreparation, LeaseReleaseReason, LeaseTransferReason,
     PreparedLeaseTransfer, QueueAdmissionDecision, QueueLeaseRequest, QueuePoll, QueuedLease,
@@ -39,7 +44,7 @@ use actingcommand_scheduler::{
 };
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fs::{self, OpenOptions};
-use std::io::Write;
+use std::io::{Read, Write};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, TcpListener, TcpStream};
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::{Path, PathBuf};
@@ -687,10 +692,68 @@ impl HostShared {
                     result: RuntimeResult::Events { events },
                 })
                 .map_err(|_| RequestFailure::poison(ledger_error("query_runtime_events"), None)),
+            RuntimeOperation::DebugPackage { request } => self.debug_package(validated, request),
             RuntimeOperation::RecordAuthoringEvent { event } => {
                 self.record_authoring_event(validated, event)
             }
         }
+    }
+
+    fn debug_package(
+        &self,
+        validated: &ValidatedRuntimeRequest<'_>,
+        request: &PackageDebugRequest,
+    ) -> Result<OperationSuccess, RequestFailure> {
+        let links = validated.event_links(None, None, None);
+        self.append_event(
+            EventSeverity::Info,
+            EventSource::Lab,
+            OriginModule::Actinglab,
+            EventActor::Lab,
+            links.clone(),
+            CommandPayloadDraft::received(EventAction::RuntimeDebugPackage, AuditInput::new()),
+        )?;
+
+        let summary = match inspect_debug_package(request) {
+            Ok(summary) => summary,
+            Err(error) => {
+                let event = self.append_event(
+                    EventSeverity::Error,
+                    EventSource::Runtime,
+                    OriginModule::Runtime,
+                    EventActor::Runtime,
+                    links,
+                    CommandPayloadDraft::rejected(
+                        EventAction::RuntimeDebugPackage,
+                        DiagnosticCode::CommandRejected,
+                        EffectDisposition::NotPerformed,
+                        AuditInput::new(),
+                    ),
+                )?;
+                return Err(RequestFailure::request(
+                    error,
+                    RuntimeReceiptState::Failed,
+                    Some(terminal(&event)),
+                ));
+            }
+        };
+        let event = self.append_event(
+            EventSeverity::Info,
+            EventSource::Runtime,
+            OriginModule::Runtime,
+            EventActor::Runtime,
+            links,
+            CommandPayloadDraft::validated(
+                EventAction::RuntimeDebugPackage,
+                EffectDisposition::NotPerformed,
+                AuditInput::new(),
+            ),
+        )?;
+        Ok(OperationSuccess {
+            state: RuntimeReceiptState::Completed,
+            terminal: Some(terminal(&event)),
+            result: RuntimeResult::PackageDebugCompleted { summary },
+        })
     }
 
     fn record_authoring_event(
@@ -4481,6 +4544,57 @@ fn remove_temporary_runtime_info(path: &Path) -> RuntimeHostResult<()> {
             RuntimeErrorCode::RuntimeFatal,
         )),
     }
+}
+
+fn inspect_debug_package(request: &PackageDebugRequest) -> RuntimeHostResult<PackageDebugSummary> {
+    let path = Path::new(request.package_path());
+    if !path.is_absolute() {
+        return Err(debug_package_error("debug_package_path_not_absolute"));
+    }
+    let file =
+        fs::File::open(path).map_err(|_| debug_package_error("debug_package_open_failed"))?;
+    let metadata = file
+        .metadata()
+        .map_err(|_| debug_package_error("debug_package_metadata_failed"))?;
+    if !metadata.is_file() || metadata.len() > DEFAULT_MAX_COMPRESSED_BYTES {
+        return Err(debug_package_error("debug_package_file_invalid"));
+    }
+    let mut bytes = Vec::new();
+    file.take(DEFAULT_MAX_COMPRESSED_BYTES + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|_| debug_package_error("debug_package_read_failed"))?;
+    if bytes.len() as u64 > DEFAULT_MAX_COMPRESSED_BYTES {
+        return Err(debug_package_error("debug_package_file_too_large"));
+    }
+    let expected = Sha256Hash::parse_hex(request.expected_sha256())
+        .map_err(|_| debug_package_error("debug_package_hash_invalid"))?;
+    let instance = ContainmentInstanceId::new("runtime-debug-package")
+        .map_err(|_| debug_package_error("debug_package_instance_invalid"))?;
+    let mut containment = Containment::new();
+    let bundle = containment
+        .load(&instance, &bytes, &expected)
+        .map_err(|_| debug_package_error("debug_package_containment_failed"))?;
+    PackageDebugSummary::new(
+        bundle.task_id().as_str(),
+        bundle.verified_hash().to_string(),
+        match bundle.layout() {
+            PackageLayout::Lab => PackageDebugLayout::Lab,
+            PackageLayout::Module => PackageDebugLayout::Module,
+        },
+        u32::try_from(bundle.entry_count())
+            .map_err(|_| debug_package_error("debug_package_entry_count_overflow"))?,
+        bundle.resident_bytes(),
+        u32::try_from(bundle.task_count())
+            .map_err(|_| debug_package_error("debug_package_task_count_overflow"))?,
+        bundle.recognition_pack_path().is_some(),
+        bundle.pages_path().is_some(),
+        bundle.navigation_path().is_some(),
+    )
+    .map_err(|_| debug_package_error("debug_package_summary_invalid"))
+}
+
+fn debug_package_error(code: &'static str) -> RuntimeHostError {
+    RuntimeHostError::request(code, "debug_package", RuntimeErrorCode::PackageInvalid)
 }
 
 fn runtime_error_receipt(

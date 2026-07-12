@@ -5,10 +5,10 @@ use crate::{RuntimeClientError, RuntimeClientResult};
 use actingcommand_contract::{
     ActionId, CaptureSequenceSpec, CorrelationId, EventActor, EventQuery, EventSource,
     IdentifierIssuer, InputAction, IssuedCorrelationId, LeaseQueuePolicy, LeaseQueueStatus,
-    LeaseToken, OwnerEpoch, ProjectedEvent, ProjectionProfile, RUNTIME_INFO_FILE, RequestId,
-    ResourceAuthoringEvent, RuntimeControlPlaneStatus, RuntimeInfo, RuntimeMonitorInstanceStatus,
-    RuntimeMonitorPolicy, RuntimeMonitorRegistryStatus, RuntimeOperation, RuntimeReceipt,
-    RuntimeRequest, RuntimeResult, TerminalEvent,
+    LeaseToken, OwnerEpoch, PackageDebugRequest, ProjectedEvent, ProjectionProfile,
+    RUNTIME_INFO_FILE, RequestId, ResourceAuthoringEvent, RuntimeControlPlaneStatus, RuntimeInfo,
+    RuntimeMonitorInstanceStatus, RuntimeMonitorPolicy, RuntimeMonitorRegistryStatus,
+    RuntimeOperation, RuntimeReceipt, RuntimeRequest, RuntimeResult, TerminalEvent,
 };
 use serde::Serialize;
 use std::fmt;
@@ -743,6 +743,32 @@ impl RuntimeAuthoringSession {
 impl RuntimeDebugSession {
     pub const fn correlation_id(&self) -> CorrelationId {
         *self.correlation.transport()
+    }
+
+    pub fn debug_package(
+        &self,
+        request: PackageDebugRequest,
+    ) -> RuntimeClientResult<RuntimeReceipt> {
+        request.validate().map_err(|_| {
+            RuntimeClientError::fatal("runtime_debug_package_invalid", "debug_package")
+        })?;
+        let timeout = self
+            .client
+            .connection("debug_package")?
+            .backend_open_timeout;
+        let receipt = self.client.execute_receipt_with_correlation(
+            "debug_package",
+            RuntimeOperation::DebugPackage { request },
+            self.correlation,
+            Some(timeout),
+        )?;
+        if !matches!(
+            receipt.result(),
+            Some(RuntimeResult::PackageDebugCompleted { .. })
+        ) {
+            return Err(self.client.unexpected_result("debug_package"));
+        }
+        Ok(receipt)
     }
 
     pub fn observe_readonly(&self, instance_alias: &str) -> RuntimeClientResult<RuntimeReceipt> {
