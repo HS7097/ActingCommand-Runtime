@@ -17,7 +17,7 @@ use std::io::Write;
 use std::path::Path;
 use std::process::Command;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use tempfile::TempDir;
 use zip::ZipWriter;
 use zip::write::FileOptions;
@@ -27,6 +27,7 @@ struct FakeState {
     taps: AtomicUsize,
     captures: AtomicUsize,
     closes: AtomicUsize,
+    transition_after_tap: AtomicBool,
 }
 
 struct FakeBackend {
@@ -90,8 +91,15 @@ struct FakeCapture {
 impl CaptureBackend for FakeCapture {
     fn capture(&mut self) -> DeviceResult<Frame> {
         self.state.captures.fetch_add(1, Ordering::AcqRel);
+        let color = if self.state.transition_after_tap.load(Ordering::Acquire)
+            && self.state.taps.load(Ordering::Acquire) > 0
+        {
+            [0, 0, 255]
+        } else {
+            [255, 0, 0]
+        };
         let pixels = (0..self.frame_size * self.frame_size)
-            .flat_map(|_| [255, 0, 0])
+            .flat_map(|_| color)
             .collect();
         Frame::from_pixels(
             self.frame_size,
@@ -747,6 +755,149 @@ fn online_lab2_do_guard_failure_records_observation_without_runtime_input() {
     host.close().expect("close host");
 }
 
+#[test]
+fn online_lab2_ensure_and_wait_use_runtime_authority_without_local_state() {
+    let root = TempDir::new().expect("tempdir");
+    let runtime_root = root.path().join("runtime");
+    let local_app_data = root.path().join("local-app-data");
+    let resources = root.path().join("resources");
+    let semantic_package = root.path().join("navigation.zip");
+    let config_path = root.path().join("actinglab.json");
+    fs::write(&config_path, "{}").expect("write config");
+    write_navigation_resources(&resources);
+    write_semantic_package(&semantic_package, &resources);
+    let expected_sha256 = format!(
+        "{:x}",
+        Sha256::digest(fs::read(&semantic_package).expect("semantic package"))
+    );
+    let state = Arc::new(FakeState::default());
+    state.transition_after_tap.store(true, Ordering::Release);
+    let instance_id = *IdentifierIssuer::new()
+        .expect("identifier issuer")
+        .mint_instance_id()
+        .expect("instance id")
+        .transport();
+    let host = RuntimeHost::start(
+        RuntimeHostConfig::new(&runtime_root, b"actinglab-runtime-lab2-route-test"),
+        Arc::new(FakeProvider {
+            instance_id,
+            state: Arc::clone(&state),
+            frame_size: 1,
+        }),
+    )
+    .expect("runtime host");
+
+    let wait_home = run_actinglab_json(
+        &config_path,
+        &runtime_root,
+        &local_app_data,
+        [
+            "--json",
+            "--instance",
+            "ak.cn",
+            "wait",
+            "--capture",
+            "--page",
+            "home",
+            "--zip",
+            semantic_package.to_str().expect("semantic package path"),
+            "--expected-sha256",
+            &expected_sha256,
+        ],
+    );
+    assert_eq!(wait_home["data"]["state"], "arrived");
+    assert_eq!(
+        wait_home["data"]["arbitration"]["authority"],
+        "runtime_scheduler"
+    );
+
+    let ensure = run_actinglab_json(
+        &config_path,
+        &runtime_root,
+        &local_app_data,
+        [
+            "--json",
+            "--instance",
+            "ak.cn",
+            "ensure",
+            "--capture",
+            "--to",
+            "target",
+            "--step-timeout-ms",
+            "100",
+            "--poll-ms",
+            "1",
+            "--zip",
+            semantic_package.to_str().expect("semantic package path"),
+            "--expected-sha256",
+            &expected_sha256,
+        ],
+    );
+    assert_eq!(ensure["data"]["state"], "arrived");
+    assert_eq!(ensure["data"]["page"], "arknights/target");
+    assert_eq!(ensure["data"]["executed"], true);
+    assert_eq!(
+        ensure["data"]["arbitration"]["authority"],
+        "runtime_scheduler"
+    );
+
+    let wait_stable = run_actinglab_json(
+        &config_path,
+        &runtime_root,
+        &local_app_data,
+        [
+            "--json",
+            "--instance",
+            "ak.cn",
+            "wait",
+            "--capture",
+            "--stable",
+            "target_anchor",
+            "--zip",
+            semantic_package.to_str().expect("semantic package path"),
+            "--expected-sha256",
+            &expected_sha256,
+        ],
+    );
+    assert_eq!(wait_stable["data"]["state"], "stable");
+    assert_eq!(state.taps.load(Ordering::Acquire), 1);
+    assert!(state.captures.load(Ordering::Acquire) >= 6);
+    assert!(!local_app_data.join("ActingCommand/actinglab/lab2").exists());
+
+    let client = RuntimeClient::connect(RuntimeClientConfig::new(
+        &runtime_root,
+        EventActor::Lab,
+        EventSource::Lab,
+    ))
+    .expect("Runtime client");
+    let events = client
+        .query_events(EventQuery::default(), ProjectionProfile::Forensic)
+        .expect("Runtime events");
+    let input = events
+        .iter()
+        .find(|event| event.event_type == EventType::InputCommitted)
+        .expect("input committed");
+    let correlation = input.links.correlation_id().copied().expect("correlation");
+    let correlated = events
+        .iter()
+        .filter(|event| event.links.correlation_id().copied() == Some(correlation))
+        .map(|event| event.event_type)
+        .collect::<Vec<_>>();
+    assert_event_order(
+        &correlated,
+        &[
+            EventType::CaptureCompleted,
+            EventType::LeaseGranted,
+            EventType::InputCommitted,
+            EventType::LeaseReleased,
+            EventType::CaptureCompleted,
+        ],
+    );
+
+    drop(client);
+    host.close().expect("close host");
+}
+
 fn write_semantic_resources(root: &std::path::Path) {
     let recognition = root.join("recognition");
     let navigation = root.join("navigation");
@@ -771,6 +922,52 @@ fn write_semantic_resources(root: &std::path::Path) {
     fs::write(
         navigation.join("arknights.cn.navigation.json"),
         r#"{"schema_version":"0.3","game":"arknights","server":"cn","navigation":[],"destructive_actions":[]}"#,
+    )
+    .expect("navigation graph");
+}
+
+fn write_navigation_resources(root: &std::path::Path) {
+    let recognition = root.join("recognition");
+    let navigation = root.join("navigation");
+    fs::create_dir_all(&recognition).expect("recognition dir");
+    fs::create_dir_all(&navigation).expect("navigation dir");
+    fs::write(
+        recognition.join("arknights.cn.pack.json"),
+        r#"{
+            "schema_version":"0.3",
+            "coordinate_space":{"width":1,"height":1},
+            "targets":[
+                {"type":"color","id":"home_anchor","region":{"x":0,"y":0,"width":1,"height":1},"expected":[255,0,0]},
+                {"type":"color","id":"target_anchor","region":{"x":0,"y":0,"width":1,"height":1},"expected":[0,0,255]}
+            ]
+        }"#,
+    )
+    .expect("recognition pack");
+    fs::write(
+        recognition.join("arknights.cn.pages.json"),
+        r#"{
+            "schema_version":"0.3",
+            "pages":[
+                {"id":"arknights/home","required":["home_anchor"]},
+                {"id":"arknights/target","required":["target_anchor"]}
+            ]
+        }"#,
+    )
+    .expect("page set");
+    fs::write(
+        navigation.join("arknights.cn.navigation.json"),
+        r#"{
+            "schema_version":"0.3",
+            "game":"arknights",
+            "server":"cn",
+            "navigation":[{
+                "id":"home_to_target",
+                "from_page":"arknights/home",
+                "to_page":"arknights/target",
+                "click":{"kind":"point","x":0,"y":0}
+            }],
+            "destructive_actions":[]
+        }"#,
     )
     .expect("navigation graph");
 }

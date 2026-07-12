@@ -304,6 +304,410 @@ fn run_runtime_do(
     finish_runtime_debug_result(&session, flags, result)
 }
 
+fn run_runtime_ensure(
+    flags: &FlagArgs,
+    to: &str,
+    instance: &str,
+    dry_run: bool,
+    allow_destructive: bool,
+) -> CliOutcome<Value> {
+    reject_mixed_online_and_offline_scene(flags, "ensure")?;
+    let resources = super::contained_resources::load(flags, "ensure")?;
+    let (evaluator, detector) = super::contained_resources::recognition_pipeline(&resources)?;
+    let graph = super::contained_resources::navigation_graph(&resources)?;
+    let target_page = canonical_navigation_page(&graph, to);
+    let session = begin_runtime_debug_session()?;
+    let result = (|| -> CliOutcome<Value> {
+        let scene = load_runtime_lab2_scene(&session, instance)?;
+        let start = detect_current_page(&evaluator, &detector, &scene.scene)?;
+        if start.matched && start.page == target_page {
+            return Ok(json!({
+                "req_id": session.correlation_id(),
+                "state": "already_at_target",
+                "instance": instance,
+                "executed": false,
+                "page": start.page,
+                "to": target_page,
+                "route": [],
+                "frame_age_ms": scene.frame_age_ms,
+                "backend": scene.backend,
+                "arbitration": runtime_scheduler_projection(false),
+            }));
+        }
+        if !start.matched {
+            return Err(CliError::safety_blocked(
+                "current_page_unknown",
+                "ensure requires a matched current page before navigation",
+                &["current_page"],
+            )
+            .with_details(json!({
+                "error": "resource_drift",
+                "state": start.page,
+                "hint": "observe-current-page-or-route-home-before-ensure"
+            })));
+        }
+        let route =
+            find_navigation_route(&graph.edges, &start.page, &target_page).ok_or_else(|| {
+                CliError::usage(format!(
+                    "no navigation route from '{}' to '{}'",
+                    start.page, target_page
+                ))
+            })?;
+        for edge in &route {
+            if !allow_destructive {
+                reject_dangerous_semantic_id("navigation edge", &edge.id)?;
+                reject_destructive_overlap(edge, &graph.destructive_clicks)?;
+            }
+        }
+        let route_json = route.iter().map(navigation_edge_json).collect::<Vec<_>>();
+        if dry_run {
+            return Ok(json!({
+                "req_id": session.correlation_id(),
+                "state": "planned",
+                "instance": instance,
+                "executed": false,
+                "page": start.page,
+                "to": target_page,
+                "route": route_json,
+                "frame_age_ms": scene.frame_age_ms,
+                "backend": scene.backend,
+                "arbitration": runtime_scheduler_projection(false),
+            }));
+        }
+
+        let step_timeout = parse_optional_duration_ms(flags, "--step-timeout-ms", 5_000)?;
+        let poll = parse_optional_duration_ms(flags, "--poll-ms", 500)?;
+        let execution = RuntimeNavigationContext {
+            session: &session,
+            instance,
+            evaluator: &evaluator,
+            detector: &detector,
+            destructive_clicks: &graph.destructive_clicks,
+            allow_destructive,
+            step_timeout,
+            poll,
+        };
+        let (steps, arrived) =
+            execute_runtime_navigation_route(&execution, start.page.clone(), route)?;
+        Ok(json!({
+            "req_id": session.correlation_id(),
+            "state": "arrived",
+            "instance": instance,
+            "executed": true,
+            "from": start.page,
+            "page": arrived,
+            "to": target_page,
+            "route": route_json,
+            "steps": steps,
+            "arbitration": runtime_scheduler_projection(true),
+        }))
+    })();
+    finish_runtime_debug_result(&session, flags, result)
+}
+
+fn run_runtime_wait(global: &GlobalOptions, flags: &FlagArgs) -> CliOutcome<Value> {
+    reject_mixed_online_and_offline_scene(flags, "wait")?;
+    let instance = lab2_instance(global, flags);
+    let resources = super::contained_resources::load(flags, "wait")?;
+    let (evaluator, detector) = super::contained_resources::recognition_pipeline(&resources)?;
+    let timeout = parse_optional_duration_ms(flags, "--timeout-ms", 5_000)?;
+    let poll = parse_optional_duration_ms(flags, "--poll-ms", 200)?;
+    let session = begin_runtime_debug_session()?;
+    let result = if let Some(page) = wait_page_target(flags) {
+        let graph = super::contained_resources::navigation_graph(&resources)?;
+        let page = canonical_navigation_page(&graph, &page);
+        runtime_wait_for_page(
+            &session, &instance, &evaluator, &detector, &page, timeout, poll,
+        )
+    } else if let Some(target) = flags.optional("--stable").filter(|value| value != "true") {
+        runtime_wait_for_stable_target(&session, &instance, &evaluator, &target, timeout, poll)
+    } else {
+        Err(CliError::usage(
+            "wait requires --page <page> or --stable <target>",
+        ))
+    };
+    let result = result.map(|mut payload| {
+        payload["instance"] = json!(instance);
+        payload["arbitration"] = runtime_scheduler_projection(false);
+        payload
+    });
+    finish_runtime_debug_result(&session, flags, result)
+}
+
+struct RuntimeNavigationContext<'a> {
+    session: &'a RuntimeDebugSession,
+    instance: &'a str,
+    evaluator: &'a RecognitionEvaluator,
+    detector: &'a PageDetector,
+    destructive_clicks: &'a [DestructiveClick],
+    allow_destructive: bool,
+    step_timeout: Duration,
+    poll: Duration,
+}
+
+fn execute_runtime_navigation_route(
+    ctx: &RuntimeNavigationContext<'_>,
+    start_page: String,
+    route: Vec<NavigationEdge>,
+) -> CliOutcome<(Vec<Value>, String)> {
+    let mut executed = Vec::new();
+    let mut current_page = start_page;
+    for edge in route {
+        if current_page != edge.from_page {
+            return Err(CliError::safety_blocked(
+                "navigation_page_drift",
+                format!(
+                    "navigation expected current page '{}' but last page was '{}'",
+                    edge.from_page, current_page
+                ),
+                &["page_guard"],
+            ));
+        }
+        let guard_scene = load_runtime_lab2_scene(ctx.session, ctx.instance)?;
+        let guard_page = detect_current_page(ctx.evaluator, ctx.detector, &guard_scene.scene)?;
+        if !guard_page.matched || guard_page.page != edge.from_page {
+            return Err(CliError::safety_blocked(
+                "navigation_page_drift",
+                format!(
+                    "navigation edge '{}' expected '{}' but Runtime observed '{}'",
+                    edge.id, edge.from_page, guard_page.page
+                ),
+                &["page_guard"],
+            ));
+        }
+        let (input, recognition) =
+            resolve_runtime_navigation_edge_input(ctx.evaluator, &guard_scene.scene, &edge)?;
+        if !ctx.allow_destructive {
+            reject_destructive_overlap_input(&edge, &input, ctx.destructive_clicks)?;
+        }
+        let runtime_action = runtime_input_action(&input)?;
+        let action_id = execute_runtime_debug_input(ctx.session, ctx.instance, runtime_action)?;
+        let arrived = poll_for_runtime_page(
+            ctx.session,
+            ctx.instance,
+            ctx.evaluator,
+            ctx.detector,
+            &edge.to_page,
+            ctx.step_timeout,
+            ctx.poll,
+        )?;
+        if !arrived.matched {
+            return Err(CliError::safety_blocked(
+                "navigation_arrival_failed",
+                format!(
+                    "navigation edge '{}' did not arrive at '{}'; last page '{}'",
+                    edge.id, edge.to_page, arrived.page
+                ),
+                &["arrival_page"],
+            )
+            .with_details(json!({
+                "error": "navigation_arrival_failed",
+                "state": arrived.page,
+                "hint": "inspect-runtime-captures-and-navigation-resource"
+            })));
+        }
+        current_page = arrived.page.clone();
+        executed.push(json!({
+            "edge": navigation_edge_json(&edge),
+            "resolved_input": semantic_input_json(&input),
+            "recognition": recognition,
+            "action_id": action_id,
+            "device": {
+                "executed": true,
+                "backend": "runtime_proxy",
+                "authority": "runtime_execution_kernel"
+            },
+            "arrived": page_detection_json(&arrived)
+        }));
+    }
+    Ok((executed, current_page))
+}
+
+fn resolve_runtime_navigation_edge_input(
+    evaluator: &RecognitionEvaluator,
+    scene: &Scene,
+    edge: &NavigationEdge,
+) -> CliOutcome<(SemanticInput, Value)> {
+    let SemanticInput::TargetCenter { target_id } = &edge.input else {
+        return Ok((edge.input.clone(), Value::Null));
+    };
+    let evaluation = evaluator
+        .evaluate_target(scene, target_id)
+        .map_err(|error| CliError::usage(error.to_string()))?;
+    if !evaluation.passed {
+        return Err(CliError::safety_blocked(
+            "navigation_target_not_visible",
+            format!(
+                "navigation edge '{}' target '{}' did not pass recognition: {}",
+                edge.id, target_id, evaluation.message
+            ),
+            &["visible_target", "navigation"],
+        ));
+    }
+    let rect = target_evaluation_rect(&evaluation)?;
+    Ok((
+        SemanticInput::Tap {
+            rect,
+            point: rect_center(rect)?,
+        },
+        json!({
+            "target_id": target_id,
+            "evaluation": target_eval_json(&evaluation)
+        }),
+    ))
+}
+
+fn runtime_input_action(input: &SemanticInput) -> CliOutcome<InputAction> {
+    match input {
+        SemanticInput::Tap { point, .. } => Ok(InputAction::Tap {
+            x: point.x,
+            y: point.y,
+        }),
+        SemanticInput::Drag {
+            from,
+            to,
+            duration_ms,
+            ..
+        } => Ok(InputAction::Swipe {
+            x1: from.x,
+            y1: from.y,
+            x2: to.x,
+            y2: to.y,
+            duration_ms: *duration_ms,
+        }),
+        SemanticInput::TargetCenter { .. } => Err(CliError::device(
+            "Runtime navigation target was not resolved before input",
+        )),
+    }
+}
+
+fn poll_for_runtime_page(
+    session: &RuntimeDebugSession,
+    instance: &str,
+    evaluator: &RecognitionEvaluator,
+    detector: &PageDetector,
+    page_id: &str,
+    timeout: Duration,
+    poll: Duration,
+) -> CliOutcome<PageDetectionOutcome> {
+    let started = Instant::now();
+    loop {
+        if !poll.is_zero() {
+            thread::sleep(poll.min(timeout.saturating_sub(started.elapsed())));
+        }
+        let scene = load_runtime_lab2_scene(session, instance)?;
+        let outcome = detect_current_page(evaluator, detector, &scene.scene)?;
+        if outcome.matched && outcome.page == page_id {
+            return Ok(outcome);
+        }
+        if started.elapsed() >= timeout {
+            return Ok(outcome);
+        }
+    }
+}
+
+fn runtime_wait_for_page(
+    session: &RuntimeDebugSession,
+    instance: &str,
+    evaluator: &RecognitionEvaluator,
+    detector: &PageDetector,
+    page: &str,
+    timeout: Duration,
+    poll: Duration,
+) -> CliOutcome<Value> {
+    let started = Instant::now();
+    loop {
+        let scene = load_runtime_lab2_scene(session, instance)?;
+        let outcome = detect_current_page(evaluator, detector, &scene.scene)?;
+        if outcome.matched && outcome.page == page {
+            return Ok(json!({
+                "req_id": session.correlation_id(),
+                "wf_id": session.correlation_id(),
+                "state": "arrived",
+                "page": outcome.page,
+                "matched": true,
+                "elapsed_ms": started.elapsed().as_millis() as u64,
+                "frame_age_ms": scene.frame_age_ms,
+                "backend": scene.backend
+            }));
+        }
+        if started.elapsed() >= timeout {
+            return Err(CliError::safety_blocked(
+                "wait_timeout",
+                format!("wait timed out before page '{page}' became current"),
+                &["page_wait"],
+            )
+            .with_details(json!({
+                "error": "transient",
+                "state": outcome.page,
+                "hint": "retry-or-observe-current-page"
+            })));
+        }
+        thread::sleep(poll.min(timeout.saturating_sub(started.elapsed())));
+    }
+}
+
+fn runtime_wait_for_stable_target(
+    session: &RuntimeDebugSession,
+    instance: &str,
+    evaluator: &RecognitionEvaluator,
+    target: &str,
+    timeout: Duration,
+    poll: Duration,
+) -> CliOutcome<Value> {
+    guard_evaluable_target(evaluator, target, "wait --stable")?;
+    let started = Instant::now();
+    let first = load_runtime_lab2_scene(session, instance)?;
+    let mut previous = evaluator
+        .evaluate_target(&first.scene, target)
+        .map_err(|error| CliError::usage(error.to_string()))?;
+    if !previous.passed {
+        return Err(CliError::safety_blocked(
+            "stable_target_not_visible",
+            format!("stable target '{target}' did not pass baseline guard"),
+            &["stable_target"],
+        )
+        .with_details(json!({
+            "error": "resource_drift",
+            "state": "unstable",
+            "hint": "observe-current-page-and-refresh-stable-target",
+            "suspicion": guard_reject_suspicion(target, &previous.message)
+        })));
+    }
+    loop {
+        let next_scene = load_runtime_lab2_scene(session, instance)?;
+        let current = evaluator
+            .evaluate_target(&next_scene.scene, target)
+            .map_err(|error| CliError::usage(error.to_string()))?;
+        if actingcommand_lab::target_evaluations_stable_for_wait(&previous, &current) {
+            return Ok(json!({
+                "req_id": session.correlation_id(),
+                "wf_id": session.correlation_id(),
+                "state": "stable",
+                "target": target,
+                "elapsed_ms": started.elapsed().as_millis() as u64,
+                "frame_age_ms": next_scene.frame_age_ms,
+                "backend": next_scene.backend,
+                "evaluation": target_eval_json(&current)
+            }));
+        }
+        if started.elapsed() >= timeout {
+            return Err(CliError::safety_blocked(
+                "wait_timeout",
+                format!("wait timed out before target '{target}' became stable"),
+                &["stable_target"],
+            )
+            .with_details(json!({
+                "error": "transient",
+                "state": "unstable",
+                "hint": "retry-or-inspect-runtime-capture"
+            })));
+        }
+        previous = current;
+        thread::sleep(poll.min(timeout.saturating_sub(started.elapsed())));
+    }
+}
+
 fn begin_runtime_debug_session() -> CliOutcome<RuntimeDebugSession> {
     RuntimeClient::connect(RuntimeClientConfig::new(
         runtime_state_root()?,
@@ -644,6 +1048,9 @@ pub(crate) fn run_ensure(global: &GlobalOptions, args: &[String]) -> CliOutcome<
         ));
     }
     let instance = lab2_instance(global, &flags);
+    if flags.bool("--capture") {
+        return run_runtime_ensure(&flags, &to, &instance, dry_run, allow_destructive);
+    }
     let recovery_wait = wait_for_lab2_recovery_clear(
         &flags,
         &ids.req_id,
@@ -824,6 +1231,9 @@ pub(crate) fn run_ensure(global: &GlobalOptions, args: &[String]) -> CliOutcome<
 
 pub(crate) fn run_wait(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
     let flags = FlagArgs::parse(args)?;
+    if flags.bool("--capture") {
+        return run_runtime_wait(global, &flags);
+    }
     let ids = Lab2Ids::new();
     let wf_id = ids.issue(IdKind::Wf);
     let instance = lab2_instance(global, &flags);
