@@ -23,6 +23,7 @@ actingcommand-page-detector = { workspace = true }
 actingcommand-pack-containment = { workspace = true }
 actingcommand-recognition = { workspace = true }
 actingcommand-recognition-pack = { workspace = true }
+actingcommand-resource-tooling = { workspace = true }
 actingcommand-runtime-client = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

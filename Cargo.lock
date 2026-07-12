@@ -58,6 +58,7 @@ dependencies = [
  "actingcommand-page-detector",
  "actingcommand-recognition",
  "actingcommand-recognition-pack",
+ "actingcommand-resource-tooling",
  "actingcommand-runtime-client",
  "actingcommand-runtime-host",
  "actingcommand-scheduler",

@@ -55,6 +55,7 @@ mod package_cli;
 pub mod project_interface;
 mod readonly_cli;
 pub mod recovery_exec;
+mod resource_authoring;
 mod resource_convert;
 mod runtime_capture_backend;
 mod runtime_input_backend;
@@ -493,6 +494,8 @@ struct SessionRecordDriftDiagnostics {
 }
 
 struct SessionRecordBuildDraft {
+    root: PathBuf,
+    task_dir_name: String,
     bundle: Value,
     task_dir: PathBuf,
     task_path: PathBuf,
@@ -7274,8 +7277,9 @@ fn build_session_record_task(
     let (game, server) = session_record_game_server(global, config, flags, instance_id)?;
     let state_dir = record_path.parent().unwrap_or_else(|| Path::new("."));
     let draft = session_record_build_draft(&record, flags, &out, &game, &server, state_dir)?;
+    let authoring = session_record_authoring_input(&record, &draft)?;
     if !dry_run {
-        write_session_record_build_draft(&draft)?;
+        resource_authoring::materialize_record_authoring(&out, &authoring)?;
     }
     Ok(json!({
         "status": if dry_run { "validated" } else { "built" },
@@ -7351,15 +7355,59 @@ fn promote_session_record_task(
         &server,
         state_dir,
     )?;
-    validate_session_record_promote_target(&draft, force)?;
-    let resources_action = if dry_run {
-        if draft.resources_path.exists() {
+    let authoring_input = session_record_authoring_input(&record, &draft)?;
+    if draft.task_dir.exists() && !force {
+        return Err(CliError::safety_blocked(
+            "record_promote_target_exists",
+            format!(
+                "record promote target task directory already exists: {}; use --force to replace it",
+                draft.task_dir.display()
+            ),
+            &["session_record", "resource_repo"],
+        ));
+    }
+    let resources_existed = draft.resources_path.exists();
+    let (resources_action, authoring) = if dry_run {
+        let action = if resources_existed {
             "would_preserve"
         } else {
             "would_create"
-        }
+        };
+        (action, Value::Null)
     } else {
-        write_session_record_promoted_task(&draft, force)?
+        let client = RuntimeClient::connect(RuntimeClientConfig::new(
+            runtime_state_root()?,
+            EventActor::Lab,
+            EventSource::Lab,
+        ))
+        .map_err(runtime_slice_cli::map_runtime_error)?;
+        let target_label = format!(
+            "{}-{}-resources",
+            safe_file_stem(&game),
+            safe_file_stem(&server)
+        );
+        let output = resource_authoring::publish_record_authoring(
+            &client,
+            &resource_root.root,
+            target_label,
+            &authoring_input,
+            &game,
+            &server,
+            force,
+        )?;
+        let output = serde_json::to_value(output).map_err(|error| {
+            CliError::usage(format!(
+                "failed to serialize resource authoring receipt: {error}"
+            ))
+        })?;
+        (
+            if resources_existed {
+                "preserved"
+            } else {
+                "created"
+            },
+            output,
+        )
     };
     Ok(json!({
         "status": if dry_run { "validated" } else { "promoted" },
@@ -7378,6 +7426,7 @@ fn promote_session_record_task(
         "task_path": draft.task_path.display().to_string(),
         "resources_path": draft.resources_path.display().to_string(),
         "resources_action": resources_action,
+        "authoring": authoring,
         "anchor_count": draft.bundle.get("anchors").and_then(Value::as_array).map(Vec::len).unwrap_or(0),
         "color_probe_count": draft.bundle.get("color_probes").and_then(Value::as_array).map(Vec::len).unwrap_or(0),
         "verify_template_count": draft.bundle.get("verify_templates").and_then(Value::as_array).map(Vec::len).unwrap_or(0),
@@ -7402,7 +7451,7 @@ fn session_record_build_draft(
     state_dir: &Path,
 ) -> CliOutcome<SessionRecordBuildDraft> {
     let task_dir_name = safe_task_dir_name(&record.task_id)?;
-    let task_dir = out.join("operations").join(task_dir_name);
+    let task_dir = out.join("operations").join(&task_dir_name);
     let resources_path = out.join("operations").join("resources.json");
     let task_path = task_dir.join("task.json");
     let assets_dir = task_dir.join("assets");
@@ -7733,6 +7782,8 @@ fn session_record_build_draft(
         }
     });
     Ok(SessionRecordBuildDraft {
+        root: out.to_path_buf(),
+        task_dir_name,
         bundle,
         task_dir,
         task_path,
@@ -7741,103 +7792,38 @@ fn session_record_build_draft(
     })
 }
 
-fn write_session_record_build_draft(draft: &SessionRecordBuildDraft) -> CliOutcome<()> {
-    copy_session_record_build_assets(draft)?;
-    write_json_file(
-        &draft.resources_path,
-        &json!({
-            "schema_version": "1.0",
-            "resources": [],
-            "resource_count": 0
-        }),
-    )?;
-    write_json_file(&draft.task_path, &draft.bundle)
-}
-
-fn validate_session_record_promote_target(
+fn session_record_authoring_input(
+    record: &SessionRecordContext,
     draft: &SessionRecordBuildDraft,
-    force: bool,
-) -> CliOutcome<()> {
-    if draft.task_dir.exists() && !force {
-        return Err(CliError::safety_blocked(
-            "record_promote_target_exists",
-            format!(
-                "record promote target task directory already exists: {}; use --force to replace it",
-                draft.task_dir.display()
-            ),
-            &["session_record", "resource_repo"],
-        ));
-    }
-    Ok(())
-}
-
-fn write_session_record_promoted_task(
-    draft: &SessionRecordBuildDraft,
-    force: bool,
-) -> CliOutcome<&'static str> {
-    if draft.task_dir.exists() {
-        if !force {
-            return Err(CliError::safety_blocked(
-                "record_promote_target_exists",
-                format!(
-                    "record promote target task directory already exists: {}; use --force to replace it",
-                    draft.task_dir.display()
-                ),
-                &["session_record", "resource_repo"],
-            ));
-        }
-        remove_record_promote_task_dir(&draft.task_dir)?;
-    }
-    copy_session_record_build_assets(draft)?;
-    let resources_action = if draft.resources_path.exists() {
-        "preserved"
-    } else {
-        write_json_file(
-            &draft.resources_path,
-            &json!({
-                "schema_version": "1.0",
-                "resources": [],
-                "resource_count": 0
-            }),
-        )?;
-        "created"
-    };
-    write_json_file(&draft.task_path, &draft.bundle)?;
-    Ok(resources_action)
-}
-
-fn remove_record_promote_task_dir(task_dir: &Path) -> CliOutcome<()> {
-    if task_dir.is_dir() {
-        fs::remove_dir_all(task_dir).map_err(|err| {
-            CliError::usage(format!(
-                "failed to remove existing promoted task directory {}: {err}",
-                task_dir.display()
-            ))
-        })
-    } else {
-        Err(CliError::usage(format!(
-            "record promote target exists but is not a directory: {}",
-            task_dir.display()
-        )))
-    }
-}
-
-fn copy_session_record_build_assets(draft: &SessionRecordBuildDraft) -> CliOutcome<()> {
-    for asset in &draft.assets {
-        if let Some(parent) = asset.destination.parent() {
-            fs::create_dir_all(parent).map_err(|err| {
-                CliError::usage(format!("failed to create {}: {err}", parent.display()))
+) -> CliOutcome<resource_authoring::RecordAuthoringInput> {
+    let assets = draft
+        .assets
+        .iter()
+        .map(|asset| {
+            let relative_path = asset.destination.strip_prefix(&draft.root).map_err(|_| {
+                CliError::safety_blocked(
+                    "authoring_asset_path_escape",
+                    format!(
+                        "record authoring asset {} is outside target root {}",
+                        asset.destination.display(),
+                        draft.root.display()
+                    ),
+                    &["session_record", "resource_authoring"],
+                )
             })?;
-        }
-        fs::copy(&asset.source, &asset.destination).map_err(|err| {
-            CliError::usage(format!(
-                "failed to copy record asset {} to {}: {err}",
-                asset.source.display(),
-                asset.destination.display()
-            ))
-        })?;
-    }
-    Ok(())
+            Ok(resource_authoring::RecordAuthoringAsset {
+                source: asset.source.clone(),
+                relative_path: relative_path.to_path_buf(),
+            })
+        })
+        .collect::<CliOutcome<Vec<_>>>()?;
+    Ok(resource_authoring::RecordAuthoringInput {
+        record_id: record.record_id.clone(),
+        task_id: record.task_id.clone(),
+        task_dir_name: draft.task_dir_name.clone(),
+        bundle: draft.bundle.clone(),
+        assets,
+    })
 }
 
 fn session_record_bundle_color_check(
@@ -11090,6 +11076,7 @@ where
     Ok(Some(value))
 }
 
+#[cfg(test)]
 fn write_json_file<T>(path: &Path, value: &T) -> CliOutcome<()>
 where
     T: Serialize,
@@ -12409,9 +12396,14 @@ fn hex_sha256(bytes: &[u8]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use actingcommand_contract::{IdentifierIssuer, InstanceId};
+    use actingcommand_device::{CaptureBackend, DeviceError, DeviceResult};
+    use actingcommand_runtime_host::{
+        ExecutionBackendProvider, ResolvedExecutionInstance, RuntimeHost, RuntimeHostConfig,
+    };
     use std::fs::OpenOptions;
     use std::process::Stdio;
-    use std::sync::Mutex;
+    use std::sync::{Arc, Mutex};
     use tempfile::TempDir;
 
     static ENV_LOCK: Mutex<()> = Mutex::new(());
@@ -12435,6 +12427,167 @@ mod tests {
         ));
         unsafe {
             env::set_var(CONFIG_ENV, path);
+        }
+    }
+
+    struct RuntimeStateEnvGuard {
+        previous: Option<OsString>,
+    }
+
+    impl Drop for RuntimeStateEnvGuard {
+        fn drop(&mut self) {
+            unsafe {
+                if let Some(previous) = self.previous.take() {
+                    env::set_var(RUNTIME_STATE_ROOT_ENV, previous);
+                } else {
+                    env::remove_var(RUNTIME_STATE_ROOT_ENV);
+                }
+            }
+        }
+    }
+
+    struct AuthoringRuntimeProvider {
+        instance_id: InstanceId,
+    }
+
+    impl ExecutionBackendProvider for AuthoringRuntimeProvider {
+        fn instance_aliases(&self) -> Vec<String> {
+            vec!["ak".to_string()]
+        }
+
+        fn resolve(&self, instance_alias: &str) -> Option<ResolvedExecutionInstance> {
+            (instance_alias == "ak")
+                .then(|| ResolvedExecutionInstance::new(self.instance_id, "<authoring-test>"))
+        }
+
+        fn open_input(&self, _instance_alias: &str) -> DeviceResult<Box<dyn InputBackend>> {
+            Err(DeviceError::fatal(
+                "resource authoring must not open an input backend",
+            ))
+        }
+
+        fn open_capture(&self, _instance_alias: &str) -> DeviceResult<Box<dyn CaptureBackend>> {
+            Err(DeviceError::fatal(
+                "resource authoring must not open a capture backend",
+            ))
+        }
+    }
+
+    fn use_runtime_state_root(path: &Path) -> RuntimeStateEnvGuard {
+        let previous = env::var_os(RUNTIME_STATE_ROOT_ENV);
+        unsafe {
+            env::set_var(RUNTIME_STATE_ROOT_ENV, path);
+        }
+        RuntimeStateEnvGuard { previous }
+    }
+
+    fn start_authoring_runtime(state_root: &Path) -> RuntimeHost {
+        let instance_id = *IdentifierIssuer::new()
+            .expect("identifier issuer")
+            .mint_instance_id()
+            .expect("instance id")
+            .transport();
+        RuntimeHost::start(
+            RuntimeHostConfig::new(state_root, b"actinglab-resource-authoring-test"),
+            Arc::new(AuthoringRuntimeProvider { instance_id }),
+        )
+        .expect("Runtime host")
+    }
+
+    fn prepare_promotable_record(config: &Path, state_dir: &Path, frame_path: &Path) {
+        fs::write(frame_path, test_record_frame_png(12, 10)).expect("record frame");
+        set_config_env(config);
+        let start = run_cli(
+            [
+                "--json",
+                "--instance",
+                "ak",
+                "session",
+                "record",
+                "start",
+                "--state-dir",
+                state_dir.to_str().unwrap(),
+                "--task-id",
+                "daily-check",
+            ],
+            true,
+        );
+        let home_anchor = run_cli(
+            [
+                "--json",
+                "--instance",
+                "ak",
+                "session",
+                "record",
+                "step",
+                "--state-dir",
+                state_dir.to_str().unwrap(),
+                "--kind",
+                "anchor",
+                "--step-id",
+                "home-anchor",
+                "--id",
+                "page/home",
+                "--region",
+                "2,3,4,5",
+                "--frame",
+                frame_path.to_str().unwrap(),
+            ],
+            true,
+        );
+        let mail_anchor = run_cli(
+            [
+                "--json",
+                "--instance",
+                "ak",
+                "session",
+                "record",
+                "step",
+                "--state-dir",
+                state_dir.to_str().unwrap(),
+                "--kind",
+                "anchor",
+                "--step-id",
+                "mail-anchor",
+                "--id",
+                "page/mail",
+                "--region",
+                "2,3,4,5",
+                "--frame",
+                frame_path.to_str().unwrap(),
+            ],
+            true,
+        );
+        let operation = run_cli(
+            [
+                "--json",
+                "--instance",
+                "ak",
+                "session",
+                "record",
+                "step",
+                "--state-dir",
+                state_dir.to_str().unwrap(),
+                "--kind",
+                "operation",
+                "--step-id",
+                "home-to-mail",
+                "--from",
+                "page/home",
+                "--to",
+                "page/mail",
+                "--click",
+                "5,6",
+            ],
+            true,
+        );
+        for result in [start, home_anchor, mail_anchor, operation] {
+            assert_eq!(
+                result.exit_code(),
+                0,
+                "{}",
+                serde_json::to_string_pretty(&result.envelope).unwrap()
+            );
         }
     }
 
@@ -16727,6 +16880,9 @@ mod tests {
     fn session_record_promote_writes_repo_ours_and_guards_overwrite() {
         let _guard = env_lock();
         let temp = TempDir::new().unwrap();
+        let runtime_root = temp.path().join("runtime");
+        let _runtime_env = use_runtime_state_root(&runtime_root);
+        let host = start_authoring_runtime(&runtime_root);
         let config = temp.path().join("config.json");
         let state_dir = temp.path().join("session");
         let frame_path = temp.path().join("source.png");
@@ -16927,11 +17083,37 @@ mod tests {
             data.get("resources_action").and_then(Value::as_str),
             Some("preserved")
         );
+        assert!(
+            data.pointer("/authoring/runtime_correlation_id")
+                .and_then(Value::as_str)
+                .is_some_and(|value| !value.is_empty())
+        );
+        assert_eq!(
+            data.pointer("/authoring/receipt/validation/checks")
+                .and_then(Value::as_array)
+                .map(|checks| checks.iter().filter_map(Value::as_str).collect::<Vec<_>>()),
+            Some(vec![
+                "draft_schema",
+                "resource_convert",
+                "repository_references",
+                "package_build",
+                "containment_round_trip"
+            ])
+        );
         assert!(ours.join("operations/daily-check/task.json").is_file());
         assert!(
             ours.join("operations/daily-check/assets/anchor-home-anchor-page_home.png")
                 .is_file()
         );
+        for generated in [
+            "recognition/arknights.cn.pack.json",
+            "recognition/arknights.cn.pages.json",
+            "navigation/arknights.cn.navigation.json",
+            "operations/operations.index.json",
+            "operations/operations.primitives.json",
+        ] {
+            assert!(ours.join(generated).is_file(), "missing {generated}");
+        }
         let resources: Value =
             serde_json::from_str(&fs::read_to_string(&resources_path).unwrap()).unwrap();
         assert_eq!(
@@ -16973,6 +17155,115 @@ mod tests {
                 .and_then(Value::as_str),
             Some("validated")
         );
+        host.close().expect("close Runtime host");
+    }
+
+    #[test]
+    fn session_record_promote_requires_runtime_before_mutating_target() {
+        let _guard = env_lock();
+        let temp = TempDir::new().unwrap();
+        let config = temp.path().join("config.json");
+        let state_dir = temp.path().join("session");
+        let frame_path = temp.path().join("source.png");
+        let runtime_root = temp.path().join("missing-runtime");
+        let _runtime_env = use_runtime_state_root(&runtime_root);
+        let repo = temp.path().join("resource-repo");
+        let ours = repo.join("ours");
+        fs::create_dir_all(ours.join("operations")).unwrap();
+        fs::create_dir_all(ours.join("recognition")).unwrap();
+        prepare_promotable_record(&config, &state_dir, &frame_path);
+
+        let promote = run_cli(
+            [
+                "--json",
+                "--instance",
+                "ak",
+                "session",
+                "record",
+                "promote",
+                "--state-dir",
+                state_dir.to_str().unwrap(),
+                "--repo",
+                repo.to_str().unwrap(),
+                "--game",
+                "arknights",
+                "--server",
+                "cn",
+            ],
+            true,
+        );
+        set_missing_config_env();
+
+        assert_eq!(promote.exit_code(), 5);
+        assert_eq!(
+            promote.envelope.error.as_ref().unwrap().code,
+            "runtime_not_running"
+        );
+        assert!(!ours.join("operations/daily-check").exists());
+        assert!(!ours.join("operations/resources.json").exists());
+        assert!(!ours.join("recognition/arknights.cn.pack.json").exists());
+    }
+
+    #[test]
+    fn session_record_promote_validation_failure_rolls_back_canonical_tree() {
+        let _guard = env_lock();
+        let temp = TempDir::new().unwrap();
+        let runtime_root = temp.path().join("runtime");
+        let _runtime_env = use_runtime_state_root(&runtime_root);
+        let host = start_authoring_runtime(&runtime_root);
+        let config = temp.path().join("config.json");
+        let state_dir = temp.path().join("session");
+        let frame_path = temp.path().join("source.png");
+        let repo = temp.path().join("resource-repo");
+        let ours = repo.join("ours");
+        let existing_task = ours.join("operations/daily-check");
+        let broken_task = ours.join("operations/broken");
+        fs::create_dir_all(&existing_task).unwrap();
+        fs::create_dir_all(&broken_task).unwrap();
+        fs::create_dir_all(ours.join("recognition")).unwrap();
+        fs::write(existing_task.join("sentinel.txt"), "canonical-before").unwrap();
+        fs::write(broken_task.join("task.json"), "{not-json").unwrap();
+        fs::write(
+            ours.join("operations/resources.json"),
+            r#"{"schema_version":"1.0","resources":[],"resource_count":0}"#,
+        )
+        .unwrap();
+        prepare_promotable_record(&config, &state_dir, &frame_path);
+
+        let promote = run_cli(
+            [
+                "--json",
+                "--instance",
+                "ak",
+                "session",
+                "record",
+                "promote",
+                "--state-dir",
+                state_dir.to_str().unwrap(),
+                "--repo",
+                repo.to_str().unwrap(),
+                "--game",
+                "arknights",
+                "--server",
+                "cn",
+                "--force",
+            ],
+            true,
+        );
+        set_missing_config_env();
+
+        assert_ne!(promote.exit_code(), 0);
+        assert_eq!(
+            fs::read_to_string(existing_task.join("sentinel.txt")).unwrap(),
+            "canonical-before"
+        );
+        assert!(!existing_task.join("task.json").exists());
+        assert_eq!(
+            fs::read_to_string(broken_task.join("task.json")).unwrap(),
+            "{not-json"
+        );
+        assert!(!ours.join("recognition/arknights.cn.pack.json").exists());
+        host.close().expect("close Runtime host");
     }
 
     #[test]
