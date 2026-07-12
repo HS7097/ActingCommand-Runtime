@@ -138,6 +138,16 @@ impl ExecutionBackendProvider for FileProvider {
             closed: false,
         }))
     }
+
+    fn control_application(
+        &self,
+        _instance_alias: &str,
+        _action: actingcommand_contract::ApplicationLifecycleAction,
+    ) -> DeviceResult<()> {
+        Err(DeviceError::fatal(
+            "sealed C4 process does not expose application control",
+        ))
+    }
 }
 
 fn record_event(path: &Path, event: &str) -> DeviceResult<()> {

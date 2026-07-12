@@ -3,11 +3,11 @@
 #![allow(clippy::result_large_err)]
 
 use actingcommand_contract::{
-    CLI_SCHEMA_VERSION, Envelope, EventActor, EventSource, LabError as CliError,
-    LabErrorClass as ErrorKind, LedgerProjection,
+    ApplicationLifecycleAction, CLI_SCHEMA_VERSION, Envelope, EventActor, EventSource,
+    LabError as CliError, LabErrorClass as ErrorKind, LedgerProjection,
 };
 use actingcommand_device::{
-    Adb, AdbConfig, AdbPathSource, CaptureBackendChoice, CaptureBackendConfig, CaptureBackendName,
+    AdbConfig, AdbPathSource, CaptureBackendChoice, CaptureBackendConfig, CaptureBackendName,
     DeviceTarget, Frame, InputBackend, MaaTouchConfig, PixelFormat, TouchBackendChoice,
     TouchBackendConfig, combine_operation_and_close, resolve_adb_path,
     vendor_stdio_session_diagnostic,
@@ -2540,23 +2540,10 @@ fn run_devices(_global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
     let flags = FlagArgs::parse(args)?;
     reject_legacy_session_routing(&flags)?;
     flags.expect_positionals("devices", 0)?;
-    let config = read_user_config()?;
-    let resolved = effective_adb_path(&config)?;
-    let adb = Adb::new(AdbConfig {
-        adb_path: resolved.path.clone(),
-        ..Default::default()
-    });
-    let output = adb
-        .run(&["devices", "-l"])
-        .map_err(|err| CliError::device(err.to_string()))?;
-    Ok(json!({
-        "adb_stdout": output.stdout,
-        "adb_stderr": output.stderr,
-        "adb_path": resolved.path,
-        "adb_source": resolved.source.as_str(),
-        "adb_warning": resolved.warning,
-        "touch_backends": ["auto", "auto-fastest", "maatouch", "minitouch", "adb_shell_input"]
-    }))
+    Err(CliError::not_implemented(
+        "actinglab_device_authority_retired",
+        "direct ADB device discovery was retired from ActingLab; query the resident Runtime",
+    ))
 }
 
 fn run_schema(args: &[String]) -> CliOutcome<Value> {
@@ -3421,6 +3408,7 @@ fn capture_fresh_probe_report_json(
     })
 }
 
+#[cfg(test)]
 fn instance_health_status(capture_status: Option<CaptureFreshProbeStatus>) -> &'static str {
     match capture_status {
         Some(CaptureFreshProbeStatus::Fresh) => "healthy",
@@ -6610,46 +6598,12 @@ fn run_session_instance(global: &GlobalOptions, args: &[String]) -> CliOutcome<V
             })).collect::<Vec<_>>()
         })),
         "registry" => session_instance_registry_contract(&config),
-        "connect" | "health" | "keep-alive" | "reconnect" => {
-            let instance_id = resolve_instance_id_for_flags(global, &config, &flags)?;
-            let device_config = device_config_for_instance(global, &config, Some(&instance_id))?;
-            let serial = device_config.target.resolved_serial();
-            let adb = Adb::new(device_config.adb.clone());
-            let state = adb
-                .ensure_device(&serial, device_config.target.connect)
-                .map_err(|err| CliError::device(err.to_string()))?;
-            let screen_size = adb
-                .screen_size(&serial)
-                .map_err(|err| CliError::device(err.to_string()))?;
-            let requested = device_config.capture_backend;
-            let fresh_delay = parse_optional_duration_ms(&flags, "--fresh-delay-ms", 160)?;
-            let capture_report = if action == "health" && flags.bool("--capture-diagnose") {
-                Some(capture_fresh_probe_report(
-                    &device_config,
-                    requested,
-                    fresh_delay,
-                    CaptureFreshnessExpectation::StaticPageAllowed,
-                )?)
-            } else {
-                None
-            };
-            let capture_status = capture_report.as_ref().map(|report| report.status);
-            let capture = capture_report
-                .as_ref()
-                .map(|report| capture_fresh_probe_report_json(report, requested));
-            Ok(json!({
-                "instance": instance_id,
-                "serial": serial,
-                "status": instance_health_status(capture_status),
-                "state": state,
-                "screen_size": screen_size,
-                "adb_source": device_config.adb_source.as_str(),
-                "adb_warning": device_config.adb_warning,
-                "action": action,
-                "keep_alive": action == "keep-alive",
-                "capture": capture
-            }))
-        }
+        "connect" | "health" | "keep-alive" | "reconnect" => Err(CliError::not_implemented(
+            "actinglab_device_authority_retired",
+            format!(
+                "session instance {action} directly owned device state in ActingLab and is retired; use Runtime-backed status or control APIs"
+            ),
+        )),
         other => Err(CliError::usage(format!(
             "unknown session instance action: {other}"
         ))),
@@ -6663,70 +6617,32 @@ fn run_session_app(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value>
         .ok_or_else(|| CliError::usage("session app requires launch|stop|force-stop|restart"))?;
     let flags = FlagArgs::parse(&args[1..])?;
     reject_legacy_session_routing(&flags)?;
+    if flags.optional("--package").is_some() {
+        return Err(CliError::usage(
+            "--package is not accepted by ActingLab; application identity is owned by Runtime configuration",
+        ));
+    }
     let config = read_user_config()?;
     let instance_id = resolve_instance_id_for_flags(global, &config, &flags)?;
-    let package = resolve_app_package(global, &config, &flags, &instance_id)?;
-    let device_config = device_config_for_instance(global, &config, Some(&instance_id))?;
-    let serial = device_config.target.resolved_serial();
-    let adb = Adb::new(device_config.adb.clone());
-    adb.ensure_device(&serial, device_config.target.connect)
-        .map_err(|err| CliError::device(err.to_string()))?;
-    match action {
-        "launch" => {
-            let output = adb
-                .launch_package(&serial, &package)
-                .map_err(|err| CliError::device(err.to_string()))?;
-            Ok(json!({
-                "action": "launch",
-                "instance": instance_id,
-                "serial": serial,
-                "package": package,
-                "adb_source": device_config.adb_source.as_str(),
-                "adb_warning": device_config.adb_warning,
-                "stdout": output.stdout,
-                "stderr": output.stderr
-            }))
-        }
-        "stop" | "force-stop" => {
-            let output = adb
-                .force_stop(&serial, &package)
-                .map_err(|err| CliError::device(err.to_string()))?;
-            Ok(json!({
-                "action": action,
-                "instance": instance_id,
-                "serial": serial,
-                "package": package,
-                "adb_source": device_config.adb_source.as_str(),
-                "adb_warning": device_config.adb_warning,
-                "stdout": output.stdout,
-                "stderr": output.stderr
-            }))
-        }
-        "restart" => {
-            let stop = adb
-                .force_stop(&serial, &package)
-                .map_err(|err| CliError::device(err.to_string()))?;
-            thread::sleep(Duration::from_millis(500));
-            let launch = adb
-                .launch_package(&serial, &package)
-                .map_err(|err| CliError::device(err.to_string()))?;
-            Ok(json!({
-                "action": "restart",
-                "instance": instance_id,
-                "serial": serial,
-                "package": package,
-                "adb_source": device_config.adb_source.as_str(),
-                "adb_warning": device_config.adb_warning,
-                "stop_stdout": stop.stdout,
-                "stop_stderr": stop.stderr,
-                "launch_stdout": launch.stdout,
-                "launch_stderr": launch.stderr
-            }))
-        }
+    let action = match action {
+        "launch" => ApplicationLifecycleAction::Launch,
+        "stop" | "force-stop" => ApplicationLifecycleAction::Stop,
+        "restart" => ApplicationLifecycleAction::Restart,
         other => Err(CliError::usage(format!(
             "unknown session app action: {other}"
-        ))),
-    }
+        )))?,
+    };
+    let client = RuntimeClient::connect(RuntimeClientConfig::new(
+        runtime_state_root()?,
+        EventActor::Cli,
+        EventSource::Cli,
+    ))
+    .map_err(runtime_slice_cli::map_runtime_error)?;
+    let output = client
+        .control_application(&instance_id, action)
+        .map_err(runtime_slice_cli::map_runtime_error)?;
+    serde_json::to_value(output)
+        .map_err(|error| CliError::usage(format!("failed to serialize Runtime receipt: {error}")))
 }
 
 fn run_session_record(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
@@ -10370,52 +10286,6 @@ fn resolve_instance_id_for_flags(
     resolve_instance_id(global, config)
 }
 
-fn resolve_app_package(
-    global: &GlobalOptions,
-    config: &UserConfig,
-    flags: &FlagArgs,
-    instance_id: &str,
-) -> CliOutcome<String> {
-    if let Some(package) = flags.optional("--package").filter(|value| value != "true") {
-        return Ok(package);
-    }
-    let instance = config.instances.get(instance_id);
-    if let Some(package) = instance.and_then(|instance| instance.package.clone()) {
-        return Ok(package);
-    }
-    let game = global
-        .game
-        .clone()
-        .or_else(|| instance.and_then(|instance| instance.game.clone()));
-    let server = global
-        .server
-        .clone()
-        .or_else(|| instance.and_then(|instance| instance.server.clone()));
-    default_package_name(game.as_deref(), server.as_deref())
-        .map(str::to_string)
-        .ok_or_else(|| {
-            CliError::usage(
-                "session app requires --package, instance.<id>.package, or a known game/server",
-            )
-        })
-}
-
-fn default_package_name(game: Option<&str>, server: Option<&str>) -> Option<&'static str> {
-    let game = match game?.to_ascii_lowercase().as_str() {
-        "ak" | "ark" | "arknights" => "arknights",
-        "azur" | "azurlane" | "azur_lane" | "al" => "azurlane",
-        "ba" | "bluearchive" | "blue_archive" => "bluearchive",
-        _ => return None,
-    };
-    let server = server.unwrap_or_else(|| default_server_for_game(game));
-    match (game, server) {
-        ("arknights", "cn") => Some("com.hypergryph.arknights.bilibili"),
-        ("azurlane", "jp") => Some("com.YoStarJP.AzurLane"),
-        ("bluearchive", "jp") => Some("com.YostarJP.BlueArchive"),
-        _ => None,
-    }
-}
-
 fn read_user_config() -> CliOutcome<UserConfig> {
     let path = config_path()?;
     if !path.exists() {
@@ -12157,6 +12027,16 @@ mod tests {
         fn open_capture(&self, _instance_alias: &str) -> DeviceResult<Box<dyn CaptureBackend>> {
             Err(DeviceError::fatal(
                 "resource authoring must not open a capture backend",
+            ))
+        }
+
+        fn control_application(
+            &self,
+            _instance_alias: &str,
+            _action: actingcommand_contract::ApplicationLifecycleAction,
+        ) -> DeviceResult<()> {
+            Err(DeviceError::fatal(
+                "resource authoring must not control applications",
             ))
         }
     }

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 use crate::{ExecutionKernelError, ExecutionKernelResult};
-use actingcommand_contract::{InstanceId, MonitorObservation};
+use actingcommand_contract::{ApplicationLifecycleAction, InstanceId, MonitorObservation};
 use actingcommand_device::{CaptureBackend, DeviceResult, Frame, InputBackend};
 use std::fmt;
 
@@ -47,6 +47,12 @@ pub trait ExecutionBackendProvider: Send + Sync + 'static {
     fn open_input(&self, instance_alias: &str) -> DeviceResult<Box<dyn InputBackend>>;
 
     fn open_capture(&self, instance_alias: &str) -> DeviceResult<Box<dyn CaptureBackend>>;
+
+    fn control_application(
+        &self,
+        instance_alias: &str,
+        action: ApplicationLifecycleAction,
+    ) -> DeviceResult<()>;
 
     fn observe_monitor(
         &self,

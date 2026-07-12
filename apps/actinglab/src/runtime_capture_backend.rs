@@ -345,6 +345,16 @@ mod tests {
             }
             Ok(Box::new(SealedCapture))
         }
+
+        fn control_application(
+            &self,
+            _instance_alias: &str,
+            _action: actingcommand_contract::ApplicationLifecycleAction,
+        ) -> DeviceResult<()> {
+            Err(DeviceError::fatal(
+                "read-only adapter test must not control applications",
+            ))
+        }
     }
 
     #[test]

@@ -13,13 +13,14 @@ use actingcommand_artifact_store::{
     EvidenceJsonDocument, EvidencePackage, PackageVerification, PersistedFrameEvidence,
 };
 use actingcommand_contract::{
-    ArtifactIssuePolicy, ArtifactKind, ArtifactProducer, ArtifactRedactionState, AuditInput,
-    CapturePayloadDraft, CaptureSequence, CaptureSequenceSpec, ClientPayloadDraft,
-    CommandPayloadDraft, CorrelationId, DiagnosticCode, EffectDisposition, EventAction, EventActor,
-    EventDraft, EventLinksDraft, EventPayload, EventQuery, EventSeverity, EventSource, EventType,
-    EvidenceCompleteness, InputAction, InputPayload, InputPayloadDraft, InstanceId,
-    IssuedMonitorProbe, IssuedReadOnlyCaptureCapability, IssuedRunId, IssuedTaskId, LeaseId,
-    LeasePayloadDraft, LeaseQueuePolicy, LeaseToken, MAX_INSTANCE_ALIAS_BYTES, MonitorPayloadDraft,
+    ApplicationLifecycleAction, ApplicationPayload, ApplicationPayloadDraft, ArtifactIssuePolicy,
+    ArtifactKind, ArtifactProducer, ArtifactRedactionState, AuditInput, CapturePayloadDraft,
+    CaptureSequence, CaptureSequenceSpec, ClientPayloadDraft, CommandPayloadDraft, CorrelationId,
+    DiagnosticCode, EffectDisposition, EventAction, EventActor, EventDraft, EventLinksDraft,
+    EventPayload, EventQuery, EventSeverity, EventSource, EventType, EvidenceCompleteness,
+    InputAction, InputPayload, InputPayloadDraft, InstanceId, IssuedMonitorProbe,
+    IssuedReadOnlyCaptureCapability, IssuedRunId, IssuedTaskId, LeaseId, LeasePayloadDraft,
+    LeaseQueuePolicy, LeaseToken, MAX_INSTANCE_ALIAS_BYTES, MonitorPayloadDraft,
     MonitorRecoveryCoordinationReason, OriginModule, PackageDebugLayout, PackageDebugRequest,
     PackageDebugSummary, RUNTIME_INFO_FILE, ReadonlyObservation, RecognitionPayloadDraft,
     RecognitionVerdict, RequestId, ResourceAuthoringEvent, ResourceAuthoringPayloadDraft,
@@ -705,6 +706,18 @@ impl HostShared {
                 validated,
                 instance_alias,
                 *holder_id,
+                connection_id,
+            ),
+            RuntimeOperation::ApplicationLifecycle {
+                instance_alias,
+                holder_id,
+                action,
+            } => self.application_lifecycle(
+                request,
+                validated,
+                instance_alias,
+                *holder_id,
+                *action,
                 connection_id,
             ),
             RuntimeOperation::Input { token, action } => {
@@ -3496,6 +3509,148 @@ impl HostShared {
         })
     }
 
+    fn recover_application_lifecycle(
+        &self,
+        request: &RuntimeRequest,
+        instance_id: InstanceId,
+        action: ApplicationLifecycleAction,
+    ) -> Result<Option<OperationSuccess>, RequestFailure> {
+        let events = self
+            .ledger
+            .query(EventQuery {
+                request_id: Some(request.request_id()),
+                ..EventQuery::default()
+            })
+            .map_err(|_| {
+                RequestFailure::poison_without_terminal(ledger_error(
+                    "recover_application_lifecycle",
+                ))
+            })?;
+        if events.is_empty() {
+            return Ok(None);
+        }
+        if events.iter().any(|event| {
+            event.links().correlation_id() != Some(&request.correlation_id())
+                || event
+                    .links()
+                    .instance_id()
+                    .is_some_and(|actual| actual != &instance_id)
+        }) {
+            return Err(application_replay_denied(
+                "application_lifecycle_request_identity_reused",
+            ));
+        }
+        let expected_action = action.event_action();
+        let completed = events
+            .iter()
+            .filter(|event| {
+                matches!(
+                    event.payload(),
+                    EventPayload::Application(ApplicationPayload::Completed(detail))
+                        if detail.action() == expected_action
+                )
+            })
+            .collect::<Vec<_>>();
+        let released = events
+            .iter()
+            .filter(|event| event.event_type() == EventType::LeaseReleased)
+            .collect::<Vec<_>>();
+        match (completed.as_slice(), released.as_slice()) {
+            ([application], [release]) if application.sequence() < release.sequence() => {
+                let action_id = application.links().action_id().copied().ok_or_else(|| {
+                    RequestFailure::poison_without_terminal(RuntimeHostError::fatal(
+                        "application_lifecycle_action_id_missing",
+                        "recover_application_lifecycle",
+                        RuntimeErrorCode::RuntimeFatal,
+                    ))
+                })?;
+                Ok(Some(OperationSuccess {
+                    state: RuntimeReceiptState::Completed,
+                    terminal: Some(terminal(release)),
+                    result: RuntimeResult::ApplicationLifecycleCompleted { action_id, action },
+                }))
+            }
+            ([], []) => Err(application_replay_denied(
+                "application_lifecycle_previous_attempt_incomplete",
+            )),
+            _ => Err(RequestFailure::poison_without_terminal(
+                RuntimeHostError::fatal(
+                    "application_lifecycle_durable_state_inconsistent",
+                    "recover_application_lifecycle",
+                    RuntimeErrorCode::RuntimeFatal,
+                ),
+            )),
+        }
+    }
+
+    fn application_lifecycle(
+        &self,
+        original: &RuntimeRequest,
+        request: &ValidatedRuntimeRequest<'_>,
+        instance_alias: &str,
+        holder_id: actingcommand_contract::HolderId,
+        action: ApplicationLifecycleAction,
+        connection_id: ConnectionId,
+    ) -> Result<OperationSuccess, RequestFailure> {
+        let resolved = self.resolve_instance(instance_alias)?;
+        if let Some(recovered) =
+            self.recover_application_lifecycle(original, resolved.instance_id(), action)?
+        {
+            return Ok(recovered);
+        }
+        self.append_request_lifecycle(
+            original,
+            request,
+            resolved.instance_id(),
+            action.event_action(),
+        )?;
+        let acquired = self.acquire_lease(
+            request,
+            original.request_id(),
+            instance_alias,
+            holder_id,
+            connection_id,
+        )?;
+        let RuntimeResult::LeaseGranted { token } = acquired.result else {
+            return Err(RequestFailure::poison_without_terminal(
+                RuntimeHostError::fatal(
+                    "application_lifecycle_lease_result_invalid",
+                    "execute_application_lifecycle",
+                    RuntimeErrorCode::RuntimeFatal,
+                ),
+            ));
+        };
+        let executed = match self.application_control(request, &token, action, connection_id) {
+            Ok(success) => success,
+            Err(failure) => {
+                return Err(self.cleanup_composite_failure(token, connection_id, failure));
+            }
+        };
+        let RuntimeResult::ApplicationLifecycleCompleted { action_id, .. } = executed.result else {
+            return Err(self.cleanup_composite_failure(
+                token,
+                connection_id,
+                RequestFailure::poison_without_terminal(RuntimeHostError::fatal(
+                    "application_lifecycle_result_invalid",
+                    "execute_application_lifecycle",
+                    RuntimeErrorCode::RuntimeFatal,
+                )),
+            ));
+        };
+        let released =
+            match self.release_lease(request, original.request_id(), &token, connection_id) {
+                Ok(success) => success,
+                Err(failure) => {
+                    return Err(self.cleanup_composite_failure(token, connection_id, failure));
+                }
+            };
+        Ok(OperationSuccess {
+            state: RuntimeReceiptState::Completed,
+            terminal: released.terminal,
+            result: RuntimeResult::ApplicationLifecycleCompleted { action_id, action },
+        })
+    }
+
     fn issue_readonly_capability(
         &self,
         instance_id: InstanceId,
@@ -3782,6 +3937,170 @@ impl HostShared {
                     state: RuntimeReceiptState::Completed,
                     terminal: Some(terminal(receipt.outcome())),
                     result: RuntimeResult::InputCommitted { action_id },
+                })
+            }
+            Err(CriticalExecutionError::Action { error, outcome, .. }) => {
+                if error.destructive_started {
+                    self.finish_destructive_input(token, connection_id)?;
+                }
+                if error.transfer_after {
+                    self.transfer_preempted_if_ready(token, connection_id)?;
+                }
+                let release_after = error.release_after;
+                let failure = RequestFailure {
+                    state: RuntimeReceiptState::Failed,
+                    terminal: Some(terminal(&outcome)),
+                    error: Box::new(error.error),
+                    poison_runtime: error.poison_runtime,
+                };
+                if release_after {
+                    self.cleanup_token(token, connection_id, LeaseReleaseReason::BackendFailure)
+                        .map_err(RequestFailure::poison_without_terminal)?;
+                }
+                Err(failure)
+            }
+            Err(error) => Err(RequestFailure::poison_without_terminal(
+                critical_execution_error(&error),
+            )),
+        }
+    }
+
+    fn application_control(
+        &self,
+        request: &ValidatedRuntimeRequest<'_>,
+        token: &LeaseToken,
+        action: ApplicationLifecycleAction,
+        connection_id: ConnectionId,
+    ) -> Result<OperationSuccess, RequestFailure> {
+        let (resolved, transferred) = {
+            let instance_guard = self.instance_guard(token.instance_id())?;
+            let admission = lock(&instance_guard, "lock_instance_admission")?;
+            let resolved = self.validated_instance(request, token, connection_id)?;
+            let transferred =
+                self.transfer_preempted_while_guarded(token, connection_id, &admission)?;
+            (resolved, transferred)
+        };
+        if transferred {
+            return Err(self.scheduler_denied_error(
+                request,
+                Some(token.instance_id()),
+                Some(token.lease_id()),
+                resolved.audit_endpoint(),
+                RuntimeHostError::scheduler(
+                    "application_lifecycle_preempted_at_safe_boundary",
+                    &SchedulerError::TransferNotSafe,
+                ),
+            )?);
+        }
+        self.append_scheduler_admitted_for_token(request, token, resolved.audit_endpoint())?;
+        let action_id = self
+            .events
+            .action_id()
+            .map_err(RequestFailure::poison_without_terminal)?;
+        let links = self.events.request_links(
+            request,
+            Some(token.instance_id()),
+            Some(token.lease_id()),
+            Some(action_id),
+        );
+        let event_action = action.event_action();
+        let intent = self
+            .events
+            .draft(
+                EventSeverity::Info,
+                EventSource::Device,
+                OriginModule::DeviceProxy,
+                EventActor::Runtime,
+                links.clone(),
+                ApplicationPayloadDraft::intent(
+                    event_action,
+                    audit_endpoint(resolved.audit_endpoint()),
+                ),
+            )
+            .and_then(|draft| self.events.sanitize(draft))
+            .map_err(RequestFailure::poison_without_terminal)?;
+        let plan = CriticalEventPlan::new(CriticalOperation::ApplicationLifecycle, intent)
+            .map_err(|_| RequestFailure::poison_without_terminal(critical_plan_error()))?;
+        let endpoint = resolved.audit_endpoint.clone();
+        let instance_alias = resolved.instance_alias.clone();
+        let outcome_links = links.clone();
+        let failure_links = links;
+        let result = execute_critical(
+            &self.ledger,
+            self.events.fingerprinter(),
+            plan,
+            || {
+                let destructive = lock(&self.scheduler, "begin_destructive_application").and_then(
+                    |mut scheduler| {
+                        scheduler
+                            .begin_destructive_step(token, connection_id, self.monotonic_ms()?)
+                            .map_err(|error| {
+                                RuntimeHostError::scheduler("begin_destructive_application", &error)
+                            })
+                    },
+                );
+                if let Err(error) = destructive {
+                    return CriticalActionReport::Failed {
+                        error: ActionFailure::scheduler(error),
+                        effect: EffectDisposition::NotPerformed,
+                    };
+                }
+                match self.execution.control_application(&instance_alias, action) {
+                    Ok(()) => CriticalActionReport::Succeeded {
+                        value: (),
+                        effect: DefiniteEffectDisposition::Performed,
+                    },
+                    Err(error) => CriticalActionReport::Failed {
+                        error: ActionFailure::backend(RuntimeHostError::execution(
+                            "execute_application_backend",
+                            &error,
+                        )),
+                        effect: EffectDisposition::Indeterminate,
+                    },
+                }
+            },
+            |_, effect| {
+                self.events
+                    .draft(
+                        EventSeverity::Info,
+                        EventSource::Device,
+                        OriginModule::DeviceProxy,
+                        EventActor::Runtime,
+                        outcome_links,
+                        ApplicationPayloadDraft::completed(
+                            event_action,
+                            effect.into(),
+                            audit_endpoint(&endpoint),
+                        ),
+                    )
+                    .map_err(|_| actingcommand_contract::SanitizationError::fingerprinter_failure())
+            },
+            |error, effect| {
+                self.events
+                    .draft(
+                        EventSeverity::Error,
+                        EventSource::Device,
+                        OriginModule::DeviceProxy,
+                        EventActor::Runtime,
+                        failure_links,
+                        ApplicationPayloadDraft::failed(
+                            event_action,
+                            error.diagnostic,
+                            effect,
+                            audit_endpoint(&endpoint),
+                        ),
+                    )
+                    .map_err(|_| actingcommand_contract::SanitizationError::fingerprinter_failure())
+            },
+        );
+        match result {
+            Ok(receipt) => {
+                self.finish_destructive_input(token, connection_id)?;
+                self.transfer_preempted_if_ready(token, connection_id)?;
+                Ok(OperationSuccess {
+                    state: RuntimeReceiptState::Completed,
+                    terminal: Some(terminal(receipt.outcome())),
+                    result: RuntimeResult::ApplicationLifecycleCompleted { action_id, action },
                 })
             }
             Err(CriticalExecutionError::Action { error, outcome, .. }) => {
@@ -5368,6 +5687,18 @@ fn safe_reset_replay_denied(code: &'static str) -> RequestFailure {
         RuntimeHostError::request(
             code,
             "recover_safe_reset",
+            RuntimeErrorCode::ProtocolInvalid,
+        ),
+        RuntimeReceiptState::Denied,
+        None,
+    )
+}
+
+fn application_replay_denied(code: &'static str) -> RequestFailure {
+    RequestFailure::request(
+        RuntimeHostError::request(
+            code,
+            "recover_application_lifecycle",
             RuntimeErrorCode::ProtocolInvalid,
         ),
         RuntimeReceiptState::Denied,

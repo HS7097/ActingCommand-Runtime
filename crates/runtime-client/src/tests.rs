@@ -165,6 +165,15 @@ impl ExecutionBackendProvider for FakeProvider {
             closed: false,
         }))
     }
+
+    fn control_application(
+        &self,
+        instance_alias: &str,
+        _action: actingcommand_contract::ApplicationLifecycleAction,
+    ) -> DeviceResult<()> {
+        assert_eq!(instance_alias, "ak.cn");
+        Ok(())
+    }
 }
 
 fn instance_id() -> InstanceId {

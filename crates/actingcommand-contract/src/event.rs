@@ -153,6 +153,7 @@ pub enum EventFamily {
     Scheduler,
     Lease,
     Task,
+    Application,
     Input,
     Capture,
     Recognition,
@@ -228,6 +229,12 @@ pub enum EventType {
     TaskTerminalIntent,
     #[serde(rename = "task.terminal_commit_failed")]
     TaskTerminalCommitFailed,
+    #[serde(rename = "application.intent")]
+    ApplicationIntent,
+    #[serde(rename = "application.completed")]
+    ApplicationCompleted,
+    #[serde(rename = "application.failed")]
+    ApplicationFailed,
     #[serde(rename = "input.intent")]
     InputIntent,
     #[serde(rename = "input.committed")]
@@ -322,6 +329,9 @@ impl EventType {
             | Self::TaskCancelled
             | Self::TaskTerminalIntent
             | Self::TaskTerminalCommitFailed => EventFamily::Task,
+            Self::ApplicationIntent | Self::ApplicationCompleted | Self::ApplicationFailed => {
+                EventFamily::Application
+            }
             Self::InputIntent | Self::InputCommitted | Self::InputCompleted | Self::InputFailed => {
                 EventFamily::Input
             }

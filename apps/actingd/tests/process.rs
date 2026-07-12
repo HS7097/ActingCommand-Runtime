@@ -80,6 +80,7 @@ fn write_config(path: &Path, state_root: &Path) {
         "instances": [{
             "alias": "ak.cn",
             "instance_id": instance_id.transport(),
+            "application_id": "neutral.application",
             "adb_path": "adb",
             "touch_backend": "maatouch",
             "capture_backend": "adb",

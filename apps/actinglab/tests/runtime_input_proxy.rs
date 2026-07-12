@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 use actingcommand_contract::{
-    CaptureSequenceSpec, EventAction, EventActor, EventQuery, EventSource, EventType,
-    IdentifierIssuer, InstanceId, PackageDebugRequest, ProjectionPayload, ProjectionProfile,
-    RetentionClass, RuntimeEvidenceExportRequest, RuntimeResult, TaskOutcome,
+    ApplicationLifecycleAction, CaptureSequenceSpec, EventAction, EventActor, EventQuery,
+    EventSource, EventType, IdentifierIssuer, InstanceId, PackageDebugRequest, ProjectionPayload,
+    ProjectionProfile, RetentionClass, RuntimeEvidenceExportRequest, RuntimeResult, TaskOutcome,
 };
 use actingcommand_device::{
     CaptureBackend, CaptureBackendName, DeviceResult, Frame, InputBackend, PixelFormat,
@@ -29,6 +29,8 @@ struct FakeState {
     taps: AtomicUsize,
     captures: AtomicUsize,
     closes: AtomicUsize,
+    application_calls: AtomicUsize,
+    application_action: AtomicUsize,
     transition_after_tap: AtomicBool,
 }
 
@@ -138,6 +140,89 @@ impl ExecutionBackendProvider for FakeProvider {
             frame_size: self.frame_size,
         }))
     }
+
+    fn control_application(
+        &self,
+        instance_alias: &str,
+        action: ApplicationLifecycleAction,
+    ) -> DeviceResult<()> {
+        assert_eq!(instance_alias, "ak.cn");
+        self.state.application_calls.fetch_add(1, Ordering::AcqRel);
+        self.state.application_action.store(
+            match action {
+                ApplicationLifecycleAction::Launch => 1,
+                ApplicationLifecycleAction::Stop => 2,
+                ApplicationLifecycleAction::Restart => 3,
+            },
+            Ordering::Release,
+        );
+        Ok(())
+    }
+}
+
+#[test]
+fn session_app_routes_application_lifecycle_through_runtime_without_client_package_identity() {
+    let root = TempDir::new().expect("tempdir");
+    let runtime_root = root.path().join("runtime");
+    let local_app_data = root.path().join("local-app-data");
+    let config_path = root.path().join("actinglab.json");
+    fs::write(&config_path, "{}").expect("write config");
+    let state = Arc::new(FakeState::default());
+    let instance_id = *IdentifierIssuer::new()
+        .expect("identifier issuer")
+        .mint_instance_id()
+        .expect("instance id")
+        .transport();
+    let host = RuntimeHost::start(
+        RuntimeHostConfig::new(&runtime_root, b"actinglab-runtime-application-test"),
+        Arc::new(FakeProvider {
+            instance_id,
+            state: Arc::clone(&state),
+            frame_size: 1,
+        }),
+    )
+    .expect("runtime host");
+
+    let output = run_actinglab_json(
+        &config_path,
+        &runtime_root,
+        &local_app_data,
+        [
+            "--json",
+            "--instance",
+            "ak.cn",
+            "session",
+            "app",
+            "force-stop",
+        ],
+    );
+    assert_eq!(
+        output["data"]["receipt"]["result"]["kind"],
+        "application_lifecycle_completed"
+    );
+    assert_eq!(output["data"]["receipt"]["result"]["action"], "stop");
+    assert_eq!(state.application_calls.load(Ordering::Acquire), 1);
+    assert_eq!(state.application_action.load(Ordering::Acquire), 2);
+
+    let (exit_code, rejected) = run_actinglab_failure_json(
+        &config_path,
+        &runtime_root,
+        &local_app_data,
+        [
+            "--json",
+            "--instance",
+            "ak.cn",
+            "session",
+            "app",
+            "launch",
+            "--package",
+            "client.supplied.identity",
+        ],
+    );
+    assert_eq!(exit_code, 2);
+    assert_eq!(rejected["error"]["code"], "validation_failed");
+    assert_eq!(state.application_calls.load(Ordering::Acquire), 1);
+    host.close().expect("close host");
 }
 
 #[test]

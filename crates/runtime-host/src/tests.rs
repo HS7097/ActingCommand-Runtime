@@ -6,13 +6,14 @@ use crate::monitor::MONITOR_FILE_NAME;
 use crate::time::unix_ms_now;
 use actingcommand_artifact_store::read_projected_verified;
 use actingcommand_contract::{
-    CaptureSequenceSpec, EffectDisposition, EventActor, EventPayload, EventQuery, EventSource,
-    EventType, IdentifierIssuer, InputAction, InstanceId, IssuedCorrelationId, LeasePriority,
-    LeaseQueuePolicy, LeaseQueueStatus, LeaseToken, MonitorDiagnosis, MonitorDisposition,
-    MonitorObservation, MonitorPayload, MonitorRecoveryCoordinationReason, MonitorRecoveryKind,
-    OriginModule, ProjectionPayload, ProjectionProfile, RUNTIME_INFO_FILE, ResourceAuthoringEvent,
-    ResourceAuthoringPhase, RuntimeCaptureBackend, RuntimeErrorCode, RuntimeMonitorPolicy,
-    RuntimeOperation, RuntimeReceipt, RuntimeReceiptState, RuntimeRequest, RuntimeResult,
+    ApplicationLifecycleAction, CaptureSequenceSpec, EffectDisposition, EventActor, EventPayload,
+    EventQuery, EventSource, EventType, IdentifierIssuer, InputAction, InstanceId,
+    IssuedCorrelationId, LeasePriority, LeaseQueuePolicy, LeaseQueueStatus, LeaseToken,
+    MonitorDiagnosis, MonitorDisposition, MonitorObservation, MonitorPayload,
+    MonitorRecoveryCoordinationReason, MonitorRecoveryKind, OriginModule, ProjectionPayload,
+    ProjectionProfile, RUNTIME_INFO_FILE, ResourceAuthoringEvent, ResourceAuthoringPhase,
+    RuntimeCaptureBackend, RuntimeErrorCode, RuntimeMonitorPolicy, RuntimeOperation,
+    RuntimeReceipt, RuntimeReceiptState, RuntimeRequest, RuntimeResult,
 };
 use actingcommand_device::{
     CaptureBackend, CaptureBackendName, DeviceError, DeviceResult, Frame, InputBackend, PixelFormat,
@@ -43,6 +44,8 @@ struct FakeState {
     fail_capture_on: AtomicUsize,
     monitor_observation_count: AtomicUsize,
     monitor_mode: AtomicUsize,
+    application_count: AtomicUsize,
+    fail_application: AtomicBool,
 }
 
 struct FakeBackend {
@@ -253,6 +256,23 @@ impl ExecutionBackendProvider for FakeProvider {
         }
         .expect("fake monitor observation must be valid");
         Ok(observation)
+    }
+
+    fn control_application(
+        &self,
+        instance_alias: &str,
+        _action: ApplicationLifecycleAction,
+    ) -> DeviceResult<()> {
+        let entry = self
+            .entries
+            .get(instance_alias)
+            .expect("resolved fake application instance");
+        entry.state.application_count.fetch_add(1, Ordering::AcqRel);
+        if entry.state.fail_application.load(Ordering::Acquire) {
+            Err(DeviceError::fatal("private application failure"))
+        } else {
+            Ok(())
+        }
     }
 }
 
@@ -1989,6 +2009,80 @@ fn safe_reset_owns_lease_input_and_release_under_one_correlation() {
     drop(client);
     host.close().expect("close host");
     assert_eq!(state.close_count.load(Ordering::Acquire), 1);
+}
+
+#[test]
+fn application_lifecycle_owns_lease_effect_and_release_under_one_correlation() {
+    let root = TempDir::new().expect("tempdir");
+    let state = Arc::new(FakeState::default());
+    let host = host_with_state(&root, "neutral.instance", Arc::clone(&state));
+    let mut client = TestClient::connect(&host);
+    let correlation = client.ids.mint_correlation_id().expect("correlation");
+    let correlation_id = *correlation.transport();
+    let request = client.request_with_correlation(
+        correlation,
+        RuntimeOperation::application_lifecycle(
+            "neutral.instance",
+            client.ids.mint_holder_id().expect("holder"),
+            ApplicationLifecycleAction::Restart,
+        ),
+    );
+
+    let receipt = client.send(&request);
+    assert_eq!(receipt.state(), RuntimeReceiptState::Completed);
+    assert!(matches!(
+        receipt.result(),
+        Some(RuntimeResult::ApplicationLifecycleCompleted {
+            action: ApplicationLifecycleAction::Restart,
+            ..
+        })
+    ));
+    assert_eq!(state.application_count.load(Ordering::Acquire), 1);
+    assert_eq!(
+        event_types_for_correlation(&mut client, correlation_id),
+        vec![
+            EventType::CliCommand,
+            EventType::CommandReceived,
+            EventType::CommandValidated,
+            EventType::LeaseRequested,
+            EventType::SchedulerAdmitted,
+            EventType::LeaseTransitionIntent,
+            EventType::LeaseGranted,
+            EventType::SchedulerAdmitted,
+            EventType::ApplicationIntent,
+            EventType::ApplicationCompleted,
+            EventType::SchedulerAdmitted,
+            EventType::LeaseTransitionIntent,
+            EventType::LeaseReleased,
+        ]
+    );
+    drop(client);
+    host.close().expect("close host");
+}
+
+#[test]
+fn application_lifecycle_is_denied_while_another_client_holds_the_instance() {
+    let root = TempDir::new().expect("tempdir");
+    let state = Arc::new(FakeState::default());
+    let host = host_with_state(&root, "neutral.instance", Arc::clone(&state));
+    let mut owner = TestClient::connect(&host);
+    let mut contender = TestClient::connect(&host);
+    let (_request, token) = owner.acquire("neutral.instance");
+    let request = contender.request(RuntimeOperation::application_lifecycle(
+        "neutral.instance",
+        contender.ids.mint_holder_id().expect("holder"),
+        ApplicationLifecycleAction::Stop,
+    ));
+
+    let receipt = contender.send(&request);
+    assert_eq!(receipt.state(), RuntimeReceiptState::Denied);
+    assert_eq!(state.application_count.load(Ordering::Acquire), 0);
+
+    let release = owner.request(RuntimeOperation::ReleaseLease { token });
+    assert_eq!(owner.send(&release).state(), RuntimeReceiptState::Completed);
+    drop(owner);
+    drop(contender);
+    host.close().expect("close host");
 }
 
 #[test]

@@ -162,6 +162,25 @@ fn runtime_request_debug_redacts_alias_key_and_text() {
 }
 
 #[test]
+fn application_lifecycle_request_is_instance_scoped_and_carries_no_application_identity() {
+    let ids = issuer();
+    let operation = RuntimeOperation::application_lifecycle(
+        "neutral.instance",
+        ids.mint_holder_id().expect("holder"),
+        ApplicationLifecycleAction::Restart,
+    );
+    operation.validate().expect("valid application lifecycle");
+    let encoded = serde_json::to_value(&operation).expect("serialize operation");
+
+    assert_eq!(encoded["operation"], "application_lifecycle");
+    assert_eq!(encoded["instance_alias"], "neutral.instance");
+    assert_eq!(encoded["action"], "restart");
+    assert!(encoded.get("application_id").is_none());
+    assert!(encoded.get("package").is_none());
+    assert!(!format!("{operation:?}").contains("neutral.instance"));
+}
+
+#[test]
 fn package_debug_contract_is_lab_only_bounded_and_redacted() {
     let private_path = r"C:\private\resource-package.zip";
     let expected = "a".repeat(64);

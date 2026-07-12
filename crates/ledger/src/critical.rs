@@ -98,6 +98,7 @@ pub enum TaskTerminalTarget {
 pub enum CriticalOperation {
     CommandValidation,
     DeviceWrite,
+    ApplicationLifecycle,
     LeaseTransition(LeaseTransitionTarget),
     TaskTerminal(TaskTerminalTarget),
 }
@@ -107,6 +108,7 @@ impl CriticalOperation {
         match self {
             Self::CommandValidation => EventType::CommandReceived,
             Self::DeviceWrite => EventType::InputIntent,
+            Self::ApplicationLifecycle => EventType::ApplicationIntent,
             Self::LeaseTransition(_) => EventType::LeaseTransitionIntent,
             Self::TaskTerminal(_) => EventType::TaskTerminalIntent,
         }
@@ -116,6 +118,7 @@ impl CriticalOperation {
         match self {
             Self::CommandValidation => EventType::CommandValidated,
             Self::DeviceWrite => EventType::InputCommitted,
+            Self::ApplicationLifecycle => EventType::ApplicationCompleted,
             Self::LeaseTransition(target) => match target {
                 LeaseTransitionTarget::Granted => EventType::LeaseGranted,
                 LeaseTransitionTarget::Transferred => EventType::LeaseTransferred,
@@ -135,6 +138,7 @@ impl CriticalOperation {
         match self {
             Self::CommandValidation => EventType::CommandRejected,
             Self::DeviceWrite => EventType::InputFailed,
+            Self::ApplicationLifecycle => EventType::ApplicationFailed,
             Self::LeaseTransition(_) => EventType::LeaseTransitionFailed,
             Self::TaskTerminal(_) => EventType::TaskTerminalCommitFailed,
         }

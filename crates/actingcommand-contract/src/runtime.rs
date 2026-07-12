@@ -160,6 +160,24 @@ impl fmt::Debug for InputAction {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ApplicationLifecycleAction {
+    Launch,
+    Stop,
+    Restart,
+}
+
+impl ApplicationLifecycleAction {
+    pub const fn event_action(self) -> crate::EventAction {
+        match self {
+            Self::Launch => crate::EventAction::ApplicationLaunch,
+            Self::Stop => crate::EventAction::ApplicationStop,
+            Self::Restart => crate::EventAction::ApplicationRestart,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct LeaseToken {
@@ -1405,6 +1423,11 @@ pub enum RuntimeOperation {
         instance_alias: String,
         holder_id: HolderId,
     },
+    ApplicationLifecycle {
+        instance_alias: String,
+        holder_id: HolderId,
+        action: ApplicationLifecycleAction,
+    },
     Input {
         token: LeaseToken,
         action: InputAction,
@@ -1457,6 +1480,18 @@ impl RuntimeOperation {
         }
     }
 
+    pub fn application_lifecycle(
+        instance_alias: impl Into<String>,
+        holder_id: IssuedHolderId,
+        action: ApplicationLifecycleAction,
+    ) -> Self {
+        Self::ApplicationLifecycle {
+            instance_alias: instance_alias.into(),
+            holder_id: *holder_id.transport(),
+            action,
+        }
+    }
+
     pub fn validate(&self) -> RuntimeContractResult<()> {
         match self {
             Self::Health
@@ -1473,6 +1508,7 @@ impl RuntimeOperation {
             Self::AcquireLease { instance_alias, .. }
             | Self::ObserveReadonly { instance_alias }
             | Self::SafeReset { instance_alias, .. }
+            | Self::ApplicationLifecycle { instance_alias, .. }
             | Self::ClearMonitor { instance_alias } => validate_instance_alias(instance_alias),
             Self::ConfigureMonitor {
                 instance_alias,
@@ -1513,6 +1549,7 @@ impl RuntimeOperation {
             | Self::ObserveReadonly { instance_alias }
             | Self::CaptureSequence { instance_alias, .. }
             | Self::SafeReset { instance_alias, .. }
+            | Self::ApplicationLifecycle { instance_alias, .. }
             | Self::ConfigureMonitor { instance_alias, .. }
             | Self::ClearMonitor { instance_alias } => Some(instance_alias),
             _ => None,
@@ -1548,6 +1585,9 @@ impl fmt::Debug for RuntimeOperation {
             Self::ObserveReadonly { .. } => "RuntimeOperation::ObserveReadonly(<redacted>)",
             Self::CaptureSequence { .. } => "RuntimeOperation::CaptureSequence(<redacted>)",
             Self::SafeReset { .. } => "RuntimeOperation::SafeReset(<redacted>)",
+            Self::ApplicationLifecycle { .. } => {
+                "RuntimeOperation::ApplicationLifecycle(<redacted>)"
+            }
             Self::Input { .. } => "RuntimeOperation::Input(<redacted>)",
             Self::QueryEvents { .. } => "RuntimeOperation::QueryEvents(<typed-query>)",
             Self::SubscribeEvents { .. } => "RuntimeOperation::SubscribeEvents(<typed-query>)",
@@ -1929,6 +1969,10 @@ pub enum RuntimeResult {
     },
     SafeResetCompleted {
         action_id: ActionId,
+    },
+    ApplicationLifecycleCompleted {
+        action_id: ActionId,
+        action: ApplicationLifecycleAction,
     },
     InputCommitted {
         action_id: ActionId,

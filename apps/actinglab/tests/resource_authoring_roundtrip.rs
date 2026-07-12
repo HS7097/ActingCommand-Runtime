@@ -116,6 +116,16 @@ impl ExecutionBackendProvider for SealedProvider {
             state: Arc::clone(&self.state),
         }))
     }
+
+    fn control_application(
+        &self,
+        _instance_alias: &str,
+        _action: actingcommand_contract::ApplicationLifecycleAction,
+    ) -> DeviceResult<()> {
+        Err(DeviceError::fatal(
+            "resource authoring test does not expose application control",
+        ))
+    }
 }
 
 #[test]

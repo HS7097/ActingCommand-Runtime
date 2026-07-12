@@ -934,6 +934,16 @@ impl ExecutionBackendProvider for GoldenRuntimeProvider {
         }
         Ok(Box::new(GoldenCapture))
     }
+
+    fn control_application(
+        &self,
+        _instance_alias: &str,
+        _action: actingcommand_contract::ApplicationLifecycleAction,
+    ) -> DeviceResult<()> {
+        Err(DeviceError::fatal(
+            "recognize-only golden run must not control applications",
+        ))
+    }
 }
 
 fn sha256_file(path: &Path) -> String {

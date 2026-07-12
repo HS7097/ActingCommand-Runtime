@@ -19,6 +19,7 @@ pub const MONITOR_PAYLOAD_SCHEMA: &str = "actingcommand.payload.monitor.v1";
 pub const SCHEDULER_PAYLOAD_SCHEMA: &str = "actingcommand.payload.scheduler.v3";
 pub const LEASE_PAYLOAD_SCHEMA: &str = "actingcommand.payload.lease.v3";
 pub const TASK_PAYLOAD_SCHEMA: &str = "actingcommand.payload.task.v2";
+pub const APPLICATION_PAYLOAD_SCHEMA: &str = "actingcommand.payload.application.v1";
 pub const INPUT_PAYLOAD_SCHEMA: &str = "actingcommand.payload.input.v2";
 pub const CAPTURE_PAYLOAD_SCHEMA: &str = "actingcommand.payload.capture.v1";
 pub const RECOGNITION_PAYLOAD_SCHEMA: &str = "actingcommand.payload.recognition.v1";
@@ -1968,6 +1969,42 @@ impl InputPayloadDraft {
     }
 }
 
+enum ApplicationDraftKind {
+    Intent(ObservationDraft),
+    Completed(OutcomeDraft),
+    Failed(DiagnosticOutcomeDraft),
+}
+
+pub struct ApplicationPayloadDraft(ApplicationDraftKind);
+
+impl ApplicationPayloadDraft {
+    pub fn intent(action: EventAction, audit: AuditInput) -> Self {
+        Self(ApplicationDraftKind::Intent(ObservationDraft::new(
+            action, audit,
+        )))
+    }
+
+    pub fn completed(action: EventAction, effect: EffectDisposition, audit: AuditInput) -> Self {
+        Self(ApplicationDraftKind::Completed(OutcomeDraft::new(
+            action, effect, audit,
+        )))
+    }
+
+    pub fn failed(
+        action: EventAction,
+        diagnostic_code: DiagnosticCode,
+        effect: EffectDisposition,
+        audit: AuditInput,
+    ) -> Self {
+        Self(ApplicationDraftKind::Failed(DiagnosticOutcomeDraft::new(
+            action,
+            diagnostic_code,
+            effect,
+            audit,
+        )))
+    }
+}
+
 enum CaptureDraftKind {
     Requested(ObservationDraft),
     Completed(ObservationResultDraft),
@@ -2273,6 +2310,7 @@ pub enum EventPayloadDraft {
     Scheduler(SchedulerPayloadDraft),
     Lease(LeasePayloadDraft),
     Task(TaskPayloadDraft),
+    Application(ApplicationPayloadDraft),
     Input(InputPayloadDraft),
     Capture(CapturePayloadDraft),
     Recognition(RecognitionPayloadDraft),
@@ -2298,6 +2336,7 @@ payload_draft_from!(MonitorPayloadDraft, Monitor);
 payload_draft_from!(SchedulerPayloadDraft, Scheduler);
 payload_draft_from!(LeasePayloadDraft, Lease);
 payload_draft_from!(TaskPayloadDraft, Task);
+payload_draft_from!(ApplicationPayloadDraft, Application);
 payload_draft_from!(InputPayloadDraft, Input);
 payload_draft_from!(CapturePayloadDraft, Capture);
 payload_draft_from!(RecognitionPayloadDraft, Recognition);
@@ -2396,6 +2435,19 @@ pub enum TaskPayload {
     Cancelled(OutcomePayload),
     TerminalIntent(ObservationPayload),
     TerminalCommitFailed(DiagnosticOutcomePayload),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(
+    tag = "kind",
+    content = "data",
+    rename_all = "snake_case",
+    deny_unknown_fields
+)]
+pub enum ApplicationPayload {
+    Intent(ObservationPayload),
+    Completed(OutcomePayload),
+    Failed(DiagnosticOutcomePayload),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -2565,6 +2617,11 @@ family_payload!(TaskPayload, {
     TerminalIntent => EventType::TaskTerminalIntent,
     TerminalCommitFailed => EventType::TaskTerminalCommitFailed,
 });
+family_payload!(ApplicationPayload, {
+    Intent => EventType::ApplicationIntent,
+    Completed => EventType::ApplicationCompleted,
+    Failed => EventType::ApplicationFailed,
+});
 family_payload!(InputPayload, {
     Intent => EventType::InputIntent,
     Committed => EventType::InputCommitted,
@@ -2615,6 +2672,7 @@ pub enum EventPayload {
     Scheduler(SchedulerPayload),
     Lease(LeasePayload),
     Task(TaskPayload),
+    Application(ApplicationPayload),
     Input(InputPayload),
     Capture(CapturePayload),
     Recognition(RecognitionPayload),
@@ -2738,6 +2796,17 @@ impl EventPayloadDraft {
                     TaskPayload::TerminalCommitFailed(detail.sanitize(fingerprinter)?)
                 }
             }),
+            Self::Application(value) => EventPayload::Application(match value.0 {
+                ApplicationDraftKind::Intent(detail) => {
+                    ApplicationPayload::Intent(detail.sanitize(fingerprinter)?)
+                }
+                ApplicationDraftKind::Completed(detail) => {
+                    ApplicationPayload::Completed(detail.sanitize(fingerprinter)?)
+                }
+                ApplicationDraftKind::Failed(detail) => {
+                    ApplicationPayload::Failed(detail.sanitize(fingerprinter)?)
+                }
+            }),
             Self::Input(value) => EventPayload::Input(match value.0 {
                 InputDraftKind::Intent(detail) => {
                     InputPayload::Intent(detail.sanitize(fingerprinter)?)
@@ -2843,6 +2912,7 @@ impl EventPayload {
             Self::Scheduler(_) => SCHEDULER_PAYLOAD_SCHEMA,
             Self::Lease(_) => LEASE_PAYLOAD_SCHEMA,
             Self::Task(_) => TASK_PAYLOAD_SCHEMA,
+            Self::Application(_) => APPLICATION_PAYLOAD_SCHEMA,
             Self::Input(_) => INPUT_PAYLOAD_SCHEMA,
             Self::Capture(_) => CAPTURE_PAYLOAD_SCHEMA,
             Self::Recognition(_) => RECOGNITION_PAYLOAD_SCHEMA,
@@ -3017,6 +3087,7 @@ impl EventPayload {
             Self::Scheduler(_) => PublicEventPayload::Scheduler(payload),
             Self::Lease(_) => PublicEventPayload::Lease(payload),
             Self::Task(_) => PublicEventPayload::Task(payload),
+            Self::Application(_) => PublicEventPayload::Application(payload),
             Self::Input(_) => PublicEventPayload::Input(payload),
             Self::Capture(_) => PublicEventPayload::Capture(payload),
             Self::Recognition(_) => PublicEventPayload::Recognition(payload),
@@ -3035,6 +3106,7 @@ impl EventPayload {
             Self::Scheduler(value) => value,
             Self::Lease(value) => value,
             Self::Task(value) => value,
+            Self::Application(value) => value,
             Self::Input(value) => value,
             Self::Capture(value) => value,
             Self::Recognition(value) => value,
@@ -3319,6 +3391,7 @@ pub enum PublicEventPayload {
     Scheduler(PublicPayload),
     Lease(PublicPayload),
     Task(PublicPayload),
+    Application(PublicPayload),
     Input(PublicPayload),
     Capture(PublicPayload),
     Recognition(PublicPayload),

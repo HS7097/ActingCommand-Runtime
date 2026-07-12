@@ -3,12 +3,12 @@
 use crate::ipc::{DEFAULT_RUNTIME_MAX_FRAME_BYTES, exchange};
 use crate::{RuntimeClientError, RuntimeClientResult};
 use actingcommand_contract::{
-    ActionId, CaptureSequenceSpec, CorrelationId, EventActor, EventQuery, EventSource,
-    IdentifierIssuer, InputAction, IssuedCorrelationId, LeaseQueuePolicy, LeaseQueueStatus,
-    LeaseToken, OwnerEpoch, PackageDebugRequest, ProjectedEvent, ProjectionProfile,
-    RUNTIME_INFO_FILE, RequestId, ResourceAuthoringEvent, RuntimeControlPlaneStatus,
-    RuntimeDebugEvent, RuntimeEventBatch, RuntimeEvidenceExportRequest, RuntimeInfo,
-    RuntimeMonitorInstanceStatus, RuntimeMonitorPolicy, RuntimeMonitorRegistryStatus,
+    ActionId, ApplicationLifecycleAction, CaptureSequenceSpec, CorrelationId, EventActor,
+    EventQuery, EventSource, IdentifierIssuer, InputAction, IssuedCorrelationId, LeaseQueuePolicy,
+    LeaseQueueStatus, LeaseToken, OwnerEpoch, PackageDebugRequest, ProjectedEvent,
+    ProjectionProfile, RUNTIME_INFO_FILE, RequestId, ResourceAuthoringEvent,
+    RuntimeControlPlaneStatus, RuntimeDebugEvent, RuntimeEventBatch, RuntimeEvidenceExportRequest,
+    RuntimeInfo, RuntimeMonitorInstanceStatus, RuntimeMonitorPolicy, RuntimeMonitorRegistryStatus,
     RuntimeOperation, RuntimeReceipt, RuntimeRequest, RuntimeResult, RuntimeSubscriptionRequest,
     TerminalEvent,
 };
@@ -436,6 +436,38 @@ impl RuntimeClient {
             Some(RuntimeResult::SafeResetCompleted { .. })
         ) {
             return Err(self.unexpected_result("safe_reset"));
+        }
+        self.flow_output(receipt, correlation_id)
+    }
+
+    pub fn control_application(
+        &self,
+        instance_alias: &str,
+        action: ApplicationLifecycleAction,
+    ) -> RuntimeClientResult<RuntimeFlowOutput> {
+        let connection = self.connection("application_lifecycle")?;
+        let correlation = connection.ids.mint_correlation_id().map_err(|_| {
+            RuntimeClientError::fatal("runtime_identifier_issue_failed", "application_lifecycle")
+        })?;
+        let holder = connection.ids.mint_holder_id().map_err(|_| {
+            RuntimeClientError::fatal("runtime_identifier_issue_failed", "application_lifecycle")
+        })?;
+        let correlation_id = *correlation.transport();
+        drop(connection);
+        let receipt = self.execute_receipt_with_correlation(
+            "application_lifecycle",
+            RuntimeOperation::application_lifecycle(instance_alias, holder, action),
+            correlation,
+            None,
+        )?;
+        if !matches!(
+            receipt.result(),
+            Some(RuntimeResult::ApplicationLifecycleCompleted {
+                action: completed,
+                ..
+            }) if *completed == action
+        ) {
+            return Err(self.unexpected_result("application_lifecycle"));
         }
         self.flow_output(receipt, correlation_id)
     }

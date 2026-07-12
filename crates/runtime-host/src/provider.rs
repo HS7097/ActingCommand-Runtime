@@ -1,19 +1,24 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 use crate::{RuntimeHostError, RuntimeHostResult};
-use actingcommand_contract::{InstanceId, MAX_INSTANCE_ALIAS_BYTES, RuntimeErrorCode};
+use actingcommand_contract::{
+    ApplicationLifecycleAction, InstanceId, MAX_INSTANCE_ALIAS_BYTES, RuntimeErrorCode,
+};
 use actingcommand_device::{
-    CaptureBackend, CaptureBackendChoice, CaptureBackendConfig, DeviceError, DeviceResult,
-    InputBackend, TouchBackendChoice, TouchBackendConfig, create_capture_backend,
-    create_touch_backend,
+    Adb, AdbConfig, CaptureBackend, CaptureBackendChoice, CaptureBackendConfig, DeviceError,
+    DeviceResult, DeviceTarget, InputBackend, TouchBackendChoice, TouchBackendConfig,
+    create_capture_backend, create_touch_backend,
 };
 pub use actingcommand_execution_kernel::{ExecutionBackendProvider, ResolvedExecutionInstance};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
+use std::thread;
+use std::time::Duration;
 
 pub struct ExecutionBackendRegistration {
     instance_alias: String,
     instance_id: InstanceId,
+    application_id: String,
     input: TouchBackendConfig,
     capture: CaptureBackendConfig,
 }
@@ -22,11 +27,14 @@ impl ExecutionBackendRegistration {
     pub fn new(
         instance_alias: impl Into<String>,
         instance_id: InstanceId,
+        application_id: impl Into<String>,
         input: TouchBackendConfig,
         capture: CaptureBackendConfig,
     ) -> RuntimeHostResult<Self> {
         let instance_alias = instance_alias.into();
+        let application_id = application_id.into();
         validate_alias(&instance_alias)?;
+        validate_application_id(&application_id)?;
         if matches!(
             input.requested,
             TouchBackendChoice::Auto | TouchBackendChoice::AutoFastest
@@ -50,6 +58,7 @@ impl ExecutionBackendRegistration {
         Ok(Self {
             instance_alias,
             instance_id,
+            application_id,
             input,
             capture,
         })
@@ -60,6 +69,9 @@ impl ExecutionBackendRegistration {
 struct ExecutionBackendEntry {
     instance_id: InstanceId,
     audit_endpoint: String,
+    application_id: String,
+    application_adb: AdbConfig,
+    application_target: DeviceTarget,
     input: TouchBackendConfig,
     capture: CaptureBackendConfig,
 }
@@ -90,11 +102,16 @@ impl ExecutionBackendRegistry {
                 ));
             }
             let audit_endpoint = registration.input.target.resolved_serial();
+            let application_adb = registration.input.adb_config.clone();
+            let application_target = registration.input.target.clone();
             entries.insert(
                 registration.instance_alias,
                 ExecutionBackendEntry {
                     instance_id: registration.instance_id,
                     audit_endpoint,
+                    application_id: registration.application_id,
+                    application_adb,
+                    application_target,
                     input: registration.input,
                     capture: registration.capture,
                 },
@@ -149,6 +166,34 @@ impl ExecutionBackendProvider for ExecutionBackendRegistry {
             .ok_or_else(|| DeviceError::fatal("execution backend instance is not registered"))?;
         create_capture_backend(entry.capture.clone()).map(|selected| selected.backend)
     }
+
+    fn control_application(
+        &self,
+        instance_alias: &str,
+        action: ApplicationLifecycleAction,
+    ) -> DeviceResult<()> {
+        let entry = self
+            .entries
+            .get(instance_alias)
+            .ok_or_else(|| DeviceError::fatal("execution backend instance is not registered"))?;
+        let serial = entry.application_target.resolved_serial();
+        let adb = Adb::new(entry.application_adb.clone());
+        adb.ensure_device(&serial, entry.application_target.connect)?;
+        match action {
+            ApplicationLifecycleAction::Launch => {
+                adb.launch_package(&serial, &entry.application_id)?;
+            }
+            ApplicationLifecycleAction::Stop => {
+                adb.force_stop(&serial, &entry.application_id)?;
+            }
+            ApplicationLifecycleAction::Restart => {
+                adb.force_stop(&serial, &entry.application_id)?;
+                thread::sleep(Duration::from_millis(500));
+                adb.launch_package(&serial, &entry.application_id)?;
+            }
+        }
+        Ok(())
+    }
 }
 
 fn validate_alias(alias: &str) -> RuntimeHostResult<()> {
@@ -158,6 +203,20 @@ fn validate_alias(alias: &str) -> RuntimeHostResult<()> {
     {
         return Err(RuntimeHostError::fatal(
             "invalid_instance_alias",
+            "build_execution_backend_registry",
+            RuntimeErrorCode::RuntimeFatal,
+        ));
+    }
+    Ok(())
+}
+
+fn validate_application_id(application_id: &str) -> RuntimeHostResult<()> {
+    if application_id.trim().is_empty()
+        || application_id.len() > MAX_INSTANCE_ALIAS_BYTES
+        || application_id.chars().any(char::is_control)
+    {
+        return Err(RuntimeHostError::fatal(
+            "invalid_application_identity",
             "build_execution_backend_registry",
             RuntimeErrorCode::RuntimeFatal,
         ));

@@ -103,6 +103,9 @@ closed_code!(EventAction {
     InputKey => "input.key",
     InputText => "input.text",
     InputReset => "input.reset",
+    ApplicationLaunch => "application.launch",
+    ApplicationStop => "application.stop",
+    ApplicationRestart => "application.restart",
     CaptureObserve => "capture.observe",
     CapturePolicy => "capture.policy",
     CaptureDedup => "capture.dedup",
@@ -139,6 +142,7 @@ closed_code!(DiagnosticCode {
     PinnedFrameMissing => "artifact.pinned_frame_missing",
     RecognitionFailed => "recognition.failed",
     InputFailed => "input.failed",
+    ApplicationFailed => "application.failed",
     CommandRejected => "command.rejected",
 });
 

@@ -35,6 +35,8 @@ pub(super) struct ActingdConfigFile {
 struct InstanceConfig {
     alias: String,
     instance_id: InstanceId,
+    #[serde(default)]
+    application_id: Option<String>,
     adb_path: String,
     #[serde(default)]
     serial: Option<String>,
@@ -118,6 +120,10 @@ impl InstanceConfig {
         {
             return Err("instance_config_invalid");
         }
+        let application_id = self
+            .application_id
+            .filter(|value| !value.trim().is_empty())
+            .ok_or("application_identity_missing")?;
         let requested =
             TouchBackendChoice::parse(&self.touch_backend).map_err(|_| "touch_backend_invalid")?;
         if matches!(
@@ -176,8 +182,14 @@ impl InstanceConfig {
         let touch = TouchBackendConfig::new(adb, target, maatouch)
             .with_minitouch_config(minitouch)
             .with_requested(requested);
-        ExecutionBackendRegistration::new(self.alias, self.instance_id, touch, capture)
-            .map_err(|_| "instance_registration_invalid")
+        ExecutionBackendRegistration::new(
+            self.alias,
+            self.instance_id,
+            application_id,
+            touch,
+            capture,
+        )
+        .map_err(|_| "instance_registration_invalid")
     }
 }
 
@@ -224,6 +236,7 @@ mod tests {
             "instances": [{
                 "alias": "ak.cn",
                 "instance_id": id.transport(),
+                "application_id": "neutral.application",
                 "adb_path": "adb",
                 "port": 16384,
                 "touch_backend": "maatouch",
@@ -234,6 +247,33 @@ mod tests {
         let config = serde_json::from_value::<ActingdConfigFile>(value).expect("typed config");
         let assembly = config.assemble().expect("runtime assembly");
         assert_eq!(assembly.host.state_root(), root.path());
+    }
+
+    #[test]
+    fn missing_application_identity_is_rejected_before_runtime_start() {
+        let id = IdentifierIssuer::new()
+            .expect("issuer")
+            .mint_instance_id()
+            .expect("instance id");
+        let value = json!({
+            "schema_version": CONFIG_SCHEMA_VERSION,
+            "state_root": "state",
+            "bind_host": "127.0.0.1",
+            "secret_fingerprint_salt": "0123456789abcdef",
+            "instances": [{
+                "alias": "neutral.instance",
+                "instance_id": id.transport(),
+                "adb_path": "adb",
+                "port": 16384,
+                "touch_backend": "maatouch",
+                "capture_backend": "adb"
+            }]
+        });
+        let config = serde_json::from_value::<ActingdConfigFile>(value).expect("typed config");
+        assert_eq!(
+            config.assemble().err(),
+            Some("application_identity_missing")
+        );
     }
 
     #[test]
@@ -263,6 +303,7 @@ mod tests {
             "instances": [{
                 "alias": "ak.cn",
                 "instance_id": id.transport(),
+                "application_id": "neutral.application",
                 "adb_path": "adb",
                 "touch_backend": "auto",
                 "capture_backend": "adb"
@@ -289,6 +330,7 @@ mod tests {
             "instances": [{
                 "alias": "ak.cn",
                 "instance_id": id.transport(),
+                "application_id": "neutral.application",
                 "adb_path": "adb",
                 "touch_backend": "maatouch",
                 "capture_backend": "auto"

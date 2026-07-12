@@ -4,7 +4,7 @@ use crate::{
     ExecutionBackendProvider, ExecutionKernelError, ExecutionKernelResult,
     ResolvedExecutionInstance,
 };
-use actingcommand_contract::InputAction;
+use actingcommand_contract::{ApplicationLifecycleAction, InputAction};
 use actingcommand_device::{CaptureBackend, DeviceResult, Frame, InputBackend};
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::mpsc::{self, Receiver, SyncSender};
@@ -20,6 +20,10 @@ enum SessionCommand {
     },
     Capture {
         response: SyncSender<ExecutionKernelResult<Frame>>,
+    },
+    ApplicationLifecycle {
+        action: ApplicationLifecycleAction,
+        response: SyncSender<ExecutionKernelResult<()>>,
     },
     Close {
         response: SyncSender<ExecutionKernelResult<()>>,
@@ -98,6 +102,30 @@ impl ExecutionSession {
             .as_ref()
             .ok_or_else(|| ExecutionKernelError::fatal("execution_session_closed"))?
             .send(SessionCommand::Capture { response })
+            .map_err(|_| ExecutionKernelError::fatal("execution_session_unavailable"));
+        if let Err(error) = send_result {
+            return finish_after_result(&mut state, Err(error));
+        }
+        let result = receiver.recv().unwrap_or_else(|_| {
+            Err(ExecutionKernelError::fatal(
+                "execution_session_response_lost",
+            ))
+        });
+        finish_after_result(&mut state, result)
+    }
+
+    pub fn control_application(
+        &self,
+        action: ApplicationLifecycleAction,
+    ) -> ExecutionKernelResult<()> {
+        let mut state = self.lock_state("execution_session_state_poisoned")?;
+        ensure_open(&state)?;
+        let (response, receiver) = mpsc::sync_channel(1);
+        let send_result = state
+            .sender
+            .as_ref()
+            .ok_or_else(|| ExecutionKernelError::fatal("execution_session_closed"))?
+            .send(SessionCommand::ApplicationLifecycle { action, response })
             .map_err(|_| ExecutionKernelError::fatal("execution_session_unavailable"));
         if let Err(error) = send_result {
             return finish_after_result(&mut state, Err(error));
@@ -235,6 +263,29 @@ fn run_session(
                         return Err(terminal);
                     }
                 }
+            }
+            SessionCommand::ApplicationLifecycle { action, response } => {
+                capture.take();
+                if let Err(error) = close_input(input.take()) {
+                    response.send(Err(error.clone())).map_err(|_| {
+                        ExecutionKernelError::fatal("execution_session_response_lost")
+                    })?;
+                    return Err(error);
+                }
+                let result = provider
+                    .control_application(&instance_alias, action)
+                    .map_err(|error| {
+                        ExecutionKernelError::device("application_backend_operation_failed", &error)
+                    });
+                if let Err(error) = result {
+                    response.send(Err(error.clone())).map_err(|_| {
+                        ExecutionKernelError::fatal("execution_session_response_lost")
+                    })?;
+                    return Err(error);
+                }
+                response
+                    .send(Ok(()))
+                    .map_err(|_| ExecutionKernelError::fatal("execution_session_response_lost"))?;
             }
             SessionCommand::Close { response } => {
                 capture.take();

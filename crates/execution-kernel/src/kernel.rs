@@ -4,7 +4,9 @@ use crate::{
     ExecutionBackendProvider, ExecutionKernelError, ExecutionKernelResult, ExecutionSession,
     ResolvedExecutionInstance,
 };
-use actingcommand_contract::{InputAction, InstanceId, MonitorObservation};
+use actingcommand_contract::{
+    ApplicationLifecycleAction, InputAction, InstanceId, MonitorObservation,
+};
 use actingcommand_device::Frame;
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex, MutexGuard};
@@ -47,6 +49,14 @@ impl ExecutionKernel {
 
     pub fn capture(&self, instance_alias: &str) -> ExecutionKernelResult<Frame> {
         self.session(instance_alias)?.capture()
+    }
+
+    pub fn control_application(
+        &self,
+        instance_alias: &str,
+        action: ApplicationLifecycleAction,
+    ) -> ExecutionKernelResult<()> {
+        self.session(instance_alias)?.control_application(action)
     }
 
     pub fn observe_monitor(

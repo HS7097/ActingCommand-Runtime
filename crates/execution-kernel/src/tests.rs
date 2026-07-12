@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 use super::*;
-use actingcommand_contract::{IdentifierIssuer, InputAction, InstanceId};
+use actingcommand_contract::{
+    ApplicationLifecycleAction, IdentifierIssuer, InputAction, InstanceId,
+};
 use actingcommand_device::{
     CaptureBackend, CaptureBackendName, DeviceError, DeviceResult, Frame, InputBackend, PixelFormat,
 };
@@ -14,11 +16,16 @@ struct FakeState {
     capture_opens: usize,
     input_calls: usize,
     capture_calls: usize,
+    capture_closes: usize,
     input_closes: usize,
+    application_calls: usize,
+    application_observed_input_closes: usize,
+    application_observed_capture_closes: usize,
     fail_input_open: bool,
     fail_capture_open: bool,
     fail_input: bool,
     fail_capture: bool,
+    fail_application: bool,
     fail_close: bool,
     panic_input: bool,
     panic_capture: bool,
@@ -77,6 +84,22 @@ impl ExecutionBackendProvider for FakeProvider {
         Ok(Box::new(FakeCapture {
             state: Arc::clone(&self.state),
         }))
+    }
+
+    fn control_application(
+        &self,
+        _instance_alias: &str,
+        _action: ApplicationLifecycleAction,
+    ) -> DeviceResult<()> {
+        let mut state = self.state.lock().expect("state");
+        state.application_calls += 1;
+        state.application_observed_input_closes = state.input_closes;
+        state.application_observed_capture_closes = state.capture_closes;
+        if state.fail_application {
+            Err(DeviceError::fatal("private application failure"))
+        } else {
+            Ok(())
+        }
     }
 }
 
@@ -163,6 +186,12 @@ impl CaptureBackend for FakeCapture {
     }
 }
 
+impl Drop for FakeCapture {
+    fn drop(&mut self) {
+        self.state.lock().expect("state").capture_closes += 1;
+    }
+}
+
 fn instance() -> InstanceId {
     *IdentifierIssuer::new()
         .expect("issuer")
@@ -206,6 +235,30 @@ fn input_and_capture_open_lazily_once_and_share_one_daemon_session() {
     kernel.close().expect("close");
     kernel.close().expect("idempotent close");
     assert_eq!(state.lock().expect("state").input_closes, 1);
+}
+
+#[test]
+fn application_lifecycle_is_serialized_by_the_daemon_session_and_invalidates_backends() {
+    let state = Arc::new(Mutex::new(FakeState::default()));
+    let kernel = kernel(
+        Arc::clone(&state),
+        &[("neutral.instance", instance(), "private-endpoint")],
+    );
+    kernel
+        .input("neutral.instance", InputAction::Reset)
+        .expect("open input");
+    kernel.capture("neutral.instance").expect("open capture");
+
+    kernel
+        .control_application("neutral.instance", ApplicationLifecycleAction::Restart)
+        .expect("application restart");
+
+    let snapshot = state.lock().expect("state");
+    assert_eq!(snapshot.application_calls, 1);
+    assert_eq!(snapshot.application_observed_input_closes, 1);
+    assert_eq!(snapshot.application_observed_capture_closes, 1);
+    drop(snapshot);
+    kernel.close().expect("close");
 }
 
 #[test]

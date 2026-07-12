@@ -496,6 +496,16 @@ mod tests {
         fn open_capture(&self, _instance_alias: &str) -> DeviceResult<Box<dyn CaptureBackend>> {
             Err(DeviceError::fatal("authoring test must not open capture"))
         }
+
+        fn control_application(
+            &self,
+            _instance_alias: &str,
+            _action: actingcommand_contract::ApplicationLifecycleAction,
+        ) -> DeviceResult<()> {
+            Err(DeviceError::fatal(
+                "authoring test must not control applications",
+            ))
+        }
     }
 
     fn start_runtime(root: &TempDir) -> (RuntimeHost, RuntimeClient) {
