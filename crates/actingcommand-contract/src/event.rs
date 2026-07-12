@@ -157,6 +157,7 @@ pub enum EventFamily {
     Capture,
     Recognition,
     Artifact,
+    ResourceAuthoring,
     Client,
     Ledger,
 }
@@ -265,6 +266,18 @@ pub enum EventType {
     ArtifactExportCompleted,
     #[serde(rename = "artifact.export_failed")]
     ArtifactExportFailed,
+    #[serde(rename = "resource.authoring_started")]
+    ResourceAuthoringStarted,
+    #[serde(rename = "resource.draft_built")]
+    ResourceDraftBuilt,
+    #[serde(rename = "resource.validation_completed")]
+    ResourceValidationCompleted,
+    #[serde(rename = "resource.promote_intent")]
+    ResourcePromoteIntent,
+    #[serde(rename = "resource.promoted")]
+    ResourcePromoted,
+    #[serde(rename = "resource.promote_failed")]
+    ResourcePromoteFailed,
     #[serde(rename = "ui.action")]
     UiAction,
     #[serde(rename = "cli.command")]
@@ -327,6 +340,12 @@ impl EventType {
             | Self::ArtifactVerificationFailed
             | Self::ArtifactExportCompleted
             | Self::ArtifactExportFailed => EventFamily::Artifact,
+            Self::ResourceAuthoringStarted
+            | Self::ResourceDraftBuilt
+            | Self::ResourceValidationCompleted
+            | Self::ResourcePromoteIntent
+            | Self::ResourcePromoted
+            | Self::ResourcePromoteFailed => EventFamily::ResourceAuthoring,
             Self::UiAction | Self::CliCommand | Self::LabRequest => EventFamily::Client,
             Self::LedgerRecovered => EventFamily::Ledger,
         }

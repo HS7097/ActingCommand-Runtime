@@ -10,9 +10,9 @@ use actingcommand_contract::{
     EventType, IdentifierIssuer, InputAction, InstanceId, IssuedCorrelationId, LeasePriority,
     LeaseQueuePolicy, LeaseQueueStatus, LeaseToken, MonitorDiagnosis, MonitorDisposition,
     MonitorObservation, MonitorPayload, MonitorRecoveryCoordinationReason, MonitorRecoveryKind,
-    ProjectionPayload, ProjectionProfile, RUNTIME_INFO_FILE, RuntimeCaptureBackend,
-    RuntimeErrorCode, RuntimeMonitorPolicy, RuntimeOperation, RuntimeReceipt, RuntimeReceiptState,
-    RuntimeRequest, RuntimeResult,
+    OriginModule, ProjectionPayload, ProjectionProfile, RUNTIME_INFO_FILE, ResourceAuthoringEvent,
+    ResourceAuthoringPhase, RuntimeCaptureBackend, RuntimeErrorCode, RuntimeMonitorPolicy,
+    RuntimeOperation, RuntimeReceipt, RuntimeReceiptState, RuntimeRequest, RuntimeResult,
 };
 use actingcommand_device::{
     CaptureBackend, CaptureBackendName, DeviceError, DeviceResult, Frame, InputBackend, PixelFormat,
@@ -2303,6 +2303,154 @@ fn one_correlation_queries_the_complete_lease_input_release_sequence() {
             .all(|pair| pair[0].sequence < pair[1].sequence)
     );
     drop(client);
+    host.close().expect("close host");
+}
+
+#[test]
+fn runtime_is_the_single_writer_for_one_correlated_resource_authoring_sequence() {
+    let root = TempDir::new().expect("tempdir");
+    let state = Arc::new(FakeState::default());
+    let host = host_with_state(&root, "ak.cn", state);
+    let ids = IdentifierIssuer::new().expect("identifier issuer");
+    let correlation = ids.mint_correlation_id().expect("correlation id");
+    let correlation_transport = *correlation.transport();
+    let connection = ConnectionId::new(121).expect("connection");
+    let phases = [
+        (ResourceAuthoringPhase::AuthoringStarted, None),
+        (ResourceAuthoringPhase::DraftBuilt, None),
+        (ResourceAuthoringPhase::ValidationCompleted, None),
+        (ResourceAuthoringPhase::PromoteIntent, None),
+        (ResourceAuthoringPhase::Promoted, None),
+    ];
+
+    for (phase, failure_code) in phases {
+        let request = RuntimeRequest::new(
+            ids.mint_request_id().expect("request id"),
+            correlation,
+            None,
+            EventActor::Lab,
+            EventSource::Lab,
+            unix_ms_now().expect("wall clock"),
+            RuntimeOperation::RecordAuthoringEvent {
+                event: ResourceAuthoringEvent::new(
+                    phase,
+                    "draft-a",
+                    "resource-root",
+                    "b".repeat(64),
+                    vec!["operations/task-a/task.json".to_string()],
+                    failure_code,
+                )
+                .expect("authoring event"),
+            },
+        )
+        .expect("authoring request");
+        let receipt = host
+            .process_request_for_test(&request, connection)
+            .expect("authoring receipt");
+        assert_eq!(receipt.state(), RuntimeReceiptState::Completed);
+        assert!(receipt.terminal().is_some());
+        assert!(matches!(
+            receipt.result(),
+            Some(RuntimeResult::AuthoringEventRecorded { phase: recorded }) if *recorded == phase
+        ));
+    }
+
+    let query = runtime_request(
+        &ids,
+        RuntimeOperation::QueryEvents {
+            query: EventQuery {
+                correlation_id: Some(correlation_transport),
+                ..EventQuery::default()
+            },
+            profile: ProjectionProfile::Forensic,
+        },
+    );
+    let receipt = host
+        .process_request_for_test(&query, connection)
+        .expect("event query");
+    let RuntimeResult::Events { events } = receipt.result().expect("events result") else {
+        panic!("expected events");
+    };
+    assert_eq!(
+        events
+            .iter()
+            .map(|event| event.event_type)
+            .collect::<Vec<_>>(),
+        vec![
+            EventType::ResourceAuthoringStarted,
+            EventType::ResourceDraftBuilt,
+            EventType::ResourceValidationCompleted,
+            EventType::ResourcePromoteIntent,
+            EventType::ResourcePromoted,
+        ]
+    );
+    for event in events {
+        assert_eq!(event.origin.source(), EventSource::Lab);
+        assert_eq!(event.origin.module(), OriginModule::ResourceTooling);
+        assert_eq!(event.origin.actor(), EventActor::Lab);
+        assert!(matches!(
+            event.payload,
+            ProjectionPayload::Full(EventPayload::ResourceAuthoring(_))
+        ));
+    }
+    host.close().expect("close host");
+}
+
+#[test]
+fn runtime_rejects_forged_non_lab_resource_authoring_ingress_without_ledger_effect() {
+    let root = TempDir::new().expect("tempdir");
+    let state = Arc::new(FakeState::default());
+    let host = host_with_state(&root, "ak.cn", state);
+    let ids = IdentifierIssuer::new().expect("identifier issuer");
+    let correlation = ids.mint_correlation_id().expect("correlation id");
+    let correlation_transport = *correlation.transport();
+    let valid = RuntimeRequest::new(
+        ids.mint_request_id().expect("request id"),
+        correlation,
+        None,
+        EventActor::Lab,
+        EventSource::Lab,
+        unix_ms_now().expect("wall clock"),
+        RuntimeOperation::RecordAuthoringEvent {
+            event: ResourceAuthoringEvent::new(
+                ResourceAuthoringPhase::AuthoringStarted,
+                "draft-a",
+                "resource-root",
+                "b".repeat(64),
+                vec!["operations/task-a/task.json".to_string()],
+                None,
+            )
+            .expect("authoring event"),
+        },
+    )
+    .expect("Lab request");
+    let mut forged = serde_json::to_value(valid).expect("request JSON");
+    forged["actor"] = serde_json::json!("cli");
+    forged["source"] = serde_json::json!("cli");
+    let forged: RuntimeRequest = serde_json::from_value(forged).expect("wire request");
+    let connection = ConnectionId::new(122).expect("connection");
+    let denied = host
+        .process_request_for_test(&forged, connection)
+        .expect("denied receipt");
+    assert_eq!(denied.state(), RuntimeReceiptState::Denied);
+
+    let query = runtime_request(
+        &ids,
+        RuntimeOperation::QueryEvents {
+            query: EventQuery {
+                correlation_id: Some(correlation_transport),
+                ..EventQuery::default()
+            },
+            profile: ProjectionProfile::Forensic,
+        },
+    );
+    let receipt = host
+        .process_request_for_test(&query, connection)
+        .expect("event query");
+    let RuntimeResult::Events { events } = receipt.result().expect("events result") else {
+        panic!("expected events");
+    };
+    assert!(events.is_empty());
     host.close().expect("close host");
 }
 

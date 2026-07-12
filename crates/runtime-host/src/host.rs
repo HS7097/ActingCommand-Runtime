@@ -19,10 +19,11 @@ use actingcommand_contract::{
     IssuedReadOnlyCaptureCapability, LeaseId, LeasePayloadDraft, LeaseQueuePolicy, LeaseToken,
     MAX_INSTANCE_ALIAS_BYTES, MonitorPayloadDraft, MonitorRecoveryCoordinationReason, OriginModule,
     RUNTIME_INFO_FILE, ReadonlyObservation, RecognitionPayloadDraft, RecognitionVerdict, RequestId,
-    RetentionClass, RuntimeCaptureBackend, RuntimeControlPlaneStatus, RuntimeErrorCode,
-    RuntimeErrorProjection, RuntimeInfo, RuntimeInstanceStatus, RuntimeMonitorPolicy,
-    RuntimeOperation, RuntimePayloadDraft, RuntimeReceipt, RuntimeReceiptState, RuntimeRequest,
-    RuntimeResult, SchedulerPayloadDraft, TerminalEvent, ValidatedRuntimeRequest,
+    ResourceAuthoringEvent, ResourceAuthoringPayloadDraft, ResourceAuthoringPhase, RetentionClass,
+    RuntimeCaptureBackend, RuntimeControlPlaneStatus, RuntimeErrorCode, RuntimeErrorProjection,
+    RuntimeInfo, RuntimeInstanceStatus, RuntimeMonitorPolicy, RuntimeOperation,
+    RuntimePayloadDraft, RuntimeReceipt, RuntimeReceiptState, RuntimeRequest, RuntimeResult,
+    SchedulerPayloadDraft, TerminalEvent, ValidatedRuntimeRequest,
 };
 use actingcommand_device::CaptureBackendName;
 use actingcommand_execution_kernel::{ExecutionBackendProvider, ExecutionKernel, decide_monitor};
@@ -686,7 +687,45 @@ impl HostShared {
                     result: RuntimeResult::Events { events },
                 })
                 .map_err(|_| RequestFailure::poison(ledger_error("query_runtime_events"), None)),
+            RuntimeOperation::RecordAuthoringEvent { event } => {
+                self.record_authoring_event(validated, event)
+            }
         }
+    }
+
+    fn record_authoring_event(
+        &self,
+        validated: &ValidatedRuntimeRequest<'_>,
+        event: &ResourceAuthoringEvent,
+    ) -> Result<OperationSuccess, RequestFailure> {
+        let severity = if event.phase() == ResourceAuthoringPhase::PromoteFailed {
+            EventSeverity::Error
+        } else {
+            EventSeverity::Info
+        };
+        let persisted = self.append_event(
+            severity,
+            EventSource::Lab,
+            OriginModule::ResourceTooling,
+            EventActor::Lab,
+            validated.event_links(None, None, None),
+            ResourceAuthoringPayloadDraft::event(
+                event.phase(),
+                event.draft_id(),
+                event.target_label(),
+                event.target_fingerprint(),
+                event.changed_paths().to_vec(),
+                event.failure_code().map(str::to_owned),
+                AuditInput::new(),
+            ),
+        )?;
+        Ok(OperationSuccess {
+            state: RuntimeReceiptState::Completed,
+            terminal: Some(terminal(&persisted)),
+            result: RuntimeResult::AuthoringEventRecorded {
+                phase: event.phase(),
+            },
+        })
     }
 
     fn control_plane_status(&self) -> Result<OperationSuccess, RequestFailure> {

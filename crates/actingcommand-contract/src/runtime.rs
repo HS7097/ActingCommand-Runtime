@@ -18,8 +18,8 @@ use crate::{
     HolderId, IdentifierIssuanceError, IdentifierIssuer, InstanceId, IssuedCausationId,
     IssuedCorrelationId, IssuedFrameId, IssuedHolderId, IssuedRecognitionId, IssuedRequestId,
     LeaseId, OwnerEpoch, ProjectedArtifactReference, ProjectedEvent, ProjectionProfile,
-    RecognitionId, RecognitionVerdict, RequestId, RuntimeMonitorInstanceStatus,
-    RuntimeMonitorPolicy, RuntimeMonitorRegistryStatus,
+    RecognitionId, RecognitionVerdict, RequestId, ResourceAuthoringPhase,
+    RuntimeMonitorInstanceStatus, RuntimeMonitorPolicy, RuntimeMonitorRegistryStatus,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
@@ -680,6 +680,76 @@ pub enum ReadonlyObservationOutcome {
     },
 }
 
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ResourceAuthoringEvent {
+    phase: ResourceAuthoringPhase,
+    draft_id: String,
+    target_label: String,
+    target_fingerprint: String,
+    changed_paths: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    failure_code: Option<String>,
+}
+
+impl ResourceAuthoringEvent {
+    pub fn new(
+        phase: ResourceAuthoringPhase,
+        draft_id: impl Into<String>,
+        target_label: impl Into<String>,
+        target_fingerprint: impl Into<String>,
+        changed_paths: Vec<String>,
+        failure_code: Option<String>,
+    ) -> RuntimeContractResult<Self> {
+        let event = Self {
+            phase,
+            draft_id: draft_id.into(),
+            target_label: target_label.into(),
+            target_fingerprint: target_fingerprint.into(),
+            changed_paths,
+            failure_code,
+        };
+        event.validate()?;
+        Ok(event)
+    }
+
+    pub fn validate(&self) -> RuntimeContractResult<()> {
+        crate::validate_resource_authoring_fields(
+            self.phase,
+            &self.draft_id,
+            &self.target_label,
+            &self.target_fingerprint,
+            &self.changed_paths,
+            self.failure_code.as_deref(),
+        )
+        .map_err(|_| RuntimeContractError::new("invalid_resource_authoring_event"))
+    }
+
+    pub const fn phase(&self) -> ResourceAuthoringPhase {
+        self.phase
+    }
+
+    pub fn draft_id(&self) -> &str {
+        &self.draft_id
+    }
+
+    pub fn target_label(&self) -> &str {
+        &self.target_label
+    }
+
+    pub fn target_fingerprint(&self) -> &str {
+        &self.target_fingerprint
+    }
+
+    pub fn changed_paths(&self) -> &[String] {
+        &self.changed_paths
+    }
+
+    pub fn failure_code(&self) -> Option<&str> {
+        self.failure_code.as_deref()
+    }
+}
+
 impl ReadonlyObservationOutcome {
     pub fn validate(&self) -> RuntimeContractResult<()> {
         match self {
@@ -752,6 +822,9 @@ pub enum RuntimeOperation {
         query: EventQuery,
         profile: ProjectionProfile,
     },
+    RecordAuthoringEvent {
+        event: ResourceAuthoringEvent,
+    },
 }
 
 impl RuntimeOperation {
@@ -789,6 +862,7 @@ impl RuntimeOperation {
             | Self::PollQueuedLease { .. }
             | Self::CancelQueuedLease { .. }
             | Self::QueryEvents { .. } => Ok(()),
+            Self::RecordAuthoringEvent { event } => event.validate(),
             Self::AcquireLease { instance_alias, .. }
             | Self::ObserveReadonly { instance_alias }
             | Self::SafeReset { instance_alias, .. }
@@ -869,6 +943,9 @@ impl fmt::Debug for RuntimeOperation {
             Self::SafeReset { .. } => "RuntimeOperation::SafeReset(<redacted>)",
             Self::Input { .. } => "RuntimeOperation::Input(<redacted>)",
             Self::QueryEvents { .. } => "RuntimeOperation::QueryEvents(<typed-query>)",
+            Self::RecordAuthoringEvent { .. } => {
+                "RuntimeOperation::RecordAuthoringEvent(<redacted>)"
+            }
         })
     }
 }
@@ -920,6 +997,15 @@ impl RuntimeRequest {
         }
         if !valid_client_origin(self.actor, self.source) {
             return Err(RuntimeContractError::new("invalid_client_origin"));
+        }
+        if matches!(
+            self.operation,
+            RuntimeOperation::RecordAuthoringEvent { .. }
+        ) && (self.actor != EventActor::Lab || self.source != EventSource::Lab)
+        {
+            return Err(RuntimeContractError::new(
+                "invalid_resource_authoring_origin",
+            ));
         }
         self.operation.validate()?;
         Ok(ValidatedRuntimeRequest { request: self })
@@ -1196,6 +1282,9 @@ pub enum RuntimeResult {
     },
     Events {
         events: Vec<ProjectedEvent>,
+    },
+    AuthoringEventRecorded {
+        phase: ResourceAuthoringPhase,
     },
 }
 

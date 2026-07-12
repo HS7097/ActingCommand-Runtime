@@ -240,6 +240,66 @@ fn all_payload_drafts(mut input: impl FnMut() -> AuditInput) -> Vec<EventPayload
             input(),
         )
         .into(),
+        ResourceAuthoringPayloadDraft::event(
+            ResourceAuthoringPhase::AuthoringStarted,
+            "draft-a",
+            "resource-root",
+            "b".repeat(64),
+            vec!["operations/task-a/task.json".to_string()],
+            None,
+            input(),
+        )
+        .into(),
+        ResourceAuthoringPayloadDraft::event(
+            ResourceAuthoringPhase::DraftBuilt,
+            "draft-a",
+            "resource-root",
+            "b".repeat(64),
+            vec!["operations/task-a/task.json".to_string()],
+            None,
+            input(),
+        )
+        .into(),
+        ResourceAuthoringPayloadDraft::event(
+            ResourceAuthoringPhase::ValidationCompleted,
+            "draft-a",
+            "resource-root",
+            "b".repeat(64),
+            vec!["operations/task-a/task.json".to_string()],
+            None,
+            input(),
+        )
+        .into(),
+        ResourceAuthoringPayloadDraft::event(
+            ResourceAuthoringPhase::PromoteIntent,
+            "draft-a",
+            "resource-root",
+            "b".repeat(64),
+            vec!["operations/task-a/task.json".to_string()],
+            None,
+            input(),
+        )
+        .into(),
+        ResourceAuthoringPayloadDraft::event(
+            ResourceAuthoringPhase::Promoted,
+            "draft-a",
+            "resource-root",
+            "b".repeat(64),
+            vec!["operations/task-a/task.json".to_string()],
+            None,
+            input(),
+        )
+        .into(),
+        ResourceAuthoringPayloadDraft::event(
+            ResourceAuthoringPhase::PromoteFailed,
+            "draft-a",
+            "resource-root",
+            "b".repeat(64),
+            vec!["operations/task-a/task.json".to_string()],
+            Some("authoring_validation_failed".to_string()),
+            input(),
+        )
+        .into(),
         ClientPayloadDraft::ui_action(action, input()).into(),
         ClientPayloadDraft::cli_command(action, input()).into(),
         ClientPayloadDraft::lab_request(action, input()).into(),
@@ -638,7 +698,7 @@ fn tagged_payload_and_projection_layers_reject_unknown_fields() {
 #[test]
 fn event_v2_round_trips_every_c1_payload_variant() {
     let payloads = all_payload_drafts(AuditInput::new);
-    assert_eq!(payloads.len(), 52);
+    assert_eq!(payloads.len(), 58);
 
     for (index, payload) in payloads.into_iter().enumerate() {
         let sanitized = sanitize(payload, index as u64 + 1);
@@ -649,6 +709,145 @@ fn event_v2_round_trips_every_c1_payload_variant() {
         let round_trip: EventPayload =
             serde_json::from_str(&json).expect("deserialize typed payload");
         assert_eq!(round_trip, *sanitized.payload());
+    }
+}
+
+#[test]
+fn resource_authoring_payloads_preserve_phase_and_publish_only_path_count() {
+    let phases = [
+        (
+            ResourceAuthoringPhase::AuthoringStarted,
+            EventType::ResourceAuthoringStarted,
+            None,
+        ),
+        (
+            ResourceAuthoringPhase::DraftBuilt,
+            EventType::ResourceDraftBuilt,
+            None,
+        ),
+        (
+            ResourceAuthoringPhase::ValidationCompleted,
+            EventType::ResourceValidationCompleted,
+            None,
+        ),
+        (
+            ResourceAuthoringPhase::PromoteIntent,
+            EventType::ResourcePromoteIntent,
+            None,
+        ),
+        (
+            ResourceAuthoringPhase::Promoted,
+            EventType::ResourcePromoted,
+            None,
+        ),
+        (
+            ResourceAuthoringPhase::PromoteFailed,
+            EventType::ResourcePromoteFailed,
+            Some("authoring_validation_failed".to_string()),
+        ),
+    ];
+
+    for (index, (phase, expected_type, failure_code)) in phases.into_iter().enumerate() {
+        let event = sanitize(
+            ResourceAuthoringPayloadDraft::event(
+                phase,
+                "draft-a",
+                "resource-root",
+                "b".repeat(64),
+                vec![
+                    "operations/task-a/task.json".to_string(),
+                    "operations/task-a/frame.png".to_string(),
+                ],
+                failure_code,
+                AuditInput::new().with_machine_path(r"C:\private\resource-root"),
+            )
+            .into(),
+            index as u64 + 1,
+        );
+        assert_eq!(event.event_type(), expected_type);
+        assert_eq!(event.payload().family(), EventFamily::ResourceAuthoring);
+
+        let projection = serde_json::to_value(event.payload().public_projection())
+            .expect("authoring projection");
+        assert_eq!(projection["family"], "resource_authoring");
+        assert_eq!(projection["payload"]["authoring_phase"], phase.as_str());
+        assert_eq!(projection["payload"]["draft_id"], "draft-a");
+        assert_eq!(projection["payload"]["target_label"], "resource-root");
+        assert_eq!(projection["payload"]["target_fingerprint"], "b".repeat(64));
+        assert_eq!(projection["payload"]["changed_path_count"], 2);
+        let encoded = serde_json::to_string(&projection).expect("projection JSON");
+        assert!(!encoded.contains("operations/task-a"));
+        assert!(!encoded.contains("C:\\private"));
+    }
+}
+
+#[test]
+fn resource_authoring_payload_rejects_invalid_identity_paths_and_failure_semantics() {
+    let invalid = [
+        ResourceAuthoringPayloadDraft::event(
+            ResourceAuthoringPhase::AuthoringStarted,
+            "",
+            "resource-root",
+            "b".repeat(64),
+            vec!["operations/task-a/task.json".to_string()],
+            None,
+            AuditInput::new(),
+        ),
+        ResourceAuthoringPayloadDraft::event(
+            ResourceAuthoringPhase::AuthoringStarted,
+            "draft-a",
+            "resource-root",
+            "B".repeat(64),
+            vec!["operations/task-a/task.json".to_string()],
+            None,
+            AuditInput::new(),
+        ),
+        ResourceAuthoringPayloadDraft::event(
+            ResourceAuthoringPhase::AuthoringStarted,
+            "draft-a",
+            "resource-root",
+            "b".repeat(64),
+            vec!["../outside.json".to_string()],
+            None,
+            AuditInput::new(),
+        ),
+        ResourceAuthoringPayloadDraft::event(
+            ResourceAuthoringPhase::PromoteFailed,
+            "draft-a",
+            "resource-root",
+            "b".repeat(64),
+            vec!["operations/task-a/task.json".to_string()],
+            None,
+            AuditInput::new(),
+        ),
+        ResourceAuthoringPayloadDraft::event(
+            ResourceAuthoringPhase::Promoted,
+            "draft-a",
+            "resource-root",
+            "b".repeat(64),
+            vec!["operations/task-a/task.json".to_string()],
+            Some("unexpected_failure".to_string()),
+            AuditInput::new(),
+        ),
+    ];
+
+    for payload in invalid {
+        let issuer = identifier_issuer();
+        let error = EventDraft::new(
+            issuer.mint_event_id().expect("event id"),
+            1_752_147_200_000,
+            EventSeverity::Info,
+            origin(),
+            links(&issuer),
+            payload.into(),
+        )
+        .sanitize(&SpyFingerprinter::new())
+        .expect_err("invalid resource authoring payload");
+        assert!(
+            error.code().starts_with("invalid_")
+                || error.code().starts_with("missing_")
+                || error.code().starts_with("unexpected_")
+        );
     }
 }
 

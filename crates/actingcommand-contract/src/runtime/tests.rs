@@ -799,6 +799,99 @@ fn query_result_remains_typed_without_generic_value_payload() {
 }
 
 #[test]
+fn resource_authoring_event_is_strict_and_requires_lab_origin() {
+    let event = ResourceAuthoringEvent::new(
+        ResourceAuthoringPhase::PromoteIntent,
+        "draft-a",
+        "resource-root",
+        "b".repeat(64),
+        vec!["operations/task-a/task.json".to_string()],
+        None,
+    )
+    .expect("authoring event");
+    let operation = RuntimeOperation::RecordAuthoringEvent {
+        event: event.clone(),
+    };
+    let ids = issuer();
+    let request = RuntimeRequest::new(
+        ids.mint_request_id().expect("request"),
+        ids.mint_correlation_id().expect("correlation"),
+        None,
+        EventActor::Lab,
+        EventSource::Lab,
+        1,
+        operation.clone(),
+    )
+    .expect("Lab authoring request");
+    let encoded = serde_json::to_string(&request).expect("authoring request JSON");
+    let decoded: RuntimeRequest = serde_json::from_str(&encoded).expect("authoring request wire");
+    decoded.validate().expect("valid authoring request");
+    assert_eq!(event.phase(), ResourceAuthoringPhase::PromoteIntent);
+    assert_eq!(event.changed_paths(), ["operations/task-a/task.json"]);
+    assert!(!format!("{operation:?}").contains("operations/task-a"));
+
+    let ids = issuer();
+    let wrong_origin = match RuntimeRequest::new(
+        ids.mint_request_id().expect("request"),
+        ids.mint_correlation_id().expect("correlation"),
+        None,
+        EventActor::Cli,
+        EventSource::Cli,
+        1,
+        RuntimeOperation::RecordAuthoringEvent { event },
+    ) {
+        Ok(_) => panic!("CLI cannot record authoring events"),
+        Err(error) => error,
+    };
+    assert_eq!(wrong_origin.code(), "invalid_resource_authoring_origin");
+}
+
+#[test]
+fn resource_authoring_event_revalidates_deserialized_fields_and_receipt_phase() {
+    let valid = ResourceAuthoringEvent::new(
+        ResourceAuthoringPhase::Promoted,
+        "draft-a",
+        "resource-root",
+        "b".repeat(64),
+        vec!["operations/task-a/task.json".to_string()],
+        None,
+    )
+    .expect("authoring event");
+    let mut forged = serde_json::to_value(&valid).expect("authoring event JSON");
+    forged["changed_paths"] = serde_json::json!(["../outside.json"]);
+    let forged: ResourceAuthoringEvent =
+        serde_json::from_value(forged).expect("transport shape remains valid");
+    assert_eq!(
+        forged.validate().expect_err("path escape must fail").code(),
+        "invalid_resource_authoring_event"
+    );
+
+    let ids = issuer();
+    let request = RuntimeRequest::new(
+        ids.mint_request_id().expect("request"),
+        ids.mint_correlation_id().expect("correlation"),
+        None,
+        EventActor::Lab,
+        EventSource::Lab,
+        1,
+        RuntimeOperation::RecordAuthoringEvent { event: valid },
+    )
+    .expect("authoring request");
+    let receipt = RuntimeReceipt::success(
+        &request,
+        RuntimeReceiptState::Completed,
+        None,
+        RuntimeResult::AuthoringEventRecorded {
+            phase: ResourceAuthoringPhase::Promoted,
+        },
+    )
+    .expect("authoring receipt");
+    let value = serde_json::to_value(receipt).expect("authoring receipt JSON");
+    assert_eq!(value["result"]["kind"], "authoring_event_recorded");
+    assert_eq!(value["result"]["phase"], "promoted");
+}
+
+#[test]
 fn c3a_runtime_and_lease_renewal_events_are_typed() {
     let ids = issuer();
     let cases: [(EventPayloadDraft, EventType); 3] = [

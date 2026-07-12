@@ -2,8 +2,8 @@
 
 use super::{
     CapturePolicyReason, CapturePressureState, DiagnosticCode, EventAction, EventFamily, EventType,
-    EvidenceCompleteness, RecognitionVerdict, RecoveryReason, RetentionClass, SanitizationError,
-    Sensitivity, TaskOutcome,
+    EvidenceCompleteness, RecognitionVerdict, RecoveryReason, ResourceAuthoringPhase,
+    RetentionClass, SanitizationError, Sensitivity, TaskOutcome,
 };
 use crate::{
     HolderId, LeaseId, LeasePriority, MonitorDecision, MonitorDiagnosis, MonitorDisposition,
@@ -23,6 +23,7 @@ pub const INPUT_PAYLOAD_SCHEMA: &str = "actingcommand.payload.input.v2";
 pub const CAPTURE_PAYLOAD_SCHEMA: &str = "actingcommand.payload.capture.v1";
 pub const RECOGNITION_PAYLOAD_SCHEMA: &str = "actingcommand.payload.recognition.v1";
 pub const ARTIFACT_PAYLOAD_SCHEMA: &str = "actingcommand.payload.artifact.v1";
+pub const RESOURCE_AUTHORING_PAYLOAD_SCHEMA: &str = "actingcommand.payload.resource_authoring.v1";
 pub const CLIENT_PAYLOAD_SCHEMA: &str = "actingcommand.payload.client.v2";
 pub const LEDGER_PAYLOAD_SCHEMA: &str = "actingcommand.payload.ledger.v2";
 
@@ -379,6 +380,19 @@ pub struct ArtifactExportFailurePayload {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+pub struct ResourceAuthoringPayload {
+    phase: ResourceAuthoringPhase,
+    draft_id: String,
+    target_label: String,
+    target_fingerprint: String,
+    changed_paths: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    failure_code: Option<String>,
+    audit: SanitizedAudit,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct RecoveryPayload {
     reason: RecoveryReason,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -423,6 +437,36 @@ common_detail_accessors!(CaptureDedupWindowPayload);
 common_detail_accessors!(CapturePolicyPayload);
 common_detail_accessors!(ArtifactExportPayload);
 common_detail_accessors!(ArtifactExportFailurePayload);
+
+impl ResourceAuthoringPayload {
+    pub const fn phase(&self) -> ResourceAuthoringPhase {
+        self.phase
+    }
+
+    pub fn draft_id(&self) -> &str {
+        &self.draft_id
+    }
+
+    pub fn target_label(&self) -> &str {
+        &self.target_label
+    }
+
+    pub fn target_fingerprint(&self) -> &str {
+        &self.target_fingerprint
+    }
+
+    pub fn changed_paths(&self) -> &[String] {
+        &self.changed_paths
+    }
+
+    pub fn failure_code(&self) -> Option<&str> {
+        self.failure_code.as_deref()
+    }
+
+    pub fn audit(&self) -> &SanitizedAudit {
+        &self.audit
+    }
+}
 
 impl DiagnosticPayload {
     pub const fn diagnostic_code(&self) -> DiagnosticCode {
@@ -848,6 +892,28 @@ impl PayloadDetail for ArtifactExportFailurePayload {
     }
 }
 
+impl PayloadDetail for ResourceAuthoringPayload {
+    fn action(&self) -> EventAction {
+        resource_authoring_action(self.phase)
+    }
+
+    fn diagnostic_code(&self) -> Option<DiagnosticCode> {
+        None
+    }
+
+    fn effect_disposition(&self) -> Option<EffectDisposition> {
+        Some(match self.phase {
+            ResourceAuthoringPhase::Promoted => EffectDisposition::Performed,
+            ResourceAuthoringPhase::PromoteFailed => EffectDisposition::Indeterminate,
+            _ => EffectDisposition::NotPerformed,
+        })
+    }
+
+    fn audit(&self) -> &SanitizedAudit {
+        &self.audit
+    }
+}
+
 impl RecoveryPayload {
     pub const fn reason(&self) -> RecoveryReason {
         self.reason
@@ -1010,6 +1076,133 @@ struct RecoveryDraft {
     segment_index: Option<u64>,
     affected_bytes: u64,
     audit: AuditInput,
+}
+
+struct ResourceAuthoringDraft {
+    phase: ResourceAuthoringPhase,
+    draft_id: String,
+    target_label: String,
+    target_fingerprint: String,
+    changed_paths: Vec<String>,
+    failure_code: Option<String>,
+    audit: AuditInput,
+}
+
+impl ResourceAuthoringDraft {
+    fn sanitize(
+        self,
+        fingerprinter: &dyn SecretFingerprinter,
+    ) -> Result<ResourceAuthoringPayload, SanitizationError> {
+        validate_resource_authoring_fields(
+            self.phase,
+            &self.draft_id,
+            &self.target_label,
+            &self.target_fingerprint,
+            &self.changed_paths,
+            self.failure_code.as_deref(),
+        )?;
+        Ok(ResourceAuthoringPayload {
+            phase: self.phase,
+            draft_id: self.draft_id,
+            target_label: self.target_label,
+            target_fingerprint: self.target_fingerprint,
+            changed_paths: self.changed_paths,
+            failure_code: self.failure_code,
+            audit: self.audit.sanitize(fingerprinter)?,
+        })
+    }
+}
+
+const fn resource_authoring_action(phase: ResourceAuthoringPhase) -> EventAction {
+    match phase {
+        ResourceAuthoringPhase::AuthoringStarted => EventAction::ResourceAuthoringStart,
+        ResourceAuthoringPhase::DraftBuilt => EventAction::ResourceDraftBuild,
+        ResourceAuthoringPhase::ValidationCompleted => EventAction::ResourceValidation,
+        ResourceAuthoringPhase::PromoteIntent
+        | ResourceAuthoringPhase::Promoted
+        | ResourceAuthoringPhase::PromoteFailed => EventAction::ResourcePromote,
+    }
+}
+
+pub(crate) fn validate_resource_authoring_fields(
+    phase: ResourceAuthoringPhase,
+    draft_id: &str,
+    target_label: &str,
+    target_fingerprint: &str,
+    changed_paths: &[String],
+    failure_code: Option<&str>,
+) -> Result<(), SanitizationError> {
+    validate_resource_authoring_token(draft_id, 128, "draft_id")?;
+    validate_resource_authoring_token(target_label, 128, "target_label")?;
+    if target_fingerprint.len() != 64
+        || !target_fingerprint
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
+    {
+        return Err(SanitizationError::new(
+            "invalid_resource_authoring_fingerprint",
+            "target_fingerprint",
+        ));
+    }
+    if changed_paths.is_empty() || changed_paths.len() > 4_096 {
+        return Err(SanitizationError::new(
+            "invalid_resource_authoring_paths",
+            "changed_paths",
+        ));
+    }
+    for path in changed_paths {
+        let valid = path.len() <= 1_024
+            && !path.starts_with('/')
+            && !path.contains(['\\', ':'])
+            && !path.chars().any(char::is_control)
+            && path
+                .split('/')
+                .all(|component| !component.is_empty() && component != "." && component != "..");
+        if !valid {
+            return Err(SanitizationError::new(
+                "invalid_resource_authoring_path",
+                "changed_paths",
+            ));
+        }
+    }
+    match (phase, failure_code) {
+        (ResourceAuthoringPhase::PromoteFailed, Some(code)) => {
+            validate_resource_authoring_token(code, 128, "failure_code")?;
+        }
+        (ResourceAuthoringPhase::PromoteFailed, None) => {
+            return Err(SanitizationError::new(
+                "missing_resource_authoring_failure_code",
+                "failure_code",
+            ));
+        }
+        (_, Some(_)) => {
+            return Err(SanitizationError::new(
+                "unexpected_resource_authoring_failure_code",
+                "failure_code",
+            ));
+        }
+        (_, None) => {}
+    }
+    Ok(())
+}
+
+fn validate_resource_authoring_token(
+    value: &str,
+    max_bytes: usize,
+    field: &'static str,
+) -> Result<(), SanitizationError> {
+    if value.is_empty()
+        || value.len() > max_bytes
+        || !value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b':' | b'-'))
+    {
+        return Err(SanitizationError::new(
+            "invalid_resource_authoring_token",
+            field,
+        ));
+    }
+    Ok(())
 }
 
 impl ObservationDraft {
@@ -2027,6 +2220,30 @@ impl ClientPayloadDraft {
     }
 }
 
+pub struct ResourceAuthoringPayloadDraft(ResourceAuthoringDraft);
+
+impl ResourceAuthoringPayloadDraft {
+    pub fn event(
+        phase: ResourceAuthoringPhase,
+        draft_id: impl Into<String>,
+        target_label: impl Into<String>,
+        target_fingerprint: impl Into<String>,
+        changed_paths: Vec<String>,
+        failure_code: Option<String>,
+        audit: AuditInput,
+    ) -> Self {
+        Self(ResourceAuthoringDraft {
+            phase,
+            draft_id: draft_id.into(),
+            target_label: target_label.into(),
+            target_fingerprint: target_fingerprint.into(),
+            changed_paths,
+            failure_code,
+            audit,
+        })
+    }
+}
+
 enum LedgerDraftKind {
     Recovered(RecoveryDraft),
 }
@@ -2060,6 +2277,7 @@ pub enum EventPayloadDraft {
     Capture(CapturePayloadDraft),
     Recognition(RecognitionPayloadDraft),
     Artifact(ArtifactPayloadDraft),
+    ResourceAuthoring(ResourceAuthoringPayloadDraft),
     Client(ClientPayloadDraft),
     Ledger(LedgerPayloadDraft),
 }
@@ -2084,6 +2302,7 @@ payload_draft_from!(InputPayloadDraft, Input);
 payload_draft_from!(CapturePayloadDraft, Capture);
 payload_draft_from!(RecognitionPayloadDraft, Recognition);
 payload_draft_from!(ArtifactPayloadDraft, Artifact);
+payload_draft_from!(ResourceAuthoringPayloadDraft, ResourceAuthoring);
 payload_draft_from!(ClientPayloadDraft, Client);
 payload_draft_from!(LedgerPayloadDraft, Ledger);
 
@@ -2238,6 +2457,23 @@ pub enum ArtifactPayload {
     ExportFailed(ArtifactExportFailurePayload),
 }
 
+impl FamilyPayload for ResourceAuthoringPayload {
+    fn event_type(&self) -> EventType {
+        match self.phase {
+            ResourceAuthoringPhase::AuthoringStarted => EventType::ResourceAuthoringStarted,
+            ResourceAuthoringPhase::DraftBuilt => EventType::ResourceDraftBuilt,
+            ResourceAuthoringPhase::ValidationCompleted => EventType::ResourceValidationCompleted,
+            ResourceAuthoringPhase::PromoteIntent => EventType::ResourcePromoteIntent,
+            ResourceAuthoringPhase::Promoted => EventType::ResourcePromoted,
+            ResourceAuthoringPhase::PromoteFailed => EventType::ResourcePromoteFailed,
+        }
+    }
+
+    fn detail(&self) -> &dyn PayloadDetail {
+        self
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(
     tag = "kind",
@@ -2383,6 +2619,7 @@ pub enum EventPayload {
     Capture(CapturePayload),
     Recognition(RecognitionPayload),
     Artifact(ArtifactPayload),
+    ResourceAuthoring(ResourceAuthoringPayload),
     Client(ClientPayload),
     Ledger(LedgerPayload),
 }
@@ -2566,6 +2803,9 @@ impl EventPayloadDraft {
                     ArtifactPayload::ExportFailed(detail.sanitize(fingerprinter)?)
                 }
             }),
+            Self::ResourceAuthoring(value) => {
+                EventPayload::ResourceAuthoring(value.0.sanitize(fingerprinter)?)
+            }
             Self::Client(value) => EventPayload::Client(match value.0 {
                 ClientDraftKind::UiAction(detail) => {
                     ClientPayload::UiAction(detail.sanitize(fingerprinter)?)
@@ -2607,6 +2847,7 @@ impl EventPayload {
             Self::Capture(_) => CAPTURE_PAYLOAD_SCHEMA,
             Self::Recognition(_) => RECOGNITION_PAYLOAD_SCHEMA,
             Self::Artifact(_) => ARTIFACT_PAYLOAD_SCHEMA,
+            Self::ResourceAuthoring(_) => RESOURCE_AUTHORING_PAYLOAD_SCHEMA,
             Self::Client(_) => CLIENT_PAYLOAD_SCHEMA,
             Self::Ledger(_) => LEDGER_PAYLOAD_SCHEMA,
         }
@@ -2632,6 +2873,16 @@ impl EventPayload {
     pub fn validate(&self) -> Result<(), SanitizationError> {
         let detail = self.family_payload().detail();
         detail.audit().validate()?;
+        if let Self::ResourceAuthoring(value) = self {
+            validate_resource_authoring_fields(
+                value.phase,
+                &value.draft_id,
+                &value.target_label,
+                &value.target_fingerprint,
+                &value.changed_paths,
+                value.failure_code.as_deref(),
+            )?;
+        }
         match self {
             Self::Ledger(LedgerPayload::Recovered(recovery))
                 if recovery.segment_index == Some(0) =>
@@ -2718,6 +2969,7 @@ impl EventPayload {
     pub fn public_projection(&self) -> PublicEventPayload {
         let event_type = self.event_type();
         let detail = self.family_payload().detail();
+        let authoring = resource_authoring(self);
         let payload = PublicPayload {
             event_type,
             action: detail.action(),
@@ -2751,6 +3003,12 @@ impl EventPayload {
             monitor_recovery: monitor_recovery(self),
             monitor_recovery_coordination_reason: monitor_recovery_coordination(self)
                 .map(MonitorRecoveryCoordinationPayload::reason),
+            authoring_phase: authoring.map(ResourceAuthoringPayload::phase),
+            draft_id: authoring.map(|value| value.draft_id.clone()),
+            target_label: authoring.map(|value| value.target_label.clone()),
+            target_fingerprint: authoring.map(|value| value.target_fingerprint.clone()),
+            changed_path_count: authoring.map(|value| value.changed_paths.len() as u64),
+            failure_code: authoring.and_then(|value| value.failure_code.clone()),
         };
         match self {
             Self::Runtime(_) => PublicEventPayload::Runtime(payload),
@@ -2763,6 +3021,7 @@ impl EventPayload {
             Self::Capture(_) => PublicEventPayload::Capture(payload),
             Self::Recognition(_) => PublicEventPayload::Recognition(payload),
             Self::Artifact(_) => PublicEventPayload::Artifact(payload),
+            Self::ResourceAuthoring(_) => PublicEventPayload::ResourceAuthoring(payload),
             Self::Client(_) => PublicEventPayload::Client(payload),
             Self::Ledger(_) => PublicEventPayload::Ledger(payload),
         }
@@ -2780,6 +3039,7 @@ impl EventPayload {
             Self::Capture(value) => value,
             Self::Recognition(value) => value,
             Self::Artifact(value) => value,
+            Self::ResourceAuthoring(value) => value,
             Self::Client(value) => value,
             Self::Ledger(value) => value,
         }
@@ -2857,6 +3117,13 @@ fn artifact_export(payload: &EventPayload) -> Option<(TaskOutcome, EvidenceCompl
     }
 }
 
+fn resource_authoring(payload: &EventPayload) -> Option<&ResourceAuthoringPayload> {
+    match payload {
+        EventPayload::ResourceAuthoring(value) => Some(value),
+        _ => None,
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PublicPayload {
@@ -2904,6 +3171,18 @@ pub struct PublicPayload {
     monitor_recovery: Option<MonitorRecoveryKind>,
     #[serde(skip_serializing_if = "Option::is_none")]
     monitor_recovery_coordination_reason: Option<MonitorRecoveryCoordinationReason>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    authoring_phase: Option<ResourceAuthoringPhase>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    draft_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    target_label: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    target_fingerprint: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    changed_path_count: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    failure_code: Option<String>,
 }
 
 impl PublicPayload {
@@ -3000,6 +3279,30 @@ impl PublicPayload {
     ) -> Option<MonitorRecoveryCoordinationReason> {
         self.monitor_recovery_coordination_reason
     }
+
+    pub const fn authoring_phase(&self) -> Option<ResourceAuthoringPhase> {
+        self.authoring_phase
+    }
+
+    pub fn draft_id(&self) -> Option<&str> {
+        self.draft_id.as_deref()
+    }
+
+    pub fn target_label(&self) -> Option<&str> {
+        self.target_label.as_deref()
+    }
+
+    pub fn target_fingerprint(&self) -> Option<&str> {
+        self.target_fingerprint.as_deref()
+    }
+
+    pub const fn changed_path_count(&self) -> Option<u64> {
+        self.changed_path_count
+    }
+
+    pub fn failure_code(&self) -> Option<&str> {
+        self.failure_code.as_deref()
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -3020,6 +3323,7 @@ pub enum PublicEventPayload {
     Capture(PublicPayload),
     Recognition(PublicPayload),
     Artifact(PublicPayload),
+    ResourceAuthoring(PublicPayload),
     Client(PublicPayload),
     Ledger(PublicPayload),
 }

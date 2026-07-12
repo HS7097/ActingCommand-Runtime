@@ -5,9 +5,10 @@ use crate::{RuntimeClientError, RuntimeClientResult};
 use actingcommand_contract::{
     CaptureSequenceSpec, CorrelationId, EventActor, EventQuery, EventSource, IdentifierIssuer,
     InputAction, IssuedCorrelationId, LeaseQueuePolicy, LeaseQueueStatus, LeaseToken, OwnerEpoch,
-    ProjectedEvent, ProjectionProfile, RUNTIME_INFO_FILE, RequestId, RuntimeControlPlaneStatus,
-    RuntimeInfo, RuntimeMonitorInstanceStatus, RuntimeMonitorPolicy, RuntimeMonitorRegistryStatus,
-    RuntimeOperation, RuntimeReceipt, RuntimeRequest, RuntimeResult,
+    ProjectedEvent, ProjectionProfile, RUNTIME_INFO_FILE, RequestId, ResourceAuthoringEvent,
+    RuntimeControlPlaneStatus, RuntimeInfo, RuntimeMonitorInstanceStatus, RuntimeMonitorPolicy,
+    RuntimeMonitorRegistryStatus, RuntimeOperation, RuntimeReceipt, RuntimeRequest, RuntimeResult,
+    TerminalEvent,
 };
 use serde::Serialize;
 use std::fmt;
@@ -117,6 +118,13 @@ struct RuntimeClientShared {
 #[derive(Clone)]
 pub struct RuntimeClient {
     shared: Arc<RuntimeClientShared>,
+}
+
+/// Correlation-scoped authoring ingress. Runtime remains the only global-ledger writer.
+#[derive(Clone)]
+pub struct RuntimeAuthoringSession {
+    client: RuntimeClient,
+    correlation: IssuedCorrelationId,
 }
 
 /// Host receipt plus its correlation-scoped durable ledger projection.
@@ -455,6 +463,27 @@ impl RuntimeClient {
         }
     }
 
+    pub fn begin_authoring_session(&self) -> RuntimeClientResult<RuntimeAuthoringSession> {
+        let connection = self.connection("begin_resource_authoring")?;
+        if connection.actor != EventActor::Lab || connection.source != EventSource::Lab {
+            return Err(RuntimeClientError::fatal(
+                "runtime_authoring_origin_invalid",
+                "begin_resource_authoring",
+            ));
+        }
+        let correlation = connection.ids.mint_correlation_id().map_err(|_| {
+            RuntimeClientError::fatal(
+                "runtime_identifier_issue_failed",
+                "begin_resource_authoring",
+            )
+        })?;
+        drop(connection);
+        Ok(RuntimeAuthoringSession {
+            client: self.clone(),
+            correlation,
+        })
+    }
+
     fn execute(
         &self,
         operation_name: &'static str,
@@ -637,6 +666,62 @@ impl RuntimeClient {
             .connection
             .lock()
             .map_err(|_| RuntimeClientError::fatal("runtime_connection_poisoned", operation))
+    }
+}
+
+impl RuntimeAuthoringSession {
+    pub const fn correlation_id(&self) -> CorrelationId {
+        *self.correlation.transport()
+    }
+
+    pub fn append(&self, event: ResourceAuthoringEvent) -> RuntimeClientResult<TerminalEvent> {
+        event.validate().map_err(|_| {
+            RuntimeClientError::fatal(
+                "runtime_authoring_event_invalid",
+                "record_resource_authoring_event",
+            )
+        })?;
+        let expected_phase = event.phase();
+        let receipt = self.client.execute_receipt_with_correlation(
+            "record_resource_authoring_event",
+            RuntimeOperation::RecordAuthoringEvent { event },
+            self.correlation,
+            None,
+        )?;
+        if !matches!(
+            receipt.result(),
+            Some(RuntimeResult::AuthoringEventRecorded { phase }) if *phase == expected_phase
+        ) {
+            return Err(self
+                .client
+                .unexpected_result("record_resource_authoring_event"));
+        }
+        receipt.terminal().ok_or_else(|| {
+            self.client
+                .unexpected_result("record_resource_authoring_event")
+        })
+    }
+
+    pub fn query_events(
+        &self,
+        profile: ProjectionProfile,
+    ) -> RuntimeClientResult<Vec<ProjectedEvent>> {
+        self.client.query_events(
+            EventQuery {
+                correlation_id: Some(self.correlation_id()),
+                ..EventQuery::default()
+            },
+            profile,
+        )
+    }
+}
+
+impl fmt::Debug for RuntimeAuthoringSession {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("RuntimeAuthoringSession")
+            .field("correlation", &"<opaque-correlation>")
+            .finish()
     }
 }
 

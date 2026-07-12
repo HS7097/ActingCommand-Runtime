@@ -65,6 +65,7 @@ closed_code!(OriginModule {
     Capture => "capture",
     CapturePipeline => "capture-pipeline",
     Recognition => "recognition",
+    ResourceTooling => "resource-tooling",
     ArtifactStore => "artifact-store",
     EvidenceExporter => "evidence-exporter",
     GlobalLedger => "global-ledger",
@@ -104,6 +105,10 @@ closed_code!(EventAction {
     ArtifactStore => "artifact.store",
     ArtifactVerify => "artifact.verify",
     ArtifactExport => "artifact.export",
+    ResourceAuthoringStart => "resource.authoring_start",
+    ResourceDraftBuild => "resource.draft_build",
+    ResourceValidation => "resource.validation",
+    ResourcePromote => "resource.promote",
     CriticalTest => "critical.test",
     LedgerRecovery => "ledger.recovery",
 });
@@ -175,4 +180,13 @@ closed_code!(EvidenceCompleteness {
 closed_code!(RecoveryReason {
     StaleOwner => "stale_owner",
     TruncatedFinalTail => "truncated_final_tail",
+});
+
+closed_code!(ResourceAuthoringPhase {
+    AuthoringStarted => "authoring_started",
+    DraftBuilt => "draft_built",
+    ValidationCompleted => "validation_completed",
+    PromoteIntent => "promote_intent",
+    Promoted => "promoted",
+    PromoteFailed => "promote_failed",
 });

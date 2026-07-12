@@ -4,8 +4,9 @@ use super::*;
 use actingcommand_contract::{
     CaptureSequenceSpec, EventActor, EventQuery, EventSource, EventType, IdentifierIssuer,
     InputAction, InstanceId, LeasePriority, LeaseQueuePolicy, ProjectionProfile,
-    RuntimeCaptureBackend, RuntimeErrorCode, RuntimeErrorProjection, RuntimeMonitorPolicy,
-    RuntimeOperation, RuntimeReceipt, RuntimeReceiptState, RuntimeRequest, RuntimeResult,
+    ResourceAuthoringEvent, ResourceAuthoringPhase, RuntimeCaptureBackend, RuntimeErrorCode,
+    RuntimeErrorProjection, RuntimeMonitorPolicy, RuntimeOperation, RuntimeReceipt,
+    RuntimeReceiptState, RuntimeRequest, RuntimeResult,
 };
 use actingcommand_device::{
     CaptureBackend, CaptureBackendName, DeviceError, DeviceResult, Frame, InputBackend, PixelFormat,
@@ -199,6 +200,14 @@ fn client(root: &TempDir) -> RuntimeClient {
     .expect("runtime client")
 }
 
+fn lab_client(root: &TempDir) -> RuntimeClient {
+    RuntimeClient::connect(
+        RuntimeClientConfig::new(root.path(), EventActor::Lab, EventSource::Lab)
+            .with_io_timeout(Duration::from_millis(500)),
+    )
+    .expect("Lab runtime client")
+}
+
 fn client_with_timeout(root: &TempDir, io_timeout: Duration) -> RuntimeClient {
     RuntimeClient::connect(
         RuntimeClientConfig::new(root.path(), EventActor::Cli, EventSource::Cli)
@@ -277,6 +286,79 @@ fn typed_client_discovers_runtime_and_routes_queries_and_input() {
     drop(client);
     host.close().expect("close host");
     assert_eq!(state.closes.load(Ordering::Acquire), 1);
+}
+
+#[test]
+fn authoring_session_reuses_one_runtime_correlation_and_requires_durable_terminals() {
+    let root = TempDir::new().expect("tempdir");
+    let state = Arc::new(FakeState::default());
+    let host = host(&root, state, 1_000);
+    let client = lab_client(&root);
+    let session = client.begin_authoring_session().expect("authoring session");
+    let expected = [
+        (ResourceAuthoringPhase::AuthoringStarted, None),
+        (ResourceAuthoringPhase::DraftBuilt, None),
+        (ResourceAuthoringPhase::ValidationCompleted, None),
+        (ResourceAuthoringPhase::PromoteIntent, None),
+        (ResourceAuthoringPhase::Promoted, None),
+    ];
+    let mut previous_sequence = 0;
+    for (phase, failure_code) in expected {
+        let terminal = session
+            .append(
+                ResourceAuthoringEvent::new(
+                    phase,
+                    "draft-a",
+                    "resource-root",
+                    "b".repeat(64),
+                    vec!["operations/task-a/task.json".to_string()],
+                    failure_code,
+                )
+                .expect("authoring event"),
+            )
+            .expect("durable authoring event");
+        assert!(terminal.sequence > previous_sequence);
+        previous_sequence = terminal.sequence;
+    }
+
+    let events = session
+        .query_events(ProjectionProfile::Forensic)
+        .expect("authoring events");
+    assert_eq!(
+        events
+            .iter()
+            .map(|event| event.event_type)
+            .collect::<Vec<_>>(),
+        vec![
+            EventType::ResourceAuthoringStarted,
+            EventType::ResourceDraftBuilt,
+            EventType::ResourceValidationCompleted,
+            EventType::ResourcePromoteIntent,
+            EventType::ResourcePromoted,
+        ]
+    );
+    assert!(
+        events.iter().all(|event| {
+            event.links.correlation_id().copied() == Some(session.correlation_id())
+        })
+    );
+    drop(client);
+    host.close().expect("close host");
+}
+
+#[test]
+fn non_lab_client_cannot_open_authoring_session() {
+    let root = TempDir::new().expect("tempdir");
+    let state = Arc::new(FakeState::default());
+    let host = host(&root, state, 1_000);
+    let client = client(&root);
+    let error = match client.begin_authoring_session() {
+        Ok(_) => panic!("CLI authoring session must fail"),
+        Err(error) => error,
+    };
+    assert_eq!(error.code(), "runtime_authoring_origin_invalid");
+    drop(client);
+    host.close().expect("close host");
 }
 
 #[test]
