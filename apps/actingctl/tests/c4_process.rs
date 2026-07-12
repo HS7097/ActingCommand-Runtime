@@ -4,14 +4,17 @@
 mod support;
 
 use actingcommand_contract::{
-    EventActor, EventPayload, EventQuery, EventSource, EventType, ProjectionPayload,
-    ProjectionProfile, TaskOutcome, TaskPayload, TaskSemanticFact,
+    ContainedTaskRequest, EventActor, EventPayload, EventQuery, EventSource, EventType,
+    IdentifierIssuer, ProjectionPayload, ProjectionProfile, RuntimeInfo, RuntimeOperation,
+    RuntimeReceipt, RuntimeReceiptState, RuntimeRequest, TaskOutcome, TaskPayload,
+    TaskSemanticFact,
 };
 use actingcommand_pack_containment::Sha256Hash;
 use actingcommand_runtime_client::{RuntimeClient, RuntimeClientConfig};
 use serde_json::Value;
 use std::fs;
-use std::io::{Cursor, Write};
+use std::io::{Cursor, Read, Write};
+use std::net::TcpStream;
 use std::path::Path;
 use std::process::{Command, Stdio};
 use std::thread;
@@ -237,6 +240,108 @@ fn actingctl_runs_neutral_contained_task_without_lab_and_runtime_survives_client
 }
 
 #[test]
+fn process_replay_cannot_duplicate_or_conflict_a_contained_task_terminal() {
+    let root = TempDir::new().expect("tempdir");
+    let frame = root.path().join("sealed.png");
+    support::write_sealed_frame(&frame);
+    let package = root.path().join("neutral-task.zip");
+    let expected_sha256 = write_neutral_contained_task_package(&package);
+    let mut runtime = support::RuntimeChild::spawn_for_instance(
+        root.path(),
+        "c4_runtime_child_process",
+        "neutral.instance",
+    );
+    let info = runtime.wait_ready(root.path());
+    let ids = IdentifierIssuer::new().expect("identifier issuer");
+    let request_id = ids.mint_request_id().expect("request id");
+    let correlation_id = ids.mint_correlation_id().expect("correlation id");
+    let request = RuntimeRequest::new(
+        request_id,
+        correlation_id,
+        None,
+        EventActor::Cli,
+        EventSource::Cli,
+        1_752_147_200_000,
+        RuntimeOperation::run_contained_task(
+            "neutral.instance",
+            ids.mint_holder_id().expect("holder id"),
+            ContainedTaskRequest::new(package.display().to_string(), &expected_sha256)
+                .expect("contained task request"),
+        ),
+    )
+    .expect("Runtime request");
+
+    let first = raw_exchange(&info, &request);
+    assert_eq!(first.state(), RuntimeReceiptState::Completed);
+    let replayed = raw_exchange(&info, &request);
+    assert_eq!(replayed, first);
+
+    let conflicting = RuntimeRequest::new(
+        request_id,
+        correlation_id,
+        None,
+        EventActor::Cli,
+        EventSource::Cli,
+        1_752_147_200_001,
+        RuntimeOperation::run_contained_task(
+            "neutral.instance",
+            ids.mint_holder_id().expect("conflicting holder id"),
+            ContainedTaskRequest::new(package.display().to_string(), "0".repeat(64))
+                .expect("conflicting contained task request"),
+        ),
+    )
+    .expect("conflicting Runtime request");
+    let denied = raw_exchange(&info, &conflicting);
+    assert_eq!(denied.state(), RuntimeReceiptState::Denied);
+    assert_eq!(
+        denied.error_projection().expect("denial projection").code,
+        actingcommand_contract::RuntimeErrorCode::ProtocolInvalid
+    );
+
+    let ledger_client = RuntimeClient::connect(RuntimeClientConfig::new(
+        root.path(),
+        EventActor::Cli,
+        EventSource::Cli,
+    ))
+    .expect("connect ledger client");
+    let events = ledger_client
+        .query_events(
+            EventQuery {
+                request_id: Some(request.request_id()),
+                ..EventQuery::default()
+            },
+            ProjectionProfile::Forensic,
+        )
+        .expect("query contained task events");
+    assert_eq!(
+        events
+            .iter()
+            .filter(|event| event.event_type == EventType::TaskCompleted)
+            .count(),
+        1
+    );
+    assert_eq!(
+        events
+            .iter()
+            .filter(|event| {
+                matches!(
+                    event.event_type,
+                    EventType::TaskFailed | EventType::TaskCancelled
+                )
+            })
+            .count(),
+        0
+    );
+    assert_eq!(
+        support::backend_events(root.path()),
+        ["capture_open", "capture", "open", "tap", "capture"]
+    );
+    drop(ledger_client);
+    runtime.assert_alive();
+    runtime.stop_clean();
+}
+
+#[test]
 fn runtime_finishes_and_rebuilds_contained_task_after_client_is_killed() {
     let root = TempDir::new().expect("tempdir");
     let frame = root.path().join("sealed.png");
@@ -397,6 +502,33 @@ fn wait_until(timeout: Duration, mut predicate: impl FnMut() -> bool) {
         assert!(started.elapsed() < timeout, "condition timed out");
         thread::sleep(Duration::from_millis(10));
     }
+}
+
+fn raw_exchange(info: &RuntimeInfo, request: &RuntimeRequest) -> RuntimeReceipt {
+    let mut stream = TcpStream::connect(info.socket_addr().expect("Runtime socket"))
+        .expect("connect raw Runtime client");
+    stream
+        .set_read_timeout(Some(Duration::from_secs(5)))
+        .expect("set read timeout");
+    stream
+        .set_write_timeout(Some(Duration::from_secs(5)))
+        .expect("set write timeout");
+    let body = serde_json::to_vec(request).expect("serialize Runtime request");
+    assert!(!body.is_empty() && body.len() <= 1024 * 1024);
+    stream
+        .write_all(&(body.len() as u32).to_be_bytes())
+        .expect("write request header");
+    stream.write_all(&body).expect("write request body");
+    stream.flush().expect("flush request");
+    let mut header = [0_u8; 4];
+    stream.read_exact(&mut header).expect("read receipt header");
+    let length = u32::from_be_bytes(header) as usize;
+    assert!((1..=1024 * 1024).contains(&length));
+    let mut body = vec![0_u8; length];
+    stream.read_exact(&mut body).expect("read receipt body");
+    let receipt = serde_json::from_slice::<RuntimeReceipt>(&body).expect("decode Runtime receipt");
+    receipt.validate().expect("validate Runtime receipt");
+    receipt
 }
 
 fn write_neutral_contained_task_package(path: &Path) -> String {

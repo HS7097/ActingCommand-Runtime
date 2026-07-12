@@ -238,10 +238,24 @@ fn c6_actinglab_does_not_construct_live_device_backends() {
             .unwrap_or(&path)
             .display()
             .to_string();
-        for constructor in ["create_capture_backend(", "create_touch_backend("] {
-            if source.contains(constructor) {
+        for authority in [
+            "Adb::new(",
+            "create_capture_backend(",
+            "create_touch_backend(",
+            "touch_probe_report(",
+            "MaaTouchBackend",
+            "MinitouchBackend",
+            "AdbShellInputBackend",
+            "ScreencapBackend::",
+            "DroidcastRawBackend",
+            "NemuIpcBackend",
+            ".launch_package(",
+            ".force_stop(",
+            "Command::new(\"adb\")",
+        ] {
+            if source.contains(authority) {
                 violations.push(format!(
-                    "{display}: ActingLab constructs a live backend via {constructor}"
+                    "{display}: ActingLab reaches live device authority via {authority}"
                 ));
             }
         }
@@ -250,6 +264,26 @@ fn c6_actinglab_does_not_construct_live_device_backends() {
         violations.is_empty(),
         "ActingLab live-backend ownership violations:\n{}",
         violations.join("\n")
+    );
+    let input = fs::read_to_string(root.join("apps/actinglab/src/runtime_input_backend.rs"))
+        .expect("read ActingLab Runtime input adapter");
+    let capture = fs::read_to_string(root.join("apps/actinglab/src/runtime_capture_backend.rs"))
+        .expect("read ActingLab Runtime capture adapter");
+    let capture_production = capture
+        .split_once("#[cfg(test)]")
+        .map_or(capture.as_str(), |(production, _)| production);
+    assert!(
+        input.contains("proxy: RuntimeInputProxy")
+            && input.contains("self.proxy.input(action)")
+            && !input.contains("AdbConfig")
+            && !input.contains("ExecutionBackendProvider"),
+        "ActingLab input adapter must remain a Runtime proxy without provider authority"
+    );
+    assert!(
+        capture_production.contains("client: RuntimeClient")
+            && capture_production.contains("observe_readonly")
+            && !capture_production.contains("ExecutionBackendProvider"),
+        "ActingLab capture adapter must consume Runtime observations without provider authority"
     );
 }
 
@@ -358,17 +392,12 @@ fn c5_production_run_ingress_requires_external_loaded_bundle() {
     let root = workspace_root();
     let bundle = fs::read_to_string(root.join("crates/execution-kernel/src/bundle.rs"))
         .expect("read execution bundle source");
-    let run = fs::read_to_string(root.join("crates/lab/src/lab_run/api.rs"))
-        .expect("read Lab run ingress source");
-    let run_api = fs::read_to_string(root.join("crates/lab/src/lab_run_api.rs"))
-        .expect("read Lab run API source");
+    let contained = fs::read_to_string(root.join("crates/execution-kernel/src/contained_task.rs"))
+        .expect("read contained task source");
+    let host = fs::read_to_string(root.join("crates/runtime-host/src/host.rs"))
+        .expect("read Runtime host source");
     let cli = fs::read_to_string(root.join("apps/actinglab/src/lab_run.rs"))
         .expect("read ActingLab run CLI source");
-    let production_loader = run
-        .split_once("fn load_lab_package_for_run")
-        .and_then(|(_, tail)| tail.split_once("fn containment_error"))
-        .map(|(loader, _)| loader)
-        .expect("locate production run loader");
 
     for required in [
         "pub struct ExternalExpectedSha256",
@@ -387,21 +416,24 @@ fn c5_production_run_ingress_requires_external_loaded_bundle() {
         );
     }
     assert!(
-        production_loader.contains("ExternallyVerifiedBundle::load"),
-        "production run loader bypasses the execution bundle capability"
+        contained.contains("ExternallyVerifiedBundle::load(instance_label, zip_bytes, expected)"),
+        "Runtime contained task bypasses the externally verified bundle capability"
+    );
+    assert!(
+        host.contains("ExternalExpectedSha256::parse_hex(request.expected_sha256())")
+            && host.contains("PreparedContainedTask::load(instance_alias, &bytes, expected)"),
+        "Runtime host must bind the client hash to contained package admission"
     );
     for forbidden in ["Sha256Hash::digest", "unwrap_or_else"] {
         assert!(
-            !production_loader.contains(forbidden),
-            "production run loader self-trusts its package via {forbidden}"
+            !contained.contains(forbidden),
+            "contained task ingress self-trusts its package via {forbidden}"
         );
     }
     assert!(
-        run_api.contains("pub expected_input_sha256: ExternalExpectedSha256"),
-        "LabRunRequest does not require an externally supplied hash type"
-    );
-    assert!(
-        cli.contains("parse_required_external_sha256"),
+        cli.contains("required_expected_sha256")
+            && cli.contains("ContainedTaskRequest::new")
+            && cli.contains("run_contained_task(&instance, request)"),
         "ActingLab production run CLI does not require an external expected hash"
     );
 }
@@ -1343,20 +1375,15 @@ fn c5_online_lab_run_effects_are_instance_bound_and_runtime_owned() {
         .expect("read ActingLab environment adapter");
     let app_run = fs::read_to_string(root.join("apps/actinglab/src/lab_run.rs"))
         .expect("read ActingLab run adapter");
-    let app_readonly = fs::read_to_string(root.join("apps/actinglab/src/readonly_cli.rs"))
-        .expect("read ActingLab read-only adapter");
-    let lab_run = fs::read_to_string(root.join("crates/lab/src/lab_run/api.rs"))
-        .expect("read Lab run ingress");
-    let lab_execute = fs::read_to_string(root.join("crates/lab/src/lab_run/execute.rs"))
-        .expect("read Lab run execution adapter");
-    let lab_context = fs::read_to_string(root.join("crates/lab/src/lab_run/context.rs"))
-        .expect("read Lab run context");
-    let lab_output = fs::read_to_string(root.join("crates/lab/src/lab_run/output.rs"))
-        .expect("read Lab run output");
-    let lab_contract = fs::read_to_string(root.join("crates/lab/src/lab_run_api.rs"))
-        .expect("read Lab run contract");
+    let runtime_capture =
+        fs::read_to_string(root.join("apps/actinglab/src/runtime_capture_backend.rs"))
+            .expect("read Runtime capture adapter");
     let runtime_input = fs::read_to_string(root.join("crates/runtime-client/src/input.rs"))
         .expect("read Runtime input proxy");
+    let host = fs::read_to_string(root.join("crates/runtime-host/src/host.rs"))
+        .expect("read Runtime host");
+    let contained = fs::read_to_string(root.join("crates/execution-kernel/src/contained_task.rs"))
+        .expect("read contained task engine");
 
     assert!(
         !root
@@ -1366,51 +1393,40 @@ fn c5_online_lab_run_effects_are_instance_bound_and_runtime_owned() {
     for (path, source) in [
         ("apps/actinglab/src/env_detection.rs", &app_environment),
         ("apps/actinglab/src/lab_run.rs", &app_run),
-        ("apps/actinglab/src/readonly_cli.rs", &app_readonly),
     ] {
-        for forbidden in ["LegacyControl", "legacy_control_capture"] {
+        for forbidden in [
+            "LegacyControl",
+            "legacy_control_capture",
+            "Adb::new(",
+            "create_capture_backend(",
+            "create_touch_backend(",
+        ] {
             assert!(
                 !source.contains(forbidden),
                 "{path} regained legacy production authority via {forbidden}"
             );
         }
     }
-    for forbidden in ["create_capture_backend", "create_touch_backend"] {
+    for forbidden in ["LabRunRequest", ".lab_run(", "RuntimeDebugSession"] {
         assert!(
-            !app_environment.contains(forbidden),
-            "ActingLab Runtime port constructs a device backend via {forbidden}"
+            !app_run.contains(forbidden),
+            "ActingLab production run regained semantic execution authority via {forbidden}"
         );
     }
     for required in [
-        "AppCaptureAuthority::RuntimeByInstance",
-        "RuntimeInputBackend::connect_debug",
-        "RuntimeDebugSession",
+        "RuntimeClient::connect",
+        "ContainedTaskRequest::new",
+        "run_contained_task(&instance, request)",
+        "runtime_global_ledger",
     ] {
         assert!(
-            app_environment.contains(required),
-            "ActingLab Runtime port lost {required}"
+            app_run.contains(required),
+            "ActingLab Runtime task adapter lost {required}"
         );
     }
-    assert!(lab_run.contains("instance_alias: Some(selected_id.clone())"));
-    assert!(lab_execute.contains("instance_alias: Some(instance_alias.to_string())"));
-    for (path, source) in [
-        ("crates/lab/src/lab_run/api.rs", &lab_run),
-        ("crates/lab/src/lab_run/context.rs", &lab_context),
-        ("crates/lab/src/lab_run/output.rs", &lab_output),
-        ("crates/lab/src/lab_run_api.rs", &lab_contract),
-    ] {
-        for forbidden in [
-            "LabLeaseGuard",
-            "lease_root",
-            "lab_lease_acquired",
-            "lab_lease_released",
-        ] {
-            assert!(
-                !source.contains(forbidden),
-                "{path} regained private lease authority via {forbidden}"
-            );
-        }
-    }
+    assert!(app_environment.contains("AppCaptureAuthority::Runtime("));
+    assert!(app_environment.contains("RuntimeInputBackend::connect("));
+    assert!(runtime_capture.contains("observe_readonly"));
     for required in [
         "authority.acquire_lease",
         "authority.release_lease",
@@ -1421,6 +1437,12 @@ fn c5_online_lab_run_effects_are_instance_bound_and_runtime_owned() {
             "Runtime input proxy lost scheduler-fenced effect path {required}"
         );
     }
+    assert!(
+        host.contains("let execution = prepared.run(&mut runtime);")
+            && contained.contains("pub struct PreparedContainedTask")
+            && contained.contains("pub trait ContainedTaskRuntime"),
+        "Runtime and execution-kernel must own the contained task run loop"
+    );
 }
 
 #[test]
@@ -1880,6 +1902,13 @@ fn c7_lab_has_no_production_ledger_writer_authority() {
         .expect("read ActingLab Lab2 adapter");
     let lab_run = fs::read_to_string(root.join("apps/actinglab/src/lab_run.rs"))
         .expect("read ActingLab run adapter");
+    let environment = fs::read_to_string(root.join("apps/actinglab/src/env_detection.rs"))
+        .expect("read ActingLab environment adapter");
+    let runtime_contract =
+        fs::read_to_string(root.join("crates/actingcommand-contract/src/runtime.rs"))
+            .expect("read Runtime contract");
+    let runtime_host = fs::read_to_string(root.join("crates/runtime-host/src/host.rs"))
+        .expect("read Runtime host");
     assert!(
         main.contains("local_ledger_retired"),
         "legacy local ledger command must remain a fail-loud tombstone"
@@ -1891,10 +1920,95 @@ fn c7_lab_has_no_production_ledger_writer_authority() {
         "online Lab2 operations must project typed lifecycle events through Runtime"
     );
     assert!(
-        lab_run.contains("RuntimeDebugOperation::LabRun")
-            && lab_run.contains("record_event(RuntimeDebugEvent::"),
-        "Lab run lifecycle must be recorded through the Runtime debug correlation"
+        lab_run.contains("run_contained_task(&instance, request)")
+            && lab_run.contains("runtime_global_ledger")
+            && !lab_run.contains("record_event(RuntimeDebugEvent::")
+            && !lab_run.contains(".lab_run("),
+        "Lab run must submit one Runtime task request and render its GlobalLedger projection"
     );
+    for required in [
+        "pub(super) struct AppLedgerSink;",
+        "pub(super) struct AppRunLedgerSession;",
+        "retired_run_ledger_error",
+    ] {
+        assert!(
+            environment.contains(required),
+            "ActingLab disposable ledger adapter lost {required}"
+        );
+    }
+    for forbidden in [
+        "Vec<LedgerRecord>",
+        "Vec<LightEvent>",
+        "records:",
+        "events:",
+    ] {
+        assert!(
+            !environment.contains(forbidden),
+            "ActingLab environment adapter regained an in-memory semantic source via {forbidden}"
+        );
+    }
+    assert!(
+        !runtime_contract.contains("TaskSemanticFact"),
+        "clients must not be able to submit Runtime task semantic facts"
+    );
+    for required in [
+        "TaskSemanticFact::RecognitionStarted",
+        "TaskSemanticFact::EffectIntent",
+        "TaskSemanticFact::TerminalCommitted",
+        "TaskSemanticFact::TerminalRejected",
+    ] {
+        assert!(
+            runtime_host.contains(required),
+            "Runtime semantic owner lost {required}"
+        );
+    }
+}
+
+#[test]
+fn r35_contained_task_boundary_is_generic_and_has_a_neutral_process_fixture() {
+    let root = workspace_root();
+    let contract = fs::read_to_string(root.join("crates/actingcommand-contract/src/runtime.rs"))
+        .expect("read Runtime contract");
+    let request = contract
+        .split_once("pub struct ContainedTaskRequest {")
+        .and_then(|(_, tail)| tail.split_once("}\n\nimpl ContainedTaskRequest"))
+        .map(|(body, _)| body)
+        .expect("locate ContainedTaskRequest fields");
+    for required in ["package_path: String", "expected_sha256: String"] {
+        assert!(
+            request.contains(required),
+            "contained task request lost {required}"
+        );
+    }
+    for forbidden in ["game", "server", "package_name", "TaskSemanticFact"] {
+        assert!(
+            !request.contains(forbidden),
+            "contained task client contract embeds application identity via {forbidden}"
+        );
+    }
+    let host = fs::read_to_string(root.join("crates/runtime-host/src/host.rs"))
+        .expect("read Runtime host");
+    let contained = fs::read_to_string(root.join("crates/execution-kernel/src/contained_task.rs"))
+        .expect("read contained task engine");
+    for forbidden in ["arknights", "azurlane", "bluearchive", "com.YoStar"] {
+        assert!(
+            !host.contains(forbidden) && !contained.contains(forbidden),
+            "contained Runtime path hard-codes application identity {forbidden}"
+        );
+    }
+    let process = fs::read_to_string(root.join("apps/actingctl/tests/c4_process.rs"))
+        .expect("read actingctl process tests");
+    for required in [
+        "actingctl_runs_neutral_contained_task_without_lab_and_runtime_survives_client_exit",
+        "process_replay_cannot_duplicate_or_conflict_a_contained_task_terminal",
+        "\"game\":\"neutral\"",
+        "\"neutral.instance\"",
+    ] {
+        assert!(
+            process.contains(required),
+            "neutral contained-task process fixture lost {required}"
+        );
+    }
 }
 
 fn cargo_metadata_args() -> [&'static str; 4] {

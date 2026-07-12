@@ -183,6 +183,38 @@ fn session_app_routes_application_lifecycle_through_runtime_without_client_packa
     )
     .expect("runtime host");
 
+    let lease_client = RuntimeClient::connect(RuntimeClientConfig::new(
+        &runtime_root,
+        EventActor::Cli,
+        EventSource::Cli,
+    ))
+    .expect("lease client");
+    let token = lease_client.acquire_lease("ak.cn").expect("active lease");
+    let (busy_exit, busy) = run_actinglab_failure_json(
+        &config_path,
+        &runtime_root,
+        &local_app_data,
+        [
+            "--json",
+            "--instance",
+            "ak.cn",
+            "session",
+            "app",
+            "force-stop",
+        ],
+    );
+    assert_eq!(busy_exit, 4);
+    assert_eq!(busy["error"]["code"], "device_error");
+    assert!(
+        busy["error"]["message"]
+            .as_str()
+            .is_some_and(|message| message.contains("LeaseBusy"))
+    );
+    assert_eq!(state.application_calls.load(Ordering::Acquire), 0);
+    lease_client
+        .release_lease(&token)
+        .expect("release active lease");
+
     let output = run_actinglab_json(
         &config_path,
         &runtime_root,
@@ -222,6 +254,7 @@ fn session_app_routes_application_lifecycle_through_runtime_without_client_packa
     assert_eq!(exit_code, 2);
     assert_eq!(rejected["error"]["code"], "validation_failed");
     assert_eq!(state.application_calls.load(Ordering::Acquire), 1);
+    drop(lease_client);
     host.close().expect("close host");
 }
 
