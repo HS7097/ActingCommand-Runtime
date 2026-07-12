@@ -143,16 +143,16 @@
       "command": "detect-page",
       "error": {
         "blocked_by": [],
-        "code": "validation_failed",
+        "code": "package_invalid",
         "details": {
           "blocked_error": {
             "blocked_by": [],
-            "code": "validation_failed",
-            "message": "fatal page detector error: failed to parse page set JSON: expected ident at line 1 column 2"
+            "code": "package_invalid",
+            "message": "fatal containment error: hash mismatch for instance semantic_readonly: expected <SHA256>, actual <SHA256>"
           },
           "command": "detect-page",
           "details": null,
-          "error": "validation_failed",
+          "error": "package_invalid",
           "instance": "default",
           "ledger": {
             "path": "<PATH>",
@@ -167,7 +167,7 @@
           "req_id": "<REQ_ID>",
           "state": "failed"
         },
-        "message": "fatal page detector error: failed to parse page set JSON: expected ident at line 1 column 2"
+        "message": "fatal containment error: hash mismatch for instance semantic_readonly: expected <SHA256>, actual <SHA256>"
       },
       "ok": false,
       "runtime_version": "runtime-embedded-p1g",

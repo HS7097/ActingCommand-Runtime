@@ -2,7 +2,6 @@
 
 use actingcommand_contract::{EnvResolved, LabResult};
 use serde::Serialize;
-use std::path::PathBuf;
 use std::time::Duration;
 
 pub struct TapTargetRequest {
@@ -33,7 +32,6 @@ pub struct TapTargetResponse {
 
 pub struct NavigateRequest {
     pub input: crate::ReadonlyRecognitionInput,
-    pub navigation_path: LabResult<PathBuf>,
     pub to: String,
     pub allow_destructive: bool,
     pub dry_run: bool,

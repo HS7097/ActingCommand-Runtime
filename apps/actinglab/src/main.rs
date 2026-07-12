@@ -44,6 +44,7 @@ use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use zip::{ZipWriter, write::FileOptions};
 
+mod contained_resources;
 mod drive_cli;
 mod env_detection;
 mod frame_store;
@@ -4882,6 +4883,10 @@ fn load_navigation_graph(
         .map_err(|err| CliError::usage(format!("failed to read {}: {err}", path.display())))?;
     let value: Value = serde_json::from_str(&text)
         .map_err(|err| CliError::usage(format!("failed to parse {}: {err}", path.display())))?;
+    parse_navigation_graph_value(&value)
+}
+
+fn parse_navigation_graph_value(value: &Value) -> CliOutcome<NavigationGraph> {
     let game = value
         .get("game")
         .and_then(Value::as_str)
@@ -12396,10 +12401,18 @@ fn hex_sha256(bytes: &[u8]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[path = "contained_semantic.rs"]
+    mod contained_semantic;
+    #[path = "semantic_fixture.rs"]
+    mod semantic_fixture;
     use actingcommand_contract::{IdentifierIssuer, InstanceId};
     use actingcommand_device::{CaptureBackend, DeviceError, DeviceResult};
     use actingcommand_runtime_host::{
         ExecutionBackendProvider, ResolvedExecutionInstance, RuntimeHost, RuntimeHostConfig,
+    };
+    use semantic_fixture::{
+        run_semantic_cli, seal_semantic_fixture, semantic_resource_root,
+        synthetic_game_resource_root, template_drift_resource_root,
     };
     use std::fs::OpenOptions;
     use std::process::Stdio;
@@ -18323,9 +18336,10 @@ mod tests {
     fn recognize_target_output_uses_shared_evaluation_shape() {
         let _guard = env_lock();
         let temp = TempDir::new().unwrap();
-        let pack_root = temp.path().join("resources");
+        let pack_root = temp.path().to_path_buf();
         let template_dir = pack_root.join("operations/task/assets");
         let pack_path = temp.path().join("pack.json");
+        let pages_path = temp.path().join("pages.json");
         let scene_path = temp.path().join("scene.png");
         fs::create_dir_all(&template_dir).unwrap();
         let png = test_record_frame_png(1, 1);
@@ -18350,18 +18364,17 @@ mod tests {
             }),
         )
         .unwrap();
+        write_json_file(&pages_path, &json!({"schema_version":"0.3","pages":[]})).unwrap();
         set_missing_config_env();
+        let temp = seal_semantic_fixture(temp, "arknights", "cn", &pack_path, &pages_path, None);
 
-        let result = run_cli(
+        let result = run_semantic_cli(
+            &temp,
             [
                 "--json",
                 "recognize",
                 "--target",
                 "page/home",
-                "--pack",
-                pack_path.to_str().unwrap(),
-                "--pack-root",
-                pack_root.to_str().unwrap(),
                 "--scene",
                 scene_path.to_str().unwrap(),
             ],
@@ -20822,162 +20835,6 @@ mod tests {
     }
 
     #[test]
-    fn detect_page_returns_standby_when_no_page_matches() {
-        let _guard = env_lock();
-        let temp = TempDir::new().unwrap();
-        let pack = temp.path().join("pack.json");
-        let pages = temp.path().join("pages.json");
-        let scene = temp.path().join("scene.png");
-        fs::write(
-            &pack,
-            r#"{
-                "schema_version":"0.3",
-                "coordinate_space":{"width":1,"height":1},
-                "targets":[{"type":"color","id":"home","region":{"x":0,"y":0,"width":1,"height":1},"expected":[255,0,0]}]
-            }"#,
-        )
-        .unwrap();
-        fs::write(
-            &pages,
-            r#"{"schema_version":"0.3","pages":[{"id":"home","required":["home"]}]}"#,
-        )
-        .unwrap();
-        fs::write(&scene, encode_png(1, 1, [0, 0, 255])).unwrap();
-        let result = run_cli(
-            [
-                "--json",
-                "detect-page",
-                "--pack",
-                pack.to_str().unwrap(),
-                "--pack-root",
-                temp.path().to_str().unwrap(),
-                "--pages",
-                pages.to_str().unwrap(),
-                "--scene",
-                scene.to_str().unwrap(),
-            ],
-            true,
-        );
-        assert_eq!(result.exit_code(), 0);
-        assert_eq!(
-            result
-                .envelope
-                .data
-                .as_ref()
-                .unwrap()
-                .get("page")
-                .and_then(Value::as_str),
-            Some("standby")
-        );
-    }
-
-    #[test]
-    fn detect_page_resolves_pack_from_resource_root_and_game_alias() {
-        let _guard = env_lock();
-        let temp = TempDir::new().unwrap();
-        let recognition = temp.path().join("recognition");
-        fs::create_dir(&recognition).unwrap();
-        let pack = recognition.join("arknights.cn.pack.json");
-        let pages = recognition.join("arknights.cn.pages.json");
-        let scene = temp.path().join("scene.png");
-        fs::write(
-            &pack,
-            r#"{
-                "schema_version":"0.3",
-                "coordinate_space":{"width":1,"height":1},
-                "targets":[{"type":"color","id":"home","region":{"x":0,"y":0,"width":1,"height":1},"expected":[255,0,0]}]
-            }"#,
-        )
-        .unwrap();
-        fs::write(
-            &pages,
-            r#"{"schema_version":"0.3","pages":[{"id":"home","required":["home"]}]}"#,
-        )
-        .unwrap();
-        fs::write(&scene, encode_png(1, 1, [0, 0, 255])).unwrap();
-        let result = run_cli(
-            [
-                "--json",
-                "--resource-root",
-                temp.path().to_str().unwrap(),
-                "--game",
-                "ark",
-                "detect-page",
-                "--scene",
-                scene.to_str().unwrap(),
-            ],
-            true,
-        );
-        assert_eq!(result.exit_code(), 0);
-        assert_eq!(
-            result
-                .envelope
-                .data
-                .as_ref()
-                .unwrap()
-                .get("page")
-                .and_then(Value::as_str),
-            Some("standby")
-        );
-    }
-
-    #[test]
-    fn detect_page_accepts_reorganized_repo_root_resource_root() {
-        let _guard = env_lock();
-        let temp = TempDir::new().unwrap();
-        let repo = temp.path().join("repo");
-        let ours = repo.join("ours");
-        let recognition = ours.join("recognition");
-        let operations = ours.join("operations");
-        fs::create_dir_all(&recognition).unwrap();
-        fs::create_dir_all(&operations).unwrap();
-        let pack = recognition.join("arknights.cn.pack.json");
-        let pages = recognition.join("arknights.cn.pages.json");
-        let scene = temp.path().join("scene.png");
-        fs::write(
-            &pack,
-            r#"{
-                "schema_version":"0.3",
-                "coordinate_space":{"width":1,"height":1},
-                "targets":[{"type":"color","id":"home","region":{"x":0,"y":0,"width":1,"height":1},"expected":[0,0,255]}]
-            }"#,
-        )
-        .unwrap();
-        fs::write(
-            &pages,
-            r#"{"schema_version":"0.3","pages":[{"id":"home","required":["home"]}]}"#,
-        )
-        .unwrap();
-        fs::write(&scene, encode_png(1, 1, [0, 0, 255])).unwrap();
-
-        let result = run_cli(
-            [
-                "--json",
-                "--resource-root",
-                repo.to_str().unwrap(),
-                "--game",
-                "ark",
-                "detect-page",
-                "--scene",
-                scene.to_str().unwrap(),
-            ],
-            true,
-        );
-
-        assert_eq!(result.exit_code(), 0, "{:?}", result.envelope.error);
-        assert_eq!(
-            result
-                .envelope
-                .data
-                .as_ref()
-                .unwrap()
-                .get("page")
-                .and_then(Value::as_str),
-            Some("home")
-        );
-    }
-
-    #[test]
     fn lab_run_capture_backend_flag_is_global_even_after_subcommand() {
         let invocation = parse_invocation(
             [
@@ -21180,7 +21037,8 @@ mod tests {
         let scene = temp.path().join("home.png");
         fs::write(&scene, encode_png(1, 1, [255, 0, 0])).unwrap();
 
-        let result = run_cli(
+        let result = run_semantic_cli(
+            &temp,
             [
                 "--json",
                 "--resource-root",
@@ -21218,7 +21076,8 @@ mod tests {
         let scene = temp.path().join("home.png");
         fs::write(&scene, encode_png(1, 1, [255, 0, 0])).unwrap();
 
-        let result = run_cli(
+        let result = run_semantic_cli(
+            &temp,
             [
                 "--json",
                 "--resource-root",
@@ -21246,7 +21105,8 @@ mod tests {
         let scene = temp.path().join("home.png");
         fs::write(&scene, encode_png(1, 1, [255, 0, 0])).unwrap();
 
-        let result = run_cli(
+        let result = run_semantic_cli(
+            &temp,
             [
                 "--json",
                 "--dry-run",
@@ -21291,7 +21151,8 @@ mod tests {
         let scene = temp.path().join("home.png");
         fs::write(&scene, encode_png(1, 1, [255, 0, 0])).unwrap();
 
-        let detect = run_cli(
+        let detect = run_semantic_cli(
+            &temp,
             [
                 "--json",
                 "--resource-root",
@@ -21332,7 +21193,8 @@ mod tests {
             &["request", "recognition"],
         );
 
-        let tap = run_cli(
+        let tap = run_semantic_cli(
+            &temp,
             [
                 "--json",
                 "--resource-root",
@@ -21365,7 +21227,8 @@ mod tests {
             &["request", "recognition", "action_plan"],
         );
 
-        let navigate = run_cli(
+        let navigate = run_semantic_cli(
+            &temp,
             [
                 "--json",
                 "--resource-root",
@@ -21416,7 +21279,8 @@ mod tests {
         let scene = temp.path().join("home.png");
         fs::write(&scene, encode_png(1, 1, [255, 0, 0])).unwrap();
 
-        let tap = run_cli(
+        let tap = run_semantic_cli(
+            &temp,
             [
                 "--json",
                 "--resource-root",
@@ -21447,7 +21311,8 @@ mod tests {
             .write_all(b"{corrupt-tail\n")
             .unwrap();
 
-        let show = run_cli(
+        let show = run_semantic_cli(
+            &temp,
             [
                 "--json",
                 "ledger",
@@ -21469,7 +21334,8 @@ mod tests {
                 >= 3
         );
 
-        let receipts = run_cli(
+        let receipts = run_semantic_cli(
+            &temp,
             [
                 "--json",
                 "ledger",
@@ -21494,7 +21360,8 @@ mod tests {
                 >= 1
         );
 
-        let diagnose = run_cli(
+        let diagnose = run_semantic_cli(
+            &temp,
             [
                 "--json",
                 "ledger",
@@ -21535,7 +21402,8 @@ mod tests {
                 ("module/operations/resources.json", br#"{}"#.as_slice()),
             ],
         );
-        let package = run_cli(
+        let package = run_semantic_cli(
+            &temp,
             [
                 "--json",
                 "--run-root",
@@ -21556,7 +21424,8 @@ mod tests {
             .get("req_id")
             .and_then(Value::as_str)
             .unwrap();
-        let events = run_cli(
+        let events = run_semantic_cli(
+            &temp,
             [
                 "--json",
                 "ledger",
@@ -21585,7 +21454,8 @@ mod tests {
             .put("evidence-query", "frame", b"frame bytes")
             .unwrap()
             .unwrap();
-        let evidence = run_cli(
+        let evidence = run_semantic_cli(
+            &temp,
             [
                 "--json",
                 "ledger",
@@ -21658,7 +21528,8 @@ mod tests {
         let scene = temp.path().join("home.png");
         fs::write(&scene, encode_png(1, 1, [255, 0, 0])).unwrap();
 
-        let result = run_cli(
+        let result = run_semantic_cli(
+            &temp,
             [
                 "--json",
                 "--dry-run",
@@ -21695,7 +21566,8 @@ mod tests {
         let frame_out = temp.path().join("observe-frame.png");
         fs::write(&scene, encode_png(1, 1, [255, 0, 0])).unwrap();
 
-        let result = run_cli(
+        let result = run_semantic_cli(
+            &temp,
             [
                 "--json",
                 "--resource-root",
@@ -21756,7 +21628,8 @@ mod tests {
         let scene = temp.path().join("home.png");
         fs::write(&scene, encode_png(1, 1, [255, 0, 0])).unwrap();
 
-        let result = run_cli(
+        let result = run_semantic_cli(
+            &temp,
             [
                 "--json",
                 "--dry-run",
@@ -21802,7 +21675,8 @@ mod tests {
         let scene = temp.path().join("target.png");
         fs::write(&scene, encode_png(1, 1, [0, 0, 255])).unwrap();
 
-        let result = run_cli(
+        let result = run_semantic_cli(
+            &temp,
             [
                 "--json",
                 "--dry-run",
@@ -21846,7 +21720,8 @@ mod tests {
         let home = temp.path().join("home.png");
         fs::write(&home, encode_png(1, 1, [255, 0, 0])).unwrap();
 
-        let idempotent = run_cli(
+        let idempotent = run_semantic_cli(
+            &temp,
             [
                 "--json",
                 "--dry-run",
@@ -21873,7 +21748,8 @@ mod tests {
             Some("already_at_target")
         );
 
-        let planned = run_cli(
+        let planned = run_semantic_cli(
+            &temp,
             [
                 "--json",
                 "--dry-run",
@@ -21916,7 +21792,8 @@ mod tests {
         let scene = temp.path().join("home.png");
         fs::write(&scene, encode_png(1, 1, [255, 0, 0])).unwrap();
 
-        let page = run_cli(
+        let page = run_semantic_cli(
+            &temp,
             [
                 "--json",
                 "--resource-root",
@@ -21944,7 +21821,8 @@ mod tests {
             Some("arrived")
         );
 
-        let stable = run_cli(
+        let stable = run_semantic_cli(
+            &temp,
             [
                 "--json",
                 "--resource-root",
@@ -22082,7 +21960,8 @@ mod tests {
         let scene = temp.path().join("home.png");
         fs::write(&scene, encode_png(1, 1, [255, 0, 0])).unwrap();
 
-        let action = run_cli(
+        let action = run_semantic_cli(
+            &temp,
             [
                 "--json",
                 "--dry-run",
@@ -22131,7 +22010,8 @@ mod tests {
             Some(action_ledger_path.as_str())
         );
 
-        let receipt = run_cli(
+        let receipt = run_semantic_cli(
+            &temp,
             [
                 "--json",
                 "--run-root",
@@ -22242,7 +22122,8 @@ mod tests {
         let scene = temp.path().join("home.png");
         fs::write(&scene, encode_png(1, 1, [255, 0, 0])).unwrap();
 
-        let result = run_cli(
+        let result = run_semantic_cli(
+            &temp,
             [
                 "--json",
                 "--resource-root",
@@ -22339,7 +22220,8 @@ mod tests {
             let _ = fs::remove_file(cleanup_path);
         });
 
-        let result = run_cli(
+        let result = run_semantic_cli(
+            &temp,
             [
                 "--json",
                 "--dry-run",
@@ -22390,7 +22272,8 @@ mod tests {
         fs::write(&target, encode_png(1, 1, [0, 0, 255])).unwrap();
 
         let observe_started = Instant::now();
-        let observe = run_cli(
+        let observe = run_semantic_cli(
+            &temp,
             [
                 "--json",
                 "--resource-root",
@@ -22420,7 +22303,8 @@ mod tests {
         );
         assert!(!observe.envelope_json().contains('\u{1b}'));
 
-        let error = run_cli(
+        let error = run_semantic_cli(
+            &temp,
             [
                 "--json",
                 "--dry-run",
@@ -22464,7 +22348,8 @@ mod tests {
         let scene = temp.path().join("home.png");
         fs::write(&scene, encode_png(1, 1, [255, 0, 0])).unwrap();
 
-        let action = run_cli(
+        let action = run_semantic_cli(
+            &temp,
             [
                 "--json",
                 "--dry-run",
@@ -22490,7 +22375,8 @@ mod tests {
         assert!(data.get("observation").is_some());
         assert_eq!(data.get("executed").and_then(Value::as_bool), Some(false));
 
-        let receipt = run_cli(
+        let receipt = run_semantic_cli(
+            &temp,
             [
                 "--json",
                 "--run-root",
@@ -22606,7 +22492,8 @@ mod tests {
         let scene = temp.path().join("home.png");
         fs::write(&scene, encode_png(1, 1, [255, 0, 0])).unwrap();
 
-        let result = run_cli(
+        let result = run_semantic_cli(
+            &temp,
             [
                 "--json",
                 "--dry-run",
@@ -22644,7 +22531,8 @@ mod tests {
             Some(true)
         );
         let req_id = details.get("req_id").and_then(Value::as_str).unwrap();
-        let receipt = run_cli(
+        let receipt = run_semantic_cli(
+            &temp,
             [
                 "--json",
                 "--run-root",
@@ -22671,7 +22559,8 @@ mod tests {
         let scene = temp.path().join("home.png");
         fs::write(&scene, encode_png(1, 1, [255, 0, 0])).unwrap();
 
-        let destructive_without_allow = run_cli(
+        let destructive_without_allow = run_semantic_cli(
+            &temp,
             [
                 "--json",
                 "--dry-run",
@@ -22698,7 +22587,8 @@ mod tests {
             "destructive_action_requires_allow_destructive"
         );
 
-        let allowed = run_cli(
+        let allowed = run_semantic_cli(
+            &temp,
             [
                 "--json",
                 "--dry-run",
@@ -22780,7 +22670,8 @@ mod tests {
         let scene = temp.path().join("unknown.png");
         fs::write(&scene, encode_png(1, 1, [12, 34, 56])).unwrap();
 
-        let result = run_cli(
+        let result = run_semantic_cli(
+            &temp,
             [
                 "--json",
                 "--resource-root",
@@ -22821,7 +22712,8 @@ mod tests {
         let scene = temp.path().join("target.png");
         fs::write(&scene, encode_png(1, 1, [0, 0, 255])).unwrap();
 
-        let result = run_cli(
+        let result = run_semantic_cli(
+            &temp,
             [
                 "--json",
                 "--verbose",
@@ -22872,7 +22764,8 @@ mod tests {
         )
         .unwrap();
 
-        let result = run_cli(
+        let result = run_semantic_cli(
+            &temp,
             [
                 "--json",
                 "--dry-run",
@@ -22944,7 +22837,8 @@ mod tests {
         set_config_env(&config_path);
         let state_dir = temp.path().join("session");
         fs::create_dir_all(&state_dir).unwrap();
-        let lab_lease = run_cli(
+        let lab_lease = run_semantic_cli(
+            &temp,
             [
                 "--json",
                 "--game",
@@ -22978,7 +22872,8 @@ mod tests {
             env::set_var("ACTINGCOMMAND_TEST_FAKE_TOUCH_LOG", &touch_log);
         }
 
-        let result = run_cli(
+        let result = run_semantic_cli(
+            &temp,
             [
                 "--json",
                 "--instance",
@@ -23038,7 +22933,8 @@ mod tests {
             navigation.to_str().unwrap(),
         ];
 
-        let observe = run_cli(
+        let observe = run_semantic_cli(
+            &temp,
             ["--json", "observe"]
                 .into_iter()
                 .chain(shared.iter().copied())
@@ -23058,7 +22954,8 @@ mod tests {
             Some("synthetic/home")
         );
 
-        let do_result = run_cli(
+        let do_result = run_semantic_cli(
+            &temp,
             [
                 "--json",
                 "--dry-run",
@@ -23079,7 +22976,8 @@ mod tests {
         );
         assert_eq!(do_result.exit_code(), 0, "{}", do_result.envelope_json());
 
-        let ensure = run_cli(
+        let ensure = run_semantic_cli(
+            &temp,
             [
                 "--json",
                 "--dry-run",
@@ -23100,7 +22998,8 @@ mod tests {
         );
         assert_eq!(ensure.exit_code(), 0, "{}", ensure.envelope_json());
 
-        let wait = run_cli(
+        let wait = run_semantic_cli(
+            &temp,
             [
                 "--json",
                 "wait",
@@ -23429,7 +23328,8 @@ mod tests {
         let scene = temp.path().join("home.png");
         fs::write(&scene, encode_png(1, 1, [255, 0, 0])).unwrap();
         let started = Instant::now();
-        let result = run_cli(
+        let result = run_semantic_cli(
+            &temp,
             [
                 "--json",
                 "--resource-root",
@@ -23473,7 +23373,8 @@ mod tests {
         fs::write(&home, encode_png(1, 1, [255, 0, 0])).unwrap();
         fs::write(&target, encode_png(1, 1, [0, 0, 255])).unwrap();
 
-        let transient = run_cli(
+        let transient = run_semantic_cli(
+            &temp,
             [
                 "--json",
                 "--resource-root",
@@ -23496,7 +23397,8 @@ mod tests {
 
         let recovery_state_dir = temp.path().join("recovering-session");
         write_lab2_recovery_state(&recovery_state_dir, true);
-        let recovering = run_cli(
+        let recovering = run_semantic_cli(
+            &temp,
             [
                 "--json",
                 "--dry-run",
@@ -23516,7 +23418,8 @@ mod tests {
         );
         assert_lab2_error_axis(&recovering, "recovering");
 
-        let drift = run_cli(
+        let drift = run_semantic_cli(
+            &temp,
             [
                 "--json",
                 "--dry-run",
@@ -23546,7 +23449,8 @@ mod tests {
         assert!(!drift_hint.contains("retry"));
 
         let lease_state_dir = temp.path().join("lease-session");
-        let first = run_cli(
+        let first = run_semantic_cli(
+            &temp,
             [
                 "--json",
                 "--game",
@@ -23564,7 +23468,8 @@ mod tests {
             true,
         );
         assert_eq!(first.exit_code(), 0);
-        let lease_held = run_cli(
+        let lease_held = run_semantic_cli(
+            &temp,
             [
                 "--json",
                 "--dry-run",
@@ -23590,7 +23495,8 @@ mod tests {
             b"{not-json",
         )
         .unwrap();
-        let fatal = run_cli(
+        let fatal = run_semantic_cli(
+            &temp,
             [
                 "--json",
                 "--dry-run",
@@ -23874,164 +23780,6 @@ mod tests {
             zip.write_all(content).unwrap();
         }
         zip.finish().unwrap();
-    }
-
-    fn semantic_resource_root(include_destructive_overlap: bool) -> TempDir {
-        let temp = TempDir::new().unwrap();
-        let recognition = temp.path().join("recognition");
-        let navigation = temp.path().join("navigation");
-        fs::create_dir(&recognition).unwrap();
-        fs::create_dir(&navigation).unwrap();
-        fs::write(
-            recognition.join("arknights.cn.pack.json"),
-            r#"{
-                "schema_version":"0.3",
-                "coordinate_space":{"width":1,"height":1},
-                "targets":[
-                    {"type":"color","id":"home_anchor","region":{"x":0,"y":0,"width":1,"height":1},"expected":[255,0,0]},
-                    {"type":"color","id":"target_anchor","region":{"x":0,"y":0,"width":1,"height":1},"expected":[0,0,255]},
-                    {"type":"color","id":"home_button","region":{"x":0,"y":0,"width":1,"height":1},"expected":[255,0,0],"click":{"x":10,"y":20,"width":4,"height":6}}
-                ]
-            }"#,
-        )
-        .unwrap();
-        fs::write(
-            recognition.join("arknights.cn.pages.json"),
-            r#"{
-                "schema_version":"0.3",
-                "pages":[
-                    {"id":"arknights/home","required":["home_anchor"]},
-                    {"id":"arknights/target","required":["target_anchor"]}
-                ]
-            }"#,
-        )
-        .unwrap();
-        let destructive = if include_destructive_overlap {
-            r#"[{"id":"delete","click":{"kind":"rect","x":10,"y":20,"width":4,"height":6}}]"#
-        } else {
-            "[]"
-        };
-        fs::write(
-            navigation.join("arknights.cn.navigation.json"),
-            format!(
-                r#"{{
-                    "schema_version":"0.3",
-                    "game":"arknights",
-                    "server":"cn",
-                    "control_points":[{{"name":"wake","point":[3,4],"note":"test wake"}}],
-                    "navigation":[{{
-                        "id":"home_to_target",
-                        "from_page":"arknights/home",
-                        "to_page":"arknights/target",
-                        "click":{{"kind":"rect","x":10,"y":20,"width":4,"height":6}}
-                    }},
-                    {{
-                        "id":"target_to_home",
-                        "from_page":"arknights/target",
-                        "to_page":"arknights/home",
-                        "click":{{"kind":"point","point":"2,3"}}
-                    }}],
-                    "destructive_actions":{destructive}
-                }}"#
-            ),
-        )
-        .unwrap();
-        temp
-    }
-
-    fn template_drift_resource_root() -> TempDir {
-        let temp = TempDir::new().unwrap();
-        let recognition = temp.path().join("recognition");
-        let navigation = temp.path().join("navigation");
-        fs::create_dir(&recognition).unwrap();
-        fs::create_dir(&navigation).unwrap();
-        fs::write(
-            recognition.join("home-button.png"),
-            encode_png(1, 1, [255, 0, 0]),
-        )
-        .unwrap();
-        fs::write(
-            recognition.join("arknights.cn.pack.json"),
-            r#"{
-                "schema_version":"0.3",
-                "coordinate_space":{"width":3,"height":1},
-                "targets":[
-                    {
-                        "type":"template",
-                        "id":"home_button",
-                        "template_path":"recognition/home-button.png",
-                        "region":{"x":0,"y":0,"width":3,"height":1},
-                        "threshold":0.9,
-                        "click":{"x":0,"y":0,"width":1,"height":1}
-                    }
-                ]
-            }"#,
-        )
-        .unwrap();
-        fs::write(
-            recognition.join("arknights.cn.pages.json"),
-            r#"{
-                "schema_version":"0.3",
-                "pages":[{"id":"arknights/home","required":["home_button"]}]
-            }"#,
-        )
-        .unwrap();
-        fs::write(
-            navigation.join("arknights.cn.navigation.json"),
-            r#"{
-                "schema_version":"0.3",
-                "game":"arknights",
-                "server":"cn",
-                "navigation":[],
-                "destructive_actions":[]
-            }"#,
-        )
-        .unwrap();
-        temp
-    }
-
-    fn synthetic_game_resource_root() -> TempDir {
-        let temp = TempDir::new().unwrap();
-        fs::create_dir(temp.path().join("recognition")).unwrap();
-        fs::create_dir(temp.path().join("navigation")).unwrap();
-        fs::write(
-            temp.path().join("synthetic.pack.json"),
-            r#"{
-                "schema_version":"0.3",
-                "coordinate_space":{"width":1,"height":1},
-                "targets":[
-                    {"type":"color","id":"synthetic_home_anchor","region":{"x":0,"y":0,"width":1,"height":1},"expected":[10,20,30]},
-                    {"type":"color","id":"synthetic_target_anchor","region":{"x":0,"y":0,"width":1,"height":1},"expected":[30,20,10]},
-                    {"type":"color","id":"synthetic_button","region":{"x":0,"y":0,"width":1,"height":1},"expected":[10,20,30],"click":{"x":1,"y":2,"width":3,"height":4}}
-                ]
-            }"#,
-        )
-        .unwrap();
-        fs::write(
-            temp.path().join("synthetic.pages.json"),
-            r#"{
-                "schema_version":"0.3",
-                "pages":[
-                    {"id":"synthetic/home","required":["synthetic_home_anchor"]},
-                    {"id":"synthetic/target","required":["synthetic_target_anchor"]}
-                ]
-            }"#,
-        )
-        .unwrap();
-        fs::write(
-            temp.path().join("synthetic.navigation.json"),
-            r#"{
-                "schema_version":"0.3",
-                "game":"synthetic",
-                "server":"lab",
-                "navigation":[
-                    {"id":"synthetic_home_to_target","from_page":"synthetic/home","to_page":"synthetic/target","click":{"kind":"rect","x":1,"y":2,"width":3,"height":4}}
-                ],
-                "destructive_actions":[]
-            }"#,
-        )
-        .unwrap();
-        temp
     }
 
     fn assert_lab2_error_axis(result: &CliResult, expected_error: &str) {

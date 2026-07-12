@@ -18,7 +18,6 @@ use actingcommand_recognition_pack::{
     PackRect, RecognitionEvaluator, TargetEvaluation, TargetKind,
 };
 use serde_json::{Value, json};
-use std::fs;
 use std::time::{Duration, Instant};
 
 impl<P: LabPorts> Lab<P> {
@@ -178,8 +177,7 @@ impl<P: LabPorts> Lab<P> {
             .validate(&evaluator)
             .map_err(|error| LabError::usage(error.to_string()))?;
         record_env_resolved(ledger, "navigate", &env_resolved)?;
-        let navigation_path = request.navigation_path.clone()?;
-        let graph = load_navigation_graph(&navigation_path)?;
+        let graph = load_navigation_graph(request.input.resources.loaded_bundle())?;
         let scene = recognition_scene(self, &mut request.input)?;
         let start = detect_current_page(
             &evaluator,
@@ -309,9 +307,17 @@ impl<P: LabPorts> Lab<P> {
     }
 }
 
-fn load_navigation_graph(path: &std::path::Path) -> LabResult<NavigationGraph> {
-    let text = fs::read_to_string(path)
-        .map_err(|error| LabError::usage(format!("failed to read {}: {error}", path.display())))?;
+fn load_navigation_graph(
+    bundle: &actingcommand_pack_containment::LoadedBundle,
+) -> LabResult<NavigationGraph> {
+    let navigation = bundle.navigation().ok_or_else(|| {
+        LabError::package_invalid("externally verified resource bundle has no navigation graph")
+    })?;
+    let text = serde_json::to_string(navigation).map_err(|error| {
+        LabError::package_invalid(format!(
+            "failed to serialize contained navigation graph: {error}"
+        ))
+    })?;
     NavigationGraph::parse_json(&text).map_err(drive_decision_error)
 }
 

@@ -4,11 +4,9 @@ use crate::env_detection::load_scene;
 use crate::{Lab, LabPorts};
 use actingcommand_contract::{EnvResolved, LabError, LabResult};
 use actingcommand_execution_kernel::{ReadonlyRecognitionEngine, ReadonlyRecognitionError};
-use actingcommand_page_detector::{PageDetector, load_page_set_from_json_str};
+use actingcommand_page_detector::PageDetector;
 use actingcommand_recognition::Scene;
-use actingcommand_recognition_pack::{RecognitionEvaluator, load_pack_from_json_str};
-use serde_json::Value;
-use std::fs;
+use actingcommand_recognition_pack::RecognitionEvaluator;
 
 pub(crate) use actingcommand_execution_kernel::{
     needs_detection, rect_response, target_evaluation_response,
@@ -90,48 +88,32 @@ impl<P: LabPorts> Lab<P> {
 }
 
 pub(crate) fn load_evaluator<P: LabPorts>(
-    lab: &mut Lab<P>,
+    _lab: &mut Lab<P>,
     input: &mut crate::ReadonlyRecognitionInput,
 ) -> LabResult<(RecognitionEvaluator, Vec<EnvResolved>)> {
-    let pack_json = fs::read_to_string(&input.pack_path).map_err(|error| {
-        LabError::usage(format!(
-            "failed to read {}: {error}",
-            input.pack_path.display()
-        ))
-    })?;
-    let mut pack_value: Value = serde_json::from_str(&pack_json).map_err(|error| {
-        LabError::usage(format!(
-            "failed to parse {}: {error}",
-            input.pack_path.display()
-        ))
-    })?;
-    let env_resolved = lab.resolve_env_markers(input.marker_request.clone(), &mut pack_value)?;
-    let resolved_json = serde_json::to_string(&pack_value).map_err(|error| {
-        LabError::usage(format!(
-            "failed to serialize resolved recognition pack {}: {error}",
-            input.pack_path.display()
-        ))
-    })?;
-    let pack = load_pack_from_json_str(&resolved_json)
-        .map_err(|error| LabError::usage(error.to_string()))?;
-    let evaluator = RecognitionEvaluator::new(input.pack_root.clone(), pack)
-        .map_err(|error| LabError::usage(error.to_string()))?;
-    Ok((evaluator, env_resolved))
+    let evaluator = input
+        .resources
+        .loaded_bundle()
+        .evaluator()
+        .cloned()
+        .ok_or_else(|| {
+            LabError::package_invalid(
+                "externally verified resource bundle has no recognition evaluator",
+            )
+        })?;
+    Ok((evaluator, Vec::new()))
 }
 
 pub(crate) fn load_page_detector(
     input: &crate::ReadonlyRecognitionInput,
     missing_message: &str,
 ) -> LabResult<PageDetector> {
-    let path = input
-        .pages_path
-        .as_ref()
-        .ok_or_else(|| LabError::usage(missing_message))?;
-    let pages_json = fs::read_to_string(path)
-        .map_err(|error| LabError::usage(format!("failed to read {}: {error}", path.display())))?;
-    let pages = load_page_set_from_json_str(&pages_json)
-        .map_err(|error| LabError::usage(error.to_string()))?;
-    PageDetector::new(pages).map_err(|error| LabError::usage(error.to_string()))
+    input
+        .resources
+        .loaded_bundle()
+        .detector()
+        .cloned()
+        .ok_or_else(|| LabError::package_invalid(missing_message))
 }
 
 pub(crate) fn recognition_scene<P: LabPorts>(

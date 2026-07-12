@@ -2,7 +2,7 @@
 
 use super::{
     CliError, CliOutcome, FlagArgs, GlobalOptions, finish_semantic_result_with_ledger,
-    navigation_path, parse_optional_duration_ms, read_user_config, reject_legacy_session_routing,
+    parse_optional_duration_ms, read_user_config, reject_legacy_session_routing,
     resolve_instance_id, semantic_ledger_context, target_argument,
 };
 use actingcommand_lab::{NavigateRequest, TapTargetRequest};
@@ -51,12 +51,10 @@ pub(super) fn run_navigate(global: &GlobalOptions, args: &[String]) -> CliOutcom
             .transpose()?;
         let input =
             super::readonly_cli::recognition_input_with_config(global, &flags, true, &config)?;
-        let navigation_path = navigation_path(global, &config, &flags);
         let mut lab =
             super::env_detection::build_drive_lab(config, instance_alias.as_deref(), !dry_run)?;
         let request = NavigateRequest {
             input,
-            navigation_path,
             to,
             allow_destructive: flags.bool("--allow-destructive"),
             dry_run,

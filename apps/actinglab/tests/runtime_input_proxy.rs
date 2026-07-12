@@ -473,9 +473,15 @@ fn production_tap_target_uses_runtime_capture_and_fenced_input() {
     let root = TempDir::new().expect("tempdir");
     let runtime_root = root.path().join("runtime");
     let resources = root.path().join("resources");
+    let semantic_package = root.path().join("semantic.zip");
     let config_path = root.path().join("actinglab.json");
     fs::write(&config_path, "{}").expect("write config");
     write_semantic_resources(&resources);
+    write_semantic_package(&semantic_package, &resources);
+    let expected_sha256 = format!(
+        "{:x}",
+        Sha256::digest(fs::read(&semantic_package).expect("semantic package"))
+    );
     let state = Arc::new(FakeState::default());
     let instance_id = *IdentifierIssuer::new()
         .expect("identifier issuer")
@@ -506,6 +512,10 @@ fn production_tap_target_uses_runtime_capture_and_fenced_input() {
             "tap-target",
             "home_button",
             "--capture",
+            "--zip",
+            semantic_package.to_str().expect("semantic package path"),
+            "--expected-sha256",
+            &expected_sha256,
         ])
         .env("ACTINGLAB_CONFIG_PATH", &config_path)
         .env("ACTINGCOMMAND_RUNTIME_STATE_ROOT", &runtime_root)
@@ -559,6 +569,33 @@ fn write_semantic_resources(root: &std::path::Path) {
         r#"{"schema_version":"0.3","game":"arknights","server":"cn","navigation":[],"destructive_actions":[]}"#,
     )
     .expect("navigation graph");
+}
+
+fn write_semantic_package(path: &Path, root: &Path) {
+    let pack = fs::read(root.join("recognition/arknights.cn.pack.json")).expect("pack");
+    let pages = fs::read(root.join("recognition/arknights.cn.pages.json")).expect("pages");
+    let navigation =
+        fs::read(root.join("navigation/arknights.cn.navigation.json")).expect("navigation");
+    write_zip(
+        path,
+        &[
+            (
+                "control.json",
+                br#"{"game":"arknights","server":"cn","entry_task_id":"task"}"#,
+            ),
+            (
+                "resources/manifest.json",
+                br#"{"schema_version":"0.3","entry_task_id":"task"}"#,
+            ),
+            ("resources/operations/task/task.json", br#"{}"#),
+            ("resources/recognition/arknights.cn.pack.json", &pack),
+            ("resources/recognition/arknights.cn.pages.json", &pages),
+            (
+                "resources/navigation/arknights.cn.navigation.json",
+                &navigation,
+            ),
+        ],
+    );
 }
 
 #[test]

@@ -2,13 +2,12 @@
 
 use super::{
     CliError, CliOutcome, FlagArgs, GlobalOptions, finish_semantic_result_with_ledger,
-    parse_optional_duration_ms, read_user_config, recognition_resources,
-    record_env_needs_detection, record_env_resolved, reject_legacy_session_routing,
-    resolve_instance_id, semantic_ledger_context, target_argument,
+    parse_optional_duration_ms, read_user_config, record_env_needs_detection, record_env_resolved,
+    reject_legacy_session_routing, resolve_instance_id, semantic_ledger_context, target_argument,
 };
 use actingcommand_lab::{
-    CurrentPageRequest, DetectPageOutput, DetectPageRequest, DetectPageResponse,
-    EnvMarkerResolutionRequest, IsVisibleRequest, ReadonlyRecognitionInput, RecognizeRequest,
+    CurrentPageRequest, DetectPageOutput, DetectPageRequest, DetectPageResponse, IsVisibleRequest,
+    ReadonlyRecognitionInput, RecognizeRequest,
 };
 use actingcommand_ledger::IdKind;
 use serde::Serialize;
@@ -105,7 +104,10 @@ fn prepare_recognition_input_with_config(
     require_pages: bool,
     config: &super::UserConfig,
 ) -> CliOutcome<PreparedReadonlyInput> {
-    let resources = recognition_resources(global, config, flags, require_pages)?;
+    let resources = super::contained_resources::load(flags, "readonly")?;
+    if require_pages {
+        super::contained_resources::recognition_pipeline(&resources)?;
+    }
     let (capture_config, capture_instance_alias) = if !flags.bool("--capture") {
         (None, None)
     } else {
@@ -121,18 +123,7 @@ fn prepare_recognition_input_with_config(
     };
     Ok(PreparedReadonlyInput {
         input: ReadonlyRecognitionInput {
-            marker_request: EnvMarkerResolutionRequest {
-                resource_root: resources.pack_root.clone(),
-                instance: flags
-                    .optional("--instance")
-                    .or_else(|| global.instance.clone()),
-                game: flags.optional("--game").or_else(|| global.game.clone()),
-                server: flags.optional("--server").or_else(|| global.server.clone()),
-                env_task: flags.optional("--env-task"),
-            },
-            pack_path: resources.pack_path,
-            pack_root: resources.pack_root,
-            pages_path: resources.pages_path,
+            resources,
             scene: None,
             scene_path: flags.optional_path("--scene"),
             capture_config,

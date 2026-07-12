@@ -103,14 +103,15 @@ pub(crate) fn run_observe(global: &GlobalOptions, args: &[String]) -> CliOutcome
         &flags,
     )?;
     let result = (|| -> CliOutcome<Value> {
-        let config = read_user_config()?;
-        let (evaluator, detector, env_resolved) =
-            load_semantic_detector_with_env(global, &config, &flags)?;
+        let resources = super::contained_resources::load(&flags, "observe")?;
+        let (evaluator, detector) = super::contained_resources::recognition_pipeline(&resources)?;
+        let env_resolved = Vec::<env_detection::ResolvedEnvValue>::new();
+        let graph = super::contained_resources::navigation_graph(&resources)?;
         let loaded_scene = load_lab2_scene(global, &flags)?;
         let outcome = detect_current_page(&evaluator, &detector, &loaded_scene.scene)?;
         let frame_path = write_frame_if_requested(&flags, &loaded_scene)?;
         let targets = observe_targets(&evaluator, &loaded_scene.scene, &flags, &outcome)?;
-        let actions = observe_actions(global, &config, &flags, &outcome)?;
+        let actions = observe_actions(&graph, &outcome);
         let mut payload = json!({
             "req_id": ids.req_id,
             "state": if outcome.matched { "observed" } else { "unknown" },
@@ -222,8 +223,9 @@ pub(crate) fn run_do(global: &GlobalOptions, args: &[String]) -> CliOutcome<Valu
     let implicit_lease = implicit_lab2_lease(&flags, &arbitration.decision);
     let result = (|| -> CliOutcome<Value> {
         let config = read_user_config()?;
-        let (evaluator, detector, env_resolved) =
-            load_semantic_detector_with_env(global, &config, &flags)?;
+        let resources = super::contained_resources::load(&flags, "do")?;
+        let (evaluator, detector) = super::contained_resources::recognition_pipeline(&resources)?;
+        let env_resolved = Vec::<env_detection::ResolvedEnvValue>::new();
         guard_evaluable_target(&evaluator, &target, "do")?;
         let loaded_scene = load_lab2_scene(global, &flags)?;
         let before = detect_current_page(&evaluator, &detector, &loaded_scene.scene)?;
@@ -255,7 +257,7 @@ pub(crate) fn run_do(global: &GlobalOptions, args: &[String]) -> CliOutcome<Valu
             .map_err(|err| CliError::usage(err.to_string()))?;
         let actual_click = derive_lab2_click_rect(&evaluator, &target, click, &evaluation)?;
         if !allow_destructive {
-            let graph = load_navigation_graph(global, &config, &flags)?;
+            let graph = super::contained_resources::navigation_graph(&resources)?;
             if let Err(error) = reject_lab2_destructive_click_overlap(
                 &target,
                 &before.page,
@@ -403,9 +405,10 @@ pub(crate) fn run_ensure(global: &GlobalOptions, args: &[String]) -> CliOutcome<
     let implicit_lease = implicit_lab2_lease(&flags, &arbitration.decision);
     let result = (|| -> CliOutcome<Value> {
         let config = read_user_config()?;
-        let (evaluator, detector, env_resolved) =
-            load_semantic_detector_with_env(global, &config, &flags)?;
-        let graph = load_navigation_graph(global, &config, &flags)?;
+        let resources = super::contained_resources::load(&flags, "ensure")?;
+        let (evaluator, detector) = super::contained_resources::recognition_pipeline(&resources)?;
+        let env_resolved = Vec::<env_detection::ResolvedEnvValue>::new();
+        let graph = super::contained_resources::navigation_graph(&resources)?;
         let scene = load_lab2_scene(global, &flags)?;
         let start = detect_current_page(&evaluator, &detector, &scene.scene)?;
         let target_page = canonical_navigation_page(&graph, &to);
@@ -554,9 +557,9 @@ pub(crate) fn run_wait(global: &GlobalOptions, args: &[String]) -> CliOutcome<Va
         &flags,
     )?;
     let result = (|| -> CliOutcome<Value> {
-        let config = read_user_config()?;
-        let (evaluator, detector, env_resolved) =
-            load_semantic_detector_with_env(global, &config, &flags)?;
+        let resources = super::contained_resources::load(&flags, "wait")?;
+        let (evaluator, detector) = super::contained_resources::recognition_pipeline(&resources)?;
+        let env_resolved = Vec::<env_detection::ResolvedEnvValue>::new();
         let timeout = parse_optional_duration_ms(&flags, "--timeout-ms", 5_000)?;
         let poll = parse_optional_duration_ms(&flags, "--poll-ms", 200)?;
         let wait_ids = WaitIds {
@@ -2233,19 +2236,13 @@ fn observe_targets(
     Ok(targets)
 }
 
-fn observe_actions(
-    global: &GlobalOptions,
-    config: &UserConfig,
-    flags: &FlagArgs,
-    outcome: &PageDetectionOutcome,
-) -> CliOutcome<Vec<Value>> {
-    let graph = load_navigation_graph(global, config, flags)?;
-    Ok(graph
+fn observe_actions(graph: &NavigationGraph, outcome: &PageDetectionOutcome) -> Vec<Value> {
+    graph
         .edges
         .iter()
         .filter(|edge| outcome.matched && edge.from_page == outcome.page)
         .map(navigation_edge_json)
-        .collect::<Vec<_>>())
+        .collect::<Vec<_>>()
 }
 
 fn lab2_page_candidates(outcome: &PageDetectionOutcome) -> Vec<Value> {

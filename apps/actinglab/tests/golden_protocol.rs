@@ -203,6 +203,7 @@ fn normalizer_replaces_only_dynamic_protocol_fields() {
         "instance_id": "envinst_abcdef",
         "source_result": "detect_resolution@123",
         "input_sha256": "0123456789abcdef",
+        "message": "hash mismatch: expected 0000000000000000000000000000000000000000000000000000000000000000, actual ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
         "path": temp.path().join("result.json").display().to_string(),
         "schema_version": "0.2",
         "confidence": 0.9876543
@@ -216,6 +217,10 @@ fn normalizer_replaces_only_dynamic_protocol_fields() {
     assert_eq!(value["instance_id"], "<IID>");
     assert_eq!(value["source_result"], "detect_resolution@<TIME>");
     assert_eq!(value["input_sha256"], "<INPUT_SHA256>");
+    assert_eq!(
+        value["message"],
+        "hash mismatch: expected <SHA256>, actual <SHA256>"
+    );
     assert_eq!(value["path"], "<PATH>");
     assert_eq!(value["detector_id"], "detect_resolution");
     assert_eq!(value["schema_version"], "0.2");
@@ -396,7 +401,33 @@ fn normalize_string(text: &mut String, root: &Path, key: Option<&str>) {
     *text = text
         .replace(&root_text, "<PATH>")
         .replace(&slash_root, "<PATH>");
+    if key == Some("message") {
+        replace_embedded_sha256(text);
+    }
     replace_embedded_instance_id(text);
+}
+
+fn replace_embedded_sha256(text: &mut String) {
+    let bytes = text.as_bytes();
+    let mut ranges = Vec::new();
+    let mut start = 0;
+    while start < bytes.len() {
+        if !bytes[start].is_ascii_hexdigit() {
+            start += 1;
+            continue;
+        }
+        let mut end = start + 1;
+        while end < bytes.len() && bytes[end].is_ascii_hexdigit() {
+            end += 1;
+        }
+        if end - start == 64 {
+            ranges.push(start..end);
+        }
+        start = end;
+    }
+    for range in ranges.into_iter().rev() {
+        text.replace_range(range, "<SHA256>");
+    }
 }
 
 fn replace_embedded_instance_id(text: &mut String) {
@@ -481,6 +512,8 @@ struct Fixture {
     safe_package: PathBuf,
     bad_hash_package: PathBuf,
     lab_package: PathBuf,
+    semantic_package: PathBuf,
+    semantic_package_sha256: String,
     fake_adb: PathBuf,
     _runtime_host: Option<RuntimeHost>,
 }
@@ -502,6 +535,7 @@ impl Fixture {
         let safe_package = root.join("safe.zip");
         let bad_hash_package = root.join("bad-hash.zip");
         let lab_package = root.join("lab.zip");
+        let semantic_package = root.join("semantic.zip");
 
         fs::create_dir_all(&state_root).expect("state root");
         fs::create_dir_all(&run_root).expect("run root");
@@ -510,6 +544,11 @@ impl Fixture {
         fs::write(&lab_scene, encode_png(2, 2, [255, 0, 0])).expect("lab scene");
         fs::write(&invalid_pages, b"not-json").expect("invalid pages");
         write_semantic_resources(&resource_root);
+        write_semantic_package(&semantic_package, &resource_root);
+        let semantic_package_sha256 = format!(
+            "{:x}",
+            Sha256::digest(fs::read(&semantic_package).expect("semantic package bytes"))
+        );
         write_package_repo(&package_repo);
         write_safe_packages(&safe_package, &bad_hash_package);
         write_lab_package(&lab_package, &encode_png(2, 2, [255, 0, 0]));
@@ -541,6 +580,8 @@ impl Fixture {
             safe_package,
             bad_hash_package,
             lab_package,
+            semantic_package,
+            semantic_package_sha256,
             fake_adb,
             _runtime_host: runtime_host,
         }
@@ -780,6 +821,35 @@ impl Fixture {
             }
             other => panic!("unknown golden case {other}"),
         }
+        if matches!(
+            name,
+            "recognize_success"
+                | "recognize_failure"
+                | "detect_page_success"
+                | "detect_page_failure"
+                | "current_page_success"
+                | "current_page_failure"
+                | "is_visible_success"
+                | "is_visible_failure"
+                | "tap_target_success"
+                | "tap_target_failure"
+                | "navigate_success"
+                | "navigate_failure"
+                | "observe_success"
+                | "observe_failure"
+                | "do_success"
+                | "do_failure"
+        ) {
+            args.extend([os("--zip"), self.semantic_package.clone().into_os_string()]);
+            args.extend([
+                os("--expected-sha256"),
+                os(if name == "detect_page_failure" {
+                    "0000000000000000000000000000000000000000000000000000000000000000"
+                } else {
+                    &self.semantic_package_sha256
+                }),
+            ]);
+        }
         args
     }
 
@@ -925,6 +995,33 @@ fn write_semantic_resources(root: &Path) {
         }"#,
     )
     .expect("detections");
+}
+
+fn write_semantic_package(path: &Path, root: &Path) {
+    let pack = fs::read(root.join("recognition/arknights.cn.pack.json")).expect("semantic pack");
+    let pages = fs::read(root.join("recognition/arknights.cn.pages.json")).expect("semantic pages");
+    let navigation = fs::read(root.join("navigation/arknights.cn.navigation.json"))
+        .expect("semantic navigation");
+    write_zip(
+        path,
+        &[
+            (
+                "control.json",
+                br#"{"game":"arknights","server":"cn","entry_task_id":"task"}"#,
+            ),
+            (
+                "resources/manifest.json",
+                br#"{"schema_version":"0.3","entry_task_id":"task"}"#,
+            ),
+            ("resources/operations/task/task.json", br#"{}"#),
+            ("resources/recognition/arknights.cn.pack.json", &pack),
+            ("resources/recognition/arknights.cn.pages.json", &pages),
+            (
+                "resources/navigation/arknights.cn.navigation.json",
+                &navigation,
+            ),
+        ],
+    );
 }
 
 fn write_package_repo(root: &Path) {

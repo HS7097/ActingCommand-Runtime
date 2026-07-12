@@ -8,10 +8,15 @@ use crate::{
 };
 use actingcommand_contract::InputAction;
 use actingcommand_device::InputBackend;
+use actingcommand_pack_containment::Sha256Hash;
 use actingcommand_recognition::{Scene, ScenePixelFormat};
+use std::fs::File;
+use std::io::Write;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use tempfile::TempDir;
+use zip::ZipWriter;
+use zip::write::FileOptions;
 
 #[test]
 fn tap_target_dry_run_returns_typed_plan() {
@@ -118,20 +123,26 @@ fn absolute_coordinate_derivation_preserves_existing_translation() {
 
 struct Fixture {
     temp: TempDir,
-    pack_path: PathBuf,
-    pages_path: PathBuf,
-    navigation_path: PathBuf,
+    resources: Arc<crate::ExternallyVerifiedBundle>,
     actions: Arc<Mutex<Vec<String>>>,
 }
 
 impl Fixture {
     fn new() -> Self {
         let temp = TempDir::new().expect("tempdir");
-        let pack_path = temp.path().join("fixture.pack.json");
-        let pages_path = temp.path().join("fixture.pages.json");
-        let navigation_path = temp.path().join("fixture.navigation.json");
-        std::fs::write(
-            &pack_path,
+        let zip_path = temp.path().join("fixture.zip");
+        let files = [
+            (
+                "control.json",
+                br#"{"game":"fixture","server":"test","entry_task_id":"task"}"#.as_slice(),
+            ),
+            (
+                "resources/manifest.json",
+                br#"{"schema_version":"0.3","entry_task_id":"task"}"#.as_slice(),
+            ),
+            ("resources/operations/task/task.json", br#"{}"#.as_slice()),
+            (
+                "resources/recognition/fixture.test.pack.json",
             r#"{
                 "schema_version":"0.3",
                 "coordinate_space":{"width":1,"height":1},
@@ -139,22 +150,22 @@ impl Fixture {
                     {"type":"color","id":"home_anchor","region":{"x":0,"y":0,"width":1,"height":1},"expected":[255,0,0]},
                     {"type":"color","id":"home_button","region":{"x":0,"y":0,"width":1,"height":1},"expected":[255,0,0],"click":{"x":10,"y":20,"width":4,"height":6}}
                 ]
-            }"#,
-        )
-        .expect("pack");
-        std::fs::write(
-            &pages_path,
+            }"#
+                .as_bytes(),
+            ),
+            (
+                "resources/recognition/fixture.test.pages.json",
             r#"{
                 "schema_version":"0.3",
                 "pages":[
                     {"id":"fixture/home","required":["home_anchor"]},
                     {"id":"fixture/target","required":["home_button"]}
                 ]
-            }"#,
-        )
-        .expect("pages");
-        std::fs::write(
-            &navigation_path,
+            }"#
+                .as_bytes(),
+            ),
+            (
+                "resources/navigation/fixture.test.navigation.json",
             r#"{
                 "schema_version":"0.3",
                 "game":"fixture",
@@ -165,14 +176,21 @@ impl Fixture {
                     "click":{"kind":"rect","x":10,"y":20,"width":4,"height":6}
                 }],
                 "destructive_actions":[]
-            }"#,
-        )
-        .expect("navigation");
+            }"#
+                .as_bytes(),
+            ),
+        ];
+        write_zip(&zip_path, &files);
+        let bytes = std::fs::read(&zip_path).expect("bundle bytes");
+        let expected =
+            crate::ExternalExpectedSha256::parse_hex(&Sha256Hash::digest(&bytes).to_string())
+                .expect("expected hash");
+        let resources = crate::ExternallyVerifiedBundle::load("drive_fixture", &bytes, expected)
+            .map(Arc::new)
+            .expect("verified bundle");
         Self {
             temp,
-            pack_path,
-            pages_path,
-            navigation_path,
+            resources,
             actions: Arc::new(Mutex::new(Vec::new())),
         }
     }
@@ -207,7 +225,6 @@ impl Fixture {
     fn navigate_request(&self) -> crate::NavigateRequest {
         crate::NavigateRequest {
             input: self.input(red_scene(), true),
-            navigation_path: Ok(self.navigation_path.clone()),
             to: "target".to_string(),
             allow_destructive: false,
             dry_run: true,
@@ -217,18 +234,9 @@ impl Fixture {
         }
     }
 
-    fn input(&self, scene: Scene, pages: bool) -> crate::ReadonlyRecognitionInput {
+    fn input(&self, scene: Scene, _pages: bool) -> crate::ReadonlyRecognitionInput {
         crate::ReadonlyRecognitionInput {
-            pack_path: self.pack_path.clone(),
-            pack_root: self.temp.path().to_path_buf(),
-            pages_path: pages.then(|| self.pages_path.clone()),
-            marker_request: crate::EnvMarkerResolutionRequest {
-                resource_root: self.temp.path().to_path_buf(),
-                instance: None,
-                game: None,
-                server: None,
-                env_task: None,
-            },
+            resources: Arc::clone(&self.resources),
             scene: Some(scene),
             scene_path: None,
             capture_config: None,
@@ -236,6 +244,17 @@ impl Fixture {
             fresh_delay: Duration::from_millis(160),
         }
     }
+}
+
+fn write_zip(path: &std::path::Path, files: &[(&str, &[u8])]) {
+    let file = File::create(path).expect("create bundle");
+    let mut zip = ZipWriter::new(file);
+    let options = FileOptions::default().compression_method(zip::CompressionMethod::Stored);
+    for (name, bytes) in files {
+        zip.start_file(*name, options).expect("start bundle entry");
+        zip.write_all(bytes).expect("write bundle entry");
+    }
+    zip.finish().expect("finish bundle");
 }
 
 struct DisabledInputFactory;

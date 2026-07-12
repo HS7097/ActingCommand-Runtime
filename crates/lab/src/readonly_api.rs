@@ -3,6 +3,7 @@
 use actingcommand_device::CaptureBackendConfig;
 use actingcommand_recognition::Scene;
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::time::Duration;
 
 pub use actingcommand_execution_kernel::{
@@ -13,10 +14,7 @@ pub use actingcommand_execution_kernel::{
 };
 
 pub struct ReadonlyRecognitionInput {
-    pub pack_path: PathBuf,
-    pub pack_root: PathBuf,
-    pub pages_path: Option<PathBuf>,
-    pub marker_request: crate::EnvMarkerResolutionRequest,
+    pub resources: Arc<crate::ExternallyVerifiedBundle>,
     pub scene: Option<Scene>,
     pub scene_path: Option<PathBuf>,
     pub capture_config: Option<CaptureBackendConfig>,

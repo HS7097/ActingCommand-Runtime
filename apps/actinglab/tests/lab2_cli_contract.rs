@@ -1,16 +1,47 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 use serde_json::Value;
-use std::fs;
-use std::path::Path;
+use sha2::{Digest, Sha256};
+use std::fs::{self, File};
+use std::io::Write;
+use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Output, Stdio};
 use tempfile::TempDir;
+use zip::ZipWriter;
+use zip::write::FileOptions;
 
 fn actinglab_binary() -> &'static str {
     env!("CARGO_BIN_EXE_actinglab")
 }
 
-fn write_lab2_resource_root() -> TempDir {
+struct Lab2Fixture {
+    temp: TempDir,
+    package: PathBuf,
+    expected_sha256: String,
+}
+
+impl Lab2Fixture {
+    fn path(&self) -> &Path {
+        self.temp.path()
+    }
+
+    fn with_semantic_args<I>(&self, args: I) -> Vec<String>
+    where
+        I: IntoIterator,
+        I::Item: Into<String>,
+    {
+        let mut args = args.into_iter().map(Into::into).collect::<Vec<_>>();
+        args.extend([
+            "--zip".to_string(),
+            self.package.display().to_string(),
+            "--expected-sha256".to_string(),
+            self.expected_sha256.clone(),
+        ]);
+        args
+    }
+}
+
+fn write_lab2_resource_root() -> Lab2Fixture {
     let temp = TempDir::new().unwrap();
     fs::create_dir(temp.path().join("recognition")).unwrap();
     fs::create_dir(temp.path().join("navigation")).unwrap();
@@ -49,7 +80,48 @@ fn write_lab2_resource_root() -> TempDir {
         }"#,
     )
     .unwrap();
-    temp
+    let package = temp.path().join("semantic.zip");
+    let file = File::create(&package).unwrap();
+    let mut zip = ZipWriter::new(file);
+    let options = FileOptions::default().compression_method(zip::CompressionMethod::Stored);
+    for (name, bytes) in [
+        (
+            "control.json",
+            br#"{"game":"arknights","server":"cn","entry_task_id":"task"}"#.as_slice(),
+        ),
+        (
+            "resources/manifest.json",
+            br#"{"schema_version":"0.3","entry_task_id":"task"}"#.as_slice(),
+        ),
+        ("resources/operations/task/task.json", br#"{}"#.as_slice()),
+    ] {
+        zip.start_file(name, options).unwrap();
+        zip.write_all(bytes).unwrap();
+    }
+    for (source, destination) in [
+        (
+            temp.path().join("recognition/arknights.cn.pack.json"),
+            "resources/recognition/arknights.cn.pack.json",
+        ),
+        (
+            temp.path().join("recognition/arknights.cn.pages.json"),
+            "resources/recognition/arknights.cn.pages.json",
+        ),
+        (
+            temp.path().join("navigation/arknights.cn.navigation.json"),
+            "resources/navigation/arknights.cn.navigation.json",
+        ),
+    ] {
+        zip.start_file(destination, options).unwrap();
+        zip.write_all(&fs::read(source).unwrap()).unwrap();
+    }
+    zip.finish().unwrap();
+    let expected_sha256 = format!("{:x}", Sha256::digest(fs::read(&package).unwrap()));
+    Lab2Fixture {
+        temp,
+        package,
+        expected_sha256,
+    }
 }
 
 fn run_actinglab(args: &[&str], local_app_data: &Path) -> Output {
@@ -74,6 +146,13 @@ fn run_actinglab_owned(args: &[String], local_app_data: &Path) -> Output {
     command
         .output()
         .expect("actinglab child process should run")
+}
+
+fn run_semantic_actinglab(args: &[&str], fixture: &Lab2Fixture, local_app_data: &Path) -> Output {
+    run_actinglab_owned(
+        &fixture.with_semantic_args(args.iter().copied()),
+        local_app_data,
+    )
 }
 
 fn spawn_actinglab(args: &[String], local_app_data: &Path) -> Child {
@@ -234,7 +313,7 @@ fn lab2_child_process_stdout_starts_with_json_object() {
     let temp = write_lab2_resource_root();
     let scene = temp.path().join("home.png");
     fs::write(&scene, encode_png(1, 1, [255, 0, 0])).unwrap();
-    let output = run_actinglab(
+    let output = run_semantic_actinglab(
         &[
             "--json",
             "--dry-run",
@@ -247,6 +326,7 @@ fn lab2_child_process_stdout_starts_with_json_object() {
             "--scene",
             scene.to_str().unwrap(),
         ],
+        &temp,
         local.path(),
     );
 
@@ -366,8 +446,8 @@ fn lab2_bare_do_uses_short_lease_without_self_locking_next_call() {
         scene.to_str().unwrap(),
     ];
 
-    let first = run_actinglab(&args, local.path());
-    let second = run_actinglab(&args, local.path());
+    let first = run_semantic_actinglab(&args, &temp, local.path());
+    let second = run_semantic_actinglab(&args, &temp, local.path());
 
     assert!(
         first.status.success(),
@@ -506,8 +586,8 @@ fn lab2_explicit_arbitrator_lease_can_be_reused_and_blocks_third_party() {
         lease_id.as_str(),
     ];
 
-    let first = run_actinglab(&do_args, local.path());
-    let second = run_actinglab(&do_args, local.path());
+    let first = run_semantic_actinglab(&do_args, &temp, local.path());
+    let second = run_semantic_actinglab(&do_args, &temp, local.path());
     assert!(
         first.status.success(),
         "{}",
@@ -519,7 +599,7 @@ fn lab2_explicit_arbitrator_lease_can_be_reused_and_blocks_third_party() {
         String::from_utf8_lossy(&second.stdout)
     );
 
-    let blocked = run_actinglab(
+    let blocked = run_semantic_actinglab(
         &[
             "--json",
             "--dry-run",
@@ -534,6 +614,7 @@ fn lab2_explicit_arbitrator_lease_can_be_reused_and_blocks_third_party() {
             "--scene",
             scene.to_str().unwrap(),
         ],
+        &temp,
         local.path(),
     );
     assert!(!blocked.status.success());
@@ -570,7 +651,7 @@ fn lab2_explicit_lease_id_blocks_concurrent_driver_until_first_finishes() {
         .and_then(Value::as_str)
         .expect("lease id")
         .to_string();
-    let args = vec![
+    let args = temp.with_semantic_args(vec![
         "--json".to_string(),
         "--dry-run".to_string(),
         "--resource-root".to_string(),
@@ -587,7 +668,7 @@ fn lab2_explicit_lease_id_blocks_concurrent_driver_until_first_finishes() {
         lease_id,
         "--test-capture-delay-ms".to_string(),
         "1200".to_string(),
-    ];
+    ]);
 
     let first = spawn_actinglab(&args, local.path());
     std::thread::sleep(std::time::Duration::from_millis(100));
@@ -607,7 +688,7 @@ fn lab2_concurrent_bare_do_blocks_same_instance_writer_during_short_lease() {
     let temp = write_lab2_resource_root();
     let scene = temp.path().join("home.png");
     fs::write(&scene, encode_png(1, 1, [255, 0, 0])).unwrap();
-    let args = vec![
+    let args = temp.with_semantic_args(vec![
         "--json".to_string(),
         "--dry-run".to_string(),
         "--resource-root".to_string(),
@@ -622,7 +703,7 @@ fn lab2_concurrent_bare_do_blocks_same_instance_writer_during_short_lease() {
         scene.display().to_string(),
         "--test-capture-delay-ms".to_string(),
         "700".to_string(),
-    ];
+    ]);
 
     let first = spawn_actinglab(&args, local.path());
     std::thread::sleep(std::time::Duration::from_millis(100));

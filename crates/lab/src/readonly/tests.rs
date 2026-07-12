@@ -3,10 +3,16 @@
 use super::*;
 use crate::ports::{DisabledLedger, DisabledSemanticInput};
 use crate::{CaptureBackendFactory, Clock, ConfigSource, InputBackendFactory, LabPorts};
+use actingcommand_pack_containment::Sha256Hash;
 use actingcommand_recognition::ScenePixelFormat;
+use std::fs::File;
+use std::io::Write;
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::time::Duration;
 use tempfile::TempDir;
+use zip::ZipWriter;
+use zip::write::FileOptions;
 
 struct DisabledInputFactory;
 
@@ -181,17 +187,25 @@ fn is_visible_reports_failed_evaluation_without_fake_success() {
 
 struct Fixture {
     temp: TempDir,
-    pack_path: PathBuf,
-    pages_path: PathBuf,
+    resources: Arc<crate::ExternallyVerifiedBundle>,
 }
 
 impl Fixture {
     fn new() -> Self {
         let temp = TempDir::new().expect("tempdir");
-        let pack_path = temp.path().join("fixture.pack.json");
-        let pages_path = temp.path().join("fixture.pages.json");
-        std::fs::write(
-            &pack_path,
+        let zip_path = temp.path().join("fixture.zip");
+        let files = [
+            (
+                "control.json",
+                br#"{"game":"fixture","server":"test","entry_task_id":"task"}"#.as_slice(),
+            ),
+            (
+                "resources/manifest.json",
+                br#"{"schema_version":"0.3","entry_task_id":"task"}"#.as_slice(),
+            ),
+            ("resources/operations/task/task.json", br#"{}"#.as_slice()),
+            (
+                "resources/recognition/fixture.test.pack.json",
             r#"{
                 "schema_version":"0.3",
                 "coordinate_space":{"width":1,"height":1},
@@ -199,22 +213,27 @@ impl Fixture {
                     {"type":"color","id":"home_anchor","region":{"x":0,"y":0,"width":1,"height":1},"expected":[255,0,0]},
                     {"type":"click_only","id":"home_button","click":{"x":10,"y":20,"width":4,"height":6}}
                 ]
-            }"#,
-        )
-        .expect("pack");
-        std::fs::write(
-            &pages_path,
+            }"#
+                .as_bytes(),
+            ),
+            (
+                "resources/recognition/fixture.test.pages.json",
             r#"{
                 "schema_version":"0.3",
                 "pages":[{"id":"fixture/home","required":["home_anchor"]}]
-            }"#,
-        )
-        .expect("pages");
-        Self {
-            temp,
-            pack_path,
-            pages_path,
-        }
+            }"#
+                .as_bytes(),
+            ),
+        ];
+        write_zip(&zip_path, &files);
+        let bytes = std::fs::read(&zip_path).expect("bundle bytes");
+        let expected =
+            crate::ExternalExpectedSha256::parse_hex(&Sha256Hash::digest(&bytes).to_string())
+                .expect("expected hash");
+        let resources = crate::ExternallyVerifiedBundle::load("readonly_fixture", &bytes, expected)
+            .map(Arc::new)
+            .expect("verified bundle");
+        Self { temp, resources }
     }
 
     fn lab(&self) -> Lab<TestPorts> {
@@ -232,18 +251,9 @@ impl Fixture {
         .expect("lab")
     }
 
-    fn input(&self, scene: Option<Scene>, pages: bool) -> crate::ReadonlyRecognitionInput {
+    fn input(&self, scene: Option<Scene>, _pages: bool) -> crate::ReadonlyRecognitionInput {
         crate::ReadonlyRecognitionInput {
-            pack_path: self.pack_path.clone(),
-            pack_root: self.temp.path().to_path_buf(),
-            pages_path: pages.then(|| self.pages_path.clone()),
-            marker_request: crate::EnvMarkerResolutionRequest {
-                resource_root: self.temp.path().to_path_buf(),
-                instance: None,
-                game: None,
-                server: None,
-                env_task: None,
-            },
+            resources: Arc::clone(&self.resources),
             scene,
             scene_path: None,
             capture_config: None,
@@ -251,6 +261,17 @@ impl Fixture {
             fresh_delay: Duration::from_millis(160),
         }
     }
+}
+
+fn write_zip(path: &std::path::Path, files: &[(&str, &[u8])]) {
+    let file = File::create(path).expect("create bundle");
+    let mut zip = ZipWriter::new(file);
+    let options = FileOptions::default().compression_method(zip::CompressionMethod::Stored);
+    for (name, bytes) in files {
+        zip.start_file(*name, options).expect("start bundle entry");
+        zip.write_all(bytes).expect("write bundle entry");
+    }
+    zip.finish().expect("finish bundle");
 }
 
 fn red_scene() -> Option<Scene> {

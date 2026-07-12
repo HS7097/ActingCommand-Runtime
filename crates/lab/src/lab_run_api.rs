@@ -2,7 +2,7 @@
 
 use crate::{FrameStoreControl, LabError, MemorySampleSource};
 use actingcommand_device::{CaptureBackendChoice, CaptureBackendConfig, TouchBackendConfig};
-pub use actingcommand_execution_kernel::ExternalExpectedSha256;
+pub use actingcommand_execution_kernel::{ExternalExpectedSha256, ExternallyVerifiedBundle};
 use actingcommand_pack_containment::Sha256Hash;
 use serde::Serialize;
 use std::path::PathBuf;
