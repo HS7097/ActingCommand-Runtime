@@ -22687,7 +22687,7 @@ mod tests {
     }
 
     #[test]
-    fn lab2_do_non_dry_run_resource_drift_stops_before_fake_touch() {
+    fn lab2_do_rejects_mixed_online_capture_and_offline_scene_before_touch() {
         let _guard = env_lock();
         let _app_env = set_isolated_app_env();
         unsafe {
@@ -22696,57 +22696,6 @@ mod tests {
             env::remove_var("ACTINGCOMMAND_TEST_FAKE_TOUCH_LOG");
         }
         let temp = semantic_resource_root(false);
-        let config_path = temp.path().join("config.json");
-        let adb_name = if cfg!(windows) { "adb.exe" } else { "adb" };
-        let adb_path = temp.path().join(adb_name);
-        fs::write(&adb_path, b"test adb placeholder").unwrap();
-        let mut config = UserConfig {
-            adb_path: Some(adb_path.display().to_string()),
-            ..Default::default()
-        };
-        config.instances.insert(
-            "default".to_string(),
-            InstanceConfig {
-                serial: Some("fake-device".to_string()),
-                game: Some("ark".to_string()),
-                server: Some("cn".to_string()),
-                capture_backend: Some("adb_screencap".to_string()),
-                touch_backend: Some("adb_shell_input".to_string()),
-                ..Default::default()
-            },
-        );
-        fs::write(&config_path, serde_json::to_vec(&config).unwrap()).unwrap();
-        set_config_env(&config_path);
-        let state_dir = temp.path().join("session");
-        fs::create_dir_all(&state_dir).unwrap();
-        let lab_lease = run_semantic_cli(
-            &temp,
-            [
-                "--json",
-                "--game",
-                "ark",
-                "lab",
-                "arbitrator",
-                "acquire",
-                "--state-dir",
-                state_dir.to_str().unwrap(),
-                "--instance",
-                "default",
-                "--verb",
-                "do",
-            ],
-            true,
-        );
-        assert_eq!(lab_lease.exit_code(), 0, "{}", lab_lease.envelope_json());
-        let lab_lease_id = lab_lease
-            .envelope
-            .data
-            .as_ref()
-            .unwrap()
-            .pointer("/arbitration/details/lease/lease_id")
-            .and_then(Value::as_str)
-            .unwrap()
-            .to_string();
         let scene = temp.path().join("target-drift.png");
         let touch_log = temp.path().join("fake-touch.json");
         fs::write(&scene, encode_png(1, 1, [0, 0, 255])).unwrap();
@@ -22766,13 +22715,9 @@ mod tests {
                 "ark",
                 "do",
                 "home_button",
-                "--state-dir",
-                state_dir.to_str().unwrap(),
                 "--scene",
                 scene.to_str().unwrap(),
                 "--capture",
-                "--lease-id",
-                &lab_lease_id,
                 "--fields",
                 "executed,device,actual_click,guard_result",
             ],
@@ -22782,10 +22727,10 @@ mod tests {
             env::remove_var("ACTINGCOMMAND_TEST_FAKE_TOUCH_LOG");
         }
 
-        assert_eq!(result.exit_code(), 3, "{}", result.envelope_json());
+        assert_eq!(result.exit_code(), 2, "{}", result.envelope_json());
         assert_eq!(
             result.envelope.error.as_ref().unwrap().code,
-            "target_not_visible"
+            "validation_failed"
         );
         assert!(!touch_log.exists());
     }

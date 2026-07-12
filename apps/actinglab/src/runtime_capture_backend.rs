@@ -172,7 +172,7 @@ impl RuntimeObservationCaptureBackend {
     }
 }
 
-fn frame_from_observation(
+pub(super) fn frame_from_observation(
     state_root: &std::path::Path,
     observation: &ReadonlyObservation,
 ) -> DeviceResult<Frame> {

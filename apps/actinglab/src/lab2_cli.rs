@@ -4,12 +4,14 @@ use actingcommand_arbitrator::{
     ArbitrationDecision, DegradedArbitrator, InstanceArbitration, LeaseGrant, RequestEnvelope,
     RequestPriority, RequestSource, RequestVerb,
 };
+use actingcommand_contract::{InputAction, ProjectionProfile, RuntimeResult};
 use actingcommand_ledger::{
     EvidenceStore, IdIssuer, IdKind, LabLedger, LedgerRecord, LedgerRecordKind, LightEvent,
     ProjectionRequest, ProjectionVerbosity, SessionHeader, enforce_retention, error_projection,
     forbidden_target_suspicion, guard_reject_suspicion, low_margin_suspicion, project_record,
     stale_frame_suspicion,
 };
+use actingcommand_runtime_client::RuntimeDebugSession;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};
@@ -92,6 +94,9 @@ struct Lab2CommandContract {
 
 pub(crate) fn run_observe(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
     let flags = FlagArgs::parse(args)?;
+    if flags.bool("--capture") {
+        return run_runtime_observe(global, &flags);
+    }
     let ids = Lab2Ids::new();
     let instance = lab2_instance(global, &flags);
     let arbitration = admit_lab2_request(
@@ -152,6 +157,277 @@ pub(crate) fn run_observe(global: &GlobalOptions, args: &[String]) -> CliOutcome
     )
 }
 
+fn run_runtime_observe(global: &GlobalOptions, flags: &FlagArgs) -> CliOutcome<Value> {
+    reject_mixed_online_and_offline_scene(flags, "observe")?;
+    let instance = lab2_instance(global, flags);
+    let resources = super::contained_resources::load(flags, "observe")?;
+    let (evaluator, detector) = super::contained_resources::recognition_pipeline(&resources)?;
+    let graph = super::contained_resources::navigation_graph(&resources)?;
+    let session = begin_runtime_debug_session()?;
+    let result = (|| -> CliOutcome<Value> {
+        let loaded_scene = load_runtime_lab2_scene(&session, &instance)?;
+        let outcome = detect_current_page(&evaluator, &detector, &loaded_scene.scene)?;
+        let frame_path = write_frame_if_requested(flags, &loaded_scene)?;
+        let targets = observe_targets(&evaluator, &loaded_scene.scene, flags, &outcome)?;
+        let actions = observe_actions(&graph, &outcome);
+        let mut payload = json!({
+            "req_id": session.correlation_id(),
+            "state": if outcome.matched { "observed" } else { "unknown" },
+            "instance": instance,
+            "page": if outcome.matched { outcome.page.clone() } else { "unknown".to_string() },
+            "matched": outcome.matched,
+            "standby": outcome.standby,
+            "frame_age_ms": loaded_scene.frame_age_ms,
+            "backend": loaded_scene.backend,
+            "frame_source": loaded_scene.source,
+            "targets": targets,
+            "actions": actions,
+            "arbitration": runtime_scheduler_projection(false),
+        });
+        if !outcome.matched {
+            payload["candidates"] = json!(lab2_page_candidates(&outcome));
+        }
+        if let Some(suspicion) = lab2_observation_suspicion(&outcome, loaded_scene.frame_age_ms) {
+            payload["suspicion"] = suspicion;
+        }
+        if let Some(path) = frame_path {
+            payload["frame_path"] = json!(path.display().to_string());
+        }
+        attach_env_resolved(&mut payload, &Vec::<env_detection::ResolvedEnvValue>::new());
+        Ok(payload)
+    })();
+    finish_runtime_debug_result(&session, flags, result)
+}
+
+fn run_runtime_do(
+    flags: &FlagArgs,
+    target: &str,
+    instance: &str,
+    dry_run: bool,
+    allow_destructive: bool,
+) -> CliOutcome<Value> {
+    reject_mixed_online_and_offline_scene(flags, "do")?;
+    let resources = super::contained_resources::load(flags, "do")?;
+    let (evaluator, detector) = super::contained_resources::recognition_pipeline(&resources)?;
+    let session = begin_runtime_debug_session()?;
+    let result = (|| -> CliOutcome<Value> {
+        guard_evaluable_target(&evaluator, target, "do")?;
+        let loaded_scene = load_runtime_lab2_scene(&session, instance)?;
+        let before = detect_current_page(&evaluator, &detector, &loaded_scene.scene)?;
+        let evaluation = evaluator
+            .evaluate_target(&loaded_scene.scene, target)
+            .map_err(|err| CliError::usage(err.to_string()))?;
+        if !evaluation.passed {
+            return Err(CliError::safety_blocked(
+                "target_not_visible",
+                format!(
+                    "target '{target}' did not pass guard recognition: {}",
+                    evaluation.message
+                ),
+                &["guard_target"],
+            )
+            .with_details(json!({
+                "error": "resource_drift",
+                "state": before.page,
+                "hint": "observe-current-page-and-refresh-resource-or-target",
+                "suspicion": guard_reject_suspicion(target, &evaluation.message)
+            })));
+        }
+        let click = evaluator
+            .get_click_target(target)
+            .map_err(|err| CliError::usage(err.to_string()))?;
+        let actual_click = derive_lab2_click_rect(&evaluator, target, click, &evaluation)?;
+        if !allow_destructive {
+            let graph = super::contained_resources::navigation_graph(&resources)?;
+            reject_lab2_destructive_click_overlap(target, &before.page, actual_click.rect, &graph)?;
+        }
+        let point = rect_center(actual_click.rect)?;
+        let (action_id, device) = if dry_run {
+            (Value::Null, json!({"executed": false, "mode": "dry_run"}))
+        } else {
+            let action_id = execute_runtime_debug_input(
+                &session,
+                instance,
+                InputAction::Tap {
+                    x: point.x,
+                    y: point.y,
+                },
+            )?;
+            (
+                serde_json::to_value(action_id)
+                    .map_err(|error| CliError::device(error.to_string()))?,
+                json!({
+                    "executed": true,
+                    "backend": "runtime_proxy",
+                    "authority": "runtime_execution_kernel",
+                    "action": {"type": "tap", "x": point.x, "y": point.y}
+                }),
+            )
+        };
+        let after = if dry_run {
+            before
+        } else {
+            let after_scene = load_runtime_lab2_scene(&session, instance)?;
+            detect_current_page(&evaluator, &detector, &after_scene.scene)?
+        };
+        let mut payload = json!({
+            "req_id": session.correlation_id(),
+            "reco_id": Value::Null,
+            "action_id": action_id,
+            "state": if dry_run { "planned" } else { "sent" },
+            "instance": instance,
+            "executed": !dry_run,
+            "target": target,
+            "page": after.page,
+            "frame_age_ms": loaded_scene.frame_age_ms,
+            "backend": loaded_scene.backend,
+            "actual_click": {
+                "kind": actual_click.kind,
+                "declared_rect": rect_json(click),
+                "rect": rect_json(actual_click.rect),
+                "point": point_json(point),
+                "coordinate_derivation": actual_click.derivation
+            },
+            "guard_result": {
+                "reco_id": Value::Null,
+                "target": target,
+                "passed": true,
+                "evaluation": target_eval_json(&evaluation)
+            },
+            "observation": page_detection_json(&after),
+            "device": device,
+            "arbitration": runtime_scheduler_projection(!dry_run),
+        });
+        attach_env_resolved(&mut payload, &Vec::<env_detection::ResolvedEnvValue>::new());
+        Ok(payload)
+    })();
+    finish_runtime_debug_result(&session, flags, result)
+}
+
+fn begin_runtime_debug_session() -> CliOutcome<RuntimeDebugSession> {
+    RuntimeClient::connect(RuntimeClientConfig::new(
+        runtime_state_root()?,
+        actingcommand_contract::EventActor::Lab,
+        actingcommand_contract::EventSource::Lab,
+    ))
+    .and_then(|client| client.begin_debug_session())
+    .map_err(|error| CliError::device(error.to_string()))
+}
+
+fn load_runtime_lab2_scene(session: &RuntimeDebugSession, instance: &str) -> CliOutcome<Lab2Scene> {
+    let receipt = session
+        .observe_readonly(instance)
+        .map_err(|error| CliError::device(error.to_string()))?;
+    let observation = match receipt.result() {
+        Some(RuntimeResult::ReadonlyObservationCompleted { observation }) => observation,
+        _ => {
+            return Err(CliError::device(
+                "Runtime returned an invalid debug observation",
+            ));
+        }
+    };
+    let frame =
+        runtime_capture_backend::frame_from_observation(&runtime_state_root()?, observation)
+            .map_err(|error| CliError::device(error.to_string()))?;
+    let frame_age_ms = system_time_age_ms(frame.captured_at);
+    let backend = frame.backend_name.as_str().to_string();
+    let png = frame.original_png.clone();
+    let scene = scene_from_frame(&frame)?;
+    Ok(Lab2Scene {
+        scene,
+        backend,
+        source: json!({
+            "kind": "runtime_observation",
+            "artifact": observation.artifact(),
+            "authority": "runtime_artifact_store"
+        }),
+        frame_age_ms,
+        png,
+    })
+}
+
+fn execute_runtime_debug_input(
+    session: &RuntimeDebugSession,
+    instance: &str,
+    action: InputAction,
+) -> CliOutcome<actingcommand_contract::ActionId> {
+    let token = session
+        .acquire_lease(instance)
+        .map_err(|error| CliError::device(error.to_string()))?;
+    let input = session.input(&token, action);
+    let release = session.release_lease(&token);
+    match (input, release) {
+        (Ok(action_id), Ok(())) => Ok(action_id),
+        (Err(primary), Ok(())) => Err(CliError::device(primary.to_string())),
+        (Ok(_), Err(release)) => Err(CliError::device(format!(
+            "Runtime input committed but lease release failed: {release}"
+        ))),
+        (Err(primary), Err(release)) => Err(CliError::device(format!(
+            "Runtime input failed: {primary}; lease cleanup also failed: {release}"
+        ))),
+    }
+}
+
+fn finish_runtime_debug_result(
+    session: &RuntimeDebugSession,
+    flags: &FlagArgs,
+    result: CliOutcome<Value>,
+) -> CliOutcome<Value> {
+    let events = session
+        .query_events(ProjectionProfile::Lab)
+        .map_err(|error| CliError::device(format!("Runtime debug projection failed: {error}")))?;
+    let ledger = json!({
+        "authority": "runtime_global_ledger",
+        "correlation_id": session.correlation_id(),
+        "event_count": events.len(),
+        "events": events
+    });
+    match result {
+        Ok(mut payload) => {
+            payload["ledger"] = ledger.clone();
+            payload["projection_source"] = json!({
+                "kind": "runtime_global_ledger",
+                "correlation_id": session.correlation_id(),
+                "profile": "lab"
+            });
+            project_lab2_payload(&payload, flags)
+        }
+        Err(error) => {
+            let mut details = error.details.clone().unwrap_or_else(|| {
+                json!({
+                    "error": error.code,
+                    "state": "failed",
+                    "hint": "inspect-runtime-ledger"
+                })
+            });
+            details["ledger"] = ledger;
+            details["projection_source"] = json!({
+                "kind": "runtime_global_ledger",
+                "correlation_id": session.correlation_id(),
+                "profile": "lab"
+            });
+            Err(error.with_details(details))
+        }
+    }
+}
+
+fn runtime_scheduler_projection(write_requested: bool) -> Value {
+    json!({
+        "authority": "runtime_scheduler",
+        "decision": if write_requested { "lease_acquired_and_released" } else { "readonly" },
+        "local_arbitrator": false
+    })
+}
+
+fn reject_mixed_online_and_offline_scene(flags: &FlagArgs, command: &str) -> CliOutcome<()> {
+    if flags.optional_path("--scene").is_some() {
+        return Err(CliError::usage(format!(
+            "{command} cannot combine --capture with offline --scene"
+        )));
+    }
+    Ok(())
+}
+
 pub(crate) fn run_do(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
     let flags = FlagArgs::parse(args)?;
     let ids = Lab2Ids::new();
@@ -181,6 +457,9 @@ pub(crate) fn run_do(global: &GlobalOptions, args: &[String]) -> CliOutcome<Valu
         return Err(CliError::usage(
             "do real execution requires --capture; use --dry-run with --scene for offline planning",
         ));
+    }
+    if flags.bool("--capture") {
+        return run_runtime_do(&flags, &target, &instance, dry_run, allow_destructive);
     }
     let recovery_wait = wait_for_lab2_recovery_clear(
         &flags,

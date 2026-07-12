@@ -543,6 +543,210 @@ fn production_tap_target_uses_runtime_capture_and_fenced_input() {
     host.close().expect("close host");
 }
 
+#[test]
+fn online_lab2_observe_and_do_share_runtime_authority_without_local_state() {
+    let root = TempDir::new().expect("tempdir");
+    let runtime_root = root.path().join("runtime");
+    let local_app_data = root.path().join("local-app-data");
+    let resources = root.path().join("resources");
+    let semantic_package = root.path().join("semantic.zip");
+    let config_path = root.path().join("actinglab.json");
+    fs::write(&config_path, "{}").expect("write config");
+    write_semantic_resources(&resources);
+    write_semantic_package(&semantic_package, &resources);
+    let expected_sha256 = format!(
+        "{:x}",
+        Sha256::digest(fs::read(&semantic_package).expect("semantic package"))
+    );
+    let state = Arc::new(FakeState::default());
+    let instance_id = *IdentifierIssuer::new()
+        .expect("identifier issuer")
+        .mint_instance_id()
+        .expect("instance id")
+        .transport();
+    let host = RuntimeHost::start(
+        RuntimeHostConfig::new(&runtime_root, b"actinglab-runtime-lab2-test"),
+        Arc::new(FakeProvider {
+            instance_id,
+            state: Arc::clone(&state),
+            frame_size: 1,
+        }),
+    )
+    .expect("runtime host");
+
+    let observe = run_actinglab_json(
+        &config_path,
+        &runtime_root,
+        &local_app_data,
+        [
+            "--json",
+            "--instance",
+            "ak.cn",
+            "observe",
+            "--capture",
+            "--zip",
+            semantic_package.to_str().expect("semantic package path"),
+            "--expected-sha256",
+            &expected_sha256,
+        ],
+    );
+    assert_eq!(
+        observe
+            .pointer("/data/arbitration/authority")
+            .and_then(Value::as_str),
+        Some("runtime_scheduler")
+    );
+
+    let action = run_actinglab_json(
+        &config_path,
+        &runtime_root,
+        &local_app_data,
+        [
+            "--json",
+            "--instance",
+            "ak.cn",
+            "do",
+            "home_button",
+            "--capture",
+            "--zip",
+            semantic_package.to_str().expect("semantic package path"),
+            "--expected-sha256",
+            &expected_sha256,
+        ],
+    );
+    assert_eq!(
+        action.pointer("/data/executed").and_then(Value::as_bool),
+        Some(true)
+    );
+    assert_eq!(
+        action
+            .pointer("/data/device/authority")
+            .and_then(Value::as_str),
+        Some("runtime_execution_kernel")
+    );
+    assert_eq!(state.taps.load(Ordering::Acquire), 1);
+    assert!(state.captures.load(Ordering::Acquire) >= 3);
+    assert!(!local_app_data.join("ActingCommand/actinglab/lab2").exists());
+
+    let client = RuntimeClient::connect(RuntimeClientConfig::new(
+        &runtime_root,
+        EventActor::Lab,
+        EventSource::Lab,
+    ))
+    .expect("Runtime client");
+    let events = client
+        .query_events(EventQuery::default(), ProjectionProfile::Forensic)
+        .expect("Runtime events");
+    let input = events
+        .iter()
+        .find(|event| event.event_type == EventType::InputCommitted)
+        .expect("input committed");
+    let correlation = input.links.correlation_id().copied().expect("correlation");
+    let correlated = events
+        .iter()
+        .filter(|event| event.links.correlation_id().copied() == Some(correlation))
+        .map(|event| event.event_type)
+        .collect::<Vec<_>>();
+    assert_event_order(
+        &correlated,
+        &[
+            EventType::CaptureCompleted,
+            EventType::LeaseGranted,
+            EventType::InputCommitted,
+            EventType::LeaseReleased,
+            EventType::CaptureCompleted,
+        ],
+    );
+
+    drop(client);
+    host.close().expect("close host");
+}
+
+#[test]
+fn online_lab2_do_guard_failure_records_observation_without_runtime_input() {
+    let root = TempDir::new().expect("tempdir");
+    let runtime_root = root.path().join("runtime");
+    let local_app_data = root.path().join("local-app-data");
+    let resources = root.path().join("resources");
+    let semantic_package = root.path().join("semantic.zip");
+    let config_path = root.path().join("actinglab.json");
+    fs::write(&config_path, "{}").expect("write config");
+    write_semantic_resources(&resources);
+    let pack_path = resources.join("recognition/arknights.cn.pack.json");
+    let pack = fs::read_to_string(&pack_path).expect("recognition pack");
+    fs::write(&pack_path, pack.replace("[255,0,0]", "[0,0,255]"))
+        .expect("mismatched recognition pack");
+    write_semantic_package(&semantic_package, &resources);
+    let expected_sha256 = format!(
+        "{:x}",
+        Sha256::digest(fs::read(&semantic_package).expect("semantic package"))
+    );
+    let state = Arc::new(FakeState::default());
+    let instance_id = *IdentifierIssuer::new()
+        .expect("identifier issuer")
+        .mint_instance_id()
+        .expect("instance id")
+        .transport();
+    let host = RuntimeHost::start(
+        RuntimeHostConfig::new(&runtime_root, b"actinglab-runtime-lab2-guard-test"),
+        Arc::new(FakeProvider {
+            instance_id,
+            state: Arc::clone(&state),
+            frame_size: 1,
+        }),
+    )
+    .expect("runtime host");
+
+    let (exit_code, failure) = run_actinglab_failure_json(
+        &config_path,
+        &runtime_root,
+        &local_app_data,
+        [
+            "--json",
+            "--instance",
+            "ak.cn",
+            "do",
+            "home_button",
+            "--capture",
+            "--zip",
+            semantic_package.to_str().expect("semantic package path"),
+            "--expected-sha256",
+            &expected_sha256,
+        ],
+    );
+    assert_eq!(exit_code, 3, "{failure}");
+    assert_eq!(failure["error"]["code"], "target_not_visible");
+    assert_eq!(
+        failure["error"]["details"]["ledger"]["authority"],
+        "runtime_global_ledger"
+    );
+    assert_eq!(state.taps.load(Ordering::Acquire), 0);
+    assert_eq!(state.captures.load(Ordering::Acquire), 1);
+
+    let client = RuntimeClient::connect(RuntimeClientConfig::new(
+        &runtime_root,
+        EventActor::Lab,
+        EventSource::Lab,
+    ))
+    .expect("Runtime client");
+    let events = client
+        .query_events(EventQuery::default(), ProjectionProfile::Forensic)
+        .expect("Runtime events");
+    assert!(
+        events
+            .iter()
+            .any(|event| event.event_type == EventType::CaptureCompleted)
+    );
+    assert!(
+        events
+            .iter()
+            .all(|event| event.event_type != EventType::InputCommitted)
+    );
+
+    drop(client);
+    host.close().expect("close host");
+}
+
 fn write_semantic_resources(root: &std::path::Path) {
     let recognition = root.join("recognition");
     let navigation = root.join("navigation");
