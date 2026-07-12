@@ -6,7 +6,8 @@ use actingcommand_contract::{
     InputAction, InstanceId, LeasePriority, LeaseQueuePolicy, ProjectionProfile,
     ResourceAuthoringEvent, ResourceAuthoringPhase, RuntimeCaptureBackend, RuntimeErrorCode,
     RuntimeErrorProjection, RuntimeMonitorPolicy, RuntimeOperation, RuntimeReceipt,
-    RuntimeReceiptState, RuntimeRequest, RuntimeResult,
+    RuntimeReceiptState, RuntimeRequest, RuntimeResult, RuntimeSubscriptionRequest,
+    SubscriptionCursor,
 };
 use actingcommand_device::{
     CaptureBackend, CaptureBackendName, DeviceError, DeviceResult, Frame, InputBackend, PixelFormat,
@@ -286,6 +287,94 @@ fn typed_client_discovers_runtime_and_routes_queries_and_input() {
     drop(client);
     host.close().expect("close host");
     assert_eq!(state.closes.load(Ordering::Acquire), 1);
+}
+
+#[test]
+fn subscription_waits_for_new_events_and_returns_a_resumable_batch() {
+    let root = TempDir::new().expect("tempdir");
+    let state = Arc::new(FakeState::default());
+    let host = host(&root, state, 1_000);
+    let subscriber = client(&root);
+    let after_sequence = subscriber
+        .query_events(EventQuery::default(), ProjectionProfile::Forensic)
+        .expect("initial events")
+        .last()
+        .map_or(0, |event| event.sequence);
+    let producer = client(&root);
+    let producer_thread = thread::spawn(move || {
+        thread::sleep(Duration::from_millis(25));
+        let token = producer.acquire_lease("ak.cn").expect("producer lease");
+        producer.release_lease(&token).expect("producer release");
+    });
+
+    let batch = subscriber
+        .subscribe_events(
+            RuntimeSubscriptionRequest::new(
+                EventQuery::default(),
+                ProjectionProfile::Forensic,
+                SubscriptionCursor { after_sequence },
+                500,
+                32,
+            )
+            .expect("subscription request"),
+        )
+        .expect("subscription batch");
+    producer_thread.join().expect("producer thread");
+
+    assert!(!batch.timed_out());
+    assert!(!batch.events().is_empty());
+    assert!(
+        batch
+            .events()
+            .iter()
+            .all(|event| event.sequence > after_sequence)
+    );
+    assert_eq!(
+        batch.next_cursor().after_sequence,
+        batch.events().last().expect("last event").sequence
+    );
+    drop(subscriber);
+    host.close().expect("close host");
+}
+
+#[test]
+fn subscription_timeout_is_an_explicit_idle_batch() {
+    let root = TempDir::new().expect("tempdir");
+    let state = Arc::new(FakeState::default());
+    let host = host(&root, state, 1_000);
+    let subscriber = client(&root);
+    let correlation_id = *IdentifierIssuer::new()
+        .expect("identifier issuer")
+        .mint_correlation_id()
+        .expect("correlation")
+        .transport();
+    let after_sequence = subscriber
+        .query_events(EventQuery::default(), ProjectionProfile::Forensic)
+        .expect("initial events")
+        .last()
+        .map_or(0, |event| event.sequence);
+
+    let batch = subscriber
+        .subscribe_events(
+            RuntimeSubscriptionRequest::new(
+                EventQuery {
+                    correlation_id: Some(correlation_id),
+                    ..EventQuery::default()
+                },
+                ProjectionProfile::Forensic,
+                SubscriptionCursor { after_sequence },
+                20,
+                8,
+            )
+            .expect("subscription request"),
+        )
+        .expect("timeout batch");
+
+    assert!(batch.timed_out());
+    assert!(batch.events().is_empty());
+    assert_eq!(batch.next_cursor().after_sequence, after_sequence);
+    drop(subscriber);
+    host.close().expect("close host");
 }
 
 #[test]

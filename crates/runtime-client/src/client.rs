@@ -6,9 +6,10 @@ use actingcommand_contract::{
     ActionId, CaptureSequenceSpec, CorrelationId, EventActor, EventQuery, EventSource,
     IdentifierIssuer, InputAction, IssuedCorrelationId, LeaseQueuePolicy, LeaseQueueStatus,
     LeaseToken, OwnerEpoch, PackageDebugRequest, ProjectedEvent, ProjectionProfile,
-    RUNTIME_INFO_FILE, RequestId, ResourceAuthoringEvent, RuntimeControlPlaneStatus, RuntimeInfo,
-    RuntimeMonitorInstanceStatus, RuntimeMonitorPolicy, RuntimeMonitorRegistryStatus,
-    RuntimeOperation, RuntimeReceipt, RuntimeRequest, RuntimeResult, TerminalEvent,
+    RUNTIME_INFO_FILE, RequestId, ResourceAuthoringEvent, RuntimeControlPlaneStatus,
+    RuntimeEventBatch, RuntimeInfo, RuntimeMonitorInstanceStatus, RuntimeMonitorPolicy,
+    RuntimeMonitorRegistryStatus, RuntimeOperation, RuntimeReceipt, RuntimeRequest, RuntimeResult,
+    RuntimeSubscriptionRequest, TerminalEvent,
 };
 use serde::Serialize;
 use std::fmt;
@@ -466,6 +467,36 @@ impl RuntimeClient {
         )? {
             RuntimeResult::Events { events } => Ok(events),
             _ => Err(self.unexpected_result("query_runtime_events")),
+        }
+    }
+
+    pub fn subscribe_events(
+        &self,
+        request: RuntimeSubscriptionRequest,
+    ) -> RuntimeClientResult<RuntimeEventBatch> {
+        request.validate().map_err(|_| {
+            RuntimeClientError::fatal(
+                "runtime_subscription_request_invalid",
+                "subscribe_runtime_events",
+            )
+        })?;
+        let response_timeout = self
+            .connection("subscribe_runtime_events")?
+            .io_timeout
+            .checked_add(Duration::from_millis(request.wait_ms()))
+            .ok_or_else(|| {
+                RuntimeClientError::fatal(
+                    "runtime_subscription_timeout_invalid",
+                    "subscribe_runtime_events",
+                )
+            })?;
+        match self.execute_with_timeout(
+            "subscribe_runtime_events",
+            RuntimeOperation::SubscribeEvents { request },
+            Some(response_timeout),
+        )? {
+            RuntimeResult::EventBatch { batch } => Ok(batch),
+            _ => Err(self.unexpected_result("subscribe_runtime_events")),
         }
     }
 

@@ -534,6 +534,39 @@ fn lab_package_debug_is_a_correlated_runtime_request_without_device_authority() 
     assert_eq!(state.captures.load(Ordering::Acquire), 0);
     assert_eq!(state.taps.load(Ordering::Acquire), 0);
 
+    let correlation_id = output["data"]["correlation_id"]
+        .as_str()
+        .expect("debug correlation");
+    let watch = run_actinglab_json(
+        &config_path,
+        &runtime_root,
+        &local_app_data,
+        [
+            "--json",
+            "lab",
+            "watch",
+            "--req",
+            correlation_id,
+            "--after",
+            "0",
+            "--wait-ms",
+            "50",
+            "--max-events",
+            "16",
+        ],
+    );
+    assert_eq!(watch["data"]["authority"], "runtime_global_ledger");
+    assert_eq!(watch["data"]["progress"]["state"], "advanced");
+    assert!(
+        watch["data"]["progress"]["event_count"]
+            .as_u64()
+            .is_some_and(|count| count > 0)
+    );
+    assert!(watch["data"]["progress"].get("percent").is_none());
+    assert!(watch["data"]["progress"].get("completed").is_none());
+    assert_eq!(state.captures.load(Ordering::Acquire), 0);
+    assert_eq!(state.taps.load(Ordering::Acquire), 0);
+
     let (_, failure) = run_actinglab_failure_json(
         &config_path,
         &runtime_root,

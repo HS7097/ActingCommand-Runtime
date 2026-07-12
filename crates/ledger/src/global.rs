@@ -663,6 +663,14 @@ impl GlobalLedger {
     }
 }
 
+pub fn project_subscription_event(
+    event: &PersistedEvent,
+    query: &EventQuery,
+    profile: ProjectionProfile,
+) -> Option<ProjectedEvent> {
+    projection::project_if_matches(event, query, profile)
+}
+
 fn join_cancelled_writer(writer: JoinHandle<GlobalLedgerResult<()>>) -> GlobalLedgerResult<()> {
     match writer.join() {
         Ok(Err(error)) if error.code() == "writer_start_cancelled" => Ok(()),

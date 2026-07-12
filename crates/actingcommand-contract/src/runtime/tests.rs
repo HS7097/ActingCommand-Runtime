@@ -876,6 +876,63 @@ fn query_result_remains_typed_without_generic_value_payload() {
 }
 
 #[test]
+fn runtime_subscription_contract_is_bounded_and_strict() {
+    let request = RuntimeSubscriptionRequest::new(
+        EventQuery::default(),
+        ProjectionProfile::Lab,
+        SubscriptionCursor { after_sequence: 7 },
+        1_000,
+        64,
+    )
+    .expect("subscription request");
+    let operation = RuntimeOperation::SubscribeEvents {
+        request: request.clone(),
+    };
+    let encoded = serde_json::to_string(&operation).expect("subscription request JSON");
+    let decoded: RuntimeOperation = serde_json::from_str(&encoded).expect("subscription request");
+    decoded.validate().expect("valid subscription request");
+    assert_eq!(request.cursor().after_sequence, 7);
+    assert_eq!(request.wait_ms(), 1_000);
+    assert_eq!(request.max_events(), 64);
+
+    assert!(
+        RuntimeSubscriptionRequest::new(
+            EventQuery::default(),
+            ProjectionProfile::Lab,
+            SubscriptionCursor::default(),
+            MAX_RUNTIME_SUBSCRIPTION_WAIT_MS + 1,
+            1,
+        )
+        .is_err()
+    );
+    assert!(
+        RuntimeSubscriptionRequest::new(
+            EventQuery::default(),
+            ProjectionProfile::Lab,
+            SubscriptionCursor::default(),
+            0,
+            0,
+        )
+        .is_err()
+    );
+}
+
+#[test]
+fn runtime_subscription_timeout_batch_round_trips_without_fake_progress() {
+    let batch = RuntimeEventBatch::new(Vec::new(), SubscriptionCursor { after_sequence: 9 }, true)
+        .expect("timeout batch");
+    let result = RuntimeResult::EventBatch {
+        batch: batch.clone(),
+    };
+    let encoded = serde_json::to_string(&result).expect("event batch JSON");
+    let decoded: RuntimeResult = serde_json::from_str(&encoded).expect("event batch");
+    assert_eq!(decoded, result);
+    assert!(batch.events().is_empty());
+    assert!(batch.timed_out());
+    assert!(RuntimeEventBatch::new(Vec::new(), SubscriptionCursor::default(), false).is_err());
+}
+
+#[test]
 fn resource_authoring_event_is_strict_and_requires_lab_origin() {
     let event = ResourceAuthoringEvent::new(
         ResourceAuthoringPhase::PromoteIntent,

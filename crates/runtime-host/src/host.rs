@@ -22,9 +22,9 @@ use actingcommand_contract::{
     ReadonlyObservation, RecognitionPayloadDraft, RecognitionVerdict, RequestId,
     ResourceAuthoringEvent, ResourceAuthoringPayloadDraft, ResourceAuthoringPhase, RetentionClass,
     RuntimeCaptureBackend, RuntimeControlPlaneStatus, RuntimeErrorCode, RuntimeErrorProjection,
-    RuntimeInfo, RuntimeInstanceStatus, RuntimeMonitorPolicy, RuntimeOperation,
+    RuntimeEventBatch, RuntimeInfo, RuntimeInstanceStatus, RuntimeMonitorPolicy, RuntimeOperation,
     RuntimePayloadDraft, RuntimeReceipt, RuntimeReceiptState, RuntimeRequest, RuntimeResult,
-    SchedulerPayloadDraft, TerminalEvent, ValidatedRuntimeRequest,
+    RuntimeSubscriptionRequest, SchedulerPayloadDraft, TerminalEvent, ValidatedRuntimeRequest,
 };
 use actingcommand_device::CaptureBackendName;
 use actingcommand_execution_kernel::{ExecutionBackendProvider, ExecutionKernel, decide_monitor};
@@ -32,7 +32,9 @@ use actingcommand_ledger::critical::{
     CriticalActionReport, CriticalEventPlan, CriticalExecutionError, CriticalOperation,
     DefiniteEffectDisposition, LeaseTransitionTarget, execute_critical,
 };
-use actingcommand_ledger::{GlobalLedger, GlobalLedgerConfig, PersistedEvent};
+use actingcommand_ledger::{
+    GlobalLedger, GlobalLedgerConfig, PersistedEvent, project_subscription_event,
+};
 use actingcommand_pack_containment::{
     Containment, DEFAULT_MAX_COMPRESSED_BYTES, InstanceId as ContainmentInstanceId, PackageLayout,
     Sha256Hash,
@@ -692,11 +694,78 @@ impl HostShared {
                     result: RuntimeResult::Events { events },
                 })
                 .map_err(|_| RequestFailure::poison(ledger_error("query_runtime_events"), None)),
+            RuntimeOperation::SubscribeEvents { request } => self.subscribe_events(request),
             RuntimeOperation::DebugPackage { request } => self.debug_package(validated, request),
             RuntimeOperation::RecordAuthoringEvent { event } => {
                 self.record_authoring_event(validated, event)
             }
         }
+    }
+
+    fn subscribe_events(
+        &self,
+        request: &RuntimeSubscriptionRequest,
+    ) -> Result<OperationSuccess, RequestFailure> {
+        let mut subscription = self
+            .ledger
+            .subscribe(request.cursor())
+            .map_err(|_| RequestFailure::poison(ledger_error("subscribe_runtime_events"), None))?;
+        let deadline = Instant::now()
+            .checked_add(Duration::from_millis(request.wait_ms()))
+            .ok_or_else(|| {
+                RequestFailure::poison(protocol_error("subscribe_runtime_events"), None)
+            })?;
+        let mut events = Vec::with_capacity(usize::from(request.max_events()));
+        let mut first_receive = true;
+        let mut post_match_receive_budget = usize::from(request.max_events());
+        let timed_out = loop {
+            if events.len() == usize::from(request.max_events()) {
+                break false;
+            }
+            let now = Instant::now();
+            if events.is_empty() && !first_receive && now >= deadline {
+                break true;
+            }
+            if !events.is_empty() {
+                if post_match_receive_budget == 0 {
+                    break false;
+                }
+                post_match_receive_budget -= 1;
+            }
+            let timeout = if events.is_empty() {
+                deadline.saturating_duration_since(now)
+            } else {
+                Duration::ZERO
+            };
+            first_receive = false;
+            match subscription.recv_timeout(timeout) {
+                Ok(event) => {
+                    if let Some(projected) =
+                        project_subscription_event(&event, request.query(), request.profile())
+                    {
+                        events.push(projected);
+                    }
+                }
+                Err(error) if error.code() == "subscription_timeout" => {
+                    break events.is_empty();
+                }
+                Err(_) => {
+                    return Err(RequestFailure::poison(
+                        ledger_error("receive_runtime_subscription"),
+                        None,
+                    ));
+                }
+            }
+        };
+        let batch = RuntimeEventBatch::new(events, subscription.resume_cursor(), timed_out)
+            .map_err(|_| {
+                RequestFailure::poison(protocol_error("build_runtime_event_batch"), None)
+            })?;
+        Ok(OperationSuccess {
+            state: RuntimeReceiptState::Completed,
+            terminal: None,
+            result: RuntimeResult::EventBatch { batch },
+        })
     }
 
     fn debug_package(

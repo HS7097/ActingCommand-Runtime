@@ -20,6 +20,7 @@ use crate::{
     LeaseId, OwnerEpoch, ProjectedArtifactReference, ProjectedEvent, ProjectionProfile,
     RecognitionId, RecognitionVerdict, RequestId, ResourceAuthoringPhase,
     RuntimeMonitorInstanceStatus, RuntimeMonitorPolicy, RuntimeMonitorRegistryStatus,
+    SubscriptionCursor,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
@@ -41,6 +42,8 @@ pub const MAX_RUNTIME_CAPTURE_SEQUENCE_FRAMES: u16 = 60;
 pub const MAX_RUNTIME_CAPTURE_SEQUENCE_INTERVAL_MS: u64 = 5_000;
 pub const MAX_RUNTIME_CAPTURE_SEQUENCE_WAIT_MS: u64 = 60_000;
 pub const MAX_DEBUG_PACKAGE_PATH_BYTES: usize = 32 * 1024;
+pub const MAX_RUNTIME_SUBSCRIPTION_WAIT_MS: u64 = 30_000;
+pub const MAX_RUNTIME_SUBSCRIPTION_EVENTS: u16 = 256;
 
 pub type RuntimeContractResult<T> = Result<T, RuntimeContractError>;
 
@@ -919,6 +922,120 @@ impl PackageDebugSummary {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RuntimeSubscriptionRequest {
+    query: EventQuery,
+    profile: ProjectionProfile,
+    cursor: SubscriptionCursor,
+    wait_ms: u64,
+    max_events: u16,
+}
+
+impl RuntimeSubscriptionRequest {
+    pub fn new(
+        query: EventQuery,
+        profile: ProjectionProfile,
+        cursor: SubscriptionCursor,
+        wait_ms: u64,
+        max_events: u16,
+    ) -> RuntimeContractResult<Self> {
+        let request = Self {
+            query,
+            profile,
+            cursor,
+            wait_ms,
+            max_events,
+        };
+        request.validate()?;
+        Ok(request)
+    }
+
+    pub fn validate(&self) -> RuntimeContractResult<()> {
+        if self.wait_ms > MAX_RUNTIME_SUBSCRIPTION_WAIT_MS
+            || self.max_events == 0
+            || self.max_events > MAX_RUNTIME_SUBSCRIPTION_EVENTS
+        {
+            return Err(RuntimeContractError::new(
+                "invalid_runtime_subscription_request",
+            ));
+        }
+        Ok(())
+    }
+
+    pub const fn query(&self) -> &EventQuery {
+        &self.query
+    }
+
+    pub const fn profile(&self) -> ProjectionProfile {
+        self.profile
+    }
+
+    pub const fn cursor(&self) -> SubscriptionCursor {
+        self.cursor
+    }
+
+    pub const fn wait_ms(&self) -> u64 {
+        self.wait_ms
+    }
+
+    pub const fn max_events(&self) -> u16 {
+        self.max_events
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RuntimeEventBatch {
+    events: Vec<ProjectedEvent>,
+    next_cursor: SubscriptionCursor,
+    timed_out: bool,
+}
+
+impl RuntimeEventBatch {
+    pub fn new(
+        events: Vec<ProjectedEvent>,
+        next_cursor: SubscriptionCursor,
+        timed_out: bool,
+    ) -> RuntimeContractResult<Self> {
+        let batch = Self {
+            events,
+            next_cursor,
+            timed_out,
+        };
+        batch.validate()?;
+        Ok(batch)
+    }
+
+    pub fn validate(&self) -> RuntimeContractResult<()> {
+        if self.events.len() > usize::from(MAX_RUNTIME_SUBSCRIPTION_EVENTS)
+            || self.events.is_empty() != self.timed_out
+        {
+            return Err(RuntimeContractError::new("invalid_runtime_event_batch"));
+        }
+        let mut previous = 0;
+        for event in &self.events {
+            if event.sequence <= previous || event.sequence > self.next_cursor.after_sequence {
+                return Err(RuntimeContractError::new("invalid_runtime_event_batch"));
+            }
+            previous = event.sequence;
+        }
+        Ok(())
+    }
+
+    pub fn events(&self) -> &[ProjectedEvent] {
+        &self.events
+    }
+
+    pub const fn next_cursor(&self) -> SubscriptionCursor {
+        self.next_cursor
+    }
+
+    pub const fn timed_out(&self) -> bool {
+        self.timed_out
+    }
+}
+
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "operation", rename_all = "snake_case", deny_unknown_fields)]
 pub enum RuntimeOperation {
@@ -972,6 +1089,9 @@ pub enum RuntimeOperation {
         query: EventQuery,
         profile: ProjectionProfile,
     },
+    SubscribeEvents {
+        request: RuntimeSubscriptionRequest,
+    },
     DebugPackage {
         request: PackageDebugRequest,
     },
@@ -1015,6 +1135,7 @@ impl RuntimeOperation {
             | Self::PollQueuedLease { .. }
             | Self::CancelQueuedLease { .. }
             | Self::QueryEvents { .. } => Ok(()),
+            Self::SubscribeEvents { request } => request.validate(),
             Self::DebugPackage { request } => request.validate(),
             Self::RecordAuthoringEvent { event } => event.validate(),
             Self::AcquireLease { instance_alias, .. }
@@ -1097,6 +1218,7 @@ impl fmt::Debug for RuntimeOperation {
             Self::SafeReset { .. } => "RuntimeOperation::SafeReset(<redacted>)",
             Self::Input { .. } => "RuntimeOperation::Input(<redacted>)",
             Self::QueryEvents { .. } => "RuntimeOperation::QueryEvents(<typed-query>)",
+            Self::SubscribeEvents { .. } => "RuntimeOperation::SubscribeEvents(<typed-query>)",
             Self::DebugPackage { .. } => "RuntimeOperation::DebugPackage(<redacted>)",
             Self::RecordAuthoringEvent { .. } => {
                 "RuntimeOperation::RecordAuthoringEvent(<redacted>)"
@@ -1444,6 +1566,9 @@ pub enum RuntimeResult {
     Events {
         events: Vec<ProjectedEvent>,
     },
+    EventBatch {
+        batch: RuntimeEventBatch,
+    },
     PackageDebugCompleted {
         summary: PackageDebugSummary,
     },
@@ -1549,6 +1674,7 @@ impl RuntimeReceipt {
                 observation.validate()?
             }
             Some(RuntimeResult::CaptureSequenceCompleted { sequence }) => sequence.validate()?,
+            Some(RuntimeResult::EventBatch { batch }) => batch.validate()?,
             Some(RuntimeResult::PackageDebugCompleted { summary }) => summary.validate()?,
             _ => {}
         }

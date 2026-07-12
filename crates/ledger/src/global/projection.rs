@@ -118,6 +118,14 @@ pub(super) fn project(event: &PersistedEvent, profile: ProjectionProfile) -> Pro
     }
 }
 
+pub(super) fn project_if_matches(
+    event: &PersistedEvent,
+    query: &EventQuery,
+    profile: ProjectionProfile,
+) -> Option<ProjectedEvent> {
+    query_matches(query, event).then(|| project(event, profile))
+}
+
 fn query_matches(query: &EventQuery, event: &PersistedEvent) -> bool {
     let links = event.links();
     query

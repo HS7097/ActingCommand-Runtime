@@ -5845,7 +5845,7 @@ fn run_lab(sub: &str, global: &GlobalOptions, args: &[String]) -> CliOutcome<Val
             lab_run::run_lab_run(global, args)
         }
         "validate" => lab_run::run_lab_validate(args),
-        "debug-package" => runtime_debug::run_package_debug(args),
+        "debug-package" | "watch" => runtime_debug::run_runtime_debug(sub, args),
         "start" => {
             require_runtime(global)?;
             let flags = FlagArgs::parse(args)?;
@@ -11717,7 +11717,7 @@ fn contains_string_value(value: &Value, needle: &str) -> bool {
 }
 
 fn command_capabilities() -> Vec<Value> {
-    vec![
+    let mut commands = vec![
         command_cap("version", ["offline"], "available"),
         command_cap("doctor", ["offline"], "available"),
         command_cap("paths", ["offline"], "available"),
@@ -12151,9 +12151,6 @@ fn command_capabilities() -> Vec<Value> {
         command_cap("scheduler resume", ["running_runtime"], "reserved"),
         command_cap("scheduler start", ["running_runtime"], "reserved"),
         command_cap("scheduler stop", ["running_runtime"], "reserved"),
-        command_cap("lab status", ["running_runtime"], "available"),
-        command_cap("lab receipt", ["offline"], "available"),
-        command_cap("lab debug-package", ["running_runtime"], "available"),
         command_cap("lab validate", ["offline"], "available"),
         command_cap("lab run", ["device"], "available"),
         command_cap("capture", ["device"], "available"),
@@ -12183,7 +12180,9 @@ fn command_capabilities() -> Vec<Value> {
             ["running_runtime", "device", "lab_lease"],
             "blocked_until_lab_lease",
         ),
-    ]
+    ];
+    commands.extend(runtime_debug::capabilities());
+    commands
 }
 
 fn command_cap<I>(command: &str, needs: I, status: &str) -> Value
