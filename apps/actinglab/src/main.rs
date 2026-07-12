@@ -9,7 +9,7 @@ use actingcommand_contract::{
 use actingcommand_device::{
     Adb, AdbConfig, AdbPathSource, CaptureBackendChoice, CaptureBackendConfig, CaptureBackendName,
     DeviceTarget, Frame, InputBackend, MaaTouchConfig, PixelFormat, TouchBackendChoice,
-    TouchBackendConfig, combine_operation_and_close, create_capture_backend, resolve_adb_path,
+    TouchBackendConfig, combine_operation_and_close, resolve_adb_path,
     vendor_stdio_session_diagnostic,
 };
 use actingcommand_lab::{
@@ -3239,7 +3239,6 @@ enum CaptureFreshProbeStatus {
     Fresh,
     StaticUnchanged,
     StaleSuspected,
-    Unavailable,
 }
 
 impl CaptureFreshProbeStatus {
@@ -3248,7 +3247,6 @@ impl CaptureFreshProbeStatus {
             Self::Fresh => "fresh",
             Self::StaticUnchanged => "static_unchanged",
             Self::StaleSuspected => "stale_suspected",
-            Self::Unavailable => "capture_unavailable",
         }
     }
 }
@@ -3269,36 +3267,43 @@ struct CaptureFreshnessDecision {
 
 fn capture_for_command(
     device_config: &DeviceRuntimeConfig,
-    requested: CaptureBackendChoice,
+    _requested: CaptureBackendChoice,
     require_fresh: bool,
     fresh_delay: Duration,
 ) -> CliOutcome<CaptureCommandResult> {
     if require_fresh {
-        return capture_require_fresh(device_config, requested, fresh_delay);
+        return capture_require_fresh(device_config, fresh_delay);
     }
 
-    let selected = create_capture_backend(device_config.capture_backend_config())
-        .map_err(|err| CliError::device(err.to_string()))?;
-    let attempts = capture_attempts_json(&selected.diagnostics.attempts);
-    let mut backend = selected.backend;
-    let frame = backend
-        .capture()
-        .map_err(|err| CliError::device(err.to_string()))?;
+    let frame = runtime_capture_backend::capture_runtime_sequence(
+        &device_config.runtime_capture_endpoint(),
+        1,
+        Duration::ZERO,
+    )
+    .map_err(|err| CliError::device(err.to_string()))?
+    .into_iter()
+    .next()
+    .ok_or_else(|| CliError::device("Runtime capture returned no frame"))?;
+    let attempts = vec![json!({
+        "backend": frame.backend_name.as_str(),
+        "ok": true,
+        "stage": "runtime_observation",
+        "authority": "runtime_execution_kernel"
+    })];
     Ok(CaptureCommandResult {
         frame,
         attempts,
-        freshness: json!({ "required": false }),
+        freshness: json!({ "required": false, "authority": "runtime_execution_kernel" }),
     })
 }
 
 fn capture_require_fresh(
     device_config: &DeviceRuntimeConfig,
-    requested: CaptureBackendChoice,
     fresh_delay: Duration,
 ) -> CliOutcome<CaptureCommandResult> {
     let report = capture_fresh_probe_report(
         device_config,
-        requested,
+        device_config.capture_backend,
         fresh_delay,
         CaptureFreshnessExpectation::ExpectedChange,
     )?;
@@ -3311,7 +3316,7 @@ fn capture_require_fresh(
     }
 
     Err(CliError::device(format!(
-        "fresh capture required but no backend produced a changing probe frame; attempts={}",
+        "fresh capture required but Runtime did not produce a changing probe frame; attempts={}",
         serde_json::to_string(&report.attempts).unwrap_or_else(|_| "[]".to_string())
     )))
 }
@@ -3322,101 +3327,49 @@ fn capture_fresh_probe_report(
     fresh_delay: Duration,
     expectation: CaptureFreshnessExpectation,
 ) -> CliOutcome<CaptureFreshProbeReport> {
-    let mut attempts = Vec::new();
-    let mut stale_suspected = false;
-    for choice in fresh_probe_choices(requested) {
-        let selected = match create_capture_backend(
-            device_config
-                .capture_backend_config()
-                .with_requested(choice),
-        ) {
-            Ok(selected) => selected,
-            Err(err) => {
-                attempts.push(json!({
-                    "backend": choice.as_str(),
-                    "ok": false,
-                    "stage": "create",
-                    "message": err.to_string()
-                }));
-                continue;
-            }
-        };
-        let backend_used = selected.diagnostics.used.as_str();
-        attempts.extend(capture_attempts_json(&selected.diagnostics.attempts));
-        let mut backend = selected.backend;
-        let first = match backend.capture() {
-            Ok(frame) => frame,
-            Err(err) => {
-                attempts.push(json!({
-                    "backend": backend_used,
-                    "ok": false,
-                    "stage": "first_capture",
-                    "message": err.to_string()
-                }));
-                continue;
-            }
-        };
-        thread::sleep(fresh_delay);
-        let second = match backend.capture() {
-            Ok(frame) => frame,
-            Err(err) => {
-                attempts.push(json!({
-                    "backend": backend_used,
-                    "ok": false,
-                    "stage": "second_capture",
-                    "message": err.to_string()
-                }));
-                continue;
-            }
-        };
-        let first_hash = frame_digest(&first);
-        let second_hash = frame_digest(&second);
-        let decision = classify_capture_freshness(&first_hash, &second_hash, expectation);
-        stale_suspected |= decision.stale_suspected;
-        attempts.push(json!({
-            "backend": backend_used,
-            "ok": decision.ok,
-            "stage": "fresh_probe",
-            "first_hash": first_hash,
-            "second_hash": second_hash,
-            "expectation": capture_freshness_expectation_label(expectation),
-            "reason": decision.reason,
-            "stale_suspected": decision.stale_suspected,
-            "delay_ms": fresh_delay.as_millis()
-        }));
-        if decision.ok {
-            return Ok(CaptureFreshProbeReport {
-                status: decision.status,
-                frame: Some(second),
-                attempts,
-                freshness: json!({
-                    "required": true,
-                    "fresh": true,
-                    "status": decision.status.as_str(),
-                    "backend": backend_used,
-                    "expectation": capture_freshness_expectation_label(expectation),
-                    "reason": decision.reason,
-                    "first_hash": first_hash,
-                    "second_hash": second_hash
-                }),
-            });
-        }
-    }
-
-    let status = if stale_suspected {
-        CaptureFreshProbeStatus::StaleSuspected
-    } else {
-        CaptureFreshProbeStatus::Unavailable
-    };
+    let frames = runtime_capture_backend::capture_runtime_sequence(
+        &device_config.runtime_capture_endpoint(),
+        2,
+        fresh_delay,
+    )
+    .map_err(|err| CliError::device(err.to_string()))?;
+    let [first, second]: [Frame; 2] = frames.try_into().map_err(|frames: Vec<Frame>| {
+        CliError::device(format!(
+            "Runtime fresh capture returned {} frames instead of 2",
+            frames.len()
+        ))
+    })?;
+    let backend_used = second.backend_name.as_str();
+    let first_hash = frame_digest(&first);
+    let second_hash = frame_digest(&second);
+    let decision = classify_capture_freshness(&first_hash, &second_hash, expectation);
+    let attempts = vec![json!({
+        "backend": backend_used,
+        "ok": decision.ok,
+        "stage": "runtime_capture_sequence",
+        "authority": "runtime_execution_kernel",
+        "first_hash": first_hash,
+        "second_hash": second_hash,
+        "expectation": capture_freshness_expectation_label(expectation),
+        "reason": decision.reason,
+        "stale_suspected": decision.stale_suspected,
+        "delay_ms": fresh_delay.as_millis()
+    })];
     Ok(CaptureFreshProbeReport {
-        status,
-        frame: None,
+        status: decision.status,
+        frame: decision.ok.then_some(second),
         attempts,
         freshness: json!({
             "required": true,
-            "fresh": false,
-            "status": status.as_str(),
-            "expectation": capture_freshness_expectation_label(expectation)
+            "fresh": decision.ok,
+            "status": decision.status.as_str(),
+            "backend": backend_used,
+            "requested_backend": requested.as_str(),
+            "authority": "runtime_execution_kernel",
+            "expectation": capture_freshness_expectation_label(expectation),
+            "reason": decision.reason,
+            "first_hash": first_hash,
+            "second_hash": second_hash
         }),
     })
 }
@@ -3458,37 +3411,6 @@ fn capture_freshness_expectation_label(expectation: CaptureFreshnessExpectation)
     }
 }
 
-fn capture_attempts_json(attempts: &[actingcommand_device::CaptureBackendAttempt]) -> Vec<Value> {
-    attempts
-        .iter()
-        .map(|attempt| {
-            let mut value = json!({
-                "backend": attempt.backend.as_str(),
-                "ok": attempt.ok,
-                "message": attempt.message,
-                "elapsed_ms": attempt.elapsed_ms,
-                "cached": attempt.cached,
-                "channel_order_contract": attempt.channel_order_contract
-            });
-            if !attempt.vendor_stdio.is_empty() {
-                value["vendor_stdio"] = json!(attempt.vendor_stdio);
-            }
-            value
-        })
-        .collect()
-}
-
-fn fresh_probe_choices(requested: CaptureBackendChoice) -> Vec<CaptureBackendChoice> {
-    match requested {
-        CaptureBackendChoice::Auto | CaptureBackendChoice::AutoFastest => vec![
-            CaptureBackendChoice::NemuIpc,
-            CaptureBackendChoice::DroidcastRaw,
-            CaptureBackendChoice::Adb,
-        ],
-        other => vec![other],
-    }
-}
-
 fn frame_digest(frame: &Frame) -> String {
     let mut hasher = Sha256::new();
     hasher.update(frame.width.to_le_bytes());
@@ -3527,7 +3449,6 @@ fn instance_health_status(capture_status: Option<CaptureFreshProbeStatus>) -> &'
         Some(CaptureFreshProbeStatus::Fresh) => "healthy",
         Some(CaptureFreshProbeStatus::StaticUnchanged) => "healthy_static",
         Some(CaptureFreshProbeStatus::StaleSuspected) => "capture_stale_suspected",
-        Some(CaptureFreshProbeStatus::Unavailable) => "capture_unavailable",
         None => "device_connected",
     }
 }
@@ -3577,17 +3498,6 @@ fn capture_diagnosis_recovery_json(
                 "recommendations": recommendations
             })
         }
-        CaptureFreshProbeStatus::Unavailable => json!({
-            "needed": true,
-            "available": false,
-            "reason": "capture_backend_unavailable",
-            "blocked_by": ["capture_backend", "device"],
-            "recommendations": [{
-                "type": "device_health",
-                "command": "session instance health",
-                "reason": "capture could not obtain probe frames from any requested backend"
-            }]
-        }),
     }
 }
 
@@ -4615,7 +4525,6 @@ fn stale_capture_recovery_json(
                 "diagnosed_fresh"
             }
             CaptureFreshProbeStatus::StaleSuspected => "diagnosed_stale",
-            CaptureFreshProbeStatus::Unavailable => "diagnosis_unavailable",
         })
         .unwrap_or("planned");
     let recovery_status = report
@@ -10563,6 +10472,8 @@ fn device_config_for_instance(
         ..Default::default()
     };
     Ok(DeviceRuntimeConfig {
+        instance_alias: instance_id,
+        runtime_state_root: runtime_state_root()?,
         adb,
         target,
         adb_source: resolved_adb.source,
@@ -10574,6 +10485,8 @@ fn device_config_for_instance(
 
 #[derive(Debug)]
 struct DeviceRuntimeConfig {
+    instance_alias: String,
+    runtime_state_root: PathBuf,
     adb: AdbConfig,
     target: DeviceTarget,
     adb_source: AdbPathSource,
@@ -10595,6 +10508,13 @@ impl DeviceRuntimeConfig {
             MaaTouchConfig::default(),
         )
         .with_requested(self.touch_backend)
+    }
+
+    fn runtime_capture_endpoint(&self) -> runtime_capture_backend::RuntimeCaptureEndpoint {
+        runtime_capture_backend::RuntimeCaptureEndpoint::new(
+            self.instance_alias.clone(),
+            self.runtime_state_root.clone(),
+        )
     }
 }
 
@@ -20272,22 +20192,6 @@ mod tests {
     }
 
     #[test]
-    fn fresh_auto_probe_prefers_fast_backends_before_adb() {
-        assert_eq!(
-            fresh_probe_choices(CaptureBackendChoice::Auto),
-            vec![
-                CaptureBackendChoice::NemuIpc,
-                CaptureBackendChoice::DroidcastRaw,
-                CaptureBackendChoice::Adb,
-            ]
-        );
-        assert_eq!(
-            fresh_probe_choices(CaptureBackendChoice::Adb),
-            vec![CaptureBackendChoice::Adb]
-        );
-    }
-
-    #[test]
     fn capture_static_page_same_hash_does_not_switch() {
         let decision = classify_capture_freshness(
             "same-frame",
@@ -20338,24 +20242,6 @@ mod tests {
     }
 
     #[test]
-    fn capture_diagnosis_unavailable_points_to_instance_health() {
-        let recovery = capture_diagnosis_recovery_json(
-            CaptureFreshProbeStatus::Unavailable,
-            CaptureBackendChoice::Auto,
-        );
-        assert_eq!(
-            recovery.get("available").and_then(Value::as_bool),
-            Some(false)
-        );
-        assert_eq!(
-            recovery
-                .pointer("/recommendations/0/command")
-                .and_then(Value::as_str),
-            Some("session instance health")
-        );
-    }
-
-    #[test]
     fn instance_health_status_reflects_capture_freshness() {
         assert_eq!(instance_health_status(None), "device_connected");
         assert_eq!(
@@ -20369,10 +20255,6 @@ mod tests {
         assert_eq!(
             instance_health_status(Some(CaptureFreshProbeStatus::StaleSuspected)),
             "capture_stale_suspected"
-        );
-        assert_eq!(
-            instance_health_status(Some(CaptureFreshProbeStatus::Unavailable)),
-            "capture_unavailable"
         );
     }
 

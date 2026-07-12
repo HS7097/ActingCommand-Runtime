@@ -219,6 +219,41 @@ fn c3b_client_device_authority_stays_behind_runtime() {
 }
 
 #[test]
+fn c6_actinglab_does_not_construct_live_device_backends() {
+    let root = workspace_root();
+    let mut files = Vec::new();
+    collect_rust_files(&root.join("apps/actinglab/src"), &mut files);
+    let mut violations = Vec::new();
+    for path in files {
+        if path
+            .components()
+            .any(|component| component.as_os_str() == "tests")
+        {
+            continue;
+        }
+        let source = fs::read_to_string(&path)
+            .unwrap_or_else(|error| panic!("read {}: {error}", path.display()));
+        let display = path
+            .strip_prefix(&root)
+            .unwrap_or(&path)
+            .display()
+            .to_string();
+        for constructor in ["create_capture_backend(", "create_touch_backend("] {
+            if source.contains(constructor) {
+                violations.push(format!(
+                    "{display}: ActingLab constructs a live backend via {constructor}"
+                ));
+            }
+        }
+    }
+    assert!(
+        violations.is_empty(),
+        "ActingLab live-backend ownership violations:\n{}",
+        violations.join("\n")
+    );
+}
+
+#[test]
 fn c5_drive_decisions_are_owned_by_execution_kernel() {
     let root = workspace_root();
     let kernel = fs::read_to_string(root.join("crates/execution-kernel/src/drive.rs"))

@@ -1,7 +1,10 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 use actingcommand_artifact_store::read_projected_verified;
-use actingcommand_contract::{EventActor, EventSource, RuntimeCaptureBackend, RuntimeResult};
+use actingcommand_contract::{
+    CaptureSequenceSpec, EventActor, EventSource, ReadonlyObservation, RuntimeCaptureBackend,
+    RuntimeResult,
+};
 use actingcommand_device::{
     CaptureBackend, CaptureBackendAttempt, CaptureBackendChoice, CaptureBackendName, DeviceError,
     DeviceResult, Frame,
@@ -11,7 +14,7 @@ use actingcommand_lab::{
 };
 use actingcommand_runtime_client::{RuntimeClient, RuntimeClientConfig};
 use std::path::PathBuf;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 #[derive(Clone)]
 pub(super) struct RuntimeCaptureEndpoint {
@@ -26,6 +29,58 @@ impl RuntimeCaptureEndpoint {
             state_root,
         }
     }
+}
+
+/// Captures a bounded frame sequence through the resident Runtime without opening a client-side
+/// device backend.
+pub(super) fn capture_runtime_sequence(
+    endpoint: &RuntimeCaptureEndpoint,
+    frame_count: u16,
+    interval: Duration,
+) -> DeviceResult<Vec<Frame>> {
+    let interval_ms = u64::try_from(interval.as_millis())
+        .map_err(|_| DeviceError::fatal("Runtime capture interval exceeds u64 milliseconds"))?;
+    let client = RuntimeClient::connect(RuntimeClientConfig::new(
+        &endpoint.state_root,
+        EventActor::Lab,
+        EventSource::Lab,
+    ))
+    .map_err(|error| DeviceError::fatal(error.to_string()))?;
+    let observations = if frame_count == 1 {
+        let output = client
+            .observe_readonly(&endpoint.instance_alias)
+            .map_err(|error| DeviceError::fatal(error.to_string()))?;
+        match output.receipt().result() {
+            Some(RuntimeResult::ReadonlyObservationCompleted { observation }) => {
+                vec![observation.clone()]
+            }
+            _ => {
+                return Err(DeviceError::fatal(
+                    "Runtime returned an invalid read-only observation receipt",
+                ));
+            }
+        }
+    } else {
+        let spec = CaptureSequenceSpec::new(frame_count, interval_ms)
+            .map_err(|error| DeviceError::fatal(error.to_string()))?;
+        let output = client
+            .capture_sequence(&endpoint.instance_alias, spec)
+            .map_err(|error| DeviceError::fatal(error.to_string()))?;
+        match output.receipt().result() {
+            Some(RuntimeResult::CaptureSequenceCompleted { sequence }) => {
+                sequence.observations().to_vec()
+            }
+            _ => {
+                return Err(DeviceError::fatal(
+                    "Runtime returned an invalid capture sequence receipt",
+                ));
+            }
+        }
+    };
+    observations
+        .iter()
+        .map(|observation| frame_from_observation(&endpoint.state_root, observation))
+        .collect()
 }
 
 pub(super) fn open_runtime_capture(
@@ -92,16 +147,7 @@ impl RuntimeObservationCaptureBackend {
                 ));
             }
         };
-        let backend_name = device_backend_name(observation.capture_backend());
-        let png = read_projected_verified(&self.endpoint.state_root, observation.artifact())
-            .map_err(|error| DeviceError::fatal(error.to_string()))?;
-        let frame = Frame::from_png(png, backend_name)?;
-        if (frame.width, frame.height) != (observation.width(), observation.height()) {
-            return Err(DeviceError::fatal(
-                "Runtime observation dimensions do not match the verified artifact",
-            ));
-        }
-        Ok(frame)
+        frame_from_observation(&self.endpoint.state_root, observation)
     }
 
     fn publish_report(&self, used: CaptureBackendName, elapsed_ms: u128) -> DeviceResult<()> {
@@ -124,6 +170,22 @@ impl RuntimeObservationCaptureBackend {
             })
             .map_err(|error| DeviceError::fatal(error.to_string()))
     }
+}
+
+fn frame_from_observation(
+    state_root: &std::path::Path,
+    observation: &ReadonlyObservation,
+) -> DeviceResult<Frame> {
+    let backend_name = device_backend_name(observation.capture_backend());
+    let png = read_projected_verified(state_root, observation.artifact())
+        .map_err(|error| DeviceError::fatal(error.to_string()))?;
+    let frame = Frame::from_png(png, backend_name)?;
+    if (frame.width, frame.height) != (observation.width(), observation.height()) {
+        return Err(DeviceError::fatal(
+            "Runtime observation dimensions do not match the verified artifact",
+        ));
+    }
+    Ok(frame)
 }
 
 const fn device_backend_name(backend: RuntimeCaptureBackend) -> CaptureBackendName {
@@ -258,6 +320,33 @@ mod tests {
             CaptureBackendName::NemuIpc
         );
         drop(backend);
+        host.close().expect("close Runtime host");
+    }
+
+    #[test]
+    fn runtime_sequence_returns_verified_frames_without_client_backend_authority() {
+        let root = TempDir::new().expect("tempdir");
+        let instance_id = *IdentifierIssuer::new()
+            .expect("identifier issuer")
+            .mint_instance_id()
+            .expect("instance id")
+            .transport();
+        let host = RuntimeHost::start(
+            RuntimeHostConfig::new(root.path(), b"actinglab-runtime-sequence-test"),
+            Arc::new(SealedProvider { instance_id }),
+        )
+        .expect("Runtime host");
+        let endpoint = RuntimeCaptureEndpoint::new("ak.cn".to_string(), root.path().to_path_buf());
+
+        let frames = capture_runtime_sequence(&endpoint, 2, Duration::from_millis(1))
+            .expect("Runtime-owned sequence");
+
+        assert_eq!(frames.len(), 2);
+        assert!(
+            frames
+                .iter()
+                .all(|frame| frame.backend_name == CaptureBackendName::NemuIpc)
+        );
         host.close().expect("close Runtime host");
     }
 }
