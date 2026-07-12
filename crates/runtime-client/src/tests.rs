@@ -362,6 +362,65 @@ fn non_lab_client_cannot_open_authoring_session() {
 }
 
 #[test]
+fn debug_session_correlates_runtime_capture_scheduler_input_and_release() {
+    let root = TempDir::new().expect("tempdir");
+    let state = Arc::new(FakeState::default());
+    let host = host(&root, Arc::clone(&state), 1_000);
+    let client = lab_client(&root);
+    let session = client.begin_debug_session().expect("debug session");
+
+    let observation = session
+        .observe_readonly("ak.cn")
+        .expect("debug observation");
+    assert!(matches!(
+        observation.result(),
+        Some(RuntimeResult::ReadonlyObservationCompleted { .. })
+    ));
+    let token = session.acquire_lease("ak.cn").expect("debug lease");
+    session
+        .input(&token, InputAction::Tap { x: 10, y: 20 })
+        .expect("debug input");
+    session.release_lease(&token).expect("debug release");
+
+    let events = session
+        .query_events(ProjectionProfile::Forensic)
+        .expect("debug events");
+    assert!(
+        events
+            .iter()
+            .all(|event| event.links.correlation_id().copied() == Some(session.correlation_id()))
+    );
+    for event_type in [
+        EventType::CaptureCompleted,
+        EventType::LeaseGranted,
+        EventType::InputCommitted,
+        EventType::LeaseReleased,
+    ] {
+        assert!(events.iter().any(|event| event.event_type == event_type));
+    }
+    assert_eq!(state.capture_opens.load(Ordering::Acquire), 1);
+    assert_eq!(state.inputs.load(Ordering::Acquire), 1);
+    drop(client);
+    host.close().expect("close host");
+}
+
+#[test]
+fn non_lab_client_cannot_open_debug_session() {
+    let root = TempDir::new().expect("tempdir");
+    let state = Arc::new(FakeState::default());
+    let host = host(&root, state, 1_000);
+    let client = client(&root);
+
+    let error = client
+        .begin_debug_session()
+        .expect_err("CLI debug session must fail");
+
+    assert_eq!(error.code(), "runtime_debug_origin_invalid");
+    drop(client);
+    host.close().expect("close host");
+}
+
+#[test]
 fn typed_client_queues_polls_and_cancels_connection_bound_leases() {
     let root = TempDir::new().expect("tempdir");
     let state = Arc::new(FakeState::default());

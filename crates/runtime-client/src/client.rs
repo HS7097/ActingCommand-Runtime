@@ -3,12 +3,12 @@
 use crate::ipc::{DEFAULT_RUNTIME_MAX_FRAME_BYTES, exchange};
 use crate::{RuntimeClientError, RuntimeClientResult};
 use actingcommand_contract::{
-    CaptureSequenceSpec, CorrelationId, EventActor, EventQuery, EventSource, IdentifierIssuer,
-    InputAction, IssuedCorrelationId, LeaseQueuePolicy, LeaseQueueStatus, LeaseToken, OwnerEpoch,
-    ProjectedEvent, ProjectionProfile, RUNTIME_INFO_FILE, RequestId, ResourceAuthoringEvent,
-    RuntimeControlPlaneStatus, RuntimeInfo, RuntimeMonitorInstanceStatus, RuntimeMonitorPolicy,
-    RuntimeMonitorRegistryStatus, RuntimeOperation, RuntimeReceipt, RuntimeRequest, RuntimeResult,
-    TerminalEvent,
+    ActionId, CaptureSequenceSpec, CorrelationId, EventActor, EventQuery, EventSource,
+    IdentifierIssuer, InputAction, IssuedCorrelationId, LeaseQueuePolicy, LeaseQueueStatus,
+    LeaseToken, OwnerEpoch, ProjectedEvent, ProjectionProfile, RUNTIME_INFO_FILE, RequestId,
+    ResourceAuthoringEvent, RuntimeControlPlaneStatus, RuntimeInfo, RuntimeMonitorInstanceStatus,
+    RuntimeMonitorPolicy, RuntimeMonitorRegistryStatus, RuntimeOperation, RuntimeReceipt,
+    RuntimeRequest, RuntimeResult, TerminalEvent,
 };
 use serde::Serialize;
 use std::fmt;
@@ -123,6 +123,12 @@ pub struct RuntimeClient {
 /// Correlation-scoped authoring ingress. Runtime remains the only global-ledger writer.
 #[derive(Clone)]
 pub struct RuntimeAuthoringSession {
+    client: RuntimeClient,
+    correlation: IssuedCorrelationId,
+}
+
+/// Correlation-scoped Lab adapter for Runtime-owned capture, scheduling, input, and ledger facts.
+pub struct RuntimeDebugSession {
     client: RuntimeClient,
     correlation: IssuedCorrelationId,
 }
@@ -484,6 +490,24 @@ impl RuntimeClient {
         })
     }
 
+    pub fn begin_debug_session(&self) -> RuntimeClientResult<RuntimeDebugSession> {
+        let connection = self.connection("begin_runtime_debug")?;
+        if connection.actor != EventActor::Lab || connection.source != EventSource::Lab {
+            return Err(RuntimeClientError::fatal(
+                "runtime_debug_origin_invalid",
+                "begin_runtime_debug",
+            ));
+        }
+        let correlation = connection.ids.mint_correlation_id().map_err(|_| {
+            RuntimeClientError::fatal("runtime_identifier_issue_failed", "begin_runtime_debug")
+        })?;
+        drop(connection);
+        Ok(RuntimeDebugSession {
+            client: self.clone(),
+            correlation,
+        })
+    }
+
     fn execute(
         &self,
         operation_name: &'static str,
@@ -716,10 +740,142 @@ impl RuntimeAuthoringSession {
     }
 }
 
+impl RuntimeDebugSession {
+    pub const fn correlation_id(&self) -> CorrelationId {
+        *self.correlation.transport()
+    }
+
+    pub fn observe_readonly(&self, instance_alias: &str) -> RuntimeClientResult<RuntimeReceipt> {
+        let receipt = self.client.execute_receipt_with_correlation(
+            "debug_observe_readonly",
+            RuntimeOperation::ObserveReadonly {
+                instance_alias: instance_alias.to_string(),
+            },
+            self.correlation,
+            None,
+        )?;
+        if !matches!(
+            receipt.result(),
+            Some(RuntimeResult::ReadonlyObservationCompleted { .. })
+        ) {
+            return Err(self.client.unexpected_result("debug_observe_readonly"));
+        }
+        Ok(receipt)
+    }
+
+    pub fn capture_sequence(
+        &self,
+        instance_alias: &str,
+        spec: CaptureSequenceSpec,
+    ) -> RuntimeClientResult<RuntimeReceipt> {
+        spec.validate().map_err(|_| {
+            RuntimeClientError::fatal("runtime_capture_sequence_invalid", "debug_capture_sequence")
+        })?;
+        let response_timeout = {
+            let connection = self.client.connection("debug_capture_sequence")?;
+            capture_sequence_response_timeout(connection.backend_open_timeout, spec)?
+        };
+        let receipt = self.client.execute_receipt_with_correlation(
+            "debug_capture_sequence",
+            RuntimeOperation::CaptureSequence {
+                instance_alias: instance_alias.to_string(),
+                spec,
+            },
+            self.correlation,
+            Some(response_timeout),
+        )?;
+        if !matches!(
+            receipt.result(),
+            Some(RuntimeResult::CaptureSequenceCompleted { .. })
+        ) {
+            return Err(self.client.unexpected_result("debug_capture_sequence"));
+        }
+        Ok(receipt)
+    }
+
+    pub fn acquire_lease(&self, instance_alias: &str) -> RuntimeClientResult<LeaseToken> {
+        let connection = self.client.connection("debug_acquire_lease")?;
+        let holder = connection.ids.mint_holder_id().map_err(|_| {
+            RuntimeClientError::fatal("runtime_identifier_issue_failed", "debug_acquire_lease")
+        })?;
+        drop(connection);
+        let receipt = self.client.execute_receipt_with_correlation(
+            "debug_acquire_lease",
+            RuntimeOperation::acquire_lease(instance_alias, holder),
+            self.correlation,
+            None,
+        )?;
+        match receipt.result() {
+            Some(RuntimeResult::LeaseGranted { token }) => Ok(token.clone()),
+            _ => Err(self.client.unexpected_result("debug_acquire_lease")),
+        }
+    }
+
+    pub fn input(&self, token: &LeaseToken, action: InputAction) -> RuntimeClientResult<ActionId> {
+        let response_timeout = {
+            let connection = self.client.connection("debug_runtime_input")?;
+            input_response_timeout(connection.io_timeout, &action)?
+        };
+        let receipt = self.client.execute_receipt_with_correlation(
+            "debug_runtime_input",
+            RuntimeOperation::Input {
+                token: token.clone(),
+                action,
+            },
+            self.correlation,
+            Some(response_timeout),
+        )?;
+        match receipt.result() {
+            Some(RuntimeResult::InputCommitted { action_id }) => Ok(*action_id),
+            _ => Err(self.client.unexpected_result("debug_runtime_input")),
+        }
+    }
+
+    pub fn release_lease(&self, token: &LeaseToken) -> RuntimeClientResult<()> {
+        let receipt = self.client.execute_receipt_with_correlation(
+            "debug_release_lease",
+            RuntimeOperation::ReleaseLease {
+                token: token.clone(),
+            },
+            self.correlation,
+            None,
+        )?;
+        match receipt.result() {
+            Some(RuntimeResult::LeaseReleased {
+                instance_id,
+                lease_id,
+            }) if *instance_id == token.instance_id() && *lease_id == token.lease_id() => Ok(()),
+            _ => Err(self.client.unexpected_result("debug_release_lease")),
+        }
+    }
+
+    pub fn query_events(
+        &self,
+        profile: ProjectionProfile,
+    ) -> RuntimeClientResult<Vec<ProjectedEvent>> {
+        self.client.query_events(
+            EventQuery {
+                correlation_id: Some(self.correlation_id()),
+                ..EventQuery::default()
+            },
+            profile,
+        )
+    }
+}
+
 impl fmt::Debug for RuntimeAuthoringSession {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
             .debug_struct("RuntimeAuthoringSession")
+            .field("correlation", &"<opaque-correlation>")
+            .finish()
+    }
+}
+
+impl fmt::Debug for RuntimeDebugSession {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("RuntimeDebugSession")
             .field("correlation", &"<opaque-correlation>")
             .finish()
     }
