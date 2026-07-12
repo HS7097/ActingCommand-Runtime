@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
+use actingcommand_pack_containment::Sha256Hash;
 use serde::Serialize;
 use serde_json::Value;
 use std::path::PathBuf;
@@ -105,11 +106,15 @@ pub struct PackageBuildCatalogMetadata {
 pub struct PackageValidateRequest {
     pub zip_path: PathBuf,
     pub include_entries: bool,
+    pub expected_input_sha256: Option<Sha256Hash>,
 }
 
 #[derive(Debug, Clone, Serialize)]
 pub struct PackageValidationResponse {
     pub status: String,
+    pub input_sha256: String,
+    pub hash_source: String,
+    pub externally_verified: bool,
     pub module: String,
     pub manifest_path: String,
     pub task_count: usize,

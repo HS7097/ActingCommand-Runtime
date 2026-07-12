@@ -17,6 +17,9 @@ pub struct LabValidateRequest {
 pub struct LabValidateResponse {
     pub zip: String,
     pub status: String,
+    pub input_sha256: String,
+    pub hash_source: String,
+    pub externally_verified: bool,
     pub entry_count: usize,
     pub control: LabValidateControlResponse,
     pub resources: LabValidateResourcesResponse,

@@ -15,6 +15,7 @@ fn package_family_exposes_typed_requests_and_responses() {
     let _validate = PackageValidateRequest {
         zip_path: PathBuf::from("bundle.zip"),
         include_entries: false,
+        expected_input_sha256: None,
     };
     let _build = PackageBuildTaskRequest {
         source: PackageSource::Local(PathBuf::from("resources")),

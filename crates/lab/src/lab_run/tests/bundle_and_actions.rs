@@ -298,8 +298,25 @@
         let response = validate_lab_package_zip(&zip).expect("valid package");
 
         assert_eq!(response.status, "valid");
+        assert_eq!(response.hash_source, "self_computed_provenance_only");
+        assert!(!response.externally_verified);
         assert_eq!(response.control.entry_task_id, "task");
         assert_eq!(response.resources.operation_count, 1);
+    }
+
+    #[test]
+    fn lab_validate_reports_an_externally_supplied_hash_as_verified() {
+        let temp = TempDir::new().expect("temp");
+        let zip = temp.path().join("input.zip");
+        write_minimal_lab_package(&zip);
+        let expected = Sha256Hash::digest(&fs::read(&zip).expect("package bytes"));
+
+        let response = validate_lab_package_zip_with_expected(&zip, Some(expected))
+            .expect("externally verified package");
+
+        assert_eq!(response.input_sha256, expected.to_string());
+        assert_eq!(response.hash_source, "externally_supplied");
+        assert!(response.externally_verified);
     }
 
     #[test]

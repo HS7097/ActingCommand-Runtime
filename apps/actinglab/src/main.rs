@@ -20622,6 +20622,139 @@ mod tests {
             true,
         );
         assert_eq!(result.exit_code(), 0);
+        let data = result.envelope.data.as_ref().expect("validation payload");
+        assert_eq!(
+            data.get("hash_source").and_then(Value::as_str),
+            Some("self_computed_provenance_only")
+        );
+        assert_eq!(
+            data.get("externally_verified").and_then(Value::as_bool),
+            Some(false)
+        );
+    }
+
+    #[test]
+    fn package_validate_accepts_matching_external_hash() {
+        let temp = TempDir::new().unwrap();
+        let zip = temp.path().join("bundle.zip");
+        write_test_zip(
+            &zip,
+            &[
+                (
+                    "module/manifest.json",
+                    br#"{"schema_version":"0.2"}"#.as_slice(),
+                ),
+                (
+                    "module/operations/task/task.json",
+                    br#"{"id":"task"}"#.as_slice(),
+                ),
+                ("module/operations/resources.json", br#"{}"#.as_slice()),
+            ],
+        );
+        let hash = format!("{:x}", Sha256::digest(fs::read(&zip).unwrap()));
+
+        let result = run_cli(
+            [
+                "--json",
+                "package",
+                "validate",
+                "--zip",
+                zip.to_str().unwrap(),
+                "--expected-sha256",
+                &hash,
+            ],
+            true,
+        );
+
+        assert_eq!(result.exit_code(), 0, "{}", result.envelope_json());
+        let data = result.envelope.data.as_ref().expect("validation payload");
+        assert_eq!(
+            data.get("hash_source").and_then(Value::as_str),
+            Some("externally_supplied")
+        );
+        assert_eq!(
+            data.get("externally_verified").and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            data.get("input_sha256").and_then(Value::as_str),
+            Some(hash.as_str())
+        );
+    }
+
+    #[test]
+    fn package_validate_rejects_mismatched_external_hash() {
+        let temp = TempDir::new().unwrap();
+        let zip = temp.path().join("bundle.zip");
+        write_test_zip(
+            &zip,
+            &[
+                (
+                    "module/manifest.json",
+                    br#"{"schema_version":"0.2"}"#.as_slice(),
+                ),
+                (
+                    "module/operations/task/task.json",
+                    br#"{"id":"task"}"#.as_slice(),
+                ),
+                ("module/operations/resources.json", br#"{}"#.as_slice()),
+            ],
+        );
+
+        let result = run_cli(
+            [
+                "--json",
+                "package",
+                "validate",
+                "--zip",
+                zip.to_str().unwrap(),
+                "--expected-sha256",
+                "0000000000000000000000000000000000000000000000000000000000000000",
+            ],
+            true,
+        );
+
+        assert_eq!(result.exit_code(), 2);
+        assert!(result.envelope_json().contains("hash mismatch"));
+    }
+
+    #[test]
+    fn package_validate_rejects_bare_external_hash_flag() {
+        let temp = TempDir::new().unwrap();
+        let zip = temp.path().join("bundle.zip");
+        write_test_zip(
+            &zip,
+            &[
+                (
+                    "module/manifest.json",
+                    br#"{"schema_version":"0.2"}"#.as_slice(),
+                ),
+                (
+                    "module/operations/task/task.json",
+                    br#"{"id":"task"}"#.as_slice(),
+                ),
+                ("module/operations/resources.json", br#"{}"#.as_slice()),
+            ],
+        );
+
+        let result = run_cli(
+            [
+                "--json",
+                "package",
+                "validate",
+                "--zip",
+                zip.to_str().unwrap(),
+                "--expected-sha256",
+            ],
+            true,
+        );
+
+        assert_eq!(result.exit_code(), 2);
+        assert!(
+            result
+                .envelope_json()
+                .contains("requires an explicit SHA-256 value")
+        );
     }
 
     #[test]

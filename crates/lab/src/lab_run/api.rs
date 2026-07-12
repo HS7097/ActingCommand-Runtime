@@ -103,6 +103,9 @@ fn validate_lab_package_zip_with_expected(
 ) -> CliOutcome<LabValidateResponse> {
     let contained =
         load_lab_package_for_validation(zip_path, "lab-validate", expected_input_sha256)?;
+    let input_sha256 = contained.sha256.clone();
+    let hash_source = contained.hash_source.to_string();
+    let externally_verified = contained.externally_verified;
     let entry_count = contained.bundle.entry_count();
     let control = lab_control_from_bundle(&contained.bundle)?;
     control.validate()?;
@@ -110,6 +113,9 @@ fn validate_lab_package_zip_with_expected(
     Ok(LabValidateResponse {
         zip: zip_path.display().to_string(),
         status: "valid".to_string(),
+        input_sha256,
+        hash_source,
+        externally_verified,
         entry_count,
         control: LabValidateControlResponse {
             package_id: control.package_id,
@@ -499,6 +505,8 @@ fn select_device_id(
 
 struct ContainedLabInput {
     sha256: String,
+    hash_source: &'static str,
+    externally_verified: bool,
     bundle: LoadedBundle,
 }
 
@@ -513,6 +521,7 @@ fn load_lab_package_for_validation(
             zip_path.display()
         ))
     })?;
+    let externally_verified = expected_input_sha256.is_some();
     let expected = expected_input_sha256.unwrap_or_else(|| Sha256Hash::digest(&bytes));
     let instance = InstanceId::new(instance_label).map_err(containment_error)?;
     let mut containment = Containment::new();
@@ -524,6 +533,12 @@ fn load_lab_package_for_validation(
         .ok_or_else(|| CliError::package_invalid("containment did not retain loaded Lab bundle"))?;
     Ok(ContainedLabInput {
         sha256: expected.to_string(),
+        hash_source: if externally_verified {
+            "externally_supplied"
+        } else {
+            "self_computed_provenance_only"
+        },
+        externally_verified,
         bundle,
     })
 }
@@ -544,6 +559,8 @@ fn load_lab_package_for_run(
     let sha256 = admitted.loaded_bundle().verified_hash().to_string();
     Ok(ContainedLabInput {
         sha256,
+        hash_source: "externally_supplied",
+        externally_verified: true,
         bundle: admitted.into_loaded_bundle(),
     })
 }

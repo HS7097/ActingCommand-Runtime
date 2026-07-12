@@ -202,6 +202,7 @@ fn normalizer_replaces_only_dynamic_protocol_fields() {
         "generated_at_unix_ms": 123,
         "instance_id": "envinst_abcdef",
         "source_result": "detect_resolution@123",
+        "input_sha256": "0123456789abcdef",
         "path": temp.path().join("result.json").display().to_string(),
         "schema_version": "0.2",
         "confidence": 0.9876543
@@ -214,6 +215,7 @@ fn normalizer_replaces_only_dynamic_protocol_fields() {
     assert_eq!(value["generated_at_unix_ms"], "<TIME>");
     assert_eq!(value["instance_id"], "<IID>");
     assert_eq!(value["source_result"], "detect_resolution@<TIME>");
+    assert_eq!(value["input_sha256"], "<INPUT_SHA256>");
     assert_eq!(value["path"], "<PATH>");
     assert_eq!(value["detector_id"], "detect_resolution");
     assert_eq!(value["schema_version"], "0.2");
@@ -361,6 +363,10 @@ fn normalize_string(text: &mut String, root: &Path, key: Option<&str>) {
             *text = "<OUTPUT_SHA256>".to_string();
             return;
         }
+        Some("input_sha256") => {
+            *text = "<INPUT_SHA256>".to_string();
+            return;
+        }
         Some("instance_id") if text.starts_with("envinst_") => {
             *text = "<IID>".to_string();
             return;
@@ -456,7 +462,8 @@ fn read_goldens() -> Vec<GoldenCase> {
 
 fn write_goldens(cases: &[GoldenCase]) {
     let path = Path::new(env!("CARGO_MANIFEST_DIR")).join(GOLDEN_PATH);
-    let bytes = serde_json::to_vec_pretty(cases).expect("serialize goldens");
+    let mut bytes = serde_json::to_vec_pretty(cases).expect("serialize goldens");
+    bytes.push(b'\n');
     fs::write(&path, bytes).unwrap_or_else(|err| panic!("write {}: {err}", path.display()));
 }
 

@@ -535,6 +535,9 @@
         "dangerous_entries": [],
         "entries": null,
         "entry_count": 3,
+        "externally_verified": false,
+        "hash_source": "self_computed_provenance_only",
+        "input_sha256": "<INPUT_SHA256>",
         "ledger_event": {
           "event_type": "package.validate.ok",
           "path": "<PATH>",
@@ -666,6 +669,9 @@
           "server": "cn"
         },
         "entry_count": 6,
+        "externally_verified": false,
+        "hash_source": "self_computed_provenance_only",
+        "input_sha256": "<INPUT_SHA256>",
         "resources": {
           "manifest": "resources/manifest.json",
           "navigation": null,

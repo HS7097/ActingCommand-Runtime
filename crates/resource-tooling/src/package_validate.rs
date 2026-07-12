@@ -17,13 +17,23 @@ pub fn validate_package(request: PackageValidateRequest) -> LabResult<PackageVal
         ))
     })?;
     let instance = InstanceId::new("package-validate").map_err(containment_package_error)?;
-    let expected = Sha256Hash::digest(&bytes);
+    let externally_verified = request.expected_input_sha256.is_some();
+    let expected = request
+        .expected_input_sha256
+        .unwrap_or_else(|| Sha256Hash::digest(&bytes));
     let mut containment = Containment::new();
     let bundle = containment
         .load(&instance, &bytes, &expected)
         .map_err(containment_package_error)?;
     Ok(PackageValidationResponse {
         status: "valid".to_string(),
+        input_sha256: expected.to_string(),
+        hash_source: if externally_verified {
+            "externally_supplied".to_string()
+        } else {
+            "self_computed_provenance_only".to_string()
+        },
+        externally_verified,
         module: bundle.resource_root().to_string(),
         manifest_path: bundle.manifest_path().to_string(),
         task_count: bundle.task_count(),
@@ -82,12 +92,67 @@ mod tests {
         let response = validate_package(PackageValidateRequest {
             zip_path: zip,
             include_entries: false,
+            expected_input_sha256: None,
         })
         .unwrap();
 
+        assert_eq!(response.hash_source, "self_computed_provenance_only");
+        assert!(!response.externally_verified);
         assert_eq!(response.module, "module");
         assert_eq!(response.task_count, 1);
         assert!(response.entries.is_none());
+    }
+
+    #[test]
+    fn package_validate_distinguishes_external_hash_from_self_computed_provenance() {
+        let temp = TempDir::new().unwrap();
+        let zip = temp.path().join("bundle.zip");
+        write_test_zip(
+            &zip,
+            &[
+                ("module/manifest.json", br#"{"schema_version":"0.2"}"#),
+                ("module/operations/task/task.json", br#"{"id":"task"}"#),
+            ],
+        );
+        let expected = Sha256Hash::digest(&fs::read(&zip).unwrap());
+
+        let response = validate_package(PackageValidateRequest {
+            zip_path: zip,
+            include_entries: false,
+            expected_input_sha256: Some(expected),
+        })
+        .unwrap();
+
+        assert_eq!(response.input_sha256, expected.to_string());
+        assert_eq!(response.hash_source, "externally_supplied");
+        assert!(response.externally_verified);
+    }
+
+    #[test]
+    fn package_validate_rejects_external_hash_mismatch() {
+        let temp = TempDir::new().unwrap();
+        let zip = temp.path().join("bundle.zip");
+        write_test_zip(
+            &zip,
+            &[
+                ("module/manifest.json", br#"{"schema_version":"0.2"}"#),
+                ("module/operations/task/task.json", br#"{"id":"task"}"#),
+            ],
+        );
+        let wrong = Sha256Hash::parse_hex(
+            "0000000000000000000000000000000000000000000000000000000000000000",
+        )
+        .unwrap();
+
+        let error = validate_package(PackageValidateRequest {
+            zip_path: zip,
+            include_entries: false,
+            expected_input_sha256: Some(wrong),
+        })
+        .expect_err("external mismatch must fail");
+
+        assert_eq!(error.code, "package_invalid");
+        assert!(error.message.contains("hash mismatch"));
     }
 
     #[test]
@@ -119,6 +184,7 @@ mod tests {
         let response = validate_package(PackageValidateRequest {
             zip_path: zip,
             include_entries: false,
+            expected_input_sha256: None,
         })
         .unwrap();
 
@@ -187,6 +253,7 @@ mod tests {
         validate_package(PackageValidateRequest {
             zip_path: zip,
             include_entries: false,
+            expected_input_sha256: None,
         })
         .expect_err("fixture must be rejected")
     }

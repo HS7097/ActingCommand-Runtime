@@ -149,11 +149,15 @@ where
 }
 
 fn parse_optional_sha256(flags: &FlagArgs, name: &str) -> CliOutcome<Option<Sha256Hash>> {
-    flags
-        .optional(name)
-        .filter(|value| value != "true")
-        .map(|value| Sha256Hash::parse_hex(&value).map_err(containment_error))
-        .transpose()
+    match flags.optional(name) {
+        None => Ok(None),
+        Some(value) if value == "true" => Err(CliError::usage(format!(
+            "{name} requires an explicit SHA-256 value"
+        ))),
+        Some(value) => Sha256Hash::parse_hex(&value)
+            .map(Some)
+            .map_err(containment_error),
+    }
 }
 
 fn parse_required_external_sha256(
@@ -261,6 +265,17 @@ mod tests {
 
         assert_eq!(error.code, "validation_failed");
         assert!(error.message.contains("external trust source"));
+    }
+
+    #[test]
+    fn optional_expected_hash_without_a_value_is_rejected() {
+        let flags = FlagArgs::parse(&["--expected-sha256".to_string()]).expect("flags");
+
+        let error = parse_optional_sha256(&flags, "--expected-sha256")
+            .expect_err("empty expected hash must fail");
+
+        assert_eq!(error.code, "validation_failed");
+        assert!(error.message.contains("explicit SHA-256 value"));
     }
 
     #[test]
