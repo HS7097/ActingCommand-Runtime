@@ -389,10 +389,20 @@ fn validate_candidate(
             &["resource_authoring", "environment"],
         ));
     }
-    let build = prepared.build(&AuthoringEnvironmentSnapshot::default());
+    let build = prepared
+        .build(&AuthoringEnvironmentSnapshot::default())
+        .and_then(|built| {
+            let bytes = fs::read(&package_path).map_err(|error| {
+                CliError::package_invalid(format!(
+                    "failed to hash validation package {}: {error}",
+                    package_path.display()
+                ))
+            })?;
+            Ok((built, format!("{:x}", Sha256::digest(bytes))))
+        });
     let cleanup = remove_validation_package(&package_path);
-    let built = match (build, cleanup) {
-        (Ok(built), Ok(())) => built,
+    let (built, package_sha256) = match (build, cleanup) {
+        (Ok(result), Ok(())) => result,
         (Err(error), Ok(())) => return Err(error),
         (Ok(_), Err(error)) => return Err(error),
         (Err(mut error), Err(cleanup_error)) => {
@@ -408,13 +418,16 @@ fn validate_candidate(
             "containment round-trip did not report a valid package",
         ));
     }
-    AuthoringValidationReport::new(vec![
-        "draft_schema".to_string(),
-        "resource_convert".to_string(),
-        "repository_references".to_string(),
-        "package_build".to_string(),
-        "containment_round_trip".to_string(),
-    ])
+    AuthoringValidationReport::new(
+        vec![
+            "draft_schema".to_string(),
+            "resource_convert".to_string(),
+            "repository_references".to_string(),
+            "package_build".to_string(),
+            "containment_round_trip".to_string(),
+        ],
+        package_sha256,
+    )
 }
 
 fn validation_package_path(candidate_root: &Path) -> CliOutcome<PathBuf> {
