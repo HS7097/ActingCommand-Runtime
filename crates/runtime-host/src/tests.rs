@@ -11,9 +11,10 @@ use actingcommand_contract::{
     InstanceId, IssuedCorrelationId, LeasePriority, LeaseQueuePolicy, LeaseQueueStatus, LeaseToken,
     MonitorDiagnosis, MonitorDisposition, MonitorObservation, MonitorPayload,
     MonitorRecoveryCoordinationReason, MonitorRecoveryKind, OriginModule, ProjectionPayload,
-    ProjectionProfile, RUNTIME_INFO_FILE, ResourceAuthoringEvent, ResourceAuthoringPhase,
-    RuntimeCaptureBackend, RuntimeErrorCode, RuntimeMonitorPolicy, RuntimeOperation,
-    RuntimeReceipt, RuntimeReceiptState, RuntimeRequest, RuntimeResult, TaskOutcome,
+    ProjectionProfile, PublicEventPayload, RUNTIME_INFO_FILE, ResourceAuthoringEvent,
+    ResourceAuthoringPhase, RuntimeCaptureBackend, RuntimeErrorCode, RuntimeMonitorPolicy,
+    RuntimeOperation, RuntimeReceipt, RuntimeReceiptState, RuntimeRequest, RuntimeResult,
+    TaskOutcome, TaskPayload, TaskSemanticFact,
 };
 use actingcommand_device::{
     CaptureBackend, CaptureBackendName, DeviceError, DeviceResult, Frame, InputBackend, PixelFormat,
@@ -472,6 +473,20 @@ fn projected_events(
         panic!("expected event projection");
     };
     events.clone()
+}
+
+fn projected_task_semantic_fact(
+    event: &actingcommand_contract::ProjectedEvent,
+) -> Option<&TaskSemanticFact> {
+    match &event.payload {
+        ProjectionPayload::Public(PublicEventPayload::Task(payload)) => {
+            payload.task_semantic_fact()
+        }
+        ProjectionPayload::Full(EventPayload::Task(TaskPayload::Semantic(payload))) => {
+            Some(payload.fact())
+        }
+        _ => None,
+    }
 }
 
 fn config(root: &TempDir) -> RuntimeHostConfig {
@@ -2192,7 +2207,7 @@ fn runtime_executes_neutral_contained_task_without_lab_ownership() {
         RuntimeOperation::run_contained_task(
             "neutral.instance",
             client.ids.mint_holder_id().expect("holder"),
-            ContainedTaskRequest::new(package.display().to_string(), expected)
+            ContainedTaskRequest::new(package.display().to_string(), expected.clone())
                 .expect("task request"),
         ),
     );
@@ -2215,16 +2230,212 @@ fn runtime_executes_neutral_contained_task_without_lab_ownership() {
         EventType::TaskRequested,
         EventType::TaskStarted,
         EventType::CaptureCompleted,
+        EventType::TaskEvidenceIndexed,
+        EventType::TaskRecognitionStarted,
         EventType::RecognitionCompleted,
+        EventType::TaskRecognitionCompleted,
         EventType::TaskStepStarted,
+        EventType::TaskEffectIntent,
         EventType::InputIntent,
         EventType::InputCommitted,
+        EventType::TaskEffectCompleted,
         EventType::TaskStepFinished,
         EventType::TaskTerminalIntent,
         EventType::TaskCompleted,
     ] {
         assert!(event_types.contains(&required), "missing {required:?}");
     }
+    let events = projected_events(
+        &mut client,
+        EventQuery {
+            correlation_id: Some(correlation_id),
+            ..EventQuery::default()
+        },
+    );
+    let semantic = events
+        .iter()
+        .filter_map(projected_task_semantic_fact)
+        .collect::<Vec<_>>();
+    assert!(semantic.iter().any(|fact| matches!(
+        fact,
+        TaskSemanticFact::PackageAdmitted { package_sha256, .. }
+            if package_sha256 == &expected
+    )));
+    assert_eq!(
+        semantic
+            .iter()
+            .filter(|fact| matches!(fact, TaskSemanticFact::EvidenceIndexed { .. }))
+            .count(),
+        2
+    );
+    assert_eq!(
+        semantic
+            .iter()
+            .filter(|fact| matches!(fact, TaskSemanticFact::RecognitionStarted { .. }))
+            .count(),
+        2
+    );
+    assert_eq!(
+        semantic
+            .iter()
+            .filter(|fact| matches!(fact, TaskSemanticFact::RecognitionCompleted { .. }))
+            .count(),
+        2
+    );
+    assert_eq!(
+        semantic
+            .iter()
+            .filter(|fact| matches!(fact, TaskSemanticFact::TerminalCommitted { .. }))
+            .count(),
+        1
+    );
+    let evidence_frames = events
+        .iter()
+        .filter(|event| event.event_type == EventType::TaskEvidenceIndexed)
+        .map(|event| *event.links.frame_id().expect("evidence frame id"))
+        .collect::<BTreeSet<_>>();
+    let verified_frames = events
+        .iter()
+        .filter(|event| event.event_type == EventType::ArtifactVerified)
+        .map(|event| *event.links.frame_id().expect("artifact frame id"))
+        .collect::<BTreeSet<_>>();
+    assert_eq!(evidence_frames, verified_frames);
+    assert_eq!(evidence_frames.len(), 2);
+    drop(client);
+    host.close().expect("close host");
+}
+
+#[test]
+fn contained_task_replay_without_connection_cache_reuses_runtime_terminal() {
+    let root = TempDir::new().expect("tempdir");
+    let package = root.path().join("neutral-task.zip");
+    let bytes = neutral_contained_task_package();
+    fs::write(&package, &bytes).expect("write package");
+    let expected = actingcommand_pack_containment::Sha256Hash::digest(&bytes).to_string();
+    let state = Arc::new(FakeState::default());
+    state
+        .transition_capture_after_input
+        .store(true, Ordering::Release);
+    let host = host_with_state(&root, "neutral.instance", Arc::clone(&state));
+    let ids = IdentifierIssuer::new().expect("identifier issuer");
+    let request = runtime_request(
+        &ids,
+        RuntimeOperation::run_contained_task(
+            "neutral.instance",
+            ids.mint_holder_id().expect("holder"),
+            ContainedTaskRequest::new(package.display().to_string(), expected)
+                .expect("task request"),
+        ),
+    );
+    let connection = ConnectionId::new(91).expect("connection");
+
+    let first = host
+        .process_request_for_test(&request, connection)
+        .expect("first contained task");
+    let replayed = host
+        .process_request_for_test(&request, connection)
+        .expect("replayed contained task");
+
+    assert_eq!(replayed, first);
+    assert_eq!(state.input_count.load(Ordering::Acquire), 1);
+    let mut query_client = TestClient::connect(&host);
+    let events = projected_events(
+        &mut query_client,
+        EventQuery {
+            request_id: Some(request.request_id()),
+            ..EventQuery::default()
+        },
+    );
+    let facts = events.iter().filter_map(projected_task_semantic_fact);
+    let mut packages = 0;
+    let mut effect_intents = 0;
+    let mut terminals = 0;
+    for fact in facts {
+        match fact {
+            TaskSemanticFact::PackageAdmitted { .. } => packages += 1,
+            TaskSemanticFact::EffectIntent { .. } => effect_intents += 1,
+            TaskSemanticFact::TerminalCommitted { .. } => terminals += 1,
+            _ => {}
+        }
+    }
+    assert_eq!((packages, effect_intents, terminals), (1, 1, 1));
+    drop(query_client);
+    host.close().expect("close host");
+}
+
+#[test]
+fn contained_task_terminal_is_absorbing_and_rejections_are_audited() {
+    let root = TempDir::new().expect("tempdir");
+    let state = Arc::new(FakeState::default());
+    let host = host_with_state(&root, "neutral.instance", state);
+    let mut client = TestClient::connect(&host);
+    let (_, token) = client.acquire("neutral.instance");
+    let request = client.request(RuntimeOperation::Health);
+    let ids = IdentifierIssuer::new().expect("identifier issuer");
+    let task_id = ids.mint_task_id().expect("task id");
+    let run_id = ids.mint_run_id().expect("run id");
+
+    let committed = host
+        .append_contained_task_terminal_for_test(
+            &request,
+            &token,
+            task_id,
+            run_id,
+            TaskOutcome::Success,
+            false,
+            Some("neutral/terminal".to_string()),
+            1,
+            None,
+        )
+        .expect("first terminal");
+    let (rejected_state, rejected_code, rejected_terminal) = host
+        .append_contained_task_terminal_for_test(
+            &request,
+            &token,
+            task_id,
+            run_id,
+            TaskOutcome::Failure,
+            true,
+            None,
+            1,
+            Some("conflicting_terminal"),
+        )
+        .expect_err("second terminal must be rejected");
+
+    assert_eq!(rejected_state, RuntimeReceiptState::Denied);
+    assert_eq!(rejected_code, RuntimeErrorCode::InvalidRequest);
+    assert_ne!(committed, rejected_terminal.expect("rejection terminal"));
+    let events = projected_events(
+        &mut client,
+        EventQuery {
+            task_id: Some(*task_id.transport()),
+            run_id: Some(*run_id.transport()),
+            ..EventQuery::default()
+        },
+    );
+    let facts = events
+        .iter()
+        .filter_map(projected_task_semantic_fact)
+        .collect::<Vec<_>>();
+    assert_eq!(
+        facts
+            .iter()
+            .filter(|fact| matches!(fact, TaskSemanticFact::TerminalCommitted { .. }))
+            .count(),
+        1
+    );
+    assert_eq!(
+        facts
+            .iter()
+            .filter(|fact| matches!(fact, TaskSemanticFact::TerminalRejected { .. }))
+            .count(),
+        1
+    );
+    let release = client.request(RuntimeOperation::ReleaseLease { token });
+    assert_eq!(
+        client.send(&release).state(),
+        RuntimeReceiptState::Completed
+    );
     drop(client);
     host.close().expect("close host");
 }

@@ -5,9 +5,7 @@ use super::{
     effective_resource_root, finish_semantic_result_with_ledger, parse_optional_duration_ms,
     read_user_config, runtime_state_root, semantic_ledger_context,
 };
-use actingcommand_contract::{
-    InputAction, ProjectionProfile, RuntimeDebugEvent, RuntimeDebugOperation,
-};
+use actingcommand_contract::InputAction;
 use actingcommand_device::{
     AdbConfig, CaptureBackend, CaptureBackendConfig, DeviceError, DeviceTarget, InputBackend,
     MaaTouchConfig, TouchBackendConfig,
@@ -17,15 +15,11 @@ use actingcommand_lab::{
     EnvMarkerResolutionRequest, EnvResolveRequest, EnvScopeRequest, EnvStatusRequest,
     InputBackendAttemptReport, InputBackendFactory, InputBackendObservation, InputBackendReport,
     InputBackendRequest, Lab, LabError, LabPorts, LabState, LedgerEventEntry, LedgerLastResort,
-    LedgerReadback, LedgerRecordEntry, LedgerSessionHeader, LedgerSink, RunLedgerSessionRequest,
-    SemanticInputExecutor, UserConfig,
+    LedgerReadback, LedgerRecordEntry, LedgerSink, RunLedgerSessionRequest, SemanticInputExecutor,
+    UserConfig,
 };
-use actingcommand_ledger::{
-    LastResortError, LedgerRecord, LightEvent, SessionHeader, write_last_resort_error,
-};
-use actingcommand_runtime_client::{
-    RuntimeClient, RuntimeClientConfig, RuntimeDebugSession, RuntimeInputProxy,
-};
+use actingcommand_ledger::{LastResortError, write_last_resort_error};
+use actingcommand_runtime_client::{RuntimeClient, RuntimeClientConfig, RuntimeInputProxy};
 use serde::{Serialize, de::DeserializeOwned};
 use serde_json::{Value, json};
 use std::path::{Path, PathBuf};
@@ -122,12 +116,7 @@ pub(super) fn resolve_env_markers_in_value(
 }
 
 pub(super) fn build_readonly_lab() -> CliOutcome<Lab<AppLabPorts>> {
-    build_app_lab(
-        UserConfig::default(),
-        None,
-        AppCaptureAuthority::Disabled,
-        None,
-    )
+    build_app_lab(UserConfig::default(), None, AppCaptureAuthority::Disabled)
 }
 
 pub(super) fn build_readonly_lab_for_capture(
@@ -142,7 +131,7 @@ pub(super) fn build_readonly_lab_for_capture(
         ),
         None => AppCaptureAuthority::Disabled,
     };
-    build_app_lab(UserConfig::default(), None, authority, None)
+    build_app_lab(UserConfig::default(), None, authority)
 }
 
 pub(super) fn build_drive_lab(
@@ -165,31 +154,24 @@ pub(super) fn build_drive_lab(
                 )
             });
     let input_metadata = enable_input.then_some(runtime_metadata).flatten();
-    build_app_lab(config, input_metadata, capture_authority, None)
+    build_app_lab(config, input_metadata, capture_authority)
 }
 
 fn build_app_lab(
     config: UserConfig,
     input_metadata: Option<InputFactoryMetadata>,
     capture_authority: AppCaptureAuthority,
-    runtime_debug_session: Option<RuntimeDebugSession>,
 ) -> CliOutcome<Lab<AppLabPorts>> {
     Lab::new(
         AppLabPorts {
             semantic_input: AppSemanticInputExecutor {
                 input_metadata: input_metadata.clone(),
-                runtime_debug_session: runtime_debug_session.clone(),
             },
-            input: AppInputFactory {
-                input_metadata,
-                runtime_debug_session: runtime_debug_session.clone(),
-            },
+            input: AppInputFactory { input_metadata },
             capture: AppCaptureFactory {
                 authority: capture_authority,
             },
-            ledger: AppLedgerSink {
-                runtime_debug_session,
-            },
+            ledger: AppLedgerSink,
             clock: SystemClock,
             config: AppConfigSource {
                 config,
@@ -313,12 +295,8 @@ fn build_lab(
         AppLabPorts {
             semantic_input: AppSemanticInputExecutor {
                 input_metadata: input_metadata.clone(),
-                runtime_debug_session: None,
             },
-            input: AppInputFactory {
-                input_metadata,
-                runtime_debug_session: None,
-            },
+            input: AppInputFactory { input_metadata },
             capture: AppCaptureFactory {
                 authority: capture_metadata.map_or(AppCaptureAuthority::Disabled, |metadata| {
                     AppCaptureAuthority::Runtime(
@@ -329,9 +307,7 @@ fn build_lab(
                     )
                 }),
             },
-            ledger: AppLedgerSink {
-                runtime_debug_session: None,
-            },
+            ledger: AppLedgerSink,
             clock: SystemClock,
             config: AppConfigSource {
                 config,
@@ -438,7 +414,6 @@ impl InputFactoryMetadata {
 
 pub(super) struct AppSemanticInputExecutor {
     input_metadata: Option<InputFactoryMetadata>,
-    runtime_debug_session: Option<RuntimeDebugSession>,
 }
 
 impl SemanticInputExecutor for AppSemanticInputExecutor {
@@ -447,17 +422,12 @@ impl SemanticInputExecutor for AppSemanticInputExecutor {
             .input_metadata
             .as_ref()
             .ok_or_else(|| LabError::device("Runtime input metadata was not configured"))?;
-        let mut proxy = match &self.runtime_debug_session {
-            Some(session) => {
-                RuntimeInputProxy::connect_debug(session.clone(), &metadata.instance_alias)
-            }
-            None => RuntimeClient::connect(RuntimeClientConfig::new(
-                &metadata.runtime_state_root,
-                actingcommand_contract::EventActor::Lab,
-                actingcommand_contract::EventSource::Lab,
-            ))
-            .and_then(|client| RuntimeInputProxy::connect(client, &metadata.instance_alias)),
-        }
+        let mut proxy = RuntimeClient::connect(RuntimeClientConfig::new(
+            &metadata.runtime_state_root,
+            actingcommand_contract::EventActor::Lab,
+            actingcommand_contract::EventSource::Lab,
+        ))
+        .and_then(|client| RuntimeInputProxy::connect(client, &metadata.instance_alias))
         .map_err(|error| LabError::device(error.to_string()))?;
         let operation = proxy.input(action);
         let close = proxy.close();
@@ -473,7 +443,6 @@ impl SemanticInputExecutor for AppSemanticInputExecutor {
 
 pub(super) struct AppInputFactory {
     input_metadata: Option<InputFactoryMetadata>,
-    runtime_debug_session: Option<RuntimeDebugSession>,
 }
 
 impl InputBackendFactory for AppInputFactory {
@@ -488,24 +457,16 @@ impl InputBackendFactory for AppInputFactory {
             .transpose()?
             .or_else(|| self.input_metadata.clone())
             .ok_or_else(|| LabError::device("Runtime input metadata was not configured"))?;
-        let proxy = match &self.runtime_debug_session {
-            Some(session) => super::runtime_input_backend::RuntimeInputBackend::connect_debug(
-                session.clone(),
-                &metadata.instance_alias,
-            ),
-            None => {
-                let client = RuntimeClient::connect(RuntimeClientConfig::new(
-                    &metadata.runtime_state_root,
-                    actingcommand_contract::EventActor::Lab,
-                    actingcommand_contract::EventSource::Lab,
-                ))
-                .map_err(|error| LabError::device(error.to_string()))?;
-                super::runtime_input_backend::RuntimeInputBackend::connect(
-                    client,
-                    &metadata.instance_alias,
-                )
-            }
-        }
+        let client = RuntimeClient::connect(RuntimeClientConfig::new(
+            &metadata.runtime_state_root,
+            actingcommand_contract::EventActor::Lab,
+            actingcommand_contract::EventSource::Lab,
+        ))
+        .map_err(|error| LabError::device(error.to_string()))?;
+        let proxy = super::runtime_input_backend::RuntimeInputBackend::connect(
+            client,
+            &metadata.instance_alias,
+        )
         .map_err(|error| LabError::device(error.to_string()))?;
         let backend = ObservedInputBackend { proxy, observation };
         backend.publish_report()?;
@@ -648,114 +609,44 @@ impl CaptureBackendFactory for AppCaptureFactory {
     }
 }
 
-pub(super) struct AppLedgerSink {
-    runtime_debug_session: Option<RuntimeDebugSession>,
-}
+pub(super) struct AppLedgerSink;
 
-pub(super) struct AppRunLedgerSession {
-    runtime_debug_session: Option<RuntimeDebugSession>,
-    header: Option<SessionHeader>,
-    events: Vec<LightEvent>,
-    records: Vec<LedgerRecord>,
-    logical_path: Option<PathBuf>,
-}
+pub(super) struct AppRunLedgerSession;
 
 impl LedgerSink for AppLedgerSink {
     type RunSession = AppRunLedgerSession;
 
     fn run_session(&mut self) -> Self::RunSession {
-        AppRunLedgerSession {
-            runtime_debug_session: self.runtime_debug_session.clone(),
-            header: None,
-            events: Vec::new(),
-            records: Vec::new(),
-            logical_path: None,
-        }
+        AppRunLedgerSession
     }
 
     fn start_run_session(
-        session: &mut Self::RunSession,
-        request: RunLedgerSessionRequest,
+        _session: &mut Self::RunSession,
+        _request: RunLedgerSessionRequest,
     ) -> CliOutcome<PathBuf> {
-        if session.logical_path.is_some() {
-            return Err(LabError::package_invalid(
-                "invalid lab logging input: runtime ledger session is already started",
-            ));
-        }
-        let header =
-            decode_ledger_json(&request.header().encoded_json()?, "ledger session header")?;
-        let correlation_id = runtime_correlation_id(app_run_runtime(session)?)?;
-        let path = PathBuf::from("runtime-global-ledger").join(&correlation_id);
-        session.header = Some(header);
-        session.logical_path = Some(path.clone());
-        Ok(path)
+        Err(retired_run_ledger_error("start_run_session"))
     }
 
     fn append_run_record(
-        session: &mut Self::RunSession,
-        record: LedgerRecordEntry,
+        _session: &mut Self::RunSession,
+        _record: LedgerRecordEntry,
     ) -> CliOutcome<()> {
-        let record = decode_record(record)?;
-        append_runtime_run_progress(session)?;
-        session.records.push(record);
-        Ok(())
+        Err(retired_run_ledger_error("append_run_record"))
     }
 
-    fn append_run_event(session: &mut Self::RunSession, event: LedgerEventEntry) -> CliOutcome<()> {
-        let event = decode_ledger_json(&event.encoded_json()?, "ledger event")?;
-        append_runtime_run_progress(session)?;
-        session.events.push(event);
-        Ok(())
+    fn append_run_event(
+        _session: &mut Self::RunSession,
+        _event: LedgerEventEntry,
+    ) -> CliOutcome<()> {
+        Err(retired_run_ledger_error("append_run_event"))
     }
 
-    fn sync_run_session(session: &Self::RunSession) -> CliOutcome<()> {
-        let events = app_run_runtime(session)?
-            .query_events(ProjectionProfile::Lab)
-            .map_err(app_runtime_ledger_error)?;
-        if events.is_empty() {
-            return Err(LabError::package_invalid(
-                "Runtime global-ledger projection is empty",
-            ));
-        }
-        Ok(())
+    fn sync_run_session(_session: &Self::RunSession) -> CliOutcome<()> {
+        Err(retired_run_ledger_error("sync_run_session"))
     }
 
-    fn read_run_session(session: &Self::RunSession) -> CliOutcome<LedgerReadback> {
-        let runtime = app_run_runtime(session)?;
-        let correlation_id = runtime_correlation_id(runtime)?;
-        let projected_events = runtime
-            .query_events(ProjectionProfile::Lab)
-            .map_err(app_runtime_ledger_error)?;
-        if projected_events.is_empty() {
-            return Err(LabError::package_invalid(
-                "Runtime global-ledger projection is empty",
-            ));
-        }
-        let header = session
-            .header
-            .clone()
-            .map(|header| {
-                let encoded = encode_ledger_json(&header, "ledger session header")?;
-                LedgerSessionHeader::from_json(&encoded)
-            })
-            .transpose()?;
-        let events = session
-            .events
-            .iter()
-            .map(|event| {
-                let encoded = encode_ledger_json(event, "ledger event")?;
-                LedgerEventEntry::from_json(&encoded)
-            })
-            .collect::<CliOutcome<Vec<_>>>()?;
-        let records = session
-            .records
-            .iter()
-            .map(|record| {
-                let encoded = encode_ledger_json(record, "ledger record")?;
-                LedgerRecordEntry::from_json(&encoded)
-            })
-            .collect::<CliOutcome<Vec<_>>>()?;
-        LedgerReadback::new_runtime(header, events, records, correlation_id, projected_events)
+    fn read_run_session(_session: &Self::RunSession) -> CliOutcome<LedgerReadback> {
+        Err(retired_run_ledger_error("read_run_session"))
     }
 
     fn write_run_last_resort(
@@ -768,38 +659,10 @@ impl LedgerSink for AppLedgerSink {
     }
 }
 
-fn app_run_runtime(session: &AppRunLedgerSession) -> CliOutcome<&RuntimeDebugSession> {
-    session.runtime_debug_session.as_ref().ok_or_else(|| {
-        LabError::package_invalid("invalid lab logging input: Runtime debug session is unavailable")
-    })
-}
-
-fn append_runtime_run_progress(session: &AppRunLedgerSession) -> CliOutcome<()> {
-    app_run_runtime(session)?
-        .record_event(RuntimeDebugEvent::progress(RuntimeDebugOperation::LabRun))
-        .map(|_| ())
-        .map_err(app_runtime_ledger_error)
-}
-
-fn runtime_correlation_id(session: &RuntimeDebugSession) -> CliOutcome<String> {
-    serde_json::to_value(session.correlation_id())
-        .map_err(|error| {
-            LabError::package_invalid(format!(
-                "failed to encode Runtime correlation identifier: {error}"
-            ))
-        })?
-        .as_str()
-        .map(str::to_owned)
-        .ok_or_else(|| LabError::package_invalid("Runtime correlation identifier must be a string"))
-}
-
-pub(super) fn decode_record(record: LedgerRecordEntry) -> CliOutcome<LedgerRecord> {
-    decode_ledger_json(&record.encoded_json()?, "ledger record")
-}
-
-fn encode_ledger_json<T: Serialize>(value: &T, label: &str) -> CliOutcome<String> {
-    serde_json::to_string(value)
-        .map_err(|error| LabError::package_invalid(format!("failed to encode {label}: {error}")))
+fn retired_run_ledger_error(operation: &'static str) -> LabError {
+    LabError::package_invalid(format!(
+        "{operation} is retired: production run facts are owned by the Runtime global ledger"
+    ))
 }
 
 fn decode_ledger_json<T: DeserializeOwned>(encoded: &str, label: &str) -> CliOutcome<T> {
@@ -809,10 +672,6 @@ fn decode_ledger_json<T: DeserializeOwned>(encoded: &str, label: &str) -> CliOut
 
 fn app_ledger_error(error: impl std::fmt::Display) -> LabError {
     LabError::package_invalid(error.to_string())
-}
-
-fn app_runtime_ledger_error(error: impl std::fmt::Display) -> LabError {
-    LabError::package_invalid(format!("Runtime global-ledger operation failed: {error}"))
 }
 
 pub(super) struct SystemClock;

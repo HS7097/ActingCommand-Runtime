@@ -22,11 +22,13 @@ const CHILD_ROOT_ENV: &str = "ACTINGCOMMAND_C4_TEST_ROOT";
 const CHILD_INSTANCE_ENV: &str = "ACTINGCOMMAND_C4_TEST_INSTANCE";
 const CHILD_INSTANCE_ALIAS_ENV: &str = "ACTINGCOMMAND_C4_TEST_INSTANCE_ALIAS";
 const CHILD_STOP_ENV: &str = "ACTINGCOMMAND_C4_TEST_STOP";
+const CHILD_INPUT_DELAY_MS_ENV: &str = "ACTINGCOMMAND_C4_TEST_INPUT_DELAY_MS";
 const BACKEND_EVENTS_FILE: &str = "sealed-c4-backend.log";
 
 struct FileBackend {
     events_path: PathBuf,
     frame_path: PathBuf,
+    input_delay: Duration,
     closed: bool,
 }
 
@@ -62,6 +64,10 @@ impl Drop for FileCaptureBackend {
 
 impl InputBackend for FileBackend {
     fn tap(&mut self, _x: i32, _y: i32) -> DeviceResult<()> {
+        if !self.input_delay.is_zero() {
+            self.record("tap_started")?;
+            thread::sleep(self.input_delay);
+        }
         write_frame(&self.frame_path, [0, 0, 255])?;
         self.record("tap")
     }
@@ -107,6 +113,7 @@ struct FileProvider {
     instance_id: InstanceId,
     events_path: PathBuf,
     frame_path: PathBuf,
+    input_delay: Duration,
 }
 
 impl ExecutionBackendProvider for FileProvider {
@@ -126,6 +133,7 @@ impl ExecutionBackendProvider for FileProvider {
         let backend = FileBackend {
             events_path: self.events_path.clone(),
             frame_path: self.frame_path.clone(),
+            input_delay: self.input_delay,
             closed: false,
         };
         backend.record("open")?;
@@ -178,6 +186,20 @@ impl RuntimeChild {
     }
 
     pub fn spawn_for_instance(root: &Path, child_test_name: &str, instance_alias: &str) -> Self {
+        Self::spawn_for_instance_with_input_delay(
+            root,
+            child_test_name,
+            instance_alias,
+            Duration::ZERO,
+        )
+    }
+
+    pub fn spawn_for_instance_with_input_delay(
+        root: &Path,
+        child_test_name: &str,
+        instance_alias: &str,
+        input_delay: Duration,
+    ) -> Self {
         let stop_path = root.join("stop-runtime");
         let instance_id = *IdentifierIssuer::new()
             .expect("identifier issuer")
@@ -199,6 +221,10 @@ impl RuntimeChild {
             )
             .env(CHILD_INSTANCE_ALIAS_ENV, instance_alias)
             .env(CHILD_STOP_ENV, &stop_path)
+            .env(
+                CHILD_INPUT_DELAY_MS_ENV,
+                input_delay.as_millis().to_string(),
+            )
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .spawn()
@@ -300,6 +326,10 @@ pub fn run_child_if_requested() -> bool {
     .expect("parse child instance id");
     let instance_alias = env::var(CHILD_INSTANCE_ALIAS_ENV).expect("child instance alias");
     let stop_path = PathBuf::from(env::var_os(CHILD_STOP_ENV).expect("child stop path"));
+    let input_delay_ms = env::var(CHILD_INPUT_DELAY_MS_ENV)
+        .expect("child input delay")
+        .parse::<u64>()
+        .expect("parse child input delay");
     let host = RuntimeHost::start(
         RuntimeHostConfig::new(&root, b"c4-process-acceptance-salt")
             .with_io_timeout(Duration::from_millis(500))
@@ -314,6 +344,7 @@ pub fn run_child_if_requested() -> bool {
             instance_id,
             events_path: root.join(BACKEND_EVENTS_FILE),
             frame_path: root.join("sealed.png"),
+            input_delay: Duration::from_millis(input_delay_ms),
         }),
     )
     .expect("start child Runtime host");

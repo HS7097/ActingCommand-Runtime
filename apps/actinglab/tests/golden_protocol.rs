@@ -202,6 +202,8 @@ fn normalizer_replaces_only_dynamic_protocol_fields() {
         "generated_at_unix_ms": 123,
         "instance_id": "envinst_abcdef",
         "correlation_id": "correlation_abcdef",
+        "artifact_id": "artifact_0123456789abcdef0123456789abcdef",
+        "object_key": "artifacts/ab/artifact_0123456789abcdef0123456789abcdef.png",
         "source_result": "detect_resolution@123",
         "input_sha256": "0123456789abcdef",
         "message": "hash mismatch: expected 0000000000000000000000000000000000000000000000000000000000000000, actual ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
@@ -218,6 +220,8 @@ fn normalizer_replaces_only_dynamic_protocol_fields() {
     assert_eq!(value["generated_at_unix_ms"], "<TIME>");
     assert_eq!(value["instance_id"], "<IID>");
     assert_eq!(value["correlation_id"], "<CORRELATION_ID>");
+    assert_eq!(value["artifact_id"], "<ARTIFACT_ID>");
+    assert_eq!(value["object_key"], "artifacts/ab/<ARTIFACT_ID>.png");
     assert_eq!(value["source_result"], "detect_resolution@<TIME>");
     assert_eq!(value["input_sha256"], "<INPUT_SHA256>");
     assert_eq!(
@@ -395,6 +399,10 @@ fn normalize_string(text: &mut String, root: &Path, key: Option<&str>) {
             *text = "<CORRELATION_ID>".to_string();
             return;
         }
+        Some("artifact_id") => {
+            *text = "<ARTIFACT_ID>".to_string();
+            return;
+        }
         Some("output_zip_sha256") => {
             *text = "<OUTPUT_SHA256>".to_string();
             return;
@@ -448,6 +456,7 @@ fn normalize_string(text: &mut String, root: &Path, key: Option<&str>) {
         replace_embedded_sha256(text);
     }
     replace_embedded_instance_id(text);
+    replace_embedded_artifact_id(text);
 }
 
 fn replace_embedded_sha256(text: &mut String) {
@@ -486,6 +495,18 @@ fn replace_embedded_instance_id(text: &mut String) {
         return;
     }
     text.replace_range(start..start + "envinst_".len() + id_len, "<IID>");
+}
+
+fn replace_embedded_artifact_id(text: &mut String) {
+    let Some(start) = text.find("artifact_") else {
+        return;
+    };
+    let suffix = &text[start + "artifact_".len()..];
+    let id_len = suffix.chars().take_while(char::is_ascii_hexdigit).count();
+    if id_len != 32 {
+        return;
+    }
+    text.replace_range(start..start + "artifact_".len() + id_len, "<ARTIFACT_ID>");
 }
 
 fn path_field(field: &str) -> bool {

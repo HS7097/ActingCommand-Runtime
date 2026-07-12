@@ -1,6 +1,6 @@
 use super::*;
 use crate::{
-    MonitorDecision, MonitorDiagnosis, MonitorDisposition, MonitorObservation,
+    InputAction, MonitorDecision, MonitorDiagnosis, MonitorDisposition, MonitorObservation,
     MonitorRecoveryCoordinationReason, MonitorRecoveryKind,
 };
 use std::sync::Mutex;
@@ -174,6 +174,7 @@ fn all_payload_drafts(mut input: impl FnMut() -> AuditInput) -> Vec<EventPayload
         TaskPayloadDraft::cancelled(action, effect, input()).into(),
         TaskPayloadDraft::terminal_intent(action, input()).into(),
         TaskPayloadDraft::terminal_commit_failed(action, diagnostic, effect, input()).into(),
+        TaskPayloadDraft::semantic(TaskSemanticFact::RunStarted, input()).into(),
         InputPayloadDraft::intent(action, input()).into(),
         InputPayloadDraft::committed(action, effect, input()).into(),
         InputPayloadDraft::completed(action, input()).into(),
@@ -698,7 +699,7 @@ fn tagged_payload_and_projection_layers_reject_unknown_fields() {
 #[test]
 fn event_v2_round_trips_every_c1_payload_variant() {
     let payloads = all_payload_drafts(AuditInput::new);
-    assert_eq!(payloads.len(), 58);
+    assert_eq!(payloads.len(), 59);
 
     for (index, payload) in payloads.into_iter().enumerate() {
         let sanitized = sanitize(payload, index as u64 + 1);
@@ -709,6 +710,116 @@ fn event_v2_round_trips_every_c1_payload_variant() {
         let round_trip: EventPayload =
             serde_json::from_str(&json).expect("deserialize typed payload");
         assert_eq!(round_trip, *sanitized.payload());
+    }
+}
+
+#[test]
+fn task_semantic_payload_preserves_recognition_basis_and_v3_schema() {
+    let event = sanitize(
+        TaskPayloadDraft::semantic(
+            TaskSemanticFact::RecognitionCompleted {
+                candidate_pages: vec!["home".to_string(), "campaign".to_string()],
+                matched_page: Some("campaign".to_string()),
+                frame_width: 1280,
+                frame_height: 720,
+            },
+            AuditInput::new(),
+        )
+        .into(),
+        1,
+    );
+
+    assert_eq!(event.event_type(), EventType::TaskRecognitionCompleted);
+    assert_eq!(event.payload_schema(), TASK_PAYLOAD_SCHEMA);
+    assert_eq!(event.payload().family(), EventFamily::Task);
+    let projection = serde_json::to_value(event.payload().public_projection())
+        .expect("task semantic projection");
+    assert_eq!(projection["family"], "task");
+    assert_eq!(
+        projection["payload"]["task_semantic_fact"]["kind"],
+        "recognition_completed"
+    );
+    assert_eq!(
+        projection["payload"]["task_semantic_fact"]["candidate_pages"],
+        serde_json::json!(["home", "campaign"])
+    );
+    assert_eq!(
+        projection["payload"]["task_semantic_fact"]["matched_page"],
+        "campaign"
+    );
+}
+
+#[test]
+fn task_semantic_effect_intent_redacts_text_and_key_before_persistence() {
+    for (index, action) in [
+        InputAction::Text {
+            text: "authentication-secret-task-text".to_string(),
+        },
+        InputAction::Key {
+            key: "authentication-secret-task-key".to_string(),
+        },
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let event = sanitize(
+            TaskPayloadDraft::semantic(
+                TaskSemanticFact::EffectIntent {
+                    step_index: index as u32,
+                    operation_label: "input".to_string(),
+                    action,
+                },
+                AuditInput::new(),
+            )
+            .into(),
+            index as u64 + 1,
+        );
+        let durable = serde_json::to_string(event.payload()).expect("semantic payload JSON");
+
+        assert!(!durable.contains("authentication-secret-task"));
+        assert!(durable.contains("[redacted]"));
+    }
+}
+
+#[test]
+fn task_semantic_payload_rejects_invalid_facts() {
+    let invalid = [
+        TaskSemanticFact::PackageAdmitted {
+            package_label: "package".to_string(),
+            task_label: "task".to_string(),
+            package_sha256: "not-a-sha256".to_string(),
+        },
+        TaskSemanticFact::RecognitionStarted {
+            candidate_pages: Vec::new(),
+            frame_width: 1280,
+            frame_height: 720,
+        },
+        TaskSemanticFact::RecognitionCompleted {
+            candidate_pages: vec!["home".to_string()],
+            matched_page: Some("campaign".to_string()),
+            frame_width: 1280,
+            frame_height: 720,
+        },
+        TaskSemanticFact::TerminalCommitted {
+            outcome: TaskOutcome::Success,
+            final_page: Some("home".to_string()),
+            executed_steps: 1,
+            failure_code: Some("must_be_absent".to_string()),
+        },
+    ];
+
+    for fact in invalid {
+        let issuer = identifier_issuer();
+        EventDraft::new(
+            issuer.mint_event_id().expect("event id"),
+            1_752_147_200_000,
+            EventSeverity::Info,
+            origin(),
+            links(&issuer),
+            TaskPayloadDraft::semantic(fact, AuditInput::new()).into(),
+        )
+        .sanitize(&SpyFingerprinter::new())
+        .expect_err("invalid task semantic fact");
     }
 }
 

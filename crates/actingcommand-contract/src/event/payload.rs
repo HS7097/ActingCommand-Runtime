@@ -6,8 +6,9 @@ use super::{
     RetentionClass, SanitizationError, Sensitivity, TaskOutcome,
 };
 use crate::{
-    HolderId, LeaseId, LeasePriority, MonitorDecision, MonitorDiagnosis, MonitorDisposition,
-    MonitorObservation, MonitorRecoveryCoordinationReason, MonitorRecoveryKind, RequestId,
+    HolderId, InputAction, LeaseId, LeasePriority, MonitorDecision, MonitorDiagnosis,
+    MonitorDisposition, MonitorObservation, MonitorRecoveryCoordinationReason, MonitorRecoveryKind,
+    RequestId,
 };
 use serde::de;
 use serde::{Deserialize, Deserializer, Serialize};
@@ -18,7 +19,7 @@ pub const RUNTIME_PAYLOAD_SCHEMA: &str = "actingcommand.payload.runtime.v1";
 pub const MONITOR_PAYLOAD_SCHEMA: &str = "actingcommand.payload.monitor.v1";
 pub const SCHEDULER_PAYLOAD_SCHEMA: &str = "actingcommand.payload.scheduler.v3";
 pub const LEASE_PAYLOAD_SCHEMA: &str = "actingcommand.payload.lease.v3";
-pub const TASK_PAYLOAD_SCHEMA: &str = "actingcommand.payload.task.v2";
+pub const TASK_PAYLOAD_SCHEMA: &str = "actingcommand.payload.task.v3";
 pub const APPLICATION_PAYLOAD_SCHEMA: &str = "actingcommand.payload.application.v1";
 pub const INPUT_PAYLOAD_SCHEMA: &str = "actingcommand.payload.input.v2";
 pub const CAPTURE_PAYLOAD_SCHEMA: &str = "actingcommand.payload.capture.v1";
@@ -390,6 +391,361 @@ pub struct ResourceAuthoringPayload {
     #[serde(skip_serializing_if = "Option::is_none")]
     failure_code: Option<String>,
     audit: SanitizedAudit,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum TaskSemanticFact {
+    PackageAdmitted {
+        package_label: String,
+        task_label: String,
+        package_sha256: String,
+    },
+    RunStarted,
+    EvidenceIndexed {
+        frame_width: u32,
+        frame_height: u32,
+    },
+    RecognitionStarted {
+        candidate_pages: Vec<String>,
+        frame_width: u32,
+        frame_height: u32,
+    },
+    RecognitionCompleted {
+        candidate_pages: Vec<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        matched_page: Option<String>,
+        frame_width: u32,
+        frame_height: u32,
+    },
+    StepStarted {
+        step_index: u32,
+        operation_label: String,
+        from_page: String,
+    },
+    EffectIntent {
+        step_index: u32,
+        operation_label: String,
+        action: InputAction,
+    },
+    EffectCompleted {
+        step_index: u32,
+        operation_label: String,
+    },
+    StepFinished {
+        step_index: u32,
+        operation_label: String,
+        page_label: String,
+    },
+    Finalizing {
+        outcome: TaskOutcome,
+    },
+    TerminalCommitted {
+        outcome: TaskOutcome,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        final_page: Option<String>,
+        executed_steps: u32,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        failure_code: Option<String>,
+    },
+    TerminalRejected {
+        committed_outcome: TaskOutcome,
+        attempted_outcome: TaskOutcome,
+        reason: String,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TaskSemanticPayload {
+    action: EventAction,
+    fact: TaskSemanticFact,
+    audit: SanitizedAudit,
+}
+
+impl TaskSemanticPayload {
+    pub const fn action(&self) -> EventAction {
+        self.action
+    }
+
+    pub const fn fact(&self) -> &TaskSemanticFact {
+        &self.fact
+    }
+
+    pub fn audit(&self) -> &SanitizedAudit {
+        &self.audit
+    }
+
+    fn validate(&self) -> Result<(), SanitizationError> {
+        if self.action != EventAction::RuntimeTaskRun {
+            return Err(SanitizationError::new(
+                "invalid_task_semantic_action",
+                "action",
+            ));
+        }
+        self.fact.validate()
+    }
+}
+
+impl TaskSemanticFact {
+    fn redact_sensitive_input(&mut self) {
+        let Self::EffectIntent { action, .. } = self else {
+            return;
+        };
+        match action {
+            InputAction::Key { key } => *key = "[redacted]".to_string(),
+            InputAction::Text { text } => *text = "[redacted]".to_string(),
+            InputAction::Tap { .. }
+            | InputAction::LongTap { .. }
+            | InputAction::Swipe { .. }
+            | InputAction::Reset => {}
+        }
+    }
+
+    fn event_type(&self) -> EventType {
+        match self {
+            Self::PackageAdmitted { .. } => EventType::TaskRequested,
+            Self::RunStarted => EventType::TaskStarted,
+            Self::EvidenceIndexed { .. } => EventType::TaskEvidenceIndexed,
+            Self::RecognitionStarted { .. } => EventType::TaskRecognitionStarted,
+            Self::RecognitionCompleted { .. } => EventType::TaskRecognitionCompleted,
+            Self::StepStarted { .. } => EventType::TaskStepStarted,
+            Self::EffectIntent { .. } => EventType::TaskEffectIntent,
+            Self::EffectCompleted { .. } => EventType::TaskEffectCompleted,
+            Self::StepFinished { .. } => EventType::TaskStepFinished,
+            Self::Finalizing { .. } => EventType::TaskTerminalIntent,
+            Self::TerminalCommitted {
+                outcome: TaskOutcome::Success,
+                ..
+            } => EventType::TaskCompleted,
+            Self::TerminalCommitted {
+                outcome: TaskOutcome::Failure,
+                ..
+            } => EventType::TaskFailed,
+            Self::TerminalCommitted {
+                outcome: TaskOutcome::Cancelled,
+                ..
+            } => EventType::TaskCancelled,
+            Self::TerminalRejected { .. } => EventType::TaskTerminalRejected,
+        }
+    }
+
+    fn validate(&self) -> Result<(), SanitizationError> {
+        match self {
+            Self::PackageAdmitted {
+                package_label,
+                task_label,
+                package_sha256,
+            } => {
+                validate_task_semantic_label(package_label, "package_label")?;
+                validate_task_semantic_label(task_label, "task_label")?;
+                if package_sha256.len() != 64
+                    || !package_sha256
+                        .bytes()
+                        .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
+                {
+                    return Err(SanitizationError::new(
+                        "invalid_task_package_fingerprint",
+                        "package_sha256",
+                    ));
+                }
+            }
+            Self::RunStarted => {}
+            Self::EvidenceIndexed {
+                frame_width,
+                frame_height,
+            } => validate_task_frame_dimensions(*frame_width, *frame_height)?,
+            Self::RecognitionStarted {
+                candidate_pages,
+                frame_width,
+                frame_height,
+            } => {
+                validate_task_candidate_pages(candidate_pages)?;
+                validate_task_frame_dimensions(*frame_width, *frame_height)?;
+            }
+            Self::RecognitionCompleted {
+                candidate_pages,
+                matched_page,
+                frame_width,
+                frame_height,
+            } => {
+                validate_task_candidate_pages(candidate_pages)?;
+                validate_task_frame_dimensions(*frame_width, *frame_height)?;
+                if let Some(page) = matched_page {
+                    validate_task_semantic_label(page, "matched_page")?;
+                    if !candidate_pages.contains(page) {
+                        return Err(SanitizationError::new(
+                            "invalid_task_recognition_result",
+                            "matched_page",
+                        ));
+                    }
+                }
+            }
+            Self::StepStarted {
+                step_index,
+                operation_label,
+                from_page,
+            } => {
+                validate_task_step(*step_index)?;
+                validate_task_semantic_label(operation_label, "operation_label")?;
+                validate_task_semantic_label(from_page, "from_page")?;
+            }
+            Self::EffectIntent {
+                step_index,
+                operation_label,
+                action,
+            } => {
+                validate_task_step(*step_index)?;
+                validate_task_semantic_label(operation_label, "operation_label")?;
+                action
+                    .validate()
+                    .map_err(|_| SanitizationError::new("invalid_task_effect", "input_action"))?;
+            }
+            Self::EffectCompleted {
+                step_index,
+                operation_label,
+            } => {
+                validate_task_step(*step_index)?;
+                validate_task_semantic_label(operation_label, "operation_label")?;
+            }
+            Self::StepFinished {
+                step_index,
+                operation_label,
+                page_label,
+            } => {
+                validate_task_step(*step_index)?;
+                validate_task_semantic_label(operation_label, "operation_label")?;
+                validate_task_semantic_label(page_label, "page_label")?;
+            }
+            Self::Finalizing { .. } => {}
+            Self::TerminalCommitted {
+                outcome,
+                final_page,
+                executed_steps,
+                failure_code,
+            } => {
+                if *executed_steps > 1_000 {
+                    return Err(SanitizationError::new(
+                        "invalid_task_terminal",
+                        "executed_steps",
+                    ));
+                }
+                if let Some(page) = final_page {
+                    validate_task_semantic_label(page, "final_page")?;
+                }
+                match (outcome, failure_code) {
+                    (TaskOutcome::Success, None) => {}
+                    (TaskOutcome::Failure | TaskOutcome::Cancelled, Some(code)) => {
+                        validate_task_semantic_label(code, "failure_code")?;
+                    }
+                    _ => {
+                        return Err(SanitizationError::new(
+                            "invalid_task_terminal",
+                            "failure_code",
+                        ));
+                    }
+                }
+            }
+            Self::TerminalRejected { reason, .. } => {
+                validate_task_semantic_label(reason, "terminal_rejection_reason")?;
+            }
+        }
+        Ok(())
+    }
+
+    fn diagnostic_code(&self) -> Option<DiagnosticCode> {
+        match self {
+            Self::TerminalCommitted {
+                outcome: TaskOutcome::Failure | TaskOutcome::Cancelled,
+                ..
+            }
+            | Self::TerminalRejected { .. } => Some(DiagnosticCode::RuntimeDiagnostic),
+            _ => None,
+        }
+    }
+
+    fn effect_disposition(&self) -> Option<EffectDisposition> {
+        match self {
+            Self::EffectCompleted { .. }
+            | Self::TerminalCommitted {
+                outcome: TaskOutcome::Success,
+                ..
+            } => Some(EffectDisposition::Performed),
+            Self::TerminalCommitted {
+                outcome: TaskOutcome::Failure | TaskOutcome::Cancelled,
+                ..
+            } => Some(EffectDisposition::Indeterminate),
+            Self::TerminalRejected { .. } => Some(EffectDisposition::NotPerformed),
+            _ => None,
+        }
+    }
+}
+
+impl PayloadDetail for TaskSemanticPayload {
+    fn action(&self) -> EventAction {
+        self.action
+    }
+
+    fn diagnostic_code(&self) -> Option<DiagnosticCode> {
+        self.fact.diagnostic_code()
+    }
+
+    fn effect_disposition(&self) -> Option<EffectDisposition> {
+        self.fact.effect_disposition()
+    }
+
+    fn audit(&self) -> &SanitizedAudit {
+        &self.audit
+    }
+}
+
+fn validate_task_semantic_label(value: &str, field: &'static str) -> Result<(), SanitizationError> {
+    if value.is_empty() || value.len() > 256 || value.chars().any(char::is_control) {
+        Err(SanitizationError::new("invalid_task_semantic_label", field))
+    } else {
+        Ok(())
+    }
+}
+
+fn validate_task_frame_dimensions(width: u32, height: u32) -> Result<(), SanitizationError> {
+    if width == 0 || height == 0 {
+        Err(SanitizationError::new(
+            "invalid_task_frame_dimensions",
+            "frame_dimensions",
+        ))
+    } else {
+        Ok(())
+    }
+}
+
+fn validate_task_candidate_pages(pages: &[String]) -> Result<(), SanitizationError> {
+    if pages.is_empty() || pages.len() > 1_024 {
+        return Err(SanitizationError::new(
+            "invalid_task_candidate_pages",
+            "candidate_pages",
+        ));
+    }
+    for (index, page) in pages.iter().enumerate() {
+        validate_task_semantic_label(page, "candidate_pages")?;
+        if pages[..index].contains(page) {
+            return Err(SanitizationError::new(
+                "invalid_task_candidate_pages",
+                "candidate_pages",
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn validate_task_step(step_index: u32) -> Result<(), SanitizationError> {
+    if step_index > 1_000 {
+        Err(SanitizationError::new(
+            "invalid_task_step_index",
+            "step_index",
+        ))
+    } else {
+        Ok(())
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1087,6 +1443,27 @@ struct ResourceAuthoringDraft {
     changed_paths: Vec<String>,
     failure_code: Option<String>,
     audit: AuditInput,
+}
+
+struct TaskSemanticDraft {
+    fact: TaskSemanticFact,
+    audit: AuditInput,
+}
+
+impl TaskSemanticDraft {
+    fn sanitize(
+        self,
+        fingerprinter: &dyn SecretFingerprinter,
+    ) -> Result<TaskSemanticPayload, SanitizationError> {
+        let mut fact = self.fact;
+        fact.validate()?;
+        fact.redact_sensitive_input();
+        Ok(TaskSemanticPayload {
+            action: EventAction::RuntimeTaskRun,
+            fact,
+            audit: self.audit.sanitize(fingerprinter)?,
+        })
+    }
 }
 
 impl ResourceAuthoringDraft {
@@ -1857,6 +2234,7 @@ enum TaskDraftKind {
     Cancelled(OutcomeDraft),
     TerminalIntent(ObservationDraft),
     TerminalCommitFailed(DiagnosticOutcomeDraft),
+    Semantic(TaskSemanticDraft),
 }
 
 pub struct TaskPayloadDraft(TaskDraftKind);
@@ -1925,6 +2303,10 @@ impl TaskPayloadDraft {
         Self(TaskDraftKind::TerminalCommitFailed(
             DiagnosticOutcomeDraft::new(action, diagnostic_code, effect, audit),
         ))
+    }
+
+    pub fn semantic(fact: TaskSemanticFact, audit: AuditInput) -> Self {
+        Self(TaskDraftKind::Semantic(TaskSemanticDraft { fact, audit }))
     }
 }
 
@@ -2435,6 +2817,7 @@ pub enum TaskPayload {
     Cancelled(OutcomePayload),
     TerminalIntent(ObservationPayload),
     TerminalCommitFailed(DiagnosticOutcomePayload),
+    Semantic(TaskSemanticPayload),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -2606,17 +2989,35 @@ family_payload!(LeasePayload, {
     TransitionIntent => EventType::LeaseTransitionIntent,
     TransitionFailed => EventType::LeaseTransitionFailed,
 });
-family_payload!(TaskPayload, {
-    Requested => EventType::TaskRequested,
-    Started => EventType::TaskStarted,
-    StepStarted => EventType::TaskStepStarted,
-    StepFinished => EventType::TaskStepFinished,
-    Completed => EventType::TaskCompleted,
-    Failed => EventType::TaskFailed,
-    Cancelled => EventType::TaskCancelled,
-    TerminalIntent => EventType::TaskTerminalIntent,
-    TerminalCommitFailed => EventType::TaskTerminalCommitFailed,
-});
+impl FamilyPayload for TaskPayload {
+    fn event_type(&self) -> EventType {
+        match self {
+            Self::Requested(_) => EventType::TaskRequested,
+            Self::Started(_) => EventType::TaskStarted,
+            Self::StepStarted(_) => EventType::TaskStepStarted,
+            Self::StepFinished(_) => EventType::TaskStepFinished,
+            Self::Completed(_) => EventType::TaskCompleted,
+            Self::Failed(_) => EventType::TaskFailed,
+            Self::Cancelled(_) => EventType::TaskCancelled,
+            Self::TerminalIntent(_) => EventType::TaskTerminalIntent,
+            Self::TerminalCommitFailed(_) => EventType::TaskTerminalCommitFailed,
+            Self::Semantic(value) => value.fact.event_type(),
+        }
+    }
+
+    fn detail(&self) -> &dyn PayloadDetail {
+        match self {
+            Self::Requested(value)
+            | Self::Started(value)
+            | Self::StepStarted(value)
+            | Self::StepFinished(value)
+            | Self::TerminalIntent(value) => value,
+            Self::Completed(value) | Self::Cancelled(value) => value,
+            Self::Failed(value) | Self::TerminalCommitFailed(value) => value,
+            Self::Semantic(value) => value,
+        }
+    }
+}
 family_payload!(ApplicationPayload, {
     Intent => EventType::ApplicationIntent,
     Completed => EventType::ApplicationCompleted,
@@ -2795,6 +3196,9 @@ impl EventPayloadDraft {
                 TaskDraftKind::TerminalCommitFailed(detail) => {
                     TaskPayload::TerminalCommitFailed(detail.sanitize(fingerprinter)?)
                 }
+                TaskDraftKind::Semantic(detail) => {
+                    TaskPayload::Semantic(detail.sanitize(fingerprinter)?)
+                }
             }),
             Self::Application(value) => EventPayload::Application(match value.0 {
                 ApplicationDraftKind::Intent(detail) => {
@@ -2954,6 +3358,12 @@ impl EventPayload {
             )?;
         }
         match self {
+            Self::Task(TaskPayload::Semantic(value)) if value.validate().is_err() => {
+                return Err(SanitizationError::new(
+                    "invalid_task_semantic_payload",
+                    "task_semantic_fact",
+                ));
+            }
             Self::Ledger(LedgerPayload::Recovered(recovery))
                 if recovery.segment_index == Some(0) =>
             {
@@ -3066,6 +3476,7 @@ impl EventPayload {
             retention_class: capture_policy(self).map(CapturePolicyPayload::retention_class),
             capture_policy_reason: capture_policy(self).map(CapturePolicyPayload::reason),
             task_outcome: artifact_export(self).map(|value| value.0),
+            task_semantic_fact: task_semantic_fact(self).cloned(),
             evidence_completeness: artifact_export(self).map(|value| value.1),
             artifact_count: artifact_export(self).map(|value| value.2),
             monitor_diagnosis: monitor_outcome(self).map(|value| value.observation.diagnosis()),
@@ -3196,6 +3607,13 @@ fn resource_authoring(payload: &EventPayload) -> Option<&ResourceAuthoringPayloa
     }
 }
 
+fn task_semantic_fact(payload: &EventPayload) -> Option<&TaskSemanticFact> {
+    match payload {
+        EventPayload::Task(TaskPayload::Semantic(value)) => Some(value.fact()),
+        _ => None,
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PublicPayload {
@@ -3231,6 +3649,8 @@ pub struct PublicPayload {
     capture_policy_reason: Option<CapturePolicyReason>,
     #[serde(skip_serializing_if = "Option::is_none")]
     task_outcome: Option<TaskOutcome>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    task_semantic_fact: Option<TaskSemanticFact>,
     #[serde(skip_serializing_if = "Option::is_none")]
     evidence_completeness: Option<EvidenceCompleteness>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -3324,6 +3744,10 @@ impl PublicPayload {
 
     pub const fn task_outcome(&self) -> Option<TaskOutcome> {
         self.task_outcome
+    }
+
+    pub const fn task_semantic_fact(&self) -> Option<&TaskSemanticFact> {
+        self.task_semantic_fact.as_ref()
     }
 
     pub const fn evidence_completeness(&self) -> Option<EvidenceCompleteness> {

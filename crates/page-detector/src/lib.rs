@@ -146,6 +146,10 @@ impl PageDetector {
         self.page_indexes.contains_key(page_id)
     }
 
+    pub fn page_ids(&self) -> impl Iterator<Item = &str> {
+        self.page_set.pages.iter().map(|page| page.id.as_str())
+    }
+
     pub fn evaluate_page(
         &self,
         evaluator: &RecognitionEvaluator,

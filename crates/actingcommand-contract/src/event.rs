@@ -217,6 +217,16 @@ pub enum EventType {
     TaskStarted,
     #[serde(rename = "task.step_started")]
     TaskStepStarted,
+    #[serde(rename = "task.evidence_indexed")]
+    TaskEvidenceIndexed,
+    #[serde(rename = "task.recognition_started")]
+    TaskRecognitionStarted,
+    #[serde(rename = "task.recognition_completed")]
+    TaskRecognitionCompleted,
+    #[serde(rename = "task.effect_intent")]
+    TaskEffectIntent,
+    #[serde(rename = "task.effect_completed")]
+    TaskEffectCompleted,
     #[serde(rename = "task.step_finished")]
     TaskStepFinished,
     #[serde(rename = "task.completed")]
@@ -229,6 +239,8 @@ pub enum EventType {
     TaskTerminalIntent,
     #[serde(rename = "task.terminal_commit_failed")]
     TaskTerminalCommitFailed,
+    #[serde(rename = "task.terminal_rejected")]
+    TaskTerminalRejected,
     #[serde(rename = "application.intent")]
     ApplicationIntent,
     #[serde(rename = "application.completed")]
@@ -323,12 +335,18 @@ impl EventType {
             Self::TaskRequested
             | Self::TaskStarted
             | Self::TaskStepStarted
+            | Self::TaskEvidenceIndexed
+            | Self::TaskRecognitionStarted
+            | Self::TaskRecognitionCompleted
+            | Self::TaskEffectIntent
+            | Self::TaskEffectCompleted
             | Self::TaskStepFinished
             | Self::TaskCompleted
             | Self::TaskFailed
             | Self::TaskCancelled
             | Self::TaskTerminalIntent
-            | Self::TaskTerminalCommitFailed => EventFamily::Task,
+            | Self::TaskTerminalCommitFailed
+            | Self::TaskTerminalRejected => EventFamily::Task,
             Self::ApplicationIntent | Self::ApplicationCompleted | Self::ApplicationFailed => {
                 EventFamily::Application
             }

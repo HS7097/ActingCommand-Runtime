@@ -67,6 +67,7 @@ pub enum ContainedTaskTrace {
     PackageAdmitted {
         task_label: String,
         package_label: String,
+        package_sha256: String,
     },
     RunStarted,
     CaptureCompleted {
@@ -74,7 +75,13 @@ pub enum ContainedTaskTrace {
         height: u32,
     },
     RecognitionCompleted {
+        candidate_pages: Vec<String>,
         page_label: Option<String>,
+        width: u32,
+        height: u32,
+    },
+    RecognitionStarted {
+        candidate_pages: Vec<String>,
         width: u32,
         height: u32,
     },
@@ -125,6 +132,7 @@ pub struct PreparedContainedTask {
     program: TaskProgram,
     evaluator: RecognitionEvaluator,
     detector: PageDetector,
+    package_sha256: String,
 }
 
 impl PreparedContainedTask {
@@ -134,8 +142,9 @@ impl PreparedContainedTask {
         expected: ExternalExpectedSha256,
     ) -> Result<Self, ContainedTaskError> {
         let bundle = ExternallyVerifiedBundle::load(instance_label, zip_bytes, expected)
-            .map_err(|_| ContainedTaskError::new("contained_task_admission_failed"))?
-            .into_loaded_bundle();
+            .map_err(|_| ContainedTaskError::new("contained_task_admission_failed"))?;
+        let package_sha256 = bundle.loaded_bundle().verified_hash().to_string();
+        let bundle = bundle.into_loaded_bundle();
         let control = bundle
             .control()
             .cloned()
@@ -162,6 +171,7 @@ impl PreparedContainedTask {
             program,
             evaluator,
             detector,
+            package_sha256,
         })
     }
 
@@ -181,6 +191,7 @@ impl PreparedContainedTask {
             .record(ContainedTaskTrace::PackageAdmitted {
                 task_label: self.task_label().to_string(),
                 package_label: self.package_label().to_string(),
+                package_sha256: self.package_sha256.clone(),
             })
             .map_err(ContainedTaskRunError::Boundary)?;
         runtime
@@ -344,6 +355,18 @@ impl PreparedContainedTask {
                 })
                 .map_err(ContainedTaskRunError::Boundary)?;
             let scene = scene_from_frame(&frame)?;
+            let candidate_pages = self
+                .detector
+                .page_ids()
+                .map(str::to_string)
+                .collect::<Vec<_>>();
+            runtime
+                .record(ContainedTaskTrace::RecognitionStarted {
+                    candidate_pages: candidate_pages.clone(),
+                    width: frame.width,
+                    height: frame.height,
+                })
+                .map_err(ContainedTaskRunError::Boundary)?;
             let page = self
                 .detector
                 .evaluate_all(&self.evaluator, &scene)
@@ -353,6 +376,7 @@ impl PreparedContainedTask {
                 .map(|evaluation| evaluation.page_id);
             runtime
                 .record(ContainedTaskTrace::RecognitionCompleted {
+                    candidate_pages,
                     page_label: page.clone(),
                     width: frame.width,
                     height: frame.height,
