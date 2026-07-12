@@ -1062,16 +1062,29 @@
       "data": {
         "actions": [
           {
-            "id": "home_to_target"
+            "from_page": "arknights/home",
+            "id": "home_to_target",
+            "input": {
+              "point": {
+                "x": 12,
+                "y": 23
+              },
+              "rect": {
+                "height": 6,
+                "width": 4,
+                "x": 10,
+                "y": 20
+              },
+              "type": "tap"
+            },
+            "source": null,
+            "to_page": "arknights/target"
           }
         ],
         "arbitration": {
-          "decision": "readonly_accepted",
-          "details": {
-            "instance": "default",
-            "kind": "readonly_accepted",
-            "req_id": "<REQ_ID>"
-          }
+          "authority": "isolated_offline",
+          "decision": "not_applicable",
+          "persistent_state": false
         },
         "backend": "scene_file",
         "frame_age_ms": 0,
@@ -1082,32 +1095,36 @@
           "path": "<PATH>"
         },
         "instance": "default",
-        "ledger": {
-          "path": "<PATH>",
-          "retention": {
-            "deleted_count": 0,
-            "deleted_paths": [],
-            "max_bytes": 2147483648,
-            "protected_over_budget": false,
-            "total_after_bytes": "<BYTES>",
-            "total_before_bytes": "<BYTES>"
-          },
-          "written": true
-        },
         "matched": true,
         "page": "arknights/home",
         "projection_schema_version": "actingcommand.projection.v0.1",
-        "projection_source": {
-          "kind": "runtime_ledger",
-          "path": "<PATH>",
-          "record_kind": "receipt",
-          "req_id": "<REQ_ID>"
-        },
         "req_id": "<REQ_ID>",
         "standby": false,
         "state": "observed",
         "targets": [
           {
+            "evaluation": {
+              "color": {
+                "distance": 0.0,
+                "expected": [
+                  255,
+                  0,
+                  0
+                ],
+                "max_distance": 20.0,
+                "mean": [
+                  255,
+                  0,
+                  0
+                ]
+              },
+              "kind": "Color",
+              "matched_rect": null,
+              "message": "color passed",
+              "passed": true,
+              "target": "home_button",
+              "template": null
+            },
             "id": "home_button",
             "passed": true,
             "score": 1.0
@@ -1131,45 +1148,6 @@
           "device"
         ],
         "code": "device_error",
-        "details": {
-          "blocked_error": {
-            "blocked_by": [
-              "device"
-            ],
-            "code": "device_error",
-            "message": "failed to read <PATH>\\missing.png: 系统找不到指定的文件。 (os error 2)"
-          },
-          "details": {
-            "error": "fatal",
-            "hint": "inspect-lab2-ledger",
-            "req_id": "<REQ_ID>",
-            "state": "failed"
-          },
-          "error": "fatal",
-          "hint": "inspect-lab2-ledger",
-          "instance": "default",
-          "ledger": {
-            "path": "<PATH>",
-            "retention": {
-              "deleted_count": 0,
-              "deleted_paths": [],
-              "max_bytes": 2147483648,
-              "protected_over_budget": false,
-              "total_after_bytes": "<BYTES>",
-              "total_before_bytes": "<BYTES>"
-            },
-            "written": true
-          },
-          "projection_schema_version": "actingcommand.projection.v0.1",
-          "projection_source": {
-            "kind": "runtime_ledger",
-            "path": "<PATH>",
-            "record_kind": "receipt",
-            "req_id": "<REQ_ID>"
-          },
-          "req_id": "<REQ_ID>",
-          "state": "failed"
-        },
         "message": "failed to read <PATH>\\missing.png: 系统找不到指定的文件。 (os error 2)"
       },
       "ok": false,
@@ -1209,31 +1187,14 @@
           }
         },
         "arbitration": {
-          "decision": "lease_granted",
-          "details": {
-            "instance": "default",
-            "kind": "lease_granted",
-            "lease": {
-              "acquired_at_ms": "<TIME>",
-              "alive": true,
-              "destructive_step_active": false,
-              "holder": "cli",
-              "holder_pid": "<PID>",
-              "instance": "default",
-              "lease_id": "<LEASE_ID>",
-              "preempt_requested": false,
-              "priority": "normal",
-              "req_id": "<REQ_ID>",
-              "schema_version": "actingcommand.arbitrator.v0.1",
-              "updated_at_ms": "<TIME>"
-            },
-            "req_id": "<REQ_ID>"
-          }
+          "authority": "isolated_offline",
+          "decision": "not_applicable",
+          "persistent_state": false
         },
         "backend": "scene_file",
         "device": {
           "executed": false,
-          "mode": "dry_run"
+          "mode": "isolated_offline"
         },
         "executed": false,
         "frame_age_ms": 0,
@@ -1265,18 +1226,6 @@
           "target": "home_button"
         },
         "instance": "default",
-        "ledger": {
-          "path": "<PATH>",
-          "retention": {
-            "deleted_count": 0,
-            "deleted_paths": [],
-            "max_bytes": 2147483648,
-            "protected_over_budget": false,
-            "total_after_bytes": "<BYTES>",
-            "total_before_bytes": "<BYTES>"
-          },
-          "written": true
-        },
         "observation": {
           "evaluations": [
             {
@@ -1316,12 +1265,6 @@
         },
         "page": "arknights/home",
         "projection_schema_version": "actingcommand.projection.v0.1",
-        "projection_source": {
-          "kind": "runtime_ledger",
-          "path": "<PATH>",
-          "record_kind": "receipt",
-          "req_id": "<REQ_ID>"
-        },
         "reco_id": "<RECO_ID>",
         "req_id": "<REQ_ID>",
         "state": "planned",
@@ -1345,49 +1288,16 @@
         ],
         "code": "target_not_visible",
         "details": {
-          "blocked_error": {
-            "blocked_by": [
-              "guard_target"
-            ],
-            "code": "target_not_visible",
-            "message": "target 'home_button' did not pass guard recognition: color failed"
-          },
-          "details": {
-            "error": "resource_drift",
-            "hint": "observe-current-page-and-refresh-resource-or-target",
-            "projection_schema_version": "actingcommand.projection.v0.1",
-            "req_id": "<REQ_ID>",
-            "state": "arknights/target",
-            "suspicion": {
-              "actual": "color failed",
-              "expected": "home_button",
-              "reason": "guard_rejected"
-            }
-          },
+          "authority": "isolated_offline",
           "error": "resource_drift",
           "hint": "observe-current-page-and-refresh-resource-or-target",
-          "instance": "default",
-          "ledger": {
-            "path": "<PATH>",
-            "retention": {
-              "deleted_count": 0,
-              "deleted_paths": [],
-              "max_bytes": 2147483648,
-              "protected_over_budget": false,
-              "total_after_bytes": "<BYTES>",
-              "total_before_bytes": "<BYTES>"
-            },
-            "written": true
-          },
-          "projection_schema_version": "actingcommand.projection.v0.1",
-          "projection_source": {
-            "kind": "runtime_ledger",
-            "path": "<PATH>",
-            "record_kind": "receipt",
-            "req_id": "<REQ_ID>"
-          },
           "req_id": "<REQ_ID>",
-          "state": "arknights/target"
+          "state": "arknights/target",
+          "suspicion": {
+            "actual": "color failed",
+            "expected": "home_button",
+            "reason": "guard_rejected"
+          }
         },
         "message": "target 'home_button' did not pass guard recognition: color failed"
       },

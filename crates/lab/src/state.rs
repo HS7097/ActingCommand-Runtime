@@ -6,7 +6,6 @@ use std::path::{Path, PathBuf};
 #[derive(Debug, Clone)]
 pub struct LabState {
     root: PathBuf,
-    arbitrator: ArbitratorStore,
     environment: EnvStore,
     sessions: SessionStore,
 }
@@ -19,7 +18,6 @@ impl LabState {
         }
         let root = root.to_path_buf();
         Ok(Self {
-            arbitrator: ArbitratorStore::new(root.join("lab2")),
             environment: EnvStore::new(root.join("env-detection")),
             sessions: SessionStore::new(root.join("session")),
             root,
@@ -30,31 +28,12 @@ impl LabState {
         &self.root
     }
 
-    pub fn arbitrator(&self) -> &ArbitratorStore {
-        &self.arbitrator
-    }
-
     pub fn environment(&self) -> &EnvStore {
         &self.environment
     }
 
     pub fn sessions(&self) -> &SessionStore {
         &self.sessions
-    }
-}
-
-#[derive(Debug, Clone)]
-pub struct ArbitratorStore {
-    root: PathBuf,
-}
-
-impl ArbitratorStore {
-    fn new(root: PathBuf) -> Self {
-        Self { root }
-    }
-
-    pub fn root(&self) -> &Path {
-        &self.root
     }
 }
 
@@ -95,7 +74,6 @@ mod tests {
     #[test]
     fn lab_state_is_the_only_domain_store_constructor() {
         let state = LabState::open("state").expect("state");
-        assert_eq!(state.arbitrator().root(), Path::new("state/lab2"));
         assert_eq!(state.environment().root(), Path::new("state/env-detection"));
         assert_eq!(state.sessions().root(), Path::new("state/session"));
     }

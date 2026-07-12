@@ -1,34 +1,25 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
-use actingcommand_arbitrator::{
-    ArbitrationDecision, DegradedArbitrator, InstanceArbitration, LeaseGrant, RequestEnvelope,
-    RequestPriority, RequestSource, RequestVerb,
+use actingcommand_contract::{
+    CorrelationId, EventQuery, InputAction, ProjectionProfile, RuntimeResult,
 };
-use actingcommand_contract::{InputAction, ProjectionProfile, RuntimeResult};
 use actingcommand_ledger::{
-    EvidenceStore, IdIssuer, IdKind, LabLedger, LedgerRecord, LedgerRecordKind, LightEvent,
-    ProjectionRequest, ProjectionVerbosity, SessionHeader, enforce_retention, error_projection,
+    EvidenceStore, IdIssuer, IdKind, ProjectionRequest, ProjectionVerbosity, error_projection,
     forbidden_target_suspicion, guard_reject_suspicion, low_margin_suspicion, project_record,
     stale_frame_suspicion,
 };
 use actingcommand_runtime_client::RuntimeDebugSession;
-use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use std::collections::{BTreeMap, BTreeSet};
-use std::path::{Path, PathBuf};
+use std::collections::BTreeSet;
+use std::fs;
+use std::path::PathBuf;
 use std::time::{Duration, Instant, SystemTime};
-use std::{env, fs};
 
 use super::*;
 
 struct Lab2Ids {
     issuer: IdIssuer,
     req_id: String,
-}
-
-struct Lab2LedgerWrite {
-    summary: Value,
-    receipt_payload: Option<Value>,
 }
 
 impl Lab2Ids {
@@ -68,20 +59,6 @@ struct Lab2ClickRect {
     derivation: Value,
 }
 
-const LAB2_RECOVERY_STATE_FILE: &str = "lab2-recovery-state.json";
-const LAB2_ARBITRATOR_STATE_FILE: &str = "lab2-arbitrator-state.json";
-const LAB2_ARBITRATOR_STATE_VERSION: &str = "actingcommand.lab2.arbitrator_state.v0.1";
-const LAB2_LEDGER_MAX_BYTES: u64 = 2 * 1024 * 1024 * 1024;
-const LAB2_LEDGER_PROTECTED_DAYS: u64 = 7;
-
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-struct Lab2ArbitratorState {
-    schema_version: String,
-    updated_at_unix_ms: u64,
-    #[serde(default)]
-    instances: BTreeMap<String, InstanceArbitration>,
-}
-
 #[derive(Clone, Copy)]
 struct Lab2CommandContract {
     name: &'static str,
@@ -99,62 +76,38 @@ pub(crate) fn run_observe(global: &GlobalOptions, args: &[String]) -> CliOutcome
     }
     let ids = Lab2Ids::new();
     let instance = lab2_instance(global, &flags);
-    let arbitration = admit_lab2_request(
-        global,
-        &ids,
-        instance.clone(),
-        RequestVerb::Observe,
-        json!({"targets": target_list(&flags)}),
-        &flags,
-    )?;
-    let result = (|| -> CliOutcome<Value> {
-        let resources = super::contained_resources::load(&flags, "observe")?;
-        let (evaluator, detector) = super::contained_resources::recognition_pipeline(&resources)?;
-        let env_resolved = Vec::<env_detection::ResolvedEnvValue>::new();
-        let graph = super::contained_resources::navigation_graph(&resources)?;
-        let loaded_scene = load_lab2_scene(global, &flags)?;
-        let outcome = detect_current_page(&evaluator, &detector, &loaded_scene.scene)?;
-        let frame_path = write_frame_if_requested(&flags, &loaded_scene)?;
-        let targets = observe_targets(&evaluator, &loaded_scene.scene, &flags, &outcome)?;
-        let actions = observe_actions(&graph, &outcome);
-        let mut payload = json!({
-            "req_id": ids.req_id,
-            "state": if outcome.matched { "observed" } else { "unknown" },
-            "instance": instance,
-            "page": if outcome.matched { outcome.page.clone() } else { "unknown".to_string() },
-            "matched": outcome.matched,
-            "standby": outcome.standby,
-            "frame_age_ms": loaded_scene.frame_age_ms,
-            "backend": loaded_scene.backend,
-            "frame_source": loaded_scene.source,
-            "targets": targets,
-            "actions": actions,
-            "arbitration": arbitration_json(&arbitration.decision),
-        });
-        if !outcome.matched {
-            payload["candidates"] = json!(lab2_page_candidates(&outcome));
-        }
-        if let Some(suspicion) = lab2_observation_suspicion(&outcome, loaded_scene.frame_age_ms) {
-            payload["suspicion"] = suspicion;
-        }
-        if let Some(recovery) = active_lab2_recovery_state(&flags, &ids.req_id, &instance)? {
-            payload["state"] = json!("recovering");
-            payload["recovery"] = recovery;
-        }
-        if let Some(path) = frame_path {
-            payload["frame_path"] = json!(path.display().to_string());
-        }
-        attach_env_resolved(&mut payload, &env_resolved);
-        Ok(payload)
-    })();
-    finish_lab2_result_with_ledger(
-        global,
-        &flags,
-        &ids.req_id,
-        &instance,
-        result,
-        arbitration.ledger_records,
-    )
+    let resources = super::contained_resources::load(&flags, "observe")?;
+    let (evaluator, detector) = super::contained_resources::recognition_pipeline(&resources)?;
+    let graph = super::contained_resources::navigation_graph(&resources)?;
+    let loaded_scene = load_lab2_scene(global, &flags)?;
+    let outcome = detect_current_page(&evaluator, &detector, &loaded_scene.scene)?;
+    let frame_path = write_frame_if_requested(&flags, &loaded_scene)?;
+    let targets = observe_targets(&evaluator, &loaded_scene.scene, &flags, &outcome)?;
+    let actions = observe_actions(&graph, &outcome);
+    let mut payload = json!({
+        "req_id": ids.req_id,
+        "state": if outcome.matched { "observed" } else { "unknown" },
+        "instance": instance,
+        "page": if outcome.matched { outcome.page.clone() } else { "unknown".to_string() },
+        "matched": outcome.matched,
+        "standby": outcome.standby,
+        "frame_age_ms": loaded_scene.frame_age_ms,
+        "backend": loaded_scene.backend,
+        "frame_source": loaded_scene.source,
+        "targets": targets,
+        "actions": actions,
+        "arbitration": isolated_offline_projection(),
+    });
+    if !outcome.matched {
+        payload["candidates"] = json!(lab2_page_candidates(&outcome));
+    }
+    if let Some(suspicion) = lab2_observation_suspicion(&outcome, loaded_scene.frame_age_ms) {
+        payload["suspicion"] = suspicion;
+    }
+    if let Some(path) = frame_path {
+        payload["frame_path"] = json!(path.display().to_string());
+    }
+    project_lab2_payload(&payload, &flags)
 }
 
 fn run_runtime_observe(global: &GlobalOptions, flags: &FlagArgs) -> CliOutcome<Value> {
@@ -823,6 +776,34 @@ fn runtime_scheduler_projection(write_requested: bool) -> Value {
     })
 }
 
+fn isolated_offline_projection() -> Value {
+    json!({
+        "authority": "isolated_offline",
+        "decision": "not_applicable",
+        "persistent_state": false
+    })
+}
+
+fn isolated_offline_error_details(
+    req_id: &str,
+    error: &str,
+    state: impl Into<String>,
+    hint: &str,
+    suspicion: Option<Value>,
+) -> CliOutcome<Value> {
+    let mut details = json!({
+        "req_id": req_id,
+        "error": error,
+        "state": state.into(),
+        "hint": hint,
+        "authority": "isolated_offline"
+    });
+    if let Some(suspicion) = suspicion {
+        details["suspicion"] = suspicion;
+    }
+    Ok(details)
+}
+
 fn reject_mixed_online_and_offline_scene(flags: &FlagArgs, command: &str) -> CliOutcome<()> {
     if flags.optional_path("--scene").is_some() {
         return Err(CliError::usage(format!(
@@ -840,12 +821,12 @@ pub(crate) fn run_do(global: &GlobalOptions, args: &[String]) -> CliOutcome<Valu
     let dry_run = global.dry_run || flags.bool("--dry-run");
     let allow_destructive = flags.bool("--allow-destructive");
     if flags.bool("--destructive") && !allow_destructive {
-        let details = lab2_error_details_for_flags(
-            &flags,
+        let details = isolated_offline_error_details(
             &ids.req_id,
             "blocked",
             "blocked",
             "rerun-with---allow-destructive-if-this-action-is-intended",
+            None,
         )?;
         return Err(CliError::safety_blocked(
             "destructive_action_requires_allow_destructive",
@@ -865,47 +846,7 @@ pub(crate) fn run_do(global: &GlobalOptions, args: &[String]) -> CliOutcome<Valu
     if flags.bool("--capture") {
         return run_runtime_do(&flags, &target, &instance, dry_run, allow_destructive);
     }
-    let recovery_wait = wait_for_lab2_recovery_clear(
-        &flags,
-        &ids.req_id,
-        &instance,
-        "do",
-        json!({"verb": "do", "target": target.clone(), "dry_run": dry_run}),
-    )?;
-
-    let arbitration = admit_lab2_request(
-        global,
-        &ids,
-        instance.clone(),
-        RequestVerb::Do,
-        json!({"target": target, "dry_run": dry_run}),
-        &flags,
-    )?;
-    let write_lease =
-        match ensure_lab2_write_admitted(&flags, &ids.req_id, &instance, &arbitration.decision) {
-            Ok(lease) => lease,
-            Err(error) => {
-                let details = cli_error_details_or_projection(
-                    &error,
-                    &ids.req_id,
-                    "lease_held",
-                    "blocked",
-                    "inspect-lab2-arbitrator-state",
-                );
-                return return_lab2_error_with_ledger(
-                    global,
-                    &flags,
-                    &ids.req_id,
-                    &instance,
-                    details,
-                    error,
-                    arbitration.ledger_records.clone(),
-                );
-            }
-        };
-    let implicit_lease = implicit_lab2_lease(&flags, &arbitration.decision);
     let result = (|| -> CliOutcome<Value> {
-        let config = read_user_config()?;
         let resources = super::contained_resources::load(&flags, "do")?;
         let (evaluator, detector) = super::contained_resources::recognition_pipeline(&resources)?;
         let env_resolved = Vec::<env_detection::ResolvedEnvValue>::new();
@@ -917,8 +858,7 @@ pub(crate) fn run_do(global: &GlobalOptions, args: &[String]) -> CliOutcome<Valu
             .evaluate_target(&loaded_scene.scene, &target)
             .map_err(|err| CliError::usage(err.to_string()))?;
         if !evaluation.passed {
-            let details = lab2_error_payload_for_flags(
-                &flags,
+            let details = isolated_offline_error_details(
                 &ids.req_id,
                 "resource_drift",
                 before.page,
@@ -947,8 +887,7 @@ pub(crate) fn run_do(global: &GlobalOptions, args: &[String]) -> CliOutcome<Valu
                 actual_click.rect,
                 &graph,
             ) {
-                let details = lab2_error_payload_for_flags(
-                    &flags,
+                let details = isolated_offline_error_details(
                     &ids.req_id,
                     "resource_drift",
                     "blocked",
@@ -960,18 +899,8 @@ pub(crate) fn run_do(global: &GlobalOptions, args: &[String]) -> CliOutcome<Valu
         }
         let point = rect_center(actual_click.rect)?;
         let action_id = ids.issue(IdKind::Action);
-        let device = if dry_run {
-            json!({"executed": false, "mode": "dry_run"})
-        } else {
-            authorize_lab2_device_drive(&flags, &ids.req_id, &instance, &write_lease)?;
-            send_semantic_tap(global, &config, point)?
-        };
-        let after = if dry_run {
-            before
-        } else {
-            let after_scene = load_lab2_scene(global, &flags)?;
-            detect_current_page(&evaluator, &detector, &after_scene.scene)?
-        };
+        let device = json!({"executed": false, "mode": "isolated_offline"});
+        let after = before;
         let mut payload = json!({
             "req_id": ids.req_id,
             "reco_id": reco_id,
@@ -998,42 +927,12 @@ pub(crate) fn run_do(global: &GlobalOptions, args: &[String]) -> CliOutcome<Valu
             },
             "observation": page_detection_json(&after),
             "device": device,
-            "arbitration": arbitration_json(&arbitration.decision),
+            "arbitration": isolated_offline_projection(),
         });
-        if let Some(recovery_wait) = recovery_wait {
-            payload["recovery_wait"] = recovery_wait;
-        }
         attach_env_resolved(&mut payload, &env_resolved);
         Ok(payload)
     })();
-    let mut records = arbitration.ledger_records;
-    if let Some(lease) = implicit_lease {
-        match release_implicit_lab2_lease(&flags, &instance, &lease) {
-            Ok(release_records) => records.extend(release_records),
-            Err(error) => {
-                return finish_lab2_result_with_ledger(
-                    global,
-                    &flags,
-                    &ids.req_id,
-                    &instance,
-                    Err(error),
-                    records,
-                );
-            }
-        }
-    } else if let Some(lease_id) = lab2_explicit_lease_id(&flags)
-        && let Err(error) = finish_explicit_lab2_drive(&flags, &instance, &lease_id, &ids.req_id)
-    {
-        return finish_lab2_result_with_ledger(
-            global,
-            &flags,
-            &ids.req_id,
-            &instance,
-            Err(error),
-            records,
-        );
-    }
-    finish_lab2_result_with_ledger(global, &flags, &ids.req_id, &instance, result, records)
+    result.and_then(|payload| project_lab2_payload(&payload, &flags))
 }
 
 pub(crate) fn run_ensure(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
@@ -1051,46 +950,7 @@ pub(crate) fn run_ensure(global: &GlobalOptions, args: &[String]) -> CliOutcome<
     if flags.bool("--capture") {
         return run_runtime_ensure(&flags, &to, &instance, dry_run, allow_destructive);
     }
-    let recovery_wait = wait_for_lab2_recovery_clear(
-        &flags,
-        &ids.req_id,
-        &instance,
-        "ensure",
-        json!({"verb": "ensure", "to": to.clone(), "dry_run": dry_run}),
-    )?;
-    let arbitration = admit_lab2_request(
-        global,
-        &ids,
-        instance.clone(),
-        RequestVerb::Ensure,
-        json!({"to": to, "dry_run": dry_run}),
-        &flags,
-    )?;
-    let write_lease =
-        match ensure_lab2_write_admitted(&flags, &ids.req_id, &instance, &arbitration.decision) {
-            Ok(lease) => lease,
-            Err(error) => {
-                let details = cli_error_details_or_projection(
-                    &error,
-                    &ids.req_id,
-                    "lease_held",
-                    "blocked",
-                    "inspect-lab2-arbitrator-state",
-                );
-                return return_lab2_error_with_ledger(
-                    global,
-                    &flags,
-                    &ids.req_id,
-                    &instance,
-                    details,
-                    error,
-                    arbitration.ledger_records.clone(),
-                );
-            }
-        };
-    let implicit_lease = implicit_lab2_lease(&flags, &arbitration.decision);
     let result = (|| -> CliOutcome<Value> {
-        let config = read_user_config()?;
         let resources = super::contained_resources::load(&flags, "ensure")?;
         let (evaluator, detector) = super::contained_resources::recognition_pipeline(&resources)?;
         let env_resolved = Vec::<env_detection::ResolvedEnvValue>::new();
@@ -1109,17 +969,13 @@ pub(crate) fn run_ensure(global: &GlobalOptions, args: &[String]) -> CliOutcome<
                 "route": [],
                 "frame_age_ms": scene.frame_age_ms,
                 "backend": scene.backend,
-                "arbitration": arbitration_json(&arbitration.decision),
+                "arbitration": isolated_offline_projection(),
             });
-            if let Some(recovery_wait) = recovery_wait {
-                payload["recovery_wait"] = recovery_wait;
-            }
             attach_env_resolved(&mut payload, &env_resolved);
             return Ok(payload);
         }
         if !start.matched {
-            let details = lab2_error_payload_for_flags(
-                &flags,
+            let details = isolated_offline_error_details(
                 &ids.req_id,
                 "resource_drift",
                 start.page,
@@ -1147,86 +1003,22 @@ pub(crate) fn run_ensure(global: &GlobalOptions, args: &[String]) -> CliOutcome<
             }
         }
         let route_json = route.iter().map(navigation_edge_json).collect::<Vec<_>>();
-        if dry_run {
-            let mut payload = json!({
-                "req_id": ids.req_id,
-                "state": "planned",
-                "instance": instance,
-                "executed": false,
-                "page": start.page,
-                "to": target_page,
-                "route": route_json,
-                "frame_age_ms": scene.frame_age_ms,
-                "backend": scene.backend,
-                "arbitration": arbitration_json(&arbitration.decision),
-            });
-            if let Some(recovery_wait) = recovery_wait {
-                payload["recovery_wait"] = recovery_wait;
-            }
-            attach_env_resolved(&mut payload, &env_resolved);
-            return Ok(payload);
-        }
-
-        let step_timeout = parse_optional_duration_ms(&flags, "--step-timeout-ms", 5_000)?;
-        let poll = parse_optional_duration_ms(&flags, "--poll-ms", 500)?;
-        let execution = NavigationExecutionContext {
-            global,
-            flags: &flags,
-            config: &config,
-            evaluator: &evaluator,
-            detector: &detector,
-            destructive_clicks: &graph.destructive_clicks,
-            step_timeout,
-            poll,
-        };
-        authorize_lab2_device_drive(&flags, &ids.req_id, &instance, &write_lease)?;
-        let (steps, arrived) = execute_navigation_route(&execution, start.page.clone(), route)?;
         let mut payload = json!({
             "req_id": ids.req_id,
-            "state": "arrived",
+            "state": "planned",
             "instance": instance,
-            "executed": true,
-            "from": start.page,
-            "page": arrived,
+            "executed": false,
+            "page": start.page,
             "to": target_page,
             "route": route_json,
-            "steps": steps,
-            "arbitration": arbitration_json(&arbitration.decision),
+            "frame_age_ms": scene.frame_age_ms,
+            "backend": scene.backend,
+            "arbitration": isolated_offline_projection(),
         });
-        if let Some(recovery_wait) = recovery_wait {
-            payload["recovery_wait"] = recovery_wait;
-        }
         attach_env_resolved(&mut payload, &env_resolved);
         Ok(payload)
     })();
-    let mut records = arbitration.ledger_records;
-    if let Some(lease) = implicit_lease {
-        match release_implicit_lab2_lease(&flags, &instance, &lease) {
-            Ok(release_records) => records.extend(release_records),
-            Err(error) => {
-                return finish_lab2_result_with_ledger(
-                    global,
-                    &flags,
-                    &ids.req_id,
-                    &instance,
-                    Err(error),
-                    records,
-                );
-            }
-        }
-    } else if let Some(lease_id) = lab2_explicit_lease_id(&flags)
-        && let Err(error) = finish_explicit_lab2_drive(&flags, &instance, &lease_id, &ids.req_id)
-    {
-        return finish_lab2_result_with_ledger(
-            global,
-            &flags,
-            &ids.req_id,
-            &instance,
-            Err(error),
-            records,
-        );
-    }
-    finish_lab2_result_with_ledger(global, &flags, &ids.req_id, &instance, result, records)
+    result.and_then(|payload| project_lab2_payload(&payload, &flags))
 }
 
 pub(crate) fn run_wait(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
@@ -1237,14 +1029,6 @@ pub(crate) fn run_wait(global: &GlobalOptions, args: &[String]) -> CliOutcome<Va
     let ids = Lab2Ids::new();
     let wf_id = ids.issue(IdKind::Wf);
     let instance = lab2_instance(global, &flags);
-    let arbitration = admit_lab2_request(
-        global,
-        &ids,
-        instance.clone(),
-        RequestVerb::Wait,
-        json!({"page": flags.optional("--page"), "stable": flags.optional("--stable")}),
-        &flags,
-    )?;
     let result = (|| -> CliOutcome<Value> {
         let resources = super::contained_resources::load(&flags, "wait")?;
         let (evaluator, detector) = super::contained_resources::recognition_pipeline(&resources)?;
@@ -1269,41 +1053,49 @@ pub(crate) fn run_wait(global: &GlobalOptions, args: &[String]) -> CliOutcome<Va
         };
         let mut payload = payload;
         payload["instance"] = json!(instance);
-        payload["arbitration"] = arbitration_json(&arbitration.decision);
+        payload["arbitration"] = isolated_offline_projection();
         attach_env_resolved(&mut payload, &env_resolved);
         Ok(payload)
     })();
-    finish_lab2_result_with_ledger(
-        global,
-        &flags,
-        &ids.req_id,
-        &instance,
-        result,
-        arbitration.ledger_records,
-    )
+    result.and_then(|payload| project_lab2_payload(&payload, &flags))
 }
 
-pub(crate) fn run_receipt(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
+pub(crate) fn run_receipt(_global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
     let flags = FlagArgs::parse(args)?;
     let req_id = flags
         .optional("--req")
         .filter(|value| value != "true")
         .or_else(|| flags.positionals.first().cloned())
         .ok_or_else(|| CliError::usage("lab receipt requires --req <req_id>"))?;
-    let config = read_user_config()?;
-    let run_root = effective_run_root(global, &config)
-        .ok_or_else(|| CliError::usage("lab receipt requires --run-root or config run_root"))?;
-    let records = read_receipt_chain(&run_root, &req_id)?;
-    if records.is_empty() {
+    let correlation = serde_json::from_value::<CorrelationId>(json!(req_id)).map_err(|_| {
+        CliError::usage("lab receipt --req must be a Runtime correlation identifier")
+    })?;
+    let client = RuntimeClient::connect(RuntimeClientConfig::new(
+        runtime_state_root()?,
+        actingcommand_contract::EventActor::Lab,
+        actingcommand_contract::EventSource::Lab,
+    ))
+    .map_err(|error| CliError::device(error.to_string()))?;
+    let events = client
+        .query_events(
+            EventQuery {
+                correlation_id: Some(correlation),
+                ..EventQuery::default()
+            },
+            ProjectionProfile::Lab,
+        )
+        .map_err(|error| CliError::device(error.to_string()))?;
+    if events.is_empty() {
         return Err(CliError::usage(format!(
-            "no lab ledger records found for req_id '{req_id}'"
+            "no Runtime ledger events found for correlation '{req_id}'"
         )));
     }
     Ok(json!({
         "req_id": req_id,
-        "ledger_count": distinct_ledger_count(&records),
-        "record_count": records.len(),
-        "records": records
+        "correlation_id": correlation,
+        "authority": "runtime_global_ledger",
+        "event_count": events.len(),
+        "events": events
     }))
 }
 
@@ -1327,235 +1119,12 @@ pub(crate) fn run_evidence(global: &GlobalOptions, args: &[String]) -> CliOutcom
     }))
 }
 
-pub(crate) fn run_arbitrator(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
-    let flags = FlagArgs::parse(args)?;
-    let ids = Lab2Ids::new();
-    let instance = lab2_instance(global, &flags);
-    match run_arbitrator_inner(global, &flags, &ids, &instance) {
-        Ok(data) => Ok(data),
-        Err(error) => {
-            let command = flags
-                .positionals
-                .first()
-                .map(String::as_str)
-                .unwrap_or("status");
-            let details = cli_error_details_or_projection(
-                &error,
-                &ids.req_id,
-                "fatal",
-                "arbitrator_command_failed",
-                "inspect-lab2-arbitrator-state",
-            );
-            let dispatch = LedgerRecord::new(
-                LedgerRecordKind::Dispatch,
-                Some(ids.req_id.clone()),
-                json!({
-                    "stage": "arbitrator_command",
-                    "command": command,
-                    "instance": instance
-                }),
-            );
-            return_lab2_error_with_ledger(
-                global,
-                &flags,
-                &ids.req_id,
-                &instance,
-                details,
-                error,
-                vec![dispatch],
-            )
-        }
-    }
-}
-
-fn run_arbitrator_inner(
-    global: &GlobalOptions,
-    flags: &FlagArgs,
-    ids: &Lab2Ids,
-    instance: &str,
-) -> CliOutcome<Value> {
-    let command = flags
-        .positionals
-        .first()
-        .map(String::as_str)
-        .unwrap_or("status");
-    let (state_path, mut arbitrator) = load_lab2_arbitrator(flags)?;
-    let mut records = Vec::new();
-    let data = match command {
-        "status" => json!({
-            "state": "status",
-            "instance": instance,
-            "state_file": state_path.display().to_string(),
-            "arbitration": arbitrator.snapshot(instance)
-        }),
-        "acquire" => {
-            let req_id = flags
-                .optional("--req")
-                .filter(|value| value != "true")
-                .unwrap_or_else(|| ids.req_id.clone());
-            let verb = parse_lab2_arbitrator_verb(
-                flags
-                    .optional("--verb")
-                    .filter(|value| value != "true")
-                    .as_deref()
-                    .unwrap_or("do"),
-            )?;
-            let mut request = RequestEnvelope::new(
-                req_id,
-                RequestSource::Cli,
-                instance.to_string(),
-                verb,
-                json!({"source": "lab_arbitrator_acquire"}),
-                current_unix_ms(),
-            );
-            request.allow_destructive = flags.bool("--allow-destructive");
-            request.holder_pid = Some(std::process::id());
-            request.priority = match flags.optional("--priority").as_deref() {
-                Some("high") => RequestPriority::High,
-                Some("normal") | None => RequestPriority::Normal,
-                Some(other) => {
-                    return Err(CliError::usage(format!(
-                        "unsupported --priority '{other}', expected normal or high"
-                    )));
-                }
-            };
-            let outcome = arbitrator
-                .admit(request, current_unix_ms())
-                .map_err(|err| CliError::device(err.to_string()))?;
-            records.extend(outcome.ledger_records.clone());
-            let mut data = json!({
-                "state": outcome.decision.as_str(),
-                "instance": instance,
-                "arbitration": arbitration_json(&outcome.decision)
-            });
-            data["session_lease"] = retired_session_lease_projection();
-            data
-        }
-        "release" => {
-            let lease_id = flags
-                .optional("--lease-id")
-                .filter(|value| value != "true")
-                .or_else(|| flags.positionals.get(1).cloned())
-                .ok_or_else(|| {
-                    CliError::usage("lab arbitrator release requires --lease-id <id>")
-                })?;
-            let outcome = arbitrator
-                .release_with_liveness(
-                    instance,
-                    &lease_id,
-                    current_unix_ms(),
-                    platform_process_is_alive,
-                )
-                .map_err(|err| CliError::device(err.to_string()))?;
-            records.extend(outcome.ledger_records.clone());
-            let mut data = json!({
-                "state": outcome.decision.as_str(),
-                "instance": instance,
-                "arbitration": arbitration_json(&outcome.decision)
-            });
-            data["session_lease"] = retired_session_lease_projection();
-            data
-        }
-        "cancel" => {
-            let req_id = flags
-                .optional("--req")
-                .filter(|value| value != "true")
-                .or_else(|| flags.positionals.get(1).cloned())
-                .ok_or_else(|| CliError::usage("lab arbitrator cancel requires --req <req_id>"))?;
-            let reason = flags
-                .optional("--reason")
-                .filter(|value| value != "true")
-                .unwrap_or_else(|| "operator_cancelled".to_string());
-            let outcome = arbitrator
-                .cancel_queued(instance, &req_id, reason)
-                .map_err(|err| CliError::device(err.to_string()))?;
-            records.extend(outcome.ledger_records.clone());
-            json!({
-                "state": outcome.decision.as_str(),
-                "instance": instance,
-                "arbitration": arbitration_json(&outcome.decision)
-            })
-        }
-        "reclaim-dead" => {
-            let outcome = arbitrator
-                .reclaim_dead_holder_with_liveness(
-                    instance,
-                    current_unix_ms(),
-                    platform_process_is_alive,
-                )
-                .map_err(|err| CliError::device(err.to_string()))?;
-            records.extend(outcome.ledger_records.clone());
-            let mut data = json!({
-                "state": outcome.decision.as_str(),
-                "instance": instance,
-                "liveness_checked": true,
-                "arbitration": arbitration_json(&outcome.decision)
-            });
-            data["session_lease"] = retired_session_lease_projection();
-            data
-        }
-        "force-unlock" => {
-            arbitrator.mark_holder_dead(instance);
-            let outcome = arbitrator
-                .reclaim_dead_holder_with_liveness(
-                    instance,
-                    current_unix_ms(),
-                    platform_process_is_alive,
-                )
-                .map_err(|err| CliError::device(err.to_string()))?;
-            records.extend(outcome.ledger_records.clone());
-            let mut data = json!({
-                "state": outcome.decision.as_str(),
-                "instance": instance,
-                "force_unlock": true,
-                "liveness_checked": false,
-                "warning": "admin_force_unlock_bypassed_liveness_check",
-                "arbitration": arbitration_json(&outcome.decision)
-            });
-            data["session_lease"] = retired_session_lease_projection();
-            data
-        }
-        "mark-destructive" => {
-            let active = flags
-                .optional("--active")
-                .filter(|value| value != "true")
-                .map(|value| parse_bool_flag_value("--active", &value))
-                .transpose()?
-                .unwrap_or(true);
-            arbitrator.mark_holder_destructive_step(instance, active);
-            json!({
-                "state": "holder_destructive_step_marked",
-                "instance": instance,
-                "active": active,
-                "arbitration": arbitrator.snapshot(instance)
-            })
-        }
-        other => {
-            return Err(CliError::usage(format!(
-                "unknown lab arbitrator command: {other}"
-            )));
-        }
-    };
-    save_lab2_arbitrator(&state_path, &arbitrator)?;
-    if records.is_empty() {
-        return Ok(data);
-    }
-    let req_id = records
-        .iter()
-        .find_map(|record| record.req_id.clone())
-        .unwrap_or_else(|| "lab2-arbitrator".to_string());
-    let mut data = data;
-    let ledger = write_lab2_ledger(global, instance, &req_id, &data, &mut records)?;
-    if ledger.receipt_payload.is_some() {
-        data["projection_source"] = json!({
-            "kind": "runtime_ledger",
-            "record_kind": "receipt",
-            "path": ledger.summary.get("path").cloned().unwrap_or(Value::Null),
-            "req_id": req_id
-        });
-    }
-    data["ledger"] = ledger.summary;
-    Ok(data)
+pub(crate) fn run_arbitrator(_global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
+    FlagArgs::parse(args)?;
+    Err(CliError::not_implemented(
+        "legacy_lab2_arbitrator_retired",
+        "Lab2 local arbitration was retired; Runtime scheduler is the only lease authority",
+    ))
 }
 
 pub(crate) fn capability_summary(config: &UserConfig) -> Value {
@@ -1575,11 +1144,9 @@ pub(crate) fn capability_summary(config: &UserConfig) -> Value {
         "engine_capabilities": recognition_engine_capabilities(),
         "instances": lab2_config_instances(config),
         "recovery_transparency": {
-            "state_file": LAB2_RECOVERY_STATE_FILE,
-            "event_type": "recovery.state.changed",
-            "observe": "allowed_with_state_recovering",
-            "write_verbs": "wait_by_default_or_fail_fast_with_--no-wait",
-            "wait_flags": ["--recovery-timeout-ms <ms>", "--recovery-poll-ms <ms>"]
+            "authority": "runtime_global_ledger",
+            "state_file": Value::Null,
+            "event_type": "recovery.state.changed"
         },
         "error_codes": lab2_error_code_table(),
         "exit_codes": exit_code_table(),
@@ -1595,746 +1162,6 @@ pub(crate) fn command_schema(command: &str) -> Option<Value> {
         .map(command_contract_schema)
 }
 
-fn admit_lab2_request(
-    global: &GlobalOptions,
-    ids: &Lab2Ids,
-    instance: String,
-    verb: RequestVerb,
-    payload: Value,
-    flags: &FlagArgs,
-) -> CliOutcome<actingcommand_arbitrator::ArbitrationOutcome> {
-    let mut request = RequestEnvelope::new(
-        ids.req_id.clone(),
-        RequestSource::Cli,
-        instance.clone(),
-        verb,
-        payload,
-        current_unix_ms(),
-    );
-    request.allow_destructive = flags.bool("--allow-destructive");
-    if request.verb.requires_lease() {
-        request.holder_pid = Some(std::process::id());
-    }
-    let request_record = LedgerRecord::new(
-        LedgerRecordKind::Dispatch,
-        Some(ids.req_id.clone()),
-        json!({
-            "stage": "request",
-            "request": request
-        }),
-    );
-    request.priority = match flags.optional("--priority").as_deref() {
-        Some("high") => RequestPriority::High,
-        Some("normal") | None => RequestPriority::Normal,
-        Some(other) => {
-            let error = CliError::usage(format!(
-                "unsupported --priority '{other}', expected normal or high"
-            ));
-            let details = lab2_error_details_for_flags(
-                flags,
-                &ids.req_id,
-                "validation_failed",
-                "admission_validation_failed",
-                "fix---priority-and-rerun",
-            )?;
-            return match return_lab2_error_with_ledger(
-                global,
-                flags,
-                &ids.req_id,
-                &instance,
-                details,
-                error,
-                vec![request_record],
-            ) {
-                Err(error) => Err(error),
-                Ok(_) => unreachable!("error ledger helper always returns Err"),
-            };
-        }
-    };
-    if let Some(deadline) = flags
-        .optional("--queue-deadline-ms")
-        .filter(|value| value != "true")
-    {
-        request.queue_deadline_ms = Some(match deadline.parse::<u64>() {
-            Ok(value) => value,
-            Err(err) => {
-                let error =
-                    CliError::usage(format!("invalid --queue-deadline-ms '{deadline}': {err}"));
-                let details = lab2_error_details_for_flags(
-                    flags,
-                    &ids.req_id,
-                    "validation_failed",
-                    "admission_validation_failed",
-                    "fix---queue-deadline-ms-and-rerun",
-                )?;
-                return match return_lab2_error_with_ledger(
-                    global,
-                    flags,
-                    &ids.req_id,
-                    &instance,
-                    details,
-                    error,
-                    vec![request_record],
-                ) {
-                    Err(error) => Err(error),
-                    Ok(_) => unreachable!("error ledger helper always returns Err"),
-                };
-            }
-        });
-    }
-    let request_record = LedgerRecord::new(
-        LedgerRecordKind::Dispatch,
-        Some(ids.req_id.clone()),
-        json!({
-            "stage": "request",
-            "request": request
-        }),
-    );
-    let (state_path, mut arbitrator) = match load_lab2_arbitrator(flags) {
-        Ok(loaded) => loaded,
-        Err(err) => {
-            let details = lab2_error_details_for_flags(
-                flags,
-                &ids.req_id,
-                "fatal",
-                "arbitrator_state_unavailable",
-                "inspect-or-remove-corrupt-lab2-arbitrator-state",
-            )?;
-            return match return_lab2_error_with_ledger(
-                global,
-                flags,
-                &ids.req_id,
-                &instance,
-                details,
-                err,
-                vec![request_record],
-            ) {
-                Err(error) => Err(error),
-                Ok(_) => unreachable!("error ledger helper always returns Err"),
-            };
-        }
-    };
-    let now_ms = current_unix_ms();
-    let mut outcome = if let Some(lease_id) = lab2_explicit_lease_id(flags) {
-        match arbitrator.admit_with_existing_lease(request, &lease_id, now_ms) {
-            Ok(outcome) => outcome,
-            Err(err) => {
-                let error = CliError::device(err.to_string());
-                let details = cli_error_details_or_projection(
-                    &error,
-                    &ids.req_id,
-                    "fatal",
-                    "arbitrator_admit_failed",
-                    "inspect-lab2-arbitrator-state",
-                );
-                return match return_lab2_error_with_ledger(
-                    global,
-                    flags,
-                    &ids.req_id,
-                    &instance,
-                    details,
-                    error,
-                    vec![request_record],
-                ) {
-                    Err(error) => Err(error),
-                    Ok(_) => unreachable!("error ledger helper always returns Err"),
-                };
-            }
-        }
-    } else {
-        match arbitrator.admit(request, now_ms) {
-            Ok(outcome) => outcome,
-            Err(err) => {
-                let error = CliError::device(err.to_string());
-                let details = cli_error_details_or_projection(
-                    &error,
-                    &ids.req_id,
-                    "fatal",
-                    "arbitrator_admit_failed",
-                    "inspect-lab2-arbitrator-state",
-                );
-                return match return_lab2_error_with_ledger(
-                    global,
-                    flags,
-                    &ids.req_id,
-                    &instance,
-                    details,
-                    error,
-                    vec![request_record],
-                ) {
-                    Err(error) => Err(error),
-                    Ok(_) => unreachable!("error ledger helper always returns Err"),
-                };
-            }
-        }
-    };
-    if let Err(error) = save_lab2_arbitrator(&state_path, &arbitrator) {
-        let details = cli_error_details_or_projection(
-            &error,
-            &ids.req_id,
-            "fatal",
-            "arbitrator_state_save_failed",
-            "inspect-lab2-arbitrator-state-directory",
-        );
-        let mut records = vec![request_record.clone()];
-        records.extend(outcome.ledger_records.clone());
-        return match return_lab2_error_with_ledger(
-            global,
-            flags,
-            &ids.req_id,
-            &instance,
-            details,
-            error,
-            records,
-        ) {
-            Err(error) => Err(error),
-            Ok(_) => unreachable!("error ledger helper always returns Err"),
-        };
-    }
-    outcome.ledger_records.insert(0, request_record);
-    Ok(outcome)
-}
-
-fn load_lab2_arbitrator(flags: &FlagArgs) -> CliOutcome<(PathBuf, DegradedArbitrator)> {
-    let state_dir = explicit_lab2_state_dir(flags)?;
-    fs::create_dir_all(&state_dir).map_err(|err| {
-        CliError::runtime_not_running(format!(
-            "failed to create Lab-2 arbitrator state dir {}: {err}",
-            state_dir.display()
-        ))
-    })?;
-    let path = state_dir.join(LAB2_ARBITRATOR_STATE_FILE);
-    let Some(state) = read_json_file::<Lab2ArbitratorState>(&path)? else {
-        return Ok((path, DegradedArbitrator::new(IdIssuer::new())));
-    };
-    if state.schema_version != LAB2_ARBITRATOR_STATE_VERSION {
-        return Err(CliError::device(format!(
-            "unsupported Lab-2 arbitrator state schema {} in {}",
-            state.schema_version,
-            path.display()
-        )));
-    }
-    Ok((
-        path,
-        DegradedArbitrator::from_instances(IdIssuer::new(), state.instances),
-    ))
-}
-
-fn save_lab2_arbitrator(path: &Path, arbitrator: &DegradedArbitrator) -> CliOutcome<()> {
-    let state = Lab2ArbitratorState {
-        schema_version: LAB2_ARBITRATOR_STATE_VERSION.to_string(),
-        updated_at_unix_ms: current_unix_ms(),
-        instances: arbitrator.instances().clone(),
-    };
-    write_json_file_atomic(path, &state)
-}
-
-fn retired_session_lease_projection() -> Value {
-    json!({
-        "status": "retired",
-        "authority": "runtime_scheduler",
-        "file_authority": false
-    })
-}
-
-fn explicit_lab2_state_dir(flags: &FlagArgs) -> CliOutcome<PathBuf> {
-    if let Some(path) = flags.optional_path("--state-dir") {
-        return Ok(path);
-    }
-    if let Ok(path) = env::var(SESSION_STATE_ENV) {
-        return Ok(PathBuf::from(path));
-    }
-    Ok(app_state_root()?.join("lab2"))
-}
-
-fn lab2_explicit_lease_id(flags: &FlagArgs) -> Option<String> {
-    flags.optional("--lease-id").filter(|value| value != "true")
-}
-
-fn parse_lab2_arbitrator_verb(value: &str) -> CliOutcome<RequestVerb> {
-    match value {
-        "do" => Ok(RequestVerb::Do),
-        "ensure" => Ok(RequestVerb::Ensure),
-        "run_task" => Ok(RequestVerb::RunTask),
-        other => Err(CliError::usage(format!(
-            "unsupported lab arbitrator --verb '{other}', expected do, ensure, or run_task"
-        ))),
-    }
-}
-
-fn implicit_lab2_lease(flags: &FlagArgs, decision: &ArbitrationDecision) -> Option<LeaseGrant> {
-    if lab2_explicit_lease_id(flags).is_some() {
-        return None;
-    }
-    match decision {
-        ArbitrationDecision::LeaseGranted { lease, .. } => Some(lease.clone()),
-        _ => None,
-    }
-}
-
-fn release_implicit_lab2_lease(
-    flags: &FlagArgs,
-    instance: &str,
-    lease: &LeaseGrant,
-) -> CliOutcome<Vec<LedgerRecord>> {
-    let (state_path, mut arbitrator) = load_lab2_arbitrator(flags)?;
-    let outcome = arbitrator
-        .release_with_liveness(
-            instance,
-            &lease.lease_id,
-            current_unix_ms(),
-            platform_process_is_alive,
-        )
-        .map_err(|err| CliError::device(err.to_string()))?;
-    save_lab2_arbitrator(&state_path, &arbitrator)?;
-    Ok(outcome.ledger_records)
-}
-
-fn finish_explicit_lab2_drive(
-    flags: &FlagArgs,
-    instance: &str,
-    lease_id: &str,
-    req_id: &str,
-) -> CliOutcome<()> {
-    let (state_path, mut arbitrator) = load_lab2_arbitrator(flags)?;
-    arbitrator
-        .finish_existing_lease_drive(instance, lease_id, req_id, current_unix_ms())
-        .map_err(|err| CliError::device(err.to_string()))?;
-    save_lab2_arbitrator(&state_path, &arbitrator)
-}
-
-fn ensure_lab2_write_admitted(
-    flags: &FlagArgs,
-    req_id: &str,
-    instance: &str,
-    decision: &ArbitrationDecision,
-) -> CliOutcome<LeaseGrant> {
-    match decision {
-        ArbitrationDecision::LeaseGranted { lease, .. } => Ok(lease.clone()),
-        other => {
-            let mut details = lab2_error_payload_for_flags(
-                flags,
-                req_id,
-                match other {
-                    ArbitrationDecision::Queued { .. } => "lease_held",
-                    ArbitrationDecision::PreemptRequested { .. } => "lease_held",
-                    ArbitrationDecision::Rejected { error, .. } => error,
-                    ArbitrationDecision::DeviceDenied { error, .. } => error,
-                    _ => "fatal",
-                },
-                other.as_str(),
-                "wait-for-current-holder-or-release-lab2-arbitrator-state",
-                None,
-            )?;
-            details["arbitration"] = arbitration_json(other);
-            Err(CliError::safety_blocked(
-                "lab2_write_not_admitted",
-                format!(
-                    "Lab-2 write request for {instance} was not admitted: {}",
-                    other.as_str()
-                ),
-                &["lab2_arbitrator", "lease"],
-            )
-            .with_details(details))
-        }
-    }
-}
-
-fn authorize_lab2_device_drive(
-    flags: &FlagArgs,
-    req_id: &str,
-    instance: &str,
-    lease: &LeaseGrant,
-) -> CliOutcome<Value> {
-    let (_, arbitrator) = match load_lab2_arbitrator(flags) {
-        Ok(loaded) => loaded,
-        Err(err) => {
-            let details = lab2_error_details_for_flags(
-                flags,
-                req_id,
-                "fatal",
-                "arbitrator_state_unavailable",
-                "inspect-or-remove-corrupt-lab2-arbitrator-state",
-            )?;
-            return Err(err.with_details(details));
-        }
-    };
-    let outcome = arbitrator.authorize_device_drive(instance, req_id.to_string(), &lease.lease_id);
-    match outcome.decision {
-        ArbitrationDecision::ReadonlyAccepted { .. } => Ok(json!({
-            "session_lease": retired_session_lease_projection(),
-            "arbitrator": arbitration_json(&outcome.decision)
-        })),
-        decision => {
-            let details = lab2_error_payload_for_flags(
-                flags,
-                req_id,
-                "lease_held",
-                decision.as_str(),
-                "acquire-matching-lab2-arbitrator-lease-before-device-io",
-                None,
-            )?;
-            Err(CliError::safety_blocked(
-                "lab2_device_drive_not_authorized",
-                "Lab-2 device drive was denied by the persistent arbitrator",
-                &["lab2_arbitrator", "lease"],
-            )
-            .with_details(details))
-        }
-    }
-}
-
-fn finish_lab2_response(
-    global: &GlobalOptions,
-    flags: &FlagArgs,
-    req_id: &str,
-    instance: &str,
-    payload: Value,
-    mut records: Vec<LedgerRecord>,
-) -> CliOutcome<Value> {
-    let mut payload = payload;
-    let ledger = write_lab2_ledger(global, instance, req_id, &payload, &mut records)?;
-    if let Some(receipt_payload) = ledger.receipt_payload {
-        project_lab2_ledger_payload(&receipt_payload, ledger.summary, flags)
-    } else {
-        payload["ledger"] = ledger.summary;
-        project_lab2_payload(&payload, flags)
-    }
-}
-
-fn finish_lab2_result_with_ledger(
-    global: &GlobalOptions,
-    flags: &FlagArgs,
-    req_id: &str,
-    instance: &str,
-    result: CliOutcome<Value>,
-    records: Vec<LedgerRecord>,
-) -> CliOutcome<Value> {
-    match result {
-        Ok(payload) => finish_lab2_response(global, flags, req_id, instance, payload, records),
-        Err(error) => {
-            let details = cli_error_details_or_projection(
-                &error,
-                req_id,
-                "fatal",
-                "failed",
-                "inspect-lab2-ledger",
-            );
-            return_lab2_error_with_ledger(global, flags, req_id, instance, details, error, records)
-        }
-    }
-}
-
-fn write_lab2_ledger(
-    global: &GlobalOptions,
-    instance: &str,
-    req_id: &str,
-    payload: &Value,
-    records: &mut Vec<LedgerRecord>,
-) -> CliOutcome<Lab2LedgerWrite> {
-    let config = read_user_config()?;
-    let Some(run_root) = effective_run_root(global, &config) else {
-        return Ok(Lab2LedgerWrite {
-            summary: json!({"written": false, "reason": "run_root_not_configured"}),
-            receipt_payload: None,
-        });
-    };
-    let game = global.game.clone().unwrap_or_else(|| "unknown".to_string());
-    let server = global
-        .server
-        .clone()
-        .unwrap_or_else(|| "unknown".to_string());
-    let mut ledger = LabLedger::create(
-        &run_root,
-        &format!("lab2-{req_id}"),
-        SessionHeader::new(RUNTIME_VERSION, game, server, instance),
-    )
-    .map_err(|err| CliError::device(err.to_string()))?;
-    records.extend(lab2_drive_records_from_payload(req_id, payload));
-    for record in records.drain(..) {
-        let record = with_lab2_id_chain(record, req_id, &[payload]);
-        ledger
-            .append(record)
-            .map_err(|err| CliError::device(err.to_string()))?;
-    }
-    let receipt = with_lab2_id_chain(
-        LedgerRecord::new(
-            LedgerRecordKind::Receipt,
-            Some(req_id.to_string()),
-            payload.clone(),
-        ),
-        req_id,
-        &[payload],
-    );
-    ledger
-        .append(receipt)
-        .map_err(|err| CliError::device(err.to_string()))?;
-    let receipt_payload = read_lab2_receipt_payload_from_ledger(ledger.ledger_path(), req_id)?;
-    let retention = enforce_retention(
-        run_root.join("sessions"),
-        LAB2_LEDGER_MAX_BYTES,
-        Duration::from_secs(LAB2_LEDGER_PROTECTED_DAYS * 24 * 60 * 60),
-    )
-    .map_err(|err| CliError::device(err.to_string()))?;
-    Ok(Lab2LedgerWrite {
-        summary: json!({
-            "written": true,
-            "path": ledger.ledger_path().display().to_string(),
-            "retention": retention
-        }),
-        receipt_payload: Some(receipt_payload),
-    })
-}
-
-fn return_lab2_error_with_ledger(
-    global: &GlobalOptions,
-    flags: &FlagArgs,
-    req_id: &str,
-    instance: &str,
-    details: Value,
-    error: CliError,
-    mut records: Vec<LedgerRecord>,
-) -> CliOutcome<Value> {
-    let mut payload = json!({
-        "req_id": req_id,
-        "instance": instance,
-        "error": details.get("error").cloned().unwrap_or_else(|| json!(error.code)),
-        "state": details.get("state").cloned().unwrap_or_else(|| json!("blocked")),
-        "hint": details.get("hint").cloned().unwrap_or_else(|| json!("inspect-ledger")),
-        "blocked_error": {
-            "code": error.code.clone(),
-            "message": error.message.clone(),
-            "blocked_by": error.blocked_by.clone()
-        },
-        "details": details
-    });
-    payload = match write_lab2_ledger(global, instance, req_id, &payload, &mut records) {
-        Ok(ledger) => {
-            if let Some(receipt_payload) = ledger.receipt_payload {
-                project_lab2_ledger_payload(&receipt_payload, ledger.summary, flags)?
-            } else {
-                let mut payload = payload;
-                payload["ledger"] = ledger.summary;
-                payload
-            }
-        }
-        Err(ledger_error) => {
-            let mut payload = payload;
-            payload["ledger"] = json!({
-                "written": false,
-                "reason": "ledger_write_failed",
-                "error": ledger_error.message
-            });
-            payload
-        }
-    };
-    Err(error.with_details(payload))
-}
-
-fn cli_error_details_or_projection(
-    error: &CliError,
-    req_id: &str,
-    default_error: &str,
-    default_state: &str,
-    default_hint: &str,
-) -> Value {
-    error
-        .details
-        .as_ref()
-        .cloned()
-        .unwrap_or_else(|| error_projection(req_id, default_error, default_state, default_hint))
-}
-
-fn lab2_drive_records_from_payload(req_id: &str, payload: &Value) -> Vec<LedgerRecord> {
-    let mut records = Vec::new();
-    if let Some(env_resolved) = payload.get("env_resolved") {
-        records.push(with_lab2_id_chain(
-            LedgerRecord::new(
-                LedgerRecordKind::Drive,
-                Some(req_id.to_string()),
-                json!({
-                    "stage": "env_resolved",
-                    "keys": env_resolved
-                }),
-            ),
-            req_id,
-            &[payload],
-        ));
-    }
-    if let Some(guard) = payload.get("guard_result") {
-        records.push(with_lab2_id_chain(
-            LedgerRecord::new(
-                LedgerRecordKind::Drive,
-                Some(req_id.to_string()),
-                json!({
-                    "stage": "recognition",
-                    "target": payload.get("target").cloned().unwrap_or(Value::Null),
-                    "guard_result": guard
-                }),
-            ),
-            req_id,
-            &[payload],
-        ));
-    }
-    if let Some(click) = payload.get("actual_click") {
-        records.push(with_lab2_id_chain(
-            LedgerRecord::new(
-                LedgerRecordKind::Drive,
-                Some(req_id.to_string()),
-                json!({
-                    "stage": "action",
-                    "executed": payload.get("executed").cloned().unwrap_or(Value::Null),
-                    "actual_click": click,
-                    "device": payload.get("device").cloned().unwrap_or(Value::Null)
-                }),
-            ),
-            req_id,
-            &[payload],
-        ));
-    }
-    if payload.get("wf_id").is_some() {
-        records.push(with_lab2_id_chain(
-            LedgerRecord::new(
-                LedgerRecordKind::Drive,
-                Some(req_id.to_string()),
-                json!({
-                    "stage": "wait",
-                    "state": payload.get("state").cloned().unwrap_or(Value::Null),
-                    "page": payload.get("page").cloned().unwrap_or(Value::Null),
-                    "target": payload.get("target").cloned().unwrap_or(Value::Null)
-                }),
-            ),
-            req_id,
-            &[payload],
-        ));
-    }
-    records
-}
-
-fn with_lab2_id_chain(
-    mut record: LedgerRecord,
-    req_id: &str,
-    extra_values: &[&Value],
-) -> LedgerRecord {
-    let mut values = Vec::with_capacity(extra_values.len() + 1);
-    values.push(&record.payload);
-    values.extend_from_slice(extra_values);
-    for (key, value) in lab2_id_chain(req_id, &values) {
-        record = record.with_id(key, value);
-    }
-    record
-}
-
-fn lab2_id_chain(req_id: &str, values: &[&Value]) -> Vec<(&'static str, String)> {
-    let mut chain = Vec::new();
-    chain.push(("req_id", req_id.to_string()));
-    for (key, paths) in [
-        (
-            "lease_id",
-            &[
-                "/lease_id",
-                "/lease/lease_id",
-                "/details/lease/lease_id",
-                "/arbitration/details/lease/lease_id",
-            ][..],
-        ),
-        ("reco_id", &["/reco_id", "/guard_result/reco_id"][..]),
-        ("action_id", &["/action_id"][..]),
-        ("wf_id", &["/wf_id"][..]),
-    ] {
-        if let Some(value) = first_string_at_paths(values, paths) {
-            chain.push((key, value));
-        }
-    }
-    chain
-}
-
-fn first_string_at_paths(values: &[&Value], paths: &[&str]) -> Option<String> {
-    values.iter().find_map(|value| {
-        paths.iter().find_map(|path| {
-            value
-                .pointer(path)
-                .and_then(Value::as_str)
-                .map(ToOwned::to_owned)
-        })
-    })
-}
-
-fn read_receipt_chain(run_root: &Path, req_id: &str) -> CliOutcome<Vec<Value>> {
-    let sessions = run_root.join("sessions");
-    let mut records = Vec::new();
-    for path in collect_ledger_paths(&sessions)? {
-        let read = LabLedger::read(&path)
-            .map_err(|err| CliError::device(format!("failed to read {}: {err}", path.display())))?;
-        for record in read.records {
-            if record_matches_req(&record, req_id) {
-                records.push(json!({
-                    "ledger_path": path.display().to_string(),
-                    "kind": record.kind.as_str(),
-                    "record": record
-                }));
-            }
-        }
-    }
-    Ok(records)
-}
-
-fn collect_ledger_paths(root: &Path) -> CliOutcome<Vec<PathBuf>> {
-    if !root.exists() {
-        return Ok(Vec::new());
-    }
-    let mut paths = Vec::new();
-    collect_ledger_paths_inner(root, &mut paths)?;
-    Ok(paths)
-}
-
-fn collect_ledger_paths_inner(root: &Path, paths: &mut Vec<PathBuf>) -> CliOutcome<()> {
-    for entry in fs::read_dir(root)
-        .map_err(|err| CliError::device(format!("failed to read {}: {err}", root.display())))?
-    {
-        let entry = entry.map_err(|err| CliError::device(err.to_string()))?;
-        let path = entry.path();
-        if path.is_dir() {
-            collect_ledger_paths_inner(&path, paths)?;
-        } else if path.file_name().and_then(|name| name.to_str()) == Some("ledger.jsonl") {
-            paths.push(path);
-        }
-    }
-    Ok(())
-}
-
-fn record_matches_req(record: &LedgerRecord, req_id: &str) -> bool {
-    record.req_id.as_deref() == Some(req_id)
-        || record
-            .id_chain
-            .get("req_id")
-            .is_some_and(|value| value == req_id)
-}
-
-fn distinct_ledger_count(records: &[Value]) -> usize {
-    records
-        .iter()
-        .filter_map(|record| record.get("ledger_path").and_then(Value::as_str))
-        .collect::<BTreeSet<_>>()
-        .len()
-}
-
-fn read_lab2_receipt_payload_from_ledger(path: &Path, req_id: &str) -> CliOutcome<Value> {
-    let read = LabLedger::read(path).map_err(|err| CliError::device(err.to_string()))?;
-    read.records
-        .iter()
-        .rev()
-        .find(|record| {
-            record.kind == LedgerRecordKind::Receipt && record.req_id.as_deref() == Some(req_id)
-        })
-        .map(|record| record.payload.clone())
-        .ok_or_else(|| {
-            CliError::device(format!(
-                "runtime ledger receipt for Lab-2 req_id '{req_id}' was not readable after write"
-            ))
-        })
-}
-
 fn project_lab2_payload(payload: &Value, flags: &FlagArgs) -> CliOutcome<Value> {
     let request = lab2_projection_request(
         flags,
@@ -2344,30 +1171,6 @@ fn project_lab2_payload(payload: &Value, flags: &FlagArgs) -> CliOutcome<Value> 
             .map(str::to_string),
     );
     project_record(payload, &request).map_err(|err| CliError::device(err.to_string()))
-}
-
-fn project_lab2_ledger_payload(
-    receipt_payload: &Value,
-    ledger_summary: Value,
-    flags: &FlagArgs,
-) -> CliOutcome<Value> {
-    let mut projected = project_lab2_payload(receipt_payload, flags)?;
-    let Some(object) = projected.as_object_mut() else {
-        return Err(CliError::device(
-            "lab2 ledger projection returned non-object",
-        ));
-    };
-    object.insert("ledger".to_string(), ledger_summary.clone());
-    object.insert(
-        "projection_source".to_string(),
-        json!({
-            "kind": "runtime_ledger",
-            "record_kind": "receipt",
-            "path": ledger_summary.get("path").cloned().unwrap_or(Value::Null),
-            "req_id": receipt_payload.get("req_id").cloned().unwrap_or(Value::Null)
-        }),
-    );
-    Ok(projected)
 }
 
 fn lab2_projection_request(flags: &FlagArgs, evidence_id: Option<String>) -> ProjectionRequest {
@@ -2381,16 +1184,6 @@ fn lab2_projection_request(flags: &FlagArgs, evidence_id: Option<String>) -> Pro
         },
         fields: fields_from_flags(flags),
         evidence_id,
-    }
-}
-
-fn parse_bool_flag_value(flag: &str, value: &str) -> CliOutcome<bool> {
-    match value {
-        "true" | "1" | "yes" | "on" => Ok(true),
-        "false" | "0" | "no" | "off" => Ok(false),
-        other => Err(CliError::usage(format!(
-            "{flag} expects true or false, got {other}"
-        ))),
     }
 }
 
@@ -2421,135 +1214,6 @@ fn lab2_error_details_for_flags(
     hint: &str,
 ) -> CliOutcome<Value> {
     lab2_error_payload_for_flags(flags, req_id, error, state, hint, None)
-}
-
-fn wait_for_lab2_recovery_clear(
-    flags: &FlagArgs,
-    req_id: &str,
-    instance: &str,
-    verb: &str,
-    planned_action: Value,
-) -> CliOutcome<Option<Value>> {
-    let Some(recovery) = active_lab2_recovery_state(flags, req_id, instance)? else {
-        return Ok(None);
-    };
-    if flags.bool("--no-wait") {
-        return Err(recovery_in_progress_error(
-            req_id,
-            verb,
-            recovery,
-            planned_action,
-        ));
-    }
-    let timeout = parse_optional_duration_ms(flags, "--recovery-timeout-ms", 5_000)?;
-    let poll = parse_optional_duration_ms(flags, "--recovery-poll-ms", 200)?;
-    if poll.is_zero() || poll > Duration::from_millis(5_000) {
-        return Err(CliError::usage(
-            "--recovery-poll-ms must be between 1 and 5000",
-        ));
-    }
-    let started = Instant::now();
-    loop {
-        if active_lab2_recovery_state(flags, req_id, instance)?.is_none() {
-            return Ok(Some(json!({
-                "waited": true,
-                "elapsed_ms": started.elapsed().as_millis() as u64,
-                "timeout_ms": timeout.as_millis() as u64
-            })));
-        }
-        if started.elapsed() >= timeout {
-            return Err(recovery_in_progress_error(
-                req_id,
-                verb,
-                recovery,
-                planned_action,
-            ));
-        }
-        thread::sleep(poll.min(timeout.saturating_sub(started.elapsed())));
-    }
-}
-
-fn active_lab2_recovery_state(
-    flags: &FlagArgs,
-    req_id: &str,
-    instance: &str,
-) -> CliOutcome<Option<Value>> {
-    let state_dir = session_state_dir_from_flags(flags)?;
-    let path = state_dir.join(LAB2_RECOVERY_STATE_FILE);
-    let text = match fs::read_to_string(&path) {
-        Ok(text) => text,
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(err) => {
-            return Err(CliError::device(format!(
-                "failed to read Lab-2 recovery state {}: {err}",
-                path.display()
-            )));
-        }
-    };
-    let mut value = serde_json::from_str::<Value>(&text).map_err(|err| {
-        CliError::device(format!(
-            "failed to parse Lab-2 recovery state {}: {err}",
-            path.display()
-        ))
-    })?;
-    if !lab2_recovery_state_is_active(&value) {
-        return Ok(None);
-    }
-    value["state_dir"] = json!(state_dir.display().to_string());
-    value["state_file"] = json!(path.display().to_string());
-    value["event"] = lab2_recovery_light_event(req_id, instance, &value)?;
-    Ok(Some(value))
-}
-
-fn lab2_recovery_state_is_active(value: &Value) -> bool {
-    value
-        .get("active")
-        .and_then(Value::as_bool)
-        .unwrap_or_else(|| {
-            matches!(
-                value.get("state").and_then(Value::as_str),
-                Some("recovering" | "running" | "in_progress")
-            )
-        })
-}
-
-fn lab2_recovery_light_event(req_id: &str, instance: &str, recovery: &Value) -> CliOutcome<Value> {
-    let mut ids = BTreeMap::new();
-    ids.insert("req_id".to_string(), req_id.to_string());
-    ids.insert("instance".to_string(), instance.to_string());
-    LightEvent::new(
-        "recovery.state.changed",
-        ids,
-        json!({
-            "state": recovery.get("state").cloned().unwrap_or_else(|| json!("recovering")),
-            "reason": recovery.get("reason").cloned().unwrap_or(Value::Null),
-            "progress": recovery.get("progress").cloned().unwrap_or(Value::Null)
-        }),
-    )
-    .map(|event| json!(event))
-    .map_err(|err| CliError::device(err.to_string()))
-}
-
-fn recovery_in_progress_error(
-    req_id: &str,
-    verb: &str,
-    recovery: Value,
-    planned_action: Value,
-) -> CliError {
-    let mut details = error_projection(
-        req_id,
-        "recovering",
-        "recovering",
-        "wait-for-recovery-or-rerun-with---no-wait-to-fail-fast",
-    );
-    details["recovery"] = recovery;
-    details["planned_action"] = planned_action;
-    CliError::safety_blocked(
-        "recovery_in_progress",
-        format!("{verb} is deferred because recovery is in progress"),
-        &["recovery", "lab2"],
-    )
-    .with_details(details)
 }
 
 fn lab2_command_contracts() -> Vec<Lab2CommandContract> {
@@ -2668,17 +1332,10 @@ fn lab2_command_contracts() -> Vec<Lab2CommandContract> {
         },
         Lab2CommandContract {
             name: "lab arbitrator",
-            summary: "inspect or maintain the persistent degraded arbitrator state",
-            required: &["status|acquire|release|cancel|reclaim-dead|force-unlock|mark-destructive"],
-            optional: &[
-                "--state-dir <path>",
-                "--instance <name>",
-                "--lease-id <id>",
-                "--req <id>",
-                "--verb <do|ensure|run_task>",
-                "--priority <normal|high>",
-            ],
-            output_fields: &["state", "instance", "arbitration", "ledger"],
+            summary: "retired compatibility command; Runtime scheduler is the only lease authority",
+            required: &[],
+            optional: &[],
+            output_fields: &["error"],
             requires_lease: false,
         },
     ]
@@ -2784,13 +1441,13 @@ fn escape_toolbox_groups() -> Value {
             "commands": ["session recover", "session self-heal-plan", "session capture-policy", "session instance app restart"]
         },
         {
-            "group": "lease_and_arbitration",
-            "commands": ["lab arbitrator acquire", "lab arbitrator release", "lab arbitrator status", "lab arbitrator force-unlock", "session request status"]
+            "group": "runtime_control",
+            "commands": ["status", "session request status"]
         }
     ])
 }
 
-fn load_lab2_scene(global: &GlobalOptions, flags: &FlagArgs) -> CliOutcome<Lab2Scene> {
+fn load_lab2_scene(_global: &GlobalOptions, flags: &FlagArgs) -> CliOutcome<Lab2Scene> {
     if let Some(scene_path) = flags.optional_path("--scene") {
         let test_delay = flags
             .optional("--test-capture-delay-ms")
@@ -2827,37 +1484,8 @@ fn load_lab2_scene(global: &GlobalOptions, flags: &FlagArgs) -> CliOutcome<Lab2S
             png: Some(png),
         });
     }
-    if flags.bool("--capture") {
-        let config = read_user_config()?;
-        let device_config = device_config(global, &config)?;
-        let requested = device_config.capture_backend;
-        let fresh_delay = parse_optional_duration_ms(flags, "--fresh-delay-ms", 160)?;
-        let captured = capture_for_command(
-            &device_config,
-            requested,
-            flags.bool("--require-fresh"),
-            fresh_delay,
-        )?;
-        let frame = captured.frame;
-        let frame_age_ms = system_time_age_ms(frame.captured_at);
-        let backend = frame.backend_name.as_str().to_string();
-        let png = frame.original_png.clone();
-        let scene = scene_from_frame(&frame)?;
-        return Ok(Lab2Scene {
-            scene,
-            backend,
-            source: json!({
-                "kind": "capture",
-                "capture_backend_used": frame.backend_name.as_str(),
-                "capture_backend_attempts": captured.attempts,
-                "freshness": captured.freshness
-            }),
-            frame_age_ms,
-            png,
-        });
-    }
     Err(CliError::usage(
-        "Lab-2 CLI verbs require --scene <png> or --capture",
+        "offline Lab-2 CLI verbs require --scene <png>; use --capture for Runtime-backed mode",
     ))
 }
 
@@ -3248,11 +1876,4 @@ fn system_time_age_ms(timestamp: SystemTime) -> u64 {
         .as_millis()
         .try_into()
         .unwrap_or(u64::MAX)
-}
-
-fn arbitration_json(decision: &ArbitrationDecision) -> Value {
-    json!({
-        "decision": decision.as_str(),
-        "details": decision
-    })
 }

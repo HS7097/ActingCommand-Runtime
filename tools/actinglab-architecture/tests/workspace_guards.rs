@@ -1795,6 +1795,50 @@ fn c5_disconnected_runtime_core_prototype_is_retired() {
     );
 }
 
+#[test]
+fn c6_local_lab2_arbitrator_is_retired() {
+    let root = workspace_root();
+    let metadata: serde_json::Value =
+        serde_json::from_str(&workspace_metadata()).expect("parse cargo metadata");
+    let packages = metadata["packages"].as_array().expect("metadata packages");
+    assert!(
+        packages
+            .iter()
+            .all(|package| package["name"] != "actingcommand-arbitrator"),
+        "the legacy Lab2 arbitrator must not re-enter the workspace"
+    );
+    assert!(
+        !root.join("crates/arbitrator/Cargo.toml").exists(),
+        "the legacy Lab2 arbitrator manifest must remain removed"
+    );
+
+    let lab_state = fs::read_to_string(root.join("crates/lab/src/state.rs"))
+        .expect("read crates/lab/src/state.rs");
+    let lab2_cli = fs::read_to_string(root.join("apps/actinglab/src/lab2_cli.rs"))
+        .expect("read apps/actinglab/src/lab2_cli.rs");
+    for forbidden in [
+        "ArbitratorStore",
+        "DegradedArbitrator",
+        "lab2-arbitrator",
+        "lab2-recovery-state.json",
+    ] {
+        assert!(
+            !lab_state.contains(forbidden) && !lab2_cli.contains(forbidden),
+            "legacy Lab2 authority symbol '{forbidden}' must remain absent"
+        );
+    }
+    for forbidden in [
+        "ScreencapBackend",
+        "MaaTouchBackend",
+        "actingcommand_device",
+    ] {
+        assert!(
+            !lab2_cli.contains(forbidden),
+            "Lab2 must use Runtime IPC rather than opening production device authority: {forbidden}"
+        );
+    }
+}
+
 fn cargo_metadata_args() -> [&'static str; 4] {
     ["metadata", "--format-version", "1", "--all-features"]
 }

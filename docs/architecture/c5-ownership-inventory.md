@@ -8,6 +8,11 @@ This inventory records current ownership, side effects, replacement owners, and 
 It is not evidence that temporary Lab ownership is correct, and it is not permission to delete a
 module before its replacement gate passes.
 
+Current disposition update: C6 retired `actingcommand-arbitrator` after online Lab2 commands moved
+behind Runtime scheduler IPC and offline `--scene` commands became state-free. The command parser
+retains an explicit fail-loud compatibility tombstone, but no Lab arbitrator package, store, lease,
+recovery file, or device backend authority remains.
+
 ## Workspace dependency snapshot
 
 | Package | Current relevant consumers | C5 disposition |

@@ -48,7 +48,6 @@ dependencies = [
 name = "actingcommand-actinglab"
 version = "0.1.0"
 dependencies = [
- "actingcommand-arbitrator",
  "actingcommand-artifact-store",
  "actingcommand-contract",
  "actingcommand-device",
@@ -77,16 +76,6 @@ dependencies = [
  "sha2",
  "syn",
  "toml",
-]
-
-[[package]]
-name = "actingcommand-arbitrator"
-version = "0.1.0"
-dependencies = [
- "actingcommand-ledger",
- "serde",
- "serde_json",
- "tempfile",
 ]
 
 [[package]]
