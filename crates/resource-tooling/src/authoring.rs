@@ -300,6 +300,34 @@ pub struct AuthoringRecoveryContext {
 }
 
 impl AuthoringRecoveryContext {
+    pub fn new(
+        correlation_id: impl Into<String>,
+        draft_id: impl Into<String>,
+        target_label: impl Into<String>,
+        target_fingerprint: impl Into<String>,
+        candidate_tree_sha256: impl Into<String>,
+    ) -> LabResult<Self> {
+        let context = Self {
+            correlation_id: correlation_id.into(),
+            draft_id: draft_id.into(),
+            target_label: target_label.into(),
+            target_fingerprint: target_fingerprint.into(),
+            candidate_tree_sha256: candidate_tree_sha256.into(),
+        };
+        if context.correlation_id.trim().is_empty()
+            || context.draft_id.trim().is_empty()
+            || context.target_label.trim().is_empty()
+            || !is_lower_hex_sha256(&context.target_fingerprint)
+            || !is_lower_hex_sha256(&context.candidate_tree_sha256)
+        {
+            return Err(authoring_error(
+                "authoring_recovery_context_invalid",
+                "authoring recovery context contains an invalid identity or digest",
+            ));
+        }
+        Ok(context)
+    }
+
     pub fn correlation_id(&self) -> &str {
         &self.correlation_id
     }
@@ -1069,31 +1097,27 @@ impl TransactionJournal {
                 )
             })
         };
-        let context = AuthoringRecoveryContext {
-            correlation_id: required("correlation_id", &self.correlation_id)?,
-            draft_id: required("draft_id", &self.draft_id)?,
-            target_label: required("target_label", &self.target_label)?,
-            target_fingerprint: required("target_fingerprint", &self.target_fingerprint)?,
-            candidate_tree_sha256: required("candidate_tree_sha256", &self.candidate_tree_sha256)?,
-        };
-        if context.correlation_id.trim().is_empty()
-            || context.draft_id.trim().is_empty()
-            || context.target_label.trim().is_empty()
-            || context.target_fingerprint.len() != 64
-            || context.candidate_tree_sha256.len() != 64
-            || !context
-                .target_fingerprint
-                .bytes()
-                .chain(context.candidate_tree_sha256.bytes())
-                .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
-        {
-            return Err(authoring_error(
+        AuthoringRecoveryContext::new(
+            required("correlation_id", &self.correlation_id)?,
+            required("draft_id", &self.draft_id)?,
+            required("target_label", &self.target_label)?,
+            required("target_fingerprint", &self.target_fingerprint)?,
+            required("candidate_tree_sha256", &self.candidate_tree_sha256)?,
+        )
+        .map_err(|_| {
+            authoring_error(
                 "authoring_journal_identity_invalid",
-                "authoring transaction journal contains an invalid digest",
-            ));
-        }
-        Ok(context)
+                "authoring transaction journal contains an invalid identity or digest",
+            )
+        })
     }
+}
+
+fn is_lower_hex_sha256(value: &str) -> bool {
+    value.len() == 64
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
 }
 
 fn parse_journal(bytes: &[u8]) -> LabResult<TransactionJournal> {
