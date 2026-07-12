@@ -282,6 +282,65 @@ pub trait AuthoringValidator {
     ) -> LabResult<AuthoringValidationReport>;
 }
 
+/// Resolution supplied by the durable authoring fact source for an interrupted candidate swap.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AuthoringRecoveryDecision {
+    CommitCandidate,
+    RollbackCandidate,
+}
+
+/// Stable identity and candidate digest used to reconcile a filesystem journal with durable facts.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AuthoringRecoveryContext {
+    correlation_id: String,
+    draft_id: String,
+    target_label: String,
+    target_fingerprint: String,
+    candidate_tree_sha256: String,
+}
+
+impl AuthoringRecoveryContext {
+    pub fn correlation_id(&self) -> &str {
+        &self.correlation_id
+    }
+
+    pub fn draft_id(&self) -> &str {
+        &self.draft_id
+    }
+
+    pub fn target_label(&self) -> &str {
+        &self.target_label
+    }
+
+    pub fn target_fingerprint(&self) -> &str {
+        &self.target_fingerprint
+    }
+
+    pub fn candidate_tree_sha256(&self) -> &str {
+        &self.candidate_tree_sha256
+    }
+}
+
+/// Durable recovery authority supplied by the Lab/Runtime composition boundary.
+pub trait AuthoringRecoveryOracle {
+    fn decide(
+        &mut self,
+        context: &AuthoringRecoveryContext,
+    ) -> LabResult<AuthoringRecoveryDecision>;
+}
+
+impl<F> AuthoringRecoveryOracle for F
+where
+    F: FnMut(&AuthoringRecoveryContext) -> LabResult<AuthoringRecoveryDecision>,
+{
+    fn decide(
+        &mut self,
+        context: &AuthoringRecoveryContext,
+    ) -> LabResult<AuthoringRecoveryDecision> {
+        self(context)
+    }
+}
+
 impl<F> AuthoringValidator for F
 where
     F: FnMut(&Path, &AuthoringDraft) -> LabResult<AuthoringValidationReport>,
@@ -302,7 +361,24 @@ pub fn publish_authoring_draft(
     validator: &mut dyn AuthoringValidator,
     events: &mut dyn AuthoringEventSink,
 ) -> LabResult<AuthoringReceipt> {
-    publish_authoring_draft_inner(request, draft, validator, events, None)
+    let mut recovery = |_context: &AuthoringRecoveryContext| {
+        Err(authoring_error(
+            "authoring_recovery_oracle_required",
+            "an interrupted candidate swap requires a durable recovery oracle",
+        ))
+    };
+    publish_authoring_draft_inner(request, draft, &mut recovery, validator, events, None)
+}
+
+/// Publish with a caller-owned durable oracle for reconciling interrupted candidate swaps.
+pub fn publish_authoring_draft_with_recovery(
+    request: &AuthoringPublishRequest,
+    draft: &AuthoringDraft,
+    recovery: &mut dyn AuthoringRecoveryOracle,
+    validator: &mut dyn AuthoringValidator,
+    events: &mut dyn AuthoringEventSink,
+) -> LabResult<AuthoringReceipt> {
+    publish_authoring_draft_inner(request, draft, recovery, validator, events, None)
 }
 
 /// Materialize a developer draft without publishing it or emitting Runtime events.
@@ -344,6 +420,7 @@ enum FaultPoint {
 fn publish_authoring_draft_inner(
     request: &AuthoringPublishRequest,
     draft: &AuthoringDraft,
+    recovery: &mut dyn AuthoringRecoveryOracle,
     validator: &mut dyn AuthoringValidator,
     events: &mut dyn AuthoringEventSink,
     fault: Option<FaultPoint>,
@@ -382,7 +459,7 @@ fn publish_authoring_draft_inner(
 
     let result = (|| {
         let journal_path = parent.join(transaction_journal_name(&target_root));
-        recover_transaction(&target_root, &journal_path)?;
+        recover_transaction(&target_root, &journal_path, recovery)?;
         if !target_root.is_dir() {
             return Err(authoring_error(
                 "authoring_target_not_directory",
@@ -402,10 +479,15 @@ fn publish_authoring_draft_inner(
         let stage_root = parent.join(&stage_name);
         let backup_root = parent.join(&backup_name);
         let mut journal = TransactionJournal {
-            schema_version: 1,
+            schema_version: 2,
             phase: TransactionPhase::Prepared,
             stage_name,
             backup_name,
+            correlation_id: Some(draft.correlation_id.clone()),
+            draft_id: Some(draft.draft_id.clone()),
+            target_label: Some(target_label.clone()),
+            target_fingerprint: Some(target_fingerprint.clone()),
+            candidate_tree_sha256: None,
         };
         create_journal(&journal_path, &journal)?;
 
@@ -424,6 +506,9 @@ fn publish_authoring_draft_inner(
             events.append(&event(AuthoringEventKind::DraftBuilt, None))?;
             let validation = validator.validate(&stage_root, draft)?;
             let file_hashes = hash_tree(&stage_root)?;
+            journal.phase = TransactionPhase::Validated;
+            journal.candidate_tree_sha256 = Some(hash_file_manifest(&file_hashes));
+            write_journal(&journal_path, &journal)?;
             events.append(&event(AuthoringEventKind::ValidationCompleted, None))?;
             events.append(&event(AuthoringEventKind::PromoteIntent, None))?;
             Ok((validation, file_hashes))
@@ -752,6 +837,19 @@ fn hash_tree(root: &Path) -> LabResult<Vec<AuthoringFileHash>> {
     Ok(files)
 }
 
+fn hash_file_manifest(files: &[AuthoringFileHash]) -> String {
+    let mut ordered = files.iter().collect::<Vec<_>>();
+    ordered.sort_by(|left, right| left.relative_path.cmp(&right.relative_path));
+    let mut hasher = Sha256::new();
+    for file in ordered {
+        hasher.update((file.relative_path.len() as u64).to_be_bytes());
+        hasher.update(file.relative_path.as_bytes());
+        hasher.update(file.bytes.to_be_bytes());
+        hasher.update(file.sha256.as_bytes());
+    }
+    format!("{:x}", hasher.finalize())
+}
+
 fn collect_files(root: &Path, current: &Path, files: &mut Vec<AuthoringFileHash>) -> LabResult<()> {
     let mut entries = fs::read_dir(current)
         .map_err(|error| {
@@ -819,6 +917,7 @@ fn collect_files(root: &Path, current: &Path, files: &mut Vec<AuthoringFileHash>
 #[serde(rename_all = "snake_case")]
 enum TransactionPhase {
     Prepared,
+    Validated,
     OldMoved,
     CandidateMoved,
     Committed,
@@ -830,9 +929,23 @@ struct TransactionJournal {
     phase: TransactionPhase,
     stage_name: String,
     backup_name: String,
+    #[serde(default)]
+    correlation_id: Option<String>,
+    #[serde(default)]
+    draft_id: Option<String>,
+    #[serde(default)]
+    target_label: Option<String>,
+    #[serde(default)]
+    target_fingerprint: Option<String>,
+    #[serde(default)]
+    candidate_tree_sha256: Option<String>,
 }
 
-fn recover_transaction(target_root: &Path, journal_path: &Path) -> LabResult<()> {
+fn recover_transaction(
+    target_root: &Path,
+    journal_path: &Path,
+    recovery: &mut dyn AuthoringRecoveryOracle,
+) -> LabResult<()> {
     if !journal_path.exists() {
         return Ok(());
     }
@@ -844,13 +957,8 @@ fn recover_transaction(target_root: &Path, journal_path: &Path) -> LabResult<()>
             error,
         )
     })?;
-    let journal: TransactionJournal = serde_json::from_slice(&bytes).map_err(|error| {
-        authoring_error(
-            "authoring_journal_corrupt",
-            format!("authoring transaction journal is invalid: {error}"),
-        )
-    })?;
-    if journal.schema_version != 1 {
+    let journal = parse_journal(&bytes)?;
+    if !matches!(journal.schema_version, 1 | 2) {
         return Err(authoring_error(
             "authoring_journal_schema_unsupported",
             format!(
@@ -871,7 +979,7 @@ fn recover_transaction(target_root: &Path, journal_path: &Path) -> LabResult<()>
     let backup_root = parent.join(&journal.backup_name);
 
     match journal.phase {
-        TransactionPhase::Prepared => {
+        TransactionPhase::Prepared | TransactionPhase::Validated => {
             if !target_root.exists() && backup_root.exists() {
                 fs::rename(&backup_root, target_root).map_err(|error| {
                     io_error(
@@ -889,9 +997,53 @@ fn recover_transaction(target_root: &Path, journal_path: &Path) -> LabResult<()>
             }
             remove_tree_if_exists(&stage_root)?;
         }
-        TransactionPhase::OldMoved | TransactionPhase::CandidateMoved => {
+        TransactionPhase::OldMoved => {
             restore_old_tree(target_root, &stage_root, &backup_root, journal_path)?;
             return Ok(());
+        }
+        TransactionPhase::CandidateMoved if journal.schema_version == 1 => {
+            restore_old_tree(target_root, &stage_root, &backup_root, journal_path)?;
+            return Ok(());
+        }
+        TransactionPhase::CandidateMoved => {
+            if !target_root.is_dir() {
+                return Err(authoring_error(
+                    "authoring_recovery_candidate_missing",
+                    "interrupted authoring transaction has no candidate tree",
+                ));
+            }
+            let context = journal.recovery_context()?;
+            let canonical_target = fs::canonicalize(target_root).map_err(|error| {
+                io_error(
+                    "authoring_recovery_target_canonicalize_failed",
+                    "canonicalize interrupted authoring target",
+                    target_root,
+                    error,
+                )
+            })?;
+            if context.target_fingerprint != path_fingerprint(&canonical_target) {
+                return Err(authoring_error(
+                    "authoring_recovery_target_mismatch",
+                    "interrupted authoring journal does not belong to this target tree",
+                ));
+            }
+            let observed_hash = hash_file_manifest(&hash_tree(target_root)?);
+            if observed_hash != context.candidate_tree_sha256 {
+                return Err(authoring_error(
+                    "authoring_recovery_candidate_mismatch",
+                    "interrupted authoring candidate does not match its durable journal digest",
+                ));
+            }
+            match recovery.decide(&context)? {
+                AuthoringRecoveryDecision::CommitCandidate => {
+                    remove_tree_if_exists(&stage_root)?;
+                    remove_tree_if_exists(&backup_root)?;
+                }
+                AuthoringRecoveryDecision::RollbackCandidate => {
+                    restore_old_tree(target_root, &stage_root, &backup_root, journal_path)?;
+                    return Ok(());
+                }
+            }
         }
         TransactionPhase::Committed => {
             if !target_root.is_dir() {
@@ -905,6 +1057,134 @@ fn recover_transaction(target_root: &Path, journal_path: &Path) -> LabResult<()>
         }
     }
     remove_file_if_exists(journal_path)
+}
+
+impl TransactionJournal {
+    fn recovery_context(&self) -> LabResult<AuthoringRecoveryContext> {
+        let required = |name: &'static str, value: &Option<String>| {
+            value.clone().ok_or_else(|| {
+                authoring_error(
+                    "authoring_journal_identity_missing",
+                    format!("authoring transaction journal is missing {name}"),
+                )
+            })
+        };
+        let context = AuthoringRecoveryContext {
+            correlation_id: required("correlation_id", &self.correlation_id)?,
+            draft_id: required("draft_id", &self.draft_id)?,
+            target_label: required("target_label", &self.target_label)?,
+            target_fingerprint: required("target_fingerprint", &self.target_fingerprint)?,
+            candidate_tree_sha256: required("candidate_tree_sha256", &self.candidate_tree_sha256)?,
+        };
+        if context.correlation_id.trim().is_empty()
+            || context.draft_id.trim().is_empty()
+            || context.target_label.trim().is_empty()
+            || context.target_fingerprint.len() != 64
+            || context.candidate_tree_sha256.len() != 64
+            || !context
+                .target_fingerprint
+                .bytes()
+                .chain(context.candidate_tree_sha256.bytes())
+                .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
+        {
+            return Err(authoring_error(
+                "authoring_journal_identity_invalid",
+                "authoring transaction journal contains an invalid digest",
+            ));
+        }
+        Ok(context)
+    }
+}
+
+fn parse_journal(bytes: &[u8]) -> LabResult<TransactionJournal> {
+    if bytes.is_empty() {
+        return Err(authoring_error(
+            "authoring_journal_corrupt",
+            "authoring transaction journal is empty",
+        ));
+    }
+    if !bytes.contains(&b'\n') {
+        return serde_json::from_slice(bytes).map_err(|error| {
+            authoring_error(
+                "authoring_journal_corrupt",
+                format!("authoring transaction journal is invalid: {error}"),
+            )
+        });
+    }
+
+    let complete_len = bytes
+        .iter()
+        .rposition(|byte| *byte == b'\n')
+        .map(|index| index + 1)
+        .unwrap_or(0);
+    let lines = bytes[..complete_len]
+        .split(|byte| *byte == b'\n')
+        .collect::<Vec<_>>();
+    let mut records = Vec::new();
+    for (index, line) in lines.iter().enumerate() {
+        if line.is_empty() {
+            if index + 1 == lines.len() {
+                continue;
+            }
+            return Err(authoring_error(
+                "authoring_journal_corrupt",
+                "authoring transaction journal contains a blank record",
+            ));
+        }
+        let record: TransactionJournal = serde_json::from_slice(line).map_err(|error| {
+            authoring_error(
+                "authoring_journal_corrupt",
+                format!("authoring transaction journal record is invalid: {error}"),
+            )
+        })?;
+        if let Some(previous) = records.last() {
+            validate_journal_transition(previous, &record)?;
+        }
+        records.push(record);
+    }
+    records.pop().ok_or_else(|| {
+        authoring_error(
+            "authoring_journal_corrupt",
+            "authoring transaction journal has no complete record",
+        )
+    })
+}
+
+fn validate_journal_transition(
+    previous: &TransactionJournal,
+    next: &TransactionJournal,
+) -> LabResult<()> {
+    let identity_matches = previous.schema_version == next.schema_version
+        && previous.stage_name == next.stage_name
+        && previous.backup_name == next.backup_name
+        && previous.correlation_id == next.correlation_id
+        && previous.draft_id == next.draft_id
+        && previous.target_label == next.target_label
+        && previous.target_fingerprint == next.target_fingerprint;
+    let phase_advances = matches!(
+        (previous.phase, next.phase),
+        (TransactionPhase::Prepared, TransactionPhase::Validated)
+            | (TransactionPhase::Validated, TransactionPhase::OldMoved)
+            | (TransactionPhase::OldMoved, TransactionPhase::CandidateMoved)
+            | (
+                TransactionPhase::CandidateMoved,
+                TransactionPhase::Committed
+            )
+    );
+    let hash_is_stable = match previous.phase {
+        TransactionPhase::Prepared => {
+            previous.candidate_tree_sha256.is_none() && next.candidate_tree_sha256.is_some()
+        }
+        _ => previous.candidate_tree_sha256 == next.candidate_tree_sha256,
+    };
+    if identity_matches && phase_advances && hash_is_stable {
+        Ok(())
+    } else {
+        Err(authoring_error(
+            "authoring_journal_transition_invalid",
+            "authoring transaction journal history is inconsistent",
+        ))
+    }
 }
 
 fn restore_old_tree(
@@ -963,12 +1243,7 @@ fn rollback_failure(
 }
 
 fn create_journal(path: &Path, journal: &TransactionJournal) -> LabResult<()> {
-    let bytes = serde_json::to_vec(journal).map_err(|error| {
-        authoring_error(
-            "authoring_journal_serialize_failed",
-            format!("failed to serialize authoring transaction journal: {error}"),
-        )
-    })?;
+    let bytes = journal_record_bytes(journal)?;
     let mut file = OpenOptions::new()
         .create_new(true)
         .write(true)
@@ -1000,15 +1275,9 @@ fn create_journal(path: &Path, journal: &TransactionJournal) -> LabResult<()> {
 }
 
 fn write_journal(path: &Path, journal: &TransactionJournal) -> LabResult<()> {
-    let bytes = serde_json::to_vec(journal).map_err(|error| {
-        authoring_error(
-            "authoring_journal_serialize_failed",
-            format!("failed to serialize authoring transaction journal: {error}"),
-        )
-    })?;
+    let bytes = journal_record_bytes(journal)?;
     let mut file = OpenOptions::new()
-        .write(true)
-        .truncate(true)
+        .append(true)
         .open(path)
         .map_err(|error| {
             io_error(
@@ -1034,6 +1303,17 @@ fn write_journal(path: &Path, journal: &TransactionJournal) -> LabResult<()> {
             error,
         )
     })
+}
+
+fn journal_record_bytes(journal: &TransactionJournal) -> LabResult<Vec<u8>> {
+    let mut bytes = serde_json::to_vec(journal).map_err(|error| {
+        authoring_error(
+            "authoring_journal_serialize_failed",
+            format!("failed to serialize authoring transaction journal: {error}"),
+        )
+    })?;
+    bytes.push(b'\n');
+    Ok(bytes)
 }
 
 fn remove_tree_if_exists(path: &Path) -> LabResult<()> {
@@ -1404,12 +1684,15 @@ mod tests {
         fs::create_dir_all(root.join("operations/task-a")).expect("old task");
         fs::write(root.join("operations/task-a/old.txt"), b"old").expect("old file");
         fs::write(temp.path().join("frame.png"), b"png").expect("source");
+        let mut recovery =
+            |_context: &AuthoringRecoveryContext| Ok(AuthoringRecoveryDecision::RollbackCandidate);
         let mut validator = validator();
         let mut sink = |_event: &AuthoringEvent| Ok(());
 
         let error = publish_authoring_draft_inner(
             &request(&root, true),
             &draft(&temp.path().join("frame.png")),
+            &mut recovery,
             &mut validator,
             &mut sink,
             Some(FaultPoint::AfterOldTreeMoved),
@@ -1474,14 +1757,149 @@ mod tests {
                 phase: TransactionPhase::CandidateMoved,
                 stage_name: ".ours.authoring-stage-crash".to_string(),
                 backup_name: ".ours.authoring-backup-crash".to_string(),
+                correlation_id: None,
+                draft_id: None,
+                target_label: None,
+                target_fingerprint: None,
+                candidate_tree_sha256: None,
             },
         )
         .expect("journal");
 
-        recover_transaction(&root, &journal_path).expect("recover");
+        let mut recovery =
+            |_context: &AuthoringRecoveryContext| Ok(AuthoringRecoveryDecision::RollbackCandidate);
+        recover_transaction(&root, &journal_path, &mut recovery).expect("recover");
 
         assert!(root.join("operations/task-a/old.txt").is_file());
         assert!(!root.join("operations/task-a/task.json").exists());
+        assert!(!backup.exists());
+        assert!(!journal_path.exists());
+    }
+
+    fn install_candidate_moved_v2_transaction(
+        temp: &Path,
+        root: &Path,
+    ) -> (PathBuf, PathBuf, AuthoringRecoveryContext) {
+        let stage_name = ".ours.authoring-stage-v2";
+        let backup_name = ".ours.authoring-backup-v2";
+        let stage = temp.join(stage_name);
+        let backup = temp.join(backup_name);
+        fs::create_dir_all(stage.join("operations/task-a")).expect("candidate tree");
+        fs::write(stage.join("operations/task-a/task.json"), b"new").expect("candidate file");
+        let canonical = fs::canonicalize(root).expect("canonical target");
+        let journal_path = temp.join(transaction_journal_name(&canonical));
+        fs::rename(root, &backup).expect("move old tree");
+        fs::rename(&stage, root).expect("move candidate tree");
+        let mut journal = TransactionJournal {
+            schema_version: 2,
+            phase: TransactionPhase::Prepared,
+            stage_name: stage_name.to_string(),
+            backup_name: backup_name.to_string(),
+            correlation_id: Some("correlation_test".to_string()),
+            draft_id: Some("draft-test".to_string()),
+            target_label: Some("test-resource-root".to_string()),
+            target_fingerprint: Some(path_fingerprint(&canonical)),
+            candidate_tree_sha256: None,
+        };
+        create_journal(&journal_path, &journal).expect("prepared journal");
+        journal.phase = TransactionPhase::Validated;
+        journal.candidate_tree_sha256 = Some(hash_file_manifest(
+            &hash_tree(root).expect("candidate hashes"),
+        ));
+        write_journal(&journal_path, &journal).expect("validated journal");
+        journal.phase = TransactionPhase::OldMoved;
+        write_journal(&journal_path, &journal).expect("old-moved journal");
+        journal.phase = TransactionPhase::CandidateMoved;
+        write_journal(&journal_path, &journal).expect("candidate-moved journal");
+        let context = journal.recovery_context().expect("recovery context");
+        (backup, journal_path, context)
+    }
+
+    #[test]
+    fn durable_promoted_recovery_commits_candidate_instead_of_rolling_back() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let root = temp.path().join("ours");
+        fs::create_dir_all(root.join("operations/task-a")).expect("old tree");
+        fs::write(root.join("operations/task-a/old.txt"), b"old").expect("old file");
+        let (backup, journal_path, expected) =
+            install_candidate_moved_v2_transaction(temp.path(), &root);
+        let mut recovery = |context: &AuthoringRecoveryContext| {
+            assert_eq!(context, &expected);
+            Ok(AuthoringRecoveryDecision::CommitCandidate)
+        };
+
+        recover_transaction(&root, &journal_path, &mut recovery).expect("commit recovery");
+
+        assert_eq!(
+            fs::read(root.join("operations/task-a/task.json")).expect("candidate"),
+            b"new"
+        );
+        assert!(!root.join("operations/task-a/old.txt").exists());
+        assert!(!backup.exists());
+        assert!(!journal_path.exists());
+    }
+
+    #[test]
+    fn nonterminal_recovery_rolls_back_candidate_to_the_old_tree() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let root = temp.path().join("ours");
+        fs::create_dir_all(root.join("operations/task-a")).expect("old tree");
+        fs::write(root.join("operations/task-a/old.txt"), b"old").expect("old file");
+        let (backup, journal_path, _) = install_candidate_moved_v2_transaction(temp.path(), &root);
+        let mut recovery =
+            |_context: &AuthoringRecoveryContext| Ok(AuthoringRecoveryDecision::RollbackCandidate);
+
+        recover_transaction(&root, &journal_path, &mut recovery).expect("rollback recovery");
+
+        assert!(root.join("operations/task-a/old.txt").is_file());
+        assert!(!root.join("operations/task-a/task.json").exists());
+        assert!(!backup.exists());
+        assert!(!journal_path.exists());
+    }
+
+    #[test]
+    fn recovery_rejects_a_candidate_that_changed_after_the_durable_journal() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let root = temp.path().join("ours");
+        fs::create_dir_all(root.join("operations/task-a")).expect("old tree");
+        fs::write(root.join("operations/task-a/old.txt"), b"old").expect("old file");
+        let (backup, journal_path, _) = install_candidate_moved_v2_transaction(temp.path(), &root);
+        fs::write(root.join("operations/task-a/task.json"), b"tampered").expect("tamper candidate");
+        let mut recovery = |_context: &AuthoringRecoveryContext| -> LabResult<_> {
+            panic!("digest mismatch must be rejected before asking the oracle")
+        };
+
+        let error = recover_transaction(&root, &journal_path, &mut recovery)
+            .expect_err("candidate mismatch");
+
+        assert_eq!(error.code, "authoring_recovery_candidate_mismatch");
+        assert_eq!(
+            fs::read(root.join("operations/task-a/task.json")).expect("candidate retained"),
+            b"tampered"
+        );
+        assert!(backup.join("operations/task-a/old.txt").is_file());
+        assert!(journal_path.is_file());
+    }
+
+    #[test]
+    fn partial_final_journal_record_recovers_from_the_last_durable_phase() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let root = temp.path().join("ours");
+        fs::create_dir_all(root.join("operations/task-a")).expect("old tree");
+        fs::write(root.join("operations/task-a/old.txt"), b"old").expect("old file");
+        let (backup, journal_path, _) = install_candidate_moved_v2_transaction(temp.path(), &root);
+        OpenOptions::new()
+            .append(true)
+            .open(&journal_path)
+            .expect("journal append")
+            .write_all(b"{partial")
+            .expect("partial tail");
+        let mut recovery =
+            |_context: &AuthoringRecoveryContext| Ok(AuthoringRecoveryDecision::CommitCandidate);
+
+        recover_transaction(&root, &journal_path, &mut recovery).expect("tail recovery");
+
+        assert!(root.join("operations/task-a/task.json").is_file());
         assert!(!backup.exists());
         assert!(!journal_path.exists());
     }
