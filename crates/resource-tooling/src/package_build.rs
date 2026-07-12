@@ -120,7 +120,7 @@ impl PreparedPackageBuildTask {
     }
 
     pub fn required_environment_keys(&self) -> CliOutcome<Vec<String>> {
-        let mut keys = required_environment_keys(&self.outputs.pack)?;
+        let mut keys = generated_output_environment_keys(&self.outputs)?;
         keys.extend(selected_operation_environment_keys(
             &self.converter,
             &self.task_ids,
@@ -132,7 +132,7 @@ impl PreparedPackageBuildTask {
         mut self,
         environment: &AuthoringEnvironmentSnapshot,
     ) -> CliOutcome<PackageBuildTaskResponse> {
-        environment.apply(&mut self.outputs.pack)?;
+        apply_environment_to_outputs(environment, &mut self.outputs)?;
         let mut entries = PackageEntries::default();
         entries.add_json(
             "control.json",
@@ -243,19 +243,25 @@ impl PackageBuildCatalog {
 
     pub fn task_environment_keys(&self, task_id: &str) -> CliOutcome<Vec<String>> {
         find_bundle(&self.converter, task_id)?;
-        Ok(
-            selected_operation_environment_keys(&self.converter, &[task_id.to_string()])?
-                .into_iter()
-                .collect(),
-        )
+        let task_ids = [task_id.to_string()];
+        let outputs = self.converter.build_selected(&task_ids)?;
+        let mut keys = generated_output_environment_keys(&outputs)?;
+        keys.extend(selected_operation_environment_keys(
+            &self.converter,
+            &task_ids,
+        )?);
+        Ok(keys.into_iter().collect())
     }
 
     pub fn full_environment_keys(&self) -> CliOutcome<Vec<String>> {
-        Ok(
-            selected_operation_environment_keys(&self.converter, &self.task_ids())?
-                .into_iter()
-                .collect(),
-        )
+        let task_ids = self.task_ids();
+        let outputs = self.converter.build_all()?;
+        let mut keys = generated_output_environment_keys(&outputs)?;
+        keys.extend(selected_operation_environment_keys(
+            &self.converter,
+            &task_ids,
+        )?);
+        Ok(keys.into_iter().collect())
     }
 
     pub fn build_task_archive(
@@ -273,7 +279,8 @@ impl PackageBuildCatalog {
             env: _,
         } = request;
         let task_ids = vec![task_id.clone()];
-        let outputs = self.converter.build_selected(&task_ids)?;
+        let mut outputs = self.converter.build_selected(&task_ids)?;
+        apply_environment_to_outputs(environment, &mut outputs)?;
         let bundle = find_bundle(&self.converter, &task_id)?;
         let resolution = parse_resolution(resolution, bundle)?;
         validate_execution_mode(&execution_mode)?;
@@ -326,7 +333,8 @@ impl PackageBuildCatalog {
         let entry_bundle = find_bundle(&self.converter, &entry_task_id)?;
         let resolution = parse_resolution(resolution, entry_bundle)?;
         validate_execution_mode(&execution_mode)?;
-        let outputs = self.converter.build_all()?;
+        let mut outputs = self.converter.build_all()?;
+        apply_environment_to_outputs(environment, &mut outputs)?;
         let task_ids = self.task_ids();
         let mut entries = PackageEntries::default();
         entries.add_json(
@@ -355,6 +363,7 @@ impl PackageBuildCatalog {
             &task_ids,
         )?;
         add_generated_outputs(&mut entries, &self.converter, &outputs)?;
+        add_recognition_target_assets(&mut entries, &self.resource_root, &outputs.pack)?;
         entries.add_manifest(&entry_task_id)?;
         Ok(write_and_validate_package(&out, entries, dry_run)?.validation)
     }
@@ -549,6 +558,36 @@ fn selected_operation_environment_keys(
     Ok(keys)
 }
 
+fn generated_output_environment_keys(outputs: &ConvertOutputs) -> CliOutcome<BTreeSet<String>> {
+    let mut keys = BTreeSet::new();
+    for output in [
+        &outputs.pack,
+        &outputs.pages,
+        &outputs.navigation,
+        &outputs.index,
+        &outputs.primitives,
+    ] {
+        keys.extend(required_environment_keys(output)?);
+    }
+    Ok(keys)
+}
+
+fn apply_environment_to_outputs(
+    environment: &AuthoringEnvironmentSnapshot,
+    outputs: &mut ConvertOutputs,
+) -> CliOutcome<()> {
+    for output in [
+        &mut outputs.pack,
+        &mut outputs.pages,
+        &mut outputs.navigation,
+        &mut outputs.index,
+        &mut outputs.primitives,
+    ] {
+        environment.apply(output)?;
+    }
+    Ok(())
+}
+
 fn add_selected_operations(
     entries: &mut PackageEntries,
     environment: &AuthoringEnvironmentSnapshot,
@@ -558,11 +597,13 @@ fn add_selected_operations(
 ) -> CliOutcome<()> {
     for bundle in &converter.bundles {
         if task_ids.iter().any(|task_id| task_id == &bundle.task_id) {
+            let canonical_task = converter.canonical_task(&bundle.task_id)?;
             entries.add_operation_dir(
                 environment,
                 &bundle.dir,
                 &format!("resources/operations/{}", bundle.task_id),
                 resource_root,
+                &canonical_task,
             )?;
         }
     }
@@ -647,11 +688,12 @@ impl PackageEntries {
         source_dir: &Path,
         zip_prefix: &str,
         resource_root: &Path,
+        canonical_task: &Value,
     ) -> CliOutcome<()> {
         for path in collect_files(source_dir)? {
             let rel = relative_slash(source_dir, &path)?;
             if rel == "task.json" {
-                let mut task = read_json_value(&path)?;
+                let mut task = canonical_task.clone();
                 environment.apply(&mut task)?;
                 self.add_root_relative_operation_assets(&task, resource_root)?;
                 self.add_json(&format!("{zip_prefix}/{rel}"), task)?;
@@ -2289,16 +2331,7 @@ mod tests {
         let out = temp.path().join("resolved.zip");
         let prepared = prepare_package_build_task(build_task_request(repo, out.clone()))
             .expect("prepare resolved snapshot");
-        let environment =
-            AuthoringEnvironmentSnapshot::from_resolved([actingcommand_contract::EnvResolved {
-                key: "server".to_string(),
-                value: "cn".to_string(),
-                confidence: 1.0,
-                source: "sealed".to_string(),
-                detector_id: "test".to_string(),
-                source_result: "test@1".to_string(),
-            }])
-            .expect("environment snapshot");
+        let environment = environment_snapshot("server", "cn");
         prepared.build(&environment).expect("resolved build");
 
         let entries = read_zip_entries(&out);
@@ -2309,6 +2342,19 @@ mod tests {
         )
         .expect("task json");
         assert_eq!(task["goal"], "operator-cn");
+        let index: Value = serde_json::from_slice(
+            entries
+                .get("resources/operations/operations.index.json")
+                .expect("operation index"),
+        )
+        .expect("index json");
+        let operator = index["operations"]
+            .as_array()
+            .expect("index operations")
+            .iter()
+            .find(|entry| entry["task_id"] == "operator_task")
+            .expect("operator index");
+        assert_eq!(operator["goal"], "operator-cn");
     }
 
     #[test]
@@ -2316,12 +2362,75 @@ mod tests {
         let temp = TempDir::new().expect("temp");
         let repo = temp.path().join("repo");
         write_fixture_repo(&repo);
+        update_fixture_operation(&repo, |operation| {
+            operation["goal"] = json!("operator-{env:server}");
+        });
         let out = temp.path().join("full.zip");
         let catalog = PackageBuildCatalog::open(build_catalog_request(
             repo,
             temp.path().join("remote-source"),
         ))
         .unwrap();
+        assert_eq!(
+            catalog.full_environment_keys().expect("environment keys"),
+            vec!["server".to_string()]
+        );
+
+        catalog
+            .build_full_archive(
+                &environment_snapshot("server", "cn"),
+                PackageFullArchiveRequest {
+                    entry_task_id: "operator_task".to_string(),
+                    package_id: "arknights.cn.full".to_string(),
+                    execution_mode: "recognize_only".to_string(),
+                    resolution: None,
+                    out: out.clone(),
+                    dry_run: false,
+                    env: PackageEnvOptions::default(),
+                },
+            )
+            .unwrap();
+        assert!(out.is_file());
+        let entries = read_zip_entries(&out);
+        let task: Value = serde_json::from_slice(
+            entries
+                .get("resources/operations/operator_task/task.json")
+                .expect("operation task"),
+        )
+        .expect("task json");
+        assert_eq!(task["goal"], "operator-cn");
+        let index: Value = serde_json::from_slice(
+            entries
+                .get("resources/operations/operations.index.json")
+                .expect("operation index"),
+        )
+        .expect("index json");
+        assert!(
+            index["operations"]
+                .as_array()
+                .expect("index operations")
+                .iter()
+                .any(|entry| entry["task_id"] == "operator_task" && entry["goal"] == "operator-cn")
+        );
+    }
+
+    #[test]
+    fn catalog_packages_converter_synthesized_guards_without_mutating_source() {
+        let temp = TempDir::new().expect("temp");
+        let repo = temp.path().join("repo");
+        write_fixture_repo(&repo);
+        update_fixture_operation(&repo, |task| {
+            task["operations"][1]
+                .as_object_mut()
+                .expect("operation object")
+                .remove("guard");
+        });
+        let out = temp.path().join("canonical-guard.zip");
+        let catalog = PackageBuildCatalog::open(build_catalog_request(
+            repo.clone(),
+            temp.path().join("remote-source"),
+        ))
+        .expect("catalog");
 
         catalog
             .build_full_archive(
@@ -2336,8 +2445,55 @@ mod tests {
                     env: PackageEnvOptions::default(),
                 },
             )
-            .unwrap();
-        assert!(out.is_file());
+            .expect("full archive");
+
+        let source: Value = serde_json::from_slice(
+            &fs::read(repo.join("operations/operator_task/task.json")).expect("source task"),
+        )
+        .expect("source JSON");
+        assert!(source["operations"][1].get("guard").is_none());
+        let entries = read_zip_entries(&out);
+        let packaged: Value = serde_json::from_slice(
+            entries
+                .get("resources/operations/operator_task/task.json")
+                .expect("packaged task"),
+        )
+        .expect("packaged JSON");
+        assert_eq!(packaged["operations"][1]["guard"]["target_id"], "page/mall");
+        assert_eq!(
+            packaged["operations"][1]["guard"]["verify_template"],
+            "assets/MALL.png"
+        );
+    }
+
+    #[test]
+    fn generated_environment_snapshot_covers_every_output_document() {
+        let mut outputs = ConvertOutputs {
+            pack: json!({"value": "{env:theme}"}),
+            pages: json!({"value": "{env:theme}"}),
+            navigation: json!({"value": "{env:theme}"}),
+            index: json!({"value": "{env:theme}"}),
+            primitives: json!({"value": "{env:theme}"}),
+        };
+        assert_eq!(
+            generated_output_environment_keys(&outputs)
+                .expect("generated environment keys")
+                .into_iter()
+                .collect::<Vec<_>>(),
+            vec!["theme".to_string()]
+        );
+
+        apply_environment_to_outputs(&environment_snapshot("theme", "Siege"), &mut outputs)
+            .expect("apply environment");
+        for output in [
+            outputs.pack,
+            outputs.pages,
+            outputs.navigation,
+            outputs.index,
+            outputs.primitives,
+        ] {
+            assert_eq!(output["value"], "Siege");
+        }
     }
 
     #[test]
@@ -2497,6 +2653,18 @@ mod tests {
         let mut operation: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
         update(&mut operation);
         fs::write(path, serde_json::to_string_pretty(&operation).unwrap()).unwrap();
+    }
+
+    fn environment_snapshot(key: &str, value: &str) -> AuthoringEnvironmentSnapshot {
+        AuthoringEnvironmentSnapshot::from_resolved([actingcommand_contract::EnvResolved {
+            key: key.to_string(),
+            value: value.to_string(),
+            confidence: 1.0,
+            source: "sealed".to_string(),
+            detector_id: "test".to_string(),
+            source_result: "test@1".to_string(),
+        }])
+        .expect("environment snapshot")
     }
 
     fn add_recruit_fixture(root: &Path) {

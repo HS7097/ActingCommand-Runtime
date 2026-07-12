@@ -351,6 +351,41 @@ impl OperationConverter {
         subset.build_all()
     }
 
+    pub(crate) fn canonical_task(&self, task_id: &str) -> CliOutcome<Value> {
+        let bundle = self
+            .bundles
+            .iter()
+            .find(|bundle| bundle.task_id == task_id)
+            .ok_or_else(|| {
+                CliError::package_invalid(format!("missing task operations/{task_id}/task.json"))
+            })?;
+        let mut task = bundle.data.clone();
+        let operations = task
+            .get_mut("operations")
+            .and_then(Value::as_array_mut)
+            .ok_or_else(|| {
+                CliError::package_invalid(format!("task '{task_id}' operations must be an array"))
+            })?;
+        for operation in operations {
+            let guard = self.operation_guard(bundle, operation)?;
+            let click = self.operation_click(bundle, operation, &guard)?;
+            let trusted_coordinate = operation
+                .get("unguarded_trusted_coordinate")
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
+            let object = operation.as_object_mut().ok_or_else(|| {
+                CliError::package_invalid(format!("task '{task_id}' operation must be an object"))
+            })?;
+            object.insert("click".to_string(), click);
+            object.insert("guard".to_string(), guard);
+            object.insert(
+                "unguarded_trusted_coordinate".to_string(),
+                Value::Bool(trusted_coordinate),
+            );
+        }
+        Ok(task)
+    }
+
     fn prune_page_rules_for_selected_build(&self, bundles: Vec<Bundle>) -> Vec<Bundle> {
         let available_pages = selected_available_page_ids(&self.game, &bundles);
         let available_targets = selected_available_target_ids(&bundles);
