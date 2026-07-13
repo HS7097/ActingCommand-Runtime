@@ -238,6 +238,118 @@ fn normalizer_replaces_only_dynamic_protocol_fields() {
     assert_eq!(value["confidence"], 0.9876543);
 }
 
+#[test]
+fn normalizer_stabilizes_localized_os_error_text() {
+    let temp = TempDir::new().expect("temp");
+    let missing = temp.path().join("missing.png");
+    let mut chinese = json!({
+        "error": {
+            "code": "device_error",
+            "message": format!(
+                "failed to read {}: 系统找不到指定的文件。 (os error 2)",
+                missing.display()
+            )
+        }
+    });
+    let mut english = json!({
+        "error": {
+            "code": "device_error",
+            "message": format!(
+                "failed to read {}: The system cannot find the file specified. (os error 2)",
+                missing.display()
+            )
+        }
+    });
+
+    normalize_value(&mut chinese, temp.path(), None);
+    normalize_value(&mut english, temp.path(), None);
+
+    assert_eq!(chinese, english);
+    assert_eq!(chinese["error"]["code"], "device_error");
+    assert_eq!(
+        chinese["error"]["message"],
+        format!(
+            "failed to read {}: <OS_ERROR_TEXT> (os error 2)",
+            Path::new("<PATH>").join("missing.png").display()
+        )
+    );
+
+    let mut context_only = "operation failed: localized text (os error 5)".to_string();
+    normalize_string(&mut context_only, temp.path(), Some("message"));
+    assert_eq!(
+        context_only,
+        "operation failed: <OS_ERROR_TEXT> (os error 5)"
+    );
+}
+
+#[test]
+fn os_error_normalizer_preserves_semantic_differences() {
+    let temp = TempDir::new().expect("temp");
+    let normalize = |message: String| {
+        let mut message = message;
+        normalize_string(&mut message, temp.path(), Some("message"));
+        message
+    };
+    let missing = temp.path().join("missing.png");
+    let other = temp.path().join("other.png");
+    let baseline = normalize(format!(
+        "failed to read {}: localized text (os error 2)",
+        missing.display()
+    ));
+
+    assert_eq!(
+        baseline,
+        normalize(format!(
+            "failed to read {}: localized: text (os error 2)",
+            missing.display()
+        ))
+    );
+    assert_ne!(
+        baseline,
+        normalize(format!(
+            "failed to read {}: localized text (os error 3)",
+            missing.display()
+        ))
+    );
+    assert_ne!(
+        baseline,
+        normalize(format!(
+            "failed to read {}: localized text (os error 2)",
+            other.display()
+        ))
+    );
+    assert_ne!(
+        baseline,
+        normalize(format!(
+            "failed to open {}: localized text (os error 2)",
+            missing.display()
+        ))
+    );
+}
+
+#[test]
+fn os_error_normalizer_leaves_non_matching_text_unchanged() {
+    let temp = TempDir::new().expect("temp");
+    let samples = [
+        "failed to read <PATH>\\missing.png: localized text (os error 2) trailing",
+        "failed to read <PATH>\\missing.png: localized text (os error two)",
+        "localized text (os error 2)",
+        "failed to read <PATH>\\missing.png:  (os error 2)",
+    ];
+
+    for sample in samples {
+        let mut message = sample.to_string();
+        normalize_string(&mut message, temp.path(), Some("message"));
+        assert_eq!(message, sample);
+    }
+
+    let mut non_message =
+        "failed to read <PATH>\\missing.png: localized text (os error 2)".to_string();
+    let original = non_message.clone();
+    normalize_string(&mut non_message, temp.path(), Some("diagnostic"));
+    assert_eq!(non_message, original);
+}
+
 fn capture_cases() -> Vec<GoldenCase> {
     CASES
         .iter()
@@ -454,9 +566,47 @@ fn normalize_string(text: &mut String, root: &Path, key: Option<&str>) {
         .replace(&slash_root, "<PATH>");
     if key == Some("message") {
         replace_embedded_sha256(text);
+        normalize_localized_os_error(text);
     }
     replace_embedded_instance_id(text);
     replace_embedded_artifact_id(text);
+}
+
+fn normalize_localized_os_error(text: &mut String) {
+    const SUFFIX_PREFIX: &str = " (os error ";
+
+    let Some(suffix_start) = text.rfind(SUFFIX_PREFIX) else {
+        return;
+    };
+    if !text.ends_with(')') {
+        return;
+    }
+
+    let code_start = suffix_start + SUFFIX_PREFIX.len();
+    let code = &text[code_start..text.len() - 1];
+    if code.is_empty() || !code.bytes().all(|byte| byte.is_ascii_digit()) {
+        return;
+    }
+
+    let prefix = &text[..suffix_start];
+    let delimiter_start = if let Some(path_start) = prefix.find("<PATH>") {
+        let search_start = path_start + "<PATH>".len();
+        prefix[search_start..]
+            .find(": ")
+            .map(|offset| search_start + offset)
+    } else {
+        prefix.rfind(": ")
+    };
+    let Some(delimiter_start) = delimiter_start else {
+        return;
+    };
+    let context = &prefix[..delimiter_start];
+    let localized_text = &prefix[delimiter_start + 2..];
+    if localized_text.is_empty() {
+        return;
+    }
+
+    *text = format!("{context}: <OS_ERROR_TEXT> (os error {code})");
 }
 
 fn replace_embedded_sha256(text: &mut String) {

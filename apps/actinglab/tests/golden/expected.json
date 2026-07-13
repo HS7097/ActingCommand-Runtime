@@ -237,7 +237,7 @@
           "device"
         ],
         "code": "device_error",
-        "message": "failed to read <PATH>\\missing.png: 系统找不到指定的文件。 (os error 2)"
+        "message": "failed to read <PATH>\\missing.png: <OS_ERROR_TEXT> (os error 2)"
       },
       "ok": false,
       "runtime_version": "runtime-embedded-p1g",
@@ -2114,7 +2114,7 @@
           "device"
         ],
         "code": "device_error",
-        "message": "failed to read <PATH>\\missing.png: 系统找不到指定的文件。 (os error 2)"
+        "message": "failed to read <PATH>\\missing.png: <OS_ERROR_TEXT> (os error 2)"
       },
       "ok": false,
       "runtime_version": "runtime-embedded-p1g",
