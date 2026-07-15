@@ -38,7 +38,11 @@ graph TD
   fut -.-> host
   host --> sched --> kernel --> dev --> emu
   res --> contain --> kernel
-  kernel --> ledger
+  host -->|唯一写入闸口:收据 · 拒绝 · 调试动词| ledger
+  sched -->|准入 · 租约全生命周期 · fencing| ledger
+  kernel -->|执行 · 应用生命周期 · 恢复| ledger
+  dev -->|输入 · 截图 · 识别| ledger
+  contain -->|资源制作 · 验证 · 发布| ledger
   ledger -.->|投影 / 订阅| clients
   kernel --- store
 ```
