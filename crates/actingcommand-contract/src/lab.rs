@@ -229,6 +229,25 @@ pub struct NeedsDetection {
     pub recommended_action: String,
 }
 
+impl NeedsDetection {
+    /// Builds a client request for detection without claiming authoritative environment facts.
+    pub fn unresolved_environment(
+        command: impl Into<String>,
+        reason: impl Into<String>,
+        subject: impl Into<String>,
+    ) -> Self {
+        Self {
+            status: "needs_detection".to_string(),
+            reason: reason.into(),
+            command: Some(command.into()),
+            subject: Some(subject.into()),
+            detector_ids: Vec::new(),
+            keys: Vec::new(),
+            recommended_action: "run_detect".to_string(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum DriveStage {
@@ -349,6 +368,27 @@ mod tests {
         assert_eq!(
             serde_json::to_value(DriveStage::EnvNeedsDetection).expect("stage"),
             "env_needs_detection"
+        );
+    }
+
+    #[test]
+    fn unresolved_environment_request_does_not_publish_facts() {
+        assert_eq!(
+            serde_json::to_value(NeedsDetection::unresolved_environment(
+                "do",
+                "resource_drift",
+                "home_button"
+            ))
+            .expect("needs detection"),
+            json!({
+                "status": "needs_detection",
+                "reason": "resource_drift",
+                "command": "do",
+                "subject": "home_button",
+                "detector_ids": [],
+                "keys": [],
+                "recommended_action": "run_detect"
+            })
         );
     }
 }

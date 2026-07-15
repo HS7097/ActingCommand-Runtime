@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 use actingcommand_contract::{
-    CorrelationId, EffectDisposition, EventQuery, InputAction, ProjectionProfile,
+    CorrelationId, EffectDisposition, EventQuery, InputAction, NeedsDetection, ProjectionProfile,
     RuntimeDebugEvent, RuntimeDebugOperation, RuntimeResult,
 };
 use actingcommand_ledger::{
@@ -186,7 +186,12 @@ fn run_runtime_do(
                 "error": "resource_drift",
                 "state": before.page,
                 "hint": "observe-current-page-and-refresh-resource-or-target",
-                "suspicion": guard_reject_suspicion(target, &evaluation.message)
+                "suspicion": guard_reject_suspicion(target, &evaluation.message),
+                "needs_detection": NeedsDetection::unresolved_environment(
+                    "do",
+                    "resource_drift",
+                    target,
+                )
             })));
         }
         let click = evaluator

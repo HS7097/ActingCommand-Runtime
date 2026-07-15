@@ -26,6 +26,9 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
+mod lock;
+use lock::EnvResultLock;
+
 const ENV_DETECTION_DIR: &str = "env-detection";
 const ENV_DETECTION_CATALOG: &str = "detections.json";
 const ENV_DETECTION_RESULT: &str = "result.json";
@@ -1162,69 +1165,15 @@ fn load_env_result(path: &Path) -> EnvResult<EnvDetectionResult> {
 
 fn write_env_result(path: &Path, result: &EnvDetectionResult) -> EnvResult<()> {
     let lock = EnvResultLock::acquire(path)?;
-    write_json_file_atomic(path, result)?;
-    lock.release()
-}
-
-#[derive(Debug)]
-struct EnvResultLock {
-    path: PathBuf,
-    released: bool,
-}
-
-impl EnvResultLock {
-    fn acquire(result_path: &Path) -> EnvResult<Self> {
-        let lock_path = result_path.with_extension("json.lock");
-        if let Some(parent) = lock_path.parent() {
-            fs::create_dir_all(parent).map_err(|err| {
-                LabError::usage(format!("failed to create {}: {err}", parent.display()))
-            })?;
-        }
-        match OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&lock_path)
-        {
-            Ok(mut file) => {
-                file.write_all(format!("pid={}\n", std::process::id()).as_bytes())
-                    .map_err(|err| {
-                        LabError::usage(format!("failed to write {}: {err}", lock_path.display()))
-                    })?;
-                file.sync_all().map_err(|err| {
-                    LabError::usage(format!("failed to sync {}: {err}", lock_path.display()))
-                })?;
-                Ok(Self {
-                    path: lock_path,
-                    released: false,
-                })
-            }
-            Err(err) if err.kind() == io::ErrorKind::AlreadyExists => Err(LabError::usage(
-                "env detection result lock conflict; another detection writer is active",
-            )),
-            Err(err) => Err(LabError::usage(format!(
-                "failed to create env detection result lock {}: {err}",
-                lock_path.display()
-            ))),
-        }
-    }
-
-    fn release(mut self) -> EnvResult<()> {
-        fs::remove_file(&self.path).map_err(|err| {
-            LabError::usage(format!(
-                "failed to release env detection lock {}: {err}",
-                self.path.display()
-            ))
-        })?;
-        self.released = true;
-        Ok(())
-    }
-}
-
-impl Drop for EnvResultLock {
-    fn drop(&mut self) {
-        if !self.released {
-            let _ = fs::remove_file(&self.path);
-        }
+    let write = write_json_file_atomic(path, result);
+    let release = lock.release();
+    match (write, release) {
+        (Ok(()), Ok(())) => Ok(()),
+        (Err(error), Ok(())) | (Ok(()), Err(error)) => Err(error),
+        (Err(error), Err(release_error)) => Err(LabError::usage(format!(
+            "{}; env detection lock release also failed: {}",
+            error.message, release_error.message
+        ))),
     }
 }
 
