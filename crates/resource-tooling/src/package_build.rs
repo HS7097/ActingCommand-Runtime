@@ -6,9 +6,10 @@ use crate::resource_convert::{
 };
 use crate::{
     LabPackageControlResponse, LabPackageResourcesResponse, LabPackageValidationResponse,
-    PackageBuildCatalogMetadata, PackageBuildCatalogRequest, PackageBuildTaskRequest,
-    PackageBuildTaskResponse, PackageFullArchiveRequest, PackageResolution, PackageSource,
-    PackageTaskArchiveRequest, UnsupportedRecognitionTargetResponse,
+    PACKAGE_COMPRESSOR_INPUT_BUFFER_BYTES, PackageBuildCatalogMetadata, PackageBuildCatalogRequest,
+    PackageBuildTaskRequest, PackageBuildTaskResponse, PackageFullArchiveRequest,
+    PackageResolution, PackageSource, PackageTaskArchiveRequest,
+    UnsupportedRecognitionTargetResponse,
 };
 use actingcommand_contract::{LabError as CliError, LabResult as CliOutcome};
 use actingcommand_pack_containment::{Containment, ContainmentError, InstanceId, Sha256Hash};
@@ -20,7 +21,7 @@ use serde_json::{Map, Value};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self, File};
-use std::io::{self, Write};
+use std::io::{self, Read, Write};
 use std::path::{Component, Path, PathBuf};
 use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -49,6 +50,7 @@ pub struct PreparedPackageBuildTask {
     execution_mode: String,
     out: PathBuf,
     dry_run: bool,
+    max_buffered_payload_bytes: usize,
 }
 
 /// Loads and validates package inputs without reading Lab or live Runtime state.
@@ -68,8 +70,10 @@ pub fn prepare_package_build_task(
         include_recovery,
         out,
         dry_run,
+        max_buffered_payload_bytes,
         env: _,
     } = request;
+    validate_max_buffered_payload_bytes(max_buffered_payload_bytes)?;
     let source = ResolvedRepo::from_source(source, &temporary_root)?;
     let repo = source.path().to_path_buf();
     let resource_root = resolve_package_resource_root(&repo)?;
@@ -111,6 +115,7 @@ pub fn prepare_package_build_task(
         execution_mode,
         out,
         dry_run,
+        max_buffered_payload_bytes,
     })
 }
 
@@ -133,7 +138,8 @@ impl PreparedPackageBuildTask {
         environment: &AuthoringEnvironmentSnapshot,
     ) -> CliOutcome<PackageBuildTaskResponse> {
         apply_environment_to_outputs(environment, &mut self.outputs)?;
-        let mut entries = PackageEntries::new(&self.resource_root);
+        let mut entries =
+            PackageEntries::new(&self.resource_root, self.max_buffered_payload_bytes)?;
         entries.add_json(
             "control.json",
             control_json(
@@ -192,10 +198,12 @@ pub struct PackageBuildCatalog {
     resource_root: PathBuf,
     resource_layout: String,
     converter: OperationConverter,
+    max_buffered_payload_bytes: usize,
 }
 
 impl PackageBuildCatalog {
     pub fn open(request: PackageBuildCatalogRequest) -> CliOutcome<Self> {
+        validate_max_buffered_payload_bytes(request.max_buffered_payload_bytes)?;
         let source = ResolvedRepo::from_source(request.source, &request.temporary_root)?;
         let repo = source.path().to_path_buf();
         let resource_root = resolve_package_resource_root(&repo)?;
@@ -211,6 +219,7 @@ impl PackageBuildCatalog {
             resource_root: resource_root.root,
             resource_layout: resource_root.layout.to_string(),
             converter,
+            max_buffered_payload_bytes: request.max_buffered_payload_bytes,
         })
     }
 
@@ -284,7 +293,8 @@ impl PackageBuildCatalog {
         let bundle = find_bundle(&self.converter, &task_id)?;
         let resolution = parse_resolution(resolution, bundle)?;
         validate_execution_mode(&execution_mode)?;
-        let mut entries = PackageEntries::new(&self.resource_root);
+        let mut entries =
+            PackageEntries::new(&self.resource_root, self.max_buffered_payload_bytes)?;
         entries.add_json(
             "control.json",
             control_json(
@@ -336,7 +346,8 @@ impl PackageBuildCatalog {
         let mut outputs = self.converter.build_all()?;
         apply_environment_to_outputs(environment, &mut outputs)?;
         let task_ids = self.task_ids();
-        let mut entries = PackageEntries::new(&self.resource_root);
+        let mut entries =
+            PackageEntries::new(&self.resource_root, self.max_buffered_payload_bytes)?;
         entries.add_json(
             "control.json",
             control_json(
@@ -661,30 +672,161 @@ fn add_recognition_target_assets(
     Ok(())
 }
 
+enum PackagePayload {
+    Buffered {
+        bytes: Vec<u8>,
+        sha256: String,
+    },
+    SourceFile {
+        source: PathBuf,
+        expected_len: u64,
+        sha256: String,
+    },
+}
+
+impl PackagePayload {
+    fn sha256(&self) -> &str {
+        match self {
+            Self::Buffered { sha256, .. } | Self::SourceFile { sha256, .. } => sha256,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+struct PackagePayloadStats {
+    logical_payload_bytes: u64,
+    buffered_payload_bytes: usize,
+    peak_buffered_payload_bytes: usize,
+    peak_streamed_payload_bytes: usize,
+    peak_resident_payload_bytes: usize,
+}
+
+impl PackagePayloadStats {
+    fn add_logical(&mut self, bytes: u64) -> CliOutcome<()> {
+        self.logical_payload_bytes =
+            self.logical_payload_bytes
+                .checked_add(bytes)
+                .ok_or_else(|| {
+                    CliError::package_invalid("package logical payload byte count overflow")
+                })?;
+        Ok(())
+    }
+
+    fn add_buffered(&mut self, bytes: usize) -> CliOutcome<()> {
+        self.buffered_payload_bytes =
+            self.buffered_payload_bytes
+                .checked_add(bytes)
+                .ok_or_else(|| {
+                    CliError::package_invalid("package buffered payload byte count overflow")
+                })?;
+        self.peak_buffered_payload_bytes = self
+            .peak_buffered_payload_bytes
+            .max(self.buffered_payload_bytes);
+        self.peak_resident_payload_bytes = self
+            .peak_resident_payload_bytes
+            .max(self.buffered_payload_bytes);
+        self.add_logical(u64::try_from(bytes).map_err(|_| {
+            CliError::package_invalid("package buffered payload does not fit in u64")
+        })?)
+    }
+
+    fn observe_streamed(&mut self, bytes: usize) -> CliOutcome<()> {
+        self.peak_streamed_payload_bytes = self.peak_streamed_payload_bytes.max(bytes);
+        let resident = self
+            .buffered_payload_bytes
+            .checked_add(bytes)
+            .ok_or_else(|| {
+                CliError::package_invalid("package resident payload byte count overflow")
+            })?;
+        self.peak_resident_payload_bytes = self.peak_resident_payload_bytes.max(resident);
+        Ok(())
+    }
+}
+
 struct PackageEntries {
     approved_root: PathBuf,
-    files: BTreeMap<String, Vec<u8>>,
+    files: BTreeMap<String, PackagePayload>,
+    max_buffered_payload_bytes: usize,
+    stats: PackagePayloadStats,
 }
 
 impl PackageEntries {
-    fn new(approved_root: &Path) -> Self {
-        Self {
+    fn new(approved_root: &Path, max_buffered_payload_bytes: usize) -> CliOutcome<Self> {
+        validate_max_buffered_payload_bytes(max_buffered_payload_bytes)?;
+        Ok(Self {
             approved_root: approved_root.to_path_buf(),
             files: BTreeMap::new(),
-        }
+            max_buffered_payload_bytes,
+            stats: PackagePayloadStats::default(),
+        })
     }
 
     fn add_json(&mut self, path: &str, value: Value) -> CliOutcome<()> {
-        let mut text = serde_json::to_string_pretty(&value).map_err(|err| {
+        self.ensure_entry_available(path)?;
+        let remaining = self
+            .max_buffered_payload_bytes
+            .checked_sub(self.stats.buffered_payload_bytes)
+            .ok_or_else(|| {
+                CliError::package_invalid(
+                    "buffered package payload already exceeds max_buffered_payload_bytes",
+                )
+            })?;
+        let mut writer =
+            BoundedPayloadWriter::new(path, remaining, self.max_buffered_payload_bytes);
+        serde_json::to_writer_pretty(&mut writer, &value).map_err(|err| {
             CliError::package_invalid(format!("failed to serialize {path}: {err}"))
         })?;
-        text.push('\n');
-        self.add_bytes(path, text.into_bytes())
+        writer.write_all(b"\n").map_err(|err| {
+            CliError::package_invalid(format!("failed to serialize {path}: {err}"))
+        })?;
+        self.add_buffered(path, writer.into_inner())
     }
 
     fn add_file(&mut self, source: &Path, zip_path: &str) -> CliOutcome<()> {
-        let bytes = read_approved_file(&self.approved_root, source)?;
-        self.add_bytes(zip_path, bytes)
+        self.ensure_entry_available(zip_path)?;
+        let metadata = inspect_approved_path(&self.approved_root, source)?.ok_or_else(|| {
+            CliError::package_invalid(format!(
+                "approved package source file does not exist: {}",
+                source.display()
+            ))
+        })?;
+        if !metadata.is_file() {
+            return Err(CliError::package_invalid(format!(
+                "approved package source path is not a regular file: {}",
+                source.display()
+            )));
+        }
+        let expected_len = metadata.len();
+        let entry_len = usize::try_from(expected_len).map_err(|_| {
+            CliError::package_invalid(format!(
+                "package source entry {} is too large for this platform",
+                source.display()
+            ))
+        })?;
+        if entry_len > self.max_buffered_payload_bytes {
+            return Err(CliError::package_invalid(format!(
+                "package source entry {} is {entry_len} bytes, exceeding max_buffered_payload_bytes={}",
+                source.display(),
+                self.max_buffered_payload_bytes
+            )));
+        }
+        let sha256 = stream_approved_source(
+            &self.approved_root,
+            source,
+            expected_len,
+            &mut io::sink(),
+            &mut self.stats,
+        )?;
+        self.stats.add_logical(expected_len)?;
+        self.files.insert(
+            zip_path.to_string(),
+            PackagePayload::SourceFile {
+                source: source.to_path_buf(),
+                expected_len,
+                sha256,
+            },
+        );
+        Ok(())
     }
 
     fn add_operation_dir(
@@ -742,7 +884,7 @@ impl PackageEntries {
             .filter(|(path, _)| {
                 path.starts_with("resources/") && path.as_str() != "resources/manifest.json"
             })
-            .map(|(path, bytes)| {
+            .map(|(path, payload)| {
                 ordered_object([
                     (
                         "path",
@@ -750,7 +892,7 @@ impl PackageEntries {
                     ),
                     (
                         "sha256",
-                        Value::String(format!("sha256:{}", hex_sha256(bytes))),
+                        Value::String(format!("sha256:{}", payload.sha256())),
                     ),
                 ])
             })
@@ -763,9 +905,31 @@ impl PackageEntries {
         self.add_json("resources/manifest.json", manifest)
     }
 
-    fn add_bytes(&mut self, path: &str, bytes: Vec<u8>) -> CliOutcome<()> {
+    fn add_buffered(&mut self, path: &str, bytes: Vec<u8>) -> CliOutcome<()> {
+        self.ensure_entry_available(path)?;
+        let next = self
+            .stats
+            .buffered_payload_bytes
+            .checked_add(bytes.len())
+            .ok_or_else(|| {
+                CliError::package_invalid("package buffered payload byte count overflow")
+            })?;
+        if next > self.max_buffered_payload_bytes {
+            return Err(CliError::package_invalid(format!(
+                "package entry {path} would raise buffered payload to {next} bytes, exceeding max_buffered_payload_bytes={}",
+                self.max_buffered_payload_bytes
+            )));
+        }
+        let sha256 = hex_sha256(&bytes);
+        self.stats.add_buffered(bytes.len())?;
+        self.files
+            .insert(path.to_string(), PackagePayload::Buffered { bytes, sha256 });
+        Ok(())
+    }
+
+    fn ensure_entry_available(&self, path: &str) -> CliOutcome<()> {
         validate_zip_entry_path(path)?;
-        if self.files.insert(path.to_string(), bytes).is_some() {
+        if self.files.contains_key(path) {
             return Err(CliError::package_invalid(format!(
                 "duplicate package entry: {path}"
             )));
@@ -778,17 +942,70 @@ impl PackageEntries {
     }
 }
 
+fn validate_max_buffered_payload_bytes(max_buffered_payload_bytes: usize) -> CliOutcome<()> {
+    if max_buffered_payload_bytes == 0 {
+        return Err(CliError::package_invalid(
+            "max_buffered_payload_bytes must be positive",
+        ));
+    }
+    Ok(())
+}
+
+struct BoundedPayloadWriter {
+    entry: String,
+    bytes: Vec<u8>,
+    remaining_budget: usize,
+    total_budget: usize,
+}
+
+impl BoundedPayloadWriter {
+    fn new(entry: &str, remaining_budget: usize, total_budget: usize) -> Self {
+        Self {
+            entry: entry.to_string(),
+            bytes: Vec::new(),
+            remaining_budget,
+            total_budget,
+        }
+    }
+
+    fn into_inner(self) -> Vec<u8> {
+        self.bytes
+    }
+}
+
+impl Write for BoundedPayloadWriter {
+    fn write(&mut self, buffer: &[u8]) -> io::Result<usize> {
+        let next = self
+            .bytes
+            .len()
+            .checked_add(buffer.len())
+            .ok_or_else(|| io::Error::other("generated package payload length overflow"))?;
+        if next > self.remaining_budget {
+            return Err(io::Error::other(format!(
+                "package entry {} exceeds remaining buffered payload budget of {} bytes (max_buffered_payload_bytes={})",
+                self.entry, self.remaining_budget, self.total_budget
+            )));
+        }
+        self.bytes.extend_from_slice(buffer);
+        Ok(buffer.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+}
+
 struct PackageWrite {
     validation: LabPackageValidationResponse,
 }
 
 fn write_and_validate_package(
     out: &Path,
-    entries: PackageEntries,
+    mut entries: PackageEntries,
     dry_run: bool,
 ) -> CliOutcome<PackageWrite> {
     let temp = temp_zip_path(out)?;
-    write_zip(&temp, &entries.files)?;
+    write_zip(&temp, &mut entries)?;
     let validation = match validate_generated_package(&temp) {
         Ok(value) => value,
         Err(err) => {
@@ -831,7 +1048,7 @@ fn write_and_validate_package(
     Ok(PackageWrite { validation })
 }
 
-fn write_zip(path: &Path, files: &BTreeMap<String, Vec<u8>>) -> CliOutcome<()> {
+fn write_zip(path: &Path, entries: &mut PackageEntries) -> CliOutcome<()> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).map_err(|err| {
             CliError::package_invalid(format!("failed to create {}: {err}", parent.display()))
@@ -842,12 +1059,105 @@ fn write_zip(path: &Path, files: &BTreeMap<String, Vec<u8>>) -> CliOutcome<()> {
     })?;
     let options = FileOptions::default().compression_method(zip::CompressionMethod::Deflated);
     let mut zip = ZipWriter::new(file);
-    for (entry, bytes) in files {
+    let PackageEntries {
+        approved_root,
+        files,
+        stats,
+        ..
+    } = entries;
+    for (entry, payload) in files {
         zip.start_file(entry, options).map_err(zip_write_error)?;
-        zip.write_all(bytes).map_err(zip_io_error)?;
+        match payload {
+            PackagePayload::Buffered { bytes, .. } => {
+                zip.write_all(bytes).map_err(zip_io_error)?;
+            }
+            PackagePayload::SourceFile {
+                source,
+                expected_len,
+                sha256,
+            } => {
+                let written_sha256 =
+                    stream_approved_source(approved_root, source, *expected_len, &mut zip, stats)?;
+                if written_sha256 != *sha256 {
+                    return Err(CliError::package_invalid(format!(
+                        "package source file changed while building: {}",
+                        source.display()
+                    )));
+                }
+            }
+        }
     }
     zip.finish().map_err(zip_write_error)?;
     Ok(())
+}
+
+fn stream_approved_source<W: Write>(
+    approved_root: &Path,
+    source: &Path,
+    expected_len: u64,
+    output: &mut W,
+    stats: &mut PackagePayloadStats,
+) -> CliOutcome<String> {
+    let metadata = inspect_approved_path(approved_root, source)?.ok_or_else(|| {
+        CliError::package_invalid(format!(
+            "approved package source file does not exist: {}",
+            source.display()
+        ))
+    })?;
+    if !metadata.is_file() {
+        return Err(CliError::package_invalid(format!(
+            "approved package source path is not a regular file: {}",
+            source.display()
+        )));
+    }
+    if metadata.len() != expected_len {
+        return Err(CliError::package_invalid(format!(
+            "package source file size changed before streaming: {} (expected {expected_len}, found {})",
+            source.display(),
+            metadata.len()
+        )));
+    }
+
+    let mut file = File::open(source).map_err(|err| {
+        CliError::package_invalid(format!("failed to open {}: {err}", source.display()))
+    })?;
+    let mut hasher = Sha256::new();
+    let mut total = 0u64;
+    let mut buffer = [0u8; PACKAGE_COMPRESSOR_INPUT_BUFFER_BYTES];
+    loop {
+        let read = file.read(&mut buffer).map_err(|err| {
+            CliError::package_invalid(format!("failed to read {}: {err}", source.display()))
+        })?;
+        if read == 0 {
+            break;
+        }
+        stats.observe_streamed(read)?;
+        total = total
+            .checked_add(u64::try_from(read).map_err(|_| {
+                CliError::package_invalid("streamed package chunk does not fit in u64")
+            })?)
+            .ok_or_else(|| CliError::package_invalid("streamed package byte count overflow"))?;
+        if total > expected_len {
+            return Err(CliError::package_invalid(format!(
+                "package source file grew while streaming: {} (expected {expected_len} bytes)",
+                source.display()
+            )));
+        }
+        hasher.update(&buffer[..read]);
+        output.write_all(&buffer[..read]).map_err(|err| {
+            CliError::package_invalid(format!(
+                "failed to stream package source {}: {err}",
+                source.display()
+            ))
+        })?;
+    }
+    if total != expected_len {
+        return Err(CliError::package_invalid(format!(
+            "package source file was truncated while streaming: {} (expected {expected_len}, read {total})",
+            source.display()
+        )));
+    }
+    Ok(format!("{:x}", hasher.finalize()))
 }
 
 fn validate_generated_package(path: &Path) -> CliOutcome<LabPackageValidationResponse> {
@@ -2417,6 +2727,7 @@ mod tests {
             include_recovery: false,
             out,
             dry_run: false,
+            max_buffered_payload_bytes: crate::DEFAULT_MAX_BUFFERED_PAYLOAD_BYTES,
             env: PackageEnvOptions::default(),
         }
     }
@@ -2428,6 +2739,7 @@ mod tests {
             game: None,
             server: None,
             locale: None,
+            max_buffered_payload_bytes: crate::DEFAULT_MAX_BUFFERED_PAYLOAD_BYTES,
         }
     }
 
@@ -2444,6 +2756,82 @@ mod tests {
 
         assert!(error.message.contains(&outside.display().to_string()));
         assert!(error.message.contains("outside approved resource root"));
+    }
+
+    #[test]
+    fn package_entries_reject_single_source_over_budget_before_streaming() {
+        let temp = TempDir::new().expect("temp");
+        let approved = temp.path().join("approved");
+        fs::create_dir_all(&approved).expect("approved root");
+        let source = approved.join("large.bin");
+        let budget = 1024usize;
+        File::create(&source)
+            .expect("large source")
+            .set_len((budget + 1) as u64)
+            .expect("large source length");
+        let mut entries = PackageEntries::new(&approved, budget).expect("entries");
+
+        let error = entries
+            .add_file(&source, "resources/large.bin")
+            .expect_err("entry larger than the budget must fail before streaming");
+
+        assert!(error.message.contains(&source.display().to_string()));
+        assert!(error.message.contains("max_buffered_payload_bytes=1024"));
+        assert_eq!(entries.stats, PackagePayloadStats::default());
+        assert!(entries.files.is_empty());
+    }
+
+    #[test]
+    fn generated_payload_stops_at_aggregate_buffer_budget() {
+        let temp = TempDir::new().expect("temp");
+        let approved = temp.path().join("approved");
+        fs::create_dir_all(&approved).expect("approved root");
+        let budget = 128usize;
+        let mut entries = PackageEntries::new(&approved, budget).expect("entries");
+
+        let error = entries
+            .add_json("large.json", json!({"value": "x".repeat(512)}))
+            .expect_err("generated payload must stop at the aggregate budget");
+
+        assert!(error.message.contains("max_buffered_payload_bytes=128"));
+        assert!(entries.stats.buffered_payload_bytes <= budget);
+        assert!(entries.files.is_empty());
+    }
+
+    #[test]
+    fn streamed_payload_peak_is_bounded_when_total_exceeds_four_budgets() {
+        let temp = TempDir::new().expect("temp");
+        let approved = temp.path().join("approved");
+        fs::create_dir_all(&approved).expect("approved root");
+        let budget = 128 * 1024usize;
+        let source_size = 64 * 1024usize;
+        let source_count = 8usize;
+        let mut entries = PackageEntries::new(&approved, budget).expect("entries");
+
+        for index in 0..source_count {
+            let source = approved.join(format!("asset-{index}.bin"));
+            fs::write(&source, vec![index as u8; source_size]).expect("source asset");
+            entries
+                .add_file(&source, &format!("resources/assets/asset-{index}.bin"))
+                .expect("streamed source");
+        }
+        entries.add_manifest("operator_task").expect("manifest");
+        let out = temp.path().join("bounded.zip");
+        write_zip(&out, &mut entries).expect("bounded zip");
+
+        let logical_source_bytes = source_size * source_count;
+        assert!(logical_source_bytes >= budget * 4);
+        assert!(
+            entries.stats.logical_payload_bytes
+                >= u64::try_from(logical_source_bytes).expect("logical bytes")
+        );
+        assert!(entries.stats.peak_buffered_payload_bytes <= budget);
+        assert!(entries.stats.peak_streamed_payload_bytes <= PACKAGE_COMPRESSOR_INPUT_BUFFER_BYTES);
+        assert!(
+            entries.stats.peak_resident_payload_bytes
+                <= budget + PACKAGE_COMPRESSOR_INPUT_BUFFER_BYTES
+        );
+        assert!(out.is_file());
     }
 
     #[cfg(unix)]

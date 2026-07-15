@@ -5,6 +5,15 @@ use serde::Serialize;
 use serde_json::Value;
 use std::path::PathBuf;
 
+/// A source entry or all generated package payloads may use at most 32 MiB.
+/// The supported minimum packaging environment reserves 512 MiB of process
+/// headroom; this one-sixteenth share leaves room for conversion, ZIP state,
+/// and validation while source assets use the fixed streaming buffer.
+pub const DEFAULT_MAX_BUFFERED_PAYLOAD_BYTES: usize = 32 * 1024 * 1024;
+
+/// Maximum source-payload chunk handed to the ZIP compressor at one time.
+pub const PACKAGE_COMPRESSOR_INPUT_BUFFER_BYTES: usize = 64 * 1024;
+
 #[derive(Debug, Clone)]
 pub enum PackageSource {
     Local(PathBuf),
@@ -39,6 +48,7 @@ pub struct PackageBuildTaskRequest {
     pub include_recovery: bool,
     pub out: PathBuf,
     pub dry_run: bool,
+    pub max_buffered_payload_bytes: usize,
     pub env: PackageEnvOptions,
 }
 
@@ -68,6 +78,7 @@ pub struct PackageBuildCatalogRequest {
     pub game: Option<String>,
     pub server: Option<String>,
     pub locale: Option<String>,
+    pub max_buffered_payload_bytes: usize,
 }
 
 #[derive(Debug, Clone)]
