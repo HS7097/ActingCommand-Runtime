@@ -2,7 +2,7 @@
 
 use crate::environment::{AuthoringEnvironmentSnapshot, required_environment_keys};
 use crate::resource_convert::{
-    Bundle, ConvertOutputs, OperationConverter, canonical_game, resolve_resource_root,
+    Bundle, ConvertOutputs, OperationConverter, ResolvedResourceRoot, canonical_game,
 };
 use crate::{
     LabPackageControlResponse, LabPackageResourcesResponse, LabPackageValidationResponse,
@@ -72,7 +72,7 @@ pub fn prepare_package_build_task(
     } = request;
     let source = ResolvedRepo::from_source(source, &temporary_root)?;
     let repo = source.path().to_path_buf();
-    let resource_root = resolve_resource_root(&repo);
+    let resource_root = resolve_package_resource_root(&repo)?;
     let converter = load_converter(
         game.as_deref(),
         server.as_deref(),
@@ -133,7 +133,7 @@ impl PreparedPackageBuildTask {
         environment: &AuthoringEnvironmentSnapshot,
     ) -> CliOutcome<PackageBuildTaskResponse> {
         apply_environment_to_outputs(environment, &mut self.outputs)?;
-        let mut entries = PackageEntries::default();
+        let mut entries = PackageEntries::new(&self.resource_root);
         entries.add_json(
             "control.json",
             control_json(
@@ -198,7 +198,7 @@ impl PackageBuildCatalog {
     pub fn open(request: PackageBuildCatalogRequest) -> CliOutcome<Self> {
         let source = ResolvedRepo::from_source(request.source, &request.temporary_root)?;
         let repo = source.path().to_path_buf();
-        let resource_root = resolve_resource_root(&repo);
+        let resource_root = resolve_package_resource_root(&repo)?;
         let converter = load_converter(
             request.game.as_deref(),
             request.server.as_deref(),
@@ -284,7 +284,7 @@ impl PackageBuildCatalog {
         let bundle = find_bundle(&self.converter, &task_id)?;
         let resolution = parse_resolution(resolution, bundle)?;
         validate_execution_mode(&execution_mode)?;
-        let mut entries = PackageEntries::default();
+        let mut entries = PackageEntries::new(&self.resource_root);
         entries.add_json(
             "control.json",
             control_json(
@@ -336,7 +336,7 @@ impl PackageBuildCatalog {
         let mut outputs = self.converter.build_all()?;
         apply_environment_to_outputs(environment, &mut outputs)?;
         let task_ids = self.task_ids();
-        let mut entries = PackageEntries::default();
+        let mut entries = PackageEntries::new(&self.resource_root);
         entries.add_json(
             "control.json",
             control_json(
@@ -498,7 +498,7 @@ fn add_resources_json(
     subset: bool,
 ) -> CliOutcome<()> {
     let path = repo.join("operations").join("resources.json");
-    let mut resources = read_json_value(&path)?;
+    let mut resources = read_json_value(repo, &path)?;
     if subset {
         let referenced = referenced_resource_ids(converter, task_ids);
         if let Some(array) = resources.get_mut("resources").and_then(Value::as_array_mut) {
@@ -551,7 +551,7 @@ fn selected_operation_environment_keys(
     let mut keys = BTreeSet::new();
     for bundle in &converter.bundles {
         if task_ids.iter().any(|task_id| task_id == &bundle.task_id) {
-            let task = read_json_value(&bundle.dir.join("task.json"))?;
+            let task = read_json_value(&converter.root, &bundle.dir.join("task.json"))?;
             keys.extend(required_environment_keys(&task)?);
         }
     }
@@ -661,12 +661,19 @@ fn add_recognition_target_assets(
     Ok(())
 }
 
-#[derive(Default)]
 struct PackageEntries {
+    approved_root: PathBuf,
     files: BTreeMap<String, Vec<u8>>,
 }
 
 impl PackageEntries {
+    fn new(approved_root: &Path) -> Self {
+        Self {
+            approved_root: approved_root.to_path_buf(),
+            files: BTreeMap::new(),
+        }
+    }
+
     fn add_json(&mut self, path: &str, value: Value) -> CliOutcome<()> {
         let mut text = serde_json::to_string_pretty(&value).map_err(|err| {
             CliError::package_invalid(format!("failed to serialize {path}: {err}"))
@@ -676,9 +683,7 @@ impl PackageEntries {
     }
 
     fn add_file(&mut self, source: &Path, zip_path: &str) -> CliOutcome<()> {
-        let bytes = fs::read(source).map_err(|err| {
-            CliError::package_invalid(format!("failed to read {}: {err}", source.display()))
-        })?;
+        let bytes = read_approved_file(&self.approved_root, source)?;
         self.add_bytes(zip_path, bytes)
     }
 
@@ -690,7 +695,7 @@ impl PackageEntries {
         resource_root: &Path,
         canonical_task: &Value,
     ) -> CliOutcome<()> {
-        for path in collect_files(source_dir)? {
+        for path in collect_files(&self.approved_root, source_dir)? {
             let rel = relative_slash(source_dir, &path)?;
             if rel == "task.json" {
                 let mut task = canonical_task.clone();
@@ -719,7 +724,7 @@ impl PackageEntries {
                 )));
             }
             let source = resource_root.join(path);
-            if !source.is_file() {
+            if !approved_file_exists(&self.approved_root, &source)? {
                 continue;
             }
             let zip_path = format!("resources/{path}");
@@ -1824,6 +1829,265 @@ fn containment_error(error: ContainmentError) -> CliError {
     CliError::package_invalid(error.to_string())
 }
 
+fn resolve_package_resource_root(input: &Path) -> CliOutcome<ResolvedResourceRoot> {
+    require_approved_directory(input, input)?;
+    let (root, layout) = if looks_like_approved_resource_root(input)? {
+        (input.to_path_buf(), "direct")
+    } else {
+        let ours = input.join("ours");
+        if looks_like_approved_resource_root(&ours)? {
+            (ours, "repo_ours")
+        } else {
+            (input.to_path_buf(), "unresolved")
+        }
+    };
+    validate_resource_tree_boundary(&root)?;
+    Ok(ResolvedResourceRoot {
+        input: input.to_path_buf(),
+        root,
+        layout,
+    })
+}
+
+fn looks_like_approved_resource_root(path: &Path) -> CliOutcome<bool> {
+    let metadata = match fs::symlink_metadata(path) {
+        Ok(metadata) => metadata,
+        Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(false),
+        Err(err) => {
+            return Err(CliError::package_invalid(format!(
+                "failed to inspect package source path {}: {err}",
+                path.display()
+            )));
+        }
+    };
+    reject_link_or_reparse(path, &metadata)?;
+    if !metadata.is_dir() {
+        return Ok(false);
+    }
+    Ok(approved_directory_exists(path, &path.join("operations"))?
+        && (approved_directory_exists(path, &path.join("recognition"))?
+            || approved_directory_exists(path, &path.join("navigation"))?))
+}
+
+fn validate_resource_tree_boundary(root: &Path) -> CliOutcome<()> {
+    require_approved_directory(root, root)?;
+    let canonical_root = canonical_approved_root(root)?;
+    let mut pending = vec![root.to_path_buf()];
+    while let Some(directory) = pending.pop() {
+        let mut entries = fs::read_dir(&directory)
+            .map_err(|err| {
+                CliError::package_invalid(format!(
+                    "failed to inspect approved resource directory {}: {err}",
+                    directory.display()
+                ))
+            })?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|err| {
+                CliError::package_invalid(format!(
+                    "failed to inspect approved resource directory {}: {err}",
+                    directory.display()
+                ))
+            })?;
+        entries.sort_by_key(|entry| entry.file_name());
+        for entry in entries {
+            let path = entry.path();
+            let metadata = link_safe_metadata(&path)?;
+            ensure_canonical_containment(&canonical_root, &path)?;
+            if metadata.is_dir() {
+                pending.push(path);
+            } else if !metadata.is_file() {
+                return Err(CliError::package_invalid(format!(
+                    "package source path {} is neither a regular file nor a directory",
+                    path.display()
+                )));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn read_approved_file(approved_root: &Path, path: &Path) -> CliOutcome<Vec<u8>> {
+    let metadata = inspect_approved_path(approved_root, path)?.ok_or_else(|| {
+        CliError::package_invalid(format!(
+            "approved package source file does not exist: {}",
+            path.display()
+        ))
+    })?;
+    if !metadata.is_file() {
+        return Err(CliError::package_invalid(format!(
+            "approved package source path is not a regular file: {}",
+            path.display()
+        )));
+    }
+    fs::read(path).map_err(|err| {
+        CliError::package_invalid(format!("failed to read {}: {err}", path.display()))
+    })
+}
+
+fn approved_file_exists(approved_root: &Path, path: &Path) -> CliOutcome<bool> {
+    let Some(metadata) = inspect_approved_path(approved_root, path)? else {
+        return Ok(false);
+    };
+    if !metadata.is_file() {
+        return Err(CliError::package_invalid(format!(
+            "approved package source path is not a regular file: {}",
+            path.display()
+        )));
+    }
+    Ok(true)
+}
+
+fn approved_directory_exists(approved_root: &Path, path: &Path) -> CliOutcome<bool> {
+    let Some(metadata) = inspect_approved_path(approved_root, path)? else {
+        return Ok(false);
+    };
+    if !metadata.is_dir() {
+        return Ok(false);
+    }
+    Ok(true)
+}
+
+fn require_approved_directory(approved_root: &Path, path: &Path) -> CliOutcome<()> {
+    let metadata = inspect_approved_path(approved_root, path)?.ok_or_else(|| {
+        CliError::package_invalid(format!(
+            "approved resource directory does not exist: {}",
+            path.display()
+        ))
+    })?;
+    if !metadata.is_dir() {
+        return Err(CliError::package_invalid(format!(
+            "approved resource path is not a directory: {}",
+            path.display()
+        )));
+    }
+    Ok(())
+}
+
+fn inspect_approved_path(approved_root: &Path, path: &Path) -> CliOutcome<Option<fs::Metadata>> {
+    let root_metadata = link_safe_metadata(approved_root)?;
+    if !root_metadata.is_dir() {
+        return Err(CliError::package_invalid(format!(
+            "approved resource root is not a directory: {}",
+            approved_root.display()
+        )));
+    }
+    let relative = path.strip_prefix(approved_root).map_err(|_| {
+        CliError::package_invalid(format!(
+            "package source path {} is outside approved resource root {}",
+            path.display(),
+            approved_root.display()
+        ))
+    })?;
+    if relative.components().any(|component| {
+        matches!(
+            component,
+            Component::ParentDir | Component::RootDir | Component::Prefix(_)
+        )
+    }) {
+        return Err(CliError::package_invalid(format!(
+            "package source path {} escapes approved resource root {}",
+            path.display(),
+            approved_root.display()
+        )));
+    }
+
+    let canonical_root = canonical_approved_root(approved_root)?;
+    if relative.as_os_str().is_empty() {
+        return Ok(Some(root_metadata));
+    }
+    let components = relative.components().collect::<Vec<_>>();
+    let mut current = approved_root.to_path_buf();
+    for (index, component) in components.iter().enumerate() {
+        match component {
+            Component::CurDir => continue,
+            Component::Normal(value) => current.push(value),
+            Component::ParentDir | Component::RootDir | Component::Prefix(_) => unreachable!(),
+        }
+        let metadata = match fs::symlink_metadata(&current) {
+            Ok(metadata) => metadata,
+            Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(None),
+            Err(err) => {
+                return Err(CliError::package_invalid(format!(
+                    "failed to inspect package source path {}: {err}",
+                    current.display()
+                )));
+            }
+        };
+        reject_link_or_reparse(&current, &metadata)?;
+        ensure_canonical_containment(&canonical_root, &current)?;
+        if index + 1 < components.len() && !metadata.is_dir() {
+            return Err(CliError::package_invalid(format!(
+                "package source parent is not a directory: {}",
+                current.display()
+            )));
+        }
+        if index + 1 == components.len() {
+            return Ok(Some(metadata));
+        }
+    }
+    Ok(None)
+}
+
+fn link_safe_metadata(path: &Path) -> CliOutcome<fs::Metadata> {
+    let metadata = fs::symlink_metadata(path).map_err(|err| {
+        CliError::package_invalid(format!(
+            "failed to inspect package source path {}: {err}",
+            path.display()
+        ))
+    })?;
+    reject_link_or_reparse(path, &metadata)?;
+    Ok(metadata)
+}
+
+fn reject_link_or_reparse(path: &Path, metadata: &fs::Metadata) -> CliOutcome<()> {
+    if metadata.file_type().is_symlink() || metadata_is_reparse_point(metadata) {
+        return Err(CliError::package_invalid(format!(
+            "package source path {} is a symlink or reparse point and cannot be read",
+            path.display()
+        )));
+    }
+    Ok(())
+}
+
+#[cfg(windows)]
+fn metadata_is_reparse_point(metadata: &fs::Metadata) -> bool {
+    use std::os::windows::fs::MetadataExt;
+
+    const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0400;
+    metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
+}
+
+#[cfg(not(windows))]
+fn metadata_is_reparse_point(_metadata: &fs::Metadata) -> bool {
+    false
+}
+
+fn canonical_approved_root(root: &Path) -> CliOutcome<PathBuf> {
+    fs::canonicalize(root).map_err(|err| {
+        CliError::package_invalid(format!(
+            "failed to canonicalize approved resource root {}: {err}",
+            root.display()
+        ))
+    })
+}
+
+fn ensure_canonical_containment(canonical_root: &Path, path: &Path) -> CliOutcome<()> {
+    let canonical = fs::canonicalize(path).map_err(|err| {
+        CliError::package_invalid(format!(
+            "failed to canonicalize package source path {}: {err}",
+            path.display()
+        ))
+    })?;
+    if !canonical.starts_with(canonical_root) {
+        return Err(CliError::package_invalid(format!(
+            "package source path {} resolves outside approved resource root {}",
+            path.display(),
+            canonical_root.display()
+        )));
+    }
+    Ok(())
+}
+
 struct ResolvedRepo {
     path: PathBuf,
     remote_url: Option<String>,
@@ -1901,23 +2165,29 @@ impl Drop for ResolvedRepo {
     }
 }
 
-fn read_json_value(path: &Path) -> CliOutcome<Value> {
-    let text = fs::read_to_string(path).map_err(|err| {
-        CliError::package_invalid(format!("failed to read {}: {err}", path.display()))
+fn read_json_value(approved_root: &Path, path: &Path) -> CliOutcome<Value> {
+    let bytes = read_approved_file(approved_root, path)?;
+    let text = std::str::from_utf8(&bytes).map_err(|err| {
+        CliError::package_invalid(format!("{} is not valid UTF-8: {err}", path.display()))
     })?;
-    serde_json::from_str(&text).map_err(|err| {
+    serde_json::from_str(text).map_err(|err| {
         CliError::package_invalid(format!("failed to parse {}: {err}", path.display()))
     })
 }
 
-fn collect_files(root: &Path) -> CliOutcome<Vec<PathBuf>> {
+fn collect_files(approved_root: &Path, root: &Path) -> CliOutcome<Vec<PathBuf>> {
+    require_approved_directory(approved_root, root)?;
     let mut files = Vec::new();
-    collect_files_inner(root, &mut files)?;
+    collect_files_inner(approved_root, root, &mut files)?;
     files.sort();
     Ok(files)
 }
 
-fn collect_files_inner(root: &Path, files: &mut Vec<PathBuf>) -> CliOutcome<()> {
+fn collect_files_inner(
+    approved_root: &Path,
+    root: &Path,
+    files: &mut Vec<PathBuf>,
+) -> CliOutcome<()> {
     let mut entries = fs::read_dir(root)
         .map_err(|err| {
             CliError::package_invalid(format!("failed to read {}: {err}", root.display()))
@@ -1929,10 +2199,21 @@ fn collect_files_inner(root: &Path, files: &mut Vec<PathBuf>) -> CliOutcome<()> 
     entries.sort_by_key(|entry| entry.file_name());
     for entry in entries {
         let path = entry.path();
-        if path.is_dir() {
-            collect_files_inner(&path, files)?;
-        } else if path.is_file() {
+        let metadata = inspect_approved_path(approved_root, &path)?.ok_or_else(|| {
+            CliError::package_invalid(format!(
+                "package source path disappeared during collection: {}",
+                path.display()
+            ))
+        })?;
+        if metadata.is_dir() {
+            collect_files_inner(approved_root, &path, files)?;
+        } else if metadata.is_file() {
             files.push(path);
+        } else {
+            return Err(CliError::package_invalid(format!(
+                "package source path {} is neither a regular file nor a directory",
+                path.display()
+            )));
         }
     }
     Ok(())
@@ -2148,6 +2429,79 @@ mod tests {
             server: None,
             locale: None,
         }
+    }
+
+    #[test]
+    fn package_read_rejects_path_outside_approved_root() {
+        let temp = TempDir::new().expect("temp");
+        let approved = temp.path().join("approved");
+        fs::create_dir_all(&approved).expect("approved root");
+        let outside = temp.path().join("outside.png");
+        fs::write(&outside, b"outside").expect("outside file");
+
+        let error = read_approved_file(&approved, &outside)
+            .expect_err("root-external source must fail before reading");
+
+        assert!(error.message.contains(&outside.display().to_string()));
+        assert!(error.message.contains("outside approved resource root"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn build_task_rejects_symlinked_asset_before_read() {
+        use std::os::unix::fs::symlink;
+
+        let temp = TempDir::new().expect("temp");
+        let repo = temp.path().join("repo");
+        write_fixture_repo(&repo);
+        let outside = temp.path().join("outside.png");
+        fs::write(&outside, one_pixel_png()).expect("outside asset");
+        let linked = repo.join("operations/operator_task/assets/LINKED.png");
+        symlink(&outside, &linked).expect("asset symlink");
+
+        let error = build_task(build_task_request(
+            repo,
+            temp.path().join("symlink-rejected.zip"),
+        ))
+        .expect_err("symlinked source must fail before reading");
+
+        assert!(error.message.contains(&linked.display().to_string()));
+        assert!(error.message.contains("symlink or reparse point"));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn build_task_rejects_junction_reparse_point_before_read() {
+        let temp = TempDir::new().expect("temp");
+        let repo = temp.path().join("repo");
+        write_fixture_repo(&repo);
+        let outside = temp.path().join("outside-assets");
+        fs::create_dir_all(&outside).expect("outside directory");
+        fs::write(outside.join("OUTSIDE.png"), one_pixel_png()).expect("outside asset");
+        let junction = repo
+            .join("operations")
+            .join("operator_task")
+            .join("junction-assets");
+        let output = Command::new("cmd")
+            .args(["/C", "mklink", "/J"])
+            .arg(&junction)
+            .arg(&outside)
+            .output()
+            .expect("create junction");
+        assert!(
+            output.status.success(),
+            "mklink failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+
+        let error = build_task(build_task_request(
+            repo,
+            temp.path().join("junction-rejected.zip"),
+        ))
+        .expect_err("junction source must fail before reading");
+
+        assert!(error.message.contains(&junction.display().to_string()));
+        assert!(error.message.contains("symlink or reparse point"));
     }
 
     #[test]
