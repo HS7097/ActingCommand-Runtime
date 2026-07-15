@@ -6,14 +6,17 @@ use std::fs;
 use crate::{
     JsonDocument, PackageValidateRequest, PackageValidationResponse,
     RecognitionPackDiagnosticsResponse, UnsupportedRecognitionTargetResponse,
+    resolve_published_package_path,
 };
 use actingcommand_contract::{LabError, LabResult};
 
 pub fn validate_package(request: PackageValidateRequest) -> LabResult<PackageValidationResponse> {
-    let bytes = fs::read(&request.zip_path).map_err(|error| {
+    let resolved = resolve_published_package_path(&request.zip_path)?;
+    let bytes = fs::read(&resolved).map_err(|error| {
         LabError::package_invalid(format!(
-            "failed to open package {}: {error}",
-            request.zip_path.display()
+            "failed to open package {} resolved from {}: {error}",
+            resolved.display(),
+            request.zip_path.display(),
         ))
     })?;
     let instance = InstanceId::new("package-validate").map_err(containment_package_error)?;

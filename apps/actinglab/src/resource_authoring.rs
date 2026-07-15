@@ -391,7 +391,7 @@ fn validate_candidate(
         ));
     }
     let build = prepared
-        .build(&AuthoringEnvironmentSnapshot::default())
+        .build_staged(&AuthoringEnvironmentSnapshot::default())
         .and_then(|built| {
             let bytes = fs::read(&package_path).map_err(|error| {
                 CliError::package_invalid(format!(

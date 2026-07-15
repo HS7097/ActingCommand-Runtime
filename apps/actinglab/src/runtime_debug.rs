@@ -8,6 +8,7 @@ use actingcommand_contract::{
     TaskOutcome,
 };
 use actingcommand_pack_containment::Sha256Hash;
+use actingcommand_resource_tooling::resolve_published_package_path;
 use actingcommand_runtime_client::{RuntimeClient, RuntimeClientConfig};
 use serde_json::{Value, json};
 use std::fs;
@@ -69,6 +70,7 @@ pub(super) fn run_package_debug(args: &[String]) -> CliOutcome<Value> {
 
 fn package_debug_request(flags: &FlagArgs, command: &str) -> CliOutcome<PackageDebugRequest> {
     let package = flags.required_path("--zip")?;
+    let package = resolve_published_package_path(&package)?;
     let package = fs::canonicalize(&package).map_err(|error| {
         CliError::package_invalid(format!(
             "failed to resolve debug package {}: {error}",

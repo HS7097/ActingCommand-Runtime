@@ -12,6 +12,7 @@ mod authoring;
 mod environment;
 mod maa_task_graph;
 mod package_build;
+mod package_publish;
 mod package_validate;
 mod resource_convert;
 
@@ -21,6 +22,9 @@ pub use environment::AuthoringEnvironmentSnapshot;
 pub use maa_task_graph::{MaaTaskGraph, MaaTaskGraphStats, compile_maa_task_graph};
 pub use package_build::{
     PackageBuildCatalog, PreparedPackageBuildTask, prepare_package_build_task,
+};
+pub use package_publish::{
+    PackagePublicationCommit, PackagePublicationTransaction, resolve_published_package_path,
 };
 pub use package_validate::validate_package;
 pub use resource_convert::{
