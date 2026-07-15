@@ -38,7 +38,11 @@ graph TD
   fut -.-> host
   host --> sched --> kernel --> dev --> emu
   res --> contain --> kernel
-  kernel --> ledger
+  host -->|sole write gate: receipts · rejections · debug verbs| ledger
+  sched -->|admission · full lease lifecycle · fencing| ledger
+  kernel -->|execution · app lifecycle · recovery| ledger
+  dev -->|input · capture · recognition| ledger
+  contain -->|resource authoring · validation · promotion| ledger
   ledger -.->|projections / subscriptions| clients
   kernel --- store
 ```
