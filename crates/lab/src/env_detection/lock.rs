@@ -51,6 +51,7 @@ trait LockEnvironment: Send + Sync {
     fn inspect_process(&self, pid: u32) -> Result<ProcessStatus, String>;
     fn next_owner_token(&self) -> Result<String, String>;
     fn now_unix_ms(&self) -> Result<u64, String>;
+    fn after_reclaim_claim_persisted(&self) {}
 }
 
 struct SystemLockEnvironment;
@@ -276,6 +277,8 @@ impl EnvResultLock {
                 &observed,
                 &proposed,
                 attempt,
+                &started,
+                environment,
             )?;
             let recovery = reclaim_under_claim(
                 &lock_path,
@@ -349,25 +352,136 @@ impl ReclaimClaim {
         observed: &EnvResultLockRecord,
         proposed: &EnvResultLockRecord,
         attempt: usize,
+        started: &Instant,
+        environment: &impl LockEnvironment,
     ) -> LockResult<Self> {
         let path = reclaim_claim_path(lock_path, observed);
-        match create_lock_file(&path, proposed, result_path) {
-            Ok(()) => Ok(Self {
-                path,
-                result_path: result_path.to_path_buf(),
-                owner_token: proposed.owner_token.clone(),
-            }),
-            Err(CreateLockError::AlreadyExists) => Err(lock_conflict(
+        for claim_attempt in 1..=MAX_RECLAIM_ATTEMPTS {
+            if started.elapsed() > MAX_RECLAIM_ELAPSED {
+                return Err(reclaim_exhausted(
+                    result_path,
+                    attempt,
+                    "reclaim claim recovery exceeded the shared timeout",
+                ));
+            }
+            match create_lock_file(&path, proposed, result_path) {
+                Ok(()) => {
+                    environment.after_reclaim_claim_persisted();
+                    return Ok(Self {
+                        path,
+                        result_path: result_path.to_path_buf(),
+                        owner_token: proposed.owner_token.clone(),
+                    });
+                }
+                Err(CreateLockError::Fatal(error)) => return Err(error),
+                Err(CreateLockError::AlreadyExists) => {}
+            }
+
+            let claimed = read_lock_record(&path, result_path).map_err(|error| {
+                lock_conflict(
+                    result_path,
+                    None,
+                    attempt,
+                    format!(
+                        "existing reclaim claim is unparseable or unverifiable: {}; claim_retry={claim_attempt}/{MAX_RECLAIM_ATTEMPTS}",
+                        error.message
+                    ),
+                )
+            })?;
+            confirm_reclaim_claim_owner_is_stale(
                 result_path,
-                Some(observed),
+                &claimed,
                 attempt,
-                format!(
-                    "another reclaimer owns claim {}; preserved for owner diagnosis",
-                    path.display()
-                ),
-            )),
-            Err(CreateLockError::Fatal(error)) => Err(error),
+                claim_attempt,
+                environment,
+            )?;
+
+            let confirmed = read_lock_record(&path, result_path).map_err(|error| {
+                lock_conflict(
+                    result_path,
+                    Some(&claimed),
+                    attempt,
+                    format!(
+                        "reclaim claim re-read failed: {}; claim_retry={claim_attempt}/{MAX_RECLAIM_ATTEMPTS}",
+                        error.message
+                    ),
+                )
+            })?;
+            if confirmed.owner_token != claimed.owner_token {
+                continue;
+            }
+            confirm_reclaim_claim_owner_is_stale(
+                result_path,
+                &confirmed,
+                attempt,
+                claim_attempt,
+                environment,
+            )?;
+
+            let tombstone = reclaim_claim_tombstone_path(&path, &confirmed, proposed);
+            match fs::rename(&path, &tombstone) {
+                Ok(()) => {}
+                Err(error) if error.kind() == io::ErrorKind::NotFound => continue,
+                Err(error) => {
+                    return Err(lock_conflict(
+                        result_path,
+                        Some(&confirmed),
+                        attempt,
+                        format!(
+                            "failed to atomically tombstone stale reclaim claim {}: {error}; claim_retry={claim_attempt}/{MAX_RECLAIM_ATTEMPTS}",
+                            path.display()
+                        ),
+                    ));
+                }
+            }
+
+            match create_lock_file(&path, proposed, result_path) {
+                Ok(()) => {
+                    let claim = Self {
+                        path: path.clone(),
+                        result_path: result_path.to_path_buf(),
+                        owner_token: proposed.owner_token.clone(),
+                    };
+                    if let Err(cleanup_error) = remove_tombstone(&tombstone, result_path) {
+                        return match claim.release() {
+                            Ok(()) => Err(cleanup_error),
+                            Err(release_error) => Err(combine_lock_errors(
+                                result_path,
+                                &cleanup_error,
+                                "new reclaim claim release also failed",
+                                &release_error,
+                            )),
+                        };
+                    }
+                    environment.after_reclaim_claim_persisted();
+                    return Ok(claim);
+                }
+                Err(CreateLockError::AlreadyExists) => {
+                    remove_tombstone(&tombstone, result_path)?;
+                }
+                Err(CreateLockError::Fatal(error)) => {
+                    return match remove_tombstone(&tombstone, result_path) {
+                        Ok(()) => Err(error),
+                        Err(cleanup_error) => Err(combine_lock_errors(
+                            result_path,
+                            &error,
+                            "stale reclaim claim tombstone cleanup also failed",
+                            &cleanup_error,
+                        )),
+                    };
+                }
+            }
         }
+
+        Err(lock_conflict(
+            result_path,
+            Some(observed),
+            attempt,
+            format!(
+                "reclaim claim recovery exhausted; claim_retries={MAX_RECLAIM_ATTEMPTS}/{MAX_RECLAIM_ATTEMPTS}; timeout_ms={}; escalation=fail_loud",
+                MAX_RECLAIM_ELAPSED.as_millis()
+            ),
+        ))
     }
 
     fn release(self) -> LockResult<()> {
@@ -390,6 +504,37 @@ impl ReclaimClaim {
                 ),
             )
         })
+    }
+}
+
+fn confirm_reclaim_claim_owner_is_stale(
+    result_path: &Path,
+    claim: &EnvResultLockRecord,
+    attempt: usize,
+    claim_attempt: usize,
+    environment: &impl LockEnvironment,
+) -> LockResult<()> {
+    match environment.inspect_process(claim.pid) {
+        Ok(ProcessStatus::Missing) => Ok(()),
+        Ok(ProcessStatus::Alive { start_token }) if start_token != claim.process_start_token => {
+            Ok(())
+        }
+        Ok(ProcessStatus::Alive { .. }) => Err(lock_conflict(
+            result_path,
+            Some(claim),
+            attempt,
+            format!(
+                "reclaim claim owner process is still active; claim_retry={claim_attempt}/{MAX_RECLAIM_ATTEMPTS}"
+            ),
+        )),
+        Err(error) => Err(lock_conflict(
+            result_path,
+            Some(claim),
+            attempt,
+            format!(
+                "reclaim claim owner liveness could not be proven: {error}; claim_retry={claim_attempt}/{MAX_RECLAIM_ATTEMPTS}"
+            ),
+        )),
     }
 }
 
@@ -622,6 +767,21 @@ fn reclaim_claim_path(lock_path: &Path, observed: &EnvResultLockRecord) -> PathB
     lock_path.with_file_name(format!("{file_name}.reclaim.{}", observed.owner_token))
 }
 
+fn reclaim_claim_tombstone_path(
+    claim_path: &Path,
+    observed: &EnvResultLockRecord,
+    proposed: &EnvResultLockRecord,
+) -> PathBuf {
+    let file_name = claim_path
+        .file_name()
+        .and_then(|value| value.to_str())
+        .unwrap_or("result.json.lock.reclaim");
+    claim_path.with_file_name(format!(
+        "{file_name}.stale.{}.{}",
+        observed.owner_token, proposed.owner_token
+    ))
+}
+
 fn remove_tombstone(tombstone: &Path, result_path: &Path) -> LockResult<()> {
     fs::remove_file(tombstone).map_err(|error| {
         lock_error(
@@ -829,6 +989,7 @@ mod tests {
         current: ProcessIdentity,
         statuses: Mutex<BTreeMap<u32, Result<ProcessStatus, String>>>,
         token_sequence: AtomicU64,
+        terminate_after_claim: bool,
     }
 
     impl FakeEnvironment {
@@ -840,6 +1001,19 @@ mod tests {
                 },
                 statuses: Mutex::new(BTreeMap::new()),
                 token_sequence: AtomicU64::new(1),
+                terminate_after_claim: false,
+            }
+        }
+
+        fn terminating_reclaimer(pid: u32, start_token: &str) -> Self {
+            Self {
+                current: ProcessIdentity {
+                    pid,
+                    start_token: start_token.to_string(),
+                },
+                statuses: Mutex::new(BTreeMap::new()),
+                token_sequence: AtomicU64::new(1),
+                terminate_after_claim: true,
             }
         }
 
@@ -874,6 +1048,12 @@ mod tests {
 
         fn now_unix_ms(&self) -> Result<u64, String> {
             Ok(1_750_000_000_000)
+        }
+
+        fn after_reclaim_claim_persisted(&self) {
+            if self.terminate_after_claim {
+                panic!("fault injection: reclaimer terminated after claim persistence");
+            }
         }
     }
 
@@ -991,59 +1171,57 @@ mod tests {
     }
 
     #[test]
-    fn two_reclaimers_have_one_winner() {
+    fn two_reclaimers_have_one_winner_for_fifty_rounds() {
         let temp = TempDir::new().unwrap();
-        let result = temp.path().join("envinst_a/result.json");
-        write_foreign_record(&result, 77, "foreign-start", &format!("{:064x}", 902));
         let environment = Arc::new(FakeEnvironment::new());
-        let barrier = Arc::new(Barrier::new(3));
-        let mut handles = Vec::new();
-        for _ in 0..2 {
-            let result = result.clone();
-            let environment = Arc::clone(&environment);
-            let barrier = Arc::clone(&barrier);
-            handles.push(std::thread::spawn(move || {
-                barrier.wait();
-                EnvResultLock::acquire_with(&result, environment.as_ref())
-            }));
-        }
-        barrier.wait();
-        let outcomes = handles
-            .into_iter()
-            .map(|handle| handle.join().unwrap())
-            .collect::<Vec<_>>();
-        assert_eq!(
-            outcomes.iter().filter(|result| result.is_ok()).count(),
-            1,
-            "{outcomes:?}"
-        );
-        assert_eq!(
-            outcomes.iter().filter(|result| result.is_err()).count(),
-            1,
-            "{outcomes:?}"
-        );
-        for error in outcomes.iter().filter_map(|result| result.as_ref().err()) {
-            assert!(
-                error.message.contains("lock conflict")
-                    || error.message.contains("recovery exhausted"),
-                "{}",
-                error.message
+        for round in 0..50 {
+            let result = temp.path().join(format!("envinst_{round}/result.json"));
+            write_foreign_record(
+                &result,
+                77,
+                "foreign-start",
+                &format!("{:064x}", 902 + round),
             );
+            let barrier = Arc::new(Barrier::new(3));
+            let mut handles = Vec::new();
+            for _ in 0..2 {
+                let result = result.clone();
+                let environment = Arc::clone(&environment);
+                let barrier = Arc::clone(&barrier);
+                handles.push(std::thread::spawn(move || {
+                    barrier.wait();
+                    EnvResultLock::acquire_with(&result, environment.as_ref())
+                }));
+            }
+            barrier.wait();
+            let outcomes = handles
+                .into_iter()
+                .map(|handle| handle.join().unwrap())
+                .collect::<Vec<_>>();
+            assert!(
+                outcomes.iter().filter(|outcome| outcome.is_ok()).count() == 1,
+                "round={round} outcomes={outcomes:?}"
+            );
+            assert!(
+                outcomes.iter().filter(|outcome| outcome.is_err()).count() == 1,
+                "round={round} outcomes={outcomes:?}"
+            );
+            for error in outcomes.iter().filter_map(|outcome| outcome.as_ref().err()) {
+                assert!(
+                    error.message.contains("lock conflict")
+                        || error.message.contains("recovery exhausted"),
+                    "round={round} error={}",
+                    error.message
+                );
+            }
+            outcomes
+                .into_iter()
+                .find_map(Result::ok)
+                .unwrap()
+                .release()
+                .unwrap();
+            assert_no_recovery_artifacts(&result);
         }
-        outcomes
-            .into_iter()
-            .find_map(Result::ok)
-            .unwrap()
-            .release()
-            .unwrap();
-        let lock_dir = result.parent().unwrap();
-        assert!(
-            fs::read_dir(lock_dir).unwrap().all(|entry| {
-                let name = entry.unwrap().file_name().to_string_lossy().into_owned();
-                !name.contains(".reclaim.") && !name.contains(".stale.")
-            }),
-            "successful recovery must not leave claim or tombstone artifacts"
-        );
     }
 
     #[test]
@@ -1064,12 +1242,79 @@ mod tests {
         lock.release().unwrap();
     }
 
+    #[test]
+    fn unconfirmed_reclaim_claim_owner_is_preserved() {
+        let temp = TempDir::new().unwrap();
+        let result = temp.path().join("envinst_a/result.json");
+        let environment = FakeEnvironment::new();
+        environment.set_status(88, Err("access denied".to_string()));
+        let observed = write_foreign_record(&result, 77, "foreign-start", &format!("{:064x}", 904));
+        let claim_path = reclaim_claim_path(
+            &normalize_result_path(&result)
+                .unwrap()
+                .with_extension("json.lock"),
+            &observed,
+        );
+        write_record_at(
+            &claim_path,
+            &result,
+            88,
+            "claim-start",
+            &format!("{:064x}", 905),
+        );
+
+        let error = EnvResultLock::acquire_with(&result, &environment)
+            .expect_err("unverifiable reclaim claim owner must be preserved");
+        assert!(
+            error
+                .message
+                .contains("reclaim claim owner liveness could not be proven")
+        );
+        assert!(claim_path.exists());
+        assert!(
+            normalize_result_path(&result)
+                .unwrap()
+                .with_extension("json.lock")
+                .exists()
+        );
+    }
+
+    #[test]
+    fn terminated_reclaimer_claim_is_recovered_without_manual_cleanup() {
+        let temp = TempDir::new().unwrap();
+        let result = temp.path().join("envinst_a/result.json");
+        let observed =
+            write_foreign_record(&result, 77, "former-owner-start", &format!("{:064x}", 906));
+        let crashing_result = result.clone();
+        let crashed = std::thread::spawn(move || {
+            let environment = FakeEnvironment::terminating_reclaimer(88, "reclaimer-start");
+            EnvResultLock::acquire_with(&crashing_result, &environment)
+        })
+        .join();
+        assert!(crashed.is_err(), "fault injection must terminate reclaimer");
+
+        let lock_path = normalize_result_path(&result)
+            .unwrap()
+            .with_extension("json.lock");
+        let claim_path = reclaim_claim_path(&lock_path, &observed);
+        assert!(lock_path.exists(), "fault point must precede stale rename");
+        assert!(
+            claim_path.exists(),
+            "terminated reclaimer must leave its claim"
+        );
+
+        let recovery_environment = FakeEnvironment::new();
+        let lock = EnvResultLock::acquire_with(&result, &recovery_environment).unwrap();
+        lock.release().unwrap();
+        assert_no_recovery_artifacts(&result);
+    }
+
     fn write_foreign_record(
         result_path: &Path,
         pid: u32,
         process_start_token: &str,
         owner_token: &str,
-    ) {
+    ) -> EnvResultLockRecord {
         let normalized = normalize_result_path(result_path).unwrap();
         let record = EnvResultLockRecord {
             schema_version: LOCK_SCHEMA_VERSION.to_string(),
@@ -1084,6 +1329,37 @@ mod tests {
             serde_json::to_vec_pretty(&record).unwrap(),
         )
         .unwrap();
+        record
+    }
+
+    fn write_record_at(
+        path: &Path,
+        result_path: &Path,
+        pid: u32,
+        process_start_token: &str,
+        owner_token: &str,
+    ) {
+        let normalized = normalize_result_path(result_path).unwrap();
+        let record = EnvResultLockRecord {
+            schema_version: LOCK_SCHEMA_VERSION.to_string(),
+            owner_token: owner_token.to_string(),
+            pid,
+            process_start_token: process_start_token.to_string(),
+            acquired_at_unix_ms: 1_750_000_000_000,
+            normalized_result_path: normalized.display().to_string(),
+        };
+        fs::write(path, serde_json::to_vec_pretty(&record).unwrap()).unwrap();
+    }
+
+    fn assert_no_recovery_artifacts(result: &Path) {
+        let lock_dir = result.parent().unwrap();
+        assert!(
+            fs::read_dir(lock_dir).unwrap().all(|entry| {
+                let name = entry.unwrap().file_name().to_string_lossy().into_owned();
+                !name.contains(".reclaim.") && !name.contains(".stale.")
+            }),
+            "successful recovery must not leave claim or tombstone artifacts"
+        );
     }
 
     fn wait_for_child_identity(environment: &SystemLockEnvironment, pid: u32) -> ProcessStatus {
