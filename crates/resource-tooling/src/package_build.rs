@@ -12,8 +12,10 @@ use crate::{
     UnsupportedRecognitionTargetResponse,
 };
 use actingcommand_contract::{LabError as CliError, LabResult as CliOutcome};
-use actingcommand_pack_containment::{Containment, ContainmentError, InstanceId, Sha256Hash};
-use actingcommand_recognition_pack::PackRect;
+use actingcommand_pack_containment::{
+    ContainmentError, ContainmentLimits, Sha256Hash, validate_recognition_metadata,
+};
+use actingcommand_recognition_pack::{AssetResolver, PackRect, RecognitionPackError};
 use serde::Deserialize;
 #[cfg(test)]
 use serde_json::json;
@@ -24,9 +26,10 @@ use std::fs::{self, File};
 use std::io::{self, Read, Write};
 use std::path::{Component, Path, PathBuf};
 use std::process::Command;
+use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
-use zip::ZipWriter;
 use zip::write::FileOptions;
+use zip::{ZipArchive, ZipWriter};
 
 const DANGEROUS_EXTENSIONS: &[&str] = &[
     "py", "exe", "bat", "cmd", "ps1", "sh", "js", "vbs", "msi", "dll", "scr", "com", "jar",
@@ -690,6 +693,22 @@ impl PackagePayload {
             Self::Buffered { sha256, .. } | Self::SourceFile { sha256, .. } => sha256,
         }
     }
+
+    fn expected_len(&self) -> CliOutcome<u64> {
+        match self {
+            Self::Buffered { bytes, .. } => u64::try_from(bytes.len()).map_err(|_| {
+                CliError::package_invalid("buffered package entry length does not fit in u64")
+            }),
+            Self::SourceFile { expected_len, .. } => Ok(*expected_len),
+        }
+    }
+
+    fn buffered_bytes(&self) -> Option<&[u8]> {
+        match self {
+            Self::Buffered { bytes, .. } => Some(bytes),
+            Self::SourceFile { .. } => None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -699,6 +718,9 @@ struct PackagePayloadStats {
     peak_buffered_payload_bytes: usize,
     peak_streamed_payload_bytes: usize,
     peak_resident_payload_bytes: usize,
+    validation_streamed_payload_bytes: u64,
+    peak_validation_streamed_payload_bytes: usize,
+    peak_validation_resident_payload_bytes: usize,
 }
 
 impl PackagePayloadStats {
@@ -739,6 +761,29 @@ impl PackagePayloadStats {
                 CliError::package_invalid("package resident payload byte count overflow")
             })?;
         self.peak_resident_payload_bytes = self.peak_resident_payload_bytes.max(resident);
+        Ok(())
+    }
+
+    fn observe_validation_streamed(&mut self, bytes: usize) -> CliOutcome<()> {
+        self.observe_streamed(bytes)?;
+        self.validation_streamed_payload_bytes = self
+            .validation_streamed_payload_bytes
+            .checked_add(u64::try_from(bytes).map_err(|_| {
+                CliError::package_invalid("validation chunk length does not fit in u64")
+            })?)
+            .ok_or_else(|| {
+                CliError::package_invalid("validation streamed payload byte count overflow")
+            })?;
+        self.peak_validation_streamed_payload_bytes =
+            self.peak_validation_streamed_payload_bytes.max(bytes);
+        let resident = self
+            .buffered_payload_bytes
+            .checked_add(bytes)
+            .ok_or_else(|| {
+                CliError::package_invalid("validation resident payload byte count overflow")
+            })?;
+        self.peak_validation_resident_payload_bytes =
+            self.peak_validation_resident_payload_bytes.max(resident);
         Ok(())
     }
 }
@@ -940,6 +985,18 @@ impl PackageEntries {
     fn contains(&self, path: &str) -> bool {
         self.files.contains_key(path)
     }
+
+    fn required_buffered(&self, path: &str) -> CliOutcome<&[u8]> {
+        let payload = self
+            .files
+            .get(path)
+            .ok_or_else(|| CliError::package_invalid(format!("missing package entry: {path}")))?;
+        payload.buffered_bytes().ok_or_else(|| {
+            CliError::package_invalid(format!(
+                "package metadata entry must be buffered during validation: {path}"
+            ))
+        })
+    }
 }
 
 fn validate_max_buffered_payload_bytes(max_buffered_payload_bytes: usize) -> CliOutcome<()> {
@@ -997,6 +1054,8 @@ impl Write for BoundedPayloadWriter {
 
 struct PackageWrite {
     validation: LabPackageValidationResponse,
+    #[cfg(test)]
+    stats: PackagePayloadStats,
 }
 
 fn write_and_validate_package(
@@ -1006,7 +1065,7 @@ fn write_and_validate_package(
 ) -> CliOutcome<PackageWrite> {
     let temp = temp_zip_path(out)?;
     write_zip(&temp, &mut entries)?;
-    let validation = match validate_generated_package(&temp) {
+    let validation = match validate_generated_package(&temp, &mut entries) {
         Ok(value) => value,
         Err(err) => {
             let _ = fs::remove_file(&temp);
@@ -1017,7 +1076,11 @@ fn write_and_validate_package(
         fs::remove_file(&temp).map_err(|err| {
             CliError::package_invalid(format!("failed to remove {}: {err}", temp.display()))
         })?;
-        return Ok(PackageWrite { validation });
+        return Ok(PackageWrite {
+            validation,
+            #[cfg(test)]
+            stats: entries.stats,
+        });
     }
     if let Some(parent) = out.parent() {
         fs::create_dir_all(parent).map_err(|err| {
@@ -1045,7 +1108,11 @@ fn write_and_validate_package(
             out.display()
         ))
     })?;
-    Ok(PackageWrite { validation })
+    Ok(PackageWrite {
+        validation,
+        #[cfg(test)]
+        stats: entries.stats,
+    })
 }
 
 fn write_zip(path: &Path, entries: &mut PackageEntries) -> CliOutcome<()> {
@@ -1160,69 +1227,69 @@ fn stream_approved_source<W: Write>(
     Ok(format!("{:x}", hasher.finalize()))
 }
 
-fn validate_generated_package(path: &Path) -> CliOutcome<LabPackageValidationResponse> {
-    let bytes = fs::read(path).map_err(|error| {
-        CliError::package_invalid(format!(
-            "failed to read Lab package {}: {error}",
-            path.display()
-        ))
+fn validate_generated_package(
+    path: &Path,
+    entries: &mut PackageEntries,
+) -> CliOutcome<LabPackageValidationResponse> {
+    let entry_count = validate_generated_archive(path, entries)?;
+    let control_value = parse_buffered_json(entries, "control.json")?;
+    let control: LabControl = serde_json::from_value(control_value).map_err(|error| {
+        CliError::package_invalid(format!("failed to parse control.json: {error}"))
     })?;
-    let expected = Sha256Hash::digest(&bytes);
-    let instance = InstanceId::new("lab-validate").map_err(containment_error)?;
-    let mut containment = Containment::new();
-    let bundle = containment
-        .load(&instance, &bytes, &expected)
-        .map_err(containment_error)?;
-    let control = lab_control_from_bundle(bundle)?;
     control.validate()?;
-    validate_manifest_entry_task_id(
-        Path::new(bundle.manifest_path()),
-        bundle.manifest(),
-        &control,
-    )?;
-    let operation_bundle: OperationBundle = serde_json::from_value(bundle.operation().clone())
-        .map_err(|error| {
-            CliError::package_invalid(format!(
-                "failed to parse {}: {error}",
-                bundle.operation_path()
-            ))
+
+    let resource_root = "resources";
+    let manifest_path = format!("{resource_root}/manifest.json");
+    let manifest = parse_buffered_json(entries, &manifest_path)?;
+    validate_manifest_entry_task_id(Path::new(&manifest_path), &manifest, &control)?;
+    validate_generated_manifest_hashes(&manifest, entries, resource_root)?;
+
+    let operation_path = format!(
+        "{resource_root}/operations/{}/task.json",
+        control.entry_task_id
+    );
+    let operation_value = parse_buffered_json(entries, &operation_path)?;
+    let operation_bundle: OperationBundle =
+        serde_json::from_value(operation_value).map_err(|error| {
+            CliError::package_invalid(format!("failed to parse {operation_path}: {error}"))
         })?;
     operation_bundle.validate(&control, |relative| {
-        bundle
-            .resource_entry(&format!(
-                "operations/{}/{}",
-                control.entry_task_id, relative
-            ))
-            .map(|_| true)
-            .or_else(|error| match error {
-                ContainmentError::MissingEntry { .. } => Ok(false),
-                other => Err(containment_error(other)),
+        Ok(entries.contains(&format!(
+            "{resource_root}/operations/{}/{}",
+            control.entry_task_id, relative
+        )))
+    })?;
+
+    let stem = format!("{}.{}", control.game, control.server);
+    let pack = format!("{resource_root}/recognition/{stem}.pack.json");
+    let pages = format!("{resource_root}/recognition/{stem}.pages.json");
+    let pack_json = buffered_utf8(entries, &pack)?;
+    let pages_json = buffered_utf8(entries, &pages)?;
+    let resolver = Arc::new(PackageEntryAssetResolver {
+        paths: entries.files.keys().cloned().collect(),
+        resource_root: resource_root.to_string(),
+    });
+    let unsupported_targets =
+        validate_recognition_metadata(&pack, pack_json, &pages, pages_json, resolver)
+            .map_err(containment_error)?
+            .into_iter()
+            .map(|target| UnsupportedRecognitionTargetResponse {
+                id: target.id,
+                reason: target.reason,
             })
-    })?;
-    let evaluator = bundle.evaluator().ok_or_else(|| {
-        CliError::package_invalid("missing recognition evaluator for Lab package")
-    })?;
-    bundle
-        .detector()
-        .ok_or_else(|| CliError::package_invalid("missing page detector for Lab package"))?;
-    let unsupported_targets = evaluator
-        .unsupported_targets()
-        .iter()
-        .map(|target| UnsupportedRecognitionTargetResponse {
-            id: target.id.clone(),
-            reason: target.reason.clone(),
-        })
-        .collect::<Vec<_>>();
-    let pack = bundle
-        .recognition_pack_path()
-        .ok_or_else(|| CliError::package_invalid("missing recognition pack for Lab package"))?;
-    let pages = bundle
-        .pages_path()
-        .ok_or_else(|| CliError::package_invalid("missing page set for Lab package"))?;
+            .collect::<Vec<_>>();
+    let navigation = format!("{resource_root}/navigation/{stem}.navigation.json");
+    let navigation = if entries.contains(&navigation) {
+        parse_buffered_json(entries, &navigation)?;
+        Some(navigation)
+    } else {
+        None
+    };
+
     Ok(LabPackageValidationResponse {
         zip: path.display().to_string(),
         status: "valid".to_string(),
-        entry_count: bundle.entry_count(),
+        entry_count,
         control: LabPackageControlResponse {
             package_id: control.package_id,
             execution_mode: control.execution_mode,
@@ -1235,28 +1302,255 @@ fn validate_generated_package(path: &Path) -> CliOutcome<LabPackageValidationRes
             entry_task_id: control.entry_task_id,
         },
         resources: LabPackageResourcesResponse {
-            resource_root: bundle.resource_root().to_string(),
-            manifest: bundle.manifest_path().to_string(),
-            operation: bundle.operation_path().to_string(),
+            resource_root: resource_root.to_string(),
+            manifest: manifest_path,
+            operation: operation_path,
             operation_count: operation_bundle.operations.len(),
-            pack: pack.to_string(),
+            pack,
             recognition_unsupported_target_count: unsupported_targets.len(),
             recognition_unsupported_targets: unsupported_targets,
-            pages: pages.to_string(),
-            navigation: bundle.navigation_path().map(str::to_string),
+            pages,
+            navigation,
         },
     })
 }
 
-fn lab_control_from_bundle(
-    bundle: &actingcommand_pack_containment::LoadedBundle,
-) -> CliOutcome<LabControl> {
-    let control = bundle
-        .control()
-        .ok_or_else(|| CliError::package_invalid("Lab package must include control.json"))?;
-    serde_json::from_value(control.clone()).map_err(|error| {
-        CliError::package_invalid(format!("failed to parse control.json: {error}"))
+fn validate_generated_archive(path: &Path, entries: &mut PackageEntries) -> CliOutcome<usize> {
+    let limits = ContainmentLimits::default();
+    let metadata = fs::metadata(path).map_err(|error| {
+        CliError::package_invalid(format!(
+            "failed to inspect generated package {}: {error}",
+            path.display()
+        ))
+    })?;
+    if !metadata.is_file() {
+        return Err(CliError::package_invalid(format!(
+            "generated package is not a regular file: {}",
+            path.display()
+        )));
+    }
+    if metadata.len() > limits.max_compressed_bytes {
+        return Err(CliError::package_invalid(format!(
+            "generated package {} is {} bytes, exceeding compressed limit {}",
+            path.display(),
+            metadata.len(),
+            limits.max_compressed_bytes
+        )));
+    }
+    let file = File::open(path).map_err(|error| {
+        CliError::package_invalid(format!(
+            "failed to open generated package {}: {error}",
+            path.display()
+        ))
+    })?;
+    let mut archive = ZipArchive::new(file).map_err(|error| {
+        CliError::package_invalid(format!(
+            "failed to parse generated package {}: {error}",
+            path.display()
+        ))
+    })?;
+    if archive.len() > limits.max_entry_count {
+        return Err(CliError::package_invalid(format!(
+            "generated package entry count {} exceeds limit {}",
+            archive.len(),
+            limits.max_entry_count
+        )));
+    }
+
+    let mut seen = BTreeSet::new();
+    let mut total_decompressed = 0u64;
+    for index in 0..archive.len() {
+        let mut entry = archive.by_index(index).map_err(|error| {
+            CliError::package_invalid(format!(
+                "failed to inspect generated package entry {index}: {error}"
+            ))
+        })?;
+        let entry_path = entry.name().to_string();
+        validate_zip_entry_path(&entry_path)?;
+        if !seen.insert(entry_path.to_ascii_lowercase()) {
+            return Err(CliError::package_invalid(format!(
+                "duplicate package entry: {entry_path}"
+            )));
+        }
+        let expected = entries.files.get(&entry_path).ok_or_else(|| {
+            CliError::package_invalid(format!(
+                "generated package contains unexpected entry: {entry_path}"
+            ))
+        })?;
+        let expected_len = expected.expected_len()?;
+        if entry.size() != expected_len {
+            return Err(CliError::package_invalid(format!(
+                "generated package entry length mismatch for {entry_path}: expected {expected_len}, found {}",
+                entry.size()
+            )));
+        }
+        if entry.size()
+            > u64::try_from(entries.max_buffered_payload_bytes).map_err(|_| {
+                CliError::package_invalid("max_buffered_payload_bytes does not fit in u64")
+            })?
+        {
+            return Err(CliError::package_invalid(format!(
+                "generated package entry {entry_path} is {} bytes, exceeding max_buffered_payload_bytes={}",
+                entry.size(),
+                entries.max_buffered_payload_bytes
+            )));
+        }
+        if entry.size() > limits.max_entry_bytes {
+            return Err(CliError::package_invalid(format!(
+                "generated package entry {entry_path} is {} bytes, exceeding entry limit {}",
+                entry.size(),
+                limits.max_entry_bytes
+            )));
+        }
+        total_decompressed = total_decompressed
+            .checked_add(entry.size())
+            .ok_or_else(|| CliError::package_invalid("package decompressed size overflow"))?;
+        if total_decompressed > limits.max_total_decompressed_bytes {
+            return Err(CliError::package_invalid(format!(
+                "generated package decompressed size {total_decompressed} exceeds limit {}",
+                limits.max_total_decompressed_bytes
+            )));
+        }
+        let actual_sha256 = stream_zip_entry_hash(&mut entry, &entry_path, &mut entries.stats)?;
+        if actual_sha256 != expected.sha256() {
+            return Err(CliError::package_invalid(format!(
+                "generated package entry hash mismatch for {entry_path}: expected {}, found {actual_sha256}",
+                expected.sha256()
+            )));
+        }
+    }
+
+    if seen.len() != entries.files.len() {
+        let missing = entries
+            .files
+            .keys()
+            .find(|path| !seen.contains(&path.to_ascii_lowercase()))
+            .expect("entry count mismatch implies a missing expected path");
+        return Err(CliError::package_invalid(format!(
+            "generated package is missing expected entry: {missing}"
+        )));
+    }
+    Ok(archive.len())
+}
+
+fn stream_zip_entry_hash<R: Read>(
+    reader: &mut R,
+    path: &str,
+    stats: &mut PackagePayloadStats,
+) -> CliOutcome<String> {
+    let mut hasher = Sha256::new();
+    let mut buffer = [0u8; PACKAGE_COMPRESSOR_INPUT_BUFFER_BYTES];
+    loop {
+        let read = reader.read(&mut buffer).map_err(|error| {
+            CliError::package_invalid(format!(
+                "failed to stream generated package entry {path}: {error}"
+            ))
+        })?;
+        if read == 0 {
+            break;
+        }
+        stats.observe_validation_streamed(read)?;
+        hasher.update(&buffer[..read]);
+    }
+    Ok(format!("{:x}", hasher.finalize()))
+}
+
+fn parse_buffered_json(entries: &PackageEntries, path: &str) -> CliOutcome<Value> {
+    serde_json::from_slice(entries.required_buffered(path)?)
+        .map_err(|error| CliError::package_invalid(format!("failed to parse {path}: {error}")))
+}
+
+fn buffered_utf8<'a>(entries: &'a PackageEntries, path: &str) -> CliOutcome<&'a str> {
+    std::str::from_utf8(entries.required_buffered(path)?).map_err(|error| {
+        CliError::package_invalid(format!("failed to decode {path} as UTF-8: {error}"))
     })
+}
+
+#[derive(Debug, Deserialize)]
+struct GeneratedManifestFile {
+    path: String,
+    #[serde(default)]
+    sha256: Option<String>,
+    #[serde(default)]
+    hash: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct GeneratedManifestHashes {
+    #[serde(default)]
+    hashes: BTreeMap<String, String>,
+    #[serde(default)]
+    files: Vec<GeneratedManifestFile>,
+}
+
+fn validate_generated_manifest_hashes(
+    manifest: &Value,
+    entries: &PackageEntries,
+    resource_root: &str,
+) -> CliOutcome<()> {
+    let hashes: GeneratedManifestHashes =
+        serde_json::from_value(manifest.clone()).map_err(|error| {
+            CliError::package_invalid(format!(
+                "failed to parse {resource_root}/manifest.json hashes: {error}"
+            ))
+        })?;
+    for (path, expected) in hashes
+        .hashes
+        .iter()
+        .map(|(path, hash)| (path.as_str(), hash.as_str()))
+        .chain(hashes.files.iter().filter_map(|file| {
+            file.sha256
+                .as_deref()
+                .or(file.hash.as_deref())
+                .map(|hash| (file.path.as_str(), hash))
+        }))
+    {
+        if !is_safe_package_relative_path(path) {
+            return Err(CliError::package_invalid(format!(
+                "unsafe manifest hash path: {path}"
+            )));
+        }
+        let resolved = if entries.contains(path) {
+            path.to_string()
+        } else {
+            format!("{resource_root}/{path}")
+        };
+        let payload = entries.files.get(&resolved).ok_or_else(|| {
+            CliError::package_invalid(format!("missing package entry: {resolved}"))
+        })?;
+        let expected = Sha256Hash::parse_hex(expected).map_err(containment_error)?;
+        if payload.sha256() != expected.to_string() {
+            return Err(CliError::package_invalid(format!(
+                "manifest hash mismatch for {resolved}: expected {expected}, actual {}",
+                payload.sha256()
+            )));
+        }
+    }
+    Ok(())
+}
+
+#[derive(Debug)]
+struct PackageEntryAssetResolver {
+    paths: BTreeSet<String>,
+    resource_root: String,
+}
+
+impl AssetResolver for PackageEntryAssetResolver {
+    fn read_asset(&self, path: &str) -> Result<Vec<u8>, RecognitionPackError> {
+        Err(RecognitionPackError::fatal(format!(
+            "bounded package validation does not materialize asset '{path}'"
+        )))
+    }
+
+    fn contains_asset(&self, path: &str) -> bool {
+        is_safe_package_relative_path(path)
+            && (self.paths.contains(path)
+                || self.paths.contains(&format!(
+                    "{}/{}",
+                    self.resource_root.trim_end_matches('/'),
+                    path.trim_start_matches('/')
+                )))
+    }
 }
 
 fn validate_manifest_entry_task_id(
@@ -2799,7 +3093,7 @@ mod tests {
     }
 
     #[test]
-    fn streamed_payload_peak_is_bounded_when_total_exceeds_four_budgets() {
+    fn production_validation_peak_is_bounded_when_total_exceeds_four_budgets() {
         let temp = TempDir::new().expect("temp");
         let approved = temp.path().join("approved");
         fs::create_dir_all(&approved).expect("approved root");
@@ -2815,22 +3109,100 @@ mod tests {
                 .add_file(&source, &format!("resources/assets/asset-{index}.bin"))
                 .expect("streamed source");
         }
+        entries
+            .add_json(
+                "control.json",
+                control_json(
+                    "arknights.cn.operator_task",
+                    "navigable_route",
+                    "arknights",
+                    "cn",
+                    (1280, 720),
+                    "operator_task",
+                ),
+            )
+            .expect("control");
+        entries
+            .add_json(
+                "resources/operations/operator_task/task.json",
+                json!({
+                    "schema_version": "0.3",
+                    "task_id": "operator_task",
+                    "game": "arknights",
+                    "server_scope": ["cn"],
+                    "coordinate_space": {"width": 1280, "height": 720},
+                    "operations": [{
+                        "id": "noop",
+                        "purpose": "bounded validation fixture",
+                        "from": "home",
+                        "to": null,
+                        "click": {"kind": "point", "x": 10, "y": 10},
+                        "unguarded_trusted_coordinate": true
+                    }]
+                }),
+            )
+            .expect("operation");
+        entries
+            .add_json(
+                "resources/recognition/arknights.cn.pack.json",
+                json!({
+                    "schema_version": "0.3",
+                    "game": "arknights",
+                    "server": "cn",
+                    "coordinate_space": {"width": 1280, "height": 720},
+                    "targets": [{
+                        "type": "color",
+                        "id": "page/home",
+                        "region": {"x": 0, "y": 0, "width": 1, "height": 1},
+                        "expected": [0, 0, 0]
+                    }]
+                }),
+            )
+            .expect("recognition pack");
+        entries
+            .add_json(
+                "resources/recognition/arknights.cn.pages.json",
+                json!({
+                    "schema_version": "0.3",
+                    "pages": [{"id": "home", "required": ["page/home"]}]
+                }),
+            )
+            .expect("pages");
+        entries
+            .add_json(
+                "resources/navigation/arknights.cn.navigation.json",
+                json!({"schema_version": "0.3", "control_points": []}),
+            )
+            .expect("navigation");
         entries.add_manifest("operator_task").expect("manifest");
         let out = temp.path().join("bounded.zip");
-        write_zip(&out, &mut entries).expect("bounded zip");
+        let write = write_and_validate_package(&out, entries, false).expect("bounded package");
 
         let logical_source_bytes = source_size * source_count;
         assert!(logical_source_bytes >= budget * 4);
         assert!(
-            entries.stats.logical_payload_bytes
+            write.stats.logical_payload_bytes
                 >= u64::try_from(logical_source_bytes).expect("logical bytes")
         );
-        assert!(entries.stats.peak_buffered_payload_bytes <= budget);
-        assert!(entries.stats.peak_streamed_payload_bytes <= PACKAGE_COMPRESSOR_INPUT_BUFFER_BYTES);
+        assert!(write.stats.peak_buffered_payload_bytes <= budget);
+        assert!(write.stats.peak_streamed_payload_bytes <= PACKAGE_COMPRESSOR_INPUT_BUFFER_BYTES);
         assert!(
-            entries.stats.peak_resident_payload_bytes
+            write.stats.peak_resident_payload_bytes
                 <= budget + PACKAGE_COMPRESSOR_INPUT_BUFFER_BYTES
         );
+        assert_eq!(
+            write.stats.validation_streamed_payload_bytes,
+            write.stats.logical_payload_bytes
+        );
+        assert!(
+            write.stats.peak_validation_streamed_payload_bytes
+                <= PACKAGE_COMPRESSOR_INPUT_BUFFER_BYTES
+        );
+        assert!(
+            write.stats.peak_validation_resident_payload_bytes
+                <= budget + PACKAGE_COMPRESSOR_INPUT_BUFFER_BYTES
+        );
+        assert_eq!(write.validation.status, "valid");
         assert!(out.is_file());
     }
 
