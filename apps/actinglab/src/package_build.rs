@@ -8,7 +8,7 @@ use actingcommand_lab::{
 };
 use actingcommand_resource_tooling::PackagePublicationTransaction;
 #[cfg(test)]
-use actingcommand_resource_tooling::resolve_published_package_path;
+use actingcommand_resource_tooling::open_published_package;
 use serde::Serialize;
 use serde_json::Value;
 #[cfg(test)]
@@ -425,7 +425,9 @@ mod tests {
             data["validation"].pointer("/control/execution_mode"),
             Some(&json!("recognize_only"))
         );
-        assert!(resolve_published_package_path(&out).unwrap().is_file());
+        let package = open_published_package(&out).unwrap();
+        assert!(package.path().is_file());
+        package.close().unwrap();
     }
 
     #[test]
@@ -498,15 +500,17 @@ mod tests {
                 package.pointer("/validation/control/execution_mode"),
                 Some(&json!("navigable_route"))
             );
-            let resolved = resolve_published_package_path(&out).unwrap();
-            assert!(resolved.is_file());
+            let package = open_published_package(&out).unwrap();
+            assert!(package.path().is_file());
             generation_dirs.insert(
-                resolved
+                package
+                    .path()
                     .parent()
                     .and_then(Path::parent)
                     .expect("generation directory")
                     .to_path_buf(),
             );
+            package.close().unwrap();
         }
         assert_eq!(generation_dirs.len(), 1);
         assert_eq!(

@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
+use super::contained_resources::finish_package_use;
 use super::{
     CliError, CliOutcome, FlagArgs, GlobalOptions, read_user_config, resolve_instance_id,
     runtime_slice_cli, runtime_state_root,
@@ -7,7 +8,7 @@ use super::{
 use actingcommand_contract::{ContainedTaskRequest, EventActor, EventSource};
 use actingcommand_lab::LabValidateRequest;
 use actingcommand_pack_containment::{ContainmentError, Sha256Hash};
-use actingcommand_resource_tooling::resolve_published_package_path;
+use actingcommand_resource_tooling::open_published_package;
 use actingcommand_runtime_client::{RuntimeClient, RuntimeClientConfig};
 use serde::Serialize;
 use serde_json::{Value, json};
@@ -24,11 +25,11 @@ pub(super) fn run_lab_run(global: &GlobalOptions, args: &[String]) -> CliOutcome
         .optional_path("--zip")
         .or_else(|| flags.optional_path("--package"))
         .ok_or_else(|| CliError::usage("lab run requires --zip <input.zip>"))?;
-    let package = resolve_published_package_path(&package)?;
-    let package = fs::canonicalize(&package).map_err(|error| {
+    let package_reader = open_published_package(&package)?;
+    let package = fs::canonicalize(package_reader.path()).map_err(|error| {
         CliError::package_invalid(format!(
             "failed to canonicalize contained task package {}: {error}",
-            package.display()
+            package_reader.path().display()
         ))
     })?;
     let expected_sha256 = required_expected_sha256(&flags)?;
@@ -45,7 +46,8 @@ pub(super) fn run_lab_run(global: &GlobalOptions, args: &[String]) -> CliOutcome
     .map_err(runtime_slice_cli::map_runtime_error)?;
     let output = client
         .run_contained_task(&instance, request)
-        .map_err(runtime_slice_cli::map_runtime_error)?;
+        .map_err(runtime_slice_cli::map_runtime_error);
+    let output = finish_package_use(output, package_reader.close())?;
     let projection = serialize_response(&output)?;
     write_projection_package(&output_path, &projection)?;
     Ok(json!({

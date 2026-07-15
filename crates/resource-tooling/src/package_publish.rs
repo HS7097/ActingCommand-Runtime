@@ -26,11 +26,13 @@ const STATE_DIRECTORY: &str = ".actingcommand-publish";
 const AUTHORITIES_DIRECTORY: &str = "authorities";
 const LOCKS_DIRECTORY: &str = "locks";
 const GENERATIONS_DIRECTORY: &str = "generations";
+const READER_LEASES_DIRECTORY: &str = "reader-leases";
 const POINTER_FILE: &str = "current.pointer.jsonl";
 const GENERATION_MANIFEST_FILE: &str = "generation.json";
 const POINTER_SCHEMA: &str = "actingcommand.package-pointer.v1";
 const GENERATION_SCHEMA: &str = "actingcommand.package-generation.v1";
 const LOCK_SCHEMA: &str = "actingcommand.package-publish-lock.v1";
+const READER_LEASE_SCHEMA: &str = "actingcommand.package-reader-lease.v1";
 const MAX_LOCK_ATTEMPTS: usize = 8;
 const LOCK_RETRY_DELAY: Duration = Duration::from_millis(25);
 const HASH_BUFFER_BYTES: usize = 64 * 1024;
@@ -42,6 +44,84 @@ pub struct PackagePublicationCommit {
     pub generation_id: String,
     /// Normalized logical output paths mapped to immutable generation files.
     pub resolved_outputs: BTreeMap<String, PathBuf>,
+}
+
+/// Pins one committed package generation while its file is being consumed.
+#[must_use = "published package readers must be read and closed explicitly"]
+#[derive(Debug)]
+pub struct PublishedPackageReader {
+    logical_path: PathBuf,
+    resolved_path: PathBuf,
+    file: File,
+    lease: Option<GenerationReaderLease>,
+}
+
+impl PublishedPackageReader {
+    /// Returns the immutable file path protected by this reader capability.
+    pub fn path(&self) -> &Path {
+        &self.resolved_path
+    }
+
+    /// Returns the opened immutable package file.
+    pub fn file_mut(&mut self) -> &mut File {
+        &mut self.file
+    }
+
+    /// Returns metadata for the opened immutable package file.
+    pub fn metadata(&self) -> LabResult<fs::Metadata> {
+        self.file.metadata().map_err(|error| {
+            publication_error(format!(
+                "failed to inspect package {} resolved from {}: {error}",
+                self.resolved_path.display(),
+                self.logical_path.display()
+            ))
+        })
+    }
+
+    /// Reads the package completely and releases its generation lease.
+    pub fn read_all(mut self) -> LabResult<Vec<u8>> {
+        let mut bytes = Vec::new();
+        let read_result = self.file.read_to_end(&mut bytes).map_err(|error| {
+            publication_error(format!(
+                "failed to read package {} resolved from {}: {error}",
+                self.resolved_path.display(),
+                self.logical_path.display()
+            ))
+        });
+        let close_result = self.release_lease();
+        match (read_result, close_result) {
+            (Ok(_), Ok(())) => Ok(bytes),
+            (Err(error), Ok(())) | (Ok(_), Err(error)) => Err(error),
+            (Err(primary), Err(secondary)) => Err(combine_errors(primary, secondary)),
+        }
+    }
+
+    /// Releases the reader lease after the caller has finished using the path or file.
+    pub fn close(mut self) -> LabResult<()> {
+        self.release_lease()
+    }
+
+    fn release_lease(&mut self) -> LabResult<()> {
+        match self.lease.take() {
+            Some(lease) => lease.release(),
+            None => Ok(()),
+        }
+    }
+}
+
+impl Drop for PublishedPackageReader {
+    fn drop(&mut self) {
+        let Some(lease) = self.lease.take() else {
+            return;
+        };
+        // A live-process orphan lease would block generation cleanup indefinitely.
+        if let Err(error) = lease.release() {
+            if thread::panicking() {
+                std::process::abort();
+            }
+            panic!("failed to release published package reader lease: {error:?}");
+        }
+    }
 }
 
 /// Owns all locks and staging state for one package publication.
@@ -68,6 +148,12 @@ struct OutputPlan {
 
 #[derive(Debug)]
 struct PublicationLock {
+    path: PathBuf,
+    owner_token: String,
+}
+
+#[derive(Debug)]
+struct GenerationReaderLease {
     path: PathBuf,
     owner_token: String,
 }
@@ -128,6 +214,18 @@ struct PublicationLockRecord {
     output_set_digest: String,
     normalized_outputs: Vec<String>,
     lock_key: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+struct GenerationReaderLeaseRecord {
+    schema_version: String,
+    owner_token: String,
+    pid: u32,
+    process_start_token: String,
+    acquired_unix_ms: u128,
+    generation_id: String,
+    logical_output: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -902,15 +1000,35 @@ impl PublicationLock {
     }
 }
 
-/// Resolves a logical package path to its current committed immutable generation.
-pub fn resolve_published_package_path(logical_path: &Path) -> LabResult<PathBuf> {
+impl GenerationReaderLease {
+    fn release(self) -> LabResult<()> {
+        let observed = read_generation_reader_lease(&self.path)?;
+        if observed.owner_token != self.owner_token {
+            return Err(publication_error(format!(
+                "refusing to release package reader lease owned by another reader; lease={}; expected_owner={}; observed_owner={}",
+                self.path.display(),
+                self.owner_token,
+                observed.owner_token
+            )));
+        }
+        fs::remove_file(&self.path).map_err(|error| {
+            publication_error(format!(
+                "failed to release package reader lease {}: {error}",
+                self.path.display()
+            ))
+        })
+    }
+}
+
+/// Opens a logical package while pinning its current committed immutable generation.
+pub fn open_published_package(logical_path: &Path) -> LabResult<PublishedPackageReader> {
     let Some(parent) = logical_path.parent().or_else(|| Some(Path::new("."))) else {
-        return Ok(logical_path.to_path_buf());
+        return open_direct_package(logical_path);
     };
     let state_parent = match fs::canonicalize(parent) {
         Ok(parent) => parent,
         Err(error) if error.kind() == ErrorKind::NotFound => {
-            return Ok(logical_path.to_path_buf());
+            return open_direct_package(logical_path);
         }
         Err(error) => {
             return Err(publication_error(format!(
@@ -924,7 +1042,7 @@ pub fn resolve_published_package_path(logical_path: &Path) -> LabResult<PathBuf>
         .join(STATE_DIRECTORY)
         .join(AUTHORITIES_DIRECTORY);
     if !authorities.exists() {
-        return Ok(logical_path.to_path_buf());
+        return open_direct_package(logical_path);
     }
     let authority_digests = candidate_authority_digests(&state_parent, &logical_key)?;
     let mut resolved = None;
@@ -951,22 +1069,199 @@ pub fn resolve_published_package_path(logical_path: &Path) -> LabResult<PathBuf>
             continue;
         };
         validate_pointer_record(&record)?;
-        let Some(output) = record.outputs.get(&logical_key) else {
+        let Some(output) = record.outputs.get(&logical_key).cloned() else {
             continue;
         };
         let generation_dir = authority_root
             .join(GENERATIONS_DIRECTORY)
             .join(&record.generation_id);
         validate_generation(&authority_root, &record)?;
-        let candidate = checked_generation_output_path(&generation_dir, output)?;
-        if resolved.replace(candidate).is_some() {
+        checked_generation_output_path(&generation_dir, &output)?;
+        if resolved.replace((authority_root, record, output)).is_some() {
             return Err(publication_error(format!(
                 "multiple committed publication authorities claim output {}",
                 logical_path.display()
             )));
         }
     }
-    Ok(resolved.unwrap_or_else(|| logical_path.to_path_buf()))
+    match resolved {
+        Some((authority_root, record, output)) => open_generation_package(
+            logical_path,
+            &state_parent,
+            &authority_root,
+            &record,
+            &output,
+        ),
+        None => open_direct_package(logical_path),
+    }
+}
+
+fn open_direct_package(logical_path: &Path) -> LabResult<PublishedPackageReader> {
+    let file = File::open(logical_path).map_err(|error| {
+        publication_error(format!(
+            "failed to open package {}: {error}",
+            logical_path.display()
+        ))
+    })?;
+    Ok(PublishedPackageReader {
+        logical_path: logical_path.to_path_buf(),
+        resolved_path: logical_path.to_path_buf(),
+        file,
+        lease: None,
+    })
+}
+
+fn open_generation_package(
+    logical_path: &Path,
+    state_parent: &Path,
+    authority_root: &Path,
+    record: &PointerRecord,
+    output: &PublishedOutput,
+) -> LabResult<PublishedPackageReader> {
+    let gate =
+        acquire_generation_gate(state_parent, authority_root, record, &record.generation_id)?;
+    let generation_dir = authority_root
+        .join(GENERATIONS_DIRECTORY)
+        .join(&record.generation_id);
+    let opened = validate_generation(authority_root, record).and_then(|()| {
+        let resolved_path = checked_generation_output_path(&generation_dir, output)?;
+        let lease = create_generation_reader_lease(
+            authority_root,
+            record,
+            &normalize_output_for_existing_parent(logical_path, state_parent)?,
+        )?;
+        match File::open(&resolved_path) {
+            Ok(file) => Ok((resolved_path, file, lease)),
+            Err(error) => {
+                let primary = publication_error(format!(
+                    "failed to open committed package {} resolved from {}: {error}",
+                    resolved_path.display(),
+                    logical_path.display()
+                ));
+                match lease.release() {
+                    Ok(()) => Err(primary),
+                    Err(secondary) => Err(combine_errors(primary, secondary)),
+                }
+            }
+        }
+    });
+    let (resolved_path, file, lease) = match opened {
+        Ok(opened) => opened,
+        Err(primary) => {
+            return match gate.release() {
+                Ok(()) => Err(primary),
+                Err(secondary) => Err(combine_errors(primary, secondary)),
+            };
+        }
+    };
+    if let Err(primary) = gate.release() {
+        return match lease.release() {
+            Ok(()) => Err(primary),
+            Err(secondary) => Err(combine_errors(primary, secondary)),
+        };
+    }
+    Ok(PublishedPackageReader {
+        logical_path: logical_path.to_path_buf(),
+        resolved_path,
+        file,
+        lease: Some(lease),
+    })
+}
+
+fn acquire_generation_gate(
+    state_parent: &Path,
+    authority_root: &Path,
+    record: &PointerRecord,
+    generation_id: &str,
+) -> LabResult<PublicationLock> {
+    let environment = SystemPublicationEnvironment;
+    let identity = environment.current_process().map_err(|error| {
+        publication_error(format!(
+            "failed to identify package reader process: {error}"
+        ))
+    })?;
+    let acquired_unix_ms = environment.now_unix_ms().map_err(|error| {
+        publication_error(format!("failed to timestamp generation gate: {error}"))
+    })?;
+    let owner_token =
+        random_identifier(&environment, "generation-gate", &identity, acquired_unix_ms)?;
+    let lock_key = format!(
+        "generation-gate:{}:{}",
+        path_key(authority_root)?,
+        generation_id
+    );
+    let normalized_outputs = record.locked_outputs.clone();
+    let output_set_digest =
+        digest_output_set(&normalized_outputs.iter().cloned().collect::<BTreeSet<_>>());
+    let state_root = state_parent.join(STATE_DIRECTORY);
+    let locks_dir = state_root.join(LOCKS_DIRECTORY);
+    fs::create_dir_all(&locks_dir).map_err(|error| {
+        publication_error(format!(
+            "failed to create generation gate directory {}: {error}",
+            locks_dir.display()
+        ))
+    })?;
+    require_regular_directory(&state_root, "publication state directory")?;
+    require_regular_directory(&locks_dir, "publication lock directory")?;
+    let lock_record = PublicationLockRecord {
+        schema_version: LOCK_SCHEMA.to_string(),
+        owner_token,
+        pid: identity.pid,
+        process_start_token: identity.start_token,
+        acquired_unix_ms,
+        output_set_digest,
+        normalized_outputs,
+        lock_key: lock_key.clone(),
+    };
+    PublicationLock::acquire(
+        locks_dir.join(format!("{}.lock", digest_text(&lock_key))),
+        lock_record,
+        &environment,
+    )
+}
+
+fn create_generation_reader_lease(
+    authority_root: &Path,
+    record: &PointerRecord,
+    logical_output: &str,
+) -> LabResult<GenerationReaderLease> {
+    let environment = SystemPublicationEnvironment;
+    let identity = environment.current_process().map_err(|error| {
+        publication_error(format!(
+            "failed to identify package reader process: {error}"
+        ))
+    })?;
+    let acquired_unix_ms = environment.now_unix_ms().map_err(|error| {
+        publication_error(format!("failed to timestamp package reader lease: {error}"))
+    })?;
+    let owner_token = random_identifier(&environment, "reader-lease", &identity, acquired_unix_ms)?;
+    let leases_root = authority_root.join(READER_LEASES_DIRECTORY);
+    let generation_leases = leases_root.join(&record.generation_id);
+    fs::create_dir_all(&generation_leases).map_err(|error| {
+        publication_error(format!(
+            "failed to create package reader lease directory {}: {error}",
+            generation_leases.display()
+        ))
+    })?;
+    require_regular_directory(&leases_root, "package reader leases directory")?;
+    require_regular_directory(
+        &generation_leases,
+        "package generation reader leases directory",
+    )?;
+    let lease_record = GenerationReaderLeaseRecord {
+        schema_version: READER_LEASE_SCHEMA.to_string(),
+        owner_token: owner_token.clone(),
+        pid: identity.pid,
+        process_start_token: identity.start_token,
+        acquired_unix_ms,
+        generation_id: record.generation_id.clone(),
+        logical_output: logical_output.to_string(),
+    };
+    let mut bytes = serde_json::to_vec(&lease_record).map_err(json_publication_error)?;
+    bytes.push(b'\n');
+    let path = generation_leases.join(format!("{owner_token}.lease"));
+    write_new_synced_file(&path, &bytes)?;
+    Ok(GenerationReaderLease { path, owner_token })
 }
 
 fn validate_no_cross_authority_claims<'a>(
@@ -1462,9 +1757,18 @@ fn read_pointer_log(path: &Path) -> LabResult<PointerLog> {
         .map(|index| index + 1)
         .unwrap_or(0);
     let mut last: Option<PointerRecord> = None;
-    for line in bytes[..complete_len].split(|byte| *byte == b'\n') {
+    let mut lines = bytes[..complete_len]
+        .split(|byte| *byte == b'\n')
+        .peekable();
+    while let Some(line) = lines.next() {
         if line.is_empty() {
-            continue;
+            if lines.peek().is_none() {
+                continue;
+            }
+            return Err(publication_error(format!(
+                "publication pointer contains a complete empty record: {}",
+                path.display()
+            )));
         }
         let envelope: PointerEnvelope =
             serde_json::from_slice(line).map_err(json_publication_error)?;
@@ -1693,39 +1997,161 @@ fn cleanup_targets(
                         "refusing unsafe generation cleanup target: {generation_id}"
                     )));
                 }
-                let path = authority_root
-                    .join(GENERATIONS_DIRECTORY)
-                    .join(generation_id);
-                match fs::symlink_metadata(&path) {
-                    Ok(metadata)
-                        if metadata.file_type().is_dir()
-                            && !metadata_is_link_or_reparse(&metadata) =>
-                    {
-                        fs::remove_dir_all(&path).map_err(|error| {
-                            publication_error(format!(
-                                "failed to remove old package generation {}: {error}",
-                                path.display()
-                            ))
-                        })?;
-                    }
-                    Ok(_) => {
-                        return Err(publication_error(format!(
-                            "generation cleanup target is not a regular directory: {}",
-                            path.display()
-                        )));
-                    }
-                    Err(error) if error.kind() == ErrorKind::NotFound => {}
-                    Err(error) => {
-                        return Err(publication_error(format!(
-                            "failed to inspect generation cleanup target {}: {error}",
-                            path.display()
-                        )));
-                    }
-                }
+                cleanup_generation_target(state_parent, authority_root, record, generation_id)?;
             }
         }
     }
     Ok(())
+}
+
+fn cleanup_generation_target(
+    state_parent: &Path,
+    authority_root: &Path,
+    record: &PointerRecord,
+    generation_id: &str,
+) -> LabResult<()> {
+    let gate = acquire_generation_gate(state_parent, authority_root, record, generation_id)?;
+    let cleanup =
+        ensure_no_active_generation_readers(authority_root, generation_id).and_then(|()| {
+            let path = authority_root
+                .join(GENERATIONS_DIRECTORY)
+                .join(generation_id);
+            match fs::symlink_metadata(&path) {
+                Ok(metadata)
+                    if metadata.file_type().is_dir() && !metadata_is_link_or_reparse(&metadata) =>
+                {
+                    fs::remove_dir_all(&path).map_err(|error| {
+                        publication_error(format!(
+                            "failed to remove old package generation {}: {error}",
+                            path.display()
+                        ))
+                    })?;
+                }
+                Ok(_) => {
+                    return Err(publication_error(format!(
+                        "generation cleanup target is not a regular directory: {}",
+                        path.display()
+                    )));
+                }
+                Err(error) if error.kind() == ErrorKind::NotFound => {}
+                Err(error) => {
+                    return Err(publication_error(format!(
+                        "failed to inspect generation cleanup target {}: {error}",
+                        path.display()
+                    )));
+                }
+            }
+            remove_generation_reader_lease_directory(authority_root, generation_id)
+        });
+    match (cleanup, gate.release()) {
+        (Ok(()), Ok(())) => Ok(()),
+        (Err(error), Ok(())) | (Ok(()), Err(error)) => Err(error),
+        (Err(primary), Err(secondary)) => Err(combine_errors(primary, secondary)),
+    }
+}
+
+fn ensure_no_active_generation_readers(
+    authority_root: &Path,
+    generation_id: &str,
+) -> LabResult<()> {
+    let leases = authority_root
+        .join(READER_LEASES_DIRECTORY)
+        .join(generation_id);
+    match fs::symlink_metadata(&leases) {
+        Ok(metadata)
+            if metadata.file_type().is_dir() && !metadata_is_link_or_reparse(&metadata) => {}
+        Ok(_) => {
+            return Err(publication_error(format!(
+                "package reader lease path is not a regular directory: {}",
+                leases.display()
+            )));
+        }
+        Err(error) if error.kind() == ErrorKind::NotFound => return Ok(()),
+        Err(error) => {
+            return Err(publication_error(format!(
+                "failed to inspect package reader leases {}: {error}",
+                leases.display()
+            )));
+        }
+    }
+    let mut paths = fs::read_dir(&leases)
+        .map_err(|error| {
+            publication_error(format!(
+                "failed to read package reader leases {}: {error}",
+                leases.display()
+            ))
+        })?
+        .map(|entry| {
+            entry.map(|entry| entry.path()).map_err(|error| {
+                publication_error(format!(
+                    "failed to enumerate package reader leases {}: {error}",
+                    leases.display()
+                ))
+            })
+        })
+        .collect::<LabResult<Vec<_>>>()?;
+    paths.sort();
+    let environment = SystemPublicationEnvironment;
+    for path in paths {
+        let record = read_generation_reader_lease(&path)?;
+        if record.generation_id != generation_id
+            || path.file_name().and_then(|name| name.to_str())
+                != Some(format!("{}.lease", record.owner_token).as_str())
+        {
+            return Err(publication_error(format!(
+                "package reader lease identity does not match its path: {}",
+                path.display()
+            )));
+        }
+        let stale = match environment.inspect_process(record.pid) {
+            Ok(ProcessStatus::Dead) => true,
+            Ok(ProcessStatus::Alive { start_token }) => start_token != record.process_start_token,
+            Err(error) => {
+                return Err(publication_error(format!(
+                    "cannot confirm package reader death; lease={}; pid={}; owner_token={}; original_error={error}",
+                    path.display(),
+                    record.pid,
+                    record.owner_token
+                )));
+            }
+        };
+        if !stale {
+            return Err(publication_error(format!(
+                "package generation is pinned by a live reader; generation={generation_id}; lease={}; pid={}; owner_token={}",
+                path.display(),
+                record.pid,
+                record.owner_token
+            )));
+        }
+        match fs::remove_file(&path) {
+            Ok(()) => {}
+            Err(error) if error.kind() == ErrorKind::NotFound => {}
+            Err(error) => {
+                return Err(publication_error(format!(
+                    "failed to remove stale package reader lease {}: {error}",
+                    path.display()
+                )));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn remove_generation_reader_lease_directory(
+    authority_root: &Path,
+    generation_id: &str,
+) -> LabResult<()> {
+    let leases = authority_root
+        .join(READER_LEASES_DIRECTORY)
+        .join(generation_id);
+    match fs::remove_dir(&leases) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(publication_error(format!(
+            "failed to remove package reader lease directory {}: {error}",
+            leases.display()
+        ))),
+    }
 }
 
 fn cleanup_sort_key(target: &CleanupTarget) -> String {
@@ -1791,6 +2217,49 @@ fn read_lock_record_if_present(path: &Path) -> LabResult<Option<PublicationLockR
         ))
     })?;
     Ok(Some(record))
+}
+
+fn read_generation_reader_lease(path: &Path) -> LabResult<GenerationReaderLeaseRecord> {
+    let metadata = fs::symlink_metadata(path).map_err(|error| {
+        publication_error(format!(
+            "failed to inspect package reader lease {}: {error}",
+            path.display()
+        ))
+    })?;
+    if !metadata.file_type().is_file() || metadata_is_link_or_reparse(&metadata) {
+        return Err(publication_error(format!(
+            "package reader lease is not a regular file: {}",
+            path.display()
+        )));
+    }
+    let bytes = fs::read(path).map_err(|error| {
+        publication_error(format!(
+            "failed to read package reader lease {}: {error}",
+            path.display()
+        ))
+    })?;
+    let record: GenerationReaderLeaseRecord = serde_json::from_slice(&bytes).map_err(|error| {
+        publication_error(format!(
+            "failed to parse package reader lease {}: {error}",
+            path.display()
+        ))
+    })?;
+    validate_generation_reader_lease(&record)?;
+    Ok(record)
+}
+
+fn validate_generation_reader_lease(record: &GenerationReaderLeaseRecord) -> LabResult<()> {
+    if record.schema_version != READER_LEASE_SCHEMA
+        || !is_hash_identifier(&record.owner_token)
+        || record.pid == 0
+        || record.process_start_token.is_empty()
+        || record.acquired_unix_ms == 0
+        || !is_hash_identifier(&record.generation_id)
+        || record.logical_output.is_empty()
+    {
+        return Err(publication_error("package reader lease record is corrupt"));
+    }
+    Ok(())
 }
 
 fn validate_lock_record(record: &PublicationLockRecord, expected_lock_key: &str) -> LabResult<()> {
@@ -2359,7 +2828,7 @@ mod tests {
         let output = temp.path().join("package.zip");
         let transaction = PackagePublicationTransaction::begin_single_with(&output, &env).unwrap();
         stage(&transaction, &output, b"uncommitted");
-        assert_eq!(resolve_published_package_path(&output).unwrap(), output);
+        assert!(open_published_package(&output).is_err());
         assert!(!output.exists());
         transaction.abort().unwrap();
     }
@@ -2390,9 +2859,12 @@ mod tests {
         let output = temp.path().join("package.zip");
         publish_single(&env, &output, b"single");
 
-        let error =
-            PackagePublicationTransaction::begin_group_with(temp.path(), &[output.clone()], &env)
-                .expect_err("group authority must not duplicate a single-output claim");
+        let error = PackagePublicationTransaction::begin_group_with(
+            temp.path(),
+            std::slice::from_ref(&output),
+            &env,
+        )
+        .expect_err("group authority must not duplicate a single-output claim");
         assert!(
             error
                 .message
@@ -2431,9 +2903,12 @@ mod tests {
             &[(&left, b"old-left"), (&right, b"old-right")],
         );
 
-        let transaction =
-            PackagePublicationTransaction::begin_group_with(temp.path(), &[left.clone()], &env)
-                .unwrap();
+        let transaction = PackagePublicationTransaction::begin_group_with(
+            temp.path(),
+            std::slice::from_ref(&left),
+            &env,
+        )
+        .unwrap();
         let pointer = transaction.pointer_path.clone();
         stage(&transaction, &left, b"new-left");
         transaction.commit().unwrap();
@@ -2456,7 +2931,7 @@ mod tests {
             digest_output_set(&expected)
         );
         assert_eq!(read_visible(&left), b"new-left");
-        assert_eq!(resolve_published_package_path(&right).unwrap(), right);
+        assert!(open_published_package(&right).is_err());
     }
 
     #[test]
@@ -2478,6 +2953,51 @@ mod tests {
         assert_eq!(retained.len(), 2);
         assert!(retained.iter().all(|path| path.is_dir()));
         assert_eq!(read_visible(&output), b"third");
+    }
+
+    #[test]
+    fn reader_pin_preserves_generation_across_two_publications() {
+        let temp = TempDir::new().unwrap();
+        let env = FakeEnvironment::new(120, "start-a");
+        let output = temp.path().join("package.zip");
+        publish_single(&env, &output, b"first");
+        let reader = open_published_package(&output).unwrap();
+
+        publish_single(&env, &output, b"second");
+        let third = PackagePublicationTransaction::begin_single_with(&output, &env).unwrap();
+        stage(&third, &output, b"third");
+        let error = third
+            .commit()
+            .expect_err("active reader must defer old-generation cleanup");
+        assert!(error.message.contains("committed_generation="));
+        assert!(error.message.contains("pinned by a live reader"));
+        assert_eq!(reader.read_all().unwrap(), b"first");
+
+        let fourth = PackagePublicationTransaction::begin_single_with(&output, &env).unwrap();
+        stage(&fourth, &output, b"fourth");
+        fourth.commit().unwrap();
+        assert_eq!(read_visible(&output), b"fourth");
+    }
+
+    #[test]
+    fn complete_empty_pointer_record_fails_loud() {
+        let temp = TempDir::new().unwrap();
+        let env = FakeEnvironment::new(121, "start-a");
+        let output = temp.path().join("package.zip");
+        let transaction = PackagePublicationTransaction::begin_single_with(&output, &env).unwrap();
+        let pointer = transaction.pointer_path.clone();
+        stage(&transaction, &output, b"complete");
+        transaction.commit().unwrap();
+        OpenOptions::new()
+            .append(true)
+            .open(&pointer)
+            .unwrap()
+            .write_all(b"\n")
+            .unwrap();
+
+        let error = open_published_package(&output)
+            .expect_err("complete empty journal record must be rejected");
+        assert!(error.message.contains("complete empty record"));
     }
 
     #[test]
@@ -2584,7 +3104,7 @@ mod tests {
             .unwrap()
             .write_all(b"{}\n")
             .unwrap();
-        assert!(resolve_published_package_path(&output).is_err());
+        assert!(open_published_package(&output).is_err());
 
         let bytes = fs::read(&pointer).unwrap();
         let valid_len = bytes[..bytes.len() - 3]
@@ -2600,7 +3120,7 @@ mod tests {
             .unwrap();
         let resolved = commit.resolved_outputs.values().next().unwrap();
         fs::write(resolved, b"tampered").unwrap();
-        assert!(resolve_published_package_path(&output).is_err());
+        assert!(open_published_package(&output).is_err());
     }
 
     #[test]
@@ -2622,7 +3142,7 @@ mod tests {
             .unwrap();
 
         assert_eq!(read_visible(&healthy), b"healthy");
-        assert!(resolve_published_package_path(&corrupt).is_err());
+        assert!(open_published_package(&corrupt).is_err());
     }
 
     #[test]
@@ -2721,7 +3241,6 @@ mod tests {
     }
 
     fn read_visible(output: &Path) -> Vec<u8> {
-        let resolved = resolve_published_package_path(output).unwrap();
-        fs::read(resolved).unwrap()
+        open_published_package(output).unwrap().read_all().unwrap()
     }
 }

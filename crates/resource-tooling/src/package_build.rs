@@ -3,7 +3,7 @@
 use crate::environment::{AuthoringEnvironmentSnapshot, required_environment_keys};
 use crate::package_publish::PackagePublicationTransaction;
 #[cfg(test)]
-use crate::package_publish::resolve_published_package_path;
+use crate::package_publish::open_published_package;
 use crate::resource_convert::{
     Bundle, ConvertOutputs, OperationConverter, ResolvedResourceRoot, canonical_game,
 };
@@ -3319,7 +3319,7 @@ mod tests {
                 <= budget + PACKAGE_COMPRESSOR_INPUT_BUFFER_BYTES
         );
         assert_eq!(write.validation.status, "valid");
-        assert!(resolve_published_package_path(&out).unwrap().is_file());
+        assert_published_file(&out);
     }
 
     #[cfg(unix)]
@@ -3388,7 +3388,7 @@ mod tests {
         let out = temp.path().join("task.zip");
 
         build_task(build_task_request(repo, out.clone())).unwrap();
-        assert!(resolve_published_package_path(&out).unwrap().is_file());
+        assert_published_file(&out);
         let entries = read_zip_entries(&out);
         assert!(entries.contains_key("control.json"));
         assert!(entries.contains_key("resources/manifest.json"));
@@ -3488,7 +3488,7 @@ mod tests {
             "{}",
             response.resource_root
         );
-        assert!(resolve_published_package_path(&out).unwrap().is_file());
+        assert_published_file(&out);
     }
 
     #[test]
@@ -3620,7 +3620,7 @@ mod tests {
                 },
             )
             .unwrap();
-        assert!(resolve_published_package_path(&out).unwrap().is_file());
+        assert_published_file(&out);
         let entries = read_zip_entries(&out);
         let task: Value = serde_json::from_slice(
             entries
@@ -3756,16 +3756,8 @@ mod tests {
                 )
                 .unwrap();
         }
-        assert!(
-            resolve_published_package_path(&split_dir.join("arknights.cn.operator_task.zip"))
-                .unwrap()
-                .is_file()
-        );
-        assert!(
-            resolve_published_package_path(&split_dir.join("arknights.cn.return_home.zip"))
-                .unwrap()
-                .is_file()
-        );
+        assert_published_file(&split_dir.join("arknights.cn.operator_task.zip"));
+        assert_published_file(&split_dir.join("arknights.cn.return_home.zip"));
     }
 
     #[test]
@@ -3786,9 +3778,8 @@ mod tests {
     }
 
     fn read_zip_entries(path: &Path) -> BTreeMap<String, Vec<u8>> {
-        let resolved = resolve_published_package_path(path).unwrap();
-        let file = File::open(resolved).unwrap();
-        let mut zip = ZipArchive::new(file).unwrap();
+        let mut package = open_published_package(path).unwrap();
+        let mut zip = ZipArchive::new(package.file_mut()).unwrap();
         let mut entries = BTreeMap::new();
         for index in 0..zip.len() {
             let mut entry = zip.by_index(index).unwrap();
@@ -3799,7 +3790,15 @@ mod tests {
             entry.read_to_end(&mut bytes).unwrap();
             entries.insert(entry.name().to_string(), bytes);
         }
+        drop(zip);
+        package.close().unwrap();
         entries
+    }
+
+    fn assert_published_file(path: &Path) {
+        let package = open_published_package(path).unwrap();
+        assert!(package.path().is_file());
+        package.close().unwrap();
     }
 
     fn write_fixture_repo(root: &Path) {
