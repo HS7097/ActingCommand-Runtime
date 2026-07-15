@@ -2,9 +2,9 @@
 
 use super::{CliError, CliOutcome, FlagArgs, GlobalOptions};
 use actingcommand_lab::{
-    LabPackageValidationResponse, PackageBuildCatalog, PackageBuildCatalogRequest,
-    PackageBuildTaskRequest, PackageEnvOptions, PackageFullArchiveRequest, PackageResolution,
-    PackageSource, PackageTaskArchiveRequest,
+    DEFAULT_MAX_BUFFERED_PAYLOAD_BYTES, LabPackageValidationResponse, PackageBuildCatalog,
+    PackageBuildCatalogRequest, PackageBuildTaskRequest, PackageEnvOptions,
+    PackageFullArchiveRequest, PackageResolution, PackageSource, PackageTaskArchiveRequest,
 };
 use serde::Serialize;
 use serde_json::Value;
@@ -28,6 +28,7 @@ pub(super) fn run_build_task(global: &GlobalOptions, flags: &FlagArgs) -> CliOut
         include_recovery: flags.bool("--include-recovery"),
         out: flags.required_path("--out")?,
         dry_run: global.dry_run || flags.bool("--dry-run"),
+        max_buffered_payload_bytes: parse_max_buffered_payload_bytes(flags)?,
         env: package_env(global, flags, game, server),
     };
     let mut lab = super::env_detection::build_readonly_lab()?;
@@ -45,6 +46,7 @@ pub(super) fn run_build_pack(global: &GlobalOptions, flags: &FlagArgs) -> CliOut
         game,
         server,
         locale: flags.optional("--locale"),
+        max_buffered_payload_bytes: parse_max_buffered_payload_bytes(flags)?,
     })?;
     let metadata = catalog.metadata();
     let resolution = parse_resolution(flags)?;
@@ -259,6 +261,28 @@ fn parse_resolution(flags: &FlagArgs) -> CliOutcome<Option<PackageResolution>> {
     Ok(Some(PackageResolution { width, height }))
 }
 
+fn parse_max_buffered_payload_bytes(flags: &FlagArgs) -> CliOutcome<usize> {
+    let Some(value) = flags.optional("--max-buffered-payload-bytes") else {
+        return Ok(DEFAULT_MAX_BUFFERED_PAYLOAD_BYTES);
+    };
+    if value == "true" {
+        return Err(CliError::usage(
+            "missing --max-buffered-payload-bytes <value>",
+        ));
+    }
+    let bytes = value.parse::<usize>().map_err(|error| {
+        CliError::usage(format!(
+            "invalid --max-buffered-payload-bytes value '{value}': {error}"
+        ))
+    })?;
+    if bytes == 0 {
+        return Err(CliError::usage(
+            "--max-buffered-payload-bytes must be positive",
+        ));
+    }
+    Ok(bytes)
+}
+
 fn temp_dir_path(target: &Path) -> PathBuf {
     let parent = target.parent().unwrap_or_else(|| Path::new("."));
     let name = target
@@ -324,6 +348,33 @@ mod tests {
     use serde_json::json;
     use std::collections::BTreeSet;
     use tempfile::TempDir;
+
+    #[test]
+    fn buffered_payload_budget_flag_has_a_default_and_rejects_invalid_values() {
+        assert_eq!(
+            parse_max_buffered_payload_bytes(&FlagArgs::default()).expect("default budget"),
+            DEFAULT_MAX_BUFFERED_PAYLOAD_BYTES
+        );
+
+        let configured = FlagArgs::parse(&[
+            "--max-buffered-payload-bytes".to_string(),
+            "4096".to_string(),
+        ])
+        .expect("configured flags");
+        assert_eq!(
+            parse_max_buffered_payload_bytes(&configured).expect("configured budget"),
+            4096
+        );
+
+        let zero = FlagArgs::parse(&["--max-buffered-payload-bytes".to_string(), "0".to_string()])
+            .expect("zero flags");
+        assert!(
+            parse_max_buffered_payload_bytes(&zero)
+                .expect_err("zero budget")
+                .message
+                .contains("must be positive")
+        );
+    }
 
     #[test]
     fn package_build_pack_full_command_preserves_defaults_and_response_shape() {

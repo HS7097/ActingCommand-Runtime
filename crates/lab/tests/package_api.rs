@@ -33,6 +33,7 @@ fn package_family_exposes_typed_requests_and_responses() {
         include_recovery: false,
         out: PathBuf::from("task.zip"),
         dry_run: true,
+        max_buffered_payload_bytes: actingcommand_lab::DEFAULT_MAX_BUFFERED_PAYLOAD_BYTES,
         env: PackageEnvOptions::default(),
     };
     let _convert = ResourceConvertRequest {
