@@ -24,7 +24,8 @@ pub use package_build::{
     PackageBuildCatalog, PreparedPackageBuildTask, prepare_package_build_task,
 };
 pub use package_publish::{
-    PackagePublicationCommit, PackagePublicationTransaction, resolve_published_package_path,
+    PackagePublicationCommit, PackagePublicationTransaction, PublishedPackageReader,
+    open_published_package,
 };
 pub use package_validate::validate_package;
 pub use resource_convert::{

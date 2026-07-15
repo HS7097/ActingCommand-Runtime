@@ -7,37 +7,24 @@ use actingcommand_lab::{ExternalExpectedSha256, ExternallyVerifiedBundle};
 use actingcommand_pack_containment::ContainmentLimits;
 use actingcommand_page_detector::PageDetector;
 use actingcommand_recognition_pack::RecognitionEvaluator;
-use actingcommand_resource_tooling::resolve_published_package_path;
-use std::fs;
+use actingcommand_resource_tooling::open_published_package;
 use std::path::PathBuf;
 use std::sync::Arc;
 
 pub(super) fn load(flags: &FlagArgs, command: &str) -> CliOutcome<Arc<ExternallyVerifiedBundle>> {
     let logical_zip = explicit_path(flags, "--zip")?;
-    let zip = resolve_published_package_path(&logical_zip)?;
+    let zip = open_published_package(&logical_zip)?;
     let expected = explicit_hash(flags)?;
-    let metadata = fs::metadata(&zip).map_err(|error| {
-        CliError::package_invalid(format!(
-            "failed to inspect {} resolved from {}: {error}",
-            zip.display(),
-            logical_zip.display()
-        ))
-    })?;
+    let metadata = zip.metadata()?;
     let limit = ContainmentLimits::default().max_compressed_bytes;
     if metadata.len() > limit {
         return Err(CliError::package_invalid(format!(
             "semantic resource package {} is {} bytes, above the {limit}-byte containment limit",
-            zip.display(),
+            zip.path().display(),
             metadata.len()
         )));
     }
-    let bytes = fs::read(&zip).map_err(|error| {
-        CliError::package_invalid(format!(
-            "failed to read {} resolved from {}: {error}",
-            zip.display(),
-            logical_zip.display()
-        ))
-    })?;
+    let bytes = zip.read_all()?;
     let instance = format!("semantic_{}", command.replace('-', "_"));
     ExternallyVerifiedBundle::load(&instance, &bytes, expected)
         .map(Arc::new)
@@ -91,5 +78,22 @@ fn explicit_hash(flags: &FlagArgs) -> CliOutcome<ExternalExpectedSha256> {
         )),
         Some(value) => ExternalExpectedSha256::parse_hex(&value)
             .map_err(|error| CliError::package_invalid(error.to_string())),
+    }
+}
+
+pub(super) fn finish_package_use<T>(
+    operation: CliOutcome<T>,
+    close: CliOutcome<()>,
+) -> CliOutcome<T> {
+    match (operation, close) {
+        (Ok(value), Ok(())) => Ok(value),
+        (Err(error), Ok(())) | (Ok(_), Err(error)) => Err(error),
+        (Err(mut primary), Err(secondary)) => {
+            primary.message = format!(
+                "{}; package_reader_release_failed={}",
+                primary.message, secondary.message
+            );
+            Err(primary)
+        }
     }
 }

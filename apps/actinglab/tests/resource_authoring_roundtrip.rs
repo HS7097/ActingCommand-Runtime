@@ -7,7 +7,7 @@ use actingcommand_contract::{
 use actingcommand_device::{
     CaptureBackend, CaptureBackendName, DeviceError, DeviceResult, Frame, InputBackend, PixelFormat,
 };
-use actingcommand_resource_tooling::resolve_published_package_path;
+use actingcommand_resource_tooling::open_published_package;
 use actingcommand_runtime_client::{RuntimeClient, RuntimeClientConfig};
 use actingcommand_runtime_host::{
     ExecutionBackendProvider, ResolvedExecutionInstance, RuntimeHost, RuntimeHostConfig,
@@ -438,8 +438,10 @@ fn sha256_file(path: &Path) -> String {
 }
 
 fn read_published(path: &Path) -> Vec<u8> {
-    let resolved = resolve_published_package_path(path).expect("resolve published package");
-    fs::read(resolved).expect("read published package")
+    open_published_package(path)
+        .expect("open published package")
+        .read_all()
+        .expect("read published package")
 }
 
 fn frame_png(mail_visible: bool) -> Vec<u8> {

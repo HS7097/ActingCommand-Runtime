@@ -515,14 +515,7 @@ fn load_lab_package_for_validation(
     instance_label: &str,
     expected_input_sha256: Option<Sha256Hash>,
 ) -> CliOutcome<ContainedLabInput> {
-    let resolved = resolve_published_package_path(zip_path)?;
-    let bytes = fs::read(&resolved).map_err(|err| {
-        CliError::package_invalid(format!(
-            "failed to read Lab package {} resolved from {}: {err}",
-            resolved.display(),
-            zip_path.display(),
-        ))
-    })?;
+    let bytes = open_published_package(zip_path)?.read_all()?;
     let externally_verified = expected_input_sha256.is_some();
     let expected = expected_input_sha256.unwrap_or_else(|| Sha256Hash::digest(&bytes));
     let instance = InstanceId::new(instance_label).map_err(containment_error)?;
@@ -550,14 +543,7 @@ fn load_lab_package_for_run(
     instance_label: &str,
     expected_input_sha256: ExternalExpectedSha256,
 ) -> CliOutcome<ContainedLabInput> {
-    let resolved = resolve_published_package_path(zip_path)?;
-    let bytes = fs::read(&resolved).map_err(|err| {
-        CliError::package_invalid(format!(
-            "failed to read Lab package {} resolved from {}: {err}",
-            resolved.display(),
-            zip_path.display(),
-        ))
-    })?;
+    let bytes = open_published_package(zip_path)?.read_all()?;
     let admitted = ExternallyVerifiedBundle::load(instance_label, &bytes, expected_input_sha256)
         .map_err(|error| CliError::package_invalid(error.to_string()))?;
     let sha256 = admitted.loaded_bundle().verified_hash().to_string();
