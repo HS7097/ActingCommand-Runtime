@@ -6,11 +6,15 @@ use actingcommand_lab::{
     PackageBuildCatalogRequest, PackageBuildTaskRequest, PackageEnvOptions,
     PackageFullArchiveRequest, PackageResolution, PackageSource, PackageTaskArchiveRequest,
 };
+use actingcommand_resource_tooling::PackagePublicationTransaction;
+#[cfg(test)]
+use actingcommand_resource_tooling::resolve_published_package_path;
 use serde::Serialize;
 use serde_json::Value;
+#[cfg(test)]
 use std::fs;
-use std::path::{Path, PathBuf};
-use std::time::{SystemTime, UNIX_EPOCH};
+#[cfg(test)]
+use std::path::Path;
 
 pub(super) fn run_build_task(global: &GlobalOptions, flags: &FlagArgs) -> CliOutcome<Value> {
     let game = flags.optional("--game").or_else(|| global.game.clone());
@@ -54,21 +58,48 @@ pub(super) fn run_build_pack(global: &GlobalOptions, flags: &FlagArgs) -> CliOut
 
     if let Some(split_dir) = flags.optional_path("--split-dir") {
         let mut packages = Vec::new();
-        let temp_split_dir = if dry_run {
+        let task_ids = catalog.task_ids();
+        let outputs = task_ids
+            .iter()
+            .map(|task_id| {
+                split_dir.join(format!(
+                    "{}.{}.{}.zip",
+                    metadata.game, metadata.server, task_id
+                ))
+            })
+            .collect::<Vec<_>>();
+        let mut transaction = if dry_run {
             None
         } else {
-            let temp = temp_dir_path(&split_dir);
-            fs::create_dir_all(&temp).map_err(|error| {
-                CliError::package_invalid(format!("failed to create {}: {error}", temp.display()))
-            })?;
-            Some(temp)
+            Some(PackagePublicationTransaction::begin_group(
+                &split_dir, &outputs,
+            )?)
         };
-        let build_dir = temp_split_dir.as_deref().unwrap_or(&split_dir);
-        for task_id in catalog.task_ids() {
+        let build_outputs = match &transaction {
+            Some(active) => match outputs
+                .iter()
+                .map(|output| active.staging_path(output))
+                .collect::<CliOutcome<Vec<_>>>()
+            {
+                Ok(paths) => paths,
+                Err(error) => {
+                    let cleanup = transaction
+                        .take()
+                        .expect("active transaction exists")
+                        .abort();
+                    return Err(match cleanup {
+                        Ok(()) => error,
+                        Err(cleanup) => combine_cli_errors(error, cleanup),
+                    });
+                }
+            },
+            None => outputs.clone(),
+        };
+        for ((task_id, final_out), build_out) in
+            task_ids.into_iter().zip(outputs.iter()).zip(build_outputs)
+        {
             let package_id = format!("{}.{}.{}", metadata.game, metadata.server, task_id);
-            let final_out = split_dir.join(format!("{package_id}.zip"));
-            let build_out = build_dir.join(format!("{package_id}.zip"));
-            let validation = match catalog.build_task_archive(
+            let mut validation = match catalog.build_task_archive_staged(
                 &mut lab,
                 PackageTaskArchiveRequest {
                     task_id: task_id.clone(),
@@ -82,23 +113,24 @@ pub(super) fn run_build_pack(global: &GlobalOptions, flags: &FlagArgs) -> CliOut
             ) {
                 Ok(validation) => validation,
                 Err(error) => {
-                    if let Some(temp) = &temp_split_dir {
-                        let _ = fs::remove_dir_all(temp);
-                    }
-                    return Err(error);
+                    return Err(match transaction.take() {
+                        Some(transaction) => match transaction.abort() {
+                            Ok(()) => error,
+                            Err(cleanup) => combine_cli_errors(error, cleanup),
+                        },
+                        None => error,
+                    });
                 }
             };
+            validation.zip = final_out.display().to_string();
             packages.push(PackageBuildPackItemResponse {
                 task_id,
                 out: (!dry_run).then(|| final_out.display().to_string()),
                 validation,
             });
         }
-        if let Some(temp) = &temp_split_dir {
-            move_split_packages(temp, &split_dir)?;
-            fs::remove_dir_all(temp).map_err(|error| {
-                CliError::package_invalid(format!("failed to remove {}: {error}", temp.display()))
-            })?;
+        if let Some(transaction) = transaction.take() {
+            transaction.commit()?;
         }
         catalog.cleanup()?;
         return serialize_response(PackageBuildPackResponse::Split(Box::new(
@@ -283,58 +315,12 @@ fn parse_max_buffered_payload_bytes(flags: &FlagArgs) -> CliOutcome<usize> {
     Ok(bytes)
 }
 
-fn temp_dir_path(target: &Path) -> PathBuf {
-    let parent = target.parent().unwrap_or_else(|| Path::new("."));
-    let name = target
-        .file_name()
-        .and_then(|name| name.to_str())
-        .unwrap_or("actinglab-split");
-    parent.join(format!(
-        ".{name}.tmp-{}-{}",
-        std::process::id(),
-        unique_suffix()
-    ))
-}
-
-fn move_split_packages(temp: &Path, target: &Path) -> CliOutcome<()> {
-    fs::create_dir_all(target).map_err(|error| {
-        CliError::package_invalid(format!("failed to create {}: {error}", target.display()))
-    })?;
-    for entry in fs::read_dir(temp).map_err(|error| {
-        CliError::package_invalid(format!("failed to read {}: {error}", temp.display()))
-    })? {
-        let entry = entry.map_err(|error| {
-            CliError::package_invalid(format!("failed to read {}: {error}", temp.display()))
-        })?;
-        let source = entry.path();
-        if !source.is_file() {
-            continue;
-        }
-        let destination = target.join(entry.file_name());
-        if destination.exists() {
-            fs::remove_file(&destination).map_err(|error| {
-                CliError::package_invalid(format!(
-                    "failed to replace {}: {error}",
-                    destination.display()
-                ))
-            })?;
-        }
-        fs::rename(&source, &destination).map_err(|error| {
-            CliError::package_invalid(format!(
-                "failed to move {} to {}: {error}",
-                source.display(),
-                destination.display()
-            ))
-        })?;
-    }
-    Ok(())
-}
-
-fn unique_suffix() -> u128 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_nanos()
+fn combine_cli_errors(mut primary: CliError, secondary: CliError) -> CliError {
+    primary.message = format!(
+        "{}; secondary_failure={}",
+        primary.message, secondary.message
+    );
+    primary
 }
 
 fn serialize_response<T: Serialize>(response: T) -> CliOutcome<Value> {
@@ -439,7 +425,7 @@ mod tests {
             data["validation"].pointer("/control/execution_mode"),
             Some(&json!("recognize_only"))
         );
-        assert!(out.is_file());
+        assert!(resolve_published_package_path(&out).unwrap().is_file());
     }
 
     #[test]
@@ -498,6 +484,7 @@ mod tests {
                 .unwrap()
                 .cmp(right["task_id"].as_str().unwrap())
         });
+        let mut generation_dirs = BTreeSet::new();
         for package in packages {
             let task_id = package["task_id"].as_str().unwrap();
             let package_id = format!("arknights.cn.{task_id}");
@@ -511,15 +498,24 @@ mod tests {
                 package.pointer("/validation/control/execution_mode"),
                 Some(&json!("navigable_route"))
             );
-            assert!(out.is_file());
+            let resolved = resolve_published_package_path(&out).unwrap();
+            assert!(resolved.is_file());
+            generation_dirs.insert(
+                resolved
+                    .parent()
+                    .and_then(Path::parent)
+                    .expect("generation directory")
+                    .to_path_buf(),
+            );
         }
+        assert_eq!(generation_dirs.len(), 1);
         assert_eq!(
             fs::read_dir(&split_dir)
                 .unwrap()
                 .filter_map(Result::ok)
                 .filter(|entry| entry.path().is_file())
                 .count(),
-            2
+            0
         );
         let staging_prefix = ".split.tmp-";
         let staging_dirs = fs::read_dir(temp.path())
