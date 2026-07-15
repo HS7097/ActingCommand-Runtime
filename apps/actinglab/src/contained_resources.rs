@@ -7,15 +7,21 @@ use actingcommand_lab::{ExternalExpectedSha256, ExternallyVerifiedBundle};
 use actingcommand_pack_containment::ContainmentLimits;
 use actingcommand_page_detector::PageDetector;
 use actingcommand_recognition_pack::RecognitionEvaluator;
+use actingcommand_resource_tooling::resolve_published_package_path;
 use std::fs;
 use std::path::PathBuf;
 use std::sync::Arc;
 
 pub(super) fn load(flags: &FlagArgs, command: &str) -> CliOutcome<Arc<ExternallyVerifiedBundle>> {
-    let zip = explicit_path(flags, "--zip")?;
+    let logical_zip = explicit_path(flags, "--zip")?;
+    let zip = resolve_published_package_path(&logical_zip)?;
     let expected = explicit_hash(flags)?;
     let metadata = fs::metadata(&zip).map_err(|error| {
-        CliError::package_invalid(format!("failed to inspect {}: {error}", zip.display()))
+        CliError::package_invalid(format!(
+            "failed to inspect {} resolved from {}: {error}",
+            zip.display(),
+            logical_zip.display()
+        ))
     })?;
     let limit = ContainmentLimits::default().max_compressed_bytes;
     if metadata.len() > limit {
@@ -26,7 +32,11 @@ pub(super) fn load(flags: &FlagArgs, command: &str) -> CliOutcome<Arc<Externally
         )));
     }
     let bytes = fs::read(&zip).map_err(|error| {
-        CliError::package_invalid(format!("failed to read {}: {error}", zip.display()))
+        CliError::package_invalid(format!(
+            "failed to read {} resolved from {}: {error}",
+            zip.display(),
+            logical_zip.display()
+        ))
     })?;
     let instance = format!("semantic_{}", command.replace('-', "_"));
     ExternallyVerifiedBundle::load(&instance, &bytes, expected)

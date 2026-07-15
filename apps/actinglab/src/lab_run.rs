@@ -7,6 +7,7 @@ use super::{
 use actingcommand_contract::{ContainedTaskRequest, EventActor, EventSource};
 use actingcommand_lab::LabValidateRequest;
 use actingcommand_pack_containment::{ContainmentError, Sha256Hash};
+use actingcommand_resource_tooling::resolve_published_package_path;
 use actingcommand_runtime_client::{RuntimeClient, RuntimeClientConfig};
 use serde::Serialize;
 use serde_json::{Value, json};
@@ -23,6 +24,7 @@ pub(super) fn run_lab_run(global: &GlobalOptions, args: &[String]) -> CliOutcome
         .optional_path("--zip")
         .or_else(|| flags.optional_path("--package"))
         .ok_or_else(|| CliError::usage("lab run requires --zip <input.zip>"))?;
+    let package = resolve_published_package_path(&package)?;
     let package = fs::canonicalize(&package).map_err(|error| {
         CliError::package_invalid(format!(
             "failed to canonicalize contained task package {}: {error}",
