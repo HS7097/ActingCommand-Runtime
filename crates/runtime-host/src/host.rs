@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 use crate::events::RuntimeEvents;
+use crate::fact_store::InstanceFactStore;
 use crate::ipc::{DEFAULT_RUNTIME_MAX_FRAME_BYTES, FrameRead, read_frame, write_frame};
 use crate::monitor::{DueMonitorProbe, MonitorRegistry, MonitorUpdate};
 use crate::owner::{OwnerGuard, OwnerStartup};
@@ -28,9 +29,10 @@ use actingcommand_contract::{
     ArtifactKind, ArtifactProducer, ArtifactRedactionState, AuditInput, CapturePayloadDraft,
     CaptureSequence, CaptureSequenceSpec, CatalogPayloadDraft, CatalogTransitionEventData,
     ClientPayloadDraft, CommandPayloadDraft, ContainedTaskRequest, CorrelationId, DiagnosticCode,
-    EffectDisposition, EventAction, EventActor, EventDraft, EventLinksDraft, EventPayload,
-    EventQuery, EventSeverity, EventSource, EventType, EvidenceCompleteness, InputAction,
-    InputPayload, InputPayloadDraft, InstanceId, IssuedActionId, IssuedFrameId, IssuedMonitorProbe,
+    EffectDisposition, EventAction, EventActor, EventDraft, EventId, EventLinksDraft, EventPayload,
+    EventQuery, EventSeverity, EventSource, EventType, EvidenceCompleteness, FactPayloadDraft,
+    FactRecord, InputAction, InputPayload, InputPayloadDraft, InstanceFactContext,
+    InstanceFactSnapshot, InstanceId, IssuedActionId, IssuedFrameId, IssuedMonitorProbe,
     IssuedReadOnlyCaptureCapability, IssuedRecognitionId, IssuedRunId, IssuedTaskId, LeaseId,
     LeasePayloadDraft, LeaseQueuePolicy, LeaseToken, MAX_INSTANCE_ALIAS_BYTES, MonitorPayloadDraft,
     MonitorRecoveryCoordinationReason, OriginModule, PackageDebugLayout, PackageDebugRequest,
@@ -279,6 +281,7 @@ impl RuntimeHost {
             )
         })?;
         append_runtime_start_event(&ledger, &events, &config.state_root, takeover)?;
+        let facts = InstanceFactStore::recover(&ledger)?;
         let performance = match config.performance_monitor.clone() {
             Some(performance_config) => {
                 PerformanceMonitor::enabled(performance_config, system_performance_sampler())?
@@ -311,6 +314,8 @@ impl RuntimeHost {
             policy: Mutex::new(policy),
             performance: Mutex::new(performance),
             performance_control: Mutex::new(performance_control),
+            fact_write_gate: Mutex::new(()),
+            facts: Mutex::new(facts),
             owner: Mutex::new(owner),
             ledger,
             artifacts,
@@ -327,6 +332,10 @@ impl RuntimeHost {
             clock: Instant::now(),
             fatal,
         });
+        if let Err(original) = shared.synchronize_fact_store() {
+            failed_start_cleanup(shared, &info_path, None, None, None)?;
+            return Err(original);
+        }
         let sweep_shared = Arc::clone(&shared);
         let sweep_thread = match thread::Builder::new()
             .name("actingcommand-runtime-sweeper".to_string())
@@ -459,6 +468,20 @@ impl RuntimeHost {
     ) -> RuntimeHostResult<PolicyCycle> {
         self.shared_ref("evaluate_policy_cycle")?
             .evaluate_policy_cycle(facts, resources, time, seed, trigger)
+    }
+
+    /// Validates and durably publishes one Runtime-owned fact into the GlobalLedger.
+    pub fn publish_fact(&self, record: FactRecord) -> RuntimeHostResult<EventId> {
+        self.shared_ref("publish_fact")?.publish_fact(record)
+    }
+
+    /// Returns an immutable ledger-pinned fact projection for one instance context.
+    pub fn instance_fact_snapshot(
+        &self,
+        context: InstanceFactContext,
+    ) -> RuntimeHostResult<InstanceFactSnapshot> {
+        self.shared_ref("read_instance_fact_snapshot")?
+            .instance_fact_snapshot(context)
     }
 
     pub fn admit_policy_dispatch(
@@ -803,6 +826,9 @@ struct HostShared {
     policy: Mutex<PolicyHost>,
     performance: Mutex<PerformanceMonitor>,
     performance_control: Mutex<PerformanceBalanceController>,
+    // Ledger append and fact projection commit are one ordered Runtime-owned transition.
+    fact_write_gate: Mutex<()>,
+    facts: Mutex<InstanceFactStore>,
     ledger: GlobalLedger,
     artifacts: ArtifactStore,
     owner: Mutex<OwnerGuard>,
@@ -1209,6 +1235,16 @@ impl HostShared {
         seed: u64,
         trigger: PolicyTrigger,
     ) -> RuntimeHostResult<PolicyCycle> {
+        let facts = {
+            let _gate = lock(&self.fact_write_gate, "project_policy_facts")?;
+            self.synchronize_fact_store_under_gate()?;
+            let ledger_position = self
+                .ledger
+                .latest_sequence()
+                .map_err(|_| ledger_error("read_policy_fact_position"))?;
+            lock(&self.facts, "project_policy_facts")?
+                .overlay_policy_facts(facts, ledger_position)?
+        };
         let workloads = lock(&self.policy, "read_policy_performance_workloads")?
             .active_performance_workloads()?;
         let mut controlled_resources = resources.clone();
@@ -1218,12 +1254,51 @@ impl HostShared {
         )?
         .apply_to_resources(&mut controlled_resources.hosts, &workloads)?;
         lock(&self.policy, "evaluate_policy_cycle")?.evaluate(
-            facts,
+            &facts,
             &controlled_resources,
             time,
             seed,
             trigger,
         )
+    }
+
+    fn publish_fact(&self, record: FactRecord) -> RuntimeHostResult<EventId> {
+        let result: RuntimeHostResult<EventId> = (|| {
+            let _gate = lock(&self.fact_write_gate, "publish_fact")?;
+            self.synchronize_fact_store_under_gate()?;
+            if let Some(event_id) = lock(&self.facts, "publish_fact")?.preview_publish(&record)? {
+                return Ok(event_id);
+            }
+            let event = self.append_event_under_fact_gate(
+                EventSeverity::Info,
+                EventSource::Runtime,
+                OriginModule::FactStore,
+                EventActor::Runtime,
+                self.events.system_links()?,
+                FactPayloadDraft::published(record.clone(), AuditInput::new()),
+            )?;
+            self.synchronize_fact_store_under_gate()?;
+            Ok(*event.event_id())
+        })();
+        if let Err(error) = &result
+            && error.is_fatal()
+        {
+            self.fatal.mark(error.clone())?;
+        }
+        result
+    }
+
+    fn instance_fact_snapshot(
+        &self,
+        context: InstanceFactContext,
+    ) -> RuntimeHostResult<InstanceFactSnapshot> {
+        let _gate = lock(&self.fact_write_gate, "read_instance_fact_snapshot")?;
+        self.synchronize_fact_store_under_gate()?;
+        let ledger_position = self
+            .ledger
+            .latest_sequence()
+            .map_err(|_| ledger_error("read_instance_fact_position"))?;
+        lock(&self.facts, "read_instance_fact_snapshot")?.snapshot(context, ledger_position)
     }
 
     fn admit_policy_dispatch(
@@ -6380,6 +6455,24 @@ impl HostShared {
         links: EventLinksDraft,
         payload: impl Into<actingcommand_contract::EventPayloadDraft>,
     ) -> RuntimeHostResult<PersistedEvent> {
+        let gate = lock(&self.fact_write_gate, "append_runtime_event")?;
+        let event =
+            self.append_event_under_fact_gate(severity, source, module, actor, links, payload)?;
+        self.synchronize_fact_store_under_gate()?;
+        drop(gate);
+        self.observe_pipeline_event(&event)?;
+        Ok(event)
+    }
+
+    fn append_event_under_fact_gate(
+        &self,
+        severity: EventSeverity,
+        source: EventSource,
+        module: OriginModule,
+        actor: EventActor,
+        links: EventLinksDraft,
+        payload: impl Into<actingcommand_contract::EventPayloadDraft>,
+    ) -> RuntimeHostResult<PersistedEvent> {
         let draft = self
             .events
             .draft(severity, source, module, actor, links, payload)?;
@@ -6388,8 +6481,37 @@ impl HostShared {
             .ledger
             .append(draft)
             .map_err(|_| ledger_error("append_runtime_event"))?;
-        self.observe_pipeline_event(&event)?;
         Ok(event)
+    }
+
+    fn synchronize_fact_store(&self) -> RuntimeHostResult<()> {
+        let _gate = lock(&self.fact_write_gate, "synchronize_fact_store")?;
+        self.synchronize_fact_store_under_gate()
+    }
+
+    fn synchronize_fact_store_under_gate(&self) -> RuntimeHostResult<()> {
+        let result: RuntimeHostResult<()> = (|| {
+            let mut facts = lock(&self.facts, "synchronize_fact_store")?;
+            facts.synchronize(&self.ledger)?;
+            for invalidation in facts.pending_invalidations() {
+                self.append_event_under_fact_gate(
+                    EventSeverity::Info,
+                    EventSource::Runtime,
+                    OriginModule::FactStore,
+                    EventActor::Runtime,
+                    self.events.system_links()?,
+                    FactPayloadDraft::invalidated(invalidation.clone(), AuditInput::new()),
+                )?;
+                facts.acknowledge_generated_invalidation(&invalidation)?;
+            }
+            Ok(())
+        })();
+        if let Err(error) = &result
+            && error.is_fatal()
+        {
+            self.fatal.mark(error.clone())?;
+        }
+        result
     }
 
     fn lease_intent(

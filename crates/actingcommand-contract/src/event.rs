@@ -150,6 +150,7 @@ pub enum EventFamily {
     Runtime,
     Monitor,
     Performance,
+    Fact,
     Command,
     Scheduler,
     Policy,
@@ -198,6 +199,10 @@ pub enum EventType {
     PerformanceMonitorRecovered,
     #[serde(rename = "perf.balance_changed")]
     PerformanceBalanceChanged,
+    #[serde(rename = "fact.published")]
+    FactPublished,
+    #[serde(rename = "fact.invalidated")]
+    FactInvalidated,
     #[serde(rename = "command.received")]
     CommandReceived,
     #[serde(rename = "command.validated")]
@@ -361,6 +366,7 @@ impl EventType {
             | Self::PerformanceMonitorDegraded
             | Self::PerformanceMonitorRecovered
             | Self::PerformanceBalanceChanged => EventFamily::Performance,
+            Self::FactPublished | Self::FactInvalidated => EventFamily::Fact,
             Self::CommandReceived | Self::CommandValidated | Self::CommandRejected => {
                 EventFamily::Command
             }

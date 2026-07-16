@@ -247,7 +247,7 @@ fn lab_projection_contains_full_sanitized_typed_payload() {
 
     assert_eq!(
         projected[0].payload,
-        ProjectionPayload::Full(persisted.payload().clone())
+        ProjectionPayload::Full(Box::new(persisted.payload().clone()))
     );
 }
 

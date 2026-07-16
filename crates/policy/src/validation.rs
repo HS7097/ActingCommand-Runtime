@@ -725,7 +725,10 @@ fn validate_comparison_value(
 ) {
     let computable = match comparison {
         Comparison::Eq | Comparison::NotEq => true,
-        Comparison::Contains => matches!(value, FactValue::String(_)),
+        Comparison::Contains => {
+            matches!(value, FactValue::String(_))
+                || matches!(value, FactValue::RecordList(records) if !records.is_empty())
+        }
         Comparison::LessThan
         | Comparison::LessThanOrEqual
         | Comparison::GreaterThan
@@ -751,6 +754,31 @@ fn validate_comparison_value(
             format!("fact string exceeds {MAX_TEXT_BYTES} UTF-8 bytes"),
             descriptor,
         ));
+    }
+    if let FactValue::RecordList(records) = value {
+        if records.len() > 256
+            || records.iter().any(|record| record.len() > 64)
+            || records.iter().flat_map(|record| record.iter()).any(|(key, value)| {
+                key.is_empty()
+                    || key.len() > MAX_TEXT_BYTES
+                    || matches!(value, crate::FactScalar::String(text) if text.len() > MAX_TEXT_BYTES)
+            })
+        {
+            diagnostics.push(map.diagnostic(
+                CatalogDiagnosticCode::LimitExceeded,
+                format!("{path}/value/value"),
+                "fact record list exceeds the bounded predicate surface",
+                descriptor,
+            ));
+        }
+        if comparison == Comparison::Contains && records.len() != 1 {
+            diagnostics.push(map.diagnostic(
+                CatalogDiagnosticCode::PredicateUncomputable,
+                format!("{path}/value/value"),
+                "record-list contains requires exactly one expected record",
+                descriptor,
+            ));
+        }
     }
 }
 

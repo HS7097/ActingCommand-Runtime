@@ -1665,7 +1665,7 @@ fn production_lab_run_routes_device_effects_through_runtime_only() {
                 && matches!(
                     &event.payload,
                     ProjectionPayload::Full(payload)
-                        if payload.action() == EventAction::RuntimeTaskRun
+                        if payload.as_ref().action() == EventAction::RuntimeTaskRun
                 )
         })
         .expect("Runtime Lab run terminal");
@@ -1705,7 +1705,7 @@ fn production_lab_run_routes_device_effects_through_runtime_only() {
     let actions = correlated
         .iter()
         .filter_map(|event| match &event.payload {
-            ProjectionPayload::Full(payload) => Some(payload.action()),
+            ProjectionPayload::Full(payload) => Some(payload.as_ref().action()),
             _ => None,
         })
         .collect::<Vec<_>>();
@@ -1809,9 +1809,10 @@ fn runtime_finishes_and_rebuilds_lab_run_after_actinglab_client_is_killed() {
     let facts = events
         .iter()
         .filter_map(|event| match &event.payload {
-            ProjectionPayload::Full(EventPayload::Task(TaskPayload::Semantic(payload))) => {
-                Some(payload.fact())
-            }
+            ProjectionPayload::Full(payload) => match payload.as_ref() {
+                EventPayload::Task(TaskPayload::Semantic(payload)) => Some(payload.fact()),
+                _ => None,
+            },
             _ => None,
         })
         .collect::<Vec<_>>();

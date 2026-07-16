@@ -1,6 +1,7 @@
 use super::*;
 use crate::{
-    InputAction, MonitorDecision, MonitorDiagnosis, MonitorDisposition, MonitorObservation,
+    FactContent, FactInvalidationEventData, FactRecord, FactScope, FactValue, InputAction,
+    MonitorDecision, MonitorDiagnosis, MonitorDisposition, MonitorObservation,
     MonitorRecoveryCoordinationReason, MonitorRecoveryKind, PerformanceContext,
     PerformanceControlEventData, PerformanceControlLevel, PerformanceControlReason,
     PerformanceDeadlineDisposition, PerformanceMetric, PerformanceMonitorHealth,
@@ -221,6 +222,31 @@ fn all_payload_drafts(mut input: impl FnMut() -> AuditInput) -> Vec<EventPayload
         max_action_effect_latency_ms: Some(250),
         related_event_ids: Vec::new(),
     };
+    let fact_record = FactRecord {
+        scope: FactScope::Instance {
+            instance_id: "instance:fixture-a".to_owned(),
+        },
+        key: "env.theme".to_owned(),
+        content: FactContent::Inline {
+            value: FactValue::String("Neutral".to_owned()),
+        },
+        observed_at_unix_ms: 1_752_147_201_000,
+        expires_at_unix_ms: Some(1_752_147_261_000),
+        confidence_milli: 900,
+        source_detector: "detector.theme".to_owned(),
+        source_snapshot_id: "snapshot:fixture-a".to_owned(),
+        schema_version: "fact.v1".to_owned(),
+        resource_bundle_hash: "d".repeat(64),
+        invalidate_on: vec![EventType::RuntimeTakeover],
+    };
+    let fact_invalidation = FactInvalidationEventData {
+        scope: fact_record.scope.clone(),
+        key: fact_record.key.clone(),
+        source_snapshot_id: fact_record.source_snapshot_id.clone(),
+        invalidated_at_unix_ms: 1_752_147_202_000,
+        invalidated_by_event_id: *ids.mint_event_id().expect("trigger event").transport(),
+        invalidated_by_event_type: EventType::RuntimeTakeover,
+    };
 
     vec![
         MonitorPayloadDraft::requested(input()).into(),
@@ -298,6 +324,8 @@ fn all_payload_drafts(mut input: impl FnMut() -> AuditInput) -> Vec<EventPayload
             input(),
         )
         .into(),
+        FactPayloadDraft::published(fact_record, input()).into(),
+        FactPayloadDraft::invalidated(fact_invalidation, input()).into(),
         CommandPayloadDraft::received(action, input()).into(),
         CommandPayloadDraft::validated(action, effect, input()).into(),
         CommandPayloadDraft::rejected(action, diagnostic, effect, input()).into(),
@@ -895,7 +923,8 @@ fn tagged_payload_and_projection_layers_reject_unknown_fields() {
         .expect_err("unknown projection payload field");
     assert!(!error.to_string().contains("token-secret"));
 
-    let public_projection = ProjectionPayload::Public(sanitized.payload().public_projection());
+    let public_projection =
+        ProjectionPayload::Public(Box::new(sanitized.payload().public_projection()));
     let mut public_family_layer =
         serde_json::to_value(&public_projection).expect("public projection value");
     public_family_layer["payload"]["smuggled"] = serde_json::json!("token-secret-public-family");
@@ -915,7 +944,7 @@ fn tagged_payload_and_projection_layers_reject_unknown_fields() {
 #[test]
 fn event_v2_round_trips_every_c1_payload_variant() {
     let payloads = all_payload_drafts(AuditInput::new);
-    assert_eq!(payloads.len(), 76);
+    assert_eq!(payloads.len(), 78);
 
     for (index, payload) in payloads.into_iter().enumerate() {
         let sanitized = sanitize(payload, index as u64 + 1);
@@ -927,6 +956,79 @@ fn event_v2_round_trips_every_c1_payload_variant() {
             serde_json::from_str(&json).expect("deserialize typed payload");
         assert_eq!(round_trip, *sanitized.payload());
     }
+}
+
+#[test]
+fn fact_public_projection_exposes_identity_without_inline_value() {
+    let event = sanitize(
+        FactPayloadDraft::published(
+            FactRecord {
+                scope: FactScope::Instance {
+                    instance_id: "instance:fixture-a".to_owned(),
+                },
+                key: "env.theme".to_owned(),
+                content: FactContent::Inline {
+                    value: FactValue::String("private-inline-value".to_owned()),
+                },
+                observed_at_unix_ms: 1_752_147_201_000,
+                expires_at_unix_ms: None,
+                confidence_milli: 900,
+                source_detector: "detector.theme".to_owned(),
+                source_snapshot_id: "snapshot:fixture-a".to_owned(),
+                schema_version: "fact.v1".to_owned(),
+                resource_bundle_hash: "d".repeat(64),
+                invalidate_on: Vec::new(),
+            },
+            AuditInput::new(),
+        )
+        .into(),
+        1,
+    );
+    assert_eq!(event.payload().sensitivity(), Sensitivity::Internal);
+    let projection =
+        serde_json::to_value(event.payload().public_projection()).expect("fact public projection");
+    assert_eq!(projection["family"], "fact");
+    assert_eq!(projection["payload"]["fact_key"], "env.theme");
+    assert_eq!(
+        projection["payload"]["fact_source_snapshot_id"],
+        "snapshot:fixture-a"
+    );
+    assert!(!projection.to_string().contains("private-inline-value"));
+}
+
+#[test]
+fn artifact_backed_fact_inherits_redaction_sensitivity() {
+    let artifact = artifact(b"private-fact-evidence").reference().project(true);
+    let object_key = artifact
+        .object_key()
+        .expect("durable artifact object key")
+        .to_owned();
+    let event = sanitize(
+        FactPayloadDraft::published(
+            FactRecord {
+                scope: FactScope::Game {
+                    game_id: "game:fixture-a".to_owned(),
+                },
+                key: "health.evidence".to_owned(),
+                content: FactContent::Artifact { artifact },
+                observed_at_unix_ms: 1_752_147_201_000,
+                expires_at_unix_ms: None,
+                confidence_milli: 1_000,
+                source_detector: "detector.health".to_owned(),
+                source_snapshot_id: "snapshot:health".to_owned(),
+                schema_version: "fact.v1".to_owned(),
+                resource_bundle_hash: "d".repeat(64),
+                invalidate_on: Vec::new(),
+            },
+            AuditInput::new(),
+        )
+        .into(),
+        1,
+    );
+    assert_eq!(event.payload().sensitivity(), Sensitivity::Secret);
+    let projection =
+        serde_json::to_value(event.payload().public_projection()).expect("fact projection");
+    assert!(!projection.to_string().contains(&object_key));
 }
 
 #[test]

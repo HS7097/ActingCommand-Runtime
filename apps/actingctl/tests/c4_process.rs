@@ -398,9 +398,10 @@ fn runtime_finishes_and_rebuilds_contained_task_after_client_is_killed() {
     let facts = events
         .iter()
         .filter_map(|event| match &event.payload {
-            ProjectionPayload::Full(EventPayload::Task(TaskPayload::Semantic(payload))) => {
-                Some(payload.fact())
-            }
+            ProjectionPayload::Full(payload) => match payload.as_ref() {
+                EventPayload::Task(TaskPayload::Semantic(payload)) => Some(payload.fact()),
+                _ => None,
+            },
             _ => None,
         })
         .collect::<Vec<_>>();

@@ -9,6 +9,7 @@
 
 mod error;
 mod events;
+mod fact_store;
 mod host;
 mod ipc;
 mod monitor;
