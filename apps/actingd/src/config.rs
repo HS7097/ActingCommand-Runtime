@@ -6,7 +6,8 @@ use actingcommand_device::{
     MinitouchConfig, TouchBackendChoice, TouchBackendConfig,
 };
 use actingcommand_runtime_host::{
-    ExecutionBackendRegistration, ExecutionBackendRegistry, RuntimeHostConfig,
+    ExecutionBackendRegistration, ExecutionBackendRegistry, PerformanceMonitorConfig,
+    RuntimeHostConfig,
 };
 use serde::Deserialize;
 use std::fs;
@@ -102,7 +103,8 @@ impl ActingdConfigFile {
             .map_err(|_| "execution_registry_invalid")?;
         Ok(RuntimeAssembly {
             host: RuntimeHostConfig::new(self.state_root, self.secret_fingerprint_salt.as_bytes())
-                .with_bind_address(SocketAddr::new(bind_host, self.bind_port)),
+                .with_bind_address(SocketAddr::new(bind_host, self.bind_port))
+                .with_performance_monitor(PerformanceMonitorConfig::default()),
             registry,
         })
     }

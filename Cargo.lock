@@ -141,6 +141,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "actingcommand-host-metrics"
+version = "0.1.0"
+dependencies = [
+ "windows-sys",
+]
+
+[[package]]
 name = "actingcommand-lab"
 version = "0.1.0"
 dependencies = [
@@ -294,6 +301,7 @@ dependencies = [
  "actingcommand-contract",
  "actingcommand-device",
  "actingcommand-execution-kernel",
+ "actingcommand-host-metrics",
  "actingcommand-ledger",
  "actingcommand-pack-containment",
  "actingcommand-policy",

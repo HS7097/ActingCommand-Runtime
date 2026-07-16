@@ -4,9 +4,9 @@
 
 use crate::{RuntimeHostError, RuntimeHostResult};
 use actingcommand_contract::{
-    PolicyActivitySample, PolicyAdmissionRecord, PolicyBudgetReceipt, PolicyExecutionEventData,
-    PolicyExecutionOutcome, PolicyFailureClass, PolicyFailureDisposition, PolicyFailureRecord,
-    RuntimeErrorCode,
+    PerformanceContext, PolicyActivitySample, PolicyAdmissionRecord, PolicyBudgetReceipt,
+    PolicyExecutionEventData, PolicyExecutionOutcome, PolicyFailureClass, PolicyFailureDisposition,
+    PolicyFailureRecord, RuntimeErrorCode,
 };
 use actingcommand_policy::{
     ActivityProfile, ActivityWindow, CompiledCatalog, DispatchIntent, FailureAction, TaskSpec,
@@ -31,6 +31,7 @@ struct FailureStreak {
     error_code: String,
     class: PolicyFailureClass,
     count: u16,
+    escalation_streak: u16,
 }
 
 #[derive(Default)]
@@ -217,6 +218,7 @@ impl PolicyControlState {
         admission: &PolicyAdmissionRecord,
         observed_at_unix_ms: u64,
         input: &PolicyExecutionInput,
+        perf_context: &PerformanceContext,
     ) -> RuntimeHostResult<PolicyExecutionEventData> {
         let (task, _) = task_and_profile(catalog, intent)?;
         let runtime_ms = observed_at_unix_ms
@@ -238,7 +240,8 @@ impl PolicyControlState {
             PolicyExecutionInput::Succeeded => PolicyExecutionOutcome::Succeeded { runtime_ms },
             PolicyExecutionInput::Failed { error_code, class } => {
                 let key = (intent.task_id.clone(), intent.instance_id.clone());
-                let consecutive_same_error = match self.failure_streaks.get(&key) {
+                let previous = self.failure_streaks.get(&key);
+                let consecutive_same_error = match previous {
                     Some(previous)
                         if previous.error_code == error_code && previous.class == class =>
                     {
@@ -248,9 +251,27 @@ impl PolicyControlState {
                     }
                     _ => 1,
                 };
+                let performance_tax_exempt = class == PolicyFailureClass::Recoverable
+                    && !task.sensitive
+                    && perf_context.pressure_observed();
+                let escalation_streak = match previous {
+                    Some(previous)
+                        if previous.error_code == error_code && previous.class == class =>
+                    {
+                        if performance_tax_exempt {
+                            previous.escalation_streak
+                        } else {
+                            previous.escalation_streak.checked_add(1).ok_or_else(|| {
+                                fatal("policy_failure_count_overflow", "classify_policy_outcome")
+                            })?
+                        }
+                    }
+                    _ if performance_tax_exempt => 0,
+                    _ => 1,
+                };
                 let effective_class = if class == PolicyFailureClass::Severe
                     || task.sensitive
-                    || consecutive_same_error >= task.on_failure.escalation_threshold
+                    || escalation_streak >= task.on_failure.escalation_threshold
                 {
                     PolicyFailureClass::Severe
                 } else {
@@ -285,11 +306,14 @@ impl PolicyControlState {
                         original_class: class,
                         effective_class,
                         consecutive_same_error,
+                        escalation_streak,
+                        performance_tax_exempt,
                         retry_attempt,
                         disposition,
                         retry_at_unix_ms,
                         runtime_ms,
                         sensitive: task.sensitive,
+                        perf_context: Box::new(perf_context.clone()),
                     },
                 }
             }
@@ -320,8 +344,18 @@ impl PolicyControlState {
                 class: failure.original_class,
             },
         };
-        let expected =
-            self.preview_execution(catalog, intent, admission, data.observed_at_unix_ms, &input)?;
+        let perf_context = match &data.outcome {
+            PolicyExecutionOutcome::Succeeded { .. } => PerformanceContext::unavailable(1),
+            PolicyExecutionOutcome::Failed { failure } => failure.perf_context.as_ref().clone(),
+        };
+        let expected = self.preview_execution(
+            catalog,
+            intent,
+            admission,
+            data.observed_at_unix_ms,
+            &input,
+            &perf_context,
+        )?;
         if &expected != data {
             return Err(fatal(
                 "policy_execution_record_mismatch",
@@ -360,6 +394,7 @@ impl PolicyControlState {
                         error_code: failure.error_code.clone(),
                         class: failure.original_class,
                         count: failure.consecutive_same_error,
+                        escalation_streak: failure.escalation_streak,
                     },
                 );
             }
@@ -530,7 +565,11 @@ const fn fatal(code: &'static str, operation: &'static str) -> RuntimeHostError 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use actingcommand_contract::{PolicyExecutionOutcome, PolicyFailureDisposition};
+    use actingcommand_contract::{
+        PerformanceMonitorHealth, PerformancePressureKind, PerformancePressureRecord,
+        PerformancePressureSeverity, PerformancePressureValue, PolicyExecutionOutcome,
+        PolicyFailureDisposition,
+    };
     use actingcommand_policy::{
         CatalogDocumentSource, CatalogSources, DispatchPrerequisites, LoadProfile, compile_catalog,
     };
@@ -582,6 +621,39 @@ mod tests {
         catalog_with(|_| {}, |_| {})
     }
 
+    fn unavailable(at_unix_ms: u64) -> PerformanceContext {
+        PerformanceContext::unavailable(at_unix_ms)
+    }
+
+    fn pressured(at_unix_ms: u64) -> PerformanceContext {
+        PerformanceContext {
+            window_start_unix_ms: at_unix_ms.saturating_sub(30_000).max(1),
+            window_end_unix_ms: at_unix_ms,
+            health: PerformanceMonitorHealth::Healthy,
+            sample_count: 1,
+            unavailable_metrics: Vec::new(),
+            pressures: vec![PerformancePressureRecord {
+                kind: PerformancePressureKind::Cpu,
+                severity: PerformancePressureSeverity::High,
+                started_at_unix_ms: at_unix_ms.saturating_sub(1).max(1),
+                last_observed_at_unix_ms: at_unix_ms,
+                peak: PerformancePressureValue::Utilization {
+                    basis_points: 9_500,
+                },
+            }],
+            max_cpu_basis_points: Some(9_500),
+            max_ram_basis_points: Some(4_000),
+            disk_queue_depth_p95_milli: None,
+            disk_latency_p95_micros: None,
+            max_gpu_basis_points: None,
+            max_frame_gap_ms: None,
+            max_capture_latency_ms: None,
+            max_recognition_latency_ms: None,
+            max_action_effect_latency_ms: None,
+            related_event_ids: Vec::new(),
+        }
+    }
+
     fn intent(catalog: &CompiledCatalog, suffix: u64) -> DispatchIntent {
         let task = &catalog.catalog().tasks.tasks[0];
         DispatchIntent {
@@ -629,6 +701,7 @@ mod tests {
                         error_code: "transient.capture".to_owned(),
                         class: PolicyFailureClass::Recoverable,
                     },
+                    &unavailable(NOW + 100),
                 )
                 .expect("failure classification");
             let PolicyExecutionOutcome::Failed { failure } = &data.outcome else {
@@ -645,6 +718,57 @@ mod tests {
             } else {
                 assert_eq!(failure.effective_class, PolicyFailureClass::Severe);
                 assert_eq!(failure.disposition, PolicyFailureDisposition::PausedTask);
+                assert_eq!(failure.retry_attempt, 0);
+                assert!(failure.retry_at_unix_ms.is_none());
+            }
+            state
+                .commit_execution(&catalog, &intent, &admission, &data)
+                .expect("commit failure");
+        }
+    }
+
+    #[test]
+    fn performance_pressure_exempts_escalation_but_not_bounded_retry_count() {
+        let catalog = catalog_with(
+            |tasks| {
+                tasks["tasks"][0]["on_failure"]["retry_limit"] = serde_json::json!(2);
+                tasks["tasks"][0]["on_failure"]["escalation_threshold"] = serde_json::json!(2);
+            },
+            |_| {},
+        );
+        let mut state = PolicyControlState::default();
+        for attempt in 1_u16..=3 {
+            let intent = intent(&catalog, u64::from(attempt));
+            let admission = state
+                .preview_admission(&catalog, &intent, NOW)
+                .expect("admission preview");
+            let data = state
+                .preview_execution(
+                    &catalog,
+                    &intent,
+                    &admission,
+                    NOW + 100,
+                    &PolicyExecutionInput::Failed {
+                        error_code: "transient.capture".to_owned(),
+                        class: PolicyFailureClass::Recoverable,
+                    },
+                    &pressured(NOW + 100),
+                )
+                .expect("performance-associated failure");
+            let PolicyExecutionOutcome::Failed { failure } = &data.outcome else {
+                panic!("expected failure")
+            };
+            assert!(failure.performance_tax_exempt);
+            assert_eq!(failure.consecutive_same_error, attempt);
+            assert_eq!(failure.escalation_streak, 0);
+            assert_eq!(failure.effective_class, PolicyFailureClass::Recoverable);
+            if attempt <= 2 {
+                assert_eq!(
+                    failure.disposition,
+                    PolicyFailureDisposition::RetryScheduled
+                );
+            } else {
+                assert_eq!(failure.disposition, PolicyFailureDisposition::Continue);
                 assert_eq!(failure.retry_attempt, 0);
                 assert!(failure.retry_at_unix_ms.is_none());
             }
@@ -675,6 +799,7 @@ mod tests {
                     error_code: "transient.capture".to_owned(),
                     class: PolicyFailureClass::Recoverable,
                 },
+                &unavailable(NOW + 100),
             )
             .expect("failure classification");
         let PolicyExecutionOutcome::Failed { failure } = data.outcome else {
@@ -709,6 +834,7 @@ mod tests {
                         error_code: error_code.to_owned(),
                         class,
                     },
+                    &unavailable(NOW + 100),
                 )
                 .expect("failure classification");
             let PolicyExecutionOutcome::Failed { failure } = &data.outcome else {
@@ -745,6 +871,7 @@ mod tests {
                     error_code: "transient.capture".to_owned(),
                     class: PolicyFailureClass::Recoverable,
                 },
+                &unavailable(NOW + 100),
             )
             .expect("failure classification");
         let PolicyExecutionOutcome::Failed { failure } = data.outcome else {
@@ -783,6 +910,7 @@ mod tests {
                             error_code: "transient.capture".to_owned(),
                             class: PolicyFailureClass::Recoverable,
                         },
+                        &unavailable(NOW + 100),
                     )
                     .expect("failure classification");
                 let PolicyExecutionOutcome::Failed { failure } = &data.outcome else {
@@ -912,6 +1040,7 @@ mod tests {
                 &admission,
                 NOW + 80000,
                 &PolicyExecutionInput::Succeeded,
+                &unavailable(NOW + 80000),
             )
             .expect("first execution");
         state
