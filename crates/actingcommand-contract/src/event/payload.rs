@@ -7,7 +7,8 @@ use super::{
     RetentionClass, SanitizationError, Sensitivity, TaskOutcome,
 };
 use crate::{
-    ApprovalDecisionRecord, ApprovalDisposition, ApprovalTarget, ApprovalTargetKind,
+    AgentAttentionState, AgentSessionEventData, AgentSessionId, AgentWakeData, AgentWakeId,
+    AgentWakeKind, ApprovalDecisionRecord, ApprovalDisposition, ApprovalTarget, ApprovalTargetKind,
     ClientActionKind, ClientActionRecord, FactInvalidationEventData, FactRecord, FactScope,
     HolderId, InputAction, LeaseId, LeasePriority, MonitorDecision, MonitorDiagnosis,
     MonitorDisposition, MonitorObservation, MonitorRecoveryCoordinationReason, MonitorRecoveryKind,
@@ -43,6 +44,7 @@ pub const RESOURCE_AUTHORING_PAYLOAD_SCHEMA: &str = "actingcommand.payload.resou
 pub const CLIENT_PAYLOAD_SCHEMA: &str = "actingcommand.payload.client.v2";
 pub const STATE_PAYLOAD_SCHEMA: &str = "actingcommand.payload.state.v1";
 pub const RELEASE_PAYLOAD_SCHEMA: &str = "actingcommand.payload.release.v1";
+pub const AGENT_PAYLOAD_SCHEMA: &str = "actingcommand.payload.agent.v1";
 pub const LEDGER_PAYLOAD_SCHEMA: &str = "actingcommand.payload.ledger.v2";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -917,6 +919,34 @@ pub struct ReleaseTransitionPayload {
     effect_disposition: Option<EffectDisposition>,
     transition: ReleaseTransitionData,
     audit: SanitizedAudit,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AgentWakePayload {
+    action: EventAction,
+    wake: AgentWakeData,
+    audit: SanitizedAudit,
+}
+
+impl AgentWakePayload {
+    pub const fn wake(&self) -> &AgentWakeData {
+        &self.wake
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AgentSessionPayload {
+    action: EventAction,
+    session: AgentSessionEventData,
+    audit: SanitizedAudit,
+}
+
+impl AgentSessionPayload {
+    pub const fn session(&self) -> &AgentSessionEventData {
+        &self.session
+    }
 }
 
 impl ReleaseTransitionPayload {
@@ -1988,6 +2018,42 @@ impl PayloadDetail for ReleaseTransitionPayload {
     }
 }
 
+impl PayloadDetail for AgentWakePayload {
+    fn action(&self) -> EventAction {
+        self.action
+    }
+
+    fn diagnostic_code(&self) -> Option<DiagnosticCode> {
+        None
+    }
+
+    fn effect_disposition(&self) -> Option<EffectDisposition> {
+        None
+    }
+
+    fn audit(&self) -> &SanitizedAudit {
+        &self.audit
+    }
+}
+
+impl PayloadDetail for AgentSessionPayload {
+    fn action(&self) -> EventAction {
+        self.action
+    }
+
+    fn diagnostic_code(&self) -> Option<DiagnosticCode> {
+        None
+    }
+
+    fn effect_disposition(&self) -> Option<EffectDisposition> {
+        None
+    }
+
+    fn audit(&self) -> &SanitizedAudit {
+        &self.audit
+    }
+}
+
 impl PayloadDetail for LeaseTransferPayload {
     fn action(&self) -> EventAction {
         self.action
@@ -2327,6 +2393,17 @@ struct ReleaseTransitionDraft {
     audit: AuditInput,
 }
 
+struct AgentWakeDraft {
+    wake: AgentWakeData,
+    audit: AuditInput,
+}
+
+struct AgentSessionDraft {
+    action: EventAction,
+    session: AgentSessionEventData,
+    audit: AuditInput,
+}
+
 struct TaskSemanticDraft {
     fact: TaskSemanticFact,
     audit: AuditInput,
@@ -2653,6 +2730,34 @@ impl ReleaseTransitionDraft {
             diagnostic_code: self.diagnostic_code,
             effect_disposition: self.effect_disposition,
             transition: self.transition,
+            audit: self.audit.sanitize(fingerprinter)?,
+        })
+    }
+}
+
+impl AgentWakeDraft {
+    fn sanitize(
+        self,
+        fingerprinter: &dyn SecretFingerprinter,
+    ) -> Result<AgentWakePayload, SanitizationError> {
+        self.wake.validate()?;
+        Ok(AgentWakePayload {
+            action: EventAction::AgentWake,
+            wake: self.wake,
+            audit: self.audit.sanitize(fingerprinter)?,
+        })
+    }
+}
+
+impl AgentSessionDraft {
+    fn sanitize(
+        self,
+        fingerprinter: &dyn SecretFingerprinter,
+    ) -> Result<AgentSessionPayload, SanitizationError> {
+        self.session.validate()?;
+        Ok(AgentSessionPayload {
+            action: self.action,
+            session: self.session,
             audit: self.audit.sanitize(fingerprinter)?,
         })
     }
@@ -3252,6 +3357,64 @@ fn validate_release_payload(payload: &ReleasePayload) -> Result<(), Sanitization
         _ => Err(SanitizationError::new(
             "invalid_release_transition_lifecycle",
             "release_payload",
+        )),
+    }
+}
+
+fn validate_agent_payload(payload: &AgentPayload) -> Result<(), SanitizationError> {
+    match payload {
+        AgentPayload::WakeRequested(value) if value.action == EventAction::AgentWake => {
+            value.wake.validate()
+        }
+        AgentPayload::SessionStarted(value)
+            if value.action == EventAction::AgentSessionStart
+                && value.session.response().is_none()
+                && value.session.status().state() == AgentAttentionState::Active
+                && value.session.status().attempts_used() == 1 =>
+        {
+            value.session.validate()
+        }
+        AgentPayload::SessionResumed(value)
+            if value.action == EventAction::AgentSessionResume
+                && value.session.response().is_none()
+                && value.session.status().state() == AgentAttentionState::Active =>
+        {
+            value.session.validate()
+        }
+        AgentPayload::ResponseRecorded(value)
+            if value.action == EventAction::AgentSessionRespond
+                && value.session.status().state() == AgentAttentionState::Active
+                && value.session.response().is_some_and(|response| {
+                    response.disposition() == crate::AgentResponseDisposition::RetryableFailure
+                }) =>
+        {
+            value.session.validate()
+        }
+        AgentPayload::SessionCompleted(value)
+            if value.action == EventAction::AgentSessionComplete
+                && value.session.status().state() == AgentAttentionState::Completed
+                && value.session.response().is_some_and(|response| {
+                    response.disposition() == crate::AgentResponseDisposition::Completed
+                }) =>
+        {
+            value.session.validate()
+        }
+        AgentPayload::SessionEscalated(value)
+            if value.action == EventAction::AgentSessionEscalate
+                && value.session.status().state() == AgentAttentionState::PausedNeedsHuman
+                && value.session.response().is_some_and(|response| {
+                    matches!(
+                        response.disposition(),
+                        crate::AgentResponseDisposition::RetryableFailure
+                            | crate::AgentResponseDisposition::NeedsHuman
+                    )
+                }) =>
+        {
+            value.session.validate()
+        }
+        _ => Err(SanitizationError::new(
+            "invalid_agent_session_lifecycle",
+            "agent_payload",
         )),
     }
 }
@@ -4711,6 +4874,66 @@ impl ReleasePayloadDraft {
     }
 }
 
+enum AgentDraftKind {
+    WakeRequested(AgentWakeDraft),
+    SessionStarted(AgentSessionDraft),
+    SessionResumed(AgentSessionDraft),
+    ResponseRecorded(AgentSessionDraft),
+    SessionCompleted(AgentSessionDraft),
+    SessionEscalated(AgentSessionDraft),
+}
+
+pub struct AgentPayloadDraft(AgentDraftKind);
+
+impl AgentPayloadDraft {
+    pub fn wake_requested(wake: AgentWakeData, audit: AuditInput) -> Self {
+        Self(AgentDraftKind::WakeRequested(AgentWakeDraft {
+            wake,
+            audit,
+        }))
+    }
+
+    pub fn session_started(session: AgentSessionEventData, audit: AuditInput) -> Self {
+        Self(AgentDraftKind::SessionStarted(AgentSessionDraft {
+            action: EventAction::AgentSessionStart,
+            session,
+            audit,
+        }))
+    }
+
+    pub fn session_resumed(session: AgentSessionEventData, audit: AuditInput) -> Self {
+        Self(AgentDraftKind::SessionResumed(AgentSessionDraft {
+            action: EventAction::AgentSessionResume,
+            session,
+            audit,
+        }))
+    }
+
+    pub fn response_recorded(session: AgentSessionEventData, audit: AuditInput) -> Self {
+        Self(AgentDraftKind::ResponseRecorded(AgentSessionDraft {
+            action: EventAction::AgentSessionRespond,
+            session,
+            audit,
+        }))
+    }
+
+    pub fn session_completed(session: AgentSessionEventData, audit: AuditInput) -> Self {
+        Self(AgentDraftKind::SessionCompleted(AgentSessionDraft {
+            action: EventAction::AgentSessionComplete,
+            session,
+            audit,
+        }))
+    }
+
+    pub fn session_escalated(session: AgentSessionEventData, audit: AuditInput) -> Self {
+        Self(AgentDraftKind::SessionEscalated(AgentSessionDraft {
+            action: EventAction::AgentSessionEscalate,
+            session,
+            audit,
+        }))
+    }
+}
+
 const fn release_action(kind: ReleaseTransitionKind) -> EventAction {
     match kind {
         ReleaseTransitionKind::Activate => EventAction::ReleaseActivate,
@@ -4730,6 +4953,7 @@ pub enum EventPayloadDraft {
     Catalog(CatalogPayloadDraft),
     State(StatePayloadDraft),
     Release(ReleasePayloadDraft),
+    Agent(AgentPayloadDraft),
     Lease(LeasePayloadDraft),
     Task(TaskPayloadDraft),
     Application(ApplicationPayloadDraft),
@@ -4763,6 +4987,7 @@ payload_draft_from!(PolicyPayloadDraft, Policy);
 payload_draft_from!(CatalogPayloadDraft, Catalog);
 payload_draft_from!(StatePayloadDraft, State);
 payload_draft_from!(ReleasePayloadDraft, Release);
+payload_draft_from!(AgentPayloadDraft, Agent);
 payload_draft_from!(LeasePayloadDraft, Lease);
 payload_draft_from!(TaskPayloadDraft, Task);
 payload_draft_from!(ApplicationPayloadDraft, Application);
@@ -4923,6 +5148,22 @@ pub enum ReleasePayload {
     Activated(ReleaseTransitionPayload),
     RolledBack(ReleaseTransitionPayload),
     TransitionFailed(ReleaseTransitionPayload),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(
+    tag = "kind",
+    content = "data",
+    rename_all = "snake_case",
+    deny_unknown_fields
+)]
+pub enum AgentPayload {
+    WakeRequested(AgentWakePayload),
+    SessionStarted(AgentSessionPayload),
+    SessionResumed(AgentSessionPayload),
+    ResponseRecorded(AgentSessionPayload),
+    SessionCompleted(AgentSessionPayload),
+    SessionEscalated(AgentSessionPayload),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -5177,6 +5418,14 @@ family_payload!(ReleasePayload, {
     RolledBack => EventType::ReleaseRolledBack,
     TransitionFailed => EventType::ReleaseTransitionFailed,
 });
+family_payload!(AgentPayload, {
+    WakeRequested => EventType::AgentWakeRequested,
+    SessionStarted => EventType::AgentSessionStarted,
+    SessionResumed => EventType::AgentSessionResumed,
+    ResponseRecorded => EventType::AgentResponseRecorded,
+    SessionCompleted => EventType::AgentSessionCompleted,
+    SessionEscalated => EventType::AgentSessionEscalated,
+});
 family_payload!(LeasePayload, {
     Requested => EventType::LeaseRequested,
     Granted => EventType::LeaseGranted,
@@ -5277,6 +5526,7 @@ pub enum EventPayload {
     Catalog(CatalogPayload),
     State(StatePayload),
     Release(ReleasePayload),
+    Agent(AgentPayload),
     Lease(LeasePayload),
     Task(TaskPayload),
     Application(ApplicationPayload),
@@ -5438,6 +5688,26 @@ impl EventPayloadDraft {
                 }
                 ReleaseDraftKind::TransitionFailed(detail) => {
                     ReleasePayload::TransitionFailed(detail.sanitize(fingerprinter)?)
+                }
+            }),
+            Self::Agent(value) => EventPayload::Agent(match value.0 {
+                AgentDraftKind::WakeRequested(detail) => {
+                    AgentPayload::WakeRequested(detail.sanitize(fingerprinter)?)
+                }
+                AgentDraftKind::SessionStarted(detail) => {
+                    AgentPayload::SessionStarted(detail.sanitize(fingerprinter)?)
+                }
+                AgentDraftKind::SessionResumed(detail) => {
+                    AgentPayload::SessionResumed(detail.sanitize(fingerprinter)?)
+                }
+                AgentDraftKind::ResponseRecorded(detail) => {
+                    AgentPayload::ResponseRecorded(detail.sanitize(fingerprinter)?)
+                }
+                AgentDraftKind::SessionCompleted(detail) => {
+                    AgentPayload::SessionCompleted(detail.sanitize(fingerprinter)?)
+                }
+                AgentDraftKind::SessionEscalated(detail) => {
+                    AgentPayload::SessionEscalated(detail.sanitize(fingerprinter)?)
                 }
             }),
             Self::Lease(value) => EventPayload::Lease(match value.0 {
@@ -5622,6 +5892,7 @@ impl EventPayload {
             Self::Catalog(_) => CATALOG_PAYLOAD_SCHEMA,
             Self::State(_) => STATE_PAYLOAD_SCHEMA,
             Self::Release(_) => RELEASE_PAYLOAD_SCHEMA,
+            Self::Agent(_) => AGENT_PAYLOAD_SCHEMA,
             Self::Lease(_) => LEASE_PAYLOAD_SCHEMA,
             Self::Task(_) => TASK_PAYLOAD_SCHEMA,
             Self::Application(_) => APPLICATION_PAYLOAD_SCHEMA,
@@ -5654,6 +5925,9 @@ impl EventPayload {
             sensitivity = sensitivity.max(Sensitivity::Internal);
         }
         if matches!(self, Self::State(_) | Self::Release(_)) {
+            sensitivity = sensitivity.max(Sensitivity::Internal);
+        }
+        if matches!(self, Self::Agent(_)) {
             sensitivity = sensitivity.max(Sensitivity::Internal);
         }
         sensitivity
@@ -5709,6 +5983,9 @@ impl EventPayload {
         }
         if let Self::Release(value) = self {
             validate_release_payload(value)?;
+        }
+        if let Self::Agent(value) = self {
+            validate_agent_payload(value)?;
         }
         match self {
             Self::Task(TaskPayload::Semantic(value)) if value.validate().is_err() => {
@@ -5815,6 +6092,8 @@ impl EventPayload {
         let fact_identity = fact_identity(self);
         let client_action = client_action(self);
         let approval = approval_decision(self);
+        let agent_wake = agent_wake(self);
+        let agent_session = agent_session(self);
         let payload = PublicPayload {
             event_type,
             action: detail.action(),
@@ -5919,6 +6198,18 @@ impl EventPayload {
             }),
             approval_catalog_version: approval
                 .map(|value| value.decision().target().catalog_version()),
+            agent_wake_id: agent_wake
+                .map(AgentWakeData::wake_id)
+                .or_else(|| agent_session.map(|value| value.status().wake_id())),
+            agent_session_id: agent_session.map(|value| value.status().session_id()),
+            agent_wake_kind: agent_wake.map(AgentWakeData::kind),
+            agent_attention_state: agent_wake
+                .map(AgentWakeData::attention_state)
+                .or_else(|| agent_session.map(|value| value.status().state())),
+            agent_attempts_used: agent_session.map(|value| value.status().attempts_used()),
+            agent_attempt_limit: agent_wake
+                .map(|value| value.budget().max_attempts())
+                .or_else(|| agent_session.map(|value| value.status().budget().max_attempts())),
         };
         match self {
             Self::Runtime(_) => PublicEventPayload::Runtime(payload),
@@ -5932,6 +6223,7 @@ impl EventPayload {
             Self::Catalog(_) => PublicEventPayload::Catalog(payload),
             Self::State(_) => PublicEventPayload::State(payload),
             Self::Release(_) => PublicEventPayload::Release(payload),
+            Self::Agent(_) => PublicEventPayload::Agent(payload),
             Self::Lease(_) => PublicEventPayload::Lease(payload),
             Self::Task(_) => PublicEventPayload::Task(payload),
             Self::Application(_) => PublicEventPayload::Application(payload),
@@ -5958,6 +6250,7 @@ impl EventPayload {
             Self::Catalog(value) => value,
             Self::State(value) => value,
             Self::Release(value) => value,
+            Self::Agent(value) => value,
             Self::Lease(value) => value,
             Self::Task(value) => value,
             Self::Application(value) => value,
@@ -6042,6 +6335,26 @@ fn client_action(payload: &EventPayload) -> Option<&ClientActionPayload> {
 fn approval_decision(payload: &EventPayload) -> Option<&ApprovalDecisionPayload> {
     match payload {
         EventPayload::Approval(ApprovalPayload::Decision(value)) => Some(value),
+        _ => None,
+    }
+}
+
+fn agent_wake(payload: &EventPayload) -> Option<&AgentWakeData> {
+    match payload {
+        EventPayload::Agent(AgentPayload::WakeRequested(value)) => Some(value.wake()),
+        _ => None,
+    }
+}
+
+fn agent_session(payload: &EventPayload) -> Option<&AgentSessionEventData> {
+    match payload {
+        EventPayload::Agent(
+            AgentPayload::SessionStarted(value)
+            | AgentPayload::SessionResumed(value)
+            | AgentPayload::ResponseRecorded(value)
+            | AgentPayload::SessionCompleted(value)
+            | AgentPayload::SessionEscalated(value),
+        ) => Some(value.session()),
         _ => None,
     }
 }
@@ -6309,6 +6622,18 @@ pub struct PublicPayload {
     approval_catalog_hash: Option<Box<str>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     approval_catalog_version: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    agent_wake_id: Option<AgentWakeId>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    agent_session_id: Option<AgentSessionId>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    agent_wake_kind: Option<AgentWakeKind>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    agent_attention_state: Option<AgentAttentionState>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    agent_attempts_used: Option<u16>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    agent_attempt_limit: Option<u16>,
 }
 
 impl PublicPayload {
@@ -6569,6 +6894,30 @@ impl PublicPayload {
     pub const fn approval_catalog_version(&self) -> Option<u64> {
         self.approval_catalog_version
     }
+
+    pub const fn agent_wake_id(&self) -> Option<AgentWakeId> {
+        self.agent_wake_id
+    }
+
+    pub const fn agent_session_id(&self) -> Option<AgentSessionId> {
+        self.agent_session_id
+    }
+
+    pub const fn agent_wake_kind(&self) -> Option<AgentWakeKind> {
+        self.agent_wake_kind
+    }
+
+    pub const fn agent_attention_state(&self) -> Option<AgentAttentionState> {
+        self.agent_attention_state
+    }
+
+    pub const fn agent_attempts_used(&self) -> Option<u16> {
+        self.agent_attempts_used
+    }
+
+    pub const fn agent_attempt_limit(&self) -> Option<u16> {
+        self.agent_attempt_limit
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -6590,6 +6939,7 @@ pub enum PublicEventPayload {
     Catalog(PublicPayload),
     State(PublicPayload),
     Release(PublicPayload),
+    Agent(PublicPayload),
     Lease(PublicPayload),
     Task(PublicPayload),
     Application(PublicPayload),
