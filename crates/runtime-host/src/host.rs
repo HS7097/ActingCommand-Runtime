@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
+use crate::approval::ApprovalProjection;
 use crate::events::RuntimeEvents;
 use crate::fact_store::InstanceFactStore;
 use crate::ipc::{DEFAULT_RUNTIME_MAX_FRAME_BYTES, FrameRead, read_frame, write_frame};
@@ -25,24 +26,25 @@ use actingcommand_artifact_store::{
     EvidenceJsonDocument, EvidencePackage, PackageVerification, PersistedFrameEvidence,
 };
 use actingcommand_contract::{
-    ApplicationLifecycleAction, ApplicationPayload, ApplicationPayloadDraft, ArtifactIssuePolicy,
+    ApplicationLifecycleAction, ApplicationPayload, ApplicationPayloadDraft,
+    ApprovalDecisionRecord, ApprovalPayload, ApprovalPayloadDraft, ArtifactIssuePolicy,
     ArtifactKind, ArtifactProducer, ArtifactRedactionState, AuditInput, CapturePayloadDraft,
     CaptureSequence, CaptureSequenceSpec, CatalogPayloadDraft, CatalogTransitionEventData,
-    ClientPayloadDraft, CommandPayloadDraft, ContainedTaskRequest, CorrelationId, DiagnosticCode,
-    EffectDisposition, EventAction, EventActor, EventDraft, EventId, EventLinksDraft, EventPayload,
-    EventQuery, EventSeverity, EventSource, EventType, EvidenceCompleteness, FactPayloadDraft,
-    FactRecord, InputAction, InputPayload, InputPayloadDraft, InstanceFactContext,
-    InstanceFactSnapshot, InstanceId, IssuedActionId, IssuedFrameId, IssuedMonitorProbe,
-    IssuedReadOnlyCaptureCapability, IssuedRecognitionId, IssuedRunId, IssuedTaskId, LeaseId,
-    LeasePayloadDraft, LeaseQueuePolicy, LeaseToken, MAX_INSTANCE_ALIAS_BYTES, MonitorPayloadDraft,
-    MonitorRecoveryCoordinationReason, OriginModule, PackageDebugLayout, PackageDebugRequest,
-    PackageDebugSummary, PerformanceContext, PerformancePayloadDraft, PolicyDispatchEventData,
-    PolicyExecutionEventData, PolicyPayloadDraft, PolicyPlanningSignalEventData,
-    PolicyReasonRecord, RUNTIME_INFO_FILE, ReadonlyObservation, RecognitionPayloadDraft,
-    RecognitionVerdict, RequestId, ResourceAuthoringEvent, ResourceAuthoringPayloadDraft,
-    ResourceAuthoringPhase, RetentionClass, RuntimeCaptureBackend, RuntimeControlPlaneStatus,
-    RuntimeDebugEvent, RuntimeDebugOperation, RuntimeDebugPhase, RuntimeErrorCode,
-    RuntimeErrorProjection, RuntimeEventBatch, RuntimeEvidenceExportRequest,
+    ClientActionRecord, ClientPayload, ClientPayloadDraft, CommandPayloadDraft,
+    ContainedTaskRequest, CorrelationId, DiagnosticCode, EffectDisposition, EventAction,
+    EventActor, EventDraft, EventId, EventLinksDraft, EventPayload, EventQuery, EventSeverity,
+    EventSource, EventType, EvidenceCompleteness, FactPayloadDraft, FactRecord, InputAction,
+    InputPayload, InputPayloadDraft, InstanceFactContext, InstanceFactSnapshot, InstanceId,
+    IssuedActionId, IssuedFrameId, IssuedMonitorProbe, IssuedReadOnlyCaptureCapability,
+    IssuedRecognitionId, IssuedRunId, IssuedTaskId, LeaseId, LeasePayloadDraft, LeaseQueuePolicy,
+    LeaseToken, MAX_INSTANCE_ALIAS_BYTES, MonitorPayloadDraft, MonitorRecoveryCoordinationReason,
+    OriginModule, PackageDebugLayout, PackageDebugRequest, PackageDebugSummary, PerformanceContext,
+    PerformancePayloadDraft, PolicyDispatchEventData, PolicyExecutionEventData, PolicyPayloadDraft,
+    PolicyPlanningSignalEventData, PolicyReasonRecord, RUNTIME_INFO_FILE, ReadonlyObservation,
+    RecognitionPayloadDraft, RecognitionVerdict, RequestId, ResourceAuthoringEvent,
+    ResourceAuthoringPayloadDraft, ResourceAuthoringPhase, RetentionClass, RuntimeCaptureBackend,
+    RuntimeControlPlaneStatus, RuntimeDebugEvent, RuntimeDebugOperation, RuntimeDebugPhase,
+    RuntimeErrorCode, RuntimeErrorProjection, RuntimeEventBatch, RuntimeEvidenceExportRequest,
     RuntimeEvidenceExportSummary, RuntimeEvidenceScreenshotCounts, RuntimeInfo,
     RuntimeInstanceStatus, RuntimeMonitorPolicy, RuntimeOperation, RuntimePayloadDraft,
     RuntimeReceipt, RuntimeReceiptState, RuntimeRequest, RuntimeResult, RuntimeSubscriptionRequest,
@@ -314,6 +316,7 @@ impl RuntimeHost {
             policy: Mutex::new(policy),
             performance: Mutex::new(performance),
             performance_control: Mutex::new(performance_control),
+            governance_write_gate: Mutex::new(()),
             fact_write_gate: Mutex::new(()),
             facts: Mutex::new(facts),
             owner: Mutex::new(owner),
@@ -826,6 +829,8 @@ struct HostShared {
     policy: Mutex<PolicyHost>,
     performance: Mutex<PerformanceMonitor>,
     performance_control: Mutex<PerformanceBalanceController>,
+    // Client facts and approval authority are projected and appended as one ordered transition.
+    governance_write_gate: Mutex<()>,
     // Ledger append and fact projection commit are one ordered Runtime-owned transition.
     fact_write_gate: Mutex<()>,
     facts: Mutex<InstanceFactStore>,
@@ -1313,6 +1318,18 @@ impl HostShared {
                 return Ok(replay);
             }
         }
+        // Approval projection and dispatch admission share one order so a concurrent revocation
+        // cannot appear in the ledger before a dispatch authorized by the superseded fact.
+        let _governance_gate = lock(&self.governance_write_gate, "project_policy_approvals")?;
+        let mut authoritative_context = context.clone();
+        authoritative_context.approval_fact_ids = match ApprovalProjection::recover(&self.ledger) {
+            Ok(projection) => projection.active_for_dispatch(intent),
+            Err(error) => {
+                self.fatal.mark(error.clone())?;
+                return Err(error);
+            }
+        };
+        let context = &authoritative_context;
         let gate_error = match lock(
             &self.performance_control,
             "gate_policy_performance_dispatch",
@@ -1840,6 +1857,12 @@ impl HostShared {
             }
             RuntimeOperation::RecordDebugEvent { event } => {
                 self.record_debug_event(validated, event)
+            }
+            RuntimeOperation::RecordClientAction { action } => {
+                self.record_client_action(request, validated, action)
+            }
+            RuntimeOperation::RecordApprovalDecision { decision } => {
+                self.record_approval_decision(request, validated, decision)
             }
         }
     }
@@ -2532,6 +2555,176 @@ impl HostShared {
                 phase: event.phase(),
             },
         })
+    }
+
+    fn record_client_action(
+        &self,
+        request: &RuntimeRequest,
+        validated: &ValidatedRuntimeRequest<'_>,
+        action: &ClientActionRecord,
+    ) -> Result<OperationSuccess, RequestFailure> {
+        let _gate = lock(&self.governance_write_gate, "record_client_action")
+            .map_err(RequestFailure::poison_without_terminal)?;
+        if let Some(existing) = self.client_fact_replay(request, EventType::ClientAction)? {
+            let EventPayload::Client(ClientPayload::Action(payload)) = existing.payload() else {
+                return Err(RequestFailure::poison_without_terminal(
+                    RuntimeHostError::fatal(
+                        "client_action_replay_payload_mismatch",
+                        "record_client_action",
+                        RuntimeErrorCode::RuntimeFatal,
+                    ),
+                ));
+            };
+            if payload.record() != action {
+                return Err(client_fact_conflict(
+                    "client_action_replay_conflict",
+                    "record_client_action",
+                ));
+            }
+            return Ok(OperationSuccess {
+                state: RuntimeReceiptState::Completed,
+                terminal: Some(terminal(&existing)),
+                result: RuntimeResult::ClientActionRecorded,
+            });
+        }
+        let instance_id = match action.instance_alias() {
+            Some(alias) => Some(self.registered_instance_id(alias)?),
+            None => None,
+        };
+        let persisted = self.append_event(
+            EventSeverity::Info,
+            request.source(),
+            OriginModule::Governance,
+            request.actor(),
+            validated.event_links(instance_id, None, None),
+            ClientPayloadDraft::action(action.clone(), AuditInput::new()),
+        )?;
+        Ok(OperationSuccess {
+            state: RuntimeReceiptState::Completed,
+            terminal: Some(terminal(&persisted)),
+            result: RuntimeResult::ClientActionRecorded,
+        })
+    }
+
+    fn record_approval_decision(
+        &self,
+        request: &RuntimeRequest,
+        validated: &ValidatedRuntimeRequest<'_>,
+        decision: &ApprovalDecisionRecord,
+    ) -> Result<OperationSuccess, RequestFailure> {
+        let _gate = lock(&self.governance_write_gate, "record_approval_decision")
+            .map_err(RequestFailure::poison_without_terminal)?;
+        if let Some(existing) = self.client_fact_replay(request, EventType::ApprovalDecision)? {
+            let EventPayload::Approval(ApprovalPayload::Decision(payload)) = existing.payload()
+            else {
+                return Err(RequestFailure::poison_without_terminal(
+                    RuntimeHostError::fatal(
+                        "approval_replay_payload_mismatch",
+                        "record_approval_decision",
+                        RuntimeErrorCode::RuntimeFatal,
+                    ),
+                ));
+            };
+            if payload.decision() != decision {
+                return Err(client_fact_conflict(
+                    "approval_replay_conflict",
+                    "record_approval_decision",
+                ));
+            }
+            return Ok(OperationSuccess {
+                state: RuntimeReceiptState::Completed,
+                terminal: Some(terminal(&existing)),
+                result: RuntimeResult::ApprovalDecisionRecorded {
+                    approval_id: decision.approval_id().to_owned(),
+                    disposition: decision.disposition(),
+                },
+            });
+        }
+        ApprovalProjection::recover(&self.ledger)
+            .map_err(RequestFailure::poison_without_terminal)?
+            .validate_transition(decision)
+            .map_err(|error| RequestFailure::request(error, RuntimeReceiptState::Denied, None))?;
+        let persisted = self.append_event(
+            EventSeverity::Info,
+            request.source(),
+            OriginModule::Governance,
+            request.actor(),
+            validated.event_links(None, None, None),
+            ApprovalPayloadDraft::decision(decision.clone(), AuditInput::new()),
+        )?;
+        Ok(OperationSuccess {
+            state: RuntimeReceiptState::Completed,
+            terminal: Some(terminal(&persisted)),
+            result: RuntimeResult::ApprovalDecisionRecorded {
+                approval_id: decision.approval_id().to_owned(),
+                disposition: decision.disposition(),
+            },
+        })
+    }
+
+    fn client_fact_replay(
+        &self,
+        request: &RuntimeRequest,
+        event_type: EventType,
+    ) -> Result<Option<PersistedEvent>, RequestFailure> {
+        let mut events = self
+            .ledger
+            .query(EventQuery {
+                request_id: Some(request.request_id()),
+                ..EventQuery::default()
+            })
+            .map_err(|_| RequestFailure::poison(ledger_error("query_client_fact_replay"), None))?;
+        if events.len() > 1 {
+            if events.iter().all(|event| {
+                event.event_type() == event_type
+                    && event.origin().module() == OriginModule::Governance
+            }) {
+                return Err(RequestFailure::poison_without_terminal(
+                    RuntimeHostError::fatal(
+                        "client_fact_replay_ambiguous",
+                        "query_client_fact_replay",
+                        RuntimeErrorCode::RuntimeFatal,
+                    ),
+                ));
+            }
+            return Err(client_fact_conflict(
+                "client_fact_request_id_conflict",
+                "query_client_fact_replay",
+            ));
+        }
+        let Some(event) = events.pop() else {
+            return Ok(None);
+        };
+        if event.event_type() != event_type
+            || event.origin().source() != request.source()
+            || event.origin().actor() != request.actor()
+            || event.origin().module() != OriginModule::Governance
+            || event.links().correlation_id() != Some(&request.correlation_id())
+        {
+            return Err(client_fact_conflict(
+                "client_fact_replay_origin_conflict",
+                "query_client_fact_replay",
+            ));
+        }
+        Ok(Some(event))
+    }
+
+    fn registered_instance_id(&self, instance_alias: &str) -> Result<InstanceId, RequestFailure> {
+        lock(&self.registered_instances, "resolve_client_action_instance")?
+            .values()
+            .find(|instance| instance.instance_alias == instance_alias)
+            .map(RegisteredInstance::instance_id)
+            .ok_or_else(|| {
+                RequestFailure::request(
+                    RuntimeHostError::request(
+                        "instance_unknown",
+                        "resolve_client_action_instance",
+                        RuntimeErrorCode::InstanceUnknown,
+                    ),
+                    RuntimeReceiptState::Denied,
+                    None,
+                )
+            })
     }
 
     fn control_plane_status(&self) -> Result<OperationSuccess, RequestFailure> {
@@ -7963,6 +8156,14 @@ fn critical_plan_error() -> RuntimeHostError {
         "critical_event_plan_invalid",
         "build_critical_event",
         RuntimeErrorCode::RuntimeFatal,
+    )
+}
+
+fn client_fact_conflict(code: &'static str, operation: &'static str) -> RequestFailure {
+    RequestFailure::request(
+        RuntimeHostError::request(code, operation, RuntimeErrorCode::InvalidRequest),
+        RuntimeReceiptState::Denied,
+        None,
     )
 }
 

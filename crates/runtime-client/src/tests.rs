@@ -2,8 +2,9 @@
 
 use super::*;
 use actingcommand_contract::{
-    CaptureSequenceSpec, EventActor, EventQuery, EventSource, EventType, IdentifierIssuer,
-    InputAction, InstanceId, LeasePriority, LeaseQueuePolicy, ProjectionProfile,
+    ApprovalDecisionRecord, ApprovalDisposition, ApprovalTarget, CaptureSequenceSpec,
+    ClientActionKind, ClientActionRecord, EventActor, EventQuery, EventSource, EventType,
+    IdentifierIssuer, InputAction, InstanceId, LeasePriority, LeaseQueuePolicy, ProjectionProfile,
     ResourceAuthoringEvent, ResourceAuthoringPhase, RuntimeCaptureBackend, RuntimeDebugEvent,
     RuntimeDebugOperation, RuntimeErrorCode, RuntimeErrorProjection, RuntimeMonitorPolicy,
     RuntimeOperation, RuntimeReceipt, RuntimeReceiptState, RuntimeRequest, RuntimeResult,
@@ -296,6 +297,61 @@ fn typed_client_discovers_runtime_and_routes_queries_and_input() {
     drop(client);
     host.close().expect("close host");
     assert_eq!(state.closes.load(Ordering::Acquire), 1);
+}
+
+#[test]
+fn typed_client_records_client_actions_and_approval_decisions_through_runtime() {
+    let root = TempDir::new().expect("tempdir");
+    let state = Arc::new(FakeState::default());
+    let host = host(&root, state, 1_000);
+    let client = client(&root);
+
+    client
+        .record_client_action(
+            ClientActionRecord::new(
+                "overview",
+                "refresh",
+                ClientActionKind::Button,
+                Some("ak.cn".to_owned()),
+                None,
+            )
+            .expect("client action"),
+        )
+        .expect("record client action");
+    client
+        .record_approval_decision(
+            ApprovalDecisionRecord::new(
+                "approval:client-fixture",
+                ApprovalDisposition::Approved,
+                ApprovalTarget::Catalog {
+                    catalog_hash: format!("sha256:{}", "a".repeat(64)),
+                    catalog_version: 1,
+                },
+                "user_confirmed",
+            )
+            .expect("approval decision"),
+        )
+        .expect("record approval decision");
+
+    let events = client
+        .query_events(EventQuery::default(), ProjectionProfile::Forensic)
+        .expect("events");
+    assert_eq!(
+        events
+            .iter()
+            .filter(|event| event.event_type == EventType::ClientAction)
+            .count(),
+        1
+    );
+    assert_eq!(
+        events
+            .iter()
+            .filter(|event| event.event_type == EventType::ApprovalDecision)
+            .count(),
+        1
+    );
+    drop(client);
+    host.close().expect("close host");
 }
 
 #[test]

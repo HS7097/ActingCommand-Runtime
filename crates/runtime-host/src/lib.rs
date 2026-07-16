@@ -7,6 +7,7 @@
 
 #![forbid(unsafe_code)]
 
+mod approval;
 mod error;
 mod events;
 mod fact_store;
