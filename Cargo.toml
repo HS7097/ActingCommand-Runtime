@@ -24,6 +24,7 @@ members = [
     "crates/resource-tooling",
     "crates/runtime-client",
     "crates/runtime-host",
+    "crates/runtime-state",
     "crates/scheduler",
     "crates/vision-ffi",
     "providers/onnxruntime-json",
@@ -54,10 +55,12 @@ actingcommand-recognition-pack = { path = "crates/recognition-pack" }
 actingcommand-resource-tooling = { path = "crates/resource-tooling" }
 actingcommand-runtime-client = { path = "crates/runtime-client" }
 actingcommand-runtime-host = { path = "crates/runtime-host" }
+actingcommand-runtime-state = { path = "crates/runtime-state" }
 actingcommand-scheduler = { path = "crates/scheduler" }
 actingcommand-vision-ffi = { path = "crates/vision-ffi" }
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order"] }
+rusqlite = { version = "0.40.1", features = ["bundled"] }
 sha2 = "0.10"
 time = { version = "0.3", features = ["formatting", "macros"] }
 zip = { version = "0.6", default-features = false, features = ["deflate"] }

@@ -106,6 +106,10 @@ closed_code!(EventAction {
     FactInvalidate => "fact.invalidate",
     ClientAction => "client.action",
     ApprovalDecision => "approval.decision",
+    StateMigrate => "state.migrate",
+    ReleaseStage => "release.stage",
+    ReleaseActivate => "release.activate",
+    ReleaseRollback => "release.rollback",
     ProcessAcceptance => "process.acceptance",
     ScheduleAdmit => "schedule.admit",
     LeaseAcquire => "lease.acquire",
@@ -161,6 +165,7 @@ closed_code!(DiagnosticCode {
     CommandRejected => "command.rejected",
     PolicyRejected => "policy.rejected",
     CatalogTransitionFailed => "catalog.transition_failed",
+    ReleaseTransitionFailed => "release.transition_failed",
 });
 
 closed_code!(RecognitionVerdict {

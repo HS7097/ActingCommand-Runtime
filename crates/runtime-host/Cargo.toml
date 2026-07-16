@@ -17,6 +17,7 @@ actingcommand-host-metrics = { workspace = true }
 actingcommand-ledger = { workspace = true }
 actingcommand-pack-containment = { workspace = true }
 actingcommand-policy = { workspace = true }
+actingcommand-runtime-state = { workspace = true }
 actingcommand-scheduler = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
