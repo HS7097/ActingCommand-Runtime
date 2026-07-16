@@ -11,8 +11,8 @@ use sha2::{Digest, Sha256};
 
 use crate::{
     ActivityProfile, ClockSchedule, Comparison, CompiledCatalog, FactValue, LoadProfile,
-    ObservationRef, PoolSpec, PredicateSpec, ResourceEffectSpec, ScopeSelector, TaskSpec,
-    TaskTerminalState,
+    MAX_TEXT_BYTES, ObservationRef, PoolSpec, PredicateSpec, ResourceEffectSpec, ScopeSelector,
+    TaskSpec, TaskTerminalState,
 };
 
 pub const MAX_EVALUATION_FACTS: usize = 16_384;
@@ -29,6 +29,14 @@ pub struct ObservedFact {
     pub fact_key: String,
     pub value: FactValue,
     pub observed_at_unix_ms: u64,
+    #[serde(default)]
+    pub expires_at_unix_ms: Option<u64>,
+    #[serde(default = "default_fact_confidence_milli")]
+    pub confidence_milli: u16,
+}
+
+const fn default_fact_confidence_milli() -> u16 {
+    1_000
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1187,7 +1195,14 @@ fn evaluate_predicate(
                     reason: "fact_missing".to_owned(),
                 }));
             };
-            let fresh_until = max_age_ms
+            if observation.confidence_milli == 0 {
+                return Ok(PredicateEvaluation::unknown(DetectionSuggestion {
+                    scope: scope.clone(),
+                    fact_key: fact_key.clone(),
+                    reason: "fact_low_confidence".to_owned(),
+                }));
+            }
+            let max_age_expiration = max_age_ms
                 .map(|max_age| {
                     observation
                         .observed_at_unix_ms
@@ -1201,11 +1216,19 @@ fn evaluate_predicate(
                         })
                 })
                 .transpose()?;
+            let fresh_until = min_wake(max_age_expiration, observation.expires_at_unix_ms);
             if fresh_until.is_some_and(|expiration| time.unix_ms > expiration) {
                 return Ok(PredicateEvaluation::unknown(DetectionSuggestion {
                     scope: scope.clone(),
                     fact_key: fact_key.clone(),
-                    reason: "fact_stale".to_owned(),
+                    reason: if observation
+                        .expires_at_unix_ms
+                        .is_some_and(|expiration| time.unix_ms > expiration)
+                    {
+                        "fact_expired".to_owned()
+                    } else {
+                        "fact_stale".to_owned()
+                    },
                 }));
             }
             Ok(PredicateEvaluation {
@@ -1382,8 +1405,13 @@ fn compare_fact_values(
             (FactValue::String(actual), FactValue::String(expected)) => {
                 Ok(actual.contains(expected))
             }
+            (FactValue::RecordList(actual), FactValue::RecordList(expected))
+                if expected.len() == 1 =>
+            {
+                Ok(actual.contains(&expected[0]))
+            }
             _ => Err(PolicyEvaluationError::type_mismatch(
-                "contains requires two string facts",
+                "contains requires strings or a one-record list needle",
             )),
         },
         Comparison::LessThan
@@ -1453,6 +1481,7 @@ fn fact_kind(value: &FactValue) -> &'static str {
         FactValue::String(_) => "string",
         FactValue::TimestampMs(_) => "timestamp_ms",
         FactValue::DurationMs(_) => "duration_ms",
+        FactValue::RecordList(_) => "record_list",
     }
 }
 
@@ -1732,6 +1761,18 @@ fn validate_inputs(
         validate_id("fact key", &fact.fact_key)?;
         validate_input_scope("fact", &fact.scope, &instance_ids)?;
         validate_observation_time("fact", fact.observed_at_unix_ms, time.unix_ms)?;
+        if fact.confidence_milli > 1_000
+            || fact
+                .expires_at_unix_ms
+                .is_some_and(|expires| expires <= fact.observed_at_unix_ms)
+            || !observed_fact_value_is_bounded(&fact.value)
+        {
+            return Err(PolicyEvaluationError::invalid(format!(
+                "fact '{}:{}' metadata or value is invalid",
+                scope_key(&fact.scope),
+                fact.fact_key
+            )));
+        }
         if !fact_keys.insert((scope_key(&fact.scope), fact.fact_key.as_str())) {
             return Err(PolicyEvaluationError::invalid(format!(
                 "duplicate fact '{}:{}'",
@@ -1832,6 +1873,33 @@ fn validate_inputs(
         }
     }
     Ok(())
+}
+
+fn observed_fact_value_is_bounded(value: &FactValue) -> bool {
+    match value {
+        FactValue::String(value) => value.len() <= MAX_TEXT_BYTES,
+        FactValue::RecordList(records) => {
+            records.len() <= 256
+                && records.iter().all(|record| {
+                    record.len() <= 64
+                        && record.iter().all(|(key, value)| {
+                            !key.is_empty()
+                                && key.len() <= MAX_TEXT_BYTES
+                                && !key.chars().any(char::is_control)
+                                && !matches!(
+                                    value,
+                                    crate::FactScalar::String(text)
+                                        if text.len() > MAX_TEXT_BYTES
+                                            || text.chars().any(char::is_control)
+                                )
+                        })
+                })
+        }
+        FactValue::Boolean(_)
+        | FactValue::Integer(_)
+        | FactValue::TimestampMs(_)
+        | FactValue::DurationMs(_) => true,
+    }
 }
 
 fn validate_input_scope(
@@ -1978,6 +2046,67 @@ mod tests {
             "fact_missing"
         );
         assert!(result.dispatch_intents.is_empty());
+    }
+
+    #[test]
+    fn record_list_fact_and_ttl_share_the_typed_predicate_surface() {
+        let expected = BTreeMap::from([
+            (
+                "label".to_owned(),
+                crate::FactScalar::String("alpha".to_owned()),
+            ),
+            ("count".to_owned(), crate::FactScalar::Integer(2)),
+        ]);
+        let catalog = catalog(|tasks| {
+            tasks["tasks"][0]["trigger"] = serde_json::json!({
+                "kind": "fact",
+                "scope": {"kind": "server", "server_id": "fixture-server-a"},
+                "fact_key": "inventory.items",
+                "comparison": "contains",
+                "value": {
+                    "type": "record_list",
+                    "value": [{"label": {"type": "string", "value": "alpha"}, "count": {"type": "integer", "value": 2}}]
+                },
+                "max_age_ms": null
+            });
+            tasks["tasks"][0]["feedback_stop"] = false_fact();
+        });
+        let mut facts = base_facts();
+        facts.facts.push(ObservedFact {
+            scope: ScopeSelector::Server {
+                server_id: "fixture-server-a".to_owned(),
+            },
+            fact_key: "inventory.items".to_owned(),
+            value: FactValue::RecordList(vec![expected]),
+            observed_at_unix_ms: NOW,
+            expires_at_unix_ms: Some(NOW + 5),
+            confidence_milli: 900,
+        });
+
+        let fresh = evaluate(
+            &catalog,
+            &facts,
+            &base_resources(),
+            EvaluationTime { unix_ms: NOW },
+            1,
+        )
+        .expect("fresh record-list fact");
+        assert_eq!(fresh.decisions[0].eligibility, EligibilityState::True);
+        assert_eq!(fresh.next_wake_unix_ms, Some(NOW + 6));
+
+        let expired = evaluate(
+            &catalog,
+            &facts,
+            &base_resources(),
+            EvaluationTime { unix_ms: NOW + 6 },
+            1,
+        )
+        .expect("expired record-list fact");
+        assert_eq!(expired.decisions[0].eligibility, EligibilityState::Unknown);
+        assert_eq!(
+            expired.decisions[0].detection_suggestions[0].reason,
+            "fact_expired"
+        );
     }
 
     #[test]
@@ -2230,6 +2359,8 @@ mod tests {
             fact_key: "fixture.ready".to_owned(),
             value: FactValue::Boolean(true),
             observed_at_unix_ms: NOW,
+            expires_at_unix_ms: None,
+            confidence_milli: 1_000,
         });
 
         let result = evaluate(
@@ -2365,6 +2496,8 @@ mod tests {
             fact_key: "fixture.ready".to_owned(),
             value: FactValue::Boolean(true),
             observed_at_unix_ms: NOW - 101,
+            expires_at_unix_ms: None,
+            confidence_milli: 1_000,
         });
 
         let result = evaluate(
@@ -2547,6 +2680,8 @@ mod tests {
                 fact_key: "fixture.completed".to_owned(),
                 value: FactValue::Boolean(false),
                 observed_at_unix_ms: NOW,
+                expires_at_unix_ms: None,
+                confidence_milli: 1_000,
             }],
             outcomes: Vec::new(),
             tasks: Vec::new(),

@@ -2138,7 +2138,7 @@ mod tests {
             origin: sanitized.origin().clone(),
             links: sanitized.links().clone(),
             payload_schema: sanitized.payload_schema().to_string(),
-            payload: ProjectionPayload::Full(sanitized.payload().clone()),
+            payload: ProjectionPayload::Full(Box::new(sanitized.payload().clone())),
             artifacts: sanitized
                 .artifacts()
                 .iter()

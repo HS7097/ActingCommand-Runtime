@@ -911,7 +911,7 @@ fn lab_projection_exposes_full_sanitized_fact() {
     assert_eq!(&projected[0].links, persisted.links());
     assert_eq!(
         projected[0].payload,
-        ProjectionPayload::Full(persisted.payload().clone())
+        ProjectionPayload::Full(Box::new(persisted.payload().clone()))
     );
     assert!(projected[0].artifacts.is_empty());
 }

@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 use serde::{Deserialize, Deserializer, Serialize};
+use std::collections::BTreeMap;
 
 pub const SCHEDULING_SCHEMA_VERSION: &str = "actingcommand.scheduling.v1";
 pub const MAX_DOCUMENT_BYTES: usize = 1_048_576;
@@ -350,6 +351,22 @@ pub enum Comparison {
     deny_unknown_fields
 )]
 pub enum FactValue {
+    Boolean(bool),
+    Integer(i64),
+    String(String),
+    TimestampMs(u64),
+    DurationMs(u64),
+    RecordList(Vec<BTreeMap<String, FactScalar>>),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(
+    tag = "type",
+    content = "value",
+    rename_all = "snake_case",
+    deny_unknown_fields
+)]
+pub enum FactScalar {
     Boolean(bool),
     Integer(i64),
     String(String),

@@ -9,6 +9,7 @@
 #![allow(clippy::result_large_err)]
 
 pub mod event;
+pub mod fact;
 pub mod game_engine;
 pub mod lab;
 pub mod monitor;
@@ -19,6 +20,7 @@ pub mod taskflow;
 pub mod types;
 
 pub use event::*;
+pub use fact::*;
 pub use game_engine::*;
 pub use lab::*;
 pub use monitor::*;
