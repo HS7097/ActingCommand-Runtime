@@ -7,6 +7,7 @@ use actingcommand_contract::{
 use actingcommand_device::{
     CaptureBackend, CaptureBackendName, DeviceError, DeviceResult, Frame, InputBackend, PixelFormat,
 };
+use actingcommand_resource_tooling::open_published_package;
 use actingcommand_runtime_client::{RuntimeClient, RuntimeClientConfig};
 use actingcommand_runtime_host::{
     ExecutionBackendProvider, ResolvedExecutionInstance, RuntimeHost, RuntimeHostConfig,
@@ -310,10 +311,7 @@ fn recorded_resource_is_deterministically_packaged_and_runs_from_containment() {
     build_package(&config, &runtime_root, &repo, &package_one);
     build_package(&config, &runtime_root, &repo, &package_two);
     let package_hash = sha256_file(&package_one);
-    assert_eq!(
-        fs::read(&package_one).expect("first package"),
-        fs::read(&package_two).expect("second package")
-    );
+    assert_eq!(read_published(&package_one), read_published(&package_two));
     assert_eq!(
         promoted
             .pointer("/data/authoring/receipt/validation/package_sha256")
@@ -436,10 +434,14 @@ fn path(path: &Path) -> &str {
 }
 
 fn sha256_file(path: &Path) -> String {
-    format!(
-        "{:x}",
-        Sha256::digest(fs::read(path).expect("read file for SHA-256"))
-    )
+    format!("{:x}", Sha256::digest(read_published(path)))
+}
+
+fn read_published(path: &Path) -> Vec<u8> {
+    open_published_package(path)
+        .expect("open published package")
+        .read_all()
+        .expect("read published package")
 }
 
 fn frame_png(mail_visible: bool) -> Vec<u8> {

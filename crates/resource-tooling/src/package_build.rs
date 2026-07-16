@@ -1,6 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 use crate::environment::{AuthoringEnvironmentSnapshot, required_environment_keys};
+use crate::package_publish::PackagePublicationTransaction;
+#[cfg(test)]
+use crate::package_publish::open_published_package;
 use crate::resource_convert::{
     Bundle, ConvertOutputs, OperationConverter, ResolvedResourceRoot, canonical_game,
 };
@@ -140,6 +143,22 @@ impl PreparedPackageBuildTask {
         mut self,
         environment: &AuthoringEnvironmentSnapshot,
     ) -> CliOutcome<PackageBuildTaskResponse> {
+        self.build_with_publication(environment, true)
+    }
+
+    /// Builds directly at a caller-owned staging path without publishing a logical output.
+    pub fn build_staged(
+        mut self,
+        environment: &AuthoringEnvironmentSnapshot,
+    ) -> CliOutcome<PackageBuildTaskResponse> {
+        self.build_with_publication(environment, false)
+    }
+
+    fn build_with_publication(
+        &mut self,
+        environment: &AuthoringEnvironmentSnapshot,
+        publish: bool,
+    ) -> CliOutcome<PackageBuildTaskResponse> {
         apply_environment_to_outputs(environment, &mut self.outputs)?;
         let mut entries =
             PackageEntries::new(&self.resource_root, self.max_buffered_payload_bytes)?;
@@ -172,7 +191,11 @@ impl PreparedPackageBuildTask {
         add_recognition_target_assets(&mut entries, &self.resource_root, &self.outputs.pack)?;
         entries.add_manifest(&self.task_id)?;
 
-        let write = write_and_validate_package(&self.out, entries, self.dry_run)?;
+        let write = if publish {
+            write_and_validate_package(&self.out, entries, self.dry_run)?
+        } else {
+            write_and_validate_package_staged(&self.out, entries, self.dry_run)?
+        };
         let from_remote = self.source.remote_url();
         self.source.cleanup()?;
         Ok(PackageBuildTaskResponse {
@@ -180,14 +203,14 @@ impl PreparedPackageBuildTask {
             mode: "build-task".to_string(),
             repo: self.repo.display().to_string(),
             resource_root: self.resource_root.display().to_string(),
-            resource_layout: self.resource_layout,
+            resource_layout: self.resource_layout.clone(),
             from_remote,
-            task_id: self.task_id,
-            included_tasks: self.task_ids,
-            game: self.converter.game,
-            server: self.converter.server,
-            package_id: self.package_id,
-            execution_mode: self.execution_mode,
+            task_id: self.task_id.clone(),
+            included_tasks: self.task_ids.clone(),
+            game: self.converter.game.clone(),
+            server: self.converter.server.clone(),
+            package_id: self.package_id.clone(),
+            execution_mode: self.execution_mode.clone(),
             dry_run: self.dry_run,
             out: (!self.dry_run).then(|| self.out.display().to_string()),
             validation: write.validation,
@@ -281,6 +304,24 @@ impl PackageBuildCatalog {
         environment: &AuthoringEnvironmentSnapshot,
         request: PackageTaskArchiveRequest,
     ) -> CliOutcome<LabPackageValidationResponse> {
+        self.build_task_archive_with_publication(environment, request, true)
+    }
+
+    /// Builds directly at a caller-owned staging path for a surrounding group transaction.
+    pub fn build_task_archive_staged(
+        &self,
+        environment: &AuthoringEnvironmentSnapshot,
+        request: PackageTaskArchiveRequest,
+    ) -> CliOutcome<LabPackageValidationResponse> {
+        self.build_task_archive_with_publication(environment, request, false)
+    }
+
+    fn build_task_archive_with_publication(
+        &self,
+        environment: &AuthoringEnvironmentSnapshot,
+        request: PackageTaskArchiveRequest,
+        publish: bool,
+    ) -> CliOutcome<LabPackageValidationResponse> {
         let PackageTaskArchiveRequest {
             task_id,
             package_id,
@@ -326,7 +367,11 @@ impl PackageBuildCatalog {
         add_generated_outputs(&mut entries, &self.converter, &outputs)?;
         add_recognition_target_assets(&mut entries, &self.resource_root, &outputs.pack)?;
         entries.add_manifest(&task_id)?;
-        Ok(write_and_validate_package(&out, entries, dry_run)?.validation)
+        if publish {
+            Ok(write_and_validate_package(&out, entries, dry_run)?.validation)
+        } else {
+            Ok(write_and_validate_package_staged(&out, entries, dry_run)?.validation)
+        }
     }
 
     pub fn build_full_archive(
@@ -1060,59 +1105,109 @@ struct PackageWrite {
 
 fn write_and_validate_package(
     out: &Path,
+    entries: PackageEntries,
+    dry_run: bool,
+) -> CliOutcome<PackageWrite> {
+    if dry_run {
+        return write_and_validate_dry_run(out, entries);
+    }
+    let transaction = PackagePublicationTransaction::begin_single(out)?;
+    let staged = match transaction.staging_path(out) {
+        Ok(staged) => staged,
+        Err(error) => {
+            return Err(match transaction.abort() {
+                Ok(()) => error,
+                Err(cleanup) => combine_package_errors(error, cleanup),
+            });
+        }
+    };
+    let mut write = match write_and_validate_package_staged(&staged, entries, false) {
+        Ok(write) => write,
+        Err(error) => {
+            return Err(match transaction.abort() {
+                Ok(()) => error,
+                Err(cleanup) => combine_package_errors(error, cleanup),
+            });
+        }
+    };
+    transaction.commit()?;
+    write.validation.zip = out.display().to_string();
+    Ok(write)
+}
+
+fn write_and_validate_package_staged(
+    out: &Path,
     mut entries: PackageEntries,
     dry_run: bool,
 ) -> CliOutcome<PackageWrite> {
-    let temp = temp_zip_path(out)?;
-    write_zip(&temp, &mut entries)?;
-    let validation = match validate_generated_package(&temp, &mut entries) {
-        Ok(value) => value,
-        Err(err) => {
-            let _ = fs::remove_file(&temp);
-            return Err(err);
-        }
-    };
     if dry_run {
-        fs::remove_file(&temp).map_err(|err| {
-            CliError::package_invalid(format!("failed to remove {}: {err}", temp.display()))
-        })?;
-        return Ok(PackageWrite {
-            validation,
-            #[cfg(test)]
-            stats: entries.stats,
-        });
+        return write_and_validate_dry_run(out, entries);
     }
-    if let Some(parent) = out.parent() {
-        fs::create_dir_all(parent).map_err(|err| {
-            CliError::package_invalid(format!("failed to create {}: {err}", parent.display()))
-        })?;
-    }
-    if out.exists() {
-        if out.is_dir() {
-            let _ = fs::remove_file(&temp);
-            return Err(CliError::package_invalid(format!(
-                "output path is a directory: {}",
-                out.display()
-            )));
-        }
-        fs::remove_file(out).map_err(|err| {
-            let _ = fs::remove_file(&temp);
-            CliError::package_invalid(format!("failed to replace {}: {err}", out.display()))
-        })?;
-    }
-    fs::rename(&temp, out).map_err(|err| {
-        let _ = fs::remove_file(&temp);
-        CliError::package_invalid(format!(
-            "failed to move {} to {}: {err}",
-            temp.display(),
-            out.display()
-        ))
-    })?;
+    let mut validation = build_validated_package(out, &mut entries)?;
+    validation.zip = out.display().to_string();
     Ok(PackageWrite {
         validation,
         #[cfg(test)]
         stats: entries.stats,
     })
+}
+
+fn write_and_validate_dry_run(out: &Path, mut entries: PackageEntries) -> CliOutcome<PackageWrite> {
+    let temp = temp_zip_path(out)?;
+    let mut validation = build_validated_package(&temp, &mut entries)?;
+    fs::remove_file(&temp).map_err(|error| {
+        CliError::package_invalid(format!(
+            "failed to remove dry-run package {}: {error}",
+            temp.display()
+        ))
+    })?;
+    validation.zip = out.display().to_string();
+    Ok(PackageWrite {
+        validation,
+        #[cfg(test)]
+        stats: entries.stats,
+    })
+}
+
+fn build_validated_package(
+    path: &Path,
+    entries: &mut PackageEntries,
+) -> CliOutcome<LabPackageValidationResponse> {
+    if path.exists() {
+        return Err(CliError::package_invalid(format!(
+            "refusing to overwrite staged package output: {}",
+            path.display()
+        )));
+    }
+    if let Err(error) = write_zip(path, entries) {
+        return Err(cleanup_failed_package(path, error));
+    }
+    match validate_generated_package(path, entries) {
+        Ok(validation) => Ok(validation),
+        Err(error) => Err(cleanup_failed_package(path, error)),
+    }
+}
+
+fn cleanup_failed_package(path: &Path, primary: CliError) -> CliError {
+    match fs::remove_file(path) {
+        Ok(()) => primary,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => primary,
+        Err(error) => combine_package_errors(
+            primary,
+            CliError::package_invalid(format!(
+                "failed to remove invalid staged package {}: {error}",
+                path.display()
+            )),
+        ),
+    }
+}
+
+fn combine_package_errors(mut primary: CliError, secondary: CliError) -> CliError {
+    primary.message = format!(
+        "{}; secondary_failure={}",
+        primary.message, secondary.message
+    );
+    primary
 }
 
 fn write_zip(path: &Path, entries: &mut PackageEntries) -> CliOutcome<()> {
@@ -1121,9 +1216,13 @@ fn write_zip(path: &Path, entries: &mut PackageEntries) -> CliOutcome<()> {
             CliError::package_invalid(format!("failed to create {}: {err}", parent.display()))
         })?;
     }
-    let file = File::create(path).map_err(|err| {
-        CliError::package_invalid(format!("failed to create {}: {err}", path.display()))
-    })?;
+    let file = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(path)
+        .map_err(|err| {
+            CliError::package_invalid(format!("failed to create {}: {err}", path.display()))
+        })?;
     let options = FileOptions::default().compression_method(zip::CompressionMethod::Deflated);
     let mut zip = ZipWriter::new(file);
     let PackageEntries {
@@ -1154,7 +1253,13 @@ fn write_zip(path: &Path, entries: &mut PackageEntries) -> CliOutcome<()> {
             }
         }
     }
-    zip.finish().map_err(zip_write_error)?;
+    let file = zip.finish().map_err(zip_write_error)?;
+    file.sync_all().map_err(|error| {
+        CliError::package_invalid(format!(
+            "failed to sync package output {}: {error}",
+            path.display()
+        ))
+    })?;
     Ok(())
 }
 
@@ -2727,11 +2832,17 @@ impl ResolvedRepo {
             .map_err(|err| CliError::usage(format!("failed to start git clone: {err}")))?;
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
-            let _ = fs::remove_dir_all(&root);
-            return Err(CliError::usage(format!(
-                "git clone failed: {}",
-                stderr.trim()
-            )));
+            let primary = CliError::usage(format!("git clone failed: {}", stderr.trim()));
+            return Err(match fs::remove_dir_all(&root) {
+                Ok(()) => primary,
+                Err(error) => combine_package_errors(
+                    primary,
+                    CliError::package_invalid(format!(
+                        "failed to remove incomplete remote clone {}: {error}",
+                        root.display()
+                    )),
+                ),
+            });
         }
         Ok(Self {
             path,
@@ -2763,8 +2874,13 @@ impl ResolvedRepo {
 
 impl Drop for ResolvedRepo {
     fn drop(&mut self) {
-        if let Some(root) = self.temp_root.take() {
-            let _ = fs::remove_dir_all(root);
+        if let Some(root) = self.temp_root.take()
+            && let Err(error) = fs::remove_dir_all(&root)
+        {
+            eprintln!(
+                "WARNING package source cleanup failed during drop; path={}; original_error={error}; fallback=retain_temp_directory; impact=disk_space",
+                root.display()
+            );
         }
     }
 }
@@ -3203,7 +3319,7 @@ mod tests {
                 <= budget + PACKAGE_COMPRESSOR_INPUT_BUFFER_BYTES
         );
         assert_eq!(write.validation.status, "valid");
-        assert!(out.is_file());
+        assert_published_file(&out);
     }
 
     #[cfg(unix)]
@@ -3272,7 +3388,7 @@ mod tests {
         let out = temp.path().join("task.zip");
 
         build_task(build_task_request(repo, out.clone())).unwrap();
-        assert!(out.is_file());
+        assert_published_file(&out);
         let entries = read_zip_entries(&out);
         assert!(entries.contains_key("control.json"));
         assert!(entries.contains_key("resources/manifest.json"));
@@ -3372,7 +3488,7 @@ mod tests {
             "{}",
             response.resource_root
         );
-        assert!(out.is_file());
+        assert_published_file(&out);
     }
 
     #[test]
@@ -3504,7 +3620,7 @@ mod tests {
                 },
             )
             .unwrap();
-        assert!(out.is_file());
+        assert_published_file(&out);
         let entries = read_zip_entries(&out);
         let task: Value = serde_json::from_slice(
             entries
@@ -3640,8 +3756,8 @@ mod tests {
                 )
                 .unwrap();
         }
-        assert!(split_dir.join("arknights.cn.operator_task.zip").is_file());
-        assert!(split_dir.join("arknights.cn.return_home.zip").is_file());
+        assert_published_file(&split_dir.join("arknights.cn.operator_task.zip"));
+        assert_published_file(&split_dir.join("arknights.cn.return_home.zip"));
     }
 
     #[test]
@@ -3662,8 +3778,8 @@ mod tests {
     }
 
     fn read_zip_entries(path: &Path) -> BTreeMap<String, Vec<u8>> {
-        let file = File::open(path).unwrap();
-        let mut zip = ZipArchive::new(file).unwrap();
+        let mut package = open_published_package(path).unwrap();
+        let mut zip = ZipArchive::new(package.file_mut()).unwrap();
         let mut entries = BTreeMap::new();
         for index in 0..zip.len() {
             let mut entry = zip.by_index(index).unwrap();
@@ -3674,7 +3790,15 @@ mod tests {
             entry.read_to_end(&mut bytes).unwrap();
             entries.insert(entry.name().to_string(), bytes);
         }
+        drop(zip);
+        package.close().unwrap();
         entries
+    }
+
+    fn assert_published_file(path: &Path) {
+        let package = open_published_package(path).unwrap();
+        assert!(package.path().is_file());
+        package.close().unwrap();
     }
 
     fn write_fixture_repo(root: &Path) {

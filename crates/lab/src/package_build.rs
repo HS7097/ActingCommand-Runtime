@@ -65,6 +65,21 @@ impl PackageBuildCatalog {
         self.inner.build_task_archive(&environment, request)
     }
 
+    /// Builds into caller-owned staging so a multi-package publication can commit once.
+    pub fn build_task_archive_staged<P: LabPorts>(
+        &self,
+        lab: &mut Lab<P>,
+        request: PackageTaskArchiveRequest,
+    ) -> LabResult<crate::LabPackageValidationResponse> {
+        let environment = resolve_environment_snapshot(
+            lab,
+            &request.env,
+            self.inner.resource_root(),
+            self.inner.task_environment_keys(&request.task_id)?,
+        )?;
+        self.inner.build_task_archive_staged(&environment, request)
+    }
+
     pub fn build_full_archive<P: LabPorts>(
         &self,
         lab: &mut Lab<P>,

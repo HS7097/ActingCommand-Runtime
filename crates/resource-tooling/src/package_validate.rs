@@ -1,21 +1,18 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 use actingcommand_pack_containment::{Containment, ContainmentError, InstanceId, Sha256Hash};
+#[cfg(test)]
 use std::fs;
 
 use crate::{
     JsonDocument, PackageValidateRequest, PackageValidationResponse,
     RecognitionPackDiagnosticsResponse, UnsupportedRecognitionTargetResponse,
+    open_published_package,
 };
 use actingcommand_contract::{LabError, LabResult};
 
 pub fn validate_package(request: PackageValidateRequest) -> LabResult<PackageValidationResponse> {
-    let bytes = fs::read(&request.zip_path).map_err(|error| {
-        LabError::package_invalid(format!(
-            "failed to open package {}: {error}",
-            request.zip_path.display()
-        ))
-    })?;
+    let bytes = open_published_package(&request.zip_path)?.read_all()?;
     let instance = InstanceId::new("package-validate").map_err(containment_package_error)?;
     let externally_verified = request.expected_input_sha256.is_some();
     let expected = request
