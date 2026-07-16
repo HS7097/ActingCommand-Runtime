@@ -2,9 +2,11 @@
 
 //! Bounded Runtime performance monitoring and failure-context projection.
 
+use crate::performance_control::PerformanceControlObservation;
 use crate::{RuntimeHostError, RuntimeHostResult};
 use actingcommand_contract::{
     ActionId, EventId, EventSeverity, EventType, FrameId, PerformanceContext,
+    PerformanceControlEventData, PerformanceControlLevel, PerformanceDeadlineDisposition,
     PerformanceForegroundSummary, PerformanceMetric, PerformanceMonitorHealth,
     PerformanceMonitorStateEventData, PerformancePressureEventData, PerformancePressureKind,
     PerformancePressureRecord, PerformancePressureSeverity, PerformancePressureValue,
@@ -296,6 +298,7 @@ pub(crate) enum PerformanceSemanticEvent {
     Summary(Box<PerformanceSummaryEventData>),
     MonitorDegraded(PerformanceMonitorStateEventData),
     MonitorRecovered(PerformanceMonitorStateEventData),
+    BalanceChanged(PerformanceControlEventData),
 }
 
 impl PerformanceSemanticEvent {
@@ -310,7 +313,20 @@ impl PerformanceSemanticEvent {
                 EventSeverity::Info
             }
             Self::MonitorDegraded(data) if data.terminal => EventSeverity::Error,
+            Self::BalanceChanged(data)
+                if data.deadline_disposition
+                    == Some(PerformanceDeadlineDisposition::CapacityFailure)
+                    || data.level.rank() >= PerformanceControlLevel::QosReduced.rank() =>
+            {
+                EventSeverity::Error
+            }
+            Self::BalanceChanged(data)
+                if data.recovery || data.level == PerformanceControlLevel::Normal =>
+            {
+                EventSeverity::Info
+            }
             Self::StutterDetected(_) | Self::MonitorDegraded(_) => EventSeverity::Warning,
+            Self::BalanceChanged(_) => EventSeverity::Warning,
         }
     }
 
@@ -320,6 +336,7 @@ impl PerformanceSemanticEvent {
             Self::StutterDetected(data) => data.observed_at_unix_ms,
             Self::Summary(data) => data.context.window_end_unix_ms,
             Self::MonitorDegraded(data) | Self::MonitorRecovered(data) => data.observed_at_unix_ms,
+            Self::BalanceChanged(data) => data.observed_at_unix_ms,
         }
     }
 }
@@ -834,6 +851,43 @@ impl PerformanceMonitor {
             performance_fatal("performance_context_invalid", "read_performance_context")
         })?;
         Ok(context)
+    }
+
+    pub(crate) fn control_observation(
+        &self,
+        observed_at_unix_ms: u64,
+    ) -> RuntimeHostResult<Option<PerformanceControlObservation>> {
+        if observed_at_unix_ms == 0 {
+            return Err(performance_fatal(
+                "performance_control_time_invalid",
+                "read_performance_control_observation",
+            ));
+        }
+        let latest_system = self.system_samples.back();
+        let pipeline = self.pipeline_samples.iter().rev().take(64);
+        let responsiveness = pipeline
+            .filter_map(pipeline_responsiveness_basis_points)
+            .min();
+        let third_party_pressure = latest_system.and_then(|sample| {
+            let process_metrics_available = !sample.unavailable_metrics.iter().any(|metric| {
+                matches!(
+                    metric,
+                    PerformanceMetric::ProcessCpu | PerformanceMetric::ProcessIo
+                )
+            });
+            process_metrics_available.then(|| third_party_pressure_basis_points(sample))
+        });
+        if responsiveness.is_none() && third_party_pressure.is_none() {
+            return Ok(None);
+        }
+        Ok(Some(PerformanceControlObservation {
+            observed_at_unix_ms,
+            host_responsiveness_basis_points: responsiveness,
+            third_party_pressure_basis_points: third_party_pressure,
+            foreground_fullscreen: latest_system
+                .and_then(|sample| sample.foreground.as_ref())
+                .is_some_and(|foreground| foreground.fullscreen),
+        }))
     }
 
     pub(crate) fn record_event_reference(
@@ -1352,6 +1406,53 @@ fn pressure_measurements(
     Ok(values)
 }
 
+fn pipeline_responsiveness_basis_points(signal: &PipelinePerformanceSignal) -> Option<u16> {
+    [
+        signal.frame_gap_ms.map(|value| latency_score(value, 1_000)),
+        signal
+            .capture_latency_ms
+            .map(|value| latency_score(value, 500)),
+        signal
+            .recognition_latency_ms
+            .map(|value| latency_score(value, 1_000)),
+        signal
+            .action_effect_latency_ms
+            .map(|value| latency_score(value, 1_500)),
+    ]
+    .into_iter()
+    .flatten()
+    .min()
+}
+
+fn latency_score(actual_ms: u64, target_ms: u64) -> u16 {
+    if actual_ms <= target_ms {
+        return BASIS_POINTS_MAX;
+    }
+    u16::try_from(target_ms.saturating_mul(u64::from(BASIS_POINTS_MAX)) / actual_ms).unwrap_or(0)
+}
+
+fn third_party_pressure_basis_points(sample: &RawSystemSample) -> u16 {
+    let cpu = sample
+        .third_party_high_load
+        .iter()
+        .map(|process| process.cpu_basis_points)
+        .max()
+        .unwrap_or(0);
+    let io = sample
+        .third_party_high_load
+        .iter()
+        .map(|process| {
+            process
+                .io_bytes_per_second
+                .saturating_mul(u64::from(BASIS_POINTS_MAX))
+                / (64 * 1024 * 1024)
+        })
+        .max()
+        .unwrap_or(0)
+        .min(u64::from(BASIS_POINTS_MAX));
+    cpu.max(u16::try_from(io).unwrap_or(BASIS_POINTS_MAX))
+}
+
 fn pressure_above_start(
     kind: PerformancePressureKind,
     value: &PerformancePressureValue,
@@ -1865,6 +1966,32 @@ mod tests {
         assert_eq!(context.max_recognition_latency_ms, Some(700));
         assert_eq!(context.max_action_effect_latency_ms, Some(800));
         assert_eq!(context.related_event_ids, vec![event_id]);
+    }
+
+    #[test]
+    fn pipeline_probes_synthesize_responsiveness_without_faking_missing_samples() {
+        let empty = monitor(Vec::new());
+        assert_eq!(
+            empty.control_observation(1_000).expect("empty observation"),
+            None
+        );
+
+        let mut monitor = monitor(vec![Ok(sample(1_000, 4_000))]);
+        monitor.tick(1_000).expect("host sample");
+        monitor
+            .record_pipeline_signal(
+                PipelinePerformanceSignal::new("fixture-instance", 1_500, 2_000)
+                    .expect("signal")
+                    .with_capture_latency(1_000)
+                    .expect("capture"),
+            )
+            .expect("pipeline sample");
+        let observation = monitor
+            .control_observation(1_500)
+            .expect("observation")
+            .expect("measured observation");
+        assert_eq!(observation.host_responsiveness_basis_points, Some(5_000));
+        assert_eq!(observation.third_party_pressure_basis_points, Some(0));
     }
 
     #[test]

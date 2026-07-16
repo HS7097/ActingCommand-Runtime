@@ -1,10 +1,12 @@
 use super::*;
 use crate::{
     InputAction, MonitorDecision, MonitorDiagnosis, MonitorDisposition, MonitorObservation,
-    MonitorRecoveryCoordinationReason, MonitorRecoveryKind, PerformanceContext, PerformanceMetric,
-    PerformanceMonitorHealth, PerformanceMonitorStateEventData, PerformancePressureEventData,
-    PerformancePressureKind, PerformancePressureRecord, PerformancePressureSeverity,
-    PerformancePressureValue, PerformanceStutterEventData, PerformanceSummaryEventData,
+    MonitorRecoveryCoordinationReason, MonitorRecoveryKind, PerformanceContext,
+    PerformanceControlEventData, PerformanceControlLevel, PerformanceControlReason,
+    PerformanceDeadlineDisposition, PerformanceMetric, PerformanceMonitorHealth,
+    PerformanceMonitorStateEventData, PerformancePressureEventData, PerformancePressureKind,
+    PerformancePressureRecord, PerformancePressureSeverity, PerformancePressureValue,
+    PerformanceStutterEventData, PerformanceSummaryEventData,
 };
 use std::sync::Mutex;
 
@@ -134,6 +136,7 @@ fn all_payload_drafts(mut input: impl FnMut() -> AuditInput) -> Vec<EventPayload
         input_ledger_position: 1,
         fact_snapshot_id: "snapshot:fixture-a".to_owned(),
         approval_fact_ids: vec!["approval:fixture-a".to_owned()],
+        urgency_milli: 500,
     };
     let policy_admission = PolicyAdmissionRecord {
         activity: PolicyActivitySample {
@@ -276,6 +279,21 @@ fn all_payload_drafts(mut input: impl FnMut() -> AuditInput) -> Vec<EventPayload
                 consecutive_failures: 0,
                 terminal: false,
                 unavailable_metrics: Vec::new(),
+            },
+            input(),
+        )
+        .into(),
+        PerformancePayloadDraft::balance_changed(
+            PerformanceControlEventData {
+                observed_at_unix_ms: 1_752_147_203_000,
+                instance_id: None,
+                previous_level: PerformanceControlLevel::Normal,
+                level: PerformanceControlLevel::DispatchPaused,
+                reason: PerformanceControlReason::ThirdPartyContention,
+                host_responsiveness_basis_points: Some(9_000),
+                third_party_pressure_basis_points: Some(3_000),
+                recovery: false,
+                deadline_disposition: None,
             },
             input(),
         )
@@ -897,7 +915,7 @@ fn tagged_payload_and_projection_layers_reject_unknown_fields() {
 #[test]
 fn event_v2_round_trips_every_c1_payload_variant() {
     let payloads = all_payload_drafts(AuditInput::new);
-    assert_eq!(payloads.len(), 75);
+    assert_eq!(payloads.len(), 76);
 
     for (index, payload) in payloads.into_iter().enumerate() {
         let sanitized = sanitize(payload, index as u64 + 1);
@@ -1007,6 +1025,26 @@ fn performance_payload_rejects_fake_health_and_invalid_stutter() {
     assert_eq!(
         sanitize_error(invalid_stutter).code(),
         "invalid_performance_stutter"
+    );
+
+    let invalid_control: EventPayloadDraft = PerformancePayloadDraft::balance_changed(
+        PerformanceControlEventData {
+            observed_at_unix_ms: 1_752_147_201_000,
+            instance_id: Some("instance:fixture-a".to_owned()),
+            previous_level: PerformanceControlLevel::DispatchPaused,
+            level: PerformanceControlLevel::DispatchPaused,
+            reason: PerformanceControlReason::Recovery,
+            host_responsiveness_basis_points: Some(10_000),
+            third_party_pressure_basis_points: Some(0),
+            recovery: true,
+            deadline_disposition: Some(PerformanceDeadlineDisposition::Throttled),
+        },
+        AuditInput::new(),
+    )
+    .into();
+    assert_eq!(
+        sanitize_error(invalid_control).code(),
+        "invalid_performance_control_transition"
     );
 }
 

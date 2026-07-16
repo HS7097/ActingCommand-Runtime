@@ -3,7 +3,7 @@
 //! Runtime-owned catalog generations and replayable policy admission state.
 
 use crate::policy_control::{PolicyControlState, PolicyExecutionInput};
-use crate::{RuntimeHostError, RuntimeHostResult};
+use crate::{PerformanceControlWorkload, RuntimeHostError, RuntimeHostResult};
 use actingcommand_contract::{
     EventPayload, LeaseToken, OwnerEpoch, PerformanceContext, PolicyAdmissionRecord,
     PolicyDispatchEventData, PolicyExecutionEventData, PolicyExecutionOutcome, PolicyPayload,
@@ -450,6 +450,7 @@ impl PolicyHost {
             || task.loop_budget.window_iteration_limit
                 != intent.prerequisites.window_iteration_limit
             || task.loop_budget.max_runtime_ms != intent.prerequisites.max_runtime_ms
+            || intent.prerequisites.urgency_milli > 1_000
             || !active
                 .compiled
                 .catalog()
@@ -600,6 +601,40 @@ impl PolicyHost {
             .get(decision_id)
             .map(|dispatch| dispatch.data.instance_id.as_str())
             .ok_or_else(|| request("policy_dispatch_unknown", "read_policy_dispatch_instance"))
+    }
+
+    pub(crate) fn active_performance_workloads(
+        &self,
+    ) -> RuntimeHostResult<Vec<PerformanceControlWorkload>> {
+        let mut workloads = BTreeMap::new();
+        for dispatch in self
+            .seen_dispatches
+            .values()
+            .filter(|dispatch| dispatch.lifecycle == DispatchLifecycle::Admitted)
+        {
+            let admission = dispatch.admission.as_ref().ok_or_else(|| {
+                fatal(
+                    "policy_dispatch_admission_missing",
+                    "read_active_performance_workloads",
+                )
+            })?;
+            let catalog = self.store.load_generation(&dispatch.data.catalog_hash)?;
+            let intent = control_intent(&dispatch.data, &catalog.compiled, admission)?;
+            let workload = PerformanceControlWorkload {
+                instance_id: intent.instance_id.clone(),
+                load_profile: intent.load_profile,
+            };
+            if workloads
+                .insert(workload.instance_id.clone(), workload)
+                .is_some()
+            {
+                return Err(fatal(
+                    "policy_instance_dispatch_conflict",
+                    "read_active_performance_workloads",
+                ));
+            }
+        }
+        Ok(workloads.into_values().collect())
     }
 
     pub(crate) fn completion_data(
@@ -917,6 +952,7 @@ fn event_data(payload: &actingcommand_contract::PolicyDispatchPayload) -> Policy
         input_ledger_position: payload.input_ledger_position(),
         fact_snapshot_id: payload.fact_snapshot_id().to_owned(),
         approval_fact_ids: payload.approval_fact_ids().to_vec(),
+        urgency_milli: payload.urgency_milli(),
     }
 }
 
@@ -943,6 +979,7 @@ fn dispatch_event_data(
         input_ledger_position: intent.input_ledger_position,
         fact_snapshot_id: intent.fact_snapshot_id.clone(),
         approval_fact_ids: intent.approval_refs.clone(),
+        urgency_milli: intent.prerequisites.urgency_milli,
     }
 }
 
@@ -1027,6 +1064,7 @@ fn control_intent(
             daily_limit: task.loop_budget.daily_limit,
             window_iteration_limit: task.loop_budget.window_iteration_limit,
             max_runtime_ms: task.loop_budget.max_runtime_ms,
+            urgency_milli: data.urgency_milli,
         },
     })
 }

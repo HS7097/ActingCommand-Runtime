@@ -89,6 +89,22 @@ pub struct HostResourceSnapshot {
     pub cpu_available_milli: u16,
     pub gpu_available_milli: u16,
     pub io_available_milli: u16,
+    #[serde(default = "default_host_responsiveness_basis_points")]
+    pub host_responsiveness_basis_points: u16,
+    #[serde(default)]
+    pub third_party_pressure_basis_points: u16,
+    #[serde(default = "default_heavy_dispatch_limit")]
+    pub heavy_dispatch_limit: u16,
+    #[serde(default)]
+    pub active_heavy_dispatches: u16,
+}
+
+const fn default_host_responsiveness_basis_points() -> u16 {
+    10_000
+}
+
+const fn default_heavy_dispatch_limit() -> u16 {
+    1
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -143,6 +159,8 @@ pub struct TaskRank {
     pub aging_ms: u64,
     pub strategic_weight_milli: u32,
     pub urgency_milli: u16,
+    pub load_cost_milli: u16,
+    pub contention_penalty: i64,
     pub total_score: i64,
 }
 
@@ -187,6 +205,8 @@ pub struct DispatchPrerequisites {
     pub daily_limit: u32,
     pub window_iteration_limit: u32,
     pub max_runtime_ms: u64,
+    #[serde(default)]
+    pub urgency_milli: u16,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -450,10 +470,22 @@ pub fn evaluate(
                 ))
             })?;
         if !host.fits(candidate.load) {
-            work[candidate.work_index].reasons.push(reason(
-                "host_budget_deferred",
-                "the shared host budget was consumed by higher-ranked dispatches",
-            ));
+            let (code, detail) = if candidate.load.heavy
+                && host.active_heavy_dispatches >= host.heavy_dispatch_limit
+            {
+                (
+                    "heavy_scene_budget_deferred",
+                    "the shared host heavy-scene concurrency budget was consumed by higher-ranked dispatches",
+                )
+            } else {
+                (
+                    "host_budget_deferred",
+                    "the shared host budget was consumed by higher-ranked dispatches",
+                )
+            };
+            work[candidate.work_index]
+                .reasons
+                .push(reason(code, detail));
             continue;
         }
         host.consume(candidate.load);
@@ -509,6 +541,7 @@ pub fn evaluate(
                 daily_limit: candidate.daily_limit,
                 window_iteration_limit: candidate.window_iteration_limit,
                 max_runtime_ms: candidate.max_runtime_ms,
+                urgency_milli: candidate.rank.urgency_milli,
             },
         });
         let task_work = &mut work[candidate.work_index];
@@ -605,7 +638,7 @@ struct PlacementCandidate {
 }
 
 enum PlacementResult {
-    Candidate(PlacementCandidate),
+    Candidate(Box<PlacementCandidate>),
     Blocked(DecisionReason),
 }
 
@@ -684,13 +717,25 @@ fn build_candidate(
             ))
         })?;
     if !host.fits(load) {
-        return Ok(PlacementResult::Blocked(reason(
-            "host_capacity_insufficient",
-            format!(
-                "host '{}' cannot satisfy the task load profile",
-                instance.host_id
-            ),
-        )));
+        let (code, detail) =
+            if load.heavy && host.active_heavy_dispatches >= host.heavy_dispatch_limit {
+                (
+                    "heavy_scene_budget_exhausted",
+                    format!(
+                        "host '{}' has no remaining heavy-scene concurrency budget",
+                        instance.host_id
+                    ),
+                )
+            } else {
+                (
+                    "host_capacity_insufficient",
+                    format!(
+                        "host '{}' cannot satisfy the task load profile",
+                        instance.host_id
+                    ),
+                )
+            };
+        return Ok(PlacementResult::Blocked(reason(code, detail)));
     }
 
     let priority = task_override
@@ -708,10 +753,12 @@ fn build_candidate(
         context.pool_values,
         priority,
         task_weight,
+        load,
+        host,
         context.time,
     )?;
 
-    Ok(PlacementResult::Candidate(PlacementCandidate {
+    Ok(PlacementResult::Candidate(Box::new(PlacementCandidate {
         work_index,
         task_id: task.id.clone(),
         instance_id: instance.instance_id.clone(),
@@ -732,7 +779,7 @@ fn build_candidate(
         daily_limit: task.loop_budget.daily_limit,
         window_iteration_limit: task.loop_budget.window_iteration_limit,
         max_runtime_ms: task.loop_budget.max_runtime_ms,
-    }))
+    })))
 }
 
 fn select_activity_profile<'a>(
@@ -767,6 +814,8 @@ fn rank_task(
     pool_values: &BTreeMap<&str, &PoolValueSnapshot>,
     priority: i16,
     task_weight: u16,
+    load: ResourceLoad,
+    host: &HostRemaining,
     time: EvaluationTime,
 ) -> PolicyEvaluationResult<TaskRank> {
     let aging_ms = task_state
@@ -809,16 +858,25 @@ fn rank_task(
     let aging_score = i64::try_from(aging_ms).unwrap_or(i64::MAX);
     let strategic_score = i64::from(strategic_weight_milli).saturating_mul(1_000);
     let urgency_score = i64::from(urgency_milli).saturating_mul(1_000);
+    let contention_basis_points = host
+        .third_party_pressure_basis_points
+        .max(10_000u16.saturating_sub(host.host_responsiveness_basis_points));
+    let contention_penalty = i64::from(load.cost_milli)
+        .saturating_mul(i64::from(contention_basis_points))
+        .saturating_mul(100);
     let total_score = priority_score
         .saturating_add(aging_score)
         .saturating_add(strategic_score)
-        .saturating_add(urgency_score);
+        .saturating_add(urgency_score)
+        .saturating_sub(contention_penalty);
 
     Ok(TaskRank {
         priority,
         aging_ms,
         strategic_weight_milli,
         urgency_milli,
+        load_cost_milli: load.cost_milli,
+        contention_penalty,
         total_score,
     })
 }
@@ -851,6 +909,8 @@ struct ResourceLoad {
     cpu: u16,
     gpu: u16,
     io: u16,
+    cost_milli: u16,
+    heavy: bool,
 }
 
 impl From<&LoadProfile> for ResourceLoad {
@@ -860,11 +920,15 @@ impl From<&LoadProfile> for ResourceLoad {
                 cpu: 100,
                 gpu: 100,
                 io: 100,
+                cost_milli: 100,
+                heavy: false,
             },
             LoadProfile::Heavy => Self {
                 cpu: 700,
                 gpu: 700,
                 io: 700,
+                cost_milli: 700,
+                heavy: true,
             },
             LoadProfile::Weighted {
                 cpu_milli,
@@ -874,6 +938,11 @@ impl From<&LoadProfile> for ResourceLoad {
                 cpu: *cpu_milli,
                 gpu: *gpu_milli,
                 io: *io_milli,
+                cost_milli: (*cpu_milli).max(*gpu_milli).max(*io_milli),
+                heavy: u32::from(*cpu_milli)
+                    .saturating_add(u32::from(*gpu_milli))
+                    .saturating_add(u32::from(*io_milli))
+                    >= 1_500,
             },
         }
     }
@@ -884,17 +953,27 @@ struct HostRemaining {
     cpu: u16,
     gpu: u16,
     io: u16,
+    host_responsiveness_basis_points: u16,
+    third_party_pressure_basis_points: u16,
+    heavy_dispatch_limit: u16,
+    active_heavy_dispatches: u16,
 }
 
 impl HostRemaining {
     fn fits(&self, load: ResourceLoad) -> bool {
-        self.cpu >= load.cpu && self.gpu >= load.gpu && self.io >= load.io
+        self.cpu >= load.cpu
+            && self.gpu >= load.gpu
+            && self.io >= load.io
+            && (!load.heavy || self.active_heavy_dispatches < self.heavy_dispatch_limit)
     }
 
     fn consume(&mut self, load: ResourceLoad) {
         self.cpu -= load.cpu;
         self.gpu -= load.gpu;
         self.io -= load.io;
+        if load.heavy {
+            self.active_heavy_dispatches += 1;
+        }
     }
 }
 
@@ -904,6 +983,10 @@ impl From<&HostResourceSnapshot> for HostRemaining {
             cpu: value.cpu_available_milli,
             gpu: value.gpu_available_milli,
             io: value.io_available_milli,
+            host_responsiveness_basis_points: value.host_responsiveness_basis_points,
+            third_party_pressure_basis_points: value.third_party_pressure_basis_points,
+            heavy_dispatch_limit: value.heavy_dispatch_limit,
+            active_heavy_dispatches: value.active_heavy_dispatches,
         }
     }
 }
@@ -1602,9 +1685,13 @@ fn validate_inputs(
         ]
         .into_iter()
         .any(|value| value > 1_000)
+            || host.host_responsiveness_basis_points > 10_000
+            || host.third_party_pressure_basis_points > 10_000
+            || host.heavy_dispatch_limit == 0
+            || host.active_heavy_dispatches > host.heavy_dispatch_limit
         {
             return Err(PolicyEvaluationError::invalid(format!(
-                "host '{}' resources must be within 0..=1000",
+                "host '{}' resource and contention limits are invalid",
                 host.host_id
             )));
         }
@@ -1974,6 +2061,75 @@ mod tests {
         let instance_b = decision_for(&result, "fixture.observe", "fixture-instance-b");
         assert_eq!(instance_a.state, SchedulingDecisionState::Eligible);
         assert_eq!(instance_b.state, SchedulingDecisionState::Selected);
+    }
+
+    #[test]
+    fn contention_penalizes_heavier_load_in_ranking() {
+        let catalog = two_task_catalog(|tasks| {
+            for task in tasks.iter_mut() {
+                task["priority"] = serde_json::json!(0);
+                task["trigger"] = due_clock();
+                task["feedback_stop"] = false_fact();
+            }
+            tasks[0]["load_profile"] = serde_json::json!({"kind": "heavy"});
+            tasks[1]["load_profile"] = serde_json::json!({"kind": "light"});
+        });
+        let mut resources = base_resources();
+        resources.hosts[0].host_responsiveness_basis_points = 6_000;
+        resources.hosts[0].third_party_pressure_basis_points = 5_000;
+
+        let result = evaluate(
+            &catalog,
+            &base_facts(),
+            &resources,
+            EvaluationTime { unix_ms: NOW },
+            4,
+        )
+        .expect("evaluation");
+
+        assert_eq!(result.dispatch_intents.len(), 1);
+        assert_eq!(
+            result.dispatch_intents[0].task_id,
+            "fixture.observe-secondary"
+        );
+        let light = decision_for(&result, "fixture.observe-secondary", "fixture-instance-a")
+            .rank
+            .as_ref()
+            .expect("light rank");
+        let heavy = decision_for(&result, "fixture.observe", "fixture-instance-a")
+            .rank
+            .as_ref()
+            .expect("heavy rank");
+        assert!(heavy.contention_penalty > light.contention_penalty);
+    }
+
+    #[test]
+    fn heavy_scene_concurrency_budget_blocks_another_heavy_dispatch() {
+        let catalog = catalog(|tasks| {
+            tasks["tasks"][0]["trigger"] = due_clock();
+            tasks["tasks"][0]["feedback_stop"] = false_fact();
+            tasks["tasks"][0]["load_profile"] = serde_json::json!({"kind": "heavy"});
+        });
+        let mut resources = base_resources();
+        resources.hosts[0].heavy_dispatch_limit = 1;
+        resources.hosts[0].active_heavy_dispatches = 1;
+
+        let result = evaluate(
+            &catalog,
+            &base_facts(),
+            &resources,
+            EvaluationTime { unix_ms: NOW },
+            4,
+        )
+        .expect("evaluation");
+
+        assert!(result.dispatch_intents.is_empty());
+        assert!(
+            result.decisions[0]
+                .reasons
+                .iter()
+                .any(|reason| reason.code == "heavy_scene_budget_exhausted")
+        );
     }
 
     #[test]
@@ -2418,6 +2574,10 @@ mod tests {
                 cpu_available_milli: 1_000,
                 gpu_available_milli: 1_000,
                 io_available_milli: 1_000,
+                host_responsiveness_basis_points: 10_000,
+                third_party_pressure_basis_points: 0,
+                heavy_dispatch_limit: 1,
+                active_heavy_dispatches: 0,
             }],
         }
     }
