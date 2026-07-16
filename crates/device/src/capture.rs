@@ -1,6 +1,10 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
-use crate::adb::{Adb, AdbConfig, stop_child};
+use crate::adb::{ACTINGCOMMAND_NEMU_FOLDER_ENV, Adb, AdbConfig, stop_child};
+use crate::mumu::{
+    mumu_root_from_capture_dll, path_is_within_mumu_root, resolve_mumu_capture_dll,
+    resolve_mumu_installation, same_mumu_install_root,
+};
 use crate::vendor_stdio::{VendorStdioCapture, VendorStdioSession};
 use crate::{DeviceError, DeviceResult, DeviceTarget};
 use image::{
@@ -1731,74 +1735,57 @@ fn resolve_nemu_paths(
     folder: Option<PathBuf>,
     dll_path: Option<PathBuf>,
 ) -> DeviceResult<(PathBuf, PathBuf)> {
+    let folder =
+        folder.or_else(|| std::env::var_os(ACTINGCOMMAND_NEMU_FOLDER_ENV).map(PathBuf::from));
     if let Some(dll_path) =
         dll_path.or_else(|| std::env::var_os("ACTINGCOMMAND_NEMU_IPC_DLL").map(PathBuf::from))
     {
         require_file(&dll_path, "Nemu IPC DLL")?;
-        let folder = folder
-            .or_else(|| std::env::var_os("ACTINGCOMMAND_NEMU_FOLDER").map(PathBuf::from))
-            .or_else(|| infer_nemu_folder_from_dll(&dll_path))
-            .ok_or_else(|| {
-                DeviceError::fatal(
-                    "Nemu IPC unavailable: set ACTINGCOMMAND_NEMU_FOLDER with ACTINGCOMMAND_NEMU_IPC_DLL",
-                )
-            })?;
-        return Ok((folder, dll_path));
-    }
-
-    let folders = folder
-        .into_iter()
-        .chain(std::env::var_os("ACTINGCOMMAND_NEMU_FOLDER").map(PathBuf::from))
-        .chain(default_nemu_folders())
-        .collect::<Vec<_>>();
-    for folder in folders {
-        for dll in nemu_dll_candidates(&folder) {
-            if dll.is_file() {
-                return Ok((folder, dll));
+        let inferred_root = mumu_root_from_capture_dll(&dll_path);
+        let root = match folder {
+            Some(root) => {
+                let installation = resolve_mumu_installation(Some(root))?
+                    .expect("explicit MuMu root resolves to an installation");
+                if let Some(inferred_root) = inferred_root.as_deref()
+                    && !same_mumu_install_root(&installation.root, inferred_root)
+                {
+                    return Err(DeviceError::fatal(format!(
+                        "explicit Nemu IPC DLL {} belongs to MuMu root {}, not configured root {}",
+                        dll_path.display(),
+                        inferred_root.display(),
+                        installation.root.display()
+                    )));
+                }
+                if !path_is_within_mumu_root(&dll_path, &installation.root) {
+                    return Err(DeviceError::fatal(format!(
+                        "explicit Nemu IPC DLL {} is outside configured MuMu root {}",
+                        dll_path.display(),
+                        installation.root.display()
+                    )));
+                }
+                installation.root
             }
-        }
+            None => {
+                let root = inferred_root.ok_or_else(|| {
+                    DeviceError::fatal(
+                        "Nemu IPC unavailable: explicit DLL path does not identify a MuMu installation root; also configure ACTINGCOMMAND_NEMU_FOLDER",
+                    )
+                })?;
+                resolve_mumu_installation(Some(root))?
+                    .expect("inferred MuMu root resolves to an installation")
+                    .root
+            }
+        };
+        return Ok((root, dll_path));
     }
-    Err(DeviceError::fatal(
-        "Nemu IPC unavailable: external_renderer_ipc.dll was not found; set ACTINGCOMMAND_NEMU_FOLDER or ACTINGCOMMAND_NEMU_IPC_DLL",
-    ))
-}
 
-fn infer_nemu_folder_from_dll(dll: &Path) -> Option<PathBuf> {
-    let mut path = dll.parent()?.to_path_buf();
-    for _ in 0..3 {
-        path = path.parent()?.to_path_buf();
-    }
-    Some(path)
-}
-
-fn default_nemu_folders() -> Vec<PathBuf> {
-    ["ProgramFiles", "ProgramFiles(x86)"]
-        .into_iter()
-        .filter_map(std::env::var_os)
-        .flat_map(|root| {
-            let root = PathBuf::from(root);
-            [
-                root.join("Netease").join("MuMu Player 12"),
-                root.join("Netease").join("MuMuPlayer-12.0"),
-                root.join("MuMuPlayer-12.0"),
-            ]
-        })
-        .collect()
-}
-
-fn nemu_dll_candidates(folder: &Path) -> Vec<PathBuf> {
-    vec![
-        folder
-            .join("shell")
-            .join("sdk")
-            .join("external_renderer_ipc.dll"),
-        folder
-            .join("nx_device")
-            .join("12.0")
-            .join("shell")
-            .join("sdk")
-            .join("external_renderer_ipc.dll"),
-    ]
+    let installation = resolve_mumu_installation(folder)?.ok_or_else(|| {
+        DeviceError::fatal(
+            "Nemu IPC unavailable: no MuMu installation was discovered; set ACTINGCOMMAND_NEMU_FOLDER or ACTINGCOMMAND_NEMU_IPC_DLL",
+        )
+    })?;
+    let dll_path = resolve_mumu_capture_dll(&installation)?;
+    Ok((installation.root, dll_path))
 }
 
 fn serial_to_nemu_instance_id(serial: &str) -> Option<i32> {
@@ -1932,6 +1919,21 @@ mod tests {
             DeviceTarget::default(),
         )
         .with_requested(CaptureBackendChoice::Auto);
+        for backend in [
+            CaptureBackendName::NemuIpc,
+            CaptureBackendName::DroidcastRaw,
+        ] {
+            capture_probe_cache_store(
+                CaptureProbeCacheKey::new(&config, backend),
+                &CaptureBackendAttempt::failure(
+                    backend,
+                    "cached unavailable".to_string(),
+                    Some(1),
+                    false,
+                ),
+            )
+            .expect("store unavailable cache");
+        }
         let key = CaptureProbeCacheKey::new(&config, CaptureBackendName::AdbScreencap);
         capture_probe_cache_store(
             key,
@@ -2263,6 +2265,29 @@ mod tests {
             .chain(std::iter::once(0))
             .collect::<Vec<_>>();
         assert_eq!(wide, expected);
+    }
+
+    #[test]
+    fn explicit_nemu_dll_must_belong_to_configured_installation() {
+        let temp = std::env::temp_dir().join(format!(
+            "actingcommand-nemu-root-mismatch-{}",
+            std::process::id()
+        ));
+        let configured = temp.join("MuMu Player Configured");
+        let other = temp.join("MuMuPlayer-Other");
+        let dll = other.join("nx_device/13.7/shell/sdk/external_renderer_ipc.dll");
+        let _ = fs::remove_dir_all(&temp);
+        fs::create_dir_all(&configured).expect("configured root");
+        fs::create_dir_all(dll.parent().expect("DLL parent")).expect("DLL parent");
+        fs::write(&dll, b"fixture").expect("DLL fixture");
+
+        let err = resolve_nemu_paths(Some(configured.clone()), Some(dll.clone()))
+            .expect_err("cross-install DLL must fail");
+
+        assert!(err.message().contains("not configured root"));
+        assert!(err.message().contains(&configured.display().to_string()));
+        assert!(err.message().contains(&dll.display().to_string()));
+        let _ = fs::remove_dir_all(temp);
     }
 
     #[test]
