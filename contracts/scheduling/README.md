@@ -65,6 +65,10 @@ Compiler failures use `CatalogDiagnostic`. `code` is stable within V1; `reason` 
 
 Any error-severity diagnostic rejects the complete four-document catalog. Warnings may accompany a successful dry-run but cannot conceal an error. The compiler must sort diagnostics deterministically by document, source position, code, and JSON path.
 
+## Compiler Boundary
+
+`actingcommand_policy::compile_catalog` accepts four in-memory `CatalogDocumentSource` values. It performs no file access, script execution, network request, clock read, sleep, ledger write, lease operation, or device action. Success returns one complete `CompiledCatalog`; any error returns `CatalogCompileFailure` and no partial IR. Both outcomes expose canonical, byte-stable dry-run JSON.
+
 ## Neutral Example
 
 `examples/catalog-a` is a synthetic, product-neutral catalog. It exercises all four documents without embedding external project, game, account, device, or private workflow data.

@@ -50,7 +50,7 @@ pub struct CatalogDiagnostic {
     pub catalog_version: RequiredNullable<u64>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum CatalogDiagnosticCode {
     DocumentTooLarge,
@@ -72,7 +72,7 @@ pub enum CatalogDiagnosticCode {
     ApprovalMissing,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum DiagnosticSeverity {
     Error,
@@ -88,7 +88,7 @@ pub struct SourceLocation {
     pub column: u32,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SchedulingDocumentKind {
     Tasks,
@@ -357,7 +357,7 @@ pub enum FactValue {
     DurationMs(u64),
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum TaskTerminalState {
     Succeeded,
