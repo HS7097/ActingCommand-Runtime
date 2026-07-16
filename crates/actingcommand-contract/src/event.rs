@@ -205,6 +205,10 @@ pub enum EventType {
     PolicyDispatchRejected,
     #[serde(rename = "policy.dispatch_completed")]
     PolicyDispatchCompleted,
+    #[serde(rename = "policy.execution_recorded")]
+    PolicyExecutionRecorded,
+    #[serde(rename = "policy.planning_signal_observed")]
+    PolicyPlanningSignalObserved,
     #[serde(rename = "catalog.transition_intent")]
     CatalogTransitionIntent,
     #[serde(rename = "catalog.activated")]
@@ -345,7 +349,9 @@ impl EventType {
             Self::PolicyDispatchIntent
             | Self::PolicyDispatchAdmitted
             | Self::PolicyDispatchRejected
-            | Self::PolicyDispatchCompleted => EventFamily::Policy,
+            | Self::PolicyDispatchCompleted
+            | Self::PolicyExecutionRecorded
+            | Self::PolicyPlanningSignalObserved => EventFamily::Policy,
             Self::CatalogTransitionIntent
             | Self::CatalogActivated
             | Self::CatalogRolledBack

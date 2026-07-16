@@ -89,6 +89,8 @@ closed_code!(EventAction {
     RuntimeDebugDo => "runtime.debug_do",
     RuntimeDebugEnsure => "runtime.debug_ensure",
     PolicyDispatch => "policy.dispatch",
+    PolicyExecution => "policy.execution",
+    PolicyPlanning => "policy.planning",
     CatalogActivate => "catalog.activate",
     CatalogRollback => "catalog.rollback",
     RuntimeDebugWait => "runtime.debug_wait",
@@ -188,6 +190,23 @@ closed_code!(TaskOutcome {
     Success => "success",
     Failure => "failure",
     Cancelled => "cancelled",
+});
+
+closed_code!(PolicyFailureClass {
+    Recoverable => "recoverable",
+    Severe => "severe",
+});
+
+closed_code!(PolicyFailureDisposition {
+    Continue => "continue",
+    RetryScheduled => "retry_scheduled",
+    PausedTask => "paused_task",
+});
+
+closed_code!(PolicyPlanningSignalKind {
+    GoalMissed => "goal_missed",
+    FeasibilityRed => "feasibility_red",
+    DriftPredicted => "drift_predicted",
 });
 
 closed_code!(EvidenceCompleteness {

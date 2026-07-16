@@ -183,6 +183,7 @@ pub struct DispatchPrerequisites {
     pub fencing_required: bool,
     pub evaluated_at_unix_ms: u64,
     pub facts_fresh_until_unix_ms: Option<u64>,
+    pub activity_profile_id: String,
     pub daily_limit: u32,
     pub window_iteration_limit: u32,
     pub max_runtime_ms: u64,
@@ -504,6 +505,7 @@ pub fn evaluate(
                 fencing_required: true,
                 evaluated_at_unix_ms: time.unix_ms,
                 facts_fresh_until_unix_ms: candidate.facts_fresh_until_unix_ms,
+                activity_profile_id: candidate.activity_profile_id,
                 daily_limit: candidate.daily_limit,
                 window_iteration_limit: candidate.window_iteration_limit,
                 max_runtime_ms: candidate.max_runtime_ms,
@@ -596,6 +598,7 @@ struct PlacementCandidate {
     affinity: bool,
     tie_breaker: u64,
     facts_fresh_until_unix_ms: Option<u64>,
+    activity_profile_id: String,
     daily_limit: u32,
     window_iteration_limit: u32,
     max_runtime_ms: u64,
@@ -657,6 +660,16 @@ fn build_candidate(
         )));
     }
 
+    let Some(activity_profile) = select_activity_profile(context.profiles, instance) else {
+        return Ok(PlacementResult::Blocked(reason(
+            "activity_profile_missing",
+            format!(
+                "instance '{}' has no matching activity profile",
+                instance.instance_id
+            ),
+        )));
+    };
+
     let load_profile = task_override
         .and_then(|value| value.load_profile.0.clone())
         .unwrap_or_else(|| task.load_profile.clone());
@@ -715,10 +728,33 @@ fn build_candidate(
             .any(|task_id| task_id == &task.id),
         tie_breaker: deterministic_tie_breaker(context.seed, &task.id, &instance.instance_id),
         facts_fresh_until_unix_ms,
+        activity_profile_id: activity_profile.id.clone(),
         daily_limit: task.loop_budget.daily_limit,
         window_iteration_limit: task.loop_budget.window_iteration_limit,
         max_runtime_ms: task.loop_budget.max_runtime_ms,
     }))
+}
+
+fn select_activity_profile<'a>(
+    profiles: &'a [ActivityProfile],
+    instance: &InstanceSnapshot,
+) -> Option<&'a ActivityProfile> {
+    profiles
+        .iter()
+        .filter(|profile| scope_matches_instance(&profile.scope, instance))
+        .max_by(|left, right| {
+            activity_scope_specificity(&left.scope)
+                .cmp(&activity_scope_specificity(&right.scope))
+                .then_with(|| right.id.cmp(&left.id))
+        })
+}
+
+const fn activity_scope_specificity(scope: &ScopeSelector) -> u8 {
+    match scope {
+        ScopeSelector::Instance { .. } => 3,
+        ScopeSelector::Server { .. } => 2,
+        ScopeSelector::Game { .. } => 1,
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1930,6 +1966,10 @@ mod tests {
 
         assert_eq!(result.dispatch_intents.len(), 1);
         assert_eq!(result.dispatch_intents[0].instance_id, "fixture-instance-b");
+        assert_eq!(
+            result.dispatch_intents[0].prerequisites.activity_profile_id,
+            "fixture-activity-game"
+        );
         let instance_a = decision_for(&result, "fixture.observe", "fixture-instance-a");
         let instance_b = decision_for(&result, "fixture.observe", "fixture-instance-b");
         assert_eq!(instance_a.state, SchedulingDecisionState::Eligible);
@@ -2047,6 +2087,7 @@ mod tests {
         let prerequisites = &result.dispatch_intents[0].prerequisites;
 
         assert_eq!(prerequisites.facts_fresh_until_unix_ms, Some(NOW + 1_000));
+        assert_eq!(prerequisites.activity_profile_id, "fixture-activity-a");
         assert_eq!(prerequisites.daily_limit, 24);
         assert_eq!(prerequisites.window_iteration_limit, 4);
         assert_eq!(prerequisites.max_runtime_ms, 300_000);
