@@ -8,12 +8,14 @@ use crate::performance::{
     PerformanceMonitor, PerformanceSemanticEvent, PerformanceTick, PipelineEventObservation,
     system_performance_sampler,
 };
+use crate::performance_control::{PerformanceBalanceController, PerformanceDispatchGate};
 use crate::policy_host::{LoadedCatalog, PolicyExecutionPreparation, PolicyHost};
 use crate::time::unix_ms_now;
 use crate::{
-    CatalogGeneration, FatalState, PerformanceMonitorConfig, PipelinePerformanceSignal,
-    PolicyAdmissionContext, PolicyCadence, PolicyCycle, PolicyDispatchAdmission,
-    PolicyExecutionInput, PolicyTrigger, RuntimeHostError, RuntimeHostResult,
+    CatalogGeneration, FatalState, PerformanceControlConfig, PerformanceControlDirective,
+    PerformanceMonitorConfig, PipelinePerformanceSignal, PolicyAdmissionContext, PolicyCadence,
+    PolicyCycle, PolicyDispatchAdmission, PolicyExecutionInput, PolicyTrigger, RuntimeHostError,
+    RuntimeHostResult,
 };
 use actingcommand_artifact_store::{
     ArtifactEventSink, ArtifactStore, ArtifactStoreError, ArtifactStoreResult,
@@ -98,6 +100,7 @@ pub struct RuntimeHostConfig {
     maximum_frame_bytes: usize,
     io_timeout: Duration,
     performance_monitor: Option<PerformanceMonitorConfig>,
+    performance_control: PerformanceControlConfig,
     secret_fingerprint_salt: Vec<u8>,
 }
 
@@ -111,6 +114,7 @@ impl RuntimeHostConfig {
             maximum_frame_bytes: DEFAULT_RUNTIME_MAX_FRAME_BYTES,
             io_timeout: DEFAULT_RUNTIME_IO_TIMEOUT,
             performance_monitor: None,
+            performance_control: PerformanceControlConfig::default(),
             secret_fingerprint_salt: secret_fingerprint_salt.as_ref().to_vec(),
         }
     }
@@ -148,6 +152,14 @@ impl RuntimeHostConfig {
         self
     }
 
+    pub fn with_performance_control(
+        mut self,
+        performance_control: PerformanceControlConfig,
+    ) -> Self {
+        self.performance_control = performance_control;
+        self
+    }
+
     pub fn state_root(&self) -> &Path {
         &self.state_root
     }
@@ -160,6 +172,7 @@ impl RuntimeHostConfig {
         if let Some(performance_monitor) = &self.performance_monitor {
             performance_monitor.validate()?;
         }
+        self.performance_control.validate()?;
         if self.state_root.as_os_str().is_empty()
             || !self.bind_address.ip().is_loopback()
             || self.io_timeout.is_zero()
@@ -188,6 +201,7 @@ impl std::fmt::Debug for RuntimeHostConfig {
             .field("maximum_frame_bytes", &self.maximum_frame_bytes)
             .field("io_timeout", &self.io_timeout)
             .field("performance_monitor", &self.performance_monitor)
+            .field("performance_control", &self.performance_control)
             .field("secret_fingerprint_salt", &"<redacted>")
             .finish()
     }
@@ -272,6 +286,8 @@ impl RuntimeHost {
             None => PerformanceMonitor::disabled(),
         };
         let performance_interval = performance.sample_interval();
+        let performance_control =
+            PerformanceBalanceController::new(config.performance_control.clone())?;
         let info = RuntimeInfo::new(
             std::process::id(),
             local_address.ip().to_string(),
@@ -294,6 +310,7 @@ impl RuntimeHost {
             scheduler: Mutex::new(scheduler),
             policy: Mutex::new(policy),
             performance: Mutex::new(performance),
+            performance_control: Mutex::new(performance_control),
             owner: Mutex::new(owner),
             ledger,
             artifacts,
@@ -501,6 +518,14 @@ impl RuntimeHost {
             .record_pipeline_performance(signal)
     }
 
+    pub fn performance_control_directive(
+        &self,
+        instance_id: &str,
+    ) -> RuntimeHostResult<PerformanceControlDirective> {
+        self.shared_ref("read_performance_control_directive")?
+            .performance_control_directive(instance_id)
+    }
+
     #[cfg(test)]
     pub(crate) fn process_request_for_test(
         &self,
@@ -527,6 +552,15 @@ impl RuntimeHost {
     ) -> RuntimeHostResult<PerformanceContext> {
         self.shared_ref("read_test_performance_context")?
             .performance_context(instance_id, observed_at_unix_ms)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn observe_performance_control_for_test(
+        &self,
+        observation: crate::PerformanceControlObservation,
+    ) -> RuntimeHostResult<()> {
+        self.shared_ref("observe_test_performance_control")?
+            .reconcile_performance_control(observation)
     }
 
     #[cfg(test)]
@@ -768,6 +802,7 @@ struct HostShared {
     scheduler: Mutex<SeedScheduler>,
     policy: Mutex<PolicyHost>,
     performance: Mutex<PerformanceMonitor>,
+    performance_control: Mutex<PerformanceBalanceController>,
     ledger: GlobalLedger,
     artifacts: ArtifactStore,
     owner: Mutex<OwnerGuard>,
@@ -828,12 +863,35 @@ struct ActionFailure {
 
 impl HostShared {
     fn sample_performance(&self, observed_at_unix_ms: u64) -> RuntimeHostResult<bool> {
+        let (tick, control_observation) = {
+            let mut performance = lock(&self.performance, "sample_performance")?;
+            let tick = performance.tick(observed_at_unix_ms)?;
+            let observation = performance.control_observation(observed_at_unix_ms)?;
+            (tick, observation)
+        };
         let PerformanceTick {
             events,
             stop_sampling,
-        } = lock(&self.performance, "sample_performance")?.tick(observed_at_unix_ms)?;
+        } = tick;
         self.record_performance_events(&events)?;
+        if let Some(observation) = control_observation {
+            self.reconcile_performance_control(observation)?;
+        }
         Ok(stop_sampling)
+    }
+
+    fn reconcile_performance_control(
+        &self,
+        observation: crate::PerformanceControlObservation,
+    ) -> RuntimeHostResult<()> {
+        let workloads =
+            lock(&self.policy, "read_performance_workloads")?.active_performance_workloads()?;
+        let control_events = lock(&self.performance_control, "reconcile_performance_control")?
+            .observe(observation, &workloads)?
+            .into_iter()
+            .map(PerformanceSemanticEvent::BalanceChanged)
+            .collect::<Vec<_>>();
+        self.record_performance_events(&control_events)
     }
 
     fn record_pipeline_performance(
@@ -852,6 +910,17 @@ impl HostShared {
     ) -> RuntimeHostResult<PerformanceContext> {
         lock(&self.performance, "read_performance_context")?
             .context(instance_id, observed_at_unix_ms)
+    }
+
+    fn performance_control_directive(
+        &self,
+        instance_id: &str,
+    ) -> RuntimeHostResult<PerformanceControlDirective> {
+        lock(
+            &self.performance_control,
+            "read_performance_control_directive",
+        )?
+        .directive(instance_id)
     }
 
     fn record_performance_events(
@@ -878,6 +947,9 @@ impl HostShared {
                 PerformanceSemanticEvent::MonitorRecovered(data) => {
                     PerformancePayloadDraft::monitor_recovered(data.clone(), AuditInput::new())
                 }
+                PerformanceSemanticEvent::BalanceChanged(data) => {
+                    PerformancePayloadDraft::balance_changed(data.clone(), AuditInput::new())
+                }
             };
             let persisted = self.append_event_raw(
                 event.severity(),
@@ -887,8 +959,12 @@ impl HostShared {
                 self.events.system_links()?,
                 payload,
             )?;
-            lock(&self.performance, "record_performance_event_reference")?
-                .record_event_reference(event, *persisted.event_id())?;
+            let mut performance = lock(&self.performance, "record_performance_event_reference")?;
+            if !matches!(event, PerformanceSemanticEvent::BalanceChanged(_))
+                || performance.sample_interval().is_some()
+            {
+                performance.record_event_reference(event, *persisted.event_id())?;
+            }
         }
         Ok(())
     }
@@ -1133,7 +1209,21 @@ impl HostShared {
         seed: u64,
         trigger: PolicyTrigger,
     ) -> RuntimeHostResult<PolicyCycle> {
-        lock(&self.policy, "evaluate_policy_cycle")?.evaluate(facts, resources, time, seed, trigger)
+        let workloads = lock(&self.policy, "read_policy_performance_workloads")?
+            .active_performance_workloads()?;
+        let mut controlled_resources = resources.clone();
+        lock(
+            &self.performance_control,
+            "apply_policy_performance_control",
+        )?
+        .apply_to_resources(&mut controlled_resources.hosts, &workloads)?;
+        lock(&self.policy, "evaluate_policy_cycle")?.evaluate(
+            facts,
+            &controlled_resources,
+            time,
+            seed,
+            trigger,
+        )
     }
 
     fn admit_policy_dispatch(
@@ -1148,6 +1238,40 @@ impl HostShared {
                 return Ok(replay);
             }
         }
+        let gate_error = match lock(
+            &self.performance_control,
+            "gate_policy_performance_dispatch",
+        )?
+        .gate_dispatch(
+            &intent.instance_id,
+            intent.prerequisites.urgency_milli,
+            context.now_unix_ms,
+        )? {
+            PerformanceDispatchGate::Allowed => None,
+            PerformanceDispatchGate::Deferred {
+                reason,
+                deadline_disposition,
+                event,
+            } => {
+                if let Some(event) = event {
+                    self.record_performance_events(&[PerformanceSemanticEvent::BalanceChanged(
+                        event,
+                    )])?;
+                }
+                let code = if deadline_disposition
+                    == Some(actingcommand_contract::PerformanceDeadlineDisposition::CapacityFailure)
+                {
+                    "performance_capacity_deadline_conflict"
+                } else {
+                    reason
+                };
+                Some(RuntimeHostError::request(
+                    code,
+                    "admit_policy_dispatch",
+                    RuntimeErrorCode::InvalidRequest,
+                ))
+            }
+        };
         let resolved = self
             .resolve_instance(&intent.instance_id)
             .map_err(|failure| *failure.error)?;
@@ -1210,6 +1334,12 @@ impl HostShared {
             self.events.fingerprinter(),
             plan,
             || {
+                if let Some(error) = gate_error.clone() {
+                    return CriticalActionReport::Failed {
+                        error: RequestFailure::request(error, RuntimeReceiptState::Denied, None),
+                        effect: EffectDisposition::NotPerformed,
+                    };
+                }
                 let ledger_high_watermark = match self.ledger.latest_sequence() {
                     Ok(position) => position,
                     Err(_) => {
@@ -7661,6 +7791,7 @@ fn policy_event_data(
         input_ledger_position: intent.input_ledger_position,
         fact_snapshot_id: intent.fact_snapshot_id.clone(),
         approval_fact_ids: intent.approval_refs.clone(),
+        urgency_milli: intent.prerequisites.urgency_milli,
     }
 }
 

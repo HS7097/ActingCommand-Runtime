@@ -9,10 +9,12 @@ use super::{
 use crate::{
     HolderId, InputAction, LeaseId, LeasePriority, MonitorDecision, MonitorDiagnosis,
     MonitorDisposition, MonitorObservation, MonitorRecoveryCoordinationReason, MonitorRecoveryKind,
-    PerformanceContext, PerformanceMonitorHealth, PerformanceMonitorStateEventData,
-    PerformancePressureEventData, PerformancePressureRecord, PerformanceStutterEventData,
-    PerformanceSummaryEventData, RequestId, validate_performance_monitor_state,
-    validate_performance_stutter, validate_performance_summary,
+    PerformanceContext, PerformanceControlEventData, PerformanceControlLevel,
+    PerformanceControlReason, PerformanceDeadlineDisposition, PerformanceMonitorHealth,
+    PerformanceMonitorStateEventData, PerformancePressureEventData, PerformancePressureRecord,
+    PerformanceStutterEventData, PerformanceSummaryEventData, RequestId,
+    validate_performance_control, validate_performance_monitor_state, validate_performance_stutter,
+    validate_performance_summary,
 };
 use serde::de;
 use serde::{Deserialize, Deserializer, Serialize};
@@ -339,6 +341,26 @@ pub struct PerformanceMonitorStatePayload {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+pub struct PerformanceControlPayload {
+    action: EventAction,
+    observed_at_unix_ms: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    instance_id: Option<String>,
+    previous_level: PerformanceControlLevel,
+    level: PerformanceControlLevel,
+    reason: PerformanceControlReason,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    host_responsiveness_basis_points: Option<u16>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    third_party_pressure_basis_points: Option<u16>,
+    recovery: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    deadline_disposition: Option<PerformanceDeadlineDisposition>,
+    audit: SanitizedAudit,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct SchedulerQueuePayload {
     action: EventAction,
     priority: LeasePriority,
@@ -471,6 +493,7 @@ pub struct PolicyDispatchEventData {
     pub input_ledger_position: u64,
     pub fact_snapshot_id: String,
     pub approval_fact_ids: Vec<String>,
+    pub urgency_milli: u16,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -713,6 +736,8 @@ pub struct PolicyDispatchPayload {
     input_ledger_position: u64,
     fact_snapshot_id: String,
     approval_fact_ids: Vec<String>,
+    #[serde(default)]
+    urgency_milli: u16,
     #[serde(skip_serializing_if = "Option::is_none")]
     admission: Option<Box<PolicyAdmissionRecord>>,
     audit: SanitizedAudit,
@@ -765,6 +790,10 @@ impl PolicyDispatchPayload {
 
     pub fn admission(&self) -> Option<&PolicyAdmissionRecord> {
         self.admission.as_deref()
+    }
+
+    pub const fn urgency_milli(&self) -> u16 {
+        self.urgency_milli
     }
 }
 
@@ -1206,6 +1235,7 @@ common_detail_accessors!(PerformancePressurePayload);
 common_detail_accessors!(PerformanceStutterPayload);
 common_detail_accessors!(PerformanceSummaryPayload);
 common_detail_accessors!(PerformanceMonitorStatePayload);
+common_detail_accessors!(PerformanceControlPayload);
 common_detail_accessors!(SchedulerQueuePayload);
 common_detail_accessors!(SchedulerPreemptionPayload);
 common_detail_accessors!(LeaseTransferPayload);
@@ -1245,6 +1275,7 @@ plain_payload_detail!(
     PerformanceStutterPayload,
     PerformanceSummaryPayload,
     PerformanceMonitorStatePayload,
+    PerformanceControlPayload,
 );
 
 impl PerformancePressurePayload {
@@ -1288,6 +1319,28 @@ impl PerformanceMonitorStatePayload {
 
     pub fn failure_code(&self) -> Option<&str> {
         self.failure_code.as_deref()
+    }
+}
+
+impl PerformanceControlPayload {
+    pub const fn observed_at_unix_ms(&self) -> u64 {
+        self.observed_at_unix_ms
+    }
+
+    pub fn instance_id(&self) -> Option<&str> {
+        self.instance_id.as_deref()
+    }
+
+    pub const fn level(&self) -> PerformanceControlLevel {
+        self.level
+    }
+
+    pub const fn reason(&self) -> PerformanceControlReason {
+        self.reason
+    }
+
+    pub const fn deadline_disposition(&self) -> Option<PerformanceDeadlineDisposition> {
+        self.deadline_disposition
     }
 }
 
@@ -2046,6 +2099,11 @@ struct PerformanceMonitorStateDraft {
     audit: AuditInput,
 }
 
+struct PerformanceControlDraft {
+    data: PerformanceControlEventData,
+    audit: AuditInput,
+}
+
 struct PolicyPlanningSignalDraft {
     data: PolicyPlanningSignalEventData,
     audit: AuditInput,
@@ -2126,6 +2184,7 @@ impl PolicyDispatchDraft {
             input_ledger_position: self.data.input_ledger_position,
             fact_snapshot_id: self.data.fact_snapshot_id,
             approval_fact_ids: self.data.approval_fact_ids,
+            urgency_milli: self.data.urgency_milli,
             admission: self.admission,
             audit: self.audit.sanitize(fingerprinter)?,
         })
@@ -2223,6 +2282,28 @@ impl PerformanceMonitorStateDraft {
             consecutive_failures: self.data.consecutive_failures,
             terminal: self.data.terminal,
             unavailable_metrics: self.data.unavailable_metrics,
+            audit: self.audit.sanitize(fingerprinter)?,
+        })
+    }
+}
+
+impl PerformanceControlDraft {
+    fn sanitize(
+        self,
+        fingerprinter: &dyn SecretFingerprinter,
+    ) -> Result<PerformanceControlPayload, SanitizationError> {
+        validate_performance_control(&self.data)?;
+        Ok(PerformanceControlPayload {
+            action: EventAction::PerformanceObserve,
+            observed_at_unix_ms: self.data.observed_at_unix_ms,
+            instance_id: self.data.instance_id,
+            previous_level: self.data.previous_level,
+            level: self.data.level,
+            reason: self.data.reason,
+            host_responsiveness_basis_points: self.data.host_responsiveness_basis_points,
+            third_party_pressure_basis_points: self.data.third_party_pressure_basis_points,
+            recovery: self.data.recovery,
+            deadline_disposition: self.data.deadline_disposition,
             audit: self.audit.sanitize(fingerprinter)?,
         })
     }
@@ -2366,7 +2447,7 @@ fn validate_policy_dispatch_data(data: &PolicyDispatchEventData) -> Result<(), S
     validate_policy_token(&data.reason_chain_id, "reason_chain_id")?;
     validate_policy_token(&data.fact_snapshot_id, "fact_snapshot_id")?;
     validate_catalog_hash(&data.catalog_hash, "catalog_hash")?;
-    if data.catalog_version == 0 || data.input_ledger_position == 0 {
+    if data.catalog_version == 0 || data.input_ledger_position == 0 || data.urgency_milli > 1_000 {
         return Err(SanitizationError::new(
             "invalid_policy_dispatch_position",
             "catalog_version_or_input_position",
@@ -2584,6 +2665,21 @@ fn validate_performance_payload(payload: &PerformancePayload) -> Result<(), Sani
                 unavailable_metrics: value.unavailable_metrics.clone(),
             })
         }
+        PerformancePayload::BalanceChanged(value)
+            if value.action == EventAction::PerformanceObserve =>
+        {
+            validate_performance_control(&PerformanceControlEventData {
+                observed_at_unix_ms: value.observed_at_unix_ms,
+                instance_id: value.instance_id.clone(),
+                previous_level: value.previous_level,
+                level: value.level,
+                reason: value.reason,
+                host_responsiveness_basis_points: value.host_responsiveness_basis_points,
+                third_party_pressure_basis_points: value.third_party_pressure_basis_points,
+                recovery: value.recovery,
+                deadline_disposition: value.deadline_disposition,
+            })
+        }
         _ => Err(SanitizationError::new(
             "invalid_performance_payload",
             "performance_payload",
@@ -2673,6 +2769,7 @@ fn validate_policy_payload(payload: &PolicyPayload) -> Result<(), SanitizationEr
         input_ledger_position: value.input_ledger_position,
         fact_snapshot_id: value.fact_snapshot_id.clone(),
         approval_fact_ids: value.approval_fact_ids.clone(),
+        urgency_milli: value.urgency_milli,
     })?;
     if let Some(admission) = &value.admission {
         validate_policy_admission(admission)?;
@@ -3898,6 +3995,7 @@ enum PerformanceDraftKind {
     Summary(Box<PerformanceSummaryDraft>),
     MonitorDegraded(PerformanceMonitorStateDraft),
     MonitorRecovered(PerformanceMonitorStateDraft),
+    BalanceChanged(PerformanceControlDraft),
 }
 
 pub struct PerformancePayloadDraft(PerformanceDraftKind);
@@ -3936,6 +4034,12 @@ impl PerformancePayloadDraft {
     pub fn monitor_recovered(data: PerformanceMonitorStateEventData, audit: AuditInput) -> Self {
         Self(PerformanceDraftKind::MonitorRecovered(
             PerformanceMonitorStateDraft { data, audit },
+        ))
+    }
+
+    pub fn balance_changed(data: PerformanceControlEventData, audit: AuditInput) -> Self {
+        Self(PerformanceDraftKind::BalanceChanged(
+            PerformanceControlDraft { data, audit },
         ))
     }
 }
@@ -4185,6 +4289,7 @@ pub enum PerformancePayload {
     Summary(Box<PerformanceSummaryPayload>),
     MonitorDegraded(PerformanceMonitorStatePayload),
     MonitorRecovered(PerformanceMonitorStatePayload),
+    BalanceChanged(PerformanceControlPayload),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -4431,6 +4536,7 @@ impl FamilyPayload for PerformancePayload {
             Self::Summary(_) => EventType::PerformanceSummary,
             Self::MonitorDegraded(_) => EventType::PerformanceMonitorDegraded,
             Self::MonitorRecovered(_) => EventType::PerformanceMonitorRecovered,
+            Self::BalanceChanged(_) => EventType::PerformanceBalanceChanged,
         }
     }
 
@@ -4440,6 +4546,7 @@ impl FamilyPayload for PerformancePayload {
             Self::StutterDetected(detail) => detail,
             Self::Summary(detail) => detail.as_ref(),
             Self::MonitorDegraded(detail) | Self::MonitorRecovered(detail) => detail,
+            Self::BalanceChanged(detail) => detail,
         }
     }
 }
@@ -4622,6 +4729,9 @@ impl EventPayloadDraft {
                 }
                 PerformanceDraftKind::MonitorRecovered(detail) => {
                     PerformancePayload::MonitorRecovered(detail.sanitize(fingerprinter)?)
+                }
+                PerformanceDraftKind::BalanceChanged(detail) => {
+                    PerformancePayload::BalanceChanged(detail.sanitize(fingerprinter)?)
                 }
             }),
             Self::Command(value) => EventPayload::Command(match value.0 {
@@ -5014,6 +5124,7 @@ impl EventPayload {
         let performance_stutter = performance_stutter(self);
         let performance_summary = performance_summary(self);
         let performance_state = performance_monitor_state(self);
+        let performance_control = performance_control(self);
         let payload = PublicPayload {
             event_type,
             action: detail.action(),
@@ -5088,6 +5199,10 @@ impl EventPayload {
             performance_context: performance_summary.map(|value| Box::new(value.context.clone())),
             performance_frame_gap_ms: performance_stutter.map(|value| value.frame_gap_ms),
             performance_monitor_health: performance_state.map(|value| value.health),
+            performance_control_level: performance_control.map(|value| value.level),
+            performance_control_reason: performance_control.map(|value| value.reason),
+            performance_deadline_disposition: performance_control
+                .and_then(|value| value.deadline_disposition),
         };
         match self {
             Self::Runtime(_) => PublicEventPayload::Runtime(payload),
@@ -5166,6 +5281,13 @@ fn performance_monitor_state(payload: &EventPayload) -> Option<&PerformanceMonit
     match payload {
         EventPayload::Performance(PerformancePayload::MonitorDegraded(value))
         | EventPayload::Performance(PerformancePayload::MonitorRecovered(value)) => Some(value),
+        _ => None,
+    }
+}
+
+fn performance_control(payload: &EventPayload) -> Option<&PerformanceControlPayload> {
+    match payload {
+        EventPayload::Performance(PerformancePayload::BalanceChanged(value)) => Some(value),
         _ => None,
     }
 }
@@ -5381,6 +5503,12 @@ pub struct PublicPayload {
     performance_frame_gap_ms: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     performance_monitor_health: Option<PerformanceMonitorHealth>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    performance_control_level: Option<PerformanceControlLevel>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    performance_control_reason: Option<PerformanceControlReason>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    performance_deadline_disposition: Option<PerformanceDeadlineDisposition>,
 }
 
 impl PublicPayload {
@@ -5580,6 +5708,18 @@ impl PublicPayload {
 
     pub const fn performance_monitor_health(&self) -> Option<PerformanceMonitorHealth> {
         self.performance_monitor_health
+    }
+
+    pub const fn performance_control_level(&self) -> Option<PerformanceControlLevel> {
+        self.performance_control_level
+    }
+
+    pub const fn performance_control_reason(&self) -> Option<PerformanceControlReason> {
+        self.performance_control_reason
+    }
+
+    pub const fn performance_deadline_disposition(&self) -> Option<PerformanceDeadlineDisposition> {
+        self.performance_deadline_disposition
     }
 }
 
