@@ -14,7 +14,9 @@ const TEMPLATE_MATCH_TIMEOUT: Duration = Duration::from_secs(5);
 const FULL_FRAME_FAST_PATH_WORK_THRESHOLD: u64 = 50_000_000;
 const FULL_FRAME_COARSE_WORK_TARGET: u64 = 5_000_000;
 const FULL_FRAME_MAX_DOWNSAMPLE: u32 = 8;
-const FULL_FRAME_TOP_CANDIDATES: usize = 4;
+const FULL_FRAME_MIN_COARSE_CANDIDATES: usize = 8;
+const FULL_FRAME_MAX_COARSE_CANDIDATES: usize = 32;
+const FULL_FRAME_REFINEMENT_WORK_TARGET: u64 = 25_000_000;
 const FULL_FRAME_REFINE_RADIUS_MULTIPLIER: u32 = 1;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -312,6 +314,17 @@ fn full_frame_pyramid_match(
     offset_y: u32,
 ) -> RecognitionResult<TemplateMatch> {
     let deadline = TemplateMatchDeadline::new(TEMPLATE_MATCH_TIMEOUT);
+    full_frame_pyramid_match_with_deadline(search, template, metric, offset_x, offset_y, &deadline)
+}
+
+fn full_frame_pyramid_match_with_deadline(
+    search: &GrayImage,
+    template: &GrayImage,
+    metric: MatchMetric,
+    offset_x: u32,
+    offset_y: u32,
+    deadline: &TemplateMatchDeadline,
+) -> RecognitionResult<TemplateMatch> {
     let factor = choose_downsample_factor(search, template);
     if factor <= 1 {
         return exact_metric_match(
@@ -321,7 +334,7 @@ fn full_frame_pyramid_match(
             offset_x,
             offset_y,
             SearchWindow::full(search, template),
-            &deadline,
+            deadline,
         );
     }
 
@@ -337,7 +350,7 @@ fn full_frame_pyramid_match(
             offset_x,
             offset_y,
             SearchWindow::full(search, template),
-            &deadline,
+            deadline,
         );
     }
 
@@ -346,8 +359,8 @@ fn full_frame_pyramid_match(
         &coarse_template,
         metric,
         SearchWindow::full(&coarse_search, &coarse_template),
-        FULL_FRAME_TOP_CANDIDATES,
-        &deadline,
+        refinement_candidate_limit(template, factor),
+        deadline,
     )?;
     let full_window = SearchWindow::full(search, template);
     let radius = factor * FULL_FRAME_REFINE_RADIUS_MULTIPLIER;
@@ -356,7 +369,7 @@ fn full_frame_pyramid_match(
         let approx_x = candidate.x.saturating_mul(factor);
         let approx_y = candidate.y.saturating_mul(factor);
         let window = full_window.around(approx_x, approx_y, radius);
-        let best = exact_metric_candidates(search, template, metric, window, 1, &deadline)?;
+        let best = exact_metric_candidates(search, template, metric, window, 1, deadline)?;
         refined.extend(best);
     }
 
@@ -367,6 +380,22 @@ fn full_frame_pyramid_match(
             RecognitionError::fatal("full-frame template match produced no candidates")
         })?;
     template_match_from_candidate(candidate, template, offset_x, offset_y)
+}
+
+fn refinement_candidate_limit(template: &GrayImage, factor: u32) -> usize {
+    let diameter = u64::from(factor.saturating_mul(2).saturating_add(1));
+    let work_per_candidate = diameter
+        .saturating_mul(diameter)
+        .saturating_mul(u64::from(template.width()))
+        .saturating_mul(u64::from(template.height()))
+        .max(1);
+    let budget_limit = FULL_FRAME_REFINEMENT_WORK_TARGET / work_per_candidate;
+    usize::try_from(budget_limit)
+        .unwrap_or(FULL_FRAME_MAX_COARSE_CANDIDATES)
+        .clamp(
+            FULL_FRAME_MIN_COARSE_CANDIDATES,
+            FULL_FRAME_MAX_COARSE_CANDIDATES,
+        )
 }
 
 fn template_match_from_candidate(
@@ -798,7 +827,7 @@ fn normalize_ncc_score(raw: f32) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use image::{DynamicImage, ImageBuffer, Rgb};
+    use image::{DynamicImage, GrayImage, ImageBuffer, Luma, Rgb};
     use std::io::Cursor;
 
     #[test]
@@ -951,6 +980,92 @@ mod tests {
             "full-frame ccorr match took {:?}",
             started.elapsed()
         );
+    }
+
+    #[test]
+    fn full_frame_refines_true_best_beyond_legacy_top_four() {
+        let template = checkerboard_gray(8, 8);
+        let inverse =
+            ImageBuffer::from_fn(8, 8, |x, y| Luma([if (x + y) % 2 == 0 { 255 } else { 0 }]));
+        let mut search = GrayImage::from_pixel(80, 8, Luma([127]));
+        for x in [0, 12, 24, 36, 48] {
+            imageops::replace(&mut search, &inverse, x, 0);
+        }
+        let true_x = 61;
+        imageops::replace(&mut search, &template, i64::from(true_x), 0);
+        let factor = choose_downsample_factor(&search, &template);
+        assert_eq!(factor, 2);
+        let coarse_search = downsample_gray(&search, factor);
+        let coarse_template = downsample_gray(&template, factor);
+        let deadline = TemplateMatchDeadline::new(Duration::from_secs(1));
+        let coarse_window = SearchWindow::full(&coarse_search, &coarse_template);
+        let coarse_count = usize::try_from(
+            u64::from(coarse_window.max_x - coarse_window.min_x + 1)
+                * u64::from(coarse_window.max_y - coarse_window.min_y + 1),
+        )
+        .expect("coarse candidate count");
+        let ranked = exact_metric_candidates(
+            &coarse_search,
+            &coarse_template,
+            MatchMetric::CrossCorrelationNormalized,
+            coarse_window,
+            coarse_count,
+            &deadline,
+        )
+        .expect("coarse candidates");
+        let full_window = SearchWindow::full(&search, &template);
+        let radius = factor * FULL_FRAME_REFINE_RADIUS_MULTIPLIER;
+        let first_covering_rank = ranked
+            .iter()
+            .position(|candidate| {
+                let window = full_window.around(
+                    candidate.x.saturating_mul(factor),
+                    candidate.y.saturating_mul(factor),
+                    radius,
+                );
+                window.min_x <= true_x && true_x <= window.max_x
+            })
+            .expect("a coarse candidate covers the true match");
+
+        assert!(
+            first_covering_rank >= 4,
+            "first covering rank={first_covering_rank}, ranked={ranked:?}"
+        );
+        assert!(first_covering_rank < refinement_candidate_limit(&template, factor));
+
+        let matched = full_frame_pyramid_match_with_deadline(
+            &search,
+            &template,
+            MatchMetric::CrossCorrelationNormalized,
+            0,
+            0,
+            &deadline,
+        )
+        .expect("bounded refinement");
+
+        assert_eq!((matched.x, matched.y), (true_x as i32, 0));
+        assert!(matched.raw_score >= 0.99);
+    }
+
+    #[test]
+    fn full_frame_refinement_deadline_remains_fatal() {
+        let template = checkerboard_gray(8, 8);
+        let search = GrayImage::from_pixel(64, 8, Luma([127]));
+        let deadline = TemplateMatchDeadline::new(Duration::ZERO);
+        std::thread::sleep(Duration::from_millis(1));
+
+        let err = full_frame_pyramid_match_with_deadline(
+            &search,
+            &template,
+            MatchMetric::CrossCorrelationNormalized,
+            0,
+            0,
+            &deadline,
+        )
+        .expect_err("expired deadline must fail");
+
+        assert_eq!(err.severity(), RecognitionErrorSeverity::Fatal);
+        assert!(err.message().contains("deadline"));
     }
 
     #[test]
@@ -1202,5 +1317,11 @@ mod tests {
 
     fn assert_score_is_normalized(score: f32) {
         assert!((0.0..=1.0).contains(&score), "score was {score}");
+    }
+
+    fn checkerboard_gray(width: u32, height: u32) -> GrayImage {
+        ImageBuffer::from_fn(width, height, |x, y| {
+            Luma([if (x + y) % 2 == 0 { 0 } else { 255 }])
+        })
     }
 }
