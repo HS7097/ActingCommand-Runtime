@@ -1569,6 +1569,7 @@ fn resource_policy_json(policy: Option<&ResourcePolicy>) -> serde_json::Value {
     match policy {
         Some(policy) => json!({
             "kind": format_resource_kind(policy.kind),
+            "resource_key": policy.resource_key,
             "max_cost": policy.max_cost,
             "premium_currency_allowed": policy.premium_currency_allowed,
             "auto_refill_allowed": policy.auto_refill_allowed,
@@ -1589,9 +1590,7 @@ fn format_effect(effect: ProbeClickEffect) -> &'static str {
 fn format_resource_kind(kind: ResourcePolicyKind) -> &'static str {
     match kind {
         ResourcePolicyKind::FreeReward => "free_reward",
-        ResourcePolicyKind::AzurlaneOil => "azurlane.oil",
-        ResourcePolicyKind::BluearchiveAp => "bluearchive.ap",
-        ResourcePolicyKind::ArknightsSanity => "arknights.sanity",
+        ResourcePolicyKind::RegeneratingResource => "regenerating_resource",
     }
 }
 

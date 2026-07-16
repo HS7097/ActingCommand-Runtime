@@ -28,7 +28,7 @@ fn actinglab_runtime_adapter_is_disposable_and_emits_runtime_flow_data() {
             "--state-root",
             root.path().to_str().expect("state root"),
             "--instance",
-            "ak.cn",
+            "node.a",
         ])
         .output()
         .expect("run actinglab observe");
@@ -58,7 +58,7 @@ fn actinglab_runtime_adapter_is_disposable_and_emits_runtime_flow_data() {
             "--state-root",
             root.path().to_str().expect("state root"),
             "--instance",
-            "ak.cn",
+            "node.a",
         ])
         .output()
         .expect("run actinglab reset");

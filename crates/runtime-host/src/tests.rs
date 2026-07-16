@@ -622,13 +622,13 @@ fn concurrent_acquire(
 #[test]
 fn runtime_status_lists_configured_instances_and_live_scheduler_state() {
     let root = TempDir::new().expect("tempdir");
-    let ak_state = Arc::new(FakeState::default());
-    let ba_state = Arc::new(FakeState::default());
+    let state_a = Arc::new(FakeState::default());
+    let state_b = Arc::new(FakeState::default());
     let host = RuntimeHost::start(
         config(&root),
         Arc::new(FakeProvider::from_entries([
-            ("ba.jp".to_string(), instance_id(), Arc::clone(&ba_state)),
-            ("ak.cn".to_string(), instance_id(), Arc::clone(&ak_state)),
+            ("node.c".to_string(), instance_id(), Arc::clone(&state_b)),
+            ("node.a".to_string(), instance_id(), Arc::clone(&state_a)),
         ])),
     )
     .expect("runtime host");
@@ -642,19 +642,19 @@ fn runtime_status_lists_configured_instances_and_live_scheduler_state() {
     };
     assert_eq!(status.owner_epoch(), host.runtime_info().owner_epoch());
     assert_eq!(status.instances().len(), 2);
-    assert_eq!(status.instances()[0].instance_alias(), "ak.cn");
-    assert_eq!(status.instances()[1].instance_alias(), "ba.jp");
+    assert_eq!(status.instances()[0].instance_alias(), "node.a");
+    assert_eq!(status.instances()[1].instance_alias(), "node.c");
     assert!(
         status
             .instances()
             .iter()
             .all(|instance| !instance.lease_active())
     );
-    assert_eq!(ak_state.open_count.load(Ordering::Acquire), 0);
-    assert_eq!(ba_state.open_count.load(Ordering::Acquire), 0);
+    assert_eq!(state_a.open_count.load(Ordering::Acquire), 0);
+    assert_eq!(state_b.open_count.load(Ordering::Acquire), 0);
 
     let acquire = owner.request(RuntimeOperation::acquire_lease(
-        "ak.cn",
+        "node.a",
         owner.ids.mint_holder_id().expect("owner holder"),
     ));
     let acquire = owner.send(&acquire);
@@ -664,7 +664,7 @@ fn runtime_status_lists_configured_instances_and_live_scheduler_state() {
     ));
     let mut waiter = TestClient::connect(&host);
     let queued = waiter.request(RuntimeOperation::queue_lease(
-        "ak.cn",
+        "node.a",
         waiter.ids.mint_holder_id().expect("waiter holder"),
         LeaseQueuePolicy::new(LeasePriority::Normal, 1_000).expect("queue policy"),
     ));
@@ -680,11 +680,11 @@ fn runtime_status_lists_configured_instances_and_live_scheduler_state() {
     let RuntimeResult::Status { status } = live.result().expect("live status result") else {
         panic!("expected live runtime status");
     };
-    let ak = &status.instances()[0];
-    assert!(ak.lease_active());
-    assert_eq!(ak.queued_request_count(), 1);
-    assert!(!ak.takeover_cooldown_active());
-    assert_eq!(ak_state.open_count.load(Ordering::Acquire), 0);
+    let active = &status.instances()[0];
+    assert!(active.lease_active());
+    assert_eq!(active.queued_request_count(), 1);
+    assert!(!active.takeover_cooldown_active());
+    assert_eq!(state_a.open_count.load(Ordering::Acquire), 0);
 
     drop(waiter);
     drop(owner);
@@ -700,23 +700,23 @@ fn runtime_registry_is_immutable_and_rejects_duplicate_instance_ids() {
         Arc::new(
             FakeProvider::from_entries([
                 (
-                    "ak.cn".to_string(),
+                    "node.a".to_string(),
                     instance_id(),
                     Arc::new(FakeState::default()),
                 ),
                 (
-                    "hidden.jp".to_string(),
+                    "hidden.node".to_string(),
                     instance_id(),
                     Arc::clone(&hidden_state),
                 ),
             ])
-            .with_inventory(["ak.cn".to_string()]),
+            .with_inventory(["node.a".to_string()]),
         ),
     )
     .expect("runtime host");
     let mut client = TestClient::connect(&host);
     let hidden = client.request(RuntimeOperation::acquire_lease(
-        "hidden.jp",
+        "hidden.node",
         client.ids.mint_holder_id().expect("hidden holder"),
     ));
     let hidden = client.send(&hidden);
@@ -735,12 +735,12 @@ fn runtime_registry_is_immutable_and_rejects_duplicate_instance_ids() {
         config(&duplicate_root),
         Arc::new(FakeProvider::from_entries([
             (
-                "ak.cn".to_string(),
+                "node.a".to_string(),
                 duplicate_id,
                 Arc::new(FakeState::default()),
             ),
             (
-                "ba.jp".to_string(),
+                "node.c".to_string(),
                 duplicate_id,
                 Arc::new(FakeState::default()),
             ),
@@ -765,7 +765,7 @@ fn runtime_monitor_policy_persists_and_idempotent_updates_do_not_rewrite_state()
     let host = RuntimeHost::start(
         config(&root),
         Arc::new(FakeProvider::one(
-            "ak.cn",
+            "node.a",
             configured_id,
             Arc::clone(&state),
         )),
@@ -774,7 +774,7 @@ fn runtime_monitor_policy_persists_and_idempotent_updates_do_not_rewrite_state()
     let mut client = TestClient::connect(&host);
     let policy = RuntimeMonitorPolicy::new(1_000, "home", false).expect("policy");
     let configure = client.request(RuntimeOperation::ConfigureMonitor {
-        instance_alias: "ak.cn".to_string(),
+        instance_alias: "node.a".to_string(),
         policy: policy.clone(),
     });
     let configured = client.send(&configure);
@@ -814,7 +814,7 @@ fn runtime_monitor_policy_persists_and_idempotent_updates_do_not_rewrite_state()
     let first_length = fs::metadata(&journal).expect("monitor metadata").len();
 
     let repeated = client.request(RuntimeOperation::ConfigureMonitor {
-        instance_alias: "ak.cn".to_string(),
+        instance_alias: "node.a".to_string(),
         policy: policy.clone(),
     });
     assert!(matches!(
@@ -836,7 +836,7 @@ fn runtime_monitor_policy_persists_and_idempotent_updates_do_not_rewrite_state()
 
     let reopened = RuntimeHost::start(
         config(&root),
-        Arc::new(FakeProvider::one("ak.cn", configured_id, state)),
+        Arc::new(FakeProvider::one("node.a", configured_id, state)),
     )
     .expect("reopened runtime");
     let mut client = TestClient::connect(&reopened);
@@ -852,7 +852,7 @@ fn runtime_monitor_policy_persists_and_idempotent_updates_do_not_rewrite_state()
     );
 
     let clear = client.request(RuntimeOperation::ClearMonitor {
-        instance_alias: "ak.cn".to_string(),
+        instance_alias: "node.a".to_string(),
     });
     assert!(matches!(
         client.send(&clear).result(),
@@ -860,7 +860,7 @@ fn runtime_monitor_policy_persists_and_idempotent_updates_do_not_rewrite_state()
     ));
     let cleared_length = fs::metadata(&journal).expect("monitor metadata").len();
     let repeated_clear = client.request(RuntimeOperation::ClearMonitor {
-        instance_alias: "ak.cn".to_string(),
+        instance_alias: "node.a".to_string(),
     });
     assert!(matches!(
         client.send(&repeated_clear).result(),
@@ -878,10 +878,10 @@ fn runtime_monitor_policy_persists_and_idempotent_updates_do_not_rewrite_state()
 fn resident_monitor_runs_without_a_client_and_records_artifact_backed_lifecycle() {
     let root = TempDir::new().expect("tempdir");
     let state = Arc::new(FakeState::default());
-    let host = host_with_state(&root, "ak.cn", Arc::clone(&state));
+    let host = host_with_state(&root, "node.a", Arc::clone(&state));
     let mut client = TestClient::connect(&host);
     let configure = client.request(RuntimeOperation::ConfigureMonitor {
-        instance_alias: "ak.cn".to_string(),
+        instance_alias: "node.a".to_string(),
         policy: RuntimeMonitorPolicy::new(200, "home", false).expect("monitor policy"),
     });
     assert_eq!(
@@ -961,7 +961,7 @@ fn resident_monitor_runs_without_a_client_and_records_artifact_backed_lifecycle(
     assert_eq!(state.input_count.load(Ordering::Acquire), 0);
 
     let clear = client.request(RuntimeOperation::ClearMonitor {
-        instance_alias: "ak.cn".to_string(),
+        instance_alias: "node.a".to_string(),
     });
     assert_eq!(client.send(&clear).state(), RuntimeReceiptState::Completed);
     thread::sleep(Duration::from_millis(300));
@@ -979,10 +979,10 @@ fn resident_monitor_runs_without_a_client_and_records_artifact_backed_lifecycle(
 fn resident_monitor_uses_completion_based_cadence_without_a_tight_loop() {
     let root = TempDir::new().expect("tempdir");
     let state = Arc::new(FakeState::default());
-    let host = host_with_state(&root, "ak.cn", Arc::clone(&state));
+    let host = host_with_state(&root, "node.a", Arc::clone(&state));
     let mut client = TestClient::connect(&host);
     let configure = client.request(RuntimeOperation::ConfigureMonitor {
-        instance_alias: "ak.cn".to_string(),
+        instance_alias: "node.a".to_string(),
         policy: RuntimeMonitorPolicy::new(100, "home", false).expect("monitor policy"),
     });
     assert_eq!(
@@ -993,7 +993,7 @@ fn resident_monitor_uses_completion_based_cadence_without_a_tight_loop() {
         state.monitor_observation_count.load(Ordering::Acquire) >= 3
     });
     let clear = client.request(RuntimeOperation::ClearMonitor {
-        instance_alias: "ak.cn".to_string(),
+        instance_alias: "node.a".to_string(),
     });
     assert_eq!(client.send(&clear).state(), RuntimeReceiptState::Completed);
 
@@ -1018,10 +1018,10 @@ fn monitor_recovery_is_scheduler_admitted_without_executing_an_effect() {
     let root = TempDir::new().expect("tempdir");
     let state = Arc::new(FakeState::default());
     state.monitor_mode.store(1, Ordering::Release);
-    let host = host_with_state(&root, "ak.cn", Arc::clone(&state));
+    let host = host_with_state(&root, "node.a", Arc::clone(&state));
     let mut client = TestClient::connect(&host);
     let configure = client.request(RuntimeOperation::ConfigureMonitor {
-        instance_alias: "ak.cn".to_string(),
+        instance_alias: "node.a".to_string(),
         policy: RuntimeMonitorPolicy::new(500, "home", true).expect("monitor policy"),
     });
     assert_eq!(
@@ -1039,7 +1039,7 @@ fn monitor_recovery_is_scheduler_admitted_without_executing_an_effect() {
         .is_empty()
     });
     let clear = client.request(RuntimeOperation::ClearMonitor {
-        instance_alias: "ak.cn".to_string(),
+        instance_alias: "node.a".to_string(),
     });
     assert_eq!(client.send(&clear).state(), RuntimeReceiptState::Completed);
 
@@ -1081,11 +1081,11 @@ fn monitor_recovery_is_deferred_by_an_active_fenced_lease() {
     let root = TempDir::new().expect("tempdir");
     let state = Arc::new(FakeState::default());
     state.monitor_mode.store(1, Ordering::Release);
-    let host = host_with_state(&root, "ak.cn", Arc::clone(&state));
+    let host = host_with_state(&root, "node.a", Arc::clone(&state));
     let mut client = TestClient::connect(&host);
-    let (_, token) = client.acquire("ak.cn");
+    let (_, token) = client.acquire("node.a");
     let configure = client.request(RuntimeOperation::ConfigureMonitor {
-        instance_alias: "ak.cn".to_string(),
+        instance_alias: "node.a".to_string(),
         policy: RuntimeMonitorPolicy::new(500, "home", true).expect("monitor policy"),
     });
     assert_eq!(
@@ -1103,7 +1103,7 @@ fn monitor_recovery_is_deferred_by_an_active_fenced_lease() {
         .is_empty()
     });
     let clear = client.request(RuntimeOperation::ClearMonitor {
-        instance_alias: "ak.cn".to_string(),
+        instance_alias: "node.a".to_string(),
     });
     assert_eq!(client.send(&clear).state(), RuntimeReceiptState::Completed);
 
@@ -1144,10 +1144,10 @@ fn monitor_capture_failure_is_persisted_without_fake_success() {
     let root = TempDir::new().expect("tempdir");
     let state = Arc::new(FakeState::default());
     state.fail_capture.store(true, Ordering::Release);
-    let host = host_with_state(&root, "ak.cn", Arc::clone(&state));
+    let host = host_with_state(&root, "node.a", Arc::clone(&state));
     let mut client = TestClient::connect(&host);
     let configure = client.request(RuntimeOperation::ConfigureMonitor {
-        instance_alias: "ak.cn".to_string(),
+        instance_alias: "node.a".to_string(),
         policy: RuntimeMonitorPolicy::new(500, "home", false).expect("monitor policy"),
     });
     assert_eq!(
@@ -1167,7 +1167,7 @@ fn monitor_capture_failure_is_persisted_without_fake_success() {
         )
     });
     let clear = client.request(RuntimeOperation::ClearMonitor {
-        instance_alias: "ak.cn".to_string(),
+        instance_alias: "node.a".to_string(),
     });
     assert_eq!(client.send(&clear).state(), RuntimeReceiptState::Completed);
     assert!(
@@ -1223,12 +1223,12 @@ fn runtime_restart_fails_when_monitor_evidence_is_missing() {
     let state = Arc::new(FakeState::default());
     let host = RuntimeHost::start(
         config(&root),
-        Arc::new(FakeProvider::one("ak.cn", instance_id, Arc::clone(&state))),
+        Arc::new(FakeProvider::one("node.a", instance_id, Arc::clone(&state))),
     )
     .expect("runtime host");
     let mut client = TestClient::connect(&host);
     let configure = client.request(RuntimeOperation::ConfigureMonitor {
-        instance_alias: "ak.cn".to_string(),
+        instance_alias: "node.a".to_string(),
         policy: RuntimeMonitorPolicy::new(500, "home", false).expect("monitor policy"),
     });
     assert_eq!(
@@ -1252,7 +1252,7 @@ fn runtime_restart_fails_when_monitor_evidence_is_missing() {
         .expect("monitor artifact object key")
         .to_string();
     let clear = client.request(RuntimeOperation::ClearMonitor {
-        instance_alias: "ak.cn".to_string(),
+        instance_alias: "node.a".to_string(),
     });
     assert_eq!(client.send(&clear).state(), RuntimeReceiptState::Completed);
     drop(client);
@@ -1261,7 +1261,7 @@ fn runtime_restart_fails_when_monitor_evidence_is_missing() {
 
     let restarted = RuntimeHost::start(
         config(&root),
-        Arc::new(FakeProvider::one("ak.cn", instance_id, state)),
+        Arc::new(FakeProvider::one("node.a", instance_id, state)),
     );
     let error = match restarted {
         Ok(host) => {
@@ -1279,10 +1279,10 @@ fn invalid_monitor_provider_observation_poison_runtime_after_recording_failure()
     let root = TempDir::new().expect("tempdir");
     let state = Arc::new(FakeState::default());
     state.monitor_mode.store(usize::MAX, Ordering::Release);
-    let host = host_with_state(&root, "ak.cn", state);
+    let host = host_with_state(&root, "node.a", state);
     let mut client = TestClient::connect(&host);
     let configure = client.request(RuntimeOperation::ConfigureMonitor {
-        instance_alias: "ak.cn".to_string(),
+        instance_alias: "node.a".to_string(),
         policy: RuntimeMonitorPolicy::new(500, "home", false).expect("monitor policy"),
     });
     assert_eq!(
@@ -1311,7 +1311,7 @@ fn corrupt_monitor_registry_fails_runtime_startup() {
     let result = RuntimeHost::start(
         config(&root),
         Arc::new(FakeProvider::one(
-            "ak.cn",
+            "node.a",
             instance_id(),
             Arc::new(FakeState::default()),
         )),
@@ -1331,13 +1331,13 @@ fn corrupt_monitor_registry_fails_runtime_startup() {
 fn zero_stagger_host_requests_produce_one_grant_and_one_busy_denial() {
     let root = TempDir::new().expect("tempdir");
     let state = Arc::new(FakeState::default());
-    let host = host_with_state(&root, "ak.cn", Arc::clone(&state));
+    let host = host_with_state(&root, "node.a", Arc::clone(&state));
     let first = TestClient::connect(&host);
     let second = TestClient::connect(&host);
     let start = Arc::new(Barrier::new(3));
     let completed = Arc::new(Barrier::new(3));
-    let first = concurrent_acquire(first, "ak.cn", Arc::clone(&start), Arc::clone(&completed));
-    let second = concurrent_acquire(second, "ak.cn", Arc::clone(&start), Arc::clone(&completed));
+    let first = concurrent_acquire(first, "node.a", Arc::clone(&start), Arc::clone(&completed));
+    let second = concurrent_acquire(second, "node.a", Arc::clone(&start), Arc::clone(&completed));
 
     start.wait();
     completed.wait();
@@ -1368,11 +1368,11 @@ fn zero_stagger_host_requests_produce_one_grant_and_one_busy_denial() {
 fn queued_release_transfers_only_after_the_durable_transfer_fact() {
     let root = TempDir::new().expect("tempdir");
     let state = Arc::new(FakeState::default());
-    let host = host_with_state(&root, "ak.cn", Arc::clone(&state));
+    let host = host_with_state(&root, "node.a", Arc::clone(&state));
     let mut first = TestClient::connect(&host);
     let mut second = TestClient::connect(&host);
-    let (_, old_token) = first.acquire("ak.cn");
-    let (queued_request, status) = second.queue("ak.cn", LeasePriority::Normal, 2_000);
+    let (_, old_token) = first.acquire("node.a");
+    let (queued_request, status) = second.queue("node.a", LeasePriority::Normal, 2_000);
     assert!(!status.preempt_requested());
 
     let release = first.request(RuntimeOperation::ReleaseLease {
@@ -1424,13 +1424,13 @@ fn queued_release_transfers_only_after_the_durable_transfer_fact() {
 fn high_priority_queue_transfers_immediately_at_an_idle_safe_boundary() {
     let root = TempDir::new().expect("tempdir");
     let state = Arc::new(FakeState::default());
-    let host = host_with_state(&root, "ak.cn", Arc::clone(&state));
+    let host = host_with_state(&root, "node.a", Arc::clone(&state));
     let mut first = TestClient::connect(&host);
     let mut second = TestClient::connect(&host);
-    let (_, old_token) = first.acquire("ak.cn");
+    let (_, old_token) = first.acquire("node.a");
     let holder = second.ids.mint_holder_id().expect("holder id");
     let queued_request = second.request(RuntimeOperation::queue_lease(
-        "ak.cn",
+        "node.a",
         holder,
         LeaseQueuePolicy::new(LeasePriority::High, 2_000).expect("queue policy"),
     ));
@@ -1472,10 +1472,10 @@ fn high_priority_preemption_waits_for_the_durable_input_outcome() {
     let root = TempDir::new().expect("tempdir");
     let state = Arc::new(FakeState::default());
     state.block_input.store(true, Ordering::Release);
-    let host = host_with_state(&root, "ak.cn", Arc::clone(&state));
+    let host = host_with_state(&root, "node.a", Arc::clone(&state));
     let mut first = TestClient::connect(&host);
     let mut second = TestClient::connect(&host);
-    let (_, old_token) = first.acquire("ak.cn");
+    let (_, old_token) = first.acquire("node.a");
     let input_token = old_token.clone();
     let input_thread = thread::spawn(move || {
         let input = first.request(RuntimeOperation::Input {
@@ -1489,7 +1489,7 @@ fn high_priority_preemption_waits_for_the_durable_input_outcome() {
         state.input_started.load(Ordering::Acquire)
     });
 
-    let (queued_request, status) = second.queue("ak.cn", LeasePriority::High, 2_000);
+    let (queued_request, status) = second.queue("node.a", LeasePriority::High, 2_000);
     assert!(status.preempt_requested());
     let poll = second.request(RuntimeOperation::PollQueuedLease {
         queued_request_id: status.request_id(),
@@ -1548,12 +1548,12 @@ fn high_priority_preemption_waits_for_the_durable_input_outcome() {
 fn queued_request_is_connection_bound_and_cancellation_is_ledger_visible() {
     let root = TempDir::new().expect("tempdir");
     let state = Arc::new(FakeState::default());
-    let host = host_with_state(&root, "ak.cn", state);
+    let host = host_with_state(&root, "node.a", state);
     let mut first = TestClient::connect(&host);
     let mut second = TestClient::connect(&host);
     let mut intruder = TestClient::connect(&host);
-    let (_, token) = first.acquire("ak.cn");
-    let (queued_request, status) = second.queue("ak.cn", LeasePriority::Normal, 2_000);
+    let (_, token) = first.acquire("node.a");
+    let (queued_request, status) = second.queue("node.a", LeasePriority::Normal, 2_000);
 
     let poll = intruder.request(RuntimeOperation::PollQueuedLease {
         queued_request_id: status.request_id(),
@@ -1594,11 +1594,11 @@ fn queued_request_is_connection_bound_and_cancellation_is_ledger_visible() {
 fn disconnect_promotes_another_connections_queue_without_opening_a_backend() {
     let root = TempDir::new().expect("tempdir");
     let state = Arc::new(FakeState::default());
-    let host = host_with_state(&root, "ak.cn", Arc::clone(&state));
+    let host = host_with_state(&root, "node.a", Arc::clone(&state));
     let mut first = TestClient::connect(&host);
     let mut second = TestClient::connect(&host);
-    let _ = first.acquire("ak.cn");
-    let (queued_request, status) = second.queue("ak.cn", LeasePriority::Normal, 2_000);
+    let _ = first.acquire("node.a");
+    let (queued_request, status) = second.queue("node.a", LeasePriority::Normal, 2_000);
     drop(first);
 
     let started = Instant::now();
@@ -1641,7 +1641,7 @@ fn lease_expiry_promotes_the_queue_and_fences_the_expired_token() {
     let root = TempDir::new().expect("tempdir");
     let state = Arc::new(FakeState::default());
     let provider = Arc::new(FakeProvider::one(
-        "ak.cn",
+        "node.a",
         instance_id(),
         Arc::clone(&state),
     ));
@@ -1657,8 +1657,8 @@ fn lease_expiry_promotes_the_queue_and_fences_the_expired_token() {
     .expect("runtime host");
     let mut first = TestClient::connect(&host);
     let mut second = TestClient::connect(&host);
-    let (_, expired_token) = first.acquire("ak.cn");
-    let (queued_request, status) = second.queue("ak.cn", LeasePriority::Normal, 1_000);
+    let (_, expired_token) = first.acquire("node.a");
+    let (queued_request, status) = second.queue("node.a", LeasePriority::Normal, 1_000);
 
     let started = Instant::now();
     let new_token = loop {
@@ -1701,11 +1701,11 @@ fn lease_expiry_promotes_the_queue_and_fences_the_expired_token() {
 fn queued_timeout_is_a_visible_terminal_denial() {
     let root = TempDir::new().expect("tempdir");
     let state = Arc::new(FakeState::default());
-    let host = host_with_state(&root, "ak.cn", state);
+    let host = host_with_state(&root, "node.a", state);
     let mut first = TestClient::connect(&host);
     let mut second = TestClient::connect(&host);
-    let (_, token) = first.acquire("ak.cn");
-    let (queued_request, status) = second.queue("ak.cn", LeasePriority::Normal, 50);
+    let (_, token) = first.acquire("node.a");
+    let (queued_request, status) = second.queue("node.a", LeasePriority::Normal, 50);
     thread::sleep(Duration::from_millis(100));
 
     let poll = second.request(RuntimeOperation::PollQueuedLease {
@@ -1735,11 +1735,11 @@ fn queued_timeout_is_a_visible_terminal_denial() {
 #[test]
 fn different_instances_acquire_and_execute_independently() {
     let root = TempDir::new().expect("tempdir");
-    let ak_state = Arc::new(FakeState::default());
-    let ba_state = Arc::new(FakeState::default());
+    let state_a = Arc::new(FakeState::default());
+    let state_b = Arc::new(FakeState::default());
     let provider = FakeProvider::from_entries([
-        ("ak.cn".to_string(), instance_id(), Arc::clone(&ak_state)),
-        ("ba.jp".to_string(), instance_id(), Arc::clone(&ba_state)),
+        ("node.a".to_string(), instance_id(), Arc::clone(&state_a)),
+        ("node.c".to_string(), instance_id(), Arc::clone(&state_b)),
     ]);
     let host = RuntimeHost::start(config(&root), Arc::new(provider)).expect("runtime host");
     let first = TestClient::connect(&host);
@@ -1761,19 +1761,19 @@ fn different_instances_acquire_and_execute_independently() {
             );
         })
     };
-    let first = run(first, "ak.cn", Arc::clone(&start));
-    let second = run(second, "ba.jp", Arc::clone(&start));
+    let first = run(first, "node.a", Arc::clone(&start));
+    let second = run(second, "node.c", Arc::clone(&start));
 
     start.wait();
     first.join().expect("first instance client");
     second.join().expect("second instance client");
-    for state in [&ak_state, &ba_state] {
+    for state in [&state_a, &state_b] {
         assert_eq!(state.open_count.load(Ordering::Acquire), 1);
         assert_eq!(state.input_count.load(Ordering::Acquire), 1);
         assert_eq!(state.close_count.load(Ordering::Acquire), 0);
     }
     host.close().expect("close host");
-    for state in [&ak_state, &ba_state] {
+    for state in [&state_a, &state_b] {
         assert_eq!(state.close_count.load(Ordering::Acquire), 1);
     }
 }
@@ -1782,14 +1782,14 @@ fn different_instances_acquire_and_execute_independently() {
 fn readonly_observation_uses_one_correlation_and_typed_durable_events() {
     let root = TempDir::new().expect("tempdir");
     let state = Arc::new(FakeState::default());
-    let host = host_with_state(&root, "ak.cn", Arc::clone(&state));
+    let host = host_with_state(&root, "node.a", Arc::clone(&state));
     let mut client = TestClient::connect(&host);
     let correlation = client.ids.mint_correlation_id().expect("correlation");
     let correlation_id = *correlation.transport();
     let observe = client.request_with_correlation(
         correlation,
         RuntimeOperation::ObserveReadonly {
-            instance_alias: "ak.cn".to_string(),
+            instance_alias: "node.a".to_string(),
         },
     );
     let completed = client.send(&observe);
@@ -1835,14 +1835,14 @@ fn readonly_observation_uses_one_correlation_and_typed_durable_events() {
 fn bounded_capture_sequence_returns_unique_verified_observations_without_input() {
     let root = TempDir::new().expect("tempdir");
     let state = Arc::new(FakeState::default());
-    let host = host_with_state(&root, "ak.cn", Arc::clone(&state));
+    let host = host_with_state(&root, "node.a", Arc::clone(&state));
     let mut client = TestClient::connect(&host);
     let correlation = client.ids.mint_correlation_id().expect("correlation");
     let correlation_id = *correlation.transport();
     let capture = client.request_with_correlation(
         correlation,
         RuntimeOperation::CaptureSequence {
-            instance_alias: "ak.cn".to_string(),
+            instance_alias: "node.a".to_string(),
             spec: CaptureSequenceSpec::new(3, 5).expect("sequence spec"),
         },
     );
@@ -1925,14 +1925,14 @@ fn capture_sequence_partial_failure_keeps_evidence_without_fake_success_or_input
     let root = TempDir::new().expect("tempdir");
     let state = Arc::new(FakeState::default());
     state.fail_capture_on.store(2, Ordering::Release);
-    let host = host_with_state(&root, "ak.cn", Arc::clone(&state));
+    let host = host_with_state(&root, "node.a", Arc::clone(&state));
     let mut client = TestClient::connect(&host);
     let correlation = client.ids.mint_correlation_id().expect("correlation");
     let correlation_id = *correlation.transport();
     let request = client.request_with_correlation(
         correlation,
         RuntimeOperation::CaptureSequence {
-            instance_alias: "ak.cn".to_string(),
+            instance_alias: "node.a".to_string(),
             spec: CaptureSequenceSpec::new(3, 0).expect("sequence spec"),
         },
     );
@@ -1978,10 +1978,10 @@ fn capture_sequence_partial_failure_keeps_evidence_without_fake_success_or_input
 fn capture_sequence_bounds_are_rejected_before_backend_open() {
     let root = TempDir::new().expect("tempdir");
     let state = Arc::new(FakeState::default());
-    let host = host_with_state(&root, "ak.cn", Arc::clone(&state));
+    let host = host_with_state(&root, "node.a", Arc::clone(&state));
     let mut client = TestClient::connect(&host);
     let valid = client.request(RuntimeOperation::CaptureSequence {
-        instance_alias: "ak.cn".to_string(),
+        instance_alias: "node.a".to_string(),
         spec: CaptureSequenceSpec::new(1, 0).expect("valid spec"),
     });
     let mut encoded = serde_json::to_value(valid).expect("request JSON");
@@ -2003,12 +2003,12 @@ fn capture_sequence_bounds_are_rejected_before_backend_open() {
 fn readonly_artifact_store_failure_is_fatal_without_fake_success() {
     let root = TempDir::new().expect("tempdir");
     let state = Arc::new(FakeState::default());
-    let host = host_with_state(&root, "ak.cn", Arc::clone(&state));
+    let host = host_with_state(&root, "node.a", Arc::clone(&state));
     fs::write(root.path().join("artifacts"), b"blocks artifact directory")
         .expect("block artifact directory");
     let mut client = TestClient::connect(&host);
     let observe = client.request(RuntimeOperation::ObserveReadonly {
-        instance_alias: "ak.cn".to_string(),
+        instance_alias: "node.a".to_string(),
     });
 
     let failed = client.send(&observe);
@@ -2039,14 +2039,14 @@ fn readonly_failures_are_visible_and_terminal_without_fake_success() {
     let root = TempDir::new().expect("tempdir");
     let state = Arc::new(FakeState::default());
     state.fail_capture.store(true, Ordering::Release);
-    let host = host_with_state(&root, "ak.cn", Arc::clone(&state));
+    let host = host_with_state(&root, "node.a", Arc::clone(&state));
     let mut client = TestClient::connect(&host);
     let correlation = client.ids.mint_correlation_id().expect("correlation");
     let correlation_id = *correlation.transport();
     let observe = client.request_with_correlation(
         correlation,
         RuntimeOperation::ObserveReadonly {
-            instance_alias: "ak.cn".to_string(),
+            instance_alias: "node.a".to_string(),
         },
     );
     let failed = client.send(&observe);
@@ -2073,13 +2073,13 @@ fn readonly_failures_are_visible_and_terminal_without_fake_success() {
 fn safe_reset_owns_lease_input_and_release_under_one_correlation() {
     let root = TempDir::new().expect("tempdir");
     let state = Arc::new(FakeState::default());
-    let host = host_with_state(&root, "ak.cn", Arc::clone(&state));
+    let host = host_with_state(&root, "node.a", Arc::clone(&state));
     let mut client = TestClient::connect(&host);
     let correlation = client.ids.mint_correlation_id().expect("correlation");
     let correlation_id = *correlation.transport();
     let request = client.request_with_correlation(
         correlation,
-        RuntimeOperation::safe_reset("ak.cn", client.ids.mint_holder_id().expect("holder")),
+        RuntimeOperation::safe_reset("node.a", client.ids.mint_holder_id().expect("holder")),
     );
     let receipt = client.send(&request);
     assert_eq!(receipt.state(), RuntimeReceiptState::Completed);
@@ -2444,11 +2444,11 @@ fn contained_task_terminal_is_absorbing_and_rejections_are_audited() {
 fn safe_reset_replay_without_connection_cache_does_not_repeat_input() {
     let root = TempDir::new().expect("tempdir");
     let state = Arc::new(FakeState::default());
-    let host = host_with_state(&root, "ak.cn", Arc::clone(&state));
+    let host = host_with_state(&root, "node.a", Arc::clone(&state));
     let ids = IdentifierIssuer::new().expect("identifier issuer");
     let request = runtime_request(
         &ids,
-        RuntimeOperation::safe_reset("ak.cn", ids.mint_holder_id().expect("holder")),
+        RuntimeOperation::safe_reset("node.a", ids.mint_holder_id().expect("holder")),
     );
     let connection = ConnectionId::new(77).expect("connection");
 
@@ -2479,13 +2479,13 @@ fn safe_reset_replay_recovers_from_durable_ledger_after_host_restart() {
     let ids = IdentifierIssuer::new().expect("identifier issuer");
     let request = runtime_request(
         &ids,
-        RuntimeOperation::safe_reset("ak.cn", ids.mint_holder_id().expect("holder")),
+        RuntimeOperation::safe_reset("node.a", ids.mint_holder_id().expect("holder")),
     );
     let connection = ConnectionId::new(88).expect("connection");
     let first = RuntimeHost::start(
         config(&root),
         Arc::new(FakeProvider::one(
-            "ak.cn",
+            "node.a",
             fixed_instance,
             Arc::clone(&state),
         )),
@@ -2499,7 +2499,7 @@ fn safe_reset_replay_recovers_from_durable_ledger_after_host_restart() {
     let second = RuntimeHost::start(
         config(&root),
         Arc::new(FakeProvider::one(
-            "ak.cn",
+            "node.a",
             fixed_instance,
             Arc::clone(&state),
         )),
@@ -2520,7 +2520,7 @@ fn safe_reset_replay_recovers_from_durable_ledger_after_host_restart() {
 fn typed_ipc_routes_input_once_and_correlates_ledger_events() {
     let root = TempDir::new().expect("tempdir");
     let state = Arc::new(FakeState::default());
-    let host = host_with_state(&root, "ak.cn", Arc::clone(&state));
+    let host = host_with_state(&root, "node.a", Arc::clone(&state));
     let mut client = TestClient::connect(&host);
     let health = client.request(RuntimeOperation::Health);
     let health = client.send_result(&health);
@@ -2530,7 +2530,7 @@ fn typed_ipc_routes_input_once_and_correlates_ledger_events() {
         host.fatal_error()
     );
     let acquire_request = client.request(RuntimeOperation::acquire_lease(
-        "ak.cn",
+        "node.a",
         client.ids.mint_holder_id().expect("holder id"),
     ));
     let acquire_receipt = client.send_result(&acquire_request);
@@ -2669,13 +2669,13 @@ fn typed_ipc_routes_input_once_and_correlates_ledger_events() {
 fn one_correlation_queries_the_complete_lease_input_release_sequence() {
     let root = TempDir::new().expect("tempdir");
     let state = Arc::new(FakeState::default());
-    let host = host_with_state(&root, "ak.cn", state);
+    let host = host_with_state(&root, "node.a", state);
     let mut client = TestClient::connect(&host);
     let correlation_id = client.ids.mint_correlation_id().expect("correlation id");
     let correlation_transport = *correlation_id.transport();
     let acquire = client.request_with_correlation(
         correlation_id,
-        RuntimeOperation::acquire_lease("ak.cn", client.ids.mint_holder_id().expect("holder id")),
+        RuntimeOperation::acquire_lease("node.a", client.ids.mint_holder_id().expect("holder id")),
     );
     let acquire_id = acquire.request_id();
     let receipt = client.send(&acquire);
@@ -2759,7 +2759,7 @@ fn one_correlation_queries_the_complete_lease_input_release_sequence() {
 fn runtime_is_the_single_writer_for_one_correlated_resource_authoring_sequence() {
     let root = TempDir::new().expect("tempdir");
     let state = Arc::new(FakeState::default());
-    let host = host_with_state(&root, "ak.cn", state);
+    let host = host_with_state(&root, "node.a", state);
     let ids = IdentifierIssuer::new().expect("identifier issuer");
     let correlation = ids.mint_correlation_id().expect("correlation id");
     let correlation_transport = *correlation.transport();
@@ -2849,7 +2849,7 @@ fn runtime_is_the_single_writer_for_one_correlated_resource_authoring_sequence()
 fn runtime_rejects_forged_non_lab_resource_authoring_ingress_without_ledger_effect() {
     let root = TempDir::new().expect("tempdir");
     let state = Arc::new(FakeState::default());
-    let host = host_with_state(&root, "ak.cn", state);
+    let host = host_with_state(&root, "node.a", state);
     let ids = IdentifierIssuer::new().expect("identifier issuer");
     let correlation = ids.mint_correlation_id().expect("correlation id");
     let correlation_transport = *correlation.transport();
@@ -2907,7 +2907,7 @@ fn runtime_rejects_forged_non_lab_resource_authoring_ingress_without_ledger_effe
 fn acquire_idempotency_recovers_its_durable_terminal_without_a_connection_cache() {
     let root = TempDir::new().expect("tempdir");
     let state = Arc::new(FakeState::default());
-    let host = host_with_state(&root, "ak.cn", Arc::clone(&state));
+    let host = host_with_state(&root, "node.a", Arc::clone(&state));
     let ids = IdentifierIssuer::new().expect("identifier issuer");
     let request = RuntimeRequest::new(
         ids.mint_request_id().expect("request id"),
@@ -2916,7 +2916,7 @@ fn acquire_idempotency_recovers_its_durable_terminal_without_a_connection_cache(
         EventActor::Cli,
         EventSource::Cli,
         unix_ms_now().expect("wall clock"),
-        RuntimeOperation::acquire_lease("ak.cn", ids.mint_holder_id().expect("holder id")),
+        RuntimeOperation::acquire_lease("node.a", ids.mint_holder_id().expect("holder id")),
     )
     .expect("runtime request");
     let connection = ConnectionId::new(99).expect("connection id");
@@ -2973,12 +2973,12 @@ fn acquire_idempotency_recovers_its_durable_terminal_without_a_connection_cache(
 fn renew_and_release_idempotency_survive_connection_cache_loss() {
     let root = TempDir::new().expect("tempdir");
     let state = Arc::new(FakeState::default());
-    let host = host_with_state(&root, "ak.cn", Arc::clone(&state));
+    let host = host_with_state(&root, "node.a", Arc::clone(&state));
     let ids = IdentifierIssuer::new().expect("identifier issuer");
     let connection_id = ConnectionId::new(99).expect("connection id");
     let acquire = runtime_request(
         &ids,
-        RuntimeOperation::acquire_lease("ak.cn", ids.mint_holder_id().expect("holder id")),
+        RuntimeOperation::acquire_lease("node.a", ids.mint_holder_id().expect("holder id")),
     );
     let receipt = host
         .process_request_for_test(&acquire, connection_id)
@@ -3042,13 +3042,13 @@ fn renew_and_release_idempotency_survive_connection_cache_loss() {
 fn second_owner_is_rejected_and_clean_restart_gets_a_new_epoch() {
     let root = TempDir::new().expect("tempdir");
     let state = Arc::new(FakeState::default());
-    let first = host_with_state(&root, "ak.cn", Arc::clone(&state));
+    let first = host_with_state(&root, "node.a", Arc::clone(&state));
     assert!(root.path().join(RUNTIME_INFO_FILE).is_file());
     let first_epoch = first.runtime_info().owner_epoch();
     let error = match RuntimeHost::start(
         config(&root),
         Arc::new(FakeProvider::one(
-            "ak.cn",
+            "node.a",
             instance_id(),
             Arc::clone(&state),
         )),
@@ -3064,7 +3064,7 @@ fn second_owner_is_rejected_and_clean_restart_gets_a_new_epoch() {
     first.close().expect("close first host");
     assert!(!root.path().join(RUNTIME_INFO_FILE).exists());
 
-    let second = host_with_state(&root, "ak.cn", state);
+    let second = host_with_state(&root, "node.a", state);
     assert_ne!(second.runtime_info().owner_epoch(), first_epoch);
     second.close().expect("close second host");
 }
@@ -3073,7 +3073,7 @@ fn second_owner_is_rejected_and_clean_restart_gets_a_new_epoch() {
 fn owner_journal_recovers_only_an_incomplete_final_record() {
     let root = TempDir::new().expect("tempdir");
     let state = Arc::new(FakeState::default());
-    host_with_state(&root, "ak.cn", Arc::clone(&state))
+    host_with_state(&root, "node.a", Arc::clone(&state))
         .close()
         .expect("close initial host");
     let owner_path = root.path().join(crate::owner::OWNER_FILE_NAME);
@@ -3084,7 +3084,7 @@ fn owner_journal_recovers_only_an_incomplete_final_record() {
         .write_all(br#"{"incomplete"#)
         .expect("append incomplete tail");
 
-    let recovered = host_with_state(&root, "ak.cn", state);
+    let recovered = host_with_state(&root, "node.a", state);
     recovered.close().expect("close recovered host");
     let content = std::fs::read(&owner_path).expect("read owner journal");
     assert!(content.ends_with(b"\n"));
@@ -3095,7 +3095,7 @@ fn owner_journal_recovers_only_an_incomplete_final_record() {
 fn complete_owner_journal_corruption_is_fatal() {
     let root = TempDir::new().expect("tempdir");
     let state = Arc::new(FakeState::default());
-    host_with_state(&root, "ak.cn", Arc::clone(&state))
+    host_with_state(&root, "node.a", Arc::clone(&state))
         .close()
         .expect("close initial host");
     let owner_path = root.path().join(crate::owner::OWNER_FILE_NAME);
@@ -3107,7 +3107,7 @@ fn complete_owner_journal_corruption_is_fatal() {
         .expect("append corruption");
     let result = RuntimeHost::start(
         config(&root),
-        Arc::new(FakeProvider::one("ak.cn", instance_id(), state)),
+        Arc::new(FakeProvider::one("node.a", instance_id(), state)),
     );
     let error = match result {
         Ok(host) => {
@@ -3124,14 +3124,14 @@ fn complete_owner_journal_corruption_is_fatal() {
 fn connection_drop_revokes_lease_without_opening_the_lazy_backend() {
     let root = TempDir::new().expect("tempdir");
     let state = Arc::new(FakeState::default());
-    let host = host_with_state(&root, "ak.cn", Arc::clone(&state));
+    let host = host_with_state(&root, "node.a", Arc::clone(&state));
     let mut client = TestClient::connect(&host);
-    let _ = client.acquire("ak.cn");
+    let _ = client.acquire("node.a");
     drop(client);
     assert_eq!(state.open_count.load(Ordering::Acquire), 0);
 
     let mut replacement = TestClient::connect(&host);
-    let (_, token) = replacement.acquire("ak.cn");
+    let (_, token) = replacement.acquire("node.a");
     let release = replacement.request(RuntimeOperation::ReleaseLease { token });
     assert_eq!(
         replacement.send(&release).state(),
@@ -3146,9 +3146,9 @@ fn connection_drop_revokes_lease_without_opening_the_lazy_backend() {
 fn every_fencing_field_is_checked_before_backend_use() {
     let root = TempDir::new().expect("tempdir");
     let state = Arc::new(FakeState::default());
-    let host = host_with_state(&root, "ak.cn", Arc::clone(&state));
+    let host = host_with_state(&root, "node.a", Arc::clone(&state));
     let mut client = TestClient::connect(&host);
-    let (_, token) = client.acquire("ak.cn");
+    let (_, token) = client.acquire("node.a");
     let ids = IdentifierIssuer::new().expect("identifier issuer");
     let stale_epoch = LeaseToken::new(
         *ids.mint_owner_epoch().expect("owner epoch").transport(),
@@ -3219,9 +3219,9 @@ fn backend_failure_is_visible_and_revokes_the_guard() {
     let root = TempDir::new().expect("tempdir");
     let state = Arc::new(FakeState::default());
     state.fail_input.store(true, Ordering::Release);
-    let host = host_with_state(&root, "ak.cn", Arc::clone(&state));
+    let host = host_with_state(&root, "node.a", Arc::clone(&state));
     let mut client = TestClient::connect(&host);
-    let (_, token) = client.acquire("ak.cn");
+    let (_, token) = client.acquire("node.a");
     let input = client.request(RuntimeOperation::Input {
         token,
         action: InputAction::Reset,
@@ -3245,7 +3245,7 @@ fn expired_unopened_lease_is_reclaimed_before_a_new_grant() {
     let root = TempDir::new().expect("tempdir");
     let state = Arc::new(FakeState::default());
     let provider = Arc::new(FakeProvider::one(
-        "ak.cn",
+        "node.a",
         instance_id(),
         Arc::clone(&state),
     ));
@@ -3260,11 +3260,11 @@ fn expired_unopened_lease_is_reclaimed_before_a_new_grant() {
     )
     .expect("runtime host");
     let mut first = TestClient::connect(&host);
-    let _ = first.acquire("ak.cn");
+    let _ = first.acquire("node.a");
     thread::sleep(Duration::from_millis(1_100));
     assert_eq!(state.open_count.load(Ordering::Acquire), 0);
     let mut second = TestClient::connect(&host);
-    let (_, token) = second.acquire("ak.cn");
+    let (_, token) = second.acquire("node.a");
     let release = second.request(RuntimeOperation::ReleaseLease { token });
     second.send(&release);
     drop(first);

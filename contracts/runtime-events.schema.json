@@ -87,7 +87,7 @@
       "properties": {
         "id": { "type": "string" },
         "profileId": { "type": "string" },
-        "game": { "type": "string", "enum": ["Azur", "Ark", "BA"] },
+        "game": { "type": "string", "minLength": 1, "maxLength": 128 },
         "server": { "$ref": "#/$defs/serverKey" },
         "locale": { "type": "string" },
         "resolution": { "$ref": "#/$defs/resolution" },

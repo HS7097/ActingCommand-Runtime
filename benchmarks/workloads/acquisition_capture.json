@@ -1,9 +1,9 @@
 {
   "id": "acq-20260614-000001",
-  "profileId": "alas-jp-main",
-  "game": "Azur",
-  "server": "alas.jp",
-  "locale": "ja-JP",
+  "profileId": "fixture-profile",
+  "game": "fixture-game",
+  "server": "engine-a.region-1",
+  "locale": "en-US",
   "resolution": {
     "width": 1280,
     "height": 720,
@@ -16,6 +16,6 @@
   "imageHash": "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
   "sourceTrigger": "reward_screen",
   "recognitionState": "pending",
-  "labels": ["coin", "oil", "event_point"],
+  "labels": ["resource-a", "resource-b", "resource-c"],
   "retentionClass": "recent"
 }

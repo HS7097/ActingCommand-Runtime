@@ -308,11 +308,9 @@ impl DriveNavigationGraph {
 pub fn reject_dangerous_semantic_id(label: &str, value: &str) -> Result<(), DriveDecisionError> {
     let lower = value.to_ascii_lowercase();
     let dangerous = [
-        "gacha",
         "shop",
         "purchase",
         "buy",
-        "recruit",
         "construct",
         "retire",
         "delete",
@@ -321,8 +319,6 @@ pub fn reject_dangerous_semantic_id(label: &str, value: &str) -> Result<(), Driv
         "refill",
         "paid",
         "premium",
-        "exercise",
-        "pvp",
     ];
     if dangerous.iter().any(|word| lower.contains(word)) {
         return Err(DriveDecisionError::safety(
@@ -592,13 +588,13 @@ mod tests {
     use super::*;
 
     const NAVIGATION: &str = r#"{
-        "game":"arknights",
+        "game":"fixture01",
         "navigation":[
-            {"id":"home_to_terminal","from_page":"arknights/home","to_page":"arknights/terminal","click":{"kind":"rect","x":10,"y":20,"width":20,"height":10}},
-            {"id":"terminal_to_stage","from_page":"arknights/terminal","to_page":"arknights/stage","click":{"kind":"target_center","target_id":"stage_entry"}}
+            {"id":"home_to_terminal","from_page":"fixture01/home","to_page":"fixture01/terminal","click":{"kind":"rect","x":10,"y":20,"width":20,"height":10}},
+            {"id":"terminal_to_stage","from_page":"fixture01/terminal","to_page":"fixture01/stage","click":{"kind":"target_center","target_id":"stage_entry"}}
         ],
         "destructive_actions":[
-            {"page":"arknights/home","click":{"kind":"rect","x":100,"y":100,"width":20,"height":20}}
+            {"page":"fixture01/home","click":{"kind":"rect","x":100,"y":100,"width":20,"height":20}}
         ],
         "control_points":[{"name":"safe","point":[1,2]}]
     }"#;
@@ -607,12 +603,12 @@ mod tests {
     fn graph_parses_and_returns_shortest_canonical_route() {
         let graph = DriveNavigationGraph::parse_json(NAVIGATION).expect("graph");
         let route = graph
-            .find_route("arknights/home", &graph.canonical_page("stage"))
+            .find_route("fixture01/home", &graph.canonical_page("stage"))
             .expect("route");
 
         assert_eq!(route.len(), 2);
         assert_eq!(route[0].id(), "home_to_terminal");
-        assert_eq!(route[1].to_page(), "arknights/stage");
+        assert_eq!(route[1].to_page(), "fixture01/stage");
         assert_eq!(graph.control_points(), ["safe"]);
         graph.validate_route(&route).expect("safe route");
     }
@@ -622,8 +618,8 @@ mod tests {
         let graph = DriveNavigationGraph::parse_json(NAVIGATION).expect("graph");
         let edge = DriveNavigationEdge {
             id: "open_shop".to_string(),
-            from_page: "arknights/home".to_string(),
-            to_page: "arknights/shop".to_string(),
+            from_page: "fixture01/home".to_string(),
+            to_page: "fixture01/shop".to_string(),
             input: DriveSemanticInput::Tap {
                 rect: PackRect {
                     x: 105,

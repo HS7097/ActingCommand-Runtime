@@ -612,7 +612,7 @@ mod tests {
         let operations = vec![candidate("fallback", "any"), candidate("specific", "home")];
 
         let selected =
-            select_run_operation("arknights", "arknights/home", &operations).expect("operation");
+            select_run_operation("fixture01", "fixture01/home", &operations).expect("operation");
 
         assert_eq!(selected.id(), "specific");
     }
@@ -710,7 +710,7 @@ mod tests {
     fn target_confirmation_completes_without_operation() {
         let mut machine = machine(1, 4, Some("home"));
         machine
-            .observe_page(Some("arknights/home".to_string()))
+            .observe_page(Some("fixture01/home".to_string()))
             .expect("page");
 
         let directive = machine.next_directive(&[]).expect("directive");
@@ -751,7 +751,7 @@ mod tests {
 
     #[test]
     fn exhausted_recovery_pauses_for_human() {
-        let config = RunStateConfig::new("arknights", None, true, 1, 4).expect("config");
+        let config = RunStateConfig::new("fixture01", None, true, 1, 4).expect("config");
         let mut machine = RunStateMachine::new(config, 1).expect("machine");
         let operations = [candidate("open_terminal", "home")];
         machine
@@ -850,7 +850,7 @@ mod tests {
         target_page: Option<&str>,
     ) -> RunStateMachine {
         let config = RunStateConfig::new(
-            "arknights",
+            "fixture01",
             target_page.map(str::to_string),
             true,
             max_task_retries,

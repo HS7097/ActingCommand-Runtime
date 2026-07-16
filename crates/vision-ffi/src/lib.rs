@@ -545,8 +545,8 @@ mod tests {
     fn nn_classifies_frame() {
         let request = NnInferenceRequest {
             frame: test_frame(),
-            model_id: "ak-recruit-entry".to_string(),
-            labels: vec!["arknights.recruit".to_string(), "unknown".to_string()],
+            model_id: "fixture-model-a".to_string(),
+            labels: vec!["fixture.label".to_string(), "unknown".to_string()],
             timeout_ms: 1_000,
         };
         let mut boundary = VisionFfiBoundary::new(
@@ -564,7 +564,7 @@ mod tests {
         let result = boundary.classify(request).expect("nn result");
 
         assert_eq!(result.backend, VisionBackendKind::OnnxRuntime);
-        assert_eq!(result.labels[0].label, "arknights.recruit");
+        assert_eq!(result.labels[0].label, "fixture.label");
         assert!(result.labels[0].score > 0.9);
     }
 
@@ -619,8 +619,8 @@ mod tests {
     fn unavailable_nn_backend_fails_loudly() {
         let request = NnInferenceRequest {
             frame: test_frame(),
-            model_id: "ak-recruit-entry".to_string(),
-            labels: vec!["arknights.recruit".to_string()],
+            model_id: "fixture-model-a".to_string(),
+            labels: vec!["fixture.label".to_string()],
             timeout_ms: 1_000,
         };
         let mut backend = UnavailableNnBackend;

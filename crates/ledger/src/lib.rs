@@ -1313,7 +1313,7 @@ mod tests {
     #[test]
     fn ledger_writes_flushes_and_skips_corrupt_tail() {
         let temp = tempfile::tempdir().expect("tempdir");
-        let header = SessionHeader::new("runtime", "arknights", "cn_b", "ak");
+        let header = SessionHeader::new("runtime", "fixture-game-a", "region-a", "fixture-node");
         let mut ledger = LabLedger::create(temp.path(), "session 1", header).expect("ledger");
         ledger
             .append(
@@ -1352,7 +1352,7 @@ mod tests {
 
         let read = LabLedger::read(path).expect("read ledger");
 
-        assert_eq!(read.header.as_ref().unwrap().game, "arknights");
+        assert_eq!(read.header.as_ref().unwrap().game, "fixture-game-a");
         assert_eq!(read.events.len(), 1);
         assert_eq!(read.events[0].event_type, "runtime.state.finished");
         assert_eq!(read.records.len(), 2);
