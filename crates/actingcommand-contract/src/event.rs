@@ -149,6 +149,7 @@ pub enum Sensitivity {
 pub enum EventFamily {
     Runtime,
     Monitor,
+    Performance,
     Command,
     Scheduler,
     Policy,
@@ -183,6 +184,18 @@ pub enum EventType {
     MonitorRecoveryAdmitted,
     #[serde(rename = "monitor.recovery_deferred")]
     MonitorRecoveryDeferred,
+    #[serde(rename = "perf.pressure_started")]
+    PerformancePressureStarted,
+    #[serde(rename = "perf.pressure_ended")]
+    PerformancePressureEnded,
+    #[serde(rename = "perf.stutter_detected")]
+    PerformanceStutterDetected,
+    #[serde(rename = "perf.summary")]
+    PerformanceSummary,
+    #[serde(rename = "perf.monitor_degraded")]
+    PerformanceMonitorDegraded,
+    #[serde(rename = "perf.monitor_recovered")]
+    PerformanceMonitorRecovered,
     #[serde(rename = "command.received")]
     CommandReceived,
     #[serde(rename = "command.validated")]
@@ -339,6 +352,12 @@ impl EventType {
             | Self::MonitorProbeFailed
             | Self::MonitorRecoveryAdmitted
             | Self::MonitorRecoveryDeferred => EventFamily::Monitor,
+            Self::PerformancePressureStarted
+            | Self::PerformancePressureEnded
+            | Self::PerformanceStutterDetected
+            | Self::PerformanceSummary
+            | Self::PerformanceMonitorDegraded
+            | Self::PerformanceMonitorRecovered => EventFamily::Performance,
             Self::CommandReceived | Self::CommandValidated | Self::CommandRejected => {
                 EventFamily::Command
             }

@@ -13,6 +13,7 @@ mod host;
 mod ipc;
 mod monitor;
 mod owner;
+mod performance;
 mod policy_control;
 mod policy_host;
 mod provider;
@@ -20,6 +21,7 @@ mod time;
 
 pub use error::*;
 pub use host::*;
+pub use performance::{PerformanceMonitorConfig, PipelinePerformanceSignal};
 pub use policy_control::PolicyExecutionInput;
 pub use policy_host::{
     CatalogGeneration, PolicyAdmissionContext, PolicyCadence, PolicyCycle, PolicyDispatchAdmission,

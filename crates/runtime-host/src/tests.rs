@@ -10,12 +10,13 @@ use actingcommand_contract::{
     EventActor, EventPayload, EventQuery, EventSource, EventType, IdentifierIssuer, InputAction,
     InstanceId, IssuedCorrelationId, LeasePriority, LeaseQueuePolicy, LeaseQueueStatus, LeaseToken,
     MonitorDiagnosis, MonitorDisposition, MonitorObservation, MonitorPayload,
-    MonitorRecoveryCoordinationReason, MonitorRecoveryKind, OriginModule, PolicyExecutionOutcome,
-    PolicyFailureClass, PolicyFailureDisposition, PolicyPayload, PolicyPlanningSignalEventData,
-    PolicyPlanningSignalKind, ProjectionPayload, ProjectionProfile, PublicEventPayload,
-    RUNTIME_INFO_FILE, ResourceAuthoringEvent, ResourceAuthoringPhase, RuntimeCaptureBackend,
-    RuntimeErrorCode, RuntimeMonitorPolicy, RuntimeOperation, RuntimeReceipt, RuntimeReceiptState,
-    RuntimeRequest, RuntimeResult, TaskOutcome, TaskPayload, TaskSemanticFact,
+    MonitorRecoveryCoordinationReason, MonitorRecoveryKind, OriginModule, PerformanceMonitorHealth,
+    PolicyExecutionOutcome, PolicyFailureClass, PolicyFailureDisposition, PolicyPayload,
+    PolicyPlanningSignalEventData, PolicyPlanningSignalKind, ProjectionPayload, ProjectionProfile,
+    PublicEventPayload, RUNTIME_INFO_FILE, ResourceAuthoringEvent, ResourceAuthoringPhase,
+    RuntimeCaptureBackend, RuntimeErrorCode, RuntimeMonitorPolicy, RuntimeOperation,
+    RuntimeReceipt, RuntimeReceiptState, RuntimeRequest, RuntimeResult, TaskOutcome, TaskPayload,
+    TaskSemanticFact,
 };
 use actingcommand_device::{
     CaptureBackend, CaptureBackendName, DeviceError, DeviceResult, Frame, InputBackend, PixelFormat,
@@ -1959,6 +1960,35 @@ fn readonly_observation_uses_one_correlation_and_typed_durable_events() {
 }
 
 #[test]
+fn enabled_performance_monitor_collects_runtime_capture_pipeline_events() {
+    let root = TempDir::new().expect("tempdir");
+    let state = Arc::new(FakeState::default());
+    let host = RuntimeHost::start(
+        config(&root).with_performance_monitor(PerformanceMonitorConfig::default()),
+        Arc::new(FakeProvider::one("ak.cn", instance_id(), state)),
+    )
+    .expect("runtime host");
+    let mut client = TestClient::connect(&host);
+    let request = client.request(RuntimeOperation::ObserveReadonly {
+        instance_alias: "ak.cn".to_owned(),
+    });
+    assert_eq!(
+        client.send(&request).state(),
+        RuntimeReceiptState::Completed
+    );
+    let observed_at_unix_ms = unix_ms_now().expect("wall clock");
+    let context = host
+        .performance_context_for_test("ak.cn", observed_at_unix_ms)
+        .expect("performance context");
+    assert!(context.max_capture_latency_ms.is_some());
+    assert!(context.max_recognition_latency_ms.is_some());
+    assert_eq!(context.max_action_effect_latency_ms, None);
+    assert!(host.fatal_error().expect("runtime health").is_none());
+    drop(client);
+    host.close().expect("close host");
+}
+
+#[test]
 fn bounded_capture_sequence_returns_unique_verified_observations_without_input() {
     let root = TempDir::new().expect("tempdir");
     let state = Arc::new(FakeState::default());
@@ -3727,6 +3757,20 @@ fn policy_failure_activity_and_planning_facts_recover_without_duplicate_side_eff
         panic!("expected classified failure")
     };
     assert_eq!(failure.consecutive_same_error, 1);
+    assert_eq!(failure.escalation_streak, 1);
+    assert!(!failure.performance_tax_exempt);
+    assert_eq!(
+        failure.perf_context.health,
+        PerformanceMonitorHealth::Unavailable
+    );
+    assert_eq!(
+        failure.perf_context.window_end_unix_ms,
+        POLICY_NOW_UNIX_MS + 100
+    );
+    assert_eq!(
+        failure.perf_context.window_start_unix_ms,
+        POLICY_NOW_UNIX_MS + 100 - 30_000
+    );
     assert_eq!(failure.effective_class, PolicyFailureClass::Recoverable);
     assert_eq!(
         failure.disposition,
@@ -3797,6 +3841,61 @@ fn policy_failure_activity_and_planning_facts_recover_without_duplicate_side_eff
     );
     drop(client);
     reopened.close().expect("close reopened host");
+}
+
+#[test]
+fn performance_stutter_is_ledger_visible_and_enriches_policy_failure() {
+    let root = TempDir::new().expect("tempdir");
+    let host = RuntimeHost::start(
+        config(&root).with_performance_monitor(PerformanceMonitorConfig::default()),
+        Arc::new(FakeProvider::one(
+            POLICY_INSTANCE_ALIAS,
+            instance_id(),
+            Arc::new(FakeState::default()),
+        )),
+    )
+    .expect("runtime host");
+    host.activate_policy_catalog(&policy_sources(1))
+        .expect("activate policy catalog");
+    let (_, intent, reasons) = evaluated_policy_dispatch(&host, PolicyTrigger::FactsChanged);
+    host.admit_policy_dispatch(&intent, &reasons, &policy_context(&host))
+        .expect("policy admission");
+    host.record_pipeline_performance(
+        PipelinePerformanceSignal::new(POLICY_INSTANCE_ALIAS, POLICY_NOW_UNIX_MS + 90, 1_500)
+            .expect("pipeline signal")
+            .with_capture_latency(900)
+            .expect("capture latency"),
+    )
+    .expect("record pipeline performance");
+
+    let outcome = host
+        .record_policy_dispatch_outcome(
+            &intent.decision_id,
+            POLICY_NOW_UNIX_MS + 100,
+            &PolicyExecutionInput::Failed {
+                error_code: "transient.capture".to_owned(),
+                class: PolicyFailureClass::Recoverable,
+            },
+        )
+        .expect("policy failure outcome");
+    let PolicyExecutionOutcome::Failed { failure } = outcome.outcome else {
+        panic!("expected failure")
+    };
+    assert_eq!(failure.perf_context.max_frame_gap_ms, Some(1_500));
+    assert_eq!(failure.perf_context.max_capture_latency_ms, Some(900));
+    assert!(!failure.perf_context.related_event_ids.is_empty());
+
+    let mut client = TestClient::connect(&host);
+    let events = projected_events(&mut client, EventQuery::default());
+    assert_eq!(
+        events
+            .iter()
+            .filter(|event| event.event_type == EventType::PerformanceStutterDetected)
+            .count(),
+        1
+    );
+    drop(client);
+    host.close().expect("close host");
 }
 
 #[test]
