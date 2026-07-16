@@ -1,18 +1,19 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 use super::{
-    CapturePolicyReason, CapturePressureState, DiagnosticCode, EventAction, EventFamily, EventType,
-    EvidenceCompleteness, PolicyFailureClass, PolicyFailureDisposition, PolicyPlanningSignalKind,
-    RecognitionVerdict, RecoveryReason, ResourceAuthoringPhase, RetentionClass, SanitizationError,
-    Sensitivity, TaskOutcome,
+    ArtifactRedactionState, CapturePolicyReason, CapturePressureState, DiagnosticCode, EventAction,
+    EventFamily, EventType, EvidenceCompleteness, PolicyFailureClass, PolicyFailureDisposition,
+    PolicyPlanningSignalKind, RecognitionVerdict, RecoveryReason, ResourceAuthoringPhase,
+    RetentionClass, SanitizationError, Sensitivity, TaskOutcome,
 };
 use crate::{
-    HolderId, InputAction, LeaseId, LeasePriority, MonitorDecision, MonitorDiagnosis,
-    MonitorDisposition, MonitorObservation, MonitorRecoveryCoordinationReason, MonitorRecoveryKind,
-    PerformanceContext, PerformanceControlEventData, PerformanceControlLevel,
-    PerformanceControlReason, PerformanceDeadlineDisposition, PerformanceMonitorHealth,
-    PerformanceMonitorStateEventData, PerformancePressureEventData, PerformancePressureRecord,
-    PerformanceStutterEventData, PerformanceSummaryEventData, RequestId,
+    FactInvalidationEventData, FactRecord, FactScope, HolderId, InputAction, LeaseId,
+    LeasePriority, MonitorDecision, MonitorDiagnosis, MonitorDisposition, MonitorObservation,
+    MonitorRecoveryCoordinationReason, MonitorRecoveryKind, PerformanceContext,
+    PerformanceControlEventData, PerformanceControlLevel, PerformanceControlReason,
+    PerformanceDeadlineDisposition, PerformanceMonitorHealth, PerformanceMonitorStateEventData,
+    PerformancePressureEventData, PerformancePressureRecord, PerformanceStutterEventData,
+    PerformanceSummaryEventData, RequestId, validate_fact_invalidation,
     validate_performance_control, validate_performance_monitor_state, validate_performance_stutter,
     validate_performance_summary,
 };
@@ -24,6 +25,7 @@ pub const COMMAND_PAYLOAD_SCHEMA: &str = "actingcommand.payload.command.v2";
 pub const RUNTIME_PAYLOAD_SCHEMA: &str = "actingcommand.payload.runtime.v1";
 pub const MONITOR_PAYLOAD_SCHEMA: &str = "actingcommand.payload.monitor.v1";
 pub const PERFORMANCE_PAYLOAD_SCHEMA: &str = "actingcommand.payload.performance.v1";
+pub const FACT_PAYLOAD_SCHEMA: &str = "actingcommand.payload.fact.v1";
 pub const SCHEDULER_PAYLOAD_SCHEMA: &str = "actingcommand.payload.scheduler.v3";
 pub const POLICY_PAYLOAD_SCHEMA: &str = "actingcommand.payload.policy.v1";
 pub const CATALOG_PAYLOAD_SCHEMA: &str = "actingcommand.payload.catalog.v1";
@@ -356,6 +358,22 @@ pub struct PerformanceControlPayload {
     recovery: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     deadline_disposition: Option<PerformanceDeadlineDisposition>,
+    audit: SanitizedAudit,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FactPublishedPayload {
+    action: EventAction,
+    record: Box<FactRecord>,
+    audit: SanitizedAudit,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FactInvalidatedPayload {
+    action: EventAction,
+    invalidation: FactInvalidationEventData,
     audit: SanitizedAudit,
 }
 
@@ -1236,6 +1254,8 @@ common_detail_accessors!(PerformanceStutterPayload);
 common_detail_accessors!(PerformanceSummaryPayload);
 common_detail_accessors!(PerformanceMonitorStatePayload);
 common_detail_accessors!(PerformanceControlPayload);
+common_detail_accessors!(FactPublishedPayload);
+common_detail_accessors!(FactInvalidatedPayload);
 common_detail_accessors!(SchedulerQueuePayload);
 common_detail_accessors!(SchedulerPreemptionPayload);
 common_detail_accessors!(LeaseTransferPayload);
@@ -1276,6 +1296,8 @@ plain_payload_detail!(
     PerformanceSummaryPayload,
     PerformanceMonitorStatePayload,
     PerformanceControlPayload,
+    FactPublishedPayload,
+    FactInvalidatedPayload,
 );
 
 impl PerformancePressurePayload {
@@ -1341,6 +1363,18 @@ impl PerformanceControlPayload {
 
     pub const fn deadline_disposition(&self) -> Option<PerformanceDeadlineDisposition> {
         self.deadline_disposition
+    }
+}
+
+impl FactPublishedPayload {
+    pub fn record(&self) -> &FactRecord {
+        self.record.as_ref()
+    }
+}
+
+impl FactInvalidatedPayload {
+    pub const fn invalidation(&self) -> &FactInvalidationEventData {
+        &self.invalidation
     }
 }
 
@@ -2104,6 +2138,16 @@ struct PerformanceControlDraft {
     audit: AuditInput,
 }
 
+struct FactPublishedDraft {
+    record: Box<FactRecord>,
+    audit: AuditInput,
+}
+
+struct FactInvalidatedDraft {
+    invalidation: FactInvalidationEventData,
+    audit: AuditInput,
+}
+
 struct PolicyPlanningSignalDraft {
     data: PolicyPlanningSignalEventData,
     audit: AuditInput,
@@ -2304,6 +2348,34 @@ impl PerformanceControlDraft {
             third_party_pressure_basis_points: self.data.third_party_pressure_basis_points,
             recovery: self.data.recovery,
             deadline_disposition: self.data.deadline_disposition,
+            audit: self.audit.sanitize(fingerprinter)?,
+        })
+    }
+}
+
+impl FactPublishedDraft {
+    fn sanitize(
+        self,
+        fingerprinter: &dyn SecretFingerprinter,
+    ) -> Result<FactPublishedPayload, SanitizationError> {
+        self.record.validate()?;
+        Ok(FactPublishedPayload {
+            action: EventAction::FactPublish,
+            record: self.record,
+            audit: self.audit.sanitize(fingerprinter)?,
+        })
+    }
+}
+
+impl FactInvalidatedDraft {
+    fn sanitize(
+        self,
+        fingerprinter: &dyn SecretFingerprinter,
+    ) -> Result<FactInvalidatedPayload, SanitizationError> {
+        validate_fact_invalidation(&self.invalidation)?;
+        Ok(FactInvalidatedPayload {
+            action: EventAction::FactInvalidate,
+            invalidation: self.invalidation,
             audit: self.audit.sanitize(fingerprinter)?,
         })
     }
@@ -2683,6 +2755,21 @@ fn validate_performance_payload(payload: &PerformancePayload) -> Result<(), Sani
         _ => Err(SanitizationError::new(
             "invalid_performance_payload",
             "performance_payload",
+        )),
+    }
+}
+
+fn validate_fact_payload(payload: &FactPayload) -> Result<(), SanitizationError> {
+    match payload {
+        FactPayload::Published(value) if value.action == EventAction::FactPublish => {
+            value.record.validate()
+        }
+        FactPayload::Invalidated(value) if value.action == EventAction::FactInvalidate => {
+            validate_fact_invalidation(&value.invalidation)
+        }
+        _ => Err(SanitizationError::new(
+            "invalid_fact_payload",
+            "fact_payload",
         )),
     }
 }
@@ -4044,6 +4131,29 @@ impl PerformancePayloadDraft {
     }
 }
 
+enum FactDraftKind {
+    Published(FactPublishedDraft),
+    Invalidated(FactInvalidatedDraft),
+}
+
+pub struct FactPayloadDraft(FactDraftKind);
+
+impl FactPayloadDraft {
+    pub fn published(record: FactRecord, audit: AuditInput) -> Self {
+        Self(FactDraftKind::Published(FactPublishedDraft {
+            record: Box::new(record),
+            audit,
+        }))
+    }
+
+    pub fn invalidated(invalidation: FactInvalidationEventData, audit: AuditInput) -> Self {
+        Self(FactDraftKind::Invalidated(FactInvalidatedDraft {
+            invalidation,
+            audit,
+        }))
+    }
+}
+
 enum PolicyDraftKind {
     Intent(PolicyDispatchDraft),
     Admitted(PolicyDispatchDraft),
@@ -4190,6 +4300,7 @@ pub enum EventPayloadDraft {
     Runtime(RuntimePayloadDraft),
     Monitor(MonitorPayloadDraft),
     Performance(PerformancePayloadDraft),
+    Fact(FactPayloadDraft),
     Command(CommandPayloadDraft),
     Scheduler(SchedulerPayloadDraft),
     Policy(PolicyPayloadDraft),
@@ -4220,6 +4331,7 @@ payload_draft_from!(CommandPayloadDraft, Command);
 payload_draft_from!(RuntimePayloadDraft, Runtime);
 payload_draft_from!(MonitorPayloadDraft, Monitor);
 payload_draft_from!(PerformancePayloadDraft, Performance);
+payload_draft_from!(FactPayloadDraft, Fact);
 payload_draft_from!(SchedulerPayloadDraft, Scheduler);
 payload_draft_from!(PolicyPayloadDraft, Policy);
 payload_draft_from!(CatalogPayloadDraft, Catalog);
@@ -4290,6 +4402,18 @@ pub enum PerformancePayload {
     MonitorDegraded(PerformanceMonitorStatePayload),
     MonitorRecovered(PerformanceMonitorStatePayload),
     BalanceChanged(PerformanceControlPayload),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(
+    tag = "kind",
+    content = "data",
+    rename_all = "snake_case",
+    deny_unknown_fields
+)]
+pub enum FactPayload {
+    Published(FactPublishedPayload),
+    Invalidated(FactInvalidatedPayload),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -4550,6 +4674,10 @@ impl FamilyPayload for PerformancePayload {
         }
     }
 }
+family_payload!(FactPayload, {
+    Published => EventType::FactPublished,
+    Invalidated => EventType::FactInvalidated,
+});
 family_payload!(SchedulerPayload, {
     Admitted => EventType::SchedulerAdmitted,
     Queued => EventType::SchedulerQueued,
@@ -4661,6 +4789,7 @@ pub enum EventPayload {
     Runtime(RuntimePayload),
     Monitor(MonitorPayload),
     Performance(PerformancePayload),
+    Fact(FactPayload),
     Command(CommandPayload),
     Scheduler(SchedulerPayload),
     Policy(PolicyPayload),
@@ -4732,6 +4861,14 @@ impl EventPayloadDraft {
                 }
                 PerformanceDraftKind::BalanceChanged(detail) => {
                     PerformancePayload::BalanceChanged(detail.sanitize(fingerprinter)?)
+                }
+            }),
+            Self::Fact(value) => EventPayload::Fact(match value.0 {
+                FactDraftKind::Published(detail) => {
+                    FactPayload::Published(detail.sanitize(fingerprinter)?)
+                }
+                FactDraftKind::Invalidated(detail) => {
+                    FactPayload::Invalidated(detail.sanitize(fingerprinter)?)
                 }
             }),
             Self::Command(value) => EventPayload::Command(match value.0 {
@@ -4964,6 +5101,7 @@ impl EventPayload {
             Self::Runtime(_) => RUNTIME_PAYLOAD_SCHEMA,
             Self::Monitor(_) => MONITOR_PAYLOAD_SCHEMA,
             Self::Performance(_) => PERFORMANCE_PAYLOAD_SCHEMA,
+            Self::Fact(_) => FACT_PAYLOAD_SCHEMA,
             Self::Command(_) => COMMAND_PAYLOAD_SCHEMA,
             Self::Scheduler(_) => SCHEDULER_PAYLOAD_SCHEMA,
             Self::Policy(_) => POLICY_PAYLOAD_SCHEMA,
@@ -4989,6 +5127,9 @@ impl EventPayload {
         }
         if matches!(self, Self::Performance(_)) {
             sensitivity = sensitivity.max(Sensitivity::Internal);
+        }
+        if let Self::Fact(payload) = self {
+            sensitivity = sensitivity.max(fact_sensitivity(payload));
         }
         sensitivity
     }
@@ -5019,6 +5160,9 @@ impl EventPayload {
         }
         if let Self::Performance(value) = self {
             validate_performance_payload(value)?;
+        }
+        if let Self::Fact(value) = self {
+            validate_fact_payload(value)?;
         }
         if let Self::Catalog(value) = self {
             validate_catalog_payload(value)?;
@@ -5125,6 +5269,7 @@ impl EventPayload {
         let performance_summary = performance_summary(self);
         let performance_state = performance_monitor_state(self);
         let performance_control = performance_control(self);
+        let fact_identity = fact_identity(self);
         let payload = PublicPayload {
             event_type,
             action: detail.action(),
@@ -5203,11 +5348,15 @@ impl EventPayload {
             performance_control_reason: performance_control.map(|value| value.reason),
             performance_deadline_disposition: performance_control
                 .and_then(|value| value.deadline_disposition),
+            fact_scope: fact_identity.map(|value| Box::new(value.0.clone())),
+            fact_key: fact_identity.map(|value| value.1.to_owned().into_boxed_str()),
+            fact_source_snapshot_id: fact_identity.map(|value| value.2.to_owned().into_boxed_str()),
         };
         match self {
             Self::Runtime(_) => PublicEventPayload::Runtime(payload),
             Self::Monitor(_) => PublicEventPayload::Monitor(payload),
             Self::Performance(_) => PublicEventPayload::Performance(payload),
+            Self::Fact(_) => PublicEventPayload::Fact(payload),
             Self::Command(_) => PublicEventPayload::Command(payload),
             Self::Scheduler(_) => PublicEventPayload::Scheduler(payload),
             Self::Policy(_) => PublicEventPayload::Policy(payload),
@@ -5230,6 +5379,7 @@ impl EventPayload {
             Self::Runtime(value) => value,
             Self::Monitor(value) => value,
             Self::Performance(value) => value,
+            Self::Fact(value) => value,
             Self::Command(value) => value,
             Self::Scheduler(value) => value,
             Self::Policy(value) => value,
@@ -5289,6 +5439,36 @@ fn performance_control(payload: &EventPayload) -> Option<&PerformanceControlPayl
     match payload {
         EventPayload::Performance(PerformancePayload::BalanceChanged(value)) => Some(value),
         _ => None,
+    }
+}
+
+fn fact_identity(payload: &EventPayload) -> Option<(&FactScope, &str, &str)> {
+    match payload {
+        EventPayload::Fact(FactPayload::Published(value)) => Some((
+            &value.record.scope,
+            &value.record.key,
+            &value.record.source_snapshot_id,
+        )),
+        EventPayload::Fact(FactPayload::Invalidated(value)) => Some((
+            &value.invalidation.scope,
+            &value.invalidation.key,
+            &value.invalidation.source_snapshot_id,
+        )),
+        _ => None,
+    }
+}
+
+fn fact_sensitivity(payload: &FactPayload) -> Sensitivity {
+    let FactPayload::Published(value) = payload else {
+        return Sensitivity::Internal;
+    };
+    let crate::FactContent::Artifact { artifact } = &value.record().content else {
+        return Sensitivity::Internal;
+    };
+    match artifact.redaction_state() {
+        ArtifactRedactionState::Pending => Sensitivity::Secret,
+        ArtifactRedactionState::Applied => Sensitivity::Sensitive,
+        ArtifactRedactionState::NotRequired => Sensitivity::Internal,
     }
 }
 
@@ -5509,6 +5689,12 @@ pub struct PublicPayload {
     performance_control_reason: Option<PerformanceControlReason>,
     #[serde(skip_serializing_if = "Option::is_none")]
     performance_deadline_disposition: Option<PerformanceDeadlineDisposition>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    fact_scope: Option<Box<FactScope>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    fact_key: Option<Box<str>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    fact_source_snapshot_id: Option<Box<str>>,
 }
 
 impl PublicPayload {
@@ -5721,6 +5907,18 @@ impl PublicPayload {
     pub const fn performance_deadline_disposition(&self) -> Option<PerformanceDeadlineDisposition> {
         self.performance_deadline_disposition
     }
+
+    pub fn fact_scope(&self) -> Option<&FactScope> {
+        self.fact_scope.as_deref()
+    }
+
+    pub fn fact_key(&self) -> Option<&str> {
+        self.fact_key.as_deref()
+    }
+
+    pub fn fact_source_snapshot_id(&self) -> Option<&str> {
+        self.fact_source_snapshot_id.as_deref()
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -5734,6 +5932,7 @@ pub enum PublicEventPayload {
     Runtime(PublicPayload),
     Monitor(PublicPayload),
     Performance(PublicPayload),
+    Fact(PublicPayload),
     Command(PublicPayload),
     Scheduler(PublicPayload),
     Policy(PublicPayload),
@@ -5759,8 +5958,8 @@ pub enum PublicEventPayload {
 )]
 pub enum ProjectionPayload {
     Omitted,
-    Public(PublicEventPayload),
-    Full(EventPayload),
+    Public(Box<PublicEventPayload>),
+    Full(Box<EventPayload>),
 }
 
 fn validate_fingerprint(candidate: &str, original: &str) -> Result<(), SanitizationError> {

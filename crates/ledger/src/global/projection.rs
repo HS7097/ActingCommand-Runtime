@@ -91,12 +91,13 @@ pub(super) fn project(event: &PersistedEvent, profile: ProjectionProfile) -> Pro
     let (payload, include_object_key) = match profile {
         ProjectionProfile::Cli | ProjectionProfile::Concise => (ProjectionPayload::Omitted, false),
         ProjectionProfile::Ui | ProjectionProfile::Normal => (
-            ProjectionPayload::Public(event.payload().public_projection()),
+            ProjectionPayload::Public(Box::new(event.payload().public_projection())),
             false,
         ),
-        ProjectionProfile::Lab | ProjectionProfile::Verbose | ProjectionProfile::Forensic => {
-            (ProjectionPayload::Full(event.payload().clone()), true)
-        }
+        ProjectionProfile::Lab | ProjectionProfile::Verbose | ProjectionProfile::Forensic => (
+            ProjectionPayload::Full(Box::new(event.payload().clone())),
+            true,
+        ),
     };
     ProjectedEvent {
         schema_version: event.schema_version().to_string(),

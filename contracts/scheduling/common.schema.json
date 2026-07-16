@@ -72,6 +72,55 @@
         "contains"
       ]
     },
+    "factScalar": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": ["type", "value"],
+          "properties": {
+            "type": { "const": "boolean" },
+            "value": { "type": "boolean" }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": ["type", "value"],
+          "properties": {
+            "type": { "const": "integer" },
+            "value": { "type": "integer" }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": ["type", "value"],
+          "properties": {
+            "type": { "const": "string" },
+            "value": { "type": "string", "maxLength": 1024 }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": ["type", "value"],
+          "properties": {
+            "type": { "const": "timestamp_ms" },
+            "value": { "type": "integer", "minimum": 0 }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": ["type", "value"],
+          "properties": {
+            "type": { "const": "duration_ms" },
+            "value": { "type": "integer", "minimum": 0 }
+          },
+          "additionalProperties": false
+        }
+      ]
+    },
     "factValue": {
       "oneOf": [
         {
@@ -116,6 +165,28 @@
           "properties": {
             "type": { "const": "duration_ms" },
             "value": { "type": "integer", "minimum": 0 }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": ["type", "value"],
+          "properties": {
+            "type": { "const": "record_list" },
+            "value": {
+              "type": "array",
+              "maxItems": 256,
+              "items": {
+                "type": "object",
+                "maxProperties": 64,
+                "propertyNames": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 1024
+                },
+                "additionalProperties": { "$ref": "#/$defs/factScalar" }
+              }
+            }
           },
           "additionalProperties": false
         }

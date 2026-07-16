@@ -2,7 +2,10 @@
 
 //! Pure environment-result validation and marker-resolution decisions.
 
-use actingcommand_contract::{EnvDetected, EnvResolved};
+use actingcommand_contract::{
+    EnvDetected, EnvResolved, FactContent, FactResolution, FactUnknownReason, FactValue,
+    InstanceFactSnapshot,
+};
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
@@ -1155,6 +1158,142 @@ impl EnvironmentStateEngine {
         Ok(resolved.into_values().collect())
     }
 
+    /// Resolves legacy `{env:}` markers from the Runtime-owned fact snapshot.
+    pub fn resolve_markers_from_fact_snapshot(
+        &self,
+        input: &str,
+        snapshot: &InstanceFactSnapshot,
+        resource_hash: &str,
+        now_ms: u64,
+    ) -> EnvironmentStateResult<(String, Vec<EnvResolved>)> {
+        self.validate_fact_snapshot_scope(snapshot)?;
+        let mut output = String::new();
+        let mut resolved = Vec::new();
+        let mut offset = 0usize;
+        while let Some(start_rel) = input[offset..].find("{env:") {
+            let start = offset + start_rel;
+            output.push_str(&input[offset..start]);
+            let key_start = start + "{env:".len();
+            let end_rel = input[key_start..].find('}').ok_or_else(|| {
+                EnvironmentStateError::new(
+                    EnvironmentStateErrorKind::InvalidPointer,
+                    format!("malformed env pointer in '{input}': missing closing '}}'"),
+                )
+            })?;
+            let end = key_start + end_rel;
+            let key = &input[key_start..end];
+            let value =
+                self.resolve_key_from_fact_snapshot(key, snapshot, resource_hash, now_ms)?;
+            output.push_str(&value.value);
+            resolved.push(value);
+            offset = end + 1;
+        }
+        output.push_str(&input[offset..]);
+        Ok((output, resolved))
+    }
+
+    /// Resolves every legacy `{env:}` marker in a JSON value from one pinned fact snapshot.
+    pub fn resolve_value_from_fact_snapshot(
+        &self,
+        value: &mut Value,
+        snapshot: &InstanceFactSnapshot,
+        resource_hash: &str,
+        now_ms: u64,
+    ) -> EnvironmentStateResult<Vec<EnvResolved>> {
+        self.validate_fact_snapshot_scope(snapshot)?;
+        let mut resolved = BTreeMap::new();
+        self.resolve_fact_value_inner(value, snapshot, resource_hash, now_ms, &mut resolved)?;
+        Ok(resolved.into_values().collect())
+    }
+
+    /// Resolves one declared environment key through the shared fact projection.
+    pub fn resolve_key_from_fact_snapshot(
+        &self,
+        key: &str,
+        snapshot: &InstanceFactSnapshot,
+        resource_hash: &str,
+        now_ms: u64,
+    ) -> EnvironmentStateResult<EnvResolved> {
+        self.validate_fact_snapshot_scope(snapshot)?;
+        let key_config = self
+            .detector
+            .keys
+            .iter()
+            .find(|item| item.key == key)
+            .ok_or_else(|| {
+                EnvironmentStateError::new(
+                    EnvironmentStateErrorKind::UndeclaredKey,
+                    format!(
+                        "env key '{key}' is not declared by detector '{}'",
+                        self.detector.id
+                    ),
+                )
+            })?;
+        let fact_key = format!("env.{key}");
+        let record = match snapshot.resolve(&fact_key, now_ms) {
+            FactResolution::Known(record) => record,
+            FactResolution::Unknown { reason, .. } => {
+                return Err(EnvironmentStateError::new(
+                    fact_unknown_kind(reason),
+                    format!("env fact '{fact_key}' is unavailable: {reason:?}"),
+                ));
+            }
+        };
+        if record.source_detector != self.detector.id {
+            return Err(EnvironmentStateError::new(
+                EnvironmentStateErrorKind::DetectorMismatch,
+                format!(
+                    "env fact '{fact_key}' was produced by detector '{}' instead of '{}'",
+                    record.source_detector, self.detector.id
+                ),
+            ));
+        }
+        if record.resource_bundle_hash != resource_hash {
+            return Err(EnvironmentStateError::new(
+                EnvironmentStateErrorKind::ResourceHashChanged,
+                "env fact is stale because detector resource hash changed",
+            ));
+        }
+        let FactContent::Inline {
+            value: FactValue::String(value),
+        } = &record.content
+        else {
+            return Err(EnvironmentStateError::new(
+                EnvironmentStateErrorKind::SchemaMismatch,
+                format!("env fact '{fact_key}' is not an inline string"),
+            ));
+        };
+        validate_environment_value_safety(value, key)?;
+        if !key_config
+            .allowed_values
+            .iter()
+            .any(|allowed| allowed == value)
+        {
+            return Err(EnvironmentStateError::new(
+                EnvironmentStateErrorKind::UnallowedValue,
+                format!("env key '{key}' value '{value}' is not in allowed_values"),
+            ));
+        }
+        let confidence = f32::from(record.confidence_milli) / 1_000.0;
+        if confidence < key_config.stale_threshold {
+            return Err(EnvironmentStateError::new(
+                EnvironmentStateErrorKind::LowConfidence,
+                format!(
+                    "env key '{key}' is stale: confidence {confidence:.6} below threshold {:.6}",
+                    key_config.stale_threshold
+                ),
+            ));
+        }
+        Ok(EnvResolved {
+            key: key.to_owned(),
+            value: value.clone(),
+            confidence,
+            source: record.source_snapshot_id.clone(),
+            detector_id: record.source_detector.clone(),
+            source_result: snapshot.snapshot_id.clone(),
+        })
+    }
+
     pub fn resolve_key(
         &self,
         key: &str,
@@ -1220,6 +1359,88 @@ impl EnvironmentStateEngine {
             Value::Null | Value::Bool(_) | Value::Number(_) => {}
         }
         Ok(())
+    }
+
+    fn resolve_fact_value_inner(
+        &self,
+        value: &mut Value,
+        snapshot: &InstanceFactSnapshot,
+        resource_hash: &str,
+        now_ms: u64,
+        resolved: &mut BTreeMap<String, EnvResolved>,
+    ) -> EnvironmentStateResult<()> {
+        match value {
+            Value::String(text) => {
+                let (replacement, keys) =
+                    self.resolve_markers_from_fact_snapshot(text, snapshot, resource_hash, now_ms)?;
+                *text = replacement;
+                for key in keys {
+                    resolved.entry(key.key.clone()).or_insert(key);
+                }
+            }
+            Value::Array(values) => {
+                for value in values {
+                    self.resolve_fact_value_inner(
+                        value,
+                        snapshot,
+                        resource_hash,
+                        now_ms,
+                        resolved,
+                    )?;
+                }
+            }
+            Value::Object(object) => {
+                for value in object.values_mut() {
+                    self.resolve_fact_value_inner(
+                        value,
+                        snapshot,
+                        resource_hash,
+                        now_ms,
+                        resolved,
+                    )?;
+                }
+            }
+            Value::Null | Value::Bool(_) | Value::Number(_) => {}
+        }
+        Ok(())
+    }
+
+    fn validate_fact_snapshot_scope(
+        &self,
+        snapshot: &InstanceFactSnapshot,
+    ) -> EnvironmentStateResult<()> {
+        snapshot.validate().map_err(|_| {
+            EnvironmentStateError::new(
+                EnvironmentStateErrorKind::SchemaMismatch,
+                "instance fact snapshot is invalid",
+            )
+        })?;
+        if snapshot.context.instance_id != self.scope.instance_id {
+            return Err(EnvironmentStateError::new(
+                EnvironmentStateErrorKind::InstanceMismatch,
+                "instance fact snapshot belongs to a different instance_id",
+            ));
+        }
+        if snapshot.context.game_id != self.scope.game_id
+            || snapshot.context.server_id != self.scope.server_id
+        {
+            return Err(EnvironmentStateError::new(
+                EnvironmentStateErrorKind::ScopeMismatch,
+                "instance fact snapshot belongs to a different game or server",
+            ));
+        }
+        Ok(())
+    }
+}
+
+const fn fact_unknown_kind(reason: FactUnknownReason) -> EnvironmentStateErrorKind {
+    match reason {
+        FactUnknownReason::Missing => EnvironmentStateErrorKind::MissingKey,
+        FactUnknownReason::Expired => EnvironmentStateErrorKind::Expired,
+        FactUnknownReason::LowConfidence => EnvironmentStateErrorKind::LowConfidence,
+        FactUnknownReason::NonInline | FactUnknownReason::TypeMismatch => {
+            EnvironmentStateErrorKind::SchemaMismatch
+        }
     }
 }
 
@@ -1337,6 +1558,7 @@ fn collect_environment_pointer_keys_from_str(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use actingcommand_contract::{EventType, FactRecord, FactScope, InstanceFactContext};
     use serde_json::json;
 
     #[test]
@@ -1356,6 +1578,26 @@ mod tests {
         assert_eq!(value["path"], "hometheme/Default/Depot.png");
         assert_eq!(resolved.len(), 1);
         assert_eq!(resolved[0].value, "Default");
+    }
+
+    #[test]
+    fn fact_snapshot_drives_the_existing_environment_pointer_surface() {
+        let snapshot = fact_snapshot("Default", 950, Some(200));
+        let mut value = json!({
+            "path": "hometheme/{env:ui_theme}/Depot.png",
+            "nested": ["{env:ui_theme}"]
+        });
+        let resolved = engine()
+            .resolve_value_from_fact_snapshot(&mut value, &snapshot, &"a".repeat(64), 100)
+            .expect("resolve fact-backed value");
+        assert_eq!(value["path"], "hometheme/Default/Depot.png");
+        assert_eq!(resolved.len(), 1);
+        assert_eq!(resolved[0].source_result, snapshot.snapshot_id);
+
+        let error = engine()
+            .resolve_key_from_fact_snapshot("ui_theme", &snapshot, &"a".repeat(64), 201)
+            .expect_err("expired fact must request fresh detection");
+        assert_eq!(error.kind(), EnvironmentStateErrorKind::Expired);
     }
 
     #[test]
@@ -1676,6 +1918,39 @@ mod tests {
                     expires_at_unix_ms,
                 },
             )]),
+        }
+    }
+
+    fn fact_snapshot(
+        value: &str,
+        confidence_milli: u16,
+        expires_at_unix_ms: Option<u64>,
+    ) -> InstanceFactSnapshot {
+        InstanceFactSnapshot {
+            snapshot_id: "snapshot:fact".to_string(),
+            ledger_position: 1,
+            context: InstanceFactContext {
+                instance_id: "envinst_a".to_string(),
+                game_id: "arknights".to_string(),
+                server_id: "cn".to_string(),
+            },
+            records: vec![FactRecord {
+                scope: FactScope::Server {
+                    server_id: "cn".to_string(),
+                },
+                key: "env.ui_theme".to_string(),
+                content: FactContent::Inline {
+                    value: FactValue::String(value.to_string()),
+                },
+                observed_at_unix_ms: 50,
+                expires_at_unix_ms,
+                confidence_milli,
+                source_detector: "detect_ui_theme".to_string(),
+                source_snapshot_id: "snapshot:detection".to_string(),
+                schema_version: "fact.v1".to_string(),
+                resource_bundle_hash: "a".repeat(64),
+                invalidate_on: vec![EventType::RuntimeTakeover],
+            }],
         }
     }
 }

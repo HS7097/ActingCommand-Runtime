@@ -7,7 +7,8 @@ use crate::time::unix_ms_now;
 use actingcommand_artifact_store::read_projected_verified;
 use actingcommand_contract::{
     ApplicationLifecycleAction, CaptureSequenceSpec, ContainedTaskRequest, EffectDisposition,
-    EventActor, EventPayload, EventQuery, EventSource, EventType, IdentifierIssuer, InputAction,
+    EventActor, EventPayload, EventQuery, EventSource, EventType, FactContent, FactRecord,
+    FactScope, FactValue as ContractFactValue, IdentifierIssuer, InputAction, InstanceFactContext,
     InstanceId, IssuedCorrelationId, LeasePriority, LeaseQueuePolicy, LeaseQueueStatus, LeaseToken,
     MonitorDiagnosis, MonitorDisposition, MonitorObservation, MonitorPayload,
     MonitorRecoveryCoordinationReason, MonitorRecoveryKind, OriginModule, PerformanceControlLevel,
@@ -488,12 +489,14 @@ fn projected_task_semantic_fact(
     event: &actingcommand_contract::ProjectedEvent,
 ) -> Option<&TaskSemanticFact> {
     match &event.payload {
-        ProjectionPayload::Public(PublicEventPayload::Task(payload)) => {
-            payload.task_semantic_fact()
-        }
-        ProjectionPayload::Full(EventPayload::Task(TaskPayload::Semantic(payload))) => {
-            Some(payload.fact())
-        }
+        ProjectionPayload::Public(projected) => match projected.as_ref() {
+            PublicEventPayload::Task(payload) => payload.task_semantic_fact(),
+            _ => None,
+        },
+        ProjectionPayload::Full(projected) => match projected.as_ref() {
+            EventPayload::Task(TaskPayload::Semantic(payload)) => Some(payload.fact()),
+            _ => None,
+        },
         _ => None,
     }
 }
@@ -617,6 +620,28 @@ fn policy_facts() -> EvaluationFacts {
             capability_operation_ids: vec!["operation.observe".to_owned()],
             preferred_task_ids: Vec::new(),
         }],
+    }
+}
+
+fn stored_fact(
+    scope: FactScope,
+    key: &str,
+    value: ContractFactValue,
+    source_snapshot_id: &str,
+    invalidate_on: Vec<EventType>,
+) -> FactRecord {
+    FactRecord {
+        scope,
+        key: key.to_owned(),
+        content: FactContent::Inline { value },
+        observed_at_unix_ms: POLICY_NOW_UNIX_MS,
+        expires_at_unix_ms: Some(POLICY_NOW_UNIX_MS + 60_000),
+        confidence_milli: 900,
+        source_detector: "detector.fixture".to_owned(),
+        source_snapshot_id: source_snapshot_id.to_owned(),
+        schema_version: "fact.v1".to_owned(),
+        resource_bundle_hash: "a".repeat(64),
+        invalidate_on,
     }
 }
 
@@ -1048,9 +1073,10 @@ fn resident_monitor_runs_without_a_client_and_records_artifact_backed_lifecycle(
         },
     );
     let event = completed.last().expect("monitor completion event");
-    let ProjectionPayload::Full(EventPayload::Monitor(MonitorPayload::Completed(detail))) =
-        &event.payload
-    else {
+    let ProjectionPayload::Full(payload) = &event.payload else {
+        panic!("expected full monitor completion payload");
+    };
+    let EventPayload::Monitor(MonitorPayload::Completed(detail)) = payload.as_ref() else {
         panic!("expected full monitor completion payload");
     };
     assert_eq!(detail.observation().diagnosis(), MonitorDiagnosis::Healthy);
@@ -1182,9 +1208,11 @@ fn monitor_recovery_is_scheduler_admitted_without_executing_an_effect() {
             ..EventQuery::default()
         },
     );
-    let ProjectionPayload::Full(EventPayload::Monitor(MonitorPayload::RecoveryAdmitted(detail))) =
-        &admitted.last().expect("recovery admission").payload
+    let ProjectionPayload::Full(payload) = &admitted.last().expect("recovery admission").payload
     else {
+        panic!("expected full recovery admission payload");
+    };
+    let EventPayload::Monitor(MonitorPayload::RecoveryAdmitted(detail)) = payload.as_ref() else {
         panic!("expected full recovery admission payload");
     };
     assert_eq!(detail.recovery(), MonitorRecoveryKind::WakeStandby);
@@ -1248,9 +1276,10 @@ fn monitor_recovery_is_deferred_by_an_active_fenced_lease() {
     );
     let event = deferred.last().expect("recovery deferral");
     assert_eq!(event.links.lease_id(), Some(&token.lease_id()));
-    let ProjectionPayload::Full(EventPayload::Monitor(MonitorPayload::RecoveryDeferred(detail))) =
-        &event.payload
-    else {
+    let ProjectionPayload::Full(payload) = &event.payload else {
+        panic!("expected full recovery deferral payload");
+    };
+    let EventPayload::Monitor(MonitorPayload::RecoveryDeferred(detail)) = payload.as_ref() else {
         panic!("expected full recovery deferral payload");
     };
     assert_eq!(detail.recovery(), MonitorRecoveryKind::WakeStandby);
@@ -2999,8 +3028,9 @@ fn runtime_is_the_single_writer_for_one_correlated_resource_authoring_sequence()
         assert_eq!(event.origin.module(), OriginModule::ResourceTooling);
         assert_eq!(event.origin.actor(), EventActor::Lab);
         assert!(matches!(
-            event.payload,
-            ProjectionPayload::Full(EventPayload::ResourceAuthoring(_))
+            &event.payload,
+            ProjectionPayload::Full(payload)
+                if matches!(payload.as_ref(), EventPayload::ResourceAuthoring(_))
         ));
     }
     host.close().expect("close host");
@@ -3434,6 +3464,292 @@ fn expired_unopened_lease_is_reclaimed_before_a_new_grant() {
 }
 
 #[test]
+fn runtime_fact_store_shares_server_facts_invalidates_and_recovers_from_ledger() {
+    let root = TempDir::new().expect("tempdir");
+    let state = Arc::new(FakeState::default());
+    let registered_id = instance_id();
+    let provider = Arc::new(FakeProvider::one(
+        POLICY_INSTANCE_ALIAS,
+        registered_id,
+        Arc::clone(&state),
+    ));
+    let host = RuntimeHost::start(config(&root), provider).expect("runtime host");
+    let server_record = stored_fact(
+        FactScope::Server {
+            server_id: "fixture-server-a".to_owned(),
+        },
+        "env.ui_theme",
+        ContractFactValue::String("Neutral".to_owned()),
+        "snapshot:server-theme",
+        vec![EventType::PolicyPlanningSignalObserved],
+    );
+    let instance_record = stored_fact(
+        FactScope::Instance {
+            instance_id: POLICY_INSTANCE_ALIAS.to_owned(),
+        },
+        "inventory.items",
+        ContractFactValue::RecordList(Vec::new()),
+        "snapshot:instance-inventory",
+        Vec::new(),
+    );
+    let published = host
+        .publish_fact(server_record.clone())
+        .expect("publish server fact");
+    assert_eq!(
+        host.publish_fact(server_record.clone())
+            .expect("idempotent fact publication"),
+        published
+    );
+    host.publish_fact(instance_record)
+        .expect("publish instance fact");
+
+    let primary = host
+        .instance_fact_snapshot(InstanceFactContext {
+            instance_id: POLICY_INSTANCE_ALIAS.to_owned(),
+            server_id: "fixture-server-a".to_owned(),
+            game_id: "fixture-game-a".to_owned(),
+        })
+        .expect("primary snapshot");
+    let peer = host
+        .instance_fact_snapshot(InstanceFactContext {
+            instance_id: "fixture-instance-b".to_owned(),
+            server_id: "fixture-server-a".to_owned(),
+            game_id: "fixture-game-a".to_owned(),
+        })
+        .expect("peer snapshot");
+    assert_eq!(primary.records.len(), 2);
+    assert_eq!(peer.records.len(), 1);
+
+    host.record_policy_planning_signal(PolicyPlanningSignalEventData {
+        signal_id: "signal:fact-invalidation".to_owned(),
+        instance_id: POLICY_INSTANCE_ALIAS.to_owned(),
+        task_id: None,
+        kind: PolicyPlanningSignalKind::GoalMissed,
+        fact_code: "goal.fixture.missed".to_owned(),
+        observed_at_unix_ms: POLICY_NOW_UNIX_MS + 1,
+    })
+    .expect("record invalidating event");
+    let after = host
+        .instance_fact_snapshot(InstanceFactContext {
+            instance_id: POLICY_INSTANCE_ALIAS.to_owned(),
+            server_id: "fixture-server-a".to_owned(),
+            game_id: "fixture-game-a".to_owned(),
+        })
+        .expect("snapshot after invalidation");
+    assert_eq!(after.records.len(), 1);
+    assert_eq!(after.records[0].key, "inventory.items");
+    let stale = host
+        .publish_fact(server_record)
+        .expect_err("invalidated source snapshot must not be resurrected");
+    assert_eq!(stale.code(), "fact_source_snapshot_invalidated");
+    assert!(!stale.is_fatal());
+
+    let mut client = TestClient::connect(&host);
+    assert_eq!(
+        projected_events(
+            &mut client,
+            EventQuery {
+                event_type: Some(EventType::FactPublished),
+                ..EventQuery::default()
+            }
+        )
+        .len(),
+        2
+    );
+    assert_eq!(
+        projected_events(
+            &mut client,
+            EventQuery {
+                event_type: Some(EventType::FactInvalidated),
+                ..EventQuery::default()
+            }
+        )
+        .len(),
+        1
+    );
+    drop(client);
+    host.close().expect("close host");
+
+    let reopened = RuntimeHost::start(
+        config(&root),
+        Arc::new(FakeProvider::one(
+            POLICY_INSTANCE_ALIAS,
+            registered_id,
+            state,
+        )),
+    )
+    .expect("reopen runtime host");
+    let recovered = reopened
+        .instance_fact_snapshot(InstanceFactContext {
+            instance_id: POLICY_INSTANCE_ALIAS.to_owned(),
+            server_id: "fixture-server-a".to_owned(),
+            game_id: "fixture-game-a".to_owned(),
+        })
+        .expect("recovered snapshot");
+    assert_eq!(recovered.records.len(), 1);
+    assert_eq!(recovered.records[0].key, "inventory.items");
+    reopened.close().expect("close reopened host");
+}
+
+#[test]
+fn policy_evaluation_consumes_runtime_owned_fact_projection() {
+    let root = TempDir::new().expect("tempdir");
+    let state = Arc::new(FakeState::default());
+    let host = host_with_state(&root, POLICY_INSTANCE_ALIAS, state);
+    let mut sources = policy_sources(1);
+    let mut tasks: serde_json::Value =
+        serde_json::from_slice(&sources.tasks.bytes).expect("tasks fixture");
+    tasks["tasks"][0]["trigger"] = serde_json::json!({
+        "kind": "fact",
+        "scope": {"kind": "server", "server_id": "fixture-server-a"},
+        "fact_key": "env.ui_theme",
+        "comparison": "eq",
+        "value": {"type": "string", "value": "Neutral"},
+        "max_age_ms": 60_000
+    });
+    sources.tasks.bytes = serde_json::to_vec_pretty(&tasks).expect("tasks bytes");
+    host.activate_policy_catalog(&sources)
+        .expect("activate policy catalog");
+    host.publish_fact(stored_fact(
+        FactScope::Server {
+            server_id: "fixture-server-a".to_owned(),
+        },
+        "env.ui_theme",
+        ContractFactValue::String("Neutral".to_owned()),
+        "snapshot:policy-theme",
+        Vec::new(),
+    ))
+    .expect("publish policy fact");
+
+    let cycle = host
+        .evaluate_policy_cycle(
+            &policy_facts(),
+            &policy_resources(),
+            EvaluationTime {
+                unix_ms: POLICY_NOW_UNIX_MS,
+            },
+            7,
+            PolicyTrigger::FactsChanged,
+        )
+        .expect("evaluate fact-backed policy");
+    let evaluation = cycle.evaluation.expect("policy evaluation");
+    assert_eq!(evaluation.dispatch_intents.len(), 1);
+    assert!(
+        evaluation.dispatch_intents[0]
+            .fact_snapshot_id
+            .starts_with("snapshot:policy-fact:")
+    );
+    host.close().expect("close host");
+}
+
+#[test]
+fn fact_snapshot_catches_up_with_critical_ledger_events() {
+    let root = TempDir::new().expect("tempdir");
+    let state = Arc::new(FakeState::default());
+    let host = host_with_state(&root, POLICY_INSTANCE_ALIAS, state);
+    host.activate_policy_catalog(&policy_sources(1))
+        .expect("activate first catalog");
+    host.publish_fact(stored_fact(
+        FactScope::Instance {
+            instance_id: POLICY_INSTANCE_ALIAS.to_owned(),
+        },
+        "env.ui_theme",
+        ContractFactValue::String("Neutral".to_owned()),
+        "snapshot:critical-event",
+        vec![EventType::CatalogActivated],
+    ))
+    .expect("publish fact");
+    host.activate_policy_catalog(&policy_sources(2))
+        .expect("activate second catalog");
+
+    let snapshot = host
+        .instance_fact_snapshot(InstanceFactContext {
+            instance_id: POLICY_INSTANCE_ALIAS.to_owned(),
+            server_id: "fixture-server-a".to_owned(),
+            game_id: "fixture-game-a".to_owned(),
+        })
+        .expect("synchronized fact snapshot");
+    assert!(snapshot.records.is_empty());
+
+    let mut client = TestClient::connect(&host);
+    assert_eq!(
+        projected_events(
+            &mut client,
+            EventQuery {
+                event_type: Some(EventType::FactInvalidated),
+                ..EventQuery::default()
+            }
+        )
+        .len(),
+        1
+    );
+    drop(client);
+    host.close().expect("close host");
+}
+
+#[test]
+fn runtime_startup_materializes_a_missed_critical_fact_invalidation() {
+    let root = TempDir::new().expect("tempdir");
+    let registered_id = instance_id();
+    let host = RuntimeHost::start(
+        config(&root),
+        Arc::new(FakeProvider::one(
+            POLICY_INSTANCE_ALIAS,
+            registered_id,
+            Arc::new(FakeState::default()),
+        )),
+    )
+    .expect("runtime host");
+    host.activate_policy_catalog(&policy_sources(1))
+        .expect("activate first catalog");
+    host.publish_fact(stored_fact(
+        FactScope::Instance {
+            instance_id: POLICY_INSTANCE_ALIAS.to_owned(),
+        },
+        "env.ui_theme",
+        ContractFactValue::String("Neutral".to_owned()),
+        "snapshot:restart-critical-event",
+        vec![EventType::CatalogActivated],
+    ))
+    .expect("publish fact");
+    host.activate_policy_catalog(&policy_sources(2))
+        .expect("activate second catalog");
+    host.close().expect("close without reading facts");
+
+    let reopened = RuntimeHost::start(
+        config(&root),
+        Arc::new(FakeProvider::one(
+            POLICY_INSTANCE_ALIAS,
+            registered_id,
+            Arc::new(FakeState::default()),
+        )),
+    )
+    .expect("reopen runtime host");
+    let snapshot = reopened
+        .instance_fact_snapshot(InstanceFactContext {
+            instance_id: POLICY_INSTANCE_ALIAS.to_owned(),
+            server_id: "fixture-server-a".to_owned(),
+            game_id: "fixture-game-a".to_owned(),
+        })
+        .expect("recovered snapshot");
+    assert!(snapshot.records.is_empty());
+    let mut client = TestClient::connect(&reopened);
+    assert_eq!(
+        projected_events(
+            &mut client,
+            EventQuery {
+                event_type: Some(EventType::FactInvalidated),
+                ..EventQuery::default()
+            }
+        )
+        .len(),
+        1
+    );
+    drop(client);
+    reopened.close().expect("close reopened host");
+}
+
+#[test]
 fn policy_cadence_is_explicit_and_clock_jumps_force_full_recompute() {
     let root = TempDir::new().expect("tempdir");
     let state = Arc::new(FakeState::default());
@@ -3858,12 +4174,14 @@ fn policy_failure_activity_and_planning_facts_recover_without_duplicate_side_eff
         1
     );
     assert!(events.iter().any(|event| {
-        matches!(
-            &event.payload,
-            ProjectionPayload::Full(EventPayload::Policy(
-                PolicyPayload::DispatchAdmitted(payload)
-            )) if payload.admission() == Some(&budget_record)
-        )
+        match &event.payload {
+            ProjectionPayload::Full(payload) => matches!(
+                payload.as_ref(),
+                EventPayload::Policy(PolicyPayload::DispatchAdmitted(payload))
+                    if payload.admission() == Some(&budget_record)
+            ),
+            _ => false,
+        }
     }));
     drop(client);
     host.close().expect("close host");
