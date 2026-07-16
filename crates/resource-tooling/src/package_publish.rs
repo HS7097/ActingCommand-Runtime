@@ -20,7 +20,7 @@ use std::os::windows::fs::MetadataExt;
 use std::path::{Component, Path, PathBuf};
 use std::process::Command;
 use std::thread;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 const STATE_DIRECTORY: &str = ".actingcommand-publish";
 const AUTHORITIES_DIRECTORY: &str = "authorities";
@@ -35,6 +35,8 @@ const LOCK_SCHEMA: &str = "actingcommand.package-publish-lock.v1";
 const READER_LEASE_SCHEMA: &str = "actingcommand.package-reader-lease.v1";
 const MAX_LOCK_ATTEMPTS: usize = 8;
 const LOCK_RETRY_DELAY: Duration = Duration::from_millis(25);
+const GENERATION_GATE_TIMEOUT: Duration = Duration::from_secs(5);
+const MAX_GENERATION_OPEN_ATTEMPTS: usize = 8;
 const HASH_BUFFER_BYTES: usize = 64 * 1024;
 
 /// A committed immutable generation and the physical files that now back its logical outputs.
@@ -152,10 +154,21 @@ struct PublicationLock {
     owner_token: String,
 }
 
+#[derive(Debug, Clone, Copy)]
+enum LockContentionPolicy {
+    RejectLiveOwner,
+    WaitForLiveOwner { timeout: Duration },
+}
+
 #[derive(Debug)]
 struct GenerationReaderLease {
     path: PathBuf,
     owner_token: String,
+}
+
+enum GenerationOpen {
+    Opened(PublishedPackageReader),
+    PointerAdvanced,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -916,7 +929,38 @@ impl PublicationLock {
         record: PublicationLockRecord,
         environment: &impl PublicationEnvironment,
     ) -> LabResult<Self> {
-        for attempt in 1..=MAX_LOCK_ATTEMPTS {
+        Self::acquire_with_policy(
+            path,
+            record,
+            environment,
+            LockContentionPolicy::RejectLiveOwner,
+        )
+    }
+
+    fn acquire_waiting_for_live_owner(
+        path: PathBuf,
+        record: PublicationLockRecord,
+        environment: &impl PublicationEnvironment,
+        timeout: Duration,
+    ) -> LabResult<Self> {
+        Self::acquire_with_policy(
+            path,
+            record,
+            environment,
+            LockContentionPolicy::WaitForLiveOwner { timeout },
+        )
+    }
+
+    fn acquire_with_policy(
+        path: PathBuf,
+        record: PublicationLockRecord,
+        environment: &impl PublicationEnvironment,
+        policy: LockContentionPolicy,
+    ) -> LabResult<Self> {
+        let started = Instant::now();
+        let mut attempt = 0usize;
+        loop {
+            attempt = attempt.saturating_add(1);
             match create_lock_file(&path, &record) {
                 Ok(()) => {
                     return Ok(Self {
@@ -933,52 +977,81 @@ impl PublicationLock {
                 }
             }
             let Some(observed) = read_lock_record_if_present(&path)? else {
-                if attempt < MAX_LOCK_ATTEMPTS {
-                    thread::sleep(LOCK_RETRY_DELAY);
+                if retry_lock_acquisition(policy, attempt, started) {
+                    continue;
                 }
-                continue;
+                break;
             };
             validate_lock_record(&observed, &record.lock_key)?;
-            let stale = match environment.inspect_process(observed.pid) {
-                Ok(ProcessStatus::Dead) => true,
-                Ok(ProcessStatus::Alive { start_token }) => {
-                    start_token != observed.process_start_token
-                }
-                Err(error) => {
-                    return Err(publication_error(format!(
-                        "cannot confirm publication lock owner death; lock={}; pid={}; owner_token={}; original_error={error}",
-                        path.display(),
-                        observed.pid,
-                        observed.owner_token
-                    )));
+            let stale = if observed.pid == record.pid
+                && observed.process_start_token == record.process_start_token
+            {
+                false
+            } else {
+                match environment.inspect_process(observed.pid) {
+                    Ok(ProcessStatus::Dead) => true,
+                    Ok(ProcessStatus::Alive { start_token }) => {
+                        start_token != observed.process_start_token
+                    }
+                    Err(error) => {
+                        return Err(publication_error(format!(
+                            "cannot confirm publication lock owner death; lock={}; pid={}; owner_token={}; original_error={error}",
+                            path.display(),
+                            observed.pid,
+                            observed.owner_token
+                        )));
+                    }
                 }
             };
             if !stale {
-                return Err(publication_error(format!(
-                    "publication output is locked by a live owner; lock={}; pid={}; process_start={}; owner_token={}; output_set_digest={}",
-                    path.display(),
-                    observed.pid,
-                    observed.process_start_token,
-                    observed.owner_token,
-                    observed.output_set_digest
-                )));
+                match policy {
+                    LockContentionPolicy::RejectLiveOwner => {
+                        return Err(publication_error(format!(
+                            "publication output is locked by a live owner; lock={}; pid={}; process_start={}; owner_token={}; output_set_digest={}",
+                            path.display(),
+                            observed.pid,
+                            observed.process_start_token,
+                            observed.owner_token,
+                            observed.output_set_digest
+                        )));
+                    }
+                    LockContentionPolicy::WaitForLiveOwner { timeout } => {
+                        if retry_lock_acquisition(policy, attempt, started) {
+                            continue;
+                        }
+                        return Err(publication_error(format!(
+                            "generation gate acquisition timed out waiting for a live owner; lock={}; pid={}; process_start={}; owner_token={}; timeout_ms={}; attempts={attempt}; escalation=fail_loud",
+                            path.display(),
+                            observed.pid,
+                            observed.process_start_token,
+                            observed.owner_token,
+                            timeout.as_millis()
+                        )));
+                    }
+                }
             }
             match reclaim_stale_lock(&path, &observed, &record.owner_token) {
                 Ok(true) => {}
                 Ok(false) => {
-                    if attempt == MAX_LOCK_ATTEMPTS {
+                    if !retry_lock_acquisition(policy, attempt, started) {
                         break;
                     }
-                    thread::sleep(LOCK_RETRY_DELAY);
                 }
                 Err(error) => return Err(error),
             }
         }
-        Err(publication_error(format!(
-            "publication lock recovery exhausted; lock={}; retries={MAX_LOCK_ATTEMPTS}; timeout_ms={}; escalation=fail_loud",
-            path.display(),
-            LOCK_RETRY_DELAY.as_millis() * MAX_LOCK_ATTEMPTS as u128
-        )))
+        match policy {
+            LockContentionPolicy::RejectLiveOwner => Err(publication_error(format!(
+                "publication lock recovery exhausted; lock={}; retries={MAX_LOCK_ATTEMPTS}; timeout_ms={}; escalation=fail_loud",
+                path.display(),
+                LOCK_RETRY_DELAY.as_millis() * MAX_LOCK_ATTEMPTS as u128
+            ))),
+            LockContentionPolicy::WaitForLiveOwner { timeout } => Err(publication_error(format!(
+                "generation gate acquisition timed out; lock={}; timeout_ms={}; attempts={attempt}; escalation=fail_loud",
+                path.display(),
+                timeout.as_millis()
+            ))),
+        }
     }
 
     fn release(&self) -> LabResult<()> {
@@ -998,6 +1071,22 @@ impl PublicationLock {
             ))
         })
     }
+}
+
+fn retry_lock_acquisition(policy: LockContentionPolicy, attempt: usize, started: Instant) -> bool {
+    let delay = match policy {
+        LockContentionPolicy::RejectLiveOwner if attempt < MAX_LOCK_ATTEMPTS => LOCK_RETRY_DELAY,
+        LockContentionPolicy::RejectLiveOwner => return false,
+        LockContentionPolicy::WaitForLiveOwner { timeout } => {
+            let remaining = timeout.saturating_sub(started.elapsed());
+            if remaining.is_zero() {
+                return false;
+            }
+            LOCK_RETRY_DELAY.min(remaining)
+        }
+    };
+    thread::sleep(delay);
+    true
 }
 
 impl GenerationReaderLease {
@@ -1044,56 +1133,67 @@ pub fn open_published_package(logical_path: &Path) -> LabResult<PublishedPackage
     if !authorities.exists() {
         return open_direct_package(logical_path);
     }
-    let authority_digests = candidate_authority_digests(&state_parent, &logical_key)?;
-    let mut resolved = None;
-    for authority_digest in authority_digests {
-        let authority_root = authorities.join(authority_digest);
-        let metadata = match fs::symlink_metadata(&authority_root) {
-            Ok(metadata) => metadata,
-            Err(error) if error.kind() == ErrorKind::NotFound => continue,
-            Err(error) => {
+    for attempt in 1..=MAX_GENERATION_OPEN_ATTEMPTS {
+        let authority_digests = candidate_authority_digests(&state_parent, &logical_key)?;
+        let mut resolved = None;
+        for authority_digest in authority_digests {
+            let authority_root = authorities.join(authority_digest);
+            let metadata = match fs::symlink_metadata(&authority_root) {
+                Ok(metadata) => metadata,
+                Err(error) if error.kind() == ErrorKind::NotFound => continue,
+                Err(error) => {
+                    return Err(publication_error(format!(
+                        "failed to inspect publication authority {}: {error}",
+                        authority_root.display()
+                    )));
+                }
+            };
+            if !metadata.file_type().is_dir() || metadata_is_link_or_reparse(&metadata) {
                 return Err(publication_error(format!(
-                    "failed to inspect publication authority {}: {error}",
+                    "publication authority is not a regular directory: {}",
                     authority_root.display()
                 )));
             }
-        };
-        if !metadata.file_type().is_dir() || metadata_is_link_or_reparse(&metadata) {
-            return Err(publication_error(format!(
-                "publication authority is not a regular directory: {}",
-                authority_root.display()
-            )));
+            let pointer = read_pointer_log(&authority_root.join(POINTER_FILE))?;
+            let Some(record) = pointer.last else {
+                continue;
+            };
+            validate_pointer_record(&record)?;
+            let Some(output) = record.outputs.get(&logical_key).cloned() else {
+                continue;
+            };
+            if resolved.replace((authority_root, record, output)).is_some() {
+                return Err(publication_error(format!(
+                    "multiple committed publication authorities claim output {}",
+                    logical_path.display()
+                )));
+            }
         }
-        let pointer = read_pointer_log(&authority_root.join(POINTER_FILE))?;
-        let Some(record) = pointer.last else {
-            continue;
-        };
-        validate_pointer_record(&record)?;
-        let Some(output) = record.outputs.get(&logical_key).cloned() else {
-            continue;
-        };
-        let generation_dir = authority_root
-            .join(GENERATIONS_DIRECTORY)
-            .join(&record.generation_id);
-        validate_generation(&authority_root, &record)?;
-        checked_generation_output_path(&generation_dir, &output)?;
-        if resolved.replace((authority_root, record, output)).is_some() {
-            return Err(publication_error(format!(
-                "multiple committed publication authorities claim output {}",
-                logical_path.display()
-            )));
+        match resolved {
+            Some((authority_root, record, output)) => {
+                match open_generation_package(
+                    logical_path,
+                    &state_parent,
+                    &authority_root,
+                    &record,
+                    &output,
+                )? {
+                    GenerationOpen::Opened(reader) => return Ok(reader),
+                    GenerationOpen::PointerAdvanced if attempt < MAX_GENERATION_OPEN_ATTEMPTS => {
+                        continue;
+                    }
+                    GenerationOpen::PointerAdvanced => {
+                        return Err(publication_error(format!(
+                            "package pointer kept advancing during reader registration; package={}; attempts={MAX_GENERATION_OPEN_ATTEMPTS}; escalation=fail_loud",
+                            logical_path.display()
+                        )));
+                    }
+                }
+            }
+            None => return open_direct_package(logical_path),
         }
     }
-    match resolved {
-        Some((authority_root, record, output)) => open_generation_package(
-            logical_path,
-            &state_parent,
-            &authority_root,
-            &record,
-            &output,
-        ),
-        None => open_direct_package(logical_path),
-    }
+    unreachable!("generation open attempts are non-zero")
 }
 
 fn open_direct_package(logical_path: &Path) -> LabResult<PublishedPackageReader> {
@@ -1117,34 +1217,58 @@ fn open_generation_package(
     authority_root: &Path,
     record: &PointerRecord,
     output: &PublishedOutput,
-) -> LabResult<PublishedPackageReader> {
+) -> LabResult<GenerationOpen> {
+    let logical_output = normalize_output_for_existing_parent(logical_path, state_parent)?;
+    let lease_record = prepare_generation_reader_lease(record, &logical_output)?;
     let gate =
         acquire_generation_gate(state_parent, authority_root, record, &record.generation_id)?;
+    let pointer_path = authority_root.join(POINTER_FILE);
+    let current = match read_pointer_log(&pointer_path).and_then(|pointer| {
+        let current = pointer.last.ok_or_else(|| {
+            publication_error(format!(
+                "committed package pointer disappeared during reader registration: {}",
+                pointer_path.display()
+            ))
+        })?;
+        validate_pointer_record(&current)?;
+        Ok(current)
+    }) {
+        Ok(current) => current,
+        Err(primary) => {
+            return match gate.release() {
+                Ok(()) => Err(primary),
+                Err(secondary) => Err(combine_errors(primary, secondary)),
+            };
+        }
+    };
+    if current.generation_id != record.generation_id
+        || current.outputs.get(&logical_output) != Some(output)
+    {
+        gate.release()?;
+        return Ok(GenerationOpen::PointerAdvanced);
+    }
     let generation_dir = authority_root
         .join(GENERATIONS_DIRECTORY)
         .join(&record.generation_id);
-    let opened = validate_generation(authority_root, record).and_then(|()| {
+    let opened = (|| {
         let resolved_path = checked_generation_output_path(&generation_dir, output)?;
-        let lease = create_generation_reader_lease(
-            authority_root,
-            record,
-            &normalize_output_for_existing_parent(logical_path, state_parent)?,
-        )?;
-        match File::open(&resolved_path) {
-            Ok(file) => Ok((resolved_path, file, lease)),
+        let lease = create_generation_reader_lease(authority_root, lease_record)?;
+        let file = match File::open(&resolved_path) {
+            Ok(file) => file,
             Err(error) => {
                 let primary = publication_error(format!(
                     "failed to open committed package {} resolved from {}: {error}",
                     resolved_path.display(),
                     logical_path.display()
                 ));
-                match lease.release() {
+                return match lease.release() {
                     Ok(()) => Err(primary),
                     Err(secondary) => Err(combine_errors(primary, secondary)),
-                }
+                };
             }
-        }
-    });
+        };
+        Ok((resolved_path, file, lease))
+    })();
     let (resolved_path, file, lease) = match opened {
         Ok(opened) => opened,
         Err(primary) => {
@@ -1160,12 +1284,18 @@ fn open_generation_package(
             Err(secondary) => Err(combine_errors(primary, secondary)),
         };
     }
-    Ok(PublishedPackageReader {
+    if let Err(primary) = validate_generation(authority_root, record) {
+        return match lease.release() {
+            Ok(()) => Err(primary),
+            Err(secondary) => Err(combine_errors(primary, secondary)),
+        };
+    }
+    Ok(GenerationOpen::Opened(PublishedPackageReader {
         logical_path: logical_path.to_path_buf(),
         resolved_path,
         file,
         lease: Some(lease),
-    })
+    }))
 }
 
 fn acquire_generation_gate(
@@ -1213,30 +1343,20 @@ fn acquire_generation_gate(
         normalized_outputs,
         lock_key: lock_key.clone(),
     };
-    PublicationLock::acquire(
+    PublicationLock::acquire_waiting_for_live_owner(
         locks_dir.join(format!("{}.lock", digest_text(&lock_key))),
         lock_record,
         &environment,
+        GENERATION_GATE_TIMEOUT,
     )
 }
 
 fn create_generation_reader_lease(
     authority_root: &Path,
-    record: &PointerRecord,
-    logical_output: &str,
+    lease_record: GenerationReaderLeaseRecord,
 ) -> LabResult<GenerationReaderLease> {
-    let environment = SystemPublicationEnvironment;
-    let identity = environment.current_process().map_err(|error| {
-        publication_error(format!(
-            "failed to identify package reader process: {error}"
-        ))
-    })?;
-    let acquired_unix_ms = environment.now_unix_ms().map_err(|error| {
-        publication_error(format!("failed to timestamp package reader lease: {error}"))
-    })?;
-    let owner_token = random_identifier(&environment, "reader-lease", &identity, acquired_unix_ms)?;
     let leases_root = authority_root.join(READER_LEASES_DIRECTORY);
-    let generation_leases = leases_root.join(&record.generation_id);
+    let generation_leases = leases_root.join(&lease_record.generation_id);
     fs::create_dir_all(&generation_leases).map_err(|error| {
         publication_error(format!(
             "failed to create package reader lease directory {}: {error}",
@@ -1248,20 +1368,37 @@ fn create_generation_reader_lease(
         &generation_leases,
         "package generation reader leases directory",
     )?;
-    let lease_record = GenerationReaderLeaseRecord {
-        schema_version: READER_LEASE_SCHEMA.to_string(),
-        owner_token: owner_token.clone(),
-        pid: identity.pid,
-        process_start_token: identity.start_token,
-        acquired_unix_ms,
-        generation_id: record.generation_id.clone(),
-        logical_output: logical_output.to_string(),
-    };
+    let owner_token = lease_record.owner_token.clone();
     let mut bytes = serde_json::to_vec(&lease_record).map_err(json_publication_error)?;
     bytes.push(b'\n');
     let path = generation_leases.join(format!("{owner_token}.lease"));
     write_new_synced_file(&path, &bytes)?;
     Ok(GenerationReaderLease { path, owner_token })
+}
+
+fn prepare_generation_reader_lease(
+    record: &PointerRecord,
+    logical_output: &str,
+) -> LabResult<GenerationReaderLeaseRecord> {
+    let environment = SystemPublicationEnvironment;
+    let identity = environment.current_process().map_err(|error| {
+        publication_error(format!(
+            "failed to identify package reader process: {error}"
+        ))
+    })?;
+    let acquired_unix_ms = environment.now_unix_ms().map_err(|error| {
+        publication_error(format!("failed to timestamp package reader lease: {error}"))
+    })?;
+    let owner_token = random_identifier(&environment, "reader-lease", &identity, acquired_unix_ms)?;
+    Ok(GenerationReaderLeaseRecord {
+        schema_version: READER_LEASE_SCHEMA.to_string(),
+        owner_token,
+        pid: identity.pid,
+        process_start_token: identity.start_token,
+        acquired_unix_ms,
+        generation_id: record.generation_id.clone(),
+        logical_output: logical_output.to_string(),
+    })
 }
 
 fn validate_no_cross_authority_claims<'a>(
@@ -2977,6 +3114,145 @@ mod tests {
         stage(&fourth, &output, b"fourth");
         fourth.commit().unwrap();
         assert_eq!(read_visible(&output), b"fourth");
+    }
+
+    #[test]
+    fn concurrent_readers_wait_for_live_generation_gate() {
+        const READER_COUNT: usize = 32;
+
+        let temp = TempDir::new().unwrap();
+        let env = FakeEnvironment::new(122, "start-a");
+        let output = temp.path().join("package.zip");
+        publish_single(&env, &output, b"first");
+
+        let locator = PackagePublicationTransaction::begin_single_with(&output, &env).unwrap();
+        let state_parent = locator.state_parent.clone();
+        let authority_root = locator.authority_root.clone();
+        let pointer_path = locator.pointer_path.clone();
+        locator.abort().unwrap();
+        let record = read_pointer_log(&pointer_path).unwrap().last.unwrap();
+        let gate = acquire_generation_gate(
+            &state_parent,
+            &authority_root,
+            &record,
+            &record.generation_id,
+        )
+        .unwrap();
+
+        let barrier = Arc::new(Barrier::new(READER_COUNT + 1));
+        let readers = (0..READER_COUNT)
+            .map(|_| {
+                let output = output.clone();
+                let barrier = Arc::clone(&barrier);
+                thread::spawn(move || {
+                    barrier.wait();
+                    open_published_package(&output)
+                        .and_then(PublishedPackageReader::read_all)
+                        .map_err(|error| error.message)
+                })
+            })
+            .collect::<Vec<_>>();
+
+        barrier.wait();
+        thread::sleep(Duration::from_millis(75));
+        gate.release().unwrap();
+
+        for reader in readers {
+            assert_eq!(reader.join().unwrap().unwrap(), b"first");
+        }
+    }
+
+    #[test]
+    fn waiting_gate_times_out_fails_closed_and_reclaims_only_confirmed_stale_owner() {
+        let temp = TempDir::new().unwrap();
+        let env = FakeEnvironment::new(124, "holder-start");
+        let output = temp.path().join("package.zip");
+        let holder = PackagePublicationTransaction::begin_single_with(&output, &env).unwrap();
+        let lock_path = holder.locks[0].path.clone();
+        let mut candidate = read_lock_record(&lock_path).unwrap();
+        env.set_current(125, "waiter-start");
+        candidate.owner_token = digest_text("waiting-gate-candidate");
+        candidate.pid = 125;
+        candidate.process_start_token = "waiter-start".to_string();
+        candidate.acquired_unix_ms += 1;
+
+        let timeout = PublicationLock::acquire_waiting_for_live_owner(
+            lock_path.clone(),
+            candidate.clone(),
+            &env,
+            Duration::from_millis(30),
+        )
+        .expect_err("a live owner must cause an explicit bounded timeout");
+        assert!(
+            timeout
+                .message
+                .contains("timed out waiting for a live owner")
+        );
+        assert!(timeout.message.contains("escalation=fail_loud"));
+
+        env.set_status(124, Err("owner inspection denied".to_string()));
+        let unknown = PublicationLock::acquire_waiting_for_live_owner(
+            lock_path.clone(),
+            candidate.clone(),
+            &env,
+            Duration::from_millis(30),
+        )
+        .expect_err("an unknown owner must fail closed");
+        assert!(
+            unknown
+                .message
+                .contains("cannot confirm publication lock owner death")
+        );
+
+        env.set_status(124, Ok(ProcessStatus::Dead));
+        let recovered = PublicationLock::acquire_waiting_for_live_owner(
+            lock_path,
+            candidate,
+            &env,
+            Duration::from_millis(30),
+        )
+        .unwrap();
+        recovered.release().unwrap();
+        drop(holder);
+    }
+
+    #[test]
+    fn reader_registration_retries_when_cleanup_wins() {
+        let temp = TempDir::new().unwrap();
+        let env = FakeEnvironment::new(123, "start-a");
+        let output = temp.path().join("package.zip");
+        publish_single(&env, &output, b"first");
+
+        let locator = PackagePublicationTransaction::begin_single_with(&output, &env).unwrap();
+        let state_parent = locator.state_parent.clone();
+        let authority_root = locator.authority_root.clone();
+        let pointer_path = locator.pointer_path.clone();
+        locator.abort().unwrap();
+        let first_record = read_pointer_log(&pointer_path).unwrap().last.unwrap();
+        let logical_output = normalize_output_for_existing_parent(&output, &state_parent).unwrap();
+        let first_output = first_record.outputs.get(&logical_output).unwrap().clone();
+
+        publish_single(&env, &output, b"second");
+        publish_single(&env, &output, b"third");
+        assert!(
+            !authority_root
+                .join(GENERATIONS_DIRECTORY)
+                .join(&first_record.generation_id)
+                .exists()
+        );
+
+        assert!(matches!(
+            open_generation_package(
+                &output,
+                &state_parent,
+                &authority_root,
+                &first_record,
+                &first_output,
+            )
+            .unwrap(),
+            GenerationOpen::PointerAdvanced
+        ));
+        assert_eq!(read_visible(&output), b"third");
     }
 
     #[test]
