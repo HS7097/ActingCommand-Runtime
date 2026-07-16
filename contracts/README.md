@@ -1,6 +1,6 @@
 # ActingCommand Runtime Contracts
 
-These files are historical and protocol reference contracts between the runtime decision/data core, UI, and future execution layer.
+These files are versioned data and protocol contracts between the runtime decision/data core, UI, and execution layer.
 
 ## Files
 
@@ -10,6 +10,7 @@ These files are historical and protocol reference contracts between the runtime 
 - `sqlite/schema.sql` — initial SQLite schema for profiles, runs, resources, acquisition captures, logs, and manifests.
 - `server-keys.md` — persisted server variant key policy.
 - `primitive-service.md` — language-neutral execution-layer boundary for Rust or other worker implementations.
+- `scheduling/` — frozen four-document scheduling catalog, diagnostics, canonical hash contract, and neutral examples.
 
 ## Rust mainline boundary
 
@@ -20,6 +21,10 @@ The Rust mainline contract crate lives in:
 The Rust device-layer crate lives in:
 
 - `crates/device`
+
+The Rust scheduling policy contract lives in:
+
+- `crates/policy`
 
 ## Historical Go boundary
 

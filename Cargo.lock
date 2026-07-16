@@ -216,6 +216,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "actingcommand-policy"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "actingcommand-ppocr-onnx-json-provider"
 version = "0.1.0"
 dependencies = [
