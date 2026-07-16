@@ -296,9 +296,11 @@ dependencies = [
  "actingcommand-execution-kernel",
  "actingcommand-ledger",
  "actingcommand-pack-containment",
+ "actingcommand-policy",
  "actingcommand-scheduler",
  "serde",
  "serde_json",
+ "sha2",
  "tempfile",
  "zip",
 ]
