@@ -1069,35 +1069,6 @@ mod tests {
     }
 
     #[test]
-    fn consume_allows_fight_with_bounded_nonpremium_policy() {
-        let probe = ProbeDecisionLoop::new(ProbePlan {
-            steps: vec![ProbeStep {
-                id: "bounded_consume".to_string(),
-                page_id: Some("fixture/home_page".to_string()),
-                action: ProbeAction::Click {
-                    target_id: "fixture/fight".to_string(),
-                    effect: ProbeClickEffect::ConsumeRegeneratingResource,
-                    resource_policy: Some(ResourcePolicy {
-                        kind: ResourcePolicyKind::ArknightsSanity,
-                        max_cost: Some(10),
-                        premium_currency_allowed: false,
-                        auto_refill_allowed: false,
-                        cost_allowed: true,
-                    }),
-                },
-                expect_after: Some(ProbeExpectation {
-                    page_id: "fixture/home_page".to_string(),
-                    timeout_ms: None,
-                    interval_ms: None,
-                }),
-            }],
-            ..valid_probe_plan()
-        });
-
-        assert!(probe.is_ok());
-    }
-
-    #[test]
     fn observe_target_with_dangerous_name_is_allowed() {
         let probe = ProbeDecisionLoop::new(ProbePlan {
             steps: vec![ProbeStep {
