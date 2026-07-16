@@ -19,11 +19,18 @@ use actingcommand_contract::{
 use actingcommand_device::{
     CaptureBackend, CaptureBackendName, DeviceError, DeviceResult, Frame, InputBackend, PixelFormat,
 };
+use actingcommand_policy::{
+    CatalogDocumentSource, CatalogSources, DecisionReasonChain, DispatchIntent, EvaluationFacts,
+    EvaluationResources, EvaluationTime, FactValue, HostResourceSnapshot, InstanceSnapshot,
+    ObservedOutcome, PoolValueSnapshot,
+};
 use actingcommand_scheduler::{ConnectionId, SchedulerConfig};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self, OpenOptions};
 use std::io::{Cursor, Write};
 use std::net::TcpStream;
+use std::path::Path;
+use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Barrier};
 use std::thread;
@@ -506,6 +513,130 @@ fn host_with_state(root: &TempDir, alias: &str, state: Arc<FakeState>) -> Runtim
         Arc::new(FakeProvider::one(alias, instance_id(), state)),
     )
     .expect("runtime host")
+}
+
+const POLICY_INSTANCE_ALIAS: &str = "fixture-instance-a";
+const POLICY_NOW_UNIX_MS: u64 = 1_699_963_200_000;
+
+fn policy_sources(version: u64) -> CatalogSources {
+    let mut sources = CatalogSources {
+        tasks: CatalogDocumentSource::new(
+            "memory://fixture/tasks.json",
+            include_bytes!("../../../contracts/scheduling/examples/catalog-a/tasks.json").to_vec(),
+        ),
+        pools: CatalogDocumentSource::new(
+            "memory://fixture/pools.json",
+            include_bytes!("../../../contracts/scheduling/examples/catalog-a/pools.json").to_vec(),
+        ),
+        activity: CatalogDocumentSource::new(
+            "memory://fixture/activity.json",
+            include_bytes!("../../../contracts/scheduling/examples/catalog-a/activity.json")
+                .to_vec(),
+        ),
+        timeline: CatalogDocumentSource::new(
+            "memory://fixture/timeline.json",
+            include_bytes!("../../../contracts/scheduling/examples/catalog-a/timeline.json")
+                .to_vec(),
+        ),
+    };
+    for source in [
+        &mut sources.tasks,
+        &mut sources.pools,
+        &mut sources.activity,
+        &mut sources.timeline,
+    ] {
+        let mut document: serde_json::Value =
+            serde_json::from_slice(&source.bytes).expect("policy fixture JSON");
+        document["catalog"]["catalog_version"] = serde_json::json!(version);
+        source.bytes = serde_json::to_vec_pretty(&document).expect("policy fixture bytes");
+    }
+    sources
+}
+
+fn evaluated_policy_dispatch(
+    host: &RuntimeHost,
+    trigger: PolicyTrigger,
+) -> (PolicyCycle, DispatchIntent, DecisionReasonChain) {
+    let cycle = host
+        .evaluate_policy_cycle(
+            &policy_facts(),
+            &policy_resources(),
+            EvaluationTime {
+                unix_ms: POLICY_NOW_UNIX_MS,
+            },
+            7,
+            trigger,
+        )
+        .expect("evaluate policy dispatch");
+    let evaluation = cycle.evaluation.as_ref().expect("policy evaluation");
+    let intent = evaluation
+        .dispatch_intents
+        .first()
+        .unwrap_or_else(|| panic!("dispatch intent: {evaluation:#?}"))
+        .clone();
+    let reason_chain = evaluation
+        .reason_chains
+        .iter()
+        .find(|chain| chain.id == intent.reason_chain_id)
+        .expect("dispatch reason chain")
+        .clone();
+    (cycle, intent, reason_chain)
+}
+
+fn policy_context(host: &RuntimeHost) -> PolicyAdmissionContext {
+    PolicyAdmissionContext {
+        fact_ledger_position: 1,
+        fact_snapshot_id: "snapshot:fixture-a".to_owned(),
+        approval_fact_ids: BTreeSet::from(["approval:fixture-a".to_owned()]),
+        budget: PolicyBudgetSnapshot {
+            daily_dispatches_remaining: 10,
+            window_iterations_remaining: 4,
+            runtime_ms_remaining: 120_000,
+        },
+        fencing_owner_epoch: host.runtime_info().owner_epoch(),
+        now_unix_ms: POLICY_NOW_UNIX_MS,
+    }
+}
+
+fn policy_facts() -> EvaluationFacts {
+    EvaluationFacts {
+        ledger_position: 1,
+        fact_snapshot_id: "snapshot:fixture-a".to_owned(),
+        facts: Vec::new(),
+        outcomes: vec![ObservedOutcome {
+            task_id: "fixture.observe".to_owned(),
+            instance_id: POLICY_INSTANCE_ALIAS.to_owned(),
+            outcome_key: "completed".to_owned(),
+            value: FactValue::Boolean(false),
+            observed_at_unix_ms: POLICY_NOW_UNIX_MS,
+        }],
+        tasks: Vec::new(),
+        instances: vec![InstanceSnapshot {
+            instance_id: POLICY_INSTANCE_ALIAS.to_owned(),
+            server_id: "fixture-server-a".to_owned(),
+            game_id: "fixture-game-a".to_owned(),
+            host_id: "fixture-host-a".to_owned(),
+            available: true,
+            capability_operation_ids: vec!["operation.observe".to_owned()],
+            preferred_task_ids: Vec::new(),
+        }],
+    }
+}
+
+fn policy_resources() -> EvaluationResources {
+    EvaluationResources {
+        pools: vec![PoolValueSnapshot {
+            pool_id: "fixture-pool-a".to_owned(),
+            value: 10,
+            observed_at_unix_ms: POLICY_NOW_UNIX_MS,
+        }],
+        hosts: vec![HostResourceSnapshot {
+            host_id: "fixture-host-a".to_owned(),
+            cpu_available_milli: 1_000,
+            gpu_available_milli: 1_000,
+            io_available_milli: 1_000,
+        }],
+    }
 }
 
 fn neutral_contained_task_package() -> Vec<u8> {
@@ -3270,4 +3401,356 @@ fn expired_unopened_lease_is_reclaimed_before_a_new_grant() {
     drop(first);
     drop(second);
     host.close().expect("close host");
+}
+
+#[test]
+fn policy_cadence_is_explicit_and_clock_jumps_force_full_recompute() {
+    let root = TempDir::new().expect("tempdir");
+    let state = Arc::new(FakeState::default());
+    let host = host_with_state(&root, POLICY_INSTANCE_ALIAS, state);
+    host.activate_policy_catalog(&policy_sources(1))
+        .expect("activate policy catalog");
+    let facts = policy_facts();
+    let resources = policy_resources();
+
+    let startup = host
+        .evaluate_policy_cycle(
+            &facts,
+            &resources,
+            EvaluationTime {
+                unix_ms: POLICY_NOW_UNIX_MS,
+            },
+            7,
+            PolicyTrigger::FactsChanged,
+        )
+        .expect("startup policy cycle");
+    assert_eq!(startup.directive.kind, PolicyRecomputeKind::Full);
+    assert_eq!(
+        startup.directive.reason,
+        PolicyRecomputeReason::StartupOrRecovery
+    );
+    assert!(startup.evaluation.is_some());
+
+    let cooldown = host
+        .evaluate_policy_cycle(
+            &facts,
+            &resources,
+            EvaluationTime {
+                unix_ms: POLICY_NOW_UNIX_MS + 100,
+            },
+            7,
+            PolicyTrigger::ResourcesChanged,
+        )
+        .expect("cooldown policy cycle");
+    assert_eq!(cooldown.directive.kind, PolicyRecomputeKind::Deferred);
+    assert_eq!(cooldown.directive.reason, PolicyRecomputeReason::Cooldown);
+    assert!(cooldown.evaluation.is_none());
+
+    let incremental = host
+        .evaluate_policy_cycle(
+            &facts,
+            &resources,
+            EvaluationTime {
+                unix_ms: POLICY_NOW_UNIX_MS + 1_100,
+            },
+            7,
+            PolicyTrigger::FactsChanged,
+        )
+        .expect("incremental policy cycle");
+    assert_eq!(incremental.directive.kind, PolicyRecomputeKind::Incremental);
+    assert_eq!(incremental.directive.reason, PolicyRecomputeReason::Event);
+
+    let clock_jump = host
+        .evaluate_policy_cycle(
+            &facts,
+            &resources,
+            EvaluationTime {
+                unix_ms: POLICY_NOW_UNIX_MS + 7_000,
+            },
+            7,
+            PolicyTrigger::ClockObserved {
+                previous_unix_ms: POLICY_NOW_UNIX_MS + 1_100,
+            },
+        )
+        .expect("clock-jump policy cycle");
+    assert_eq!(clock_jump.directive.kind, PolicyRecomputeKind::Full);
+    assert_eq!(
+        clock_jump.directive.reason,
+        PolicyRecomputeReason::ClockJump
+    );
+
+    let reconciliation = host
+        .evaluate_policy_cycle(
+            &facts,
+            &resources,
+            EvaluationTime {
+                unix_ms: POLICY_NOW_UNIX_MS + 67_000,
+            },
+            7,
+            PolicyTrigger::Reconciliation,
+        )
+        .expect("reconciliation policy cycle");
+    assert_eq!(reconciliation.directive.kind, PolicyRecomputeKind::Full);
+    assert_eq!(
+        reconciliation.directive.reason,
+        PolicyRecomputeReason::Reconciliation
+    );
+    host.close().expect("close host");
+}
+
+#[test]
+fn policy_host_revalidates_admission_pins_versions_and_replays_without_side_effects() {
+    let root = TempDir::new().expect("tempdir");
+    let state = Arc::new(FakeState::default());
+    let host = host_with_state(&root, POLICY_INSTANCE_ALIAS, Arc::clone(&state));
+    let first_catalog = host
+        .activate_policy_catalog(&policy_sources(1))
+        .expect("activate first catalog");
+    let (_, intent, reasons) = evaluated_policy_dispatch(&host, PolicyTrigger::FactsChanged);
+
+    let mut missing_approval = policy_context(&host);
+    missing_approval.approval_fact_ids.clear();
+    let mut missing_approval_intent = intent.clone();
+    missing_approval_intent.decision_id = "decision:missing-approval".to_owned();
+    missing_approval_intent.reason_chain_id = "reason:missing-approval".to_owned();
+    let mut missing_approval_reasons = reasons.clone();
+    missing_approval_reasons.id = "reason:missing-approval".to_owned();
+    missing_approval_reasons.decision_id = "decision:missing-approval".to_owned();
+    let error = host
+        .admit_policy_dispatch(
+            &missing_approval_intent,
+            &missing_approval_reasons,
+            &missing_approval,
+        )
+        .expect_err("missing approval must reject");
+    assert_eq!(error.code(), "policy_approval_fact_missing");
+
+    let mut tampered_intent = intent.clone();
+    tampered_intent.decision_id = "decision:tampered".to_owned();
+    tampered_intent.reason_chain_id = "reason:tampered".to_owned();
+    tampered_intent.approval_refs.clear();
+    let mut tampered_reasons = reasons.clone();
+    tampered_reasons.id = "reason:tampered".to_owned();
+    tampered_reasons.decision_id = "decision:tampered".to_owned();
+    let error = host
+        .admit_policy_dispatch(&tampered_intent, &tampered_reasons, &policy_context(&host))
+        .expect_err("catalog approval requirements cannot be stripped");
+    assert_eq!(error.code(), "policy_intent_catalog_mismatch");
+
+    let admission = host
+        .admit_policy_dispatch(&intent, &reasons, &policy_context(&host))
+        .expect("policy admission");
+    assert!(matches!(admission, PolicyDispatchAdmission::Granted { .. }));
+    assert_eq!(
+        host.pinned_policy_catalog(&intent.decision_id)
+            .expect("pinned catalog")
+            .expect("catalog pin")
+            .catalog_hash(),
+        first_catalog.catalog_hash()
+    );
+
+    let mut client = TestClient::connect(&host);
+    let before = projected_events(&mut client, EventQuery::default());
+    let mut stale_context = policy_context(&host);
+    stale_context.now_unix_ms = POLICY_NOW_UNIX_MS + 60_000;
+    let replay = host
+        .admit_policy_dispatch(&intent, &reasons, &stale_context)
+        .expect("exact replay is suppressed before mutable-state revalidation");
+    assert!(matches!(
+        replay,
+        PolicyDispatchAdmission::ReplaySuppressed { .. }
+    ));
+    let after = projected_events(&mut client, EventQuery::default());
+    assert_eq!(before.len(), after.len());
+    assert_eq!(
+        after
+            .iter()
+            .filter(|event| event.event_type == EventType::PolicyDispatchIntent)
+            .count(),
+        3
+    );
+    assert_eq!(
+        after
+            .iter()
+            .filter(|event| event.event_type == EventType::LeaseGranted)
+            .count(),
+        1
+    );
+    assert_eq!(
+        after
+            .iter()
+            .filter(|event| event.event_type == EventType::PolicyDispatchRejected)
+            .count(),
+        2
+    );
+
+    let second_catalog = host
+        .activate_policy_catalog(&policy_sources(2))
+        .expect("activate second catalog");
+    assert_ne!(first_catalog.catalog_hash(), second_catalog.catalog_hash());
+    assert_eq!(
+        host.pinned_policy_catalog(&intent.decision_id)
+            .expect("pinned catalog")
+            .expect("catalog pin")
+            .catalog_hash(),
+        first_catalog.catalog_hash()
+    );
+
+    let mut old_new_intent = intent.clone();
+    old_new_intent.decision_id = "decision:fixture-b".to_owned();
+    old_new_intent.reason_chain_id = "reason:fixture-b".to_owned();
+    let mut old_new_reasons = reasons.clone();
+    old_new_reasons.id = "reason:fixture-b".to_owned();
+    old_new_reasons.decision_id = "decision:fixture-b".to_owned();
+    let error = host
+        .admit_policy_dispatch(&old_new_intent, &old_new_reasons, &policy_context(&host))
+        .expect_err("new admission cannot use the old catalog");
+    assert_eq!(error.code(), "policy_catalog_mismatch");
+
+    host.complete_policy_dispatch(&intent.decision_id)
+        .expect("complete policy dispatch");
+    assert!(
+        host.pinned_policy_catalog(&intent.decision_id)
+            .expect("pinned catalog")
+            .is_none()
+    );
+    let rolled_back = host
+        .rollback_policy_catalog(first_catalog.catalog_hash())
+        .expect("rollback policy catalog");
+    assert_eq!(rolled_back, first_catalog);
+    let events = projected_events(&mut client, EventQuery::default());
+    assert!(
+        events
+            .iter()
+            .any(|event| event.event_type == EventType::CatalogActivated)
+    );
+    assert!(
+        events
+            .iter()
+            .any(|event| event.event_type == EventType::CatalogRolledBack)
+    );
+    assert!(
+        events
+            .iter()
+            .any(|event| event.event_type == EventType::PolicyDispatchCompleted)
+    );
+    assert_eq!(state.open_count.load(Ordering::Acquire), 0);
+    drop(client);
+    host.close().expect("close host");
+
+    let reopened = host_with_state(&root, POLICY_INSTANCE_ALIAS, Arc::new(FakeState::default()));
+    assert_eq!(
+        reopened
+            .active_policy_catalog()
+            .expect("active catalog")
+            .expect("catalog")
+            .catalog_hash(),
+        first_catalog.catalog_hash()
+    );
+    let replay = reopened
+        .admit_policy_dispatch(&intent, &reasons, &policy_context(&reopened))
+        .expect("replay after restart");
+    assert!(matches!(
+        replay,
+        PolicyDispatchAdmission::ReplaySuppressed { .. }
+    ));
+    reopened.close().expect("close reopened host");
+}
+
+#[test]
+fn policy_dispatch_crash_child_process() {
+    let Ok(root) = std::env::var("ACTINGCOMMAND_POLICY_CRASH_ROOT") else {
+        return;
+    };
+    let instance_bytes = fs::read(Path::new(&root).join("instance.json")).expect("instance bytes");
+    let instance_id: InstanceId =
+        serde_json::from_slice(&instance_bytes).expect("instance identifier");
+    let host = RuntimeHost::start(
+        RuntimeHostConfig::new(&root, b"policy-crash-process-salt"),
+        Arc::new(FakeProvider::one(
+            POLICY_INSTANCE_ALIAS,
+            instance_id,
+            Arc::new(FakeState::default()),
+        )),
+    )
+    .expect("child runtime host");
+    let catalog = host
+        .activate_policy_catalog(&policy_sources(1))
+        .expect("child catalog activation");
+    let (_, intent, reason_chain) = evaluated_policy_dispatch(&host, PolicyTrigger::FactsChanged);
+    assert_eq!(intent.catalog_hash, catalog.catalog_hash());
+    let admission = host
+        .admit_policy_dispatch(&intent, &reason_chain, &policy_context(&host))
+        .expect("child policy admission");
+    assert!(matches!(admission, PolicyDispatchAdmission::Granted { .. }));
+    fs::write(Path::new(&root).join("child-ready"), b"ready").expect("child marker");
+    std::process::exit(0);
+}
+
+#[test]
+fn policy_dispatch_survives_real_process_crash_without_second_lease_side_effect() {
+    let root = TempDir::new().expect("tempdir");
+    let shared_instance_id = instance_id();
+    fs::write(
+        root.path().join("instance.json"),
+        serde_json::to_vec(&shared_instance_id).expect("instance bytes"),
+    )
+    .expect("instance file");
+    let status = Command::new(std::env::current_exe().expect("test executable"))
+        .args([
+            "--exact",
+            "tests::policy_dispatch_crash_child_process",
+            "--nocapture",
+        ])
+        .env("ACTINGCOMMAND_POLICY_CRASH_ROOT", root.path())
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .expect("run crash child");
+    assert!(status.success());
+    assert!(root.path().join("child-ready").is_file());
+
+    let host = RuntimeHost::start(
+        config(&root),
+        Arc::new(FakeProvider::one(
+            POLICY_INSTANCE_ALIAS,
+            shared_instance_id,
+            Arc::new(FakeState::default()),
+        )),
+    )
+    .expect("recovered runtime host");
+    let catalog = host
+        .active_policy_catalog()
+        .expect("active catalog")
+        .expect("catalog");
+    let (cycle, intent, reason_chain) = evaluated_policy_dispatch(&host, PolicyTrigger::Recovery);
+    assert_eq!(cycle.directive.kind, PolicyRecomputeKind::Full);
+    assert!(cycle.pending_dispatch_intents.is_empty());
+    assert_eq!(intent.catalog_hash, catalog.catalog_hash());
+    let replay = host
+        .admit_policy_dispatch(&intent, &reason_chain, &policy_context(&host))
+        .expect("replay after crash");
+    assert!(matches!(
+        replay,
+        PolicyDispatchAdmission::ReplaySuppressed { .. }
+    ));
+    let mut client = TestClient::connect(&host);
+    let events = projected_events(&mut client, EventQuery::default());
+    assert_eq!(
+        events
+            .iter()
+            .filter(|event| event.event_type == EventType::PolicyDispatchIntent)
+            .count(),
+        1
+    );
+    assert_eq!(
+        events
+            .iter()
+            .filter(|event| event.event_type == EventType::LeaseGranted)
+            .count(),
+        1
+    );
+    drop(client);
+    host.close().expect("close recovered host");
 }
