@@ -8,7 +8,7 @@ use crate::{
 };
 use actingcommand_contract::{InputAction, TaskOutcome};
 use actingcommand_device::{Frame, PixelFormat};
-use actingcommand_page_detector::PageDetector;
+use actingcommand_page_detector::{PageDetector, require_all_page_evaluations};
 use actingcommand_recognition::{Scene, ScenePixelFormat};
 use actingcommand_recognition_pack::RecognitionEvaluator;
 use serde::Deserialize;
@@ -30,21 +30,37 @@ const MAX_STEPS: u32 = 1_000;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ContainedTaskError {
     code: &'static str,
+    detail: Option<String>,
 }
 
 impl ContainedTaskError {
     fn new(code: &'static str) -> Self {
-        Self { code }
+        Self { code, detail: None }
+    }
+
+    fn with_detail(code: &'static str, detail: impl Into<String>) -> Self {
+        Self {
+            code,
+            detail: Some(detail.into()),
+        }
     }
 
     pub const fn code(&self) -> &'static str {
         self.code
     }
+
+    pub fn detail(&self) -> Option<&str> {
+        self.detail.as_deref()
+    }
 }
 
 impl fmt::Display for ContainedTaskError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(formatter, "contained task error {}", self.code)
+        write!(formatter, "contained task error {}", self.code)?;
+        if let Some(detail) = &self.detail {
+            write!(formatter, ": {detail}")?;
+        }
+        Ok(())
     }
 }
 
@@ -367,10 +383,22 @@ impl PreparedContainedTask {
                     height: frame.height,
                 })
                 .map_err(ContainedTaskRunError::Boundary)?;
-            let page = self
+            let outcomes = self
                 .detector
                 .evaluate_all(&self.evaluator, &scene)
-                .map_err(|_| ContainedTaskError::new("contained_task_recognition_failed"))?
+                .map_err(|error| {
+                    ContainedTaskError::with_detail(
+                        "contained_task_recognition_failed",
+                        error.to_string(),
+                    )
+                })?;
+            let page = require_all_page_evaluations(outcomes)
+                .map_err(|error| {
+                    ContainedTaskError::with_detail(
+                        "contained_task_recognition_failed",
+                        error.to_string(),
+                    )
+                })?
                 .into_iter()
                 .find(|evaluation| evaluation.matched)
                 .map(|evaluation| evaluation.page_id);
