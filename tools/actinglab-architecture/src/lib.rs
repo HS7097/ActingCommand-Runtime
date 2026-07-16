@@ -1167,6 +1167,7 @@ pub fn contract_dependency_violations(manifest: &str) -> Result<Vec<String>, Str
     let allowed = HashSet::from([
         "serde".to_string(),
         "serde_json".to_string(),
+        "sha2".to_string(),
         "thiserror".to_string(),
     ]);
     let mut violations = dependencies

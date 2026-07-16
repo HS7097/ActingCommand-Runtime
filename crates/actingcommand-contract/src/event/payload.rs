@@ -14,7 +14,8 @@ use crate::{
     PerformanceContext, PerformanceControlEventData, PerformanceControlLevel,
     PerformanceControlReason, PerformanceDeadlineDisposition, PerformanceMonitorHealth,
     PerformanceMonitorStateEventData, PerformancePressureEventData, PerformancePressureRecord,
-    PerformanceStutterEventData, PerformanceSummaryEventData, RequestId,
+    PerformanceStutterEventData, PerformanceSummaryEventData, ReleaseTransitionData,
+    ReleaseTransitionKind, RequestId, RuntimeReleaseSet, StateMigrationData,
     validate_fact_invalidation, validate_performance_control, validate_performance_monitor_state,
     validate_performance_stutter, validate_performance_summary,
 };
@@ -40,6 +41,8 @@ pub const RECOGNITION_PAYLOAD_SCHEMA: &str = "actingcommand.payload.recognition.
 pub const ARTIFACT_PAYLOAD_SCHEMA: &str = "actingcommand.payload.artifact.v1";
 pub const RESOURCE_AUTHORING_PAYLOAD_SCHEMA: &str = "actingcommand.payload.resource_authoring.v1";
 pub const CLIENT_PAYLOAD_SCHEMA: &str = "actingcommand.payload.client.v2";
+pub const STATE_PAYLOAD_SCHEMA: &str = "actingcommand.payload.state.v1";
+pub const RELEASE_PAYLOAD_SCHEMA: &str = "actingcommand.payload.release.v1";
 pub const LEDGER_PAYLOAD_SCHEMA: &str = "actingcommand.payload.ledger.v2";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -872,6 +875,53 @@ impl CatalogTransitionPayload {
 
     pub fn previous_catalog_hash(&self) -> Option<&str> {
         self.previous_catalog_hash.as_deref()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct StateMigrationPayload {
+    action: EventAction,
+    migration: StateMigrationData,
+    audit: SanitizedAudit,
+}
+
+impl StateMigrationPayload {
+    pub const fn migration(&self) -> &StateMigrationData {
+        &self.migration
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ReleaseStagedPayload {
+    action: EventAction,
+    effect_disposition: EffectDisposition,
+    manifest: RuntimeReleaseSet,
+    audit: SanitizedAudit,
+}
+
+impl ReleaseStagedPayload {
+    pub const fn manifest(&self) -> &RuntimeReleaseSet {
+        &self.manifest
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ReleaseTransitionPayload {
+    action: EventAction,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    diagnostic_code: Option<DiagnosticCode>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    effect_disposition: Option<EffectDisposition>,
+    transition: ReleaseTransitionData,
+    audit: SanitizedAudit,
+}
+
+impl ReleaseTransitionPayload {
+    pub const fn transition(&self) -> &ReleaseTransitionData {
+        &self.transition
     }
 }
 
@@ -1884,6 +1934,60 @@ impl PayloadDetail for CatalogTransitionPayload {
     }
 }
 
+impl PayloadDetail for StateMigrationPayload {
+    fn action(&self) -> EventAction {
+        self.action
+    }
+
+    fn diagnostic_code(&self) -> Option<DiagnosticCode> {
+        None
+    }
+
+    fn effect_disposition(&self) -> Option<EffectDisposition> {
+        Some(EffectDisposition::Performed)
+    }
+
+    fn audit(&self) -> &SanitizedAudit {
+        &self.audit
+    }
+}
+
+impl PayloadDetail for ReleaseStagedPayload {
+    fn action(&self) -> EventAction {
+        self.action
+    }
+
+    fn diagnostic_code(&self) -> Option<DiagnosticCode> {
+        None
+    }
+
+    fn effect_disposition(&self) -> Option<EffectDisposition> {
+        Some(self.effect_disposition)
+    }
+
+    fn audit(&self) -> &SanitizedAudit {
+        &self.audit
+    }
+}
+
+impl PayloadDetail for ReleaseTransitionPayload {
+    fn action(&self) -> EventAction {
+        self.action
+    }
+
+    fn diagnostic_code(&self) -> Option<DiagnosticCode> {
+        self.diagnostic_code
+    }
+
+    fn effect_disposition(&self) -> Option<EffectDisposition> {
+        self.effect_disposition
+    }
+
+    fn audit(&self) -> &SanitizedAudit {
+        &self.audit
+    }
+}
+
 impl PayloadDetail for LeaseTransferPayload {
     fn action(&self) -> EventAction {
         self.action
@@ -2205,6 +2309,24 @@ struct CatalogTransitionDraft {
     audit: AuditInput,
 }
 
+struct StateMigrationDraft {
+    migration: StateMigrationData,
+    audit: AuditInput,
+}
+
+struct ReleaseStagedDraft {
+    manifest: RuntimeReleaseSet,
+    audit: AuditInput,
+}
+
+struct ReleaseTransitionDraft {
+    action: EventAction,
+    transition: ReleaseTransitionData,
+    diagnostic_code: Option<DiagnosticCode>,
+    effect_disposition: Option<EffectDisposition>,
+    audit: AuditInput,
+}
+
 struct TaskSemanticDraft {
     fact: TaskSemanticFact,
     audit: AuditInput,
@@ -2486,6 +2608,51 @@ impl CatalogTransitionDraft {
             catalog_version: self.data.catalog_version,
             catalog_hash: self.data.catalog_hash,
             previous_catalog_hash: self.data.previous_catalog_hash,
+            audit: self.audit.sanitize(fingerprinter)?,
+        })
+    }
+}
+
+impl StateMigrationDraft {
+    fn sanitize(
+        self,
+        fingerprinter: &dyn SecretFingerprinter,
+    ) -> Result<StateMigrationPayload, SanitizationError> {
+        self.migration.validate()?;
+        Ok(StateMigrationPayload {
+            action: EventAction::StateMigrate,
+            migration: self.migration,
+            audit: self.audit.sanitize(fingerprinter)?,
+        })
+    }
+}
+
+impl ReleaseStagedDraft {
+    fn sanitize(
+        self,
+        fingerprinter: &dyn SecretFingerprinter,
+    ) -> Result<ReleaseStagedPayload, SanitizationError> {
+        self.manifest.validate()?;
+        Ok(ReleaseStagedPayload {
+            action: EventAction::ReleaseStage,
+            effect_disposition: EffectDisposition::Performed,
+            manifest: self.manifest,
+            audit: self.audit.sanitize(fingerprinter)?,
+        })
+    }
+}
+
+impl ReleaseTransitionDraft {
+    fn sanitize(
+        self,
+        fingerprinter: &dyn SecretFingerprinter,
+    ) -> Result<ReleaseTransitionPayload, SanitizationError> {
+        self.transition.validate()?;
+        Ok(ReleaseTransitionPayload {
+            action: self.action,
+            diagnostic_code: self.diagnostic_code,
+            effect_disposition: self.effect_disposition,
+            transition: self.transition,
             audit: self.audit.sanitize(fingerprinter)?,
         })
     }
@@ -3034,6 +3201,59 @@ fn validate_catalog_payload(payload: &CatalogPayload) -> Result<(), Sanitization
         catalog_hash: value.catalog_hash.clone(),
         previous_catalog_hash: value.previous_catalog_hash.clone(),
     })
+}
+
+fn validate_release_payload(payload: &ReleasePayload) -> Result<(), SanitizationError> {
+    match payload {
+        ReleasePayload::Staged(value) => {
+            if value.action != EventAction::ReleaseStage
+                || value.effect_disposition != EffectDisposition::Performed
+            {
+                return Err(SanitizationError::new(
+                    "invalid_release_stage_lifecycle",
+                    "release_payload",
+                ));
+            }
+            value.manifest.validate()
+        }
+        ReleasePayload::TransitionIntent(value)
+            if value.action == release_action(value.transition.kind())
+                && value.diagnostic_code.is_none()
+                && value.effect_disposition.is_none() =>
+        {
+            value.transition.validate()
+        }
+        ReleasePayload::Activated(value)
+            if value.action == EventAction::ReleaseActivate
+                && value.transition.kind() == ReleaseTransitionKind::Activate
+                && value.diagnostic_code.is_none()
+                && value.effect_disposition == Some(EffectDisposition::Performed) =>
+        {
+            value.transition.validate()
+        }
+        ReleasePayload::RolledBack(value)
+            if value.action == EventAction::ReleaseRollback
+                && value.transition.kind() == ReleaseTransitionKind::Rollback
+                && value.diagnostic_code.is_none()
+                && value.effect_disposition == Some(EffectDisposition::Performed) =>
+        {
+            value.transition.validate()
+        }
+        ReleasePayload::TransitionFailed(value)
+            if value.action == release_action(value.transition.kind())
+                && value.diagnostic_code == Some(DiagnosticCode::ReleaseTransitionFailed)
+                && matches!(
+                    value.effect_disposition,
+                    Some(EffectDisposition::NotPerformed | EffectDisposition::Indeterminate)
+                ) =>
+        {
+            value.transition.validate()
+        }
+        _ => Err(SanitizationError::new(
+            "invalid_release_transition_lifecycle",
+            "release_payload",
+        )),
+    }
 }
 
 fn validate_policy_token(value: &str, field: &'static str) -> Result<(), SanitizationError> {
@@ -4413,6 +4633,91 @@ impl CatalogPayloadDraft {
     }
 }
 
+enum StateDraftKind {
+    Migrated(StateMigrationDraft),
+}
+
+pub struct StatePayloadDraft(StateDraftKind);
+
+impl StatePayloadDraft {
+    pub fn migrated(migration: StateMigrationData, audit: AuditInput) -> Self {
+        Self(StateDraftKind::Migrated(StateMigrationDraft {
+            migration,
+            audit,
+        }))
+    }
+}
+
+enum ReleaseDraftKind {
+    Staged(ReleaseStagedDraft),
+    TransitionIntent(ReleaseTransitionDraft),
+    Activated(ReleaseTransitionDraft),
+    RolledBack(ReleaseTransitionDraft),
+    TransitionFailed(ReleaseTransitionDraft),
+}
+
+pub struct ReleasePayloadDraft(ReleaseDraftKind);
+
+impl ReleasePayloadDraft {
+    pub fn staged(manifest: RuntimeReleaseSet, audit: AuditInput) -> Self {
+        Self(ReleaseDraftKind::Staged(ReleaseStagedDraft {
+            manifest,
+            audit,
+        }))
+    }
+
+    pub fn transition_intent(transition: ReleaseTransitionData, audit: AuditInput) -> Self {
+        Self(ReleaseDraftKind::TransitionIntent(ReleaseTransitionDraft {
+            action: release_action(transition.kind()),
+            transition,
+            diagnostic_code: None,
+            effect_disposition: None,
+            audit,
+        }))
+    }
+
+    pub fn activated(transition: ReleaseTransitionData, audit: AuditInput) -> Self {
+        Self(ReleaseDraftKind::Activated(ReleaseTransitionDraft {
+            action: EventAction::ReleaseActivate,
+            transition,
+            diagnostic_code: None,
+            effect_disposition: Some(EffectDisposition::Performed),
+            audit,
+        }))
+    }
+
+    pub fn rolled_back(transition: ReleaseTransitionData, audit: AuditInput) -> Self {
+        Self(ReleaseDraftKind::RolledBack(ReleaseTransitionDraft {
+            action: EventAction::ReleaseRollback,
+            transition,
+            diagnostic_code: None,
+            effect_disposition: Some(EffectDisposition::Performed),
+            audit,
+        }))
+    }
+
+    pub fn transition_failed(
+        transition: ReleaseTransitionData,
+        effect_disposition: EffectDisposition,
+        audit: AuditInput,
+    ) -> Self {
+        Self(ReleaseDraftKind::TransitionFailed(ReleaseTransitionDraft {
+            action: release_action(transition.kind()),
+            transition,
+            diagnostic_code: Some(DiagnosticCode::ReleaseTransitionFailed),
+            effect_disposition: Some(effect_disposition),
+            audit,
+        }))
+    }
+}
+
+const fn release_action(kind: ReleaseTransitionKind) -> EventAction {
+    match kind {
+        ReleaseTransitionKind::Activate => EventAction::ReleaseActivate,
+        ReleaseTransitionKind::Rollback => EventAction::ReleaseRollback,
+    }
+}
+
 pub enum EventPayloadDraft {
     Runtime(RuntimePayloadDraft),
     Monitor(MonitorPayloadDraft),
@@ -4423,6 +4728,8 @@ pub enum EventPayloadDraft {
     Scheduler(SchedulerPayloadDraft),
     Policy(PolicyPayloadDraft),
     Catalog(CatalogPayloadDraft),
+    State(StatePayloadDraft),
+    Release(ReleasePayloadDraft),
     Lease(LeasePayloadDraft),
     Task(TaskPayloadDraft),
     Application(ApplicationPayloadDraft),
@@ -4454,6 +4761,8 @@ payload_draft_from!(ApprovalPayloadDraft, Approval);
 payload_draft_from!(SchedulerPayloadDraft, Scheduler);
 payload_draft_from!(PolicyPayloadDraft, Policy);
 payload_draft_from!(CatalogPayloadDraft, Catalog);
+payload_draft_from!(StatePayloadDraft, State);
+payload_draft_from!(ReleasePayloadDraft, Release);
 payload_draft_from!(LeasePayloadDraft, Lease);
 payload_draft_from!(TaskPayloadDraft, Task);
 payload_draft_from!(ApplicationPayloadDraft, Application);
@@ -4588,6 +4897,32 @@ pub enum CatalogPayload {
     Activated(CatalogTransitionPayload),
     RolledBack(CatalogTransitionPayload),
     TransitionFailed(CatalogTransitionPayload),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(
+    tag = "kind",
+    content = "data",
+    rename_all = "snake_case",
+    deny_unknown_fields
+)]
+pub enum StatePayload {
+    Migrated(StateMigrationPayload),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(
+    tag = "kind",
+    content = "data",
+    rename_all = "snake_case",
+    deny_unknown_fields
+)]
+pub enum ReleasePayload {
+    Staged(ReleaseStagedPayload),
+    TransitionIntent(ReleaseTransitionPayload),
+    Activated(ReleaseTransitionPayload),
+    RolledBack(ReleaseTransitionPayload),
+    TransitionFailed(ReleaseTransitionPayload),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -4832,6 +5167,16 @@ family_payload!(CatalogPayload, {
     RolledBack => EventType::CatalogRolledBack,
     TransitionFailed => EventType::CatalogTransitionFailed,
 });
+family_payload!(StatePayload, {
+    Migrated => EventType::StateMigrated,
+});
+family_payload!(ReleasePayload, {
+    Staged => EventType::ReleaseStaged,
+    TransitionIntent => EventType::ReleaseTransitionIntent,
+    Activated => EventType::ReleaseActivated,
+    RolledBack => EventType::ReleaseRolledBack,
+    TransitionFailed => EventType::ReleaseTransitionFailed,
+});
 family_payload!(LeasePayload, {
     Requested => EventType::LeaseRequested,
     Granted => EventType::LeaseGranted,
@@ -4930,6 +5275,8 @@ pub enum EventPayload {
     Scheduler(SchedulerPayload),
     Policy(PolicyPayload),
     Catalog(CatalogPayload),
+    State(StatePayload),
+    Release(ReleasePayload),
     Lease(LeasePayload),
     Task(TaskPayload),
     Application(ApplicationPayload),
@@ -5069,6 +5416,28 @@ impl EventPayloadDraft {
                 }
                 CatalogDraftKind::TransitionFailed(detail) => {
                     CatalogPayload::TransitionFailed(detail.sanitize(fingerprinter)?)
+                }
+            }),
+            Self::State(value) => EventPayload::State(match value.0 {
+                StateDraftKind::Migrated(detail) => {
+                    StatePayload::Migrated(detail.sanitize(fingerprinter)?)
+                }
+            }),
+            Self::Release(value) => EventPayload::Release(match value.0 {
+                ReleaseDraftKind::Staged(detail) => {
+                    ReleasePayload::Staged(detail.sanitize(fingerprinter)?)
+                }
+                ReleaseDraftKind::TransitionIntent(detail) => {
+                    ReleasePayload::TransitionIntent(detail.sanitize(fingerprinter)?)
+                }
+                ReleaseDraftKind::Activated(detail) => {
+                    ReleasePayload::Activated(detail.sanitize(fingerprinter)?)
+                }
+                ReleaseDraftKind::RolledBack(detail) => {
+                    ReleasePayload::RolledBack(detail.sanitize(fingerprinter)?)
+                }
+                ReleaseDraftKind::TransitionFailed(detail) => {
+                    ReleasePayload::TransitionFailed(detail.sanitize(fingerprinter)?)
                 }
             }),
             Self::Lease(value) => EventPayload::Lease(match value.0 {
@@ -5251,6 +5620,8 @@ impl EventPayload {
             Self::Scheduler(_) => SCHEDULER_PAYLOAD_SCHEMA,
             Self::Policy(_) => POLICY_PAYLOAD_SCHEMA,
             Self::Catalog(_) => CATALOG_PAYLOAD_SCHEMA,
+            Self::State(_) => STATE_PAYLOAD_SCHEMA,
+            Self::Release(_) => RELEASE_PAYLOAD_SCHEMA,
             Self::Lease(_) => LEASE_PAYLOAD_SCHEMA,
             Self::Task(_) => TASK_PAYLOAD_SCHEMA,
             Self::Application(_) => APPLICATION_PAYLOAD_SCHEMA,
@@ -5280,6 +5651,9 @@ impl EventPayload {
             self,
             Self::Approval(_) | Self::Client(ClientPayload::Action(_))
         ) {
+            sensitivity = sensitivity.max(Sensitivity::Internal);
+        }
+        if matches!(self, Self::State(_) | Self::Release(_)) {
             sensitivity = sensitivity.max(Sensitivity::Internal);
         }
         sensitivity
@@ -5323,6 +5697,18 @@ impl EventPayload {
         }
         if let Self::Catalog(value) = self {
             validate_catalog_payload(value)?;
+        }
+        if let Self::State(StatePayload::Migrated(value)) = self {
+            if value.action != EventAction::StateMigrate {
+                return Err(SanitizationError::new(
+                    "invalid_state_migration_lifecycle",
+                    "state_payload",
+                ));
+            }
+            value.migration.validate()?;
+        }
+        if let Self::Release(value) = self {
+            validate_release_payload(value)?;
         }
         match self {
             Self::Task(TaskPayload::Semantic(value)) if value.validate().is_err() => {
@@ -5544,6 +5930,8 @@ impl EventPayload {
             Self::Scheduler(_) => PublicEventPayload::Scheduler(payload),
             Self::Policy(_) => PublicEventPayload::Policy(payload),
             Self::Catalog(_) => PublicEventPayload::Catalog(payload),
+            Self::State(_) => PublicEventPayload::State(payload),
+            Self::Release(_) => PublicEventPayload::Release(payload),
             Self::Lease(_) => PublicEventPayload::Lease(payload),
             Self::Task(_) => PublicEventPayload::Task(payload),
             Self::Application(_) => PublicEventPayload::Application(payload),
@@ -5568,6 +5956,8 @@ impl EventPayload {
             Self::Scheduler(value) => value,
             Self::Policy(value) => value,
             Self::Catalog(value) => value,
+            Self::State(value) => value,
+            Self::Release(value) => value,
             Self::Lease(value) => value,
             Self::Task(value) => value,
             Self::Application(value) => value,
@@ -6198,6 +6588,8 @@ pub enum PublicEventPayload {
     Scheduler(PublicPayload),
     Policy(PublicPayload),
     Catalog(PublicPayload),
+    State(PublicPayload),
+    Release(PublicPayload),
     Lease(PublicPayload),
     Task(PublicPayload),
     Application(PublicPayload),

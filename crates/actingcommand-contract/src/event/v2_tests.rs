@@ -8,7 +8,9 @@ use crate::{
     PerformanceDeadlineDisposition, PerformanceMetric, PerformanceMonitorHealth,
     PerformanceMonitorStateEventData, PerformancePressureEventData, PerformancePressureKind,
     PerformancePressureRecord, PerformancePressureSeverity, PerformancePressureValue,
-    PerformanceStutterEventData, PerformanceSummaryEventData,
+    PerformanceStutterEventData, PerformanceSummaryEventData, ReleaseResourceVersion,
+    ReleaseTransitionData, ReleaseTransitionKind, RuntimeReleaseSet, StateMigrationData,
+    StateRecoveryAction, StateTransitionStatus, StateValidationResult,
 };
 use std::sync::Mutex;
 
@@ -186,6 +188,49 @@ fn all_payload_drafts(mut input: impl FnMut() -> AuditInput) -> Vec<EventPayload
         catalog_hash: format!("sha256:{}", "c".repeat(64)),
         previous_catalog_hash: Some(format!("sha256:{}", "b".repeat(64))),
     };
+    let migration = StateMigrationData::new(
+        format!("migration:{}", "d".repeat(64)),
+        "policy.catalog.active",
+        "pointer.v0",
+        "pointer.v1",
+        format!("sha256:{}", "e".repeat(64)),
+        StateValidationResult::Passed,
+        StateRecoveryAction::ImportedLegacy,
+    )
+    .expect("state migration");
+    let release = RuntimeReleaseSet::new(
+        "1.0.0",
+        "1.0.0",
+        vec![
+            ReleaseResourceVersion::new(
+                "project-neutral",
+                "1.0.0",
+                format!("sha256:{}", "f".repeat(64)),
+            )
+            .expect("release resource"),
+        ],
+    )
+    .expect("release set");
+    let release_transition = ReleaseTransitionData::new(
+        format!("release-transition:{}", "a".repeat(64)),
+        ReleaseTransitionKind::Activate,
+        None,
+        release.release_id(),
+        1,
+        release.manifest_sha256(),
+        StateTransitionStatus::new(StateValidationResult::Passed, StateRecoveryAction::None),
+    )
+    .expect("release transition");
+    let rollback_transition = ReleaseTransitionData::new(
+        format!("release-transition:{}", "b".repeat(64)),
+        ReleaseTransitionKind::Rollback,
+        Some(format!("release:{}", "c".repeat(64))),
+        release.release_id(),
+        2,
+        release.manifest_sha256(),
+        StateTransitionStatus::new(StateValidationResult::Passed, StateRecoveryAction::None),
+    )
+    .expect("rollback transition");
     let performance_pressure_started = PerformancePressureEventData {
         observed_at_unix_ms: 1_752_147_201_000,
         pressure: PerformancePressureRecord {
@@ -394,6 +439,17 @@ fn all_payload_drafts(mut input: impl FnMut() -> AuditInput) -> Vec<EventPayload
         )
         .into(),
         CatalogPayloadDraft::rolled_back(catalog_data, input()).into(),
+        StatePayloadDraft::migrated(migration, input()).into(),
+        ReleasePayloadDraft::staged(release, input()).into(),
+        ReleasePayloadDraft::transition_intent(release_transition.clone(), input()).into(),
+        ReleasePayloadDraft::activated(release_transition.clone(), input()).into(),
+        ReleasePayloadDraft::rolled_back(rollback_transition, input()).into(),
+        ReleasePayloadDraft::transition_failed(
+            release_transition,
+            EffectDisposition::Indeterminate,
+            input(),
+        )
+        .into(),
         LeasePayloadDraft::requested(action, input()).into(),
         LeasePayloadDraft::granted(action, effect, input()).into(),
         LeasePayloadDraft::transferred(
@@ -965,7 +1021,7 @@ fn tagged_payload_and_projection_layers_reject_unknown_fields() {
 #[test]
 fn event_v2_round_trips_every_c1_payload_variant() {
     let payloads = all_payload_drafts(AuditInput::new);
-    assert_eq!(payloads.len(), 80);
+    assert_eq!(payloads.len(), 86);
 
     for (index, payload) in payloads.into_iter().enumerate() {
         let sanitized = sanitize(payload, index as u64 + 1);

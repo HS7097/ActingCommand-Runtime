@@ -17,6 +17,7 @@ pub mod monitor;
 pub mod performance;
 pub mod primitive;
 pub mod runtime;
+pub mod state;
 pub mod taskflow;
 pub mod types;
 
@@ -29,6 +30,7 @@ pub use monitor::*;
 pub use performance::*;
 pub use primitive::*;
 pub use runtime::*;
+pub use state::*;
 pub use taskflow::*;
 pub use types::{
     AcquisitionCapture, ContractResult, DurationMillis, ENGINE_DELEGATED, ENGINE_NATIVE,

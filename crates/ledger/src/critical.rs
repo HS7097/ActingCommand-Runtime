@@ -101,6 +101,12 @@ pub enum CatalogTransitionTarget {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReleaseTransitionTarget {
+    Activated,
+    RolledBack,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CriticalOperation {
     CommandValidation,
     DeviceWrite,
@@ -109,6 +115,7 @@ pub enum CriticalOperation {
     TaskTerminal(TaskTerminalTarget),
     PolicyDispatch,
     CatalogTransition(CatalogTransitionTarget),
+    ReleaseTransition(ReleaseTransitionTarget),
 }
 
 impl CriticalOperation {
@@ -121,6 +128,7 @@ impl CriticalOperation {
             Self::TaskTerminal(_) => EventType::TaskTerminalIntent,
             Self::PolicyDispatch => EventType::PolicyDispatchIntent,
             Self::CatalogTransition(_) => EventType::CatalogTransitionIntent,
+            Self::ReleaseTransition(_) => EventType::ReleaseTransitionIntent,
         }
     }
 
@@ -146,6 +154,10 @@ impl CriticalOperation {
                 CatalogTransitionTarget::Activated => EventType::CatalogActivated,
                 CatalogTransitionTarget::RolledBack => EventType::CatalogRolledBack,
             },
+            Self::ReleaseTransition(target) => match target {
+                ReleaseTransitionTarget::Activated => EventType::ReleaseActivated,
+                ReleaseTransitionTarget::RolledBack => EventType::ReleaseRolledBack,
+            },
         }
     }
 
@@ -158,6 +170,7 @@ impl CriticalOperation {
             Self::TaskTerminal(_) => EventType::TaskTerminalCommitFailed,
             Self::PolicyDispatch => EventType::PolicyDispatchRejected,
             Self::CatalogTransition(_) => EventType::CatalogTransitionFailed,
+            Self::ReleaseTransition(_) => EventType::ReleaseTransitionFailed,
         }
     }
 }
