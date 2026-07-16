@@ -2,8 +2,9 @@
 
 use super::{
     CapturePolicyReason, CapturePressureState, DiagnosticCode, EventAction, EventFamily, EventType,
-    EvidenceCompleteness, RecognitionVerdict, RecoveryReason, ResourceAuthoringPhase,
-    RetentionClass, SanitizationError, Sensitivity, TaskOutcome,
+    EvidenceCompleteness, PolicyFailureClass, PolicyFailureDisposition, PolicyPlanningSignalKind,
+    RecognitionVerdict, RecoveryReason, ResourceAuthoringPhase, RetentionClass, SanitizationError,
+    Sensitivity, TaskOutcome,
 };
 use crate::{
     HolderId, InputAction, LeaseId, LeasePriority, MonitorDecision, MonitorDiagnosis,
@@ -419,6 +420,158 @@ pub struct PolicyDispatchEventData {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+pub struct PolicyActivitySample {
+    pub profile_id: String,
+    pub local_day: i64,
+    pub window_id: String,
+    pub admitted_at_unix_ms: u64,
+    pub seed: u64,
+    pub interval_ms: u64,
+    pub next_eligible_unix_ms: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PolicyBudgetReceipt {
+    pub task_daily_used: u32,
+    pub task_daily_limit: u32,
+    pub task_window_used: u32,
+    pub task_window_limit: u32,
+    pub task_runtime_reserved_ms: u64,
+    pub task_runtime_limit_ms: u64,
+    pub activity_daily_used: u32,
+    pub activity_daily_limit: u32,
+    pub activity_window_used: u32,
+    pub activity_window_limit: u32,
+    pub activity_runtime_reserved_ms: u64,
+    pub activity_runtime_limit_ms: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PolicyAdmissionRecord {
+    pub activity: PolicyActivitySample,
+    pub budget: PolicyBudgetReceipt,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PolicyFailureRecord {
+    pub error_code: String,
+    pub reported_success: bool,
+    pub original_class: PolicyFailureClass,
+    pub effective_class: PolicyFailureClass,
+    pub consecutive_same_error: u16,
+    pub retry_attempt: u16,
+    pub disposition: PolicyFailureDisposition,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub retry_at_unix_ms: Option<u64>,
+    pub runtime_ms: u64,
+    pub sensitive: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum PolicyExecutionOutcome {
+    Succeeded { runtime_ms: u64 },
+    Failed { failure: PolicyFailureRecord },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PolicyExecutionEventData {
+    pub decision_id: String,
+    pub task_id: String,
+    pub instance_id: String,
+    pub observed_at_unix_ms: u64,
+    pub outcome: PolicyExecutionOutcome,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PolicyExecutionPayload {
+    action: EventAction,
+    decision_id: String,
+    task_id: String,
+    instance_id: String,
+    observed_at_unix_ms: u64,
+    outcome: PolicyExecutionOutcome,
+    audit: SanitizedAudit,
+}
+
+impl PolicyExecutionPayload {
+    pub fn decision_id(&self) -> &str {
+        &self.decision_id
+    }
+
+    pub fn task_id(&self) -> &str {
+        &self.task_id
+    }
+
+    pub fn instance_id(&self) -> &str {
+        &self.instance_id
+    }
+
+    pub const fn observed_at_unix_ms(&self) -> u64 {
+        self.observed_at_unix_ms
+    }
+
+    pub const fn outcome(&self) -> &PolicyExecutionOutcome {
+        &self.outcome
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PolicyPlanningSignalEventData {
+    pub signal_id: String,
+    pub instance_id: String,
+    pub task_id: Option<String>,
+    pub kind: PolicyPlanningSignalKind,
+    pub fact_code: String,
+    pub observed_at_unix_ms: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PolicyPlanningSignalPayload {
+    action: EventAction,
+    signal_id: String,
+    instance_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    task_id: Option<String>,
+    kind: PolicyPlanningSignalKind,
+    fact_code: String,
+    observed_at_unix_ms: u64,
+    audit: SanitizedAudit,
+}
+
+impl PolicyPlanningSignalPayload {
+    pub fn signal_id(&self) -> &str {
+        &self.signal_id
+    }
+
+    pub fn instance_id(&self) -> &str {
+        &self.instance_id
+    }
+
+    pub fn task_id(&self) -> Option<&str> {
+        self.task_id.as_deref()
+    }
+
+    pub const fn kind(&self) -> PolicyPlanningSignalKind {
+        self.kind
+    }
+
+    pub fn fact_code(&self) -> &str {
+        &self.fact_code
+    }
+
+    pub const fn observed_at_unix_ms(&self) -> u64 {
+        self.observed_at_unix_ms
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct PolicyDispatchPayload {
     action: EventAction,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -436,6 +589,8 @@ pub struct PolicyDispatchPayload {
     input_ledger_position: u64,
     fact_snapshot_id: String,
     approval_fact_ids: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    admission: Option<Box<PolicyAdmissionRecord>>,
     audit: SanitizedAudit,
 }
 
@@ -482,6 +637,10 @@ impl PolicyDispatchPayload {
 
     pub fn approval_fact_ids(&self) -> &[String] {
         &self.approval_fact_ids
+    }
+
+    pub fn admission(&self) -> Option<&PolicyAdmissionRecord> {
+        self.admission.as_deref()
     }
 }
 
@@ -1347,6 +1506,42 @@ impl PayloadDetail for PolicyDispatchPayload {
     }
 }
 
+impl PayloadDetail for PolicyExecutionPayload {
+    fn action(&self) -> EventAction {
+        self.action
+    }
+
+    fn diagnostic_code(&self) -> Option<DiagnosticCode> {
+        None
+    }
+
+    fn effect_disposition(&self) -> Option<EffectDisposition> {
+        None
+    }
+
+    fn audit(&self) -> &SanitizedAudit {
+        &self.audit
+    }
+}
+
+impl PayloadDetail for PolicyPlanningSignalPayload {
+    fn action(&self) -> EventAction {
+        self.action
+    }
+
+    fn diagnostic_code(&self) -> Option<DiagnosticCode> {
+        None
+    }
+
+    fn effect_disposition(&self) -> Option<EffectDisposition> {
+        None
+    }
+
+    fn audit(&self) -> &SanitizedAudit {
+        &self.audit
+    }
+}
+
 impl PayloadDetail for CatalogTransitionPayload {
     fn action(&self) -> EventAction {
         self.action
@@ -1617,8 +1812,19 @@ struct ResourceAuthoringDraft {
 
 struct PolicyDispatchDraft {
     data: PolicyDispatchEventData,
+    admission: Option<Box<PolicyAdmissionRecord>>,
     diagnostic_code: Option<DiagnosticCode>,
     effect_disposition: Option<EffectDisposition>,
+    audit: AuditInput,
+}
+
+struct PolicyExecutionDraft {
+    data: PolicyExecutionEventData,
+    audit: AuditInput,
+}
+
+struct PolicyPlanningSignalDraft {
+    data: PolicyPlanningSignalEventData,
     audit: AuditInput,
 }
 
@@ -1697,6 +1903,44 @@ impl PolicyDispatchDraft {
             input_ledger_position: self.data.input_ledger_position,
             fact_snapshot_id: self.data.fact_snapshot_id,
             approval_fact_ids: self.data.approval_fact_ids,
+            admission: self.admission,
+            audit: self.audit.sanitize(fingerprinter)?,
+        })
+    }
+}
+
+impl PolicyExecutionDraft {
+    fn sanitize(
+        self,
+        fingerprinter: &dyn SecretFingerprinter,
+    ) -> Result<PolicyExecutionPayload, SanitizationError> {
+        validate_policy_execution_data(&self.data)?;
+        Ok(PolicyExecutionPayload {
+            action: EventAction::PolicyExecution,
+            decision_id: self.data.decision_id,
+            task_id: self.data.task_id,
+            instance_id: self.data.instance_id,
+            observed_at_unix_ms: self.data.observed_at_unix_ms,
+            outcome: self.data.outcome,
+            audit: self.audit.sanitize(fingerprinter)?,
+        })
+    }
+}
+
+impl PolicyPlanningSignalDraft {
+    fn sanitize(
+        self,
+        fingerprinter: &dyn SecretFingerprinter,
+    ) -> Result<PolicyPlanningSignalPayload, SanitizationError> {
+        validate_policy_planning_signal_data(&self.data)?;
+        Ok(PolicyPlanningSignalPayload {
+            action: EventAction::PolicyPlanning,
+            signal_id: self.data.signal_id,
+            instance_id: self.data.instance_id,
+            task_id: self.data.task_id,
+            kind: self.data.kind,
+            fact_code: self.data.fact_code,
+            observed_at_unix_ms: self.data.observed_at_unix_ms,
             audit: self.audit.sanitize(fingerprinter)?,
         })
     }
@@ -1849,21 +2093,121 @@ fn validate_policy_dispatch_data(data: &PolicyDispatchEventData) -> Result<(), S
     Ok(())
 }
 
+fn validate_policy_admission(value: &PolicyAdmissionRecord) -> Result<(), SanitizationError> {
+    validate_policy_token(&value.activity.profile_id, "activity_profile_id")?;
+    validate_policy_token(&value.activity.window_id, "activity_window_id")?;
+    if value.activity.admitted_at_unix_ms == 0
+        || value.activity.next_eligible_unix_ms < value.activity.admitted_at_unix_ms
+        || value.activity.next_eligible_unix_ms - value.activity.admitted_at_unix_ms
+            != value.activity.interval_ms
+    {
+        return Err(SanitizationError::new(
+            "invalid_policy_activity_sample",
+            "activity",
+        ));
+    }
+    let budget = &value.budget;
+    if budget.task_daily_used == 0
+        || budget.task_daily_used > budget.task_daily_limit
+        || budget.task_window_used == 0
+        || budget.task_window_used > budget.task_window_limit
+        || budget.task_runtime_reserved_ms == 0
+        || budget.task_runtime_reserved_ms > budget.task_runtime_limit_ms
+        || budget.activity_daily_used == 0
+        || budget.activity_daily_used > budget.activity_daily_limit
+        || budget.activity_window_used == 0
+        || budget.activity_window_used > budget.activity_window_limit
+        || budget.activity_runtime_reserved_ms == 0
+        || budget.activity_runtime_reserved_ms > budget.activity_runtime_limit_ms
+    {
+        return Err(SanitizationError::new(
+            "invalid_policy_budget_receipt",
+            "budget",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_policy_execution_data(
+    data: &PolicyExecutionEventData,
+) -> Result<(), SanitizationError> {
+    validate_policy_token(&data.decision_id, "decision_id")?;
+    validate_policy_token(&data.task_id, "task_id")?;
+    validate_policy_token(&data.instance_id, "instance_id")?;
+    if data.observed_at_unix_ms == 0 {
+        return Err(SanitizationError::new(
+            "invalid_policy_execution_time",
+            "observed_at_unix_ms",
+        ));
+    }
+    if let PolicyExecutionOutcome::Failed { failure } = &data.outcome {
+        validate_policy_token(&failure.error_code, "error_code")?;
+        let retry_scheduled = failure.disposition == PolicyFailureDisposition::RetryScheduled;
+        if failure.consecutive_same_error == 0
+            || retry_scheduled != failure.retry_at_unix_ms.is_some()
+            || retry_scheduled
+                && (failure.retry_attempt == 0
+                    || failure.effective_class != PolicyFailureClass::Recoverable
+                    || failure
+                        .retry_at_unix_ms
+                        .is_some_and(|retry_at| retry_at <= data.observed_at_unix_ms))
+            || !retry_scheduled && failure.retry_attempt != 0
+            || failure.original_class == PolicyFailureClass::Severe
+                && failure.effective_class != PolicyFailureClass::Severe
+            || failure.effective_class == PolicyFailureClass::Severe
+                && failure.disposition != PolicyFailureDisposition::PausedTask
+            || failure.reported_success
+                && (failure.error_code != "policy_runtime_budget_exceeded"
+                    || failure.original_class != PolicyFailureClass::Severe
+                    || failure.effective_class != PolicyFailureClass::Severe)
+            || failure.sensitive
+                && (failure.effective_class != PolicyFailureClass::Severe
+                    || failure.disposition != PolicyFailureDisposition::PausedTask)
+        {
+            return Err(SanitizationError::new(
+                "invalid_policy_failure_record",
+                "outcome",
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn validate_policy_planning_signal_data(
+    data: &PolicyPlanningSignalEventData,
+) -> Result<(), SanitizationError> {
+    validate_policy_token(&data.signal_id, "signal_id")?;
+    validate_policy_token(&data.instance_id, "instance_id")?;
+    if let Some(task_id) = &data.task_id {
+        validate_policy_token(task_id, "task_id")?;
+    }
+    validate_policy_token(&data.fact_code, "fact_code")?;
+    if data.observed_at_unix_ms == 0 {
+        return Err(SanitizationError::new(
+            "invalid_policy_planning_signal_time",
+            "observed_at_unix_ms",
+        ));
+    }
+    Ok(())
+}
+
 fn validate_policy_payload(payload: &PolicyPayload) -> Result<(), SanitizationError> {
-    let value = match payload {
+    let dispatch = match payload {
         PolicyPayload::DispatchIntent(value)
             if value.action == EventAction::PolicyDispatch
                 && value.diagnostic_code.is_none()
-                && value.effect_disposition.is_none() =>
+                && value.effect_disposition.is_none()
+                && value.admission.is_none() =>
         {
-            value
+            Some(value)
         }
         PolicyPayload::DispatchAdmitted(value)
             if value.action == EventAction::PolicyDispatch
                 && value.diagnostic_code.is_none()
-                && value.effect_disposition == Some(EffectDisposition::Performed) =>
+                && value.effect_disposition == Some(EffectDisposition::Performed)
+                && value.admission.is_some() =>
         {
-            value
+            Some(value)
         }
         PolicyPayload::DispatchRejected(value)
             if value.action == EventAction::PolicyDispatch
@@ -1871,23 +2215,51 @@ fn validate_policy_payload(payload: &PolicyPayload) -> Result<(), SanitizationEr
                 && matches!(
                     value.effect_disposition,
                     Some(EffectDisposition::NotPerformed | EffectDisposition::Indeterminate)
-                ) =>
+                )
+                && value.admission.is_none() =>
         {
-            value
+            Some(value)
         }
         PolicyPayload::DispatchCompleted(value)
             if value.action == EventAction::PolicyDispatch
                 && value.diagnostic_code.is_none()
-                && value.effect_disposition == Some(EffectDisposition::Performed) =>
+                && value.effect_disposition == Some(EffectDisposition::Performed)
+                && value.admission.is_some() =>
         {
-            value
+            Some(value)
+        }
+        PolicyPayload::ExecutionRecorded(value) if value.action == EventAction::PolicyExecution => {
+            validate_policy_execution_data(&PolicyExecutionEventData {
+                decision_id: value.decision_id.clone(),
+                task_id: value.task_id.clone(),
+                instance_id: value.instance_id.clone(),
+                observed_at_unix_ms: value.observed_at_unix_ms,
+                outcome: value.outcome.clone(),
+            })?;
+            None
+        }
+        PolicyPayload::PlanningSignalObserved(value)
+            if value.action == EventAction::PolicyPlanning =>
+        {
+            validate_policy_planning_signal_data(&PolicyPlanningSignalEventData {
+                signal_id: value.signal_id.clone(),
+                instance_id: value.instance_id.clone(),
+                task_id: value.task_id.clone(),
+                kind: value.kind,
+                fact_code: value.fact_code.clone(),
+                observed_at_unix_ms: value.observed_at_unix_ms,
+            })?;
+            None
         }
         _ => {
             return Err(SanitizationError::new(
-                "invalid_policy_dispatch_lifecycle",
+                "invalid_policy_payload",
                 "policy_payload",
             ));
         }
+    };
+    let Some(value) = dispatch else {
+        return Ok(());
     };
     validate_policy_dispatch_data(&PolicyDispatchEventData {
         decision_id: value.decision_id.clone(),
@@ -1901,7 +2273,11 @@ fn validate_policy_payload(payload: &PolicyPayload) -> Result<(), SanitizationEr
         input_ledger_position: value.input_ledger_position,
         fact_snapshot_id: value.fact_snapshot_id.clone(),
         approval_fact_ids: value.approval_fact_ids.clone(),
-    })
+    })?;
+    if let Some(admission) = &value.admission {
+        validate_policy_admission(admission)?;
+    }
+    Ok(())
 }
 
 fn validate_catalog_transition_data(
@@ -3120,6 +3496,8 @@ enum PolicyDraftKind {
     Admitted(PolicyDispatchDraft),
     Rejected(PolicyDispatchDraft),
     Completed(PolicyDispatchDraft),
+    Execution(PolicyExecutionDraft),
+    PlanningSignal(PolicyPlanningSignalDraft),
 }
 
 pub struct PolicyPayloadDraft(PolicyDraftKind);
@@ -3128,15 +3506,21 @@ impl PolicyPayloadDraft {
     pub fn dispatch_intent(data: PolicyDispatchEventData, audit: AuditInput) -> Self {
         Self(PolicyDraftKind::Intent(PolicyDispatchDraft {
             data,
+            admission: None,
             diagnostic_code: None,
             effect_disposition: None,
             audit,
         }))
     }
 
-    pub fn dispatch_admitted(data: PolicyDispatchEventData, audit: AuditInput) -> Self {
+    pub fn dispatch_admitted(
+        data: PolicyDispatchEventData,
+        admission: PolicyAdmissionRecord,
+        audit: AuditInput,
+    ) -> Self {
         Self(PolicyDraftKind::Admitted(PolicyDispatchDraft {
             data,
+            admission: Some(Box::new(admission)),
             diagnostic_code: None,
             effect_disposition: Some(EffectDisposition::Performed),
             audit,
@@ -3150,17 +3534,40 @@ impl PolicyPayloadDraft {
     ) -> Self {
         Self(PolicyDraftKind::Rejected(PolicyDispatchDraft {
             data,
+            admission: None,
             diagnostic_code: Some(DiagnosticCode::PolicyRejected),
             effect_disposition: Some(effect_disposition),
             audit,
         }))
     }
 
-    pub fn dispatch_completed(data: PolicyDispatchEventData, audit: AuditInput) -> Self {
+    pub fn dispatch_completed(
+        data: PolicyDispatchEventData,
+        admission: PolicyAdmissionRecord,
+        audit: AuditInput,
+    ) -> Self {
         Self(PolicyDraftKind::Completed(PolicyDispatchDraft {
             data,
+            admission: Some(Box::new(admission)),
             diagnostic_code: None,
             effect_disposition: Some(EffectDisposition::Performed),
+            audit,
+        }))
+    }
+
+    pub fn execution_recorded(data: PolicyExecutionEventData, audit: AuditInput) -> Self {
+        Self(PolicyDraftKind::Execution(PolicyExecutionDraft {
+            data,
+            audit,
+        }))
+    }
+
+    pub fn planning_signal_observed(
+        data: PolicyPlanningSignalEventData,
+        audit: AuditInput,
+    ) -> Self {
+        Self(PolicyDraftKind::PlanningSignal(PolicyPlanningSignalDraft {
+            data,
             audit,
         }))
     }
@@ -3339,6 +3746,8 @@ pub enum PolicyPayload {
     DispatchAdmitted(PolicyDispatchPayload),
     DispatchRejected(PolicyDispatchPayload),
     DispatchCompleted(PolicyDispatchPayload),
+    ExecutionRecorded(PolicyExecutionPayload),
+    PlanningSignalObserved(PolicyPlanningSignalPayload),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -3557,6 +3966,8 @@ family_payload!(PolicyPayload, {
     DispatchAdmitted => EventType::PolicyDispatchAdmitted,
     DispatchRejected => EventType::PolicyDispatchRejected,
     DispatchCompleted => EventType::PolicyDispatchCompleted,
+    ExecutionRecorded => EventType::PolicyExecutionRecorded,
+    PlanningSignalObserved => EventType::PolicyPlanningSignalObserved,
 });
 family_payload!(CatalogPayload, {
     TransitionIntent => EventType::CatalogTransitionIntent,
@@ -3741,6 +4152,12 @@ impl EventPayloadDraft {
                 }
                 PolicyDraftKind::Completed(detail) => {
                     PolicyPayload::DispatchCompleted(detail.sanitize(fingerprinter)?)
+                }
+                PolicyDraftKind::Execution(detail) => {
+                    PolicyPayload::ExecutionRecorded(detail.sanitize(fingerprinter)?)
+                }
+                PolicyDraftKind::PlanningSignal(detail) => {
+                    PolicyPayload::PlanningSignalObserved(detail.sanitize(fingerprinter)?)
                 }
             }),
             Self::Catalog(value) => EventPayload::Catalog(match value.0 {
@@ -4074,6 +4491,8 @@ impl EventPayload {
         let detail = self.family_payload().detail();
         let authoring = resource_authoring(self);
         let policy_dispatch = policy_dispatch(self);
+        let policy_execution = policy_execution(self);
+        let policy_signal = policy_planning_signal(self);
         let catalog_transition = catalog_transition(self);
         let payload = PublicPayload {
             event_type,
@@ -4101,7 +4520,7 @@ impl EventPayload {
             retention_class: capture_policy(self).map(CapturePolicyPayload::retention_class),
             capture_policy_reason: capture_policy(self).map(CapturePolicyPayload::reason),
             task_outcome: artifact_export(self).map(|value| value.0),
-            task_semantic_fact: task_semantic_fact(self).cloned(),
+            task_semantic_fact: task_semantic_fact(self).cloned().map(Box::new),
             evidence_completeness: artifact_export(self).map(|value| value.1),
             artifact_count: artifact_export(self).map(|value| value.2),
             monitor_diagnosis: monitor_outcome(self).map(|value| value.observation.diagnosis()),
@@ -4138,6 +4557,12 @@ impl EventPayload {
                     .clone()
                     .map(String::into_boxed_str)
             }),
+            policy_admission: policy_dispatch.and_then(|value| value.admission.clone()),
+            policy_execution_outcome: policy_execution.map(|value| Box::new(value.outcome.clone())),
+            policy_signal_id: policy_signal.map(|value| value.signal_id.clone().into_boxed_str()),
+            policy_signal_kind: policy_signal.map(|value| value.kind),
+            policy_signal_fact_code: policy_signal
+                .map(|value| value.fact_code.clone().into_boxed_str()),
         };
         match self {
             Self::Runtime(_) => PublicEventPayload::Runtime(payload),
@@ -4276,6 +4701,20 @@ fn policy_dispatch(payload: &EventPayload) -> Option<&PolicyDispatchPayload> {
     }
 }
 
+fn policy_execution(payload: &EventPayload) -> Option<&PolicyExecutionPayload> {
+    match payload {
+        EventPayload::Policy(PolicyPayload::ExecutionRecorded(value)) => Some(value),
+        _ => None,
+    }
+}
+
+fn policy_planning_signal(payload: &EventPayload) -> Option<&PolicyPlanningSignalPayload> {
+    match payload {
+        EventPayload::Policy(PolicyPayload::PlanningSignalObserved(value)) => Some(value),
+        _ => None,
+    }
+}
+
 fn catalog_transition(payload: &EventPayload) -> Option<&CatalogTransitionPayload> {
     match payload {
         EventPayload::Catalog(CatalogPayload::TransitionIntent(value))
@@ -4322,7 +4761,7 @@ pub struct PublicPayload {
     #[serde(skip_serializing_if = "Option::is_none")]
     task_outcome: Option<TaskOutcome>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    task_semantic_fact: Option<TaskSemanticFact>,
+    task_semantic_fact: Option<Box<TaskSemanticFact>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     evidence_completeness: Option<EvidenceCompleteness>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -4367,6 +4806,16 @@ pub struct PublicPayload {
     catalog_version: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     previous_catalog_hash: Option<Box<str>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    policy_admission: Option<Box<PolicyAdmissionRecord>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    policy_execution_outcome: Option<Box<PolicyExecutionOutcome>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    policy_signal_id: Option<Box<str>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    policy_signal_kind: Option<PolicyPlanningSignalKind>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    policy_signal_fact_code: Option<Box<str>>,
 }
 
 impl PublicPayload {
@@ -4438,8 +4887,8 @@ impl PublicPayload {
         self.task_outcome
     }
 
-    pub const fn task_semantic_fact(&self) -> Option<&TaskSemanticFact> {
-        self.task_semantic_fact.as_ref()
+    pub fn task_semantic_fact(&self) -> Option<&TaskSemanticFact> {
+        self.task_semantic_fact.as_deref()
     }
 
     pub const fn evidence_completeness(&self) -> Option<EvidenceCompleteness> {
@@ -4530,6 +4979,26 @@ impl PublicPayload {
 
     pub fn previous_catalog_hash(&self) -> Option<&str> {
         self.previous_catalog_hash.as_deref()
+    }
+
+    pub fn policy_admission(&self) -> Option<&PolicyAdmissionRecord> {
+        self.policy_admission.as_deref()
+    }
+
+    pub fn policy_execution_outcome(&self) -> Option<&PolicyExecutionOutcome> {
+        self.policy_execution_outcome.as_deref()
+    }
+
+    pub fn policy_signal_id(&self) -> Option<&str> {
+        self.policy_signal_id.as_deref()
+    }
+
+    pub const fn policy_signal_kind(&self) -> Option<PolicyPlanningSignalKind> {
+        self.policy_signal_kind
+    }
+
+    pub fn policy_signal_fact_code(&self) -> Option<&str> {
+        self.policy_signal_fact_code.as_deref()
     }
 }
 

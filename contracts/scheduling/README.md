@@ -24,6 +24,12 @@ Every task, pool, activity profile, and timeline event declares `instance`, `ser
 
 Activity sampling uses a ledger-derived seed and `same_round_stable`: the host records the seed once and must reuse the sampled value throughout the same scheduling round. Resampling within a round is invalid.
 
+## Runtime Enforcement
+
+The evaluator pins the selected activity profile in every dispatch intent. Runtime owns activity sampling, budget counters, retry state, and failure escalation; callers cannot supply remaining-budget values. Admission and execution ledger events record the selected profile, sample seed, activity window, cadence, cumulative task and activity budget receipts, and classified outcome.
+
+Recoverable failures receive a positive, bounded backoff. Only repeated failures with the same error code and failure class share a consecutive-failure streak, and sensitive or severe failures are never automatically restarted. Goal-missed, feasibility-red, and drift-predicted signals are informational planning facts: they do not consume failure tax, advance a failure streak, or pause execution.
+
 ## Bounds
 
 The compiler enforces both schema limits and UTF-8 byte limits:

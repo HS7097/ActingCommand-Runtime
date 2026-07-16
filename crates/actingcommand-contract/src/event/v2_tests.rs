@@ -132,6 +132,46 @@ fn all_payload_drafts(mut input: impl FnMut() -> AuditInput) -> Vec<EventPayload
         fact_snapshot_id: "snapshot:fixture-a".to_owned(),
         approval_fact_ids: vec!["approval:fixture-a".to_owned()],
     };
+    let policy_admission = PolicyAdmissionRecord {
+        activity: PolicyActivitySample {
+            profile_id: "activity:fixture-a".to_owned(),
+            local_day: 20_000,
+            window_id: "activity:fixture-a:20000:0".to_owned(),
+            admitted_at_unix_ms: 1_752_147_200_000,
+            seed: 7,
+            interval_ms: 60_000,
+            next_eligible_unix_ms: 1_752_147_260_000,
+        },
+        budget: PolicyBudgetReceipt {
+            task_daily_used: 1,
+            task_daily_limit: 24,
+            task_window_used: 1,
+            task_window_limit: 4,
+            task_runtime_reserved_ms: 60_000,
+            task_runtime_limit_ms: 300_000,
+            activity_daily_used: 1,
+            activity_daily_limit: 24,
+            activity_window_used: 1,
+            activity_window_limit: 4,
+            activity_runtime_reserved_ms: 60_000,
+            activity_runtime_limit_ms: 7_200_000,
+        },
+    };
+    let policy_execution = PolicyExecutionEventData {
+        decision_id: "decision:fixture-a".to_owned(),
+        task_id: "task:fixture-a".to_owned(),
+        instance_id: "instance:fixture-a".to_owned(),
+        observed_at_unix_ms: 1_752_147_201_000,
+        outcome: PolicyExecutionOutcome::Succeeded { runtime_ms: 1_000 },
+    };
+    let policy_signal = PolicyPlanningSignalEventData {
+        signal_id: "signal:fixture-a".to_owned(),
+        instance_id: "instance:fixture-a".to_owned(),
+        task_id: Some("task:fixture-a".to_owned()),
+        kind: PolicyPlanningSignalKind::GoalMissed,
+        fact_code: "goal.primary.missed".to_owned(),
+        observed_at_unix_ms: 1_752_147_201_000,
+    };
     let catalog_data = CatalogTransitionEventData {
         catalog_id: "catalog:fixture-a".to_owned(),
         catalog_version: 2,
@@ -170,14 +210,21 @@ fn all_payload_drafts(mut input: impl FnMut() -> AuditInput) -> Vec<EventPayload
         )
         .into(),
         PolicyPayloadDraft::dispatch_intent(policy_data.clone(), input()).into(),
-        PolicyPayloadDraft::dispatch_admitted(policy_data.clone(), input()).into(),
+        PolicyPayloadDraft::dispatch_admitted(
+            policy_data.clone(),
+            policy_admission.clone(),
+            input(),
+        )
+        .into(),
         PolicyPayloadDraft::dispatch_rejected(
             policy_data.clone(),
             EffectDisposition::NotPerformed,
             input(),
         )
         .into(),
-        PolicyPayloadDraft::dispatch_completed(policy_data, input()).into(),
+        PolicyPayloadDraft::execution_recorded(policy_execution, input()).into(),
+        PolicyPayloadDraft::planning_signal_observed(policy_signal, input()).into(),
+        PolicyPayloadDraft::dispatch_completed(policy_data, policy_admission, input()).into(),
         CatalogPayloadDraft::transition_intent(
             EventAction::CatalogActivate,
             catalog_data.clone(),
@@ -441,6 +488,23 @@ fn sanitize_with(
 
 fn sanitize(payload: EventPayloadDraft, index: u64) -> SanitizedEventDraft {
     sanitize_with(payload, index, &SpyFingerprinter::new())
+}
+
+fn sanitize_error(payload: EventPayloadDraft) -> SanitizationError {
+    let issuer = identifier_issuer();
+    match EventDraft::new(
+        issuer.mint_event_id().expect("event id"),
+        1_752_147_200_000,
+        EventSeverity::Info,
+        origin(),
+        links(&issuer),
+        payload,
+    )
+    .sanitize(&SpyFingerprinter::new())
+    {
+        Ok(_) => panic!("event must be rejected"),
+        Err(error) => error,
+    }
 }
 
 #[test]
@@ -745,7 +809,7 @@ fn tagged_payload_and_projection_layers_reject_unknown_fields() {
 #[test]
 fn event_v2_round_trips_every_c1_payload_variant() {
     let payloads = all_payload_drafts(AuditInput::new);
-    assert_eq!(payloads.len(), 67);
+    assert_eq!(payloads.len(), 69);
 
     for (index, payload) in payloads.into_iter().enumerate() {
         let sanitized = sanitize(payload, index as u64 + 1);
@@ -757,6 +821,57 @@ fn event_v2_round_trips_every_c1_payload_variant() {
             serde_json::from_str(&json).expect("deserialize typed payload");
         assert_eq!(round_trip, *sanitized.payload());
     }
+}
+
+#[test]
+fn policy_failure_payload_rejects_impossible_retry_combinations() {
+    let base = PolicyFailureRecord {
+        error_code: "transient.capture".to_owned(),
+        reported_success: false,
+        original_class: PolicyFailureClass::Recoverable,
+        effective_class: PolicyFailureClass::Recoverable,
+        consecutive_same_error: 1,
+        retry_attempt: 1,
+        disposition: PolicyFailureDisposition::RetryScheduled,
+        retry_at_unix_ms: Some(1_752_147_201_100),
+        runtime_ms: 1_000,
+        sensitive: false,
+    };
+    let event = |failure| {
+        PolicyPayloadDraft::execution_recorded(
+            PolicyExecutionEventData {
+                decision_id: "decision:fixture-a".to_owned(),
+                task_id: "task:fixture-a".to_owned(),
+                instance_id: "instance:fixture-a".to_owned(),
+                observed_at_unix_ms: 1_752_147_201_000,
+                outcome: PolicyExecutionOutcome::Failed { failure },
+            },
+            AuditInput::new(),
+        )
+        .into()
+    };
+
+    let mut severe_retry = base.clone();
+    severe_retry.effective_class = PolicyFailureClass::Severe;
+    assert_eq!(
+        sanitize_error(event(severe_retry)).code(),
+        "invalid_policy_failure_record"
+    );
+
+    let mut hidden_retry_attempt = base.clone();
+    hidden_retry_attempt.disposition = PolicyFailureDisposition::Continue;
+    hidden_retry_attempt.retry_at_unix_ms = None;
+    assert_eq!(
+        sanitize_error(event(hidden_retry_attempt)).code(),
+        "invalid_policy_failure_record"
+    );
+
+    let mut past_retry = base;
+    past_retry.retry_at_unix_ms = Some(1_752_147_201_000);
+    assert_eq!(
+        sanitize_error(event(past_retry)).code(),
+        "invalid_policy_failure_record"
+    );
 }
 
 #[test]
