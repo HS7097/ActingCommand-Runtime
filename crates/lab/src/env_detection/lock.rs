@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 //! Stale recovery holds a per-owner claim and re-reads ownership before rename so delayed
-//! contenders cannot replace a newly acquired result lock. Timestamps never prove staleness.
+//! contenders cannot replace a newly acquired result lock. Host identity must match before
+//! process liveness can prove staleness; timestamps never prove staleness.
 
 use actingcommand_contract::{LabError, LabResult};
 use serde::{Deserialize, Serialize};
@@ -18,12 +19,13 @@ use std::sync::OnceLock;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-const LOCK_SCHEMA_VERSION: &str = "env-result-lock.v1";
+const LOCK_SCHEMA_VERSION: &str = "env-result-lock.v2";
 const MAX_RECLAIM_ATTEMPTS: usize = 4;
 const MAX_RECLAIM_ELAPSED: Duration = Duration::from_secs(2);
 static TOKEN_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 static RANDOM_SEED: OnceLock<Result<[u8; 32], String>> = OnceLock::new();
 static CURRENT_PROCESS_START: OnceLock<Result<String, String>> = OnceLock::new();
+static CURRENT_HOST_IDENTITY: OnceLock<Result<String, String>> = OnceLock::new();
 
 type LockResult<T> = LabResult<T>;
 
@@ -47,6 +49,7 @@ enum ProcessStatus {
 }
 
 trait LockEnvironment: Send + Sync {
+    fn host_identity(&self) -> Result<String, String>;
     fn current_process(&self) -> Result<ProcessIdentity, String>;
     fn inspect_process(&self, pid: u32) -> Result<ProcessStatus, String>;
     fn next_owner_token(&self) -> Result<String, String>;
@@ -57,6 +60,12 @@ trait LockEnvironment: Send + Sync {
 struct SystemLockEnvironment;
 
 impl LockEnvironment for SystemLockEnvironment {
+    fn host_identity(&self) -> Result<String, String> {
+        CURRENT_HOST_IDENTITY
+            .get_or_init(system_host_identity)
+            .clone()
+    }
+
     fn current_process(&self) -> Result<ProcessIdentity, String> {
         let pid = std::process::id();
         let start_token = CURRENT_PROCESS_START
@@ -104,6 +113,7 @@ impl LockEnvironment for SystemLockEnvironment {
 #[serde(deny_unknown_fields)]
 struct EnvResultLockRecord {
     schema_version: String,
+    host_identity: String,
     owner_token: String,
     pid: u32,
     process_start_token: String,
@@ -113,6 +123,12 @@ struct EnvResultLockRecord {
 
 impl EnvResultLockRecord {
     fn new(environment: &impl LockEnvironment, normalized_result_path: &Path) -> LockResult<Self> {
+        let host_identity = environment.host_identity().map_err(|error| {
+            lock_error(
+                normalized_result_path,
+                format!("host identity unavailable: {error}"),
+            )
+        })?;
         let identity = environment.current_process().map_err(|error| {
             lock_error(
                 normalized_result_path,
@@ -133,6 +149,7 @@ impl EnvResultLockRecord {
         })?;
         let record = Self {
             schema_version: LOCK_SCHEMA_VERSION.to_string(),
+            host_identity,
             owner_token,
             pid: identity.pid,
             process_start_token: identity.start_token,
@@ -151,6 +168,12 @@ impl EnvResultLockRecord {
                     "unsupported lock schema '{}'; expected {LOCK_SCHEMA_VERSION}",
                     self.schema_version
                 ),
+            ));
+        }
+        if self.host_identity.trim().is_empty() {
+            return Err(lock_error(
+                expected_result_path,
+                "lock host identity is empty",
             ));
         }
         if self.owner_token.len() != 64
@@ -246,6 +269,13 @@ impl EnvResultLock {
                         ),
                     )
                 })?;
+            ensure_matching_host(
+                &normalized_result_path,
+                &observed,
+                &proposed,
+                attempt,
+                "lock owner",
+            )?;
             let stale_reason = match environment.inspect_process(observed.pid) {
                 Ok(ProcessStatus::Missing) => "owner_pid_absent".to_string(),
                 Ok(ProcessStatus::Alive { start_token })
@@ -391,6 +421,7 @@ impl ReclaimClaim {
             confirm_reclaim_claim_owner_is_stale(
                 result_path,
                 &claimed,
+                proposed,
                 attempt,
                 claim_attempt,
                 environment,
@@ -413,6 +444,7 @@ impl ReclaimClaim {
             confirm_reclaim_claim_owner_is_stale(
                 result_path,
                 &confirmed,
+                proposed,
                 attempt,
                 claim_attempt,
                 environment,
@@ -510,10 +542,12 @@ impl ReclaimClaim {
 fn confirm_reclaim_claim_owner_is_stale(
     result_path: &Path,
     claim: &EnvResultLockRecord,
+    proposed: &EnvResultLockRecord,
     attempt: usize,
     claim_attempt: usize,
     environment: &impl LockEnvironment,
 ) -> LockResult<()> {
+    ensure_matching_host(result_path, claim, proposed, attempt, "reclaim claim owner")?;
     match environment.inspect_process(claim.pid) {
         Ok(ProcessStatus::Missing) => Ok(()),
         Ok(ProcessStatus::Alive { start_token }) if start_token != claim.process_start_token => {
@@ -555,6 +589,13 @@ fn reclaim_under_claim(
             format!("stale owner re-read failed: {}", error.message),
         )
     })?;
+    ensure_matching_host(
+        result_path,
+        &confirmed,
+        proposed,
+        attempt,
+        "lock owner recheck",
+    )?;
     if confirmed.owner_token != observed.owner_token {
         return Ok(RecoveryOutcome::Retry(format!(
             "owner token changed during stale confirmation: {} -> {}; retry={attempt}/{MAX_RECLAIM_ATTEMPTS}",
@@ -651,6 +692,27 @@ fn combine_lock_errors(
             primary.message, cleanup.message
         ),
     )
+}
+
+fn ensure_matching_host(
+    result_path: &Path,
+    observed: &EnvResultLockRecord,
+    proposed: &EnvResultLockRecord,
+    attempt: usize,
+    context: &str,
+) -> LockResult<()> {
+    if observed.host_identity == proposed.host_identity {
+        return Ok(());
+    }
+    Err(lock_conflict(
+        result_path,
+        Some(observed),
+        attempt,
+        format!(
+            "{context} host identity mismatch: owner_host={} current_host={}; cross-host reclaim is forbidden",
+            observed.host_identity, proposed.host_identity
+        ),
+    ))
 }
 
 fn normalize_result_path(result_path: &Path) -> LockResult<PathBuf> {
@@ -812,8 +874,8 @@ fn lock_conflict(
         || "owner=unavailable".to_string(),
         |record| {
             format!(
-                "owner_pid={} owner_start={} owner_token={}",
-                record.pid, record.process_start_token, record.owner_token
+                "owner_host={} owner_pid={} owner_start={} owner_token={}",
+                record.host_identity, record.pid, record.process_start_token, record.owner_token
             )
         },
     );
@@ -924,6 +986,64 @@ fn inspect_system_process(_pid: u32) -> Result<ProcessStatus, String> {
 }
 
 #[cfg(target_os = "windows")]
+fn system_host_identity() -> Result<String, String> {
+    let output = Command::new("hostname.exe")
+        .output()
+        .map_err(|error| format!("failed to start host inspector: {error}"))?;
+    if !output.status.success() {
+        return Err(format!(
+            "host inspector failed: status={} stderr={}",
+            output.status,
+            String::from_utf8_lossy(&output.stderr).trim()
+        ));
+    }
+    normalize_host_identity(
+        String::from_utf8(output.stdout)
+            .map_err(|error| format!("host inspector returned non-UTF-8 output: {error}"))?
+            .as_str(),
+    )
+}
+
+#[cfg(target_os = "linux")]
+fn system_host_identity() -> Result<String, String> {
+    let hostname = fs::read_to_string("/proc/sys/kernel/hostname")
+        .map_err(|error| format!("failed to read kernel hostname: {error}"))?;
+    normalize_host_identity(&hostname)
+}
+
+#[cfg(all(unix, not(target_os = "linux")))]
+fn system_host_identity() -> Result<String, String> {
+    let output = Command::new("hostname")
+        .output()
+        .map_err(|error| format!("failed to start host inspector: {error}"))?;
+    if !output.status.success() {
+        return Err(format!(
+            "host inspector failed: status={} stderr={}",
+            output.status,
+            String::from_utf8_lossy(&output.stderr).trim()
+        ));
+    }
+    normalize_host_identity(
+        String::from_utf8(output.stdout)
+            .map_err(|error| format!("host inspector returned non-UTF-8 output: {error}"))?
+            .as_str(),
+    )
+}
+
+#[cfg(not(any(windows, unix)))]
+fn system_host_identity() -> Result<String, String> {
+    Err("host identity inspection is unsupported on this platform".to_string())
+}
+
+fn normalize_host_identity(value: &str) -> Result<String, String> {
+    let normalized = value.trim().to_ascii_lowercase();
+    if normalized.is_empty() {
+        return Err("host inspector returned an empty hostname".to_string());
+    }
+    Ok(normalized)
+}
+
+#[cfg(target_os = "windows")]
 fn system_random_seed() -> Result<[u8; 32], String> {
     let script = "$bytes=New-Object byte[] 32; $rng=[Security.Cryptography.RandomNumberGenerator]::Create(); try { $rng.GetBytes($bytes) } finally { $rng.Dispose() }; [Console]::Out.Write((($bytes | ForEach-Object { $_.ToString('x2') }) -join ''))";
     let output = Command::new("powershell.exe")
@@ -986,6 +1106,7 @@ mod tests {
     use tempfile::TempDir;
 
     struct FakeEnvironment {
+        host_identity: String,
         current: ProcessIdentity,
         statuses: Mutex<BTreeMap<u32, Result<ProcessStatus, String>>>,
         token_sequence: AtomicU64,
@@ -995,6 +1116,7 @@ mod tests {
     impl FakeEnvironment {
         fn new() -> Self {
             Self {
+                host_identity: "test-host".to_string(),
                 current: ProcessIdentity {
                     pid: 42,
                     start_token: "current-start".to_string(),
@@ -1007,6 +1129,7 @@ mod tests {
 
         fn terminating_reclaimer(pid: u32, start_token: &str) -> Self {
             Self {
+                host_identity: "test-host".to_string(),
                 current: ProcessIdentity {
                     pid,
                     start_token: start_token.to_string(),
@@ -1020,9 +1143,18 @@ mod tests {
         fn set_status(&self, pid: u32, status: Result<ProcessStatus, String>) {
             self.statuses.lock().unwrap().insert(pid, status);
         }
+
+        fn with_host_identity(mut self, host_identity: &str) -> Self {
+            self.host_identity = host_identity.to_string();
+            self
+        }
     }
 
     impl LockEnvironment for FakeEnvironment {
+        fn host_identity(&self) -> Result<String, String> {
+            Ok(self.host_identity.clone())
+        }
+
         fn current_process(&self) -> Result<ProcessIdentity, String> {
             Ok(self.current.clone())
         }
@@ -1068,6 +1200,10 @@ mod tests {
             .unwrap()
             .with_extension("json.lock");
         assert!(lock_path.exists());
+        let record =
+            read_lock_record(&lock_path, &normalize_result_path(&result).unwrap()).unwrap();
+        assert_eq!(record.schema_version, LOCK_SCHEMA_VERSION);
+        assert_eq!(record.host_identity, environment.host_identity);
         lock.release().unwrap();
         assert!(!lock_path.exists());
     }
@@ -1149,6 +1285,61 @@ mod tests {
             .expect_err("corrupt lock must be refused");
         assert!(error.message.contains("unparseable or unverifiable"));
         assert!(lock_path.exists());
+    }
+
+    #[test]
+    fn empty_host_identity_is_rejected_before_lock_creation() {
+        let temp = TempDir::new().unwrap();
+        let result = temp.path().join("envinst_a/result.json");
+        let environment = FakeEnvironment::new().with_host_identity("  ");
+
+        let error = EnvResultLock::acquire_with(&result, &environment)
+            .expect_err("empty host identity must be rejected");
+        assert!(error.message.contains("lock host identity is empty"));
+        assert!(!result.with_extension("json.lock").exists());
+    }
+
+    #[test]
+    fn old_lock_schema_is_preserved_and_rejected() {
+        let temp = TempDir::new().unwrap();
+        let result = temp.path().join("envinst_a/result.json");
+        let mut record =
+            write_foreign_record(&result, 77, "foreign-start", &format!("{:064x}", 910));
+        record.schema_version = "env-result-lock.v1".to_string();
+        let lock_path = normalize_result_path(&result)
+            .unwrap()
+            .with_extension("json.lock");
+        fs::write(&lock_path, serde_json::to_vec_pretty(&record).unwrap()).unwrap();
+
+        let error = EnvResultLock::acquire_with(&result, &FakeEnvironment::new())
+            .expect_err("old schema without the current contract must fail closed");
+        assert!(error.message.contains("unsupported lock schema"));
+        assert!(lock_path.exists());
+    }
+
+    #[test]
+    fn foreign_host_lock_is_never_reclaimed() {
+        let temp = TempDir::new().unwrap();
+        let result = temp.path().join("envinst_a/result.json");
+        let environment = FakeEnvironment::new();
+        environment.set_status(77, Err("foreign PID must not be inspected".to_string()));
+        write_foreign_record_on_host(
+            &result,
+            "other-host",
+            77,
+            "foreign-start",
+            &format!("{:064x}", 911),
+        );
+        let lock_path = normalize_result_path(&result)
+            .unwrap()
+            .with_extension("json.lock");
+
+        let error = EnvResultLock::acquire_with(&result, &environment)
+            .expect_err("foreign host lock must fail before stale recovery");
+        assert!(error.message.contains("host identity mismatch"));
+        assert!(error.message.contains("cross-host reclaim is forbidden"));
+        assert!(lock_path.exists());
+        assert_no_recovery_artifacts(&result);
     }
 
     #[test]
@@ -1234,7 +1425,13 @@ mod tests {
         let ProcessStatus::Alive { start_token } = status else {
             panic!("sleeping child disappeared before lock fixture setup");
         };
-        write_foreign_record(&result, child.id(), &start_token, &format!("{:064x}", 903));
+        write_foreign_record_on_host(
+            &result,
+            &environment.host_identity().unwrap(),
+            child.id(),
+            &start_token,
+            &format!("{:064x}", 903),
+        );
         child.kill().unwrap();
         child.wait().unwrap();
 
@@ -1280,6 +1477,40 @@ mod tests {
     }
 
     #[test]
+    fn foreign_host_reclaim_claim_is_never_reclaimed() {
+        let temp = TempDir::new().unwrap();
+        let result = temp.path().join("envinst_a/result.json");
+        let environment = FakeEnvironment::new();
+        environment.set_status(88, Err("foreign PID must not be inspected".to_string()));
+        let observed = write_foreign_record(&result, 77, "foreign-start", &format!("{:064x}", 912));
+        let claim_path = reclaim_claim_path(
+            &normalize_result_path(&result)
+                .unwrap()
+                .with_extension("json.lock"),
+            &observed,
+        );
+        write_record_at_on_host(
+            &claim_path,
+            &result,
+            "other-host",
+            88,
+            "claim-start",
+            &format!("{:064x}", 913),
+        );
+
+        let error = EnvResultLock::acquire_with(&result, &environment)
+            .expect_err("foreign host reclaim claim must fail before stale recovery");
+        assert!(error.message.contains("host identity mismatch"));
+        assert!(claim_path.exists());
+        assert!(
+            normalize_result_path(&result)
+                .unwrap()
+                .with_extension("json.lock")
+                .exists()
+        );
+    }
+
+    #[test]
     fn terminated_reclaimer_claim_is_recovered_without_manual_cleanup() {
         let temp = TempDir::new().unwrap();
         let result = temp.path().join("envinst_a/result.json");
@@ -1315,9 +1546,26 @@ mod tests {
         process_start_token: &str,
         owner_token: &str,
     ) -> EnvResultLockRecord {
+        write_foreign_record_on_host(
+            result_path,
+            "test-host",
+            pid,
+            process_start_token,
+            owner_token,
+        )
+    }
+
+    fn write_foreign_record_on_host(
+        result_path: &Path,
+        host_identity: &str,
+        pid: u32,
+        process_start_token: &str,
+        owner_token: &str,
+    ) -> EnvResultLockRecord {
         let normalized = normalize_result_path(result_path).unwrap();
         let record = EnvResultLockRecord {
             schema_version: LOCK_SCHEMA_VERSION.to_string(),
+            host_identity: host_identity.to_string(),
             owner_token: owner_token.to_string(),
             pid,
             process_start_token: process_start_token.to_string(),
@@ -1339,9 +1587,28 @@ mod tests {
         process_start_token: &str,
         owner_token: &str,
     ) {
+        write_record_at_on_host(
+            path,
+            result_path,
+            "test-host",
+            pid,
+            process_start_token,
+            owner_token,
+        );
+    }
+
+    fn write_record_at_on_host(
+        path: &Path,
+        result_path: &Path,
+        host_identity: &str,
+        pid: u32,
+        process_start_token: &str,
+        owner_token: &str,
+    ) {
         let normalized = normalize_result_path(result_path).unwrap();
         let record = EnvResultLockRecord {
             schema_version: LOCK_SCHEMA_VERSION.to_string(),
+            host_identity: host_identity.to_string(),
             owner_token: owner_token.to_string(),
             pid,
             process_start_token: process_start_token.to_string(),
