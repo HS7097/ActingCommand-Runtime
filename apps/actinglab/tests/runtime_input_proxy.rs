@@ -1047,6 +1047,7 @@ fn production_do_uses_runtime_capture_and_fenced_input() {
             .and_then(Value::as_str),
         Some("runtime_proxy")
     );
+    assert!(envelope.pointer("/data/needs_detection").is_none());
     assert_eq!(state.captures.load(Ordering::Acquire), 2);
     assert_eq!(state.taps.load(Ordering::Acquire), 1);
     host.close().expect("close host");
@@ -1227,6 +1228,18 @@ fn online_lab2_do_guard_failure_records_observation_without_runtime_input() {
     );
     assert_eq!(exit_code, 3, "{failure}");
     assert_eq!(failure["error"]["code"], "target_not_visible");
+    assert_eq!(
+        failure["error"]["details"]["needs_detection"],
+        serde_json::json!({
+            "status": "needs_detection",
+            "reason": "resource_drift",
+            "command": "do",
+            "subject": "home_button",
+            "detector_ids": [],
+            "keys": [],
+            "recommended_action": "run_detect"
+        })
+    );
     assert_eq!(
         failure["error"]["details"]["ledger"]["authority"],
         "runtime_global_ledger"
