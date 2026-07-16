@@ -930,8 +930,8 @@ fn session_layer_capability_contract() -> Value {
         "request_classes": {
             "read_only": {
                 "requires_lease": false,
-                "examples": ["status", "queue", "journal", "capabilities", "devices", "session bootstrap", "session throat-policy", "session capture-policy", "session record-policy", "session self-heal-policy", "session self-heal-plan", "session phase-c-plan", "session transport plan", "session transport check", "session connect-plan", "session stream-plan", "session submit-plan", "session validation-plan", "session instance registry", "session instance health", "session instance keep-alive", "capture", "stream", "session recover --stale-capture", "session record step --capture", "session record step --current-frame", "session monitor-policy status"],
-                "device_affecting_examples": ["capture", "stream", "session instance health", "session record step --capture", "session record step --current-frame"]
+                "examples": ["status", "queue", "journal", "capabilities", "devices", "session bootstrap", "session throat-policy", "session capture-policy", "session record-policy", "session self-heal-policy", "session self-heal-plan", "session phase-c-plan", "session transport plan", "session transport check", "session connect-plan", "session stream-plan", "session submit-plan", "session validation-plan", "session instance registry", "capture", "stream", "session recover --stale-capture", "session record step --capture", "session record step --current-frame", "session monitor-policy status"],
+                "device_affecting_examples": ["capture", "stream", "session record step --capture", "session record step --current-frame"]
             },
             "daemon_state": {
                 "requires_lease": false,
@@ -941,7 +941,7 @@ fn session_layer_capability_contract() -> Value {
             },
             "control": {
                 "requires_lease": true,
-                "examples": ["tap", "swipe", "long-tap", "key", "text", "stream --input-relay", "stream --input-event <action,args>", "stream --relay-event <action,args>", "session instance connect", "session instance reconnect", "session app launch", "session app stop", "session app force-stop", "session app restart", "session instance app launch", "session instance app stop", "session instance app force-stop", "session instance app restart", "tap-target", "navigate", "recover except --stale-capture"]
+                "examples": ["tap", "swipe", "long-tap", "key", "text", "stream --input-relay", "stream --input-event <action,args>", "stream --relay-event <action,args>", "session app launch", "session app stop", "session app force-stop", "session app restart", "session instance app launch", "session instance app stop", "session instance app force-stop", "session instance app restart", "tap-target", "navigate", "recover except --stale-capture"]
             }
         },
         "safety": {
@@ -1068,7 +1068,6 @@ fn session_capture_policy_payload(
             "require_fresh_flag": "--require-fresh",
             "diagnostic_command": "capture diagnose --require-fresh",
             "session_diagnostic_command": "session capture diagnose --require-fresh",
-            "instance_health_command": "session instance health --capture-diagnose",
             "stale_frame_must_be_visible": true,
             "stale_frame_must_not_be_treated_as_success": true
         },
@@ -1297,7 +1296,7 @@ fn session_self_heal_policy_payload(
         "flow": [
             {
                 "stage": "observe",
-                "allowed_commands": ["monitor --once", "session status --diagnostics", "session instance health --capture-diagnose"],
+                "allowed_commands": ["monitor --once", "session status --diagnostics"],
                 "device_control_allowed": false
             },
             {
@@ -1466,15 +1465,11 @@ fn session_access_contract() -> Value {
             "journal": "session request journal",
             "events": "session request events",
             "instance_registry": "session request instance registry",
-            "instance_health": "session request instance health",
-            "instance_keep_alive": "session request instance keep-alive",
             "monitor_policy": "session request monitor-policy status"
         },
         "daemon_controls": {
             "app_lifecycle": "session request app <launch|stop|force-stop|restart>",
-            "instance_app_lifecycle": "session request instance app <launch|stop|force-stop|restart>",
-            "instance_connect": "session request instance connect",
-            "instance_reconnect": "session request instance reconnect"
+            "instance_app_lifecycle": "session request instance app <launch|stop|force-stop|restart>"
         },
         "request_classes": {
             "read_only": {
@@ -1513,9 +1508,6 @@ fn session_access_contract() -> Value {
                     "session record step --current-frame",
                     "session monitor-policy status",
                     "session instance registry",
-                    "session instance health",
-                    "session instance keep-alive",
-                    "session instance health --capture-diagnose",
                     "monitor-once"
                 ],
                 "device_affecting_examples": [
@@ -1528,9 +1520,7 @@ fn session_access_contract() -> Value {
                     "is-visible",
                     "locate",
                     "session record step --capture",
-                    "session record step --current-frame",
-                    "session instance health",
-                    "session instance health --capture-diagnose"
+                    "session record step --current-frame"
                 ]
             },
             "daemon_state": {
@@ -1554,8 +1544,6 @@ fn session_access_contract() -> Value {
                 "requires_lease": true,
                 "examples": [
                     "lease",
-                    "session instance connect",
-                    "session instance reconnect",
                     "session app launch",
                     "session app stop",
                     "session app force-stop",
@@ -2066,25 +2054,6 @@ fn session_api_contract() -> Value {
                 "schema_version": "session.instance_registry.v0.1",
                 "ready_field": "instances[].validation.ready_for_device_control"
             },
-            "instance_health_view": {
-                "query": "session instance health [--capture-diagnose]",
-                "daemon_query": "session request instance health [--capture-diagnose]",
-                "status_field": "status",
-                "capture_field": "capture"
-            },
-            "instance_keep_alive_view": {
-                "query": "session instance keep-alive",
-                "daemon_query": "session request instance keep-alive",
-                "status_field": "status",
-                "action_field": "action"
-            },
-            "instance_connect_view": {
-                "query": "session instance connect",
-                "daemon_query": "session request instance connect",
-                "requires_lease": true,
-                "status_field": "status",
-                "action_field": "action"
-            },
             "app_lifecycle_view": {
                 "query": "session app <launch|stop|force-stop|restart>",
                 "daemon_query": "session request app <launch|stop|force-stop|restart>",
@@ -2144,9 +2113,6 @@ fn session_api_contract() -> Value {
                     "session record step --current-frame",
                     "session monitor-policy status",
                     "session instance registry",
-                    "session instance health",
-                    "session instance keep-alive",
-                    "session instance health --capture-diagnose",
                     "monitor-once"
                 ],
                 "device_affecting_examples": [
@@ -2159,17 +2125,13 @@ fn session_api_contract() -> Value {
                     "is-visible",
                     "locate",
                     "session record step --capture",
-                    "session record step --current-frame",
-                    "session instance health",
-                    "session instance health --capture-diagnose"
+                    "session record step --current-frame"
                 ]
             },
             "control": {
                 "requires_lease": true,
                 "examples": [
                     "lease",
-                    "session instance connect",
-                    "session instance reconnect",
                     "session app launch",
                     "session app stop",
                     "session app force-stop",
@@ -4388,12 +4350,6 @@ fn stale_capture_recovery_json(
             },
             {
                 "order": 4,
-                "type": "device_health",
-                "command": "session instance health",
-                "read_only": true
-            },
-            {
-                "order": 5,
                 "type": "app_restart",
                 "command": "session app restart",
                 "requires_lease": true,
@@ -6569,11 +6525,10 @@ fn instance_missing_recommended_fields(instance: &InstanceConfig) -> Vec<&'stati
 }
 
 fn run_session_instance(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
-    let action = args.first().map(String::as_str).ok_or_else(|| {
-        CliError::usage(
-            "session instance requires list|registry|connect|health|keep-alive|reconnect|app",
-        )
-    })?;
+    let action = args
+        .first()
+        .map(String::as_str)
+        .ok_or_else(|| CliError::usage("session instance requires list|registry|app"))?;
     if action == "app" {
         if args.get(1).is_none() {
             return Err(CliError::usage(
@@ -11701,26 +11656,14 @@ fn command_capabilities() -> Vec<Value> {
             ["running_runtime"],
             "available",
         ),
-        command_cap(
-            "session request instance health",
-            ["running_runtime", "device"],
-            "available",
-        ),
+        command_cap("session request instance health", ["offline"], "retired"),
         command_cap(
             "session request instance keep-alive",
-            ["running_runtime", "device"],
-            "available",
+            ["offline"],
+            "retired",
         ),
-        command_cap(
-            "session request instance connect",
-            ["running_runtime", "device", "lab_lease"],
-            "available",
-        ),
-        command_cap(
-            "session request instance reconnect",
-            ["running_runtime", "device", "lab_lease"],
-            "available",
-        ),
+        command_cap("session request instance connect", ["offline"], "retired"),
+        command_cap("session request instance reconnect", ["offline"], "retired"),
         command_cap(
             "session request instance app",
             ["running_runtime", "device", "lab_lease"],
@@ -11794,10 +11737,10 @@ fn command_capabilities() -> Vec<Value> {
         command_cap("session instance", ["offline", "device"], "available"),
         command_cap("session instance list", ["offline"], "available"),
         command_cap("session instance registry", ["offline"], "available"),
-        command_cap("session instance health", ["device"], "available"),
-        command_cap("session instance keep-alive", ["device"], "available"),
-        command_cap("session instance connect", ["device"], "available"),
-        command_cap("session instance reconnect", ["device"], "available"),
+        command_cap("session instance health", ["offline"], "retired"),
+        command_cap("session instance keep-alive", ["offline"], "retired"),
+        command_cap("session instance connect", ["offline"], "retired"),
+        command_cap("session instance reconnect", ["offline"], "retired"),
         command_cap("session instance app", ["device"], "available"),
         command_cap("session instance app launch", ["device"], "available"),
         command_cap("session instance app stop", ["device"], "available"),
@@ -18646,13 +18589,19 @@ mod tests {
                 .any(|command| command.get("command").and_then(Value::as_str)
                     == Some("session instance registry"))
         );
-        assert!(
-            data.get("commands")
-                .and_then(Value::as_array)
-                .unwrap()
-                .iter()
-                .any(|command| command.get("command").and_then(Value::as_str)
-                    == Some("session instance keep-alive"))
+        let retired = data
+            .get("commands")
+            .and_then(Value::as_array)
+            .unwrap()
+            .iter()
+            .find(|command| {
+                command.get("command").and_then(Value::as_str)
+                    == Some("session instance keep-alive")
+            })
+            .expect("retired command remains discoverable");
+        assert_eq!(
+            retired.get("status").and_then(Value::as_str),
+            Some("retired")
         );
     }
 
@@ -19909,11 +19858,11 @@ mod tests {
             Some("fresh_probe")
         );
         assert_eq!(
-            data.pointer("/steps/4/type").and_then(Value::as_str),
+            data.pointer("/steps/3/type").and_then(Value::as_str),
             Some("app_restart")
         );
         assert_eq!(
-            data.pointer("/steps/4/requires_lease")
+            data.pointer("/steps/3/requires_lease")
                 .and_then(Value::as_bool),
             Some(true)
         );
@@ -20000,10 +19949,6 @@ mod tests {
             "session api",
             "session instance",
             "session instance list",
-            "session instance health",
-            "session instance keep-alive",
-            "session instance connect",
-            "session instance reconnect",
             "session instance app",
             "session instance app launch",
             "session instance app stop",
@@ -20043,10 +19988,6 @@ mod tests {
             "session request monitor-once",
             "session request instance list",
             "session request instance registry",
-            "session request instance health",
-            "session request instance keep-alive",
-            "session request instance connect",
-            "session request instance reconnect",
             "session request instance app",
             "session request app",
             "session request recover --stale-capture",
@@ -20069,6 +20010,61 @@ mod tests {
                 capability.get("status").and_then(Value::as_str),
                 Some("available")
             );
+        }
+        for command in [
+            "session instance health",
+            "session instance keep-alive",
+            "session instance connect",
+            "session instance reconnect",
+            "session request instance health",
+            "session request instance keep-alive",
+            "session request instance connect",
+            "session request instance reconnect",
+        ] {
+            let capability = commands
+                .iter()
+                .find(|value| value.get("command").and_then(Value::as_str) == Some(command))
+                .unwrap_or_else(|| panic!("{command} retirement marker missing"));
+            assert_eq!(
+                capability.get("status").and_then(Value::as_str),
+                Some("retired")
+            );
+            assert_eq!(
+                capability.get("needs").and_then(Value::as_array).unwrap(),
+                &vec![Value::String("offline".to_string())]
+            );
+        }
+    }
+
+    #[test]
+    fn retired_instance_commands_are_absent_from_live_contracts() {
+        let global = GlobalOptions::default();
+        let flags = FlagArgs::default();
+        let contracts = [
+            session_layer_capability_contract(),
+            session_access_contract(),
+            session_api_contract(),
+            session_capture_policy_payload(&global, &flags, "session capture-policy").unwrap(),
+            session_self_heal_policy_payload(&global, &flags, "session self-heal-policy").unwrap(),
+            stale_capture_recovery_json(CaptureBackendChoice::Adb, Duration::from_millis(1), None),
+        ];
+        for contract in contracts {
+            let text = serde_json::to_string(&contract).unwrap();
+            for command in [
+                "session instance health",
+                "session instance keep-alive",
+                "session instance connect",
+                "session instance reconnect",
+                "session request instance health",
+                "session request instance keep-alive",
+                "session request instance connect",
+                "session request instance reconnect",
+            ] {
+                assert!(
+                    !text.contains(command),
+                    "retired command advertised: {command}"
+                );
+            }
         }
     }
 
