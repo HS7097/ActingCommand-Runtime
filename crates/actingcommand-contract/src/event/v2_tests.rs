@@ -116,6 +116,28 @@ fn all_payload_drafts(mut input: impl FnMut() -> AuditInput) -> Vec<EventPayload
     let monitor_decision =
         MonitorDecision::new(MonitorDiagnosis::Healthy, MonitorDisposition::Healthy, None)
             .expect("monitor decision");
+    let policy_data = PolicyDispatchEventData {
+        decision_id: "decision:fixture-a".to_owned(),
+        task_id: "task:fixture-a".to_owned(),
+        instance_id: "instance:fixture-a".to_owned(),
+        operation_id: "operation:fixture-a".to_owned(),
+        reason_chain_id: "reason:fixture-a".to_owned(),
+        reasons: vec![PolicyReasonRecord {
+            code: "eligible".to_owned(),
+            detail: "neutral fixture is eligible".to_owned(),
+        }],
+        catalog_hash: format!("sha256:{}", "b".repeat(64)),
+        catalog_version: 1,
+        input_ledger_position: 1,
+        fact_snapshot_id: "snapshot:fixture-a".to_owned(),
+        approval_fact_ids: vec!["approval:fixture-a".to_owned()],
+    };
+    let catalog_data = CatalogTransitionEventData {
+        catalog_id: "catalog:fixture-a".to_owned(),
+        catalog_version: 2,
+        catalog_hash: format!("sha256:{}", "c".repeat(64)),
+        previous_catalog_hash: Some(format!("sha256:{}", "b".repeat(64))),
+    };
 
     vec![
         MonitorPayloadDraft::requested(input()).into(),
@@ -147,6 +169,30 @@ fn all_payload_drafts(mut input: impl FnMut() -> AuditInput) -> Vec<EventPayload
             input(),
         )
         .into(),
+        PolicyPayloadDraft::dispatch_intent(policy_data.clone(), input()).into(),
+        PolicyPayloadDraft::dispatch_admitted(policy_data.clone(), input()).into(),
+        PolicyPayloadDraft::dispatch_rejected(
+            policy_data.clone(),
+            EffectDisposition::NotPerformed,
+            input(),
+        )
+        .into(),
+        PolicyPayloadDraft::dispatch_completed(policy_data, input()).into(),
+        CatalogPayloadDraft::transition_intent(
+            EventAction::CatalogActivate,
+            catalog_data.clone(),
+            input(),
+        )
+        .into(),
+        CatalogPayloadDraft::activated(catalog_data.clone(), input()).into(),
+        CatalogPayloadDraft::transition_failed(
+            EventAction::CatalogActivate,
+            catalog_data.clone(),
+            EffectDisposition::Indeterminate,
+            input(),
+        )
+        .into(),
+        CatalogPayloadDraft::rolled_back(catalog_data, input()).into(),
         LeasePayloadDraft::requested(action, input()).into(),
         LeasePayloadDraft::granted(action, effect, input()).into(),
         LeasePayloadDraft::transferred(
@@ -699,7 +745,7 @@ fn tagged_payload_and_projection_layers_reject_unknown_fields() {
 #[test]
 fn event_v2_round_trips_every_c1_payload_variant() {
     let payloads = all_payload_drafts(AuditInput::new);
-    assert_eq!(payloads.len(), 59);
+    assert_eq!(payloads.len(), 67);
 
     for (index, payload) in payloads.into_iter().enumerate() {
         let sanitized = sanitize(payload, index as u64 + 1);

@@ -95,12 +95,20 @@ pub enum TaskTerminalTarget {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CatalogTransitionTarget {
+    Activated,
+    RolledBack,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CriticalOperation {
     CommandValidation,
     DeviceWrite,
     ApplicationLifecycle,
     LeaseTransition(LeaseTransitionTarget),
     TaskTerminal(TaskTerminalTarget),
+    PolicyDispatch,
+    CatalogTransition(CatalogTransitionTarget),
 }
 
 impl CriticalOperation {
@@ -111,6 +119,8 @@ impl CriticalOperation {
             Self::ApplicationLifecycle => EventType::ApplicationIntent,
             Self::LeaseTransition(_) => EventType::LeaseTransitionIntent,
             Self::TaskTerminal(_) => EventType::TaskTerminalIntent,
+            Self::PolicyDispatch => EventType::PolicyDispatchIntent,
+            Self::CatalogTransition(_) => EventType::CatalogTransitionIntent,
         }
     }
 
@@ -131,6 +141,11 @@ impl CriticalOperation {
                 TaskTerminalTarget::Failed => EventType::TaskFailed,
                 TaskTerminalTarget::Cancelled => EventType::TaskCancelled,
             },
+            Self::PolicyDispatch => EventType::PolicyDispatchAdmitted,
+            Self::CatalogTransition(target) => match target {
+                CatalogTransitionTarget::Activated => EventType::CatalogActivated,
+                CatalogTransitionTarget::RolledBack => EventType::CatalogRolledBack,
+            },
         }
     }
 
@@ -141,6 +156,8 @@ impl CriticalOperation {
             Self::ApplicationLifecycle => EventType::ApplicationFailed,
             Self::LeaseTransition(_) => EventType::LeaseTransitionFailed,
             Self::TaskTerminal(_) => EventType::TaskTerminalCommitFailed,
+            Self::PolicyDispatch => EventType::PolicyDispatchRejected,
+            Self::CatalogTransition(_) => EventType::CatalogTransitionFailed,
         }
     }
 }

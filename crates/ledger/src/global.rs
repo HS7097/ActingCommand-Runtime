@@ -280,6 +280,9 @@ enum WriterCommand {
         query: EventQuery,
         response: SyncSender<GlobalLedgerResult<Vec<PersistedEvent>>>,
     },
+    LatestSequence {
+        response: SyncSender<GlobalLedgerResult<u64>>,
+    },
     Subscribe {
         cursor: SubscriptionCursor,
         response: SyncSender<GlobalLedgerResult<SubscriptionRegistration>>,
@@ -580,6 +583,20 @@ impl GlobalLedger {
         receive_response(receiver, "query_events")?
     }
 
+    pub fn latest_sequence(&self) -> GlobalLedgerResult<u64> {
+        let (response, receiver) = mpsc::sync_channel(1);
+        let sender = self
+            .sender
+            .as_ref()
+            .ok_or_else(|| GlobalLedgerError::fatal("writer_unavailable", "latest_sequence"))?;
+        send_command(
+            sender,
+            WriterCommand::LatestSequence { response },
+            "latest_sequence",
+        )?;
+        receive_response(receiver, "latest_sequence")?
+    }
+
     pub fn subscribe(&self, cursor: SubscriptionCursor) -> GlobalLedgerResult<LedgerSubscription> {
         self.subscribe_with_options(cursor, SubscriptionOptions::default())
     }
@@ -726,6 +743,9 @@ fn writer_loop(
             }
             WriterCommand::Query { query, response } => {
                 let _ = response.send(Ok(store.query(&query)));
+            }
+            WriterCommand::LatestSequence { response } => {
+                let _ = response.send(Ok(store.latest_sequence()));
             }
             WriterCommand::Subscribe { cursor, response } => {
                 let replay_through_sequence = store.latest_sequence();

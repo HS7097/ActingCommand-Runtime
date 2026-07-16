@@ -18,6 +18,8 @@ pub const COMMAND_PAYLOAD_SCHEMA: &str = "actingcommand.payload.command.v2";
 pub const RUNTIME_PAYLOAD_SCHEMA: &str = "actingcommand.payload.runtime.v1";
 pub const MONITOR_PAYLOAD_SCHEMA: &str = "actingcommand.payload.monitor.v1";
 pub const SCHEDULER_PAYLOAD_SCHEMA: &str = "actingcommand.payload.scheduler.v3";
+pub const POLICY_PAYLOAD_SCHEMA: &str = "actingcommand.payload.policy.v1";
+pub const CATALOG_PAYLOAD_SCHEMA: &str = "actingcommand.payload.catalog.v1";
 pub const LEASE_PAYLOAD_SCHEMA: &str = "actingcommand.payload.lease.v3";
 pub const TASK_PAYLOAD_SCHEMA: &str = "actingcommand.payload.task.v3";
 pub const APPLICATION_PAYLOAD_SCHEMA: &str = "actingcommand.payload.application.v1";
@@ -391,6 +393,138 @@ pub struct ResourceAuthoringPayload {
     #[serde(skip_serializing_if = "Option::is_none")]
     failure_code: Option<String>,
     audit: SanitizedAudit,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PolicyReasonRecord {
+    pub code: String,
+    pub detail: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PolicyDispatchEventData {
+    pub decision_id: String,
+    pub task_id: String,
+    pub instance_id: String,
+    pub operation_id: String,
+    pub reason_chain_id: String,
+    pub reasons: Vec<PolicyReasonRecord>,
+    pub catalog_hash: String,
+    pub catalog_version: u64,
+    pub input_ledger_position: u64,
+    pub fact_snapshot_id: String,
+    pub approval_fact_ids: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PolicyDispatchPayload {
+    action: EventAction,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    diagnostic_code: Option<DiagnosticCode>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    effect_disposition: Option<EffectDisposition>,
+    decision_id: String,
+    task_id: String,
+    instance_id: String,
+    operation_id: String,
+    reason_chain_id: String,
+    reasons: Vec<PolicyReasonRecord>,
+    catalog_hash: String,
+    catalog_version: u64,
+    input_ledger_position: u64,
+    fact_snapshot_id: String,
+    approval_fact_ids: Vec<String>,
+    audit: SanitizedAudit,
+}
+
+impl PolicyDispatchPayload {
+    pub fn decision_id(&self) -> &str {
+        &self.decision_id
+    }
+
+    pub fn task_id(&self) -> &str {
+        &self.task_id
+    }
+
+    pub fn instance_id(&self) -> &str {
+        &self.instance_id
+    }
+
+    pub fn operation_id(&self) -> &str {
+        &self.operation_id
+    }
+
+    pub fn reason_chain_id(&self) -> &str {
+        &self.reason_chain_id
+    }
+
+    pub fn reasons(&self) -> &[PolicyReasonRecord] {
+        &self.reasons
+    }
+
+    pub fn catalog_hash(&self) -> &str {
+        &self.catalog_hash
+    }
+
+    pub const fn catalog_version(&self) -> u64 {
+        self.catalog_version
+    }
+
+    pub const fn input_ledger_position(&self) -> u64 {
+        self.input_ledger_position
+    }
+
+    pub fn fact_snapshot_id(&self) -> &str {
+        &self.fact_snapshot_id
+    }
+
+    pub fn approval_fact_ids(&self) -> &[String] {
+        &self.approval_fact_ids
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CatalogTransitionEventData {
+    pub catalog_id: String,
+    pub catalog_version: u64,
+    pub catalog_hash: String,
+    pub previous_catalog_hash: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CatalogTransitionPayload {
+    action: EventAction,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    diagnostic_code: Option<DiagnosticCode>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    effect_disposition: Option<EffectDisposition>,
+    catalog_id: String,
+    catalog_version: u64,
+    catalog_hash: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    previous_catalog_hash: Option<String>,
+    audit: SanitizedAudit,
+}
+
+impl CatalogTransitionPayload {
+    pub fn catalog_id(&self) -> &str {
+        &self.catalog_id
+    }
+
+    pub const fn catalog_version(&self) -> u64 {
+        self.catalog_version
+    }
+
+    pub fn catalog_hash(&self) -> &str {
+        &self.catalog_hash
+    }
+
+    pub fn previous_catalog_hash(&self) -> Option<&str> {
+        self.previous_catalog_hash.as_deref()
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1195,6 +1329,42 @@ observation_detail!(CapturePolicyPayload);
 observation_detail!(SchedulerQueuePayload);
 observation_detail!(SchedulerPreemptionPayload);
 
+impl PayloadDetail for PolicyDispatchPayload {
+    fn action(&self) -> EventAction {
+        self.action
+    }
+
+    fn diagnostic_code(&self) -> Option<DiagnosticCode> {
+        self.diagnostic_code
+    }
+
+    fn effect_disposition(&self) -> Option<EffectDisposition> {
+        self.effect_disposition
+    }
+
+    fn audit(&self) -> &SanitizedAudit {
+        &self.audit
+    }
+}
+
+impl PayloadDetail for CatalogTransitionPayload {
+    fn action(&self) -> EventAction {
+        self.action
+    }
+
+    fn diagnostic_code(&self) -> Option<DiagnosticCode> {
+        self.diagnostic_code
+    }
+
+    fn effect_disposition(&self) -> Option<EffectDisposition> {
+        self.effect_disposition
+    }
+
+    fn audit(&self) -> &SanitizedAudit {
+        &self.audit
+    }
+}
+
 impl PayloadDetail for LeaseTransferPayload {
     fn action(&self) -> EventAction {
         self.action
@@ -1445,6 +1615,21 @@ struct ResourceAuthoringDraft {
     audit: AuditInput,
 }
 
+struct PolicyDispatchDraft {
+    data: PolicyDispatchEventData,
+    diagnostic_code: Option<DiagnosticCode>,
+    effect_disposition: Option<EffectDisposition>,
+    audit: AuditInput,
+}
+
+struct CatalogTransitionDraft {
+    action: EventAction,
+    data: CatalogTransitionEventData,
+    diagnostic_code: Option<DiagnosticCode>,
+    effect_disposition: Option<EffectDisposition>,
+    audit: AuditInput,
+}
+
 struct TaskSemanticDraft {
     fact: TaskSemanticFact,
     audit: AuditInput,
@@ -1486,6 +1671,51 @@ impl ResourceAuthoringDraft {
             target_fingerprint: self.target_fingerprint,
             changed_paths: self.changed_paths,
             failure_code: self.failure_code,
+            audit: self.audit.sanitize(fingerprinter)?,
+        })
+    }
+}
+
+impl PolicyDispatchDraft {
+    fn sanitize(
+        self,
+        fingerprinter: &dyn SecretFingerprinter,
+    ) -> Result<PolicyDispatchPayload, SanitizationError> {
+        validate_policy_dispatch_data(&self.data)?;
+        Ok(PolicyDispatchPayload {
+            action: EventAction::PolicyDispatch,
+            diagnostic_code: self.diagnostic_code,
+            effect_disposition: self.effect_disposition,
+            decision_id: self.data.decision_id,
+            task_id: self.data.task_id,
+            instance_id: self.data.instance_id,
+            operation_id: self.data.operation_id,
+            reason_chain_id: self.data.reason_chain_id,
+            reasons: self.data.reasons,
+            catalog_hash: self.data.catalog_hash,
+            catalog_version: self.data.catalog_version,
+            input_ledger_position: self.data.input_ledger_position,
+            fact_snapshot_id: self.data.fact_snapshot_id,
+            approval_fact_ids: self.data.approval_fact_ids,
+            audit: self.audit.sanitize(fingerprinter)?,
+        })
+    }
+}
+
+impl CatalogTransitionDraft {
+    fn sanitize(
+        self,
+        fingerprinter: &dyn SecretFingerprinter,
+    ) -> Result<CatalogTransitionPayload, SanitizationError> {
+        validate_catalog_transition_data(&self.data)?;
+        Ok(CatalogTransitionPayload {
+            action: self.action,
+            diagnostic_code: self.diagnostic_code,
+            effect_disposition: self.effect_disposition,
+            catalog_id: self.data.catalog_id,
+            catalog_version: self.data.catalog_version,
+            catalog_hash: self.data.catalog_hash,
+            previous_catalog_hash: self.data.previous_catalog_hash,
             audit: self.audit.sanitize(fingerprinter)?,
         })
     }
@@ -1581,6 +1811,206 @@ fn validate_resource_authoring_token(
         ));
     }
     Ok(())
+}
+
+fn validate_policy_dispatch_data(data: &PolicyDispatchEventData) -> Result<(), SanitizationError> {
+    validate_policy_token(&data.decision_id, "decision_id")?;
+    validate_policy_token(&data.task_id, "task_id")?;
+    validate_policy_token(&data.instance_id, "instance_id")?;
+    validate_policy_token(&data.operation_id, "operation_id")?;
+    validate_policy_token(&data.reason_chain_id, "reason_chain_id")?;
+    validate_policy_token(&data.fact_snapshot_id, "fact_snapshot_id")?;
+    validate_catalog_hash(&data.catalog_hash, "catalog_hash")?;
+    if data.catalog_version == 0 || data.input_ledger_position == 0 {
+        return Err(SanitizationError::new(
+            "invalid_policy_dispatch_position",
+            "catalog_version_or_input_position",
+        ));
+    }
+    if data.reasons.is_empty() || data.reasons.len() > 128 {
+        return Err(SanitizationError::new(
+            "invalid_policy_reason_chain",
+            "reasons",
+        ));
+    }
+    for reason in &data.reasons {
+        validate_policy_token(&reason.code, "reason_code")?;
+        validate_policy_text(&reason.detail, "reason_detail")?;
+    }
+    if data.approval_fact_ids.len() > 64 {
+        return Err(SanitizationError::new(
+            "invalid_policy_approval_facts",
+            "approval_fact_ids",
+        ));
+    }
+    for approval in &data.approval_fact_ids {
+        validate_policy_token(approval, "approval_fact_ids")?;
+    }
+    Ok(())
+}
+
+fn validate_policy_payload(payload: &PolicyPayload) -> Result<(), SanitizationError> {
+    let value = match payload {
+        PolicyPayload::DispatchIntent(value)
+            if value.action == EventAction::PolicyDispatch
+                && value.diagnostic_code.is_none()
+                && value.effect_disposition.is_none() =>
+        {
+            value
+        }
+        PolicyPayload::DispatchAdmitted(value)
+            if value.action == EventAction::PolicyDispatch
+                && value.diagnostic_code.is_none()
+                && value.effect_disposition == Some(EffectDisposition::Performed) =>
+        {
+            value
+        }
+        PolicyPayload::DispatchRejected(value)
+            if value.action == EventAction::PolicyDispatch
+                && value.diagnostic_code == Some(DiagnosticCode::PolicyRejected)
+                && matches!(
+                    value.effect_disposition,
+                    Some(EffectDisposition::NotPerformed | EffectDisposition::Indeterminate)
+                ) =>
+        {
+            value
+        }
+        PolicyPayload::DispatchCompleted(value)
+            if value.action == EventAction::PolicyDispatch
+                && value.diagnostic_code.is_none()
+                && value.effect_disposition == Some(EffectDisposition::Performed) =>
+        {
+            value
+        }
+        _ => {
+            return Err(SanitizationError::new(
+                "invalid_policy_dispatch_lifecycle",
+                "policy_payload",
+            ));
+        }
+    };
+    validate_policy_dispatch_data(&PolicyDispatchEventData {
+        decision_id: value.decision_id.clone(),
+        task_id: value.task_id.clone(),
+        instance_id: value.instance_id.clone(),
+        operation_id: value.operation_id.clone(),
+        reason_chain_id: value.reason_chain_id.clone(),
+        reasons: value.reasons.clone(),
+        catalog_hash: value.catalog_hash.clone(),
+        catalog_version: value.catalog_version,
+        input_ledger_position: value.input_ledger_position,
+        fact_snapshot_id: value.fact_snapshot_id.clone(),
+        approval_fact_ids: value.approval_fact_ids.clone(),
+    })
+}
+
+fn validate_catalog_transition_data(
+    data: &CatalogTransitionEventData,
+) -> Result<(), SanitizationError> {
+    validate_policy_token(&data.catalog_id, "catalog_id")?;
+    validate_catalog_hash(&data.catalog_hash, "catalog_hash")?;
+    if data.catalog_version == 0 {
+        return Err(SanitizationError::new(
+            "invalid_catalog_version",
+            "catalog_version",
+        ));
+    }
+    if let Some(previous) = &data.previous_catalog_hash {
+        validate_catalog_hash(previous, "previous_catalog_hash")?;
+        if previous == &data.catalog_hash {
+            return Err(SanitizationError::new(
+                "invalid_catalog_transition",
+                "previous_catalog_hash",
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn validate_catalog_payload(payload: &CatalogPayload) -> Result<(), SanitizationError> {
+    let value = match payload {
+        CatalogPayload::TransitionIntent(value)
+            if matches!(
+                value.action,
+                EventAction::CatalogActivate | EventAction::CatalogRollback
+            ) && value.diagnostic_code.is_none()
+                && value.effect_disposition.is_none() =>
+        {
+            value
+        }
+        CatalogPayload::Activated(value)
+            if value.action == EventAction::CatalogActivate
+                && value.diagnostic_code.is_none()
+                && value.effect_disposition == Some(EffectDisposition::Performed) =>
+        {
+            value
+        }
+        CatalogPayload::RolledBack(value)
+            if value.action == EventAction::CatalogRollback
+                && value.diagnostic_code.is_none()
+                && value.effect_disposition == Some(EffectDisposition::Performed) =>
+        {
+            value
+        }
+        CatalogPayload::TransitionFailed(value)
+            if matches!(
+                value.action,
+                EventAction::CatalogActivate | EventAction::CatalogRollback
+            ) && value.diagnostic_code == Some(DiagnosticCode::CatalogTransitionFailed)
+                && matches!(
+                    value.effect_disposition,
+                    Some(EffectDisposition::NotPerformed | EffectDisposition::Indeterminate)
+                ) =>
+        {
+            value
+        }
+        _ => {
+            return Err(SanitizationError::new(
+                "invalid_catalog_transition_lifecycle",
+                "catalog_payload",
+            ));
+        }
+    };
+    validate_catalog_transition_data(&CatalogTransitionEventData {
+        catalog_id: value.catalog_id.clone(),
+        catalog_version: value.catalog_version,
+        catalog_hash: value.catalog_hash.clone(),
+        previous_catalog_hash: value.previous_catalog_hash.clone(),
+    })
+}
+
+fn validate_policy_token(value: &str, field: &'static str) -> Result<(), SanitizationError> {
+    if value.is_empty()
+        || value.len() > 256
+        || value.chars().any(char::is_control)
+        || value.chars().any(char::is_whitespace)
+    {
+        Err(SanitizationError::new("invalid_policy_token", field))
+    } else {
+        Ok(())
+    }
+}
+
+fn validate_policy_text(value: &str, field: &'static str) -> Result<(), SanitizationError> {
+    if value.is_empty() || value.len() > 1_024 || value.chars().any(char::is_control) {
+        Err(SanitizationError::new("invalid_policy_text", field))
+    } else {
+        Ok(())
+    }
+}
+
+fn validate_catalog_hash(value: &str, field: &'static str) -> Result<(), SanitizationError> {
+    let valid = value.strip_prefix("sha256:").is_some_and(|digest| {
+        digest.len() == 64
+            && digest
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
+    });
+    if valid {
+        Ok(())
+    } else {
+        Err(SanitizationError::new("invalid_catalog_hash", field))
+    }
 }
 
 impl ObservationDraft {
@@ -2685,11 +3115,124 @@ impl LedgerPayloadDraft {
     }
 }
 
+enum PolicyDraftKind {
+    Intent(PolicyDispatchDraft),
+    Admitted(PolicyDispatchDraft),
+    Rejected(PolicyDispatchDraft),
+    Completed(PolicyDispatchDraft),
+}
+
+pub struct PolicyPayloadDraft(PolicyDraftKind);
+
+impl PolicyPayloadDraft {
+    pub fn dispatch_intent(data: PolicyDispatchEventData, audit: AuditInput) -> Self {
+        Self(PolicyDraftKind::Intent(PolicyDispatchDraft {
+            data,
+            diagnostic_code: None,
+            effect_disposition: None,
+            audit,
+        }))
+    }
+
+    pub fn dispatch_admitted(data: PolicyDispatchEventData, audit: AuditInput) -> Self {
+        Self(PolicyDraftKind::Admitted(PolicyDispatchDraft {
+            data,
+            diagnostic_code: None,
+            effect_disposition: Some(EffectDisposition::Performed),
+            audit,
+        }))
+    }
+
+    pub fn dispatch_rejected(
+        data: PolicyDispatchEventData,
+        effect_disposition: EffectDisposition,
+        audit: AuditInput,
+    ) -> Self {
+        Self(PolicyDraftKind::Rejected(PolicyDispatchDraft {
+            data,
+            diagnostic_code: Some(DiagnosticCode::PolicyRejected),
+            effect_disposition: Some(effect_disposition),
+            audit,
+        }))
+    }
+
+    pub fn dispatch_completed(data: PolicyDispatchEventData, audit: AuditInput) -> Self {
+        Self(PolicyDraftKind::Completed(PolicyDispatchDraft {
+            data,
+            diagnostic_code: None,
+            effect_disposition: Some(EffectDisposition::Performed),
+            audit,
+        }))
+    }
+}
+
+enum CatalogDraftKind {
+    TransitionIntent(CatalogTransitionDraft),
+    Activated(CatalogTransitionDraft),
+    RolledBack(CatalogTransitionDraft),
+    TransitionFailed(CatalogTransitionDraft),
+}
+
+pub struct CatalogPayloadDraft(CatalogDraftKind);
+
+impl CatalogPayloadDraft {
+    pub fn transition_intent(
+        action: EventAction,
+        data: CatalogTransitionEventData,
+        audit: AuditInput,
+    ) -> Self {
+        Self(CatalogDraftKind::TransitionIntent(CatalogTransitionDraft {
+            action,
+            data,
+            diagnostic_code: None,
+            effect_disposition: None,
+            audit,
+        }))
+    }
+
+    pub fn activated(data: CatalogTransitionEventData, audit: AuditInput) -> Self {
+        Self(CatalogDraftKind::Activated(CatalogTransitionDraft {
+            action: EventAction::CatalogActivate,
+            data,
+            diagnostic_code: None,
+            effect_disposition: Some(EffectDisposition::Performed),
+            audit,
+        }))
+    }
+
+    pub fn rolled_back(data: CatalogTransitionEventData, audit: AuditInput) -> Self {
+        Self(CatalogDraftKind::RolledBack(CatalogTransitionDraft {
+            action: EventAction::CatalogRollback,
+            data,
+            diagnostic_code: None,
+            effect_disposition: Some(EffectDisposition::Performed),
+            audit,
+        }))
+    }
+
+    pub fn transition_failed(
+        action: EventAction,
+        data: CatalogTransitionEventData,
+        effect_disposition: EffectDisposition,
+        audit: AuditInput,
+    ) -> Self {
+        Self(CatalogDraftKind::TransitionFailed(CatalogTransitionDraft {
+            action,
+            data,
+            diagnostic_code: Some(DiagnosticCode::CatalogTransitionFailed),
+            effect_disposition: Some(effect_disposition),
+            audit,
+        }))
+    }
+}
+
 pub enum EventPayloadDraft {
     Runtime(RuntimePayloadDraft),
     Monitor(MonitorPayloadDraft),
     Command(CommandPayloadDraft),
     Scheduler(SchedulerPayloadDraft),
+    Policy(PolicyPayloadDraft),
+    Catalog(CatalogPayloadDraft),
     Lease(LeasePayloadDraft),
     Task(TaskPayloadDraft),
     Application(ApplicationPayloadDraft),
@@ -2716,6 +3259,8 @@ payload_draft_from!(CommandPayloadDraft, Command);
 payload_draft_from!(RuntimePayloadDraft, Runtime);
 payload_draft_from!(MonitorPayloadDraft, Monitor);
 payload_draft_from!(SchedulerPayloadDraft, Scheduler);
+payload_draft_from!(PolicyPayloadDraft, Policy);
+payload_draft_from!(CatalogPayloadDraft, Catalog);
 payload_draft_from!(LeasePayloadDraft, Lease);
 payload_draft_from!(TaskPayloadDraft, Task);
 payload_draft_from!(ApplicationPayloadDraft, Application);
@@ -2780,6 +3325,34 @@ pub enum SchedulerPayload {
     Queued(SchedulerQueuePayload),
     Denied(DiagnosticPayload),
     Preempted(SchedulerPreemptionPayload),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(
+    tag = "kind",
+    content = "data",
+    rename_all = "snake_case",
+    deny_unknown_fields
+)]
+pub enum PolicyPayload {
+    DispatchIntent(PolicyDispatchPayload),
+    DispatchAdmitted(PolicyDispatchPayload),
+    DispatchRejected(PolicyDispatchPayload),
+    DispatchCompleted(PolicyDispatchPayload),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(
+    tag = "kind",
+    content = "data",
+    rename_all = "snake_case",
+    deny_unknown_fields
+)]
+pub enum CatalogPayload {
+    TransitionIntent(CatalogTransitionPayload),
+    Activated(CatalogTransitionPayload),
+    RolledBack(CatalogTransitionPayload),
+    TransitionFailed(CatalogTransitionPayload),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -2979,6 +3552,18 @@ family_payload!(SchedulerPayload, {
     Denied => EventType::SchedulerDenied,
     Preempted => EventType::SchedulerPreempted,
 });
+family_payload!(PolicyPayload, {
+    DispatchIntent => EventType::PolicyDispatchIntent,
+    DispatchAdmitted => EventType::PolicyDispatchAdmitted,
+    DispatchRejected => EventType::PolicyDispatchRejected,
+    DispatchCompleted => EventType::PolicyDispatchCompleted,
+});
+family_payload!(CatalogPayload, {
+    TransitionIntent => EventType::CatalogTransitionIntent,
+    Activated => EventType::CatalogActivated,
+    RolledBack => EventType::CatalogRolledBack,
+    TransitionFailed => EventType::CatalogTransitionFailed,
+});
 family_payload!(LeasePayload, {
     Requested => EventType::LeaseRequested,
     Granted => EventType::LeaseGranted,
@@ -3071,6 +3656,8 @@ pub enum EventPayload {
     Monitor(MonitorPayload),
     Command(CommandPayload),
     Scheduler(SchedulerPayload),
+    Policy(PolicyPayload),
+    Catalog(CatalogPayload),
     Lease(LeasePayload),
     Task(TaskPayload),
     Application(ApplicationPayload),
@@ -3140,6 +3727,34 @@ impl EventPayloadDraft {
                 }
                 SchedulerDraftKind::Preempted(detail) => {
                     SchedulerPayload::Preempted(detail.sanitize(fingerprinter)?)
+                }
+            }),
+            Self::Policy(value) => EventPayload::Policy(match value.0 {
+                PolicyDraftKind::Intent(detail) => {
+                    PolicyPayload::DispatchIntent(detail.sanitize(fingerprinter)?)
+                }
+                PolicyDraftKind::Admitted(detail) => {
+                    PolicyPayload::DispatchAdmitted(detail.sanitize(fingerprinter)?)
+                }
+                PolicyDraftKind::Rejected(detail) => {
+                    PolicyPayload::DispatchRejected(detail.sanitize(fingerprinter)?)
+                }
+                PolicyDraftKind::Completed(detail) => {
+                    PolicyPayload::DispatchCompleted(detail.sanitize(fingerprinter)?)
+                }
+            }),
+            Self::Catalog(value) => EventPayload::Catalog(match value.0 {
+                CatalogDraftKind::TransitionIntent(detail) => {
+                    CatalogPayload::TransitionIntent(detail.sanitize(fingerprinter)?)
+                }
+                CatalogDraftKind::Activated(detail) => {
+                    CatalogPayload::Activated(detail.sanitize(fingerprinter)?)
+                }
+                CatalogDraftKind::RolledBack(detail) => {
+                    CatalogPayload::RolledBack(detail.sanitize(fingerprinter)?)
+                }
+                CatalogDraftKind::TransitionFailed(detail) => {
+                    CatalogPayload::TransitionFailed(detail.sanitize(fingerprinter)?)
                 }
             }),
             Self::Lease(value) => EventPayload::Lease(match value.0 {
@@ -3314,6 +3929,8 @@ impl EventPayload {
             Self::Monitor(_) => MONITOR_PAYLOAD_SCHEMA,
             Self::Command(_) => COMMAND_PAYLOAD_SCHEMA,
             Self::Scheduler(_) => SCHEDULER_PAYLOAD_SCHEMA,
+            Self::Policy(_) => POLICY_PAYLOAD_SCHEMA,
+            Self::Catalog(_) => CATALOG_PAYLOAD_SCHEMA,
             Self::Lease(_) => LEASE_PAYLOAD_SCHEMA,
             Self::Task(_) => TASK_PAYLOAD_SCHEMA,
             Self::Application(_) => APPLICATION_PAYLOAD_SCHEMA,
@@ -3356,6 +3973,12 @@ impl EventPayload {
                 &value.changed_paths,
                 value.failure_code.as_deref(),
             )?;
+        }
+        if let Self::Policy(value) = self {
+            validate_policy_payload(value)?;
+        }
+        if let Self::Catalog(value) = self {
+            validate_catalog_payload(value)?;
         }
         match self {
             Self::Task(TaskPayload::Semantic(value)) if value.validate().is_err() => {
@@ -3450,6 +4073,8 @@ impl EventPayload {
         let event_type = self.event_type();
         let detail = self.family_payload().detail();
         let authoring = resource_authoring(self);
+        let policy_dispatch = policy_dispatch(self);
+        let catalog_transition = catalog_transition(self);
         let payload = PublicPayload {
             event_type,
             action: detail.action(),
@@ -3490,12 +4115,37 @@ impl EventPayload {
             target_fingerprint: authoring.map(|value| value.target_fingerprint.clone()),
             changed_path_count: authoring.map(|value| value.changed_paths.len() as u64),
             failure_code: authoring.and_then(|value| value.failure_code.clone()),
+            decision_id: policy_dispatch.map(|value| value.decision_id.clone().into_boxed_str()),
+            reason_chain_id: policy_dispatch
+                .map(|value| value.reason_chain_id.clone().into_boxed_str()),
+            reason_count: policy_dispatch.map(|value| value.reasons.len() as u64),
+            input_ledger_position: policy_dispatch.map(|value| value.input_ledger_position),
+            fact_snapshot_id: policy_dispatch
+                .map(|value| value.fact_snapshot_id.clone().into_boxed_str()),
+            approval_fact_count: policy_dispatch.map(|value| value.approval_fact_ids.len() as u64),
+            catalog_id: catalog_transition.map(|value| value.catalog_id.clone().into_boxed_str()),
+            catalog_hash: policy_dispatch
+                .map(|value| value.catalog_hash.clone().into_boxed_str())
+                .or_else(|| {
+                    catalog_transition.map(|value| value.catalog_hash.clone().into_boxed_str())
+                }),
+            catalog_version: policy_dispatch
+                .map(|value| value.catalog_version)
+                .or_else(|| catalog_transition.map(|value| value.catalog_version)),
+            previous_catalog_hash: catalog_transition.and_then(|value| {
+                value
+                    .previous_catalog_hash
+                    .clone()
+                    .map(String::into_boxed_str)
+            }),
         };
         match self {
             Self::Runtime(_) => PublicEventPayload::Runtime(payload),
             Self::Monitor(_) => PublicEventPayload::Monitor(payload),
             Self::Command(_) => PublicEventPayload::Command(payload),
             Self::Scheduler(_) => PublicEventPayload::Scheduler(payload),
+            Self::Policy(_) => PublicEventPayload::Policy(payload),
+            Self::Catalog(_) => PublicEventPayload::Catalog(payload),
             Self::Lease(_) => PublicEventPayload::Lease(payload),
             Self::Task(_) => PublicEventPayload::Task(payload),
             Self::Application(_) => PublicEventPayload::Application(payload),
@@ -3515,6 +4165,8 @@ impl EventPayload {
             Self::Monitor(value) => value,
             Self::Command(value) => value,
             Self::Scheduler(value) => value,
+            Self::Policy(value) => value,
+            Self::Catalog(value) => value,
             Self::Lease(value) => value,
             Self::Task(value) => value,
             Self::Application(value) => value,
@@ -3614,6 +4266,26 @@ fn task_semantic_fact(payload: &EventPayload) -> Option<&TaskSemanticFact> {
     }
 }
 
+fn policy_dispatch(payload: &EventPayload) -> Option<&PolicyDispatchPayload> {
+    match payload {
+        EventPayload::Policy(PolicyPayload::DispatchIntent(value))
+        | EventPayload::Policy(PolicyPayload::DispatchAdmitted(value))
+        | EventPayload::Policy(PolicyPayload::DispatchRejected(value))
+        | EventPayload::Policy(PolicyPayload::DispatchCompleted(value)) => Some(value),
+        _ => None,
+    }
+}
+
+fn catalog_transition(payload: &EventPayload) -> Option<&CatalogTransitionPayload> {
+    match payload {
+        EventPayload::Catalog(CatalogPayload::TransitionIntent(value))
+        | EventPayload::Catalog(CatalogPayload::Activated(value))
+        | EventPayload::Catalog(CatalogPayload::RolledBack(value))
+        | EventPayload::Catalog(CatalogPayload::TransitionFailed(value)) => Some(value),
+        _ => None,
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PublicPayload {
@@ -3675,6 +4347,26 @@ pub struct PublicPayload {
     changed_path_count: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     failure_code: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    decision_id: Option<Box<str>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    reason_chain_id: Option<Box<str>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    reason_count: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    input_ledger_position: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    fact_snapshot_id: Option<Box<str>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    approval_fact_count: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    catalog_id: Option<Box<str>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    catalog_hash: Option<Box<str>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    catalog_version: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    previous_catalog_hash: Option<Box<str>>,
 }
 
 impl PublicPayload {
@@ -3799,6 +4491,46 @@ impl PublicPayload {
     pub fn failure_code(&self) -> Option<&str> {
         self.failure_code.as_deref()
     }
+
+    pub fn decision_id(&self) -> Option<&str> {
+        self.decision_id.as_deref()
+    }
+
+    pub fn reason_chain_id(&self) -> Option<&str> {
+        self.reason_chain_id.as_deref()
+    }
+
+    pub const fn reason_count(&self) -> Option<u64> {
+        self.reason_count
+    }
+
+    pub const fn input_ledger_position(&self) -> Option<u64> {
+        self.input_ledger_position
+    }
+
+    pub fn fact_snapshot_id(&self) -> Option<&str> {
+        self.fact_snapshot_id.as_deref()
+    }
+
+    pub const fn approval_fact_count(&self) -> Option<u64> {
+        self.approval_fact_count
+    }
+
+    pub fn catalog_id(&self) -> Option<&str> {
+        self.catalog_id.as_deref()
+    }
+
+    pub fn catalog_hash(&self) -> Option<&str> {
+        self.catalog_hash.as_deref()
+    }
+
+    pub const fn catalog_version(&self) -> Option<u64> {
+        self.catalog_version
+    }
+
+    pub fn previous_catalog_hash(&self) -> Option<&str> {
+        self.previous_catalog_hash.as_deref()
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -3813,6 +4545,8 @@ pub enum PublicEventPayload {
     Monitor(PublicPayload),
     Command(PublicPayload),
     Scheduler(PublicPayload),
+    Policy(PublicPayload),
+    Catalog(PublicPayload),
     Lease(PublicPayload),
     Task(PublicPayload),
     Application(PublicPayload),

@@ -4,8 +4,12 @@ use crate::events::RuntimeEvents;
 use crate::ipc::{DEFAULT_RUNTIME_MAX_FRAME_BYTES, FrameRead, read_frame, write_frame};
 use crate::monitor::{DueMonitorProbe, MonitorRegistry, MonitorUpdate};
 use crate::owner::{OwnerGuard, OwnerStartup};
+use crate::policy_host::{LoadedCatalog, PolicyHost};
 use crate::time::unix_ms_now;
-use crate::{FatalState, RuntimeHostError, RuntimeHostResult};
+use crate::{
+    CatalogGeneration, FatalState, PolicyAdmissionContext, PolicyCadence, PolicyCycle,
+    PolicyDispatchAdmission, PolicyTrigger, RuntimeHostError, RuntimeHostResult,
+};
 use actingcommand_artifact_store::{
     ArtifactEventSink, ArtifactStore, ArtifactStoreError, ArtifactStoreResult,
     ArtifactWriteContext, ArtifactWriteRequest, CapturePipelineCounts, CapturePipelineSummary,
@@ -15,15 +19,16 @@ use actingcommand_artifact_store::{
 use actingcommand_contract::{
     ApplicationLifecycleAction, ApplicationPayload, ApplicationPayloadDraft, ArtifactIssuePolicy,
     ArtifactKind, ArtifactProducer, ArtifactRedactionState, AuditInput, CapturePayloadDraft,
-    CaptureSequence, CaptureSequenceSpec, ClientPayloadDraft, CommandPayloadDraft,
-    ContainedTaskRequest, CorrelationId, DiagnosticCode, EffectDisposition, EventAction,
-    EventActor, EventDraft, EventLinksDraft, EventPayload, EventQuery, EventSeverity, EventSource,
-    EventType, EvidenceCompleteness, InputAction, InputPayload, InputPayloadDraft, InstanceId,
-    IssuedActionId, IssuedFrameId, IssuedMonitorProbe, IssuedReadOnlyCaptureCapability,
-    IssuedRecognitionId, IssuedRunId, IssuedTaskId, LeaseId, LeasePayloadDraft, LeaseQueuePolicy,
-    LeaseToken, MAX_INSTANCE_ALIAS_BYTES, MonitorPayloadDraft, MonitorRecoveryCoordinationReason,
-    OriginModule, PackageDebugLayout, PackageDebugRequest, PackageDebugSummary, RUNTIME_INFO_FILE,
-    ReadonlyObservation, RecognitionPayloadDraft, RecognitionVerdict, RequestId,
+    CaptureSequence, CaptureSequenceSpec, CatalogPayloadDraft, CatalogTransitionEventData,
+    ClientPayloadDraft, CommandPayloadDraft, ContainedTaskRequest, CorrelationId, DiagnosticCode,
+    EffectDisposition, EventAction, EventActor, EventDraft, EventLinksDraft, EventPayload,
+    EventQuery, EventSeverity, EventSource, EventType, EvidenceCompleteness, InputAction,
+    InputPayload, InputPayloadDraft, InstanceId, IssuedActionId, IssuedFrameId, IssuedMonitorProbe,
+    IssuedReadOnlyCaptureCapability, IssuedRecognitionId, IssuedRunId, IssuedTaskId, LeaseId,
+    LeasePayloadDraft, LeaseQueuePolicy, LeaseToken, MAX_INSTANCE_ALIAS_BYTES, MonitorPayloadDraft,
+    MonitorRecoveryCoordinationReason, OriginModule, PackageDebugLayout, PackageDebugRequest,
+    PackageDebugSummary, PolicyDispatchEventData, PolicyPayloadDraft, PolicyReasonRecord,
+    RUNTIME_INFO_FILE, ReadonlyObservation, RecognitionPayloadDraft, RecognitionVerdict, RequestId,
     ResourceAuthoringEvent, ResourceAuthoringPayloadDraft, ResourceAuthoringPhase, RetentionClass,
     RuntimeCaptureBackend, RuntimeControlPlaneStatus, RuntimeDebugEvent, RuntimeDebugOperation,
     RuntimeDebugPhase, RuntimeErrorCode, RuntimeErrorProjection, RuntimeEventBatch,
@@ -39,8 +44,8 @@ use actingcommand_execution_kernel::{
     ExecutionKernel, ExternalExpectedSha256, PreparedContainedTask, decide_monitor,
 };
 use actingcommand_ledger::critical::{
-    CriticalActionReport, CriticalEventPlan, CriticalExecutionError, CriticalOperation,
-    DefiniteEffectDisposition, LeaseTransitionTarget, execute_critical,
+    CatalogTransitionTarget, CriticalActionReport, CriticalEventPlan, CriticalExecutionError,
+    CriticalOperation, DefiniteEffectDisposition, LeaseTransitionTarget, execute_critical,
 };
 use actingcommand_ledger::{
     GlobalLedger, GlobalLedgerConfig, PersistedEvent, project_subscription_event,
@@ -48,6 +53,10 @@ use actingcommand_ledger::{
 use actingcommand_pack_containment::{
     Containment, DEFAULT_MAX_COMPRESSED_BYTES, InstanceId as ContainmentInstanceId, PackageLayout,
     Sha256Hash,
+};
+use actingcommand_policy::{
+    CatalogSources, DecisionReasonChain, DispatchIntent, EvaluationFacts, EvaluationResources,
+    EvaluationTime,
 };
 use actingcommand_scheduler::{
     CancelledQueuedLease, ConnectionId, LeasePreparation, LeaseReleaseReason, LeaseTransferReason,
@@ -71,12 +80,14 @@ const MONITOR_POLL_INTERVAL: Duration = Duration::from_millis(25);
 const ACCEPT_IDLE_INTERVAL: Duration = Duration::from_millis(20);
 const MAX_REQUEST_CACHE_ENTRIES: usize = 4096;
 const MAX_MONITOR_PROBES_PER_TICK: usize = 16;
+const POLICY_CONNECTION_VALUE: u64 = u64::MAX;
 
 #[derive(Clone)]
 pub struct RuntimeHostConfig {
     state_root: PathBuf,
     bind_address: SocketAddr,
     scheduler: SchedulerConfig,
+    policy_cadence: PolicyCadence,
     maximum_frame_bytes: usize,
     io_timeout: Duration,
     secret_fingerprint_salt: Vec<u8>,
@@ -88,6 +99,7 @@ impl RuntimeHostConfig {
             state_root: state_root.into(),
             bind_address: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
             scheduler: SchedulerConfig::default(),
+            policy_cadence: PolicyCadence::default(),
             maximum_frame_bytes: DEFAULT_RUNTIME_MAX_FRAME_BYTES,
             io_timeout: DEFAULT_RUNTIME_IO_TIMEOUT,
             secret_fingerprint_salt: secret_fingerprint_salt.as_ref().to_vec(),
@@ -101,6 +113,11 @@ impl RuntimeHostConfig {
 
     pub fn with_scheduler(mut self, scheduler: SchedulerConfig) -> Self {
         self.scheduler = scheduler;
+        self
+    }
+
+    pub fn with_policy_cadence(mut self, policy_cadence: PolicyCadence) -> Self {
+        self.policy_cadence = policy_cadence;
         self
     }
 
@@ -122,6 +139,7 @@ impl RuntimeHostConfig {
         self.scheduler
             .validate()
             .map_err(|error| RuntimeHostError::scheduler("validate_runtime_config", &error))?;
+        self.policy_cadence.validate()?;
         if self.state_root.as_os_str().is_empty()
             || !self.bind_address.ip().is_loopback()
             || self.io_timeout.is_zero()
@@ -146,6 +164,7 @@ impl std::fmt::Debug for RuntimeHostConfig {
             .field("state_root", &"<redacted>")
             .field("bind_address", &self.bind_address)
             .field("scheduler", &self.scheduler)
+            .field("policy_cadence", &self.policy_cadence)
             .field("maximum_frame_bytes", &self.maximum_frame_bytes)
             .field("io_timeout", &self.io_timeout)
             .field("secret_fingerprint_salt", &"<redacted>")
@@ -201,6 +220,7 @@ impl RuntimeHost {
             |reference| artifacts.verify_recovery_reference(reference).ok(),
         )
         .map_err(|_| ledger_error("open_global_ledger"))?;
+        let policy = PolicyHost::open(&config.state_root, &ledger, config.policy_cadence.clone())?;
         let listener = TcpListener::bind(config.bind_address).map_err(|_| {
             RuntimeHostError::fatal(
                 "runtime_bind_failed",
@@ -243,6 +263,7 @@ impl RuntimeHost {
         let shared = Arc::new(HostShared {
             owner_epoch,
             scheduler: Mutex::new(scheduler),
+            policy: Mutex::new(policy),
             owner: Mutex::new(owner),
             ledger,
             artifacts,
@@ -324,17 +345,63 @@ impl RuntimeHost {
     }
 
     pub fn fatal_error(&self) -> RuntimeHostResult<Option<RuntimeHostError>> {
-        self.shared
-            .as_ref()
-            .ok_or_else(|| {
-                RuntimeHostError::fatal(
-                    "runtime_host_closed",
-                    "read_runtime_health",
-                    RuntimeErrorCode::RuntimeUnavailable,
-                )
-            })?
-            .fatal
-            .current()
+        self.shared_ref("read_runtime_health")?.fatal.current()
+    }
+
+    pub fn active_policy_catalog(&self) -> RuntimeHostResult<Option<CatalogGeneration>> {
+        self.shared_ref("read_active_policy_catalog")?
+            .active_policy_catalog()
+    }
+
+    pub fn activate_policy_catalog(
+        &self,
+        sources: &CatalogSources,
+    ) -> RuntimeHostResult<CatalogGeneration> {
+        self.shared_ref("activate_policy_catalog")?
+            .activate_policy_catalog(sources)
+    }
+
+    pub fn rollback_policy_catalog(
+        &self,
+        catalog_hash: &str,
+    ) -> RuntimeHostResult<CatalogGeneration> {
+        self.shared_ref("rollback_policy_catalog")?
+            .rollback_policy_catalog(catalog_hash)
+    }
+
+    pub fn evaluate_policy_cycle(
+        &self,
+        facts: &EvaluationFacts,
+        resources: &EvaluationResources,
+        time: EvaluationTime,
+        seed: u64,
+        trigger: PolicyTrigger,
+    ) -> RuntimeHostResult<PolicyCycle> {
+        self.shared_ref("evaluate_policy_cycle")?
+            .evaluate_policy_cycle(facts, resources, time, seed, trigger)
+    }
+
+    pub fn admit_policy_dispatch(
+        &self,
+        intent: &DispatchIntent,
+        reason_chain: &DecisionReasonChain,
+        context: &PolicyAdmissionContext,
+    ) -> RuntimeHostResult<PolicyDispatchAdmission> {
+        self.shared_ref("admit_policy_dispatch")?
+            .admit_policy_dispatch(intent, reason_chain, context)
+    }
+
+    pub fn pinned_policy_catalog(
+        &self,
+        decision_id: &str,
+    ) -> RuntimeHostResult<Option<CatalogGeneration>> {
+        self.shared_ref("read_pinned_policy_catalog")?
+            .pinned_policy_catalog(decision_id)
+    }
+
+    pub fn complete_policy_dispatch(&self, decision_id: &str) -> RuntimeHostResult<()> {
+        self.shared_ref("complete_policy_dispatch")?
+            .complete_policy_dispatch(decision_id)
     }
 
     #[cfg(test)]
@@ -397,6 +464,16 @@ impl RuntimeHost {
 
     pub fn close(mut self) -> RuntimeHostResult<()> {
         self.shutdown()
+    }
+
+    fn shared_ref(&self, operation: &'static str) -> RuntimeHostResult<&HostShared> {
+        self.shared.as_deref().ok_or_else(|| {
+            RuntimeHostError::fatal(
+                "runtime_host_closed",
+                operation,
+                RuntimeErrorCode::RuntimeUnavailable,
+            )
+        })
     }
 
     fn shutdown(&mut self) -> RuntimeHostResult<()> {
@@ -578,6 +655,7 @@ fn initial_registered_instances(
 struct HostShared {
     owner_epoch: actingcommand_contract::OwnerEpoch,
     scheduler: Mutex<SeedScheduler>,
+    policy: Mutex<PolicyHost>,
     ledger: GlobalLedger,
     artifacts: ArtifactStore,
     owner: Mutex<OwnerGuard>,
@@ -637,6 +715,423 @@ struct ActionFailure {
 }
 
 impl HostShared {
+    fn active_policy_catalog(&self) -> RuntimeHostResult<Option<CatalogGeneration>> {
+        Ok(lock(&self.policy, "read_active_policy_catalog")?.active_generation())
+    }
+
+    fn activate_policy_catalog(
+        &self,
+        sources: &CatalogSources,
+    ) -> RuntimeHostResult<CatalogGeneration> {
+        let (catalog, previous) = {
+            let policy = lock(&self.policy, "stage_policy_catalog")?;
+            let catalog = policy.stage(sources)?;
+            let previous = policy.active_generation();
+            (catalog, previous)
+        };
+        if previous
+            .as_ref()
+            .is_some_and(|current| current.catalog_hash() == catalog.generation().catalog_hash())
+        {
+            return Ok(catalog.generation().clone());
+        }
+        if let Some(current) = &previous
+            && (current.catalog_id() != catalog.generation().catalog_id()
+                || catalog.generation().catalog_version() <= current.catalog_version())
+        {
+            return Err(RuntimeHostError::request(
+                "catalog_activation_not_newer",
+                "activate_policy_catalog",
+                RuntimeErrorCode::InvalidRequest,
+            ));
+        }
+        self.switch_policy_catalog(
+            catalog,
+            previous,
+            EventAction::CatalogActivate,
+            CatalogTransitionTarget::Activated,
+        )
+    }
+
+    fn rollback_policy_catalog(&self, catalog_hash: &str) -> RuntimeHostResult<CatalogGeneration> {
+        let (catalog, previous) = {
+            let policy = lock(&self.policy, "load_policy_catalog_rollback")?;
+            let previous = policy.active_generation().ok_or_else(|| {
+                RuntimeHostError::request(
+                    "policy_catalog_unavailable",
+                    "rollback_policy_catalog",
+                    RuntimeErrorCode::InvalidRequest,
+                )
+            })?;
+            let catalog = policy.load_generation(catalog_hash)?;
+            (catalog, previous)
+        };
+        if catalog.generation().catalog_hash() == previous.catalog_hash() {
+            return Ok(previous);
+        }
+        if catalog.generation().catalog_id() != previous.catalog_id()
+            || catalog.generation().catalog_version() >= previous.catalog_version()
+        {
+            return Err(RuntimeHostError::request(
+                "catalog_rollback_not_older",
+                "rollback_policy_catalog",
+                RuntimeErrorCode::InvalidRequest,
+            ));
+        }
+        self.switch_policy_catalog(
+            catalog,
+            Some(previous),
+            EventAction::CatalogRollback,
+            CatalogTransitionTarget::RolledBack,
+        )
+    }
+
+    fn switch_policy_catalog(
+        &self,
+        catalog: LoadedCatalog,
+        previous: Option<CatalogGeneration>,
+        action: EventAction,
+        target: CatalogTransitionTarget,
+    ) -> RuntimeHostResult<CatalogGeneration> {
+        let generation = catalog.generation().clone();
+        let expected_active_hash = previous
+            .as_ref()
+            .map(|value| value.catalog_hash().to_owned());
+        let data = CatalogTransitionEventData {
+            catalog_id: generation.catalog_id().to_owned(),
+            catalog_version: generation.catalog_version(),
+            catalog_hash: generation.catalog_hash().to_owned(),
+            previous_catalog_hash: previous
+                .as_ref()
+                .map(|value| value.catalog_hash().to_owned()),
+        };
+        let links = self.events.system_links()?;
+        let intent = self.events.draft(
+            EventSeverity::Info,
+            EventSource::Runtime,
+            OriginModule::Policy,
+            EventActor::Runtime,
+            links.clone(),
+            CatalogPayloadDraft::transition_intent(action, data.clone(), AuditInput::new()),
+        )?;
+        let intent = self.events.sanitize(intent)?;
+        let plan = CriticalEventPlan::new(CriticalOperation::CatalogTransition(target), intent)
+            .map_err(|_| critical_plan_error())?;
+        let success_links = links.clone();
+        let failure_links = links;
+        let success_data = data.clone();
+        let failure_data = data;
+        let result = execute_critical(
+            &self.ledger,
+            self.events.fingerprinter(),
+            plan,
+            || match lock(&self.policy, "switch_active_policy_catalog").and_then(|mut policy| {
+                policy.switch_active(catalog, expected_active_hash.as_deref())
+            }) {
+                Ok(()) => CriticalActionReport::Succeeded {
+                    value: generation.clone(),
+                    effect: DefiniteEffectDisposition::Performed,
+                },
+                Err(error) => CriticalActionReport::Failed {
+                    error,
+                    effect: EffectDisposition::Indeterminate,
+                },
+            },
+            |_, _| {
+                self.events
+                    .draft(
+                        EventSeverity::Info,
+                        EventSource::Runtime,
+                        OriginModule::Policy,
+                        EventActor::Runtime,
+                        success_links,
+                        match target {
+                            CatalogTransitionTarget::Activated => {
+                                CatalogPayloadDraft::activated(success_data, AuditInput::new())
+                            }
+                            CatalogTransitionTarget::RolledBack => {
+                                CatalogPayloadDraft::rolled_back(success_data, AuditInput::new())
+                            }
+                        },
+                    )
+                    .map_err(|_| actingcommand_contract::SanitizationError::fingerprinter_failure())
+            },
+            |_, effect| {
+                self.events
+                    .draft(
+                        EventSeverity::Error,
+                        EventSource::Runtime,
+                        OriginModule::Policy,
+                        EventActor::Runtime,
+                        failure_links,
+                        CatalogPayloadDraft::transition_failed(
+                            action,
+                            failure_data,
+                            effect,
+                            AuditInput::new(),
+                        ),
+                    )
+                    .map_err(|_| actingcommand_contract::SanitizationError::fingerprinter_failure())
+            },
+        );
+        match result {
+            Ok(receipt) => Ok(receipt.into_value()),
+            Err(CriticalExecutionError::Action { error, .. }) => {
+                self.fatal.mark(error.clone())?;
+                Err(error)
+            }
+            Err(error) => {
+                let error = critical_execution_error(&error);
+                self.fatal.mark(error.clone())?;
+                Err(error)
+            }
+        }
+    }
+
+    fn evaluate_policy_cycle(
+        &self,
+        facts: &EvaluationFacts,
+        resources: &EvaluationResources,
+        time: EvaluationTime,
+        seed: u64,
+        trigger: PolicyTrigger,
+    ) -> RuntimeHostResult<PolicyCycle> {
+        lock(&self.policy, "evaluate_policy_cycle")?.evaluate(facts, resources, time, seed, trigger)
+    }
+
+    fn admit_policy_dispatch(
+        &self,
+        intent: &DispatchIntent,
+        reason_chain: &DecisionReasonChain,
+        context: &PolicyAdmissionContext,
+    ) -> RuntimeHostResult<PolicyDispatchAdmission> {
+        {
+            let policy = lock(&self.policy, "validate_policy_dispatch")?;
+            if let Some(replay) = policy.replay_admission(intent, reason_chain)? {
+                return Ok(replay);
+            }
+        }
+        let resolved = self
+            .resolve_instance(&intent.instance_id)
+            .map_err(|failure| *failure.error)?;
+        let request_id = self
+            .events
+            .issuer()
+            .mint_request_id()
+            .map_err(|_| policy_id_error("issue_policy_request_id"))?;
+        let correlation_id = self
+            .events
+            .issuer()
+            .mint_correlation_id()
+            .map_err(|_| policy_id_error("issue_policy_correlation_id"))?;
+        let holder = self
+            .events
+            .issuer()
+            .mint_holder_id()
+            .map_err(|_| policy_id_error("issue_policy_holder_id"))?;
+        let holder_id = *holder.transport();
+        let request = RuntimeRequest::new(
+            request_id,
+            correlation_id,
+            None,
+            EventActor::Agent,
+            EventSource::Adapter,
+            context.now_unix_ms,
+            RuntimeOperation::acquire_lease(intent.instance_id.clone(), holder),
+        )
+        .map_err(|_| policy_contract_error("build_policy_runtime_request"))?;
+        let validated = request
+            .validate()
+            .map_err(|_| policy_contract_error("validate_policy_runtime_request"))?;
+        let connection_id = ConnectionId::new(POLICY_CONNECTION_VALUE)
+            .map_err(|error| RuntimeHostError::scheduler("build_policy_connection", &error))?;
+        let action_id = self.events.action_id()?;
+        let links = self.events.request_links(
+            &validated,
+            Some(resolved.instance_id()),
+            None,
+            Some(action_id),
+        );
+        let data = policy_event_data(intent, reason_chain);
+        let event = self.events.draft(
+            EventSeverity::Info,
+            EventSource::Scheduler,
+            OriginModule::Policy,
+            EventActor::Scheduler,
+            links.clone(),
+            PolicyPayloadDraft::dispatch_intent(data.clone(), AuditInput::new()),
+        )?;
+        let event = self.events.sanitize(event)?;
+        let plan = CriticalEventPlan::new(CriticalOperation::PolicyDispatch, event)
+            .map_err(|_| critical_plan_error())?;
+        let success_links = links.clone();
+        let failure_links = links;
+        let success_data = data.clone();
+        let failure_data = data;
+        let result = execute_critical(
+            &self.ledger,
+            self.events.fingerprinter(),
+            plan,
+            || {
+                let ledger_high_watermark = match self.ledger.latest_sequence() {
+                    Ok(position) => position,
+                    Err(_) => {
+                        return CriticalActionReport::Failed {
+                            error: RequestFailure::poison_without_terminal(ledger_error(
+                                "read_policy_ledger_position",
+                            )),
+                            effect: EffectDisposition::NotPerformed,
+                        };
+                    }
+                };
+                let policy = match lock(&self.policy, "validate_policy_dispatch") {
+                    Ok(policy) => policy,
+                    Err(error) => {
+                        return CriticalActionReport::Failed {
+                            error: RequestFailure::poison_without_terminal(error),
+                            effect: EffectDisposition::NotPerformed,
+                        };
+                    }
+                };
+                let catalog = match policy.validate_dispatch(
+                    intent,
+                    reason_chain,
+                    context,
+                    self.owner_epoch,
+                    ledger_high_watermark,
+                ) {
+                    Ok(catalog) => catalog,
+                    Err(error) => {
+                        let failure = if error.is_fatal() {
+                            RequestFailure::poison_without_terminal(error)
+                        } else {
+                            RequestFailure::request(error, RuntimeReceiptState::Denied, None)
+                        };
+                        return CriticalActionReport::Failed {
+                            error: failure,
+                            effect: EffectDisposition::NotPerformed,
+                        };
+                    }
+                };
+                let admission = self.acquire_lease(
+                    &validated,
+                    request.request_id(),
+                    &intent.instance_id,
+                    holder_id,
+                    connection_id,
+                );
+                drop(policy);
+                match admission {
+                    Ok(success) => match success.result {
+                        RuntimeResult::LeaseGranted { token } => CriticalActionReport::Succeeded {
+                            value: (token, catalog),
+                            effect: DefiniteEffectDisposition::Performed,
+                        },
+                        _ => CriticalActionReport::Failed {
+                            error: RequestFailure::poison_without_terminal(
+                                RuntimeHostError::fatal(
+                                    "policy_lease_result_invalid",
+                                    "admit_policy_dispatch",
+                                    RuntimeErrorCode::RuntimeFatal,
+                                ),
+                            ),
+                            effect: EffectDisposition::Indeterminate,
+                        },
+                    },
+                    Err(error) => {
+                        let effect = if error.poison_runtime {
+                            EffectDisposition::Indeterminate
+                        } else {
+                            EffectDisposition::NotPerformed
+                        };
+                        CriticalActionReport::Failed { error, effect }
+                    }
+                }
+            },
+            |_, _| {
+                self.events
+                    .draft(
+                        EventSeverity::Info,
+                        EventSource::Scheduler,
+                        OriginModule::Policy,
+                        EventActor::Scheduler,
+                        success_links,
+                        PolicyPayloadDraft::dispatch_admitted(success_data, AuditInput::new()),
+                    )
+                    .map_err(|_| actingcommand_contract::SanitizationError::fingerprinter_failure())
+            },
+            |_, effect| {
+                self.events
+                    .draft(
+                        EventSeverity::Error,
+                        EventSource::Scheduler,
+                        OriginModule::Policy,
+                        EventActor::Scheduler,
+                        failure_links,
+                        PolicyPayloadDraft::dispatch_rejected(
+                            failure_data,
+                            effect,
+                            AuditInput::new(),
+                        ),
+                    )
+                    .map_err(|_| actingcommand_contract::SanitizationError::fingerprinter_failure())
+            },
+        );
+        self.refresh_policy_dispatches()?;
+        match result {
+            Ok(receipt) => {
+                let (token, catalog) = receipt.into_value();
+                Ok(PolicyDispatchAdmission::Granted {
+                    decision_id: intent.decision_id.clone(),
+                    catalog,
+                    token,
+                })
+            }
+            Err(CriticalExecutionError::Action { error, .. }) => {
+                if error.poison_runtime {
+                    self.fatal.mark((*error.error).clone())?;
+                }
+                Err(*error.error)
+            }
+            Err(error) => {
+                let error = critical_execution_error(&error);
+                self.fatal.mark(error.clone())?;
+                Err(error)
+            }
+        }
+    }
+
+    fn refresh_policy_dispatches(&self) -> RuntimeHostResult<()> {
+        let result =
+            lock(&self.policy, "recover_policy_dispatches")?.refresh_dispatches(&self.ledger);
+        if let Err(error) = &result {
+            self.fatal.mark(error.clone())?;
+        }
+        result
+    }
+
+    fn pinned_policy_catalog(
+        &self,
+        decision_id: &str,
+    ) -> RuntimeHostResult<Option<CatalogGeneration>> {
+        Ok(lock(&self.policy, "read_pinned_policy_catalog")?.pinned_catalog(decision_id))
+    }
+
+    fn complete_policy_dispatch(&self, decision_id: &str) -> RuntimeHostResult<()> {
+        let data = lock(&self.policy, "prepare_policy_dispatch_completion")?
+            .completion_data(decision_id)?;
+        let links = self.events.system_links()?;
+        self.append_event_raw(
+            EventSeverity::Info,
+            EventSource::Scheduler,
+            OriginModule::Policy,
+            EventActor::Scheduler,
+            links,
+            PolicyPayloadDraft::dispatch_completed(data, AuditInput::new()),
+        )?;
+        lock(&self.policy, "complete_policy_dispatch")?.complete_dispatch(decision_id)
+    }
+
     fn process_request(
         &self,
         request: &RuntimeRequest,
@@ -6758,6 +7253,48 @@ fn diagnostic_for_projection(projection: &RuntimeErrorProjection) -> DiagnosticC
         RuntimeErrorCode::BackendOperationFailed => DiagnosticCode::BackendOperationFailed,
         _ => DiagnosticCode::LeaseFencingDenied,
     }
+}
+
+fn policy_event_data(
+    intent: &DispatchIntent,
+    reason_chain: &DecisionReasonChain,
+) -> PolicyDispatchEventData {
+    PolicyDispatchEventData {
+        decision_id: intent.decision_id.clone(),
+        task_id: intent.task_id.clone(),
+        instance_id: intent.instance_id.clone(),
+        operation_id: intent.operation_id.clone(),
+        reason_chain_id: reason_chain.id.clone(),
+        reasons: reason_chain
+            .reasons
+            .iter()
+            .map(|reason| PolicyReasonRecord {
+                code: reason.code.clone(),
+                detail: reason.detail.clone(),
+            })
+            .collect(),
+        catalog_hash: intent.catalog_hash.clone(),
+        catalog_version: intent.catalog_version,
+        input_ledger_position: intent.input_ledger_position,
+        fact_snapshot_id: intent.fact_snapshot_id.clone(),
+        approval_fact_ids: intent.approval_refs.clone(),
+    }
+}
+
+fn policy_id_error(operation: &'static str) -> RuntimeHostError {
+    RuntimeHostError::fatal(
+        "policy_identifier_issue_failed",
+        operation,
+        RuntimeErrorCode::RuntimeFatal,
+    )
+}
+
+fn policy_contract_error(operation: &'static str) -> RuntimeHostError {
+    RuntimeHostError::fatal(
+        "policy_runtime_contract_invalid",
+        operation,
+        RuntimeErrorCode::RuntimeFatal,
+    )
 }
 
 fn critical_execution_error<E>(error: &CriticalExecutionError<E>) -> RuntimeHostError {

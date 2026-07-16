@@ -68,6 +68,16 @@ impl RuntimeEvents {
         request.event_links(instance_id, lease_id, action_id)
     }
 
+    pub(crate) fn system_links(&self) -> RuntimeHostResult<EventLinksDraft> {
+        let request_id = self.issuer.mint_request_id().map_err(|_| id_error())?;
+        let correlation_id = self.issuer.mint_correlation_id().map_err(|_| id_error())?;
+        let action_id = self.issuer.mint_action_id().map_err(|_| id_error())?;
+        Ok(EventLinksDraft::default()
+            .with_request_id(request_id)
+            .with_correlation_id(correlation_id)
+            .with_action_id(action_id))
+    }
+
     pub(crate) fn synthetic_links(
         &self,
         token: &LeaseToken,

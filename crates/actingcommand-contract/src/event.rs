@@ -151,6 +151,8 @@ pub enum EventFamily {
     Monitor,
     Command,
     Scheduler,
+    Policy,
+    Catalog,
     Lease,
     Task,
     Application,
@@ -195,6 +197,22 @@ pub enum EventType {
     SchedulerDenied,
     #[serde(rename = "scheduler.preempted")]
     SchedulerPreempted,
+    #[serde(rename = "policy.dispatch_intent")]
+    PolicyDispatchIntent,
+    #[serde(rename = "policy.dispatch_admitted")]
+    PolicyDispatchAdmitted,
+    #[serde(rename = "policy.dispatch_rejected")]
+    PolicyDispatchRejected,
+    #[serde(rename = "policy.dispatch_completed")]
+    PolicyDispatchCompleted,
+    #[serde(rename = "catalog.transition_intent")]
+    CatalogTransitionIntent,
+    #[serde(rename = "catalog.activated")]
+    CatalogActivated,
+    #[serde(rename = "catalog.rolled_back")]
+    CatalogRolledBack,
+    #[serde(rename = "catalog.transition_failed")]
+    CatalogTransitionFailed,
     #[serde(rename = "lease.requested")]
     LeaseRequested,
     #[serde(rename = "lease.granted")]
@@ -324,6 +342,14 @@ impl EventType {
             | Self::SchedulerQueued
             | Self::SchedulerDenied
             | Self::SchedulerPreempted => EventFamily::Scheduler,
+            Self::PolicyDispatchIntent
+            | Self::PolicyDispatchAdmitted
+            | Self::PolicyDispatchRejected
+            | Self::PolicyDispatchCompleted => EventFamily::Policy,
+            Self::CatalogTransitionIntent
+            | Self::CatalogActivated
+            | Self::CatalogRolledBack
+            | Self::CatalogTransitionFailed => EventFamily::Catalog,
             Self::LeaseRequested
             | Self::LeaseGranted
             | Self::LeaseTransferred

@@ -15,9 +15,11 @@ actingcommand-device = { workspace = true }
 actingcommand-execution-kernel = { workspace = true }
 actingcommand-ledger = { workspace = true }
 actingcommand-pack-containment = { workspace = true }
+actingcommand-policy = { workspace = true }
 actingcommand-scheduler = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+sha2 = { workspace = true }
 
 [dev-dependencies]
 tempfile = "3"

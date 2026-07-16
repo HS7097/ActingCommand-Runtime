@@ -61,6 +61,7 @@ closed_code!(OriginModule {
     Actinglab => "actinglab",
     Runtime => "runtime",
     Scheduler => "scheduler",
+    Policy => "policy",
     DeviceProxy => "device-proxy",
     Capture => "capture",
     CapturePipeline => "capture-pipeline",
@@ -87,6 +88,9 @@ closed_code!(EventAction {
     RuntimeDebugObserve => "runtime.debug_observe",
     RuntimeDebugDo => "runtime.debug_do",
     RuntimeDebugEnsure => "runtime.debug_ensure",
+    PolicyDispatch => "policy.dispatch",
+    CatalogActivate => "catalog.activate",
+    CatalogRollback => "catalog.rollback",
     RuntimeDebugWait => "runtime.debug_wait",
     MonitorConfigure => "monitor.configure",
     MonitorClear => "monitor.clear",
@@ -145,6 +149,8 @@ closed_code!(DiagnosticCode {
     InputFailed => "input.failed",
     ApplicationFailed => "application.failed",
     CommandRejected => "command.rejected",
+    PolicyRejected => "policy.rejected",
+    CatalogTransitionFailed => "catalog.transition_failed",
 });
 
 closed_code!(RecognitionVerdict {
