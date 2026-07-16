@@ -37,7 +37,14 @@ pub unsafe extern "C" fn ac_onnxruntime_classify_json(
     request_len: usize,
     response_out: *mut VisionFfiOwnedBuffer,
 ) -> i32 {
-    let result = std::panic::catch_unwind(|| classify_json(request_ptr, request_len));
+    invoke_provider(response_out, || classify_json(request_ptr, request_len))
+}
+
+fn invoke_provider<F>(response_out: *mut VisionFfiOwnedBuffer, invoke: F) -> i32
+where
+    F: FnOnce() -> Result<NnClassificationResult, String> + std::panic::UnwindSafe,
+{
+    let result = std::panic::catch_unwind(invoke);
     match result {
         Ok(Ok(response)) => write_response(response_out, 0, &response),
         Ok(Err(err)) => write_error(response_out, 1, &err),
@@ -406,6 +413,21 @@ mod tests {
         let bytes = unsafe { slice::from_raw_parts(response.data, response.len) };
         let text = std::str::from_utf8(bytes).expect("utf8");
         assert!(text.contains("failed to parse ONNXRuntime JSON envelope"));
+        unsafe {
+            ac_vision_free_buffer(response);
+        }
+    }
+
+    #[test]
+    fn exported_classify_reports_provider_panic() {
+        let mut response = VisionFfiOwnedBuffer::default();
+
+        let status = invoke_provider(&mut response, || panic!("injected provider panic"));
+
+        assert_eq!(status, 2);
+        let bytes = unsafe { slice::from_raw_parts(response.data, response.len) };
+        let text = std::str::from_utf8(bytes).expect("utf8");
+        assert!(text.contains("panicked"));
         unsafe {
             ac_vision_free_buffer(response);
         }
