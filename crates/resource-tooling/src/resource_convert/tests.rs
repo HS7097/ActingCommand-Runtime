@@ -574,9 +574,10 @@ fn resource_convert_rejects_missing_coordinate_space_before_writing_outputs() {
     let task_path = root.path().join("operations/synthetic-maa/task.json");
     let mut task: Value =
         serde_json::from_slice(&fs::read(&task_path).expect("read task")).expect("parse task");
-    task.as_object_mut()
-        .expect("task object")
-        .remove("coordinate_space");
+    let task = task.as_object_mut().expect("task object");
+    task.insert("game".to_string(), json!("neutral"));
+    task.insert("server_scope".to_string(), json!(["test"]));
+    task.remove("coordinate_space");
     fs::write(
         &task_path,
         serde_json::to_vec_pretty(&task).expect("serialize task"),
@@ -595,9 +596,9 @@ fn resource_convert_rejects_missing_coordinate_space_before_writing_outputs() {
 
     assert!(err.message.contains("missing coordinate_space"));
     for output in [
-        "recognition/arknights.cn.pack.json",
-        "recognition/arknights.cn.pages.json",
-        "navigation/arknights.cn.navigation.json",
+        "recognition/neutral.test.pack.json",
+        "recognition/neutral.test.pages.json",
+        "navigation/neutral.test.navigation.json",
         "operations/operations.index.json",
         "operations/operations.primitives.json",
     ] {
