@@ -2,7 +2,8 @@
 
 //! Stale recovery holds a per-owner claim and re-reads ownership before rename so delayed
 //! contenders cannot replace a newly acquired result lock. Host identity must match before
-//! process liveness can prove staleness; timestamps never prove staleness.
+//! process liveness can prove staleness; timestamps never prove staleness. Windows process
+//! proofs have an executable deadline, independent from bounded lock and claim attempts.
 
 use actingcommand_contract::{LabError, LabResult};
 use serde::{Deserialize, Serialize};
@@ -10,20 +11,32 @@ use sha2::{Digest, Sha256};
 #[cfg(unix)]
 use std::fs::File;
 use std::fs::{self, OpenOptions};
-#[cfg(unix)]
-use std::io::Read;
-use std::io::{self, Write};
+use std::io::{self, Read, Write};
+#[cfg(target_os = "windows")]
+use std::os::windows::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+#[cfg(target_os = "windows")]
+use std::process::{ExitStatus, Stdio};
 use std::sync::OnceLock;
 use std::sync::atomic::{AtomicU64, Ordering};
+#[cfg(target_os = "windows")]
+use std::thread::JoinHandle;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 const LOCK_SCHEMA_VERSION: &str = "env-result-lock.v2";
-const MAX_RECLAIM_ATTEMPTS: usize = 4;
-const MAX_RECLAIM_ELAPSED: Duration = Duration::from_secs(2);
+const MAX_LOCK_ACQUIRE_ATTEMPTS: usize = 4;
+const MAX_RECLAIM_CLAIM_ATTEMPTS: usize = 4;
 const RECORD_READ_TIMEOUT: Duration = Duration::from_secs(1);
 const RECORD_READ_DELAY: Duration = Duration::from_millis(5);
+#[cfg(target_os = "windows")]
+const WINDOWS_PROBE_TIMEOUT: Duration = Duration::from_secs(30);
+#[cfg(target_os = "windows")]
+const WINDOWS_PROBE_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(1);
+#[cfg(target_os = "windows")]
+const WINDOWS_PROBE_POLL_DELAY: Duration = Duration::from_millis(10);
+#[cfg(target_os = "windows")]
+const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 static TOKEN_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 static RANDOM_SEED: OnceLock<Result<[u8; 32], String>> = OnceLock::new();
 static CURRENT_PROCESS_START: OnceLock<Result<String, String>> = OnceLock::new();
@@ -236,17 +249,9 @@ impl EnvResultLock {
         let normalized_result_path = normalize_result_path(result_path)?;
         let lock_path = normalized_result_path.with_extension("json.lock");
         let proposed = EnvResultLockRecord::new(environment, &normalized_result_path)?;
-        let started = Instant::now();
         let mut last_retry_reason = "initial lock conflict".to_string();
 
-        for attempt in 1..=MAX_RECLAIM_ATTEMPTS {
-            if started.elapsed() > MAX_RECLAIM_ELAPSED {
-                return Err(reclaim_exhausted(
-                    &normalized_result_path,
-                    attempt - 1,
-                    &last_retry_reason,
-                ));
-            }
+        for attempt in 1..=MAX_LOCK_ACQUIRE_ATTEMPTS {
             match create_lock_file(&lock_path, &proposed, &normalized_result_path) {
                 Ok(()) => {
                     return Ok(Self {
@@ -314,7 +319,6 @@ impl EnvResultLock {
                 &observed,
                 &proposed,
                 attempt,
-                &started,
                 environment,
             )?;
             let recovery = reclaim_under_claim(
@@ -357,7 +361,7 @@ impl EnvResultLock {
 
         Err(reclaim_exhausted(
             &normalized_result_path,
-            MAX_RECLAIM_ATTEMPTS,
+            MAX_LOCK_ACQUIRE_ATTEMPTS,
             &last_retry_reason,
         ))
     }
@@ -389,18 +393,11 @@ impl ReclaimClaim {
         observed: &EnvResultLockRecord,
         proposed: &EnvResultLockRecord,
         attempt: usize,
-        started: &Instant,
         environment: &impl LockEnvironment,
     ) -> LockResult<Self> {
         let path = reclaim_claim_path(lock_path, observed);
-        for claim_attempt in 1..=MAX_RECLAIM_ATTEMPTS {
-            if started.elapsed() > MAX_RECLAIM_ELAPSED {
-                return Err(reclaim_exhausted(
-                    result_path,
-                    attempt,
-                    "reclaim claim recovery exceeded the shared timeout",
-                ));
-            }
+        // Owner proofs are independently deadline-bound; claim arbitration is bounded by attempts.
+        for claim_attempt in 1..=MAX_RECLAIM_CLAIM_ATTEMPTS {
             match create_lock_file(&path, proposed, result_path) {
                 Ok(()) => {
                     environment.after_reclaim_claim_persisted();
@@ -420,7 +417,7 @@ impl ReclaimClaim {
                     None,
                     attempt,
                     format!(
-                        "existing reclaim claim is unparseable or unverifiable: {}; claim_retry={claim_attempt}/{MAX_RECLAIM_ATTEMPTS}",
+                        "existing reclaim claim is unparseable or unverifiable: {}; claim_retry={claim_attempt}/{MAX_RECLAIM_CLAIM_ATTEMPTS}",
                         error.message
                     ),
                 )
@@ -440,7 +437,7 @@ impl ReclaimClaim {
                     Some(&claimed),
                     attempt,
                     format!(
-                        "reclaim claim re-read failed: {}; claim_retry={claim_attempt}/{MAX_RECLAIM_ATTEMPTS}",
+                        "reclaim claim re-read failed: {}; claim_retry={claim_attempt}/{MAX_RECLAIM_CLAIM_ATTEMPTS}",
                         error.message
                     ),
                 )
@@ -467,7 +464,7 @@ impl ReclaimClaim {
                         Some(&confirmed),
                         attempt,
                         format!(
-                            "failed to atomically tombstone stale reclaim claim {}: {error}; claim_retry={claim_attempt}/{MAX_RECLAIM_ATTEMPTS}",
+                            "failed to atomically tombstone stale reclaim claim {}: {error}; claim_retry={claim_attempt}/{MAX_RECLAIM_CLAIM_ATTEMPTS}",
                             path.display()
                         ),
                     ));
@@ -517,8 +514,7 @@ impl ReclaimClaim {
             Some(observed),
             attempt,
             format!(
-                "reclaim claim recovery exhausted; claim_retries={MAX_RECLAIM_ATTEMPTS}/{MAX_RECLAIM_ATTEMPTS}; timeout_ms={}; escalation=fail_loud",
-                MAX_RECLAIM_ELAPSED.as_millis()
+                "reclaim claim recovery exhausted; claim_retries={MAX_RECLAIM_CLAIM_ATTEMPTS}/{MAX_RECLAIM_CLAIM_ATTEMPTS}; escalation=fail_loud"
             ),
         ))
     }
@@ -565,7 +561,7 @@ fn confirm_reclaim_claim_owner_is_stale(
             Some(claim),
             attempt,
             format!(
-                "reclaim claim owner process is still active; claim_retry={claim_attempt}/{MAX_RECLAIM_ATTEMPTS}"
+                "reclaim claim owner process is still active; claim_retry={claim_attempt}/{MAX_RECLAIM_CLAIM_ATTEMPTS}"
             ),
         )),
         Err(error) => Err(lock_conflict(
@@ -573,7 +569,7 @@ fn confirm_reclaim_claim_owner_is_stale(
             Some(claim),
             attempt,
             format!(
-                "reclaim claim owner liveness could not be proven: {error}; claim_retry={claim_attempt}/{MAX_RECLAIM_ATTEMPTS}"
+                "reclaim claim owner liveness could not be proven: {error}; claim_retry={claim_attempt}/{MAX_RECLAIM_CLAIM_ATTEMPTS}"
             ),
         )),
     }
@@ -605,7 +601,7 @@ fn reclaim_under_claim(
     )?;
     if confirmed.owner_token != observed.owner_token {
         return Ok(RecoveryOutcome::Retry(format!(
-            "owner token changed during stale confirmation: {} -> {}; retry={attempt}/{MAX_RECLAIM_ATTEMPTS}",
+            "owner token changed during stale confirmation: {} -> {}; retry={attempt}/{MAX_LOCK_ACQUIRE_ATTEMPTS}",
             observed.owner_token, confirmed.owner_token
         )));
     }
@@ -636,7 +632,7 @@ fn reclaim_under_claim(
         Ok(()) => {}
         Err(error) if error.kind() == io::ErrorKind::NotFound => {
             return Ok(RecoveryOutcome::Retry(format!(
-                "stale rename race after {stale_reason}; original_error=already_exists; retry={attempt}/{MAX_RECLAIM_ATTEMPTS}"
+                "stale rename race after {stale_reason}; original_error=already_exists; retry={attempt}/{MAX_LOCK_ACQUIRE_ATTEMPTS}"
             )));
         }
         Err(error) => {
@@ -671,7 +667,7 @@ fn reclaim_under_claim(
         Err(CreateLockError::AlreadyExists) => {
             remove_tombstone(&tombstone, result_path)?;
             Ok(RecoveryOutcome::Retry(format!(
-                "another writer won after {stale_reason}; original_error=already_exists; retry={attempt}/{MAX_RECLAIM_ATTEMPTS}"
+                "another writer won after {stale_reason}; original_error=already_exists; retry={attempt}/{MAX_LOCK_ACQUIRE_ATTEMPTS}"
             )))
         }
         Err(CreateLockError::Fatal(error)) => match remove_tombstone(&tombstone, result_path) {
@@ -1012,7 +1008,7 @@ fn lock_conflict(
         },
     );
     LabError::usage(format!(
-        "env detection result lock conflict; target={}; {owner_context}; original_error=already_exists; retry={attempt}/{MAX_RECLAIM_ATTEMPTS}; escalation=fail_loud; reason={}",
+        "env detection result lock conflict; target={}; {owner_context}; original_error=already_exists; retry={attempt}/{MAX_LOCK_ACQUIRE_ATTEMPTS}; escalation=fail_loud; reason={}",
         result_path.display(),
         reason.as_ref()
     ))
@@ -1020,10 +1016,173 @@ fn lock_conflict(
 
 fn reclaim_exhausted(result_path: &Path, attempts: usize, reason: &str) -> LabError {
     LabError::usage(format!(
-        "env detection result lock recovery exhausted; target={}; original_error=already_exists; retries={attempts}/{MAX_RECLAIM_ATTEMPTS}; timeout_ms={}; escalation=fail_loud; last_reason={reason}",
-        result_path.display(),
-        MAX_RECLAIM_ELAPSED.as_millis()
+        "env detection result lock recovery exhausted; target={}; original_error=already_exists; retries={attempts}/{MAX_LOCK_ACQUIRE_ATTEMPTS}; reclaim_claim_retries={MAX_RECLAIM_CLAIM_ATTEMPTS}; escalation=fail_loud; last_reason={reason}",
+        result_path.display()
     ))
+}
+
+#[cfg(target_os = "windows")]
+#[derive(Debug)]
+struct WindowsProbeOutput {
+    status: ExitStatus,
+    stdout: Vec<u8>,
+    stderr: Vec<u8>,
+}
+
+#[cfg(target_os = "windows")]
+fn run_windows_probe(
+    program: &str,
+    args: &[&str],
+    timeout: Duration,
+    purpose: &str,
+) -> Result<WindowsProbeOutput, String> {
+    let mut command = Command::new(program);
+    command
+        .args(args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .creation_flags(CREATE_NO_WINDOW);
+    let mut child = command
+        .spawn()
+        .map_err(|error| format!("failed to start {purpose}: {error}"))?;
+    let Some(stdout) = child.stdout.take() else {
+        let cleanup = stop_windows_probe(&mut child, WINDOWS_PROBE_SHUTDOWN_TIMEOUT);
+        return Err(format!(
+            "failed to open {purpose} stdout; cleanup={cleanup:?}"
+        ));
+    };
+    let Some(stderr) = child.stderr.take() else {
+        let cleanup = stop_windows_probe(&mut child, WINDOWS_PROBE_SHUTDOWN_TIMEOUT);
+        return Err(format!(
+            "failed to open {purpose} stderr; cleanup={cleanup:?}"
+        ));
+    };
+    let stdout_reader = spawn_windows_probe_reader(stdout);
+    let stderr_reader = spawn_windows_probe_reader(stderr);
+    let started = Instant::now();
+
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => {
+                return collect_windows_probe_output(status, stdout_reader, stderr_reader, purpose);
+            }
+            Ok(None) if started.elapsed() < timeout => {
+                let remaining = timeout.saturating_sub(started.elapsed());
+                std::thread::sleep(WINDOWS_PROBE_POLL_DELAY.min(remaining));
+            }
+            Ok(None) => {
+                let status = stop_windows_probe(&mut child, WINDOWS_PROBE_SHUTDOWN_TIMEOUT)
+                    .map_err(|cleanup_error| {
+                        format!(
+                            "{purpose} timed out after {}ms; probe cleanup failed: {cleanup_error}",
+                            timeout.as_millis()
+                        )
+                    })?;
+                let output = collect_windows_probe_output(
+                    status,
+                    stdout_reader,
+                    stderr_reader,
+                    purpose,
+                )
+                .map_err(|output_error| {
+                    format!(
+                        "{purpose} timed out after {}ms and was terminated; output collection failed: {output_error}",
+                        timeout.as_millis()
+                    )
+                })?;
+                return Err(format!(
+                    "{purpose} timed out after {}ms and was terminated; status={}; stdout_bytes={}; stderr={}",
+                    timeout.as_millis(),
+                    output.status,
+                    output.stdout.len(),
+                    String::from_utf8_lossy(&output.stderr).trim()
+                ));
+            }
+            Err(error) => {
+                let cleanup = stop_windows_probe(&mut child, WINDOWS_PROBE_SHUTDOWN_TIMEOUT);
+                return Err(format!(
+                    "failed to poll {purpose}: {error}; cleanup={cleanup:?}"
+                ));
+            }
+        }
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn spawn_windows_probe_reader(
+    mut reader: impl Read + Send + 'static,
+) -> JoinHandle<io::Result<Vec<u8>>> {
+    std::thread::spawn(move || {
+        let mut bytes = Vec::new();
+        reader.read_to_end(&mut bytes)?;
+        Ok(bytes)
+    })
+}
+
+#[cfg(target_os = "windows")]
+fn collect_windows_probe_output(
+    status: ExitStatus,
+    stdout_reader: JoinHandle<io::Result<Vec<u8>>>,
+    stderr_reader: JoinHandle<io::Result<Vec<u8>>>,
+    purpose: &str,
+) -> Result<WindowsProbeOutput, String> {
+    Ok(WindowsProbeOutput {
+        status,
+        stdout: join_windows_probe_reader(stdout_reader, purpose, "stdout")?,
+        stderr: join_windows_probe_reader(stderr_reader, purpose, "stderr")?,
+    })
+}
+
+#[cfg(target_os = "windows")]
+fn join_windows_probe_reader(
+    reader: JoinHandle<io::Result<Vec<u8>>>,
+    purpose: &str,
+    stream: &str,
+) -> Result<Vec<u8>, String> {
+    reader
+        .join()
+        .map_err(|_| format!("{purpose} {stream} reader panicked"))?
+        .map_err(|error| format!("failed to read {purpose} {stream}: {error}"))
+}
+
+#[cfg(target_os = "windows")]
+fn stop_windows_probe(
+    child: &mut std::process::Child,
+    timeout: Duration,
+) -> Result<ExitStatus, String> {
+    if let Some(status) = child
+        .try_wait()
+        .map_err(|error| format!("failed to poll probe before termination: {error}"))?
+    {
+        return Ok(status);
+    }
+    if let Err(error) = child.kill() {
+        if let Some(status) = child
+            .try_wait()
+            .map_err(|poll_error| format!("{error}; follow-up poll failed: {poll_error}"))?
+        {
+            return Ok(status);
+        }
+        return Err(format!("failed to terminate probe: {error}"));
+    }
+    let started = Instant::now();
+    loop {
+        if let Some(status) = child
+            .try_wait()
+            .map_err(|error| format!("failed to poll terminated probe: {error}"))?
+        {
+            return Ok(status);
+        }
+        let remaining = timeout.saturating_sub(started.elapsed());
+        if remaining.is_zero() {
+            return Err(format!(
+                "probe did not exit within {}ms after termination",
+                timeout.as_millis()
+            ));
+        }
+        std::thread::sleep(WINDOWS_PROBE_POLL_DELAY.min(remaining));
+    }
 }
 
 #[cfg(target_os = "windows")]
@@ -1031,16 +1190,18 @@ fn inspect_system_process(pid: u32) -> Result<ProcessStatus, String> {
     let script = format!(
         "$p=Get-Process -Id {pid} -ErrorAction SilentlyContinue; if ($null -eq $p) {{ exit 3 }}; try {{ [Console]::Out.Write($p.StartTime.ToUniversalTime().Ticks.ToString([Globalization.CultureInfo]::InvariantCulture)); exit 0 }} catch {{ [Console]::Error.Write($_.Exception.Message); exit 4 }}"
     );
-    let output = Command::new("powershell.exe")
-        .args([
+    let output = run_windows_probe(
+        "powershell.exe",
+        &[
             "-NoLogo",
             "-NoProfile",
             "-NonInteractive",
             "-Command",
             &script,
-        ])
-        .output()
-        .map_err(|error| format!("failed to start PowerShell process inspector: {error}"))?;
+        ],
+        WINDOWS_PROBE_TIMEOUT,
+        &format!("PowerShell process inspector for PID {pid}"),
+    )?;
     if output.status.success() {
         let start_token = String::from_utf8(output.stdout)
             .map_err(|error| format!("process inspector returned non-UTF-8 output: {error}"))?;
@@ -1119,9 +1280,7 @@ fn inspect_system_process(_pid: u32) -> Result<ProcessStatus, String> {
 
 #[cfg(target_os = "windows")]
 fn system_host_identity() -> Result<String, String> {
-    let output = Command::new("hostname.exe")
-        .output()
-        .map_err(|error| format!("failed to start host inspector: {error}"))?;
+    let output = run_windows_probe("hostname.exe", &[], WINDOWS_PROBE_TIMEOUT, "host inspector")?;
     if !output.status.success() {
         return Err(format!(
             "host inspector failed: status={} stderr={}",
@@ -1178,16 +1337,18 @@ fn normalize_host_identity(value: &str) -> Result<String, String> {
 #[cfg(target_os = "windows")]
 fn system_random_seed() -> Result<[u8; 32], String> {
     let script = "$bytes=New-Object byte[] 32; $rng=[Security.Cryptography.RandomNumberGenerator]::Create(); try { $rng.GetBytes($bytes) } finally { $rng.Dispose() }; [Console]::Out.Write((($bytes | ForEach-Object { $_.ToString('x2') }) -join ''))";
-    let output = Command::new("powershell.exe")
-        .args([
+    let output = run_windows_probe(
+        "powershell.exe",
+        &[
             "-NoLogo",
             "-NoProfile",
             "-NonInteractive",
             "-Command",
             script,
-        ])
-        .output()
-        .map_err(|error| format!("failed to start PowerShell random source: {error}"))?;
+        ],
+        WINDOWS_PROBE_TIMEOUT,
+        "PowerShell random source",
+    )?;
     if !output.status.success() {
         return Err(format!(
             "PowerShell random source failed: status={} stderr={}",
@@ -1234,6 +1395,7 @@ mod tests {
     use super::*;
     use std::collections::BTreeMap;
     use std::process::{Child, Stdio};
+    use std::sync::atomic::AtomicBool;
     use std::sync::{Arc, Barrier, Mutex};
     use tempfile::TempDir;
 
@@ -1319,6 +1481,73 @@ mod tests {
                 panic!("fault injection: reclaimer terminated after claim persistence");
             }
         }
+    }
+
+    struct DelayedOwnerProofEnvironment {
+        inner: FakeEnvironment,
+        delayed_pid: u32,
+        delay: Duration,
+        delayed: AtomicBool,
+    }
+
+    impl DelayedOwnerProofEnvironment {
+        fn new(delayed_pid: u32, delay: Duration) -> Self {
+            Self {
+                inner: FakeEnvironment::new(),
+                delayed_pid,
+                delay,
+                delayed: AtomicBool::new(false),
+            }
+        }
+    }
+
+    impl LockEnvironment for DelayedOwnerProofEnvironment {
+        fn host_identity(&self) -> Result<String, String> {
+            self.inner.host_identity()
+        }
+
+        fn current_process(&self) -> Result<ProcessIdentity, String> {
+            self.inner.current_process()
+        }
+
+        fn inspect_process(&self, pid: u32) -> Result<ProcessStatus, String> {
+            if pid == self.delayed_pid && !self.delayed.swap(true, Ordering::AcqRel) {
+                std::thread::sleep(self.delay);
+            }
+            self.inner.inspect_process(pid)
+        }
+
+        fn next_owner_token(&self) -> Result<String, String> {
+            self.inner.next_owner_token()
+        }
+
+        fn now_unix_ms(&self) -> Result<u64, String> {
+            self.inner.now_unix_ms()
+        }
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn windows_probe_timeout_terminates_helper() {
+        let started = Instant::now();
+        let error = run_windows_probe(
+            "powershell.exe",
+            &[
+                "-NoLogo",
+                "-NoProfile",
+                "-NonInteractive",
+                "-Command",
+                "Start-Sleep -Seconds 60",
+            ],
+            Duration::from_millis(100),
+            "timeout test probe",
+        )
+        .expect_err("probe must be terminated at its deadline");
+        assert!(error.contains("timed out after 100ms"), "{error}");
+        assert!(
+            started.elapsed() < Duration::from_secs(3),
+            "bounded probe cleanup exceeded three seconds"
+        );
     }
 
     #[test]
@@ -1585,6 +1814,28 @@ mod tests {
     }
 
     #[test]
+    fn owner_proof_does_not_consume_reclaim_claim_budget() {
+        let temp = TempDir::new().unwrap();
+        let result = temp.path().join("envinst_a/result.json");
+        let stale_pid = 77;
+        write_foreign_record(
+            &result,
+            stale_pid,
+            "former-owner-start",
+            &format!("{:064x}", 914),
+        );
+        let proof_delay = Duration::from_millis(2_100);
+        let environment = DelayedOwnerProofEnvironment::new(stale_pid, proof_delay);
+        let started = Instant::now();
+
+        let lock = EnvResultLock::acquire_with(&result, &environment)
+            .expect("claim phase must receive a fresh budget after stale owner proof");
+        assert!(started.elapsed() >= proof_delay);
+        lock.release().unwrap();
+        assert_no_recovery_artifacts(&result);
+    }
+
+    #[test]
     fn killed_process_lock_is_recovered() {
         let temp = TempDir::new().unwrap();
         let result = temp.path().join("envinst_a/result.json");
@@ -1606,6 +1857,7 @@ mod tests {
 
         let lock = EnvResultLock::acquire_with(&result, &environment).unwrap();
         lock.release().unwrap();
+        assert_no_recovery_artifacts(&result);
     }
 
     #[test]
