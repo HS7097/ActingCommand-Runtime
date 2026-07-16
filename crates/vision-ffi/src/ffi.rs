@@ -407,6 +407,34 @@ mod tests {
     }
 
     #[test]
+    fn take_owned_buffer_rejects_null_data_with_nonzero_length() {
+        let buffer = VisionFfiOwnedBuffer {
+            data: std::ptr::null_mut(),
+            len: 1,
+            capacity: 1,
+        };
+
+        let err = take_owned_buffer("test", buffer, fake_free_buffer)
+            .expect_err("null data with non-zero length must be rejected");
+
+        assert!(err.message().contains("null data pointer"));
+    }
+
+    #[test]
+    fn take_owned_buffer_rejects_capacity_smaller_than_length() {
+        let buffer = VisionFfiOwnedBuffer {
+            data: std::ptr::NonNull::<u8>::dangling().as_ptr(),
+            len: 2,
+            capacity: 1,
+        };
+
+        let err = take_owned_buffer("test", buffer, fake_free_buffer)
+            .expect_err("capacity smaller than length must be rejected");
+
+        assert!(err.message().contains("capacity smaller than its length"));
+    }
+
+    #[test]
     fn runtime_library_loadability_rejects_corrupt_file() {
         let path = std::env::temp_dir().join(format!(
             "actingcommand-corrupt-runtime-{}-{}.dll",
