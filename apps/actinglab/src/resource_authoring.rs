@@ -376,6 +376,7 @@ fn validate_candidate(
         include_recovery: false,
         out: package_path.clone(),
         dry_run: false,
+        max_buffered_payload_bytes: actingcommand_lab::DEFAULT_MAX_BUFFERED_PAYLOAD_BYTES,
         env: PackageEnvOptions::default(),
     })?;
     let required = prepared.required_environment_keys()?;

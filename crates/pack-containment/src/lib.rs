@@ -222,6 +222,19 @@ impl Containment {
     }
 }
 
+/// Validates recognition and page metadata against a caller-owned asset resolver.
+pub fn validate_recognition_metadata(
+    pack_path: &str,
+    pack_json: &str,
+    pages_path: &str,
+    pages_json: &str,
+    asset_resolver: Arc<dyn AssetResolver>,
+) -> ContainmentResult<Vec<UnsupportedRecognitionTarget>> {
+    let (evaluator, _) =
+        build_recognition_pipeline(pack_path, pack_json, pages_path, pages_json, asset_resolver)?;
+    Ok(evaluator.unsupported_targets().to_vec())
+}
+
 #[derive(Debug)]
 struct Bench {
     #[allow(dead_code)]
@@ -827,45 +840,72 @@ fn load_recognition_pipeline(
         return Ok((None, None));
     };
     let pack_json = decode_utf8_entry(entries, pack_path)?;
-    let pack =
-        load_pack_from_json_str(pack_json.trim_start_matches('\u{feff}')).map_err(|err| {
-            ContainmentError::PackParse {
-                path: pack_path.clone(),
-                message: err.to_string(),
-            }
-        })?;
     let resolver = Arc::new(MemoryAssetResolver {
         entries: Arc::clone(entries),
         resource_root: metadata.resource_root.clone(),
     });
-    let evaluator = RecognitionEvaluator::with_asset_resolver(pack, resolver).map_err(|err| {
-        ContainmentError::PackParse {
-            path: pack_path.clone(),
-            message: err.to_string(),
-        }
-    })?;
     let Some(pages_path) = &metadata.pages_path else {
+        let pack =
+            load_pack_from_json_str(pack_json.trim_start_matches('\u{feff}')).map_err(|err| {
+                ContainmentError::PackParse {
+                    path: pack_path.clone(),
+                    message: err.to_string(),
+                }
+            })?;
+        let evaluator =
+            RecognitionEvaluator::with_asset_resolver(pack, resolver).map_err(|err| {
+                ContainmentError::PackParse {
+                    path: pack_path.clone(),
+                    message: err.to_string(),
+                }
+            })?;
         return Ok((Some(evaluator), None));
     };
     let pages_json = decode_utf8_entry(entries, pages_path)?;
+    let (evaluator, detector) =
+        build_recognition_pipeline(pack_path, pack_json, pages_path, pages_json, resolver)?;
+    Ok((Some(evaluator), Some(detector)))
+}
+
+fn build_recognition_pipeline(
+    pack_path: &str,
+    pack_json: &str,
+    pages_path: &str,
+    pages_json: &str,
+    asset_resolver: Arc<dyn AssetResolver>,
+) -> ContainmentResult<(RecognitionEvaluator, PageDetector)> {
+    let pack =
+        load_pack_from_json_str(pack_json.trim_start_matches('\u{feff}')).map_err(|err| {
+            ContainmentError::PackParse {
+                path: pack_path.to_string(),
+                message: err.to_string(),
+            }
+        })?;
+    let evaluator =
+        RecognitionEvaluator::with_asset_resolver(pack, asset_resolver).map_err(|err| {
+            ContainmentError::PackParse {
+                path: pack_path.to_string(),
+                message: err.to_string(),
+            }
+        })?;
     let page_set =
         load_page_set_from_json_str(pages_json.trim_start_matches('\u{feff}')).map_err(|err| {
             ContainmentError::PackParse {
-                path: pages_path.clone(),
+                path: pages_path.to_string(),
                 message: err.to_string(),
             }
         })?;
     let detector = PageDetector::new(page_set).map_err(|err| ContainmentError::PackParse {
-        path: pages_path.clone(),
+        path: pages_path.to_string(),
         message: err.to_string(),
     })?;
     detector
         .validate(&evaluator)
         .map_err(|err| ContainmentError::PackParse {
-            path: pages_path.clone(),
+            path: pages_path.to_string(),
             message: err.to_string(),
         })?;
-    Ok((Some(evaluator), Some(detector)))
+    Ok((evaluator, detector))
 }
 
 fn collect_recognition_pack_diagnostics(
