@@ -4,6 +4,12 @@
 
 #![forbid(unsafe_code)]
 
+mod canonical;
+mod compiler;
 mod schema;
+mod source;
+mod validation;
 
+pub use compiler::*;
 pub use schema::*;
+pub use source::{CatalogDocumentSource, CatalogSources};
