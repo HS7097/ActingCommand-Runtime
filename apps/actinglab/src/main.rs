@@ -816,22 +816,8 @@ fn run_doctor(global: &GlobalOptions) -> CliOutcome<Value> {
         "ok": config_path()?.exists(),
         "path": config_path()?.display().to_string()
     }));
-    let adb_check = match adb_resolution {
-        Ok(resolved) => json!({
-            "name": "adb",
-            "ok": true,
-            "path": resolved.path,
-            "source": resolved.source.as_str(),
-            "warning": resolved.warning
-        }),
-        Err(err) => json!({
-            "name": "adb",
-            "ok": false,
-            "error": err.to_string(),
-            "required_env": "ACTINGCOMMAND_ADB_PATH",
-            "mumu_env": "ACTINGCOMMAND_NEMU_FOLDER"
-        }),
-    };
+    let mut adb_check = resolved_adb_json_from(adb_resolution);
+    adb_check["name"] = json!("adb");
     checks.push(adb_check);
     let runtime_endpoint_check = runtime_endpoint
         .as_ref()
@@ -10852,7 +10838,13 @@ fn env_flag(name: &str) -> bool {
 }
 
 fn resolved_adb_json(config: &UserConfig) -> Value {
-    match resolve_adb_path(config.adb_path.as_deref()) {
+    resolved_adb_json_from(resolve_adb_path(config.adb_path.as_deref()))
+}
+
+fn resolved_adb_json_from(
+    resolution: actingcommand_device::DeviceResult<actingcommand_device::ResolvedAdbPath>,
+) -> Value {
+    match resolution {
         Ok(resolved) => json!({
             "ok": true,
             "path": resolved.path,
@@ -12166,23 +12158,12 @@ mod tests {
         )
     }
 
-    fn configure_path_baseline_adb_env(temp: &TempDir) -> PathBuf {
-        let adb_name = if cfg!(windows) { "adb.exe" } else { "adb" };
-        let adb_path = temp.path().join(adb_name);
-        let program_files = temp.path().join("program-files");
-        let program_files_x86 = temp.path().join("program-files-x86");
-        fs::write(&adb_path, b"test adb placeholder").unwrap();
-        fs::create_dir_all(&program_files).unwrap();
-        fs::create_dir_all(&program_files_x86).unwrap();
-        unsafe {
-            env::set_var("PATH", temp.path());
-            env::remove_var(actingcommand_device::ACTINGCOMMAND_ADB_PATH_ENV);
-            env::remove_var(actingcommand_device::ACTINGCOMMAND_NEMU_FOLDER_ENV);
-            env::remove_var(ALLOW_PATH_ADB_FOR_MUMU_ENV);
-            env::set_var("ProgramFiles", program_files);
-            env::set_var("ProgramFiles(x86)", program_files_x86);
+    fn path_baseline_adb() -> actingcommand_device::ResolvedAdbPath {
+        actingcommand_device::ResolvedAdbPath {
+            path: "test-adb".to_string(),
+            source: AdbPathSource::PathBaseline,
+            warning: Some("WARNING: using PATH adb as a non-MuMu baseline channel".to_string()),
         }
-        adb_path
     }
 
     #[test]
@@ -12796,26 +12777,7 @@ mod tests {
 
     #[test]
     fn doctor_reports_path_adb_baseline_warning() {
-        let _guard = env_lock();
-        let temp = set_isolated_app_env();
-        set_missing_config_env();
-        configure_path_baseline_adb_env(&temp);
-
-        let result = run_cli(["--json", "doctor"], true);
-
-        assert_eq!(result.exit_code(), 0);
-        let checks = result
-            .envelope
-            .data
-            .as_ref()
-            .unwrap()
-            .get("checks")
-            .and_then(Value::as_array)
-            .unwrap();
-        let adb = checks
-            .iter()
-            .find(|check| check.get("name").and_then(Value::as_str) == Some("adb"))
-            .expect("adb check");
+        let adb = resolved_adb_json_from(Ok(path_baseline_adb()));
         assert_eq!(
             adb.get("source").and_then(Value::as_str),
             Some("path_adb_baseline")
@@ -12830,23 +12792,20 @@ mod tests {
     #[test]
     fn device_config_rejects_path_adb_for_nemu_ipc_without_opt_in() {
         let _guard = env_lock();
-        let temp = set_isolated_app_env();
-        configure_path_baseline_adb_env(&temp);
-        let mut config = UserConfig::default();
-        config.instances.insert(
-            "ak".to_string(),
-            InstanceConfig {
-                capture_backend: Some("nemu_ipc".to_string()),
-                ..Default::default()
-            },
-        );
-        let global = GlobalOptions {
-            instance: Some("ak".to_string()),
+        unsafe {
+            env::remove_var(ALLOW_PATH_ADB_FOR_MUMU_ENV);
+        }
+        let instance = InstanceConfig {
+            capture_backend: Some("nemu_ipc".to_string()),
             ..Default::default()
         };
 
-        let error = device_config_for_instance(&global, &config, Some("ak"))
-            .expect_err("MuMu/Nemu IPC must not use PATH baseline by default");
+        let error = enforce_path_adb_target_boundary(
+            &path_baseline_adb(),
+            Some(&instance),
+            CaptureBackendChoice::NemuIpc,
+        )
+        .expect_err("MuMu/Nemu IPC must not use PATH baseline by default");
 
         assert_eq!(error.code, "device_error");
         assert!(error.message.contains(ALLOW_PATH_ADB_FOR_MUMU_ENV));
@@ -12855,31 +12814,22 @@ mod tests {
     #[test]
     fn device_config_allows_path_adb_for_nemu_ipc_with_explicit_opt_in() {
         let _guard = env_lock();
-        let temp = set_isolated_app_env();
-        configure_path_baseline_adb_env(&temp);
         unsafe {
             env::set_var(ALLOW_PATH_ADB_FOR_MUMU_ENV, "1");
         }
-        let mut config = UserConfig::default();
-        config.instances.insert(
-            "ak".to_string(),
-            InstanceConfig {
-                capture_backend: Some("nemu_ipc".to_string()),
-                ..Default::default()
-            },
-        );
-        let global = GlobalOptions {
-            instance: Some("ak".to_string()),
+        let instance = InstanceConfig {
+            capture_backend: Some("nemu_ipc".to_string()),
             ..Default::default()
         };
+        let resolved = path_baseline_adb();
 
-        let device = device_config_for_instance(&global, &config, Some("ak"))
+        enforce_path_adb_target_boundary(&resolved, Some(&instance), CaptureBackendChoice::NemuIpc)
             .expect("explicit opt-in allows PATH baseline");
 
-        assert_eq!(device.adb_source, AdbPathSource::PathBaseline);
+        assert_eq!(resolved.source, AdbPathSource::PathBaseline);
         assert!(
-            device
-                .adb_warning
+            resolved
+                .warning
                 .as_deref()
                 .is_some_and(|warning| warning.contains("non-MuMu baseline"))
         );
