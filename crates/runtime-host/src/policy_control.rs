@@ -678,6 +678,7 @@ mod tests {
                 daily_limit: task.loop_budget.daily_limit,
                 window_iteration_limit: task.loop_budget.window_iteration_limit,
                 max_runtime_ms: task.loop_budget.max_runtime_ms,
+                urgency_milli: 0,
             },
         }
     }

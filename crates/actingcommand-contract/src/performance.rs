@@ -66,6 +66,51 @@ pub enum PerformanceProcessOwnership {
     ThirdParty,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PerformanceControlLevel {
+    Normal,
+    DispatchPaused,
+    Throttled,
+    YieldRequested,
+    QosReduced,
+    Suspended,
+    ShutdownRequested,
+}
+
+impl PerformanceControlLevel {
+    pub const fn rank(self) -> u8 {
+        match self {
+            Self::Normal => 0,
+            Self::DispatchPaused => 1,
+            Self::Throttled => 2,
+            Self::YieldRequested => 3,
+            Self::QosReduced => 4,
+            Self::Suspended => 5,
+            Self::ShutdownRequested => 6,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PerformanceControlReason {
+    ResponsivenessPressure,
+    ThirdPartyContention,
+    FullscreenContention,
+    Recovery,
+    ClockJump,
+    DeadlineConflict,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PerformanceDeadlineDisposition {
+    Throttled,
+    InformationWarning,
+    CapacityFailure,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum PerformancePressureValue {
@@ -323,6 +368,19 @@ pub struct PerformanceMonitorStateEventData {
     pub unavailable_metrics: Vec<PerformanceMetric>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PerformanceControlEventData {
+    pub observed_at_unix_ms: u64,
+    pub instance_id: Option<String>,
+    pub previous_level: PerformanceControlLevel,
+    pub level: PerformanceControlLevel,
+    pub reason: PerformanceControlReason,
+    pub host_responsiveness_basis_points: Option<u16>,
+    pub third_party_pressure_basis_points: Option<u16>,
+    pub recovery: bool,
+    pub deadline_disposition: Option<PerformanceDeadlineDisposition>,
+}
+
 pub(crate) fn validate_performance_summary(
     data: &PerformanceSummaryEventData,
 ) -> Result<(), SanitizationError> {
@@ -363,6 +421,68 @@ pub(crate) fn validate_performance_stutter(
         ));
     }
     Ok(())
+}
+
+pub(crate) fn validate_performance_control(
+    data: &PerformanceControlEventData,
+) -> Result<(), SanitizationError> {
+    if data.observed_at_unix_ms == 0
+        || data
+            .instance_id
+            .as_ref()
+            .is_some_and(|value| !valid_control_instance_id(value))
+        || data
+            .host_responsiveness_basis_points
+            .is_some_and(|value| value > 10_000)
+        || data
+            .third_party_pressure_basis_points
+            .is_some_and(|value| value > 10_000)
+    {
+        return Err(SanitizationError::new(
+            "invalid_performance_control",
+            "performance_control",
+        ));
+    }
+    let previous = data.previous_level.rank();
+    let current = data.level.rank();
+    let transition_valid = if data.reason == PerformanceControlReason::DeadlineConflict {
+        previous == current && data.deadline_disposition.is_some() && !data.recovery
+    } else if data.reason == PerformanceControlReason::ClockJump {
+        previous == current && data.deadline_disposition.is_none() && !data.recovery
+    } else if data.recovery {
+        data.reason == PerformanceControlReason::Recovery
+            && current < previous
+            && data.deadline_disposition.is_none()
+    } else {
+        current > previous && data.deadline_disposition.is_none()
+    };
+    if !transition_valid {
+        return Err(SanitizationError::new(
+            "invalid_performance_control_transition",
+            "performance_control",
+        ));
+    }
+    if matches!(
+        data.reason,
+        PerformanceControlReason::ResponsivenessPressure
+            | PerformanceControlReason::FullscreenContention
+    ) && data.host_responsiveness_basis_points.is_none()
+        || matches!(
+            data.reason,
+            PerformanceControlReason::ThirdPartyContention
+                | PerformanceControlReason::FullscreenContention
+        ) && data.third_party_pressure_basis_points.is_none()
+    {
+        return Err(SanitizationError::new(
+            "performance_control_evidence_missing",
+            "performance_control",
+        ));
+    }
+    Ok(())
+}
+
+fn valid_control_instance_id(value: &str) -> bool {
+    !value.is_empty() && value.len() <= 128 && !value.chars().any(char::is_control)
 }
 
 pub(crate) fn validate_performance_monitor_state(

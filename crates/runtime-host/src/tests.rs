@@ -10,13 +10,13 @@ use actingcommand_contract::{
     EventActor, EventPayload, EventQuery, EventSource, EventType, IdentifierIssuer, InputAction,
     InstanceId, IssuedCorrelationId, LeasePriority, LeaseQueuePolicy, LeaseQueueStatus, LeaseToken,
     MonitorDiagnosis, MonitorDisposition, MonitorObservation, MonitorPayload,
-    MonitorRecoveryCoordinationReason, MonitorRecoveryKind, OriginModule, PerformanceMonitorHealth,
-    PolicyExecutionOutcome, PolicyFailureClass, PolicyFailureDisposition, PolicyPayload,
-    PolicyPlanningSignalEventData, PolicyPlanningSignalKind, ProjectionPayload, ProjectionProfile,
-    PublicEventPayload, RUNTIME_INFO_FILE, ResourceAuthoringEvent, ResourceAuthoringPhase,
-    RuntimeCaptureBackend, RuntimeErrorCode, RuntimeMonitorPolicy, RuntimeOperation,
-    RuntimeReceipt, RuntimeReceiptState, RuntimeRequest, RuntimeResult, TaskOutcome, TaskPayload,
-    TaskSemanticFact,
+    MonitorRecoveryCoordinationReason, MonitorRecoveryKind, OriginModule, PerformanceControlLevel,
+    PerformanceMonitorHealth, PolicyExecutionOutcome, PolicyFailureClass, PolicyFailureDisposition,
+    PolicyPayload, PolicyPlanningSignalEventData, PolicyPlanningSignalKind, ProjectionPayload,
+    ProjectionProfile, PublicEventPayload, RUNTIME_INFO_FILE, ResourceAuthoringEvent,
+    ResourceAuthoringPhase, RuntimeCaptureBackend, RuntimeErrorCode, RuntimeMonitorPolicy,
+    RuntimeOperation, RuntimeReceipt, RuntimeReceiptState, RuntimeRequest, RuntimeResult,
+    TaskOutcome, TaskPayload, TaskSemanticFact,
 };
 use actingcommand_device::{
     CaptureBackend, CaptureBackendName, DeviceError, DeviceResult, Frame, InputBackend, PixelFormat,
@@ -632,6 +632,10 @@ fn policy_resources() -> EvaluationResources {
             cpu_available_milli: 1_000,
             gpu_available_milli: 1_000,
             io_available_milli: 1_000,
+            host_responsiveness_basis_points: 10_000,
+            third_party_pressure_basis_points: 0,
+            heavy_dispatch_limit: 1,
+            active_heavy_dispatches: 0,
         }],
     }
 }
@@ -3681,6 +3685,61 @@ fn policy_host_revalidates_admission_pins_versions_and_replays_without_side_effe
         PolicyDispatchAdmission::ReplaySuppressed { .. }
     ));
     reopened.close().expect("close reopened host");
+}
+
+#[test]
+fn measured_contention_gates_deadline_dispatch_and_records_the_conflict() {
+    let root = TempDir::new().expect("tempdir");
+    let state = Arc::new(FakeState::default());
+    let host = host_with_state(&root, POLICY_INSTANCE_ALIAS, state);
+    host.activate_policy_catalog(&policy_sources(1))
+        .expect("activate catalog");
+    host.observe_performance_control_for_test(PerformanceControlObservation {
+        observed_at_unix_ms: POLICY_NOW_UNIX_MS - 2_000,
+        host_responsiveness_basis_points: Some(7_000),
+        third_party_pressure_basis_points: Some(0),
+        foreground_fullscreen: false,
+    })
+    .expect("first contention sample");
+    host.observe_performance_control_for_test(PerformanceControlObservation {
+        observed_at_unix_ms: POLICY_NOW_UNIX_MS,
+        host_responsiveness_basis_points: Some(7_000),
+        third_party_pressure_basis_points: Some(0),
+        foreground_fullscreen: false,
+    })
+    .expect("second contention sample");
+    assert_eq!(
+        host.performance_control_directive(POLICY_INSTANCE_ALIAS)
+            .expect("directive")
+            .level,
+        PerformanceControlLevel::DispatchPaused
+    );
+
+    let (_, mut intent, reasons) = evaluated_policy_dispatch(&host, PolicyTrigger::FactsChanged);
+    intent.prerequisites.urgency_milli = 1_000;
+    let error = host
+        .admit_policy_dispatch(&intent, &reasons, &policy_context(&host))
+        .expect_err("deadline must not bypass a measured contention gate");
+    assert_eq!(error.code(), "performance_capacity_deadline_conflict");
+
+    let mut client = TestClient::connect(&host);
+    let events = projected_events(&mut client, EventQuery::default());
+    assert!(
+        events
+            .iter()
+            .any(|event| event.event_type == EventType::PerformanceBalanceChanged)
+    );
+    assert!(
+        events
+            .iter()
+            .any(|event| event.event_type == EventType::PolicyDispatchRejected)
+    );
+    assert!(
+        !events
+            .iter()
+            .any(|event| event.event_type == EventType::LeaseGranted)
+    );
+    host.close().expect("close host");
 }
 
 #[test]

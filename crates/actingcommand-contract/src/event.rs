@@ -196,6 +196,8 @@ pub enum EventType {
     PerformanceMonitorDegraded,
     #[serde(rename = "perf.monitor_recovered")]
     PerformanceMonitorRecovered,
+    #[serde(rename = "perf.balance_changed")]
+    PerformanceBalanceChanged,
     #[serde(rename = "command.received")]
     CommandReceived,
     #[serde(rename = "command.validated")]
@@ -357,7 +359,8 @@ impl EventType {
             | Self::PerformanceStutterDetected
             | Self::PerformanceSummary
             | Self::PerformanceMonitorDegraded
-            | Self::PerformanceMonitorRecovered => EventFamily::Performance,
+            | Self::PerformanceMonitorRecovered
+            | Self::PerformanceBalanceChanged => EventFamily::Performance,
             Self::CommandReceived | Self::CommandValidated | Self::CommandRejected => {
                 EventFamily::Command
             }
