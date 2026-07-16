@@ -1,5 +1,7 @@
 use super::*;
 use crate::{
+    AgentCapabilityContract, AgentResponseDisposition, AgentSessionBudget, AgentSessionEventData,
+    AgentSessionResponse, AgentSessionStatus, AgentWakeData, AgentWakeKind, AgentWakeTrigger,
     ApprovalDecisionRecord, ApprovalDisposition, ApprovalTarget, ClientActionKind,
     ClientActionRecord, ClientActionValue, FactContent, FactInvalidationEventData, FactRecord,
     FactScope, FactValue, InputAction, MonitorDecision, MonitorDiagnosis, MonitorDisposition,
@@ -231,6 +233,66 @@ fn all_payload_drafts(mut input: impl FnMut() -> AuditInput) -> Vec<EventPayload
         StateTransitionStatus::new(StateValidationResult::Passed, StateRecoveryAction::None),
     )
     .expect("rollback transition");
+    let agent_wake = AgentWakeData::new(
+        *ids.mint_agent_wake_id().expect("agent wake id").transport(),
+        *ids.mint_correlation_id()
+            .expect("agent correlation id")
+            .transport(),
+        AgentWakeTrigger::new(
+            *ids.mint_instance_id()
+                .expect("agent instance id")
+                .transport(),
+            AgentWakeKind::DriftPredicted,
+            *ids.mint_event_id().expect("agent trigger id").transport(),
+            1,
+            1_752_147_201_000,
+        )
+        .expect("agent wake trigger"),
+        AgentSessionBudget::new(2, 60_000).expect("agent budget"),
+        AgentCapabilityContract::read_only(2).expect("agent capabilities"),
+    )
+    .expect("agent wake");
+    let agent_session = AgentSessionStatus::started(
+        *ids.mint_agent_session_id()
+            .expect("agent session id")
+            .transport(),
+        &agent_wake,
+        1_752_147_202_000,
+    )
+    .expect("agent session");
+    let agent_resumed = agent_session
+        .resumed(1_752_147_203_000)
+        .expect("agent resumed");
+    let retry_response = AgentSessionResponse::new(
+        agent_session.session_id(),
+        AgentResponseDisposition::RetryableFailure,
+        "transient_failure",
+        1_752_147_204_000,
+    )
+    .expect("agent retry response");
+    let agent_retry = agent_session
+        .retry_or_escalate(retry_response.observed_at_unix_ms())
+        .expect("agent retry");
+    let completed_response = AgentSessionResponse::new(
+        agent_session.session_id(),
+        AgentResponseDisposition::Completed,
+        "completed",
+        1_752_147_205_000,
+    )
+    .expect("agent completed response");
+    let agent_completed = agent_session
+        .completed(completed_response.observed_at_unix_ms())
+        .expect("agent completed");
+    let human_response = AgentSessionResponse::new(
+        agent_session.session_id(),
+        AgentResponseDisposition::NeedsHuman,
+        "human_required",
+        1_752_147_206_000,
+    )
+    .expect("agent human response");
+    let agent_escalated = agent_session
+        .escalated(human_response.observed_at_unix_ms())
+        .expect("agent escalated");
     let performance_pressure_started = PerformancePressureEventData {
         observed_at_unix_ms: 1_752_147_201_000,
         pressure: PerformancePressureRecord {
@@ -447,6 +509,35 @@ fn all_payload_drafts(mut input: impl FnMut() -> AuditInput) -> Vec<EventPayload
         ReleasePayloadDraft::transition_failed(
             release_transition,
             EffectDisposition::Indeterminate,
+            input(),
+        )
+        .into(),
+        AgentPayloadDraft::wake_requested(agent_wake, input()).into(),
+        AgentPayloadDraft::session_started(
+            AgentSessionEventData::new(agent_session, None).expect("agent start event"),
+            input(),
+        )
+        .into(),
+        AgentPayloadDraft::session_resumed(
+            AgentSessionEventData::new(agent_resumed, None).expect("agent resume event"),
+            input(),
+        )
+        .into(),
+        AgentPayloadDraft::response_recorded(
+            AgentSessionEventData::new(agent_retry, Some(retry_response))
+                .expect("agent retry event"),
+            input(),
+        )
+        .into(),
+        AgentPayloadDraft::session_completed(
+            AgentSessionEventData::new(agent_completed, Some(completed_response))
+                .expect("agent completed event"),
+            input(),
+        )
+        .into(),
+        AgentPayloadDraft::session_escalated(
+            AgentSessionEventData::new(agent_escalated, Some(human_response))
+                .expect("agent escalation event"),
             input(),
         )
         .into(),
@@ -1021,7 +1112,7 @@ fn tagged_payload_and_projection_layers_reject_unknown_fields() {
 #[test]
 fn event_v2_round_trips_every_c1_payload_variant() {
     let payloads = all_payload_drafts(AuditInput::new);
-    assert_eq!(payloads.len(), 86);
+    assert_eq!(payloads.len(), 92);
 
     for (index, payload) in payloads.into_iter().enumerate() {
         let sanitized = sanitize(payload, index as u64 + 1);

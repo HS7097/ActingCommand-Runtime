@@ -13,7 +13,8 @@
 //! ```
 
 use crate::{
-    ActionId, ApprovalDecisionRecord, ApprovalDisposition, ArtifactKind, ArtifactLinksDraft,
+    ActionId, AgentSessionContext, AgentSessionId, AgentSessionResponse, AgentSessionStatus,
+    AgentWakeId, ApprovalDecisionRecord, ApprovalDisposition, ArtifactKind, ArtifactLinksDraft,
     ArtifactMediaType, ArtifactRedactionState, CausationId, ClientActionRecord, CorrelationId,
     EffectDisposition, EventActor, EventId, EventLinksDraft, EventQuery, EventSource, EventType,
     EvidenceCompleteness, FrameId, HolderId, IdentifierIssuanceError, IdentifierIssuer, InstanceId,
@@ -1513,6 +1514,18 @@ pub enum RuntimeOperation {
     RecordApprovalDecision {
         decision: ApprovalDecisionRecord,
     },
+    StartAgentSession {
+        wake_id: AgentWakeId,
+    },
+    ResumeAgentSession {
+        session_id: AgentSessionId,
+    },
+    AgentSessionStatus {
+        session_id: AgentSessionId,
+    },
+    RecordAgentResponse {
+        response: AgentSessionResponse,
+    },
 }
 
 impl RuntimeOperation {
@@ -1585,6 +1598,12 @@ impl RuntimeOperation {
             Self::RecordApprovalDecision { decision } => decision
                 .validate()
                 .map_err(|_| RuntimeContractError::new("invalid_approval_decision")),
+            Self::StartAgentSession { .. }
+            | Self::ResumeAgentSession { .. }
+            | Self::AgentSessionStatus { .. } => Ok(()),
+            Self::RecordAgentResponse { response } => response
+                .validate()
+                .map_err(|_| RuntimeContractError::new("invalid_agent_response")),
             Self::AcquireLease { instance_alias, .. }
             | Self::ObserveReadonly { instance_alias }
             | Self::SafeReset { instance_alias, .. }
@@ -1696,6 +1715,16 @@ impl fmt::Debug for RuntimeOperation {
             Self::RecordApprovalDecision { .. } => {
                 "RuntimeOperation::RecordApprovalDecision(<typed-approval>)"
             }
+            Self::StartAgentSession { .. } => "RuntimeOperation::StartAgentSession(<opaque-wake>)",
+            Self::ResumeAgentSession { .. } => {
+                "RuntimeOperation::ResumeAgentSession(<opaque-session>)"
+            }
+            Self::AgentSessionStatus { .. } => {
+                "RuntimeOperation::AgentSessionStatus(<opaque-session>)"
+            }
+            Self::RecordAgentResponse { .. } => {
+                "RuntimeOperation::RecordAgentResponse(<typed-response>)"
+            }
         })
     }
 }
@@ -1768,6 +1797,16 @@ impl RuntimeRequest {
         ) && (self.actor != EventActor::Lab || self.source != EventSource::Lab)
         {
             return Err(RuntimeContractError::new("invalid_runtime_debug_origin"));
+        }
+        if matches!(
+            self.operation,
+            RuntimeOperation::StartAgentSession { .. }
+                | RuntimeOperation::ResumeAgentSession { .. }
+                | RuntimeOperation::AgentSessionStatus { .. }
+                | RuntimeOperation::RecordAgentResponse { .. }
+        ) && (self.actor != EventActor::Agent || self.source != EventSource::Adapter)
+        {
+            return Err(RuntimeContractError::new("invalid_agent_dispatcher_origin"));
         }
         self.operation.validate()?;
         Ok(ValidatedRuntimeRequest { request: self })
@@ -2105,6 +2144,15 @@ pub enum RuntimeResult {
         approval_id: String,
         disposition: ApprovalDisposition,
     },
+    AgentSessionOpened {
+        context: Box<AgentSessionContext>,
+    },
+    AgentSessionObserved {
+        context: Box<AgentSessionContext>,
+    },
+    AgentResponseRecorded {
+        status: AgentSessionStatus,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -2220,6 +2268,15 @@ impl RuntimeReceipt {
             {
                 return Err(RuntimeContractError::new("invalid_contained_task_result"));
             }
+            Some(
+                RuntimeResult::AgentSessionOpened { context }
+                | RuntimeResult::AgentSessionObserved { context },
+            ) => context
+                .validate()
+                .map_err(|_| RuntimeContractError::new("invalid_agent_session_context"))?,
+            Some(RuntimeResult::AgentResponseRecorded { status }) => status
+                .validate()
+                .map_err(|_| RuntimeContractError::new("invalid_agent_session_status"))?,
             _ => {}
         }
         Ok(())

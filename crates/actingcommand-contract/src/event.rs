@@ -167,6 +167,7 @@ pub enum EventFamily {
     Client,
     State,
     Release,
+    Agent,
     Ledger,
 }
 
@@ -364,6 +365,18 @@ pub enum EventType {
     ReleaseRolledBack,
     #[serde(rename = "release.transition_failed")]
     ReleaseTransitionFailed,
+    #[serde(rename = "agent.wake_requested")]
+    AgentWakeRequested,
+    #[serde(rename = "agent.session_started")]
+    AgentSessionStarted,
+    #[serde(rename = "agent.session_resumed")]
+    AgentSessionResumed,
+    #[serde(rename = "agent.response_recorded")]
+    AgentResponseRecorded,
+    #[serde(rename = "agent.session_completed")]
+    AgentSessionCompleted,
+    #[serde(rename = "agent.session_escalated")]
+    AgentSessionEscalated,
     #[serde(rename = "ledger.recovered")]
     LedgerRecovered,
 }
@@ -463,6 +476,12 @@ impl EventType {
             | Self::ReleaseActivated
             | Self::ReleaseRolledBack
             | Self::ReleaseTransitionFailed => EventFamily::Release,
+            Self::AgentWakeRequested
+            | Self::AgentSessionStarted
+            | Self::AgentSessionResumed
+            | Self::AgentResponseRecorded
+            | Self::AgentSessionCompleted
+            | Self::AgentSessionEscalated => EventFamily::Agent,
             Self::LedgerRecovered => EventFamily::Ledger,
         }
     }

@@ -1043,6 +1043,37 @@ fn client_action_and_approval_operations_are_closed_typed_contracts() {
 }
 
 #[test]
+fn agent_dispatcher_operations_require_agent_adapter_origin() {
+    let ids = issuer();
+    let wake_id = *ids.mint_agent_wake_id().expect("wake id").transport();
+    let operation = RuntimeOperation::StartAgentSession { wake_id };
+    let valid = RuntimeRequest::new(
+        ids.mint_request_id().expect("request"),
+        ids.mint_correlation_id().expect("correlation"),
+        None,
+        EventActor::Agent,
+        EventSource::Adapter,
+        1,
+        operation.clone(),
+    )
+    .expect("agent request");
+    valid.validate().expect("valid agent request");
+
+    let ids = issuer();
+    let error = RuntimeRequest::new(
+        ids.mint_request_id().expect("request"),
+        ids.mint_correlation_id().expect("correlation"),
+        None,
+        EventActor::Cli,
+        EventSource::Cli,
+        1,
+        operation,
+    )
+    .expect_err("CLI cannot claim an agent session");
+    assert_eq!(error.code(), "invalid_agent_dispatcher_origin");
+}
+
+#[test]
 fn query_result_remains_typed_without_generic_value_payload() {
     let result = RuntimeResult::Events { events: Vec::new() };
     let value = serde_json::to_value(result).expect("result json");
