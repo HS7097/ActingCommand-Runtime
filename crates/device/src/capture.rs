@@ -378,6 +378,20 @@ fn create_auto_capture_backend_with_mode(
     config: CaptureBackendConfig,
     mode: AutoCaptureMode,
 ) -> DeviceResult<SelectedCaptureBackend> {
+    select_auto_capture_backend_with_probe(mode, AUTO_CAPTURE_BACKEND_ORDER, |name| {
+        probe_or_cached_capture_backend(&config, name)
+    })
+}
+
+fn select_auto_capture_backend_with_probe<I, F>(
+    mode: AutoCaptureMode,
+    candidates: I,
+    mut probe: F,
+) -> DeviceResult<SelectedCaptureBackend>
+where
+    I: IntoIterator<Item = CaptureBackendName>,
+    F: FnMut(CaptureBackendName) -> DeviceResult<CaptureProbeOutcome>,
+{
     let mut attempts = Vec::new();
     let requested = match mode {
         AutoCaptureMode::Priority => CaptureBackendChoice::Auto,
@@ -385,8 +399,8 @@ fn create_auto_capture_backend_with_mode(
     };
     let mut successful = Vec::new();
 
-    for name in AUTO_CAPTURE_BACKEND_ORDER {
-        match probe_or_cached_capture_backend(&config, name)? {
+    for name in candidates {
+        match probe(name)? {
             CaptureProbeOutcome::Available(backend, attempt, elapsed_ms) => {
                 attempts.push(attempt);
                 if mode == AutoCaptureMode::Priority {
@@ -1822,6 +1836,24 @@ fn rgba_bottom_up_to_rgba(raw: &[u8], width: u32, height: u32) -> DeviceResult<V
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::cell::Cell;
+    use std::rc::Rc;
+
+    struct FakeCaptureBackend {
+        drops: Rc<Cell<usize>>,
+    }
+
+    impl CaptureBackend for FakeCaptureBackend {
+        fn capture(&mut self) -> DeviceResult<Frame> {
+            Err(DeviceError::fatal("fake capture must not run"))
+        }
+    }
+
+    impl Drop for FakeCaptureBackend {
+        fn drop(&mut self) {
+            self.drops.set(self.drops.get() + 1);
+        }
+    }
 
     #[test]
     fn parses_png_dimensions_from_valid_header() {
@@ -2073,6 +2105,95 @@ mod tests {
             parse_screen_size("Physical size: 1280x720").expect("screen size"),
             (1280, 720)
         );
+    }
+
+    #[test]
+    fn rejects_invalid_screen_sizes() {
+        for text in [
+            "Physical size: 1280",
+            "Physical size: invalidx720",
+            "Physical size: 0x720",
+            "Physical size: 1280x0",
+        ] {
+            assert_fatal(parse_screen_size(text));
+        }
+    }
+
+    #[test]
+    fn priority_capture_uses_second_backend_after_first_failure() {
+        let drops = Rc::new(Cell::new(0));
+        let mut outcomes = vec![
+            CaptureProbeOutcome::Unavailable(CaptureBackendAttempt::failure(
+                CaptureBackendName::NemuIpc,
+                "unavailable".to_string(),
+                Some(1),
+                false,
+            )),
+            CaptureProbeOutcome::Available(
+                Box::new(FakeCaptureBackend {
+                    drops: Rc::clone(&drops),
+                }),
+                CaptureBackendAttempt::success(
+                    CaptureBackendName::DroidcastRaw,
+                    "available".to_string(),
+                    Some(2),
+                    false,
+                ),
+                2,
+            ),
+        ]
+        .into_iter();
+
+        let selected = select_auto_capture_backend_with_probe(
+            AutoCaptureMode::Priority,
+            [
+                CaptureBackendName::NemuIpc,
+                CaptureBackendName::DroidcastRaw,
+            ],
+            |_| Ok(outcomes.next().expect("probe outcome")),
+        )
+        .expect("second backend selected");
+
+        assert_eq!(selected.diagnostics.used, CaptureBackendName::DroidcastRaw);
+        assert_eq!(selected.diagnostics.attempts.len(), 2);
+        assert_eq!(drops.get(), 0);
+    }
+
+    #[test]
+    fn fastest_capture_selects_faster_backend_and_releases_loser() {
+        let drops = Rc::new(Cell::new(0));
+        let mut outcomes = [
+            (CaptureBackendName::NemuIpc, 9),
+            (CaptureBackendName::DroidcastRaw, 3),
+        ]
+        .into_iter()
+        .map(|(name, elapsed_ms)| {
+            CaptureProbeOutcome::Available(
+                Box::new(FakeCaptureBackend {
+                    drops: Rc::clone(&drops),
+                }),
+                CaptureBackendAttempt::success(
+                    name,
+                    "available".to_string(),
+                    Some(elapsed_ms),
+                    false,
+                ),
+                elapsed_ms,
+            )
+        });
+
+        let selected = select_auto_capture_backend_with_probe(
+            AutoCaptureMode::Fastest,
+            [
+                CaptureBackendName::NemuIpc,
+                CaptureBackendName::DroidcastRaw,
+            ],
+            |_| Ok(outcomes.next().expect("probe outcome")),
+        )
+        .expect("fastest backend selected");
+
+        assert_eq!(selected.diagnostics.used, CaptureBackendName::DroidcastRaw);
+        assert_eq!(drops.get(), 1);
     }
 
     #[test]
