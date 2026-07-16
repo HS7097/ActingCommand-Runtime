@@ -151,6 +151,7 @@ pub enum EventFamily {
     Monitor,
     Performance,
     Fact,
+    Approval,
     Command,
     Scheduler,
     Policy,
@@ -203,6 +204,8 @@ pub enum EventType {
     FactPublished,
     #[serde(rename = "fact.invalidated")]
     FactInvalidated,
+    #[serde(rename = "approval.decision")]
+    ApprovalDecision,
     #[serde(rename = "command.received")]
     CommandReceived,
     #[serde(rename = "command.validated")]
@@ -341,6 +344,8 @@ pub enum EventType {
     ResourcePromoteFailed,
     #[serde(rename = "ui.action")]
     UiAction,
+    #[serde(rename = "client.action")]
+    ClientAction,
     #[serde(rename = "cli.command")]
     CliCommand,
     #[serde(rename = "lab.request")]
@@ -367,6 +372,7 @@ impl EventType {
             | Self::PerformanceMonitorRecovered
             | Self::PerformanceBalanceChanged => EventFamily::Performance,
             Self::FactPublished | Self::FactInvalidated => EventFamily::Fact,
+            Self::ApprovalDecision => EventFamily::Approval,
             Self::CommandReceived | Self::CommandValidated | Self::CommandRejected => {
                 EventFamily::Command
             }
@@ -434,7 +440,9 @@ impl EventType {
             | Self::ResourcePromoteIntent
             | Self::ResourcePromoted
             | Self::ResourcePromoteFailed => EventFamily::ResourceAuthoring,
-            Self::UiAction | Self::CliCommand | Self::LabRequest => EventFamily::Client,
+            Self::UiAction | Self::ClientAction | Self::CliCommand | Self::LabRequest => {
+                EventFamily::Client
+            }
             Self::LedgerRecovered => EventFamily::Ledger,
         }
     }

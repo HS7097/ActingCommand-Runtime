@@ -6,18 +6,20 @@ use crate::monitor::MONITOR_FILE_NAME;
 use crate::time::unix_ms_now;
 use actingcommand_artifact_store::read_projected_verified;
 use actingcommand_contract::{
-    ApplicationLifecycleAction, CaptureSequenceSpec, ContainedTaskRequest, EffectDisposition,
-    EventActor, EventPayload, EventQuery, EventSource, EventType, FactContent, FactRecord,
-    FactScope, FactValue as ContractFactValue, IdentifierIssuer, InputAction, InstanceFactContext,
-    InstanceId, IssuedCorrelationId, LeasePriority, LeaseQueuePolicy, LeaseQueueStatus, LeaseToken,
-    MonitorDiagnosis, MonitorDisposition, MonitorObservation, MonitorPayload,
-    MonitorRecoveryCoordinationReason, MonitorRecoveryKind, OriginModule, PerformanceControlLevel,
-    PerformanceMonitorHealth, PolicyExecutionOutcome, PolicyFailureClass, PolicyFailureDisposition,
-    PolicyPayload, PolicyPlanningSignalEventData, PolicyPlanningSignalKind, ProjectionPayload,
-    ProjectionProfile, PublicEventPayload, RUNTIME_INFO_FILE, ResourceAuthoringEvent,
-    ResourceAuthoringPhase, RuntimeCaptureBackend, RuntimeErrorCode, RuntimeMonitorPolicy,
-    RuntimeOperation, RuntimeReceipt, RuntimeReceiptState, RuntimeRequest, RuntimeResult,
-    TaskOutcome, TaskPayload, TaskSemanticFact,
+    ApplicationLifecycleAction, ApprovalDecisionRecord, ApprovalDisposition, ApprovalTarget,
+    CaptureSequenceSpec, ClientActionKind, ClientActionRecord, ClientActionValue,
+    ContainedTaskRequest, EffectDisposition, EventActor, EventPayload, EventQuery, EventSource,
+    EventType, FactContent, FactRecord, FactScope, FactValue as ContractFactValue,
+    IdentifierIssuer, InputAction, InstanceFactContext, InstanceId, IssuedCorrelationId,
+    LeasePriority, LeaseQueuePolicy, LeaseQueueStatus, LeaseToken, MonitorDiagnosis,
+    MonitorDisposition, MonitorObservation, MonitorPayload, MonitorRecoveryCoordinationReason,
+    MonitorRecoveryKind, OriginModule, PerformanceControlLevel, PerformanceMonitorHealth,
+    PolicyExecutionOutcome, PolicyFailureClass, PolicyFailureDisposition, PolicyPayload,
+    PolicyPlanningSignalEventData, PolicyPlanningSignalKind, ProjectionPayload, ProjectionProfile,
+    PublicEventPayload, RUNTIME_INFO_FILE, ResourceAuthoringEvent, ResourceAuthoringPhase,
+    RuntimeCaptureBackend, RuntimeErrorCode, RuntimeMonitorPolicy, RuntimeOperation,
+    RuntimeReceipt, RuntimeReceiptState, RuntimeRequest, RuntimeResult, TaskOutcome, TaskPayload,
+    TaskSemanticFact, TerminalEvent,
 };
 use actingcommand_device::{
     CaptureBackend, CaptureBackendName, DeviceError, DeviceResult, Frame, InputBackend, PixelFormat,
@@ -596,6 +598,39 @@ fn policy_context(host: &RuntimeHost) -> PolicyAdmissionContext {
         fencing_owner_epoch: host.runtime_info().owner_epoch(),
         now_unix_ms: POLICY_NOW_UNIX_MS,
     }
+}
+
+fn record_policy_approval(host: &RuntimeHost, intent: &DispatchIntent) -> TerminalEvent {
+    record_policy_approval_disposition(host, intent, ApprovalDisposition::Approved)
+}
+
+fn record_policy_approval_disposition(
+    host: &RuntimeHost,
+    intent: &DispatchIntent,
+    disposition: ApprovalDisposition,
+) -> TerminalEvent {
+    let decision = ApprovalDecisionRecord::new(
+        "approval:fixture-a",
+        disposition,
+        ApprovalTarget::Catalog {
+            catalog_hash: intent.catalog_hash.clone(),
+            catalog_version: intent.catalog_version,
+        },
+        "user_confirmed",
+    )
+    .expect("approval decision");
+    let mut client = TestClient::connect(host);
+    let request = client.request(RuntimeOperation::RecordApprovalDecision { decision });
+    let receipt = client.send(&request);
+    assert_eq!(receipt.state(), RuntimeReceiptState::Completed);
+    assert!(matches!(
+        receipt.result(),
+        Some(RuntimeResult::ApprovalDecisionRecorded {
+            approval_id,
+            disposition: recorded,
+        }) if approval_id == "approval:fixture-a" && *recorded == disposition
+    ));
+    receipt.terminal().expect("approval terminal")
 }
 
 fn policy_facts() -> EvaluationFacts {
@@ -3095,6 +3130,210 @@ fn runtime_rejects_forged_non_lab_resource_authoring_ingress_without_ledger_effe
 }
 
 #[test]
+fn typed_client_action_is_idempotent_and_public_projection_hides_the_value() {
+    let root = TempDir::new().expect("tempdir");
+    let host = host_with_state(&root, "ak.cn", Arc::new(FakeState::default()));
+    let mut client = TestClient::connect(&host);
+    let secret_hash = format!("sha256:{}", "e".repeat(64));
+    let request = client.request(RuntimeOperation::RecordClientAction {
+        action: ClientActionRecord::new(
+            "settings",
+            "account_token",
+            ClientActionKind::Input,
+            Some("ak.cn".to_owned()),
+            Some(ClientActionValue::Redacted {
+                sha256: secret_hash.clone(),
+                byte_count: 24,
+            }),
+        )
+        .expect("client action"),
+    });
+    let first = client.send(&request);
+    let replay = client.send(&request);
+    assert_eq!(first, replay);
+    assert!(matches!(
+        first.result(),
+        Some(RuntimeResult::ClientActionRecorded)
+    ));
+
+    let query = client.request(RuntimeOperation::QueryEvents {
+        query: EventQuery {
+            event_type: Some(EventType::ClientAction),
+            ..EventQuery::default()
+        },
+        profile: ProjectionProfile::Ui,
+    });
+    let receipt = client.send(&query);
+    let RuntimeResult::Events { events } = receipt.result().expect("events") else {
+        panic!("expected events")
+    };
+    assert_eq!(events.len(), 1);
+    let ProjectionPayload::Public(payload) = &events[0].payload else {
+        panic!("expected public projection")
+    };
+    let PublicEventPayload::Client(payload) = payload.as_ref() else {
+        panic!("expected client projection")
+    };
+    assert_eq!(payload.client_surface_id(), Some("settings"));
+    assert_eq!(payload.client_control_id(), Some("account_token"));
+    assert!(
+        !serde_json::to_string(&events)
+            .expect("events JSON")
+            .contains(&secret_hash)
+    );
+    drop(client);
+    host.close().expect("close host");
+}
+
+#[test]
+fn client_fact_request_id_cannot_cross_typed_operation_boundaries() {
+    let root = TempDir::new().expect("tempdir");
+    let host = host_with_state(&root, "fixture-instance-a", Arc::new(FakeState::default()));
+    let ids = IdentifierIssuer::new().expect("identifier issuer");
+    let request_id = ids.mint_request_id().expect("request id");
+    let action = RuntimeRequest::new(
+        request_id,
+        ids.mint_correlation_id().expect("action correlation"),
+        None,
+        EventActor::Cli,
+        EventSource::Cli,
+        unix_ms_now().expect("wall clock"),
+        RuntimeOperation::RecordClientAction {
+            action: ClientActionRecord::new(
+                "settings",
+                "refresh",
+                ClientActionKind::Button,
+                None,
+                None,
+            )
+            .expect("client action"),
+        },
+    )
+    .expect("action request");
+    let action_other_correlation = RuntimeRequest::new(
+        request_id,
+        ids.mint_correlation_id().expect("other correlation"),
+        None,
+        EventActor::Cli,
+        EventSource::Cli,
+        unix_ms_now().expect("wall clock"),
+        action.operation().clone(),
+    )
+    .expect("action request with another correlation");
+    let approval = RuntimeRequest::new(
+        request_id,
+        ids.mint_correlation_id().expect("approval correlation"),
+        None,
+        EventActor::Cli,
+        EventSource::Cli,
+        unix_ms_now().expect("wall clock"),
+        RuntimeOperation::RecordApprovalDecision {
+            decision: ApprovalDecisionRecord::new(
+                "approval:request-boundary",
+                ApprovalDisposition::Approved,
+                ApprovalTarget::Catalog {
+                    catalog_hash: format!("sha256:{}", "a".repeat(64)),
+                    catalog_version: 1,
+                },
+                "user_confirmed",
+            )
+            .expect("approval decision"),
+        },
+    )
+    .expect("approval request");
+    let connection = ConnectionId::new(99).expect("connection id");
+
+    assert_eq!(
+        host.process_request_for_test(&action, connection)
+            .expect("action receipt")
+            .state(),
+        RuntimeReceiptState::Completed
+    );
+    let correlation_collision = host
+        .process_request_for_test(&action_other_correlation, connection)
+        .expect("correlation collision receipt");
+    assert_eq!(correlation_collision.state(), RuntimeReceiptState::Denied);
+    let collision = host
+        .process_request_for_test(&approval, connection)
+        .expect("collision receipt");
+    assert_eq!(collision.state(), RuntimeReceiptState::Denied);
+    assert_eq!(
+        collision.error_projection().expect("collision error").code,
+        RuntimeErrorCode::InvalidRequest
+    );
+    assert_eq!(
+        event_types_for_request(&host, &ids, connection, action.request_id()),
+        vec![EventType::ClientAction]
+    );
+    host.close().expect("close host");
+}
+
+#[test]
+fn concurrent_approval_targets_commit_exactly_one_authoritative_fact() {
+    let root = TempDir::new().expect("tempdir");
+    let host = host_with_state(&root, "fixture-instance-a", Arc::new(FakeState::default()));
+    let first = TestClient::connect(&host);
+    let second = TestClient::connect(&host);
+    let start = Arc::new(Barrier::new(3));
+    let run = |mut client: TestClient, marker: char, start: Arc<Barrier>| {
+        thread::spawn(move || {
+            let request = client.request(RuntimeOperation::RecordApprovalDecision {
+                decision: ApprovalDecisionRecord::new(
+                    "approval:concurrent-target",
+                    ApprovalDisposition::Approved,
+                    ApprovalTarget::Catalog {
+                        catalog_hash: format!("sha256:{}", marker.to_string().repeat(64)),
+                        catalog_version: 1,
+                    },
+                    "user_confirmed",
+                )
+                .expect("approval decision"),
+            });
+            start.wait();
+            client.send(&request)
+        })
+    };
+    let first = run(first, 'a', Arc::clone(&start));
+    let second = run(second, 'b', Arc::clone(&start));
+    start.wait();
+    let receipts = [
+        first.join().expect("first approval writer"),
+        second.join().expect("second approval writer"),
+    ];
+    assert_eq!(
+        receipts
+            .iter()
+            .filter(|receipt| receipt.state() == RuntimeReceiptState::Completed)
+            .count(),
+        1
+    );
+    assert_eq!(
+        receipts
+            .iter()
+            .filter(|receipt| receipt.state() == RuntimeReceiptState::Denied)
+            .count(),
+        1
+    );
+    assert!(receipts.iter().any(|receipt| {
+        receipt
+            .error_projection()
+            .is_some_and(|error| error.code == RuntimeErrorCode::InvalidRequest)
+    }));
+
+    let mut client = TestClient::connect(&host);
+    let events = projected_events(
+        &mut client,
+        EventQuery {
+            event_type: Some(EventType::ApprovalDecision),
+            ..EventQuery::default()
+        },
+    );
+    assert_eq!(events.len(), 1);
+    drop(client);
+    host.close().expect("close host");
+}
+
+#[test]
 fn acquire_idempotency_recovers_its_durable_terminal_without_a_connection_cache() {
     let root = TempDir::new().expect("tempdir");
     let state = Arc::new(FakeState::default());
@@ -3854,8 +4093,7 @@ fn policy_host_revalidates_admission_pins_versions_and_replays_without_side_effe
         .expect("activate first catalog");
     let (_, intent, reasons) = evaluated_policy_dispatch(&host, PolicyTrigger::FactsChanged);
 
-    let mut missing_approval = policy_context(&host);
-    missing_approval.approval_fact_ids.clear();
+    let forged_approval = policy_context(&host);
     let mut missing_approval_intent = intent.clone();
     missing_approval_intent.decision_id = "decision:missing-approval".to_owned();
     missing_approval_intent.reason_chain_id = "reason:missing-approval".to_owned();
@@ -3866,10 +4104,11 @@ fn policy_host_revalidates_admission_pins_versions_and_replays_without_side_effe
         .admit_policy_dispatch(
             &missing_approval_intent,
             &missing_approval_reasons,
-            &missing_approval,
+            &forged_approval,
         )
-        .expect_err("missing approval must reject");
+        .expect_err("caller-supplied approval IDs must not grant authority");
     assert_eq!(error.code(), "policy_approval_fact_missing");
+    record_policy_approval(&host, &intent);
 
     let mut tampered_intent = intent.clone();
     tampered_intent.decision_id = "decision:tampered".to_owned();
@@ -4004,6 +4243,80 @@ fn policy_host_revalidates_admission_pins_versions_and_replays_without_side_effe
 }
 
 #[test]
+fn approval_decision_is_authoritative_target_bound_and_revocable() {
+    let root = TempDir::new().expect("tempdir");
+    let host = host_with_state(&root, POLICY_INSTANCE_ALIAS, Arc::new(FakeState::default()));
+    host.activate_policy_catalog(&policy_sources(1))
+        .expect("activate catalog");
+    let (_, intent, reasons) = evaluated_policy_dispatch(&host, PolicyTrigger::FactsChanged);
+    let forged = policy_context(&host);
+    assert_eq!(
+        host.admit_policy_dispatch(&intent, &reasons, &forged)
+            .expect_err("caller approval set is not authoritative")
+            .code(),
+        "policy_approval_fact_missing"
+    );
+
+    record_policy_approval(&host, &intent);
+    let mut approved_intent = intent.clone();
+    approved_intent.decision_id = "decision:approved".to_owned();
+    approved_intent.reason_chain_id = "reason:approved".to_owned();
+    let mut approved_reasons = reasons.clone();
+    approved_reasons.id = "reason:approved".to_owned();
+    approved_reasons.decision_id = "decision:approved".to_owned();
+    assert!(matches!(
+        host.admit_policy_dispatch(&approved_intent, &approved_reasons, &policy_context(&host),)
+            .expect("approved dispatch"),
+        PolicyDispatchAdmission::Granted { .. }
+    ));
+
+    let mut client = TestClient::connect(&host);
+    let conflicting = client.request(RuntimeOperation::RecordApprovalDecision {
+        decision: ApprovalDecisionRecord::new(
+            "approval:fixture-a",
+            ApprovalDisposition::Approved,
+            ApprovalTarget::Catalog {
+                catalog_hash: format!("sha256:{}", "f".repeat(64)),
+                catalog_version: 1,
+            },
+            "user_confirmed",
+        )
+        .expect("conflicting approval"),
+    });
+    assert_eq!(
+        client.send(&conflicting).state(),
+        RuntimeReceiptState::Denied
+    );
+    drop(client);
+
+    record_policy_approval_disposition(&host, &approved_intent, ApprovalDisposition::Revoked);
+    let mut after_revoke = intent.clone();
+    after_revoke.decision_id = "decision:after-revoke".to_owned();
+    after_revoke.reason_chain_id = "reason:after-revoke".to_owned();
+    let mut after_revoke_reasons = reasons.clone();
+    after_revoke_reasons.id = "reason:after-revoke".to_owned();
+    after_revoke_reasons.decision_id = "decision:after-revoke".to_owned();
+    assert_eq!(
+        host.admit_policy_dispatch(&after_revoke, &after_revoke_reasons, &policy_context(&host),)
+            .expect_err("revoked approval must not authorize a new dispatch")
+            .code(),
+        "policy_approval_fact_missing"
+    );
+
+    let mut client = TestClient::connect(&host);
+    let events = projected_events(
+        &mut client,
+        EventQuery {
+            event_type: Some(EventType::ApprovalDecision),
+            ..EventQuery::default()
+        },
+    );
+    assert_eq!(events.len(), 2);
+    drop(client);
+    host.close().expect("close host");
+}
+
+#[test]
 fn measured_contention_gates_deadline_dispatch_and_records_the_conflict() {
     let root = TempDir::new().expect("tempdir");
     let state = Arc::new(FakeState::default());
@@ -4065,6 +4378,7 @@ fn policy_failure_activity_and_planning_facts_recover_without_duplicate_side_eff
     host.activate_policy_catalog(&policy_sources(1))
         .expect("activate policy catalog");
     let (_, intent, reasons) = evaluated_policy_dispatch(&host, PolicyTrigger::FactsChanged);
+    record_policy_approval(&host, &intent);
     let admission = host
         .admit_policy_dispatch(&intent, &reasons, &policy_context(&host))
         .expect("policy admission");
@@ -4235,6 +4549,7 @@ fn performance_stutter_is_ledger_visible_and_enriches_policy_failure() {
     host.activate_policy_catalog(&policy_sources(1))
         .expect("activate policy catalog");
     let (_, intent, reasons) = evaluated_policy_dispatch(&host, PolicyTrigger::FactsChanged);
+    record_policy_approval(&host, &intent);
     host.admit_policy_dispatch(&intent, &reasons, &policy_context(&host))
         .expect("policy admission");
     host.record_pipeline_performance(
@@ -4297,6 +4612,7 @@ fn policy_dispatch_crash_child_process() {
         .expect("child catalog activation");
     let (_, intent, reason_chain) = evaluated_policy_dispatch(&host, PolicyTrigger::FactsChanged);
     assert_eq!(intent.catalog_hash, catalog.catalog_hash());
+    record_policy_approval(&host, &intent);
     let admission = host
         .admit_policy_dispatch(&intent, &reason_chain, &policy_context(&host))
         .expect("child policy admission");

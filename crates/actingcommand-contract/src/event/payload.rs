@@ -7,15 +7,16 @@ use super::{
     RetentionClass, SanitizationError, Sensitivity, TaskOutcome,
 };
 use crate::{
-    FactInvalidationEventData, FactRecord, FactScope, HolderId, InputAction, LeaseId,
-    LeasePriority, MonitorDecision, MonitorDiagnosis, MonitorDisposition, MonitorObservation,
-    MonitorRecoveryCoordinationReason, MonitorRecoveryKind, PerformanceContext,
-    PerformanceControlEventData, PerformanceControlLevel, PerformanceControlReason,
-    PerformanceDeadlineDisposition, PerformanceMonitorHealth, PerformanceMonitorStateEventData,
-    PerformancePressureEventData, PerformancePressureRecord, PerformanceStutterEventData,
-    PerformanceSummaryEventData, RequestId, validate_fact_invalidation,
-    validate_performance_control, validate_performance_monitor_state, validate_performance_stutter,
-    validate_performance_summary,
+    ApprovalDecisionRecord, ApprovalDisposition, ApprovalTarget, ApprovalTargetKind,
+    ClientActionKind, ClientActionRecord, FactInvalidationEventData, FactRecord, FactScope,
+    HolderId, InputAction, LeaseId, LeasePriority, MonitorDecision, MonitorDiagnosis,
+    MonitorDisposition, MonitorObservation, MonitorRecoveryCoordinationReason, MonitorRecoveryKind,
+    PerformanceContext, PerformanceControlEventData, PerformanceControlLevel,
+    PerformanceControlReason, PerformanceDeadlineDisposition, PerformanceMonitorHealth,
+    PerformanceMonitorStateEventData, PerformancePressureEventData, PerformancePressureRecord,
+    PerformanceStutterEventData, PerformanceSummaryEventData, RequestId,
+    validate_fact_invalidation, validate_performance_control, validate_performance_monitor_state,
+    validate_performance_stutter, validate_performance_summary,
 };
 use serde::de;
 use serde::{Deserialize, Deserializer, Serialize};
@@ -26,6 +27,7 @@ pub const RUNTIME_PAYLOAD_SCHEMA: &str = "actingcommand.payload.runtime.v1";
 pub const MONITOR_PAYLOAD_SCHEMA: &str = "actingcommand.payload.monitor.v1";
 pub const PERFORMANCE_PAYLOAD_SCHEMA: &str = "actingcommand.payload.performance.v1";
 pub const FACT_PAYLOAD_SCHEMA: &str = "actingcommand.payload.fact.v1";
+pub const APPROVAL_PAYLOAD_SCHEMA: &str = "actingcommand.payload.approval.v1";
 pub const SCHEDULER_PAYLOAD_SCHEMA: &str = "actingcommand.payload.scheduler.v3";
 pub const POLICY_PAYLOAD_SCHEMA: &str = "actingcommand.payload.policy.v1";
 pub const CATALOG_PAYLOAD_SCHEMA: &str = "actingcommand.payload.catalog.v1";
@@ -374,6 +376,22 @@ pub struct FactPublishedPayload {
 pub struct FactInvalidatedPayload {
     action: EventAction,
     invalidation: FactInvalidationEventData,
+    audit: SanitizedAudit,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ClientActionPayload {
+    action: EventAction,
+    record: ClientActionRecord,
+    audit: SanitizedAudit,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ApprovalDecisionPayload {
+    action: EventAction,
+    decision: ApprovalDecisionRecord,
     audit: SanitizedAudit,
 }
 
@@ -1256,6 +1274,8 @@ common_detail_accessors!(PerformanceMonitorStatePayload);
 common_detail_accessors!(PerformanceControlPayload);
 common_detail_accessors!(FactPublishedPayload);
 common_detail_accessors!(FactInvalidatedPayload);
+common_detail_accessors!(ClientActionPayload);
+common_detail_accessors!(ApprovalDecisionPayload);
 common_detail_accessors!(SchedulerQueuePayload);
 common_detail_accessors!(SchedulerPreemptionPayload);
 common_detail_accessors!(LeaseTransferPayload);
@@ -1298,6 +1318,8 @@ plain_payload_detail!(
     PerformanceControlPayload,
     FactPublishedPayload,
     FactInvalidatedPayload,
+    ClientActionPayload,
+    ApprovalDecisionPayload,
 );
 
 impl PerformancePressurePayload {
@@ -1375,6 +1397,18 @@ impl FactPublishedPayload {
 impl FactInvalidatedPayload {
     pub const fn invalidation(&self) -> &FactInvalidationEventData {
         &self.invalidation
+    }
+}
+
+impl ClientActionPayload {
+    pub const fn record(&self) -> &ClientActionRecord {
+        &self.record
+    }
+}
+
+impl ApprovalDecisionPayload {
+    pub const fn decision(&self) -> &ApprovalDecisionRecord {
+        &self.decision
     }
 }
 
@@ -2148,6 +2182,16 @@ struct FactInvalidatedDraft {
     audit: AuditInput,
 }
 
+struct ClientActionDraft {
+    record: ClientActionRecord,
+    audit: AuditInput,
+}
+
+struct ApprovalDecisionDraft {
+    decision: ApprovalDecisionRecord,
+    audit: AuditInput,
+}
+
 struct PolicyPlanningSignalDraft {
     data: PolicyPlanningSignalEventData,
     audit: AuditInput,
@@ -2376,6 +2420,34 @@ impl FactInvalidatedDraft {
         Ok(FactInvalidatedPayload {
             action: EventAction::FactInvalidate,
             invalidation: self.invalidation,
+            audit: self.audit.sanitize(fingerprinter)?,
+        })
+    }
+}
+
+impl ClientActionDraft {
+    fn sanitize(
+        self,
+        fingerprinter: &dyn SecretFingerprinter,
+    ) -> Result<ClientActionPayload, SanitizationError> {
+        self.record.validate()?;
+        Ok(ClientActionPayload {
+            action: EventAction::ClientAction,
+            record: self.record,
+            audit: self.audit.sanitize(fingerprinter)?,
+        })
+    }
+}
+
+impl ApprovalDecisionDraft {
+    fn sanitize(
+        self,
+        fingerprinter: &dyn SecretFingerprinter,
+    ) -> Result<ApprovalDecisionPayload, SanitizationError> {
+        self.decision.validate()?;
+        Ok(ApprovalDecisionPayload {
+            action: EventAction::ApprovalDecision,
+            decision: self.decision,
             audit: self.audit.sanitize(fingerprinter)?,
         })
     }
@@ -2770,6 +2842,31 @@ fn validate_fact_payload(payload: &FactPayload) -> Result<(), SanitizationError>
         _ => Err(SanitizationError::new(
             "invalid_fact_payload",
             "fact_payload",
+        )),
+    }
+}
+
+fn validate_client_action_payload(payload: &ClientPayload) -> Result<(), SanitizationError> {
+    if let ClientPayload::Action(value) = payload {
+        if value.action == EventAction::ClientAction {
+            return value.record.validate();
+        }
+        return Err(SanitizationError::new(
+            "invalid_client_action_payload",
+            "client_action_payload",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_approval_payload(payload: &ApprovalPayload) -> Result<(), SanitizationError> {
+    match payload {
+        ApprovalPayload::Decision(value) if value.action == EventAction::ApprovalDecision => {
+            value.decision.validate()
+        }
+        _ => Err(SanitizationError::new(
+            "invalid_approval_payload",
+            "approval_payload",
         )),
     }
 }
@@ -4002,6 +4099,7 @@ impl ArtifactPayloadDraft {
 }
 
 enum ClientDraftKind {
+    Action(ClientActionDraft),
     UiAction(ObservationDraft),
     CliCommand(ObservationDraft),
     LabRequest(ObservationDraft),
@@ -4010,6 +4108,10 @@ enum ClientDraftKind {
 pub struct ClientPayloadDraft(ClientDraftKind);
 
 impl ClientPayloadDraft {
+    pub fn action(record: ClientActionRecord, audit: AuditInput) -> Self {
+        Self(ClientDraftKind::Action(ClientActionDraft { record, audit }))
+    }
+
     pub fn ui_action(action: EventAction, audit: AuditInput) -> Self {
         Self(ClientDraftKind::UiAction(ObservationDraft::new(
             action, audit,
@@ -4149,6 +4251,21 @@ impl FactPayloadDraft {
     pub fn invalidated(invalidation: FactInvalidationEventData, audit: AuditInput) -> Self {
         Self(FactDraftKind::Invalidated(FactInvalidatedDraft {
             invalidation,
+            audit,
+        }))
+    }
+}
+
+enum ApprovalDraftKind {
+    Decision(ApprovalDecisionDraft),
+}
+
+pub struct ApprovalPayloadDraft(ApprovalDraftKind);
+
+impl ApprovalPayloadDraft {
+    pub fn decision(decision: ApprovalDecisionRecord, audit: AuditInput) -> Self {
+        Self(ApprovalDraftKind::Decision(ApprovalDecisionDraft {
+            decision,
             audit,
         }))
     }
@@ -4301,6 +4418,7 @@ pub enum EventPayloadDraft {
     Monitor(MonitorPayloadDraft),
     Performance(PerformancePayloadDraft),
     Fact(FactPayloadDraft),
+    Approval(ApprovalPayloadDraft),
     Command(CommandPayloadDraft),
     Scheduler(SchedulerPayloadDraft),
     Policy(PolicyPayloadDraft),
@@ -4332,6 +4450,7 @@ payload_draft_from!(RuntimePayloadDraft, Runtime);
 payload_draft_from!(MonitorPayloadDraft, Monitor);
 payload_draft_from!(PerformancePayloadDraft, Performance);
 payload_draft_from!(FactPayloadDraft, Fact);
+payload_draft_from!(ApprovalPayloadDraft, Approval);
 payload_draft_from!(SchedulerPayloadDraft, Scheduler);
 payload_draft_from!(PolicyPayloadDraft, Policy);
 payload_draft_from!(CatalogPayloadDraft, Catalog);
@@ -4414,6 +4533,17 @@ pub enum PerformancePayload {
 pub enum FactPayload {
     Published(FactPublishedPayload),
     Invalidated(FactInvalidatedPayload),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(
+    tag = "kind",
+    content = "data",
+    rename_all = "snake_case",
+    deny_unknown_fields
+)]
+pub enum ApprovalPayload {
+    Decision(ApprovalDecisionPayload),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -4595,6 +4725,7 @@ impl FamilyPayload for ResourceAuthoringPayload {
     deny_unknown_fields
 )]
 pub enum ClientPayload {
+    Action(ClientActionPayload),
     UiAction(ObservationPayload),
     CliCommand(ObservationPayload),
     LabRequest(ObservationPayload),
@@ -4677,6 +4808,9 @@ impl FamilyPayload for PerformancePayload {
 family_payload!(FactPayload, {
     Published => EventType::FactPublished,
     Invalidated => EventType::FactInvalidated,
+});
+family_payload!(ApprovalPayload, {
+    Decision => EventType::ApprovalDecision,
 });
 family_payload!(SchedulerPayload, {
     Admitted => EventType::SchedulerAdmitted,
@@ -4770,6 +4904,7 @@ family_payload!(ArtifactPayload, {
     ExportFailed => EventType::ArtifactExportFailed,
 });
 family_payload!(ClientPayload, {
+    Action => EventType::ClientAction,
     UiAction => EventType::UiAction,
     CliCommand => EventType::CliCommand,
     LabRequest => EventType::LabRequest,
@@ -4790,6 +4925,7 @@ pub enum EventPayload {
     Monitor(MonitorPayload),
     Performance(PerformancePayload),
     Fact(FactPayload),
+    Approval(ApprovalPayload),
     Command(CommandPayload),
     Scheduler(SchedulerPayload),
     Policy(PolicyPayload),
@@ -4869,6 +5005,11 @@ impl EventPayloadDraft {
                 }
                 FactDraftKind::Invalidated(detail) => {
                     FactPayload::Invalidated(detail.sanitize(fingerprinter)?)
+                }
+            }),
+            Self::Approval(value) => EventPayload::Approval(match value.0 {
+                ApprovalDraftKind::Decision(detail) => {
+                    ApprovalPayload::Decision(detail.sanitize(fingerprinter)?)
                 }
             }),
             Self::Command(value) => EventPayload::Command(match value.0 {
@@ -5068,6 +5209,9 @@ impl EventPayloadDraft {
                 EventPayload::ResourceAuthoring(value.0.sanitize(fingerprinter)?)
             }
             Self::Client(value) => EventPayload::Client(match value.0 {
+                ClientDraftKind::Action(detail) => {
+                    ClientPayload::Action(detail.sanitize(fingerprinter)?)
+                }
                 ClientDraftKind::UiAction(detail) => {
                     ClientPayload::UiAction(detail.sanitize(fingerprinter)?)
                 }
@@ -5102,6 +5246,7 @@ impl EventPayload {
             Self::Monitor(_) => MONITOR_PAYLOAD_SCHEMA,
             Self::Performance(_) => PERFORMANCE_PAYLOAD_SCHEMA,
             Self::Fact(_) => FACT_PAYLOAD_SCHEMA,
+            Self::Approval(_) => APPROVAL_PAYLOAD_SCHEMA,
             Self::Command(_) => COMMAND_PAYLOAD_SCHEMA,
             Self::Scheduler(_) => SCHEDULER_PAYLOAD_SCHEMA,
             Self::Policy(_) => POLICY_PAYLOAD_SCHEMA,
@@ -5130,6 +5275,12 @@ impl EventPayload {
         }
         if let Self::Fact(payload) = self {
             sensitivity = sensitivity.max(fact_sensitivity(payload));
+        }
+        if matches!(
+            self,
+            Self::Approval(_) | Self::Client(ClientPayload::Action(_))
+        ) {
+            sensitivity = sensitivity.max(Sensitivity::Internal);
         }
         sensitivity
     }
@@ -5163,6 +5314,12 @@ impl EventPayload {
         }
         if let Self::Fact(value) = self {
             validate_fact_payload(value)?;
+        }
+        if let Self::Approval(value) = self {
+            validate_approval_payload(value)?;
+        }
+        if let Self::Client(value) = self {
+            validate_client_action_payload(value)?;
         }
         if let Self::Catalog(value) = self {
             validate_catalog_payload(value)?;
@@ -5270,6 +5427,8 @@ impl EventPayload {
         let performance_state = performance_monitor_state(self);
         let performance_control = performance_control(self);
         let fact_identity = fact_identity(self);
+        let client_action = client_action(self);
+        let approval = approval_decision(self);
         let payload = PublicPayload {
             event_type,
             action: detail.action(),
@@ -5351,12 +5510,36 @@ impl EventPayload {
             fact_scope: fact_identity.map(|value| Box::new(value.0.clone())),
             fact_key: fact_identity.map(|value| value.1.to_owned().into_boxed_str()),
             fact_source_snapshot_id: fact_identity.map(|value| value.2.to_owned().into_boxed_str()),
+            client_surface_id: client_action
+                .map(|value| value.record().surface_id().to_owned().into_boxed_str()),
+            client_control_id: client_action
+                .map(|value| value.record().control_id().to_owned().into_boxed_str()),
+            client_action_kind: client_action.map(|value| value.record().kind()),
+            approval_id: approval
+                .map(|value| value.decision().approval_id().to_owned().into_boxed_str()),
+            approval_disposition: approval.map(|value| value.decision().disposition()),
+            approval_target_kind: approval.map(|value| value.decision().target().kind()),
+            approval_target_id: approval.and_then(|value| {
+                approval_target_id(value.decision().target())
+                    .map(|id| id.to_owned().into_boxed_str())
+            }),
+            approval_catalog_hash: approval.map(|value| {
+                value
+                    .decision()
+                    .target()
+                    .catalog_hash()
+                    .to_owned()
+                    .into_boxed_str()
+            }),
+            approval_catalog_version: approval
+                .map(|value| value.decision().target().catalog_version()),
         };
         match self {
             Self::Runtime(_) => PublicEventPayload::Runtime(payload),
             Self::Monitor(_) => PublicEventPayload::Monitor(payload),
             Self::Performance(_) => PublicEventPayload::Performance(payload),
             Self::Fact(_) => PublicEventPayload::Fact(payload),
+            Self::Approval(_) => PublicEventPayload::Approval(payload),
             Self::Command(_) => PublicEventPayload::Command(payload),
             Self::Scheduler(_) => PublicEventPayload::Scheduler(payload),
             Self::Policy(_) => PublicEventPayload::Policy(payload),
@@ -5380,6 +5563,7 @@ impl EventPayload {
             Self::Monitor(value) => value,
             Self::Performance(value) => value,
             Self::Fact(value) => value,
+            Self::Approval(value) => value,
             Self::Command(value) => value,
             Self::Scheduler(value) => value,
             Self::Policy(value) => value,
@@ -5455,6 +5639,28 @@ fn fact_identity(payload: &EventPayload) -> Option<(&FactScope, &str, &str)> {
             &value.invalidation.source_snapshot_id,
         )),
         _ => None,
+    }
+}
+
+fn client_action(payload: &EventPayload) -> Option<&ClientActionPayload> {
+    match payload {
+        EventPayload::Client(ClientPayload::Action(value)) => Some(value),
+        _ => None,
+    }
+}
+
+fn approval_decision(payload: &EventPayload) -> Option<&ApprovalDecisionPayload> {
+    match payload {
+        EventPayload::Approval(ApprovalPayload::Decision(value)) => Some(value),
+        _ => None,
+    }
+}
+
+fn approval_target_id(target: &ApprovalTarget) -> Option<&str> {
+    match target {
+        ApprovalTarget::Catalog { .. } => None,
+        ApprovalTarget::Plan { plan_id, .. } => Some(plan_id),
+        ApprovalTarget::Decision { decision_id, .. } => Some(decision_id),
     }
 }
 
@@ -5695,6 +5901,24 @@ pub struct PublicPayload {
     fact_key: Option<Box<str>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     fact_source_snapshot_id: Option<Box<str>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    client_surface_id: Option<Box<str>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    client_control_id: Option<Box<str>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    client_action_kind: Option<ClientActionKind>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    approval_id: Option<Box<str>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    approval_disposition: Option<ApprovalDisposition>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    approval_target_kind: Option<ApprovalTargetKind>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    approval_target_id: Option<Box<str>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    approval_catalog_hash: Option<Box<str>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    approval_catalog_version: Option<u64>,
 }
 
 impl PublicPayload {
@@ -5919,6 +6143,42 @@ impl PublicPayload {
     pub fn fact_source_snapshot_id(&self) -> Option<&str> {
         self.fact_source_snapshot_id.as_deref()
     }
+
+    pub fn client_surface_id(&self) -> Option<&str> {
+        self.client_surface_id.as_deref()
+    }
+
+    pub fn client_control_id(&self) -> Option<&str> {
+        self.client_control_id.as_deref()
+    }
+
+    pub const fn client_action_kind(&self) -> Option<ClientActionKind> {
+        self.client_action_kind
+    }
+
+    pub fn approval_id(&self) -> Option<&str> {
+        self.approval_id.as_deref()
+    }
+
+    pub const fn approval_disposition(&self) -> Option<ApprovalDisposition> {
+        self.approval_disposition
+    }
+
+    pub const fn approval_target_kind(&self) -> Option<ApprovalTargetKind> {
+        self.approval_target_kind
+    }
+
+    pub fn approval_target_id(&self) -> Option<&str> {
+        self.approval_target_id.as_deref()
+    }
+
+    pub fn approval_catalog_hash(&self) -> Option<&str> {
+        self.approval_catalog_hash.as_deref()
+    }
+
+    pub const fn approval_catalog_version(&self) -> Option<u64> {
+        self.approval_catalog_version
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -5933,6 +6193,7 @@ pub enum PublicEventPayload {
     Monitor(PublicPayload),
     Performance(PublicPayload),
     Fact(PublicPayload),
+    Approval(PublicPayload),
     Command(PublicPayload),
     Scheduler(PublicPayload),
     Policy(PublicPayload),

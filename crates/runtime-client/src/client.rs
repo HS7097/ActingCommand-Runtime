@@ -3,12 +3,13 @@
 use crate::ipc::{DEFAULT_RUNTIME_MAX_FRAME_BYTES, exchange};
 use crate::{RuntimeClientError, RuntimeClientResult};
 use actingcommand_contract::{
-    ActionId, ApplicationLifecycleAction, CaptureSequenceSpec, ContainedTaskRequest, CorrelationId,
-    EventActor, EventQuery, EventSource, IdentifierIssuer, InputAction, IssuedCorrelationId,
-    LeaseQueuePolicy, LeaseQueueStatus, LeaseToken, OwnerEpoch, PackageDebugRequest,
-    ProjectedEvent, ProjectionProfile, RUNTIME_INFO_FILE, RequestId, ResourceAuthoringEvent,
-    RuntimeControlPlaneStatus, RuntimeDebugEvent, RuntimeEventBatch, RuntimeEvidenceExportRequest,
-    RuntimeInfo, RuntimeMonitorInstanceStatus, RuntimeMonitorPolicy, RuntimeMonitorRegistryStatus,
+    ActionId, ApplicationLifecycleAction, ApprovalDecisionRecord, CaptureSequenceSpec,
+    ClientActionRecord, ContainedTaskRequest, CorrelationId, EventActor, EventQuery, EventSource,
+    IdentifierIssuer, InputAction, IssuedCorrelationId, LeaseQueuePolicy, LeaseQueueStatus,
+    LeaseToken, OwnerEpoch, PackageDebugRequest, ProjectedEvent, ProjectionProfile,
+    RUNTIME_INFO_FILE, RequestId, ResourceAuthoringEvent, RuntimeControlPlaneStatus,
+    RuntimeDebugEvent, RuntimeEventBatch, RuntimeEvidenceExportRequest, RuntimeInfo,
+    RuntimeMonitorInstanceStatus, RuntimeMonitorPolicy, RuntimeMonitorRegistryStatus,
     RuntimeOperation, RuntimeReceipt, RuntimeRequest, RuntimeResult, RuntimeSubscriptionRequest,
     TerminalEvent,
 };
@@ -517,6 +518,54 @@ impl RuntimeClient {
             RuntimeResult::InputCommitted { .. } => Ok(()),
             _ => Err(self.unexpected_result("runtime_input")),
         }
+    }
+
+    pub fn record_client_action(
+        &self,
+        action: ClientActionRecord,
+    ) -> RuntimeClientResult<TerminalEvent> {
+        action.validate().map_err(|_| {
+            RuntimeClientError::fatal("client_action_invalid", "record_client_action")
+        })?;
+        let receipt = self.execute_receipt(
+            "record_client_action",
+            RuntimeOperation::RecordClientAction { action },
+            None,
+        )?;
+        if !matches!(receipt.result(), Some(RuntimeResult::ClientActionRecorded)) {
+            return Err(self.unexpected_result("record_client_action"));
+        }
+        receipt
+            .terminal()
+            .ok_or_else(|| self.unexpected_result("record_client_action"))
+    }
+
+    pub fn record_approval_decision(
+        &self,
+        decision: ApprovalDecisionRecord,
+    ) -> RuntimeClientResult<TerminalEvent> {
+        decision.validate().map_err(|_| {
+            RuntimeClientError::fatal("approval_decision_invalid", "record_approval_decision")
+        })?;
+        let approval_id = decision.approval_id().to_owned();
+        let disposition = decision.disposition();
+        let receipt = self.execute_receipt(
+            "record_approval_decision",
+            RuntimeOperation::RecordApprovalDecision { decision },
+            None,
+        )?;
+        if !matches!(
+            receipt.result(),
+            Some(RuntimeResult::ApprovalDecisionRecorded {
+                approval_id: recorded_id,
+                disposition: recorded_disposition,
+            }) if recorded_id == &approval_id && *recorded_disposition == disposition
+        ) {
+            return Err(self.unexpected_result("record_approval_decision"));
+        }
+        receipt
+            .terminal()
+            .ok_or_else(|| self.unexpected_result("record_approval_decision"))
     }
 
     pub fn query_events(

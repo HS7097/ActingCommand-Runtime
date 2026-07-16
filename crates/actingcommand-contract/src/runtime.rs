@@ -13,15 +13,15 @@
 //! ```
 
 use crate::{
-    ActionId, ArtifactKind, ArtifactLinksDraft, ArtifactMediaType, ArtifactRedactionState,
-    CausationId, CorrelationId, EffectDisposition, EventActor, EventId, EventLinksDraft,
-    EventQuery, EventSource, EventType, EvidenceCompleteness, FrameId, HolderId,
-    IdentifierIssuanceError, IdentifierIssuer, InstanceId, IssuedCausationId, IssuedCorrelationId,
-    IssuedFrameId, IssuedHolderId, IssuedRecognitionId, IssuedRequestId, IssuedRunId, IssuedTaskId,
-    LeaseId, OwnerEpoch, ProjectedArtifactReference, ProjectedEvent, ProjectionProfile,
-    RecognitionId, RecognitionVerdict, RequestId, ResourceAuthoringPhase, RunId,
-    RuntimeMonitorInstanceStatus, RuntimeMonitorPolicy, RuntimeMonitorRegistryStatus,
-    SubscriptionCursor, TaskOutcome,
+    ActionId, ApprovalDecisionRecord, ApprovalDisposition, ArtifactKind, ArtifactLinksDraft,
+    ArtifactMediaType, ArtifactRedactionState, CausationId, ClientActionRecord, CorrelationId,
+    EffectDisposition, EventActor, EventId, EventLinksDraft, EventQuery, EventSource, EventType,
+    EvidenceCompleteness, FrameId, HolderId, IdentifierIssuanceError, IdentifierIssuer, InstanceId,
+    IssuedCausationId, IssuedCorrelationId, IssuedFrameId, IssuedHolderId, IssuedRecognitionId,
+    IssuedRequestId, IssuedRunId, IssuedTaskId, LeaseId, OwnerEpoch, ProjectedArtifactReference,
+    ProjectedEvent, ProjectionProfile, RecognitionId, RecognitionVerdict, RequestId,
+    ResourceAuthoringPhase, RunId, RuntimeMonitorInstanceStatus, RuntimeMonitorPolicy,
+    RuntimeMonitorRegistryStatus, SubscriptionCursor, TaskOutcome,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
@@ -1507,6 +1507,12 @@ pub enum RuntimeOperation {
     RecordDebugEvent {
         event: RuntimeDebugEvent,
     },
+    RecordClientAction {
+        action: ClientActionRecord,
+    },
+    RecordApprovalDecision {
+        decision: ApprovalDecisionRecord,
+    },
 }
 
 impl RuntimeOperation {
@@ -1573,6 +1579,12 @@ impl RuntimeOperation {
             Self::ExportEvidence { request } => request.validate(),
             Self::RecordAuthoringEvent { event } => event.validate(),
             Self::RecordDebugEvent { event } => event.validate(),
+            Self::RecordClientAction { action } => action
+                .validate()
+                .map_err(|_| RuntimeContractError::new("invalid_client_action")),
+            Self::RecordApprovalDecision { decision } => decision
+                .validate()
+                .map_err(|_| RuntimeContractError::new("invalid_approval_decision")),
             Self::AcquireLease { instance_alias, .. }
             | Self::ObserveReadonly { instance_alias }
             | Self::SafeReset { instance_alias, .. }
@@ -1629,6 +1641,7 @@ impl RuntimeOperation {
             | Self::RunContainedTask { instance_alias, .. }
             | Self::ConfigureMonitor { instance_alias, .. }
             | Self::ClearMonitor { instance_alias } => Some(instance_alias),
+            Self::RecordClientAction { action } => action.instance_alias(),
             _ => None,
         }
     }
@@ -1676,6 +1689,12 @@ impl fmt::Debug for RuntimeOperation {
             }
             Self::RecordDebugEvent { .. } => {
                 "RuntimeOperation::RecordDebugEvent(<typed-debug-event>)"
+            }
+            Self::RecordClientAction { .. } => {
+                "RuntimeOperation::RecordClientAction(<typed-redacted-action>)"
+            }
+            Self::RecordApprovalDecision { .. } => {
+                "RuntimeOperation::RecordApprovalDecision(<typed-approval>)"
             }
         })
     }
@@ -2080,6 +2099,11 @@ pub enum RuntimeResult {
     },
     DebugEventRecorded {
         phase: RuntimeDebugPhase,
+    },
+    ClientActionRecorded,
+    ApprovalDecisionRecorded {
+        approval_id: String,
+        disposition: ApprovalDisposition,
     },
 }
 

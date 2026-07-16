@@ -2,11 +2,11 @@
 
 use super::*;
 use crate::{
-    ArtifactIssuePolicy, ArtifactKind, ArtifactLinksDraft, ArtifactProducer,
-    ArtifactRedactionState, ArtifactStoreIssuer, AuditInput, EventDraft, EventLinksDraft,
-    EventOrigin, EventPayloadDraft, EventSeverity, EventType, IdentifierIssuer, LeasePayloadDraft,
-    OriginModule, RetentionClass, RuntimeMonitorState, RuntimePayloadDraft, SanitizationError,
-    SecretField, SecretFingerprinter, Sha256Fingerprint,
+    ApprovalTarget, ArtifactIssuePolicy, ArtifactKind, ArtifactLinksDraft, ArtifactProducer,
+    ArtifactRedactionState, ArtifactStoreIssuer, AuditInput, ClientActionKind, EventDraft,
+    EventLinksDraft, EventOrigin, EventPayloadDraft, EventSeverity, EventType, IdentifierIssuer,
+    LeasePayloadDraft, OriginModule, RetentionClass, RuntimeMonitorState, RuntimePayloadDraft,
+    SanitizationError, SecretField, SecretFingerprinter, Sha256Fingerprint,
 };
 
 struct RejectSecrets;
@@ -1003,6 +1003,43 @@ fn c4_operations_round_trip_without_generic_payloads() {
         )
         .is_err()
     );
+}
+
+#[test]
+fn client_action_and_approval_operations_are_closed_typed_contracts() {
+    let client_action = ClientActionRecord::new(
+        "overview",
+        "refresh",
+        ClientActionKind::Button,
+        Some("ak.cn".to_owned()),
+        None,
+    )
+    .expect("client action");
+    let approval = ApprovalDecisionRecord::new(
+        "approval:fixture-a",
+        ApprovalDisposition::Approved,
+        ApprovalTarget::Catalog {
+            catalog_hash: format!("sha256:{}", "a".repeat(64)),
+            catalog_version: 1,
+        },
+        "user_confirmed",
+    )
+    .expect("approval");
+    for operation in [
+        RuntimeOperation::RecordClientAction {
+            action: client_action,
+        },
+        RuntimeOperation::RecordApprovalDecision { decision: approval },
+    ] {
+        let request = request(operation);
+        let encoded = serde_json::to_value(&request).expect("request JSON");
+        let decoded = serde_json::from_value::<RuntimeRequest>(encoded.clone())
+            .expect("typed interaction request");
+        decoded.validate().expect("valid interaction request");
+        let mut smuggled = encoded;
+        smuggled["operation"]["raw_text"] = serde_json::json!("secret");
+        assert!(serde_json::from_value::<RuntimeRequest>(smuggled).is_err());
+    }
 }
 
 #[test]
