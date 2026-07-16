@@ -11955,6 +11955,13 @@ mod tests {
             .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 
+    fn clear_trusted_remote_env() {
+        unsafe {
+            env::remove_var(TRUSTED_REMOTE_TOKEN_ENV);
+            env::remove_var(TRUSTED_REMOTE_CLIENT_CERT_ENV);
+        }
+    }
+
     fn set_config_env(path: impl AsRef<Path>) {
         unsafe {
             env::set_var(CONFIG_ENV, path.as_ref());
@@ -12353,10 +12360,7 @@ mod tests {
     #[test]
     fn runtime_endpoint_policy_allows_loopback_without_auth() {
         let _guard = env_lock();
-        unsafe {
-            env::remove_var(TRUSTED_REMOTE_TOKEN_ENV);
-            env::remove_var(TRUSTED_REMOTE_CLIENT_CERT_ENV);
-        }
+        clear_trusted_remote_env();
         let policy = runtime_endpoint_policy("http://127.0.0.1:4317").unwrap();
         assert_eq!(policy.channel, RuntimeEndpointChannel::LocalDirect);
         assert_eq!(policy.scheme, "http");
@@ -12368,10 +12372,7 @@ mod tests {
     #[test]
     fn runtime_endpoint_policy_blocks_remote_http() {
         let _guard = env_lock();
-        unsafe {
-            env::remove_var(TRUSTED_REMOTE_TOKEN_ENV);
-            env::remove_var(TRUSTED_REMOTE_CLIENT_CERT_ENV);
-        }
+        clear_trusted_remote_env();
         let err = runtime_endpoint_policy("http://example.invalid:4317").unwrap_err();
         assert_eq!(err.code, "trusted_remote_transport_blocked");
         assert_eq!(err.exit_code(), 3);
@@ -12380,10 +12381,7 @@ mod tests {
     #[test]
     fn runtime_endpoint_policy_blocks_remote_https_without_auth() {
         let _guard = env_lock();
-        unsafe {
-            env::remove_var(TRUSTED_REMOTE_TOKEN_ENV);
-            env::remove_var(TRUSTED_REMOTE_CLIENT_CERT_ENV);
-        }
+        clear_trusted_remote_env();
         let err = runtime_endpoint_policy("https://example.invalid:4317").unwrap_err();
         assert_eq!(err.code, "trusted_remote_auth_required");
         assert_eq!(err.exit_code(), 3);
@@ -12407,6 +12405,8 @@ mod tests {
 
     #[test]
     fn session_transport_check_reports_loopback_policy() {
+        let _guard = env_lock();
+        clear_trusted_remote_env();
         let result = run_cli(
             [
                 "--json",
