@@ -1,8 +1,9 @@
 use super::*;
 use crate::{
-    FactContent, FactInvalidationEventData, FactRecord, FactScope, FactValue, InputAction,
-    MonitorDecision, MonitorDiagnosis, MonitorDisposition, MonitorObservation,
-    MonitorRecoveryCoordinationReason, MonitorRecoveryKind, PerformanceContext,
+    ApprovalDecisionRecord, ApprovalDisposition, ApprovalTarget, ClientActionKind,
+    ClientActionRecord, ClientActionValue, FactContent, FactInvalidationEventData, FactRecord,
+    FactScope, FactValue, InputAction, MonitorDecision, MonitorDiagnosis, MonitorDisposition,
+    MonitorObservation, MonitorRecoveryCoordinationReason, MonitorRecoveryKind, PerformanceContext,
     PerformanceControlEventData, PerformanceControlLevel, PerformanceControlReason,
     PerformanceDeadlineDisposition, PerformanceMetric, PerformanceMonitorHealth,
     PerformanceMonitorStateEventData, PerformancePressureEventData, PerformancePressureKind,
@@ -247,6 +248,24 @@ fn all_payload_drafts(mut input: impl FnMut() -> AuditInput) -> Vec<EventPayload
         invalidated_by_event_id: *ids.mint_event_id().expect("trigger event").transport(),
         invalidated_by_event_type: EventType::RuntimeTakeover,
     };
+    let client_action = ClientActionRecord::new(
+        "settings",
+        "profile_mode",
+        ClientActionKind::Input,
+        Some("instance-a".to_owned()),
+        Some(ClientActionValue::PathSafeString("balanced".to_owned())),
+    )
+    .expect("client action");
+    let approval = ApprovalDecisionRecord::new(
+        "approval:fixture-a",
+        ApprovalDisposition::Approved,
+        ApprovalTarget::Catalog {
+            catalog_hash: format!("sha256:{}", "d".repeat(64)),
+            catalog_version: 1,
+        },
+        "user_confirmed",
+    )
+    .expect("approval");
 
     vec![
         MonitorPayloadDraft::requested(input()).into(),
@@ -326,6 +345,7 @@ fn all_payload_drafts(mut input: impl FnMut() -> AuditInput) -> Vec<EventPayload
         .into(),
         FactPayloadDraft::published(fact_record, input()).into(),
         FactPayloadDraft::invalidated(fact_invalidation, input()).into(),
+        ApprovalPayloadDraft::decision(approval, input()).into(),
         CommandPayloadDraft::received(action, input()).into(),
         CommandPayloadDraft::validated(action, effect, input()).into(),
         CommandPayloadDraft::rejected(action, diagnostic, effect, input()).into(),
@@ -528,6 +548,7 @@ fn all_payload_drafts(mut input: impl FnMut() -> AuditInput) -> Vec<EventPayload
             input(),
         )
         .into(),
+        ClientPayloadDraft::action(client_action, input()).into(),
         ClientPayloadDraft::ui_action(action, input()).into(),
         ClientPayloadDraft::cli_command(action, input()).into(),
         ClientPayloadDraft::lab_request(action, input()).into(),
@@ -944,7 +965,7 @@ fn tagged_payload_and_projection_layers_reject_unknown_fields() {
 #[test]
 fn event_v2_round_trips_every_c1_payload_variant() {
     let payloads = all_payload_drafts(AuditInput::new);
-    assert_eq!(payloads.len(), 78);
+    assert_eq!(payloads.len(), 80);
 
     for (index, payload) in payloads.into_iter().enumerate() {
         let sanitized = sanitize(payload, index as u64 + 1);
@@ -1029,6 +1050,59 @@ fn artifact_backed_fact_inherits_redaction_sensitivity() {
     let projection =
         serde_json::to_value(event.payload().public_projection()).expect("fact projection");
     assert!(!projection.to_string().contains(&object_key));
+}
+
+#[test]
+fn client_and_approval_public_projections_keep_values_private() {
+    let secret_hash = format!("sha256:{}", "e".repeat(64));
+    let client = sanitize(
+        ClientPayloadDraft::action(
+            ClientActionRecord::new(
+                "settings",
+                "account_token",
+                ClientActionKind::Input,
+                None,
+                Some(ClientActionValue::Redacted {
+                    sha256: secret_hash.clone(),
+                    byte_count: 24,
+                }),
+            )
+            .expect("client action"),
+            AuditInput::new(),
+        )
+        .into(),
+        1,
+    );
+    let projection =
+        serde_json::to_value(client.payload().public_projection()).expect("client projection");
+    assert_eq!(projection["payload"]["client_surface_id"], "settings");
+    assert_eq!(projection["payload"]["client_action_kind"], "input");
+    assert!(!projection.to_string().contains(&secret_hash));
+
+    let approval = sanitize(
+        ApprovalPayloadDraft::decision(
+            ApprovalDecisionRecord::new(
+                "approval:fixture-a",
+                ApprovalDisposition::Pinned,
+                ApprovalTarget::Decision {
+                    decision_id: "decision:fixture-a".to_owned(),
+                    catalog_hash: format!("sha256:{}", "a".repeat(64)),
+                    catalog_version: 3,
+                },
+                "user_confirmed",
+            )
+            .expect("approval"),
+            AuditInput::new(),
+        )
+        .into(),
+        2,
+    );
+    let projection =
+        serde_json::to_value(approval.payload().public_projection()).expect("approval projection");
+    assert_eq!(projection["family"], "approval");
+    assert_eq!(projection["payload"]["approval_id"], "approval:fixture-a");
+    assert_eq!(projection["payload"]["approval_target_kind"], "decision");
+    assert!(!projection.to_string().contains("user_confirmed"));
 }
 
 #[test]

@@ -72,6 +72,7 @@ closed_code!(OriginModule {
     GlobalLedger => "global-ledger",
     PerformanceMonitor => "performance-monitor",
     FactStore => "fact-store",
+    Governance => "governance",
     ProcessTest => "process-test",
 });
 
@@ -103,6 +104,8 @@ closed_code!(EventAction {
     PerformanceObserve => "performance.observe",
     FactPublish => "fact.publish",
     FactInvalidate => "fact.invalidate",
+    ClientAction => "client.action",
+    ApprovalDecision => "approval.decision",
     ProcessAcceptance => "process.acceptance",
     ScheduleAdmit => "schedule.admit",
     LeaseAcquire => "lease.acquire",
