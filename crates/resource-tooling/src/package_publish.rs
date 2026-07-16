@@ -19,6 +19,8 @@ use std::io::{ErrorKind, Read, Seek, SeekFrom, Write};
 use std::os::windows::fs::MetadataExt;
 use std::path::{Component, Path, PathBuf};
 use std::process::Command;
+use std::sync::OnceLock;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -38,6 +40,11 @@ const LOCK_RETRY_DELAY: Duration = Duration::from_millis(25);
 const GENERATION_GATE_TIMEOUT: Duration = Duration::from_secs(5);
 const MAX_GENERATION_OPEN_ATTEMPTS: usize = 8;
 const HASH_BUFFER_BYTES: usize = 64 * 1024;
+const RECORD_READ_TIMEOUT: Duration = Duration::from_secs(1);
+const RECORD_READ_DELAY: Duration = Duration::from_millis(5);
+static SYSTEM_PROCESS_IDENTITY: OnceLock<Result<ProcessIdentity, String>> = OnceLock::new();
+static SYSTEM_RANDOM_SEED: OnceLock<Result<[u8; 32], String>> = OnceLock::new();
+static IDENTIFIER_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 /// A committed immutable generation and the physical files that now back its logical outputs.
 #[derive(Debug, Clone)]
@@ -194,11 +201,17 @@ struct SystemPublicationEnvironment;
 
 impl PublicationEnvironment for SystemPublicationEnvironment {
     fn current_process(&self) -> Result<ProcessIdentity, String> {
-        let pid = std::process::id();
-        match inspect_system_process(pid)? {
-            ProcessStatus::Alive { start_token } => Ok(ProcessIdentity { pid, start_token }),
-            ProcessStatus::Dead => Err(format!("current process {pid} was not found")),
-        }
+        SYSTEM_PROCESS_IDENTITY
+            .get_or_init(|| {
+                let pid = std::process::id();
+                match inspect_system_process(pid)? {
+                    ProcessStatus::Alive { start_token } => {
+                        Ok(ProcessIdentity { pid, start_token })
+                    }
+                    ProcessStatus::Dead => Err(format!("current process {pid} was not found")),
+                }
+            })
+            .clone()
     }
 
     fn inspect_process(&self, pid: u32) -> Result<ProcessStatus, String> {
@@ -206,7 +219,7 @@ impl PublicationEnvironment for SystemPublicationEnvironment {
     }
 
     fn random_seed(&self) -> Result<[u8; 32], String> {
-        system_random_seed()
+        SYSTEM_RANDOM_SEED.get_or_init(system_random_seed).clone()
     }
 
     fn now_unix_ms(&self) -> Result<u128, String> {
@@ -969,6 +982,15 @@ impl PublicationLock {
                     });
                 }
                 Err(error) if error.kind() == ErrorKind::AlreadyExists => {}
+                Err(error) if transient_record_io(&error) => {
+                    if retry_lock_acquisition(policy, attempt, started) {
+                        continue;
+                    }
+                    return Err(publication_error(format!(
+                        "publication lock target did not stabilize during acquisition; lock={}; attempts={attempt}; escalation=fail_loud; last_error={error}",
+                        path.display()
+                    )));
+                }
                 Err(error) => {
                     return Err(publication_error(format!(
                         "failed to create publication lock {}: {error}",
@@ -1372,7 +1394,13 @@ fn create_generation_reader_lease(
     let mut bytes = serde_json::to_vec(&lease_record).map_err(json_publication_error)?;
     bytes.push(b'\n');
     let path = generation_leases.join(format!("{owner_token}.lease"));
-    write_new_synced_file(&path, &bytes)?;
+    let pending_path = atomic_record_pending_path(&path, &owner_token)?;
+    publish_new_synced_record(&path, &pending_path, &bytes).map_err(|error| {
+        publication_error(format!(
+            "failed to publish package reader lease {}: {error}",
+            path.display()
+        ))
+    })?;
     Ok(GenerationReaderLease { path, owner_token })
 }
 
@@ -1560,8 +1588,11 @@ fn random_identifier(
             "failed to obtain secure random bytes for {purpose}: {error}"
         ))
     })?;
+    // Process identity and entropy are cached invariants; the sequence keeps concurrent IDs unique.
+    let sequence = IDENTIFIER_SEQUENCE.fetch_add(1, Ordering::Relaxed);
     let mut hasher = Sha256::new();
     hasher.update(seed);
+    hasher.update(sequence.to_be_bytes());
     hasher.update(purpose.as_bytes());
     hasher.update(identity.pid.to_be_bytes());
     hasher.update(identity.start_token.as_bytes());
@@ -2296,19 +2327,85 @@ fn cleanup_sort_key(target: &CleanupTarget) -> String {
 }
 
 fn create_lock_file(path: &Path, record: &PublicationLockRecord) -> std::io::Result<()> {
+    match fs::symlink_metadata(path) {
+        Ok(_) => return Err(std::io::Error::from(ErrorKind::AlreadyExists)),
+        Err(error) if error.kind() == ErrorKind::NotFound => {}
+        Err(error) => return Err(error),
+    }
     let mut bytes = serde_json::to_vec(record).map_err(std::io::Error::other)?;
     bytes.push(b'\n');
-    let mut file = OpenOptions::new().write(true).create_new(true).open(path)?;
-    if let Err(error) = file.write_all(&bytes).and_then(|_| file.sync_all()) {
-        let cleanup = fs::remove_file(path);
-        return match cleanup {
-            Ok(()) => Err(error),
-            Err(cleanup_error) => Err(std::io::Error::other(format!(
-                "{error}; lock cleanup failed: {cleanup_error}"
-            ))),
-        };
+    let pending_path = atomic_record_pending_path(path, &record.owner_token)
+        .map_err(|error| std::io::Error::other(error.message))?;
+    publish_new_synced_record(path, &pending_path, &bytes)
+}
+
+fn atomic_record_pending_path(path: &Path, owner_token: &str) -> LabResult<PathBuf> {
+    let file_name = path.file_name().ok_or_else(|| {
+        publication_error(format!(
+            "atomic record target has no file name: {}",
+            path.display()
+        ))
+    })?;
+    let mut pending_name = file_name.to_os_string();
+    pending_name.push(format!(".pending.{owner_token}"));
+    Ok(path.with_file_name(pending_name))
+}
+
+fn publish_new_synced_record(
+    target_path: &Path,
+    pending_path: &Path,
+    bytes: &[u8],
+) -> std::io::Result<()> {
+    write_synced_pending_record(pending_path, bytes)?;
+    publish_synced_pending_record(target_path, pending_path)
+}
+
+fn publish_synced_pending_record(target_path: &Path, pending_path: &Path) -> std::io::Result<()> {
+    match fs::hard_link(pending_path, target_path) {
+        Ok(()) => {}
+        Err(error) => return Err(cleanup_pending_after_error(pending_path, error)),
+    }
+    if let Err(error) = fs::remove_file(pending_path) {
+        let cleanup_error = std::io::Error::other(format!(
+            "failed to remove atomic record alias {} after publishing {}: {error}",
+            pending_path.display(),
+            target_path.display()
+        ));
+        return Err(rollback_published_record(target_path, cleanup_error));
     }
     Ok(())
+}
+
+fn write_synced_pending_record(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    let mut file = OpenOptions::new().write(true).create_new(true).open(path)?;
+    let write = file.write_all(bytes).and_then(|()| file.sync_all());
+    drop(file);
+    match write {
+        Ok(()) => Ok(()),
+        Err(error) => Err(cleanup_pending_after_error(path, error)),
+    }
+}
+
+fn cleanup_pending_after_error(path: &Path, error: std::io::Error) -> std::io::Error {
+    match fs::remove_file(path) {
+        Ok(()) => error,
+        Err(cleanup_error) if cleanup_error.kind() == ErrorKind::NotFound => error,
+        Err(cleanup_error) => std::io::Error::other(format!(
+            "{error}; atomic record cleanup failed for {}: {cleanup_error}",
+            path.display()
+        )),
+    }
+}
+
+fn rollback_published_record(path: &Path, error: std::io::Error) -> std::io::Error {
+    match fs::remove_file(path) {
+        Ok(()) => error,
+        Err(rollback_error) if rollback_error.kind() == ErrorKind::NotFound => error,
+        Err(rollback_error) => std::io::Error::other(format!(
+            "{error}; atomic record rollback failed for {}: {rollback_error}",
+            path.display()
+        )),
+    }
 }
 
 fn read_lock_record(path: &Path) -> LabResult<PublicationLockRecord> {
@@ -2321,68 +2418,118 @@ fn read_lock_record(path: &Path) -> LabResult<PublicationLockRecord> {
 }
 
 fn read_lock_record_if_present(path: &Path) -> LabResult<Option<PublicationLockRecord>> {
+    read_json_record_with_retry(path, "publication lock", true)
+}
+
+fn read_generation_reader_lease(path: &Path) -> LabResult<GenerationReaderLeaseRecord> {
+    let record =
+        read_json_record_with_retry(path, "package reader lease", false)?.ok_or_else(|| {
+            publication_error(format!(
+                "package reader lease does not exist: {}",
+                path.display()
+            ))
+        })?;
+    validate_generation_reader_lease(&record)?;
+    Ok(record)
+}
+
+enum JsonRecordRead<T> {
+    Missing,
+    Ready(T),
+    Transient(String),
+}
+
+fn read_json_record_with_retry<T>(
+    path: &Path,
+    label: &str,
+    missing_allowed: bool,
+) -> LabResult<Option<T>>
+where
+    T: for<'de> Deserialize<'de>,
+{
+    let started = Instant::now();
+    loop {
+        match read_json_record_once(path, label)? {
+            JsonRecordRead::Missing if missing_allowed => return Ok(None),
+            JsonRecordRead::Missing => {
+                return Err(publication_error(format!(
+                    "{label} does not exist: {}",
+                    path.display()
+                )));
+            }
+            JsonRecordRead::Ready(record) => return Ok(Some(record)),
+            JsonRecordRead::Transient(reason) => {
+                let remaining = RECORD_READ_TIMEOUT.saturating_sub(started.elapsed());
+                if remaining.is_zero() {
+                    return Err(publication_error(format!(
+                        "{label} did not stabilize within {}ms; path={}; escalation=fail_loud; last_error={reason}",
+                        RECORD_READ_TIMEOUT.as_millis(),
+                        path.display()
+                    )));
+                }
+                thread::sleep(RECORD_READ_DELAY.min(remaining));
+            }
+        }
+    }
+}
+
+fn read_json_record_once<T>(path: &Path, label: &str) -> LabResult<JsonRecordRead<T>>
+where
+    T: for<'de> Deserialize<'de>,
+{
     let metadata = match fs::symlink_metadata(path) {
         Ok(metadata) => metadata,
-        Err(error) if error.kind() == ErrorKind::NotFound => return Ok(None),
+        Err(error) if error.kind() == ErrorKind::NotFound => return Ok(JsonRecordRead::Missing),
+        Err(error) if transient_record_io(&error) => {
+            return Ok(JsonRecordRead::Transient(format!(
+                "failed to inspect {label}: {error}"
+            )));
+        }
         Err(error) => {
             return Err(publication_error(format!(
-                "failed to inspect publication lock {}: {error}",
+                "failed to inspect {label} {}: {error}",
                 path.display()
             )));
         }
     };
     if !metadata.file_type().is_file() || metadata_is_link_or_reparse(&metadata) {
         return Err(publication_error(format!(
-            "publication lock is not a regular file: {}",
+            "{label} is not a regular file: {}",
             path.display()
         )));
     }
     let bytes = match fs::read(path) {
         Ok(bytes) => bytes,
-        Err(error) if error.kind() == ErrorKind::NotFound => return Ok(None),
+        Err(error) if error.kind() == ErrorKind::NotFound => return Ok(JsonRecordRead::Missing),
+        Err(error) if transient_record_io(&error) => {
+            return Ok(JsonRecordRead::Transient(format!(
+                "failed to read {label}: {error}"
+            )));
+        }
         Err(error) => {
             return Err(publication_error(format!(
-                "failed to read publication lock {}: {error}",
+                "failed to read {label} {}: {error}",
                 path.display()
             )));
         }
     };
-    let record: PublicationLockRecord = serde_json::from_slice(&bytes).map_err(|error| {
-        publication_error(format!(
-            "failed to parse publication lock {}: {error}",
+    match serde_json::from_slice(&bytes) {
+        Ok(record) => Ok(JsonRecordRead::Ready(record)),
+        Err(error) if bytes.is_empty() || error.is_eof() => Ok(JsonRecordRead::Transient(format!(
+            "incomplete {label} JSON: {error}"
+        ))),
+        Err(error) => Err(publication_error(format!(
+            "failed to parse {label} {}: {error}",
             path.display()
-        ))
-    })?;
-    Ok(Some(record))
+        ))),
+    }
 }
 
-fn read_generation_reader_lease(path: &Path) -> LabResult<GenerationReaderLeaseRecord> {
-    let metadata = fs::symlink_metadata(path).map_err(|error| {
-        publication_error(format!(
-            "failed to inspect package reader lease {}: {error}",
-            path.display()
-        ))
-    })?;
-    if !metadata.file_type().is_file() || metadata_is_link_or_reparse(&metadata) {
-        return Err(publication_error(format!(
-            "package reader lease is not a regular file: {}",
-            path.display()
-        )));
-    }
-    let bytes = fs::read(path).map_err(|error| {
-        publication_error(format!(
-            "failed to read package reader lease {}: {error}",
-            path.display()
-        ))
-    })?;
-    let record: GenerationReaderLeaseRecord = serde_json::from_slice(&bytes).map_err(|error| {
-        publication_error(format!(
-            "failed to parse package reader lease {}: {error}",
-            path.display()
-        ))
-    })?;
-    validate_generation_reader_lease(&record)?;
-    Ok(record)
+fn transient_record_io(error: &std::io::Error) -> bool {
+    matches!(
+        error.kind(),
+        ErrorKind::Interrupted | ErrorKind::PermissionDenied | ErrorKind::WouldBlock
+    )
 }
 
 fn validate_generation_reader_lease(record: &GenerationReaderLeaseRecord) -> LabResult<()> {
@@ -2430,18 +2577,9 @@ fn reclaim_stale_lock(
     observed: &PublicationLockRecord,
     reclaimer_token: &str,
 ) -> LabResult<bool> {
-    let bytes = match fs::read(path) {
-        Ok(bytes) => bytes,
-        Err(error) if error.kind() == ErrorKind::NotFound => return Ok(false),
-        Err(error) => {
-            return Err(publication_error(format!(
-                "failed to re-read stale publication lock {}: {error}",
-                path.display()
-            )));
-        }
+    let Some(current) = read_lock_record_if_present(path)? else {
+        return Ok(false);
     };
-    let current: PublicationLockRecord =
-        serde_json::from_slice(&bytes).map_err(json_publication_error)?;
     if current != *observed {
         return Ok(false);
     }
@@ -3011,6 +3149,30 @@ mod tests {
     }
 
     #[test]
+    fn atomic_record_publication_hides_partial_bytes_and_preserves_collision() {
+        let temp = TempDir::new().unwrap();
+        let target = temp.path().join("record.lock");
+        let pending = atomic_record_pending_path(&target, &format!("{:064x}", 1)).unwrap();
+        let complete = br#"{"state":"complete"}\n"#;
+
+        write_synced_pending_record(&pending, complete).unwrap();
+        assert!(!target.exists());
+        assert_eq!(fs::read(&pending).unwrap(), complete);
+        publish_synced_pending_record(&target, &pending).unwrap();
+        assert_eq!(fs::read(&target).unwrap(), complete);
+        assert!(!pending.exists());
+
+        let contender = atomic_record_pending_path(&target, &format!("{:064x}", 2)).unwrap();
+        let replacement = br#"{"state":"replacement"}\n"#;
+        write_synced_pending_record(&contender, replacement).unwrap();
+        let error = publish_synced_pending_record(&target, &contender)
+            .expect_err("atomic publication must not replace an existing owner");
+        assert_eq!(error.kind(), ErrorKind::AlreadyExists);
+        assert_eq!(fs::read(&target).unwrap(), complete);
+        assert!(!contender.exists());
+    }
+
+    #[test]
     fn lock_record_binds_owner_process_time_and_output_set() {
         let temp = TempDir::new().unwrap();
         let env = FakeEnvironment::new(106, "process-start");
@@ -3024,6 +3186,8 @@ mod tests {
             assert!(record.acquired_unix_ms > 0);
             assert_eq!(record.output_set_digest, transaction.lock_set_digest);
             assert_eq!(record.normalized_outputs.len(), 1);
+            let pending = atomic_record_pending_path(&lock.path, &record.owner_token).unwrap();
+            assert!(!pending.exists());
         }
         transaction.abort().unwrap();
     }
@@ -3099,6 +3263,10 @@ mod tests {
         let output = temp.path().join("package.zip");
         publish_single(&env, &output, b"first");
         let reader = open_published_package(&output).unwrap();
+        let lease = reader.lease.as_ref().unwrap();
+        let lease_record = read_generation_reader_lease(&lease.path).unwrap();
+        let pending = atomic_record_pending_path(&lease.path, &lease_record.owner_token).unwrap();
+        assert!(!pending.exists());
 
         publish_single(&env, &output, b"second");
         let third = PackagePublicationTransaction::begin_single_with(&output, &env).unwrap();
@@ -3291,6 +3459,7 @@ mod tests {
         let error = PackagePublicationTransaction::begin_single_with(&output, &env)
             .expect_err("corrupt lock must block recovery");
         assert!(error.message.contains("failed to parse publication lock"));
+        assert!(!error.message.contains("did not stabilize"));
         assert!(error.message.contains(lock.to_string_lossy().as_ref()));
         assert!(lock.exists());
     }

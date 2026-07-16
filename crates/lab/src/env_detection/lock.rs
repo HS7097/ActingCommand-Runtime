@@ -22,6 +22,8 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 const LOCK_SCHEMA_VERSION: &str = "env-result-lock.v2";
 const MAX_RECLAIM_ATTEMPTS: usize = 4;
 const MAX_RECLAIM_ELAPSED: Duration = Duration::from_secs(2);
+const RECORD_READ_TIMEOUT: Duration = Duration::from_secs(1);
+const RECORD_READ_DELAY: Duration = Duration::from_millis(5);
 static TOKEN_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 static RANDOM_SEED: OnceLock<Result<[u8; 32], String>> = OnceLock::new();
 static CURRENT_PROCESS_START: OnceLock<Result<String, String>> = OnceLock::new();
@@ -257,8 +259,8 @@ impl EnvResultLock {
                 Err(CreateLockError::AlreadyExists) => {}
             }
 
-            let observed =
-                read_lock_record(&lock_path, &normalized_result_path).map_err(|error| {
+            let observed = read_lock_record_if_present(&lock_path, &normalized_result_path)
+                .map_err(|error| {
                     lock_conflict(
                         &normalized_result_path,
                         None,
@@ -269,6 +271,11 @@ impl EnvResultLock {
                         ),
                     )
                 })?;
+            let Some(observed) = observed else {
+                last_retry_reason =
+                    "lock disappeared before its owner record could be read".to_string();
+                continue;
+            };
             ensure_matching_host(
                 &normalized_result_path,
                 &observed,
@@ -746,6 +753,19 @@ fn create_lock_file(
     record: &EnvResultLockRecord,
     result_path: &Path,
 ) -> Result<(), CreateLockError> {
+    match fs::symlink_metadata(lock_path) {
+        Ok(_) => return Err(CreateLockError::AlreadyExists),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+        Err(error) => {
+            return Err(CreateLockError::Fatal(lock_error(
+                result_path,
+                format!(
+                    "failed to inspect lock target {}: {error}",
+                    lock_path.display()
+                ),
+            )));
+        }
+    }
     let mut bytes = serde_json::to_vec_pretty(record).map_err(|error| {
         CreateLockError::Fatal(lock_error(
             result_path,
@@ -753,57 +773,169 @@ fn create_lock_file(
         ))
     })?;
     bytes.push(b'\n');
-    let mut file = match OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(lock_path)
-    {
-        Ok(file) => file,
+    let pending_path = atomic_record_pending_path(lock_path, &record.owner_token, result_path)
+        .map_err(CreateLockError::Fatal)?;
+    match publish_new_synced_record(lock_path, &pending_path, &bytes) {
+        Ok(()) => Ok(()),
         Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
-            return Err(CreateLockError::AlreadyExists);
+            Err(CreateLockError::AlreadyExists)
         }
-        Err(error) => {
-            return Err(CreateLockError::Fatal(lock_error(
-                result_path,
-                format!("failed to create lock {}: {error}", lock_path.display()),
-            )));
-        }
-    };
-    let write = file.write_all(&bytes).and_then(|()| file.sync_all());
-    drop(file);
-    if let Err(error) = write {
-        return Err(CreateLockError::Fatal(match fs::remove_file(lock_path) {
-            Ok(()) => lock_error(
-                result_path,
-                format!("failed to initialize lock {}: {error}", lock_path.display()),
+        Err(error) => Err(CreateLockError::Fatal(lock_error(
+            result_path,
+            format!("failed to publish lock {}: {error}", lock_path.display()),
+        ))),
+    }
+}
+
+fn atomic_record_pending_path(
+    target_path: &Path,
+    owner_token: &str,
+    result_path: &Path,
+) -> LockResult<PathBuf> {
+    let file_name = target_path.file_name().ok_or_else(|| {
+        lock_error(
+            result_path,
+            format!(
+                "atomic lock target has no file name: {}",
+                target_path.display()
             ),
-            Err(cleanup_error) => lock_error(
-                result_path,
-                format!(
-                    "failed to initialize lock {}: {error}; partial lock cleanup failed: {cleanup_error}",
-                    lock_path.display()
-                ),
-            ),
-        }));
+        )
+    })?;
+    let mut pending_name = file_name.to_os_string();
+    pending_name.push(format!(".pending.{owner_token}"));
+    Ok(target_path.with_file_name(pending_name))
+}
+
+fn publish_new_synced_record(
+    target_path: &Path,
+    pending_path: &Path,
+    bytes: &[u8],
+) -> io::Result<()> {
+    write_synced_pending_record(pending_path, bytes)?;
+    publish_synced_pending_record(target_path, pending_path)
+}
+
+fn publish_synced_pending_record(target_path: &Path, pending_path: &Path) -> io::Result<()> {
+    match fs::hard_link(pending_path, target_path) {
+        Ok(()) => {}
+        Err(error) => return Err(cleanup_pending_after_error(pending_path, error)),
+    }
+    if let Err(error) = fs::remove_file(pending_path) {
+        let cleanup_error = io::Error::other(format!(
+            "failed to remove atomic lock alias {} after publishing {}: {error}",
+            pending_path.display(),
+            target_path.display()
+        ));
+        return Err(rollback_published_record(target_path, cleanup_error));
     }
     Ok(())
 }
 
+fn write_synced_pending_record(path: &Path, bytes: &[u8]) -> io::Result<()> {
+    let mut file = OpenOptions::new().write(true).create_new(true).open(path)?;
+    let write = file.write_all(bytes).and_then(|()| file.sync_all());
+    drop(file);
+    match write {
+        Ok(()) => Ok(()),
+        Err(error) => Err(cleanup_pending_after_error(path, error)),
+    }
+}
+
+fn cleanup_pending_after_error(path: &Path, error: io::Error) -> io::Error {
+    match fs::remove_file(path) {
+        Ok(()) => error,
+        Err(cleanup_error) if cleanup_error.kind() == io::ErrorKind::NotFound => error,
+        Err(cleanup_error) => io::Error::other(format!(
+            "{error}; atomic lock cleanup failed for {}: {cleanup_error}",
+            path.display()
+        )),
+    }
+}
+
+fn rollback_published_record(path: &Path, error: io::Error) -> io::Error {
+    match fs::remove_file(path) {
+        Ok(()) => error,
+        Err(rollback_error) if rollback_error.kind() == io::ErrorKind::NotFound => error,
+        Err(rollback_error) => io::Error::other(format!(
+            "{error}; atomic lock rollback failed for {}: {rollback_error}",
+            path.display()
+        )),
+    }
+}
+
 fn read_lock_record(lock_path: &Path, result_path: &Path) -> LockResult<EnvResultLockRecord> {
-    let bytes = fs::read(lock_path).map_err(|error| {
+    read_lock_record_if_present(lock_path, result_path)?.ok_or_else(|| {
         lock_error(
             result_path,
-            format!("failed to read lock {}: {error}", lock_path.display()),
+            format!("lock does not exist: {}", lock_path.display()),
         )
-    })?;
-    let record: EnvResultLockRecord = serde_json::from_slice(&bytes).map_err(|error| {
-        lock_error(
+    })
+}
+
+fn read_lock_record_if_present(
+    lock_path: &Path,
+    result_path: &Path,
+) -> LockResult<Option<EnvResultLockRecord>> {
+    let started = Instant::now();
+    loop {
+        let bytes = match fs::read(lock_path) {
+            Ok(bytes) => bytes,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+            Err(error) if transient_lock_io(&error) => {
+                retry_incomplete_lock_read(started, lock_path, result_path, error.to_string())?;
+                continue;
+            }
+            Err(error) => {
+                return Err(lock_error(
+                    result_path,
+                    format!("failed to read lock {}: {error}", lock_path.display()),
+                ));
+            }
+        };
+        let record: EnvResultLockRecord = match serde_json::from_slice(&bytes) {
+            Ok(record) => record,
+            Err(error) if bytes.is_empty() || error.is_eof() => {
+                retry_incomplete_lock_read(started, lock_path, result_path, error.to_string())?;
+                continue;
+            }
+            Err(error) => {
+                return Err(lock_error(
+                    result_path,
+                    format!("failed to parse lock {}: {error}", lock_path.display()),
+                ));
+            }
+        };
+        record.validate(result_path)?;
+        return Ok(Some(record));
+    }
+}
+
+fn transient_lock_io(error: &io::Error) -> bool {
+    matches!(
+        error.kind(),
+        io::ErrorKind::Interrupted | io::ErrorKind::PermissionDenied | io::ErrorKind::WouldBlock
+    )
+}
+
+fn retry_incomplete_lock_read(
+    started: Instant,
+    lock_path: &Path,
+    result_path: &Path,
+    reason: String,
+) -> LockResult<()> {
+    let remaining = RECORD_READ_TIMEOUT.saturating_sub(started.elapsed());
+    if remaining.is_zero() {
+        return Err(lock_error(
             result_path,
-            format!("failed to parse lock {}: {error}", lock_path.display()),
-        )
-    })?;
-    record.validate(result_path)?;
-    Ok(record)
+            format!(
+                "lock did not stabilize within {}ms; lock={}; escalation=fail_loud; last_error={reason}",
+                RECORD_READ_TIMEOUT.as_millis(),
+                lock_path.display()
+            ),
+        ));
+    }
+    std::thread::sleep(RECORD_READ_DELAY.min(remaining));
+    Ok(())
 }
 
 fn tombstone_path(
@@ -1190,6 +1322,40 @@ mod tests {
     }
 
     #[test]
+    fn atomic_lock_publication_hides_partial_bytes_and_preserves_collision() {
+        let temp = TempDir::new().unwrap();
+        let result = temp.path().join("envinst_a/result.json");
+        let normalized = normalize_result_path(&result).unwrap();
+        let target = normalized.with_extension("json.lock");
+        let environment = FakeEnvironment::new();
+        let record = EnvResultLockRecord::new(&environment, &normalized).unwrap();
+        let mut complete = serde_json::to_vec(&record).unwrap();
+        complete.push(b'\n');
+        let pending =
+            atomic_record_pending_path(&target, &record.owner_token, &normalized).unwrap();
+
+        write_synced_pending_record(&pending, &complete).unwrap();
+        assert!(!target.exists());
+        assert_eq!(fs::read(&pending).unwrap(), complete);
+        publish_synced_pending_record(&target, &pending).unwrap();
+        assert_eq!(fs::read(&target).unwrap(), complete);
+        assert!(!pending.exists());
+
+        let contender_record = EnvResultLockRecord::new(&environment, &normalized).unwrap();
+        let contender =
+            atomic_record_pending_path(&target, &contender_record.owner_token, &normalized)
+                .unwrap();
+        let mut replacement = serde_json::to_vec(&contender_record).unwrap();
+        replacement.push(b'\n');
+        write_synced_pending_record(&contender, &replacement).unwrap();
+        let error = publish_synced_pending_record(&target, &contender)
+            .expect_err("atomic lock publication must not replace an existing owner");
+        assert_eq!(error.kind(), io::ErrorKind::AlreadyExists);
+        assert_eq!(fs::read(&target).unwrap(), complete);
+        assert!(!contender.exists());
+    }
+
+    #[test]
     fn normal_release_removes_owned_lock() {
         let temp = TempDir::new().unwrap();
         let result = temp.path().join("envinst_a/result.json");
@@ -1204,6 +1370,8 @@ mod tests {
             read_lock_record(&lock_path, &normalize_result_path(&result).unwrap()).unwrap();
         assert_eq!(record.schema_version, LOCK_SCHEMA_VERSION);
         assert_eq!(record.host_identity, environment.host_identity);
+        let pending = atomic_record_pending_path(&lock_path, &record.owner_token, &result).unwrap();
+        assert!(!pending.exists());
         lock.release().unwrap();
         assert!(!lock_path.exists());
     }
@@ -1284,6 +1452,7 @@ mod tests {
         let error = EnvResultLock::acquire_with(&result, &FakeEnvironment::new())
             .expect_err("corrupt lock must be refused");
         assert!(error.message.contains("unparseable or unverifiable"));
+        assert!(!error.message.contains("did not stabilize"));
         assert!(lock_path.exists());
     }
 
@@ -1623,7 +1792,9 @@ mod tests {
         assert!(
             fs::read_dir(lock_dir).unwrap().all(|entry| {
                 let name = entry.unwrap().file_name().to_string_lossy().into_owned();
-                !name.contains(".reclaim.") && !name.contains(".stale.")
+                !name.contains(".reclaim.")
+                    && !name.contains(".stale.")
+                    && !name.contains(".pending.")
             }),
             "successful recovery must not leave claim or tombstone artifacts"
         );
