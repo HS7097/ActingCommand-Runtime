@@ -9,6 +9,7 @@ use std::collections::{HashMap, HashSet};
 
 const MAX_PROBE_STEPS: usize = 10;
 const MAX_NAVIGATION_CLICKS: usize = 3;
+const SHORT_DANGEROUS_WORD_MAX_CHARS: usize = 2;
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub struct ProbePlan {
@@ -578,7 +579,25 @@ fn dangerous_word(effect: ProbeClickEffect, value: &str) -> Option<&'static str>
         ProbeClickEffect::FreeClaim => FREE_CLAIM_DANGEROUS_WORDS,
         ProbeClickEffect::ConsumeRegeneratingResource => CONSUME_DANGEROUS_WORDS,
     };
-    words.iter().copied().find(|word| lower.contains(word))
+    words
+        .iter()
+        .copied()
+        .find(|word| contains_dangerous_word(&lower, word))
+}
+
+fn contains_dangerous_word(value: &str, word: &str) -> bool {
+    if !word.is_ascii() || word.chars().count() > SHORT_DANGEROUS_WORD_MAX_CHARS {
+        return value.contains(word);
+    }
+    value.match_indices(word).any(|(start, matched)| {
+        let before = value[..start].chars().next_back();
+        let after = value[start + matched.len()..].chars().next();
+        identifier_token_boundary(before) && identifier_token_boundary(after)
+    })
+}
+
+fn identifier_token_boundary(character: Option<char>) -> bool {
+    character.is_none_or(|character| !character.is_alphanumeric())
 }
 
 fn page_error(err: actingcommand_page_detector::PageDetectorError) -> TaskLoopError {
@@ -596,10 +615,14 @@ const NAVIGATION_DANGEROUS_WORDS: &[&str] = &[
     "reward",
     "battle",
     "sortie",
+    "fight",
     "start",
+    "finish",
+    "complete",
     "buy",
     "purchase",
     "confirm",
+    "ok",
     "delete",
     "retire",
     "scrap",
@@ -647,6 +670,9 @@ const FREE_CLAIM_DANGEROUS_WORDS: &[&str] = &[
     "recruit",
     "sortie",
     "battle",
+    "fight",
+    "finish",
+    "complete",
     "shop",
     "\u{8d2d}\u{4e70}",
     "\u{8cfc}\u{5165}",
@@ -658,6 +684,8 @@ const FREE_CLAIM_DANGEROUS_WORDS: &[&str] = &[
 const CONSUME_DANGEROUS_WORDS: &[&str] = &[
     "exercise",
     "pvp",
+    "finish",
+    "complete",
     "buy",
     "purchase",
     "refill",
@@ -686,45 +714,6 @@ const CONSUME_DANGEROUS_WORDS: &[&str] = &[
     "\u{8d2d}\u{4e70}",
     "\u{8cfc}\u{5165}",
     "\u{88dc}\u{5145}",
-];
-
-#[allow(dead_code)]
-const DANGEROUS_WORDS: &[&str] = &[
-    "claim",
-    "collect",
-    "receive",
-    "reward",
-    "buy",
-    "purchase",
-    "confirm",
-    "ok",
-    "delete",
-    "retire",
-    "scrap",
-    "consume",
-    "enhance",
-    "awaken",
-    "build",
-    "construct",
-    "sortie",
-    "battle",
-    "fight",
-    "start",
-    "finish",
-    "complete",
-    "exchange",
-    "decompose",
-    "mail",
-    "一括",
-    "受取",
-    "领取",
-    "購入",
-    "確認",
-    "出撃",
-    "戦闘",
-    "建造",
-    "退役",
-    "強化",
 ];
 
 #[cfg(test)]
@@ -1024,6 +1013,88 @@ mod tests {
         .expect_err("danger");
 
         assert_fatal_contains(err, "not allowed");
+    }
+
+    #[test]
+    fn dangerous_word_effect_matrix_matches_approved_synonyms() {
+        for (word, navigation, free_claim, consume) in [
+            ("ok", true, false, false),
+            ("confirm", true, false, false),
+            ("fight", true, true, false),
+            ("battle", true, true, false),
+            ("sortie", true, true, false),
+            ("finish", true, true, true),
+            ("complete", true, true, true),
+        ] {
+            assert_eq!(
+                dangerous_word(ProbeClickEffect::NavigationOnly, word).is_some(),
+                navigation,
+                "navigation matrix mismatch for {word}"
+            );
+            assert_eq!(
+                dangerous_word(ProbeClickEffect::FreeClaim, word).is_some(),
+                free_claim,
+                "free-claim matrix mismatch for {word}"
+            );
+            assert_eq!(
+                dangerous_word(ProbeClickEffect::ConsumeRegeneratingResource, word).is_some(),
+                consume,
+                "consume matrix mismatch for {word}"
+            );
+        }
+    }
+
+    #[test]
+    fn short_dangerous_words_use_identifier_token_boundaries() {
+        assert_eq!(
+            dangerous_word(ProbeClickEffect::NavigationOnly, "ok"),
+            Some("ok")
+        );
+        assert!(contains_dangerous_word("fixture/confirm_ok_button", "ok"));
+        assert!(
+            dangerous_word(
+                ProbeClickEffect::NavigationOnly,
+                "fixture/confirm_ok_button"
+            )
+            .is_some()
+        );
+        assert_eq!(
+            dangerous_word(ProbeClickEffect::NavigationOnly, "book"),
+            None
+        );
+        assert_eq!(
+            dangerous_word(ProbeClickEffect::NavigationOnly, "smoke"),
+            None
+        );
+    }
+
+    #[test]
+    fn consume_allows_fight_with_bounded_nonpremium_policy() {
+        let probe = ProbeDecisionLoop::new(ProbePlan {
+            steps: vec![ProbeStep {
+                id: "bounded_consume".to_string(),
+                page_id: Some("fixture/home_page".to_string()),
+                action: ProbeAction::Click {
+                    target_id: "fixture/fight".to_string(),
+                    effect: ProbeClickEffect::ConsumeRegeneratingResource,
+                    resource_policy: Some(ResourcePolicy {
+                        kind: ResourcePolicyKind::ArknightsSanity,
+                        max_cost: Some(10),
+                        premium_currency_allowed: false,
+                        auto_refill_allowed: false,
+                        cost_allowed: true,
+                    }),
+                },
+                expect_after: Some(ProbeExpectation {
+                    page_id: "fixture/home_page".to_string(),
+                    timeout_ms: None,
+                    interval_ms: None,
+                }),
+            }],
+            ..valid_probe_plan()
+        });
+
+        assert!(probe.is_ok());
     }
 
     #[test]
