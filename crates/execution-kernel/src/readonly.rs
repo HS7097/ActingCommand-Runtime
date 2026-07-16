@@ -3,7 +3,9 @@
 //! Pure read-only recognition decisions over caller-supplied resources and scenes.
 
 use actingcommand_contract::{EnvResolved, NeedsDetection};
-use actingcommand_page_detector::{PageDetector, PageEvaluation, PageTargetEvaluation};
+use actingcommand_page_detector::{
+    PageDetector, PageEvaluation, PageTargetEvaluation, require_all_page_evaluations,
+};
 use actingcommand_recognition::{MatchMetric, Scene};
 use actingcommand_recognition_pack::{
     PackRect, RecognitionEvaluator, TargetEvaluation, TargetKind,
@@ -195,9 +197,10 @@ pub fn detect_current_page(
     command: &str,
     env_resolved: Vec<EnvResolved>,
 ) -> ReadonlyRecognitionResult<PageDetectionResponse> {
-    let evaluations = detector
+    let outcomes = detector
         .evaluate_all(evaluator, scene)
         .map_err(page_error)?;
+    let evaluations = require_all_page_evaluations(outcomes).map_err(page_error)?;
     let matched = evaluations.iter().find(|evaluation| evaluation.matched);
     let page = matched
         .map(|evaluation| evaluation.page_id.clone())
@@ -325,7 +328,7 @@ fn match_metric_name(metric: MatchMetric) -> &'static str {
     }
 }
 
-fn page_error(error: actingcommand_page_detector::PageDetectorError) -> ReadonlyRecognitionError {
+fn page_error(error: impl fmt::Display) -> ReadonlyRecognitionError {
     ReadonlyRecognitionError::new(error.to_string())
 }
 
@@ -541,6 +544,44 @@ mod tests {
             .expect("current page");
         assert_eq!(current.page, "fixture/home");
         assert!(current.matched);
+    }
+
+    #[test]
+    fn detect_current_page_rejects_partial_batch_instead_of_returning_a_match() {
+        let engine = engine();
+        let detector = PageDetector::new(PageSet {
+            schema_version: "0.3".to_string(),
+            pages: vec![
+                PageDefinition {
+                    id: "fixture/home".to_string(),
+                    required: vec!["home_anchor".to_string()],
+                    any_of: Vec::new(),
+                    optional: Vec::new(),
+                    forbidden: Vec::new(),
+                },
+                PageDefinition {
+                    id: "fixture/broken".to_string(),
+                    required: vec!["missing_anchor".to_string()],
+                    any_of: Vec::new(),
+                    optional: Vec::new(),
+                    forbidden: Vec::new(),
+                },
+            ],
+        })
+        .expect("detector");
+
+        let error = detect_current_page(
+            &engine.evaluator,
+            &detector,
+            &scene([255, 0, 0]),
+            "fixture-command",
+            Vec::new(),
+        )
+        .expect_err("partial page batch must not return a match");
+
+        assert!(error.message().contains("1 successful page(s)"));
+        assert!(error.message().contains("fixture/broken"));
+        assert!(error.message().contains("target id not found"));
     }
 
     #[test]

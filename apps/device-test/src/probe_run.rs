@@ -10,7 +10,7 @@ use actingcommand_execution_kernel::{
     ProbeClickEffect, ProbeDecisionLoop, ProbeReferenceOverrides, ProbeStepDecision,
     ResourcePolicy, ResourcePolicyKind, load_probe_plan_from_json_str,
 };
-use actingcommand_page_detector::PageDetector;
+use actingcommand_page_detector::{PageDetector, require_all_page_evaluations};
 use actingcommand_recognition::{Rect as RecognitionRect, Scene, ScenePixelFormat};
 use actingcommand_recognition_pack::{PackRect, RecognitionEvaluator};
 use serde::Deserialize;
@@ -768,9 +768,10 @@ fn detect_current_page(
     evaluator: &RecognitionEvaluator,
     scene: &Scene,
 ) -> DeviceResult<Option<String>> {
-    let evaluations = detector
+    let outcomes = detector
         .evaluate_all(evaluator, scene)
         .map_err(page_error)?;
+    let evaluations = require_all_page_evaluations(outcomes).map_err(page_error)?;
     Ok(evaluations
         .into_iter()
         .find(|evaluation| evaluation.matched)

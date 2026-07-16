@@ -422,7 +422,7 @@ impl<'a, L: LedgerSink> LabRunContext<'a, L> {
                 .collect::<Result<Vec<_>, _>>()
                 .map_err(|err| CliError::device(err.to_string()))?,
             None => detector
-                .evaluate_all(evaluator, &scene)
+                .evaluate_all_complete(evaluator, &scene)
                 .map_err(|err| CliError::device(err.to_string()))?,
         };
         let matched_page = evaluations
@@ -602,7 +602,7 @@ impl<'a, L: LedgerSink> LabRunContext<'a, L> {
                 .collect::<Result<Vec<_>, _>>()
                 .map_err(|err| CliError::device(err.to_string()))?,
             None => detector
-                .evaluate_all(evaluator, &scene)
+                .evaluate_all_complete(evaluator, &scene)
                 .map_err(|err| CliError::device(err.to_string()))?,
         };
         let matched_page = evaluations
