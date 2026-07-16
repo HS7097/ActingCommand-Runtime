@@ -617,9 +617,9 @@ mod tests {
         let policy = RuntimeMonitorPolicy::new(1_000, "home", true).expect("policy");
         let state = RuntimeMonitorState::scheduled(10).expect("state");
         let configured =
-            RuntimeMonitorInstanceStatus::configured("ak.cn", policy, state).expect("configured");
+            RuntimeMonitorInstanceStatus::configured("node.a", policy, state).expect("configured");
         let unconfigured =
-            RuntimeMonitorInstanceStatus::unconfigured("ba.jp").expect("unconfigured");
+            RuntimeMonitorInstanceStatus::unconfigured("node.c").expect("unconfigured");
         let status = RuntimeMonitorRegistryStatus::new(
             owner_epoch,
             vec![unconfigured.clone(), configured.clone()],
