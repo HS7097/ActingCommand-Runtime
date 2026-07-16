@@ -1,5 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
+use crate::agent_dispatcher::{
+    AgentDispatcherState, AgentResponsePreparation, AgentSessionPreparation,
+};
 use crate::approval::ApprovalProjection;
 use crate::events::RuntimeEvents;
 use crate::fact_store::InstanceFactStore;
@@ -14,10 +17,10 @@ use crate::performance_control::{PerformanceBalanceController, PerformanceDispat
 use crate::policy_host::{LoadedCatalog, PolicyExecutionPreparation, PolicyHost};
 use crate::time::unix_ms_now;
 use crate::{
-    CatalogGeneration, FatalState, PerformanceControlConfig, PerformanceControlDirective,
-    PerformanceMonitorConfig, PipelinePerformanceSignal, PolicyAdmissionContext, PolicyCadence,
-    PolicyCycle, PolicyDispatchAdmission, PolicyExecutionInput, PolicyTrigger, RuntimeHostError,
-    RuntimeHostResult,
+    AgentDispatcherConfig, CatalogGeneration, FatalState, PerformanceControlConfig,
+    PerformanceControlDirective, PerformanceMonitorConfig, PipelinePerformanceSignal,
+    PolicyAdmissionContext, PolicyCadence, PolicyCycle, PolicyDispatchAdmission,
+    PolicyExecutionInput, PolicyTrigger, RuntimeHostError, RuntimeHostResult,
 };
 use actingcommand_artifact_store::{
     ArtifactEventSink, ArtifactStore, ArtifactStoreError, ArtifactStoreResult,
@@ -26,31 +29,32 @@ use actingcommand_artifact_store::{
     EvidenceJsonDocument, EvidencePackage, PackageVerification, PersistedFrameEvidence,
 };
 use actingcommand_contract::{
-    ApplicationLifecycleAction, ApplicationPayload, ApplicationPayloadDraft,
-    ApprovalDecisionRecord, ApprovalPayload, ApprovalPayloadDraft, ArtifactIssuePolicy,
-    ArtifactKind, ArtifactProducer, ArtifactRedactionState, AuditInput, CapturePayloadDraft,
-    CaptureSequence, CaptureSequenceSpec, CatalogPayloadDraft, CatalogTransitionEventData,
-    ClientActionRecord, ClientPayload, ClientPayloadDraft, CommandPayloadDraft,
-    ContainedTaskRequest, CorrelationId, DiagnosticCode, EffectDisposition, EventAction,
-    EventActor, EventDraft, EventId, EventLinksDraft, EventPayload, EventQuery, EventSeverity,
-    EventSource, EventType, EvidenceCompleteness, FactPayloadDraft, FactRecord, InputAction,
-    InputPayload, InputPayloadDraft, InstanceFactContext, InstanceFactSnapshot, InstanceId,
-    IssuedActionId, IssuedFrameId, IssuedMonitorProbe, IssuedReadOnlyCaptureCapability,
-    IssuedRecognitionId, IssuedRunId, IssuedTaskId, LeaseId, LeasePayloadDraft, LeaseQueuePolicy,
-    LeaseToken, MAX_INSTANCE_ALIAS_BYTES, MonitorPayloadDraft, MonitorRecoveryCoordinationReason,
-    OriginModule, PackageDebugLayout, PackageDebugRequest, PackageDebugSummary, PerformanceContext,
-    PerformancePayloadDraft, PolicyDispatchEventData, PolicyExecutionEventData, PolicyPayloadDraft,
-    PolicyPlanningSignalEventData, PolicyReasonRecord, RUNTIME_INFO_FILE, ReadonlyObservation,
-    RecognitionPayloadDraft, RecognitionVerdict, ReleasePayload, ReleasePayloadDraft,
-    ReleaseTransitionKind, RequestId, ResourceAuthoringEvent, ResourceAuthoringPayloadDraft,
-    ResourceAuthoringPhase, RetentionClass, RuntimeCaptureBackend, RuntimeControlPlaneStatus,
-    RuntimeDebugEvent, RuntimeDebugOperation, RuntimeDebugPhase, RuntimeErrorCode,
-    RuntimeErrorProjection, RuntimeEventBatch, RuntimeEvidenceExportRequest,
-    RuntimeEvidenceExportSummary, RuntimeEvidenceScreenshotCounts, RuntimeInfo,
-    RuntimeInstanceStatus, RuntimeMonitorPolicy, RuntimeOperation, RuntimePayloadDraft,
-    RuntimeReceipt, RuntimeReceiptState, RuntimeReleaseSet, RuntimeRequest, RuntimeResult,
-    RuntimeSubscriptionRequest, SchedulerPayloadDraft, StatePayload, StatePayloadDraft,
-    TaskOutcome, TaskPayload, TaskPayloadDraft, TaskSemanticFact, TerminalEvent,
+    AgentPayloadDraft, AgentSessionContext, AgentSessionId, AgentSessionResponse,
+    AgentSessionStatus, AgentWakeId, AgentWakeKind, AgentWakeTrigger, ApplicationLifecycleAction,
+    ApplicationPayload, ApplicationPayloadDraft, ApprovalDecisionRecord, ApprovalPayload,
+    ApprovalPayloadDraft, ArtifactIssuePolicy, ArtifactKind, ArtifactProducer,
+    ArtifactRedactionState, AuditInput, CapturePayloadDraft, CaptureSequence, CaptureSequenceSpec,
+    CatalogPayloadDraft, CatalogTransitionEventData, ClientActionRecord, ClientPayload,
+    ClientPayloadDraft, CommandPayloadDraft, ContainedTaskRequest, CorrelationId, DiagnosticCode,
+    EffectDisposition, EventAction, EventActor, EventDraft, EventId, EventLinksDraft, EventPayload,
+    EventQuery, EventSeverity, EventSource, EventType, EvidenceCompleteness, FactPayloadDraft,
+    FactRecord, InputAction, InputPayload, InputPayloadDraft, InstanceFactContext,
+    InstanceFactSnapshot, InstanceId, IssuedActionId, IssuedFrameId, IssuedMonitorProbe,
+    IssuedReadOnlyCaptureCapability, IssuedRecognitionId, IssuedRunId, IssuedTaskId, LeaseId,
+    LeasePayloadDraft, LeaseQueuePolicy, LeaseToken, MAX_INSTANCE_ALIAS_BYTES, MonitorPayloadDraft,
+    MonitorRecoveryCoordinationReason, OriginModule, PackageDebugLayout, PackageDebugRequest,
+    PackageDebugSummary, PerformanceContext, PerformancePayloadDraft, PolicyDispatchEventData,
+    PolicyExecutionEventData, PolicyPayloadDraft, PolicyPlanningSignalEventData,
+    PolicyReasonRecord, RUNTIME_INFO_FILE, ReadonlyObservation, RecognitionPayloadDraft,
+    RecognitionVerdict, ReleasePayload, ReleasePayloadDraft, ReleaseTransitionKind, RequestId,
+    ResourceAuthoringEvent, ResourceAuthoringPayloadDraft, ResourceAuthoringPhase, RetentionClass,
+    RuntimeCaptureBackend, RuntimeControlPlaneStatus, RuntimeDebugEvent, RuntimeDebugOperation,
+    RuntimeDebugPhase, RuntimeErrorCode, RuntimeErrorProjection, RuntimeEventBatch,
+    RuntimeEvidenceExportRequest, RuntimeEvidenceExportSummary, RuntimeEvidenceScreenshotCounts,
+    RuntimeInfo, RuntimeInstanceStatus, RuntimeMonitorPolicy, RuntimeOperation,
+    RuntimePayloadDraft, RuntimeReceipt, RuntimeReceiptState, RuntimeReleaseSet, RuntimeRequest,
+    RuntimeResult, RuntimeSubscriptionRequest, SchedulerPayloadDraft, StatePayload,
+    StatePayloadDraft, TaskOutcome, TaskPayload, TaskPayloadDraft, TaskSemanticFact, TerminalEvent,
     ValidatedRuntimeRequest,
 };
 use actingcommand_device::{CaptureBackendName, Frame};
@@ -109,6 +113,7 @@ pub struct RuntimeHostConfig {
     io_timeout: Duration,
     performance_monitor: Option<PerformanceMonitorConfig>,
     performance_control: PerformanceControlConfig,
+    agent_dispatcher: Option<AgentDispatcherConfig>,
     secret_fingerprint_salt: Vec<u8>,
 }
 
@@ -123,6 +128,7 @@ impl RuntimeHostConfig {
             io_timeout: DEFAULT_RUNTIME_IO_TIMEOUT,
             performance_monitor: None,
             performance_control: PerformanceControlConfig::default(),
+            agent_dispatcher: None,
             secret_fingerprint_salt: secret_fingerprint_salt.as_ref().to_vec(),
         }
     }
@@ -168,6 +174,11 @@ impl RuntimeHostConfig {
         self
     }
 
+    pub fn with_agent_dispatcher(mut self, agent_dispatcher: AgentDispatcherConfig) -> Self {
+        self.agent_dispatcher = Some(agent_dispatcher);
+        self
+    }
+
     pub fn state_root(&self) -> &Path {
         &self.state_root
     }
@@ -210,6 +221,7 @@ impl std::fmt::Debug for RuntimeHostConfig {
             .field("io_timeout", &self.io_timeout)
             .field("performance_monitor", &self.performance_monitor)
             .field("performance_control", &self.performance_control)
+            .field("agent_dispatcher", &self.agent_dispatcher)
             .field("secret_fingerprint_salt", &"<redacted>")
             .finish()
     }
@@ -275,6 +287,26 @@ impl RuntimeHost {
             config.policy_cadence.clone(),
         )?;
         reconcile_runtime_state(&state, &ledger, &events)?;
+        let agent_instance_ids = registered_instances
+            .values()
+            .map(|instance| (instance.instance_alias.clone(), instance.instance_id))
+            .collect::<BTreeMap<_, _>>();
+        let mut agent_dispatcher = AgentDispatcherState::recover(&ledger, &agent_instance_ids)?;
+        if let Some(agent_config) = &config.agent_dispatcher {
+            reconcile_agent_wakes(
+                &mut agent_dispatcher,
+                &ledger,
+                &events,
+                &registered_instances,
+                agent_config,
+            )?;
+        } else if !agent_dispatcher.is_empty() {
+            return Err(RuntimeHostError::fatal(
+                "agent_dispatcher_config_missing",
+                "start_runtime_host",
+                RuntimeErrorCode::RuntimeFatal,
+            ));
+        }
         let listener = TcpListener::bind(config.bind_address).map_err(|_| {
             RuntimeHostError::fatal(
                 "runtime_bind_failed",
@@ -333,11 +365,14 @@ impl RuntimeHost {
             governance_write_gate: Mutex::new(()),
             fact_write_gate: Mutex::new(()),
             state_write_gate: Mutex::new(()),
+            agent_write_gate: Mutex::new(()),
             facts: Mutex::new(facts),
             owner: Mutex::new(owner),
             ledger,
             artifacts,
             state,
+            agent_dispatcher_config: config.agent_dispatcher,
+            agent_dispatcher: Mutex::new(agent_dispatcher),
             events,
             execution: ExecutionKernel::new(provider),
             registered_instances: Mutex::new(registered_instances),
@@ -352,6 +387,10 @@ impl RuntimeHost {
             fatal,
         });
         if let Err(original) = shared.synchronize_fact_store() {
+            failed_start_cleanup(shared, &info_path, None, None, None)?;
+            return Err(original);
+        }
+        if let Err(original) = shared.expire_agent_sessions() {
             failed_start_cleanup(shared, &info_path, None, None, None)?;
             return Err(original);
         }
@@ -998,6 +1037,109 @@ fn append_runtime_state_event(
         .map_err(|_| ledger_error("append_runtime_state_event"))
 }
 
+fn reconcile_agent_wakes(
+    state: &mut AgentDispatcherState,
+    ledger: &GlobalLedger,
+    events: &RuntimeEvents,
+    instances: &BTreeMap<InstanceId, RegisteredInstance>,
+    config: &AgentDispatcherConfig,
+) -> RuntimeHostResult<()> {
+    let sources = ledger
+        .query(EventQuery {
+            event_type: Some(EventType::PolicyPlanningSignalObserved),
+            ..EventQuery::default()
+        })
+        .map_err(|_| ledger_error("query_agent_wake_sources"))?;
+    for source in sources {
+        if state.has_wake_for_trigger(source.event_id()) {
+            continue;
+        }
+        let EventPayload::Policy(actingcommand_contract::PolicyPayload::PlanningSignalObserved(
+            signal,
+        )) = source.payload()
+        else {
+            return Err(RuntimeHostError::fatal(
+                "agent_wake_source_invalid",
+                "reconcile_agent_wakes",
+                RuntimeErrorCode::RuntimeFatal,
+            ));
+        };
+        let kind = match signal.kind() {
+            actingcommand_contract::PolicyPlanningSignalKind::TimelineReached => {
+                AgentWakeKind::TimelineReached
+            }
+            actingcommand_contract::PolicyPlanningSignalKind::DriftPredicted => {
+                AgentWakeKind::DriftPredicted
+            }
+            _ => continue,
+        };
+        let instance_id = instances
+            .values()
+            .find(|instance| instance.instance_alias == signal.instance_id())
+            .map(|instance| instance.instance_id)
+            .ok_or_else(|| {
+                RuntimeHostError::fatal(
+                    "agent_wake_instance_unknown",
+                    "reconcile_agent_wakes",
+                    RuntimeErrorCode::RuntimeFatal,
+                )
+            })?;
+        append_agent_wake(state, ledger, events, config, &source, instance_id, kind)?;
+    }
+    Ok(())
+}
+
+fn append_agent_wake(
+    state: &mut AgentDispatcherState,
+    ledger: &GlobalLedger,
+    events: &RuntimeEvents,
+    config: &AgentDispatcherConfig,
+    source: &PersistedEvent,
+    instance_id: InstanceId,
+    kind: AgentWakeKind,
+) -> RuntimeHostResult<PersistedEvent> {
+    let issued = events
+        .issuer()
+        .issue_agent_wake(
+            AgentWakeTrigger::new(
+                instance_id,
+                kind,
+                *source.event_id(),
+                source.sequence(),
+                source.timestamp_unix_ms(),
+            )
+            .map_err(|_| {
+                RuntimeHostError::fatal(
+                    "agent_wake_trigger_invalid",
+                    "append_agent_wake",
+                    RuntimeErrorCode::RuntimeFatal,
+                )
+            })?,
+            config.budget(),
+            config.capabilities().clone(),
+        )
+        .map_err(|_| {
+            RuntimeHostError::fatal(
+                "agent_wake_issue_failed",
+                "append_agent_wake",
+                RuntimeErrorCode::RuntimeFatal,
+            )
+        })?;
+    let draft = events.draft(
+        EventSeverity::Info,
+        EventSource::Scheduler,
+        OriginModule::AgentDispatcher,
+        EventActor::Runtime,
+        issued.event_links(),
+        AgentPayloadDraft::wake_requested(issued.data().clone(), AuditInput::new()),
+    )?;
+    let persisted = ledger
+        .append(events.sanitize(draft)?)
+        .map_err(|_| ledger_error("append_agent_wake"))?;
+    state.apply_event(&persisted, None)?;
+    Ok(persisted)
+}
+
 struct HostShared {
     owner_epoch: actingcommand_contract::OwnerEpoch,
     scheduler: Mutex<SeedScheduler>,
@@ -1010,10 +1152,14 @@ struct HostShared {
     fact_write_gate: Mutex<()>,
     // State and release pointer changes are serialized with their ledger facts.
     state_write_gate: Mutex<()>,
+    // Agent session transitions are ledger-first and serialized across IPC and timeout sweeps.
+    agent_write_gate: Mutex<()>,
     facts: Mutex<InstanceFactStore>,
     ledger: GlobalLedger,
     artifacts: ArtifactStore,
     state: Arc<RuntimeStateStore>,
+    agent_dispatcher_config: Option<AgentDispatcherConfig>,
+    agent_dispatcher: Mutex<AgentDispatcherState>,
     owner: Mutex<OwnerGuard>,
     events: RuntimeEvents,
     execution: ExecutionKernel,
@@ -1071,6 +1217,33 @@ struct ActionFailure {
 }
 
 impl HostShared {
+    fn expire_agent_sessions(&self) -> RuntimeHostResult<()> {
+        if self.agent_dispatcher_config.is_none() {
+            return Ok(());
+        }
+        let now_unix_ms = unix_ms_now()?;
+        let _gate = lock(&self.agent_write_gate, "expire_agent_sessions")?;
+        let expired =
+            lock(&self.agent_dispatcher, "expire_agent_sessions")?.expired_sessions(now_unix_ms)?;
+        for data in expired {
+            let links = self
+                .events
+                .issuer()
+                .issue_agent_session_links(data.status().instance_id())
+                .map_err(|_| runtime_identifier_error())?;
+            let persisted = self.append_event_raw(
+                EventSeverity::Warning,
+                EventSource::System,
+                OriginModule::AgentDispatcher,
+                EventActor::Runtime,
+                links.event_links(),
+                AgentPayloadDraft::session_escalated(data, AuditInput::new()),
+            )?;
+            lock(&self.agent_dispatcher, "commit_agent_timeout")?.apply_event(&persisted, None)?;
+        }
+        Ok(())
+    }
+
     fn sample_performance(&self, observed_at_unix_ms: u64) -> RuntimeHostResult<bool> {
         let (tick, control_observation) = {
             let mut performance = lock(&self.performance, "sample_performance")?;
@@ -2001,7 +2174,7 @@ impl HostShared {
                 };
             }
             let links = self.events.system_links()?;
-            self.append_event_raw(
+            let persisted = self.append_event_raw(
                 EventSeverity::Info,
                 EventSource::Scheduler,
                 OriginModule::Policy,
@@ -2009,7 +2182,45 @@ impl HostShared {
                 links,
                 PolicyPayloadDraft::planning_signal_observed(signal.clone(), AuditInput::new()),
             )?;
-            policy.commit_planning_signal(signal)
+            policy.commit_planning_signal(signal.clone())?;
+            drop(policy);
+            let Some(config) = &self.agent_dispatcher_config else {
+                return Ok(());
+            };
+            let kind = match signal.kind {
+                actingcommand_contract::PolicyPlanningSignalKind::TimelineReached => {
+                    AgentWakeKind::TimelineReached
+                }
+                actingcommand_contract::PolicyPlanningSignalKind::DriftPredicted => {
+                    AgentWakeKind::DriftPredicted
+                }
+                _ => return Ok(()),
+            };
+            let instance_id = lock(&self.registered_instances, "resolve_agent_wake_instance")?
+                .values()
+                .find(|instance| instance.instance_alias == signal.instance_id)
+                .map(|instance| instance.instance_id)
+                .ok_or_else(|| {
+                    RuntimeHostError::fatal(
+                        "agent_wake_instance_unknown",
+                        "record_policy_planning_signal",
+                        RuntimeErrorCode::RuntimeFatal,
+                    )
+                })?;
+            let _gate = lock(&self.agent_write_gate, "record_agent_wake")?;
+            let mut agent = lock(&self.agent_dispatcher, "record_agent_wake")?;
+            if !agent.has_wake_for_trigger(persisted.event_id()) {
+                append_agent_wake(
+                    &mut agent,
+                    &self.ledger,
+                    &self.events,
+                    config,
+                    &persisted,
+                    instance_id,
+                    kind,
+                )?;
+            }
+            Ok(())
         })();
         if let Err(error) = &result
             && error.is_fatal()
@@ -2188,6 +2399,18 @@ impl HostShared {
             }
             RuntimeOperation::RecordApprovalDecision { decision } => {
                 self.record_approval_decision(request, validated, decision)
+            }
+            RuntimeOperation::StartAgentSession { wake_id } => {
+                self.start_agent_session(request, validated, *wake_id)
+            }
+            RuntimeOperation::ResumeAgentSession { session_id } => {
+                self.resume_agent_session(request, validated, *session_id)
+            }
+            RuntimeOperation::AgentSessionStatus { session_id } => {
+                self.agent_session_status(*session_id)
+            }
+            RuntimeOperation::RecordAgentResponse { response } => {
+                self.record_agent_response(request, validated, response)
             }
         }
     }
@@ -2985,6 +3208,168 @@ impl HostShared {
                 disposition: decision.disposition(),
             },
         })
+    }
+
+    fn start_agent_session(
+        &self,
+        request: &RuntimeRequest,
+        validated: &ValidatedRuntimeRequest<'_>,
+        wake_id: AgentWakeId,
+    ) -> Result<OperationSuccess, RequestFailure> {
+        self.require_agent_dispatcher("start_agent_session")?;
+        let _gate = lock(&self.agent_write_gate, "start_agent_session")
+            .map_err(RequestFailure::poison_without_terminal)?;
+        let session_id = self
+            .events
+            .issuer()
+            .mint_agent_session_id()
+            .map(|issued| *issued.transport())
+            .map_err(|_| RequestFailure::poison_without_terminal(runtime_identifier_error()))?;
+        let started_at_unix_ms = unix_ms_now().map_err(RequestFailure::poison_without_terminal)?;
+        let preparation = lock(&self.agent_dispatcher, "start_agent_session")?
+            .prepare_start(wake_id, session_id, started_at_unix_ms)
+            .map_err(agent_request_failure)?;
+        let (status, terminal) = match preparation {
+            AgentSessionPreparation::Replay(status) => (status, None),
+            AgentSessionPreparation::New(data) => {
+                let persisted = self.append_event(
+                    EventSeverity::Info,
+                    request.source(),
+                    OriginModule::AgentDispatcher,
+                    request.actor(),
+                    validated.event_links(Some(data.status().instance_id()), None, None),
+                    AgentPayloadDraft::session_started(data.clone(), AuditInput::new()),
+                )?;
+                lock(&self.agent_dispatcher, "commit_agent_session_start")?
+                    .apply_event(&persisted, None)
+                    .map_err(RequestFailure::poison_without_terminal)?;
+                (data.status().clone(), Some(terminal(&persisted)))
+            }
+        };
+        let context = self.agent_session_context(status)?;
+        Ok(OperationSuccess {
+            state: RuntimeReceiptState::Completed,
+            terminal,
+            result: RuntimeResult::AgentSessionOpened {
+                context: Box::new(context),
+            },
+        })
+    }
+
+    fn resume_agent_session(
+        &self,
+        request: &RuntimeRequest,
+        validated: &ValidatedRuntimeRequest<'_>,
+        session_id: AgentSessionId,
+    ) -> Result<OperationSuccess, RequestFailure> {
+        self.require_agent_dispatcher("resume_agent_session")?;
+        let _gate = lock(&self.agent_write_gate, "resume_agent_session")
+            .map_err(RequestFailure::poison_without_terminal)?;
+        let observed_at_unix_ms = unix_ms_now().map_err(RequestFailure::poison_without_terminal)?;
+        let data = lock(&self.agent_dispatcher, "resume_agent_session")?
+            .prepare_resume(session_id, observed_at_unix_ms)
+            .map_err(agent_request_failure)?;
+        let persisted = self.append_event(
+            EventSeverity::Info,
+            request.source(),
+            OriginModule::AgentDispatcher,
+            request.actor(),
+            validated.event_links(Some(data.status().instance_id()), None, None),
+            AgentPayloadDraft::session_resumed(data.clone(), AuditInput::new()),
+        )?;
+        lock(&self.agent_dispatcher, "commit_agent_session_resume")?
+            .apply_event(&persisted, None)
+            .map_err(RequestFailure::poison_without_terminal)?;
+        let context = self.agent_session_context(data.status().clone())?;
+        Ok(OperationSuccess {
+            state: RuntimeReceiptState::Completed,
+            terminal: Some(terminal(&persisted)),
+            result: RuntimeResult::AgentSessionObserved {
+                context: Box::new(context),
+            },
+        })
+    }
+
+    fn agent_session_status(
+        &self,
+        session_id: AgentSessionId,
+    ) -> Result<OperationSuccess, RequestFailure> {
+        self.require_agent_dispatcher("read_agent_session")?;
+        let status = lock(&self.agent_dispatcher, "read_agent_session")?
+            .session(session_id)
+            .map_err(agent_request_failure)?
+            .clone();
+        let context = self.agent_session_context(status)?;
+        Ok(OperationSuccess {
+            state: RuntimeReceiptState::Completed,
+            terminal: None,
+            result: RuntimeResult::AgentSessionObserved {
+                context: Box::new(context),
+            },
+        })
+    }
+
+    fn record_agent_response(
+        &self,
+        request: &RuntimeRequest,
+        validated: &ValidatedRuntimeRequest<'_>,
+        response: &AgentSessionResponse,
+    ) -> Result<OperationSuccess, RequestFailure> {
+        self.require_agent_dispatcher("record_agent_response")?;
+        let _gate = lock(&self.agent_write_gate, "record_agent_response")
+            .map_err(RequestFailure::poison_without_terminal)?;
+        let observed_at_unix_ms = unix_ms_now().map_err(RequestFailure::poison_without_terminal)?;
+        let preparation = lock(&self.agent_dispatcher, "record_agent_response")?
+            .prepare_response(request.request_id(), response, observed_at_unix_ms)
+            .map_err(agent_request_failure)?;
+        let (data, payload, severity) = match preparation {
+            AgentResponsePreparation::Replay(status) => {
+                return Ok(OperationSuccess {
+                    state: RuntimeReceiptState::Completed,
+                    terminal: None,
+                    result: RuntimeResult::AgentResponseRecorded { status },
+                });
+            }
+            AgentResponsePreparation::Retry(data) => {
+                let payload = AgentPayloadDraft::response_recorded(data.clone(), AuditInput::new());
+                (data, payload, EventSeverity::Warning)
+            }
+            AgentResponsePreparation::Complete(data) => {
+                let payload = AgentPayloadDraft::session_completed(data.clone(), AuditInput::new());
+                (data, payload, EventSeverity::Info)
+            }
+            AgentResponsePreparation::Escalate(data) => {
+                let payload = AgentPayloadDraft::session_escalated(data.clone(), AuditInput::new());
+                (data, payload, EventSeverity::Warning)
+            }
+        };
+        let persisted = self.append_event(
+            severity,
+            request.source(),
+            OriginModule::AgentDispatcher,
+            request.actor(),
+            validated.event_links(Some(data.status().instance_id()), None, None),
+            payload,
+        )?;
+        lock(&self.agent_dispatcher, "commit_agent_response")?
+            .apply_event(&persisted, None)
+            .map_err(RequestFailure::poison_without_terminal)?;
+        Ok(OperationSuccess {
+            state: RuntimeReceiptState::Completed,
+            terminal: Some(terminal(&persisted)),
+            result: RuntimeResult::AgentResponseRecorded {
+                status: data.status().clone(),
+            },
+        })
+    }
+
+    fn agent_session_context(
+        &self,
+        status: AgentSessionStatus,
+    ) -> Result<AgentSessionContext, RequestFailure> {
+        lock(&self.agent_dispatcher, "project_agent_session")?
+            .context(&self.ledger, status)
+            .map_err(agent_request_failure)
     }
 
     fn client_fact_replay(
@@ -6964,6 +7349,19 @@ impl HostShared {
             .map_err(RequestFailure::poison_without_terminal)
     }
 
+    fn require_agent_dispatcher(&self, operation: &'static str) -> Result<(), RequestFailure> {
+        self.agent_dispatcher_config
+            .as_ref()
+            .map(|_| ())
+            .ok_or_else(|| {
+                agent_request_failure(RuntimeHostError::request(
+                    "agent_dispatcher_disabled",
+                    operation,
+                    RuntimeErrorCode::InvalidRequest,
+                ))
+            })
+    }
+
     fn append_event_raw(
         &self,
         severity: EventSeverity,
@@ -7965,6 +8363,10 @@ fn lease_sweep_loop(shared: Arc<HostShared>) -> RuntimeHostResult<()> {
             shared.fatal.mark(error.clone())?;
             return Err(error);
         }
+        if let Err(error) = shared.expire_agent_sessions() {
+            shared.fatal.mark(error.clone())?;
+            return Err(error);
+        }
     }
     Ok(())
 }
@@ -8490,6 +8892,14 @@ fn client_fact_conflict(code: &'static str, operation: &'static str) -> RequestF
         RuntimeReceiptState::Denied,
         None,
     )
+}
+
+fn agent_request_failure(error: RuntimeHostError) -> RequestFailure {
+    if error.is_fatal() {
+        RequestFailure::poison_without_terminal(error)
+    } else {
+        RequestFailure::request(error, RuntimeReceiptState::Denied, None)
+    }
 }
 
 fn ledger_error(operation: &'static str) -> RuntimeHostError {

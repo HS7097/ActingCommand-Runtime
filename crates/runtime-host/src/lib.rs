@@ -7,6 +7,7 @@
 
 #![forbid(unsafe_code)]
 
+mod agent_dispatcher;
 mod approval;
 mod error;
 mod events;
@@ -22,6 +23,7 @@ mod policy_host;
 mod provider;
 mod time;
 
+pub use agent_dispatcher::AgentDispatcherConfig;
 pub use error::*;
 pub use host::*;
 pub use performance::{PerformanceMonitorConfig, PipelinePerformanceSignal};

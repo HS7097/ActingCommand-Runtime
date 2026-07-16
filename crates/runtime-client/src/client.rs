@@ -3,7 +3,8 @@
 use crate::ipc::{DEFAULT_RUNTIME_MAX_FRAME_BYTES, exchange};
 use crate::{RuntimeClientError, RuntimeClientResult};
 use actingcommand_contract::{
-    ActionId, ApplicationLifecycleAction, ApprovalDecisionRecord, CaptureSequenceSpec,
+    ActionId, AgentSessionContext, AgentSessionId, AgentSessionResponse, AgentSessionStatus,
+    AgentWakeId, ApplicationLifecycleAction, ApprovalDecisionRecord, CaptureSequenceSpec,
     ClientActionRecord, ContainedTaskRequest, CorrelationId, EventActor, EventQuery, EventSource,
     IdentifierIssuer, InputAction, IssuedCorrelationId, LeaseQueuePolicy, LeaseQueueStatus,
     LeaseToken, OwnerEpoch, PackageDebugRequest, ProjectedEvent, ProjectionProfile,
@@ -566,6 +567,61 @@ impl RuntimeClient {
         receipt
             .terminal()
             .ok_or_else(|| self.unexpected_result("record_approval_decision"))
+    }
+
+    pub fn start_agent_session(
+        &self,
+        wake_id: AgentWakeId,
+    ) -> RuntimeClientResult<AgentSessionContext> {
+        match self.execute(
+            "start_agent_session",
+            RuntimeOperation::StartAgentSession { wake_id },
+        )? {
+            RuntimeResult::AgentSessionOpened { context } => Ok(*context),
+            _ => Err(self.unexpected_result("start_agent_session")),
+        }
+    }
+
+    pub fn resume_agent_session(
+        &self,
+        session_id: AgentSessionId,
+    ) -> RuntimeClientResult<AgentSessionContext> {
+        match self.execute(
+            "resume_agent_session",
+            RuntimeOperation::ResumeAgentSession { session_id },
+        )? {
+            RuntimeResult::AgentSessionObserved { context } => Ok(*context),
+            _ => Err(self.unexpected_result("resume_agent_session")),
+        }
+    }
+
+    pub fn agent_session_status(
+        &self,
+        session_id: AgentSessionId,
+    ) -> RuntimeClientResult<AgentSessionContext> {
+        match self.execute(
+            "agent_session_status",
+            RuntimeOperation::AgentSessionStatus { session_id },
+        )? {
+            RuntimeResult::AgentSessionObserved { context } => Ok(*context),
+            _ => Err(self.unexpected_result("agent_session_status")),
+        }
+    }
+
+    pub fn record_agent_response(
+        &self,
+        response: AgentSessionResponse,
+    ) -> RuntimeClientResult<AgentSessionStatus> {
+        response.validate().map_err(|_| {
+            RuntimeClientError::fatal("agent_response_invalid", "record_agent_response")
+        })?;
+        match self.execute(
+            "record_agent_response",
+            RuntimeOperation::RecordAgentResponse { response },
+        )? {
+            RuntimeResult::AgentResponseRecorded { status } => Ok(status),
+            _ => Err(self.unexpected_result("record_agent_response")),
+        }
     }
 
     pub fn query_events(

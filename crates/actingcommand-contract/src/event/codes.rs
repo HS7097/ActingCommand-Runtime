@@ -73,6 +73,7 @@ closed_code!(OriginModule {
     PerformanceMonitor => "performance-monitor",
     FactStore => "fact-store",
     Governance => "governance",
+    AgentDispatcher => "agent-dispatcher",
     ProcessTest => "process-test",
 });
 
@@ -110,6 +111,12 @@ closed_code!(EventAction {
     ReleaseStage => "release.stage",
     ReleaseActivate => "release.activate",
     ReleaseRollback => "release.rollback",
+    AgentWake => "agent.wake",
+    AgentSessionStart => "agent.session_start",
+    AgentSessionResume => "agent.session_resume",
+    AgentSessionRespond => "agent.session_respond",
+    AgentSessionComplete => "agent.session_complete",
+    AgentSessionEscalate => "agent.session_escalate",
     ProcessAcceptance => "process.acceptance",
     ScheduleAdmit => "schedule.admit",
     LeaseAcquire => "lease.acquire",
@@ -220,6 +227,7 @@ closed_code!(PolicyPlanningSignalKind {
     GoalMissed => "goal_missed",
     FeasibilityRed => "feasibility_red",
     DriftPredicted => "drift_predicted",
+    TimelineReached => "timeline_reached",
 });
 
 closed_code!(EvidenceCompleteness {
