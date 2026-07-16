@@ -4,12 +4,16 @@ use crate::events::RuntimeEvents;
 use crate::ipc::{DEFAULT_RUNTIME_MAX_FRAME_BYTES, FrameRead, read_frame, write_frame};
 use crate::monitor::{DueMonitorProbe, MonitorRegistry, MonitorUpdate};
 use crate::owner::{OwnerGuard, OwnerStartup};
+use crate::performance::{
+    PerformanceMonitor, PerformanceSemanticEvent, PerformanceTick, PipelineEventObservation,
+    system_performance_sampler,
+};
 use crate::policy_host::{LoadedCatalog, PolicyExecutionPreparation, PolicyHost};
 use crate::time::unix_ms_now;
 use crate::{
-    CatalogGeneration, FatalState, PolicyAdmissionContext, PolicyCadence, PolicyCycle,
-    PolicyDispatchAdmission, PolicyExecutionInput, PolicyTrigger, RuntimeHostError,
-    RuntimeHostResult,
+    CatalogGeneration, FatalState, PerformanceMonitorConfig, PipelinePerformanceSignal,
+    PolicyAdmissionContext, PolicyCadence, PolicyCycle, PolicyDispatchAdmission,
+    PolicyExecutionInput, PolicyTrigger, RuntimeHostError, RuntimeHostResult,
 };
 use actingcommand_artifact_store::{
     ArtifactEventSink, ArtifactStore, ArtifactStoreError, ArtifactStoreResult,
@@ -28,12 +32,13 @@ use actingcommand_contract::{
     IssuedReadOnlyCaptureCapability, IssuedRecognitionId, IssuedRunId, IssuedTaskId, LeaseId,
     LeasePayloadDraft, LeaseQueuePolicy, LeaseToken, MAX_INSTANCE_ALIAS_BYTES, MonitorPayloadDraft,
     MonitorRecoveryCoordinationReason, OriginModule, PackageDebugLayout, PackageDebugRequest,
-    PackageDebugSummary, PolicyDispatchEventData, PolicyExecutionEventData, PolicyPayloadDraft,
-    PolicyPlanningSignalEventData, PolicyReasonRecord, RUNTIME_INFO_FILE, ReadonlyObservation,
-    RecognitionPayloadDraft, RecognitionVerdict, RequestId, ResourceAuthoringEvent,
-    ResourceAuthoringPayloadDraft, ResourceAuthoringPhase, RetentionClass, RuntimeCaptureBackend,
-    RuntimeControlPlaneStatus, RuntimeDebugEvent, RuntimeDebugOperation, RuntimeDebugPhase,
-    RuntimeErrorCode, RuntimeErrorProjection, RuntimeEventBatch, RuntimeEvidenceExportRequest,
+    PackageDebugSummary, PerformanceContext, PerformancePayloadDraft, PolicyDispatchEventData,
+    PolicyExecutionEventData, PolicyPayloadDraft, PolicyPlanningSignalEventData,
+    PolicyReasonRecord, RUNTIME_INFO_FILE, ReadonlyObservation, RecognitionPayloadDraft,
+    RecognitionVerdict, RequestId, ResourceAuthoringEvent, ResourceAuthoringPayloadDraft,
+    ResourceAuthoringPhase, RetentionClass, RuntimeCaptureBackend, RuntimeControlPlaneStatus,
+    RuntimeDebugEvent, RuntimeDebugOperation, RuntimeDebugPhase, RuntimeErrorCode,
+    RuntimeErrorProjection, RuntimeEventBatch, RuntimeEvidenceExportRequest,
     RuntimeEvidenceExportSummary, RuntimeEvidenceScreenshotCounts, RuntimeInfo,
     RuntimeInstanceStatus, RuntimeMonitorPolicy, RuntimeOperation, RuntimePayloadDraft,
     RuntimeReceipt, RuntimeReceiptState, RuntimeRequest, RuntimeResult, RuntimeSubscriptionRequest,
@@ -92,6 +97,7 @@ pub struct RuntimeHostConfig {
     policy_cadence: PolicyCadence,
     maximum_frame_bytes: usize,
     io_timeout: Duration,
+    performance_monitor: Option<PerformanceMonitorConfig>,
     secret_fingerprint_salt: Vec<u8>,
 }
 
@@ -104,6 +110,7 @@ impl RuntimeHostConfig {
             policy_cadence: PolicyCadence::default(),
             maximum_frame_bytes: DEFAULT_RUNTIME_MAX_FRAME_BYTES,
             io_timeout: DEFAULT_RUNTIME_IO_TIMEOUT,
+            performance_monitor: None,
             secret_fingerprint_salt: secret_fingerprint_salt.as_ref().to_vec(),
         }
     }
@@ -133,6 +140,14 @@ impl RuntimeHostConfig {
         self
     }
 
+    pub fn with_performance_monitor(
+        mut self,
+        performance_monitor: PerformanceMonitorConfig,
+    ) -> Self {
+        self.performance_monitor = Some(performance_monitor);
+        self
+    }
+
     pub fn state_root(&self) -> &Path {
         &self.state_root
     }
@@ -142,6 +157,9 @@ impl RuntimeHostConfig {
             .validate()
             .map_err(|error| RuntimeHostError::scheduler("validate_runtime_config", &error))?;
         self.policy_cadence.validate()?;
+        if let Some(performance_monitor) = &self.performance_monitor {
+            performance_monitor.validate()?;
+        }
         if self.state_root.as_os_str().is_empty()
             || !self.bind_address.ip().is_loopback()
             || self.io_timeout.is_zero()
@@ -169,6 +187,7 @@ impl std::fmt::Debug for RuntimeHostConfig {
             .field("policy_cadence", &self.policy_cadence)
             .field("maximum_frame_bytes", &self.maximum_frame_bytes)
             .field("io_timeout", &self.io_timeout)
+            .field("performance_monitor", &self.performance_monitor)
             .field("secret_fingerprint_salt", &"<redacted>")
             .finish()
     }
@@ -182,6 +201,7 @@ pub struct RuntimeHost {
     accept_thread: Option<JoinHandle<RuntimeHostResult<()>>>,
     sweep_thread: Option<JoinHandle<RuntimeHostResult<()>>>,
     monitor_thread: Option<JoinHandle<RuntimeHostResult<()>>>,
+    performance_thread: Option<JoinHandle<RuntimeHostResult<()>>>,
 }
 
 impl RuntimeHost {
@@ -245,6 +265,13 @@ impl RuntimeHost {
             )
         })?;
         append_runtime_start_event(&ledger, &events, &config.state_root, takeover)?;
+        let performance = match config.performance_monitor.clone() {
+            Some(performance_config) => {
+                PerformanceMonitor::enabled(performance_config, system_performance_sampler())?
+            }
+            None => PerformanceMonitor::disabled(),
+        };
+        let performance_interval = performance.sample_interval();
         let info = RuntimeInfo::new(
             std::process::id(),
             local_address.ip().to_string(),
@@ -266,6 +293,7 @@ impl RuntimeHost {
             owner_epoch,
             scheduler: Mutex::new(scheduler),
             policy: Mutex::new(policy),
+            performance: Mutex::new(performance),
             owner: Mutex::new(owner),
             ledger,
             artifacts,
@@ -294,7 +322,7 @@ impl RuntimeHost {
                     "start_runtime_host",
                     RuntimeErrorCode::RuntimeFatal,
                 );
-                failed_start_cleanup(shared, &info_path, None, None)?;
+                failed_start_cleanup(shared, &info_path, None, None, None)?;
                 return Err(original);
             }
         };
@@ -310,9 +338,35 @@ impl RuntimeHost {
                     "start_runtime_host",
                     RuntimeErrorCode::RuntimeFatal,
                 );
-                failed_start_cleanup(shared, &info_path, Some(sweep_thread), None)?;
+                failed_start_cleanup(shared, &info_path, Some(sweep_thread), None, None)?;
                 return Err(original);
             }
+        };
+        let performance_thread = if let Some(interval) = performance_interval {
+            let performance_shared = Arc::clone(&shared);
+            match thread::Builder::new()
+                .name("actingcommand-runtime-performance".to_string())
+                .spawn(move || performance_monitor_loop(performance_shared, interval))
+            {
+                Ok(thread) => Some(thread),
+                Err(_) => {
+                    let original = RuntimeHostError::fatal(
+                        "runtime_performance_spawn_failed",
+                        "start_runtime_host",
+                        RuntimeErrorCode::RuntimeFatal,
+                    );
+                    failed_start_cleanup(
+                        shared,
+                        &info_path,
+                        Some(sweep_thread),
+                        Some(monitor_thread),
+                        None,
+                    )?;
+                    return Err(original);
+                }
+            }
+        } else {
+            None
         };
         let accept_shared = Arc::clone(&shared);
         let maximum_frame_bytes = config.maximum_frame_bytes;
@@ -328,7 +382,13 @@ impl RuntimeHost {
                     "start_runtime_host",
                     RuntimeErrorCode::RuntimeFatal,
                 );
-                failed_start_cleanup(shared, &info_path, Some(sweep_thread), Some(monitor_thread))?;
+                failed_start_cleanup(
+                    shared,
+                    &info_path,
+                    Some(sweep_thread),
+                    Some(monitor_thread),
+                    performance_thread,
+                )?;
                 return Err(original);
             }
         };
@@ -339,6 +399,7 @@ impl RuntimeHost {
             accept_thread: Some(accept_thread),
             sweep_thread: Some(sweep_thread),
             monitor_thread: Some(monitor_thread),
+            performance_thread,
         })
     }
 
@@ -432,6 +493,14 @@ impl RuntimeHost {
             .record_policy_planning_signal(signal)
     }
 
+    pub fn record_pipeline_performance(
+        &self,
+        signal: PipelinePerformanceSignal,
+    ) -> RuntimeHostResult<()> {
+        self.shared_ref("record_pipeline_performance")?
+            .record_pipeline_performance(signal)
+    }
+
     #[cfg(test)]
     pub(crate) fn process_request_for_test(
         &self,
@@ -448,6 +517,16 @@ impl RuntimeHost {
                 )
             })?
             .process_request(request, connection_id)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn performance_context_for_test(
+        &self,
+        instance_id: &str,
+        observed_at_unix_ms: u64,
+    ) -> RuntimeHostResult<PerformanceContext> {
+        self.shared_ref("read_test_performance_context")?
+            .performance_context(instance_id, observed_at_unix_ms)
     }
 
     #[cfg(test)]
@@ -518,6 +597,10 @@ impl RuntimeHost {
         record_failure(
             &mut failure,
             join_runtime_thread(self.monitor_thread.take(), "join_runtime_monitor"),
+        );
+        record_failure(
+            &mut failure,
+            join_runtime_thread(self.performance_thread.take(), "join_runtime_performance"),
         );
         if let Err(error) = fs::remove_file(&self.info_path)
             && error.kind() != std::io::ErrorKind::NotFound
@@ -684,6 +767,7 @@ struct HostShared {
     owner_epoch: actingcommand_contract::OwnerEpoch,
     scheduler: Mutex<SeedScheduler>,
     policy: Mutex<PolicyHost>,
+    performance: Mutex<PerformanceMonitor>,
     ledger: GlobalLedger,
     artifacts: ArtifactStore,
     owner: Mutex<OwnerGuard>,
@@ -743,6 +827,131 @@ struct ActionFailure {
 }
 
 impl HostShared {
+    fn sample_performance(&self, observed_at_unix_ms: u64) -> RuntimeHostResult<bool> {
+        let PerformanceTick {
+            events,
+            stop_sampling,
+        } = lock(&self.performance, "sample_performance")?.tick(observed_at_unix_ms)?;
+        self.record_performance_events(&events)?;
+        Ok(stop_sampling)
+    }
+
+    fn record_pipeline_performance(
+        &self,
+        signal: PipelinePerformanceSignal,
+    ) -> RuntimeHostResult<()> {
+        let events = lock(&self.performance, "record_pipeline_performance")?
+            .record_pipeline_signal(signal)?;
+        self.record_performance_events(&events)
+    }
+
+    fn performance_context(
+        &self,
+        instance_id: &str,
+        observed_at_unix_ms: u64,
+    ) -> RuntimeHostResult<PerformanceContext> {
+        lock(&self.performance, "read_performance_context")?
+            .context(instance_id, observed_at_unix_ms)
+    }
+
+    fn record_performance_events(
+        &self,
+        events: &[PerformanceSemanticEvent],
+    ) -> RuntimeHostResult<()> {
+        for event in events {
+            let payload = match event {
+                PerformanceSemanticEvent::PressureStarted(data) => {
+                    PerformancePayloadDraft::pressure_started(data.clone(), AuditInput::new())
+                }
+                PerformanceSemanticEvent::PressureEnded(data) => {
+                    PerformancePayloadDraft::pressure_ended(data.clone(), AuditInput::new())
+                }
+                PerformanceSemanticEvent::StutterDetected(data) => {
+                    PerformancePayloadDraft::stutter_detected(data.clone(), AuditInput::new())
+                }
+                PerformanceSemanticEvent::Summary(data) => {
+                    PerformancePayloadDraft::summary(data.as_ref().clone(), AuditInput::new())
+                }
+                PerformanceSemanticEvent::MonitorDegraded(data) => {
+                    PerformancePayloadDraft::monitor_degraded(data.clone(), AuditInput::new())
+                }
+                PerformanceSemanticEvent::MonitorRecovered(data) => {
+                    PerformancePayloadDraft::monitor_recovered(data.clone(), AuditInput::new())
+                }
+            };
+            let persisted = self.append_event_raw(
+                event.severity(),
+                EventSource::Runtime,
+                OriginModule::PerformanceMonitor,
+                EventActor::Runtime,
+                self.events.system_links()?,
+                payload,
+            )?;
+            lock(&self.performance, "record_performance_event_reference")?
+                .record_event_reference(event, *persisted.event_id())?;
+        }
+        Ok(())
+    }
+
+    fn observe_pipeline_event(&self, event: &PersistedEvent) -> RuntimeHostResult<()> {
+        if !is_pipeline_event(event.event_type())
+            || !lock(&self.performance, "read_performance_monitor_state")?.accepts_pipeline_events()
+        {
+            return Ok(());
+        }
+        let result: RuntimeHostResult<Vec<PerformanceSemanticEvent>> = (|| {
+            let instance_id = event.links().instance_id().ok_or_else(|| {
+                RuntimeHostError::fatal(
+                    "performance_pipeline_instance_missing",
+                    "observe_performance_pipeline_event",
+                    RuntimeErrorCode::RuntimeFatal,
+                )
+            })?;
+            let instance_alias = lock(
+                &self.registered_instances,
+                "resolve_performance_pipeline_instance",
+            )?
+            .get(instance_id)
+            .map(|instance| instance.instance_alias.clone())
+            .ok_or_else(|| {
+                RuntimeHostError::fatal(
+                    "performance_pipeline_instance_unknown",
+                    "observe_performance_pipeline_event",
+                    RuntimeErrorCode::RuntimeFatal,
+                )
+            })?;
+            let observation = PipelineEventObservation {
+                event_type: event.event_type(),
+                instance_id: instance_alias,
+                observed_at_unix_ms: event.timestamp_unix_ms(),
+                frame_id: event.links().frame_id().copied(),
+                recognition_id: event.links().recognition_id().copied(),
+                action_id: event.links().action_id().copied(),
+            };
+            lock(&self.performance, "observe_performance_pipeline_event")?
+                .observe_pipeline_event(observation)
+        })();
+        let semantic_events = match result {
+            Ok(mut events) => {
+                let mut recovered =
+                    lock(&self.performance, "recover_performance_pipeline_monitor")?
+                        .record_pipeline_success(event.timestamp_unix_ms())?;
+                events.append(&mut recovered);
+                events
+            }
+            Err(error) => {
+                let tick = lock(&self.performance, "degrade_performance_pipeline_monitor")?
+                    .record_monitor_failure(
+                        event.timestamp_unix_ms(),
+                        error.code(),
+                        Some(*event.event_id()),
+                    )?;
+                tick.events
+            }
+        };
+        self.record_performance_events(&semantic_events)
+    }
+
     fn active_policy_catalog(&self) -> RuntimeHostResult<Option<CatalogGeneration>> {
         Ok(lock(&self.policy, "read_active_policy_catalog")?.active_generation())
     }
@@ -1178,8 +1387,17 @@ impl HostShared {
         input: &PolicyExecutionInput,
     ) -> RuntimeHostResult<PolicyExecutionEventData> {
         let result: RuntimeHostResult<PolicyExecutionEventData> = (|| {
+            let instance_id = lock(&self.policy, "read_policy_dispatch_instance")?
+                .execution_instance_id(decision_id)?
+                .to_owned();
+            let perf_context = self.performance_context(&instance_id, observed_at_unix_ms)?;
             let mut policy = lock(&self.policy, "record_policy_dispatch_outcome")?;
-            let data = match policy.prepare_execution(decision_id, observed_at_unix_ms, input)? {
+            let data = match policy.prepare_execution(
+                decision_id,
+                observed_at_unix_ms,
+                input,
+                &perf_context,
+            )? {
                 PolicyExecutionPreparation::New(data) => {
                     let links = self.events.system_links()?;
                     self.append_event_raw(
@@ -6036,9 +6254,12 @@ impl HostShared {
             .events
             .draft(severity, source, module, actor, links, payload)?;
         let draft = self.events.sanitize(draft)?;
-        self.ledger
+        let event = self
+            .ledger
             .append(draft)
-            .map_err(|_| ledger_error("append_runtime_event"))
+            .map_err(|_| ledger_error("append_runtime_event"))?;
+        self.observe_pipeline_event(&event)?;
+        Ok(event)
     }
 
     fn lease_intent(
@@ -6997,6 +7218,46 @@ fn monitor_probe_loop(shared: Arc<HostShared>) -> RuntimeHostResult<()> {
     Ok(())
 }
 
+const fn is_pipeline_event(event_type: EventType) -> bool {
+    matches!(
+        event_type,
+        EventType::CaptureRequested
+            | EventType::CaptureCompleted
+            | EventType::CaptureFailed
+            | EventType::RecognitionRequested
+            | EventType::RecognitionCompleted
+            | EventType::RecognitionFailed
+            | EventType::TaskEffectIntent
+            | EventType::TaskEffectCompleted
+            | EventType::TaskStepFinished
+            | EventType::TaskCompleted
+            | EventType::TaskFailed
+            | EventType::TaskCancelled
+    )
+}
+
+fn performance_monitor_loop(
+    shared: Arc<HostShared>,
+    sample_interval: Duration,
+) -> RuntimeHostResult<()> {
+    while !shared.fatal.is_shutdown_requested() {
+        thread::sleep(sample_interval);
+        if shared.fatal.is_shutdown_requested() {
+            break;
+        }
+        let observed_at_unix_ms = unix_ms_now()?;
+        match shared.sample_performance(observed_at_unix_ms) {
+            Ok(true) => break,
+            Ok(false) => {}
+            Err(error) => {
+                shared.fatal.mark(error.clone())?;
+                return Err(error);
+            }
+        }
+    }
+    Ok(())
+}
+
 fn append_runtime_start_event(
     ledger: &GlobalLedger,
     events: &RuntimeEvents,
@@ -7520,12 +7781,17 @@ fn failed_start_cleanup(
     info_path: &Path,
     sweep_thread: Option<JoinHandle<RuntimeHostResult<()>>>,
     monitor_thread: Option<JoinHandle<RuntimeHostResult<()>>>,
+    performance_thread: Option<JoinHandle<RuntimeHostResult<()>>>,
 ) -> RuntimeHostResult<()> {
     shared.fatal.request_shutdown();
     let mut failure = join_runtime_thread(sweep_thread, "join_runtime_sweeper").err();
     record_failure(
         &mut failure,
         join_runtime_thread(monitor_thread, "join_runtime_monitor"),
+    );
+    record_failure(
+        &mut failure,
+        join_runtime_thread(performance_thread, "join_runtime_performance"),
     );
     if let Err(error) = fs::remove_file(info_path)
         && error.kind() != std::io::ErrorKind::NotFound

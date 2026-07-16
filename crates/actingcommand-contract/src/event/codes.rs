@@ -70,6 +70,7 @@ closed_code!(OriginModule {
     ArtifactStore => "artifact-store",
     EvidenceExporter => "evidence-exporter",
     GlobalLedger => "global-ledger",
+    PerformanceMonitor => "performance-monitor",
     ProcessTest => "process-test",
 });
 
@@ -98,6 +99,7 @@ closed_code!(EventAction {
     MonitorClear => "monitor.clear",
     MonitorProbe => "monitor.probe",
     MonitorRecovery => "monitor.recovery",
+    PerformanceObserve => "performance.observe",
     ProcessAcceptance => "process.acceptance",
     ScheduleAdmit => "schedule.admit",
     LeaseAcquire => "lease.acquire",

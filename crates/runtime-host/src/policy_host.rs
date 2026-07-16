@@ -5,9 +5,9 @@
 use crate::policy_control::{PolicyControlState, PolicyExecutionInput};
 use crate::{RuntimeHostError, RuntimeHostResult};
 use actingcommand_contract::{
-    EventPayload, LeaseToken, OwnerEpoch, PolicyAdmissionRecord, PolicyDispatchEventData,
-    PolicyExecutionEventData, PolicyExecutionOutcome, PolicyPayload, PolicyPlanningSignalEventData,
-    PolicyReasonRecord, RuntimeErrorCode,
+    EventPayload, LeaseToken, OwnerEpoch, PerformanceContext, PolicyAdmissionRecord,
+    PolicyDispatchEventData, PolicyExecutionEventData, PolicyExecutionOutcome, PolicyPayload,
+    PolicyPlanningSignalEventData, PolicyReasonRecord, RuntimeErrorCode,
 };
 use actingcommand_ledger::GlobalLedger;
 use actingcommand_policy::{
@@ -595,6 +595,13 @@ impl PolicyHost {
             })
     }
 
+    pub(crate) fn execution_instance_id(&self, decision_id: &str) -> RuntimeHostResult<&str> {
+        self.seen_dispatches
+            .get(decision_id)
+            .map(|dispatch| dispatch.data.instance_id.as_str())
+            .ok_or_else(|| request("policy_dispatch_unknown", "read_policy_dispatch_instance"))
+    }
+
     pub(crate) fn completion_data(
         &self,
         decision_id: &str,
@@ -656,6 +663,7 @@ impl PolicyHost {
         decision_id: &str,
         observed_at_unix_ms: u64,
         input: &PolicyExecutionInput,
+        perf_context: &PerformanceContext,
     ) -> RuntimeHostResult<PolicyExecutionPreparation> {
         let dispatch = self.seen_dispatches.get(decision_id).ok_or_else(|| {
             request(
@@ -695,6 +703,7 @@ impl PolicyHost {
                 admission,
                 observed_at_unix_ms,
                 input,
+                perf_context,
             )
             .map(PolicyExecutionPreparation::New)
     }
