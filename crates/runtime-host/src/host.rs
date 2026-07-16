@@ -41,15 +41,17 @@ use actingcommand_contract::{
     OriginModule, PackageDebugLayout, PackageDebugRequest, PackageDebugSummary, PerformanceContext,
     PerformancePayloadDraft, PolicyDispatchEventData, PolicyExecutionEventData, PolicyPayloadDraft,
     PolicyPlanningSignalEventData, PolicyReasonRecord, RUNTIME_INFO_FILE, ReadonlyObservation,
-    RecognitionPayloadDraft, RecognitionVerdict, RequestId, ResourceAuthoringEvent,
-    ResourceAuthoringPayloadDraft, ResourceAuthoringPhase, RetentionClass, RuntimeCaptureBackend,
-    RuntimeControlPlaneStatus, RuntimeDebugEvent, RuntimeDebugOperation, RuntimeDebugPhase,
-    RuntimeErrorCode, RuntimeErrorProjection, RuntimeEventBatch, RuntimeEvidenceExportRequest,
+    RecognitionPayloadDraft, RecognitionVerdict, ReleasePayload, ReleasePayloadDraft,
+    ReleaseTransitionKind, RequestId, ResourceAuthoringEvent, ResourceAuthoringPayloadDraft,
+    ResourceAuthoringPhase, RetentionClass, RuntimeCaptureBackend, RuntimeControlPlaneStatus,
+    RuntimeDebugEvent, RuntimeDebugOperation, RuntimeDebugPhase, RuntimeErrorCode,
+    RuntimeErrorProjection, RuntimeEventBatch, RuntimeEvidenceExportRequest,
     RuntimeEvidenceExportSummary, RuntimeEvidenceScreenshotCounts, RuntimeInfo,
     RuntimeInstanceStatus, RuntimeMonitorPolicy, RuntimeOperation, RuntimePayloadDraft,
-    RuntimeReceipt, RuntimeReceiptState, RuntimeRequest, RuntimeResult, RuntimeSubscriptionRequest,
-    SchedulerPayloadDraft, TaskOutcome, TaskPayload, TaskPayloadDraft, TaskSemanticFact,
-    TerminalEvent, ValidatedRuntimeRequest,
+    RuntimeReceipt, RuntimeReceiptState, RuntimeReleaseSet, RuntimeRequest, RuntimeResult,
+    RuntimeSubscriptionRequest, SchedulerPayloadDraft, StatePayload, StatePayloadDraft,
+    TaskOutcome, TaskPayload, TaskPayloadDraft, TaskSemanticFact, TerminalEvent,
+    ValidatedRuntimeRequest,
 };
 use actingcommand_device::{CaptureBackendName, Frame};
 use actingcommand_execution_kernel::{
@@ -58,7 +60,8 @@ use actingcommand_execution_kernel::{
 };
 use actingcommand_ledger::critical::{
     CatalogTransitionTarget, CriticalActionReport, CriticalEventPlan, CriticalExecutionError,
-    CriticalOperation, DefiniteEffectDisposition, LeaseTransitionTarget, execute_critical,
+    CriticalOperation, DefiniteEffectDisposition, LeaseTransitionTarget, ReleaseTransitionTarget,
+    execute_critical,
 };
 use actingcommand_ledger::{
     GlobalLedger, GlobalLedgerConfig, PersistedEvent, project_subscription_event,
@@ -71,6 +74,7 @@ use actingcommand_policy::{
     CatalogSources, DecisionReasonChain, DispatchIntent, EvaluationFacts, EvaluationResources,
     EvaluationTime,
 };
+use actingcommand_runtime_state::RuntimeStateStore;
 use actingcommand_scheduler::{
     CancelledQueuedLease, ConnectionId, LeasePreparation, LeaseReleaseReason, LeaseTransferReason,
     PreparedLeaseTransfer, QueueAdmissionDecision, QueueLeaseRequest, QueuePoll, QueuedLease,
@@ -260,7 +264,17 @@ impl RuntimeHost {
             |reference| artifacts.verify_recovery_reference(reference).ok(),
         )
         .map_err(|_| ledger_error("open_global_ledger"))?;
-        let policy = PolicyHost::open(&config.state_root, &ledger, config.policy_cadence.clone())?;
+        let state = Arc::new(
+            RuntimeStateStore::open(&config.state_root, &config.secret_fingerprint_salt)
+                .map_err(|error| RuntimeHostError::state(&error))?,
+        );
+        let policy = PolicyHost::open(
+            &config.state_root,
+            Arc::clone(&state),
+            &ledger,
+            config.policy_cadence.clone(),
+        )?;
+        reconcile_runtime_state(&state, &ledger, &events)?;
         let listener = TcpListener::bind(config.bind_address).map_err(|_| {
             RuntimeHostError::fatal(
                 "runtime_bind_failed",
@@ -318,10 +332,12 @@ impl RuntimeHost {
             performance_control: Mutex::new(performance_control),
             governance_write_gate: Mutex::new(()),
             fact_write_gate: Mutex::new(()),
+            state_write_gate: Mutex::new(()),
             facts: Mutex::new(facts),
             owner: Mutex::new(owner),
             ledger,
             artifacts,
+            state,
             events,
             execution: ExecutionKernel::new(provider),
             registered_instances: Mutex::new(registered_instances),
@@ -459,6 +475,29 @@ impl RuntimeHost {
     ) -> RuntimeHostResult<CatalogGeneration> {
         self.shared_ref("rollback_policy_catalog")?
             .rollback_policy_catalog(catalog_hash)
+    }
+
+    pub fn stage_release_set(
+        &self,
+        manifest: RuntimeReleaseSet,
+    ) -> RuntimeHostResult<RuntimeReleaseSet> {
+        self.shared_ref("stage_release_set")?
+            .stage_release_set(manifest)
+    }
+
+    pub fn active_release_set(&self) -> RuntimeHostResult<Option<RuntimeReleaseSet>> {
+        self.shared_ref("read_active_release_set")?
+            .active_release_set()
+    }
+
+    pub fn activate_release_set(&self, release_id: &str) -> RuntimeHostResult<RuntimeReleaseSet> {
+        self.shared_ref("activate_release_set")?
+            .switch_release_set(ReleaseTransitionKind::Activate, release_id)
+    }
+
+    pub fn rollback_release_set(&self, release_id: &str) -> RuntimeHostResult<RuntimeReleaseSet> {
+        self.shared_ref("rollback_release_set")?
+            .switch_release_set(ReleaseTransitionKind::Rollback, release_id)
     }
 
     pub fn evaluate_policy_cycle(
@@ -823,6 +862,142 @@ fn initial_registered_instances(
     Ok(instances)
 }
 
+fn reconcile_runtime_state(
+    state: &RuntimeStateStore,
+    ledger: &GlobalLedger,
+    events: &RuntimeEvents,
+) -> RuntimeHostResult<()> {
+    let migrated = ledger
+        .query(EventQuery {
+            event_type: Some(EventType::StateMigrated),
+            ..EventQuery::default()
+        })
+        .map_err(|_| ledger_error("query_state_migrations"))?
+        .into_iter()
+        .filter_map(|event| match event.payload() {
+            EventPayload::State(StatePayload::Migrated(payload)) => {
+                Some(payload.migration().migration_id().to_owned())
+            }
+            _ => None,
+        })
+        .collect::<BTreeSet<_>>();
+    for migration in state
+        .migrations()
+        .map_err(|error| RuntimeHostError::state(&error))?
+    {
+        if !migrated.contains(migration.migration_id()) {
+            append_runtime_state_event(
+                ledger,
+                events,
+                StatePayloadDraft::migrated(migration, AuditInput::new()),
+            )?;
+        }
+    }
+
+    let staged =
+        release_event_identities(ledger, EventType::ReleaseStaged, |payload| match payload {
+            ReleasePayload::Staged(value) => Some(value.manifest().release_id().to_owned()),
+            _ => None,
+        })?;
+    for manifest in state
+        .release_generations()
+        .map_err(|error| RuntimeHostError::state(&error))?
+    {
+        if !staged.contains(manifest.release_id()) {
+            append_runtime_state_event(
+                ledger,
+                events,
+                ReleasePayloadDraft::staged(manifest, AuditInput::new()),
+            )?;
+        }
+    }
+
+    let mut completed = release_transition_identities(ledger, EventType::ReleaseActivated)?;
+    completed.extend(release_transition_identities(
+        ledger,
+        EventType::ReleaseRolledBack,
+    )?);
+    for transition in state
+        .release_transitions()
+        .map_err(|error| RuntimeHostError::state(&error))?
+    {
+        if completed.contains(transition.transition_id()) {
+            continue;
+        }
+        let recovered = transition.recovered_for_ledger();
+        let payload = match recovered.kind() {
+            ReleaseTransitionKind::Activate => {
+                ReleasePayloadDraft::activated(recovered, AuditInput::new())
+            }
+            ReleaseTransitionKind::Rollback => {
+                ReleasePayloadDraft::rolled_back(recovered, AuditInput::new())
+            }
+        };
+        append_runtime_state_event(ledger, events, payload)?;
+    }
+    Ok(())
+}
+
+fn ledger_has_release_stage(ledger: &GlobalLedger, release_id: &str) -> RuntimeHostResult<bool> {
+    Ok(
+        release_event_identities(ledger, EventType::ReleaseStaged, |payload| match payload {
+            ReleasePayload::Staged(value) => Some(value.manifest().release_id().to_owned()),
+            _ => None,
+        })?
+        .contains(release_id),
+    )
+}
+
+fn release_event_identities(
+    ledger: &GlobalLedger,
+    event_type: EventType,
+    identity: impl Fn(&ReleasePayload) -> Option<String>,
+) -> RuntimeHostResult<BTreeSet<String>> {
+    Ok(ledger
+        .query(EventQuery {
+            event_type: Some(event_type),
+            ..EventQuery::default()
+        })
+        .map_err(|_| ledger_error("query_release_events"))?
+        .into_iter()
+        .filter_map(|event| match event.payload() {
+            EventPayload::Release(payload) => identity(payload),
+            _ => None,
+        })
+        .collect::<BTreeSet<_>>())
+}
+
+fn release_transition_identities(
+    ledger: &GlobalLedger,
+    event_type: EventType,
+) -> RuntimeHostResult<BTreeSet<String>> {
+    release_event_identities(ledger, event_type, |payload| match payload {
+        ReleasePayload::Activated(value) | ReleasePayload::RolledBack(value) => {
+            Some(value.transition().transition_id().to_owned())
+        }
+        _ => None,
+    })
+}
+
+fn append_runtime_state_event(
+    ledger: &GlobalLedger,
+    events: &RuntimeEvents,
+    payload: impl Into<actingcommand_contract::EventPayloadDraft>,
+) -> RuntimeHostResult<PersistedEvent> {
+    let draft = events.draft(
+        EventSeverity::Info,
+        EventSource::Runtime,
+        OriginModule::Runtime,
+        EventActor::Runtime,
+        events.system_links()?,
+        payload,
+    )?;
+    let draft = events.sanitize(draft)?;
+    ledger
+        .append(draft)
+        .map_err(|_| ledger_error("append_runtime_state_event"))
+}
+
 struct HostShared {
     owner_epoch: actingcommand_contract::OwnerEpoch,
     scheduler: Mutex<SeedScheduler>,
@@ -833,9 +1008,12 @@ struct HostShared {
     governance_write_gate: Mutex<()>,
     // Ledger append and fact projection commit are one ordered Runtime-owned transition.
     fact_write_gate: Mutex<()>,
+    // State and release pointer changes are serialized with their ledger facts.
+    state_write_gate: Mutex<()>,
     facts: Mutex<InstanceFactStore>,
     ledger: GlobalLedger,
     artifacts: ArtifactStore,
+    state: Arc<RuntimeStateStore>,
     owner: Mutex<OwnerGuard>,
     events: RuntimeEvents,
     execution: ExecutionKernel,
@@ -1061,6 +1239,153 @@ impl HostShared {
 
     fn active_policy_catalog(&self) -> RuntimeHostResult<Option<CatalogGeneration>> {
         Ok(lock(&self.policy, "read_active_policy_catalog")?.active_generation())
+    }
+
+    fn stage_release_set(
+        &self,
+        manifest: RuntimeReleaseSet,
+    ) -> RuntimeHostResult<RuntimeReleaseSet> {
+        let result: RuntimeHostResult<RuntimeReleaseSet> = (|| {
+            let _gate = lock(&self.state_write_gate, "stage_release_set")?;
+            let staged = self
+                .state
+                .stage_release(manifest)
+                .map_err(|error| RuntimeHostError::state(&error))?;
+            let manifest = staged.manifest().clone();
+            if !ledger_has_release_stage(&self.ledger, manifest.release_id())? {
+                self.append_event_raw(
+                    EventSeverity::Info,
+                    EventSource::Runtime,
+                    OriginModule::Runtime,
+                    EventActor::Runtime,
+                    self.events.system_links()?,
+                    ReleasePayloadDraft::staged(manifest.clone(), AuditInput::new()),
+                )?;
+            }
+            Ok(manifest)
+        })();
+        if let Err(error) = &result
+            && error.is_fatal()
+        {
+            self.fatal.mark(error.clone())?;
+        }
+        result
+    }
+
+    fn active_release_set(&self) -> RuntimeHostResult<Option<RuntimeReleaseSet>> {
+        self.state
+            .active_release()
+            .map(|active| active.map(|release| release.manifest().clone()))
+            .map_err(|error| RuntimeHostError::state(&error))
+    }
+
+    fn switch_release_set(
+        &self,
+        kind: ReleaseTransitionKind,
+        release_id: &str,
+    ) -> RuntimeHostResult<RuntimeReleaseSet> {
+        let _gate = lock(&self.state_write_gate, "switch_release_set")?;
+        let preview = self
+            .state
+            .preview_release_transition(kind, release_id)
+            .map_err(|error| RuntimeHostError::state(&error))?;
+        let transition = preview.data().clone();
+        let links = self.events.system_links()?;
+        let intent = self.events.draft(
+            EventSeverity::Info,
+            EventSource::Runtime,
+            OriginModule::Runtime,
+            EventActor::Runtime,
+            links.clone(),
+            ReleasePayloadDraft::transition_intent(transition.clone(), AuditInput::new()),
+        )?;
+        let intent = self.events.sanitize(intent)?;
+        let target = match kind {
+            ReleaseTransitionKind::Activate => ReleaseTransitionTarget::Activated,
+            ReleaseTransitionKind::Rollback => ReleaseTransitionTarget::RolledBack,
+        };
+        let plan = CriticalEventPlan::new(CriticalOperation::ReleaseTransition(target), intent)
+            .map_err(|_| critical_plan_error())?;
+        let success_links = links.clone();
+        let failure_links = links;
+        let success_transition = transition.clone();
+        let failure_transition = transition;
+        let result = execute_critical(
+            &self.ledger,
+            self.events.fingerprinter(),
+            plan,
+            || match self
+                .state
+                .commit_release_transition(&preview)
+                .map_err(|error| RuntimeHostError::state(&error))
+            {
+                Ok(active) => CriticalActionReport::Succeeded {
+                    value: active,
+                    effect: DefiniteEffectDisposition::Performed,
+                },
+                Err(error) => CriticalActionReport::Failed {
+                    effect: if error.is_fatal() {
+                        EffectDisposition::Indeterminate
+                    } else {
+                        EffectDisposition::NotPerformed
+                    },
+                    error,
+                },
+            },
+            |_, _| {
+                self.events
+                    .draft(
+                        EventSeverity::Info,
+                        EventSource::Runtime,
+                        OriginModule::Runtime,
+                        EventActor::Runtime,
+                        success_links,
+                        match target {
+                            ReleaseTransitionTarget::Activated => ReleasePayloadDraft::activated(
+                                success_transition,
+                                AuditInput::new(),
+                            ),
+                            ReleaseTransitionTarget::RolledBack => {
+                                ReleasePayloadDraft::rolled_back(
+                                    success_transition,
+                                    AuditInput::new(),
+                                )
+                            }
+                        },
+                    )
+                    .map_err(|_| actingcommand_contract::SanitizationError::fingerprinter_failure())
+            },
+            |_, effect| {
+                self.events
+                    .draft(
+                        EventSeverity::Error,
+                        EventSource::Runtime,
+                        OriginModule::Runtime,
+                        EventActor::Runtime,
+                        failure_links,
+                        ReleasePayloadDraft::transition_failed(
+                            failure_transition,
+                            effect,
+                            AuditInput::new(),
+                        ),
+                    )
+                    .map_err(|_| actingcommand_contract::SanitizationError::fingerprinter_failure())
+            },
+        );
+        match result {
+            Ok(receipt) => Ok(receipt.into_value().manifest().clone()),
+            Err(CriticalExecutionError::Action { error, .. }) => {
+                if error.is_fatal() {
+                    self.fatal.mark(error.clone())?;
+                }
+                Err(error)
+            }
+            Err(error) => {
+                let error = critical_execution_error(&error);
+                self.fatal.mark(error.clone())?;
+                Err(error)
+            }
+        }
     }
 
     fn activate_policy_catalog(

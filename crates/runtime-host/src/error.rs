@@ -2,6 +2,7 @@
 
 use actingcommand_contract::{RuntimeErrorCode, RuntimeErrorProjection};
 use actingcommand_execution_kernel::ExecutionKernelError;
+use actingcommand_runtime_state::RuntimeStateError;
 use actingcommand_scheduler::SchedulerError;
 use std::error::Error;
 use std::fmt;
@@ -91,6 +92,22 @@ impl RuntimeHostError {
             operation,
             RuntimeErrorProjection::new(runtime_code, error.is_fatal()),
         )
+    }
+
+    pub(crate) const fn state(error: &RuntimeStateError) -> Self {
+        if error.is_fatal() {
+            Self::fatal(
+                error.code(),
+                error.operation(),
+                RuntimeErrorCode::RuntimeFatal,
+            )
+        } else {
+            Self::request(
+                error.code(),
+                error.operation(),
+                RuntimeErrorCode::InvalidRequest,
+            )
+        }
     }
 }
 

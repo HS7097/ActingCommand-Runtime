@@ -165,6 +165,8 @@ pub enum EventFamily {
     Artifact,
     ResourceAuthoring,
     Client,
+    State,
+    Release,
     Ledger,
 }
 
@@ -350,6 +352,18 @@ pub enum EventType {
     CliCommand,
     #[serde(rename = "lab.request")]
     LabRequest,
+    #[serde(rename = "state.migrated")]
+    StateMigrated,
+    #[serde(rename = "release.staged")]
+    ReleaseStaged,
+    #[serde(rename = "release.transition_intent")]
+    ReleaseTransitionIntent,
+    #[serde(rename = "release.activated")]
+    ReleaseActivated,
+    #[serde(rename = "release.rolled_back")]
+    ReleaseRolledBack,
+    #[serde(rename = "release.transition_failed")]
+    ReleaseTransitionFailed,
     #[serde(rename = "ledger.recovered")]
     LedgerRecovered,
 }
@@ -443,6 +457,12 @@ impl EventType {
             Self::UiAction | Self::ClientAction | Self::CliCommand | Self::LabRequest => {
                 EventFamily::Client
             }
+            Self::StateMigrated => EventFamily::State,
+            Self::ReleaseStaged
+            | Self::ReleaseTransitionIntent
+            | Self::ReleaseActivated
+            | Self::ReleaseRolledBack
+            | Self::ReleaseTransitionFailed => EventFamily::Release,
             Self::LedgerRecovered => EventFamily::Ledger,
         }
     }

@@ -15,16 +15,19 @@ use actingcommand_policy::{
     DispatchPrerequisites, EvaluationFacts, EvaluationResources, EvaluationTime, PolicyEvaluation,
     ScopeSelector, compile_catalog, evaluate,
 };
+use actingcommand_runtime_state::RuntimeStateStore;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 const CATALOG_STATE_SCHEMA: &str = "actingcommand.catalog-state.v1";
 const ACTIVE_POINTER_FILE: &str = "active.json";
+const ACTIVE_POINTER_STATE_KEY: &str = "policy.catalog.active";
 const GENERATIONS_DIR: &str = "generations";
 const MAX_POINTER_BYTES: usize = 16 * 1024;
 const MAX_MANIFEST_BYTES: usize = 64 * 1024;
@@ -325,10 +328,11 @@ pub(crate) struct PolicyHost {
 impl PolicyHost {
     pub(crate) fn open(
         state_root: &Path,
+        state: Arc<RuntimeStateStore>,
         ledger: &GlobalLedger,
         cadence: PolicyCadence,
     ) -> RuntimeHostResult<Self> {
-        let store = CatalogStore::open(state_root)?;
+        let store = CatalogStore::open(state_root, state)?;
         let active = store.load_active()?;
         let mut host = Self {
             store,
@@ -1090,20 +1094,24 @@ fn execution_input_matches(outcome: &PolicyExecutionOutcome, input: &PolicyExecu
 struct CatalogStore {
     root: PathBuf,
     generations: PathBuf,
-    active_pointer: PathBuf,
+    legacy_active_pointer: PathBuf,
+    state: Arc<RuntimeStateStore>,
 }
 
 impl CatalogStore {
-    fn open(state_root: &Path) -> RuntimeHostResult<Self> {
+    fn open(state_root: &Path, state: Arc<RuntimeStateStore>) -> RuntimeHostResult<Self> {
         let root = state_root.join("policy").join("catalogs");
         let generations = root.join(GENERATIONS_DIR);
         fs::create_dir_all(&generations)
             .map_err(|_| fatal("catalog_state_create_failed", "open_catalog_store"))?;
-        Ok(Self {
-            active_pointer: root.join(ACTIVE_POINTER_FILE),
+        let store = Self {
+            legacy_active_pointer: root.join(ACTIVE_POINTER_FILE),
             root,
             generations,
-        })
+            state,
+        };
+        store.migrate_legacy_active_pointer()?;
+        Ok(store)
     }
 
     fn stage(&self, sources: &CatalogSources) -> RuntimeHostResult<LoadedCatalog> {
@@ -1149,11 +1157,20 @@ impl CatalogStore {
     }
 
     fn load_active(&self) -> RuntimeHostResult<Option<LoadedCatalog>> {
-        if !self.active_pointer.exists() {
+        let Some(document) = self
+            .state
+            .read_json_document(ACTIVE_POINTER_STATE_KEY)
+            .map_err(|error| RuntimeHostError::state(&error))?
+        else {
             return Ok(None);
+        };
+        if document.schema_version() != CATALOG_STATE_SCHEMA {
+            return Err(fatal(
+                "catalog_pointer_version_unsupported",
+                "load_active_catalog",
+            ));
         }
-        let bytes = read_bounded(&self.active_pointer, MAX_POINTER_BYTES)?;
-        let pointer: CatalogPointer = serde_json::from_slice(&bytes)
+        let pointer: CatalogPointer = serde_json::from_slice(document.payload())
             .map_err(|_| fatal("catalog_pointer_invalid", "load_active_catalog"))?;
         if pointer.schema_version != CATALOG_STATE_SCHEMA {
             return Err(fatal(
@@ -1234,29 +1251,56 @@ impl CatalogStore {
             schema_version: CATALOG_STATE_SCHEMA.to_owned(),
             generation: generation.clone(),
         };
-        let bytes = serde_json::to_vec_pretty(&pointer)
+        let bytes = serde_json::to_vec(&pointer)
             .map_err(|_| fatal("catalog_pointer_encode_failed", "switch_active_catalog"))?;
-        let temporary = self.root.join(format!(
-            ".active.tmp-{}-{}",
-            std::process::id(),
-            NEXT_TEMPORARY_ID.fetch_add(1, Ordering::Relaxed)
-        ));
-        write_new_file(&temporary, &bytes)?;
-        if let Err(error) = fs::rename(&temporary, &self.active_pointer) {
-            let cleanup = fs::remove_file(&temporary);
-            if cleanup.is_err() {
-                return Err(fatal(
-                    "catalog_pointer_cleanup_failed",
-                    "switch_active_catalog",
-                ));
-            }
-            let _ = error;
+        let current = self
+            .state
+            .read_json_document(ACTIVE_POINTER_STATE_KEY)
+            .map_err(|error| RuntimeHostError::state(&error))?;
+        self.state
+            .write_json_document(
+                ACTIVE_POINTER_STATE_KEY,
+                CATALOG_STATE_SCHEMA,
+                &bytes,
+                current.as_ref().map(|document| document.payload_sha256()),
+            )
+            .map_err(|error| RuntimeHostError::state(&error))?;
+        Ok(())
+    }
+
+    fn migrate_legacy_active_pointer(&self) -> RuntimeHostResult<()> {
+        if !self.legacy_active_pointer.exists() {
+            return Ok(());
+        }
+        let bytes = read_bounded(&self.legacy_active_pointer, MAX_POINTER_BYTES)?;
+        let pointer: CatalogPointer = serde_json::from_slice(&bytes)
+            .map_err(|_| fatal("catalog_pointer_invalid", "migrate_active_catalog"))?;
+        if pointer.schema_version != CATALOG_STATE_SCHEMA {
             return Err(fatal(
-                "catalog_pointer_publish_failed",
-                "switch_active_catalog",
+                "catalog_pointer_version_unsupported",
+                "migrate_active_catalog",
             ));
         }
-        Ok(())
+        let loaded = self.load_generation(&pointer.generation.catalog_hash)?;
+        if loaded.generation != pointer.generation {
+            return Err(fatal(
+                "catalog_pointer_generation_mismatch",
+                "migrate_active_catalog",
+            ));
+        }
+        let canonical = serde_json::to_vec(&pointer)
+            .map_err(|_| fatal("catalog_pointer_encode_failed", "migrate_active_catalog"))?;
+        self.state
+            .migrate_legacy_json_document(
+                ACTIVE_POINTER_STATE_KEY,
+                CATALOG_STATE_SCHEMA,
+                CATALOG_STATE_SCHEMA,
+                &canonical,
+            )
+            .map_err(|error| RuntimeHostError::state(&error))?;
+        fs::remove_file(&self.legacy_active_pointer)
+            .map_err(|_| fatal("catalog_pointer_cleanup_failed", "migrate_active_catalog"))?;
+        sync_directory(&self.root, "migrate_active_catalog")
     }
 
     fn generation_path(&self, hash: &str) -> RuntimeHostResult<PathBuf> {
@@ -1334,6 +1378,21 @@ fn remove_directory_if_exists(path: &Path) -> RuntimeHostResult<()> {
             "stage_catalog_generation",
         )),
     }
+}
+
+#[cfg(unix)]
+fn sync_directory(path: &Path, operation: &'static str) -> RuntimeHostResult<()> {
+    OpenOptions::new()
+        .read(true)
+        .open(path)
+        .and_then(|directory| directory.sync_all())
+        .map_err(|_| fatal("catalog_directory_sync_failed", operation))
+}
+
+#[cfg(not(unix))]
+fn sync_directory(_path: &Path, _operation: &'static str) -> RuntimeHostResult<()> {
+    // Rust's standard library cannot open Windows directories for fsync without unsafe flags.
+    Ok(())
 }
 
 fn fatal(code: &'static str, operation: &'static str) -> RuntimeHostError {

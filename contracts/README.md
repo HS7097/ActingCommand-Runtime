@@ -7,7 +7,7 @@ These files are versioned data and protocol contracts between the runtime decisi
 - `runtime-api.openapi.yaml` — local HTTP API reserved for the UI.
 - `runtime-events.schema.json` — WebSocket event envelope and payload schema.
 - `task-flow.schema.json` — declarative task-flow schema.
-- `sqlite/schema.sql` — initial SQLite schema for profiles, runs, resources, acquisition captures, logs, and manifests.
+- `sqlite/schema.sql` — authoritative versioned Runtime state, migration, and release-set schema.
 - `server-keys.md` — persisted server variant key policy.
 - `primitive-service.md` — language-neutral execution-layer boundary for Rust or other worker implementations.
 - `scheduling/` — frozen four-document scheduling catalog, diagnostics, canonical hash contract, and neutral examples.
@@ -25,6 +25,14 @@ The Rust device-layer crate lives in:
 The Rust scheduling policy contract lives in:
 
 - `crates/policy`
+
+The sole mutable-state owner and executable SQLite schema live in:
+
+- `crates/runtime-state`
+
+Runtime reports, ledgers, mutable state, and release pointers live under the Runtime state root;
+they are never written into resource repositories. Release sets pair Runtime, UI, and external
+resource versions as immutable generations before one atomic pointer transition.
 
 ## Historical Go boundary
 
