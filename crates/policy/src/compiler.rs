@@ -407,7 +407,7 @@ mod tests {
         assert!(first.catalog_hash().starts_with("sha256:"));
         assert_eq!(
             first.catalog_hash(),
-            "sha256:987eba5b5cc6b96f9e5ed4d155b2237cc2d79201fb5ccd34d0c1c8aa9cd02c6a"
+            "sha256:11a92a2565d996214372c78192aa4072047636b6f1e1efcec25965931a9b932d"
         );
         assert_eq!(first.summary().counts.tasks, 1);
     }

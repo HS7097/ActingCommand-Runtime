@@ -4,11 +4,12 @@ use crate::events::RuntimeEvents;
 use crate::ipc::{DEFAULT_RUNTIME_MAX_FRAME_BYTES, FrameRead, read_frame, write_frame};
 use crate::monitor::{DueMonitorProbe, MonitorRegistry, MonitorUpdate};
 use crate::owner::{OwnerGuard, OwnerStartup};
-use crate::policy_host::{LoadedCatalog, PolicyHost};
+use crate::policy_host::{LoadedCatalog, PolicyExecutionPreparation, PolicyHost};
 use crate::time::unix_ms_now;
 use crate::{
     CatalogGeneration, FatalState, PolicyAdmissionContext, PolicyCadence, PolicyCycle,
-    PolicyDispatchAdmission, PolicyTrigger, RuntimeHostError, RuntimeHostResult,
+    PolicyDispatchAdmission, PolicyExecutionInput, PolicyTrigger, RuntimeHostError,
+    RuntimeHostResult,
 };
 use actingcommand_artifact_store::{
     ArtifactEventSink, ArtifactStore, ArtifactStoreError, ArtifactStoreResult,
@@ -27,16 +28,17 @@ use actingcommand_contract::{
     IssuedReadOnlyCaptureCapability, IssuedRecognitionId, IssuedRunId, IssuedTaskId, LeaseId,
     LeasePayloadDraft, LeaseQueuePolicy, LeaseToken, MAX_INSTANCE_ALIAS_BYTES, MonitorPayloadDraft,
     MonitorRecoveryCoordinationReason, OriginModule, PackageDebugLayout, PackageDebugRequest,
-    PackageDebugSummary, PolicyDispatchEventData, PolicyPayloadDraft, PolicyReasonRecord,
-    RUNTIME_INFO_FILE, ReadonlyObservation, RecognitionPayloadDraft, RecognitionVerdict, RequestId,
-    ResourceAuthoringEvent, ResourceAuthoringPayloadDraft, ResourceAuthoringPhase, RetentionClass,
-    RuntimeCaptureBackend, RuntimeControlPlaneStatus, RuntimeDebugEvent, RuntimeDebugOperation,
-    RuntimeDebugPhase, RuntimeErrorCode, RuntimeErrorProjection, RuntimeEventBatch,
-    RuntimeEvidenceExportRequest, RuntimeEvidenceExportSummary, RuntimeEvidenceScreenshotCounts,
-    RuntimeInfo, RuntimeInstanceStatus, RuntimeMonitorPolicy, RuntimeOperation,
-    RuntimePayloadDraft, RuntimeReceipt, RuntimeReceiptState, RuntimeRequest, RuntimeResult,
-    RuntimeSubscriptionRequest, SchedulerPayloadDraft, TaskOutcome, TaskPayload, TaskPayloadDraft,
-    TaskSemanticFact, TerminalEvent, ValidatedRuntimeRequest,
+    PackageDebugSummary, PolicyDispatchEventData, PolicyExecutionEventData, PolicyPayloadDraft,
+    PolicyPlanningSignalEventData, PolicyReasonRecord, RUNTIME_INFO_FILE, ReadonlyObservation,
+    RecognitionPayloadDraft, RecognitionVerdict, RequestId, ResourceAuthoringEvent,
+    ResourceAuthoringPayloadDraft, ResourceAuthoringPhase, RetentionClass, RuntimeCaptureBackend,
+    RuntimeControlPlaneStatus, RuntimeDebugEvent, RuntimeDebugOperation, RuntimeDebugPhase,
+    RuntimeErrorCode, RuntimeErrorProjection, RuntimeEventBatch, RuntimeEvidenceExportRequest,
+    RuntimeEvidenceExportSummary, RuntimeEvidenceScreenshotCounts, RuntimeInfo,
+    RuntimeInstanceStatus, RuntimeMonitorPolicy, RuntimeOperation, RuntimePayloadDraft,
+    RuntimeReceipt, RuntimeReceiptState, RuntimeRequest, RuntimeResult, RuntimeSubscriptionRequest,
+    SchedulerPayloadDraft, TaskOutcome, TaskPayload, TaskPayloadDraft, TaskSemanticFact,
+    TerminalEvent, ValidatedRuntimeRequest,
 };
 use actingcommand_device::{CaptureBackendName, Frame};
 use actingcommand_execution_kernel::{
@@ -400,8 +402,34 @@ impl RuntimeHost {
     }
 
     pub fn complete_policy_dispatch(&self, decision_id: &str) -> RuntimeHostResult<()> {
-        self.shared_ref("complete_policy_dispatch")?
-            .complete_policy_dispatch(decision_id)
+        let shared = self.shared_ref("complete_policy_dispatch")?;
+        let observed_at_unix_ms =
+            lock(&shared.policy, "read_policy_admission_time")?.admitted_at(decision_id)?;
+        shared
+            .record_policy_dispatch_outcome(
+                decision_id,
+                observed_at_unix_ms,
+                &PolicyExecutionInput::Succeeded,
+            )
+            .map(|_| ())
+    }
+
+    pub fn record_policy_dispatch_outcome(
+        &self,
+        decision_id: &str,
+        observed_at_unix_ms: u64,
+        input: &PolicyExecutionInput,
+    ) -> RuntimeHostResult<PolicyExecutionEventData> {
+        self.shared_ref("record_policy_dispatch_outcome")?
+            .record_policy_dispatch_outcome(decision_id, observed_at_unix_ms, input)
+    }
+
+    pub fn record_policy_planning_signal(
+        &self,
+        signal: PolicyPlanningSignalEventData,
+    ) -> RuntimeHostResult<()> {
+        self.shared_ref("record_policy_planning_signal")?
+            .record_policy_planning_signal(signal)
     }
 
     #[cfg(test)]
@@ -984,7 +1012,7 @@ impl HostShared {
                         };
                     }
                 };
-                let policy = match lock(&self.policy, "validate_policy_dispatch") {
+                let mut policy = match lock(&self.policy, "validate_policy_dispatch") {
                     Ok(policy) => policy,
                     Err(error) => {
                         return CriticalActionReport::Failed {
@@ -1013,6 +1041,20 @@ impl HostShared {
                         };
                     }
                 };
+                let admission_record = match policy.preview_admission(intent, context.now_unix_ms) {
+                    Ok(record) => record,
+                    Err(error) => {
+                        let failure = if error.is_fatal() {
+                            RequestFailure::poison_without_terminal(error)
+                        } else {
+                            RequestFailure::request(error, RuntimeReceiptState::Denied, None)
+                        };
+                        return CriticalActionReport::Failed {
+                            error: failure,
+                            effect: EffectDisposition::NotPerformed,
+                        };
+                    }
+                };
                 let admission = self.acquire_lease(
                     &validated,
                     request.request_id(),
@@ -1020,13 +1062,20 @@ impl HostShared {
                     holder_id,
                     connection_id,
                 );
-                drop(policy);
                 match admission {
                     Ok(success) => match success.result {
-                        RuntimeResult::LeaseGranted { token } => CriticalActionReport::Succeeded {
-                            value: (token, catalog),
-                            effect: DefiniteEffectDisposition::Performed,
-                        },
+                        RuntimeResult::LeaseGranted { token } => {
+                            if let Err(error) = policy.commit_admission(intent, &admission_record) {
+                                return CriticalActionReport::Failed {
+                                    error: RequestFailure::poison_without_terminal(error),
+                                    effect: EffectDisposition::Indeterminate,
+                                };
+                            }
+                            CriticalActionReport::Succeeded {
+                                value: (token, catalog, admission_record),
+                                effect: DefiniteEffectDisposition::Performed,
+                            }
+                        }
                         _ => CriticalActionReport::Failed {
                             error: RequestFailure::poison_without_terminal(
                                 RuntimeHostError::fatal(
@@ -1048,7 +1097,7 @@ impl HostShared {
                     }
                 }
             },
-            |_, _| {
+            |(_, _, admission), _| {
                 self.events
                     .draft(
                         EventSeverity::Info,
@@ -1056,7 +1105,11 @@ impl HostShared {
                         OriginModule::Policy,
                         EventActor::Scheduler,
                         success_links,
-                        PolicyPayloadDraft::dispatch_admitted(success_data, AuditInput::new()),
+                        PolicyPayloadDraft::dispatch_admitted(
+                            success_data,
+                            admission.clone(),
+                            AuditInput::new(),
+                        ),
                     )
                     .map_err(|_| actingcommand_contract::SanitizationError::fingerprinter_failure())
             },
@@ -1080,11 +1133,12 @@ impl HostShared {
         self.refresh_policy_dispatches()?;
         match result {
             Ok(receipt) => {
-                let (token, catalog) = receipt.into_value();
+                let (token, catalog, admission) = receipt.into_value();
                 Ok(PolicyDispatchAdmission::Granted {
                     decision_id: intent.decision_id.clone(),
                     catalog,
                     token,
+                    admission: Box::new(admission),
                 })
             }
             Err(CriticalExecutionError::Action { error, .. }) => {
@@ -1117,19 +1171,87 @@ impl HostShared {
         Ok(lock(&self.policy, "read_pinned_policy_catalog")?.pinned_catalog(decision_id))
     }
 
-    fn complete_policy_dispatch(&self, decision_id: &str) -> RuntimeHostResult<()> {
-        let data = lock(&self.policy, "prepare_policy_dispatch_completion")?
-            .completion_data(decision_id)?;
-        let links = self.events.system_links()?;
-        self.append_event_raw(
-            EventSeverity::Info,
-            EventSource::Scheduler,
-            OriginModule::Policy,
-            EventActor::Scheduler,
-            links,
-            PolicyPayloadDraft::dispatch_completed(data, AuditInput::new()),
-        )?;
-        lock(&self.policy, "complete_policy_dispatch")?.complete_dispatch(decision_id)
+    fn record_policy_dispatch_outcome(
+        &self,
+        decision_id: &str,
+        observed_at_unix_ms: u64,
+        input: &PolicyExecutionInput,
+    ) -> RuntimeHostResult<PolicyExecutionEventData> {
+        let result: RuntimeHostResult<PolicyExecutionEventData> = (|| {
+            let mut policy = lock(&self.policy, "record_policy_dispatch_outcome")?;
+            let data = match policy.prepare_execution(decision_id, observed_at_unix_ms, input)? {
+                PolicyExecutionPreparation::New(data) => {
+                    let links = self.events.system_links()?;
+                    self.append_event_raw(
+                        policy_execution_severity(&data),
+                        EventSource::Scheduler,
+                        OriginModule::Policy,
+                        EventActor::Scheduler,
+                        links,
+                        PolicyPayloadDraft::execution_recorded(data.clone(), AuditInput::new()),
+                    )?;
+                    policy.commit_execution(&data)?;
+                    data
+                }
+                PolicyExecutionPreparation::Replay(data) => data,
+            };
+            if policy.dispatch_needs_completion(decision_id)? {
+                let (dispatch, admission) = policy.completion_data(decision_id)?;
+                let links = self.events.system_links()?;
+                self.append_event_raw(
+                    EventSeverity::Info,
+                    EventSource::Scheduler,
+                    OriginModule::Policy,
+                    EventActor::Scheduler,
+                    links,
+                    PolicyPayloadDraft::dispatch_completed(dispatch, admission, AuditInput::new()),
+                )?;
+                policy.complete_dispatch(decision_id)?;
+            }
+            Ok(data)
+        })();
+        if let Err(error) = &result
+            && error.is_fatal()
+        {
+            self.fatal.mark(error.clone())?;
+        }
+        result
+    }
+
+    fn record_policy_planning_signal(
+        &self,
+        signal: PolicyPlanningSignalEventData,
+    ) -> RuntimeHostResult<()> {
+        let result: RuntimeHostResult<()> = (|| {
+            let mut policy = lock(&self.policy, "record_policy_planning_signal")?;
+            if let Some(existing) = policy.planning_signal(&signal.signal_id) {
+                return if existing == &signal {
+                    Ok(())
+                } else {
+                    Err(RuntimeHostError::fatal(
+                        "policy_planning_signal_identity_conflict",
+                        "record_policy_planning_signal",
+                        RuntimeErrorCode::RuntimeFatal,
+                    ))
+                };
+            }
+            let links = self.events.system_links()?;
+            self.append_event_raw(
+                EventSeverity::Info,
+                EventSource::Scheduler,
+                OriginModule::Policy,
+                EventActor::Scheduler,
+                links,
+                PolicyPayloadDraft::planning_signal_observed(signal.clone(), AuditInput::new()),
+            )?;
+            policy.commit_planning_signal(signal)
+        })();
+        if let Err(error) = &result
+            && error.is_fatal()
+        {
+            self.fatal.mark(error.clone())?;
+        }
+        result
     }
 
     fn process_request(
@@ -7278,6 +7400,19 @@ fn policy_event_data(
         input_ledger_position: intent.input_ledger_position,
         fact_snapshot_id: intent.fact_snapshot_id.clone(),
         approval_fact_ids: intent.approval_refs.clone(),
+    }
+}
+
+fn policy_execution_severity(data: &PolicyExecutionEventData) -> EventSeverity {
+    match &data.outcome {
+        actingcommand_contract::PolicyExecutionOutcome::Succeeded { .. } => EventSeverity::Info,
+        actingcommand_contract::PolicyExecutionOutcome::Failed { failure }
+            if failure.effective_class
+                == actingcommand_contract::PolicyFailureClass::Recoverable =>
+        {
+            EventSeverity::Warning
+        }
+        actingcommand_contract::PolicyExecutionOutcome::Failed { .. } => EventSeverity::Error,
     }
 }
 

@@ -41,6 +41,30 @@
           "best_effort": true
         }
       ]
+    },
+    {
+      "id": "fixture-activity-game",
+      "scope": {
+        "kind": "game",
+        "game_id": "fixture-game-a"
+      },
+      "windows": [
+        {
+          "weekdays": [1, 2, 3, 4, 5, 6, 7],
+          "utc_offset_minutes": 0,
+          "start_minute_of_day": 480,
+          "end_minute_of_day": 1320
+        }
+      ],
+      "daily_budget": 24,
+      "max_window_iterations": 4,
+      "session_max_ms": 7200000,
+      "minimum_interval_ms": 60000,
+      "maximum_interval_ms": 300000,
+      "seed_source": "ledger",
+      "resample_policy": "same_round_stable",
+      "importance_milli": 1000,
+      "goals": []
     }
   ]
 }

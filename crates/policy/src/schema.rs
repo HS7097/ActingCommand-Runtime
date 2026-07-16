@@ -517,7 +517,7 @@ mod tests {
         assert!(bundle.descriptors_match());
         assert_eq!(bundle.tasks.tasks.len(), 1);
         assert_eq!(bundle.pools.pools.len(), 1);
-        assert_eq!(bundle.activity.profiles.len(), 1);
+        assert_eq!(bundle.activity.profiles.len(), 2);
         assert_eq!(bundle.timeline.events.len(), 1);
     }
 
