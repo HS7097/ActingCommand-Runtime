@@ -1256,6 +1256,25 @@ mod tests {
     }
 
     #[test]
+    fn fastest_selection_removes_selected_factory_from_remaining() {
+        let selected = select_fastest(
+            TouchBackendChoice::AutoFastest,
+            vec![
+                fake_factory(TouchBackendName::MaaTouch, Ok(()), Ok(())),
+                fake_factory(TouchBackendName::AdbShellInput, Ok(()), Ok(())),
+            ],
+        )
+        .expect("selected");
+
+        assert!(
+            selected
+                .remaining
+                .iter()
+                .all(|factory| factory.name() != selected.backend_name())
+        );
+    }
+
+    #[test]
     fn minitouch_in_priority_chain() {
         let selected = select_fixed_priority(
             TouchBackendChoice::Auto,
