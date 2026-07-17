@@ -2,15 +2,17 @@
 
 //! Translation from Runtime-owned domain state into the read-only project transport contract.
 
-use crate::policy_host::{LoadedCatalog, PolicyDispatchProjection, PolicyDispatchProjectionState};
+use crate::policy_host::{
+    LoadedCatalog, PolicyDispatchPage, PolicyDispatchProjection, PolicyDispatchProjectionState,
+};
 use crate::{RuntimeHostError, RuntimeHostResult};
 use actingcommand_contract::{
     ApprovalDecisionRecord, ApprovalTarget, EventSeverity, EventType, FactRecord, FactScope,
-    ProjectApprovalView, ProjectCatalogView, ProjectDecisionState, ProjectDecisionView,
-    ProjectDiagnosticView, ProjectFactContentState, ProjectFactView, ProjectGoalMetricView,
-    ProjectGoalView, ProjectInstanceView, ProjectInterfaceRequest, ProjectInterfaceResponse,
-    ProjectInterfaceSnapshot, ProjectRuntimeView, ProjectScopeView, ProjectView,
-    RuntimeControlPlaneStatus, RuntimeErrorCode,
+    ProjectApprovalView, ProjectCatalogView, ProjectDecisionPage, ProjectDecisionPageCursor,
+    ProjectDecisionState, ProjectDecisionView, ProjectDiagnosticView, ProjectFactContentState,
+    ProjectFactView, ProjectGoalMetricView, ProjectGoalView, ProjectInstanceView,
+    ProjectInterfaceRequest, ProjectInterfaceResponse, ProjectInterfaceSnapshot,
+    ProjectRuntimeView, ProjectScopeView, ProjectView, RuntimeControlPlaneStatus, RuntimeErrorCode,
 };
 use actingcommand_policy::{MetricRef, ScopeSelector};
 
@@ -28,7 +30,7 @@ pub(crate) struct ProjectInterfaceProjection {
     pub(crate) catalog: Option<LoadedCatalog>,
     pub(crate) instances: RuntimeControlPlaneStatus,
     pub(crate) facts: Vec<FactRecord>,
-    pub(crate) decisions: Vec<PolicyDispatchProjection>,
+    pub(crate) decisions: PolicyDispatchPage,
     pub(crate) approvals: Vec<ApprovalDecisionRecord>,
     pub(crate) diagnostics: Vec<ProjectDiagnosticProjection>,
     pub(crate) fatal: bool,
@@ -64,10 +66,23 @@ impl ProjectInterfaceProjection {
                 preempt_requested: instance.preempt_requested(),
             })
             .collect::<Vec<_>>();
-        let facts = self.facts.into_iter().map(project_fact).collect();
+        let facts = self.facts.into_iter().map(project_fact).collect::<Vec<_>>();
         let goals = self.catalog.as_ref().map(project_goals).unwrap_or_default();
-        let decisions = self.decisions.into_iter().map(project_decision).collect();
-        let approvals = self.approvals.into_iter().map(project_approval).collect();
+        let mut decisions = self
+            .decisions
+            .dispatches
+            .iter()
+            .map(|decision| (decision.intent_sequence, project_decision(decision.clone())))
+            .collect::<Vec<_>>();
+        let original_decision_count = decisions.len();
+        let decision_snapshot_position = self.decisions.snapshot_ledger_position;
+        let requested_decision_limit = self.decisions.requested_limit;
+        let older_decisions_exist = self.decisions.has_more;
+        let approvals = self
+            .approvals
+            .into_iter()
+            .map(project_approval)
+            .collect::<Vec<_>>();
         let diagnostics = self
             .diagnostics
             .into_iter()
@@ -80,38 +95,99 @@ impl ProjectInterfaceProjection {
                 fatal: diagnostic.severity == EventSeverity::Fatal,
             })
             .collect::<Vec<_>>();
-        let snapshot = ProjectInterfaceSnapshot {
-            ledger_position: self.ledger_position,
-            project,
-            instances,
-            catalog,
-            facts,
-            goals,
-            decisions,
-            approvals,
-            runtime: ProjectRuntimeView {
-                owner_epoch: self.instances.owner_epoch(),
-                ledger_position: self.ledger_position,
-                fatal: self.fatal,
-                instance_count: self.instances.instances().len() as u32,
-            },
-            diagnostics,
-        };
-        ProjectInterfaceResponse::new(negotiated_version, snapshot).map_err(|error| {
-            if error.code() == "project_interface_response_too_large" {
-                RuntimeHostError::request(
-                    error.code(),
-                    "project_runtime_interface",
-                    RuntimeErrorCode::ProtocolInvalid,
+        loop {
+            let decision_page = if negotiated_version
+                == actingcommand_contract::PROJECT_INTERFACE_CONTRACT_V2
+            {
+                let has_more = older_decisions_exist || decisions.len() < original_decision_count;
+                let next_cursor = if has_more {
+                    let (intent_sequence, decision) = decisions.last().ok_or_else(|| {
+                        RuntimeHostError::request(
+                            "project_interface_response_too_large",
+                            "project_runtime_interface",
+                            RuntimeErrorCode::ProtocolInvalid,
+                        )
+                    })?;
+                    Some(
+                        ProjectDecisionPageCursor::new(
+                            decision_snapshot_position,
+                            *intent_sequence,
+                            decision.decision_id.clone(),
+                        )
+                        .map_err(project_contract_error)?,
+                    )
+                } else {
+                    None
+                };
+                Some(
+                    ProjectDecisionPage::new(
+                        decision_snapshot_position,
+                        requested_decision_limit,
+                        u16::try_from(decisions.len()).map_err(|_| {
+                            RuntimeHostError::fatal(
+                                "project_decision_count_overflow",
+                                "project_runtime_interface",
+                                RuntimeErrorCode::RuntimeFatal,
+                            )
+                        })?,
+                        has_more,
+                        next_cursor,
+                    )
+                    .map_err(project_contract_error)?,
                 )
             } else {
-                RuntimeHostError::fatal(
-                    error.code(),
-                    "project_runtime_interface",
-                    RuntimeErrorCode::RuntimeFatal,
-                )
+                None
+            };
+            let snapshot = ProjectInterfaceSnapshot {
+                ledger_position: self.ledger_position,
+                project: project.clone(),
+                instances: instances.clone(),
+                catalog: catalog.clone(),
+                facts: facts.clone(),
+                goals: goals.clone(),
+                decisions: decisions
+                    .iter()
+                    .map(|(_, decision)| decision.clone())
+                    .collect(),
+                decision_page,
+                approvals: approvals.clone(),
+                runtime: ProjectRuntimeView {
+                    owner_epoch: self.instances.owner_epoch(),
+                    ledger_position: self.ledger_position,
+                    fatal: self.fatal,
+                    instance_count: self.instances.instances().len() as u32,
+                },
+                diagnostics: diagnostics.clone(),
+            };
+            match ProjectInterfaceResponse::new(negotiated_version, snapshot) {
+                Ok(response) => return Ok(response),
+                Err(error)
+                    if error.code() == "project_interface_response_too_large"
+                        && decisions.len() > 1 =>
+                {
+                    decisions.pop();
+                }
+                Err(error) => return Err(project_contract_error(error)),
             }
-        })
+        }
+    }
+}
+
+fn project_contract_error(
+    error: actingcommand_contract::ProjectInterfaceError,
+) -> RuntimeHostError {
+    if error.code() == "project_interface_response_too_large" {
+        RuntimeHostError::request(
+            error.code(),
+            "project_runtime_interface",
+            RuntimeErrorCode::ProtocolInvalid,
+        )
+    } else {
+        RuntimeHostError::fatal(
+            error.code(),
+            "project_runtime_interface",
+            RuntimeErrorCode::RuntimeFatal,
+        )
     }
 }
 

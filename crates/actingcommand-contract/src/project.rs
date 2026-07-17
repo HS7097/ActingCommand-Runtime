@@ -13,19 +13,27 @@ use std::collections::BTreeSet;
 use std::error::Error;
 use std::fmt;
 
-pub const PROJECT_INTERFACE_REQUEST_SCHEMA_VERSION: &str =
+pub const PROJECT_INTERFACE_REQUEST_SCHEMA_VERSION_V1: &str =
     "actingcommand.project-interface.request.v1";
-pub const PROJECT_INTERFACE_RESPONSE_SCHEMA_VERSION: &str =
+pub const PROJECT_INTERFACE_REQUEST_SCHEMA_VERSION: &str =
+    "actingcommand.project-interface.request.v2";
+pub const PROJECT_INTERFACE_RESPONSE_SCHEMA_VERSION_V1: &str =
     "actingcommand.project-interface.response.v1";
+pub const PROJECT_INTERFACE_RESPONSE_SCHEMA_VERSION: &str =
+    "actingcommand.project-interface.response.v2";
 pub const PROJECT_INTERFACE_CONTRACT_V1: &str = "actingcommand.project-interface.v1";
-pub const PROJECT_INTERFACE_SUPPORTED_VERSIONS: &[&str] = &[PROJECT_INTERFACE_CONTRACT_V1];
+pub const PROJECT_INTERFACE_CONTRACT_V2: &str = "actingcommand.project-interface.v2";
+pub const PROJECT_INTERFACE_SUPPORTED_VERSIONS: &[&str] =
+    &[PROJECT_INTERFACE_CONTRACT_V2, PROJECT_INTERFACE_CONTRACT_V1];
 pub const MAX_PROJECT_INTERFACE_RESPONSE_BYTES: usize = 768 * 1024;
+pub const DEFAULT_PROJECT_DECISION_PAGE_SIZE: u16 = 128;
+pub const MAX_PROJECT_DECISION_PAGE_SIZE: u16 = 512;
 
 const MAX_ACCEPTED_VERSIONS: usize = 8;
 const MAX_PROJECT_INSTANCES: usize = 4_096;
 const MAX_PROJECT_FACTS: usize = 16_384;
 const MAX_PROJECT_GOALS: usize = 16_384;
-const MAX_PROJECT_DECISIONS: usize = 16_384;
+const MAX_PROJECT_DECISIONS: usize = MAX_PROJECT_DECISION_PAGE_SIZE as usize;
 const MAX_PROJECT_APPROVALS: usize = 4_096;
 const MAX_PROJECT_DIAGNOSTICS: usize = 256;
 const MAX_PROJECT_TEXT_BYTES: usize = 1_024;
@@ -76,7 +84,7 @@ pub struct ProjectInterfaceCompatibility {
 impl ProjectInterfaceCompatibility {
     pub fn current() -> Self {
         Self {
-            current_version: PROJECT_INTERFACE_CONTRACT_V1.to_owned(),
+            current_version: PROJECT_INTERFACE_CONTRACT_V2.to_owned(),
             supported_versions: PROJECT_INTERFACE_SUPPORTED_VERSIONS
                 .iter()
                 .map(|version| (*version).to_owned())
@@ -85,15 +93,23 @@ impl ProjectInterfaceCompatibility {
         }
     }
 
+    fn for_contract(contract_version: &str) -> ProjectInterfaceResult<Self> {
+        match contract_version {
+            PROJECT_INTERFACE_CONTRACT_V2 => Ok(Self::current()),
+            PROJECT_INTERFACE_CONTRACT_V1 => Ok(Self {
+                current_version: PROJECT_INTERFACE_CONTRACT_V1.to_owned(),
+                supported_versions: vec![PROJECT_INTERFACE_CONTRACT_V1.to_owned()],
+                unknown_field_policy: ProjectUnknownFieldPolicy::Reject,
+            }),
+            _ => Err(ProjectInterfaceError::new(
+                "project_contract_version_unsupported",
+            )),
+        }
+    }
+
     pub fn validate(&self) -> ProjectInterfaceResult<()> {
-        if self.current_version != PROJECT_INTERFACE_CONTRACT_V1
-            || self.supported_versions
-                != PROJECT_INTERFACE_SUPPORTED_VERSIONS
-                    .iter()
-                    .map(|version| (*version).to_owned())
-                    .collect::<Vec<_>>()
-            || self.unknown_field_policy != ProjectUnknownFieldPolicy::Reject
-        {
+        let current = Self::for_contract(&self.current_version)?;
+        if self != &current {
             return Err(ProjectInterfaceError::new(
                 "project_compatibility_matrix_invalid",
             ));
@@ -104,30 +120,152 @@ impl ProjectInterfaceCompatibility {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+pub struct ProjectDecisionPageCursor {
+    snapshot_ledger_position: u64,
+    before_intent_sequence: u64,
+    before_decision_id: String,
+}
+
+impl ProjectDecisionPageCursor {
+    pub fn new(
+        snapshot_ledger_position: u64,
+        before_intent_sequence: u64,
+        before_decision_id: impl Into<String>,
+    ) -> ProjectInterfaceResult<Self> {
+        let cursor = Self {
+            snapshot_ledger_position,
+            before_intent_sequence,
+            before_decision_id: before_decision_id.into(),
+        };
+        cursor.validate()?;
+        Ok(cursor)
+    }
+
+    pub fn validate(&self) -> ProjectInterfaceResult<()> {
+        if self.snapshot_ledger_position == 0
+            || self.before_intent_sequence == 0
+            || self.before_intent_sequence > self.snapshot_ledger_position
+        {
+            return Err(ProjectInterfaceError::new(
+                "project_decision_cursor_invalid",
+            ));
+        }
+        validate_text(&self.before_decision_id, "project_decision_cursor_invalid")
+    }
+
+    pub const fn snapshot_ledger_position(&self) -> u64 {
+        self.snapshot_ledger_position
+    }
+
+    pub const fn before_intent_sequence(&self) -> u64 {
+        self.before_intent_sequence
+    }
+
+    pub fn before_decision_id(&self) -> &str {
+        &self.before_decision_id
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProjectDecisionPageRequest {
+    limit: u16,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    cursor: Option<ProjectDecisionPageCursor>,
+}
+
+impl ProjectDecisionPageRequest {
+    pub fn new(
+        limit: u16,
+        cursor: Option<ProjectDecisionPageCursor>,
+    ) -> ProjectInterfaceResult<Self> {
+        let request = Self { limit, cursor };
+        request.validate()?;
+        Ok(request)
+    }
+
+    pub fn validate(&self) -> ProjectInterfaceResult<()> {
+        if self.limit == 0 || self.limit > MAX_PROJECT_DECISION_PAGE_SIZE {
+            return Err(ProjectInterfaceError::new("project_decision_page_invalid"));
+        }
+        if let Some(cursor) = &self.cursor {
+            cursor.validate()?;
+        }
+        Ok(())
+    }
+
+    pub const fn limit(&self) -> u16 {
+        self.limit
+    }
+
+    pub const fn cursor(&self) -> Option<&ProjectDecisionPageCursor> {
+        self.cursor.as_ref()
+    }
+}
+
+impl Default for ProjectDecisionPageRequest {
+    fn default() -> Self {
+        Self {
+            limit: DEFAULT_PROJECT_DECISION_PAGE_SIZE,
+            cursor: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ProjectInterfaceRequest {
     schema_version: String,
     accepted_contract_versions: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    decision_page: Option<ProjectDecisionPageRequest>,
 }
 
 impl ProjectInterfaceRequest {
     pub fn current() -> Self {
         Self {
             schema_version: PROJECT_INTERFACE_REQUEST_SCHEMA_VERSION.to_owned(),
-            accepted_contract_versions: vec![PROJECT_INTERFACE_CONTRACT_V1.to_owned()],
+            accepted_contract_versions: PROJECT_INTERFACE_SUPPORTED_VERSIONS
+                .iter()
+                .map(|version| (*version).to_owned())
+                .collect(),
+            decision_page: Some(ProjectDecisionPageRequest::default()),
         }
     }
 
     pub fn new(accepted_contract_versions: Vec<String>) -> ProjectInterfaceResult<Self> {
+        let schema_version = if accepted_contract_versions
+            .iter()
+            .any(|version| version == PROJECT_INTERFACE_CONTRACT_V2)
+        {
+            PROJECT_INTERFACE_REQUEST_SCHEMA_VERSION
+        } else {
+            PROJECT_INTERFACE_REQUEST_SCHEMA_VERSION_V1
+        };
         let request = Self {
-            schema_version: PROJECT_INTERFACE_REQUEST_SCHEMA_VERSION.to_owned(),
+            schema_version: schema_version.to_owned(),
             accepted_contract_versions,
+            decision_page: None,
         };
         request.validate()?;
         Ok(request)
     }
 
+    pub fn with_decision_page(
+        mut self,
+        decision_page: ProjectDecisionPageRequest,
+    ) -> ProjectInterfaceResult<Self> {
+        self.schema_version = PROJECT_INTERFACE_REQUEST_SCHEMA_VERSION.to_owned();
+        self.decision_page = Some(decision_page);
+        self.validate()?;
+        Ok(self)
+    }
+
     pub fn validate(&self) -> ProjectInterfaceResult<()> {
-        if self.schema_version != PROJECT_INTERFACE_REQUEST_SCHEMA_VERSION {
+        if !matches!(
+            self.schema_version.as_str(),
+            PROJECT_INTERFACE_REQUEST_SCHEMA_VERSION | PROJECT_INTERFACE_REQUEST_SCHEMA_VERSION_V1
+        ) {
             return Err(ProjectInterfaceError::new(
                 "unsupported_project_request_schema",
             ));
@@ -148,6 +286,25 @@ impl ProjectInterfaceRequest {
                 ));
             }
         }
+        if self.schema_version == PROJECT_INTERFACE_REQUEST_SCHEMA_VERSION_V1
+            && self.decision_page.is_some()
+        {
+            return Err(ProjectInterfaceError::new(
+                "project_decision_page_requires_v2",
+            ));
+        }
+        if let Some(page) = &self.decision_page {
+            if !self
+                .accepted_contract_versions
+                .iter()
+                .any(|version| version == PROJECT_INTERFACE_CONTRACT_V2)
+            {
+                return Err(ProjectInterfaceError::new(
+                    "project_decision_page_requires_v2",
+                ));
+            }
+            page.validate()?;
+        }
         Ok(())
     }
 
@@ -166,6 +323,10 @@ impl ProjectInterfaceRequest {
 
     pub fn accepted_contract_versions(&self) -> &[String] {
         &self.accepted_contract_versions
+    }
+
+    pub const fn decision_page(&self) -> Option<&ProjectDecisionPageRequest> {
+        self.decision_page.as_ref()
     }
 }
 
@@ -316,6 +477,75 @@ pub struct ProjectDiagnosticView {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+pub struct ProjectDecisionPage {
+    snapshot_ledger_position: u64,
+    requested_limit: u16,
+    returned_count: u16,
+    has_more: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    next_cursor: Option<ProjectDecisionPageCursor>,
+}
+
+impl ProjectDecisionPage {
+    pub fn new(
+        snapshot_ledger_position: u64,
+        requested_limit: u16,
+        returned_count: u16,
+        has_more: bool,
+        next_cursor: Option<ProjectDecisionPageCursor>,
+    ) -> ProjectInterfaceResult<Self> {
+        let page = Self {
+            snapshot_ledger_position,
+            requested_limit,
+            returned_count,
+            has_more,
+            next_cursor,
+        };
+        page.validate()?;
+        Ok(page)
+    }
+
+    pub fn validate(&self) -> ProjectInterfaceResult<()> {
+        if self.snapshot_ledger_position == 0
+            || self.requested_limit == 0
+            || self.requested_limit > MAX_PROJECT_DECISION_PAGE_SIZE
+            || self.returned_count > self.requested_limit
+            || self.has_more != self.next_cursor.is_some()
+        {
+            return Err(ProjectInterfaceError::new("project_decision_page_invalid"));
+        }
+        if let Some(cursor) = &self.next_cursor {
+            cursor.validate()?;
+            if cursor.snapshot_ledger_position() != self.snapshot_ledger_position {
+                return Err(ProjectInterfaceError::new("project_decision_page_invalid"));
+            }
+        }
+        Ok(())
+    }
+
+    pub const fn snapshot_ledger_position(&self) -> u64 {
+        self.snapshot_ledger_position
+    }
+
+    pub const fn requested_limit(&self) -> u16 {
+        self.requested_limit
+    }
+
+    pub const fn returned_count(&self) -> u16 {
+        self.returned_count
+    }
+
+    pub const fn has_more(&self) -> bool {
+        self.has_more
+    }
+
+    pub const fn next_cursor(&self) -> Option<&ProjectDecisionPageCursor> {
+        self.next_cursor.as_ref()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ProjectInterfaceSnapshot {
     pub ledger_position: u64,
     pub project: Option<ProjectView>,
@@ -324,6 +554,8 @@ pub struct ProjectInterfaceSnapshot {
     pub facts: Vec<ProjectFactView>,
     pub goals: Vec<ProjectGoalView>,
     pub decisions: Vec<ProjectDecisionView>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub decision_page: Option<ProjectDecisionPage>,
     pub approvals: Vec<ProjectApprovalView>,
     pub runtime: ProjectRuntimeView,
     pub diagnostics: Vec<ProjectDiagnosticView>,
@@ -366,6 +598,12 @@ impl ProjectInterfaceSnapshot {
         validate_facts(&self.facts)?;
         validate_goals(&self.goals)?;
         validate_decisions(&self.decisions, self.ledger_position)?;
+        if let Some(page) = &self.decision_page {
+            page.validate()?;
+            if usize::from(page.returned_count()) != self.decisions.len() {
+                return Err(ProjectInterfaceError::new("project_decision_page_invalid"));
+            }
+        }
         validate_approvals(&self.approvals)?;
         validate_diagnostics(&self.diagnostics, self.ledger_position)?;
         Ok(())
@@ -386,15 +624,16 @@ impl ProjectInterfaceResponse {
         negotiated_version: &str,
         snapshot: ProjectInterfaceSnapshot,
     ) -> ProjectInterfaceResult<Self> {
-        if negotiated_version != PROJECT_INTERFACE_CONTRACT_V1 {
-            return Err(ProjectInterfaceError::new(
-                "project_contract_version_unsupported",
-            ));
-        }
+        let compatibility = ProjectInterfaceCompatibility::for_contract(negotiated_version)?;
+        let schema_version = match negotiated_version {
+            PROJECT_INTERFACE_CONTRACT_V2 => PROJECT_INTERFACE_RESPONSE_SCHEMA_VERSION,
+            PROJECT_INTERFACE_CONTRACT_V1 => PROJECT_INTERFACE_RESPONSE_SCHEMA_VERSION_V1,
+            _ => unreachable!("validated contract version"),
+        };
         let response = Self {
-            schema_version: PROJECT_INTERFACE_RESPONSE_SCHEMA_VERSION.to_owned(),
+            schema_version: schema_version.to_owned(),
             contract_version: negotiated_version.to_owned(),
-            compatibility: ProjectInterfaceCompatibility::current(),
+            compatibility,
             snapshot,
         };
         response.validate()?;
@@ -409,18 +648,36 @@ impl ProjectInterfaceResponse {
     }
 
     pub fn validate(&self) -> ProjectInterfaceResult<()> {
-        if self.schema_version != PROJECT_INTERFACE_RESPONSE_SCHEMA_VERSION {
+        let expected_schema = match self.contract_version.as_str() {
+            PROJECT_INTERFACE_CONTRACT_V2 => PROJECT_INTERFACE_RESPONSE_SCHEMA_VERSION,
+            PROJECT_INTERFACE_CONTRACT_V1 => PROJECT_INTERFACE_RESPONSE_SCHEMA_VERSION_V1,
+            _ => {
+                return Err(ProjectInterfaceError::new(
+                    "project_contract_version_unsupported",
+                ));
+            }
+        };
+        if self.schema_version != expected_schema {
             return Err(ProjectInterfaceError::new(
                 "unsupported_project_response_schema",
             ));
         }
-        if self.contract_version != PROJECT_INTERFACE_CONTRACT_V1 {
+        let expected_compatibility =
+            ProjectInterfaceCompatibility::for_contract(&self.contract_version)?;
+        if self.compatibility != expected_compatibility {
             return Err(ProjectInterfaceError::new(
-                "project_contract_version_unsupported",
+                "project_compatibility_matrix_invalid",
             ));
         }
         self.compatibility.validate()?;
-        self.snapshot.validate()
+        self.snapshot.validate()?;
+        match self.contract_version.as_str() {
+            PROJECT_INTERFACE_CONTRACT_V2 if self.snapshot.decision_page.is_some() => Ok(()),
+            PROJECT_INTERFACE_CONTRACT_V1 if self.snapshot.decision_page.is_none() => Ok(()),
+            _ => Err(ProjectInterfaceError::new(
+                "project_decision_page_contract_mismatch",
+            )),
+        }
     }
 
     pub fn contract_version(&self) -> &str {
@@ -712,6 +969,10 @@ mod tests {
                 reason_codes: vec!["eligible".to_owned()],
                 urgency_milli: 500,
             }],
+            decision_page: Some(
+                ProjectDecisionPage::new(7, DEFAULT_PROJECT_DECISION_PAGE_SIZE, 1, false, None)
+                    .expect("decision page"),
+            ),
             approvals: vec![ProjectApprovalView {
                 approval_id: "approval:neutral".to_owned(),
                 disposition: ApprovalDisposition::Approved,
@@ -781,14 +1042,42 @@ mod tests {
         request["unexpected"] = serde_json::json!(true);
         assert!(serde_json::from_value::<ProjectInterfaceRequest>(request).is_err());
 
-        let response = ProjectInterfaceResponse::new(PROJECT_INTERFACE_CONTRACT_V1, snapshot())
-            .expect("response");
+        let mut legacy_snapshot = snapshot();
+        legacy_snapshot.decision_page = None;
+        let response =
+            ProjectInterfaceResponse::new(PROJECT_INTERFACE_CONTRACT_V1, legacy_snapshot)
+                .expect("response");
         let mut value = serde_json::to_value(response).expect("value");
         value["contract_version"] = serde_json::json!("actingcommand.project-interface.v9");
         let decoded: ProjectInterfaceResponse = serde_json::from_value(value).expect("shape");
         assert_eq!(
             decoded.validate().expect_err("version").code(),
             "project_contract_version_unsupported"
+        );
+    }
+
+    #[test]
+    fn decision_page_cursor_round_trips_and_is_snapshot_bound() {
+        let cursor =
+            ProjectDecisionPageCursor::new(10, 7, "decision:neutral").expect("decision cursor");
+        let page = ProjectDecisionPageRequest::new(32, Some(cursor.clone())).expect("page request");
+        let request = ProjectInterfaceRequest::current()
+            .with_decision_page(page)
+            .expect("paged request");
+        let decoded: ProjectInterfaceRequest =
+            serde_json::from_slice(&serde_json::to_vec(&request).expect("encode request"))
+                .expect("decode request");
+        assert_eq!(
+            decoded
+                .decision_page()
+                .and_then(ProjectDecisionPageRequest::cursor),
+            Some(&cursor)
+        );
+        assert_eq!(
+            ProjectDecisionPageCursor::new(6, 7, "decision:neutral")
+                .expect_err("cursor cannot exceed snapshot")
+                .code(),
+            "project_decision_cursor_invalid"
         );
     }
 }

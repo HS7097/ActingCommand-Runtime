@@ -7,13 +7,13 @@ use actingcommand_contract::{
     AgentWakeId, ApplicationLifecycleAction, ApprovalDecisionRecord, CaptureSequenceSpec,
     CatalogProposal, ClientActionRecord, ContainedTaskRequest, CorrelationId, EventActor,
     EventQuery, EventSource, IdentifierIssuer, InputAction, IssuedCorrelationId, LeaseQueuePolicy,
-    LeaseQueueStatus, LeaseToken, OwnerEpoch, PackageDebugRequest, ProjectInterfaceRequest,
-    ProjectInterfaceSnapshot, ProjectedEvent, ProjectionProfile, ProposalPreview,
-    ProposalPromotion, RUNTIME_INFO_FILE, RequestId, ResourceAuthoringEvent,
-    RuntimeControlPlaneStatus, RuntimeDebugEvent, RuntimeEventBatch, RuntimeEvidenceExportRequest,
-    RuntimeInfo, RuntimeMonitorInstanceStatus, RuntimeMonitorPolicy, RuntimeMonitorRegistryStatus,
-    RuntimeOperation, RuntimeReceipt, RuntimeRequest, RuntimeResult, RuntimeSubscriptionRequest,
-    TerminalEvent,
+    LeaseQueueStatus, LeaseToken, OwnerEpoch, PackageDebugRequest, ProjectDecisionPageCursor,
+    ProjectDecisionPageRequest, ProjectInterfaceRequest, ProjectInterfaceSnapshot, ProjectedEvent,
+    ProjectionProfile, ProposalPreview, ProposalPromotion, RUNTIME_INFO_FILE, RequestId,
+    ResourceAuthoringEvent, RuntimeControlPlaneStatus, RuntimeDebugEvent, RuntimeEventBatch,
+    RuntimeEvidenceExportRequest, RuntimeInfo, RuntimeMonitorInstanceStatus, RuntimeMonitorPolicy,
+    RuntimeMonitorRegistryStatus, RuntimeOperation, RuntimeReceipt, RuntimeRequest, RuntimeResult,
+    RuntimeSubscriptionRequest, TerminalEvent,
 };
 use serde::Serialize;
 use std::fmt;
@@ -983,6 +983,25 @@ impl RuntimeProjectClient {
     pub fn snapshot(&self) -> RuntimeClientResult<ProjectInterfaceSnapshot> {
         self.client
             .project_snapshot(ProjectInterfaceRequest::current())
+    }
+
+    pub fn snapshot_page(
+        &self,
+        limit: u16,
+        cursor: Option<ProjectDecisionPageCursor>,
+    ) -> RuntimeClientResult<ProjectInterfaceSnapshot> {
+        let page = ProjectDecisionPageRequest::new(limit, cursor).map_err(|_| {
+            RuntimeClientError::fatal("runtime_project_page_invalid", "runtime_project_interface")
+        })?;
+        let request = ProjectInterfaceRequest::current()
+            .with_decision_page(page)
+            .map_err(|_| {
+                RuntimeClientError::fatal(
+                    "runtime_project_page_invalid",
+                    "runtime_project_interface",
+                )
+            })?;
+        self.client.project_snapshot(request)
     }
 
     pub fn snapshot_with_versions(

@@ -23,6 +23,8 @@ pub const MAX_INSTANCE_OVERRIDES_PER_TASK: usize = 128;
 pub const MAX_BUDGET_COUNT: u32 = 1_000_000;
 pub const MAX_CLOCK_DRIFT_MS: i64 = 604_800_000;
 pub const MAX_FACT_MAX_AGE_MS: u64 = 31_536_000_000;
+pub const MIN_CANONICAL_INTEGER: i64 = -9_007_199_254_740_991;
+pub const MAX_CANONICAL_INTEGER: i64 = 9_007_199_254_740_991;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(transparent)]
@@ -651,6 +653,75 @@ mod tests {
 
         for schema in schemas {
             serde_json::from_str::<serde_json::Value>(schema).expect("schema JSON");
+        }
+    }
+
+    #[test]
+    fn published_integer_schemas_are_bounded_to_jcs_safe_values() {
+        fn verify(value: &serde_json::Value, path: &str) {
+            match value {
+                serde_json::Value::Object(fields) => {
+                    let integer_type = fields.get("type").is_some_and(|kind| {
+                        kind.as_str() == Some("integer")
+                            || kind
+                                .as_array()
+                                .is_some_and(|kinds| kinds.iter().any(|kind| kind == "integer"))
+                    });
+                    if integer_type {
+                        let minimum = fields
+                            .get("minimum")
+                            .and_then(serde_json::Value::as_i64)
+                            .unwrap_or_else(|| panic!("integer minimum missing at {path}"));
+                        let maximum = fields
+                            .get("maximum")
+                            .and_then(serde_json::Value::as_i64)
+                            .unwrap_or_else(|| panic!("integer maximum missing at {path}"));
+                        assert!(
+                            minimum >= MIN_CANONICAL_INTEGER && maximum <= MAX_CANONICAL_INTEGER,
+                            "integer bounds exceed JCS safe range at {path}"
+                        );
+                    }
+                    for (key, child) in fields {
+                        verify(child, &format!("{path}/{key}"));
+                    }
+                }
+                serde_json::Value::Array(items) => {
+                    for (index, child) in items.iter().enumerate() {
+                        verify(child, &format!("{path}/{index}"));
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        for (name, schema) in [
+            (
+                "common",
+                include_str!("../../../contracts/scheduling/common.schema.json"),
+            ),
+            (
+                "tasks",
+                include_str!("../../../contracts/scheduling/tasks.schema.json"),
+            ),
+            (
+                "pools",
+                include_str!("../../../contracts/scheduling/pools.schema.json"),
+            ),
+            (
+                "activity",
+                include_str!("../../../contracts/scheduling/activity.schema.json"),
+            ),
+            (
+                "timeline",
+                include_str!("../../../contracts/scheduling/timeline.schema.json"),
+            ),
+            (
+                "diagnostic",
+                include_str!("../../../contracts/scheduling/diagnostic.schema.json"),
+            ),
+        ] {
+            let schema = serde_json::from_str::<serde_json::Value>(schema).expect("schema JSON");
+            verify(&schema, name);
         }
     }
 
