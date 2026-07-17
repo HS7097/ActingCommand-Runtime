@@ -8,6 +8,7 @@ These files are versioned data and protocol contracts between the runtime decisi
 - `runtime-events.schema.json` — WebSocket event envelope and payload schema.
 - `task-flow.schema.json` — declarative task-flow schema.
 - `sqlite/schema.sql` — authoritative versioned Runtime state, migration, and release-set schema.
+- `runtime-project-interface.md` — versioned read-only project projection and compatibility matrix.
 - `server-keys.md` — persisted server variant key policy.
 - `primitive-service.md` — language-neutral execution-layer boundary for Rust or other worker implementations.
 - `scheduling/` — frozen four-document scheduling catalog, diagnostics, canonical hash contract, and neutral examples.
