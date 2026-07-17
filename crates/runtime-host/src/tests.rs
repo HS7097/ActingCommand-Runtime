@@ -14,20 +14,22 @@ use actingcommand_contract::{
     EventQuery, EventSeverity, EventSource, EventType, FactContent, FactRecord, FactScope,
     FactTtlPolicy, FactTtlSource, FactValue as ContractFactValue, IdentifierIssuer, InputAction,
     InstanceFactContext, InstanceId, IssuedCorrelationId, LeasePriority, LeaseQueuePolicy,
-    LeaseQueueStatus, LeaseToken, MonitorDiagnosis, MonitorDisposition, MonitorObservation,
-    MonitorPayload, MonitorRecoveryCoordinationReason, MonitorRecoveryKind, OriginModule,
-    PerformanceControlLevel, PerformanceMonitorHealth, PolicyExecutionOutcome, PolicyFailureClass,
-    PolicyFailureDisposition, PolicyPayload, PolicyPlanningSignalEventData,
-    PolicyPlanningSignalKind, ProjectDecisionPageRequest, ProjectDecisionState,
-    ProjectInterfaceRequest, ProjectLedgerSnapshot, ProjectedArtifactReference, ProjectionPayload,
-    ProjectionProfile, ProposalClass, ProposalDisposition, ProposalDocument, ProposalKind,
-    ProposalPatchOperation, PublicEventPayload, RUNTIME_INFO_FILE, ReleasePayload,
-    ReleaseResourceVersion, ReleaseTransitionKind, ResourceAuthoringEvent, ResourceAuthoringPhase,
-    RuntimeCaptureBackend, RuntimeErrorCode, RuntimeEventQueryCursor, RuntimeEventQueryPageRequest,
-    RuntimeMonitorPolicy, RuntimeOperation, RuntimePlanningDocument, RuntimePlanningDocumentKind,
-    RuntimeReceipt, RuntimeReceiptState, RuntimeReleaseSet, RuntimeRequest, RuntimeResult,
-    RuntimeStrategicReportRequest, StatePayload, StateRecoveryAction, StateValidationResult,
-    TaskOutcome, TaskPayload, TaskSemanticFact, TaskTemplateInstantiation, TerminalEvent,
+    LeaseQueueStatus, LeaseToken, MAX_RUNTIME_PLANNING_DOCUMENT_BYTES, MonitorDiagnosis,
+    MonitorDisposition, MonitorObservation, MonitorPayload, MonitorRecoveryCoordinationReason,
+    MonitorRecoveryKind, OriginModule, PerformanceControlLevel, PerformanceMonitorHealth,
+    PolicyExecutionOutcome, PolicyFailureClass, PolicyFailureDisposition, PolicyPayload,
+    PolicyPlanningSignalEventData, PolicyPlanningSignalKind, ProjectDecisionPageRequest,
+    ProjectDecisionState, ProjectInterfaceRequest, ProjectLedgerSnapshot,
+    ProjectedArtifactReference, ProjectionPayload, ProjectionProfile, ProposalClass,
+    ProposalDisposition, ProposalDocument, ProposalKind, ProposalPatchOperation,
+    PublicEventPayload, RUNTIME_INFO_FILE, ReleasePayload, ReleaseResourceVersion,
+    ReleaseTransitionKind, ResourceAuthoringEvent, ResourceAuthoringPhase, RuntimeCaptureBackend,
+    RuntimeErrorCode, RuntimeEventQueryCursor, RuntimeEventQueryPageRequest,
+    RuntimeForwardProjectionRequest, RuntimeMonitorPolicy, RuntimeOperation,
+    RuntimePlanningDocument, RuntimePlanningDocumentKind, RuntimeReceipt, RuntimeReceiptState,
+    RuntimeReleaseSet, RuntimeRequest, RuntimeResult, RuntimeStrategicReportRequest, StatePayload,
+    StateRecoveryAction, StateValidationResult, TaskOutcome, TaskPayload, TaskSemanticFact,
+    TaskTemplateInstantiation, TerminalEvent,
 };
 use actingcommand_device::{
     CaptureBackend, CaptureBackendName, DeviceError, DeviceResult, Frame, InputBackend, PixelFormat,
@@ -807,6 +809,45 @@ fn budget_policy_sources(version: u64) -> CatalogSources {
     sources
 }
 
+fn high_volume_forward_policy_sources(version: u64) -> CatalogSources {
+    let mut sources = policy_sources(version);
+    let mut tasks: serde_json::Value =
+        serde_json::from_slice(&sources.tasks.bytes).expect("forward task fixture");
+    tasks["tasks"][0]["trigger"] = serde_json::json!({
+        "kind": "clock",
+        "schedule": {
+            "kind": "interval",
+            "clock_source": {"kind": "local"},
+            "every_ms": 1,
+            "anchor_ms": 0
+        }
+    });
+    tasks["tasks"][0]["expected_duration_ms"] = serde_json::json!(1);
+    tasks["tasks"][0]["cooldown_ms"] = serde_json::json!(0);
+    tasks["tasks"][0]["loop_budget"] = serde_json::json!({
+        "daily_limit": 1_000_000,
+        "window_iteration_limit": 1_000_000,
+        "max_runtime_ms": 1_000_000
+    });
+    sources.tasks.bytes = serde_json::to_vec_pretty(&tasks).expect("forward task bytes");
+
+    let mut activity: serde_json::Value =
+        serde_json::from_slice(&sources.activity.bytes).expect("forward activity fixture");
+    activity["profiles"][0]["windows"] = serde_json::json!([{
+        "weekdays": [1, 2, 3, 4, 5, 6, 7],
+        "utc_offset_minutes": 0,
+        "start_minute_of_day": 0,
+        "end_minute_of_day": 0
+    }]);
+    activity["profiles"][0]["daily_budget"] = serde_json::json!(1_000_000);
+    activity["profiles"][0]["max_window_iterations"] = serde_json::json!(1_000_000);
+    activity["profiles"][0]["session_max_ms"] = serde_json::json!(1_000_000);
+    activity["profiles"][0]["minimum_interval_ms"] = serde_json::json!(1);
+    activity["profiles"][0]["maximum_interval_ms"] = serde_json::json!(1);
+    sources.activity.bytes = serde_json::to_vec_pretty(&activity).expect("forward activity bytes");
+    sources
+}
+
 fn pending_policy_sources(version: u64) -> CatalogSources {
     let mut sources = policy_sources(version);
     let mut tasks: serde_json::Value =
@@ -896,11 +937,66 @@ fn strategy_policy_sources(version: u64) -> CatalogSources {
     sources
 }
 
+fn large_strategy_policy_sources(version: u64) -> CatalogSources {
+    let mut sources = strategy_policy_sources(version);
+    let mut tasks: serde_json::Value =
+        serde_json::from_slice(&sources.tasks.bytes).expect("large strategy task fixture");
+    tasks["tasks"][0]["yield_points"] = serde_json::Value::Array(
+        (0..128)
+            .map(|index| {
+                serde_json::Value::String(format!("checkpoint.{index:03}.{}", "x".repeat(108)))
+            })
+            .collect(),
+    );
+    sources.tasks.bytes = serde_json::to_vec_pretty(&tasks).expect("large strategy task bytes");
+    sources
+}
+
 fn strategy_report(
     base: &CatalogGeneration,
     evidence: &ProjectedArtifactReference,
     as_of_ledger_position: u64,
 ) -> StrategicReport {
+    strategy_report_with_assessments(
+        base,
+        evidence,
+        as_of_ledger_position,
+        vec![
+            StrategicInstanceAssessment {
+                goal_id: "goal.primary".to_owned(),
+                instance_id: "fixture-instance-a".to_owned(),
+                game_id: "fixture-game-a".to_owned(),
+                fact_snapshot_id: "snapshot:strategy-a".to_owned(),
+                current_projection: Some(50),
+                production_rate_per_hour: Some(100),
+                target: 100,
+                deadline_unix_ms: POLICY_NOW_UNIX_MS + 3_600_000,
+                available: true,
+                capability_ids: vec!["operation.observe".to_owned()],
+            },
+            StrategicInstanceAssessment {
+                goal_id: "goal.primary".to_owned(),
+                instance_id: "fixture-instance-b".to_owned(),
+                game_id: "fixture-game-a".to_owned(),
+                fact_snapshot_id: "snapshot:strategy-b".to_owned(),
+                current_projection: Some(0),
+                production_rate_per_hour: Some(10),
+                target: 100,
+                deadline_unix_ms: POLICY_NOW_UNIX_MS + 3_600_000,
+                available: true,
+                capability_ids: vec!["operation.observe".to_owned()],
+            },
+        ],
+    )
+}
+
+fn strategy_report_with_assessments(
+    base: &CatalogGeneration,
+    evidence: &ProjectedArtifactReference,
+    as_of_ledger_position: u64,
+    assessments: Vec<StrategicInstanceAssessment>,
+) -> StrategicReport {
+    let max_active = u16::try_from(assessments.len()).expect("bounded assessment count");
     let artifact_id = serde_json::to_value(evidence.artifact_id)
         .expect("artifact id JSON")
         .as_str()
@@ -959,34 +1055,9 @@ fn strategy_report(
                 top_n: 1,
             },
         }],
-        vec![
-            StrategicInstanceAssessment {
-                goal_id: "goal.primary".to_owned(),
-                instance_id: "fixture-instance-a".to_owned(),
-                game_id: "fixture-game-a".to_owned(),
-                fact_snapshot_id: "snapshot:strategy-a".to_owned(),
-                current_projection: Some(50),
-                production_rate_per_hour: Some(100),
-                target: 100,
-                deadline_unix_ms: POLICY_NOW_UNIX_MS + 3_600_000,
-                available: true,
-                capability_ids: vec!["operation.observe".to_owned()],
-            },
-            StrategicInstanceAssessment {
-                goal_id: "goal.primary".to_owned(),
-                instance_id: "fixture-instance-b".to_owned(),
-                game_id: "fixture-game-a".to_owned(),
-                fact_snapshot_id: "snapshot:strategy-b".to_owned(),
-                current_projection: Some(0),
-                production_rate_per_hour: Some(10),
-                target: 100,
-                deadline_unix_ms: POLICY_NOW_UNIX_MS + 3_600_000,
-                available: true,
-                capability_ids: vec!["operation.observe".to_owned()],
-            },
-        ],
+        assessments,
         CohortBudgets {
-            max_active: 2,
+            max_active,
             max_prompt: 1,
         },
     )
@@ -1266,6 +1337,36 @@ fn policy_resources() -> EvaluationResources {
             active_heavy_dispatches: 0,
         }],
     }
+}
+
+fn forward_projection_request(
+    facts: &EvaluationFacts,
+    config: ForwardProjectionConfig,
+) -> RuntimeForwardProjectionRequest {
+    RuntimeForwardProjectionRequest::new(
+        RuntimePlanningDocument::encode(RuntimePlanningDocumentKind::EvaluationFacts, facts)
+            .expect("evaluation facts document"),
+        RuntimePlanningDocument::encode(
+            RuntimePlanningDocumentKind::EvaluationResources,
+            &policy_resources(),
+        )
+        .expect("evaluation resources document"),
+        RuntimePlanningDocument::encode(
+            RuntimePlanningDocumentKind::EvaluationTime,
+            &EvaluationTime {
+                unix_ms: POLICY_NOW_UNIX_MS,
+                monotonic_ms: POLICY_NOW_UNIX_MS,
+            },
+        )
+        .expect("evaluation time document"),
+        17,
+        RuntimePlanningDocument::encode(
+            RuntimePlanningDocumentKind::ForwardProjectionConfig,
+            &config,
+        )
+        .expect("forward config document"),
+    )
+    .expect("forward projection request")
 }
 
 fn pending_policy_resources() -> EvaluationResources {
@@ -8848,6 +8949,199 @@ fn proposal_rejects_unverified_reports_and_invalid_packs_without_partial_activat
         .len(),
         1
     );
+    drop(client);
+    host.close().expect("close runtime");
+}
+
+#[test]
+fn planning_ipc_rejects_external_authority_fact_conflicts_without_poisoning_runtime() {
+    let root = TempDir::new().expect("tempdir");
+    let host = RuntimeHost::start(
+        config(&root),
+        Arc::new(FakeProvider::one(
+            POLICY_INSTANCE_ALIAS,
+            instance_id(),
+            Arc::new(FakeState::default()),
+        )),
+    )
+    .expect("runtime host");
+    host.activate_policy_catalog(&policy_sources(1))
+        .expect("policy catalog");
+    host.publish_fact(stored_fact(
+        FactScope::Instance {
+            instance_id: POLICY_INSTANCE_ALIAS.to_owned(),
+        },
+        "env.ui_theme",
+        ContractFactValue::String("Neutral".to_owned()),
+        "snapshot:authority-conflict",
+        Vec::new(),
+    ))
+    .expect("authoritative fact");
+    let mut facts = policy_facts();
+    facts.facts.push(ObservedFact {
+        scope: ScopeSelector::Instance {
+            instance_id: POLICY_INSTANCE_ALIAS.to_owned(),
+        },
+        fact_key: "env.ui_theme".to_owned(),
+        value: FactValue::String("CallerValue".to_owned()),
+        observed_at_unix_ms: POLICY_NOW_UNIX_MS,
+        expires_at_unix_ms: Some(POLICY_NOW_UNIX_MS + 60_000),
+        confidence_milli: 1_000,
+    });
+
+    let mut client = TestClient::connect(&host);
+    let request = forward_projection_request(
+        &facts,
+        ForwardProjectionConfig::for_hours(1, 4).expect("projection config"),
+    );
+    let request = client.agent_request(RuntimeOperation::ProjectPolicyForward {
+        request: Box::new(request),
+    });
+    let receipt = client.send(&request);
+    assert_eq!(receipt.state(), RuntimeReceiptState::Denied);
+    assert!(matches!(
+        receipt.error_projection(),
+        Some(error) if error.code == RuntimeErrorCode::InvalidRequest && !error.fatal
+    ));
+    assert!(host.fatal_error().expect("runtime health").is_none());
+    let status = client.request(RuntimeOperation::Status);
+    assert_eq!(client.send(&status).state(), RuntimeReceiptState::Completed);
+    drop(client);
+    host.close().expect("close runtime");
+}
+
+#[test]
+fn planning_ipc_rejects_oversized_forward_projection_without_poisoning_runtime() {
+    let root = TempDir::new().expect("tempdir");
+    let host = RuntimeHost::start(
+        config(&root),
+        Arc::new(FakeProvider::one(
+            POLICY_INSTANCE_ALIAS,
+            instance_id(),
+            Arc::new(FakeState::default()),
+        )),
+    )
+    .expect("runtime host");
+    host.activate_policy_catalog(&high_volume_forward_policy_sources(1))
+        .expect("high-volume policy catalog");
+    let config = ForwardProjectionConfig::next_24_hours();
+    let projection = host
+        .project_policy_forward(
+            &policy_facts(),
+            &policy_resources(),
+            EvaluationTime {
+                unix_ms: POLICY_NOW_UNIX_MS,
+                monotonic_ms: POLICY_NOW_UNIX_MS,
+            },
+            17,
+            config,
+        )
+        .expect("bounded forward projection");
+    assert_eq!(projection.steps.len(), 4_096);
+    assert!(
+        serde_json::to_vec(&projection)
+            .expect("projection bytes")
+            .len()
+            > MAX_RUNTIME_PLANNING_DOCUMENT_BYTES
+    );
+
+    let mut client = TestClient::connect(&host);
+    let request = forward_projection_request(&policy_facts(), config);
+    let request = client.agent_request(RuntimeOperation::ProjectPolicyForward {
+        request: Box::new(request),
+    });
+    let receipt = client.send(&request);
+    assert_eq!(receipt.state(), RuntimeReceiptState::Denied);
+    assert!(matches!(
+        receipt.error_projection(),
+        Some(error) if error.code == RuntimeErrorCode::InvalidRequest && !error.fatal
+    ));
+    assert!(host.fatal_error().expect("runtime health").is_none());
+    let status = client.request(RuntimeOperation::Status);
+    assert_eq!(client.send(&status).state(), RuntimeReceiptState::Completed);
+    drop(client);
+    host.close().expect("close runtime");
+}
+
+#[test]
+fn strategic_planning_overrun_does_not_publish_report_or_poison_runtime() {
+    let root = TempDir::new().expect("tempdir");
+    let host = RuntimeHost::start(
+        config(&root),
+        Arc::new(FakeProvider::one(
+            POLICY_INSTANCE_ALIAS,
+            instance_id(),
+            Arc::new(FakeState::default()),
+        )),
+    )
+    .expect("runtime host");
+    let sources = large_strategy_policy_sources(1);
+    let compiled = actingcommand_policy::compile_catalog(&sources).expect("compiled catalog");
+    let base = host
+        .activate_policy_catalog(&sources)
+        .expect("large strategy catalog");
+    let evidence = host
+        .store_test_report(b"synthetic oversized strategy evidence")
+        .expect("strategy evidence");
+    let assessments = (0..29)
+        .map(|index| StrategicInstanceAssessment {
+            goal_id: "goal.primary".to_owned(),
+            instance_id: format!("fixture-instance-{index:02}"),
+            game_id: "fixture-game-a".to_owned(),
+            fact_snapshot_id: format!("snapshot:strategy-{index:02}"),
+            current_projection: Some(0),
+            production_rate_per_hour: Some(10),
+            target: 100,
+            deadline_unix_ms: POLICY_NOW_UNIX_MS + 3_600_000,
+            available: true,
+            capability_ids: vec!["operation.observe".to_owned()],
+        })
+        .collect();
+    let report = strategy_report_with_assessments(
+        &base,
+        &evidence,
+        verified_artifact_sequence(&host, &evidence),
+        assessments,
+    );
+    let report_document =
+        RuntimePlanningDocument::encode(RuntimePlanningDocumentKind::StrategicReport, &report)
+            .expect("bounded strategic report input");
+    let projection = actingcommand_policy::project_strategic_report(&compiled, &report)
+        .expect("derived strategic projection");
+    assert!(
+        serde_json::to_vec(&projection)
+            .expect("strategic projection bytes")
+            .len()
+            > MAX_RUNTIME_PLANNING_DOCUMENT_BYTES
+    );
+
+    let mut client = TestClient::connect(&host);
+    let request = RuntimeStrategicReportRequest::new(report_document, vec![evidence])
+        .expect("strategic report request");
+    let request = client.agent_request(RuntimeOperation::PrepareStrategicReport {
+        request: Box::new(request),
+    });
+    let receipt = client.send(&request);
+    assert_eq!(receipt.state(), RuntimeReceiptState::Denied);
+    assert!(matches!(
+        receipt.error_projection(),
+        Some(error) if error.code == RuntimeErrorCode::InvalidRequest && !error.fatal
+    ));
+    assert!(host.fatal_error().expect("runtime health").is_none());
+    assert!(
+        projected_events(
+            &mut client,
+            EventQuery {
+                event_type: Some(EventType::ArtifactVerified),
+                ..EventQuery::default()
+            }
+        )
+        .iter()
+        .flat_map(|event| event.artifacts.iter())
+        .all(|artifact| artifact.kind() != ArtifactKind::StrategyReport)
+    );
+    let status = client.request(RuntimeOperation::Status);
+    assert_eq!(client.send(&status).state(), RuntimeReceiptState::Completed);
     drop(client);
     host.close().expect("close runtime");
 }

@@ -36,7 +36,7 @@ use actingcommand_artifact_store::{
     ArtifactWriteContext, ArtifactWriteRequest, CapturePipelineCounts, CapturePipelineSummary,
     EvidenceExportDocuments, EvidenceExportIdentity, EvidenceExportRequest, EvidenceExporter,
     EvidenceJsonDocument, EvidencePackage, PackageVerification, PersistedFrameEvidence,
-    read_projected_verified,
+    PreparedArtifact, read_projected_verified,
 };
 use actingcommand_contract::{
     AgentPayloadDraft, AgentSessionContext, AgentSessionId, AgentSessionResponse,
@@ -61,16 +61,16 @@ use actingcommand_contract::{
     ProposalPromotion, RUNTIME_INFO_FILE, ReadonlyObservation, RecognitionPayloadDraft,
     RecognitionVerdict, ReleasePayload, ReleasePayloadDraft, ReleaseTransitionKind, RequestId,
     ResourceAuthoringEvent, ResourceAuthoringPayloadDraft, ResourceAuthoringPhase, RetentionClass,
-    RuntimeCaptureBackend, RuntimeControlPlaneStatus, RuntimeDebugEvent, RuntimeDebugOperation,
-    RuntimeDebugPhase, RuntimeErrorCode, RuntimeErrorProjection, RuntimeEventBatch,
-    RuntimeEventQueryCursor, RuntimeEventQueryPage, RuntimeEventQueryPageRequest,
-    RuntimeEvidenceExportRequest, RuntimeEvidenceExportSummary, RuntimeEvidenceScreenshotCounts,
-    RuntimeInfo, RuntimeInstanceStatus, RuntimeMaintenanceQuery, RuntimeMonitorPolicy,
-    RuntimeOperation, RuntimePayloadDraft, RuntimePlanningDocument, RuntimePlanningDocumentKind,
-    RuntimeReceipt, RuntimeReceiptState, RuntimeReleaseSet, RuntimeRequest, RuntimeResult,
-    RuntimeStrategicPlanResult, RuntimeSubscriptionRequest, SchedulerPayloadDraft, StatePayload,
-    StatePayloadDraft, TaskOutcome, TaskPayload, TaskPayloadDraft, TaskSemanticFact, TerminalEvent,
-    ValidatedRuntimeRequest,
+    RuntimeCaptureBackend, RuntimeContractError, RuntimeControlPlaneStatus, RuntimeDebugEvent,
+    RuntimeDebugOperation, RuntimeDebugPhase, RuntimeErrorCode, RuntimeErrorProjection,
+    RuntimeEventBatch, RuntimeEventQueryCursor, RuntimeEventQueryPage,
+    RuntimeEventQueryPageRequest, RuntimeEvidenceExportRequest, RuntimeEvidenceExportSummary,
+    RuntimeEvidenceScreenshotCounts, RuntimeInfo, RuntimeInstanceStatus, RuntimeMaintenanceQuery,
+    RuntimeMonitorPolicy, RuntimeOperation, RuntimePayloadDraft, RuntimePlanningDocument,
+    RuntimePlanningDocumentKind, RuntimeReceipt, RuntimeReceiptState, RuntimeReleaseSet,
+    RuntimeRequest, RuntimeResult, RuntimeStrategicPlanResult, RuntimeSubscriptionRequest,
+    SchedulerPayloadDraft, StatePayload, StatePayloadDraft, TaskOutcome, TaskPayload,
+    TaskPayloadDraft, TaskSemanticFact, TerminalEvent, ValidatedRuntimeRequest,
 };
 use actingcommand_device::{CaptureBackendName, Frame};
 use actingcommand_execution_kernel::{
@@ -2346,7 +2346,7 @@ impl HostShared {
                 .ledger
                 .latest_sequence()
                 .map_err(|_| ledger_error("project_forward_fact_position"))?;
-            fact_projection.overlay_policy_facts(facts, resources, ledger_position)?
+            fact_projection.overlay_external_policy_facts(facts, resources, ledger_position)?
         };
         let (catalog, workloads) = {
             let policy = lock(&self.policy, "project_forward_catalog")?;
@@ -4367,27 +4367,11 @@ impl HostShared {
             RuntimePlanningDocumentKind::StrategicReport,
             "prepare_strategic_report",
         )?;
-        let prepared = self
-            .prepare_strategic_report(&report, evidence)
+        let plan = self
+            .prepare_strategic_report_with(&report, evidence, |_, transport_plan| {
+                Ok(transport_plan)
+            })
             .map_err(planning_request_failure)?;
-        let projection = encode_planning_document(
-            RuntimePlanningDocumentKind::StrategicProjection,
-            prepared.projection(),
-            "prepare_strategic_report",
-        )?;
-        let plan = RuntimeStrategicPlanResult::new(
-            prepared.report().clone(),
-            projection,
-            prepared.proposal().cloned(),
-            prepared.preview().cloned(),
-        )
-        .map_err(|_| {
-            RequestFailure::poison_without_terminal(RuntimeHostError::fatal(
-                "strategic_plan_result_invalid",
-                "prepare_strategic_report",
-                RuntimeErrorCode::RuntimeFatal,
-            ))
-        })?;
         Ok(OperationSuccess {
             state: RuntimeReceiptState::Completed,
             terminal: None,
@@ -4432,7 +4416,8 @@ impl HostShared {
             RuntimePlanningDocumentKind::ForwardProjection,
             &projection,
             "project_policy_forward",
-        )?;
+        )
+        .map_err(planning_request_failure)?;
         Ok(OperationSuccess {
             state: RuntimeReceiptState::Completed,
             terminal: None,
@@ -4468,7 +4453,8 @@ impl HostShared {
             RuntimePlanningDocumentKind::MaintenanceAssessmentV2,
             &assessment,
             "assess_predictive_maintenance",
-        )?;
+        )
+        .map_err(planning_request_failure)?;
         Ok(OperationSuccess {
             state: RuntimeReceiptState::Completed,
             terminal: None,
@@ -4652,6 +4638,18 @@ impl HostShared {
         report: &StrategicReport,
         evidence: &[ProjectedArtifactReference],
     ) -> RuntimeHostResult<StrategicPlanPreparation> {
+        self.prepare_strategic_report_with(report, evidence, |prepared, _| Ok(prepared.clone()))
+    }
+
+    fn prepare_strategic_report_with<T>(
+        &self,
+        report: &StrategicReport,
+        evidence: &[ProjectedArtifactReference],
+        finalize: impl FnOnce(
+            &StrategicPlanPreparation,
+            RuntimeStrategicPlanResult,
+        ) -> RuntimeHostResult<T>,
+    ) -> RuntimeHostResult<T> {
         let result = (|| {
             let _gate = lock(&self.proposal_write_gate, "prepare_strategic_report")?;
             report.validate().map_err(|_| {
@@ -4690,6 +4688,11 @@ impl HostShared {
                         RuntimeErrorCode::InvalidRequest,
                     )
                 })?;
+            let projection_document = encode_planning_document(
+                RuntimePlanningDocumentKind::StrategicProjection,
+                &projection,
+                "prepare_strategic_report",
+            )?;
             let bytes = report.canonical_bytes().map_err(|_| {
                 RuntimeHostError::fatal(
                     "strategic_report_encode_failed",
@@ -4697,7 +4700,8 @@ impl HostShared {
                     RuntimeErrorCode::RuntimeFatal,
                 )
             })?;
-            let report_reference = self.store_or_reuse_strategic_report(&bytes)?;
+            let (report_reference, prepared_artifact) =
+                self.prepare_or_reuse_strategic_report(&bytes)?;
             let proposal = build_strategy_proposal(&projection, report_reference.clone())?;
             let preview = proposal
                 .as_ref()
@@ -4706,7 +4710,20 @@ impl HostShared {
                         .and_then(|prepared| prepared.into_ready().map(|(preview, _)| preview))
                 })
                 .transpose()?;
-            StrategicPlanPreparation::new(report_reference, projection, proposal, preview)
+            let preparation =
+                StrategicPlanPreparation::new(report_reference, projection, proposal, preview)?;
+            let transport_plan = RuntimeStrategicPlanResult::new(
+                preparation.report().clone(),
+                projection_document,
+                preparation.proposal().cloned(),
+                preparation.preview().cloned(),
+            )
+            .map_err(|error| planning_result_contract_error(error, "prepare_strategic_report"))?;
+            let output = finalize(&preparation, transport_plan)?;
+            if let Some(prepared_artifact) = prepared_artifact {
+                self.commit_strategic_report(prepared_artifact, &bytes, preparation.report())?;
+            }
+            Ok(output)
         })();
         if let Err(error) = &result
             && error.is_fatal()
@@ -4770,10 +4787,10 @@ impl HostShared {
         Ok(())
     }
 
-    fn store_or_reuse_strategic_report(
+    fn prepare_or_reuse_strategic_report(
         &self,
         bytes: &[u8],
-    ) -> RuntimeHostResult<ProjectedArtifactReference> {
+    ) -> RuntimeHostResult<(ProjectedArtifactReference, Option<PreparedArtifact>)> {
         let sha256 = format!("sha256:{:x}", Sha256::digest(bytes));
         let events = self
             .ledger
@@ -4804,33 +4821,52 @@ impl HostShared {
                     RuntimeErrorCode::RuntimeFatal,
                 ));
             }
-            return Ok(reference);
+            return Ok((reference, None));
         }
         let context = ArtifactWriteContext::new(
             ArtifactLinksDraft::default(),
             self.events.system_links()?,
             unix_ms_now()?,
         );
+        let prepared = self
+            .artifacts
+            .prepare(ArtifactWriteRequest::new(
+                ArtifactKind::StrategyReport,
+                bytes,
+                context,
+                ArtifactIssuePolicy::new(
+                    ArtifactProducer::ArtifactStore,
+                    RetentionClass::Adaptive,
+                    ArtifactRedactionState::Applied,
+                ),
+            ))
+            .map_err(|_| artifact_store_error("prepare_strategic_report_artifact"))?;
+        Ok((prepared.reference().project(true), Some(prepared)))
+    }
+
+    fn commit_strategic_report(
+        &self,
+        prepared: PreparedArtifact,
+        bytes: &[u8],
+        expected: &ProjectedArtifactReference,
+    ) -> RuntimeHostResult<()> {
         let mut sink = RuntimeArtifactEventSink {
             ledger: &self.ledger,
             events: &self.events,
         };
-        self.artifacts
-            .put(
-                ArtifactWriteRequest::new(
-                    ArtifactKind::StrategyReport,
-                    bytes,
-                    context,
-                    ArtifactIssuePolicy::new(
-                        ArtifactProducer::ArtifactStore,
-                        RetentionClass::Adaptive,
-                        ArtifactRedactionState::Applied,
-                    ),
-                ),
-                &mut sink,
-            )
-            .map(|stored| stored.reference().project(true))
-            .map_err(|_| artifact_store_error("store_strategic_report"))
+        let stored = self
+            .artifacts
+            .commit_prepared(prepared, bytes, &mut sink)
+            .map_err(|_| artifact_store_error("store_strategic_report"))?;
+        let actual = stored.reference().project(true);
+        if &actual != expected {
+            return Err(RuntimeHostError::fatal(
+                "strategic_report_identity_conflict",
+                "store_strategic_report",
+                RuntimeErrorCode::RuntimeFatal,
+            ));
+        }
+        Ok(())
     }
 
     #[cfg(test)]
@@ -10602,17 +10638,28 @@ fn encode_planning_document<T>(
     kind: RuntimePlanningDocumentKind,
     value: &T,
     operation: &'static str,
-) -> Result<RuntimePlanningDocument, RequestFailure>
+) -> RuntimeHostResult<RuntimePlanningDocument>
 where
     T: serde::Serialize,
 {
-    RuntimePlanningDocument::encode(kind, value).map_err(|_| {
-        RequestFailure::poison_without_terminal(RuntimeHostError::fatal(
+    RuntimePlanningDocument::encode(kind, value)
+        .map_err(|error| planning_result_contract_error(error, operation))
+}
+
+fn planning_result_contract_error(
+    error: RuntimeContractError,
+    operation: &'static str,
+) -> RuntimeHostError {
+    match error.code() {
+        "planning_document_size_invalid" | "planning_response_size_invalid" => {
+            RuntimeHostError::request(error.code(), operation, RuntimeErrorCode::InvalidRequest)
+        }
+        _ => RuntimeHostError::fatal(
             "planning_result_encode_failed",
             operation,
             RuntimeErrorCode::RuntimeFatal,
-        ))
-    })
+        ),
+    }
 }
 
 fn planning_request_failure(error: RuntimeHostError) -> RequestFailure {
