@@ -812,6 +812,15 @@ fn pending_policy_sources(version: u64) -> CatalogSources {
 }
 
 fn detection_policy_sources(version: u64) -> CatalogSources {
+    detection_policy_sources_with_budget(version, 2, 20_000, 10_000)
+}
+
+fn detection_policy_sources_with_budget(
+    version: u64,
+    window_dispatch_limit: u32,
+    window_runtime_ms: u64,
+    expected_duration_ms: u64,
+) -> CatalogSources {
     let mut sources = policy_sources(version);
     let mut tasks: serde_json::Value =
         serde_json::from_slice(&sources.tasks.bytes).expect("detection task fixture");
@@ -847,9 +856,9 @@ fn detection_policy_sources(version: u64) -> CatalogSources {
     let mut activity: serde_json::Value =
         serde_json::from_slice(&sources.activity.bytes).expect("detection activity fixture");
     activity["profiles"][0]["detection_budget"] = serde_json::json!({
-        "window_dispatch_limit": 2,
-        "window_runtime_ms": 20000,
-        "expected_duration_ms": 10000
+        "window_dispatch_limit": window_dispatch_limit,
+        "window_runtime_ms": window_runtime_ms,
+        "expected_duration_ms": expected_duration_ms
     });
     sources.activity.bytes =
         serde_json::to_vec_pretty(&activity).expect("detection activity bytes");
@@ -5960,6 +5969,97 @@ fn detection_quota_is_persistent_informational_and_never_starves_ordinary_work()
         PolicyPlanningSignalKind::DetectionQuotaExhausted
     );
     assert!(recovered.pending_dispatch_intents.is_empty());
+    reopened.close().expect("close recovered detection runtime");
+}
+
+#[test]
+fn tightened_detection_quota_preserves_historical_usage_and_recovers() {
+    let root = TempDir::new().expect("tempdir");
+    let registered_id = instance_id();
+    let host = RuntimeHost::start(
+        config(&root),
+        Arc::new(FakeProvider::one(
+            POLICY_INSTANCE_ALIAS,
+            registered_id,
+            Arc::new(FakeState::default()),
+        )),
+    )
+    .expect("detection runtime host");
+    host.activate_policy_catalog(&detection_policy_sources_with_budget(1, 3, 30_000, 10_000))
+        .expect("activate initial detection catalog");
+
+    for index in 1_u64..=2 {
+        let cycle = host
+            .evaluate_policy_cycle_with_test_inputs(
+                &detection_policy_facts(false, &format!("snapshot:tighten-{index}")),
+                &policy_resources(),
+                EvaluationTime {
+                    unix_ms: POLICY_NOW_UNIX_MS + index * 1_000,
+                    monotonic_ms: POLICY_NOW_UNIX_MS + index * 1_000,
+                },
+                index,
+                PolicyTrigger::FactsChanged,
+            )
+            .expect("reserve initial detection quota");
+        assert_eq!(
+            cycle.detection_planning_signals[0].kind,
+            PolicyPlanningSignalKind::DetectionReserved
+        );
+    }
+
+    host.activate_policy_catalog(&detection_policy_sources_with_budget(2, 1, 5_000, 5_000))
+        .expect("tighten detection catalog");
+    let exhausted = host
+        .evaluate_policy_cycle_with_test_inputs(
+            &detection_policy_facts(false, "snapshot:tightened-exhausted"),
+            &policy_resources(),
+            EvaluationTime {
+                unix_ms: POLICY_NOW_UNIX_MS + 3_000,
+                monotonic_ms: POLICY_NOW_UNIX_MS + 3_000,
+            },
+            3,
+            PolicyTrigger::CatalogChanged,
+        )
+        .expect("tightened quota is informational");
+    assert_eq!(exhausted.detection_planning_signals.len(), 1);
+    let signal = &exhausted.detection_planning_signals[0];
+    assert_eq!(
+        signal.kind,
+        PolicyPlanningSignalKind::DetectionQuotaExhausted
+    );
+    let budget = signal.detection_budget.as_ref().expect("detection budget");
+    assert_eq!(budget.dispatch_used, 2);
+    assert_eq!(budget.dispatch_limit, 1);
+    assert_eq!(budget.runtime_reserved_ms, 20_000);
+    assert_eq!(budget.runtime_limit_ms, 5_000);
+    host.close().expect("close tightened detection runtime");
+
+    let reopened = RuntimeHost::start(
+        config(&root),
+        Arc::new(FakeProvider::one(
+            POLICY_INSTANCE_ALIAS,
+            registered_id,
+            Arc::new(FakeState::default()),
+        )),
+    )
+    .expect("reopen tightened detection runtime");
+    let recovered = reopened
+        .evaluate_policy_cycle_with_test_inputs(
+            &detection_policy_facts(false, "snapshot:tightened-recovered"),
+            &policy_resources(),
+            EvaluationTime {
+                unix_ms: POLICY_NOW_UNIX_MS + 4_000,
+                monotonic_ms: POLICY_NOW_UNIX_MS + 4_000,
+            },
+            4,
+            PolicyTrigger::Recovery,
+        )
+        .expect("recover historical over-limit quota");
+    assert_eq!(recovered.detection_planning_signals.len(), 1);
+    assert_eq!(
+        recovered.detection_planning_signals[0].kind,
+        PolicyPlanningSignalKind::DetectionQuotaExhausted
+    );
     reopened.close().expect("close recovered detection runtime");
 }
 
