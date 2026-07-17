@@ -14,6 +14,7 @@ use crate::performance::{
     system_performance_sampler,
 };
 use crate::performance_control::{PerformanceBalanceController, PerformanceDispatchGate};
+use crate::planning::collect_maintenance_evidence;
 use crate::policy_host::{LoadedCatalog, PolicyExecutionPreparation, PolicyHost};
 use crate::project_interface::{
     ProjectDiagnosticProjection, ProjectInterfaceProjection, retain_recent_diagnostics,
@@ -22,10 +23,11 @@ use crate::proposal::prepare_proposal;
 use crate::strategy::{StrategicPlanPreparation, build_strategy_proposal};
 use crate::time::unix_ms_now;
 use crate::{
-    AgentDispatcherConfig, CatalogGeneration, FatalState, PerformanceControlConfig,
-    PerformanceControlDirective, PerformanceMonitorConfig, PipelinePerformanceSignal,
-    PolicyAdmissionContext, PolicyCadence, PolicyCycle, PolicyDispatchAdmission,
-    PolicyExecutionInput, PolicyTrigger, RuntimeHostError, RuntimeHostResult,
+    AgentDispatcherConfig, CatalogGeneration, FatalState, MaintenanceLedgerQuery,
+    PerformanceControlConfig, PerformanceControlDirective, PerformanceMonitorConfig,
+    PipelinePerformanceSignal, PolicyAdmissionContext, PolicyCadence, PolicyCycle,
+    PolicyDispatchAdmission, PolicyExecutionInput, PolicyTrigger, RuntimeHostError,
+    RuntimeHostResult,
 };
 use actingcommand_artifact_store::{
     ArtifactEventSink, ArtifactStore, ArtifactStoreError, ArtifactStoreResult,
@@ -84,7 +86,9 @@ use actingcommand_pack_containment::{
 };
 use actingcommand_policy::{
     CatalogSources, DecisionReasonChain, DispatchIntent, EvaluationFacts, EvaluationResources,
-    EvaluationTime, StrategicEvidencePointer, StrategicReport, project_strategic_report,
+    EvaluationTime, ForwardProjection, ForwardProjectionConfig, MaintenanceAssessment,
+    StrategicEvidencePointer, StrategicReport, assess_predictive_maintenance, project_forward,
+    project_strategic_report,
 };
 use actingcommand_runtime_state::RuntimeStateStore;
 use actingcommand_scheduler::{
@@ -577,6 +581,28 @@ impl RuntimeHost {
     ) -> RuntimeHostResult<PolicyCycle> {
         self.shared_ref("evaluate_policy_cycle")?
             .evaluate_policy_cycle(facts, resources, time, seed, trigger)
+    }
+
+    /// Runs a bounded future dry-run through the same pure policy evaluator used for admission.
+    pub fn project_policy_forward(
+        &self,
+        facts: &EvaluationFacts,
+        resources: &EvaluationResources,
+        time: EvaluationTime,
+        seed: u64,
+        config: ForwardProjectionConfig,
+    ) -> RuntimeHostResult<ForwardProjection> {
+        self.shared_ref("project_policy_forward")?
+            .project_policy_forward(facts, resources, time, seed, config)
+    }
+
+    /// Assesses ledger-pinned trends and publishes an idempotent recheck planning signal when due.
+    pub fn assess_and_publish_predictive_maintenance(
+        &self,
+        query: &MaintenanceLedgerQuery,
+    ) -> RuntimeHostResult<MaintenanceAssessment> {
+        self.shared_ref("assess_predictive_maintenance")?
+            .assess_and_publish_predictive_maintenance(query)
     }
 
     /// Validates and durably publishes one Runtime-owned fact into the GlobalLedger.
@@ -1805,6 +1831,103 @@ impl HostShared {
             seed,
             trigger,
         )
+    }
+
+    fn project_policy_forward(
+        &self,
+        facts: &EvaluationFacts,
+        resources: &EvaluationResources,
+        time: EvaluationTime,
+        seed: u64,
+        config: ForwardProjectionConfig,
+    ) -> RuntimeHostResult<ForwardProjection> {
+        let facts = {
+            let mut fact_projection = lock(&self.facts, "project_forward_facts")?.clone();
+            fact_projection.synchronize(&self.ledger)?;
+            let ledger_position = self
+                .ledger
+                .latest_sequence()
+                .map_err(|_| ledger_error("project_forward_fact_position"))?;
+            fact_projection.overlay_policy_facts(facts, ledger_position)?
+        };
+        let (catalog, workloads) = {
+            let policy = lock(&self.policy, "project_forward_catalog")?;
+            let catalog = policy.active_loaded().ok_or_else(|| {
+                RuntimeHostError::request(
+                    "policy_catalog_unavailable",
+                    "project_policy_forward",
+                    RuntimeErrorCode::InvalidRequest,
+                )
+            })?;
+            (catalog, policy.active_performance_workloads()?)
+        };
+        let mut resources = resources.clone();
+        lock(
+            &self.performance_control,
+            "apply_forward_performance_control",
+        )?
+        .apply_to_resources(&mut resources.hosts, &workloads)?;
+        project_forward(catalog.compiled(), &facts, &resources, time, seed, config).map_err(
+            |error| {
+                RuntimeHostError::request(
+                    error.code(),
+                    "project_policy_forward",
+                    RuntimeErrorCode::InvalidRequest,
+                )
+            },
+        )
+    }
+
+    fn assess_and_publish_predictive_maintenance(
+        &self,
+        query: &MaintenanceLedgerQuery,
+    ) -> RuntimeHostResult<MaintenanceAssessment> {
+        let result: RuntimeHostResult<MaintenanceAssessment> = (|| {
+            let evidence = collect_maintenance_evidence(&self.ledger, query)?;
+            let assessment = assess_predictive_maintenance(&evidence, query.trend_policy())
+                .map_err(|error| {
+                    RuntimeHostError::request(
+                        error.code(),
+                        "assess_predictive_maintenance",
+                        RuntimeErrorCode::InvalidRequest,
+                    )
+                })?;
+            if assessment.recheck_suggested() {
+                let observed_at_unix_ms = evidence
+                    .durations
+                    .iter()
+                    .map(|sample| sample.observed_at_unix_ms)
+                    .chain(
+                        evidence
+                            .confidences
+                            .iter()
+                            .map(|sample| sample.observed_at_unix_ms),
+                    )
+                    .max()
+                    .ok_or_else(|| {
+                        RuntimeHostError::fatal(
+                            "maintenance_evidence_timestamp_missing",
+                            "assess_predictive_maintenance",
+                            RuntimeErrorCode::RuntimeFatal,
+                        )
+                    })?;
+                self.record_policy_planning_signal(PolicyPlanningSignalEventData {
+                    signal_id: format!("signal:{}", assessment.assessment_id),
+                    instance_id: query.instance_id().to_owned(),
+                    task_id: Some(query.task_id().to_owned()),
+                    kind: actingcommand_contract::PolicyPlanningSignalKind::DriftPredicted,
+                    fact_code: "maintenance_recheck_suggested".to_owned(),
+                    observed_at_unix_ms,
+                })?;
+            }
+            Ok(assessment)
+        })();
+        if let Err(error) = &result
+            && error.is_fatal()
+        {
+            self.fatal.mark(error.clone())?;
+        }
+        result
     }
 
     fn publish_fact(&self, record: FactRecord) -> RuntimeHostResult<EventId> {

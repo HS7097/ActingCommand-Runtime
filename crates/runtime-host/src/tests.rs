@@ -33,7 +33,8 @@ use actingcommand_device::{
 use actingcommand_policy::{
     CatalogDocumentSource, CatalogSources, CohortBudgets, Comparison, DecisionReasonChain,
     DispatchIntent, EvaluationFacts, EvaluationResources, EvaluationTime, FactValue,
-    HostResourceSnapshot, InstanceSnapshot, LoadProfile, MetricRef, ObservedOutcome, OutlierMetric,
+    ForwardProjectionConfig, HostResourceSnapshot, InstanceSnapshot, LoadProfile,
+    MaintenanceDisposition, MaintenanceTrendPolicy, MetricRef, ObservedOutcome, OutlierMetric,
     OutlierPolicy, PoolValueSnapshot, PredicateSpec, ScopeSelector, StrategicBand,
     StrategicEvidencePointer, StrategicGoal, StrategicInstanceAssessment, StrategicReport,
     StrategicTemplate,
@@ -930,6 +931,286 @@ fn policy_resources() -> EvaluationResources {
             active_heavy_dispatches: 0,
         }],
     }
+}
+
+#[test]
+fn forward_projection_reuses_policy_state_without_runtime_side_effects() {
+    let root = TempDir::new().expect("tempdir");
+    let state = Arc::new(FakeState::default());
+    let host = host_with_state(&root, POLICY_INSTANCE_ALIAS, Arc::clone(&state));
+    host.activate_policy_catalog(&policy_sources(1))
+        .expect("activate policy catalog");
+    host.publish_fact(stored_fact(
+        FactScope::Instance {
+            instance_id: POLICY_INSTANCE_ALIAS.to_owned(),
+        },
+        "resource.projection_only",
+        ContractFactValue::Boolean(true),
+        "snapshot:forward-read-only",
+        vec![EventType::CatalogActivated],
+    ))
+    .expect("publish projection fact");
+    host.activate_policy_catalog(&policy_sources(2))
+        .expect("activate invalidating catalog");
+    let mut client = TestClient::connect(&host);
+    let before = projected_events(&mut client, EventQuery::default());
+    drop(client);
+
+    let config = ForwardProjectionConfig::for_hours(2, 64).expect("projection config");
+    let first = host
+        .project_policy_forward(
+            &policy_facts(),
+            &policy_resources(),
+            EvaluationTime {
+                unix_ms: POLICY_NOW_UNIX_MS,
+            },
+            17,
+            config,
+        )
+        .expect("forward projection");
+    let second = host
+        .project_policy_forward(
+            &policy_facts(),
+            &policy_resources(),
+            EvaluationTime {
+                unix_ms: POLICY_NOW_UNIX_MS,
+            },
+            17,
+            config,
+        )
+        .expect("replayed forward projection");
+    assert_eq!(first, second);
+    assert!(!first.steps.is_empty());
+
+    let mut client = TestClient::connect(&host);
+    let after = projected_events(&mut client, EventQuery::default());
+    assert_eq!(before, after);
+    assert!(
+        after
+            .iter()
+            .all(|event| event.event_type != EventType::FactInvalidated)
+    );
+    assert_eq!(state.open_count.load(Ordering::SeqCst), 0);
+    assert_eq!(state.capture_open_count.load(Ordering::SeqCst), 0);
+    assert_eq!(state.input_count.load(Ordering::SeqCst), 0);
+    drop(client);
+    let snapshot = host
+        .instance_fact_snapshot(InstanceFactContext {
+            instance_id: POLICY_INSTANCE_ALIAS.to_owned(),
+            server_id: "fixture-server-a".to_owned(),
+            game_id: "fixture-game-a".to_owned(),
+        })
+        .expect("synchronize fact snapshot");
+    assert!(
+        snapshot
+            .records
+            .iter()
+            .all(|record| record.key != "resource.projection_only")
+    );
+    host.close().expect("close host");
+}
+
+#[test]
+fn predictive_maintenance_reports_missing_evidence_without_a_signal() {
+    let root = TempDir::new().expect("tempdir");
+    let state = Arc::new(FakeState::default());
+    let host = host_with_state(&root, POLICY_INSTANCE_ALIAS, Arc::clone(&state));
+    let query = MaintenanceLedgerQuery::new(
+        POLICY_INSTANCE_ALIAS,
+        "fixture.observe",
+        FactScope::Instance {
+            instance_id: POLICY_INSTANCE_ALIAS.to_owned(),
+        },
+        "resource.primary",
+        POLICY_NOW_UNIX_MS,
+        MaintenanceTrendPolicy::default(),
+    )
+    .expect("maintenance query");
+
+    let assessment = host
+        .assess_and_publish_predictive_maintenance(&query)
+        .expect("maintenance assessment");
+    assert_eq!(
+        assessment.disposition,
+        MaintenanceDisposition::EvidenceInsufficient
+    );
+    let mut client = TestClient::connect(&host);
+    assert!(
+        projected_events(
+            &mut client,
+            EventQuery {
+                event_type: Some(EventType::PolicyPlanningSignalObserved),
+                ..EventQuery::default()
+            }
+        )
+        .is_empty()
+    );
+    assert_eq!(state.open_count.load(Ordering::SeqCst), 0);
+    assert_eq!(state.capture_open_count.load(Ordering::SeqCst), 0);
+    assert_eq!(state.input_count.load(Ordering::SeqCst), 0);
+    drop(client);
+    host.close().expect("close host");
+}
+
+#[test]
+fn predictive_maintenance_publishes_one_evidence_pinned_recheck_signal() {
+    let root = TempDir::new().expect("tempdir");
+    let state = Arc::new(FakeState::default());
+    let registered_id = instance_id();
+    let durations = [100_u64, 110, 200, 240];
+    let confidences = [950_u16, 940, 800, 780];
+    let fact_scope = FactScope::Instance {
+        instance_id: POLICY_INSTANCE_ALIAS.to_owned(),
+    };
+    let mut next_evaluation_at = POLICY_NOW_UNIX_MS;
+    let mut last_observed_at = POLICY_NOW_UNIX_MS;
+
+    for (index, (&duration_ms, &confidence_milli)) in
+        durations.iter().zip(confidences.iter()).enumerate()
+    {
+        let host = RuntimeHost::start(
+            config(&root),
+            Arc::new(FakeProvider::one(
+                POLICY_INSTANCE_ALIAS,
+                registered_id,
+                Arc::clone(&state),
+            )),
+        )
+        .expect("maintenance runtime host");
+        if index == 0 {
+            host.activate_policy_catalog(&policy_sources(1))
+                .expect("activate policy catalog");
+        }
+        let mut facts = policy_facts();
+        facts.fact_snapshot_id = format!("snapshot:maintenance-cycle-{index}");
+        facts.outcomes[0].observed_at_unix_ms = next_evaluation_at;
+        let cycle = host
+            .evaluate_policy_cycle(
+                &facts,
+                &policy_resources(),
+                EvaluationTime {
+                    unix_ms: next_evaluation_at,
+                },
+                100 + u64::try_from(index).expect("bounded maintenance index"),
+                PolicyTrigger::Reconciliation,
+            )
+            .expect("maintenance policy evaluation");
+        let evaluation = cycle.evaluation.expect("maintenance evaluation");
+        let intent = evaluation
+            .dispatch_intents
+            .first()
+            .expect("maintenance dispatch intent")
+            .clone();
+        let reasons = evaluation
+            .reason_chains
+            .iter()
+            .find(|chain| chain.id == intent.reason_chain_id)
+            .expect("maintenance reason chain")
+            .clone();
+        if index == 0 {
+            record_policy_approval(&host, &intent);
+        }
+        let admission = host
+            .admit_policy_dispatch(
+                &intent,
+                &reasons,
+                &PolicyAdmissionContext {
+                    fact_ledger_position: intent.input_ledger_position,
+                    fact_snapshot_id: intent.fact_snapshot_id.clone(),
+                    approval_fact_ids: BTreeSet::new(),
+                    fencing_owner_epoch: host.runtime_info().owner_epoch(),
+                    now_unix_ms: next_evaluation_at,
+                },
+            )
+            .expect("maintenance dispatch admission");
+        let PolicyDispatchAdmission::Granted { admission, .. } = admission else {
+            panic!("expected maintenance dispatch admission")
+        };
+        last_observed_at = next_evaluation_at + duration_ms;
+        host.record_policy_dispatch_outcome(
+            &intent.decision_id,
+            last_observed_at,
+            &PolicyExecutionInput::Succeeded,
+        )
+        .expect("maintenance execution outcome");
+        host.publish_fact(FactRecord {
+            scope: fact_scope.clone(),
+            key: "resource.primary".to_owned(),
+            content: FactContent::Inline {
+                value: ContractFactValue::Integer(10),
+            },
+            observed_at_unix_ms: last_observed_at,
+            expires_at_unix_ms: None,
+            confidence_milli,
+            source_detector: "detector.maintenance".to_owned(),
+            source_snapshot_id: format!("snapshot:maintenance-{index}"),
+            schema_version: "fact.v1".to_owned(),
+            resource_bundle_hash: "a".repeat(64),
+            invalidate_on: Vec::new(),
+        })
+        .expect("maintenance confidence fact");
+        next_evaluation_at = admission.activity.next_eligible_unix_ms + 1;
+        host.close().expect("close maintenance runtime host");
+    }
+
+    let host = RuntimeHost::start(
+        config(&root),
+        Arc::new(FakeProvider::one(
+            POLICY_INSTANCE_ALIAS,
+            registered_id,
+            Arc::clone(&state),
+        )),
+    )
+    .expect("assessment runtime host");
+    let query = MaintenanceLedgerQuery::new(
+        POLICY_INSTANCE_ALIAS,
+        "fixture.observe",
+        fact_scope,
+        "resource.primary",
+        last_observed_at,
+        MaintenanceTrendPolicy::default(),
+    )
+    .expect("maintenance query");
+    let first = host
+        .assess_and_publish_predictive_maintenance(&query)
+        .expect("maintenance assessment");
+    let second = host
+        .assess_and_publish_predictive_maintenance(&query)
+        .expect("replayed maintenance assessment");
+    assert_eq!(first, second);
+    assert_eq!(first.disposition, MaintenanceDisposition::RecheckSuggested);
+    assert_eq!(first.duration_sample_count, 4);
+    assert_eq!(first.confidence_sample_count, 4);
+    let later_query = MaintenanceLedgerQuery::new(
+        POLICY_INSTANCE_ALIAS,
+        "fixture.observe",
+        FactScope::Instance {
+            instance_id: POLICY_INSTANCE_ALIAS.to_owned(),
+        },
+        "resource.primary",
+        last_observed_at + 1_000,
+        MaintenanceTrendPolicy::default(),
+    )
+    .expect("later maintenance query");
+    let later = host
+        .assess_and_publish_predictive_maintenance(&later_query)
+        .expect("later maintenance assessment");
+    assert_eq!(later.assessment_id, first.assessment_id);
+
+    let mut client = TestClient::connect(&host);
+    let signals = projected_events(
+        &mut client,
+        EventQuery {
+            event_type: Some(EventType::PolicyPlanningSignalObserved),
+            ..EventQuery::default()
+        },
+    );
+    assert_eq!(signals.len(), 1);
+    assert_eq!(state.open_count.load(Ordering::SeqCst), 0);
+    assert_eq!(state.capture_open_count.load(Ordering::SeqCst), 0);
+    assert_eq!(state.input_count.load(Ordering::SeqCst), 0);
+    drop(client);
+    host.close().expect("close host");
 }
 
 #[test]

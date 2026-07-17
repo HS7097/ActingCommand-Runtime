@@ -33,6 +33,7 @@ struct InvalidationTombstone {
     data: FactInvalidationEventData,
 }
 
+#[derive(Clone)]
 pub(crate) struct InstanceFactStore {
     active: BTreeMap<FactIdentity, StoredFact>,
     invalidated: BTreeMap<(FactIdentity, String), InvalidationTombstone>,
