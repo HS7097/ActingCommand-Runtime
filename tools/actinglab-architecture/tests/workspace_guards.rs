@@ -22,6 +22,31 @@ fn workspace_root() -> PathBuf {
         .to_path_buf()
 }
 
+const GENERIC_RUNTIME_OWNED_ROOTS: &[&str] = &[
+    "apps/actingctl",
+    "apps/actingd",
+    "benchmarks/workloads",
+    "contracts",
+    "crates/actingcommand-contract",
+    "crates/artifact-store",
+    "crates/device",
+    "crates/execution-kernel",
+    "crates/host-metrics",
+    "crates/ledger",
+    "crates/onnx-provider-support",
+    "crates/pack-containment",
+    "crates/page-detector",
+    "crates/policy",
+    "crates/recognition",
+    "crates/recognition-pack",
+    "crates/runtime-client",
+    "crates/runtime-host",
+    "crates/runtime-state",
+    "crates/scheduler",
+    "crates/vision-ffi",
+    "tests",
+];
+
 #[test]
 fn a7_interface_amendment_matches_declared_freeze() {
     assert_frozen_payload(
@@ -128,29 +153,8 @@ fn collect_rust_files(root: &Path, files: &mut Vec<PathBuf>) {
 #[test]
 fn c2_runtime_code_contracts_defaults_and_fixtures_are_project_neutral() {
     let root = workspace_root();
-    let owned_roots = [
-        "apps/actingctl",
-        "apps/actingd",
-        "benchmarks/workloads",
-        "contracts",
-        "crates/actingcommand-contract",
-        "crates/artifact-store",
-        "crates/device",
-        "crates/execution-kernel",
-        "crates/ledger",
-        "crates/onnx-provider-support",
-        "crates/pack-containment",
-        "crates/page-detector",
-        "crates/recognition",
-        "crates/recognition-pack",
-        "crates/runtime-client",
-        "crates/runtime-host",
-        "crates/scheduler",
-        "crates/vision-ffi",
-        "tests",
-    ];
     let mut files = Vec::new();
-    for owned_root in owned_roots {
+    for owned_root in GENERIC_RUNTIME_OWNED_ROOTS {
         collect_generic_runtime_files(&root.join(owned_root), &mut files);
     }
 
@@ -171,6 +175,29 @@ fn c2_runtime_code_contracts_defaults_and_fixtures_are_project_neutral() {
         "C2 generic Runtime boundary violations:\n{}",
         violations.join("\n")
     );
+}
+
+#[test]
+fn c2_runtime_guard_covers_policy_and_runtime_owned_core_siblings() {
+    for required_root in [
+        "crates/host-metrics",
+        "crates/policy",
+        "crates/runtime-state",
+    ] {
+        assert!(
+            GENERIC_RUNTIME_OWNED_ROOTS.contains(&required_root),
+            "C2 generic Runtime guard does not cover {required_root}"
+        );
+        let counterexample = "const SERVER_BA: &str = \"neutral\";";
+        let violations = inspect_generic_runtime_identity(
+            &format!("{required_root}/src/lib.rs"),
+            counterexample,
+        );
+        assert!(
+            !violations.is_empty(),
+            "C2 counterexample escaped in {required_root}"
+        );
+    }
 }
 
 #[test]
