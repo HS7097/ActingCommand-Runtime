@@ -5,7 +5,7 @@
 use crate::policy_control::{
     PolicyControlState, PolicyExecutionInput, PolicyExecutionTiming, active_activity_window,
 };
-use crate::{PerformanceControlWorkload, RuntimeHostError, RuntimeHostResult};
+use crate::{PerformanceControlWorkload, ProcedureManifest, RuntimeHostError, RuntimeHostResult};
 use actingcommand_contract::{
     EventPayload, LeaseToken, OwnerEpoch, PerformanceContext, PolicyAdmissionRecord,
     PolicyDetectionBudgetRecord, PolicyDispatchEventData, PolicyExecutionEventData,
@@ -185,6 +185,14 @@ pub struct PolicyCycle {
     pub pending_dispatch_intents: Vec<DispatchIntent>,
     pub detection_planning_signals: Vec<PolicyPlanningSignalEventData>,
     pub measurement: Option<PolicyEvaluationMeasurement>,
+}
+
+pub(crate) struct PolicyEvaluationContext<'a> {
+    pub(crate) procedure_manifest: &'a ProcedureManifest,
+    pub(crate) time: EvaluationTime,
+    pub(crate) seed: u64,
+    pub(crate) trigger: PolicyTrigger,
+    pub(crate) sampled_at_monotonic_ms: u64,
 }
 
 /// Correlates an admission request; Runtime rebuilds approval authority and current time.
@@ -598,11 +606,15 @@ impl PolicyHost {
         &mut self,
         facts: &EvaluationFacts,
         resources: &EvaluationResources,
-        time: EvaluationTime,
-        seed: u64,
-        trigger: PolicyTrigger,
-        sampled_at_monotonic_ms: u64,
+        context: PolicyEvaluationContext<'_>,
     ) -> RuntimeHostResult<PolicyCycle> {
+        let PolicyEvaluationContext {
+            procedure_manifest,
+            time,
+            seed,
+            trigger,
+            sampled_at_monotonic_ms,
+        } = context;
         let directive = self.cadence.observe(trigger, time.unix_ms)?;
         if directive.kind == PolicyRecomputeKind::Deferred {
             return Ok(PolicyCycle {
@@ -619,8 +631,9 @@ impl PolicyHost {
             .ok_or_else(|| request("policy_catalog_unavailable", "evaluate_policy_cycle"))?;
         let cost = policy_evaluation_cost(&active.compiled, facts, resources)?;
         let started = Instant::now();
-        let evaluation = evaluate(&active.compiled, facts, resources, time, seed)
+        let mut evaluation = evaluate(&active.compiled, facts, resources, time, seed)
             .map_err(|_| request("policy_evaluation_rejected", "evaluate_policy_cycle"))?;
+        procedure_manifest.bind_evaluation(&mut evaluation)?;
         let elapsed_micros = u64::try_from(started.elapsed().as_micros()).map_err(|_| {
             fatal(
                 "policy_evaluation_measurement_overflow",
@@ -778,7 +791,7 @@ impl PolicyHost {
         let Some(seen) = self.seen_dispatches.get(&intent.decision_id) else {
             return Ok(None);
         };
-        if seen.data != dispatch_event_data(intent, reason_chain) {
+        if seen.data != dispatch_event_data(intent, reason_chain)? {
             return Err(fatal(
                 "policy_decision_identity_conflict",
                 "replay_policy_dispatch",
@@ -1128,7 +1141,7 @@ impl PolicyHost {
             };
             match payload {
                 PolicyPayload::DispatchIntent(payload) => {
-                    let data = event_data(payload);
+                    let data = event_data(payload)?;
                     self.store.load_generation(payload.catalog_hash())?;
                     let record = SeenDispatch {
                         data,
@@ -1552,12 +1565,30 @@ fn detection_signal_id(kind: &str, components: &[&str]) -> String {
     format!("signal:detection:{kind}:{:x}", digest.finalize())
 }
 
-fn event_data(payload: &actingcommand_contract::PolicyDispatchPayload) -> PolicyDispatchEventData {
-    PolicyDispatchEventData {
+fn event_data(
+    payload: &actingcommand_contract::PolicyDispatchPayload,
+) -> RuntimeHostResult<PolicyDispatchEventData> {
+    for digest in [payload.package_digest(), payload.procedure_binding_digest()] {
+        let valid = digest.strip_prefix("sha256:").is_some_and(|value| {
+            value.len() == 64
+                && value
+                    .bytes()
+                    .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
+        });
+        if !valid {
+            return Err(fatal(
+                "procedure_binding_event_invalid",
+                "recover_policy_dispatches",
+            ));
+        }
+    }
+    Ok(PolicyDispatchEventData {
         decision_id: payload.decision_id().to_owned(),
         task_id: payload.task_id().to_owned(),
         instance_id: payload.instance_id().to_owned(),
         operation_id: payload.operation_id().to_owned(),
+        package_digest: payload.package_digest().to_owned(),
+        procedure_binding_digest: payload.procedure_binding_digest().to_owned(),
         reason_chain_id: payload.reason_chain_id().to_owned(),
         reasons: payload
             .reasons()
@@ -1573,18 +1604,32 @@ fn event_data(payload: &actingcommand_contract::PolicyDispatchPayload) -> Policy
         fact_snapshot_id: payload.fact_snapshot_id().to_owned(),
         approval_fact_ids: payload.approval_fact_ids().to_vec(),
         urgency_milli: payload.urgency_milli(),
-    }
+    })
 }
 
 fn dispatch_event_data(
     intent: &DispatchIntent,
     reason_chain: &DecisionReasonChain,
-) -> PolicyDispatchEventData {
-    PolicyDispatchEventData {
+) -> RuntimeHostResult<PolicyDispatchEventData> {
+    let package_digest = intent.package_digest.clone().ok_or_else(|| {
+        fatal(
+            "procedure_package_digest_missing",
+            "build_policy_dispatch_event",
+        )
+    })?;
+    let procedure_binding_digest = intent.procedure_binding_digest.clone().ok_or_else(|| {
+        fatal(
+            "procedure_binding_digest_missing",
+            "build_policy_dispatch_event",
+        )
+    })?;
+    Ok(PolicyDispatchEventData {
         decision_id: intent.decision_id.clone(),
         task_id: intent.task_id.clone(),
         instance_id: intent.instance_id.clone(),
         operation_id: intent.operation_id.clone(),
+        package_digest,
+        procedure_binding_digest,
         reason_chain_id: reason_chain.id.clone(),
         reasons: reason_chain
             .reasons
@@ -1600,7 +1645,7 @@ fn dispatch_event_data(
         fact_snapshot_id: intent.fact_snapshot_id.clone(),
         approval_fact_ids: intent.approval_refs.clone(),
         urgency_milli: intent.prerequisites.urgency_milli,
-    }
+    })
 }
 
 fn transition_dispatch<'a>(
@@ -1616,7 +1661,7 @@ fn transition_dispatch<'a>(
             "recover_policy_dispatches",
         ));
     };
-    if intent.data != event_data(payload)
+    if intent.data != event_data(payload)?
         || intent.lifecycle != expected
         || sequence <= intent.intent_sequence
     {
@@ -1684,6 +1729,8 @@ fn control_intent(
         instance_id: data.instance_id.clone(),
         operation_id: data.operation_id.clone(),
         procedure_ref: task.procedure_ref.clone(),
+        package_digest: Some(data.package_digest.clone()),
+        procedure_binding_digest: Some(data.procedure_binding_digest.clone()),
         catalog_hash: data.catalog_hash.clone(),
         catalog_version: data.catalog_version,
         input_ledger_position: data.input_ledger_position,

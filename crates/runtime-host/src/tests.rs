@@ -607,6 +607,7 @@ fn projected_task_semantic_fact(
 fn config(root: &TempDir) -> RuntimeHostConfig {
     RuntimeHostConfig::new(root.path(), b"runtime-host-test-salt")
         .with_policy_inputs(PolicyInputSnapshot::new(policy_facts(), policy_resources()))
+        .with_procedure_manifest(procedure_manifest())
         .with_governance_capability(TEST_GOVERNANCE_CAPABILITY)
         .with_io_timeout(Duration::from_millis(500))
         .with_scheduler(SchedulerConfig {
@@ -615,6 +616,48 @@ fn config(root: &TempDir) -> RuntimeHostConfig {
             lease_ttl_ms: 5_000,
             ..SchedulerConfig::default()
         })
+}
+
+fn procedure_manifest() -> ProcedureManifest {
+    procedure_manifest_with_primary(
+        b"fixture procedure observe package v1",
+        vec!["after_observation".to_owned()],
+    )
+}
+
+fn procedure_manifest_with_primary(
+    primary_package: &[u8],
+    primary_yield_points: Vec<String>,
+) -> ProcedureManifest {
+    ProcedureManifest::new(
+        [
+            "procedure.observe",
+            "procedure.observe-b",
+            "procedure.detect",
+        ]
+        .into_iter()
+        .map(|procedure_ref| {
+            let (package_digest, yield_points) = if procedure_ref == "procedure.observe" {
+                (
+                    format!("sha256:{:x}", Sha256::digest(primary_package)),
+                    primary_yield_points.clone(),
+                )
+            } else {
+                (
+                    format!("sha256:{:x}", Sha256::digest(procedure_ref.as_bytes())),
+                    vec!["after_observation".to_owned()],
+                )
+            };
+            ProcedureBinding::new(
+                procedure_ref,
+                package_digest,
+                "operation.observe",
+                yield_points,
+            )
+            .expect("procedure binding")
+        }),
+    )
+    .expect("procedure manifest")
 }
 
 fn release_set(
@@ -6269,6 +6312,135 @@ fn fact_replacement_invalidates_an_already_evaluated_dispatch() {
 }
 
 #[test]
+fn procedure_alias_rebinding_reports_package_digest_mismatch_before_lease() {
+    let root = TempDir::new().expect("tempdir");
+    let host = host_with_state(&root, POLICY_INSTANCE_ALIAS, Arc::new(FakeState::default()));
+    host.activate_policy_catalog(&policy_sources(1))
+        .expect("activate catalog");
+    let (_, intent, reasons) = evaluated_policy_dispatch(&host, PolicyTrigger::FactsChanged);
+    let original_package_digest = intent
+        .package_digest
+        .as_deref()
+        .expect("bound package digest")
+        .to_owned();
+    record_policy_approval(&host, &intent);
+
+    host.replace_procedure_manifest_for_test(procedure_manifest_with_primary(
+        b"fixture procedure observe package v2",
+        vec!["after_observation".to_owned()],
+    ))
+    .expect("replace trusted procedure manifest");
+    let error = host
+        .admit_policy_dispatch(&intent, &reasons, &policy_context(&host, &intent))
+        .expect_err("old alias binding must not reach lease admission");
+    assert_eq!(error.code(), "procedure_package_digest_mismatch");
+
+    let replacement = host
+        .evaluate_policy_cycle_with_test_inputs(
+            &policy_facts(),
+            &policy_resources(),
+            EvaluationTime {
+                unix_ms: POLICY_NOW_UNIX_MS + 60_000,
+                monotonic_ms: POLICY_NOW_UNIX_MS + 60_000,
+            },
+            7,
+            PolicyTrigger::Reconciliation,
+        )
+        .expect("evaluate replacement binding")
+        .evaluation
+        .expect("replacement evaluation")
+        .dispatch_intents
+        .into_iter()
+        .next()
+        .expect("replacement intent");
+    assert_ne!(replacement.decision_id, intent.decision_id);
+    assert_ne!(
+        replacement.package_digest.as_deref(),
+        Some(original_package_digest.as_str())
+    );
+
+    let mut client = TestClient::connect(&host);
+    assert!(
+        projected_events(
+            &mut client,
+            EventQuery {
+                event_type: Some(EventType::LeaseGranted),
+                ..EventQuery::default()
+            }
+        )
+        .is_empty()
+    );
+    drop(client);
+    host.close().expect("close host");
+}
+
+#[test]
+fn procedure_manifest_rejects_yield_point_mismatch_during_evaluation() {
+    let root = TempDir::new().expect("tempdir");
+    let host = RuntimeHost::start(
+        config(&root).with_procedure_manifest(procedure_manifest_with_primary(
+            b"fixture procedure observe package v1",
+            vec!["different_boundary".to_owned()],
+        )),
+        Arc::new(FakeProvider::one(
+            POLICY_INSTANCE_ALIAS,
+            instance_id(),
+            Arc::new(FakeState::default()),
+        )),
+    )
+    .expect("runtime host");
+    host.activate_policy_catalog(&policy_sources(1))
+        .expect("activate catalog");
+    let error = host
+        .evaluate_policy_cycle_with_test_inputs(
+            &policy_facts(),
+            &policy_resources(),
+            EvaluationTime {
+                unix_ms: POLICY_NOW_UNIX_MS,
+                monotonic_ms: POLICY_NOW_UNIX_MS,
+            },
+            7,
+            PolicyTrigger::FactsChanged,
+        )
+        .expect_err("manifest yield points must match the catalog intent");
+    assert_eq!(error.code(), "procedure_yield_points_mismatch");
+    assert!(host.fatal_error().expect("runtime health").is_none());
+    host.close().expect("close host");
+}
+
+#[test]
+fn policy_evaluation_fails_explicitly_without_a_procedure_manifest() {
+    let root = TempDir::new().expect("tempdir");
+    let host = RuntimeHost::start(
+        RuntimeHostConfig::new(root.path(), b"missing-procedure-manifest-test")
+            .with_policy_inputs(PolicyInputSnapshot::new(policy_facts(), policy_resources())),
+        Arc::new(FakeProvider::one(
+            POLICY_INSTANCE_ALIAS,
+            instance_id(),
+            Arc::new(FakeState::default()),
+        )),
+    )
+    .expect("runtime host");
+    host.activate_policy_catalog(&policy_sources(1))
+        .expect("activate catalog");
+    let error = host
+        .evaluate_policy_cycle_with_test_inputs(
+            &policy_facts(),
+            &policy_resources(),
+            EvaluationTime {
+                unix_ms: POLICY_NOW_UNIX_MS,
+                monotonic_ms: POLICY_NOW_UNIX_MS,
+            },
+            7,
+            PolicyTrigger::FactsChanged,
+        )
+        .expect_err("unconfigured manifest must not produce an unbound intent");
+    assert_eq!(error.code(), "procedure_manifest_unconfigured");
+    assert!(!error.is_fatal());
+    host.close().expect("close host");
+}
+
+#[test]
 fn concurrent_fact_replacement_and_admission_are_ledger_ordered() {
     let root = TempDir::new().expect("tempdir");
     let host = Arc::new(host_with_state(
@@ -8023,6 +8195,7 @@ fn policy_dispatch_crash_child_process() {
         serde_json::from_slice(&instance_bytes).expect("instance identifier");
     let host = RuntimeHost::start(
         RuntimeHostConfig::new(&root, b"policy-crash-process-salt")
+            .with_procedure_manifest(procedure_manifest())
             .with_governance_capability(TEST_GOVERNANCE_CAPABILITY),
         Arc::new(FakeProvider::one(
             POLICY_INSTANCE_ALIAS,
@@ -8069,6 +8242,7 @@ fn policy_pending_crash_child_process() {
         serde_json::from_slice(&instance_bytes).expect("instance identifiers");
     let host = RuntimeHost::start(
         RuntimeHostConfig::new(&root, b"policy-pending-process-salt")
+            .with_procedure_manifest(procedure_manifest())
             .with_governance_capability(TEST_GOVERNANCE_CAPABILITY),
         Arc::new(FakeProvider::from_entries([
             (

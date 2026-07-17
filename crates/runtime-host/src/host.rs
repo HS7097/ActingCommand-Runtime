@@ -15,7 +15,9 @@ use crate::performance::{
 };
 use crate::performance_control::{PerformanceBalanceController, PerformanceDispatchGate};
 use crate::planning::collect_maintenance_evidence;
-use crate::policy_host::{LoadedCatalog, PolicyExecutionPreparation, PolicyHost};
+use crate::policy_host::{
+    LoadedCatalog, PolicyEvaluationContext, PolicyExecutionPreparation, PolicyHost,
+};
 use crate::project_interface::{
     ProjectDiagnosticProjection, ProjectInterfaceProjection, retain_recent_diagnostics,
 };
@@ -26,8 +28,8 @@ use crate::{
     AgentDispatcherConfig, CatalogGeneration, FatalState, MaintenanceLedgerQuery,
     PerformanceControlConfig, PerformanceControlDirective, PerformanceMonitorConfig,
     PipelinePerformanceSignal, PolicyAdmissionContext, PolicyCadence, PolicyCycle,
-    PolicyDispatchAdmission, PolicyExecutionInput, PolicyTrigger, RuntimeHostError,
-    RuntimeHostResult,
+    PolicyDispatchAdmission, PolicyExecutionInput, PolicyTrigger, ProcedureManifest,
+    RuntimeHostError, RuntimeHostResult,
 };
 use actingcommand_artifact_store::{
     ArtifactEventSink, ArtifactStore, ArtifactStoreError, ArtifactStoreResult,
@@ -169,6 +171,7 @@ pub struct RuntimeHostConfig {
     governance_capability_invalid: bool,
     clock: Arc<dyn RuntimeClock>,
     policy_inputs: Option<PolicyInputSnapshot>,
+    procedure_manifest: Option<ProcedureManifest>,
 }
 
 impl RuntimeHostConfig {
@@ -188,6 +191,7 @@ impl RuntimeHostConfig {
             governance_capability_invalid: false,
             clock: Arc::new(SystemRuntimeClock::new()),
             policy_inputs: None,
+            procedure_manifest: None,
         }
     }
 
@@ -260,6 +264,12 @@ impl RuntimeHostConfig {
         self
     }
 
+    /// Installs the Runtime-owned manifest that binds procedure aliases to package content.
+    pub fn with_procedure_manifest(mut self, procedure_manifest: ProcedureManifest) -> Self {
+        self.procedure_manifest = Some(procedure_manifest);
+        self
+    }
+
     pub fn state_root(&self) -> &Path {
         &self.state_root
     }
@@ -315,6 +325,10 @@ impl std::fmt::Debug for RuntimeHostConfig {
             .field(
                 "policy_inputs",
                 &self.policy_inputs.as_ref().map(|_| "<runtime-owned>"),
+            )
+            .field(
+                "procedure_manifest",
+                &self.procedure_manifest.as_ref().map(|_| "<runtime-owned>"),
             )
             .finish()
     }
@@ -468,6 +482,7 @@ impl RuntimeHost {
             proposal_write_gate: Mutex::new(()),
             facts: Mutex::new(facts),
             policy_inputs: Mutex::new(config.policy_inputs),
+            procedure_manifest: Mutex::new(config.procedure_manifest),
             owner: Mutex::new(owner),
             ledger,
             artifacts,
@@ -697,6 +712,15 @@ impl RuntimeHost {
     ) -> RuntimeHostResult<PolicyCycle> {
         self.shared_ref("evaluate_policy_cycle")?
             .evaluate_policy_cycle_with_test_inputs(facts, resources, time, seed, trigger)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn replace_procedure_manifest_for_test(
+        &self,
+        procedure_manifest: ProcedureManifest,
+    ) -> RuntimeHostResult<()> {
+        self.shared_ref("replace_procedure_manifest_for_test")?
+            .replace_procedure_manifest_for_test(procedure_manifest)
     }
 
     /// Runs a bounded future dry-run through the same pure policy evaluator used for admission.
@@ -1492,6 +1516,7 @@ struct HostShared {
     proposal_write_gate: Mutex<()>,
     facts: Mutex<InstanceFactStore>,
     policy_inputs: Mutex<Option<PolicyInputSnapshot>>,
+    procedure_manifest: Mutex<Option<ProcedureManifest>>,
     ledger: GlobalLedger,
     artifacts: ArtifactStore,
     state: Arc<RuntimeStateStore>,
@@ -2166,13 +2191,21 @@ impl HostShared {
             Some(seed) => seed,
             None => runtime_policy_seed(&facts.fact_snapshot_id, time, self.owner_epoch)?,
         };
+        let procedure_manifest = lock(&self.procedure_manifest, "read_procedure_manifest")?
+            .clone()
+            .ok_or_else(|| {
+                policy_admission_request("procedure_manifest_unconfigured", "evaluate_policy_cycle")
+            })?;
         let cycle = lock(&self.policy, "evaluate_policy_cycle")?.evaluate(
             &facts,
             &controlled_resources,
-            time,
-            seed,
-            trigger,
-            observed_monotonic_ms,
+            PolicyEvaluationContext {
+                procedure_manifest: &procedure_manifest,
+                time,
+                seed,
+                trigger,
+                sampled_at_monotonic_ms: observed_monotonic_ms,
+            },
         )?;
         for signal in &cycle.detection_planning_signals {
             self.record_policy_planning_signal(signal.clone())?;
@@ -2183,6 +2216,19 @@ impl HostShared {
         )?
         .record_cycle(&cycle, observed_monotonic_ms)?;
         Ok(cycle)
+    }
+
+    #[cfg(test)]
+    fn replace_procedure_manifest_for_test(
+        &self,
+        procedure_manifest: ProcedureManifest,
+    ) -> RuntimeHostResult<()> {
+        let _gate = lock(&self.fact_write_gate, "replace_procedure_manifest_for_test")?;
+        *lock(
+            &self.procedure_manifest,
+            "replace_procedure_manifest_for_test",
+        )? = Some(procedure_manifest);
+        Ok(())
     }
 
     fn project_authoritative_policy_inputs_under_gate(
@@ -2522,7 +2568,7 @@ impl HostShared {
             None,
             Some(action_id),
         );
-        let data = policy_event_data(intent, reason_chain);
+        let data = policy_event_data(intent, reason_chain)?;
         let event = self.events.draft(
             EventSeverity::Info,
             EventSource::Scheduler,
@@ -2543,6 +2589,12 @@ impl HostShared {
                 "admit_policy_dispatch",
             ));
         }
+        lock(&self.procedure_manifest, "validate_procedure_manifest")?
+            .as_ref()
+            .ok_or_else(|| {
+                policy_admission_request("procedure_manifest_unconfigured", "admit_policy_dispatch")
+            })?
+            .validate_intent(intent, "admit_policy_dispatch")?;
         let appender = PolicyAdmissionAppender::new(&self.ledger, fact_gate);
         let success_links = links.clone();
         let failure_links = links;
@@ -10055,12 +10107,26 @@ fn diagnostic_for_projection(projection: &RuntimeErrorProjection) -> DiagnosticC
 fn policy_event_data(
     intent: &DispatchIntent,
     reason_chain: &DecisionReasonChain,
-) -> PolicyDispatchEventData {
-    PolicyDispatchEventData {
+) -> RuntimeHostResult<PolicyDispatchEventData> {
+    let package_digest = intent.package_digest.clone().ok_or_else(|| {
+        policy_admission_fatal(
+            "procedure_package_digest_missing",
+            "build_policy_dispatch_event",
+        )
+    })?;
+    let procedure_binding_digest = intent.procedure_binding_digest.clone().ok_or_else(|| {
+        policy_admission_fatal(
+            "procedure_binding_digest_missing",
+            "build_policy_dispatch_event",
+        )
+    })?;
+    Ok(PolicyDispatchEventData {
         decision_id: intent.decision_id.clone(),
         task_id: intent.task_id.clone(),
         instance_id: intent.instance_id.clone(),
         operation_id: intent.operation_id.clone(),
+        package_digest,
+        procedure_binding_digest,
         reason_chain_id: reason_chain.id.clone(),
         reasons: reason_chain
             .reasons
@@ -10076,7 +10142,7 @@ fn policy_event_data(
         fact_snapshot_id: intent.fact_snapshot_id.clone(),
         approval_fact_ids: intent.approval_refs.clone(),
         urgency_milli: intent.prerequisites.urgency_milli,
-    }
+    })
 }
 
 fn policy_execution_severity(data: &PolicyExecutionEventData) -> EventSeverity {
