@@ -569,6 +569,44 @@ fn resource_convert_accepts_explicit_maa_tasks_mode() {
 }
 
 #[test]
+fn resource_convert_rejects_missing_coordinate_space_before_writing_outputs() {
+    let (root, _maa_dir) = write_synthetic_maa_convert_fixture();
+    let task_path = root.path().join("operations/synthetic-maa/task.json");
+    let mut task: Value =
+        serde_json::from_slice(&fs::read(&task_path).expect("read task")).expect("parse task");
+    let task = task.as_object_mut().expect("task object");
+    task.insert("game".to_string(), json!("neutral"));
+    task.insert("server_scope".to_string(), json!(["test"]));
+    task.remove("coordinate_space");
+    fs::write(
+        &task_path,
+        serde_json::to_vec_pretty(&task).expect("serialize task"),
+    )
+    .expect("write task");
+
+    let err = resource_convert(ResourceConvertRequest {
+        repo: root.path().to_path_buf(),
+        game: None,
+        server: None,
+        locale: None,
+        maa_tasks_root: None,
+        dry_run: false,
+    })
+    .expect_err("missing coordinate_space must fail before output");
+
+    assert!(err.message.contains("missing coordinate_space"));
+    for output in [
+        "recognition/neutral.test.pack.json",
+        "recognition/neutral.test.pages.json",
+        "navigation/neutral.test.navigation.json",
+        "operations/operations.index.json",
+        "operations/operations.primitives.json",
+    ] {
+        assert!(!root.path().join(output).exists(), "wrote {output}");
+    }
+}
+
+#[test]
 fn default_operation_bundle_mode_does_not_apply_maa_overlay_fields() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let converter = OperationConverter {
