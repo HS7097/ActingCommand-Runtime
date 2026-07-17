@@ -241,7 +241,7 @@ impl AgentDispatcherState {
             };
         }
         if self.response_requests.contains_key(&request_id) {
-            return Err(fatal(
+            return Err(request(
                 "agent_resume_request_conflict",
                 "resume_agent_session",
             ));
@@ -273,6 +273,12 @@ impl AgentDispatcherState {
                     "record_agent_response",
                 ))
             };
+        }
+        if self.resume_requests.contains_key(&request_id) {
+            return Err(request(
+                "agent_response_request_conflict",
+                "record_agent_response",
+            ));
         }
         let current = self.session(response.session_id())?;
         if current.expired_at(runtime_observed_at_unix_ms) {
