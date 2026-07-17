@@ -10,8 +10,8 @@ use actingcommand_contract::{
 };
 use actingcommand_ledger::{GlobalLedger, PersistedEvent};
 use actingcommand_policy::{
-    EvaluationFacts, FactScalar as PolicyFactScalar, FactValue as PolicyFactValue,
-    InstanceSnapshot, ObservedFact, ScopeSelector,
+    EvaluationFacts, EvaluationResources, FactScalar as PolicyFactScalar,
+    FactValue as PolicyFactValue, InstanceSnapshot, ObservedFact, ScopeSelector,
 };
 use actingcommand_runtime_state::RuntimeStateStore;
 use sha2::{Digest, Sha256};
@@ -508,6 +508,7 @@ impl InstanceFactStore {
     pub(crate) fn overlay_policy_facts(
         &self,
         facts: &EvaluationFacts,
+        resources: &EvaluationResources,
         ledger_position: u64,
     ) -> RuntimeHostResult<EvaluationFacts> {
         let mut projected = facts.clone();
@@ -569,11 +570,28 @@ impl InstanceFactStore {
         projected.tasks.sort_by(|left, right| {
             (&left.instance_id, &left.task_id).cmp(&(&right.instance_id, &right.task_id))
         });
+        projected.instances.iter_mut().for_each(|instance| {
+            instance.capability_operation_ids.sort();
+            instance.preferred_task_ids.sort();
+        });
         projected
             .instances
             .sort_by(|left, right| left.instance_id.cmp(&right.instance_id));
+        let authority_revisions = selected
+            .iter()
+            .map(|((scope, key), stored)| {
+                (
+                    scope,
+                    key,
+                    &stored.record.source_snapshot_id,
+                    stored.sequence,
+                    stored.event_id,
+                )
+            })
+            .collect::<Vec<_>>();
         projected.ledger_position = ledger_position;
-        projected.fact_snapshot_id = combined_policy_snapshot_id(&projected)?;
+        projected.fact_snapshot_id =
+            combined_policy_snapshot_id(&projected, resources, &authority_revisions)?;
         Ok(projected)
     }
 
@@ -681,13 +699,25 @@ fn snapshot_id(
     Ok(format!("snapshot:fact:{:x}", Sha256::digest(bytes)))
 }
 
-fn combined_policy_snapshot_id(facts: &EvaluationFacts) -> RuntimeHostResult<String> {
+fn combined_policy_snapshot_id<T: serde::Serialize>(
+    facts: &EvaluationFacts,
+    resources: &EvaluationResources,
+    authority_revisions: &[T],
+) -> RuntimeHostResult<String> {
+    let mut resources = resources.clone();
+    resources
+        .pools
+        .sort_by(|left, right| left.pool_id.cmp(&right.pool_id));
+    resources
+        .hosts
+        .sort_by(|left, right| left.host_id.cmp(&right.host_id));
     let bytes = serde_json::to_vec(&(
-        facts.ledger_position,
         &facts.facts,
         &facts.outcomes,
         &facts.tasks,
         &facts.instances,
+        &resources,
+        authority_revisions,
     ))
     .map_err(|_| fact_fatal("fact_snapshot_encode_failed", "hash_policy_fact_snapshot"))?;
     Ok(format!("snapshot:policy-fact:{:x}", Sha256::digest(bytes)))
@@ -705,7 +735,9 @@ fn fact_fatal(code: &'static str, operation: &'static str) -> RuntimeHostError {
 mod tests {
     use super::*;
     use actingcommand_contract::{FactTtlPolicy, FactTtlSource};
-    use actingcommand_policy::{ObservedOutcome, TaskRuntimeSnapshot};
+    use actingcommand_policy::{
+        HostResourceSnapshot, ObservedOutcome, PoolValueSnapshot, TaskRuntimeSnapshot,
+    };
     use tempfile::TempDir;
 
     fn store_with_state(state: Arc<RuntimeStateStore>) -> InstanceFactStore {
@@ -724,6 +756,26 @@ mod tests {
             RuntimeStateStore::open(root.path(), b"0123456789abcdef").expect("state store"),
         );
         (root, store_with_state(state))
+    }
+
+    fn resources() -> EvaluationResources {
+        EvaluationResources {
+            pools: vec![PoolValueSnapshot {
+                pool_id: "pool-a".to_owned(),
+                value: 10,
+                observed_at_unix_ms: 1_000,
+            }],
+            hosts: vec![HostResourceSnapshot {
+                host_id: "host-a".to_owned(),
+                cpu_available_milli: 1_000,
+                gpu_available_milli: 1_000,
+                io_available_milli: 1_000,
+                host_responsiveness_basis_points: 10_000,
+                third_party_pressure_basis_points: 0,
+                heavy_dispatch_limit: 1,
+                active_heavy_dispatches: 0,
+            }],
+        }
     }
 
     fn record(scope: FactScope, snapshot: &str, invalidate_on: Vec<EventType>) -> FactRecord {
@@ -866,15 +918,16 @@ mod tests {
                 preferred_task_ids: vec!["task-a".to_owned()],
             }],
         };
+        let resources = resources();
         let canonical = store
-            .overlay_policy_facts(&base, 7)
+            .overlay_policy_facts(&base, &resources, 7)
             .expect("canonical facts");
 
         let mut caller_identity_changed = base.clone();
         caller_identity_changed.fact_snapshot_id = "caller-snapshot-b".to_owned();
         assert_eq!(
             store
-                .overlay_policy_facts(&caller_identity_changed, 7)
+                .overlay_policy_facts(&caller_identity_changed, &resources, 99)
                 .expect("canonical caller-independent facts")
                 .fact_snapshot_id,
             canonical.fact_snapshot_id
@@ -893,19 +946,29 @@ mod tests {
         let mut changed = base.clone();
         changed.instances[0].server_id = "server-b".to_owned();
         variants.push(changed);
-        let mut changed = base;
+        let mut changed = base.clone();
         changed.instances[0].game_id = "game-b".to_owned();
         variants.push(changed);
 
         for changed in variants {
             assert_ne!(
                 store
-                    .overlay_policy_facts(&changed, 7)
+                    .overlay_policy_facts(&changed, &resources, 7)
                     .expect("changed facts")
                     .fact_snapshot_id,
                 canonical.fact_snapshot_id
             );
         }
+
+        let mut changed_resources = resources.clone();
+        changed_resources.pools[0].value += 1;
+        assert_ne!(
+            store
+                .overlay_policy_facts(&base, &changed_resources, 7)
+                .expect("changed resources")
+                .fact_snapshot_id,
+            canonical.fact_snapshot_id
+        );
     }
 
     #[test]
