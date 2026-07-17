@@ -2,10 +2,11 @@
 
 use actingcommand_contract::{
     AgentPayload, AgentSessionId, ApplicationLifecycleAction, EventActor, EventPayload, EventQuery,
-    EventSource, EventType, FactScope, IdentifierIssuer, InstanceId, PolicyPlanningSignalEventData,
-    PolicyPlanningSignalKind, ProjectInterfaceRequest, ProjectedArtifactReference,
-    ProjectionPayload, ProjectionProfile, RUNTIME_INFO_FILE, RuntimeInfo, RuntimeOperation,
-    RuntimeReceipt, RuntimeReceiptState, RuntimeRequest, RuntimeResult,
+    EventSource, EventType, FactScope, IdentifierIssuer, InstanceId, PolicyPayload,
+    PolicyPlanningSignalEventData, PolicyPlanningSignalKind, ProjectInterfaceRequest,
+    ProjectedArtifactReference, ProjectionPayload, ProjectionProfile, RUNTIME_INFO_FILE,
+    RuntimeInfo, RuntimeOperation, RuntimeReceipt, RuntimeReceiptState, RuntimeRequest,
+    RuntimeResult,
 };
 use actingcommand_device::{
     CaptureBackend, CaptureBackendName, DeviceError, DeviceResult, Frame, InputBackend, PixelFormat,
@@ -92,6 +93,86 @@ fn actingd_outlives_disposable_clients_and_accepts_reconnection() {
 
     child.0.kill().expect("kill actingd");
     assert!(!child.0.wait().expect("wait actingd").success());
+}
+
+#[test]
+fn actingd_runs_configured_policy_through_decision_admission_and_lease() {
+    let root = TempDir::new().expect("tempdir");
+    let config_path = root.path().join("actingd.json");
+    let instance_id = instance_id();
+    write_policy_config(&config_path, root.path(), instance_id);
+
+    let child = start_actingd(&config_path);
+    let mut child = ChildGuard(child);
+    wait_for_runtime_info(&mut child.0, root.path());
+    let client = wait_for_agent_client(&mut child.0, root.path());
+    let started = Instant::now();
+    let events = loop {
+        let events = client
+            .query_events(EventQuery::default(), ProjectionProfile::Forensic)
+            .expect("query policy startup events");
+        if events
+            .iter()
+            .any(|event| event.event_type == EventType::LeaseGranted)
+        {
+            break events;
+        }
+        if let Some(status) = child.0.try_wait().expect("process state") {
+            panic!("actingd exited before policy lease with {status}");
+        }
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "actingd policy startup timed out with events: {:?}",
+            events
+                .iter()
+                .map(|event| event.event_type)
+                .collect::<Vec<_>>()
+        );
+        thread::sleep(Duration::from_millis(20));
+    };
+
+    assert_eq!(
+        events
+            .iter()
+            .filter(|event| event.event_type == EventType::PolicyDispatchIntent)
+            .count(),
+        1
+    );
+    assert_eq!(
+        events
+            .iter()
+            .filter(|event| event.event_type == EventType::PolicyDispatchAdmitted)
+            .count(),
+        1
+    );
+    assert_eq!(
+        events
+            .iter()
+            .filter(|event| event.event_type == EventType::LeaseGranted)
+            .count(),
+        1
+    );
+    let admitted = events
+        .iter()
+        .find(|event| event.event_type == EventType::PolicyDispatchAdmitted)
+        .expect("policy admission event");
+    let ProjectionPayload::Full(payload) = &admitted.payload else {
+        panic!("expected forensic policy admission payload")
+    };
+    let EventPayload::Policy(PolicyPayload::DispatchAdmitted(payload)) = payload.as_ref() else {
+        panic!("expected policy dispatch admission")
+    };
+    assert_eq!(payload.operation_id(), "operation.observe");
+    assert_eq!(
+        payload.package_digest(),
+        format!("sha256:{}", "c".repeat(64))
+    );
+    assert!(!payload.procedure_binding_digest().is_empty());
+    assert!(child.0.try_wait().expect("process state").is_none());
+
+    drop(client);
+    child.0.kill().expect("kill actingd");
+    child.0.wait().expect("wait actingd");
 }
 
 #[test]
@@ -236,6 +317,30 @@ fn invalid_startup_returns_nonzero() {
     assert!(String::from_utf8_lossy(&output.stderr).contains("FATAL actingd"));
 }
 
+#[test]
+fn policy_startup_rejects_approval_ids_that_do_not_match_the_catalog() {
+    let root = TempDir::new().expect("tempdir");
+    let config_path = root.path().join("actingd.json");
+    write_policy_config(&config_path, root.path(), instance_id());
+    let mut config: serde_json::Value =
+        serde_json::from_slice(&fs::read(&config_path).expect("read policy config"))
+            .expect("decode policy config");
+    config["policy"]["catalog_approval_ids"] = json!(["approval:untrusted"]);
+    fs::write(
+        &config_path,
+        serde_json::to_vec_pretty(&config).expect("invalid policy config JSON"),
+    )
+    .expect("write invalid policy config");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_actingcommand-actingd"))
+        .args(["--config", config_path.to_str().expect("config path")])
+        .output()
+        .expect("run actingd");
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("policy_catalog_approval_mismatch"));
+    assert!(!root.path().join(RUNTIME_INFO_FILE).exists());
+}
+
 fn connect(state_root: &Path) -> RuntimeClient {
     RuntimeClient::connect(
         RuntimeClientConfig::new(state_root, EventActor::Cli, EventSource::Cli)
@@ -250,6 +355,33 @@ fn connect_agent(state_root: &Path) -> RuntimeClient {
             .with_io_timeout(Duration::from_millis(500)),
     )
     .expect("connect agent runtime")
+}
+
+fn wait_for_agent_client(child: &mut Child, state_root: &Path) -> RuntimeClient {
+    let started = Instant::now();
+    loop {
+        match RuntimeClient::connect(
+            RuntimeClientConfig::new(state_root, EventActor::Agent, EventSource::Adapter)
+                .with_io_timeout(Duration::from_millis(500)),
+        ) {
+            Ok(client) => return client,
+            Err(error) => {
+                if let Some(status) = child.try_wait().expect("process state") {
+                    let mut stderr = String::new();
+                    if let Some(pipe) = child.stderr.as_mut() {
+                        pipe.read_to_string(&mut stderr)
+                            .expect("read actingd stderr");
+                    }
+                    panic!("actingd exited before policy readiness with {status}: {stderr}");
+                }
+                assert!(
+                    started.elapsed() < Duration::from_secs(5),
+                    "actingd policy connection timed out after {error}"
+                );
+                thread::sleep(Duration::from_millis(20));
+            }
+        }
+    }
 }
 
 fn write_config(path: &Path, state_root: &Path, instance_id: InstanceId, dispatcher_enabled: bool) {
@@ -281,6 +413,60 @@ fn write_config(path: &Path, state_root: &Path, instance_id: InstanceId, dispatc
         serde_json::to_vec_pretty(&value).expect("config json"),
     )
     .expect("write config");
+}
+
+fn write_policy_config(path: &Path, state_root: &Path, instance_id: InstanceId) {
+    let policy_root = state_root.join("policy");
+    fs::create_dir(&policy_root).expect("create policy directory");
+    let sources = actingd_policy_sources(1);
+    for (name, source) in [
+        ("tasks.json", sources.tasks),
+        ("pools.json", sources.pools),
+        ("activity.json", sources.activity),
+        ("timeline.json", sources.timeline),
+    ] {
+        fs::write(policy_root.join(name), source.bytes).expect("write policy document");
+    }
+    let now_unix_ms = unix_ms_now();
+    let value = json!({
+        "schema_version": "actingcommand.actingd.config.v1",
+        "state_root": state_root,
+        "bind_host": "127.0.0.1",
+        "bind_port": 0,
+        "secret_fingerprint_salt": PROCESS_TEST_SALT,
+        "governance_capability": "actingd-policy-bootstrap-capability",
+        "policy": {
+            "facts": configured_policy_facts(now_unix_ms),
+            "resources": configured_policy_resources(now_unix_ms),
+            "catalog": {
+                "tasks": "policy/tasks.json",
+                "pools": "policy/pools.json",
+                "activity": "policy/activity.json",
+                "timeline": "policy/timeline.json"
+            },
+            "catalog_approval_ids": ["approval:fixture-a"],
+            "procedure_manifest": [{
+                "procedure_ref": "procedure.observe",
+                "package_digest": format!("sha256:{}", "c".repeat(64)),
+                "operation_id": "operation.observe",
+                "yield_points": ["after_observation"]
+            }]
+        },
+        "instances": [{
+            "alias": INSTANCE_ALIAS,
+            "instance_id": instance_id,
+            "application_id": "neutral.application",
+            "adb_path": "must-not-run-adb",
+            "touch_backend": "maatouch",
+            "capture_backend": "adb",
+            "push_touch_tool": false
+        }]
+    });
+    fs::write(
+        path,
+        serde_json::to_vec_pretty(&value).expect("policy config json"),
+    )
+    .expect("write policy config");
 }
 
 fn wait_for_runtime_info(child: &mut Child, state_root: &Path) -> RuntimeInfo {
@@ -408,6 +594,41 @@ fn policy_sources(version: u64) -> CatalogSources {
     sources
 }
 
+fn actingd_policy_sources(version: u64) -> CatalogSources {
+    let mut sources = policy_sources(version);
+    let mut tasks: serde_json::Value =
+        serde_json::from_slice(&sources.tasks.bytes).expect("actingd task fixture");
+    tasks["tasks"][0]["scope"] = json!({
+        "kind": "instance",
+        "instance_id": INSTANCE_ALIAS
+    });
+    tasks["tasks"][0]["trigger"]["predicates"][1]["scope"] = json!({
+        "kind": "instance",
+        "instance_id": INSTANCE_ALIAS
+    });
+    tasks["tasks"][0]["instance_overrides"] = json!([]);
+    sources.tasks.bytes = serde_json::to_vec_pretty(&tasks).expect("actingd task bytes");
+
+    let mut pools: serde_json::Value =
+        serde_json::from_slice(&sources.pools.bytes).expect("actingd pool fixture");
+    pools["pools"][0]["scope"] = json!({
+        "kind": "instance",
+        "instance_id": INSTANCE_ALIAS
+    });
+    sources.pools.bytes = serde_json::to_vec_pretty(&pools).expect("actingd pool bytes");
+
+    let mut activity: serde_json::Value =
+        serde_json::from_slice(&sources.activity.bytes).expect("actingd activity fixture");
+    activity["profiles"][0]["scope"] = json!({
+        "kind": "instance",
+        "instance_id": INSTANCE_ALIAS
+    });
+    activity["profiles"][0]["windows"][0]["start_minute_of_day"] = json!(0);
+    activity["profiles"][0]["windows"][0]["end_minute_of_day"] = json!(0);
+    sources.activity.bytes = serde_json::to_vec_pretty(&activity).expect("actingd activity bytes");
+    sources
+}
+
 fn strategy_policy_sources(version: u64) -> CatalogSources {
     let mut sources = policy_sources(version);
     let game_scope = serde_json::json!({"kind": "game", "game_id": "fixture-game-a"});
@@ -528,6 +749,51 @@ fn policy_resources() -> EvaluationResources {
             pool_id: "fixture-pool-a".to_owned(),
             value: 10,
             observed_at_unix_ms: POLICY_NOW_UNIX_MS,
+        }],
+        hosts: vec![HostResourceSnapshot {
+            host_id: "fixture-host-a".to_owned(),
+            cpu_available_milli: 1_000,
+            gpu_available_milli: 1_000,
+            io_available_milli: 1_000,
+            host_responsiveness_basis_points: 10_000,
+            third_party_pressure_basis_points: 0,
+            heavy_dispatch_limit: 1,
+            active_heavy_dispatches: 0,
+        }],
+    }
+}
+
+fn configured_policy_facts(now_unix_ms: u64) -> EvaluationFacts {
+    EvaluationFacts {
+        ledger_position: 0,
+        fact_snapshot_id: "snapshot:actingd-config-a".to_owned(),
+        facts: Vec::new(),
+        outcomes: vec![actingcommand_policy::ObservedOutcome {
+            task_id: "fixture.observe".to_owned(),
+            instance_id: INSTANCE_ALIAS.to_owned(),
+            outcome_key: "completed".to_owned(),
+            value: FactValue::Boolean(false),
+            observed_at_unix_ms: now_unix_ms,
+        }],
+        tasks: Vec::new(),
+        instances: vec![InstanceSnapshot {
+            instance_id: INSTANCE_ALIAS.to_owned(),
+            server_id: "fixture-server-a".to_owned(),
+            game_id: "fixture-game-a".to_owned(),
+            host_id: "fixture-host-a".to_owned(),
+            available: true,
+            capability_operation_ids: vec!["operation.observe".to_owned()],
+            preferred_task_ids: Vec::new(),
+        }],
+    }
+}
+
+fn configured_policy_resources(now_unix_ms: u64) -> EvaluationResources {
+    EvaluationResources {
+        pools: vec![PoolValueSnapshot {
+            pool_id: "fixture-pool-a".to_owned(),
+            value: 10,
+            observed_at_unix_ms: now_unix_ms,
         }],
         hosts: vec![HostResourceSnapshot {
             host_id: "fixture-host-a".to_owned(),
