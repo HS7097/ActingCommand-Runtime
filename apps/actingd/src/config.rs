@@ -5,11 +5,17 @@ use actingcommand_device::{
     AdbConfig, CaptureBackendChoice, CaptureBackendConfig, DeviceTarget, MaaTouchConfig,
     MinitouchConfig, TouchBackendChoice, TouchBackendConfig,
 };
+use actingcommand_policy::{
+    CatalogDocumentSource, CatalogSources, EvaluationFacts, EvaluationResources, MAX_APPROVAL_REFS,
+    MAX_CATALOG_BYTES, MAX_DOCUMENT_BYTES, MAX_REFERENCES_PER_TASK, MAX_TASKS, compile_catalog,
+};
 use actingcommand_runtime_host::{
     AgentDispatcherConfig, ExecutionBackendRegistration, ExecutionBackendRegistry,
-    PerformanceMonitorConfig, RuntimeHostConfig,
+    PerformanceMonitorConfig, PolicyInputSnapshot, ProcedureBinding, ProcedureManifest,
+    RuntimeHostConfig,
 };
 use serde::Deserialize;
+use std::collections::BTreeSet;
 use std::fs;
 use std::net::{IpAddr, SocketAddr};
 use std::path::{Path, PathBuf};
@@ -32,7 +38,11 @@ pub(super) struct ActingdConfigFile {
     governance_capability: Option<String>,
     #[serde(default)]
     agent_dispatcher: Option<AgentDispatcherConfigFile>,
+    #[serde(default)]
+    policy: Option<PolicyConfigFile>,
     instances: Vec<InstanceConfig>,
+    #[serde(skip)]
+    source_root: PathBuf,
 }
 
 #[derive(Deserialize)]
@@ -41,6 +51,34 @@ struct AgentDispatcherConfigFile {
     max_attempts: u16,
     max_session_ms: u64,
     max_projection_events: u16,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PolicyConfigFile {
+    facts: EvaluationFacts,
+    resources: EvaluationResources,
+    catalog: PolicyCatalogConfigFile,
+    catalog_approval_ids: Vec<String>,
+    procedure_manifest: Vec<ProcedureBindingConfigFile>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PolicyCatalogConfigFile {
+    tasks: PathBuf,
+    pools: PathBuf,
+    activity: PathBuf,
+    timeline: PathBuf,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ProcedureBindingConfigFile {
+    procedure_ref: String,
+    package_digest: String,
+    operation_id: String,
+    yield_points: Vec<String>,
 }
 
 #[derive(Deserialize)]
@@ -80,6 +118,14 @@ struct InstanceConfig {
 pub(super) struct RuntimeAssembly {
     pub(super) host: RuntimeHostConfig,
     pub(super) registry: ExecutionBackendRegistry,
+    pub(super) policy: Option<PolicyBootstrap>,
+}
+
+pub(super) struct PolicyBootstrap {
+    pub(super) state_root: PathBuf,
+    pub(super) governance_capability: String,
+    pub(super) catalog_approval_ids: Vec<String>,
+    pub(super) catalog: CatalogSources,
 }
 
 pub(super) fn load(path: &Path) -> Result<ActingdConfigFile, &'static str> {
@@ -88,7 +134,14 @@ pub(super) fn load(path: &Path) -> Result<ActingdConfigFile, &'static str> {
         return Err("config_size_invalid");
     }
     let bytes = fs::read(path).map_err(|_| "config_read_failed")?;
-    serde_json::from_slice(&bytes).map_err(|_| "config_decode_failed")
+    let mut config =
+        serde_json::from_slice::<ActingdConfigFile>(&bytes).map_err(|_| "config_decode_failed")?;
+    config.source_root = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."))
+        .to_path_buf();
+    Ok(config)
 }
 
 impl ActingdConfigFile {
@@ -119,6 +172,12 @@ impl ActingdConfigFile {
             .collect::<Result<Vec<_>, _>>()?;
         let registry = ExecutionBackendRegistry::new(registrations)
             .map_err(|_| "execution_registry_invalid")?;
+        let policy = self
+            .policy
+            .map(|policy| policy.assemble(&self.source_root))
+            .transpose()?;
+        let policy_state_root = self.state_root.clone();
+        let policy_governance_capability = self.governance_capability.clone();
         let mut host =
             RuntimeHostConfig::new(self.state_root, self.secret_fingerprint_salt.as_bytes())
                 .with_bind_address(SocketAddr::new(bind_host, self.bind_port))
@@ -129,8 +188,141 @@ impl ActingdConfigFile {
         if let Some(dispatcher) = self.agent_dispatcher {
             host = host.with_agent_dispatcher(dispatcher.runtime_config()?);
         }
-        Ok(RuntimeAssembly { host, registry })
+        let policy = if let Some(policy) = policy {
+            let governance_capability =
+                policy_governance_capability.ok_or("policy_governance_capability_missing")?;
+            host = host
+                .with_policy_inputs(policy.inputs)
+                .with_procedure_manifest(policy.procedure_manifest);
+            Some(PolicyBootstrap {
+                state_root: policy_state_root,
+                governance_capability,
+                catalog_approval_ids: policy.catalog_approval_ids,
+                catalog: policy.catalog,
+            })
+        } else {
+            None
+        };
+        Ok(RuntimeAssembly {
+            host,
+            registry,
+            policy,
+        })
     }
+}
+
+struct PolicyAssembly {
+    inputs: PolicyInputSnapshot,
+    procedure_manifest: ProcedureManifest,
+    catalog_approval_ids: Vec<String>,
+    catalog: CatalogSources,
+}
+
+impl PolicyConfigFile {
+    fn assemble(self, source_root: &Path) -> Result<PolicyAssembly, &'static str> {
+        if self.procedure_manifest.is_empty() || self.procedure_manifest.len() > MAX_TASKS {
+            return Err("procedure_manifest_size_invalid");
+        }
+        let bindings = self
+            .procedure_manifest
+            .into_iter()
+            .map(ProcedureBindingConfigFile::binding)
+            .collect::<Result<Vec<_>, _>>()?;
+        let procedure_manifest =
+            ProcedureManifest::new(bindings).map_err(|_| "procedure_manifest_invalid")?;
+        let catalog = self.catalog.sources(source_root)?;
+        let compiled = compile_catalog(&catalog).map_err(|_| "policy_catalog_compile_failed")?;
+        let configured_approvals = self
+            .catalog_approval_ids
+            .iter()
+            .cloned()
+            .collect::<BTreeSet<_>>();
+        let expected_approvals = compiled
+            .catalog()
+            .tasks
+            .catalog
+            .approval_refs
+            .iter()
+            .cloned()
+            .collect::<BTreeSet<_>>();
+        if self.catalog_approval_ids.is_empty()
+            || self.catalog_approval_ids.len() > MAX_APPROVAL_REFS
+            || configured_approvals.len() != self.catalog_approval_ids.len()
+            || configured_approvals != expected_approvals
+        {
+            return Err("policy_catalog_approval_mismatch");
+        }
+        Ok(PolicyAssembly {
+            inputs: PolicyInputSnapshot::new(self.facts, self.resources),
+            procedure_manifest,
+            catalog_approval_ids: self.catalog_approval_ids,
+            catalog,
+        })
+    }
+}
+
+impl PolicyCatalogConfigFile {
+    fn sources(self, source_root: &Path) -> Result<CatalogSources, &'static str> {
+        let sources = CatalogSources {
+            tasks: read_catalog_document(source_root, &self.tasks)?,
+            pools: read_catalog_document(source_root, &self.pools)?,
+            activity: read_catalog_document(source_root, &self.activity)?,
+            timeline: read_catalog_document(source_root, &self.timeline)?,
+        };
+        let total_bytes = [
+            &sources.tasks,
+            &sources.pools,
+            &sources.activity,
+            &sources.timeline,
+        ]
+        .into_iter()
+        .try_fold(0_usize, |total, source| {
+            total.checked_add(source.bytes.len())
+        })
+        .ok_or("policy_catalog_size_invalid")?;
+        if total_bytes > MAX_CATALOG_BYTES {
+            return Err("policy_catalog_size_invalid");
+        }
+        Ok(sources)
+    }
+}
+
+impl ProcedureBindingConfigFile {
+    fn binding(self) -> Result<ProcedureBinding, &'static str> {
+        if self.yield_points.len() > MAX_REFERENCES_PER_TASK {
+            return Err("procedure_binding_size_invalid");
+        }
+        ProcedureBinding::new(
+            self.procedure_ref,
+            self.package_digest,
+            self.operation_id,
+            self.yield_points,
+        )
+        .map_err(|_| "procedure_binding_invalid")
+    }
+}
+
+fn read_catalog_document(
+    source_root: &Path,
+    configured_path: &Path,
+) -> Result<CatalogDocumentSource, &'static str> {
+    if configured_path.as_os_str().is_empty() {
+        return Err("policy_catalog_path_invalid");
+    }
+    let path = if configured_path.is_absolute() {
+        configured_path.to_path_buf()
+    } else {
+        source_root.join(configured_path)
+    };
+    let metadata = fs::metadata(&path).map_err(|_| "policy_catalog_unavailable")?;
+    if !metadata.is_file() || metadata.len() == 0 || metadata.len() > MAX_DOCUMENT_BYTES as u64 {
+        return Err("policy_catalog_document_size_invalid");
+    }
+    let bytes = fs::read(&path).map_err(|_| "policy_catalog_read_failed")?;
+    Ok(CatalogDocumentSource::new(
+        format!("file://{}", path.to_string_lossy().replace('\\', "/")),
+        bytes,
+    ))
 }
 
 impl AgentDispatcherConfigFile {

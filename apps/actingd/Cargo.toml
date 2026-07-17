@@ -11,11 +11,11 @@ publish = false
 [dependencies]
 actingcommand-contract = { workspace = true }
 actingcommand-device = { workspace = true }
+actingcommand-policy = { workspace = true }
+actingcommand-runtime-client = { workspace = true }
 actingcommand-runtime-host = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 
 [dev-dependencies]
-actingcommand-policy = { workspace = true }
-actingcommand-runtime-client = { workspace = true }
 tempfile = "3"
