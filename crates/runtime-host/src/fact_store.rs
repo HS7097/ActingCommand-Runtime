@@ -385,9 +385,6 @@ impl InstanceFactStore {
         facts: &EvaluationFacts,
         ledger_position: u64,
     ) -> RuntimeHostResult<EvaluationFacts> {
-        if self.active.is_empty() {
-            return Ok(facts.clone());
-        }
         let mut projected = facts.clone();
         let contexts = projected
             .instances
@@ -410,9 +407,6 @@ impl InstanceFactStore {
                     stored,
                 );
             }
-        }
-        if selected.is_empty() {
-            return Ok(facts.clone());
         }
         for (identity, stored) in &selected {
             let scope = policy_scope(&identity.0);
@@ -440,8 +434,21 @@ impl InstanceFactStore {
                 .cmp(&policy_scope_key(&right.scope))
                 .then_with(|| left.fact_key.cmp(&right.fact_key))
         });
+        projected.outcomes.sort_by(|left, right| {
+            (&left.instance_id, &left.task_id, &left.outcome_key).cmp(&(
+                &right.instance_id,
+                &right.task_id,
+                &right.outcome_key,
+            ))
+        });
+        projected.tasks.sort_by(|left, right| {
+            (&left.instance_id, &left.task_id).cmp(&(&right.instance_id, &right.task_id))
+        });
+        projected
+            .instances
+            .sort_by(|left, right| left.instance_id.cmp(&right.instance_id));
         projected.ledger_position = ledger_position;
-        projected.fact_snapshot_id = combined_policy_snapshot_id(ledger_position, &selected)?;
+        projected.fact_snapshot_id = combined_policy_snapshot_id(&projected)?;
         Ok(projected)
     }
 
@@ -535,16 +542,15 @@ fn snapshot_id(
     Ok(format!("snapshot:fact:{:x}", Sha256::digest(bytes)))
 }
 
-fn combined_policy_snapshot_id(
-    ledger_position: u64,
-    facts: &BTreeMap<FactIdentity, &StoredFact>,
-) -> RuntimeHostResult<String> {
-    let records = facts
-        .values()
-        .map(|stored| (&stored.record, stored.sequence))
-        .collect::<Vec<_>>();
-    let bytes = serde_json::to_vec(&(ledger_position, records))
-        .map_err(|_| fact_fatal("fact_snapshot_encode_failed", "hash_policy_fact_snapshot"))?;
+fn combined_policy_snapshot_id(facts: &EvaluationFacts) -> RuntimeHostResult<String> {
+    let bytes = serde_json::to_vec(&(
+        facts.ledger_position,
+        &facts.facts,
+        &facts.outcomes,
+        &facts.tasks,
+        &facts.instances,
+    ))
+    .map_err(|_| fact_fatal("fact_snapshot_encode_failed", "hash_policy_fact_snapshot"))?;
     Ok(format!("snapshot:policy-fact:{:x}", Sha256::digest(bytes)))
 }
 
@@ -559,6 +565,8 @@ fn fact_fatal(code: &'static str, operation: &'static str) -> RuntimeHostError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use actingcommand_contract::{FactTtlPolicy, FactTtlSource};
+    use actingcommand_policy::{ObservedOutcome, TaskRuntimeSnapshot};
 
     fn record(scope: FactScope, snapshot: &str, invalidate_on: Vec<EventType>) -> FactRecord {
         FactRecord {
@@ -569,6 +577,11 @@ mod tests {
             },
             observed_at_unix_ms: 1_000,
             expires_at_unix_ms: Some(5_000),
+            ttl_policy: Some(FactTtlPolicy {
+                minimum_ms: 1_000,
+                maximum_ms: 10_000,
+                source: FactTtlSource::DetectorContract,
+            }),
             confidence_milli: 900,
             source_detector: "detector.theme".to_owned(),
             source_snapshot_id: snapshot.to_owned(),
@@ -663,5 +676,92 @@ mod tests {
             .expect("publish");
         store.apply_trigger(EventType::RuntimeTakeover, trigger, 2_000);
         assert_eq!(store.active_count(), 0);
+    }
+
+    #[test]
+    fn policy_snapshot_identity_covers_every_evaluator_fact_dimension() {
+        let store = InstanceFactStore {
+            active: BTreeMap::new(),
+            invalidated: BTreeMap::new(),
+            pending: BTreeMap::new(),
+            last_sequence: 0,
+        };
+        let base = EvaluationFacts {
+            ledger_position: 1,
+            fact_snapshot_id: "caller-snapshot-a".to_owned(),
+            facts: vec![ObservedFact {
+                scope: ScopeSelector::Instance {
+                    instance_id: "instance-a".to_owned(),
+                },
+                fact_key: "env.theme".to_owned(),
+                value: PolicyFactValue::String("Neutral".to_owned()),
+                observed_at_unix_ms: 1_000,
+                expires_at_unix_ms: Some(2_000),
+                confidence_milli: 900,
+            }],
+            outcomes: vec![ObservedOutcome {
+                task_id: "task-a".to_owned(),
+                instance_id: "instance-a".to_owned(),
+                outcome_key: "completed".to_owned(),
+                value: PolicyFactValue::Boolean(false),
+                observed_at_unix_ms: 1_000,
+            }],
+            tasks: vec![TaskRuntimeSnapshot {
+                task_id: "task-a".to_owned(),
+                instance_id: "instance-a".to_owned(),
+                last_dispatched_unix_ms: None,
+                eligible_since_unix_ms: Some(1_000),
+                terminal_state: None,
+            }],
+            instances: vec![InstanceSnapshot {
+                instance_id: "instance-a".to_owned(),
+                server_id: "server-a".to_owned(),
+                game_id: "game-a".to_owned(),
+                host_id: "host-a".to_owned(),
+                available: true,
+                capability_operation_ids: vec!["operation-a".to_owned()],
+                preferred_task_ids: vec!["task-a".to_owned()],
+            }],
+        };
+        let canonical = store
+            .overlay_policy_facts(&base, 7)
+            .expect("canonical facts");
+
+        let mut caller_identity_changed = base.clone();
+        caller_identity_changed.fact_snapshot_id = "caller-snapshot-b".to_owned();
+        assert_eq!(
+            store
+                .overlay_policy_facts(&caller_identity_changed, 7)
+                .expect("canonical caller-independent facts")
+                .fact_snapshot_id,
+            canonical.fact_snapshot_id
+        );
+
+        let mut variants = Vec::new();
+        let mut changed = base.clone();
+        changed.facts[0].confidence_milli = 899;
+        variants.push(changed);
+        let mut changed = base.clone();
+        changed.outcomes[0].value = PolicyFactValue::Boolean(true);
+        variants.push(changed);
+        let mut changed = base.clone();
+        changed.tasks[0].eligible_since_unix_ms = Some(999);
+        variants.push(changed);
+        let mut changed = base.clone();
+        changed.instances[0].server_id = "server-b".to_owned();
+        variants.push(changed);
+        let mut changed = base;
+        changed.instances[0].game_id = "game-b".to_owned();
+        variants.push(changed);
+
+        for changed in variants {
+            assert_ne!(
+                store
+                    .overlay_policy_facts(&changed, 7)
+                    .expect("changed facts")
+                    .fact_snapshot_id,
+                canonical.fact_snapshot_id
+            );
+        }
     }
 }

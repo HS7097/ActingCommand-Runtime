@@ -50,7 +50,8 @@ use actingcommand_contract::{
     InputAction, InputPayload, InputPayloadDraft, InstanceFactContext, InstanceFactSnapshot,
     InstanceId, IssuedActionId, IssuedFrameId, IssuedMonitorProbe, IssuedReadOnlyCaptureCapability,
     IssuedRecognitionId, IssuedRunId, IssuedTaskId, LeaseId, LeasePayloadDraft, LeaseQueuePolicy,
-    LeaseToken, MAX_INSTANCE_ALIAS_BYTES, MonitorPayloadDraft, MonitorRecoveryCoordinationReason,
+    LeaseToken, MAX_GOVERNANCE_CAPABILITY_BYTES, MAX_INSTANCE_ALIAS_BYTES,
+    MIN_GOVERNANCE_CAPABILITY_BYTES, MonitorPayloadDraft, MonitorRecoveryCoordinationReason,
     OriginModule, PackageDebugLayout, PackageDebugRequest, PackageDebugSummary, PerformanceContext,
     PerformancePayloadDraft, PolicyDispatchEventData, PolicyExecutionEventData, PolicyPayloadDraft,
     PolicyPlanningSignalEventData, PolicyReasonRecord, ProjectInterfaceRequest,
@@ -113,6 +114,7 @@ const LEASE_SWEEP_INTERVAL: Duration = Duration::from_millis(50);
 const MONITOR_POLL_INTERVAL: Duration = Duration::from_millis(25);
 const ACCEPT_IDLE_INTERVAL: Duration = Duration::from_millis(20);
 const MAX_REQUEST_CACHE_ENTRIES: usize = 4096;
+const MAX_TRUSTED_POLICY_DISPATCHES: usize = 16_384;
 const MAX_MONITOR_PROBES_PER_TICK: usize = 16;
 const POLICY_CONNECTION_VALUE: u64 = u64::MAX;
 
@@ -128,6 +130,8 @@ pub struct RuntimeHostConfig {
     performance_control: PerformanceControlConfig,
     agent_dispatcher: Option<AgentDispatcherConfig>,
     secret_fingerprint_salt: Vec<u8>,
+    governance_capability_sha256: Option<[u8; 32]>,
+    governance_capability_invalid: bool,
 }
 
 impl RuntimeHostConfig {
@@ -143,6 +147,8 @@ impl RuntimeHostConfig {
             performance_control: PerformanceControlConfig::default(),
             agent_dispatcher: None,
             secret_fingerprint_salt: secret_fingerprint_salt.as_ref().to_vec(),
+            governance_capability_sha256: None,
+            governance_capability_invalid: false,
         }
     }
 
@@ -192,6 +198,17 @@ impl RuntimeHostConfig {
         self
     }
 
+    pub fn with_governance_capability(mut self, capability: impl AsRef<[u8]>) -> Self {
+        let capability = capability.as_ref();
+        self.governance_capability_invalid = !(MIN_GOVERNANCE_CAPABILITY_BYTES
+            ..=MAX_GOVERNANCE_CAPABILITY_BYTES)
+            .contains(&capability.len())
+            || capability.iter().any(u8::is_ascii_control);
+        self.governance_capability_sha256 =
+            (!self.governance_capability_invalid).then(|| Sha256::digest(capability).into());
+        self
+    }
+
     pub fn state_root(&self) -> &Path {
         &self.state_root
     }
@@ -211,6 +228,7 @@ impl RuntimeHostConfig {
             || self.maximum_frame_bytes == 0
             || self.maximum_frame_bytes > DEFAULT_RUNTIME_MAX_FRAME_BYTES
             || self.secret_fingerprint_salt.is_empty()
+            || self.governance_capability_invalid
         {
             return Err(RuntimeHostError::fatal(
                 "invalid_runtime_host_config",
@@ -236,6 +254,12 @@ impl std::fmt::Debug for RuntimeHostConfig {
             .field("performance_control", &self.performance_control)
             .field("agent_dispatcher", &self.agent_dispatcher)
             .field("secret_fingerprint_salt", &"<redacted>")
+            .field(
+                "governance_capability_sha256",
+                &self
+                    .governance_capability_sha256
+                    .map(|_| "<redacted-digest>"),
+            )
             .finish()
     }
 }
@@ -299,6 +323,7 @@ impl RuntimeHost {
             &ledger,
             config.policy_cadence.clone(),
         )?;
+        ApprovalProjection::recover(&ledger)?;
         reconcile_runtime_state(&state, &ledger, &events)?;
         let agent_instance_ids = registered_instances
             .values()
@@ -376,6 +401,8 @@ impl RuntimeHost {
             performance: Mutex::new(performance),
             performance_control: Mutex::new(performance_control),
             governance_write_gate: Mutex::new(()),
+            governance_capability_sha256: config.governance_capability_sha256,
+            governance_connections: Mutex::new(BTreeSet::new()),
             fact_write_gate: Mutex::new(()),
             state_write_gate: Mutex::new(()),
             agent_write_gate: Mutex::new(()),
@@ -393,6 +420,7 @@ impl RuntimeHost {
             monitor_registry: Mutex::new(monitor_registry),
             queued_requests: Mutex::new(BTreeMap::new()),
             queue_terminals: Mutex::new(QueueTerminalStore::default()),
+            trusted_policy_dispatches: Mutex::new(TrustedPolicyDispatchStore::default()),
             admission_guards: Mutex::new(BTreeMap::new()),
             debug_runs: Mutex::new(BTreeMap::new()),
             contained_runs: Mutex::new(BTreeSet::new()),
@@ -722,6 +750,25 @@ impl RuntimeHost {
     }
 
     #[cfg(test)]
+    pub(crate) fn append_approval_event_for_test(
+        &self,
+        source: EventSource,
+        actor: EventActor,
+        decision: ApprovalDecisionRecord,
+    ) -> RuntimeHostResult<()> {
+        let shared = self.shared_ref("append_test_approval_event")?;
+        shared.append_event_raw(
+            EventSeverity::Info,
+            source,
+            OriginModule::Governance,
+            actor,
+            shared.events.system_links()?,
+            ApprovalPayloadDraft::decision(decision, AuditInput::new()),
+        )?;
+        Ok(())
+    }
+
+    #[cfg(test)]
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn append_contained_task_terminal_for_test(
         &self,
@@ -874,6 +921,19 @@ struct QueueTerminalStore {
     order: VecDeque<RequestId>,
 }
 
+#[derive(Clone)]
+struct TrustedPolicyDispatch {
+    intent: DispatchIntent,
+    reason_chain: DecisionReasonChain,
+    observed_monotonic_ms: u64,
+}
+
+#[derive(Default)]
+struct TrustedPolicyDispatchStore {
+    entries: BTreeMap<String, TrustedPolicyDispatch>,
+    order: VecDeque<String>,
+}
+
 impl QueueTerminalStore {
     fn insert(&mut self, request_id: RequestId, record: QueueTerminalRecord) {
         if self.entries.insert(request_id, record).is_none() {
@@ -884,6 +944,74 @@ impl QueueTerminalStore {
                 self.entries.remove(&expired);
             }
         }
+    }
+}
+
+impl TrustedPolicyDispatchStore {
+    fn record_cycle(
+        &mut self,
+        cycle: &PolicyCycle,
+        observed_monotonic_ms: u64,
+    ) -> RuntimeHostResult<()> {
+        let Some(evaluation) = &cycle.evaluation else {
+            return Ok(());
+        };
+        for intent in &cycle.pending_dispatch_intents {
+            let reason_chain = evaluation
+                .reason_chains
+                .iter()
+                .find(|reason| reason.id == intent.reason_chain_id)
+                .ok_or_else(|| {
+                    policy_admission_fatal(
+                        "policy_reason_chain_missing",
+                        "record_trusted_policy_dispatch",
+                    )
+                })?;
+            let trusted = TrustedPolicyDispatch {
+                intent: intent.clone(),
+                reason_chain: reason_chain.clone(),
+                observed_monotonic_ms,
+            };
+            if let Some(existing) = self.entries.get(&intent.decision_id) {
+                if existing.intent != trusted.intent
+                    || existing.reason_chain != trusted.reason_chain
+                {
+                    return Err(policy_admission_fatal(
+                        "policy_decision_identity_conflict",
+                        "record_trusted_policy_dispatch",
+                    ));
+                }
+                continue;
+            }
+            self.order.push_back(intent.decision_id.clone());
+            self.entries.insert(intent.decision_id.clone(), trusted);
+        }
+        while self.order.len() > MAX_TRUSTED_POLICY_DISPATCHES {
+            if let Some(expired) = self.order.pop_front() {
+                self.entries.remove(&expired);
+            }
+        }
+        Ok(())
+    }
+
+    fn authorize(
+        &self,
+        intent: &DispatchIntent,
+        reason_chain: &DecisionReasonChain,
+    ) -> RuntimeHostResult<TrustedPolicyDispatch> {
+        let trusted = self.entries.get(&intent.decision_id).ok_or_else(|| {
+            policy_admission_request(
+                "policy_decision_not_host_evaluated",
+                "authorize_policy_dispatch",
+            )
+        })?;
+        if trusted.intent != *intent || trusted.reason_chain != *reason_chain {
+            return Err(policy_admission_request(
+                "policy_trusted_context_mismatch",
+                "authorize_policy_dispatch",
+            ));
+        }
+        Ok(trusted.clone())
     }
 }
 
@@ -1202,6 +1330,8 @@ struct HostShared {
     performance_control: Mutex<PerformanceBalanceController>,
     // Client facts and approval authority are projected and appended as one ordered transition.
     governance_write_gate: Mutex<()>,
+    governance_capability_sha256: Option<[u8; 32]>,
+    governance_connections: Mutex<BTreeSet<ConnectionId>>,
     // Ledger append and fact projection commit are one ordered Runtime-owned transition.
     fact_write_gate: Mutex<()>,
     // State and release pointer changes are serialized with their ledger facts.
@@ -1223,6 +1353,7 @@ struct HostShared {
     monitor_registry: Mutex<MonitorRegistry>,
     queued_requests: Mutex<BTreeMap<RequestId, QueuedRequestContext>>,
     queue_terminals: Mutex<QueueTerminalStore>,
+    trusted_policy_dispatches: Mutex<TrustedPolicyDispatchStore>,
     admission_guards: Mutex<BTreeMap<InstanceId, Arc<Mutex<()>>>>,
     debug_runs: Mutex<BTreeMap<CorrelationId, DebugRunContext>>,
     contained_runs: Mutex<BTreeSet<RequestId>>,
@@ -1816,6 +1947,22 @@ impl HostShared {
             lock(&self.facts, "project_policy_facts")?
                 .overlay_policy_facts(facts, ledger_position)?
         };
+        {
+            let registered = lock(
+                &self.registered_instances,
+                "validate_policy_instance_metadata",
+            )?;
+            if facts.instances.iter().any(|snapshot| {
+                !registered
+                    .values()
+                    .any(|instance| instance.instance_alias == snapshot.instance_id)
+            }) {
+                return Err(policy_admission_request(
+                    "policy_instance_metadata_untrusted",
+                    "evaluate_policy_cycle",
+                ));
+            }
+        }
         let workloads = lock(&self.policy, "read_policy_performance_workloads")?
             .active_performance_workloads()?;
         let mut controlled_resources = resources.clone();
@@ -1824,13 +1971,20 @@ impl HostShared {
             "apply_policy_performance_control",
         )?
         .apply_to_resources(&mut controlled_resources.hosts, &workloads)?;
-        lock(&self.policy, "evaluate_policy_cycle")?.evaluate(
+        let observed_monotonic_ms = self.monotonic_ms()?;
+        let cycle = lock(&self.policy, "evaluate_policy_cycle")?.evaluate(
             &facts,
             &controlled_resources,
             time,
             seed,
             trigger,
-        )
+        )?;
+        lock(
+            &self.trusted_policy_dispatches,
+            "record_trusted_policy_dispatches",
+        )?
+        .record_cycle(&cycle, observed_monotonic_ms)?;
+        Ok(cycle)
     }
 
     fn project_policy_forward(
@@ -1981,16 +2135,50 @@ impl HostShared {
                 return Ok(replay);
             }
         }
+        let trusted = lock(
+            &self.trusted_policy_dispatches,
+            "authorize_trusted_policy_dispatch",
+        )?
+        .authorize(intent, reason_chain)?;
+        if context.fact_ledger_position != trusted.intent.input_ledger_position
+            || context.fact_snapshot_id != trusted.intent.fact_snapshot_id
+            || context.fencing_owner_epoch != self.owner_epoch
+        {
+            return Err(policy_admission_request(
+                "policy_admission_context_untrusted",
+                "admit_policy_dispatch",
+            ));
+        }
+        let elapsed_ms = self
+            .monotonic_ms()?
+            .checked_sub(trusted.observed_monotonic_ms)
+            .ok_or_else(|| {
+                policy_admission_fatal("policy_admission_clock_regressed", "admit_policy_dispatch")
+            })?;
+        let now_unix_ms = trusted
+            .intent
+            .prerequisites
+            .evaluated_at_unix_ms
+            .checked_add(elapsed_ms)
+            .ok_or_else(|| {
+                policy_admission_fatal("policy_admission_clock_overflow", "admit_policy_dispatch")
+            })?;
         // Approval projection and dispatch admission share one order so a concurrent revocation
         // cannot appear in the ledger before a dispatch authorized by the superseded fact.
         let _governance_gate = lock(&self.governance_write_gate, "project_policy_approvals")?;
-        let mut authoritative_context = context.clone();
-        authoritative_context.approval_fact_ids = match ApprovalProjection::recover(&self.ledger) {
+        let approval_fact_ids = match ApprovalProjection::recover(&self.ledger) {
             Ok(projection) => projection.active_for_dispatch(intent),
             Err(error) => {
                 self.fatal.mark(error.clone())?;
                 return Err(error);
             }
+        };
+        let authoritative_context = PolicyAdmissionContext {
+            fact_ledger_position: trusted.intent.input_ledger_position,
+            fact_snapshot_id: trusted.intent.fact_snapshot_id.clone(),
+            approval_fact_ids,
+            fencing_owner_epoch: self.owner_epoch,
+            now_unix_ms,
         };
         let context = &authoritative_context;
         let gate_error = match lock(
@@ -2563,8 +2751,11 @@ impl HostShared {
             RuntimeOperation::RecordClientAction { action } => {
                 self.record_client_action(request, validated, action)
             }
+            RuntimeOperation::AuthenticateGovernance { capability } => {
+                self.authenticate_governance(request, connection_id, capability)
+            }
             RuntimeOperation::RecordApprovalDecision { decision } => {
-                self.record_approval_decision(request, validated, decision)
+                self.record_approval_decision(request, validated, decision, connection_id)
             }
             RuntimeOperation::StartAgentSession { wake_id } => {
                 self.start_agent_session(request, validated, *wake_id)
@@ -3327,7 +3518,26 @@ impl HostShared {
         request: &RuntimeRequest,
         validated: &ValidatedRuntimeRequest<'_>,
         decision: &ApprovalDecisionRecord,
+        connection_id: ConnectionId,
     ) -> Result<OperationSuccess, RequestFailure> {
+        if request.actor() != EventActor::User
+            || request.source() != EventSource::Ui
+            || !lock(
+                &self.governance_connections,
+                "authorize_approval_connection",
+            )?
+            .contains(&connection_id)
+        {
+            return Err(RequestFailure::request(
+                RuntimeHostError::request(
+                    "governance_authority_required",
+                    "record_approval_decision",
+                    RuntimeErrorCode::InvalidRequest,
+                ),
+                RuntimeReceiptState::Denied,
+                None,
+            ));
+        }
         let _gate = lock(&self.governance_write_gate, "record_approval_decision")
             .map_err(RequestFailure::poison_without_terminal)?;
         if let Some(existing) = self.client_fact_replay(request, EventType::ApprovalDecision)? {
@@ -3362,9 +3572,9 @@ impl HostShared {
             .map_err(|error| RequestFailure::request(error, RuntimeReceiptState::Denied, None))?;
         let persisted = self.append_event(
             EventSeverity::Info,
-            request.source(),
+            EventSource::Ui,
             OriginModule::Governance,
-            request.actor(),
+            EventActor::User,
             validated.event_links(None, None, None),
             ApprovalPayloadDraft::decision(decision.clone(), AuditInput::new()),
         )?;
@@ -3375,6 +3585,38 @@ impl HostShared {
                 approval_id: decision.approval_id().to_owned(),
                 disposition: decision.disposition(),
             },
+        })
+    }
+
+    fn authenticate_governance(
+        &self,
+        request: &RuntimeRequest,
+        connection_id: ConnectionId,
+        capability: &str,
+    ) -> Result<OperationSuccess, RequestFailure> {
+        if request.actor() != EventActor::User || request.source() != EventSource::Ui {
+            return Err(governance_authentication_denied(
+                "governance_origin_untrusted",
+            ));
+        }
+        let expected = self.governance_capability_sha256.ok_or_else(|| {
+            governance_authentication_denied("governance_authentication_unavailable")
+        })?;
+        let actual: [u8; 32] = Sha256::digest(capability.as_bytes()).into();
+        if !constant_time_digest_eq(&expected, &actual) {
+            return Err(governance_authentication_denied(
+                "governance_authentication_failed",
+            ));
+        }
+        lock(
+            &self.governance_connections,
+            "authenticate_governance_connection",
+        )?
+        .insert(connection_id);
+        Ok(OperationSuccess {
+            state: RuntimeReceiptState::Completed,
+            terminal: None,
+            result: RuntimeResult::GovernanceAuthenticated,
         })
     }
 
@@ -7698,6 +7940,11 @@ impl HostShared {
         connection_id: ConnectionId,
         reason: LeaseReleaseReason,
     ) -> RuntimeHostResult<()> {
+        lock(
+            &self.governance_connections,
+            "cleanup_governance_connection",
+        )?
+        .remove(&connection_id);
         let queued_instances = lock(&self.scheduler, "list_connection_queues")?
             .queued_instance_ids_for_connection(connection_id);
         for instance_id in queued_instances {
@@ -9495,6 +9742,14 @@ fn policy_contract_error(operation: &'static str) -> RuntimeHostError {
     )
 }
 
+fn policy_admission_request(code: &'static str, operation: &'static str) -> RuntimeHostError {
+    RuntimeHostError::request(code, operation, RuntimeErrorCode::InvalidRequest)
+}
+
+fn policy_admission_fatal(code: &'static str, operation: &'static str) -> RuntimeHostError {
+    RuntimeHostError::fatal(code, operation, RuntimeErrorCode::RuntimeFatal)
+}
+
 fn critical_execution_error<E>(error: &CriticalExecutionError<E>) -> RuntimeHostError {
     match error {
         CriticalExecutionError::IntentAppend(_) => ledger_error("append_critical_intent"),
@@ -9521,6 +9776,27 @@ fn client_fact_conflict(code: &'static str, operation: &'static str) -> RequestF
         RuntimeReceiptState::Denied,
         None,
     )
+}
+
+fn governance_authentication_denied(code: &'static str) -> RequestFailure {
+    RequestFailure::request(
+        RuntimeHostError::request(
+            code,
+            "authenticate_governance",
+            RuntimeErrorCode::InvalidRequest,
+        ),
+        RuntimeReceiptState::Denied,
+        None,
+    )
+}
+
+fn constant_time_digest_eq(left: &[u8; 32], right: &[u8; 32]) -> bool {
+    left.iter()
+        .zip(right)
+        .fold(0_u8, |difference, (left, right)| {
+            difference | (left ^ right)
+        })
+        == 0
 }
 
 fn agent_request_failure(error: RuntimeHostError) -> RequestFailure {

@@ -7,10 +7,11 @@ use crate::{
     ActivityProfile, CatalogBundle, CatalogDiagnostic, CatalogDiagnosticCode, ClockSchedule,
     ClockSource, Comparison, EffectDirection, FactValue, LoadProfile, MAX_ACTIVITY_PROFILES,
     MAX_APPROVAL_REFS, MAX_BUDGET_COUNT, MAX_CLOCK_DRIFT_MS, MAX_EFFECTS_PER_TASK,
-    MAX_GOALS_PER_PROFILE, MAX_ID_BYTES, MAX_INSTANCE_OVERRIDES_PER_TASK, MAX_POOLS,
-    MAX_PREDICATE_DEPTH, MAX_PREDICATE_NODES, MAX_REFERENCES_PER_TASK, MAX_TASKS, MAX_TEXT_BYTES,
-    MAX_TIMELINE_EVENTS, MAX_WINDOWS_PER_PROFILE, MetricRef, ObservationRef, PoolSpec,
-    PredicateSpec, ResourceEffectSpec, SCHEDULING_SCHEMA_VERSION, ScopeSelector, TaskSpec,
+    MAX_FACT_MAX_AGE_MS, MAX_GOALS_PER_PROFILE, MAX_ID_BYTES, MAX_INSTANCE_OVERRIDES_PER_TASK,
+    MAX_POOLS, MAX_PREDICATE_DEPTH, MAX_PREDICATE_NODES, MAX_REFERENCES_PER_TASK, MAX_TASKS,
+    MAX_TEXT_BYTES, MAX_TIMELINE_EVENTS, MAX_WINDOWS_PER_PROFILE, MetricRef, ObservationRef,
+    PoolSpec, PredicateSpec, ResourceEffectSpec, SCHEDULING_SCHEMA_VERSION, ScopeSelector,
+    TaskSpec,
 };
 
 pub(crate) struct CatalogSourceMaps<'a> {
@@ -637,11 +638,11 @@ fn validate_predicate_node(
                 diagnostics,
             );
             validate_comparison_value(*comparison, value, path, map, descriptor, diagnostics);
-            if max_age_ms == &Some(0) {
+            if max_age_ms.is_some_and(|value| value == 0 || value > MAX_FACT_MAX_AGE_MS) {
                 diagnostics.push(map.diagnostic(
                     CatalogDiagnosticCode::LimitExceeded,
                     format!("{path}/max_age_ms"),
-                    "fact max_age_ms must be null or greater than zero",
+                    format!("fact max_age_ms must be null or within 1..={MAX_FACT_MAX_AGE_MS}"),
                     descriptor,
                 ));
             }

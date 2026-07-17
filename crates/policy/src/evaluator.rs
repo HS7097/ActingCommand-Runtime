@@ -552,6 +552,7 @@ pub fn evaluate(
             &candidate.task_id,
             &candidate.instance_id,
             facts.ledger_position,
+            &facts.fact_snapshot_id,
             time.unix_ms,
             seed,
         );
@@ -1778,6 +1779,7 @@ fn deterministic_decision_id(
     task_id: &str,
     instance_id: &str,
     ledger_position: u64,
+    fact_snapshot_id: &str,
     unix_ms: u64,
     seed: u64,
 ) -> String {
@@ -1786,6 +1788,7 @@ fn deterministic_decision_id(
     hash_part(&mut hasher, task_id.as_bytes());
     hash_part(&mut hasher, instance_id.as_bytes());
     hasher.update(ledger_position.to_be_bytes());
+    hash_part(&mut hasher, fact_snapshot_id.as_bytes());
     hasher.update(unix_ms.to_be_bytes());
     hasher.update(seed.to_be_bytes());
     format!("decision:{:x}", hasher.finalize())

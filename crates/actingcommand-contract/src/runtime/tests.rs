@@ -39,6 +39,20 @@ fn request(operation: RuntimeOperation) -> RuntimeRequest {
     .expect("runtime request")
 }
 
+fn governance_request(operation: RuntimeOperation) -> RuntimeRequest {
+    let ids = issuer();
+    RuntimeRequest::new(
+        ids.mint_request_id().expect("request id"),
+        ids.mint_correlation_id().expect("correlation id"),
+        None,
+        EventActor::User,
+        EventSource::Ui,
+        1,
+        operation,
+    )
+    .expect("governance runtime request")
+}
+
 fn token() -> LeaseToken {
     let ids = issuer();
     LeaseToken::new(
@@ -1025,13 +1039,12 @@ fn client_action_and_approval_operations_are_closed_typed_contracts() {
         "user_confirmed",
     )
     .expect("approval");
-    for operation in [
-        RuntimeOperation::RecordClientAction {
+    for request in [
+        request(RuntimeOperation::RecordClientAction {
             action: client_action,
-        },
-        RuntimeOperation::RecordApprovalDecision { decision: approval },
+        }),
+        governance_request(RuntimeOperation::RecordApprovalDecision { decision: approval }),
     ] {
-        let request = request(operation);
         let encoded = serde_json::to_value(&request).expect("request JSON");
         let decoded = serde_json::from_value::<RuntimeRequest>(encoded.clone())
             .expect("typed interaction request");
@@ -1040,6 +1053,57 @@ fn client_action_and_approval_operations_are_closed_typed_contracts() {
         smuggled["operation"]["raw_text"] = serde_json::json!("secret");
         assert!(serde_json::from_value::<RuntimeRequest>(smuggled).is_err());
     }
+}
+
+#[test]
+fn governance_operations_require_user_ui_origin_and_redact_capabilities() {
+    let capability = "g".repeat(MIN_GOVERNANCE_CAPABILITY_BYTES);
+    let operation = RuntimeOperation::AuthenticateGovernance {
+        capability: capability.clone(),
+    };
+    let valid = governance_request(operation.clone());
+    valid.validate().expect("valid governance request");
+    assert!(!format!("{operation:?}").contains(&capability));
+
+    let ids = issuer();
+    let rejected = RuntimeRequest::new(
+        ids.mint_request_id().expect("request"),
+        ids.mint_correlation_id().expect("correlation"),
+        None,
+        EventActor::Agent,
+        EventSource::Adapter,
+        1,
+        RuntimeOperation::AuthenticateGovernance { capability },
+    );
+    assert_eq!(
+        rejected.expect_err("agent governance request").code(),
+        "invalid_governance_origin"
+    );
+
+    let approval = ApprovalDecisionRecord::new(
+        "approval:agent-self-approval",
+        ApprovalDisposition::Approved,
+        ApprovalTarget::Catalog {
+            catalog_hash: format!("sha256:{}", "a".repeat(64)),
+            catalog_version: 1,
+        },
+        "agent_claimed_approval",
+    )
+    .expect("approval fixture");
+    let ids = issuer();
+    let rejected = RuntimeRequest::new(
+        ids.mint_request_id().expect("request"),
+        ids.mint_correlation_id().expect("correlation"),
+        None,
+        EventActor::Agent,
+        EventSource::Adapter,
+        1,
+        RuntimeOperation::RecordApprovalDecision { decision: approval },
+    );
+    assert_eq!(
+        rejected.expect_err("agent self-approval").code(),
+        "invalid_governance_origin"
+    );
 }
 
 #[test]

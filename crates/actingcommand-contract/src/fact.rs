@@ -12,6 +12,8 @@ const MAX_FACT_TEXT_BYTES: usize = 1_024;
 const MAX_FACT_RECORDS: usize = 256;
 const MAX_FACT_RECORD_FIELDS: usize = 64;
 const MAX_INVALIDATION_EVENTS: usize = 32;
+pub const MIN_FACT_TTL_MS: u64 = 1;
+pub const MAX_FACT_TTL_MS: u64 = 31_536_000_000;
 
 /// Selects the ownership and sharing boundary for a fact.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -67,6 +69,24 @@ pub enum FactContent {
     },
 }
 
+/// Identifies the reviewed authority that selected a fact family's TTL bounds.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FactTtlSource {
+    DetectorContract,
+    CatalogPolicy,
+    RuntimeDefault,
+}
+
+/// Pins the legal freshness interval for one published fact family.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FactTtlPolicy {
+    pub minimum_ms: u64,
+    pub maximum_ms: u64,
+    pub source: FactTtlSource,
+}
+
 /// Durable fact publication record owned and validated by Runtime.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -76,6 +96,8 @@ pub struct FactRecord {
     pub content: FactContent,
     pub observed_at_unix_ms: u64,
     pub expires_at_unix_ms: Option<u64>,
+    #[serde(default)]
+    pub ttl_policy: Option<FactTtlPolicy>,
     pub confidence_milli: u16,
     pub source_detector: String,
     pub source_snapshot_id: String,
@@ -146,9 +168,6 @@ impl FactRecord {
         validate_token(&self.schema_version, "schema_version")?;
         validate_sha256(&self.resource_bundle_hash, "resource_bundle_hash")?;
         if self.observed_at_unix_ms == 0
-            || self
-                .expires_at_unix_ms
-                .is_some_and(|expires| expires <= self.observed_at_unix_ms)
             || self.confidence_milli > 1_000
             || self.invalidate_on.len() > MAX_INVALIDATION_EVENTS
             || self
@@ -165,6 +184,29 @@ impl FactRecord {
         {
             return Err(SanitizationError::new("invalid_fact_record", "fact"));
         }
+        match (&self.expires_at_unix_ms, &self.ttl_policy) {
+            (None, None) => {}
+            (Some(expires), Some(policy)) => {
+                policy.validate()?;
+                let ttl_ms = expires
+                    .checked_sub(self.observed_at_unix_ms)
+                    .ok_or_else(|| {
+                        SanitizationError::new("fact_ttl_expiry_invalid", "expires_at_unix_ms")
+                    })?;
+                if !(policy.minimum_ms..=policy.maximum_ms).contains(&ttl_ms) {
+                    return Err(SanitizationError::new(
+                        "fact_ttl_out_of_bounds",
+                        "expires_at_unix_ms",
+                    ));
+                }
+            }
+            _ => {
+                return Err(SanitizationError::new(
+                    "fact_ttl_policy_missing",
+                    "ttl_policy",
+                ));
+            }
+        }
         self.content.validate()
     }
 
@@ -172,6 +214,21 @@ impl FactRecord {
     pub fn is_expired(&self, now_unix_ms: u64) -> bool {
         self.expires_at_unix_ms
             .is_some_and(|expires| now_unix_ms > expires)
+    }
+}
+
+impl FactTtlPolicy {
+    pub fn validate(&self) -> Result<(), SanitizationError> {
+        if self.minimum_ms < MIN_FACT_TTL_MS
+            || self.maximum_ms > MAX_FACT_TTL_MS
+            || self.minimum_ms > self.maximum_ms
+        {
+            return Err(SanitizationError::new(
+                "fact_ttl_policy_invalid",
+                "ttl_policy",
+            ));
+        }
+        Ok(())
     }
 }
 
@@ -421,6 +478,11 @@ mod tests {
             },
             observed_at_unix_ms: 1_000,
             expires_at_unix_ms: expires,
+            ttl_policy: expires.map(|_| FactTtlPolicy {
+                minimum_ms: 1,
+                maximum_ms: 10_000,
+                source: FactTtlSource::DetectorContract,
+            }),
             confidence_milli: 900,
             source_detector: "detector.theme".to_owned(),
             source_snapshot_id: "snapshot:source".to_owned(),
@@ -489,6 +551,90 @@ mod tests {
         assert_eq!(
             snapshot.resolve_environment_string("theme", 1_500),
             Err(FactUnknownReason::TypeMismatch)
+        );
+    }
+
+    #[test]
+    fn expiring_facts_require_a_bounded_ttl_policy() {
+        let valid = record(
+            FactScope::Instance {
+                instance_id: "instance-a".to_owned(),
+            },
+            "Neutral",
+            Some(2_000),
+        );
+        valid.validate().expect("bounded fact TTL");
+
+        let mut missing = valid.clone();
+        missing.ttl_policy = None;
+        assert_eq!(
+            missing
+                .validate()
+                .expect_err("missing TTL policy must be rejected")
+                .code(),
+            "fact_ttl_policy_missing"
+        );
+
+        let mut legacy_shape = serde_json::to_value(&valid).expect("fact JSON");
+        legacy_shape
+            .as_object_mut()
+            .expect("fact object")
+            .remove("ttl_policy");
+        let decoded: FactRecord = serde_json::from_value(legacy_shape).expect("legacy fact shape");
+        assert_eq!(
+            decoded
+                .validate()
+                .expect_err("legacy expiring fact must be rejected explicitly")
+                .code(),
+            "fact_ttl_policy_missing"
+        );
+
+        let mut below_family_minimum = valid.clone();
+        below_family_minimum.ttl_policy = Some(FactTtlPolicy {
+            minimum_ms: 2_000,
+            maximum_ms: 3_000,
+            source: FactTtlSource::CatalogPolicy,
+        });
+        assert_eq!(
+            below_family_minimum
+                .validate()
+                .expect_err("out-of-family TTL must be rejected")
+                .code(),
+            "fact_ttl_out_of_bounds"
+        );
+
+        let mut invalid_family = valid;
+        invalid_family.ttl_policy = Some(FactTtlPolicy {
+            minimum_ms: MAX_FACT_TTL_MS,
+            maximum_ms: MIN_FACT_TTL_MS,
+            source: FactTtlSource::RuntimeDefault,
+        });
+        assert_eq!(
+            invalid_family
+                .validate()
+                .expect_err("invalid TTL policy must be rejected")
+                .code(),
+            "fact_ttl_policy_invalid"
+        );
+
+        let mut oversized_family = record(
+            FactScope::Instance {
+                instance_id: "instance-a".to_owned(),
+            },
+            "Neutral",
+            Some(2_000),
+        );
+        oversized_family.ttl_policy = Some(FactTtlPolicy {
+            minimum_ms: MIN_FACT_TTL_MS,
+            maximum_ms: MAX_FACT_TTL_MS + 1,
+            source: FactTtlSource::DetectorContract,
+        });
+        assert_eq!(
+            oversized_family
+                .validate()
+                .expect_err("oversized TTL family must be rejected")
+                .code(),
+            "fact_ttl_policy_invalid"
         );
     }
 }
