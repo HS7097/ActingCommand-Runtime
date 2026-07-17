@@ -3,14 +3,17 @@
 //! Windows implementation of the host-counter boundary.
 
 use crate::{
-    ForegroundSample, HostMetric, HostSample, HostSampler, ProcessLoadThresholds, ProcessOwnership,
-    ProcessSample,
+    ForegroundSample, HostMetric, HostSample, HostSampler, ProcessLoadThresholds,
+    ProcessMetricCoverage, ProcessOwnership, ProcessSample,
 };
 use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::c_void;
 use std::mem::{size_of, zeroed};
 use std::ptr::{null, null_mut};
-use windows_sys::Win32::Foundation::{CloseHandle, FILETIME, HANDLE, INVALID_HANDLE_VALUE, RECT};
+use windows_sys::Win32::Foundation::{
+    CloseHandle, ERROR_ACCESS_DENIED, ERROR_NO_MORE_FILES, FILETIME, GetLastError, HANDLE,
+    INVALID_HANDLE_VALUE, RECT,
+};
 use windows_sys::Win32::Graphics::Gdi::{
     GetMonitorInfoW, MONITOR_DEFAULTTONEAREST, MONITORINFO, MonitorFromWindow,
 };
@@ -37,6 +40,7 @@ const CPU_COUNTER: &str = r"\Processor(*)\% Processor Time";
 const DISK_QUEUE_COUNTER: &str = r"\PhysicalDisk(_Total)\Current Disk Queue Length";
 const DISK_LATENCY_COUNTER: &str = r"\PhysicalDisk(_Total)\Avg. Disk sec/Transfer";
 const GPU_COUNTER: &str = r"\GPU Engine(*)\Utilization Percentage";
+const MIN_PROCESS_READABLE_BASIS_POINTS: u16 = 9_900;
 
 #[derive(Clone, Copy)]
 struct SystemTimes {
@@ -58,13 +62,65 @@ struct ProcessRecord {
 
 struct ProcessScan {
     records: Vec<ProcessRecord>,
+    enumerated_processes: usize,
+    access_denied_processes: usize,
     inaccessible_processes: usize,
 }
 
 enum ProcessRecordOutcome {
     Skipped,
     Sampled(ProcessRecord),
+    AccessDenied,
     Inaccessible,
+}
+
+trait ProcessEnumerator {
+    fn current(&self) -> &PROCESSENTRY32W;
+    fn advance(&mut self) -> Result<bool, &'static str>;
+}
+
+struct ToolhelpProcessEnumerator {
+    snapshot: OwnedHandle,
+    entry: PROCESSENTRY32W,
+}
+
+impl ToolhelpProcessEnumerator {
+    fn open() -> Result<Self, &'static str> {
+        // SAFETY: Toolhelp owns a stable snapshot; PROCESSENTRY32W has the required size.
+        unsafe {
+            let snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+            if snapshot == INVALID_HANDLE_VALUE {
+                return Err("performance_process_snapshot_failed");
+            }
+            let snapshot = OwnedHandle(snapshot);
+            let mut entry: PROCESSENTRY32W = zeroed();
+            entry.dwSize = u32::try_from(size_of::<PROCESSENTRY32W>())
+                .map_err(|_| "performance_process_structure_invalid")?;
+            if Process32FirstW(snapshot.0, &mut entry) == 0 {
+                return Err("performance_process_enumeration_failed");
+            }
+            Ok(Self { snapshot, entry })
+        }
+    }
+}
+
+impl ProcessEnumerator for ToolhelpProcessEnumerator {
+    fn current(&self) -> &PROCESSENTRY32W {
+        &self.entry
+    }
+
+    fn advance(&mut self) -> Result<bool, &'static str> {
+        // SAFETY: the snapshot and entry remain valid for this enumerator's lifetime.
+        if unsafe { Process32NextW(self.snapshot.0, &mut self.entry) } != 0 {
+            return Ok(true);
+        }
+        // GetLastError must be read immediately after Process32NextW reports failure.
+        if unsafe { GetLastError() } == ERROR_NO_MORE_FILES {
+            Ok(false)
+        } else {
+            Err("performance_process_enumeration_failed")
+        }
+    }
 }
 
 struct OwnedHandle(HANDLE);
@@ -197,7 +253,7 @@ impl HostSampler for WindowsHostSampler {
             &self.previous_processes,
             owned_processes,
         )?;
-        let inaccessible_processes = process_scan.inaccessible_processes;
+        let process_coverage = process_coverage(&process_scan)?;
         let mut next_processes = BTreeMap::new();
         let mut all_processes = BTreeMap::new();
         for record in process_scan.records {
@@ -299,7 +355,7 @@ impl HostSampler for WindowsHostSampler {
         if !process_rates_available {
             unavailable.extend([HostMetric::ProcessCpu, HostMetric::ProcessIo]);
         }
-        mark_partial_process_metrics(&mut unavailable, inaccessible_processes);
+        mark_partial_process_metrics(&mut unavailable, process_coverage);
         if owned_processes
             .keys()
             .any(|pid| !all_processes.contains_key(pid))
@@ -329,6 +385,7 @@ impl HostSampler for WindowsHostSampler {
             foreground,
             owned_processes: owned,
             third_party_high_load,
+            process_coverage,
             unavailable_metrics: unavailable.into_iter().collect(),
         })
     }
@@ -373,39 +430,43 @@ fn process_samples(
     previous: &BTreeMap<u32, ProcessCounters>,
     owned: &BTreeMap<u32, String>,
 ) -> Result<ProcessScan, &'static str> {
-    // SAFETY: Toolhelp owns a stable snapshot; PROCESSENTRY32W has the required size.
-    unsafe {
-        let snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
-        if snapshot == INVALID_HANDLE_VALUE {
-            return Err("performance_process_snapshot_failed");
-        }
-        let _snapshot = OwnedHandle(snapshot);
-        let mut entry: PROCESSENTRY32W = zeroed();
-        entry.dwSize = u32::try_from(size_of::<PROCESSENTRY32W>())
-            .map_err(|_| "performance_process_structure_invalid")?;
-        if Process32FirstW(snapshot, &mut entry) == 0 {
-            return Err("performance_process_enumeration_failed");
-        }
-        let mut scan = ProcessScan {
-            records: Vec::new(),
-            inaccessible_processes: 0,
-        };
-        loop {
-            match process_record(&entry, total_system_delta, elapsed_ms, previous, owned) {
-                ProcessRecordOutcome::Skipped => {}
-                ProcessRecordOutcome::Sampled(record) => scan.records.push(record),
-                ProcessRecordOutcome::Inaccessible => {
-                    scan.inaccessible_processes = scan
-                        .inaccessible_processes
-                        .checked_add(1)
-                        .ok_or("performance_process_count_overflow")?;
-                }
+    let mut enumerator = ToolhelpProcessEnumerator::open()?;
+    scan_processes(&mut enumerator, |entry| {
+        // SAFETY: the entry comes from the live Toolhelp snapshot and is read only here.
+        unsafe { process_record(entry, total_system_delta, elapsed_ms, previous, owned) }
+    })
+}
+
+fn scan_processes<E, F>(enumerator: &mut E, mut record: F) -> Result<ProcessScan, &'static str>
+where
+    E: ProcessEnumerator,
+    F: FnMut(&PROCESSENTRY32W) -> ProcessRecordOutcome,
+{
+    let mut scan = ProcessScan {
+        records: Vec::new(),
+        enumerated_processes: 0,
+        access_denied_processes: 0,
+        inaccessible_processes: 0,
+    };
+    loop {
+        match record(enumerator.current()) {
+            ProcessRecordOutcome::Skipped => {}
+            ProcessRecordOutcome::Sampled(record) => {
+                scan.enumerated_processes = checked_process_count(scan.enumerated_processes)?;
+                scan.records.push(record);
             }
-            if Process32NextW(snapshot, &mut entry) == 0 {
-                break;
+            ProcessRecordOutcome::AccessDenied => {
+                scan.enumerated_processes = checked_process_count(scan.enumerated_processes)?;
+                scan.access_denied_processes = checked_process_count(scan.access_denied_processes)?;
+            }
+            ProcessRecordOutcome::Inaccessible => {
+                scan.enumerated_processes = checked_process_count(scan.enumerated_processes)?;
+                scan.inaccessible_processes = checked_process_count(scan.inaccessible_processes)?;
             }
         }
-        Ok(scan)
+        if !enumerator.advance()? {
+            return Ok(scan);
+        }
     }
 }
 
@@ -423,7 +484,7 @@ unsafe fn process_record(
     let handle =
         unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_VM_READ, 0, pid) };
     if handle.is_null() {
-        return ProcessRecordOutcome::Inaccessible;
+        return process_access_failure(unsafe { GetLastError() });
     }
     let _handle = OwnedHandle(handle);
     let mut creation: FILETIME = unsafe { zeroed() };
@@ -436,11 +497,14 @@ unsafe fn process_record(
     };
     memory.cb = memory_size;
     let mut io: IO_COUNTERS = unsafe { zeroed() };
-    if unsafe { GetProcessTimes(handle, &mut creation, &mut exit, &mut kernel, &mut user) } == 0
-        || unsafe { K32GetProcessMemoryInfo(handle, &mut memory, memory.cb) } == 0
-        || unsafe { GetProcessIoCounters(handle, &mut io) } == 0
-    {
-        return ProcessRecordOutcome::Inaccessible;
+    if unsafe { GetProcessTimes(handle, &mut creation, &mut exit, &mut kernel, &mut user) } == 0 {
+        return process_access_failure(unsafe { GetLastError() });
+    }
+    if unsafe { K32GetProcessMemoryInfo(handle, &mut memory, memory.cb) } == 0 {
+        return process_access_failure(unsafe { GetLastError() });
+    }
+    if unsafe { GetProcessIoCounters(handle, &mut io) } == 0 {
+        return process_access_failure(unsafe { GetLastError() });
     }
     let counters = ProcessCounters {
         cpu_100ns: filetime(kernel).saturating_add(filetime(user)),
@@ -492,11 +556,54 @@ unsafe fn process_record(
     })
 }
 
+fn process_access_failure(error: u32) -> ProcessRecordOutcome {
+    if error == ERROR_ACCESS_DENIED {
+        ProcessRecordOutcome::AccessDenied
+    } else {
+        ProcessRecordOutcome::Inaccessible
+    }
+}
+
+fn checked_process_count(value: usize) -> Result<usize, &'static str> {
+    value
+        .checked_add(1)
+        .ok_or("performance_process_count_overflow")
+}
+
+fn process_coverage(scan: &ProcessScan) -> Result<ProcessMetricCoverage, &'static str> {
+    let sampled = scan.records.len();
+    let readable_denominator = sampled
+        .checked_add(scan.inaccessible_processes)
+        .ok_or("performance_process_count_overflow")?;
+    let sampled_processes = process_count_u32(sampled)?;
+    let readable_processes = process_count_u32(readable_denominator)?;
+    let readable_basis_points = if readable_denominator == 0 {
+        0
+    } else {
+        ratio_basis_points(u64::from(sampled_processes), u64::from(readable_processes))
+    };
+    Ok(ProcessMetricCoverage {
+        enumerated_processes: process_count_u32(scan.enumerated_processes)?,
+        sampled_processes,
+        access_denied_processes_excluded: process_count_u32(scan.access_denied_processes)?,
+        unexpectedly_inaccessible_processes: process_count_u32(scan.inaccessible_processes)?,
+        readable_basis_points,
+    })
+}
+
+fn process_count_u32(value: usize) -> Result<u32, &'static str> {
+    u32::try_from(value).map_err(|_| "performance_process_count_overflow")
+}
+
 fn mark_partial_process_metrics(
     unavailable: &mut BTreeSet<HostMetric>,
-    inaccessible_processes: usize,
+    coverage: ProcessMetricCoverage,
 ) {
-    if inaccessible_processes > 0 {
+    // Access-denied Windows system/PPL processes are explicitly excluded from the denominator;
+    // unexpected failures still make the sample partial below the declared coverage threshold.
+    if coverage.sampled_processes == 0
+        || coverage.readable_basis_points < MIN_PROCESS_READABLE_BASIS_POINTS
+    {
         unavailable.extend([
             HostMetric::ProcessCpu,
             HostMetric::ProcessRam,
@@ -677,6 +784,53 @@ unsafe fn wide_string(pointer: *const u16) -> String {
 mod tests {
     use super::*;
 
+    struct MidEnumerationFailure {
+        entry: PROCESSENTRY32W,
+    }
+
+    impl ProcessEnumerator for MidEnumerationFailure {
+        fn current(&self) -> &PROCESSENTRY32W {
+            &self.entry
+        }
+
+        fn advance(&mut self) -> Result<bool, &'static str> {
+            Err("performance_process_enumeration_failed")
+        }
+    }
+
+    fn process_record_fixture(pid: u32) -> ProcessRecord {
+        ProcessRecord {
+            sample: ProcessSample {
+                pid,
+                process_name: format!("process-{pid}"),
+                ownership: ProcessOwnership::ThirdParty,
+                cpu_basis_points: 0,
+                working_set_bytes: 1,
+                io_bytes_per_second: 0,
+            },
+            counters: ProcessCounters {
+                cpu_100ns: 0,
+                io_bytes: 0,
+            },
+        }
+    }
+
+    fn coverage_fixture(
+        sampled: usize,
+        access_denied: usize,
+        inaccessible: usize,
+    ) -> ProcessMetricCoverage {
+        process_coverage(&ProcessScan {
+            records: (1..=sampled)
+                .map(|pid| process_record_fixture(u32::try_from(pid).expect("pid")))
+                .collect(),
+            enumerated_processes: sampled + access_denied + inaccessible,
+            access_denied_processes: access_denied,
+            inaccessible_processes: inaccessible,
+        })
+        .expect("coverage")
+    }
+
     #[test]
     fn ratio_basis_points_is_bounded_and_deterministic() {
         assert_eq!(ratio_basis_points(0, 0), 0);
@@ -696,9 +850,21 @@ mod tests {
     }
 
     #[test]
-    fn inaccessible_processes_make_process_metrics_explicitly_partial() {
+    fn access_denied_processes_are_audited_but_excluded_from_coverage() {
+        let coverage = coverage_fixture(1, 1, 0);
+        assert_eq!(coverage.enumerated_processes, 2);
+        assert_eq!(coverage.access_denied_processes_excluded, 1);
+        assert_eq!(coverage.readable_basis_points, 10_000);
+
         let mut unavailable = BTreeSet::new();
-        mark_partial_process_metrics(&mut unavailable, 1);
+        mark_partial_process_metrics(&mut unavailable, coverage);
+        assert!(unavailable.is_empty());
+    }
+
+    #[test]
+    fn insufficient_readable_coverage_makes_process_metrics_partial() {
+        let mut unavailable = BTreeSet::new();
+        mark_partial_process_metrics(&mut unavailable, coverage_fixture(98, 0, 2));
         assert_eq!(
             unavailable,
             BTreeSet::from([
@@ -709,7 +875,33 @@ mod tests {
         );
 
         let mut complete = BTreeSet::new();
-        mark_partial_process_metrics(&mut complete, 0);
+        mark_partial_process_metrics(&mut complete, coverage_fixture(99, 0, 1));
         assert!(complete.is_empty());
+    }
+
+    #[test]
+    fn mid_enumeration_failure_is_not_a_complete_sample() {
+        // SAFETY: the zeroed fixture is only read by the injected record closure.
+        let mut enumerator = MidEnumerationFailure {
+            entry: unsafe { zeroed() },
+        };
+        let result = scan_processes(&mut enumerator, |_| {
+            ProcessRecordOutcome::Sampled(process_record_fixture(1))
+        });
+        assert_eq!(result.err(), Some("performance_process_enumeration_failed"));
+    }
+
+    #[test]
+    fn live_windows_scan_reports_explicit_coverage() {
+        let scan = process_samples(1, 0, &BTreeMap::new(), &BTreeMap::new()).expect("scan");
+        let coverage = process_coverage(&scan).expect("coverage");
+        assert!(coverage.enumerated_processes > 0);
+        assert!(coverage.sampled_processes > 0);
+        assert_eq!(
+            coverage.enumerated_processes,
+            coverage.sampled_processes
+                + coverage.access_denied_processes_excluded
+                + coverage.unexpectedly_inaccessible_processes
+        );
     }
 }
