@@ -10,9 +10,9 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use crate::{
-    ActivityProfile, ClockSchedule, ClockSource, Comparison, CompiledCatalog, FactValue,
-    LoadProfile, MAX_TEXT_BYTES, ObservationRef, PoolSpec, PredicateSpec, ResourceEffectSpec,
-    ScopeSelector, TaskSpec, TaskTerminalState,
+    ActivityProfile, ClockSchedule, ClockSource, Comparison, CompiledCatalog, FactScalar,
+    FactValue, LoadProfile, MAX_TEXT_BYTES, ObservationRef, PoolSpec, PredicateSpec,
+    ResourceEffectSpec, ScopeSelector, TaskSpec, TaskTerminalState,
 };
 
 pub const MAX_EVALUATION_FACTS: usize = 16_384;
@@ -1297,6 +1297,111 @@ fn evaluate_predicate(
                 fresh_until_unix_ms: fresh_until,
             })
         }
+        PredicateSpec::RecordDeadline {
+            scope,
+            fact_key,
+            timestamp_field,
+            within_ms,
+            max_age_ms,
+        } => {
+            let observation = facts
+                .facts
+                .iter()
+                .find(|fact| fact.scope == *scope && fact.fact_key == *fact_key);
+            let Some(observation) = observation else {
+                return Ok(PredicateEvaluation::unknown(DetectionSuggestion {
+                    scope: scope.clone(),
+                    fact_key: fact_key.clone(),
+                    reason: "fact_missing".to_owned(),
+                }));
+            };
+            if observation.confidence_milli == 0 {
+                return Ok(PredicateEvaluation::unknown(DetectionSuggestion {
+                    scope: scope.clone(),
+                    fact_key: fact_key.clone(),
+                    reason: "fact_low_confidence".to_owned(),
+                }));
+            }
+            let max_age_expiration = max_age_ms
+                .map(|max_age| {
+                    observation
+                        .observed_at_unix_ms
+                        .checked_add(max_age)
+                        .ok_or_else(|| {
+                            PolicyEvaluationError::overflow(format!(
+                                "fact '{}:{}' expiration overflowed",
+                                scope_key(scope),
+                                fact_key
+                            ))
+                        })
+                })
+                .transpose()?;
+            let fresh_until = min_wake(max_age_expiration, observation.expires_at_unix_ms);
+            if fresh_until.is_some_and(|expiration| time.unix_ms > expiration) {
+                return Ok(PredicateEvaluation::unknown(DetectionSuggestion {
+                    scope: scope.clone(),
+                    fact_key: fact_key.clone(),
+                    reason: if observation
+                        .expires_at_unix_ms
+                        .is_some_and(|expiration| time.unix_ms > expiration)
+                    {
+                        "fact_expired".to_owned()
+                    } else {
+                        "fact_stale".to_owned()
+                    },
+                }));
+            }
+            let FactValue::RecordList(records) = &observation.value else {
+                return Err(PolicyEvaluationError::type_mismatch(format!(
+                    "record deadline fact '{}:{}' must be a record_list",
+                    scope_key(scope),
+                    fact_key
+                )));
+            };
+            let cutoff = time.unix_ms.checked_add(*within_ms).ok_or_else(|| {
+                PolicyEvaluationError::overflow(format!(
+                    "record deadline window for '{}:{}' overflowed",
+                    scope_key(scope),
+                    fact_key
+                ))
+            })?;
+            let mut actionable = false;
+            let mut next_wake = fresh_until
+                .and_then(|expiration| expiration.checked_add(1))
+                .filter(|expiration| *expiration > time.unix_ms);
+            for (index, record) in records.iter().enumerate() {
+                let value = record.get(timestamp_field).ok_or_else(|| {
+                    PolicyEvaluationError::invalid(format!(
+                        "record deadline fact '{}:{}' item {index} is missing field '{timestamp_field}'",
+                        scope_key(scope),
+                        fact_key
+                    ))
+                })?;
+                let FactScalar::TimestampMs(deadline) = value else {
+                    return Err(PolicyEvaluationError::type_mismatch(format!(
+                        "record deadline fact '{}:{}' item {index} field '{timestamp_field}' must be timestamp_ms",
+                        scope_key(scope),
+                        fact_key
+                    )));
+                };
+                if *deadline > time.unix_ms && *deadline <= cutoff {
+                    actionable = true;
+                    next_wake = min_wake(next_wake, deadline.checked_add(1));
+                } else if *deadline > cutoff {
+                    next_wake = min_wake(next_wake, deadline.checked_sub(*within_ms));
+                }
+            }
+            Ok(PredicateEvaluation {
+                truth: if actionable {
+                    PredicateTruth::True
+                } else {
+                    PredicateTruth::False
+                },
+                suggestions: Vec::new(),
+                next_wake_unix_ms: next_wake,
+                fresh_until_unix_ms: fresh_until,
+            })
+        }
         PredicateSpec::DependencyCompleted {
             task_id,
             terminal_states,
@@ -2270,6 +2375,94 @@ mod tests {
             expired.decisions[0].detection_suggestions[0].reason,
             "fact_expired"
         );
+    }
+
+    #[test]
+    fn record_deadline_uses_each_item_expiry_and_preserves_unknown_and_blocked_states() {
+        const HOUR_MS: u64 = 3_600_000;
+        let catalog = catalog(|tasks| {
+            tasks["tasks"][0]["trigger"] = serde_json::json!({
+                "kind": "record_deadline",
+                "scope": {"kind": "instance", "instance_id": "fixture-instance-a"},
+                "fact_key": "inventory.expiring_items",
+                "timestamp_field": "expires_at_unix_ms",
+                "within_ms": 48 * HOUR_MS,
+                "max_age_ms": 1000
+            });
+            tasks["tasks"][0]["feedback_stop"] = false_fact();
+        });
+        let evaluate_case = |deadlines: &[u64], observed_at_unix_ms: u64, available: bool| {
+            let mut facts = base_facts();
+            facts.instances[0].available = available;
+            facts.facts.push(ObservedFact {
+                scope: ScopeSelector::Instance {
+                    instance_id: "fixture-instance-a".to_owned(),
+                },
+                fact_key: "inventory.expiring_items".to_owned(),
+                value: FactValue::RecordList(
+                    deadlines
+                        .iter()
+                        .map(|deadline| {
+                            BTreeMap::from([(
+                                "expires_at_unix_ms".to_owned(),
+                                FactScalar::TimestampMs(*deadline),
+                            )])
+                        })
+                        .collect(),
+                ),
+                observed_at_unix_ms,
+                expires_at_unix_ms: None,
+                confidence_milli: 1_000,
+            });
+            evaluate(
+                &catalog,
+                &facts,
+                &base_resources(),
+                EvaluationTime {
+                    unix_ms: NOW,
+                    monotonic_ms: NOW,
+                },
+                1,
+            )
+            .expect("record deadline evaluation")
+        };
+
+        let within = evaluate_case(
+            &[
+                NOW + 47 * HOUR_MS,
+                NOW + 47 * HOUR_MS + 1,
+                NOW + 47 * HOUR_MS + 2,
+            ],
+            NOW,
+            true,
+        );
+        assert_eq!(within.decisions[0].eligibility, EligibilityState::True);
+        assert_eq!(within.dispatch_intents.len(), 1);
+
+        let outside = evaluate_case(&[NOW + 49 * HOUR_MS], NOW, true);
+        assert_eq!(outside.decisions[0].eligibility, EligibilityState::False);
+        assert!(outside.dispatch_intents.is_empty());
+        assert_eq!(outside.next_wake_unix_ms, Some(NOW + 1_001));
+
+        let empty = evaluate_case(&[], NOW, true);
+        assert_eq!(empty.decisions[0].eligibility, EligibilityState::False);
+        assert!(empty.dispatch_intents.is_empty());
+
+        let stale = evaluate_case(&[NOW + 47 * HOUR_MS], NOW - 1_001, true);
+        assert_eq!(stale.decisions[0].eligibility, EligibilityState::Unknown);
+        assert_eq!(
+            stale.decisions[0].detection_suggestions[0].reason,
+            "fact_stale"
+        );
+        assert!(stale.dispatch_intents.is_empty());
+
+        let unavailable = evaluate_case(&[NOW + 47 * HOUR_MS], NOW, false);
+        assert_eq!(unavailable.decisions[0].eligibility, EligibilityState::True);
+        assert_eq!(
+            unavailable.decisions[0].state,
+            SchedulingDecisionState::Blocked
+        );
+        assert!(unavailable.dispatch_intents.is_empty());
     }
 
     #[test]

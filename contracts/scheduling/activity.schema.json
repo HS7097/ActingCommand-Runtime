@@ -45,6 +45,16 @@
       },
       "additionalProperties": false
     },
+    "detectionBudget": {
+      "type": "object",
+      "required": ["window_dispatch_limit", "window_runtime_ms", "expected_duration_ms"],
+      "properties": {
+        "window_dispatch_limit": { "type": "integer", "minimum": 1, "maximum": 1000000 },
+        "window_runtime_ms": { "type": "integer", "minimum": 1 },
+        "expected_duration_ms": { "type": "integer", "minimum": 1 }
+      },
+      "additionalProperties": false
+    },
     "profile": {
       "type": "object",
       "required": [
@@ -54,6 +64,7 @@
         "daily_budget",
         "max_window_iterations",
         "session_max_ms",
+        "detection_budget",
         "minimum_interval_ms",
         "maximum_interval_ms",
         "seed_source",
@@ -73,6 +84,7 @@
         "daily_budget": { "type": "integer", "minimum": 1, "maximum": 1000000 },
         "max_window_iterations": { "type": "integer", "minimum": 1, "maximum": 1000000 },
         "session_max_ms": { "type": "integer", "minimum": 1 },
+        "detection_budget": { "$ref": "#/$defs/detectionBudget" },
         "minimum_interval_ms": { "type": "integer", "minimum": 0 },
         "maximum_interval_ms": { "type": "integer", "minimum": 0 },
         "seed_source": { "const": "ledger" },

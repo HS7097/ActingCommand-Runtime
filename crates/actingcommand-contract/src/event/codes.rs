@@ -228,6 +228,8 @@ closed_code!(PolicyPlanningSignalKind {
     FeasibilityRed => "feasibility_red",
     DriftPredicted => "drift_predicted",
     TimelineReached => "timeline_reached",
+    DetectionReserved => "detection_reserved",
+    DetectionQuotaExhausted => "detection_quota_exhausted",
 });
 
 closed_code!(EvidenceCompleteness {

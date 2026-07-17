@@ -647,6 +647,51 @@ fn validate_predicate_node(
                 ));
             }
         }
+        PredicateSpec::RecordDeadline {
+            scope,
+            fact_key,
+            timestamp_field,
+            within_ms,
+            max_age_ms,
+        } => {
+            validate_scope(
+                map,
+                &format!("{path}/scope"),
+                scope,
+                descriptor,
+                diagnostics,
+            );
+            validate_identifier(
+                map,
+                &format!("{path}/fact_key"),
+                fact_key,
+                descriptor,
+                diagnostics,
+            );
+            validate_identifier(
+                map,
+                &format!("{path}/timestamp_field"),
+                timestamp_field,
+                descriptor,
+                diagnostics,
+            );
+            if *within_ms == 0 || *within_ms > MAX_FACT_MAX_AGE_MS {
+                diagnostics.push(map.diagnostic(
+                    CatalogDiagnosticCode::LimitExceeded,
+                    format!("{path}/within_ms"),
+                    format!("record deadline within_ms must be within 1..={MAX_FACT_MAX_AGE_MS}"),
+                    descriptor,
+                ));
+            }
+            if max_age_ms.is_some_and(|value| value == 0 || value > MAX_FACT_MAX_AGE_MS) {
+                diagnostics.push(map.diagnostic(
+                    CatalogDiagnosticCode::LimitExceeded,
+                    format!("{path}/max_age_ms"),
+                    format!("fact max_age_ms must be null or within 1..={MAX_FACT_MAX_AGE_MS}"),
+                    descriptor,
+                ));
+            }
+        }
         PredicateSpec::DependencyCompleted {
             task_id,
             terminal_states,
@@ -1094,6 +1139,11 @@ fn validate_activity_profile(
     if profile.daily_budget == 0
         || profile.max_window_iterations == 0
         || profile.session_max_ms == 0
+        || profile.detection_budget.window_dispatch_limit == 0
+        || profile.detection_budget.window_runtime_ms == 0
+        || profile.detection_budget.expected_duration_ms == 0
+        || profile.detection_budget.expected_duration_ms
+            > profile.detection_budget.window_runtime_ms
         || profile.minimum_interval_ms > profile.maximum_interval_ms
     {
         diagnostics.push(map.diagnostic(
@@ -1108,6 +1158,14 @@ fn validate_activity_profile(
             CatalogDiagnosticCode::LimitExceeded,
             path,
             format!("activity budget counts cannot exceed {MAX_BUDGET_COUNT}"),
+            descriptor,
+        ));
+    }
+    if profile.detection_budget.window_dispatch_limit > MAX_BUDGET_COUNT {
+        diagnostics.push(map.diagnostic(
+            CatalogDiagnosticCode::LimitExceeded,
+            format!("{path}/detection_budget/window_dispatch_limit"),
+            format!("detection dispatch count cannot exceed {MAX_BUDGET_COUNT}"),
             descriptor,
         ));
     }
