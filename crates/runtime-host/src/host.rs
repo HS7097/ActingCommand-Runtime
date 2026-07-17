@@ -15,9 +15,7 @@ use crate::performance::{
 };
 use crate::performance_control::{PerformanceBalanceController, PerformanceDispatchGate};
 use crate::planning::collect_maintenance_evidence;
-use crate::policy_host::{
-    LoadedCatalog, PolicyDispatchProjectionState, PolicyExecutionPreparation, PolicyHost,
-};
+use crate::policy_host::{LoadedCatalog, PolicyExecutionPreparation, PolicyHost};
 use crate::project_interface::{
     ProjectDiagnosticProjection, ProjectInterfaceProjection, retain_recent_diagnostics,
 };
@@ -56,18 +54,18 @@ use actingcommand_contract::{
     MIN_GOVERNANCE_CAPABILITY_BYTES, MonitorPayloadDraft, MonitorRecoveryCoordinationReason,
     OriginModule, PackageDebugLayout, PackageDebugRequest, PackageDebugSummary, PerformanceContext,
     PerformancePayloadDraft, PolicyDispatchEventData, PolicyExecutionEventData, PolicyPayload,
-    PolicyPayloadDraft, PolicyPlanningSignalEventData, PolicyReasonRecord, ProjectInterfaceRequest,
-    ProjectedArtifactReference, ProposalClass, ProposalPromotion, RUNTIME_INFO_FILE,
-    ReadonlyObservation, RecognitionPayloadDraft, RecognitionVerdict, ReleasePayload,
-    ReleasePayloadDraft, ReleaseTransitionKind, RequestId, ResourceAuthoringEvent,
-    ResourceAuthoringPayloadDraft, ResourceAuthoringPhase, RetentionClass, RuntimeCaptureBackend,
-    RuntimeControlPlaneStatus, RuntimeDebugEvent, RuntimeDebugOperation, RuntimeDebugPhase,
-    RuntimeErrorCode, RuntimeErrorProjection, RuntimeEventBatch, RuntimeEvidenceExportRequest,
-    RuntimeEvidenceExportSummary, RuntimeEvidenceScreenshotCounts, RuntimeInfo,
-    RuntimeInstanceStatus, RuntimeMonitorPolicy, RuntimeOperation, RuntimePayloadDraft,
-    RuntimeReceipt, RuntimeReceiptState, RuntimeReleaseSet, RuntimeRequest, RuntimeResult,
-    RuntimeSubscriptionRequest, SchedulerPayloadDraft, StatePayload, StatePayloadDraft,
-    TaskOutcome, TaskPayload, TaskPayloadDraft, TaskSemanticFact, TerminalEvent,
+    PolicyPayloadDraft, PolicyPlanningSignalEventData, PolicyReasonRecord,
+    ProjectDecisionPageRequest, ProjectInterfaceRequest, ProjectedArtifactReference, ProposalClass,
+    ProposalPromotion, RUNTIME_INFO_FILE, ReadonlyObservation, RecognitionPayloadDraft,
+    RecognitionVerdict, ReleasePayload, ReleasePayloadDraft, ReleaseTransitionKind, RequestId,
+    ResourceAuthoringEvent, ResourceAuthoringPayloadDraft, ResourceAuthoringPhase, RetentionClass,
+    RuntimeCaptureBackend, RuntimeControlPlaneStatus, RuntimeDebugEvent, RuntimeDebugOperation,
+    RuntimeDebugPhase, RuntimeErrorCode, RuntimeErrorProjection, RuntimeEventBatch,
+    RuntimeEvidenceExportRequest, RuntimeEvidenceExportSummary, RuntimeEvidenceScreenshotCounts,
+    RuntimeInfo, RuntimeInstanceStatus, RuntimeMonitorPolicy, RuntimeOperation,
+    RuntimePayloadDraft, RuntimeReceipt, RuntimeReceiptState, RuntimeReleaseSet, RuntimeRequest,
+    RuntimeResult, RuntimeSubscriptionRequest, SchedulerPayloadDraft, StatePayload,
+    StatePayloadDraft, TaskOutcome, TaskPayload, TaskPayloadDraft, TaskSemanticFact, TerminalEvent,
     ValidatedRuntimeRequest,
 };
 use actingcommand_device::{CaptureBackendName, Frame};
@@ -339,7 +337,7 @@ impl RuntimeHost {
             config.policy_cadence.clone(),
         )?;
         reconcile_policy_dispatches(&mut policy, &ledger, &events)?;
-        ApprovalProjection::recover(&ledger)?;
+        ApprovalProjection::recover(&ledger, Arc::clone(&state))?;
         reconcile_runtime_state(&state, &ledger, &events)?;
         let agent_instance_ids = registered_instances
             .values()
@@ -383,7 +381,7 @@ impl RuntimeHost {
             )
         })?;
         append_runtime_start_event(&ledger, &events, &config.state_root, takeover)?;
-        let facts = InstanceFactStore::recover(&ledger)?;
+        let facts = InstanceFactStore::recover(&ledger, Arc::clone(&state))?;
         let performance = match config.performance_monitor.clone() {
             Some(performance_config) => {
                 PerformanceMonitor::enabled(performance_config, system_performance_sampler())?
@@ -1210,11 +1208,7 @@ fn reconcile_policy_dispatches(
     ledger: &GlobalLedger,
     events: &RuntimeEvents,
 ) -> RuntimeHostResult<()> {
-    let pending = policy
-        .project_dispatches()
-        .into_iter()
-        .filter(|dispatch| dispatch.state == PolicyDispatchProjectionState::Intent)
-        .collect::<Vec<_>>();
+    let pending = policy.pending_dispatches();
     if pending.is_empty() {
         return Ok(());
     }
@@ -2288,13 +2282,14 @@ impl HostShared {
         // Approval projection and dispatch admission share one order so a concurrent revocation
         // cannot appear in the ledger before a dispatch authorized by the superseded fact.
         let _governance_gate = lock(&self.governance_write_gate, "project_policy_approvals")?;
-        let approval_fact_ids = match ApprovalProjection::recover(&self.ledger) {
-            Ok(projection) => projection.active_for_dispatch(intent),
-            Err(error) => {
-                self.fatal.mark(error.clone())?;
-                return Err(error);
-            }
-        };
+        let approval_fact_ids =
+            match ApprovalProjection::recover(&self.ledger, Arc::clone(&self.state)) {
+                Ok(projection) => projection.active_for_dispatch(intent),
+                Err(error) => {
+                    self.fatal.mark(error.clone())?;
+                    return Err(error);
+                }
+            };
         let authoritative_context = PolicyAdmissionContext {
             fact_ledger_position: trusted.intent.input_ledger_position,
             fact_snapshot_id: trusted.intent.fact_snapshot_id.clone(),
@@ -3669,6 +3664,8 @@ impl HostShared {
         }
         let _gate = lock(&self.governance_write_gate, "record_approval_decision")
             .map_err(RequestFailure::poison_without_terminal)?;
+        let approvals = ApprovalProjection::recover(&self.ledger, Arc::clone(&self.state))
+            .map_err(RequestFailure::poison_without_terminal)?;
         if let Some(existing) = self.client_fact_replay(request, EventType::ApprovalDecision)? {
             let EventPayload::Approval(ApprovalPayload::Decision(payload)) = existing.payload()
             else {
@@ -3695,8 +3692,7 @@ impl HostShared {
                 },
             });
         }
-        ApprovalProjection::recover(&self.ledger)
-            .map_err(RequestFailure::poison_without_terminal)?
+        approvals
             .validate_transition(decision)
             .map_err(|error| RequestFailure::request(error, RuntimeReceiptState::Denied, None))?;
         let persisted = self.append_event(
@@ -3707,6 +3703,8 @@ impl HostShared {
             validated.event_links(None, None, None),
             ApprovalPayloadDraft::decision(decision.clone(), AuditInput::new()),
         )?;
+        ApprovalProjection::recover(&self.ledger, Arc::clone(&self.state))
+            .map_err(RequestFailure::poison_without_terminal)?;
         Ok(OperationSuccess {
             state: RuntimeReceiptState::Completed,
             terminal: Some(terminal(&persisted)),
@@ -3983,7 +3981,7 @@ impl HostShared {
                 RuntimeErrorCode::InvalidRequest,
             )));
         }
-        let approvals = ApprovalProjection::recover(&self.ledger)
+        let approvals = ApprovalProjection::recover(&self.ledger, Arc::clone(&self.state))
             .map_err(RequestFailure::poison_without_terminal)?;
         let mut approval_fact_ids = approvals.active_for_plan(
             preview.proposal_id(),
@@ -4372,22 +4370,29 @@ impl HostShared {
             ))
         })?;
         let status = self.control_plane_status_projection()?;
-        let (catalog, decisions) = {
-            let policy = lock(&self.policy, "project_runtime_policy")?;
-            (policy.active_loaded(), policy.project_dispatches())
-        };
         let facts = {
             let _gate = lock(&self.fact_write_gate, "project_runtime_facts")?;
             self.synchronize_fact_store_under_gate()
                 .map_err(RequestFailure::poison_without_terminal)?;
             lock(&self.facts, "project_runtime_facts")?.active_records()
         };
-        let approvals = ApprovalProjection::recover(&self.ledger)
+        let approvals = ApprovalProjection::recover(&self.ledger, Arc::clone(&self.state))
             .map_err(RequestFailure::poison_without_terminal)?
             .records();
         let ledger_position = self.ledger.latest_sequence().map_err(|_| {
             RequestFailure::poison_without_terminal(ledger_error("project_runtime_position"))
         })?;
+        let decision_page = request
+            .decision_page()
+            .cloned()
+            .unwrap_or_else(ProjectDecisionPageRequest::default);
+        let (catalog, decisions) = {
+            let policy = lock(&self.policy, "project_runtime_policy")?;
+            (
+                policy.active_loaded(),
+                policy.project_dispatches(ledger_position, &decision_page)?,
+            )
+        };
         let diagnostics = self
             .ledger
             .query(EventQuery {
@@ -8415,7 +8420,7 @@ impl HostShared {
             let mut facts = lock(&self.facts, "synchronize_fact_store")?;
             facts.synchronize(&self.ledger)?;
             for invalidation in facts.pending_invalidations() {
-                self.append_event_under_fact_gate(
+                let persisted = self.append_event_under_fact_gate(
                     EventSeverity::Info,
                     EventSource::Runtime,
                     OriginModule::FactStore,
@@ -8423,7 +8428,7 @@ impl HostShared {
                     self.events.system_links()?,
                     FactPayloadDraft::invalidated(invalidation.clone(), AuditInput::new()),
                 )?;
-                facts.acknowledge_generated_invalidation(&invalidation)?;
+                facts.acknowledge_generated_invalidation(&invalidation, persisted.sequence())?;
             }
             Ok(())
         })();

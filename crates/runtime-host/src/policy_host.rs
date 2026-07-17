@@ -8,7 +8,7 @@ use actingcommand_contract::{
     EventPayload, LeaseToken, OwnerEpoch, PerformanceContext, PolicyAdmissionRecord,
     PolicyDetectionBudgetRecord, PolicyDispatchEventData, PolicyExecutionEventData,
     PolicyExecutionOutcome, PolicyPayload, PolicyPlanningSignalEventData, PolicyPlanningSignalKind,
-    PolicyReasonRecord, RuntimeErrorCode,
+    PolicyReasonRecord, ProjectDecisionPageRequest, RuntimeErrorCode,
 };
 use actingcommand_ledger::GlobalLedger;
 use actingcommand_policy::{
@@ -242,6 +242,9 @@ struct SeenDispatch {
     admission: Option<PolicyAdmissionRecord>,
     execution: Option<PolicyExecutionEventData>,
     intent_sequence: u64,
+    admitted_sequence: Option<u64>,
+    rejected_sequence: Option<u64>,
+    completed_sequence: Option<u64>,
     lifecycle: DispatchLifecycle,
 }
 
@@ -257,6 +260,14 @@ pub(crate) enum PolicyDispatchProjectionState {
 pub(crate) struct PolicyDispatchProjection {
     pub(crate) data: PolicyDispatchEventData,
     pub(crate) state: PolicyDispatchProjectionState,
+    pub(crate) intent_sequence: u64,
+}
+
+pub(crate) struct PolicyDispatchPage {
+    pub(crate) dispatches: Vec<PolicyDispatchProjection>,
+    pub(crate) snapshot_ledger_position: u64,
+    pub(crate) requested_limit: u16,
+    pub(crate) has_more: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -265,6 +276,29 @@ enum DispatchLifecycle {
     Admitted,
     Rejected,
     Completed,
+}
+
+impl SeenDispatch {
+    fn projected_state_at(&self, ledger_position: u64) -> PolicyDispatchProjectionState {
+        if self
+            .completed_sequence
+            .is_some_and(|sequence| sequence <= ledger_position)
+        {
+            PolicyDispatchProjectionState::Completed
+        } else if self
+            .rejected_sequence
+            .is_some_and(|sequence| sequence <= ledger_position)
+        {
+            PolicyDispatchProjectionState::Rejected
+        } else if self
+            .admitted_sequence
+            .is_some_and(|sequence| sequence <= ledger_position)
+        {
+            PolicyDispatchProjectionState::Admitted
+        } else {
+            PolicyDispatchProjectionState::Intent
+        }
+    }
 }
 
 struct PolicyCadenceState {
@@ -379,6 +413,7 @@ pub(crate) struct PolicyHost {
     active: Option<LoadedCatalog>,
     cadence: PolicyCadenceState,
     seen_dispatches: BTreeMap<String, SeenDispatch>,
+    dispatch_order: BTreeMap<u64, String>,
     pinned_dispatches: BTreeMap<String, CatalogGeneration>,
     planning_signals: BTreeMap<String, PolicyPlanningSignalEventData>,
     detection_quota: DetectionQuotaState,
@@ -410,6 +445,7 @@ impl PolicyHost {
             active,
             cadence: PolicyCadenceState::new(cadence)?,
             seen_dispatches: BTreeMap::new(),
+            dispatch_order: BTreeMap::new(),
             pinned_dispatches: BTreeMap::new(),
             planning_signals: BTreeMap::new(),
             detection_quota: DetectionQuotaState::default(),
@@ -441,17 +477,96 @@ impl PolicyHost {
         self.active.clone()
     }
 
-    pub(crate) fn project_dispatches(&self) -> Vec<PolicyDispatchProjection> {
+    pub(crate) fn project_dispatches(
+        &self,
+        current_ledger_position: u64,
+        page_request: &ProjectDecisionPageRequest,
+    ) -> RuntimeHostResult<PolicyDispatchPage> {
+        page_request
+            .validate()
+            .map_err(|_| request("project_decision_page_invalid", "project_policy_dispatches"))?;
+        let snapshot_ledger_position = page_request
+            .cursor()
+            .map_or(current_ledger_position, |cursor| {
+                cursor.snapshot_ledger_position()
+            });
+        if snapshot_ledger_position == 0 || snapshot_ledger_position > current_ledger_position {
+            return Err(request(
+                "project_decision_cursor_invalid",
+                "project_policy_dispatches",
+            ));
+        }
+        let limit = usize::from(page_request.limit());
+        let mut dispatches = Vec::with_capacity(limit.saturating_add(1));
+        if let Some(cursor) = page_request.cursor() {
+            if self
+                .dispatch_order
+                .get(&cursor.before_intent_sequence())
+                .is_none_or(|decision_id| decision_id != cursor.before_decision_id())
+            {
+                return Err(request(
+                    "project_decision_cursor_invalid",
+                    "project_policy_dispatches",
+                ));
+            }
+            for (_, decision_id) in self
+                .dispatch_order
+                .range(..cursor.before_intent_sequence())
+                .rev()
+                .take(limit.saturating_add(1))
+            {
+                dispatches.push(self.project_dispatch(decision_id, snapshot_ledger_position)?);
+            }
+        } else {
+            for (_, decision_id) in self
+                .dispatch_order
+                .range(..=snapshot_ledger_position)
+                .rev()
+                .take(limit.saturating_add(1))
+            {
+                dispatches.push(self.project_dispatch(decision_id, snapshot_ledger_position)?);
+            }
+        }
+        let has_more = dispatches.len() > limit;
+        dispatches.truncate(limit);
+        Ok(PolicyDispatchPage {
+            dispatches,
+            snapshot_ledger_position,
+            requested_limit: page_request.limit(),
+            has_more,
+        })
+    }
+
+    fn project_dispatch(
+        &self,
+        decision_id: &str,
+        snapshot_ledger_position: u64,
+    ) -> RuntimeHostResult<PolicyDispatchProjection> {
+        let dispatch = self
+            .seen_dispatches
+            .get(decision_id)
+            .ok_or_else(|| fatal("policy_dispatch_order_corrupt", "project_policy_dispatches"))?;
+        if dispatch.intent_sequence > snapshot_ledger_position {
+            return Err(fatal(
+                "policy_dispatch_snapshot_invalid",
+                "project_policy_dispatches",
+            ));
+        }
+        Ok(PolicyDispatchProjection {
+            data: dispatch.data.clone(),
+            state: dispatch.projected_state_at(snapshot_ledger_position),
+            intent_sequence: dispatch.intent_sequence,
+        })
+    }
+
+    pub(crate) fn pending_dispatches(&self) -> Vec<PolicyDispatchProjection> {
         self.seen_dispatches
             .values()
+            .filter(|dispatch| dispatch.lifecycle == DispatchLifecycle::Intent)
             .map(|dispatch| PolicyDispatchProjection {
                 data: dispatch.data.clone(),
-                state: match dispatch.lifecycle {
-                    DispatchLifecycle::Intent => PolicyDispatchProjectionState::Intent,
-                    DispatchLifecycle::Admitted => PolicyDispatchProjectionState::Admitted,
-                    DispatchLifecycle::Rejected => PolicyDispatchProjectionState::Rejected,
-                    DispatchLifecycle::Completed => PolicyDispatchProjectionState::Completed,
-                },
+                state: PolicyDispatchProjectionState::Intent,
+                intent_sequence: dispatch.intent_sequence,
             })
             .collect()
     }
@@ -978,6 +1093,7 @@ impl PolicyHost {
             .query(Default::default())
             .map_err(|_| fatal("policy_recovery_failed", "recover_policy_dispatches"))?;
         let mut seen_dispatches = BTreeMap::new();
+        let mut dispatch_order = BTreeMap::new();
         let mut planning_signals = BTreeMap::new();
         let mut detection_quota = DetectionQuotaState::default();
         let mut control = PolicyControlState::default();
@@ -994,6 +1110,9 @@ impl PolicyHost {
                         admission: None,
                         execution: None,
                         intent_sequence: event.sequence(),
+                        admitted_sequence: None,
+                        rejected_sequence: None,
+                        completed_sequence: None,
                         lifecycle: DispatchLifecycle::Intent,
                     };
                     if seen_dispatches
@@ -1005,6 +1124,15 @@ impl PolicyHost {
                             "recover_policy_dispatches",
                         ));
                     }
+                    if dispatch_order
+                        .insert(event.sequence(), payload.decision_id().to_owned())
+                        .is_some()
+                    {
+                        return Err(fatal(
+                            "policy_dispatch_sequence_conflict",
+                            "recover_policy_dispatches",
+                        ));
+                    }
                 }
                 PolicyPayload::DispatchAdmitted(payload) => {
                     let dispatch = transition_dispatch(
@@ -1012,6 +1140,7 @@ impl PolicyHost {
                         payload,
                         DispatchLifecycle::Intent,
                         DispatchLifecycle::Admitted,
+                        event.sequence(),
                     )?;
                     let admission = payload.admission().cloned().ok_or_else(|| {
                         fatal(
@@ -1030,6 +1159,7 @@ impl PolicyHost {
                         payload,
                         DispatchLifecycle::Intent,
                         DispatchLifecycle::Rejected,
+                        event.sequence(),
                     )?;
                 }
                 PolicyPayload::DispatchCompleted(payload) => {
@@ -1038,6 +1168,7 @@ impl PolicyHost {
                         payload,
                         DispatchLifecycle::Admitted,
                         DispatchLifecycle::Completed,
+                        event.sequence(),
                     )?;
                     if dispatch.execution.is_none()
                         || payload.admission() != dispatch.admission.as_ref()
@@ -1105,6 +1236,7 @@ impl PolicyHost {
             }
         }
         self.seen_dispatches = seen_dispatches;
+        self.dispatch_order = dispatch_order;
         self.pinned_dispatches = pinned_dispatches;
         self.planning_signals = planning_signals;
         self.detection_quota = detection_quota;
@@ -1451,6 +1583,7 @@ fn transition_dispatch<'a>(
     payload: &actingcommand_contract::PolicyDispatchPayload,
     expected: DispatchLifecycle,
     next: DispatchLifecycle,
+    sequence: u64,
 ) -> RuntimeHostResult<&'a mut SeenDispatch> {
     let Some(intent) = seen.get_mut(payload.decision_id()) else {
         return Err(fatal(
@@ -1458,11 +1591,25 @@ fn transition_dispatch<'a>(
             "recover_policy_dispatches",
         ));
     };
-    if intent.data != event_data(payload) || intent.lifecycle != expected {
+    if intent.data != event_data(payload)
+        || intent.lifecycle != expected
+        || sequence <= intent.intent_sequence
+    {
         return Err(fatal(
             "policy_dispatch_lifecycle_invalid",
             "recover_policy_dispatches",
         ));
+    }
+    match next {
+        DispatchLifecycle::Admitted => intent.admitted_sequence = Some(sequence),
+        DispatchLifecycle::Rejected => intent.rejected_sequence = Some(sequence),
+        DispatchLifecycle::Completed => intent.completed_sequence = Some(sequence),
+        DispatchLifecycle::Intent => {
+            return Err(fatal(
+                "policy_dispatch_lifecycle_invalid",
+                "recover_policy_dispatches",
+            ));
+        }
     }
     intent.lifecycle = next;
     Ok(intent)

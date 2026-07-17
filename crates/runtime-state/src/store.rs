@@ -24,6 +24,7 @@ pub const RUNTIME_STATE_INTEGRITY_KEY_FILE: &str = "runtime-state.key";
 pub const RUNTIME_RELEASE_BLOB_DIRECTORY: &str = "release-blobs";
 
 const MAX_STATE_DOCUMENT_BYTES: usize = 1024 * 1024;
+const MAX_PROJECTION_ENTRY_BYTES: usize = 64 * 1024;
 const BUSY_TIMEOUT: Duration = Duration::from_secs(5);
 static RELEASE_TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
 
@@ -60,6 +61,37 @@ impl StateDocument {
 
     pub fn previous_payload_sha256(&self) -> Option<&str> {
         self.previous_payload_sha256.as_deref()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProjectionEntry {
+    namespace: String,
+    entry_key: String,
+    ledger_sequence: u64,
+    payload: Vec<u8>,
+    payload_sha256: String,
+}
+
+impl ProjectionEntry {
+    pub fn namespace(&self) -> &str {
+        &self.namespace
+    }
+
+    pub fn entry_key(&self) -> &str {
+        &self.entry_key
+    }
+
+    pub const fn ledger_sequence(&self) -> u64 {
+        self.ledger_sequence
+    }
+
+    pub fn payload(&self) -> &[u8] {
+        &self.payload
+    }
+
+    pub fn payload_sha256(&self) -> &str {
+        &self.payload_sha256
     }
 }
 
@@ -248,6 +280,102 @@ impl RuntimeStateStore {
         let row = query_document(&connection, state_key)?;
         row.map(|row| self.validate_document_row(row, "read_state_document"))
             .transpose()
+    }
+
+    /// Reads one integrity-protected latest-by-identity projection entry.
+    pub fn read_projection_entry(
+        &self,
+        namespace: &str,
+        entry_key: &str,
+    ) -> RuntimeStateResult<Option<ProjectionEntry>> {
+        validate_projection_identity(namespace, entry_key)?;
+        let connection = self.connection("read_projection_entry")?;
+        query_projection_entry(&connection, namespace, entry_key)?
+            .map(|row| self.validate_projection_row(row, "read_projection_entry"))
+            .transpose()
+    }
+
+    /// Compacts a ledger-derived projection to the newest value for one stable identity.
+    pub fn write_projection_entry(
+        &self,
+        namespace: &str,
+        entry_key: &str,
+        ledger_sequence: u64,
+        payload: &[u8],
+    ) -> RuntimeStateResult<ProjectionEntry> {
+        validate_projection_input(namespace, entry_key, ledger_sequence, payload)?;
+        let payload_sha256 = sha256(payload);
+        let mut connection = self.connection("write_projection_entry")?;
+        let transaction = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(|_| fatal("state_transaction_begin_failed", "write_projection_entry"))?;
+        if let Some(existing) = query_projection_entry(&transaction, namespace, entry_key)? {
+            let existing = self.validate_projection_row(existing, "write_projection_entry")?;
+            if existing.ledger_sequence > ledger_sequence {
+                transaction.commit().map_err(|_| {
+                    fatal("state_transaction_commit_failed", "write_projection_entry")
+                })?;
+                return Ok(existing);
+            }
+            if existing.ledger_sequence == ledger_sequence {
+                if existing.payload_sha256 != payload_sha256 || existing.payload != payload {
+                    return Err(fatal(
+                        "projection_entry_sequence_conflict",
+                        "write_projection_entry",
+                    ));
+                }
+                transaction.commit().map_err(|_| {
+                    fatal("state_transaction_commit_failed", "write_projection_entry")
+                })?;
+                return Ok(existing);
+            }
+        }
+        let sequence = ledger_sequence.to_be_bytes();
+        let integrity_tag = self.integrity_tag(
+            "projection-entry-v1",
+            &[
+                namespace.as_bytes(),
+                entry_key.as_bytes(),
+                &sequence,
+                payload,
+                payload_sha256.as_bytes(),
+            ],
+        );
+        let sqlite_sequence = sqlite_integer(
+            ledger_sequence,
+            "projection_sequence_overflow",
+            "write_projection_entry",
+        )?;
+        transaction
+            .execute(
+                "INSERT INTO projection_entries
+                 (namespace, entry_key, ledger_sequence, payload, payload_sha256, integrity_tag)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+                 ON CONFLICT(namespace, entry_key) DO UPDATE SET
+                    ledger_sequence = excluded.ledger_sequence,
+                    payload = excluded.payload,
+                    payload_sha256 = excluded.payload_sha256,
+                    integrity_tag = excluded.integrity_tag",
+                params![
+                    namespace,
+                    entry_key,
+                    sqlite_sequence,
+                    payload,
+                    payload_sha256,
+                    integrity_tag
+                ],
+            )
+            .map_err(|_| fatal("projection_entry_write_failed", "write_projection_entry"))?;
+        transaction
+            .commit()
+            .map_err(|_| fatal("state_transaction_commit_failed", "write_projection_entry"))?;
+        Ok(ProjectionEntry {
+            namespace: namespace.to_owned(),
+            entry_key: entry_key.to_owned(),
+            ledger_sequence,
+            payload: payload.to_vec(),
+            payload_sha256,
+        })
     }
 
     pub fn write_json_document(
@@ -932,6 +1060,7 @@ impl RuntimeStateStore {
     fn validate_all(&self) -> RuntimeStateResult<()> {
         let connection = self.connection("validate_runtime_state")?;
         validate_document_tables(self, &connection)?;
+        validate_projection_entries(self, &connection)?;
         validate_pointer_tables(self, &connection)?;
         drop(connection);
         self.migrations()?;
@@ -988,6 +1117,43 @@ impl RuntimeStateStore {
             payload: row.payload,
             payload_sha256: row.payload_sha256,
             previous_payload_sha256: row.previous_payload_sha256,
+        })
+    }
+
+    fn validate_projection_row(
+        &self,
+        row: ProjectionRow,
+        operation: &'static str,
+    ) -> RuntimeStateResult<ProjectionEntry> {
+        validate_projection_input(
+            &row.namespace,
+            &row.entry_key,
+            row.ledger_sequence,
+            &row.payload,
+        )
+        .map_err(|_| fatal("projection_entry_invalid", operation))?;
+        let sequence = row.ledger_sequence.to_be_bytes();
+        if row.payload_sha256 != sha256(&row.payload)
+            || row.integrity_tag
+                != self.integrity_tag(
+                    "projection-entry-v1",
+                    &[
+                        row.namespace.as_bytes(),
+                        row.entry_key.as_bytes(),
+                        &sequence,
+                        row.payload.as_slice(),
+                        row.payload_sha256.as_bytes(),
+                    ],
+                )
+        {
+            return Err(fatal("projection_entry_integrity_mismatch", operation));
+        }
+        Ok(ProjectionEntry {
+            namespace: row.namespace,
+            entry_key: row.entry_key,
+            ledger_sequence: row.ledger_sequence,
+            payload: row.payload,
+            payload_sha256: row.payload_sha256,
         })
     }
 
@@ -1254,6 +1420,15 @@ struct DocumentRow {
     integrity_tag: String,
 }
 
+struct ProjectionRow {
+    namespace: String,
+    entry_key: String,
+    ledger_sequence: u64,
+    payload: Vec<u8>,
+    payload_sha256: String,
+    integrity_tag: String,
+}
+
 struct MigrationRow {
     migration_id: String,
     data_json: Vec<u8>,
@@ -1298,6 +1473,31 @@ fn query_document(
         )
         .optional()
         .map_err(|_| fatal("state_document_query_failed", "query_state_document"))
+}
+
+fn query_projection_entry(
+    connection: &Connection,
+    namespace: &str,
+    entry_key: &str,
+) -> RuntimeStateResult<Option<ProjectionRow>> {
+    connection
+        .query_row(
+            "SELECT namespace, entry_key, ledger_sequence, payload, payload_sha256, integrity_tag
+             FROM projection_entries WHERE namespace = ?1 AND entry_key = ?2",
+            params![namespace, entry_key],
+            |row| {
+                Ok(ProjectionRow {
+                    namespace: row.get(0)?,
+                    entry_key: row.get(1)?,
+                    ledger_sequence: row_u64(row, 2)?,
+                    payload: row.get(3)?,
+                    payload_sha256: row.get(4)?,
+                    integrity_tag: row.get(5)?,
+                })
+            },
+        )
+        .optional()
+        .map_err(|_| fatal("projection_entry_query_failed", "query_projection_entry"))
 }
 
 fn query_document_revision(
@@ -1553,6 +1753,36 @@ fn validate_document_tables(
     Ok(())
 }
 
+fn validate_projection_entries(
+    store: &RuntimeStateStore,
+    connection: &Connection,
+) -> RuntimeStateResult<()> {
+    let mut statement = connection
+        .prepare(
+            "SELECT namespace, entry_key, ledger_sequence, payload, payload_sha256, integrity_tag
+             FROM projection_entries ORDER BY namespace, entry_key",
+        )
+        .map_err(|_| fatal("projection_entry_query_failed", "validate_runtime_state"))?;
+    let rows = statement
+        .query_map([], |row| {
+            Ok(ProjectionRow {
+                namespace: row.get(0)?,
+                entry_key: row.get(1)?,
+                ledger_sequence: row_u64(row, 2)?,
+                payload: row.get(3)?,
+                payload_sha256: row.get(4)?,
+                integrity_tag: row.get(5)?,
+            })
+        })
+        .map_err(|_| fatal("projection_entry_query_failed", "validate_runtime_state"))?;
+    for row in rows {
+        let row =
+            row.map_err(|_| fatal("projection_entry_read_failed", "validate_runtime_state"))?;
+        store.validate_projection_row(row, "validate_runtime_state")?;
+    }
+    Ok(())
+}
+
 fn validate_pointer_tables(
     store: &RuntimeStateStore,
     connection: &Connection,
@@ -1621,6 +1851,50 @@ fn validate_state_key(value: &str) -> RuntimeStateResult<()> {
     {
         return Err(request("state_key_invalid", "validate_state_key"));
     }
+    Ok(())
+}
+
+fn validate_projection_identity(namespace: &str, entry_key: &str) -> RuntimeStateResult<()> {
+    if namespace.is_empty()
+        || namespace.len() > 128
+        || entry_key.is_empty()
+        || entry_key.len() > 256
+        || !namespace.bytes().all(|byte| {
+            byte.is_ascii_lowercase()
+                || byte.is_ascii_digit()
+                || matches!(byte, b'.' | b'_' | b':' | b'-')
+        })
+        || !entry_key
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b':' | b'-'))
+    {
+        return Err(request(
+            "projection_entry_identity_invalid",
+            "validate_projection_entry",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_projection_input(
+    namespace: &str,
+    entry_key: &str,
+    ledger_sequence: u64,
+    payload: &[u8],
+) -> RuntimeStateResult<()> {
+    validate_projection_identity(namespace, entry_key)?;
+    if ledger_sequence == 0 || payload.is_empty() || payload.len() > MAX_PROJECTION_ENTRY_BYTES {
+        return Err(request(
+            "projection_entry_invalid",
+            "validate_projection_entry",
+        ));
+    }
+    serde_json::from_slice::<serde_json::Value>(payload).map_err(|_| {
+        request(
+            "projection_entry_payload_invalid",
+            "validate_projection_entry",
+        )
+    })?;
     Ok(())
 }
 
@@ -1985,6 +2259,68 @@ mod tests {
             .err()
             .expect("tamper must fail");
         assert_eq!(error.code(), "state_document_integrity_mismatch");
+        assert!(error.is_fatal());
+    }
+
+    #[test]
+    fn projection_entries_are_latest_by_identity_and_tamper_evident() {
+        let root = TempDir::new().expect("tempdir");
+        let store = RuntimeStateStore::open(root.path(), b"0123456789abcdef").expect("store");
+        let first = store
+            .write_projection_entry(
+                "approval.latest.v1",
+                "approval-a",
+                7,
+                br#"{"state":"approved"}"#,
+            )
+            .expect("first projection");
+        assert_eq!(first.ledger_sequence(), 7);
+        assert_eq!(
+            store
+                .read_projection_entry("approval.latest.v1", "approval-a")
+                .expect("read projection")
+                .expect("projection")
+                .payload(),
+            br#"{"state":"approved"}"#
+        );
+
+        let older = store
+            .write_projection_entry(
+                "approval.latest.v1",
+                "approval-a",
+                6,
+                br#"{"state":"rejected"}"#,
+            )
+            .expect("older replay");
+        assert_eq!(older, first);
+        assert_eq!(
+            store
+                .write_projection_entry(
+                    "approval.latest.v1",
+                    "approval-a",
+                    7,
+                    br#"{"state":"rejected"}"#,
+                )
+                .expect_err("same sequence conflict")
+                .code(),
+            "projection_entry_sequence_conflict"
+        );
+        drop(store);
+
+        let connection = Connection::open(root.path().join(RUNTIME_STATE_DATABASE_FILE))
+            .expect("tamper connection");
+        connection
+            .execute(
+                "UPDATE projection_entries SET payload = ?1
+                 WHERE namespace = 'approval.latest.v1' AND entry_key = 'approval-a'",
+                [br#"{"state":"revoked"}"#.as_slice()],
+            )
+            .expect("tamper projection");
+        drop(connection);
+        let error = RuntimeStateStore::open(root.path(), b"0123456789abcdef")
+            .err()
+            .expect("tamper must fail");
+        assert_eq!(error.code(), "projection_entry_integrity_mismatch");
         assert!(error.is_fatal());
     }
 

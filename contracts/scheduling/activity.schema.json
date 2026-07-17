@@ -38,8 +38,8 @@
       "properties": {
         "id": { "$ref": "./common.schema.json#/$defs/identifier" },
         "metric": { "$ref": "./common.schema.json#/$defs/metric" },
-        "target": { "type": "integer" },
-        "deadline_unix_ms": { "type": "integer", "minimum": 0 },
+        "target": { "type": "integer", "minimum": -9007199254740991, "maximum": 9007199254740991 },
+        "deadline_unix_ms": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
         "strategic_weight_milli": { "type": "integer", "minimum": 0, "maximum": 10000 },
         "best_effort": { "type": "boolean" }
       },
@@ -50,8 +50,8 @@
       "required": ["window_dispatch_limit", "window_runtime_ms", "expected_duration_ms"],
       "properties": {
         "window_dispatch_limit": { "type": "integer", "minimum": 1, "maximum": 1000000 },
-        "window_runtime_ms": { "type": "integer", "minimum": 1 },
-        "expected_duration_ms": { "type": "integer", "minimum": 1 }
+        "window_runtime_ms": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 },
+        "expected_duration_ms": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 }
       },
       "additionalProperties": false
     },
@@ -83,10 +83,10 @@
         },
         "daily_budget": { "type": "integer", "minimum": 1, "maximum": 1000000 },
         "max_window_iterations": { "type": "integer", "minimum": 1, "maximum": 1000000 },
-        "session_max_ms": { "type": "integer", "minimum": 1 },
+        "session_max_ms": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 },
         "detection_budget": { "$ref": "#/$defs/detectionBudget" },
-        "minimum_interval_ms": { "type": "integer", "minimum": 0 },
-        "maximum_interval_ms": { "type": "integer", "minimum": 0 },
+        "minimum_interval_ms": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
+        "maximum_interval_ms": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
         "seed_source": { "const": "ledger" },
         "resample_policy": { "const": "same_round_stable" },
         "importance_milli": { "type": "integer", "minimum": 0, "maximum": 10000 },

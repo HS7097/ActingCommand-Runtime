@@ -19,7 +19,7 @@
       "required": ["catalog_id", "catalog_version", "approval_refs"],
       "properties": {
         "catalog_id": { "$ref": "#/$defs/identifier" },
-        "catalog_version": { "type": "integer", "minimum": 1 },
+        "catalog_version": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 },
         "approval_refs": {
           "type": "array",
           "maxItems": 64,
@@ -88,7 +88,7 @@
           "required": ["type", "value"],
           "properties": {
             "type": { "const": "integer" },
-            "value": { "type": "integer" }
+            "value": { "type": "integer", "minimum": -9007199254740991, "maximum": 9007199254740991 }
           },
           "additionalProperties": false
         },
@@ -106,7 +106,7 @@
           "required": ["type", "value"],
           "properties": {
             "type": { "const": "timestamp_ms" },
-            "value": { "type": "integer", "minimum": 0 }
+            "value": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 }
           },
           "additionalProperties": false
         },
@@ -115,7 +115,7 @@
           "required": ["type", "value"],
           "properties": {
             "type": { "const": "duration_ms" },
-            "value": { "type": "integer", "minimum": 0 }
+            "value": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 }
           },
           "additionalProperties": false
         }
@@ -137,7 +137,7 @@
           "required": ["type", "value"],
           "properties": {
             "type": { "const": "integer" },
-            "value": { "type": "integer" }
+            "value": { "type": "integer", "minimum": -9007199254740991, "maximum": 9007199254740991 }
           },
           "additionalProperties": false
         },
@@ -155,7 +155,7 @@
           "required": ["type", "value"],
           "properties": {
             "type": { "const": "timestamp_ms" },
-            "value": { "type": "integer", "minimum": 0 }
+            "value": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 }
           },
           "additionalProperties": false
         },
@@ -164,7 +164,7 @@
           "required": ["type", "value"],
           "properties": {
             "type": { "const": "duration_ms" },
-            "value": { "type": "integer", "minimum": 0 }
+            "value": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 }
           },
           "additionalProperties": false
         },
@@ -251,8 +251,8 @@
           "properties": {
             "kind": { "const": "interval" },
             "clock_source": { "$ref": "#/$defs/clockSource" },
-            "every_ms": { "type": "integer", "minimum": 1 },
-            "anchor_ms": { "type": "integer", "minimum": 0 }
+            "every_ms": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 },
+            "anchor_ms": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 }
           },
           "additionalProperties": false
         },
@@ -262,7 +262,7 @@
           "properties": {
             "kind": { "const": "at" },
             "clock_source": { "$ref": "#/$defs/wallClockSource" },
-            "at_ms": { "type": "integer", "minimum": 0 }
+            "at_ms": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 }
           },
           "additionalProperties": false
         },
@@ -350,7 +350,7 @@
             "kind": { "const": "resource_projection" },
             "pool_id": { "$ref": "#/$defs/identifier" },
             "comparison": { "$ref": "#/$defs/comparison" },
-            "value": { "type": "integer" }
+            "value": { "type": "integer", "minimum": -9007199254740991, "maximum": 9007199254740991 }
           },
           "additionalProperties": false
         },
@@ -416,7 +416,7 @@
       "properties": {
         "pool_id": { "$ref": "#/$defs/identifier" },
         "direction": { "enum": ["consume", "produce"] },
-        "amount": { "type": "integer", "minimum": 1 },
+        "amount": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 },
         "observation_source": { "enum": ["self_reported", "scan_verified", "inferred"] },
         "confidence_milli": { "type": "integer", "minimum": 0, "maximum": 1000 }
       },

@@ -23,7 +23,7 @@
         "scope": { "$ref": "./common.schema.json#/$defs/scope" },
         "event_kind": { "enum": ["reset", "maintenance", "activity", "deadline"] },
         "schedule": { "$ref": "./common.schema.json#/$defs/clockSchedule" },
-        "duration_ms": { "type": "integer", "minimum": 0 },
+        "duration_ms": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
         "invalidates_fact_prefixes": {
           "type": "array",
           "maxItems": 128,

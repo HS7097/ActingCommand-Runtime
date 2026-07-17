@@ -42,6 +42,16 @@ CREATE TABLE IF NOT EXISTS state_migrations (
     integrity_tag TEXT NOT NULL
 ) STRICT;
 
+CREATE TABLE IF NOT EXISTS projection_entries (
+    namespace TEXT NOT NULL,
+    entry_key TEXT NOT NULL,
+    ledger_sequence INTEGER NOT NULL CHECK (ledger_sequence > 0),
+    payload BLOB NOT NULL,
+    payload_sha256 TEXT NOT NULL,
+    integrity_tag TEXT NOT NULL,
+    PRIMARY KEY (namespace, entry_key)
+) STRICT;
+
 CREATE TABLE IF NOT EXISTS release_generations (
     release_id TEXT PRIMARY KEY,
     manifest_json BLOB NOT NULL,
