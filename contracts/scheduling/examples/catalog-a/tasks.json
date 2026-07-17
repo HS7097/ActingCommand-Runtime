@@ -24,8 +24,9 @@
             "kind": "clock",
             "schedule": {
               "kind": "interval",
+              "clock_source": { "kind": "local" },
               "every_ms": 3600000,
-              "anchor_unix_ms": 0
+              "anchor_ms": 0
             }
           },
           {

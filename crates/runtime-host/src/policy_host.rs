@@ -495,6 +495,7 @@ impl PolicyHost {
         if task.entrypoint.operation_id != intent.operation_id
             || task.procedure_ref != intent.procedure_ref
             || task.expected_duration_ms != intent.expected_duration_ms
+            || task.yield_points != intent.yield_points
             || task.load_profile != intent.load_profile
             || task.loop_budget.daily_limit != intent.prerequisites.daily_limit
             || task.loop_budget.window_iteration_limit
@@ -1105,6 +1106,7 @@ fn control_intent(
         approval_refs: data.approval_fact_ids.clone(),
         reason_chain_id: data.reason_chain_id.clone(),
         expected_duration_ms: task.expected_duration_ms,
+        yield_points: task.yield_points.clone(),
         load_profile: task.load_profile.clone(),
         prerequisites: DispatchPrerequisites {
             fencing_required: true,

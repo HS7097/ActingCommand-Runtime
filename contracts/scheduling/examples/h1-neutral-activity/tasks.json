@@ -24,8 +24,9 @@
             "kind": "clock",
             "schedule": {
               "kind": "interval",
+              "clock_source": { "kind": "local" },
               "every_ms": 3600000,
-              "anchor_unix_ms": 0
+              "anchor_ms": 0
             }
           },
           {
@@ -40,7 +41,14 @@
         "kind": "clock",
         "schedule": {
           "kind": "at",
-          "unix_ms": 4102444800000
+          "clock_source": {
+            "kind": "server",
+            "timezone_id": "etc/utc",
+            "utc_offset_minutes": 0,
+            "dst_offset_minutes": 0,
+            "maintenance_drift_ms": 0
+          },
+          "at_ms": 4102444800000
         }
       },
       "consumes": [
@@ -96,8 +104,9 @@
             "kind": "clock",
             "schedule": {
               "kind": "interval",
+              "clock_source": { "kind": "local" },
               "every_ms": 14400000,
-              "anchor_unix_ms": 0
+              "anchor_ms": 0
             }
           },
           {
@@ -118,7 +127,14 @@
         "kind": "clock",
         "schedule": {
           "kind": "at",
-          "unix_ms": 4102444800000
+          "clock_source": {
+            "kind": "server",
+            "timezone_id": "etc/utc",
+            "utc_offset_minutes": 0,
+            "dst_offset_minutes": 0,
+            "maintenance_drift_ms": 0
+          },
+          "at_ms": 4102444800000
         }
       },
       "consumes": [

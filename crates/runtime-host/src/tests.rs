@@ -733,6 +733,7 @@ fn evaluated_policy_dispatch(
             &policy_resources(),
             EvaluationTime {
                 unix_ms: POLICY_NOW_UNIX_MS,
+                monotonic_ms: POLICY_NOW_UNIX_MS,
             },
             7,
             trigger,
@@ -963,6 +964,7 @@ fn forward_projection_reuses_policy_state_without_runtime_side_effects() {
             &policy_resources(),
             EvaluationTime {
                 unix_ms: POLICY_NOW_UNIX_MS,
+                monotonic_ms: POLICY_NOW_UNIX_MS,
             },
             17,
             config,
@@ -974,6 +976,7 @@ fn forward_projection_reuses_policy_state_without_runtime_side_effects() {
             &policy_resources(),
             EvaluationTime {
                 unix_ms: POLICY_NOW_UNIX_MS,
+                monotonic_ms: POLICY_NOW_UNIX_MS,
             },
             17,
             config,
@@ -1090,6 +1093,7 @@ fn predictive_maintenance_publishes_one_evidence_pinned_recheck_signal() {
                 &policy_resources(),
                 EvaluationTime {
                     unix_ms: next_evaluation_at,
+                    monotonic_ms: next_evaluation_at,
                 },
                 100 + u64::try_from(index).expect("bounded maintenance index"),
                 PolicyTrigger::Reconciliation,
@@ -4449,6 +4453,7 @@ fn policy_evaluation_consumes_runtime_owned_fact_projection() {
             &policy_resources(),
             EvaluationTime {
                 unix_ms: POLICY_NOW_UNIX_MS,
+                monotonic_ms: POLICY_NOW_UNIX_MS,
             },
             7,
             PolicyTrigger::FactsChanged,
@@ -4587,6 +4592,7 @@ fn policy_cadence_is_explicit_and_clock_jumps_force_full_recompute() {
             &resources,
             EvaluationTime {
                 unix_ms: POLICY_NOW_UNIX_MS,
+                monotonic_ms: POLICY_NOW_UNIX_MS,
             },
             7,
             PolicyTrigger::FactsChanged,
@@ -4605,6 +4611,7 @@ fn policy_cadence_is_explicit_and_clock_jumps_force_full_recompute() {
             &resources,
             EvaluationTime {
                 unix_ms: POLICY_NOW_UNIX_MS + 100,
+                monotonic_ms: POLICY_NOW_UNIX_MS + 100,
             },
             7,
             PolicyTrigger::ResourcesChanged,
@@ -4620,6 +4627,7 @@ fn policy_cadence_is_explicit_and_clock_jumps_force_full_recompute() {
             &resources,
             EvaluationTime {
                 unix_ms: POLICY_NOW_UNIX_MS + 1_100,
+                monotonic_ms: POLICY_NOW_UNIX_MS + 1_100,
             },
             7,
             PolicyTrigger::FactsChanged,
@@ -4634,6 +4642,7 @@ fn policy_cadence_is_explicit_and_clock_jumps_force_full_recompute() {
             &resources,
             EvaluationTime {
                 unix_ms: POLICY_NOW_UNIX_MS + 7_000,
+                monotonic_ms: POLICY_NOW_UNIX_MS + 7_000,
             },
             7,
             PolicyTrigger::ClockObserved {
@@ -4653,6 +4662,7 @@ fn policy_cadence_is_explicit_and_clock_jumps_force_full_recompute() {
             &resources,
             EvaluationTime {
                 unix_ms: POLICY_NOW_UNIX_MS + 67_000,
+                monotonic_ms: POLICY_NOW_UNIX_MS + 67_000,
             },
             7,
             PolicyTrigger::Reconciliation,
@@ -6039,6 +6049,7 @@ fn proposal_a_b_c_pipeline_requires_reports_and_authoritative_approvals() {
             &policy_resources(),
             EvaluationTime {
                 unix_ms: POLICY_NOW_UNIX_MS,
+                monotonic_ms: POLICY_NOW_UNIX_MS,
             },
             7,
             PolicyTrigger::CatalogChanged,
@@ -6492,6 +6503,7 @@ fn policy_dispatch_crash_child_process() {
             &policy_resources(),
             EvaluationTime {
                 unix_ms: POLICY_NOW_UNIX_MS,
+                monotonic_ms: POLICY_NOW_UNIX_MS,
             },
             7,
             PolicyTrigger::Recovery,

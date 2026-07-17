@@ -49,6 +49,7 @@ fn neutral_activity_diff_compiles_and_expresses_both_requirement_shapes() {
         &SimulationState::initial().resources(8 * HOUR_MS),
         EvaluationTime {
             unix_ms: 8 * HOUR_MS,
+            monotonic_ms: 8 * HOUR_MS,
         },
         44,
     )
@@ -224,7 +225,10 @@ fn run_hours(
             catalog,
             &state.facts(catalog, now),
             &state.resources(now),
-            EvaluationTime { unix_ms: now },
+            EvaluationTime {
+                unix_ms: now,
+                monotonic_ms: now,
+            },
             44,
         )
         .expect("accelerated policy evaluation");

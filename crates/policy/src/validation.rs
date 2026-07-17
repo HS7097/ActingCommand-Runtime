@@ -5,12 +5,12 @@ use std::collections::HashSet;
 use crate::source::SourceMap;
 use crate::{
     ActivityProfile, CatalogBundle, CatalogDiagnostic, CatalogDiagnosticCode, ClockSchedule,
-    Comparison, EffectDirection, FactValue, LoadProfile, MAX_ACTIVITY_PROFILES, MAX_APPROVAL_REFS,
-    MAX_EFFECTS_PER_TASK, MAX_GOALS_PER_PROFILE, MAX_ID_BYTES, MAX_INSTANCE_OVERRIDES_PER_TASK,
-    MAX_POOLS, MAX_PREDICATE_DEPTH, MAX_PREDICATE_NODES, MAX_REFERENCES_PER_TASK, MAX_TASKS,
-    MAX_TEXT_BYTES, MAX_TIMELINE_EVENTS, MAX_WINDOWS_PER_PROFILE, MetricRef, ObservationRef,
-    PoolSpec, PredicateSpec, ResourceEffectSpec, SCHEDULING_SCHEMA_VERSION, ScopeSelector,
-    TaskSpec,
+    ClockSource, Comparison, EffectDirection, FactValue, LoadProfile, MAX_ACTIVITY_PROFILES,
+    MAX_APPROVAL_REFS, MAX_BUDGET_COUNT, MAX_CLOCK_DRIFT_MS, MAX_EFFECTS_PER_TASK,
+    MAX_GOALS_PER_PROFILE, MAX_ID_BYTES, MAX_INSTANCE_OVERRIDES_PER_TASK, MAX_POOLS,
+    MAX_PREDICATE_DEPTH, MAX_PREDICATE_NODES, MAX_REFERENCES_PER_TASK, MAX_TASKS, MAX_TEXT_BYTES,
+    MAX_TIMELINE_EVENTS, MAX_WINDOWS_PER_PROFILE, MetricRef, ObservationRef, PoolSpec,
+    PredicateSpec, ResourceEffectSpec, SCHEDULING_SCHEMA_VERSION, ScopeSelector, TaskSpec,
 };
 
 pub(crate) struct CatalogSourceMaps<'a> {
@@ -330,6 +330,16 @@ fn validate_task(
             CatalogDiagnosticCode::LoopBudgetMissing,
             format!("{path}/loop_budget"),
             "task loops and runtime must have nonzero explicit bounds",
+            descriptor,
+        ));
+    }
+    if task.loop_budget.daily_limit > MAX_BUDGET_COUNT
+        || task.loop_budget.window_iteration_limit > MAX_BUDGET_COUNT
+    {
+        diagnostics.push(map.diagnostic(
+            CatalogDiagnosticCode::LimitExceeded,
+            format!("{path}/loop_budget"),
+            format!("task loop counts cannot exceed {MAX_BUDGET_COUNT}"),
             descriptor,
         ));
     }
@@ -790,25 +800,37 @@ fn validate_schedule(
     diagnostics: &mut Vec<CatalogDiagnostic>,
 ) {
     let valid = match schedule {
-        ClockSchedule::Interval { every_ms, .. } => *every_ms > 0,
-        ClockSchedule::At { .. } => true,
+        ClockSchedule::Interval {
+            clock_source,
+            every_ms,
+            ..
+        } => {
+            validate_clock_source(clock_source, path, map, descriptor, diagnostics);
+            *every_ms > 0
+        }
+        ClockSchedule::At { clock_source, .. } => {
+            validate_clock_source(clock_source, path, map, descriptor, diagnostics);
+            !matches!(clock_source, ClockSource::Local)
+        }
         ClockSchedule::Daily {
-            utc_offset_minutes,
+            clock_source,
             minutes_of_day,
         } => {
+            validate_clock_source(clock_source, path, map, descriptor, diagnostics);
             let unique: HashSet<_> = minutes_of_day.iter().collect();
-            (-840..=840).contains(utc_offset_minutes)
+            !matches!(clock_source, ClockSource::Local)
                 && !minutes_of_day.is_empty()
                 && minutes_of_day.len() <= 32
                 && unique.len() == minutes_of_day.len()
                 && minutes_of_day.iter().all(|minute| *minute <= 1439)
         }
         ClockSchedule::Weekly {
-            utc_offset_minutes,
+            clock_source,
             weekday,
             minute_of_day,
         } => {
-            (-840..=840).contains(utc_offset_minutes)
+            validate_clock_source(clock_source, path, map, descriptor, diagnostics);
+            !matches!(clock_source, ClockSource::Local)
                 && (1..=7).contains(weekday)
                 && *minute_of_day <= 1439
         }
@@ -818,6 +840,72 @@ fn validate_schedule(
             CatalogDiagnosticCode::PredicateUncomputable,
             path,
             "clock schedule is outside the frozen V1 bounds",
+            descriptor,
+        ));
+    }
+}
+
+fn validate_clock_source(
+    source: &ClockSource,
+    path: &str,
+    map: &SourceMap,
+    descriptor: Option<(&str, u64)>,
+    diagnostics: &mut Vec<CatalogDiagnostic>,
+) {
+    let (timezone_id, reveal_source, utc_offset, dst_offset, drift) = match source {
+        ClockSource::Local => return,
+        ClockSource::Server {
+            timezone_id,
+            utc_offset_minutes,
+            dst_offset_minutes,
+            maintenance_drift_ms,
+        } => (
+            timezone_id,
+            None,
+            *utc_offset_minutes,
+            *dst_offset_minutes,
+            *maintenance_drift_ms,
+        ),
+        ClockSource::Reveal {
+            reveal_source,
+            timezone_id,
+            utc_offset_minutes,
+            dst_offset_minutes,
+            maintenance_drift_ms,
+        } => (
+            timezone_id,
+            Some(reveal_source),
+            *utc_offset_minutes,
+            *dst_offset_minutes,
+            *maintenance_drift_ms,
+        ),
+    };
+    validate_reference(
+        map,
+        &format!("{path}/clock_source/timezone_id"),
+        timezone_id,
+        descriptor,
+        diagnostics,
+    );
+    if let Some(reveal_source) = reveal_source {
+        validate_identifier(
+            map,
+            &format!("{path}/clock_source/reveal_source"),
+            reveal_source,
+            descriptor,
+            diagnostics,
+        );
+    }
+    let effective_offset = i32::from(utc_offset) + i32::from(dst_offset);
+    if !(-840..=840).contains(&utc_offset)
+        || !(-120..=120).contains(&dst_offset)
+        || !(-840..=840).contains(&effective_offset)
+        || !(-MAX_CLOCK_DRIFT_MS..=MAX_CLOCK_DRIFT_MS).contains(&drift)
+    {
+        diagnostics.push(map.diagnostic(
+            CatalogDiagnosticCode::LimitExceeded,
+            format!("{path}/clock_source"),
+            "clock source offset or maintenance drift exceeds the frozen V1 bounds",
             descriptor,
         ));
     }
@@ -1011,6 +1099,14 @@ fn validate_activity_profile(
             CatalogDiagnosticCode::LoopBudgetMissing,
             path,
             "activity budgets and intervals must be explicit and internally consistent",
+            descriptor,
+        ));
+    }
+    if profile.daily_budget > MAX_BUDGET_COUNT || profile.max_window_iterations > MAX_BUDGET_COUNT {
+        diagnostics.push(map.diagnostic(
+            CatalogDiagnosticCode::LimitExceeded,
+            path,
+            format!("activity budget counts cannot exceed {MAX_BUDGET_COUNT}"),
             descriptor,
         ));
     }
