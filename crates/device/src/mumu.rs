@@ -102,6 +102,88 @@ pub(crate) fn resolve_mumu_capture_dll(installation: &MumuInstallation) -> Devic
     )
 }
 
+fn resolve_mumu_adb_for_capture_dll(
+    installation: &MumuInstallation,
+    capture_dll: Option<&Path>,
+) -> DeviceResult<PathBuf> {
+    let Some(version_dir) = capture_dll.and_then(mumu_version_dir_from_path) else {
+        return resolve_mumu_adb(installation);
+    };
+    resolve_existing_candidate(
+        installation,
+        "ADB executable matching configured Nemu capture DLL version",
+        vec![
+            version_dir.join("shell").join("adb.exe"),
+            installation.root.join("nx_main").join("adb.exe"),
+        ],
+    )
+}
+
+fn resolve_mumu_capture_dll_for_adb(
+    installation: &MumuInstallation,
+    adb_path: &Path,
+) -> DeviceResult<PathBuf> {
+    if let Some(version_dir) = mumu_version_dir_from_path(adb_path) {
+        return resolve_existing_candidate(
+            installation,
+            "Nemu capture DLL matching configured ADB version",
+            vec![
+                version_dir
+                    .join("shell")
+                    .join("sdk")
+                    .join(NEMU_IPC_DLL_NAME),
+            ],
+        );
+    }
+
+    let candidates = mumu_capture_dll_candidates(&installation.root)?;
+    if candidates.first().is_some_and(|path| path.is_file()) {
+        return resolve_existing_candidate(installation, "Nemu capture DLL", candidates);
+    }
+    let version_candidates = candidates
+        .iter()
+        .skip(1)
+        .filter(|path| path.is_file())
+        .cloned()
+        .collect::<Vec<_>>();
+    if version_candidates.len() > 1 {
+        return Err(DeviceError::fatal(format!(
+            "MuMu Nemu capture DLL discovery is ambiguous for shared ADB {} under install_root={}; configure an explicit Nemu IPC DLL to select one version; candidates: {}",
+            adb_path.display(),
+            installation.root.display(),
+            display_paths(&version_candidates)
+        )));
+    }
+    resolve_mumu_capture_dll(installation)
+}
+
+fn ensure_mumu_backend_version_matches(
+    adb_path: &Path,
+    capture_dll_path: &Path,
+) -> DeviceResult<()> {
+    let Some(adb_version) = mumu_version_dir_from_path(adb_path) else {
+        return Ok(());
+    };
+    let Some(dll_version) = mumu_version_dir_from_path(capture_dll_path) else {
+        return Err(DeviceError::fatal(format!(
+            "MuMu ADB {} has version identity {}, but Nemu capture DLL {} has no matching nx_device/<version> identity",
+            adb_path.display(),
+            adb_version.display(),
+            capture_dll_path.display()
+        )));
+    };
+    if path_key(&adb_version) == path_key(&dll_version) {
+        return Ok(());
+    }
+    Err(DeviceError::fatal(format!(
+        "MuMu ADB {} has version identity {}, but Nemu capture DLL {} has different version identity {}; ADB and capture DLL must use the same nx_device/<version>",
+        adb_path.display(),
+        adb_version.display(),
+        capture_dll_path.display(),
+        dll_version.display()
+    )))
+}
+
 pub(crate) fn resolve_mumu_backend_paths(
     configured_adb: Option<PathBuf>,
     explicit_root: Option<PathBuf>,
@@ -160,7 +242,7 @@ pub(crate) fn resolve_mumu_backend_paths(
             ensure_same_install_root("configured ADB", &root, &installation)?;
             path
         }
-        None => resolve_mumu_adb(&installation)?,
+        None => resolve_mumu_adb_for_capture_dll(&installation, explicit_dll.as_deref())?,
     };
     let capture_dll_path = match explicit_dll {
         Some(path) => {
@@ -176,8 +258,9 @@ pub(crate) fn resolve_mumu_backend_paths(
             }
             path
         }
-        None => resolve_mumu_capture_dll(&installation)?,
+        None => resolve_mumu_capture_dll_for_adb(&installation, &adb_path)?,
     };
+    ensure_mumu_backend_version_matches(&adb_path, &capture_dll_path)?;
 
     Ok(Some(MumuBackendPaths {
         installation,
@@ -214,6 +297,23 @@ pub(crate) fn mumu_root_from_path(path: &Path) -> Option<PathBuf> {
             return (!root.as_os_str().is_empty()).then_some(root);
         }
         root.push(component.as_os_str());
+    }
+    None
+}
+
+fn mumu_version_dir_from_path(path: &Path) -> Option<PathBuf> {
+    let mut prefix = PathBuf::new();
+    let mut components = path.components();
+    while let Some(component) = components.next() {
+        prefix.push(component.as_os_str());
+        if component
+            .as_os_str()
+            .to_string_lossy()
+            .eq_ignore_ascii_case("nx_device")
+        {
+            prefix.push(components.next()?.as_os_str());
+            return Some(prefix);
+        }
     }
     None
 }
@@ -677,6 +777,77 @@ mod tests {
             paths.capture_dll_path,
             fs::canonicalize(dll).expect("canonical DLL")
         );
+    }
+
+    #[test]
+    fn coordinated_backend_paths_keep_configured_adb_version() {
+        let temp = TempRoot::new("coordinated-version-match");
+        let root = temp.path().join("MuMuPlayer-MultiVersion");
+        let old_dll = root.join("nx_device/12.0/shell/sdk/external_renderer_ipc.dll");
+        let selected_adb = root.join("nx_device/15.0/shell/adb.exe");
+        let selected_dll = root.join("nx_device/15.0/shell/sdk/external_renderer_ipc.dll");
+        for file in [&old_dll, &selected_adb, &selected_dll] {
+            fs::create_dir_all(file.parent().expect("parent")).expect("candidate parent");
+            fs::write(file, b"fixture").expect("candidate file");
+        }
+
+        let paths = resolve_mumu_backend_paths(Some(selected_adb.clone()), None, None)
+            .expect("coordinated resolution")
+            .expect("MuMu paths");
+
+        assert_eq!(
+            paths.adb_path,
+            fs::canonicalize(selected_adb).expect("canonical ADB")
+        );
+        assert_eq!(
+            paths.capture_dll_path,
+            fs::canonicalize(selected_dll).expect("canonical selected DLL")
+        );
+        assert_ne!(
+            paths.capture_dll_path,
+            fs::canonicalize(old_dll).expect("canonical old DLL")
+        );
+    }
+
+    #[test]
+    fn coordinated_backend_paths_reject_ambiguous_versions_for_shared_adb() {
+        let temp = TempRoot::new("coordinated-shared-adb-ambiguous");
+        let root = temp.path().join("MuMuPlayer-MultiVersion");
+        let shared_adb = root.join("nx_main/adb.exe");
+        let old_dll = root.join("nx_device/12.0/shell/sdk/external_renderer_ipc.dll");
+        let new_dll = root.join("nx_device/15.0/shell/sdk/external_renderer_ipc.dll");
+        for file in [&shared_adb, &old_dll, &new_dll] {
+            fs::create_dir_all(file.parent().expect("parent")).expect("candidate parent");
+            fs::write(file, b"fixture").expect("candidate file");
+        }
+
+        let err = resolve_mumu_backend_paths(Some(shared_adb), None, None)
+            .expect_err("shared ADB must not choose between multiple DLL versions");
+        let old_dll = fs::canonicalize(old_dll).expect("canonical old DLL");
+        let new_dll = fs::canonicalize(new_dll).expect("canonical new DLL");
+
+        assert!(err.message().contains("ambiguous"));
+        assert!(err.message().contains(&old_dll.display().to_string()));
+        assert!(err.message().contains(&new_dll.display().to_string()));
+    }
+
+    #[test]
+    fn coordinated_backend_paths_reject_explicit_cross_version_pair() {
+        let temp = TempRoot::new("coordinated-cross-version");
+        let root = temp.path().join("MuMuPlayer-MultiVersion");
+        let adb = root.join("nx_device/15.0/shell/adb.exe");
+        let dll = root.join("nx_device/12.0/shell/sdk/external_renderer_ipc.dll");
+        for file in [&adb, &dll] {
+            fs::create_dir_all(file.parent().expect("parent")).expect("candidate parent");
+            fs::write(file, b"fixture").expect("candidate file");
+        }
+
+        let err = resolve_mumu_backend_paths(Some(adb), None, Some(dll))
+            .expect_err("different version identities must fail");
+
+        assert!(err.message().contains("different version identity"));
+        assert!(err.message().contains("15.0"));
+        assert!(err.message().contains("12.0"));
     }
 
     #[test]
