@@ -1256,6 +1256,40 @@ mod tests {
     }
 
     #[test]
+    fn fastest_selection_removes_selected_factory_from_remaining() {
+        let selected = select_fastest(
+            TouchBackendChoice::AutoFastest,
+            vec![
+                fake_factory(TouchBackendName::MaaTouch, Ok(()), Ok(())),
+                fake_factory(TouchBackendName::AdbShellInput, Ok(()), Ok(())),
+            ],
+        )
+        .expect("selected");
+
+        let selected_name = selected.backend_name();
+        let expected_remaining = match selected_name {
+            TouchBackendName::MaaTouch => TouchBackendName::AdbShellInput,
+            TouchBackendName::AdbShellInput => TouchBackendName::MaaTouch,
+            unexpected => panic!("unexpected selected backend: {unexpected:?}"),
+        };
+        assert_eq!(selected.remaining.len(), 1);
+        assert_eq!(selected.remaining[0].name(), expected_remaining);
+
+        let diagnostics = selected.diagnostics();
+        assert_eq!(diagnostics.attempts.len(), 2);
+        for backend in [TouchBackendName::MaaTouch, TouchBackendName::AdbShellInput] {
+            let attempt = diagnostics
+                .attempts
+                .iter()
+                .find(|attempt| attempt.backend == backend)
+                .expect("successful connection diagnostic");
+            assert!(attempt.ok);
+            assert_eq!(attempt.action.as_deref(), Some("select"));
+            assert_eq!(attempt.selected, backend == selected_name);
+        }
+    }
+
+    #[test]
     fn minitouch_in_priority_chain() {
         let selected = select_fixed_priority(
             TouchBackendChoice::Auto,
