@@ -2396,6 +2396,43 @@ mod tests {
         let _ = fs::remove_dir_all(temp);
     }
 
+    #[cfg(windows)]
+    #[test]
+    fn explicit_nemu_capture_public_entry_keeps_configured_adb_version() {
+        let temp = std::env::temp_dir().join(format!(
+            "actingcommand-capture-version-identity-{}",
+            std::process::id()
+        ));
+        let root = temp.join("MuMuPlayer-MultiVersion");
+        let old_dll = root.join("nx_device/12.0/shell/sdk/external_renderer_ipc.dll");
+        let selected_adb = root.join("nx_device/15.0/shell/adb.exe");
+        let selected_dll = root.join("nx_device/15.0/shell/sdk/external_renderer_ipc.dll");
+        let _ = fs::remove_dir_all(&temp);
+        for file in [&old_dll, &selected_adb, &selected_dll] {
+            fs::create_dir_all(file.parent().expect("parent")).expect("candidate parent");
+            fs::write(file, b"not a dynamic library").expect("candidate file");
+        }
+        let config = CaptureBackendConfig::new(
+            AdbConfig {
+                adb_path: selected_adb.display().to_string(),
+                command_timeout: Duration::from_secs(1),
+            },
+            DeviceTarget::default(),
+        )
+        .with_requested(CaptureBackendChoice::NemuIpc);
+
+        let err = match create_capture_backend(config) {
+            Ok(_) => panic!("invalid fixture DLL must not create a Nemu backend"),
+            Err(err) => err,
+        };
+        let selected_dll = fs::canonicalize(selected_dll).expect("canonical selected DLL");
+        let old_dll = fs::canonicalize(old_dll).expect("canonical old DLL");
+
+        assert!(err.message().contains(&selected_dll.display().to_string()));
+        assert!(!err.message().contains(&old_dll.display().to_string()));
+        let _ = fs::remove_dir_all(temp);
+    }
+
     #[test]
     fn generic_adb_auto_choices_do_not_force_discovered_mumu_pairing() {
         let temp = std::env::temp_dir().join(format!(
