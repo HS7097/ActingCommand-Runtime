@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 use actingcommand_device::{
-    AdbConfig, CaptureBackendChoice, CaptureBackendConfig, CaptureBackendName, DeviceError,
-    DeviceResult, Frame, InputBackend, MaaTouchValidationConfig, PixelFormat, TouchBackendChoice,
+    CaptureBackendChoice, CaptureBackendConfig, CaptureBackendName, DeviceError, DeviceResult,
+    Frame, InputBackend, MaaTouchValidationConfig, PixelFormat, TouchBackendChoice,
     TouchBackendConfig, TouchBackendDiagnostics, TouchBackendName, combine_operation_and_close,
-    create_capture_backend, create_touch_backend,
+    create_capture_backend, create_touch_backend, resolve_adb_path,
 };
 use actingcommand_execution_kernel::{
     DryRunAction, DryRunResult, DryRunStatus, DryRunTaskLoop, load_task_plan_from_json_str,
@@ -267,10 +267,18 @@ fn resolve_adb_for_device_commands(
     config: &mut MaaTouchValidationConfig,
     commands: &[DeviceCommand],
 ) -> DeviceResult<()> {
+    resolve_adb_for_device_commands_with(config, commands, || Ok(resolve_adb_path(None)?.path))
+}
+
+fn resolve_adb_for_device_commands_with(
+    config: &mut MaaTouchValidationConfig,
+    commands: &[DeviceCommand],
+    resolver: impl FnOnce() -> DeviceResult<String>,
+) -> DeviceResult<()> {
     if !commands_need_device(commands) || !config.adb.adb_path.trim().is_empty() {
         return Ok(());
     }
-    config.adb = AdbConfig::resolve(None)?.0;
+    config.adb.adb_path = resolver()?;
     Ok(())
 }
 
@@ -1849,6 +1857,27 @@ mod tests {
                 },
             ]
         );
+    }
+
+    #[test]
+    fn adb_resolution_preserves_explicit_command_timeout() {
+        let (mut config, commands) = parse_args([
+            "--command-timeout-ms".to_string(),
+            "3456".to_string(),
+            "tap".to_string(),
+            "100".to_string(),
+            "200".to_string(),
+        ])
+        .expect("parse");
+
+        assert!(config.adb.adb_path.is_empty());
+        resolve_adb_for_device_commands_with(&mut config, &commands, || {
+            Ok("C:\\tools\\adb.exe".to_string())
+        })
+        .expect("resolve adb");
+
+        assert_eq!(config.adb.adb_path, "C:\\tools\\adb.exe");
+        assert_eq!(config.adb.command_timeout, Duration::from_millis(3_456));
     }
 
     #[test]
