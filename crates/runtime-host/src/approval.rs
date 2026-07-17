@@ -29,9 +29,30 @@ impl ApprovalProjection {
         ledger: &GlobalLedger,
         state: Arc<RuntimeStateStore>,
     ) -> RuntimeHostResult<Self> {
+        Self::project(ledger, state, None, true)
+    }
+
+    pub(crate) fn records_at(
+        ledger: &GlobalLedger,
+        state: Arc<RuntimeStateStore>,
+        ledger_position: u64,
+    ) -> RuntimeHostResult<Vec<ApprovalDecisionRecord>> {
+        if ledger_position == 0 {
+            return Err(approval_fatal("approval_projection_position_invalid"));
+        }
+        Ok(Self::project(ledger, state, Some(ledger_position), false)?.records())
+    }
+
+    fn project(
+        ledger: &GlobalLedger,
+        state: Arc<RuntimeStateStore>,
+        to_sequence: Option<u64>,
+        persist: bool,
+    ) -> RuntimeHostResult<Self> {
         let events = ledger
             .query(EventQuery {
                 event_type: Some(EventType::ApprovalDecision),
+                to_sequence,
                 ..EventQuery::default()
             })
             .map_err(|_| approval_fatal("approval_projection_query_failed"))?;
@@ -53,7 +74,9 @@ impl ApprovalProjection {
                 .validate()
                 .map_err(|_| approval_fatal("approval_projection_record_invalid"))?;
             validate_persisted_target(&state, decision)?;
-            persist_approval(&state, event.sequence(), decision)?;
+            if persist {
+                persist_approval(&state, event.sequence(), decision)?;
+            }
             if decision.disposition().grants_authority() {
                 active.insert(decision.approval_id().to_owned(), decision.clone());
             } else {
