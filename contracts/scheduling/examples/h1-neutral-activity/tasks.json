@@ -1,0 +1,168 @@
+{
+  "schema_version": "actingcommand.scheduling.v1",
+  "catalog": {
+    "catalog_id": "fixture.h1-neutral-activity",
+    "catalog_version": 1,
+    "approval_refs": ["approval:h1-neutral-activity"]
+  },
+  "tasks": [
+    {
+      "id": "neutral.consume-regeneration",
+      "scope": {
+        "kind": "instance",
+        "instance_id": "neutral-instance-a"
+      },
+      "entrypoint": {
+        "operation_id": "operation.consume"
+      },
+      "procedure_ref": "procedure.consume-regeneration",
+      "priority": 120,
+      "trigger": {
+        "kind": "all",
+        "predicates": [
+          {
+            "kind": "clock",
+            "schedule": {
+              "kind": "interval",
+              "every_ms": 3600000,
+              "anchor_unix_ms": 0
+            }
+          },
+          {
+            "kind": "resource_projection",
+            "pool_id": "neutral-energy",
+            "comparison": "greater_than_or_equal",
+            "value": 100
+          }
+        ]
+      },
+      "feedback_stop": {
+        "kind": "clock",
+        "schedule": {
+          "kind": "at",
+          "unix_ms": 4102444800000
+        }
+      },
+      "consumes": [
+        {
+          "pool_id": "neutral-energy",
+          "direction": "consume",
+          "amount": 20,
+          "observation_source": "scan_verified",
+          "confidence_milli": 1000
+        }
+      ],
+      "produces": [],
+      "on_failure": {
+        "action": "continue",
+        "retry_limit": 2,
+        "retry_backoff_ms": 30000,
+        "escalation_threshold": 3
+      },
+      "sensitive": false,
+      "next_run_clamp_ms": 86400000,
+      "yield_points": ["after_consumption"],
+      "expected_duration_ms": 60000,
+      "cooldown_ms": 1000,
+      "load_profile": {
+        "kind": "weighted",
+        "cpu_milli": 100,
+        "gpu_milli": 100,
+        "io_milli": 100
+      },
+      "loop_budget": {
+        "daily_limit": 24,
+        "window_iteration_limit": 6,
+        "max_runtime_ms": 300000
+      },
+      "strategic_weight_milli": 1000,
+      "instance_overrides": []
+    },
+    {
+      "id": "neutral.balance-material",
+      "scope": {
+        "kind": "instance",
+        "instance_id": "neutral-instance-b"
+      },
+      "entrypoint": {
+        "operation_id": "operation.balance"
+      },
+      "procedure_ref": "procedure.balance-material",
+      "priority": 100,
+      "trigger": {
+        "kind": "all",
+        "predicates": [
+          {
+            "kind": "clock",
+            "schedule": {
+              "kind": "interval",
+              "every_ms": 14400000,
+              "anchor_unix_ms": 0
+            }
+          },
+          {
+            "kind": "resource_projection",
+            "pool_id": "neutral-raw-material",
+            "comparison": "greater_than_or_equal",
+            "value": 10
+          },
+          {
+            "kind": "resource_projection",
+            "pool_id": "neutral-refined-material",
+            "comparison": "less_than",
+            "value": 80
+          }
+        ]
+      },
+      "feedback_stop": {
+        "kind": "clock",
+        "schedule": {
+          "kind": "at",
+          "unix_ms": 4102444800000
+        }
+      },
+      "consumes": [
+        {
+          "pool_id": "neutral-raw-material",
+          "direction": "consume",
+          "amount": 10,
+          "observation_source": "scan_verified",
+          "confidence_milli": 1000
+        }
+      ],
+      "produces": [
+        {
+          "pool_id": "neutral-refined-material",
+          "direction": "produce",
+          "amount": 10,
+          "observation_source": "scan_verified",
+          "confidence_milli": 1000
+        }
+      ],
+      "on_failure": {
+        "action": "continue",
+        "retry_limit": 2,
+        "retry_backoff_ms": 30000,
+        "escalation_threshold": 3
+      },
+      "sensitive": false,
+      "next_run_clamp_ms": 86400000,
+      "yield_points": ["after_balance"],
+      "expected_duration_ms": 60000,
+      "cooldown_ms": 1000,
+      "load_profile": {
+        "kind": "weighted",
+        "cpu_milli": 100,
+        "gpu_milli": 100,
+        "io_milli": 100
+      },
+      "loop_budget": {
+        "daily_limit": 12,
+        "window_iteration_limit": 4,
+        "max_runtime_ms": 300000
+      },
+      "strategic_weight_milli": 1000,
+      "instance_overrides": []
+    }
+  ]
+}
