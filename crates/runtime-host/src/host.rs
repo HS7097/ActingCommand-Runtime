@@ -397,6 +397,16 @@ impl RuntimeHost {
             config.policy_cadence.clone(),
         )?;
         reconcile_policy_dispatches(&mut policy, &ledger, &events)?;
+        let policy_dispatch_clocks = policy
+            .recovered_dispatch_clocks()?
+            .into_iter()
+            .map(|(decision_id, admitted_at_unix_ms)| {
+                (
+                    decision_id,
+                    PolicyDispatchClock::recovered(admitted_at_unix_ms),
+                )
+            })
+            .collect();
         ApprovalProjection::recover(&ledger, Arc::clone(&state))?;
         reconcile_runtime_state(&state, &ledger, &events)?;
         let agent_instance_ids = registered_instances
@@ -498,7 +508,7 @@ impl RuntimeHost {
             queued_requests: Mutex::new(BTreeMap::new()),
             queue_terminals: Mutex::new(QueueTerminalStore::default()),
             trusted_policy_dispatches: Mutex::new(TrustedPolicyDispatchStore::default()),
-            policy_dispatch_started_at: Mutex::new(BTreeMap::new()),
+            policy_dispatch_clocks: Mutex::new(policy_dispatch_clocks),
             policy_outcome_gate: Mutex::new(()),
             admission_guards: Mutex::new(BTreeMap::new()),
             debug_runs: Mutex::new(BTreeMap::new()),
@@ -1532,7 +1542,7 @@ struct HostShared {
     queued_requests: Mutex<BTreeMap<RequestId, QueuedRequestContext>>,
     queue_terminals: Mutex<QueueTerminalStore>,
     trusted_policy_dispatches: Mutex<TrustedPolicyDispatchStore>,
-    policy_dispatch_started_at: Mutex<BTreeMap<String, u64>>,
+    policy_dispatch_clocks: Mutex<BTreeMap<String, PolicyDispatchClock>>,
     // Outcome preparation and completion form one idempotent Runtime-owned transition.
     policy_outcome_gate: Mutex<()>,
     admission_guards: Mutex<BTreeMap<InstanceId, Arc<Mutex<()>>>>,
@@ -1547,6 +1557,28 @@ struct HostShared {
 struct PolicyAdmissionAppender<'a> {
     ledger: &'a GlobalLedger,
     initial_fact_gate: RefCell<Option<MutexGuard<'a, ()>>>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct PolicyDispatchClock {
+    admitted_at_unix_ms: u64,
+    started_at_monotonic_ms: Option<u64>,
+}
+
+impl PolicyDispatchClock {
+    const fn live(admitted_at_unix_ms: u64, started_at_monotonic_ms: u64) -> Self {
+        Self {
+            admitted_at_unix_ms,
+            started_at_monotonic_ms: Some(started_at_monotonic_ms),
+        }
+    }
+
+    const fn recovered(admitted_at_unix_ms: u64) -> Self {
+        Self {
+            admitted_at_unix_ms,
+            started_at_monotonic_ms: None,
+        }
+    }
 }
 
 impl<'a> PolicyAdmissionAppender<'a> {
@@ -2752,12 +2784,13 @@ impl HostShared {
         match result {
             Ok(receipt) => {
                 let started_at_monotonic_ms = self.monotonic_ms()?;
-                let mut starts = lock(
-                    &self.policy_dispatch_started_at,
-                    "record_policy_dispatch_start",
-                )?;
-                if starts
-                    .insert(intent.decision_id.clone(), started_at_monotonic_ms)
+                let (token, catalog, admission) = receipt.into_value();
+                let clock = PolicyDispatchClock::live(
+                    admission.activity.admitted_at_unix_ms,
+                    started_at_monotonic_ms,
+                );
+                if lock(&self.policy_dispatch_clocks, "record_policy_dispatch_start")?
+                    .insert(intent.decision_id.clone(), clock)
                     .is_some()
                 {
                     let error = policy_admission_fatal(
@@ -2767,7 +2800,6 @@ impl HostShared {
                     self.fatal.mark(error.clone())?;
                     return Err(error);
                 }
-                let (token, catalog, admission) = receipt.into_value();
                 Ok(PolicyDispatchAdmission::Granted {
                     decision_id: intent.decision_id.clone(),
                     catalog,
@@ -2823,29 +2855,36 @@ impl HostShared {
                 )
             };
             let sample = self.runtime_clock_sample()?;
-            let started_at_monotonic_ms = lock(
-                &self.policy_dispatch_started_at,
-                "read_policy_dispatch_start",
-            )?
-            .get(decision_id)
-            .copied()
-            .ok_or_else(|| {
-                RuntimeHostError::fatal(
-                    "policy_dispatch_clock_missing",
-                    "record_policy_dispatch_outcome",
-                    RuntimeErrorCode::RuntimeFatal,
-                )
-            })?;
-            let runtime_ms = sample
-                .monotonic_ms
-                .checked_sub(started_at_monotonic_ms)
+            let clock = lock(&self.policy_dispatch_clocks, "read_policy_dispatch_start")?
+                .get(decision_id)
+                .copied()
                 .ok_or_else(|| {
                     RuntimeHostError::fatal(
-                        "policy_dispatch_clock_regressed",
+                        "policy_dispatch_clock_missing",
                         "record_policy_dispatch_outcome",
                         RuntimeErrorCode::RuntimeFatal,
                     )
                 })?;
+            if clock.admitted_at_unix_ms != admitted_at_unix_ms {
+                return Err(RuntimeHostError::fatal(
+                    "policy_dispatch_clock_identity_conflict",
+                    "record_policy_dispatch_outcome",
+                    RuntimeErrorCode::RuntimeFatal,
+                ));
+            }
+            let runtime_ms = match clock.started_at_monotonic_ms {
+                Some(started_at_monotonic_ms) => {
+                    sample.monotonic_ms.checked_sub(started_at_monotonic_ms)
+                }
+                None => sample.unix_ms.checked_sub(admitted_at_unix_ms),
+            }
+            .ok_or_else(|| {
+                RuntimeHostError::fatal(
+                    "policy_dispatch_clock_regressed",
+                    "record_policy_dispatch_outcome",
+                    RuntimeErrorCode::RuntimeFatal,
+                )
+            })?;
             let observed_at_unix_ms =
                 admitted_at_unix_ms.checked_add(runtime_ms).ok_or_else(|| {
                     RuntimeHostError::fatal(
@@ -2891,11 +2930,7 @@ impl HostShared {
                 )?;
                 policy.complete_dispatch(decision_id)?;
             }
-            lock(
-                &self.policy_dispatch_started_at,
-                "clear_policy_dispatch_start",
-            )?
-            .remove(decision_id);
+            lock(&self.policy_dispatch_clocks, "clear_policy_dispatch_start")?.remove(decision_id);
             Ok(data)
         })();
         if let Err(error) = &result
