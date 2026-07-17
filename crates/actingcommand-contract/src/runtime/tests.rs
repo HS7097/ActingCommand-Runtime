@@ -1251,9 +1251,53 @@ fn planning_operations_are_strict_and_require_agent_adapter_origin() {
 
 #[test]
 fn query_result_remains_typed_without_generic_value_payload() {
-    let result = RuntimeResult::Events { events: Vec::new() };
+    let result = RuntimeResult::EventPage {
+        page: RuntimeEventQueryPage::new(
+            Vec::new(),
+            0,
+            DEFAULT_RUNTIME_EVENT_QUERY_EVENTS,
+            false,
+            None,
+        )
+        .expect("event page"),
+    };
     let value = serde_json::to_value(result).expect("result json");
-    assert_eq!(value["kind"], "events");
+    assert_eq!(value["kind"], "event_page");
+}
+
+#[test]
+fn runtime_event_query_pages_are_bounded_and_cursor_bound_to_the_query() {
+    assert_eq!(
+        RuntimeEventQueryPageRequest::default().limit(),
+        DEFAULT_RUNTIME_EVENT_QUERY_EVENTS
+    );
+    assert!(RuntimeEventQueryPageRequest::new(0, None).is_err());
+    assert!(RuntimeEventQueryPageRequest::new(MAX_RUNTIME_EVENT_QUERY_EVENTS + 1, None).is_err());
+
+    let query = EventQuery {
+        event_type: Some(EventType::PolicyPlanningSignalObserved),
+        ..EventQuery::default()
+    };
+    let cursor = RuntimeEventQueryCursor::new(50, 17, &query, ProjectionProfile::Forensic)
+        .expect("event cursor");
+    assert!(
+        cursor
+            .matches(&query, ProjectionProfile::Forensic)
+            .expect("matching cursor")
+    );
+    assert!(
+        !cursor
+            .matches(&EventQuery::default(), ProjectionProfile::Forensic)
+            .expect("different query")
+    );
+    assert!(
+        !cursor
+            .matches(&query, ProjectionProfile::Ui)
+            .expect("different projection")
+    );
+    assert!(RuntimeEventQueryCursor::new(0, 0, &query, ProjectionProfile::Forensic).is_err());
+    assert!(RuntimeEventQueryCursor::new(10, 11, &query, ProjectionProfile::Forensic).is_err());
+    assert!(RuntimeEventQueryPage::new(Vec::new(), 50, 8, true, Some(cursor)).is_err());
 }
 
 #[test]

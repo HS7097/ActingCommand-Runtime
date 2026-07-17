@@ -11,12 +11,12 @@ use actingcommand_contract::{
     ProjectDecisionPageCursor, ProjectDecisionPageRequest, ProjectInterfaceRequest,
     ProjectInterfaceSnapshot, ProjectedArtifactReference, ProjectedEvent, ProjectionProfile,
     ProposalPreview, ProposalPromotion, RUNTIME_INFO_FILE, RequestId, ResourceAuthoringEvent,
-    RuntimeControlPlaneStatus, RuntimeDebugEvent, RuntimeEventBatch, RuntimeEvidenceExportRequest,
-    RuntimeForwardProjectionRequest, RuntimeInfo, RuntimeMaintenanceQuery,
-    RuntimeMonitorInstanceStatus, RuntimeMonitorPolicy, RuntimeMonitorRegistryStatus,
-    RuntimeOperation, RuntimePlanningDocument, RuntimePlanningDocumentKind, RuntimeReceipt,
-    RuntimeRequest, RuntimeResult, RuntimeStrategicReportRequest, RuntimeSubscriptionRequest,
-    TerminalEvent,
+    RuntimeControlPlaneStatus, RuntimeDebugEvent, RuntimeEventBatch, RuntimeEventQueryPage,
+    RuntimeEventQueryPageRequest, RuntimeEvidenceExportRequest, RuntimeForwardProjectionRequest,
+    RuntimeInfo, RuntimeMaintenanceQuery, RuntimeMonitorInstanceStatus, RuntimeMonitorPolicy,
+    RuntimeMonitorRegistryStatus, RuntimeOperation, RuntimePlanningDocument,
+    RuntimePlanningDocumentKind, RuntimeReceipt, RuntimeRequest, RuntimeResult,
+    RuntimeStrategicReportRequest, RuntimeSubscriptionRequest, TerminalEvent,
 };
 use actingcommand_policy::{
     EvaluationFacts, EvaluationResources, EvaluationTime, ForwardProjection,
@@ -909,11 +909,32 @@ impl RuntimeClient {
         query: EventQuery,
         profile: ProjectionProfile,
     ) -> RuntimeClientResult<Vec<ProjectedEvent>> {
+        let page =
+            self.query_event_page(query, profile, RuntimeEventQueryPageRequest::default())?;
+        if page.has_more() {
+            return Err(RuntimeClientError::fatal(
+                "runtime_event_query_requires_pagination",
+                "query_runtime_events",
+            ));
+        }
+        Ok(page.events().to_vec())
+    }
+
+    pub fn query_event_page(
+        &self,
+        query: EventQuery,
+        profile: ProjectionProfile,
+        page: RuntimeEventQueryPageRequest,
+    ) -> RuntimeClientResult<RuntimeEventQueryPage> {
         match self.execute(
             "query_runtime_events",
-            RuntimeOperation::QueryEvents { query, profile },
+            RuntimeOperation::QueryEvents {
+                query,
+                profile,
+                page,
+            },
         )? {
-            RuntimeResult::Events { events } => Ok(events),
+            RuntimeResult::EventPage { page } => Ok(page),
             _ => Err(self.unexpected_result("query_runtime_events")),
         }
     }
