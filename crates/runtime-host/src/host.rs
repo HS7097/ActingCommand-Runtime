@@ -15,6 +15,7 @@ use crate::performance::{
 };
 use crate::performance_control::{PerformanceBalanceController, PerformanceDispatchGate};
 use crate::policy_host::{LoadedCatalog, PolicyExecutionPreparation, PolicyHost};
+use crate::proposal::prepare_proposal;
 use crate::time::unix_ms_now;
 use crate::{
     AgentDispatcherConfig, CatalogGeneration, FatalState, PerformanceControlConfig,
@@ -27,25 +28,29 @@ use actingcommand_artifact_store::{
     ArtifactWriteContext, ArtifactWriteRequest, CapturePipelineCounts, CapturePipelineSummary,
     EvidenceExportDocuments, EvidenceExportIdentity, EvidenceExportRequest, EvidenceExporter,
     EvidenceJsonDocument, EvidencePackage, PackageVerification, PersistedFrameEvidence,
+    read_projected_verified,
 };
+#[cfg(test)]
+use actingcommand_contract::ArtifactLinksDraft;
 use actingcommand_contract::{
     AgentPayloadDraft, AgentSessionContext, AgentSessionId, AgentSessionResponse,
     AgentSessionStatus, AgentWakeId, AgentWakeKind, AgentWakeTrigger, ApplicationLifecycleAction,
     ApplicationPayload, ApplicationPayloadDraft, ApprovalDecisionRecord, ApprovalPayload,
     ApprovalPayloadDraft, ArtifactIssuePolicy, ArtifactKind, ArtifactProducer,
     ArtifactRedactionState, AuditInput, CapturePayloadDraft, CaptureSequence, CaptureSequenceSpec,
-    CatalogPayloadDraft, CatalogTransitionEventData, ClientActionRecord, ClientPayload,
-    ClientPayloadDraft, CommandPayloadDraft, ContainedTaskRequest, CorrelationId, DiagnosticCode,
-    EffectDisposition, EventAction, EventActor, EventDraft, EventId, EventLinksDraft, EventPayload,
-    EventQuery, EventSeverity, EventSource, EventType, EvidenceCompleteness, FactPayloadDraft,
-    FactRecord, InputAction, InputPayload, InputPayloadDraft, InstanceFactContext,
-    InstanceFactSnapshot, InstanceId, IssuedActionId, IssuedFrameId, IssuedMonitorProbe,
-    IssuedReadOnlyCaptureCapability, IssuedRecognitionId, IssuedRunId, IssuedTaskId, LeaseId,
-    LeasePayloadDraft, LeaseQueuePolicy, LeaseToken, MAX_INSTANCE_ALIAS_BYTES, MonitorPayloadDraft,
-    MonitorRecoveryCoordinationReason, OriginModule, PackageDebugLayout, PackageDebugRequest,
-    PackageDebugSummary, PerformanceContext, PerformancePayloadDraft, PolicyDispatchEventData,
-    PolicyExecutionEventData, PolicyPayloadDraft, PolicyPlanningSignalEventData,
-    PolicyReasonRecord, RUNTIME_INFO_FILE, ReadonlyObservation, RecognitionPayloadDraft,
+    CatalogPayloadDraft, CatalogPromotionAuthorization, CatalogProposal,
+    CatalogTransitionEventData, ClientActionRecord, ClientPayload, ClientPayloadDraft,
+    CommandPayloadDraft, ContainedTaskRequest, CorrelationId, DiagnosticCode, EffectDisposition,
+    EventAction, EventActor, EventDraft, EventId, EventLinksDraft, EventPayload, EventQuery,
+    EventSeverity, EventSource, EventType, EvidenceCompleteness, FactPayloadDraft, FactRecord,
+    InputAction, InputPayload, InputPayloadDraft, InstanceFactContext, InstanceFactSnapshot,
+    InstanceId, IssuedActionId, IssuedFrameId, IssuedMonitorProbe, IssuedReadOnlyCaptureCapability,
+    IssuedRecognitionId, IssuedRunId, IssuedTaskId, LeaseId, LeasePayloadDraft, LeaseQueuePolicy,
+    LeaseToken, MAX_INSTANCE_ALIAS_BYTES, MonitorPayloadDraft, MonitorRecoveryCoordinationReason,
+    OriginModule, PackageDebugLayout, PackageDebugRequest, PackageDebugSummary, PerformanceContext,
+    PerformancePayloadDraft, PolicyDispatchEventData, PolicyExecutionEventData, PolicyPayloadDraft,
+    PolicyPlanningSignalEventData, PolicyReasonRecord, ProjectedArtifactReference, ProposalClass,
+    ProposalPromotion, RUNTIME_INFO_FILE, ReadonlyObservation, RecognitionPayloadDraft,
     RecognitionVerdict, ReleasePayload, ReleasePayloadDraft, ReleaseTransitionKind, RequestId,
     ResourceAuthoringEvent, ResourceAuthoringPayloadDraft, ResourceAuthoringPhase, RetentionClass,
     RuntimeCaptureBackend, RuntimeControlPlaneStatus, RuntimeDebugEvent, RuntimeDebugOperation,
@@ -366,6 +371,7 @@ impl RuntimeHost {
             fact_write_gate: Mutex::new(()),
             state_write_gate: Mutex::new(()),
             agent_write_gate: Mutex::new(()),
+            proposal_write_gate: Mutex::new(()),
             facts: Mutex::new(facts),
             owner: Mutex::new(owner),
             ledger,
@@ -537,6 +543,15 @@ impl RuntimeHost {
     pub fn rollback_release_set(&self, release_id: &str) -> RuntimeHostResult<RuntimeReleaseSet> {
         self.shared_ref("rollback_release_set")?
             .switch_release_set(ReleaseTransitionKind::Rollback, release_id)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn store_test_report(
+        &self,
+        bytes: &[u8],
+    ) -> RuntimeHostResult<ProjectedArtifactReference> {
+        self.shared_ref("store_test_report")?
+            .store_test_report(bytes)
     }
 
     pub fn evaluate_policy_cycle(
@@ -1154,6 +1169,8 @@ struct HostShared {
     state_write_gate: Mutex<()>,
     // Agent session transitions are ledger-first and serialized across IPC and timeout sweeps.
     agent_write_gate: Mutex<()>,
+    // Proposal recompilation, approval checks, and catalog activation form one ordered gate.
+    proposal_write_gate: Mutex<()>,
     facts: Mutex<InstanceFactStore>,
     ledger: GlobalLedger,
     artifacts: ArtifactStore,
@@ -1565,6 +1582,14 @@ impl HostShared {
         &self,
         sources: &CatalogSources,
     ) -> RuntimeHostResult<CatalogGeneration> {
+        self.activate_policy_catalog_with_authorization(sources, None)
+    }
+
+    fn activate_policy_catalog_with_authorization(
+        &self,
+        sources: &CatalogSources,
+        promotion: Option<CatalogPromotionAuthorization>,
+    ) -> RuntimeHostResult<CatalogGeneration> {
         let (catalog, previous) = {
             let policy = lock(&self.policy, "stage_policy_catalog")?;
             let catalog = policy.stage(sources)?;
@@ -1592,6 +1617,7 @@ impl HostShared {
             previous,
             EventAction::CatalogActivate,
             CatalogTransitionTarget::Activated,
+            promotion,
         )
     }
 
@@ -1625,6 +1651,7 @@ impl HostShared {
             Some(previous),
             EventAction::CatalogRollback,
             CatalogTransitionTarget::RolledBack,
+            None,
         )
     }
 
@@ -1634,6 +1661,7 @@ impl HostShared {
         previous: Option<CatalogGeneration>,
         action: EventAction,
         target: CatalogTransitionTarget,
+        promotion: Option<CatalogPromotionAuthorization>,
     ) -> RuntimeHostResult<CatalogGeneration> {
         let generation = catalog.generation().clone();
         let expected_active_hash = previous
@@ -1646,6 +1674,7 @@ impl HostShared {
             previous_catalog_hash: previous
                 .as_ref()
                 .map(|value| value.catalog_hash().to_owned()),
+            promotion,
         };
         let links = self.events.system_links()?;
         let intent = self.events.draft(
@@ -2412,6 +2441,8 @@ impl HostShared {
             RuntimeOperation::RecordAgentResponse { response } => {
                 self.record_agent_response(request, validated, response)
             }
+            RuntimeOperation::CompileProposal { proposal } => self.compile_proposal(proposal),
+            RuntimeOperation::PromoteProposal { proposal } => self.promote_proposal(proposal),
         }
     }
 
@@ -3370,6 +3401,204 @@ impl HostShared {
         lock(&self.agent_dispatcher, "project_agent_session")?
             .context(&self.ledger, status)
             .map_err(agent_request_failure)
+    }
+
+    fn compile_proposal(
+        &self,
+        proposal: &CatalogProposal,
+    ) -> Result<OperationSuccess, RequestFailure> {
+        self.verify_proposal_reports(proposal)?;
+        let prepared = {
+            let policy = lock(&self.policy, "compile_proposal")?;
+            let generation = policy.active_generation().ok_or_else(|| {
+                proposal_request_failure(RuntimeHostError::request(
+                    "proposal_base_catalog_unavailable",
+                    "compile_proposal",
+                    RuntimeErrorCode::InvalidRequest,
+                ))
+            })?;
+            let sources = policy.active_sources().ok_or_else(|| {
+                RequestFailure::poison_without_terminal(RuntimeHostError::fatal(
+                    "proposal_base_sources_unavailable",
+                    "compile_proposal",
+                    RuntimeErrorCode::RuntimeFatal,
+                ))
+            })?;
+            prepare_proposal(&generation, &sources, proposal).map_err(proposal_request_failure)?
+        };
+        Ok(OperationSuccess {
+            state: RuntimeReceiptState::Completed,
+            terminal: None,
+            result: RuntimeResult::ProposalEvaluated {
+                preview: prepared.preview().clone(),
+            },
+        })
+    }
+
+    fn promote_proposal(
+        &self,
+        proposal: &CatalogProposal,
+    ) -> Result<OperationSuccess, RequestFailure> {
+        let _gate = lock(&self.proposal_write_gate, "promote_proposal")
+            .map_err(RequestFailure::poison_without_terminal)?;
+        self.verify_proposal_reports(proposal)?;
+        let (prepared, current) = {
+            let policy = lock(&self.policy, "prepare_proposal_promotion")?;
+            let base = policy
+                .load_generation(proposal.base_catalog_hash())
+                .map_err(proposal_request_failure)?;
+            let prepared = prepare_proposal(base.generation(), base.sources(), proposal)
+                .map_err(proposal_request_failure)?;
+            (prepared, policy.active_generation())
+        };
+        let (preview, sources) = prepared.into_ready().map_err(proposal_request_failure)?;
+        let target_hash = preview.target_catalog_hash().ok_or_else(|| {
+            RequestFailure::poison_without_terminal(RuntimeHostError::fatal(
+                "proposal_target_hash_missing",
+                "promote_proposal",
+                RuntimeErrorCode::RuntimeFatal,
+            ))
+        })?;
+        let current = current.ok_or_else(|| {
+            proposal_request_failure(RuntimeHostError::request(
+                "proposal_active_catalog_unavailable",
+                "promote_proposal",
+                RuntimeErrorCode::InvalidRequest,
+            ))
+        })?;
+        if current.catalog_hash() != proposal.base_catalog_hash()
+            && current.catalog_hash() != target_hash
+        {
+            return Err(proposal_request_failure(RuntimeHostError::request(
+                "proposal_active_catalog_changed",
+                "promote_proposal",
+                RuntimeErrorCode::InvalidRequest,
+            )));
+        }
+        let approvals = ApprovalProjection::recover(&self.ledger)
+            .map_err(RequestFailure::poison_without_terminal)?;
+        let mut approval_fact_ids = approvals.active_for_plan(
+            preview.proposal_id(),
+            target_hash,
+            preview.target_catalog_version(),
+        );
+        if approval_fact_ids.is_empty() {
+            return Err(proposal_request_failure(RuntimeHostError::request(
+                "proposal_approval_missing",
+                "promote_proposal",
+                RuntimeErrorCode::InvalidRequest,
+            )));
+        }
+        if preview.class() == ProposalClass::A {
+            let template_approvals = approvals.active_for_catalog(
+                proposal.base_catalog_hash(),
+                proposal.base_catalog_version(),
+            );
+            if template_approvals.is_empty() {
+                return Err(proposal_request_failure(RuntimeHostError::request(
+                    "proposal_template_approval_missing",
+                    "promote_proposal",
+                    RuntimeErrorCode::InvalidRequest,
+                )));
+            }
+            approval_fact_ids.extend(template_approvals);
+        }
+        let promotion =
+            ProposalPromotion::new(preview.clone(), approval_fact_ids.into_iter().collect())
+                .map_err(|_| {
+                    RequestFailure::poison_without_terminal(RuntimeHostError::fatal(
+                        "proposal_promotion_invalid",
+                        "promote_proposal",
+                        RuntimeErrorCode::RuntimeFatal,
+                    ))
+                })?;
+        let authorization =
+            CatalogPromotionAuthorization::new(proposal, &promotion).map_err(|_| {
+                RequestFailure::poison_without_terminal(RuntimeHostError::fatal(
+                    "proposal_authorization_invalid",
+                    "promote_proposal",
+                    RuntimeErrorCode::RuntimeFatal,
+                ))
+            })?;
+        if current.catalog_hash() != target_hash {
+            let generation = self
+                .activate_policy_catalog_with_authorization(&sources, Some(authorization))
+                .map_err(proposal_request_failure)?;
+            if generation.catalog_hash() != target_hash
+                || generation.catalog_version() != preview.target_catalog_version()
+            {
+                return Err(RequestFailure::poison_without_terminal(
+                    RuntimeHostError::fatal(
+                        "proposal_activation_mismatch",
+                        "promote_proposal",
+                        RuntimeErrorCode::RuntimeFatal,
+                    ),
+                ));
+            }
+        }
+        Ok(OperationSuccess {
+            state: RuntimeReceiptState::Completed,
+            terminal: None,
+            result: RuntimeResult::ProposalPromoted { promotion },
+        })
+    }
+
+    fn verify_proposal_reports(&self, proposal: &CatalogProposal) -> Result<(), RequestFailure> {
+        let verified_events = self
+            .ledger
+            .query(EventQuery {
+                event_type: Some(EventType::ArtifactVerified),
+                ..EventQuery::default()
+            })
+            .map_err(|_| {
+                RequestFailure::poison_without_terminal(ledger_error("verify_proposal_reports"))
+            })?;
+        for reference in proposal.report_refs() {
+            if !proposal_report_is_verified(&verified_events, reference) {
+                return Err(proposal_request_failure(RuntimeHostError::request(
+                    "proposal_report_unverified",
+                    "verify_proposal_reports",
+                    RuntimeErrorCode::InvalidRequest,
+                )));
+            }
+            read_projected_verified(self.artifacts.root(), reference).map_err(|_| {
+                RequestFailure::poison_without_terminal(RuntimeHostError::fatal(
+                    "proposal_report_unavailable",
+                    "verify_proposal_reports",
+                    RuntimeErrorCode::RuntimeFatal,
+                ))
+            })?;
+        }
+        Ok(())
+    }
+
+    #[cfg(test)]
+    fn store_test_report(&self, bytes: &[u8]) -> RuntimeHostResult<ProjectedArtifactReference> {
+        let context = ArtifactWriteContext::new(
+            ArtifactLinksDraft::default(),
+            self.events.system_links()?,
+            unix_ms_now()?,
+        );
+        let mut sink = RuntimeArtifactEventSink {
+            ledger: &self.ledger,
+            events: &self.events,
+        };
+        self.artifacts
+            .put(
+                ArtifactWriteRequest::new(
+                    ArtifactKind::TextReport,
+                    bytes,
+                    context,
+                    ArtifactIssuePolicy::new(
+                        ArtifactProducer::ArtifactStore,
+                        RetentionClass::Adaptive,
+                        ArtifactRedactionState::NotRequired,
+                    ),
+                ),
+                &mut sink,
+            )
+            .map(|stored| stored.reference().project(true))
+            .map_err(|_| artifact_store_error("store_test_report"))
     }
 
     fn client_fact_replay(
@@ -8900,6 +9129,26 @@ fn agent_request_failure(error: RuntimeHostError) -> RequestFailure {
     } else {
         RequestFailure::request(error, RuntimeReceiptState::Denied, None)
     }
+}
+
+fn proposal_request_failure(error: RuntimeHostError) -> RequestFailure {
+    if error.is_fatal() {
+        RequestFailure::poison_without_terminal(error)
+    } else {
+        RequestFailure::request(error, RuntimeReceiptState::Denied, None)
+    }
+}
+
+fn proposal_report_is_verified(
+    events: &[PersistedEvent],
+    reference: &ProjectedArtifactReference,
+) -> bool {
+    events.iter().any(|event| {
+        event
+            .artifacts()
+            .iter()
+            .any(|artifact| artifact.project(true) == *reference)
+    })
 }
 
 fn ledger_error(operation: &'static str) -> RuntimeHostError {

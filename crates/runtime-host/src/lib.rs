@@ -20,6 +20,7 @@ mod performance;
 mod performance_control;
 mod policy_control;
 mod policy_host;
+mod proposal;
 mod provider;
 mod time;
 

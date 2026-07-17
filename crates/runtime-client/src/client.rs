@@ -5,14 +5,14 @@ use crate::{RuntimeClientError, RuntimeClientResult};
 use actingcommand_contract::{
     ActionId, AgentSessionContext, AgentSessionId, AgentSessionResponse, AgentSessionStatus,
     AgentWakeId, ApplicationLifecycleAction, ApprovalDecisionRecord, CaptureSequenceSpec,
-    ClientActionRecord, ContainedTaskRequest, CorrelationId, EventActor, EventQuery, EventSource,
-    IdentifierIssuer, InputAction, IssuedCorrelationId, LeaseQueuePolicy, LeaseQueueStatus,
-    LeaseToken, OwnerEpoch, PackageDebugRequest, ProjectedEvent, ProjectionProfile,
-    RUNTIME_INFO_FILE, RequestId, ResourceAuthoringEvent, RuntimeControlPlaneStatus,
-    RuntimeDebugEvent, RuntimeEventBatch, RuntimeEvidenceExportRequest, RuntimeInfo,
-    RuntimeMonitorInstanceStatus, RuntimeMonitorPolicy, RuntimeMonitorRegistryStatus,
-    RuntimeOperation, RuntimeReceipt, RuntimeRequest, RuntimeResult, RuntimeSubscriptionRequest,
-    TerminalEvent,
+    CatalogProposal, ClientActionRecord, ContainedTaskRequest, CorrelationId, EventActor,
+    EventQuery, EventSource, IdentifierIssuer, InputAction, IssuedCorrelationId, LeaseQueuePolicy,
+    LeaseQueueStatus, LeaseToken, OwnerEpoch, PackageDebugRequest, ProjectedEvent,
+    ProjectionProfile, ProposalPreview, ProposalPromotion, RUNTIME_INFO_FILE, RequestId,
+    ResourceAuthoringEvent, RuntimeControlPlaneStatus, RuntimeDebugEvent, RuntimeEventBatch,
+    RuntimeEvidenceExportRequest, RuntimeInfo, RuntimeMonitorInstanceStatus, RuntimeMonitorPolicy,
+    RuntimeMonitorRegistryStatus, RuntimeOperation, RuntimeReceipt, RuntimeRequest, RuntimeResult,
+    RuntimeSubscriptionRequest, TerminalEvent,
 };
 use serde::Serialize;
 use std::fmt;
@@ -621,6 +621,42 @@ impl RuntimeClient {
         )? {
             RuntimeResult::AgentResponseRecorded { status } => Ok(status),
             _ => Err(self.unexpected_result("record_agent_response")),
+        }
+    }
+
+    pub fn compile_proposal(
+        &self,
+        proposal: CatalogProposal,
+    ) -> RuntimeClientResult<ProposalPreview> {
+        proposal
+            .validate()
+            .map_err(|_| RuntimeClientError::fatal("proposal_invalid", "compile_proposal"))?;
+        match self.execute(
+            "compile_proposal",
+            RuntimeOperation::CompileProposal {
+                proposal: Box::new(proposal),
+            },
+        )? {
+            RuntimeResult::ProposalEvaluated { preview } => Ok(preview),
+            _ => Err(self.unexpected_result("compile_proposal")),
+        }
+    }
+
+    pub fn promote_proposal(
+        &self,
+        proposal: CatalogProposal,
+    ) -> RuntimeClientResult<ProposalPromotion> {
+        proposal
+            .validate()
+            .map_err(|_| RuntimeClientError::fatal("proposal_invalid", "promote_proposal"))?;
+        match self.execute(
+            "promote_proposal",
+            RuntimeOperation::PromoteProposal {
+                proposal: Box::new(proposal),
+            },
+        )? {
+            RuntimeResult::ProposalPromoted { promotion } => Ok(promotion),
+            _ => Err(self.unexpected_result("promote_proposal")),
         }
     }
 

@@ -183,11 +183,16 @@ pub(crate) enum PolicyExecutionPreparation {
 pub(crate) struct LoadedCatalog {
     generation: CatalogGeneration,
     compiled: CompiledCatalog,
+    sources: CatalogSources,
 }
 
 impl LoadedCatalog {
     pub(crate) fn generation(&self) -> &CatalogGeneration {
         &self.generation
+    }
+
+    pub(crate) fn sources(&self) -> &CatalogSources {
+        &self.sources
     }
 }
 
@@ -359,6 +364,10 @@ impl PolicyHost {
         self.active
             .as_ref()
             .map(|catalog| catalog.generation.clone())
+    }
+
+    pub(crate) fn active_sources(&self) -> Option<CatalogSources> {
+        self.active.as_ref().map(|catalog| catalog.sources.clone())
     }
 
     pub(crate) fn switch_active(
@@ -1219,6 +1228,7 @@ impl CatalogStore {
         Ok(LoadedCatalog {
             generation,
             compiled,
+            sources,
         })
     }
 
