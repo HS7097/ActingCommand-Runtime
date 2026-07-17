@@ -968,6 +968,26 @@ impl PolicyHost {
             })
     }
 
+    pub(crate) fn recovered_dispatch_clocks(&self) -> RuntimeHostResult<BTreeMap<String, u64>> {
+        self.seen_dispatches
+            .iter()
+            .filter(|(_, dispatch)| dispatch.lifecycle == DispatchLifecycle::Admitted)
+            .map(|(decision_id, dispatch)| {
+                let admitted_at_unix_ms = dispatch
+                    .admission
+                    .as_ref()
+                    .map(|admission| admission.activity.admitted_at_unix_ms)
+                    .ok_or_else(|| {
+                        fatal(
+                            "policy_dispatch_admission_missing",
+                            "recover_policy_dispatch_clocks",
+                        )
+                    })?;
+                Ok((decision_id.clone(), admitted_at_unix_ms))
+            })
+            .collect()
+    }
+
     pub(crate) fn replay_execution(
         &self,
         decision_id: &str,
