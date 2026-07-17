@@ -23,6 +23,11 @@ use std::time::Duration;
 const MODULE: &str = "onnxruntime-json-provider";
 static ORT_RUNTIME: OrtRuntimeInitializer = OrtRuntimeInitializer::new();
 
+#[cfg(test)]
+std::thread_local! {
+    static PANIC_ON_NEXT_CLASSIFY: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
 /// Classifies a frame through an ONNXRuntime model using the ActingCommand JSON ABI.
 ///
 /// # Safety
@@ -37,7 +42,20 @@ pub unsafe extern "C" fn ac_onnxruntime_classify_json(
     request_len: usize,
     response_out: *mut VisionFfiOwnedBuffer,
 ) -> i32 {
-    invoke_provider(response_out, || classify_json(request_ptr, request_len))
+    invoke_provider(response_out, || {
+        #[cfg(test)]
+        panic_on_next_classify_for_test();
+        classify_json(request_ptr, request_len)
+    })
+}
+
+#[cfg(test)]
+fn panic_on_next_classify_for_test() {
+    PANIC_ON_NEXT_CLASSIFY.with(|flag| {
+        if flag.replace(false) {
+            panic!("injected provider panic");
+        }
+    });
 }
 
 fn invoke_provider<F>(response_out: *mut VisionFfiOwnedBuffer, invoke: F) -> i32
@@ -61,7 +79,7 @@ where
 /// is undefined behavior.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn ac_vision_free_buffer(buffer: VisionFfiOwnedBuffer) {
-    if buffer.data.is_null() || buffer.capacity == 0 {
+    if !buffer.has_releasable_metadata() {
         return;
     }
     // SAFETY: every buffer returned by this provider is allocated from a Vec
@@ -409,27 +427,65 @@ mod tests {
         };
 
         assert_eq!(status, 1);
-        assert!(response.len > 0);
-        let bytes = unsafe { slice::from_raw_parts(response.data, response.len) };
-        let text = std::str::from_utf8(bytes).expect("utf8");
+        let text = take_exported_response_text(response);
         assert!(text.contains("failed to parse ONNXRuntime JSON envelope"));
-        unsafe {
-            ac_vision_free_buffer(response);
-        }
     }
 
     #[test]
     fn exported_classify_reports_provider_panic() {
         let mut response = VisionFfiOwnedBuffer::default();
+        PANIC_ON_NEXT_CLASSIFY.with(|flag| flag.set(true));
 
-        let status = invoke_provider(&mut response, || panic!("injected provider panic"));
+        let status = unsafe {
+            ac_onnxruntime_classify_json(
+                std::ptr::null(),
+                0,
+                &mut response as *mut VisionFfiOwnedBuffer,
+            )
+        };
 
         assert_eq!(status, 2);
-        let bytes = unsafe { slice::from_raw_parts(response.data, response.len) };
-        let text = std::str::from_utf8(bytes).expect("utf8");
+        let text = take_exported_response_text(response);
         assert!(text.contains("panicked"));
+    }
+
+    #[test]
+    fn exported_free_buffer_ignores_malformed_metadata() {
+        let null_with_length = VisionFfiOwnedBuffer {
+            data: std::ptr::null_mut(),
+            len: 1,
+            capacity: 1,
+        };
+        let capacity_smaller_than_length = VisionFfiOwnedBuffer {
+            data: std::ptr::NonNull::<u8>::dangling().as_ptr(),
+            len: 2,
+            capacity: 1,
+        };
+        let oversized = VisionFfiOwnedBuffer {
+            data: std::ptr::NonNull::<u8>::dangling().as_ptr(),
+            len: 1,
+            capacity: usize::MAX,
+        };
+
+        assert!(!null_with_length.has_releasable_metadata());
+        assert!(!capacity_smaller_than_length.has_releasable_metadata());
+        assert!(!oversized.has_releasable_metadata());
+        unsafe {
+            ac_vision_free_buffer(null_with_length);
+            ac_vision_free_buffer(capacity_smaller_than_length);
+            ac_vision_free_buffer(oversized);
+        }
+    }
+
+    fn take_exported_response_text(response: VisionFfiOwnedBuffer) -> String {
+        assert!(response.len > 0);
+        assert!(response.has_releasable_metadata());
+        // SAFETY: the exported provider returned metadata validated above, and
+        // the bytes are copied before the paired provider deallocator runs.
+        let bytes = unsafe { slice::from_raw_parts(response.data, response.len) }.to_vec();
         unsafe {
             ac_vision_free_buffer(response);
         }
+        String::from_utf8(bytes).expect("utf8")
     }
 }

@@ -32,6 +32,20 @@ pub struct VisionFfiOwnedBuffer {
     pub capacity: usize,
 }
 
+impl VisionFfiOwnedBuffer {
+    /// Reports whether this metadata can be passed to the paired provider deallocator.
+    ///
+    /// This validates ownership metadata only. Pointer provenance remains an ABI
+    /// invariant between the caller and the provider that allocated the buffer.
+    pub fn has_releasable_metadata(&self) -> bool {
+        !self.data.is_null()
+            && self.capacity > 0
+            && self.len <= self.capacity
+            && self.len <= MAX_FFI_RESPONSE_BYTES
+            && self.capacity <= MAX_FFI_RESPONSE_BYTES
+    }
+}
+
 impl Default for VisionFfiOwnedBuffer {
     fn default() -> Self {
         Self {
@@ -334,47 +348,46 @@ fn take_owned_buffer(
     buffer: VisionFfiOwnedBuffer,
     free_buffer: VisionFfiFreeBuffer,
 ) -> VisionFfiResult<Vec<u8>> {
-    if buffer.len == 0 {
-        if !buffer.data.is_null() {
-            // SAFETY: non-null zero-length buffers are still owned by the FFI
-            // provider and must be released through its paired free function.
-            unsafe {
-                free_buffer(buffer);
-            }
-        }
+    if buffer.len == 0 && buffer.capacity == 0 {
         return Ok(Vec::new());
     }
     if buffer.data.is_null() {
-        return Err(VisionFfiError::fatal(
+        return Err(invalid_owned_buffer(
             module,
-            "FFI backend returned a null data pointer with non-zero length",
+            "null data pointer with owned buffer metadata",
+            buffer,
         ));
     }
     if buffer.capacity < buffer.len {
-        // SAFETY: the provider still owns this malformed buffer; release it
-        // before reporting the ABI violation so leaks do not hide the failure.
-        unsafe {
-            free_buffer(buffer);
-        }
-        return Err(VisionFfiError::fatal(
+        return Err(invalid_owned_buffer(
             module,
-            "FFI backend returned a buffer capacity smaller than its length",
+            "buffer capacity smaller than its length",
+            buffer,
         ));
     }
-    if buffer.len > MAX_FFI_RESPONSE_BYTES {
-        // SAFETY: this sane maximum is accident hardening for malformed
-        // provider lengths. A malicious provider is still inside the FFI trust
-        // boundary once its dynamic library is loaded.
+    if buffer.capacity == 0 {
+        return Err(invalid_owned_buffer(
+            module,
+            "non-null data pointer with zero capacity",
+            buffer,
+        ));
+    }
+    if buffer.len > MAX_FFI_RESPONSE_BYTES || buffer.capacity > MAX_FFI_RESPONSE_BYTES {
+        return Err(invalid_owned_buffer(
+            module,
+            "oversized response buffer metadata",
+            buffer,
+        ));
+    }
+
+    debug_assert!(buffer.has_releasable_metadata());
+    if buffer.len == 0 {
+        // SAFETY: all ownership metadata was validated before the provider
+        // deallocator receives it.
         unsafe {
             free_buffer(buffer);
         }
-        return Err(VisionFfiError::fatal(
-            module,
-            format!(
-                "FFI backend returned an oversized response buffer: {} bytes exceeds {}",
-                buffer.len, MAX_FFI_RESPONSE_BYTES
-            ),
-        ));
+        return Ok(Vec::new());
     }
 
     // SAFETY: the FFI provider returned a non-null pointer and length; this
@@ -388,50 +401,119 @@ fn take_owned_buffer(
     Ok(bytes)
 }
 
+fn invalid_owned_buffer(
+    module: &'static str,
+    reason: &str,
+    buffer: VisionFfiOwnedBuffer,
+) -> VisionFfiError {
+    VisionFfiError::fatal(
+        module,
+        format!(
+            "FFI backend returned invalid owned buffer metadata: reason={reason}; data_is_null={}; len={}; capacity={}; limit={MAX_FFI_RESPONSE_BYTES}; action=not_read_not_released",
+            buffer.data.is_null(),
+            buffer.len,
+            buffer.capacity
+        ),
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::{
+        Mutex,
+        atomic::{AtomicUsize, Ordering},
+    };
+
+    static FREE_CALLS: AtomicUsize = AtomicUsize::new(0);
+    static FREE_CALLS_LOCK: Mutex<()> = Mutex::new(());
 
     #[test]
     fn take_owned_buffer_rejects_oversized_response_before_copy() {
+        let _guard = FREE_CALLS_LOCK.lock().expect("free call lock");
         let buffer = VisionFfiOwnedBuffer {
             data: std::ptr::NonNull::<u8>::dangling().as_ptr(),
             len: MAX_FFI_RESPONSE_BYTES + 1,
             capacity: MAX_FFI_RESPONSE_BYTES + 1,
         };
 
-        let err = take_owned_buffer("test", buffer, fake_free_buffer)
+        FREE_CALLS.store(0, Ordering::SeqCst);
+        let err = take_owned_buffer("test", buffer, counting_noop_free_buffer)
             .expect_err("oversized buffer must be rejected");
 
         assert!(err.message().contains("oversized response buffer"));
+        assert!(err.message().contains("action=not_read_not_released"));
+        assert_eq!(FREE_CALLS.load(Ordering::SeqCst), 0);
     }
 
     #[test]
     fn take_owned_buffer_rejects_null_data_with_nonzero_length() {
+        let _guard = FREE_CALLS_LOCK.lock().expect("free call lock");
         let buffer = VisionFfiOwnedBuffer {
             data: std::ptr::null_mut(),
             len: 1,
             capacity: 1,
         };
 
-        let err = take_owned_buffer("test", buffer, fake_free_buffer)
+        FREE_CALLS.store(0, Ordering::SeqCst);
+        let err = take_owned_buffer("test", buffer, counting_noop_free_buffer)
             .expect_err("null data with non-zero length must be rejected");
 
         assert!(err.message().contains("null data pointer"));
+        assert_eq!(FREE_CALLS.load(Ordering::SeqCst), 0);
     }
 
     #[test]
     fn take_owned_buffer_rejects_capacity_smaller_than_length() {
+        let _guard = FREE_CALLS_LOCK.lock().expect("free call lock");
         let buffer = VisionFfiOwnedBuffer {
             data: std::ptr::NonNull::<u8>::dangling().as_ptr(),
             len: 2,
             capacity: 1,
         };
 
-        let err = take_owned_buffer("test", buffer, fake_free_buffer)
+        FREE_CALLS.store(0, Ordering::SeqCst);
+        let err = take_owned_buffer("test", buffer, counting_noop_free_buffer)
             .expect_err("capacity smaller than length must be rejected");
 
         assert!(err.message().contains("capacity smaller than its length"));
+        assert_eq!(FREE_CALLS.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn take_owned_buffer_rejects_oversized_capacity_without_deallocation() {
+        let _guard = FREE_CALLS_LOCK.lock().expect("free call lock");
+        let buffer = VisionFfiOwnedBuffer {
+            data: std::ptr::NonNull::<u8>::dangling().as_ptr(),
+            len: 1,
+            capacity: MAX_FFI_RESPONSE_BYTES + 1,
+        };
+
+        FREE_CALLS.store(0, Ordering::SeqCst);
+        let err = take_owned_buffer("test", buffer, counting_noop_free_buffer)
+            .expect_err("oversized capacity must be rejected");
+
+        assert!(err.message().contains("oversized response buffer"));
+        assert_eq!(FREE_CALLS.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn take_owned_buffer_releases_valid_buffer_once() {
+        let _guard = FREE_CALLS_LOCK.lock().expect("free call lock");
+        let mut bytes = b"valid".to_vec();
+        let buffer = VisionFfiOwnedBuffer {
+            data: bytes.as_mut_ptr(),
+            len: bytes.len(),
+            capacity: bytes.capacity(),
+        };
+        std::mem::forget(bytes);
+
+        FREE_CALLS.store(0, Ordering::SeqCst);
+        let copied =
+            take_owned_buffer("test", buffer, counting_free_buffer).expect("valid buffer accepted");
+
+        assert_eq!(copied, b"valid");
+        assert_eq!(FREE_CALLS.load(Ordering::SeqCst), 1);
     }
 
     #[test]
@@ -451,5 +533,20 @@ mod tests {
         let _ = std::fs::remove_file(path);
     }
 
-    unsafe extern "C" fn fake_free_buffer(_buffer: VisionFfiOwnedBuffer) {}
+    unsafe extern "C" fn counting_noop_free_buffer(_buffer: VisionFfiOwnedBuffer) {
+        FREE_CALLS.fetch_add(1, Ordering::SeqCst);
+    }
+
+    unsafe extern "C" fn counting_free_buffer(buffer: VisionFfiOwnedBuffer) {
+        FREE_CALLS.fetch_add(1, Ordering::SeqCst);
+        // SAFETY: this test function receives the exact metadata from the Vec
+        // intentionally transferred by take_owned_buffer_releases_valid_buffer_once.
+        unsafe {
+            drop(Vec::from_raw_parts(
+                buffer.data,
+                buffer.len,
+                buffer.capacity,
+            ));
+        }
+    }
 }
