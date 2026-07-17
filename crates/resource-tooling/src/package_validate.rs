@@ -243,6 +243,21 @@ mod tests {
         assert!(!error.message.contains(".."));
     }
 
+    #[test]
+    fn package_validate_rejects_custom_lab_resource_root() {
+        let error = validate_fixture(&[
+            (
+                "control.json",
+                br#"{"game":"neutral","server":"test","entry_task_id":"task","resource_root":"alternate"}"#,
+            ),
+            ("alternate/manifest.json", br#"{"entry_task_id":"task"}"#),
+            ("alternate/operations/task/task.json", br#"{}"#),
+        ]);
+
+        assert!(error.message.contains("resource_root"));
+        assert!(error.message.contains("exactly 'resources'"));
+    }
+
     fn validate_fixture(files: &[(&str, &[u8])]) -> LabError {
         let temp = TempDir::new().unwrap();
         let zip = temp.path().join("bundle.zip");

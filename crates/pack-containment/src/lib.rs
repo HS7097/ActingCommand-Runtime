@@ -27,6 +27,7 @@ pub const DEFAULT_MAX_RESIDENT_BYTES_PER_INSTANCE: u64 = 1024 * 1024 * 1024;
 const DANGEROUS_EXTENSIONS: &[&str] = &[
     "py", "exe", "bat", "cmd", "ps1", "sh", "js", "vbs", "msi", "dll", "scr", "com", "jar",
 ];
+const LAB_RESOURCE_ROOT: &str = "resources";
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct InstanceId(String);
@@ -463,15 +464,27 @@ impl MemoryPackage {
             if has_dangerous_extension(&path) {
                 return Err(ContainmentError::ForbiddenEntry { path });
             }
-            if entry.size() > limits.max_entry_bytes {
+            let read_limit = limits
+                .max_entry_bytes
+                .min(
+                    limits
+                        .max_total_decompressed_bytes
+                        .saturating_sub(resident_bytes),
+                )
+                .min(
+                    limits
+                        .max_resident_bytes_per_instance
+                        .saturating_sub(resident_bytes),
+                );
+            if entry.size() > read_limit {
                 return Err(ContainmentError::DecompressTooLarge {
                     instance: instance.clone(),
                     path,
                     size: entry.size(),
-                    limit: limits.max_entry_bytes,
+                    limit: read_limit,
                 });
             }
-            let bytes = read_entry_limited(&mut entry, &path, limits.max_entry_bytes)?;
+            let bytes = read_entry_limited(&mut entry, instance, &path, read_limit)?;
             resident_bytes = resident_bytes.checked_add(bytes.len() as u64).ok_or(
                 ContainmentError::DecompressTooLarge {
                     instance: instance.clone(),
@@ -530,12 +543,15 @@ impl PackageMetadata {
     fn from_lab_entries(entries: &BTreeMap<String, Vec<u8>>) -> ContainmentResult<Self> {
         let control: LabControl = read_json_entry(entries, "control.json")?;
         let control_value = read_json_value_entry(entries, "control.json")?;
-        let resource_root = control
-            .resource_root
-            .unwrap_or_else(|| "resources".to_string());
-        if resource_root != "resources" {
-            validate_relative_ref(&resource_root)?;
-        }
+        let resource_root = match control.resource_root {
+            None => LAB_RESOURCE_ROOT.to_string(),
+            Some(resource_root) if resource_root == LAB_RESOURCE_ROOT => resource_root,
+            Some(resource_root) => {
+                return Err(ContainmentError::UnsupportedResourceRoot {
+                    value: resource_root,
+                });
+            }
+        };
         let manifest_path = prefixed_path(&resource_root, "manifest.json");
         let manifest = read_json_value_entry(entries, &manifest_path)?;
         if let Some(manifest_task_id) = manifest.get("entry_task_id").and_then(Value::as_str)
@@ -647,11 +663,9 @@ impl AssetResolver for MemoryAssetResolver {
         validate_relative_ref(path).map_err(|err| {
             actingcommand_recognition_pack::RecognitionPackError::fatal(err.to_string())
         })?;
-        let candidates = [path.to_string(), prefixed_path(&self.resource_root, path)];
-        for candidate in candidates {
-            if let Some(bytes) = self.entries.get(&candidate) {
-                return Ok(bytes.clone());
-            }
+        let resolved = prefixed_path(&self.resource_root, path);
+        if let Some(bytes) = self.entries.get(&resolved) {
+            return Ok(bytes.clone());
         }
         Err(actingcommand_recognition_pack::RecognitionPackError::fatal(
             format!("memory asset '{path}' does not exist"),
@@ -660,10 +674,9 @@ impl AssetResolver for MemoryAssetResolver {
 
     fn contains_asset(&self, path: &str) -> bool {
         validate_relative_ref(path).is_ok()
-            && (self.entries.contains_key(path)
-                || self
-                    .entries
-                    .contains_key(&prefixed_path(&self.resource_root, path)))
+            && self
+                .entries
+                .contains_key(&prefixed_path(&self.resource_root, path))
     }
 }
 
@@ -720,6 +733,9 @@ pub enum ContainmentError {
         actual: Sha256Hash,
     },
     UnsafeManifestHashPath,
+    UnsupportedResourceRoot {
+        value: String,
+    },
     ManifestTaskConflict {
         manifest_path: String,
         manifest_task_id: String,
@@ -812,6 +828,10 @@ impl fmt::Display for ContainmentError {
             Self::UnsafeManifestHashPath => {
                 f.write_str("fatal containment error: manifest hash path is unsafe")
             }
+            Self::UnsupportedResourceRoot { value } => write!(
+                f,
+                "fatal containment error: Lab control resource_root must be omitted or exactly '{LAB_RESOURCE_ROOT}', got '{value}'"
+            ),
             Self::ManifestTaskConflict {
                 manifest_path,
                 manifest_task_id,
@@ -965,11 +985,7 @@ fn validate_manifest_hash_entry(
     expected: &str,
 ) -> ContainmentResult<()> {
     validate_manifest_hash_path(path)?;
-    let resolved = if entries.contains_key(path) {
-        path.to_string()
-    } else {
-        prefixed_path(resource_root, path)
-    };
+    let resolved = prefixed_path(resource_root, path);
     let bytes = entries
         .get(&resolved)
         .ok_or_else(|| ContainmentError::MissingEntry {
@@ -1084,6 +1100,7 @@ fn decode_utf8_entry<'a>(
 
 fn read_entry_limited<R: Read>(
     reader: &mut R,
+    instance: &InstanceId,
     path: &str,
     limit: u64,
 ) -> ContainmentResult<Vec<u8>> {
@@ -1092,11 +1109,11 @@ fn read_entry_limited<R: Read>(
     limited
         .read_to_end(&mut bytes)
         .map_err(|err| ContainmentError::MalformedZip {
-            message: format!("failed to read zip entry {path}: {err}"),
+            message: format!("failed to read zip entry {path} for instance {instance}: {err}"),
         })?;
     if bytes.len() as u64 > limit {
         return Err(ContainmentError::DecompressTooLarge {
-            instance: InstanceId("<unknown>".to_string()),
+            instance: instance.clone(),
             path: path.to_string(),
             size: bytes.len() as u64,
             limit,
@@ -1163,7 +1180,7 @@ fn constant_time_hash_eq(actual: &Sha256Hash, expected: &Sha256Hash) -> bool {
 mod tests {
     use super::*;
     use actingcommand_recognition::{Scene, ScenePixelFormat};
-    use std::io::Write;
+    use std::io::{self, Write};
     use zip::write::FileOptions;
 
     #[test]
@@ -1245,6 +1262,79 @@ mod tests {
     }
 
     #[test]
+    fn entry_read_limit_uses_remaining_total_and_resident_budgets() {
+        let zip = zip_with_entries(&[
+            ("module/a.bin", b"1234".as_slice()),
+            ("module/b.bin", b"567".as_slice()),
+        ]);
+        let expected = Sha256Hash::digest(&zip);
+        let instance = InstanceId::new("budget-instance").expect("instance");
+
+        for (total_limit, resident_limit) in [(5, 10), (10, 5)] {
+            let mut containment = Containment::with_limits(ContainmentLimits {
+                max_total_decompressed_bytes: total_limit,
+                max_entry_bytes: 10,
+                max_resident_bytes_per_instance: resident_limit,
+                ..ContainmentLimits::default()
+            });
+            let err = containment
+                .load(&instance, &zip, &expected)
+                .expect_err("second entry must exceed the remaining budget");
+
+            assert_eq!(
+                err,
+                ContainmentError::DecompressTooLarge {
+                    instance: instance.clone(),
+                    path: "module/b.bin".to_string(),
+                    size: 3,
+                    limit: 1,
+                }
+            );
+        }
+    }
+
+    #[test]
+    fn entry_read_failure_reports_real_instance_and_path() {
+        struct FailingReader;
+        impl Read for FailingReader {
+            fn read(&mut self, _buffer: &mut [u8]) -> io::Result<usize> {
+                Err(io::Error::other("fixture read failure"))
+            }
+        }
+
+        let instance = InstanceId::new("reader-instance").expect("instance");
+        let err = read_entry_limited(&mut FailingReader, &instance, "module/failing.bin", 16)
+            .expect_err("read failure must propagate");
+        let message = err.to_string();
+
+        assert!(message.contains("reader-instance"));
+        assert!(message.contains("module/failing.bin"));
+        assert!(!message.contains("<unknown>"));
+    }
+
+    #[test]
+    fn entry_overflow_reports_real_instance_and_path() {
+        let instance = InstanceId::new("overflow-instance").expect("instance");
+        let err = read_entry_limited(
+            &mut Cursor::new(b"too-large"),
+            &instance,
+            "module/large.bin",
+            1,
+        )
+        .expect_err("bounded reader must reject limit plus one byte");
+
+        assert_eq!(
+            err,
+            ContainmentError::DecompressTooLarge {
+                instance,
+                path: "module/large.bin".to_string(),
+                size: 2,
+                limit: 1,
+            }
+        );
+    }
+
+    #[test]
     fn rejects_zip_slip_path() {
         let zip = zip_with_entries(&[
             ("module/manifest.json", br#"{}"#.as_slice()),
@@ -1306,33 +1396,177 @@ mod tests {
         assert!(matches!(err, ContainmentError::ManifestHashMismatch { .. }));
     }
 
+    #[test]
+    fn manifest_hash_cannot_be_satisfied_by_bare_path_shadow() {
+        let mut entries = lab_package_entries("task_a", [255, 0, 0]);
+        let resource_path = "resources/operations/task_a/task.json";
+        let official = entries
+            .get(resource_path)
+            .expect("official operation")
+            .clone();
+        let shadow = br#"{"shadow":true}"#.to_vec();
+        let shadow_hash = Sha256Hash::digest(&shadow);
+        entries.insert("operations/task_a/task.json".to_string(), shadow);
+        entries.insert(
+            "resources/manifest.json".to_string(),
+            format!(
+                r#"{{"entry_task_id":"task_a","files":[{{"path":"operations/task_a/task.json","sha256":"sha256:{shadow_hash}"}}]}}"#
+            )
+            .into_bytes(),
+        );
+        let zip = zip_from_map(entries);
+        let expected = Sha256Hash::digest(&zip);
+        let instance = InstanceId::new("shadow-instance").expect("instance");
+        let mut containment = Containment::new();
+
+        let err = containment
+            .load(&instance, &zip, &expected)
+            .expect_err("bare path must not satisfy a resource-root hash");
+
+        assert_eq!(
+            err,
+            ContainmentError::ManifestHashMismatch {
+                path: resource_path.to_string(),
+                expected: shadow_hash,
+                actual: Sha256Hash::digest(&official),
+            }
+        );
+    }
+
+    #[test]
+    fn memory_asset_resolver_never_reads_bare_path_shadow() {
+        let entries = Arc::new(BTreeMap::from([
+            ("templates/target.bin".to_string(), b"shadow".to_vec()),
+            (
+                "resources/templates/target.bin".to_string(),
+                b"official".to_vec(),
+            ),
+        ]));
+        let resolver = MemoryAssetResolver {
+            entries,
+            resource_root: LAB_RESOURCE_ROOT.to_string(),
+        };
+
+        assert_eq!(
+            resolver.read_asset("templates/target.bin").expect("asset"),
+            b"official"
+        );
+        assert!(resolver.contains_asset("templates/target.bin"));
+
+        let bare_only = MemoryAssetResolver {
+            entries: Arc::new(BTreeMap::from([(
+                "templates/target.bin".to_string(),
+                b"shadow".to_vec(),
+            )])),
+            resource_root: LAB_RESOURCE_ROOT.to_string(),
+        };
+        assert!(!bare_only.contains_asset("templates/target.bin"));
+        assert!(bare_only.read_asset("templates/target.bin").is_err());
+    }
+
+    #[test]
+    fn lab_resource_root_allows_only_omitted_or_exact_resources() {
+        for value in [
+            "alternate",
+            "./resources",
+            "resources/",
+            "Resources",
+            "../resources",
+            "",
+        ] {
+            let mut entries = lab_package_entries("task_a", [255, 0, 0]);
+            entries.insert(
+                "control.json".to_string(),
+                format!(
+                    r#"{{"game":"neutral","server":"test","entry_task_id":"task_a","resource_root":"{value}"}}"#
+                )
+                .into_bytes(),
+            );
+            let zip = zip_from_map(entries);
+            let expected = Sha256Hash::digest(&zip);
+            let instance = InstanceId::new("root-instance").expect("instance");
+            let mut containment = Containment::new();
+
+            let err = containment
+                .load(&instance, &zip, &expected)
+                .expect_err("custom root must be rejected");
+
+            assert_eq!(
+                err,
+                ContainmentError::UnsupportedResourceRoot {
+                    value: value.to_string(),
+                }
+            );
+        }
+    }
+
+    #[test]
+    fn exact_lab_resource_root_drives_all_metadata_paths() {
+        let mut entries = lab_package_entries("task_a", [255, 0, 0]);
+        entries.insert(
+            "control.json".to_string(),
+            br#"{"game":"neutral","server":"test","entry_task_id":"task_a","resource_root":"resources"}"#.to_vec(),
+        );
+        entries.insert(
+            "resources/navigation/neutral.test.navigation.json".to_string(),
+            br#"{}"#.to_vec(),
+        );
+        let zip = zip_from_map(entries);
+        let expected = Sha256Hash::digest(&zip);
+        let instance = InstanceId::new("root-instance").expect("instance");
+        let mut containment = Containment::new();
+
+        let bundle = containment
+            .load(&instance, &zip, &expected)
+            .expect("exact resource root");
+
+        assert_eq!(bundle.resource_root(), "resources");
+        assert_eq!(bundle.manifest_path(), "resources/manifest.json");
+        assert_eq!(
+            bundle.operation_path(),
+            "resources/operations/task_a/task.json"
+        );
+        assert_eq!(
+            bundle.recognition_pack_path(),
+            Some("resources/recognition/neutral.test.pack.json")
+        );
+        assert_eq!(
+            bundle.pages_path(),
+            Some("resources/recognition/neutral.test.pages.json")
+        );
+        assert_eq!(
+            bundle.navigation_path(),
+            Some("resources/navigation/neutral.test.navigation.json")
+        );
+    }
+
     fn lab_package_zip(task_id: &str, expected: [u8; 3]) -> Vec<u8> {
         zip_from_map(lab_package_entries(task_id, expected))
     }
 
     fn lab_package_entries(task_id: &str, expected: [u8; 3]) -> BTreeMap<String, Vec<u8>> {
         let operation = format!(
-            r#"{{"schema_version":"0.5","task_id":"{task_id}","game":"azurlane","server_scope":["jp"],"coordinate_space":{{"width":1,"height":1}},"operations":[]}}"#
+            r#"{{"schema_version":"0.5","task_id":"{task_id}","game":"neutral","server_scope":["test"],"coordinate_space":{{"width":1,"height":1}},"operations":[]}}"#
         )
         .into_bytes();
         let pack = format!(
-            r#"{{"schema_version":"0.5","game":"azurlane","server":"jp","coordinate_space":{{"width":1,"height":1}},"targets":[{{"type":"color","id":"home_color","region":{{"x":0,"y":0,"width":1,"height":1}},"expected":[{},{},{}]}}]}}"#,
+            r#"{{"schema_version":"0.5","game":"neutral","server":"test","coordinate_space":{{"width":1,"height":1}},"targets":[{{"type":"color","id":"home_color","region":{{"x":0,"y":0,"width":1,"height":1}},"expected":[{},{},{}]}}]}}"#,
             expected[0], expected[1], expected[2]
         )
         .into_bytes();
-        let pages = br#"{"schema_version":"0.5","pages":[{"id":"azurlane/home","required":["home_color"]}]}"#.to_vec();
+        let pages = br#"{"schema_version":"0.5","pages":[{"id":"neutral/home","required":["home_color"]}]}"#.to_vec();
         let operation_hash = Sha256Hash::digest(&operation);
         let pack_hash = Sha256Hash::digest(&pack);
         let pages_hash = Sha256Hash::digest(&pages);
         let manifest = format!(
-            r#"{{"schema_version":"0.3","entry_task_id":"{task_id}","files":[{{"path":"operations/{task_id}/task.json","sha256":"sha256:{operation_hash}"}},{{"path":"recognition/azurlane.jp.pack.json","sha256":"sha256:{pack_hash}"}},{{"path":"recognition/azurlane.jp.pages.json","sha256":"sha256:{pages_hash}"}}]}}"#
+            r#"{{"schema_version":"0.3","entry_task_id":"{task_id}","files":[{{"path":"operations/{task_id}/task.json","sha256":"sha256:{operation_hash}"}},{{"path":"recognition/neutral.test.pack.json","sha256":"sha256:{pack_hash}"}},{{"path":"recognition/neutral.test.pages.json","sha256":"sha256:{pages_hash}"}}]}}"#
         )
         .into_bytes();
 
         BTreeMap::from([
             (
                 "control.json".to_string(),
-                format!(r#"{{"game":"azurlane","server":"jp","entry_task_id":"{task_id}"}}"#)
+                format!(r#"{{"game":"neutral","server":"test","entry_task_id":"{task_id}"}}"#)
                     .into_bytes(),
             ),
             ("resources/manifest.json".to_string(), manifest),
@@ -1341,11 +1575,11 @@ mod tests {
                 operation,
             ),
             (
-                "resources/recognition/azurlane.jp.pack.json".to_string(),
+                "resources/recognition/neutral.test.pack.json".to_string(),
                 pack,
             ),
             (
-                "resources/recognition/azurlane.jp.pages.json".to_string(),
+                "resources/recognition/neutral.test.pages.json".to_string(),
                 pages,
             ),
         ])
