@@ -23,6 +23,10 @@ pub const MAX_INSTANCE_OVERRIDES_PER_TASK: usize = 128;
 pub const MAX_BUDGET_COUNT: u32 = 1_000_000;
 pub const MAX_CLOCK_DRIFT_MS: i64 = 604_800_000;
 pub const MAX_FACT_MAX_AGE_MS: u64 = 31_536_000_000;
+pub const MIN_UTC_OFFSET_MINUTES: i16 = -840;
+pub const MAX_UTC_OFFSET_MINUTES: i16 = 840;
+pub const MIN_DST_OFFSET_MINUTES: i16 = -120;
+pub const MAX_DST_OFFSET_MINUTES: i16 = 120;
 pub const MIN_CANONICAL_INTEGER: i64 = -9_007_199_254_740_991;
 pub const MAX_CANONICAL_INTEGER: i64 = 9_007_199_254_740_991;
 
@@ -783,6 +787,25 @@ mod tests {
             assert_eq!(
                 schedule["properties"]["clock_source"]["$ref"],
                 "#/$defs/wallClockSource"
+            );
+        }
+        for variant in [1, 2] {
+            let properties = &common["$defs"]["clockSource"]["oneOf"][variant]["properties"];
+            assert_eq!(
+                properties["utc_offset_minutes"]["minimum"],
+                MIN_UTC_OFFSET_MINUTES
+            );
+            assert_eq!(
+                properties["utc_offset_minutes"]["maximum"],
+                MAX_UTC_OFFSET_MINUTES
+            );
+            assert_eq!(
+                properties["dst_offset_minutes"]["minimum"],
+                MIN_DST_OFFSET_MINUTES
+            );
+            assert_eq!(
+                properties["dst_offset_minutes"]["maximum"],
+                MAX_DST_OFFSET_MINUTES
             );
         }
     }

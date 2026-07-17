@@ -6,12 +6,13 @@ use crate::source::SourceMap;
 use crate::{
     ActivityProfile, CatalogBundle, CatalogDiagnostic, CatalogDiagnosticCode, ClockSchedule,
     ClockSource, Comparison, EffectDirection, FactValue, LoadProfile, MAX_ACTIVITY_PROFILES,
-    MAX_APPROVAL_REFS, MAX_BUDGET_COUNT, MAX_CLOCK_DRIFT_MS, MAX_EFFECTS_PER_TASK,
-    MAX_FACT_MAX_AGE_MS, MAX_GOALS_PER_PROFILE, MAX_ID_BYTES, MAX_INSTANCE_OVERRIDES_PER_TASK,
-    MAX_POOLS, MAX_PREDICATE_DEPTH, MAX_PREDICATE_NODES, MAX_REFERENCES_PER_TASK, MAX_TASKS,
-    MAX_TEXT_BYTES, MAX_TIMELINE_EVENTS, MAX_WINDOWS_PER_PROFILE, MetricRef, ObservationRef,
-    PoolSpec, PredicateSpec, ResourceEffectSpec, SCHEDULING_SCHEMA_VERSION, ScopeSelector,
-    TaskSpec,
+    MAX_APPROVAL_REFS, MAX_BUDGET_COUNT, MAX_CLOCK_DRIFT_MS, MAX_DST_OFFSET_MINUTES,
+    MAX_EFFECTS_PER_TASK, MAX_FACT_MAX_AGE_MS, MAX_GOALS_PER_PROFILE, MAX_ID_BYTES,
+    MAX_INSTANCE_OVERRIDES_PER_TASK, MAX_POOLS, MAX_PREDICATE_DEPTH, MAX_PREDICATE_NODES,
+    MAX_REFERENCES_PER_TASK, MAX_TASKS, MAX_TEXT_BYTES, MAX_TIMELINE_EVENTS,
+    MAX_UTC_OFFSET_MINUTES, MAX_WINDOWS_PER_PROFILE, MIN_DST_OFFSET_MINUTES,
+    MIN_UTC_OFFSET_MINUTES, MetricRef, ObservationRef, PoolSpec, PredicateSpec, ResourceEffectSpec,
+    SCHEDULING_SCHEMA_VERSION, ScopeSelector, TaskSpec,
 };
 
 pub(crate) struct CatalogSourceMaps<'a> {
@@ -942,10 +943,8 @@ fn validate_clock_source(
             diagnostics,
         );
     }
-    let effective_offset = i32::from(utc_offset) + i32::from(dst_offset);
-    if !(-840..=840).contains(&utc_offset)
-        || !(-120..=120).contains(&dst_offset)
-        || !(-840..=840).contains(&effective_offset)
+    if !(MIN_UTC_OFFSET_MINUTES..=MAX_UTC_OFFSET_MINUTES).contains(&utc_offset)
+        || !(MIN_DST_OFFSET_MINUTES..=MAX_DST_OFFSET_MINUTES).contains(&dst_offset)
         || !(-MAX_CLOCK_DRIFT_MS..=MAX_CLOCK_DRIFT_MS).contains(&drift)
     {
         diagnostics.push(map.diagnostic(

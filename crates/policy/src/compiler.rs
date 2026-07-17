@@ -752,4 +752,36 @@ mod tests {
                 .catalog_hash()
         );
     }
+
+    #[test]
+    fn compiler_clock_offsets_match_the_published_independent_bounds() {
+        for (utc_offset_minutes, dst_offset_minutes) in [
+            (crate::MIN_UTC_OFFSET_MINUTES, crate::MIN_DST_OFFSET_MINUTES),
+            (crate::MAX_UTC_OFFSET_MINUTES, crate::MAX_DST_OFFSET_MINUTES),
+        ] {
+            let sources = mutate_timeline(|timeline| {
+                timeline["events"][0]["schedule"]["clock_source"] = serde_json::json!({
+                    "kind": "server",
+                    "timezone_id": "fixture/zone",
+                    "utc_offset_minutes": utc_offset_minutes,
+                    "dst_offset_minutes": dst_offset_minutes,
+                    "maintenance_drift_ms": 0
+                });
+            });
+            compile_catalog(&sources).expect("published offset boundary must compile");
+        }
+
+        for (utc_offset_minutes, dst_offset_minutes) in [(841, 0), (0, 121), (-841, 0), (0, -121)] {
+            let sources = mutate_timeline(|timeline| {
+                timeline["events"][0]["schedule"]["clock_source"] = serde_json::json!({
+                    "kind": "server",
+                    "timezone_id": "fixture/zone",
+                    "utc_offset_minutes": utc_offset_minutes,
+                    "dst_offset_minutes": dst_offset_minutes,
+                    "maintenance_drift_ms": 0
+                });
+            });
+            assert!(compile_catalog(&sources).is_err());
+        }
+    }
 }

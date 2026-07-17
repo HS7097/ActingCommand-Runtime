@@ -3065,12 +3065,12 @@ fn validate_policy_planning_signal_data(
         if budget.dispatch_limit == 0
             || budget.runtime_limit_ms == 0
             || budget.reservation_ms == 0
-            || budget.dispatch_used > budget.dispatch_limit
-            || budget.runtime_reserved_ms > budget.runtime_limit_ms
             || data.kind == PolicyPlanningSignalKind::DetectionReserved
                 && (budget.dispatch_used == 0
                     || budget.runtime_reserved_ms == 0
-                    || budget.runtime_reserved_ms < budget.reservation_ms)
+                    || budget.runtime_reserved_ms < budget.reservation_ms
+                    || budget.dispatch_used > budget.dispatch_limit
+                    || budget.runtime_reserved_ms > budget.runtime_limit_ms)
             || data.kind == PolicyPlanningSignalKind::DetectionQuotaExhausted && !exhausted
         {
             return Err(SanitizationError::new(
