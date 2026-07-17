@@ -15,6 +15,9 @@ use crate::performance::{
 };
 use crate::performance_control::{PerformanceBalanceController, PerformanceDispatchGate};
 use crate::policy_host::{LoadedCatalog, PolicyExecutionPreparation, PolicyHost};
+use crate::project_interface::{
+    ProjectDiagnosticProjection, ProjectInterfaceProjection, retain_recent_diagnostics,
+};
 use crate::proposal::prepare_proposal;
 use crate::strategy::{StrategicPlanPreparation, build_strategy_proposal};
 use crate::time::unix_ms_now;
@@ -48,17 +51,18 @@ use actingcommand_contract::{
     LeaseToken, MAX_INSTANCE_ALIAS_BYTES, MonitorPayloadDraft, MonitorRecoveryCoordinationReason,
     OriginModule, PackageDebugLayout, PackageDebugRequest, PackageDebugSummary, PerformanceContext,
     PerformancePayloadDraft, PolicyDispatchEventData, PolicyExecutionEventData, PolicyPayloadDraft,
-    PolicyPlanningSignalEventData, PolicyReasonRecord, ProjectedArtifactReference, ProposalClass,
-    ProposalPromotion, RUNTIME_INFO_FILE, ReadonlyObservation, RecognitionPayloadDraft,
-    RecognitionVerdict, ReleasePayload, ReleasePayloadDraft, ReleaseTransitionKind, RequestId,
-    ResourceAuthoringEvent, ResourceAuthoringPayloadDraft, ResourceAuthoringPhase, RetentionClass,
-    RuntimeCaptureBackend, RuntimeControlPlaneStatus, RuntimeDebugEvent, RuntimeDebugOperation,
-    RuntimeDebugPhase, RuntimeErrorCode, RuntimeErrorProjection, RuntimeEventBatch,
-    RuntimeEvidenceExportRequest, RuntimeEvidenceExportSummary, RuntimeEvidenceScreenshotCounts,
-    RuntimeInfo, RuntimeInstanceStatus, RuntimeMonitorPolicy, RuntimeOperation,
-    RuntimePayloadDraft, RuntimeReceipt, RuntimeReceiptState, RuntimeReleaseSet, RuntimeRequest,
-    RuntimeResult, RuntimeSubscriptionRequest, SchedulerPayloadDraft, StatePayload,
-    StatePayloadDraft, TaskOutcome, TaskPayload, TaskPayloadDraft, TaskSemanticFact, TerminalEvent,
+    PolicyPlanningSignalEventData, PolicyReasonRecord, ProjectInterfaceRequest,
+    ProjectedArtifactReference, ProposalClass, ProposalPromotion, RUNTIME_INFO_FILE,
+    ReadonlyObservation, RecognitionPayloadDraft, RecognitionVerdict, ReleasePayload,
+    ReleasePayloadDraft, ReleaseTransitionKind, RequestId, ResourceAuthoringEvent,
+    ResourceAuthoringPayloadDraft, ResourceAuthoringPhase, RetentionClass, RuntimeCaptureBackend,
+    RuntimeControlPlaneStatus, RuntimeDebugEvent, RuntimeDebugOperation, RuntimeDebugPhase,
+    RuntimeErrorCode, RuntimeErrorProjection, RuntimeEventBatch, RuntimeEvidenceExportRequest,
+    RuntimeEvidenceExportSummary, RuntimeEvidenceScreenshotCounts, RuntimeInfo,
+    RuntimeInstanceStatus, RuntimeMonitorPolicy, RuntimeOperation, RuntimePayloadDraft,
+    RuntimeReceipt, RuntimeReceiptState, RuntimeReleaseSet, RuntimeRequest, RuntimeResult,
+    RuntimeSubscriptionRequest, SchedulerPayloadDraft, StatePayload, StatePayloadDraft,
+    TaskOutcome, TaskPayload, TaskPayloadDraft, TaskSemanticFact, TerminalEvent,
     ValidatedRuntimeRequest,
 };
 use actingcommand_device::{CaptureBackendName, Frame};
@@ -2326,6 +2330,7 @@ impl HostShared {
                 },
             }),
             RuntimeOperation::Status => self.control_plane_status(),
+            RuntimeOperation::ProjectInterface { request } => self.project_interface(request),
             RuntimeOperation::MonitorStatus => self.monitor_status(),
             RuntimeOperation::ConfigureMonitor {
                 instance_alias,
@@ -3861,7 +3866,88 @@ impl HostShared {
             })
     }
 
+    fn project_interface(
+        &self,
+        request: &ProjectInterfaceRequest,
+    ) -> Result<OperationSuccess, RequestFailure> {
+        request.negotiate().map_err(|error| {
+            project_interface_failure(RuntimeHostError::request(
+                error.code(),
+                "negotiate_project_interface",
+                RuntimeErrorCode::ProtocolInvalid,
+            ))
+        })?;
+        let status = self.control_plane_status_projection()?;
+        let (catalog, decisions) = {
+            let policy = lock(&self.policy, "project_runtime_policy")?;
+            (policy.active_loaded(), policy.project_dispatches())
+        };
+        let facts = {
+            let _gate = lock(&self.fact_write_gate, "project_runtime_facts")?;
+            self.synchronize_fact_store_under_gate()
+                .map_err(RequestFailure::poison_without_terminal)?;
+            lock(&self.facts, "project_runtime_facts")?.active_records()
+        };
+        let approvals = ApprovalProjection::recover(&self.ledger)
+            .map_err(RequestFailure::poison_without_terminal)?
+            .records();
+        let ledger_position = self.ledger.latest_sequence().map_err(|_| {
+            RequestFailure::poison_without_terminal(ledger_error("project_runtime_position"))
+        })?;
+        let diagnostics = self
+            .ledger
+            .query(EventQuery {
+                to_sequence: Some(ledger_position),
+                minimum_severity: Some(EventSeverity::Warning),
+                ..EventQuery::default()
+            })
+            .map_err(|_| {
+                RequestFailure::poison_without_terminal(ledger_error("project_runtime_diagnostics"))
+            })?
+            .into_iter()
+            .map(|event| ProjectDiagnosticProjection {
+                sequence: event.sequence(),
+                timestamp_unix_ms: event.timestamp_unix_ms(),
+                severity: event.severity(),
+                event_type: event.event_type(),
+            })
+            .collect();
+        let fatal = self
+            .fatal
+            .current()
+            .map_err(RequestFailure::poison_without_terminal)?
+            .is_some();
+        let response = ProjectInterfaceProjection {
+            ledger_position,
+            catalog,
+            instances: status,
+            facts,
+            decisions,
+            approvals,
+            diagnostics: retain_recent_diagnostics(diagnostics),
+            fatal,
+        }
+        .into_response(request)
+        .map_err(project_interface_failure)?;
+        Ok(OperationSuccess {
+            state: RuntimeReceiptState::Completed,
+            terminal: None,
+            result: RuntimeResult::ProjectInterface {
+                response: Box::new(response),
+            },
+        })
+    }
+
     fn control_plane_status(&self) -> Result<OperationSuccess, RequestFailure> {
+        let status = self.control_plane_status_projection()?;
+        Ok(OperationSuccess {
+            state: RuntimeReceiptState::Completed,
+            terminal: None,
+            result: RuntimeResult::Status { status },
+        })
+    }
+
+    fn control_plane_status_projection(&self) -> Result<RuntimeControlPlaneStatus, RequestFailure> {
         let now = self
             .monotonic_ms()
             .map_err(RequestFailure::poison_without_terminal)?;
@@ -3912,11 +3998,7 @@ impl HostShared {
                 RuntimeErrorCode::RuntimeFatal,
             ))
         })?;
-        Ok(OperationSuccess {
-            state: RuntimeReceiptState::Completed,
-            terminal: None,
-            result: RuntimeResult::Status { status },
-        })
+        Ok(status)
     }
 
     fn monitor_status(&self) -> Result<OperationSuccess, RequestFailure> {
@@ -9327,6 +9409,14 @@ fn agent_request_failure(error: RuntimeHostError) -> RequestFailure {
 }
 
 fn proposal_request_failure(error: RuntimeHostError) -> RequestFailure {
+    if error.is_fatal() {
+        RequestFailure::poison_without_terminal(error)
+    } else {
+        RequestFailure::request(error, RuntimeReceiptState::Denied, None)
+    }
+}
+
+fn project_interface_failure(error: RuntimeHostError) -> RequestFailure {
     if error.is_fatal() {
         RequestFailure::poison_without_terminal(error)
     } else {

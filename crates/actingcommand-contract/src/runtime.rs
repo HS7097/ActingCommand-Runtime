@@ -20,10 +20,10 @@ use crate::{
     EventSource, EventType, EvidenceCompleteness, FrameId, HolderId, IdentifierIssuanceError,
     IdentifierIssuer, InstanceId, IssuedCausationId, IssuedCorrelationId, IssuedFrameId,
     IssuedHolderId, IssuedRecognitionId, IssuedRequestId, IssuedRunId, IssuedTaskId, LeaseId,
-    OwnerEpoch, ProjectedArtifactReference, ProjectedEvent, ProjectionProfile, ProposalPreview,
-    ProposalPromotion, RecognitionId, RecognitionVerdict, RequestId, ResourceAuthoringPhase, RunId,
-    RuntimeMonitorInstanceStatus, RuntimeMonitorPolicy, RuntimeMonitorRegistryStatus,
-    SubscriptionCursor, TaskOutcome,
+    OwnerEpoch, ProjectInterfaceRequest, ProjectInterfaceResponse, ProjectedArtifactReference,
+    ProjectedEvent, ProjectionProfile, ProposalPreview, ProposalPromotion, RecognitionId,
+    RecognitionVerdict, RequestId, ResourceAuthoringPhase, RunId, RuntimeMonitorInstanceStatus,
+    RuntimeMonitorPolicy, RuntimeMonitorRegistryStatus, SubscriptionCursor, TaskOutcome,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
@@ -1436,6 +1436,9 @@ impl RuntimeEventBatch {
 pub enum RuntimeOperation {
     Health,
     Status,
+    ProjectInterface {
+        request: ProjectInterfaceRequest,
+    },
     MonitorStatus,
     ConfigureMonitor {
         instance_alias: String,
@@ -1594,6 +1597,9 @@ impl RuntimeOperation {
             | Self::PollQueuedLease { .. }
             | Self::CancelQueuedLease { .. }
             | Self::QueryEvents { .. } => Ok(()),
+            Self::ProjectInterface { request } => request
+                .validate()
+                .map_err(|_| RuntimeContractError::new("invalid_project_interface_request")),
             Self::SubscribeEvents { request } => request.validate(),
             Self::DebugPackage { request } => request.validate(),
             Self::ExportEvidence { request } => request.validate(),
@@ -1690,6 +1696,9 @@ impl fmt::Debug for RuntimeOperation {
         formatter.write_str(match self {
             Self::Health => "RuntimeOperation::Health",
             Self::Status => "RuntimeOperation::Status",
+            Self::ProjectInterface { .. } => {
+                "RuntimeOperation::ProjectInterface(<version-negotiation>)"
+            }
             Self::MonitorStatus => "RuntimeOperation::MonitorStatus",
             Self::ConfigureMonitor { .. } => "RuntimeOperation::ConfigureMonitor(<redacted>)",
             Self::ClearMonitor { .. } => "RuntimeOperation::ClearMonitor(<redacted>)",
@@ -2082,6 +2091,9 @@ pub enum RuntimeResult {
     Status {
         status: RuntimeControlPlaneStatus,
     },
+    ProjectInterface {
+        response: Box<ProjectInterfaceResponse>,
+    },
     MonitorStatus {
         status: RuntimeMonitorRegistryStatus,
     },
@@ -2256,6 +2268,9 @@ impl RuntimeReceipt {
         }
         match &self.result {
             Some(RuntimeResult::Status { status }) => status.validate()?,
+            Some(RuntimeResult::ProjectInterface { response }) => response
+                .validate()
+                .map_err(|_| RuntimeContractError::new("invalid_project_interface_response"))?,
             Some(RuntimeResult::MonitorStatus { status }) => status
                 .validate()
                 .map_err(|_| RuntimeContractError::new("invalid_runtime_monitor_status"))?,
