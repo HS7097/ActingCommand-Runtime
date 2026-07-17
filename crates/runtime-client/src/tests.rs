@@ -23,6 +23,8 @@ use std::thread;
 use std::time::Duration;
 use tempfile::TempDir;
 
+const TEST_GOVERNANCE_CAPABILITY: &str = "runtime-client-governance-test-capability";
+
 #[derive(Default)]
 struct FakeState {
     opens: AtomicUsize,
@@ -224,6 +226,7 @@ fn instance_id() -> InstanceId {
 fn host(root: &TempDir, state: Arc<FakeState>, lease_ttl_ms: u64) -> RuntimeHost {
     RuntimeHost::start(
         RuntimeHostConfig::new(root.path(), b"runtime-client-test-salt")
+            .with_governance_capability(TEST_GOVERNANCE_CAPABILITY)
             .with_io_timeout(Duration::from_millis(500))
             .with_scheduler(SchedulerConfig {
                 maximum_client_heartbeat_interval_ms: 20,
@@ -388,7 +391,11 @@ fn typed_client_records_client_actions_and_approval_decisions_through_runtime() 
     let root = TempDir::new().expect("tempdir");
     let state = Arc::new(FakeState::default());
     let host = host(&root, state, 1_000);
-    let client = client(&root);
+    let client = RuntimeClient::connect(
+        RuntimeClientConfig::new(root.path(), EventActor::User, EventSource::Ui)
+            .with_io_timeout(Duration::from_millis(500)),
+    )
+    .expect("governance runtime client");
 
     client
         .record_client_action(
@@ -402,6 +409,9 @@ fn typed_client_records_client_actions_and_approval_decisions_through_runtime() 
             .expect("client action"),
         )
         .expect("record client action");
+    client
+        .authenticate_governance(TEST_GOVERNANCE_CAPABILITY)
+        .expect("authenticate governance");
     client
         .record_approval_decision(
             ApprovalDecisionRecord::new(

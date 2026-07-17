@@ -49,6 +49,8 @@ pub const MAX_CONTAINED_TASK_PATH_BYTES: usize = 32 * 1024;
 pub const MAX_EVIDENCE_OUTPUT_PATH_BYTES: usize = 32 * 1024;
 pub const MAX_RUNTIME_SUBSCRIPTION_WAIT_MS: u64 = 30_000;
 pub const MAX_RUNTIME_SUBSCRIPTION_EVENTS: u16 = 256;
+pub const MIN_GOVERNANCE_CAPABILITY_BYTES: usize = 32;
+pub const MAX_GOVERNANCE_CAPABILITY_BYTES: usize = 1024;
 
 pub type RuntimeContractResult<T> = Result<T, RuntimeContractError>;
 
@@ -1515,6 +1517,9 @@ pub enum RuntimeOperation {
     RecordClientAction {
         action: ClientActionRecord,
     },
+    AuthenticateGovernance {
+        capability: String,
+    },
     RecordApprovalDecision {
         decision: ApprovalDecisionRecord,
     },
@@ -1608,6 +1613,15 @@ impl RuntimeOperation {
             Self::RecordClientAction { action } => action
                 .validate()
                 .map_err(|_| RuntimeContractError::new("invalid_client_action")),
+            Self::AuthenticateGovernance { capability } => {
+                if !(MIN_GOVERNANCE_CAPABILITY_BYTES..=MAX_GOVERNANCE_CAPABILITY_BYTES)
+                    .contains(&capability.len())
+                    || capability.chars().any(char::is_control)
+                {
+                    return Err(RuntimeContractError::new("invalid_governance_capability"));
+                }
+                Ok(())
+            }
             Self::RecordApprovalDecision { decision } => decision
                 .validate()
                 .map_err(|_| RuntimeContractError::new("invalid_approval_decision")),
@@ -1731,6 +1745,9 @@ impl fmt::Debug for RuntimeOperation {
             Self::RecordClientAction { .. } => {
                 "RuntimeOperation::RecordClientAction(<typed-redacted-action>)"
             }
+            Self::AuthenticateGovernance { .. } => {
+                "RuntimeOperation::AuthenticateGovernance(<redacted-capability>)"
+            }
             Self::RecordApprovalDecision { .. } => {
                 "RuntimeOperation::RecordApprovalDecision(<typed-approval>)"
             }
@@ -1818,6 +1835,14 @@ impl RuntimeRequest {
         ) && (self.actor != EventActor::Lab || self.source != EventSource::Lab)
         {
             return Err(RuntimeContractError::new("invalid_runtime_debug_origin"));
+        }
+        if matches!(
+            self.operation,
+            RuntimeOperation::AuthenticateGovernance { .. }
+                | RuntimeOperation::RecordApprovalDecision { .. }
+        ) && (self.actor != EventActor::User || self.source != EventSource::Ui)
+        {
+            return Err(RuntimeContractError::new("invalid_governance_origin"));
         }
         if matches!(
             self.operation,
@@ -2166,6 +2191,7 @@ pub enum RuntimeResult {
         phase: RuntimeDebugPhase,
     },
     ClientActionRecorded,
+    GovernanceAuthenticated,
     ApprovalDecisionRecorded {
         approval_id: String,
         disposition: ApprovalDisposition,

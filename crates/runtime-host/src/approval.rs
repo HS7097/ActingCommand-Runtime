@@ -28,7 +28,8 @@ impl ApprovalProjection {
         let mut latest = BTreeMap::<String, ApprovalDecisionRecord>::new();
         for event in events {
             if event.origin().module() != OriginModule::Governance
-                || !valid_client_origin(event.origin().actor(), event.origin().source())
+                || event.origin().actor() != EventActor::User
+                || event.origin().source() != EventSource::Ui
             {
                 return Err(approval_fatal("approval_projection_origin_invalid"));
             }
@@ -132,16 +133,6 @@ impl ApprovalProjection {
             .map(|decision| decision.approval_id().to_owned())
             .collect()
     }
-}
-
-fn valid_client_origin(actor: EventActor, source: EventSource) -> bool {
-    matches!(
-        source,
-        EventSource::Cli | EventSource::Ui | EventSource::Lab | EventSource::Adapter
-    ) && matches!(
-        actor,
-        EventActor::User | EventActor::Cli | EventActor::Ui | EventActor::Lab | EventActor::Agent
-    )
 }
 
 fn target_matches_dispatch(target: &ApprovalTarget, intent: &DispatchIntent) -> bool {

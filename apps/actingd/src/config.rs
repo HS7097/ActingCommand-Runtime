@@ -28,6 +28,8 @@ pub(super) struct ActingdConfigFile {
     #[serde(default)]
     bind_port: u16,
     secret_fingerprint_salt: String,
+    #[serde(default)]
+    governance_capability: Option<String>,
     instances: Vec<InstanceConfig>,
 }
 
@@ -84,6 +86,12 @@ impl ActingdConfigFile {
         if self.schema_version != CONFIG_SCHEMA_VERSION
             || self.state_root.as_os_str().is_empty()
             || !(16..=1024).contains(&self.secret_fingerprint_salt.len())
+            || self.governance_capability.as_ref().is_some_and(|value| {
+                !(actingcommand_contract::MIN_GOVERNANCE_CAPABILITY_BYTES
+                    ..=actingcommand_contract::MAX_GOVERNANCE_CAPABILITY_BYTES)
+                    .contains(&value.len())
+                    || value.chars().any(char::is_control)
+            })
         {
             return Err("config_invalid");
         }
@@ -101,12 +109,14 @@ impl ActingdConfigFile {
             .collect::<Result<Vec<_>, _>>()?;
         let registry = ExecutionBackendRegistry::new(registrations)
             .map_err(|_| "execution_registry_invalid")?;
-        Ok(RuntimeAssembly {
-            host: RuntimeHostConfig::new(self.state_root, self.secret_fingerprint_salt.as_bytes())
+        let mut host =
+            RuntimeHostConfig::new(self.state_root, self.secret_fingerprint_salt.as_bytes())
                 .with_bind_address(SocketAddr::new(bind_host, self.bind_port))
-                .with_performance_monitor(PerformanceMonitorConfig::default()),
-            registry,
-        })
+                .with_performance_monitor(PerformanceMonitorConfig::default());
+        if let Some(capability) = self.governance_capability {
+            host = host.with_governance_capability(capability);
+        }
+        Ok(RuntimeAssembly { host, registry })
     }
 }
 

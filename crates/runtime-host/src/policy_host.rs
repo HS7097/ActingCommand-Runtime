@@ -150,6 +150,7 @@ pub struct PolicyCycle {
     pub pending_dispatch_intents: Vec<DispatchIntent>,
 }
 
+/// Correlates an admission request; Runtime rebuilds approval authority and current time.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PolicyAdmissionContext {
     pub fact_ledger_position: u64,

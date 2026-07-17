@@ -363,7 +363,7 @@
             "fact_key": { "$ref": "#/$defs/identifier" },
             "comparison": { "$ref": "#/$defs/comparison" },
             "value": { "$ref": "#/$defs/factValue" },
-            "max_age_ms": { "type": ["integer", "null"], "minimum": 1 }
+            "max_age_ms": { "type": ["integer", "null"], "minimum": 1, "maximum": 31536000000 }
           },
           "additionalProperties": false
         },

@@ -596,6 +596,22 @@ impl RuntimeClient {
             .ok_or_else(|| self.unexpected_result("record_approval_decision"))
     }
 
+    /// Authenticates this connection for governance writes without extending authority to peers.
+    pub fn authenticate_governance(
+        &self,
+        capability: impl Into<String>,
+    ) -> RuntimeClientResult<()> {
+        match self.execute(
+            "authenticate_governance",
+            RuntimeOperation::AuthenticateGovernance {
+                capability: capability.into(),
+            },
+        )? {
+            RuntimeResult::GovernanceAuthenticated => Ok(()),
+            _ => Err(self.unexpected_result("authenticate_governance")),
+        }
+    }
+
     pub fn start_agent_session(
         &self,
         wake_id: AgentWakeId,
