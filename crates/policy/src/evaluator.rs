@@ -193,6 +193,10 @@ pub struct DispatchIntent {
     pub instance_id: String,
     pub operation_id: String,
     pub procedure_ref: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub package_digest: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub procedure_binding_digest: Option<String>,
     pub catalog_hash: String,
     pub catalog_version: u64,
     pub input_ledger_position: u64,
@@ -582,6 +586,8 @@ pub fn evaluate(
             instance_id: candidate.instance_id.clone(),
             operation_id: candidate.operation_id,
             procedure_ref: candidate.procedure_ref,
+            package_digest: None,
+            procedure_binding_digest: None,
             catalog_hash: catalog.catalog_hash().to_owned(),
             catalog_version: catalog_bundle.tasks.catalog.catalog_version,
             input_ledger_position: facts.ledger_position,

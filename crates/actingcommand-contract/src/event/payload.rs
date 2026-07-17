@@ -527,6 +527,8 @@ pub struct PolicyDispatchEventData {
     pub task_id: String,
     pub instance_id: String,
     pub operation_id: String,
+    pub package_digest: String,
+    pub procedure_binding_digest: String,
     pub reason_chain_id: String,
     pub reasons: Vec<PolicyReasonRecord>,
     pub catalog_hash: String,
@@ -790,6 +792,10 @@ pub struct PolicyDispatchPayload {
     task_id: String,
     instance_id: String,
     operation_id: String,
+    #[serde(default)]
+    package_digest: String,
+    #[serde(default)]
+    procedure_binding_digest: String,
     reason_chain_id: String,
     reasons: Vec<PolicyReasonRecord>,
     catalog_hash: String,
@@ -819,6 +825,14 @@ impl PolicyDispatchPayload {
 
     pub fn operation_id(&self) -> &str {
         &self.operation_id
+    }
+
+    pub fn package_digest(&self) -> &str {
+        &self.package_digest
+    }
+
+    pub fn procedure_binding_digest(&self) -> &str {
+        &self.procedure_binding_digest
     }
 
     pub fn reason_chain_id(&self) -> &str {
@@ -2491,6 +2505,8 @@ impl PolicyDispatchDraft {
             task_id: self.data.task_id,
             instance_id: self.data.instance_id,
             operation_id: self.data.operation_id,
+            package_digest: self.data.package_digest,
+            procedure_binding_digest: self.data.procedure_binding_digest,
             reason_chain_id: self.data.reason_chain_id,
             reasons: self.data.reasons,
             catalog_hash: self.data.catalog_hash,
@@ -2889,6 +2905,8 @@ fn validate_policy_dispatch_data(data: &PolicyDispatchEventData) -> Result<(), S
     validate_policy_token(&data.task_id, "task_id")?;
     validate_policy_token(&data.instance_id, "instance_id")?;
     validate_policy_token(&data.operation_id, "operation_id")?;
+    validate_policy_digest(&data.package_digest, "package_digest")?;
+    validate_policy_digest(&data.procedure_binding_digest, "procedure_binding_digest")?;
     validate_policy_token(&data.reason_chain_id, "reason_chain_id")?;
     validate_policy_token(&data.fact_snapshot_id, "fact_snapshot_id")?;
     validate_catalog_hash(&data.catalog_hash, "catalog_hash")?;
@@ -3285,6 +3303,8 @@ fn validate_policy_payload(payload: &PolicyPayload) -> Result<(), SanitizationEr
         task_id: value.task_id.clone(),
         instance_id: value.instance_id.clone(),
         operation_id: value.operation_id.clone(),
+        package_digest: value.package_digest.clone(),
+        procedure_binding_digest: value.procedure_binding_digest.clone(),
         reason_chain_id: value.reason_chain_id.clone(),
         reasons: value.reasons.clone(),
         catalog_hash: value.catalog_hash.clone(),
@@ -3507,6 +3527,20 @@ fn validate_policy_text(value: &str, field: &'static str) -> Result<(), Sanitiza
         Err(SanitizationError::new("invalid_policy_text", field))
     } else {
         Ok(())
+    }
+}
+
+fn validate_policy_digest(value: &str, field: &'static str) -> Result<(), SanitizationError> {
+    let valid = value.strip_prefix("sha256:").is_some_and(|digest| {
+        digest.len() == 64
+            && digest
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
+    });
+    if valid {
+        Ok(())
+    } else {
+        Err(SanitizationError::new("invalid_policy_digest", field))
     }
 }
 
