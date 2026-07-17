@@ -296,9 +296,20 @@ fn project_interface_is_consistent_across_clients_and_read_only() {
         .map(|client| client.snapshot().expect("project snapshot"))
         .collect::<Vec<_>>();
     assert!(snapshots.windows(2).all(|pair| pair[0] == pair[1]));
-    assert_eq!(snapshots[0].instances[0].instance_alias, "instance-neutral");
+    let status = clients[0].status().expect("runtime status");
+    assert_eq!(status.instances()[0].instance_alias(), "instance-neutral");
     assert!(snapshots[0].project.is_none());
     assert!(snapshots[0].catalog.is_none());
+    for version in [
+        actingcommand_contract::PROJECT_INTERFACE_CONTRACT_V2,
+        actingcommand_contract::PROJECT_INTERFACE_CONTRACT_V1,
+    ] {
+        let snapshot = clients[0]
+            .snapshot_with_versions(vec![version.to_owned()])
+            .expect("legacy project snapshot");
+        assert_eq!(snapshot.ledger_position, snapshots[0].ledger_position);
+        assert!(!snapshot.decision_page.has_more());
+    }
     assert_eq!(state.opens.load(Ordering::Acquire), 0);
     assert_eq!(state.capture_opens.load(Ordering::Acquire), 0);
 

@@ -19,12 +19,18 @@ pub const PROJECT_INTERFACE_REQUEST_SCHEMA_VERSION: &str =
     "actingcommand.project-interface.request.v2";
 pub const PROJECT_INTERFACE_RESPONSE_SCHEMA_VERSION_V1: &str =
     "actingcommand.project-interface.response.v1";
-pub const PROJECT_INTERFACE_RESPONSE_SCHEMA_VERSION: &str =
+pub const PROJECT_INTERFACE_RESPONSE_SCHEMA_VERSION_V2: &str =
     "actingcommand.project-interface.response.v2";
+pub const PROJECT_INTERFACE_RESPONSE_SCHEMA_VERSION: &str =
+    "actingcommand.project-interface.response.v3";
 pub const PROJECT_INTERFACE_CONTRACT_V1: &str = "actingcommand.project-interface.v1";
 pub const PROJECT_INTERFACE_CONTRACT_V2: &str = "actingcommand.project-interface.v2";
-pub const PROJECT_INTERFACE_SUPPORTED_VERSIONS: &[&str] =
-    &[PROJECT_INTERFACE_CONTRACT_V2, PROJECT_INTERFACE_CONTRACT_V1];
+pub const PROJECT_INTERFACE_CONTRACT_V3: &str = "actingcommand.project-interface.v3";
+pub const PROJECT_INTERFACE_SUPPORTED_VERSIONS: &[&str] = &[
+    PROJECT_INTERFACE_CONTRACT_V3,
+    PROJECT_INTERFACE_CONTRACT_V2,
+    PROJECT_INTERFACE_CONTRACT_V1,
+];
 pub const MAX_PROJECT_INTERFACE_RESPONSE_BYTES: usize = 768 * 1024;
 pub const DEFAULT_PROJECT_DECISION_PAGE_SIZE: u16 = 128;
 pub const MAX_PROJECT_DECISION_PAGE_SIZE: u16 = 512;
@@ -84,7 +90,7 @@ pub struct ProjectInterfaceCompatibility {
 impl ProjectInterfaceCompatibility {
     pub fn current() -> Self {
         Self {
-            current_version: PROJECT_INTERFACE_CONTRACT_V2.to_owned(),
+            current_version: PROJECT_INTERFACE_CONTRACT_V3.to_owned(),
             supported_versions: PROJECT_INTERFACE_SUPPORTED_VERSIONS
                 .iter()
                 .map(|version| (*version).to_owned())
@@ -95,7 +101,15 @@ impl ProjectInterfaceCompatibility {
 
     fn for_contract(contract_version: &str) -> ProjectInterfaceResult<Self> {
         match contract_version {
-            PROJECT_INTERFACE_CONTRACT_V2 => Ok(Self::current()),
+            PROJECT_INTERFACE_CONTRACT_V3 => Ok(Self::current()),
+            PROJECT_INTERFACE_CONTRACT_V2 => Ok(Self {
+                current_version: PROJECT_INTERFACE_CONTRACT_V2.to_owned(),
+                supported_versions: vec![
+                    PROJECT_INTERFACE_CONTRACT_V2.to_owned(),
+                    PROJECT_INTERFACE_CONTRACT_V1.to_owned(),
+                ],
+                unknown_field_policy: ProjectUnknownFieldPolicy::Reject,
+            }),
             PROJECT_INTERFACE_CONTRACT_V1 => Ok(Self {
                 current_version: PROJECT_INTERFACE_CONTRACT_V1.to_owned(),
                 supported_versions: vec![PROJECT_INTERFACE_CONTRACT_V1.to_owned()],
@@ -234,10 +248,12 @@ impl ProjectInterfaceRequest {
     }
 
     pub fn new(accepted_contract_versions: Vec<String>) -> ProjectInterfaceResult<Self> {
-        let schema_version = if accepted_contract_versions
-            .iter()
-            .any(|version| version == PROJECT_INTERFACE_CONTRACT_V2)
-        {
+        let schema_version = if accepted_contract_versions.iter().any(|version| {
+            matches!(
+                version.as_str(),
+                PROJECT_INTERFACE_CONTRACT_V3 | PROJECT_INTERFACE_CONTRACT_V2
+            )
+        }) {
             PROJECT_INTERFACE_REQUEST_SCHEMA_VERSION
         } else {
             PROJECT_INTERFACE_REQUEST_SCHEMA_VERSION_V1
@@ -255,7 +271,19 @@ impl ProjectInterfaceRequest {
         mut self,
         decision_page: ProjectDecisionPageRequest,
     ) -> ProjectInterfaceResult<Self> {
-        self.schema_version = PROJECT_INTERFACE_REQUEST_SCHEMA_VERSION.to_owned();
+        let accepts_v3 = self
+            .accepted_contract_versions
+            .iter()
+            .any(|version| version == PROJECT_INTERFACE_CONTRACT_V3);
+        let accepts_v2 = self
+            .accepted_contract_versions
+            .iter()
+            .any(|version| version == PROJECT_INTERFACE_CONTRACT_V2);
+        self.schema_version = if accepts_v3 || accepts_v2 {
+            PROJECT_INTERFACE_REQUEST_SCHEMA_VERSION.to_owned()
+        } else {
+            PROJECT_INTERFACE_REQUEST_SCHEMA_VERSION_V1.to_owned()
+        };
         self.decision_page = Some(decision_page);
         self.validate()?;
         Ok(self)
@@ -286,6 +314,24 @@ impl ProjectInterfaceRequest {
                 ));
             }
         }
+        let accepts_v3 = self
+            .accepted_contract_versions
+            .iter()
+            .any(|version| version == PROJECT_INTERFACE_CONTRACT_V3);
+        let accepts_v2 = self
+            .accepted_contract_versions
+            .iter()
+            .any(|version| version == PROJECT_INTERFACE_CONTRACT_V2);
+        let schema_matches_versions = match self.schema_version.as_str() {
+            PROJECT_INTERFACE_REQUEST_SCHEMA_VERSION => accepts_v3 || accepts_v2,
+            PROJECT_INTERFACE_REQUEST_SCHEMA_VERSION_V1 => !accepts_v3 && !accepts_v2,
+            _ => false,
+        };
+        if !schema_matches_versions {
+            return Err(ProjectInterfaceError::new(
+                "project_request_schema_contract_mismatch",
+            ));
+        }
         if self.schema_version == PROJECT_INTERFACE_REQUEST_SCHEMA_VERSION_V1
             && self.decision_page.is_some()
         {
@@ -294,11 +340,12 @@ impl ProjectInterfaceRequest {
             ));
         }
         if let Some(page) = &self.decision_page {
-            if !self
-                .accepted_contract_versions
-                .iter()
-                .any(|version| version == PROJECT_INTERFACE_CONTRACT_V2)
-            {
+            if !self.accepted_contract_versions.iter().any(|version| {
+                matches!(
+                    version.as_str(),
+                    PROJECT_INTERFACE_CONTRACT_V3 | PROJECT_INTERFACE_CONTRACT_V2
+                )
+            }) {
                 return Err(ProjectInterfaceError::new(
                     "project_decision_page_requires_v2",
                 ));
@@ -612,46 +659,166 @@ impl ProjectInterfaceSnapshot {
     }
 }
 
+/// Ledger-derived project data pinned to one immutable pagination position.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProjectLedgerSnapshot {
+    pub ledger_position: u64,
+    pub project: Option<ProjectView>,
+    pub catalog: Option<ProjectCatalogView>,
+    pub facts: Vec<ProjectFactView>,
+    pub goals: Vec<ProjectGoalView>,
+    pub decisions: Vec<ProjectDecisionView>,
+    pub decision_page: ProjectDecisionPage,
+    pub approvals: Vec<ProjectApprovalView>,
+    pub diagnostics: Vec<ProjectDiagnosticView>,
+}
+
+impl ProjectLedgerSnapshot {
+    pub fn validate(&self) -> ProjectInterfaceResult<()> {
+        if self.ledger_position == 0
+            || self.facts.len() > MAX_PROJECT_FACTS
+            || self.goals.len() > MAX_PROJECT_GOALS
+            || self.decisions.len() > MAX_PROJECT_DECISIONS
+            || self.approvals.len() > MAX_PROJECT_APPROVALS
+            || self.diagnostics.len() > MAX_PROJECT_DIAGNOSTICS
+        {
+            return Err(ProjectInterfaceError::new(
+                "project_ledger_snapshot_invalid",
+            ));
+        }
+        match (&self.project, &self.catalog) {
+            (Some(project), Some(catalog)) if project.project_id == catalog.catalog_id => {}
+            (None, None) => {}
+            _ => {
+                return Err(ProjectInterfaceError::new(
+                    "project_catalog_identity_mismatch",
+                ));
+            }
+        }
+        if let Some(project) = &self.project {
+            validate_text(&project.project_id, "project_identity_invalid")?;
+        }
+        if let Some(catalog) = &self.catalog {
+            validate_text(&catalog.catalog_id, "project_catalog_invalid")?;
+            validate_hash(&catalog.catalog_hash, "project_catalog_invalid")?;
+            if catalog.catalog_version == 0 {
+                return Err(ProjectInterfaceError::new("project_catalog_invalid"));
+            }
+        }
+        validate_facts(&self.facts)?;
+        validate_goals(&self.goals)?;
+        validate_decisions(&self.decisions, self.ledger_position)?;
+        self.decision_page.validate()?;
+        if self.decision_page.snapshot_ledger_position() != self.ledger_position
+            || usize::from(self.decision_page.returned_count()) != self.decisions.len()
+        {
+            return Err(ProjectInterfaceError::new("project_decision_page_invalid"));
+        }
+        validate_approvals(&self.approvals)?;
+        validate_diagnostics(&self.diagnostics, self.ledger_position)?;
+        Ok(())
+    }
+}
+
+/// Explicitly live Runtime state that is not part of the historical ledger snapshot.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProjectCurrentView {
+    pub observed_ledger_position: u64,
+    pub owner_epoch: OwnerEpoch,
+    pub fatal: bool,
+    pub instances: Vec<ProjectInstanceView>,
+}
+
+impl ProjectCurrentView {
+    pub fn validate(&self) -> ProjectInterfaceResult<()> {
+        if self.observed_ledger_position == 0 || self.instances.len() > MAX_PROJECT_INSTANCES {
+            return Err(ProjectInterfaceError::new("project_current_view_invalid"));
+        }
+        validate_instances(&self.instances)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(untagged)]
+enum ProjectInterfaceResponseSnapshot {
+    Current(ProjectLedgerSnapshot),
+    Legacy(ProjectInterfaceSnapshot),
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ProjectInterfaceResponse {
     schema_version: String,
     contract_version: String,
     compatibility: ProjectInterfaceCompatibility,
-    snapshot: ProjectInterfaceSnapshot,
+    snapshot: ProjectInterfaceResponseSnapshot,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    current: Option<ProjectCurrentView>,
 }
 
 impl ProjectInterfaceResponse {
-    pub fn new(
+    pub fn new_current(
+        negotiated_version: &str,
+        snapshot: ProjectLedgerSnapshot,
+        current: ProjectCurrentView,
+    ) -> ProjectInterfaceResult<Self> {
+        if negotiated_version != PROJECT_INTERFACE_CONTRACT_V3 {
+            return Err(ProjectInterfaceError::new(
+                "project_current_contract_mismatch",
+            ));
+        }
+        let compatibility = ProjectInterfaceCompatibility::for_contract(negotiated_version)?;
+        let response = Self {
+            schema_version: PROJECT_INTERFACE_RESPONSE_SCHEMA_VERSION.to_owned(),
+            contract_version: negotiated_version.to_owned(),
+            compatibility,
+            snapshot: ProjectInterfaceResponseSnapshot::Current(snapshot),
+            current: Some(current),
+        };
+        response.finish()
+    }
+
+    pub fn new_legacy(
         negotiated_version: &str,
         snapshot: ProjectInterfaceSnapshot,
     ) -> ProjectInterfaceResult<Self> {
-        let compatibility = ProjectInterfaceCompatibility::for_contract(negotiated_version)?;
         let schema_version = match negotiated_version {
-            PROJECT_INTERFACE_CONTRACT_V2 => PROJECT_INTERFACE_RESPONSE_SCHEMA_VERSION,
+            PROJECT_INTERFACE_CONTRACT_V2 => PROJECT_INTERFACE_RESPONSE_SCHEMA_VERSION_V2,
             PROJECT_INTERFACE_CONTRACT_V1 => PROJECT_INTERFACE_RESPONSE_SCHEMA_VERSION_V1,
-            _ => unreachable!("validated contract version"),
+            _ => {
+                return Err(ProjectInterfaceError::new(
+                    "project_legacy_contract_mismatch",
+                ));
+            }
         };
         let response = Self {
             schema_version: schema_version.to_owned(),
             contract_version: negotiated_version.to_owned(),
-            compatibility,
-            snapshot,
+            compatibility: ProjectInterfaceCompatibility::for_contract(negotiated_version)?,
+            snapshot: ProjectInterfaceResponseSnapshot::Legacy(snapshot),
+            current: None,
         };
-        response.validate()?;
-        let encoded = serde_json::to_vec(&response)
+        response.finish()
+    }
+
+    fn finish(self) -> ProjectInterfaceResult<Self> {
+        self.validate()?;
+        let encoded = serde_json::to_vec(&self)
             .map_err(|_| ProjectInterfaceError::new("project_response_encode_failed"))?;
         if encoded.len() > MAX_PROJECT_INTERFACE_RESPONSE_BYTES {
             return Err(ProjectInterfaceError::new(
                 "project_interface_response_too_large",
             ));
         }
-        Ok(response)
+        Ok(self)
     }
 
     pub fn validate(&self) -> ProjectInterfaceResult<()> {
         let expected_schema = match self.contract_version.as_str() {
-            PROJECT_INTERFACE_CONTRACT_V2 => PROJECT_INTERFACE_RESPONSE_SCHEMA_VERSION,
+            PROJECT_INTERFACE_CONTRACT_V3 => PROJECT_INTERFACE_RESPONSE_SCHEMA_VERSION,
+            PROJECT_INTERFACE_CONTRACT_V2 => PROJECT_INTERFACE_RESPONSE_SCHEMA_VERSION_V2,
             PROJECT_INTERFACE_CONTRACT_V1 => PROJECT_INTERFACE_RESPONSE_SCHEMA_VERSION_V1,
             _ => {
                 return Err(ProjectInterfaceError::new(
@@ -672,12 +839,35 @@ impl ProjectInterfaceResponse {
             ));
         }
         self.compatibility.validate()?;
-        self.snapshot.validate()?;
-        match self.contract_version.as_str() {
-            PROJECT_INTERFACE_CONTRACT_V2 if self.snapshot.decision_page.is_some() => Ok(()),
-            PROJECT_INTERFACE_CONTRACT_V1 if self.snapshot.decision_page.is_none() => Ok(()),
+        match (
+            &self.snapshot,
+            self.current.as_ref(),
+            self.contract_version.as_str(),
+        ) {
+            (
+                ProjectInterfaceResponseSnapshot::Current(snapshot),
+                Some(current),
+                PROJECT_INTERFACE_CONTRACT_V3,
+            ) => {
+                snapshot.validate()?;
+                current.validate()?;
+                if current.observed_ledger_position < snapshot.ledger_position {
+                    return Err(ProjectInterfaceError::new("project_current_view_invalid"));
+                }
+                Ok(())
+            }
+            (
+                ProjectInterfaceResponseSnapshot::Legacy(snapshot),
+                None,
+                PROJECT_INTERFACE_CONTRACT_V2,
+            ) if snapshot.decision_page.is_some() => snapshot.validate(),
+            (
+                ProjectInterfaceResponseSnapshot::Legacy(snapshot),
+                None,
+                PROJECT_INTERFACE_CONTRACT_V1,
+            ) if snapshot.decision_page.is_none() => snapshot.validate(),
             _ => Err(ProjectInterfaceError::new(
-                "project_decision_page_contract_mismatch",
+                "project_response_contract_mismatch",
             )),
         }
     }
@@ -690,13 +880,69 @@ impl ProjectInterfaceResponse {
         &self.compatibility
     }
 
-    pub const fn snapshot(&self) -> &ProjectInterfaceSnapshot {
-        &self.snapshot
+    pub const fn snapshot(&self) -> Option<&ProjectLedgerSnapshot> {
+        match &self.snapshot {
+            ProjectInterfaceResponseSnapshot::Current(snapshot) => Some(snapshot),
+            ProjectInterfaceResponseSnapshot::Legacy(_) => None,
+        }
     }
 
-    pub fn into_snapshot(self) -> ProjectInterfaceResult<ProjectInterfaceSnapshot> {
+    pub const fn current(&self) -> Option<&ProjectCurrentView> {
+        self.current.as_ref()
+    }
+
+    pub const fn legacy_snapshot(&self) -> Option<&ProjectInterfaceSnapshot> {
+        match &self.snapshot {
+            ProjectInterfaceResponseSnapshot::Current(_) => None,
+            ProjectInterfaceResponseSnapshot::Legacy(snapshot) => Some(snapshot),
+        }
+    }
+
+    pub fn into_snapshot(self) -> ProjectInterfaceResult<ProjectLedgerSnapshot> {
         self.validate()?;
-        Ok(self.snapshot)
+        match self.snapshot {
+            ProjectInterfaceResponseSnapshot::Current(snapshot) => Ok(snapshot),
+            ProjectInterfaceResponseSnapshot::Legacy(snapshot) => {
+                let ProjectInterfaceSnapshot {
+                    ledger_position,
+                    project,
+                    catalog,
+                    facts,
+                    goals,
+                    decisions,
+                    decision_page,
+                    approvals,
+                    diagnostics,
+                    ..
+                } = snapshot;
+                let decision_page = match decision_page {
+                    Some(page) => page,
+                    None => {
+                        let returned_count = u16::try_from(decisions.len()).map_err(|_| {
+                            ProjectInterfaceError::new("project_decision_page_invalid")
+                        })?;
+                        ProjectDecisionPage::new(
+                            ledger_position,
+                            returned_count.max(DEFAULT_PROJECT_DECISION_PAGE_SIZE),
+                            returned_count,
+                            false,
+                            None,
+                        )?
+                    }
+                };
+                Ok(ProjectLedgerSnapshot {
+                    ledger_position,
+                    project,
+                    catalog,
+                    facts,
+                    goals,
+                    decisions,
+                    decision_page,
+                    approvals,
+                    diagnostics,
+                })
+            }
+        }
     }
 }
 
@@ -1000,19 +1246,49 @@ mod tests {
         }
     }
 
+    fn current_response_parts() -> (ProjectLedgerSnapshot, ProjectCurrentView) {
+        let legacy = snapshot();
+        (
+            ProjectLedgerSnapshot {
+                ledger_position: legacy.ledger_position,
+                project: legacy.project,
+                catalog: legacy.catalog,
+                facts: legacy.facts,
+                goals: legacy.goals,
+                decisions: legacy.decisions,
+                decision_page: legacy.decision_page.expect("decision page"),
+                approvals: legacy.approvals,
+                diagnostics: legacy.diagnostics,
+            },
+            ProjectCurrentView {
+                observed_ledger_position: 7,
+                owner_epoch: legacy.runtime.owner_epoch,
+                fatal: legacy.runtime.fatal,
+                instances: legacy.instances,
+            },
+        )
+    }
+
     #[test]
     fn current_contract_round_trips_neutral_data() {
-        let response = ProjectInterfaceResponse::new(
+        let (snapshot, current) = current_response_parts();
+        let response = ProjectInterfaceResponse::new_current(
             ProjectInterfaceRequest::current()
                 .negotiate()
                 .expect("version"),
-            snapshot(),
+            snapshot,
+            current,
         )
         .expect("response");
         let bytes = serde_json::to_vec(&response).expect("encode");
         let json = std::str::from_utf8(&bytes).expect("UTF-8 JSON");
         assert!(!json.contains("\"source_detector\":"));
         assert!(!json.contains("\"reason_code\":"));
+        let value: serde_json::Value = serde_json::from_slice(&bytes).expect("JSON value");
+        assert!(value["snapshot"].get("instances").is_none());
+        assert!(value["snapshot"].get("runtime").is_none());
+        assert!(value["current"].get("instances").is_some());
+        assert!(value["current"].get("fatal").is_some());
         let decoded: ProjectInterfaceResponse = serde_json::from_slice(&bytes).expect("decode");
         decoded.validate().expect("valid response");
         assert_eq!(decoded, response);
@@ -1047,7 +1323,7 @@ mod tests {
         let mut legacy_snapshot = snapshot();
         legacy_snapshot.decision_page = None;
         let response =
-            ProjectInterfaceResponse::new(PROJECT_INTERFACE_CONTRACT_V1, legacy_snapshot)
+            ProjectInterfaceResponse::new_legacy(PROJECT_INTERFACE_CONTRACT_V1, legacy_snapshot)
                 .expect("response");
         let mut value = serde_json::to_value(response).expect("value");
         value["contract_version"] = serde_json::json!("actingcommand.project-interface.v9");
@@ -1066,6 +1342,11 @@ mod tests {
         let request = ProjectInterfaceRequest::current()
             .with_decision_page(page)
             .expect("paged request");
+        let request_value = serde_json::to_value(&request).expect("request value");
+        assert_eq!(
+            request_value["schema_version"],
+            PROJECT_INTERFACE_REQUEST_SCHEMA_VERSION
+        );
         let decoded: ProjectInterfaceRequest =
             serde_json::from_slice(&serde_json::to_vec(&request).expect("encode request"))
                 .expect("decode request");

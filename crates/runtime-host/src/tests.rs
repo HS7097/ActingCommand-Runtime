@@ -19,9 +19,9 @@ use actingcommand_contract::{
     PerformanceControlLevel, PerformanceMonitorHealth, PolicyExecutionOutcome, PolicyFailureClass,
     PolicyFailureDisposition, PolicyPayload, PolicyPlanningSignalEventData,
     PolicyPlanningSignalKind, ProjectDecisionPageRequest, ProjectDecisionState,
-    ProjectInterfaceRequest, ProjectInterfaceSnapshot, ProjectedArtifactReference,
-    ProjectionPayload, ProjectionProfile, ProposalClass, ProposalDisposition, ProposalDocument,
-    ProposalKind, ProposalPatchOperation, PublicEventPayload, RUNTIME_INFO_FILE, ReleasePayload,
+    ProjectInterfaceRequest, ProjectLedgerSnapshot, ProjectedArtifactReference, ProjectionPayload,
+    ProjectionProfile, ProposalClass, ProposalDisposition, ProposalDocument, ProposalKind,
+    ProposalPatchOperation, PublicEventPayload, RUNTIME_INFO_FILE, ReleasePayload,
     ReleaseResourceVersion, ReleaseTransitionKind, ResourceAuthoringEvent, ResourceAuthoringPhase,
     RuntimeCaptureBackend, RuntimeErrorCode, RuntimeEventQueryCursor, RuntimeEventQueryPageRequest,
     RuntimeMonitorPolicy, RuntimeOperation, RuntimePlanningDocument, RuntimePlanningDocumentKind,
@@ -605,10 +605,7 @@ fn projected_events(
     }
 }
 
-fn project_snapshot(
-    host: &RuntimeHost,
-    request: ProjectInterfaceRequest,
-) -> ProjectInterfaceSnapshot {
+fn project_snapshot(host: &RuntimeHost, request: ProjectInterfaceRequest) -> ProjectLedgerSnapshot {
     let mut client = TestClient::connect(host);
     let request = client.request(RuntimeOperation::ProjectInterface { request });
     let receipt = client.send(&request);
@@ -616,7 +613,10 @@ fn project_snapshot(
     else {
         panic!("expected project interface response")
     };
-    response.snapshot().clone()
+    response
+        .snapshot()
+        .expect("current project snapshot")
+        .clone()
 }
 
 fn projected_task_semantic_fact(
@@ -1657,22 +1657,23 @@ fn project_interface_projects_runtime_domains_and_rejects_unknown_versions() {
     let RuntimeResult::ProjectInterface { response } = receipt.result().expect("result") else {
         panic!("expected project interface response");
     };
-    let snapshot = response.snapshot();
+    let snapshot = response.snapshot().expect("current project snapshot");
     assert_eq!(
         snapshot.project.as_ref().expect("project").project_id,
         "fixture.catalog-a"
     );
     assert_eq!(snapshot.catalog.as_ref().expect("catalog").goal_count, 1);
-    assert_eq!(snapshot.instances.len(), 1);
+    let current = response.current().expect("current runtime view");
+    assert_eq!(current.instances.len(), 1);
     assert_eq!(snapshot.facts.len(), 1);
     assert_eq!(snapshot.goals.len(), 1);
     assert_eq!(snapshot.decisions.len(), 1);
     assert_eq!(snapshot.decisions[0].state, ProjectDecisionState::Admitted);
-    let decision_page = snapshot.decision_page.as_ref().expect("decision page");
+    let decision_page = &snapshot.decision_page;
     assert_eq!(decision_page.returned_count(), 1);
     assert!(!decision_page.has_more());
     assert_eq!(snapshot.approvals.len(), 1);
-    assert!(!snapshot.runtime.fatal);
+    assert!(!current.fatal);
     assert_eq!(state.open_count.load(Ordering::Acquire), 0);
     assert_eq!(state.capture_open_count.load(Ordering::Acquire), 0);
 
@@ -1719,6 +1720,19 @@ fn project_interface_v1_rejects_decision_history_that_requires_pagination() {
         ])
         .expect("v1 request"),
     });
+    let denied = client.send(&request);
+    assert_eq!(denied.state(), RuntimeReceiptState::Denied);
+    assert_eq!(
+        denied.error_projection().expect("typed denial").code,
+        RuntimeErrorCode::ProtocolInvalid
+    );
+    let request = ProjectInterfaceRequest::new(vec![
+        actingcommand_contract::PROJECT_INTERFACE_CONTRACT_V2.to_owned(),
+    ])
+    .expect("v2 request")
+    .with_decision_page(ProjectDecisionPageRequest::new(2, None).expect("v2 page request"))
+    .expect("paged v2 request");
+    let request = client.request(RuntimeOperation::ProjectInterface { request });
     let denied = client.send(&request);
     assert_eq!(denied.state(), RuntimeReceiptState::Denied);
     assert_eq!(
@@ -1790,6 +1804,7 @@ fn project_interface_pages_decision_history_without_duplicates_or_loss() {
     let mut collected = Vec::new();
     let mut collected_states = BTreeMap::new();
     let mut frozen_projection = None;
+    let mut queued_waiter = None;
     for page_index in 0..4 {
         let request = ProjectInterfaceRequest::current()
             .with_decision_page(
@@ -1802,7 +1817,17 @@ fn project_interface_pages_decision_history_without_duplicates_or_loss() {
         else {
             panic!("expected project interface response")
         };
-        let snapshot = response.snapshot();
+        let snapshot = response.snapshot().expect("current project snapshot");
+        let current = response.current().expect("current runtime view");
+        assert!(current.observed_ledger_position >= snapshot.ledger_position);
+        let current_instance = current.instances.first().expect("project instance");
+        if page_index == 0 {
+            assert!(current_instance.lease_active);
+            assert_eq!(current_instance.queued_request_count, 0);
+        } else {
+            assert!(current_instance.lease_active);
+            assert_eq!(current_instance.queued_request_count, 1);
+        }
         let projection = (
             snapshot.ledger_position,
             snapshot.catalog.clone(),
@@ -1822,10 +1847,21 @@ fn project_interface_pages_decision_history_without_duplicates_or_loss() {
             collected.push(decision.decision_id.clone());
             collected_states.insert(decision.decision_id.clone(), decision.state);
         }
-        let page = snapshot.decision_page.as_ref().expect("decision page");
+        let page = &snapshot.decision_page;
         assert_eq!(usize::from(page.returned_count()), snapshot.decisions.len());
         cursor = page.next_cursor().cloned();
         if page_index == 0 {
+            let mut waiter = TestClient::connect(&host);
+            let queued = waiter.request(RuntimeOperation::queue_lease(
+                POLICY_INSTANCE_ALIAS,
+                waiter.ids.mint_holder_id().expect("waiter holder"),
+                LeaseQueuePolicy::new(LeasePriority::Normal, 60_000).expect("queue policy"),
+            ));
+            assert!(matches!(
+                waiter.send(&queued).result(),
+                Some(RuntimeResult::LeaseQueued { .. })
+            ));
+            queued_waiter = Some(waiter);
             host.complete_policy_dispatch(&admitted.decision_id)
                 .expect("complete after snapshot");
             host.publish_fact(stored_fact(
@@ -1876,6 +1912,7 @@ fn project_interface_pages_decision_history_without_duplicates_or_loss() {
         &current.approvals,
         &frozen_projection.as_ref().expect("frozen projection").3
     );
+    drop(queued_waiter);
     drop(client);
     host.close().expect("close host");
 }
@@ -6400,7 +6437,14 @@ fn approval_history_compacts_without_losing_durable_target_identity() {
     else {
         panic!("expected project interface response")
     };
-    assert_eq!(response.snapshot().approvals.len(), 256);
+    assert_eq!(
+        response
+            .snapshot()
+            .expect("current project snapshot")
+            .approvals
+            .len(),
+        256
+    );
     drop(client);
     host.close().expect("close host");
 
