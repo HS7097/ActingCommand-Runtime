@@ -14,6 +14,7 @@ pub mod error;
 pub mod input;
 pub mod maatouch;
 pub mod minitouch;
+mod mumu;
 pub mod replay;
 pub mod touch;
 mod vendor_stdio;

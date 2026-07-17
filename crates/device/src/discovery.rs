@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
-use crate::adb::mumu_adb_candidates;
+use crate::mumu::{mumu_adb_candidates, mumu_root_from_path};
 use crate::{DeviceError, DeviceResult};
 use std::path::{Path, PathBuf};
 #[cfg(windows)]
@@ -73,7 +73,24 @@ fn mumu_device_from_process(
             return None;
         }
     };
-    let adb_path = mumu_process_adb_path(process)?;
+    let adb_path = match mumu_process_adb_path(process) {
+        Ok(Some(path)) => path,
+        Ok(None) => {
+            diagnostics.push(DeviceDiscoveryDiagnostic {
+                process_id: process.process_id,
+                message: "MuMu process installation contains no discoverable ADB executable"
+                    .to_string(),
+            });
+            return None;
+        }
+        Err(err) => {
+            diagnostics.push(DeviceDiscoveryDiagnostic {
+                process_id: process.process_id,
+                message: err.message().to_string(),
+            });
+            return None;
+        }
+    };
     let port = mumu_instance_port(instance_id)?;
     Some(DiscoveredDevice {
         serial: format!("127.0.0.1:{port}"),
@@ -134,34 +151,34 @@ fn parse_mumu_player_comment_instance(command_line: &str) -> Option<u16> {
         .and_then(|part| part.parse().ok())
 }
 
-fn mumu_process_adb_path(process: &DeviceDiscoveryProcess) -> Option<PathBuf> {
-    let executable = process.executable_path.as_deref()?;
-    let sibling_adb = executable.parent()?.join("adb.exe");
+fn mumu_process_adb_path(process: &DeviceDiscoveryProcess) -> DeviceResult<Option<PathBuf>> {
+    let Some(executable) = process.executable_path.as_deref() else {
+        return Ok(None);
+    };
+    let Some(parent) = executable.parent() else {
+        return Ok(None);
+    };
+    let sibling_adb = parent.join("adb.exe");
     if sibling_adb.is_file() {
-        return Some(sibling_adb);
+        return Ok(Some(sibling_adb));
     }
-    mumu_root_from_path(executable).and_then(|root| {
-        mumu_adb_candidates(&root)
-            .into_iter()
-            .find(|path| path.is_file())
-    })
+    let Some(root) = mumu_root_from_path(executable) else {
+        return Ok(None);
+    };
+    Ok(mumu_adb_candidates(&root)?
+        .into_iter()
+        .find(|path| path.is_file()))
 }
 
-fn mumu_root_from_path(path: &Path) -> Option<PathBuf> {
-    let path_text = path.to_string_lossy();
-    split_before_marker(&path_text, r"\nx_device\")
-        .or_else(|| split_before_marker(&path_text, "/nx_device/"))
-        .or_else(|| split_before_marker(&path_text, r"\nx_main\"))
-        .or_else(|| split_before_marker(&path_text, "/nx_main/"))
-        .map(PathBuf::from)
-}
-
-fn split_before_marker(path: &str, marker: &str) -> Option<String> {
-    let lower_path = path.to_ascii_lowercase();
-    let lower_marker = marker.to_ascii_lowercase();
-    lower_path
-        .find(&lower_marker)
-        .map(|index| path[..index].to_string())
+pub(crate) fn running_mumu_executable_paths() -> DeviceResult<Vec<PathBuf>> {
+    let mut paths = system_processes()?
+        .into_iter()
+        .filter(is_mumu_device_process)
+        .filter_map(|process| process.executable_path)
+        .collect::<Vec<_>>();
+    paths.sort();
+    paths.dedup();
+    Ok(paths)
 }
 
 fn mumu_instance_port(instance_id: u16) -> Option<u16> {
@@ -198,7 +215,17 @@ Get-CimInstance Win32_Process | ForEach-Object {
   [Console]::Out.WriteLine(($fields -join "`t"))
 }
 "#;
-    let output = Command::new("powershell.exe")
+    let powershell = std::env::var_os("SystemRoot")
+        .map(PathBuf::from)
+        .map(|root| {
+            root.join("System32")
+                .join("WindowsPowerShell")
+                .join("v1.0")
+                .join("powershell.exe")
+        })
+        .filter(|path| path.is_file())
+        .unwrap_or_else(|| PathBuf::from("powershell.exe"));
+    let output = Command::new(&powershell)
         .args([
             "-NoProfile",
             "-ExecutionPolicy",
@@ -280,7 +307,7 @@ mod tests {
         let root = temp_mumu_root("lists-running");
         let executable = root
             .join("nx_device")
-            .join("12.0")
+            .join("13.7")
             .join("shell")
             .join("MuMuNxDevice.exe");
         fs::write(executable.parent().unwrap().join("adb.exe"), b"adb").expect("sibling adb");
@@ -308,7 +335,7 @@ mod tests {
         let root = temp_mumu_root("no-recoverable-instance");
         let executable = root
             .join("nx_device")
-            .join("12.0")
+            .join("13.7")
             .join("shell")
             .join("MuMuNxDevice.exe");
         fs::write(executable.parent().unwrap().join("adb.exe"), b"adb").expect("sibling adb");
@@ -336,7 +363,7 @@ mod tests {
         let root = temp_mumu_root("explicit-zero");
         let executable = root
             .join("nx_device")
-            .join("12.0")
+            .join("13.7")
             .join("shell")
             .join("MuMuNxDevice.exe");
         fs::write(executable.parent().unwrap().join("adb.exe"), b"adb").expect("sibling adb");
@@ -374,7 +401,7 @@ mod tests {
         let root = temp_mumu_root("dedup");
         let executable = root
             .join("nx_device")
-            .join("12.0")
+            .join("13.7")
             .join("shell")
             .join("MuMuNxDevice.exe");
         fs::write(executable.parent().unwrap().join("adb.exe"), b"adb").expect("sibling adb");
@@ -396,7 +423,7 @@ mod tests {
         let root = temp_mumu_root("fallback-adb");
         let executable = root
             .join("nx_device")
-            .join("12.0")
+            .join("13.7")
             .join("shell")
             .join("MuMuNxDevice.exe");
         let nx_main_adb = root.join("nx_main").join("adb.exe");
@@ -422,7 +449,7 @@ mod tests {
         let root = temp_mumu_root("sibling-adb");
         let executable = root
             .join("nx_device")
-            .join("12.0")
+            .join("13.7")
             .join("shell")
             .join("MuMuNxDevice.exe");
         let sibling_adb = executable.parent().unwrap().join("adb.exe");
@@ -449,7 +476,7 @@ mod tests {
         let root = temp_mumu_root("comment-instance");
         let executable = root
             .join("nx_device")
-            .join("12.0")
+            .join("13.7")
             .join("shell")
             .join("MuMuNxDevice.exe");
         fs::write(executable.parent().unwrap().join("adb.exe"), b"adb").expect("sibling adb");
@@ -484,7 +511,7 @@ mod tests {
         let root = temp_mumu_root("invalid-instance");
         let executable = root
             .join("nx_device")
-            .join("12.0")
+            .join("13.7")
             .join("shell")
             .join("MuMuNxDevice.exe");
         fs::write(executable.parent().unwrap().join("adb.exe"), b"adb").expect("sibling adb");
@@ -509,7 +536,7 @@ mod tests {
 
     #[test]
     fn parses_windows_process_rows() {
-        let rows = "3896\tMuMuNxDevice.exe\tD:\\BST\\MuMuPlayer\\nx_device\\12.0\\shell\\MuMuNxDevice.exe\tD:\\BST\\MuMuPlayer\\nx_device\\12.0\\shell\\MuMuNxDevice.exe -v 1\n";
+        let rows = "3896\tMuMuNxDevice.exe\tD:\\BST\\MuMuPlayer\\nx_device\\13.7\\shell\\MuMuNxDevice.exe\tD:\\BST\\MuMuPlayer\\nx_device\\13.7\\shell\\MuMuNxDevice.exe -v 1\n";
 
         let processes = parse_process_rows(rows).expect("process rows should parse");
 
@@ -519,7 +546,7 @@ mod tests {
         assert_eq!(
             processes[0].executable_path.as_deref(),
             Some(Path::new(
-                r"D:\BST\MuMuPlayer\nx_device\12.0\shell\MuMuNxDevice.exe"
+                r"D:\BST\MuMuPlayer\nx_device\13.7\shell\MuMuNxDevice.exe"
             ))
         );
     }
@@ -531,7 +558,7 @@ mod tests {
             std::process::id()
         ));
         let _ = fs::remove_dir_all(&root);
-        fs::create_dir_all(root.join("nx_device").join("12.0").join("shell"))
+        fs::create_dir_all(root.join("nx_device").join("13.7").join("shell"))
             .expect("device shell");
         root
     }

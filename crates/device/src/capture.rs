@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
-use crate::adb::{Adb, AdbConfig, stop_child};
+use crate::adb::{ACTINGCOMMAND_NEMU_FOLDER_ENV, Adb, AdbConfig, stop_child};
+use crate::mumu::{mumu_root_from_path, resolve_mumu_backend_paths};
 use crate::vendor_stdio::{VendorStdioCapture, VendorStdioSession};
 use crate::{DeviceError, DeviceResult, DeviceTarget};
 use image::{
@@ -284,6 +285,7 @@ pub struct SelectedCaptureBackend {
 pub fn create_capture_backend(
     config: CaptureBackendConfig,
 ) -> DeviceResult<SelectedCaptureBackend> {
+    let config = prepare_capture_backend_config(config)?;
     match config.requested {
         CaptureBackendChoice::Auto => create_auto_capture_backend(config),
         CaptureBackendChoice::AutoFastest => create_auto_fastest_capture_backend(config),
@@ -328,6 +330,87 @@ pub fn create_capture_backend(
             ))
         }
     }
+}
+
+fn prepare_capture_backend_config(
+    config: CaptureBackendConfig,
+) -> DeviceResult<CaptureBackendConfig> {
+    let explicit_root = config
+        .nemu
+        .nemu_folder
+        .clone()
+        .or_else(|| std::env::var_os(ACTINGCOMMAND_NEMU_FOLDER_ENV).map(PathBuf::from));
+    let explicit_dll = config
+        .nemu
+        .dll_path
+        .clone()
+        .or_else(|| std::env::var_os("ACTINGCOMMAND_NEMU_IPC_DLL").map(PathBuf::from));
+    prepare_capture_backend_config_with_resolver(
+        config,
+        explicit_root,
+        explicit_dll,
+        resolve_mumu_backend_paths,
+    )
+}
+
+fn prepare_capture_backend_config_with_resolver<F>(
+    mut config: CaptureBackendConfig,
+    explicit_root: Option<PathBuf>,
+    explicit_dll: Option<PathBuf>,
+    resolve_mumu: F,
+) -> DeviceResult<CaptureBackendConfig>
+where
+    F: FnOnce(
+        Option<PathBuf>,
+        Option<PathBuf>,
+        Option<PathBuf>,
+    ) -> DeviceResult<Option<crate::mumu::MumuBackendPaths>>,
+{
+    if !config.nemu.mumu_identity_resolved
+        && matches!(
+            config.requested,
+            CaptureBackendChoice::Auto
+                | CaptureBackendChoice::AutoFastest
+                | CaptureBackendChoice::NemuIpc
+        )
+    {
+        let configured_adb = (!config.adb_config.adb_path.trim().is_empty())
+            .then(|| PathBuf::from(&config.adb_config.adb_path));
+        config.nemu.mumu_identity_resolved = true;
+        let generic_adb_for_auto = matches!(
+            config.requested,
+            CaptureBackendChoice::Auto | CaptureBackendChoice::AutoFastest
+        ) && configured_adb
+            .as_deref()
+            .is_some_and(|path| mumu_root_from_path(path).is_none())
+            && explicit_root.is_none()
+            && explicit_dll.is_none();
+        if generic_adb_for_auto {
+            config.nemu.mumu_identity_unavailable = Some(format!(
+                "Nemu IPC unavailable: configured ADB {} is not associated with a MuMu installation; generic Auto channels remain available",
+                config.adb_config.adb_path
+            ));
+        } else {
+            match resolve_mumu(configured_adb, explicit_root, explicit_dll)? {
+                Some(paths) => {
+                    config.adb_config.adb_path = paths.adb_path.to_string_lossy().to_string();
+                    config.nemu.nemu_folder = Some(paths.installation.root);
+                    config.nemu.dll_path = Some(paths.capture_dll_path);
+                    config.nemu.mumu_identity_unavailable = None;
+                }
+                None => {
+                    config.nemu.mumu_identity_unavailable = Some(
+                        "Nemu IPC unavailable: no coordinated MuMu installation identity was resolved"
+                            .to_string(),
+                    );
+                }
+            }
+        }
+    }
+    if config.adb_config.adb_path.trim().is_empty() {
+        config.adb_config = AdbConfig::resolve(None)?.0;
+    }
+    Ok(config)
 }
 
 fn selected_explicit(
@@ -870,6 +953,8 @@ pub struct NemuIpcConfig {
     pub dll_path: Option<PathBuf>,
     pub instance_id: Option<i32>,
     pub display_id: i32,
+    mumu_identity_resolved: bool,
+    mumu_identity_unavailable: Option<String>,
 }
 
 pub struct NemuIpcBackend {
@@ -889,6 +974,9 @@ impl NemuIpcBackend {
         config: NemuIpcConfig,
         capture_timeout: Duration,
     ) -> DeviceResult<Self> {
+        if let Some(reason) = &config.mumu_identity_unavailable {
+            return Err(DeviceError::fatal(reason.clone()));
+        }
         if std::env::consts::OS != "windows" {
             return Err(DeviceError::fatal(
                 "Nemu IPC unavailable: host OS is not Windows",
@@ -903,7 +991,18 @@ impl NemuIpcBackend {
                     "Nemu IPC unavailable: cannot derive MuMu instance id from serial {serial}"
                 ))
             })?;
-        let (nemu_folder, dll_path) = resolve_nemu_paths(config.nemu_folder, config.dll_path)?;
+        let (nemu_folder, dll_path) = if config.mumu_identity_resolved {
+            match (config.nemu_folder, config.dll_path) {
+                (Some(folder), Some(dll_path)) => (folder, dll_path),
+                _ => {
+                    return Err(DeviceError::fatal(
+                        "Nemu IPC unavailable: no coordinated MuMu installation identity was resolved",
+                    ));
+                }
+            }
+        } else {
+            resolve_nemu_paths(config.nemu_folder, config.dll_path)?
+        };
         let mut worker = NemuIpcWorker::spawn(
             nemu_folder,
             dll_path,
@@ -1731,74 +1830,16 @@ fn resolve_nemu_paths(
     folder: Option<PathBuf>,
     dll_path: Option<PathBuf>,
 ) -> DeviceResult<(PathBuf, PathBuf)> {
-    if let Some(dll_path) =
-        dll_path.or_else(|| std::env::var_os("ACTINGCOMMAND_NEMU_IPC_DLL").map(PathBuf::from))
-    {
-        require_file(&dll_path, "Nemu IPC DLL")?;
-        let folder = folder
-            .or_else(|| std::env::var_os("ACTINGCOMMAND_NEMU_FOLDER").map(PathBuf::from))
-            .or_else(|| infer_nemu_folder_from_dll(&dll_path))
-            .ok_or_else(|| {
-                DeviceError::fatal(
-                    "Nemu IPC unavailable: set ACTINGCOMMAND_NEMU_FOLDER with ACTINGCOMMAND_NEMU_IPC_DLL",
-                )
-            })?;
-        return Ok((folder, dll_path));
-    }
-
-    let folders = folder
-        .into_iter()
-        .chain(std::env::var_os("ACTINGCOMMAND_NEMU_FOLDER").map(PathBuf::from))
-        .chain(default_nemu_folders())
-        .collect::<Vec<_>>();
-    for folder in folders {
-        for dll in nemu_dll_candidates(&folder) {
-            if dll.is_file() {
-                return Ok((folder, dll));
-            }
-        }
-    }
-    Err(DeviceError::fatal(
-        "Nemu IPC unavailable: external_renderer_ipc.dll was not found; set ACTINGCOMMAND_NEMU_FOLDER or ACTINGCOMMAND_NEMU_IPC_DLL",
-    ))
-}
-
-fn infer_nemu_folder_from_dll(dll: &Path) -> Option<PathBuf> {
-    let mut path = dll.parent()?.to_path_buf();
-    for _ in 0..3 {
-        path = path.parent()?.to_path_buf();
-    }
-    Some(path)
-}
-
-fn default_nemu_folders() -> Vec<PathBuf> {
-    ["ProgramFiles", "ProgramFiles(x86)"]
-        .into_iter()
-        .filter_map(std::env::var_os)
-        .flat_map(|root| {
-            let root = PathBuf::from(root);
-            [
-                root.join("Netease").join("MuMu Player 12"),
-                root.join("Netease").join("MuMuPlayer-12.0"),
-                root.join("MuMuPlayer-12.0"),
-            ]
-        })
-        .collect()
-}
-
-fn nemu_dll_candidates(folder: &Path) -> Vec<PathBuf> {
-    vec![
-        folder
-            .join("shell")
-            .join("sdk")
-            .join("external_renderer_ipc.dll"),
-        folder
-            .join("nx_device")
-            .join("12.0")
-            .join("shell")
-            .join("sdk")
-            .join("external_renderer_ipc.dll"),
-    ]
+    let explicit_root =
+        folder.or_else(|| std::env::var_os(ACTINGCOMMAND_NEMU_FOLDER_ENV).map(PathBuf::from));
+    let explicit_dll =
+        dll_path.or_else(|| std::env::var_os("ACTINGCOMMAND_NEMU_IPC_DLL").map(PathBuf::from));
+    let paths = resolve_mumu_backend_paths(None, explicit_root, explicit_dll)?.ok_or_else(|| {
+        DeviceError::fatal(
+            "Nemu IPC unavailable: no MuMu installation was discovered; set ACTINGCOMMAND_NEMU_FOLDER or ACTINGCOMMAND_NEMU_IPC_DLL",
+        )
+    })?;
+    Ok((paths.installation.root, paths.capture_dll_path))
 }
 
 fn serial_to_nemu_instance_id(serial: &str) -> Option<i32> {
@@ -1924,14 +1965,30 @@ mod tests {
         let _guard = capture_probe_cache_test_guard();
         clear_capture_probe_cache_for_tests();
 
-        let config = CaptureBackendConfig::new(
+        let mut config = CaptureBackendConfig::new(
             AdbConfig {
-                adb_path: String::new(),
+                adb_path: "cached-adb".to_string(),
                 command_timeout: Duration::from_millis(1),
             },
             DeviceTarget::default(),
         )
         .with_requested(CaptureBackendChoice::Auto);
+        config.nemu.mumu_identity_resolved = true;
+        for backend in [
+            CaptureBackendName::NemuIpc,
+            CaptureBackendName::DroidcastRaw,
+        ] {
+            capture_probe_cache_store(
+                CaptureProbeCacheKey::new(&config, backend),
+                &CaptureBackendAttempt::failure(
+                    backend,
+                    "cached unavailable".to_string(),
+                    Some(1),
+                    false,
+                ),
+            )
+            .expect("store unavailable cache");
+        }
         let key = CaptureProbeCacheKey::new(&config, CaptureBackendName::AdbScreencap);
         capture_probe_cache_store(
             key,
@@ -2266,6 +2323,179 @@ mod tests {
     }
 
     #[test]
+    fn explicit_nemu_dll_must_belong_to_configured_installation() {
+        let temp = std::env::temp_dir().join(format!(
+            "actingcommand-nemu-root-mismatch-{}",
+            std::process::id()
+        ));
+        let configured = temp.join("MuMu Player Configured");
+        let other = temp.join("MuMuPlayer-Other");
+        let dll = other.join("nx_device/13.7/shell/sdk/external_renderer_ipc.dll");
+        let _ = fs::remove_dir_all(&temp);
+        fs::create_dir_all(&configured).expect("configured root");
+        fs::create_dir_all(dll.parent().expect("DLL parent")).expect("DLL parent");
+        fs::write(&dll, b"fixture").expect("DLL fixture");
+
+        let err = resolve_nemu_paths(Some(configured.clone()), Some(dll.clone()))
+            .expect_err("cross-install DLL must fail");
+
+        assert!(err.message().contains("not selected root"));
+        assert!(
+            err.message().contains(
+                &fs::canonicalize(configured)
+                    .expect("canonical root")
+                    .display()
+                    .to_string()
+            )
+        );
+        assert!(
+            err.message().contains(
+                &fs::canonicalize(dll)
+                    .expect("canonical DLL")
+                    .display()
+                    .to_string()
+            )
+        );
+        let _ = fs::remove_dir_all(temp);
+    }
+
+    #[test]
+    fn auto_capture_rejects_cross_install_adb_before_fallback() {
+        let temp = std::env::temp_dir().join(format!(
+            "actingcommand-capture-shared-identity-{}",
+            std::process::id()
+        ));
+        let adb_root = temp.join("MuMu Player A");
+        let capture_root = temp.join("MuMuPlayer-B");
+        let adb = adb_root.join("nx_main/adb.exe");
+        let dll = capture_root.join("nx_device/17.0/shell/sdk/external_renderer_ipc.dll");
+        let _ = fs::remove_dir_all(&temp);
+        for file in [&adb, &dll] {
+            fs::create_dir_all(file.parent().expect("parent")).expect("candidate parent");
+            fs::write(file, b"fixture").expect("candidate file");
+        }
+        let mut config = CaptureBackendConfig::new(
+            AdbConfig {
+                adb_path: adb.display().to_string(),
+                command_timeout: Duration::from_secs(1),
+            },
+            DeviceTarget::default(),
+        )
+        .with_requested(CaptureBackendChoice::Auto);
+        config.nemu.nemu_folder = Some(capture_root.clone());
+        config.nemu.dll_path = Some(dll);
+
+        let err = match create_capture_backend(config) {
+            Ok(_) => panic!("cross-installation auto config must fail before fallback"),
+            Err(err) => err,
+        };
+
+        assert!(err.message().contains("one installation identity"));
+        assert!(err.message().contains(&adb_root.display().to_string()));
+        assert!(err.message().contains(&capture_root.display().to_string()));
+        let _ = fs::remove_dir_all(temp);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn explicit_nemu_capture_public_entry_keeps_configured_adb_version() {
+        let temp = std::env::temp_dir().join(format!(
+            "actingcommand-capture-version-identity-{}",
+            std::process::id()
+        ));
+        let root = temp.join("MuMuPlayer-MultiVersion");
+        let old_dll = root.join("nx_device/12.0/shell/sdk/external_renderer_ipc.dll");
+        let selected_adb = root.join("nx_device/15.0/shell/adb.exe");
+        let selected_dll = root.join("nx_device/15.0/shell/sdk/external_renderer_ipc.dll");
+        let _ = fs::remove_dir_all(&temp);
+        for file in [&old_dll, &selected_adb, &selected_dll] {
+            fs::create_dir_all(file.parent().expect("parent")).expect("candidate parent");
+            fs::write(file, b"not a dynamic library").expect("candidate file");
+        }
+        let config = CaptureBackendConfig::new(
+            AdbConfig {
+                adb_path: selected_adb.display().to_string(),
+                command_timeout: Duration::from_secs(1),
+            },
+            DeviceTarget::default(),
+        )
+        .with_requested(CaptureBackendChoice::NemuIpc);
+
+        let err = match create_capture_backend(config) {
+            Ok(_) => panic!("invalid fixture DLL must not create a Nemu backend"),
+            Err(err) => err,
+        };
+        let selected_dll = fs::canonicalize(selected_dll).expect("canonical selected DLL");
+        let old_dll = fs::canonicalize(old_dll).expect("canonical old DLL");
+
+        assert!(err.message().contains(&selected_dll.display().to_string()));
+        assert!(!err.message().contains(&old_dll.display().to_string()));
+        let _ = fs::remove_dir_all(temp);
+    }
+
+    #[test]
+    fn generic_adb_auto_choices_do_not_force_discovered_mumu_pairing() {
+        let temp = std::env::temp_dir().join(format!(
+            "actingcommand-capture-generic-adb-{}",
+            std::process::id()
+        ));
+        let generic_adb = temp.join("platform-tools/adb.exe");
+        let installed_root = temp.join("MuMu Player Installed");
+        let installed_dll =
+            installed_root.join("nx_device/17.0/shell/sdk/external_renderer_ipc.dll");
+        let _ = fs::remove_dir_all(&temp);
+        for file in [&generic_adb, &installed_dll] {
+            fs::create_dir_all(file.parent().expect("parent")).expect("candidate parent");
+            fs::write(file, b"fixture").expect("candidate file");
+        }
+
+        for requested in [
+            CaptureBackendChoice::Auto,
+            CaptureBackendChoice::AutoFastest,
+        ] {
+            let resolver_called = Cell::new(false);
+            let config = CaptureBackendConfig::new(
+                AdbConfig {
+                    adb_path: generic_adb.display().to_string(),
+                    command_timeout: Duration::from_secs(1),
+                },
+                DeviceTarget::default(),
+            )
+            .with_requested(requested);
+            let prepared = prepare_capture_backend_config_with_resolver(
+                config,
+                None,
+                None,
+                |configured_adb, _, _| {
+                    resolver_called.set(true);
+                    resolve_mumu_backend_paths(
+                        configured_adb,
+                        Some(installed_root.clone()),
+                        Some(installed_dll.clone()),
+                    )
+                },
+            )
+            .expect("generic ADB must remain available to Auto capture");
+
+            assert!(!resolver_called.get());
+            assert_eq!(
+                prepared.adb_config.adb_path,
+                generic_adb.display().to_string()
+            );
+            assert!(prepared.nemu.mumu_identity_resolved);
+            assert!(
+                prepared
+                    .nemu
+                    .mumu_identity_unavailable
+                    .as_deref()
+                    .is_some_and(|message| message.contains("not associated"))
+            );
+        }
+
+        let _ = fs::remove_dir_all(temp);
+    }
+
+    #[test]
     fn maps_nemu_instance_id_from_serial() {
         assert_eq!(serial_to_nemu_instance_id("127.0.0.1:16384"), Some(0));
         assert_eq!(serial_to_nemu_instance_id("127.0.0.1:16416"), Some(1));
@@ -2295,7 +2525,7 @@ mod tests {
         static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
         LOCK.get_or_init(|| Mutex::new(()))
             .lock()
-            .expect("test lock")
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 
     fn rgb8_ids(ids: &[u8]) -> Vec<u8> {
