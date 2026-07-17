@@ -678,6 +678,41 @@ mod tests {
     }
 
     #[test]
+    fn compiler_enforces_fact_freshness_boundaries() {
+        for max_age_ms in [
+            serde_json::Value::Null,
+            serde_json::json!(1),
+            serde_json::json!(crate::MAX_FACT_MAX_AGE_MS),
+        ] {
+            let sources = mutate_tasks(|tasks| {
+                tasks["tasks"][0]["trigger"] = serde_json::json!({
+                    "kind": "fact",
+                    "scope": {"kind": "instance", "instance_id": "fixture-instance-a"},
+                    "fact_key": "env.ui_theme",
+                    "comparison": "eq",
+                    "value": {"type": "string", "value": "Neutral"},
+                    "max_age_ms": max_age_ms
+                });
+            });
+            compile_catalog(&sources).expect("fact freshness boundary must compile");
+        }
+
+        for max_age_ms in [0, crate::MAX_FACT_MAX_AGE_MS + 1] {
+            let sources = mutate_tasks(|tasks| {
+                tasks["tasks"][0]["trigger"] = serde_json::json!({
+                    "kind": "fact",
+                    "scope": {"kind": "instance", "instance_id": "fixture-instance-a"},
+                    "fact_key": "env.ui_theme",
+                    "comparison": "eq",
+                    "value": {"type": "string", "value": "Neutral"},
+                    "max_age_ms": max_age_ms
+                });
+            });
+            assert!(compile_catalog(&sources).is_err());
+        }
+    }
+
+    #[test]
     fn local_clock_rejects_absolute_schedule_and_reveal_identity_changes_hash() {
         let local_at = mutate_timeline(|timeline| {
             timeline["events"][0]["schedule"] = serde_json::json!({

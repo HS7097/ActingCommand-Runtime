@@ -22,6 +22,7 @@ pub const MAX_GOALS_PER_PROFILE: usize = 128;
 pub const MAX_INSTANCE_OVERRIDES_PER_TASK: usize = 128;
 pub const MAX_BUDGET_COUNT: u32 = 1_000_000;
 pub const MAX_CLOCK_DRIFT_MS: i64 = 604_800_000;
+pub const MAX_FACT_MAX_AGE_MS: u64 = 31_536_000_000;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(transparent)]
@@ -675,6 +676,14 @@ mod tests {
         assert_eq!(
             pools["$defs"]["pool"]["properties"]["projection"]["properties"]["amount"]["minimum"],
             1
+        );
+        assert_eq!(
+            common["$defs"]["predicate"]["oneOf"][5]["properties"]["max_age_ms"]["minimum"],
+            1
+        );
+        assert_eq!(
+            common["$defs"]["predicate"]["oneOf"][5]["properties"]["max_age_ms"]["maximum"],
+            MAX_FACT_MAX_AGE_MS
         );
         let schedules = common["$defs"]["clockSchedule"]["oneOf"]
             .as_array()

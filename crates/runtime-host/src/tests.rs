@@ -11,15 +11,16 @@ use actingcommand_contract::{
     ApprovalDisposition, ApprovalTarget, ArtifactKind, CaptureSequenceSpec,
     CatalogDeclarationPatch, CatalogPayload, CatalogProposal, ClientActionKind, ClientActionRecord,
     ClientActionValue, ContainedTaskRequest, EffectDisposition, EventActor, EventPayload,
-    EventQuery, EventSource, EventType, FactContent, FactRecord, FactScope,
-    FactValue as ContractFactValue, IdentifierIssuer, InputAction, InstanceFactContext, InstanceId,
-    IssuedCorrelationId, LeasePriority, LeaseQueuePolicy, LeaseQueueStatus, LeaseToken,
-    MonitorDiagnosis, MonitorDisposition, MonitorObservation, MonitorPayload,
-    MonitorRecoveryCoordinationReason, MonitorRecoveryKind, OriginModule, PerformanceControlLevel,
-    PerformanceMonitorHealth, PolicyExecutionOutcome, PolicyFailureClass, PolicyFailureDisposition,
-    PolicyPayload, PolicyPlanningSignalEventData, PolicyPlanningSignalKind, ProjectDecisionState,
-    ProjectInterfaceRequest, ProjectedArtifactReference, ProjectionPayload, ProjectionProfile,
-    ProposalClass, ProposalDisposition, ProposalDocument, ProposalKind, ProposalPatchOperation,
+    EventQuery, EventSource, EventType, FactContent, FactRecord, FactScope, FactTtlPolicy,
+    FactTtlSource, FactValue as ContractFactValue, IdentifierIssuer, InputAction,
+    InstanceFactContext, InstanceId, IssuedCorrelationId, LeasePriority, LeaseQueuePolicy,
+    LeaseQueueStatus, LeaseToken, MonitorDiagnosis, MonitorDisposition, MonitorObservation,
+    MonitorPayload, MonitorRecoveryCoordinationReason, MonitorRecoveryKind, OriginModule,
+    PerformanceControlLevel, PerformanceMonitorHealth, PolicyExecutionOutcome, PolicyFailureClass,
+    PolicyFailureDisposition, PolicyPayload, PolicyPlanningSignalEventData,
+    PolicyPlanningSignalKind, ProjectDecisionState, ProjectInterfaceRequest,
+    ProjectedArtifactReference, ProjectionPayload, ProjectionProfile, ProposalClass,
+    ProposalDisposition, ProposalDocument, ProposalKind, ProposalPatchOperation,
     PublicEventPayload, RUNTIME_INFO_FILE, ReleasePayload, ReleaseResourceVersion,
     ReleaseTransitionKind, ResourceAuthoringEvent, ResourceAuthoringPhase, RuntimeCaptureBackend,
     RuntimeErrorCode, RuntimeMonitorPolicy, RuntimeOperation, RuntimeReceipt, RuntimeReceiptState,
@@ -55,6 +56,8 @@ use std::thread;
 use std::time::{Duration, Instant};
 use tempfile::TempDir;
 use zip::{ZipWriter, write::FileOptions};
+
+const TEST_GOVERNANCE_CAPABILITY: &str = "runtime-host-governance-test-capability";
 
 #[derive(Default)]
 struct FakeState {
@@ -381,6 +384,31 @@ impl TestClient {
         .expect("agent runtime request")
     }
 
+    fn governance_request(&self, operation: RuntimeOperation) -> RuntimeRequest {
+        RuntimeRequest::new(
+            self.ids.mint_request_id().expect("request id"),
+            self.ids.mint_correlation_id().expect("correlation id"),
+            None,
+            EventActor::User,
+            EventSource::Ui,
+            unix_ms_now().expect("wall clock"),
+            operation,
+        )
+        .expect("governance runtime request")
+    }
+
+    fn authenticate_governance(&mut self) {
+        let request = self.governance_request(RuntimeOperation::AuthenticateGovernance {
+            capability: TEST_GOVERNANCE_CAPABILITY.to_owned(),
+        });
+        let receipt = self.send(&request);
+        assert_eq!(receipt.state(), RuntimeReceiptState::Completed);
+        assert!(matches!(
+            receipt.result(),
+            Some(RuntimeResult::GovernanceAuthenticated)
+        ));
+    }
+
     fn send(&mut self, request: &RuntimeRequest) -> RuntimeReceipt {
         self.send_result(request).expect("runtime receipt")
     }
@@ -540,6 +568,7 @@ fn projected_task_semantic_fact(
 
 fn config(root: &TempDir) -> RuntimeHostConfig {
     RuntimeHostConfig::new(root.path(), b"runtime-host-test-salt")
+        .with_governance_capability(TEST_GOVERNANCE_CAPABILITY)
         .with_io_timeout(Duration::from_millis(500))
         .with_scheduler(SchedulerConfig {
             maximum_client_heartbeat_interval_ms: 20,
@@ -727,15 +756,24 @@ fn evaluated_policy_dispatch(
     host: &RuntimeHost,
     trigger: PolicyTrigger,
 ) -> (PolicyCycle, DispatchIntent, DecisionReasonChain) {
+    evaluated_policy_dispatch_at(host, trigger, POLICY_NOW_UNIX_MS, 7)
+}
+
+fn evaluated_policy_dispatch_at(
+    host: &RuntimeHost,
+    trigger: PolicyTrigger,
+    unix_ms: u64,
+    seed: u64,
+) -> (PolicyCycle, DispatchIntent, DecisionReasonChain) {
     let cycle = host
         .evaluate_policy_cycle(
             &policy_facts(),
             &policy_resources(),
             EvaluationTime {
-                unix_ms: POLICY_NOW_UNIX_MS,
-                monotonic_ms: POLICY_NOW_UNIX_MS,
+                unix_ms,
+                monotonic_ms: unix_ms,
             },
-            7,
+            seed,
             trigger,
         )
         .expect("evaluate policy dispatch");
@@ -754,13 +792,13 @@ fn evaluated_policy_dispatch(
     (cycle, intent, reason_chain)
 }
 
-fn policy_context(host: &RuntimeHost) -> PolicyAdmissionContext {
+fn policy_context(host: &RuntimeHost, intent: &DispatchIntent) -> PolicyAdmissionContext {
     PolicyAdmissionContext {
-        fact_ledger_position: 1,
-        fact_snapshot_id: "snapshot:fixture-a".to_owned(),
+        fact_ledger_position: intent.input_ledger_position,
+        fact_snapshot_id: intent.fact_snapshot_id.clone(),
         approval_fact_ids: BTreeSet::from(["approval:fixture-a".to_owned()]),
         fencing_owner_epoch: host.runtime_info().owner_epoch(),
-        now_unix_ms: POLICY_NOW_UNIX_MS,
+        now_unix_ms: intent.prerequisites.evaluated_at_unix_ms,
     }
 }
 
@@ -784,7 +822,8 @@ fn record_policy_approval_disposition(
     )
     .expect("approval decision");
     let mut client = TestClient::connect(host);
-    let request = client.request(RuntimeOperation::RecordApprovalDecision { decision });
+    client.authenticate_governance();
+    let request = client.governance_request(RuntimeOperation::RecordApprovalDecision { decision });
     let receipt = client.send(&request);
     assert_eq!(receipt.state(), RuntimeReceiptState::Completed);
     assert!(matches!(
@@ -798,6 +837,7 @@ fn record_policy_approval_disposition(
 }
 
 fn record_target_approval(client: &mut TestClient, approval_id: &str, target: ApprovalTarget) {
+    client.authenticate_governance();
     let decision = ApprovalDecisionRecord::new(
         approval_id,
         ApprovalDisposition::Approved,
@@ -805,7 +845,7 @@ fn record_target_approval(client: &mut TestClient, approval_id: &str, target: Ap
         "proposal_reviewed",
     )
     .expect("proposal approval");
-    let request = client.request(RuntimeOperation::RecordApprovalDecision { decision });
+    let request = client.governance_request(RuntimeOperation::RecordApprovalDecision { decision });
     let receipt = client.send(&request);
     assert_eq!(receipt.state(), RuntimeReceiptState::Completed);
 }
@@ -905,6 +945,11 @@ fn stored_fact(
         content: FactContent::Inline { value },
         observed_at_unix_ms: POLICY_NOW_UNIX_MS,
         expires_at_unix_ms: Some(POLICY_NOW_UNIX_MS + 60_000),
+        ttl_policy: Some(FactTtlPolicy {
+            minimum_ms: 1_000,
+            maximum_ms: 120_000,
+            source: FactTtlSource::DetectorContract,
+        }),
         confidence_milli: 900,
         source_detector: "detector.fixture".to_owned(),
         source_snapshot_id: source_snapshot_id.to_owned(),
@@ -1145,6 +1190,7 @@ fn predictive_maintenance_publishes_one_evidence_pinned_recheck_signal() {
             },
             observed_at_unix_ms: last_observed_at,
             expires_at_unix_ms: None,
+            ttl_policy: None,
             confidence_milli,
             source_detector: "detector.maintenance".to_owned(),
             source_snapshot_id: format!("snapshot:maintenance-{index}"),
@@ -3811,8 +3857,8 @@ fn client_fact_request_id_cannot_cross_typed_operation_boundaries() {
         request_id,
         ids.mint_correlation_id().expect("approval correlation"),
         None,
-        EventActor::Cli,
-        EventSource::Cli,
+        EventActor::User,
+        EventSource::Ui,
         unix_ms_now().expect("wall clock"),
         RuntimeOperation::RecordApprovalDecision {
             decision: ApprovalDecisionRecord::new(
@@ -3829,6 +3875,25 @@ fn client_fact_request_id_cannot_cross_typed_operation_boundaries() {
     )
     .expect("approval request");
     let connection = ConnectionId::new(99).expect("connection id");
+    let authentication = RuntimeRequest::new(
+        ids.mint_request_id().expect("authentication request"),
+        ids.mint_correlation_id()
+            .expect("authentication correlation"),
+        None,
+        EventActor::User,
+        EventSource::Ui,
+        unix_ms_now().expect("wall clock"),
+        RuntimeOperation::AuthenticateGovernance {
+            capability: TEST_GOVERNANCE_CAPABILITY.to_owned(),
+        },
+    )
+    .expect("authentication request");
+    assert_eq!(
+        host.process_request_for_test(&authentication, connection)
+            .expect("authentication receipt")
+            .state(),
+        RuntimeReceiptState::Completed
+    );
 
     assert_eq!(
         host.process_request_for_test(&action, connection)
@@ -3864,7 +3929,8 @@ fn concurrent_approval_targets_commit_exactly_one_authoritative_fact() {
     let start = Arc::new(Barrier::new(3));
     let run = |mut client: TestClient, marker: char, start: Arc<Barrier>| {
         thread::spawn(move || {
-            let request = client.request(RuntimeOperation::RecordApprovalDecision {
+            client.authenticate_governance();
+            let request = client.governance_request(RuntimeOperation::RecordApprovalDecision {
                 decision: ApprovalDecisionRecord::new(
                     "approval:concurrent-target",
                     ApprovalDisposition::Approved,
@@ -4686,19 +4752,9 @@ fn policy_host_revalidates_admission_pins_versions_and_replays_without_side_effe
         .expect("activate first catalog");
     let (_, intent, reasons) = evaluated_policy_dispatch(&host, PolicyTrigger::FactsChanged);
 
-    let forged_approval = policy_context(&host);
-    let mut missing_approval_intent = intent.clone();
-    missing_approval_intent.decision_id = "decision:missing-approval".to_owned();
-    missing_approval_intent.reason_chain_id = "reason:missing-approval".to_owned();
-    let mut missing_approval_reasons = reasons.clone();
-    missing_approval_reasons.id = "reason:missing-approval".to_owned();
-    missing_approval_reasons.decision_id = "decision:missing-approval".to_owned();
+    let forged_approval = policy_context(&host, &intent);
     let error = host
-        .admit_policy_dispatch(
-            &missing_approval_intent,
-            &missing_approval_reasons,
-            &forged_approval,
-        )
+        .admit_policy_dispatch(&intent, &reasons, &forged_approval)
         .expect_err("caller-supplied approval IDs must not grant authority");
     assert_eq!(error.code(), "policy_approval_fact_missing");
     record_policy_approval(&host, &intent);
@@ -4711,16 +4767,31 @@ fn policy_host_revalidates_admission_pins_versions_and_replays_without_side_effe
     tampered_reasons.id = "reason:tampered".to_owned();
     tampered_reasons.decision_id = "decision:tampered".to_owned();
     let error = host
-        .admit_policy_dispatch(&tampered_intent, &tampered_reasons, &policy_context(&host))
+        .admit_policy_dispatch(
+            &tampered_intent,
+            &tampered_reasons,
+            &policy_context(&host, &tampered_intent),
+        )
         .expect_err("catalog approval requirements cannot be stripped");
-    assert_eq!(error.code(), "policy_intent_catalog_mismatch");
+    assert_eq!(error.code(), "policy_decision_not_host_evaluated");
+
+    let (_, approved_intent, approved_reasons) = evaluated_policy_dispatch_at(
+        &host,
+        PolicyTrigger::Reconciliation,
+        POLICY_NOW_UNIX_MS + 60_000,
+        8,
+    );
 
     let admission = host
-        .admit_policy_dispatch(&intent, &reasons, &policy_context(&host))
+        .admit_policy_dispatch(
+            &approved_intent,
+            &approved_reasons,
+            &policy_context(&host, &approved_intent),
+        )
         .expect("policy admission");
     assert!(matches!(admission, PolicyDispatchAdmission::Granted { .. }));
     assert_eq!(
-        host.pinned_policy_catalog(&intent.decision_id)
+        host.pinned_policy_catalog(&approved_intent.decision_id)
             .expect("pinned catalog")
             .expect("catalog pin")
             .catalog_hash(),
@@ -4729,10 +4800,10 @@ fn policy_host_revalidates_admission_pins_versions_and_replays_without_side_effe
 
     let mut client = TestClient::connect(&host);
     let before = projected_events(&mut client, EventQuery::default());
-    let mut stale_context = policy_context(&host);
+    let mut stale_context = policy_context(&host, &approved_intent);
     stale_context.now_unix_ms = POLICY_NOW_UNIX_MS + 60_000;
     let replay = host
-        .admit_policy_dispatch(&intent, &reasons, &stale_context)
+        .admit_policy_dispatch(&approved_intent, &approved_reasons, &stale_context)
         .expect("exact replay is suppressed before mutable-state revalidation");
     assert!(matches!(
         replay,
@@ -4745,7 +4816,7 @@ fn policy_host_revalidates_admission_pins_versions_and_replays_without_side_effe
             .iter()
             .filter(|event| event.event_type == EventType::PolicyDispatchIntent)
             .count(),
-        3
+        2
     );
     assert_eq!(
         after
@@ -4759,7 +4830,7 @@ fn policy_host_revalidates_admission_pins_versions_and_replays_without_side_effe
             .iter()
             .filter(|event| event.event_type == EventType::PolicyDispatchRejected)
             .count(),
-        2
+        1
     );
 
     let second_catalog = host
@@ -4767,7 +4838,7 @@ fn policy_host_revalidates_admission_pins_versions_and_replays_without_side_effe
         .expect("activate second catalog");
     assert_ne!(first_catalog.catalog_hash(), second_catalog.catalog_hash());
     assert_eq!(
-        host.pinned_policy_catalog(&intent.decision_id)
+        host.pinned_policy_catalog(&approved_intent.decision_id)
             .expect("pinned catalog")
             .expect("catalog pin")
             .catalog_hash(),
@@ -4781,14 +4852,18 @@ fn policy_host_revalidates_admission_pins_versions_and_replays_without_side_effe
     old_new_reasons.id = "reason:fixture-b".to_owned();
     old_new_reasons.decision_id = "decision:fixture-b".to_owned();
     let error = host
-        .admit_policy_dispatch(&old_new_intent, &old_new_reasons, &policy_context(&host))
+        .admit_policy_dispatch(
+            &old_new_intent,
+            &old_new_reasons,
+            &policy_context(&host, &old_new_intent),
+        )
         .expect_err("new admission cannot use the old catalog");
-    assert_eq!(error.code(), "policy_catalog_mismatch");
+    assert_eq!(error.code(), "policy_decision_not_host_evaluated");
 
-    host.complete_policy_dispatch(&intent.decision_id)
+    host.complete_policy_dispatch(&approved_intent.decision_id)
         .expect("complete policy dispatch");
     assert!(
-        host.pinned_policy_catalog(&intent.decision_id)
+        host.pinned_policy_catalog(&approved_intent.decision_id)
             .expect("pinned catalog")
             .is_none()
     );
@@ -4826,7 +4901,11 @@ fn policy_host_revalidates_admission_pins_versions_and_replays_without_side_effe
         first_catalog.catalog_hash()
     );
     let replay = reopened
-        .admit_policy_dispatch(&intent, &reasons, &policy_context(&reopened))
+        .admit_policy_dispatch(
+            &approved_intent,
+            &approved_reasons,
+            &policy_context(&reopened, &approved_intent),
+        )
         .expect("replay after restart");
     assert!(matches!(
         replay,
@@ -4842,7 +4921,7 @@ fn approval_decision_is_authoritative_target_bound_and_revocable() {
     host.activate_policy_catalog(&policy_sources(1))
         .expect("activate catalog");
     let (_, intent, reasons) = evaluated_policy_dispatch(&host, PolicyTrigger::FactsChanged);
-    let forged = policy_context(&host);
+    let forged = policy_context(&host, &intent);
     assert_eq!(
         host.admit_policy_dispatch(&intent, &reasons, &forged)
             .expect_err("caller approval set is not authoritative")
@@ -4851,20 +4930,25 @@ fn approval_decision_is_authoritative_target_bound_and_revocable() {
     );
 
     record_policy_approval(&host, &intent);
-    let mut approved_intent = intent.clone();
-    approved_intent.decision_id = "decision:approved".to_owned();
-    approved_intent.reason_chain_id = "reason:approved".to_owned();
-    let mut approved_reasons = reasons.clone();
-    approved_reasons.id = "reason:approved".to_owned();
-    approved_reasons.decision_id = "decision:approved".to_owned();
+    let (_, approved_intent, approved_reasons) = evaluated_policy_dispatch_at(
+        &host,
+        PolicyTrigger::Reconciliation,
+        POLICY_NOW_UNIX_MS + 60_000,
+        8,
+    );
     assert!(matches!(
-        host.admit_policy_dispatch(&approved_intent, &approved_reasons, &policy_context(&host),)
-            .expect("approved dispatch"),
+        host.admit_policy_dispatch(
+            &approved_intent,
+            &approved_reasons,
+            &policy_context(&host, &approved_intent),
+        )
+        .expect("approved dispatch"),
         PolicyDispatchAdmission::Granted { .. }
     ));
 
     let mut client = TestClient::connect(&host);
-    let conflicting = client.request(RuntimeOperation::RecordApprovalDecision {
+    client.authenticate_governance();
+    let conflicting = client.governance_request(RuntimeOperation::RecordApprovalDecision {
         decision: ApprovalDecisionRecord::new(
             "approval:fixture-a",
             ApprovalDisposition::Approved,
@@ -4882,17 +4966,23 @@ fn approval_decision_is_authoritative_target_bound_and_revocable() {
     );
     drop(client);
 
+    host.complete_policy_dispatch(&approved_intent.decision_id)
+        .expect("complete approved dispatch");
     record_policy_approval_disposition(&host, &approved_intent, ApprovalDisposition::Revoked);
-    let mut after_revoke = intent.clone();
-    after_revoke.decision_id = "decision:after-revoke".to_owned();
-    after_revoke.reason_chain_id = "reason:after-revoke".to_owned();
-    let mut after_revoke_reasons = reasons.clone();
-    after_revoke_reasons.id = "reason:after-revoke".to_owned();
-    after_revoke_reasons.decision_id = "decision:after-revoke".to_owned();
+    let (_, after_revoke, after_revoke_reasons) = evaluated_policy_dispatch_at(
+        &host,
+        PolicyTrigger::Reconciliation,
+        POLICY_NOW_UNIX_MS + 120_000,
+        9,
+    );
     assert_eq!(
-        host.admit_policy_dispatch(&after_revoke, &after_revoke_reasons, &policy_context(&host),)
-            .expect_err("revoked approval must not authorize a new dispatch")
-            .code(),
+        host.admit_policy_dispatch(
+            &after_revoke,
+            &after_revoke_reasons,
+            &policy_context(&host, &after_revoke),
+        )
+        .expect_err("revoked approval must not authorize a new dispatch")
+        .code(),
         "policy_approval_fact_missing"
     );
 
@@ -4910,11 +5000,288 @@ fn approval_decision_is_authoritative_target_bound_and_revocable() {
 }
 
 #[test]
+fn governance_authority_is_capability_authenticated_and_connection_bound() {
+    let root = TempDir::new().expect("tempdir");
+    let host = host_with_state(&root, POLICY_INSTANCE_ALIAS, Arc::new(FakeState::default()));
+    let target = ApprovalTarget::Catalog {
+        catalog_hash: format!("sha256:{}", "a".repeat(64)),
+        catalog_version: 1,
+    };
+    let approval = |disposition| {
+        ApprovalDecisionRecord::new(
+            "approval:governance-boundary",
+            disposition,
+            target.clone(),
+            "user_confirmed",
+        )
+        .expect("approval decision")
+    };
+
+    let mut client = TestClient::connect(&host);
+    let unauthenticated = client.governance_request(RuntimeOperation::RecordApprovalDecision {
+        decision: approval(ApprovalDisposition::Approved),
+    });
+    let receipt = client.send(&unauthenticated);
+    assert_eq!(receipt.state(), RuntimeReceiptState::Denied);
+    assert_eq!(
+        receipt.error_projection().expect("denial").code,
+        RuntimeErrorCode::InvalidRequest
+    );
+
+    let wrong_capability = client.governance_request(RuntimeOperation::AuthenticateGovernance {
+        capability: "wrong-governance-capability-value".to_owned(),
+    });
+    let receipt = client.send(&wrong_capability);
+    assert_eq!(receipt.state(), RuntimeReceiptState::Denied);
+    assert_eq!(
+        receipt.error_projection().expect("denial").code,
+        RuntimeErrorCode::InvalidRequest
+    );
+
+    client.authenticate_governance();
+    let approved = client.governance_request(RuntimeOperation::RecordApprovalDecision {
+        decision: approval(ApprovalDisposition::Approved),
+    });
+    assert_eq!(
+        client.send(&approved).state(),
+        RuntimeReceiptState::Completed
+    );
+
+    let mut other = TestClient::connect(&host);
+    let forged_revocation = other.governance_request(RuntimeOperation::RecordApprovalDecision {
+        decision: approval(ApprovalDisposition::Revoked),
+    });
+    let receipt = other.send(&forged_revocation);
+    assert_eq!(receipt.state(), RuntimeReceiptState::Denied);
+    assert_eq!(
+        receipt.error_projection().expect("denial").code,
+        RuntimeErrorCode::InvalidRequest
+    );
+
+    let revoked = client.governance_request(RuntimeOperation::RecordApprovalDecision {
+        decision: approval(ApprovalDisposition::Revoked),
+    });
+    assert_eq!(
+        client.send(&revoked).state(),
+        RuntimeReceiptState::Completed
+    );
+
+    let events = projected_events(
+        &mut other,
+        EventQuery {
+            event_type: Some(EventType::ApprovalDecision),
+            ..EventQuery::default()
+        },
+    );
+    assert_eq!(events.len(), 2);
+    assert!(events.iter().all(|event| {
+        event.origin.source() == EventSource::Ui
+            && event.origin.module() == OriginModule::Governance
+            && event.origin.actor() == EventActor::User
+    }));
+    drop(client);
+    drop(other);
+    host.close().expect("close host");
+}
+
+#[test]
+fn historical_agent_approval_poisoning_is_fatal_during_recovery() {
+    let root = TempDir::new().expect("tempdir");
+    let instance = instance_id();
+    let host = RuntimeHost::start(
+        config(&root),
+        Arc::new(FakeProvider::one(
+            POLICY_INSTANCE_ALIAS,
+            instance,
+            Arc::new(FakeState::default()),
+        )),
+    )
+    .expect("runtime host");
+    host.append_approval_event_for_test(
+        EventSource::Adapter,
+        EventActor::Agent,
+        ApprovalDecisionRecord::new(
+            "approval:historical-agent",
+            ApprovalDisposition::Approved,
+            ApprovalTarget::Catalog {
+                catalog_hash: format!("sha256:{}", "a".repeat(64)),
+                catalog_version: 1,
+            },
+            "agent_claimed_approval",
+        )
+        .expect("approval decision"),
+    )
+    .expect("historical malicious approval fixture");
+    host.close().expect("close host");
+
+    let error = match RuntimeHost::start(
+        config(&root),
+        Arc::new(FakeProvider::one(
+            POLICY_INSTANCE_ALIAS,
+            instance,
+            Arc::new(FakeState::default()),
+        )),
+    ) {
+        Ok(host) => {
+            host.close().expect("close unexpected host");
+            panic!("historical Agent approval must prevent recovery")
+        }
+        Err(error) => error,
+    };
+    assert!(error.is_fatal());
+    assert_eq!(error.code(), "approval_projection_origin_invalid");
+}
+
+#[test]
+fn policy_admission_rejects_stale_and_tampered_trusted_context() {
+    let root = TempDir::new().expect("tempdir");
+    let host = host_with_state(&root, POLICY_INSTANCE_ALIAS, Arc::new(FakeState::default()));
+    let mut sources = policy_sources(1);
+    let mut tasks: serde_json::Value =
+        serde_json::from_slice(&sources.tasks.bytes).expect("tasks fixture");
+    tasks["tasks"][0]["trigger"] = serde_json::json!({
+        "kind": "fact",
+        "scope": {"kind": "instance", "instance_id": POLICY_INSTANCE_ALIAS},
+        "fact_key": "env.ephemeral",
+        "comparison": "eq",
+        "value": {"type": "string", "value": "Neutral"},
+        "max_age_ms": 20
+    });
+    sources.tasks.bytes = serde_json::to_vec_pretty(&tasks).expect("tasks bytes");
+    host.activate_policy_catalog(&sources)
+        .expect("activate catalog");
+    let mut ephemeral = stored_fact(
+        FactScope::Instance {
+            instance_id: POLICY_INSTANCE_ALIAS.to_owned(),
+        },
+        "env.ephemeral",
+        ContractFactValue::String("Neutral".to_owned()),
+        "snapshot:ephemeral",
+        Vec::new(),
+    );
+    ephemeral.expires_at_unix_ms = Some(POLICY_NOW_UNIX_MS + 20);
+    ephemeral.ttl_policy = Some(FactTtlPolicy {
+        minimum_ms: 1,
+        maximum_ms: 100,
+        source: FactTtlSource::DetectorContract,
+    });
+    host.publish_fact(ephemeral)
+        .expect("publish ephemeral fact");
+
+    let (_, intent, reasons) = evaluated_policy_dispatch(&host, PolicyTrigger::FactsChanged);
+    record_policy_approval(&host, &intent);
+    let mut forged_decision = intent.clone();
+    forged_decision.decision_id = "decision:forged".to_owned();
+    assert_eq!(
+        host.admit_policy_dispatch(
+            &forged_decision,
+            &reasons,
+            &policy_context(&host, &forged_decision),
+        )
+        .expect_err("forged decision identity must fail")
+        .code(),
+        "policy_decision_not_host_evaluated"
+    );
+
+    let mut wrong_profile = intent.clone();
+    wrong_profile.prerequisites.activity_profile_id = "profile:forged".to_owned();
+    assert_eq!(
+        host.admit_policy_dispatch(
+            &wrong_profile,
+            &reasons,
+            &policy_context(&host, &wrong_profile),
+        )
+        .expect_err("caller-selected profile must fail")
+        .code(),
+        "policy_trusted_context_mismatch"
+    );
+
+    thread::sleep(Duration::from_millis(30));
+    let mut forged_time = policy_context(&host, &intent);
+    forged_time.now_unix_ms = 1;
+    assert_eq!(
+        host.admit_policy_dispatch(&intent, &reasons, &forged_time)
+            .expect_err("expired fact must fail admission")
+            .code(),
+        "policy_facts_stale"
+    );
+    host.close().expect("close host");
+}
+
+#[test]
+fn game_and_server_scope_changes_cannot_reuse_a_trusted_decision_identity() {
+    let root = TempDir::new().expect("tempdir");
+    let host = host_with_state(&root, POLICY_INSTANCE_ALIAS, Arc::new(FakeState::default()));
+    host.activate_policy_catalog(&policy_sources(1))
+        .expect("activate catalog");
+    let (_, trusted, trusted_reasons) =
+        evaluated_policy_dispatch(&host, PolicyTrigger::FactsChanged);
+
+    let mut wrong_instance = trusted.clone();
+    wrong_instance.instance_id = "fixture-instance-b".to_owned();
+    assert_eq!(
+        host.admit_policy_dispatch(
+            &wrong_instance,
+            &trusted_reasons,
+            &policy_context(&host, &wrong_instance),
+        )
+        .expect_err("instance scope cannot be widened by the caller")
+        .code(),
+        "policy_trusted_context_mismatch"
+    );
+
+    for (index, mut facts) in [policy_facts(), policy_facts()].into_iter().enumerate() {
+        if index == 0 {
+            facts.instances[0].server_id = "fixture-server-b".to_owned();
+        } else {
+            facts.instances[0].game_id = "fixture-game-b".to_owned();
+        }
+        let cycle = host
+            .evaluate_policy_cycle(
+                &facts,
+                &policy_resources(),
+                EvaluationTime {
+                    unix_ms: POLICY_NOW_UNIX_MS + 60_000 * (index as u64 + 1),
+                    monotonic_ms: POLICY_NOW_UNIX_MS + 60_000 * (index as u64 + 1),
+                },
+                8 + index as u64,
+                PolicyTrigger::Reconciliation,
+            )
+            .expect("scope-changed policy evaluation");
+        let changed = cycle
+            .evaluation
+            .expect("scope-changed evaluation")
+            .dispatch_intents
+            .into_iter()
+            .next()
+            .expect("scope-changed intent");
+        assert_ne!(changed.fact_snapshot_id, trusted.fact_snapshot_id);
+        assert_ne!(changed.decision_id, trusted.decision_id);
+
+        let mut mixed = changed;
+        mixed.decision_id = trusted.decision_id.clone();
+        mixed.reason_chain_id = trusted.reason_chain_id.clone();
+        assert_eq!(
+            host.admit_policy_dispatch(&mixed, &trusted_reasons, &policy_context(&host, &mixed),)
+                .expect_err("scope changes cannot reuse an old decision identity")
+                .code(),
+            "policy_trusted_context_mismatch"
+        );
+    }
+    host.close().expect("close host");
+}
+
+#[test]
 fn measured_contention_gates_deadline_dispatch_and_records_the_conflict() {
     let root = TempDir::new().expect("tempdir");
     let state = Arc::new(FakeState::default());
     let host = host_with_state(&root, POLICY_INSTANCE_ALIAS, state);
-    host.activate_policy_catalog(&policy_sources(1))
+    let mut sources = policy_sources(1);
+    let mut activity: serde_json::Value =
+        serde_json::from_slice(&sources.activity.bytes).expect("activity fixture");
+    activity["profiles"][0]["goals"][0]["deadline_unix_ms"] = serde_json::json!(POLICY_NOW_UNIX_MS);
+    sources.activity.bytes = serde_json::to_vec_pretty(&activity).expect("activity bytes");
+    host.activate_policy_catalog(&sources)
         .expect("activate catalog");
     host.observe_performance_control_for_test(PerformanceControlObservation {
         observed_at_unix_ms: POLICY_NOW_UNIX_MS - 2_000,
@@ -4937,10 +5304,10 @@ fn measured_contention_gates_deadline_dispatch_and_records_the_conflict() {
         PerformanceControlLevel::DispatchPaused
     );
 
-    let (_, mut intent, reasons) = evaluated_policy_dispatch(&host, PolicyTrigger::FactsChanged);
-    intent.prerequisites.urgency_milli = 1_000;
+    let (_, intent, reasons) = evaluated_policy_dispatch(&host, PolicyTrigger::FactsChanged);
+    assert_eq!(intent.prerequisites.urgency_milli, 1_000);
     let error = host
-        .admit_policy_dispatch(&intent, &reasons, &policy_context(&host))
+        .admit_policy_dispatch(&intent, &reasons, &policy_context(&host, &intent))
         .expect_err("deadline must not bypass a measured contention gate");
     assert_eq!(error.code(), "performance_capacity_deadline_conflict");
 
@@ -4973,7 +5340,7 @@ fn policy_failure_activity_and_planning_facts_recover_without_duplicate_side_eff
     let (_, intent, reasons) = evaluated_policy_dispatch(&host, PolicyTrigger::FactsChanged);
     record_policy_approval(&host, &intent);
     let admission = host
-        .admit_policy_dispatch(&intent, &reasons, &policy_context(&host))
+        .admit_policy_dispatch(&intent, &reasons, &policy_context(&host, &intent))
         .expect("policy admission");
     let PolicyDispatchAdmission::Granted {
         admission: budget_record,
@@ -5143,7 +5510,7 @@ fn performance_stutter_is_ledger_visible_and_enriches_policy_failure() {
         .expect("activate policy catalog");
     let (_, intent, reasons) = evaluated_policy_dispatch(&host, PolicyTrigger::FactsChanged);
     record_policy_approval(&host, &intent);
-    host.admit_policy_dispatch(&intent, &reasons, &policy_context(&host))
+    host.admit_policy_dispatch(&intent, &reasons, &policy_context(&host, &intent))
         .expect("policy admission");
     host.record_pipeline_performance(
         PipelinePerformanceSignal::new(POLICY_INSTANCE_ALIAS, POLICY_NOW_UNIX_MS + 90, 1_500)
@@ -6479,7 +6846,8 @@ fn policy_dispatch_crash_child_process() {
     let instance_id: InstanceId =
         serde_json::from_slice(&instance_bytes).expect("instance identifier");
     let host = RuntimeHost::start(
-        RuntimeHostConfig::new(&root, b"policy-crash-process-salt"),
+        RuntimeHostConfig::new(&root, b"policy-crash-process-salt")
+            .with_governance_capability(TEST_GOVERNANCE_CAPABILITY),
         Arc::new(FakeProvider::one(
             POLICY_INSTANCE_ALIAS,
             instance_id,
@@ -6494,30 +6862,14 @@ fn policy_dispatch_crash_child_process() {
     assert_eq!(intent.catalog_hash, catalog.catalog_hash());
     record_policy_approval(&host, &intent);
     let admission = host
-        .admit_policy_dispatch(&intent, &reason_chain, &policy_context(&host))
+        .admit_policy_dispatch(&intent, &reason_chain, &policy_context(&host, &intent))
         .expect("child policy admission");
     assert!(matches!(admission, PolicyDispatchAdmission::Granted { .. }));
-    let pending_before_crash = host
-        .evaluate_policy_cycle(
-            &policy_facts(),
-            &policy_resources(),
-            EvaluationTime {
-                unix_ms: POLICY_NOW_UNIX_MS,
-                monotonic_ms: POLICY_NOW_UNIX_MS,
-            },
-            7,
-            PolicyTrigger::Recovery,
-        )
-        .expect("child pending-set projection")
-        .pending_dispatch_intents
-        .into_iter()
-        .map(|pending| pending.decision_id)
-        .collect::<Vec<_>>();
     fs::write(
-        Path::new(&root).join("pending-before-crash.json"),
-        serde_json::to_vec(&pending_before_crash).expect("pending-set bytes"),
+        Path::new(&root).join("admitted-before-crash.json"),
+        serde_json::to_vec(&(intent, reason_chain)).expect("admitted dispatch bytes"),
     )
-    .expect("pending-set marker");
+    .expect("admitted dispatch marker");
     fs::write(Path::new(&root).join("child-ready"), b"ready").expect("child marker");
     std::process::exit(0);
 }
@@ -6559,21 +6911,16 @@ fn policy_dispatch_survives_real_process_crash_without_second_lease_side_effect(
         .active_policy_catalog()
         .expect("active catalog")
         .expect("catalog");
-    let (cycle, intent, reason_chain) = evaluated_policy_dispatch(&host, PolicyTrigger::Recovery);
+    let (cycle, _, _) = evaluated_policy_dispatch(&host, PolicyTrigger::Recovery);
     assert_eq!(cycle.directive.kind, PolicyRecomputeKind::Full);
-    let pending_before_crash: Vec<String> = serde_json::from_slice(
-        &fs::read(root.path().join("pending-before-crash.json")).expect("pending-set marker"),
+    let (intent, reason_chain): (DispatchIntent, DecisionReasonChain) = serde_json::from_slice(
+        &fs::read(root.path().join("admitted-before-crash.json"))
+            .expect("admitted dispatch marker"),
     )
-    .expect("pending-set JSON");
-    let recovered_pending = cycle
-        .pending_dispatch_intents
-        .iter()
-        .map(|pending| pending.decision_id.clone())
-        .collect::<Vec<_>>();
-    assert_eq!(recovered_pending, pending_before_crash);
+    .expect("admitted dispatch JSON");
     assert_eq!(intent.catalog_hash, catalog.catalog_hash());
     let replay = host
-        .admit_policy_dispatch(&intent, &reason_chain, &policy_context(&host))
+        .admit_policy_dispatch(&intent, &reason_chain, &policy_context(&host, &intent))
         .expect("replay after crash");
     assert!(matches!(
         replay,

@@ -1558,7 +1558,9 @@ fn collect_environment_pointer_keys_from_str(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use actingcommand_contract::{EventType, FactRecord, FactScope, InstanceFactContext};
+    use actingcommand_contract::{
+        EventType, FactRecord, FactScope, FactTtlPolicy, FactTtlSource, InstanceFactContext,
+    };
     use serde_json::json;
 
     #[test]
@@ -1955,6 +1957,11 @@ mod tests {
                 },
                 observed_at_unix_ms: 50,
                 expires_at_unix_ms,
+                ttl_policy: expires_at_unix_ms.map(|expires| FactTtlPolicy {
+                    minimum_ms: 1,
+                    maximum_ms: expires - 50,
+                    source: FactTtlSource::DetectorContract,
+                }),
                 confidence_milli,
                 source_detector: "detect_ui_theme".to_string(),
                 source_snapshot_id: "snapshot:detection".to_string(),
