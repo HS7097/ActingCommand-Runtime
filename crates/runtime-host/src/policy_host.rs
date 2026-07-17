@@ -7,10 +7,11 @@ use crate::policy_control::{
 };
 use crate::{PerformanceControlWorkload, ProcedureManifest, RuntimeHostError, RuntimeHostResult};
 use actingcommand_contract::{
-    CatalogPayload, EventPayload, EventQuery, LeaseToken, OwnerEpoch, PerformanceContext,
-    PolicyAdmissionRecord, PolicyDetectionBudgetRecord, PolicyDispatchEventData,
-    PolicyExecutionEventData, PolicyExecutionOutcome, PolicyPayload, PolicyPlanningSignalEventData,
-    PolicyPlanningSignalKind, PolicyReasonRecord, ProjectDecisionPageRequest, RuntimeErrorCode,
+    CatalogPayload, EventPayload, EventQuery, EventType, LeaseToken, OwnerEpoch,
+    PerformanceContext, PolicyAdmissionRecord, PolicyDetectionBudgetRecord,
+    PolicyDispatchEventData, PolicyExecutionEventData, PolicyExecutionOutcome, PolicyPayload,
+    PolicyPlanningSignalEventData, PolicyPlanningSignalKind, PolicyReasonRecord,
+    ProjectDecisionPageRequest, RuntimeErrorCode,
 };
 use actingcommand_ledger::GlobalLedger;
 use actingcommand_policy::{
@@ -40,6 +41,12 @@ const DEFAULT_DEBOUNCE_MS: u64 = 250;
 const DEFAULT_COOLDOWN_MS: u64 = 1_000;
 const DEFAULT_RECONCILIATION_INTERVAL_MS: u64 = 60_000;
 const DEFAULT_CLOCK_JUMP_THRESHOLD_MS: u64 = 5_000;
+const PLANNING_SIGNAL_PROJECTION_NAMESPACE: &str = "policy.planning-signal.v1";
+const DETECTION_QUOTA_PROJECTION_NAMESPACE: &str = "policy.detection-quota.v1";
+const PLANNING_SIGNAL_CHECKPOINT_KEY: &str = "checkpoint";
+const PLANNING_SIGNAL_PROJECTION_SCHEMA: &str = "actingcommand.policy-planning-signal.v1";
+const DETECTION_QUOTA_PROJECTION_SCHEMA: &str = "actingcommand.policy-detection-quota.v1";
+const PLANNING_SIGNAL_RECOVERY_PAGE_EVENTS: usize = 256;
 static NEXT_TEMPORARY_ID: AtomicU64 = AtomicU64::new(1);
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -425,7 +432,6 @@ pub(crate) struct PolicyHost {
     seen_dispatches: BTreeMap<String, SeenDispatch>,
     dispatch_order: BTreeMap<u64, String>,
     pinned_dispatches: BTreeMap<String, CatalogGeneration>,
-    planning_signals: BTreeMap<String, PolicyPlanningSignalEventData>,
     detection_quota: DetectionQuotaState,
     control: PolicyControlState,
 }
@@ -439,6 +445,63 @@ struct DetectionQuotaState {
 struct DetectionQuotaUsage {
     dispatch_used: u32,
     runtime_reserved_ms: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct StoredPlanningSignal {
+    schema_version: String,
+    signal_id: String,
+    instance_id: String,
+    task_id: Option<String>,
+    kind: PolicyPlanningSignalKind,
+    fact_code: String,
+    observed_at_unix_ms: u64,
+    detection_budget: Option<PolicyDetectionBudgetRecord>,
+}
+
+impl StoredPlanningSignal {
+    fn from_data(data: &PolicyPlanningSignalEventData) -> Self {
+        Self {
+            schema_version: PLANNING_SIGNAL_PROJECTION_SCHEMA.to_owned(),
+            signal_id: data.signal_id.clone(),
+            instance_id: data.instance_id.clone(),
+            task_id: data.task_id.clone(),
+            kind: data.kind,
+            fact_code: data.fact_code.clone(),
+            observed_at_unix_ms: data.observed_at_unix_ms,
+            detection_budget: data.detection_budget.clone(),
+        }
+    }
+
+    fn into_data(self) -> PolicyPlanningSignalEventData {
+        PolicyPlanningSignalEventData {
+            signal_id: self.signal_id,
+            instance_id: self.instance_id,
+            task_id: self.task_id,
+            kind: self.kind,
+            fact_code: self.fact_code,
+            observed_at_unix_ms: self.observed_at_unix_ms,
+            detection_budget: self.detection_budget,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct StoredDetectionQuota {
+    schema_version: String,
+    instance_id: String,
+    window_id: String,
+    dispatch_used: u32,
+    runtime_reserved_ms: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PlanningSignalCheckpoint {
+    schema_version: String,
+    through_sequence: u64,
 }
 
 impl PolicyHost {
@@ -457,11 +520,11 @@ impl PolicyHost {
             seen_dispatches: BTreeMap::new(),
             dispatch_order: BTreeMap::new(),
             pinned_dispatches: BTreeMap::new(),
-            planning_signals: BTreeMap::new(),
             detection_quota: DetectionQuotaState::default(),
             control: PolicyControlState::default(),
         };
         host.recover_dispatches(ledger)?;
+        host.recover_planning_signals(ledger)?;
         Ok(host)
     }
 
@@ -697,8 +760,8 @@ impl PolicyHost {
             .cloned()
             .collect();
         let detection_planning_signals = preview_detection_planning_signals(
+            &self.store,
             &self.detection_quota,
-            &self.planning_signals,
             &active.compiled,
             facts,
             &evaluation,
@@ -1106,27 +1169,85 @@ impl PolicyHost {
     pub(crate) fn planning_signal(
         &self,
         signal_id: &str,
-    ) -> Option<&PolicyPlanningSignalEventData> {
-        self.planning_signals.get(signal_id)
+    ) -> RuntimeHostResult<Option<PolicyPlanningSignalEventData>> {
+        self.store
+            .load_planning_signal(signal_id)
+            .map(|entry| entry.map(|(_, data)| data))
     }
 
     pub(crate) fn commit_planning_signal(
         &mut self,
+        sequence: u64,
         data: PolicyPlanningSignalEventData,
     ) -> RuntimeHostResult<()> {
         self.validate_planning_signal(&data)?;
-        if let Some(existing) = self.planning_signals.get(&data.signal_id) {
-            return if existing == &data {
-                Ok(())
-            } else {
-                Err(fatal(
+        if data.detection_budget.is_some()
+            && !matches!(
+                data.kind,
+                PolicyPlanningSignalKind::DetectionReserved
+                    | PolicyPlanningSignalKind::DetectionQuotaExhausted
+            )
+        {
+            return Err(fatal(
+                "policy_detection_budget_unexpected",
+                "commit_policy_detection_budget",
+            ));
+        }
+        let signal_already_projected = if let Some((existing_sequence, existing)) =
+            self.store.load_planning_signal(&data.signal_id)?
+        {
+            if existing_sequence != sequence || existing != data {
+                return Err(fatal(
                     "policy_planning_signal_identity_conflict",
                     "commit_policy_planning_signal",
-                ))
-            };
+                ));
+            }
+            true
+        } else {
+            false
+        };
+        let mut staged_quota = self.detection_quota.clone();
+        let mut quota_already_projected = false;
+        if let Some(budget) = &data.detection_budget
+            && let Some((quota_sequence, usage)) = self
+                .store
+                .load_detection_quota(&data.instance_id, &budget.window_id)?
+        {
+            if quota_sequence > sequence
+                || quota_sequence == sequence
+                    && (!signal_already_projected
+                        || usage.dispatch_used != budget.dispatch_used
+                        || usage.runtime_reserved_ms != budget.runtime_reserved_ms)
+            {
+                return Err(fatal(
+                    "policy_detection_quota_projection_conflict",
+                    "commit_policy_planning_signal",
+                ));
+            }
+            staged_quota
+                .windows
+                .insert((data.instance_id.clone(), budget.window_id.clone()), usage);
+            quota_already_projected = quota_sequence == sequence;
         }
-        self.detection_quota.commit_signal(&data)?;
-        self.planning_signals.insert(data.signal_id.clone(), data);
+        if !quota_already_projected {
+            staged_quota.commit_signal(&data)?;
+        }
+        self.store.persist_planning_signal(sequence, &data)?;
+        if let Some(budget) = &data.detection_budget {
+            let usage = staged_quota
+                .windows
+                .get(&(data.instance_id.clone(), budget.window_id.clone()))
+                .copied()
+                .unwrap_or_default();
+            self.store.persist_detection_quota(
+                sequence,
+                &data.instance_id,
+                &budget.window_id,
+                usage,
+            )?;
+        }
+        self.store.persist_planning_checkpoint(sequence)?;
+        self.detection_quota = staged_quota;
         Ok(())
     }
 
@@ -1177,13 +1298,26 @@ impl PolicyHost {
     }
 
     fn recover_dispatches(&mut self, ledger: &GlobalLedger) -> RuntimeHostResult<()> {
-        let events = ledger
-            .query(Default::default())
-            .map_err(|_| fatal("policy_recovery_failed", "recover_policy_dispatches"))?;
+        let mut events = Vec::new();
+        for event_type in [
+            EventType::PolicyDispatchIntent,
+            EventType::PolicyDispatchAdmitted,
+            EventType::PolicyDispatchRejected,
+            EventType::PolicyDispatchCompleted,
+            EventType::PolicyExecutionRecorded,
+        ] {
+            events.extend(
+                ledger
+                    .query(EventQuery {
+                        event_type: Some(event_type),
+                        ..EventQuery::default()
+                    })
+                    .map_err(|_| fatal("policy_recovery_failed", "recover_policy_dispatches"))?,
+            );
+        }
+        events.sort_by_key(|event| event.sequence());
         let mut seen_dispatches = BTreeMap::new();
         let mut dispatch_order = BTreeMap::new();
-        let mut planning_signals = BTreeMap::new();
-        let mut detection_quota = DetectionQuotaState::default();
         let mut control = PolicyControlState::default();
         for event in events {
             let EventPayload::Policy(payload) = event.payload() else {
@@ -1294,19 +1428,11 @@ impl PolicyHost {
                     control.commit_execution(&catalog.compiled, &intent, admission, &data)?;
                     dispatch.execution = Some(data);
                 }
-                PolicyPayload::PlanningSignalObserved(payload) => {
-                    let data = planning_signal_event_data(payload);
-                    self.validate_planning_signal(&data)?;
-                    detection_quota.commit_signal(&data)?;
-                    if planning_signals
-                        .insert(data.signal_id.clone(), data)
-                        .is_some()
-                    {
-                        return Err(fatal(
-                            "policy_planning_signal_identity_conflict",
-                            "recover_policy_planning_signals",
-                        ));
-                    }
+                PolicyPayload::PlanningSignalObserved(_) => {
+                    return Err(fatal(
+                        "policy_recovery_query_mismatch",
+                        "recover_policy_dispatches",
+                    ));
                 }
             }
         }
@@ -1326,14 +1452,74 @@ impl PolicyHost {
         self.seen_dispatches = seen_dispatches;
         self.dispatch_order = dispatch_order;
         self.pinned_dispatches = pinned_dispatches;
-        self.planning_signals = planning_signals;
-        self.detection_quota = detection_quota;
         self.control = control;
+        Ok(())
+    }
+
+    fn recover_planning_signals(&mut self, ledger: &GlobalLedger) -> RuntimeHostResult<()> {
+        let latest = ledger
+            .latest_sequence()
+            .map_err(|_| fatal("policy_recovery_failed", "recover_policy_planning_signals"))?;
+        let mut after_sequence = self.store.load_planning_checkpoint()?.unwrap_or(0);
+        if after_sequence > latest {
+            return Err(fatal(
+                "policy_planning_checkpoint_ahead",
+                "recover_policy_planning_signals",
+            ));
+        }
+        while after_sequence < latest {
+            let events = ledger
+                .query_page(
+                    EventQuery {
+                        event_type: Some(EventType::PolicyPlanningSignalObserved),
+                        ..EventQuery::default()
+                    },
+                    after_sequence,
+                    latest,
+                    PLANNING_SIGNAL_RECOVERY_PAGE_EVENTS,
+                )
+                .map_err(|_| fatal("policy_recovery_failed", "recover_policy_planning_signals"))?;
+            if events.is_empty() {
+                break;
+            }
+            for event in events {
+                let EventPayload::Policy(PolicyPayload::PlanningSignalObserved(payload)) =
+                    event.payload()
+                else {
+                    return Err(fatal(
+                        "policy_recovery_query_mismatch",
+                        "recover_policy_planning_signals",
+                    ));
+                };
+                let sequence = event.sequence();
+                self.commit_planning_signal(sequence, planning_signal_event_data(payload))?;
+                after_sequence = sequence;
+            }
+        }
+        if latest > 0 && after_sequence < latest {
+            self.store.persist_planning_checkpoint(latest)?;
+        }
         Ok(())
     }
 }
 
 impl DetectionQuotaState {
+    fn ensure_loaded(
+        &mut self,
+        store: &CatalogStore,
+        instance_id: &str,
+        window_id: &str,
+    ) -> RuntimeHostResult<()> {
+        let key = (instance_id.to_owned(), window_id.to_owned());
+        if self.windows.contains_key(&key) {
+            return Ok(());
+        }
+        if let Some((_, usage)) = store.load_detection_quota(instance_id, window_id)? {
+            self.windows.insert(key, usage);
+        }
+        Ok(())
+    }
+
     fn preview(
         &self,
         profile: &ActivityProfile,
@@ -1472,8 +1658,8 @@ impl DetectionQuotaState {
 }
 
 fn preview_detection_planning_signals(
+    store: &CatalogStore,
     state: &DetectionQuotaState,
-    existing_signals: &BTreeMap<String, PolicyPlanningSignalEventData>,
     catalog: &CompiledCatalog,
     facts: &EvaluationFacts,
     evaluation: &PolicyEvaluation,
@@ -1520,11 +1706,13 @@ fn preview_detection_planning_signals(
                     &suggestion.reason,
                 ],
             );
-            if existing_signals.contains_key(&reservation_id)
+            if store.load_planning_signal(&reservation_id)?.is_some()
                 || emitted_ids.contains(&reservation_id)
             {
                 continue;
             }
+            let (_, window_id) = active_activity_window(profile, now_unix_ms)?;
+            staged.ensure_loaded(store, instance_id, &window_id)?;
             let (kind, budget) =
                 match staged.preview(profile, catalog.catalog_hash(), instance_id, now_unix_ms) {
                     Ok(value) => value,
@@ -1544,15 +1732,18 @@ fn preview_detection_planning_signals(
             } else {
                 reservation_id
             };
+            let existing = store
+                .load_planning_signal(&signal_id)?
+                .map(|(_, data)| data);
             if kind == PolicyPlanningSignalKind::DetectionQuotaExhausted
-                && let Some(existing) = existing_signals.get(&signal_id)
+                && let Some(existing) = existing.as_ref()
             {
                 if emitted_ids.insert(signal_id) {
                     signals.push(existing.clone());
                 }
                 continue;
             }
-            if existing_signals.contains_key(&signal_id) || !emitted_ids.insert(signal_id.clone()) {
+            if existing.is_some() || !emitted_ids.insert(signal_id.clone()) {
                 continue;
             }
             let signal = PolicyPlanningSignalEventData {
@@ -1953,6 +2144,215 @@ impl CatalogStore {
         })
     }
 
+    fn load_planning_signal(
+        &self,
+        signal_id: &str,
+    ) -> RuntimeHostResult<Option<(u64, PolicyPlanningSignalEventData)>> {
+        let Some(entry) = self
+            .state
+            .read_projection_entry(
+                PLANNING_SIGNAL_PROJECTION_NAMESPACE,
+                &planning_signal_projection_key(signal_id),
+            )
+            .map_err(|error| RuntimeHostError::state(&error))?
+        else {
+            return Ok(None);
+        };
+        let stored: StoredPlanningSignal =
+            serde_json::from_slice(entry.payload()).map_err(|_| {
+                fatal(
+                    "policy_planning_signal_projection_invalid",
+                    "load_policy_planning_signal",
+                )
+            })?;
+        if stored.schema_version != PLANNING_SIGNAL_PROJECTION_SCHEMA
+            || stored.signal_id != signal_id
+        {
+            return Err(fatal(
+                "policy_planning_signal_projection_invalid",
+                "load_policy_planning_signal",
+            ));
+        }
+        Ok(Some((entry.ledger_sequence(), stored.into_data())))
+    }
+
+    fn persist_planning_signal(
+        &self,
+        sequence: u64,
+        data: &PolicyPlanningSignalEventData,
+    ) -> RuntimeHostResult<()> {
+        if let Some((existing_sequence, existing)) = self.load_planning_signal(&data.signal_id)? {
+            if existing_sequence != sequence || existing != *data {
+                return Err(fatal(
+                    "policy_planning_signal_identity_conflict",
+                    "persist_policy_planning_signal",
+                ));
+            }
+            return Ok(());
+        }
+        let payload = serde_json::to_vec(&StoredPlanningSignal::from_data(data)).map_err(|_| {
+            fatal(
+                "policy_planning_signal_projection_encode_failed",
+                "persist_policy_planning_signal",
+            )
+        })?;
+        self.state
+            .write_projection_entry(
+                PLANNING_SIGNAL_PROJECTION_NAMESPACE,
+                &planning_signal_projection_key(&data.signal_id),
+                sequence,
+                &payload,
+            )
+            .map_err(|error| RuntimeHostError::state(&error))?;
+        Ok(())
+    }
+
+    fn load_detection_quota(
+        &self,
+        instance_id: &str,
+        window_id: &str,
+    ) -> RuntimeHostResult<Option<(u64, DetectionQuotaUsage)>> {
+        let Some(entry) = self
+            .state
+            .read_projection_entry(
+                DETECTION_QUOTA_PROJECTION_NAMESPACE,
+                &detection_quota_projection_key(instance_id, window_id),
+            )
+            .map_err(|error| RuntimeHostError::state(&error))?
+        else {
+            return Ok(None);
+        };
+        let stored: StoredDetectionQuota =
+            serde_json::from_slice(entry.payload()).map_err(|_| {
+                fatal(
+                    "policy_detection_quota_projection_invalid",
+                    "load_policy_detection_quota",
+                )
+            })?;
+        if stored.schema_version != DETECTION_QUOTA_PROJECTION_SCHEMA
+            || stored.instance_id != instance_id
+            || stored.window_id != window_id
+        {
+            return Err(fatal(
+                "policy_detection_quota_projection_invalid",
+                "load_policy_detection_quota",
+            ));
+        }
+        Ok(Some((
+            entry.ledger_sequence(),
+            DetectionQuotaUsage {
+                dispatch_used: stored.dispatch_used,
+                runtime_reserved_ms: stored.runtime_reserved_ms,
+            },
+        )))
+    }
+
+    fn persist_detection_quota(
+        &self,
+        sequence: u64,
+        instance_id: &str,
+        window_id: &str,
+        usage: DetectionQuotaUsage,
+    ) -> RuntimeHostResult<()> {
+        if let Some((existing_sequence, existing)) =
+            self.load_detection_quota(instance_id, window_id)?
+        {
+            if existing_sequence > sequence || existing_sequence == sequence && existing != usage {
+                return Err(fatal(
+                    "policy_detection_quota_projection_conflict",
+                    "persist_policy_detection_quota",
+                ));
+            }
+            if existing_sequence == sequence {
+                return Ok(());
+            }
+        }
+        let payload = serde_json::to_vec(&StoredDetectionQuota {
+            schema_version: DETECTION_QUOTA_PROJECTION_SCHEMA.to_owned(),
+            instance_id: instance_id.to_owned(),
+            window_id: window_id.to_owned(),
+            dispatch_used: usage.dispatch_used,
+            runtime_reserved_ms: usage.runtime_reserved_ms,
+        })
+        .map_err(|_| {
+            fatal(
+                "policy_detection_quota_projection_encode_failed",
+                "persist_policy_detection_quota",
+            )
+        })?;
+        self.state
+            .write_projection_entry(
+                DETECTION_QUOTA_PROJECTION_NAMESPACE,
+                &detection_quota_projection_key(instance_id, window_id),
+                sequence,
+                &payload,
+            )
+            .map_err(|error| RuntimeHostError::state(&error))?;
+        Ok(())
+    }
+
+    fn load_planning_checkpoint(&self) -> RuntimeHostResult<Option<u64>> {
+        let Some(entry) = self
+            .state
+            .read_projection_entry(
+                PLANNING_SIGNAL_PROJECTION_NAMESPACE,
+                PLANNING_SIGNAL_CHECKPOINT_KEY,
+            )
+            .map_err(|error| RuntimeHostError::state(&error))?
+        else {
+            return Ok(None);
+        };
+        let checkpoint: PlanningSignalCheckpoint = serde_json::from_slice(entry.payload())
+            .map_err(|_| {
+                fatal(
+                    "policy_planning_checkpoint_invalid",
+                    "load_policy_planning_checkpoint",
+                )
+            })?;
+        if checkpoint.schema_version != PLANNING_SIGNAL_PROJECTION_SCHEMA
+            || checkpoint.through_sequence != entry.ledger_sequence()
+        {
+            return Err(fatal(
+                "policy_planning_checkpoint_invalid",
+                "load_policy_planning_checkpoint",
+            ));
+        }
+        Ok(Some(checkpoint.through_sequence))
+    }
+
+    fn persist_planning_checkpoint(&self, through_sequence: u64) -> RuntimeHostResult<()> {
+        if let Some(existing) = self.load_planning_checkpoint()? {
+            if existing > through_sequence {
+                return Err(fatal(
+                    "policy_planning_checkpoint_ahead",
+                    "persist_policy_planning_checkpoint",
+                ));
+            }
+            if existing == through_sequence {
+                return Ok(());
+            }
+        }
+        let payload = serde_json::to_vec(&PlanningSignalCheckpoint {
+            schema_version: PLANNING_SIGNAL_PROJECTION_SCHEMA.to_owned(),
+            through_sequence,
+        })
+        .map_err(|_| {
+            fatal(
+                "policy_planning_checkpoint_encode_failed",
+                "persist_policy_planning_checkpoint",
+            )
+        })?;
+        self.state
+            .write_projection_entry(
+                PLANNING_SIGNAL_PROJECTION_NAMESPACE,
+                PLANNING_SIGNAL_CHECKPOINT_KEY,
+                through_sequence,
+                &payload,
+            )
+            .map_err(|error| RuntimeHostError::state(&error))?;
+        Ok(())
+    }
+
     fn load_source(
         &self,
         path: &Path,
@@ -2078,6 +2478,18 @@ fn source_record(kind: &str, source: &CatalogDocumentSource) -> CatalogSourceRec
 
 fn sha256(bytes: &[u8]) -> String {
     format!("sha256:{:x}", Sha256::digest(bytes))
+}
+
+fn planning_signal_projection_key(signal_id: &str) -> String {
+    format!("{:x}", Sha256::digest(signal_id.as_bytes()))
+}
+
+fn detection_quota_projection_key(instance_id: &str, window_id: &str) -> String {
+    let mut digest = Sha256::new();
+    digest.update(instance_id.as_bytes());
+    digest.update([0]);
+    digest.update(window_id.as_bytes());
+    format!("{:x}", digest.finalize())
 }
 
 fn write_new_file(path: &Path, bytes: &[u8]) -> RuntimeHostResult<()> {

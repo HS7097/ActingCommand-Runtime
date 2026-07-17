@@ -4,7 +4,7 @@ The Runtime project interface is a read-only, game-neutral projection for UI, CL
 clients. It is transported through the resident Runtime's existing local IPC boundary. Clients do
 not receive GlobalLedger write authority, device ownership, or an execution lease from this query.
 
-The current contract version is `actingcommand.project-interface.v1`. One response contains typed
+The current contract version is `actingcommand.project-interface.v2`. One response contains typed
 project, instance, catalog, fact, goal, decision, approval, runtime-state, and diagnostic sections.
 The Runtime translates its internal domain state into these transport DTOs; transport JSON is not
 used as an authoritative domain or persistence model.
@@ -17,14 +17,19 @@ shared version is rejected with a protocol error; it is never interpreted as the
 
 | Client accepts | Runtime supports | Result |
 | --- | --- | --- |
-| v1 | v1 | v1 response |
-| v1 plus unknown future versions | v1 | v1 response |
-| unknown versions only | v1 | fail loud |
-| malformed request schema | v1 | fail loud |
-| response version unknown to client | v1 | client rejects response |
+| v2 | v2 | bounded v2 response with decision-page metadata |
+| v1 and v2 | v1 and v2 | v2 response |
+| v1 | v1 and v2 | v1 response only when the complete decision history fits |
+| unknown versions only | v1 and v2 | fail loud |
+| malformed request schema | v1 and v2 | fail loud |
+| response version unknown to client | any | client rejects response |
 
-V1 rejects unknown JSON fields at every transport object. A future version requires an explicit
-compatibility row and translator; changing V1 field semantics in place is not compatible.
+V1 rejects unknown JSON fields at every transport object and has no continuation contract. Runtime
+therefore rejects V1 with `project_interface_v1_requires_v2` whenever decision history requires a
+second page or response-size trimming. V2 carries a snapshot-bound cursor, `has_more`, and page
+counts so clients can retrieve the complete history without duplicates or loss. A future version
+requires an explicit compatibility row and translator; changing an existing version's field
+semantics in place is not compatible.
 Responses are bounded below the local IPC frame limit; an oversized projection is rejected with a
 typed protocol error rather than truncating sections or closing the connection as fake success.
 

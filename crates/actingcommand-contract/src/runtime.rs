@@ -52,6 +52,9 @@ pub const MAX_CONTAINED_TASK_PATH_BYTES: usize = 32 * 1024;
 pub const MAX_EVIDENCE_OUTPUT_PATH_BYTES: usize = 32 * 1024;
 pub const MAX_RUNTIME_SUBSCRIPTION_WAIT_MS: u64 = 30_000;
 pub const MAX_RUNTIME_SUBSCRIPTION_EVENTS: u16 = 256;
+pub const DEFAULT_RUNTIME_EVENT_QUERY_EVENTS: u16 = 128;
+pub const MAX_RUNTIME_EVENT_QUERY_EVENTS: u16 = 256;
+pub const MAX_RUNTIME_EVENT_QUERY_RESPONSE_BYTES: usize = 768 * 1024;
 pub const MIN_GOVERNANCE_CAPABILITY_BYTES: usize = 32;
 pub const MAX_GOVERNANCE_CAPABILITY_BYTES: usize = 1024;
 pub const RUNTIME_PLANNING_DOCUMENT_SCHEMA_VERSION: &str =
@@ -1813,6 +1816,214 @@ pub struct RuntimeEventBatch {
     timed_out: bool,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RuntimeEventQueryCursor {
+    snapshot_ledger_position: u64,
+    after_sequence: u64,
+    query_fingerprint: String,
+}
+
+impl RuntimeEventQueryCursor {
+    pub fn new(
+        snapshot_ledger_position: u64,
+        after_sequence: u64,
+        query: &EventQuery,
+        profile: ProjectionProfile,
+    ) -> RuntimeContractResult<Self> {
+        let cursor = Self {
+            snapshot_ledger_position,
+            after_sequence,
+            query_fingerprint: event_query_fingerprint(query, profile)?,
+        };
+        cursor.validate()?;
+        Ok(cursor)
+    }
+
+    pub fn validate(&self) -> RuntimeContractResult<()> {
+        if self.snapshot_ledger_position == 0
+            || self.after_sequence == 0
+            || self.after_sequence > self.snapshot_ledger_position
+        {
+            return Err(RuntimeContractError::new(
+                "invalid_runtime_event_query_cursor",
+            ));
+        }
+        validate_canonical_sha256(&self.query_fingerprint)
+            .map_err(|_| RuntimeContractError::new("invalid_runtime_event_query_cursor"))
+    }
+
+    pub fn matches(
+        &self,
+        query: &EventQuery,
+        profile: ProjectionProfile,
+    ) -> RuntimeContractResult<bool> {
+        Ok(self.query_fingerprint == event_query_fingerprint(query, profile)?)
+    }
+
+    pub const fn snapshot_ledger_position(&self) -> u64 {
+        self.snapshot_ledger_position
+    }
+
+    pub const fn after_sequence(&self) -> u64 {
+        self.after_sequence
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RuntimeEventQueryPageRequest {
+    limit: u16,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    cursor: Option<RuntimeEventQueryCursor>,
+}
+
+impl RuntimeEventQueryPageRequest {
+    pub fn new(limit: u16, cursor: Option<RuntimeEventQueryCursor>) -> RuntimeContractResult<Self> {
+        let request = Self { limit, cursor };
+        request.validate()?;
+        Ok(request)
+    }
+
+    pub fn validate(&self) -> RuntimeContractResult<()> {
+        if self.limit == 0 || self.limit > MAX_RUNTIME_EVENT_QUERY_EVENTS {
+            return Err(RuntimeContractError::new(
+                "invalid_runtime_event_query_page",
+            ));
+        }
+        if let Some(cursor) = &self.cursor {
+            cursor.validate()?;
+        }
+        Ok(())
+    }
+
+    pub const fn limit(&self) -> u16 {
+        self.limit
+    }
+
+    pub const fn cursor(&self) -> Option<&RuntimeEventQueryCursor> {
+        self.cursor.as_ref()
+    }
+}
+
+impl Default for RuntimeEventQueryPageRequest {
+    fn default() -> Self {
+        Self {
+            limit: DEFAULT_RUNTIME_EVENT_QUERY_EVENTS,
+            cursor: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RuntimeEventQueryPage {
+    events: Vec<ProjectedEvent>,
+    snapshot_ledger_position: u64,
+    requested_limit: u16,
+    returned_count: u16,
+    has_more: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    next_cursor: Option<RuntimeEventQueryCursor>,
+}
+
+impl RuntimeEventQueryPage {
+    pub fn new(
+        events: Vec<ProjectedEvent>,
+        snapshot_ledger_position: u64,
+        requested_limit: u16,
+        has_more: bool,
+        next_cursor: Option<RuntimeEventQueryCursor>,
+    ) -> RuntimeContractResult<Self> {
+        let returned_count = u16::try_from(events.len())
+            .map_err(|_| RuntimeContractError::new("invalid_runtime_event_query_page"))?;
+        let page = Self {
+            events,
+            snapshot_ledger_position,
+            requested_limit,
+            returned_count,
+            has_more,
+            next_cursor,
+        };
+        page.validate()?;
+        Ok(page)
+    }
+
+    pub fn validate(&self) -> RuntimeContractResult<()> {
+        if self.requested_limit == 0
+            || self.requested_limit > MAX_RUNTIME_EVENT_QUERY_EVENTS
+            || self.returned_count as usize != self.events.len()
+            || self.returned_count > self.requested_limit
+            || self.has_more != self.next_cursor.is_some()
+            || (self.events.is_empty() && self.has_more)
+        {
+            return Err(RuntimeContractError::new(
+                "invalid_runtime_event_query_page",
+            ));
+        }
+        let mut previous = 0;
+        for event in &self.events {
+            if event.sequence <= previous || event.sequence > self.snapshot_ledger_position {
+                return Err(RuntimeContractError::new(
+                    "invalid_runtime_event_query_page",
+                ));
+            }
+            previous = event.sequence;
+        }
+        if let Some(cursor) = &self.next_cursor {
+            cursor.validate()?;
+            if cursor.snapshot_ledger_position != self.snapshot_ledger_position
+                || self.events.last().map(|event| event.sequence) != Some(cursor.after_sequence)
+            {
+                return Err(RuntimeContractError::new(
+                    "invalid_runtime_event_query_page",
+                ));
+            }
+        }
+        let encoded = serde_json::to_vec(self)
+            .map_err(|_| RuntimeContractError::new("runtime_event_query_page_encode_failed"))?;
+        if encoded.len() > MAX_RUNTIME_EVENT_QUERY_RESPONSE_BYTES {
+            return Err(RuntimeContractError::new(
+                "runtime_event_query_response_too_large",
+            ));
+        }
+        Ok(())
+    }
+
+    pub fn events(&self) -> &[ProjectedEvent] {
+        &self.events
+    }
+
+    pub const fn snapshot_ledger_position(&self) -> u64 {
+        self.snapshot_ledger_position
+    }
+
+    pub const fn requested_limit(&self) -> u16 {
+        self.requested_limit
+    }
+
+    pub const fn returned_count(&self) -> u16 {
+        self.returned_count
+    }
+
+    pub const fn has_more(&self) -> bool {
+        self.has_more
+    }
+
+    pub const fn next_cursor(&self) -> Option<&RuntimeEventQueryCursor> {
+        self.next_cursor.as_ref()
+    }
+}
+
+fn event_query_fingerprint(
+    query: &EventQuery,
+    profile: ProjectionProfile,
+) -> RuntimeContractResult<String> {
+    let bytes = serde_json::to_vec(&(query, profile))
+        .map_err(|_| RuntimeContractError::new("runtime_event_query_fingerprint_failed"))?;
+    Ok(format!("sha256:{:x}", Sha256::digest(bytes)))
+}
+
 impl RuntimeEventBatch {
     pub fn new(
         events: Vec<ProjectedEvent>,
@@ -1922,6 +2133,7 @@ pub enum RuntimeOperation {
     QueryEvents {
         query: EventQuery,
         profile: ProjectionProfile,
+        page: RuntimeEventQueryPageRequest,
     },
     SubscribeEvents {
         request: RuntimeSubscriptionRequest,
@@ -2033,8 +2245,8 @@ impl RuntimeOperation {
             | Self::Status
             | Self::MonitorStatus
             | Self::PollQueuedLease { .. }
-            | Self::CancelQueuedLease { .. }
-            | Self::QueryEvents { .. } => Ok(()),
+            | Self::CancelQueuedLease { .. } => Ok(()),
+            Self::QueryEvents { page, .. } => page.validate(),
             Self::ProjectInterface { request } => request
                 .validate()
                 .map_err(|_| RuntimeContractError::new("invalid_project_interface_request")),
@@ -2620,8 +2832,8 @@ pub enum RuntimeResult {
     InputCommitted {
         action_id: ActionId,
     },
-    Events {
-        events: Vec<ProjectedEvent>,
+    EventPage {
+        page: RuntimeEventQueryPage,
     },
     EventBatch {
         batch: RuntimeEventBatch,
@@ -2770,6 +2982,7 @@ impl RuntimeReceipt {
                 observation.validate()?
             }
             Some(RuntimeResult::CaptureSequenceCompleted { sequence }) => sequence.validate()?,
+            Some(RuntimeResult::EventPage { page }) => page.validate()?,
             Some(RuntimeResult::EventBatch { batch }) => batch.validate()?,
             Some(RuntimeResult::PackageDebugCompleted { summary }) => summary.validate()?,
             Some(RuntimeResult::EvidenceExportCompleted { summary }) => summary.validate()?,

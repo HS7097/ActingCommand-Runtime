@@ -78,6 +78,15 @@ impl ProjectInterfaceProjection {
         let decision_snapshot_position = self.decisions.snapshot_ledger_position;
         let requested_decision_limit = self.decisions.requested_limit;
         let older_decisions_exist = self.decisions.has_more;
+        let legacy_contract =
+            negotiated_version == actingcommand_contract::PROJECT_INTERFACE_CONTRACT_V1;
+        if legacy_contract && older_decisions_exist {
+            return Err(RuntimeHostError::request(
+                "project_interface_v1_requires_v2",
+                "project_runtime_interface",
+                RuntimeErrorCode::ProtocolInvalid,
+            ));
+        }
         let approvals = self
             .approvals
             .into_iter()
@@ -163,9 +172,20 @@ impl ProjectInterfaceProjection {
                 Ok(response) => return Ok(response),
                 Err(error)
                     if error.code() == "project_interface_response_too_large"
-                        && decisions.len() > 1 =>
+                        && decisions.len() > 1
+                        && !legacy_contract =>
                 {
                     decisions.pop();
+                }
+                Err(error)
+                    if error.code() == "project_interface_response_too_large"
+                        && legacy_contract =>
+                {
+                    return Err(RuntimeHostError::request(
+                        "project_interface_v1_requires_v2",
+                        "project_runtime_interface",
+                        RuntimeErrorCode::ProtocolInvalid,
+                    ));
                 }
                 Err(error) => return Err(project_contract_error(error)),
             }

@@ -31,6 +31,7 @@ const DEFAULT_INGRESS_CAPACITY: usize = 256;
 const DEFAULT_SUBSCRIPTION_CAPACITY: usize = 64;
 const DEFAULT_REPLAY_PAGE_EVENTS: usize = 256;
 const MAX_REPLAY_PAGE_EVENTS: usize = 1024;
+const MAX_QUERY_PAGE_EVENTS: usize = 1024;
 
 pub type GlobalLedgerResult<T> = Result<T, GlobalLedgerError>;
 
@@ -280,6 +281,13 @@ enum WriterCommand {
         query: EventQuery,
         response: SyncSender<GlobalLedgerResult<Vec<PersistedEvent>>>,
     },
+    QueryPage {
+        query: EventQuery,
+        after_sequence: u64,
+        through_sequence: u64,
+        page_events: usize,
+        response: SyncSender<GlobalLedgerResult<Vec<PersistedEvent>>>,
+    },
     LatestSequence {
         response: SyncSender<GlobalLedgerResult<u64>>,
     },
@@ -296,6 +304,14 @@ enum WriterCommand {
     Project {
         query: EventQuery,
         profile: ProjectionProfile,
+        response: SyncSender<GlobalLedgerResult<Vec<ProjectedEvent>>>,
+    },
+    ProjectPage {
+        query: EventQuery,
+        profile: ProjectionProfile,
+        after_sequence: u64,
+        through_sequence: u64,
+        page_events: usize,
         response: SyncSender<GlobalLedgerResult<Vec<ProjectedEvent>>>,
     },
     Shutdown {
@@ -583,6 +599,32 @@ impl GlobalLedger {
         receive_response(receiver, "query_events")?
     }
 
+    pub fn query_page(
+        &self,
+        query: EventQuery,
+        after_sequence: u64,
+        through_sequence: u64,
+        page_events: usize,
+    ) -> GlobalLedgerResult<Vec<PersistedEvent>> {
+        let (response, receiver) = mpsc::sync_channel(1);
+        let sender = self
+            .sender
+            .as_ref()
+            .ok_or_else(|| GlobalLedgerError::fatal("writer_unavailable", "query_event_page"))?;
+        send_command(
+            sender,
+            WriterCommand::QueryPage {
+                query,
+                after_sequence,
+                through_sequence,
+                page_events,
+                response,
+            },
+            "query_event_page",
+        )?;
+        receive_response(receiver, "query_event_page")?
+    }
+
     pub fn latest_sequence(&self) -> GlobalLedgerResult<u64> {
         let (response, receiver) = mpsc::sync_channel(1);
         let sender = self
@@ -651,6 +693,34 @@ impl GlobalLedger {
             "project_events",
         )?;
         receive_response(receiver, "project_events")?
+    }
+
+    pub fn project_page(
+        &self,
+        query: EventQuery,
+        profile: ProjectionProfile,
+        after_sequence: u64,
+        through_sequence: u64,
+        page_events: usize,
+    ) -> GlobalLedgerResult<Vec<ProjectedEvent>> {
+        let (response, receiver) = mpsc::sync_channel(1);
+        let sender = self
+            .sender
+            .as_ref()
+            .ok_or_else(|| GlobalLedgerError::fatal("writer_unavailable", "project_event_page"))?;
+        send_command(
+            sender,
+            WriterCommand::ProjectPage {
+                query,
+                profile,
+                after_sequence,
+                through_sequence,
+                page_events,
+                response,
+            },
+            "project_event_page",
+        )?;
+        receive_response(receiver, "project_event_page")?
     }
 
     pub fn close(mut self) -> GlobalLedgerResult<()> {
@@ -744,6 +814,25 @@ fn writer_loop(
             WriterCommand::Query { query, response } => {
                 let _ = response.send(Ok(store.query(&query)));
             }
+            WriterCommand::QueryPage {
+                query,
+                after_sequence,
+                through_sequence,
+                page_events,
+                response,
+            } => {
+                let result = if (1..=MAX_QUERY_PAGE_EVENTS).contains(&page_events)
+                    && after_sequence <= through_sequence
+                {
+                    Ok(store.query_page(&query, after_sequence, through_sequence, page_events))
+                } else {
+                    Err(GlobalLedgerError::request(
+                        "invalid_query_page",
+                        "query_event_page",
+                    ))
+                };
+                let _ = response.send(result);
+            }
             WriterCommand::LatestSequence { response } => {
                 let _ = response.send(Ok(store.latest_sequence()));
             }
@@ -794,6 +883,30 @@ fn writer_loop(
                     .map(|event| projection::project(event, profile))
                     .collect();
                 let _ = response.send(Ok(projected));
+            }
+            WriterCommand::ProjectPage {
+                query,
+                profile,
+                after_sequence,
+                through_sequence,
+                page_events,
+                response,
+            } => {
+                let result = if (1..=MAX_QUERY_PAGE_EVENTS).contains(&page_events)
+                    && after_sequence <= through_sequence
+                {
+                    Ok(store
+                        .query_page(&query, after_sequence, through_sequence, page_events)
+                        .iter()
+                        .map(|event| projection::project(event, profile))
+                        .collect())
+                } else {
+                    Err(GlobalLedgerError::request(
+                        "invalid_query_page",
+                        "project_event_page",
+                    ))
+                };
+                let _ = response.send(result);
             }
             WriterCommand::Shutdown { response } => {
                 let result = store.close();

@@ -55,6 +55,36 @@ impl EventIndexes {
         events: &[PersistedEvent],
         query: &EventQuery,
     ) -> Vec<PersistedEvent> {
+        self.candidates(events, query)
+            .filter(|event| query_matches(query, event))
+            .cloned()
+            .collect()
+    }
+
+    pub(super) fn query_page(
+        &self,
+        events: &[PersistedEvent],
+        query: &EventQuery,
+        after_sequence: u64,
+        through_sequence: u64,
+        page_events: usize,
+    ) -> Vec<PersistedEvent> {
+        self.candidates(events, query)
+            .filter(|event| {
+                event.sequence() > after_sequence
+                    && event.sequence() <= through_sequence
+                    && query_matches(query, event)
+            })
+            .take(page_events)
+            .cloned()
+            .collect()
+    }
+
+    fn candidates<'a>(
+        &'a self,
+        events: &'a [PersistedEvent],
+        query: &EventQuery,
+    ) -> Box<dyn Iterator<Item = &'a PersistedEvent> + 'a> {
         let candidates = [
             index_for(&self.instance_ids, query.instance_id.as_ref()),
             index_for(&self.request_ids, query.request_id.as_ref()),
@@ -76,14 +106,10 @@ impl EventIndexes {
                 })
             },
         );
-        let events: Box<dyn Iterator<Item = &PersistedEvent>> = match positions {
+        match positions {
             Some(positions) => Box::new(positions.into_iter().map(|position| &events[position])),
             None => Box::new(events.iter()),
-        };
-        events
-            .filter(|event| query_matches(query, event))
-            .cloned()
-            .collect()
+        }
     }
 }
 
