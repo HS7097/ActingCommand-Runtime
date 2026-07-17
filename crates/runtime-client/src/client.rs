@@ -6,16 +6,25 @@ use actingcommand_contract::{
     ActionId, AgentSessionContext, AgentSessionId, AgentSessionResponse, AgentSessionStatus,
     AgentWakeId, ApplicationLifecycleAction, ApprovalDecisionRecord, CaptureSequenceSpec,
     CatalogProposal, ClientActionRecord, ContainedTaskRequest, CorrelationId, EventActor,
-    EventQuery, EventSource, IdentifierIssuer, InputAction, IssuedCorrelationId, LeaseQueuePolicy,
-    LeaseQueueStatus, LeaseToken, OwnerEpoch, PackageDebugRequest, ProjectDecisionPageCursor,
-    ProjectDecisionPageRequest, ProjectInterfaceRequest, ProjectInterfaceSnapshot, ProjectedEvent,
-    ProjectionProfile, ProposalPreview, ProposalPromotion, RUNTIME_INFO_FILE, RequestId,
-    ResourceAuthoringEvent, RuntimeControlPlaneStatus, RuntimeDebugEvent, RuntimeEventBatch,
-    RuntimeEvidenceExportRequest, RuntimeInfo, RuntimeMonitorInstanceStatus, RuntimeMonitorPolicy,
-    RuntimeMonitorRegistryStatus, RuntimeOperation, RuntimeReceipt, RuntimeRequest, RuntimeResult,
-    RuntimeSubscriptionRequest, TerminalEvent,
+    EventQuery, EventSource, FactScope, IdentifierIssuer, InputAction, IssuedCorrelationId,
+    LeaseQueuePolicy, LeaseQueueStatus, LeaseToken, OwnerEpoch, PackageDebugRequest,
+    ProjectDecisionPageCursor, ProjectDecisionPageRequest, ProjectInterfaceRequest,
+    ProjectInterfaceSnapshot, ProjectedArtifactReference, ProjectedEvent, ProjectionProfile,
+    ProposalPreview, ProposalPromotion, RUNTIME_INFO_FILE, RequestId, ResourceAuthoringEvent,
+    RuntimeControlPlaneStatus, RuntimeDebugEvent, RuntimeEventBatch, RuntimeEvidenceExportRequest,
+    RuntimeForwardProjectionRequest, RuntimeInfo, RuntimeMaintenanceQuery,
+    RuntimeMonitorInstanceStatus, RuntimeMonitorPolicy, RuntimeMonitorRegistryStatus,
+    RuntimeOperation, RuntimePlanningDocument, RuntimePlanningDocumentKind, RuntimeReceipt,
+    RuntimeRequest, RuntimeResult, RuntimeStrategicReportRequest, RuntimeSubscriptionRequest,
+    TerminalEvent,
+};
+use actingcommand_policy::{
+    EvaluationFacts, EvaluationResources, EvaluationTime, ForwardProjection,
+    ForwardProjectionConfig, MaintenanceAssessment, MaintenanceTrendPolicy, StrategicProjection,
+    StrategicReport,
 };
 use serde::Serialize;
+use serde::de::DeserializeOwned;
 use std::fmt;
 use std::fs;
 use std::net::TcpStream;
@@ -157,6 +166,77 @@ pub struct RuntimeFlowOutput {
 pub enum LeaseAdmission {
     Granted(LeaseToken),
     Queued(LeaseQueueStatus),
+}
+
+/// Typed client projection of one strategic report preparation completed by resident Runtime.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RuntimeStrategicPlan {
+    report: ProjectedArtifactReference,
+    projection: StrategicProjection,
+    proposal: Option<CatalogProposal>,
+    preview: Option<ProposalPreview>,
+}
+
+impl RuntimeStrategicPlan {
+    pub const fn report(&self) -> &ProjectedArtifactReference {
+        &self.report
+    }
+
+    pub const fn projection(&self) -> &StrategicProjection {
+        &self.projection
+    }
+
+    pub const fn proposal(&self) -> Option<&CatalogProposal> {
+        self.proposal.as_ref()
+    }
+
+    pub const fn preview(&self) -> Option<&ProposalPreview> {
+        self.preview.as_ref()
+    }
+}
+
+/// Typed maintenance query converted to the policy-independent wire envelope at send time.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PredictiveMaintenanceRequest {
+    transport: RuntimeMaintenanceQuery,
+}
+
+impl PredictiveMaintenanceRequest {
+    pub fn new(
+        instance_id: impl Into<String>,
+        task_id: impl Into<String>,
+        fact_scope: FactScope,
+        fact_key: impl Into<String>,
+        as_of_unix_ms: u64,
+        trend_policy: MaintenanceTrendPolicy,
+    ) -> RuntimeClientResult<Self> {
+        trend_policy.validate().map_err(|_| {
+            RuntimeClientError::fatal(
+                "maintenance_trend_policy_invalid",
+                "build_predictive_maintenance_request",
+            )
+        })?;
+        let policy = encode_policy_document(
+            RuntimePlanningDocumentKind::MaintenanceTrendPolicy,
+            &trend_policy,
+            "build_predictive_maintenance_request",
+        )?;
+        let transport = RuntimeMaintenanceQuery::new(
+            instance_id,
+            task_id,
+            fact_scope,
+            fact_key,
+            as_of_unix_ms,
+            policy,
+        )
+        .map_err(|_| {
+            RuntimeClientError::fatal(
+                "predictive_maintenance_request_invalid",
+                "build_predictive_maintenance_request",
+            )
+        })?;
+        Ok(Self { transport })
+    }
 }
 
 impl RuntimeFlowOutput {
@@ -667,6 +747,125 @@ impl RuntimeClient {
         }
     }
 
+    pub fn prepare_strategic_report(
+        &self,
+        report: &StrategicReport,
+        evidence: Vec<ProjectedArtifactReference>,
+    ) -> RuntimeClientResult<RuntimeStrategicPlan> {
+        report.validate().map_err(|_| {
+            RuntimeClientError::fatal("strategic_report_invalid", "prepare_strategic_report")
+        })?;
+        let report = encode_policy_document(
+            RuntimePlanningDocumentKind::StrategicReport,
+            report,
+            "prepare_strategic_report",
+        )?;
+        let request = RuntimeStrategicReportRequest::new(report, evidence).map_err(|_| {
+            RuntimeClientError::fatal(
+                "strategic_report_request_invalid",
+                "prepare_strategic_report",
+            )
+        })?;
+        match self.execute(
+            "prepare_strategic_report",
+            RuntimeOperation::PrepareStrategicReport {
+                request: Box::new(request),
+            },
+        )? {
+            RuntimeResult::StrategicPlanPrepared { plan } => {
+                let (report, projection, proposal, preview) = plan.into_parts();
+                let projection = self.decode_policy_document(
+                    &projection,
+                    RuntimePlanningDocumentKind::StrategicProjection,
+                    "prepare_strategic_report",
+                )?;
+                Ok(RuntimeStrategicPlan {
+                    report,
+                    projection,
+                    proposal,
+                    preview,
+                })
+            }
+            _ => Err(self.unexpected_result("prepare_strategic_report")),
+        }
+    }
+
+    pub fn project_policy_forward(
+        &self,
+        facts: &EvaluationFacts,
+        resources: &EvaluationResources,
+        time: EvaluationTime,
+        seed: u64,
+        config: ForwardProjectionConfig,
+    ) -> RuntimeClientResult<ForwardProjection> {
+        config.validate().map_err(|_| {
+            RuntimeClientError::fatal(
+                "forward_projection_config_invalid",
+                "project_policy_forward",
+            )
+        })?;
+        let request = RuntimeForwardProjectionRequest::new(
+            encode_policy_document(
+                RuntimePlanningDocumentKind::EvaluationFacts,
+                facts,
+                "project_policy_forward",
+            )?,
+            encode_policy_document(
+                RuntimePlanningDocumentKind::EvaluationResources,
+                resources,
+                "project_policy_forward",
+            )?,
+            encode_policy_document(
+                RuntimePlanningDocumentKind::EvaluationTime,
+                &time,
+                "project_policy_forward",
+            )?,
+            seed,
+            encode_policy_document(
+                RuntimePlanningDocumentKind::ForwardProjectionConfig,
+                &config,
+                "project_policy_forward",
+            )?,
+        )
+        .map_err(|_| {
+            RuntimeClientError::fatal(
+                "forward_projection_request_invalid",
+                "project_policy_forward",
+            )
+        })?;
+        let operation = RuntimeOperation::ProjectPolicyForward {
+            request: Box::new(request),
+        };
+        match self.execute("project_policy_forward", operation)? {
+            RuntimeResult::PolicyForwardProjected { projection } => self.decode_policy_document(
+                &projection,
+                RuntimePlanningDocumentKind::ForwardProjection,
+                "project_policy_forward",
+            ),
+            _ => Err(self.unexpected_result("project_policy_forward")),
+        }
+    }
+
+    pub fn assess_predictive_maintenance(
+        &self,
+        request: PredictiveMaintenanceRequest,
+    ) -> RuntimeClientResult<MaintenanceAssessment> {
+        match self.execute(
+            "assess_predictive_maintenance",
+            RuntimeOperation::AssessPredictiveMaintenance {
+                query: Box::new(request.transport),
+            },
+        )? {
+            RuntimeResult::PredictiveMaintenanceAssessed { assessment } => self
+                .decode_policy_document(
+                    &assessment,
+                    RuntimePlanningDocumentKind::MaintenanceAssessment,
+                    "assess_predictive_maintenance",
+                ),
+            _ => Err(self.unexpected_result("assess_predictive_maintenance")),
+        }
+    }
+
     pub fn compile_proposal(
         &self,
         proposal: CatalogProposal,
@@ -928,6 +1127,25 @@ impl RuntimeClient {
             .map_err(|_| RuntimeClientError::fatal("runtime_identifier_issue_failed", operation))
     }
 
+    fn decode_policy_document<T>(
+        &self,
+        document: &RuntimePlanningDocument,
+        kind: RuntimePlanningDocumentKind,
+        operation: &'static str,
+    ) -> RuntimeClientResult<T>
+    where
+        T: DeserializeOwned,
+    {
+        document.decode(kind).map_err(|_| {
+            let error =
+                RuntimeClientError::fatal("runtime_planning_document_decode_failed", operation);
+            match self.connection(operation) {
+                Ok(mut connection) => connection.latch(error),
+                Err(lock_error) => lock_error,
+            }
+        })
+    }
+
     fn flow_output(
         &self,
         receipt: RuntimeReceipt,
@@ -969,6 +1187,19 @@ impl RuntimeClient {
             .lock()
             .map_err(|_| RuntimeClientError::fatal("runtime_connection_poisoned", operation))
     }
+}
+
+fn encode_policy_document<T>(
+    kind: RuntimePlanningDocumentKind,
+    value: &T,
+    operation: &'static str,
+) -> RuntimeClientResult<RuntimePlanningDocument>
+where
+    T: Serialize,
+{
+    RuntimePlanningDocument::encode(kind, value).map_err(|_| {
+        RuntimeClientError::fatal("runtime_planning_document_encode_failed", operation)
+    })
 }
 
 impl RuntimeProjectClient {

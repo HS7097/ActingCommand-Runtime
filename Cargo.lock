@@ -39,6 +39,7 @@ version = "0.1.0"
 dependencies = [
  "actingcommand-contract",
  "actingcommand-device",
+ "actingcommand-policy",
  "actingcommand-runtime-client",
  "actingcommand-runtime-host",
  "serde",
@@ -288,6 +289,7 @@ version = "0.1.0"
 dependencies = [
  "actingcommand-contract",
  "actingcommand-device",
+ "actingcommand-policy",
  "actingcommand-runtime-host",
  "actingcommand-scheduler",
  "serde",
