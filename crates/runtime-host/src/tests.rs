@@ -8140,6 +8140,194 @@ fn agent_resume_request_replays_across_reconnect_and_restart() {
 }
 
 #[test]
+fn agent_cross_operation_request_ids_are_rejected_before_append_and_survive_restart() {
+    let root = TempDir::new().expect("tempdir");
+    let runtime_instance_id = instance_id();
+    let agent_config = AgentDispatcherConfig::new(3, 60_000, 2).expect("agent config");
+    let host = RuntimeHost::start(
+        config(&root).with_agent_dispatcher(agent_config.clone()),
+        Arc::new(FakeProvider::one(
+            POLICY_INSTANCE_ALIAS,
+            runtime_instance_id,
+            Arc::new(FakeState::default()),
+        )),
+    )
+    .expect("runtime host");
+    host.record_policy_planning_signal(PolicyPlanningSignalEventData {
+        signal_id: "signal:agent-request-collision-a".to_owned(),
+        instance_id: POLICY_INSTANCE_ALIAS.to_owned(),
+        task_id: None,
+        kind: PolicyPlanningSignalKind::DriftPredicted,
+        fact_code: "goal.primary.drift_predicted".to_owned(),
+        observed_at_unix_ms: unix_ms_now().expect("wall clock"),
+        detection_budget: None,
+    })
+    .expect("drift wake signal");
+    let mut client = TestClient::connect(&host);
+    let wakes = projected_events(
+        &mut client,
+        EventQuery {
+            event_type: Some(EventType::AgentWakeRequested),
+            ..EventQuery::default()
+        },
+    );
+    let ProjectionPayload::Full(payload) = &wakes[0].payload else {
+        panic!("expected forensic wake payload")
+    };
+    let EventPayload::Agent(AgentPayload::WakeRequested(payload)) = payload.as_ref() else {
+        panic!("expected agent wake payload")
+    };
+    let start = client.agent_request(RuntimeOperation::StartAgentSession {
+        wake_id: payload.wake().wake_id(),
+    });
+    let start = client.send(&start);
+    let RuntimeResult::AgentSessionOpened { context } =
+        start.result().expect("agent session result")
+    else {
+        panic!("expected agent session context")
+    };
+    let session_id = context.status().session_id();
+    let reuse_request_id =
+        |request: RuntimeRequest, request_id: actingcommand_contract::RequestId| {
+            let mut encoded = serde_json::to_value(request).expect("request JSON");
+            encoded["request_id"] = serde_json::to_value(request_id).expect("request id JSON");
+            serde_json::from_value::<RuntimeRequest>(encoded).expect("reused request id")
+        };
+
+    let resume = client.agent_request(RuntimeOperation::ResumeAgentSession { session_id });
+    let resume_id = resume.request_id();
+    assert_eq!(client.send(&resume).state(), RuntimeReceiptState::Completed);
+    let response = AgentSessionResponse::new(
+        session_id,
+        AgentResponseDisposition::RetryableFailure,
+        "fake_sidecar_failed",
+        unix_ms_now().expect("wall clock"),
+    )
+    .expect("agent response");
+    let response_conflict = reuse_request_id(
+        client.agent_request(RuntimeOperation::RecordAgentResponse {
+            response: response.clone(),
+        }),
+        resume_id,
+    );
+    let denied = host
+        .process_request_for_test(
+            &response_conflict,
+            ConnectionId::new(901).expect("connection"),
+        )
+        .expect("response conflict receipt");
+    assert_eq!(denied.state(), RuntimeReceiptState::Denied);
+    assert_eq!(
+        denied.error_projection().expect("response denial").code,
+        RuntimeErrorCode::InvalidRequest
+    );
+    let resume_events = projected_events(
+        &mut client,
+        EventQuery {
+            request_id: Some(resume_id),
+            ..EventQuery::default()
+        },
+    );
+    assert_eq!(resume_events.len(), 1);
+    assert_eq!(resume_events[0].event_type, EventType::AgentSessionResumed);
+
+    let response_request = client.agent_request(RuntimeOperation::RecordAgentResponse { response });
+    let response_id = response_request.request_id();
+    let response_receipt = client.send(&response_request);
+    let RuntimeResult::AgentResponseRecorded { status } = response_receipt
+        .result()
+        .expect("retryable response result")
+    else {
+        panic!("expected agent response status")
+    };
+    assert_eq!(status.state(), AgentAttentionState::Active);
+    let resume_conflict = reuse_request_id(
+        client.agent_request(RuntimeOperation::ResumeAgentSession { session_id }),
+        response_id,
+    );
+    let denied = host
+        .process_request_for_test(
+            &resume_conflict,
+            ConnectionId::new(902).expect("connection"),
+        )
+        .expect("resume conflict receipt");
+    assert_eq!(denied.state(), RuntimeReceiptState::Denied);
+    assert_eq!(
+        denied.error_projection().expect("resume denial").code,
+        RuntimeErrorCode::InvalidRequest
+    );
+    let response_events = projected_events(
+        &mut client,
+        EventQuery {
+            request_id: Some(response_id),
+            ..EventQuery::default()
+        },
+    );
+    assert_eq!(response_events.len(), 1);
+    assert_eq!(
+        response_events[0].event_type,
+        EventType::AgentResponseRecorded
+    );
+    assert!(host.fatal_error().expect("runtime health").is_none());
+    drop(client);
+    host.close().expect("close runtime");
+
+    let reopened = RuntimeHost::start(
+        config(&root).with_agent_dispatcher(agent_config),
+        Arc::new(FakeProvider::one(
+            POLICY_INSTANCE_ALIAS,
+            runtime_instance_id,
+            Arc::new(FakeState::default()),
+        )),
+    )
+    .expect("reopen runtime after rejected conflicts");
+    for (request, connection_id) in [(&response_conflict, 903), (&resume_conflict, 904)] {
+        let denied = reopened
+            .process_request_for_test(
+                request,
+                ConnectionId::new(connection_id).expect("connection"),
+            )
+            .expect("recovered conflict receipt");
+        assert_eq!(denied.state(), RuntimeReceiptState::Denied);
+        assert_eq!(
+            denied.error_projection().expect("recovered denial").code,
+            RuntimeErrorCode::InvalidRequest
+        );
+    }
+    assert!(
+        reopened
+            .fatal_error()
+            .expect("reopened runtime health")
+            .is_none()
+    );
+    let mut recovered = TestClient::connect(&reopened);
+    assert_eq!(
+        projected_events(
+            &mut recovered,
+            EventQuery {
+                request_id: Some(resume_id),
+                ..EventQuery::default()
+            },
+        )
+        .len(),
+        1
+    );
+    assert_eq!(
+        projected_events(
+            &mut recovered,
+            EventQuery {
+                request_id: Some(response_id),
+                ..EventQuery::default()
+            },
+        )
+        .len(),
+        1
+    );
+    drop(recovered);
+    reopened.close().expect("close reopened runtime");
+}
+
+#[test]
 fn agent_session_timeout_escalates_to_human() {
     let root = TempDir::new().expect("tempdir");
     let host = RuntimeHost::start(
