@@ -154,7 +154,9 @@ fn main() {
 
 fn run() -> DeviceResult<()> {
     let (mut config, commands) = parse_args(env::args().skip(1))?;
-    resolve_adb_for_device_commands(&mut config, &commands)?;
+    if let Some(warning) = resolve_adb_for_device_commands(&mut config, &commands)? {
+        eprintln!("{warning}");
+    }
     match commands.as_slice() {
         [DeviceCommand::Capture { .. }] => {
             return run_capture_command(config, &commands);
@@ -266,20 +268,24 @@ fn print_touch_diagnostics(diagnostics: &TouchBackendDiagnostics) {
 fn resolve_adb_for_device_commands(
     config: &mut MaaTouchValidationConfig,
     commands: &[DeviceCommand],
-) -> DeviceResult<()> {
-    resolve_adb_for_device_commands_with(config, commands, || Ok(resolve_adb_path(None)?.path))
+) -> DeviceResult<Option<String>> {
+    resolve_adb_for_device_commands_with(config, commands, || {
+        let resolved = resolve_adb_path(None)?;
+        Ok((resolved.path, resolved.warning))
+    })
 }
 
 fn resolve_adb_for_device_commands_with(
     config: &mut MaaTouchValidationConfig,
     commands: &[DeviceCommand],
-    resolver: impl FnOnce() -> DeviceResult<String>,
-) -> DeviceResult<()> {
+    resolver: impl FnOnce() -> DeviceResult<(String, Option<String>)>,
+) -> DeviceResult<Option<String>> {
     if !commands_need_device(commands) || !config.adb.adb_path.trim().is_empty() {
-        return Ok(());
+        return Ok(None);
     }
-    config.adb.adb_path = resolver()?;
-    Ok(())
+    let (path, warning) = resolver()?;
+    config.adb.adb_path = path;
+    Ok(warning)
 }
 
 fn commands_need_device(commands: &[DeviceCommand]) -> bool {
@@ -1871,13 +1877,29 @@ mod tests {
         .expect("parse");
 
         assert!(config.adb.adb_path.is_empty());
-        resolve_adb_for_device_commands_with(&mut config, &commands, || {
-            Ok("C:\\tools\\adb.exe".to_string())
+        let warning = resolve_adb_for_device_commands_with(&mut config, &commands, || {
+            Ok(("C:\\tools\\adb.exe".to_string(), None))
         })
         .expect("resolve adb");
 
         assert_eq!(config.adb.adb_path, "C:\\tools\\adb.exe");
         assert_eq!(config.adb.command_timeout, Duration::from_millis(3_456));
+        assert!(warning.is_none());
+    }
+
+    #[test]
+    fn adb_resolution_returns_degraded_state_warning_to_cli() {
+        let (mut config, commands) =
+            parse_args(["tap".to_string(), "100".to_string(), "200".to_string()]).expect("parse");
+        let expected = "WARNING: fallback=path_adb_baseline".to_string();
+
+        let warning = resolve_adb_for_device_commands_with(&mut config, &commands, || {
+            Ok(("C:\\tools\\adb.exe".to_string(), Some(expected.clone())))
+        })
+        .expect("resolve adb");
+
+        assert_eq!(config.adb.adb_path, "C:\\tools\\adb.exe");
+        assert_eq!(warning.as_deref(), Some(expected.as_str()));
     }
 
     #[test]
