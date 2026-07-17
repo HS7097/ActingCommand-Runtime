@@ -55,7 +55,7 @@ pub(crate) fn resolve_mumu_installation_from_sources(
     vendor_parents: &[PathBuf],
 ) -> DeviceResult<Option<MumuInstallation>> {
     if let Some(root) = explicit_root {
-        require_install_root(&root, MumuInstallSource::ExplicitFolder)?;
+        let root = canonicalize_install_root(&root, MumuInstallSource::ExplicitFolder)?;
         return Ok(Some(MumuInstallation {
             root,
             source: MumuInstallSource::ExplicitFolder,
@@ -64,7 +64,8 @@ pub(crate) fn resolve_mumu_installation_from_sources(
 
     let mut running_roots = Vec::new();
     for executable in running_executables {
-        let root = mumu_root_from_path(executable).ok_or_else(|| {
+        let executable = canonicalize_backend_file(executable, "running MuMu executable")?;
+        let root = mumu_root_from_path(&executable).ok_or_else(|| {
             DeviceError::fatal(format!(
                 "running MuMu executable path does not identify an installation root: {}",
                 executable.display()
@@ -106,8 +107,14 @@ pub(crate) fn resolve_mumu_backend_paths(
     explicit_root: Option<PathBuf>,
     explicit_dll: Option<PathBuf>,
 ) -> DeviceResult<Option<MumuBackendPaths>> {
-    let configured_adb = configured_adb.filter(|path| !path.as_os_str().is_empty());
-    let explicit_dll = explicit_dll.filter(|path| !path.as_os_str().is_empty());
+    let configured_adb = configured_adb
+        .filter(|path| !path.as_os_str().is_empty())
+        .map(|path| canonicalize_backend_file(&path, "configured ADB executable"))
+        .transpose()?;
+    let explicit_dll = explicit_dll
+        .filter(|path| !path.as_os_str().is_empty())
+        .map(|path| canonicalize_backend_file(&path, "configured Nemu IPC DLL"))
+        .transpose()?;
     let adb_root = configured_adb.as_deref().and_then(mumu_root_from_path);
     let dll_root = explicit_dll.as_deref().and_then(mumu_root_from_capture_dll);
 
@@ -143,7 +150,6 @@ pub(crate) fn resolve_mumu_backend_paths(
 
     let adb_path = match configured_adb {
         Some(path) => {
-            require_backend_file(&path, "configured ADB executable")?;
             let root = adb_root.ok_or_else(|| {
                 DeviceError::fatal(format!(
                     "configured ADB {} does not identify the selected MuMu installation root {}; ADB and Nemu capture must share one installation identity",
@@ -158,7 +164,6 @@ pub(crate) fn resolve_mumu_backend_paths(
     };
     let capture_dll_path = match explicit_dll {
         Some(path) => {
-            require_backend_file(&path, "configured Nemu IPC DLL")?;
             if !path_is_within_mumu_root(&path, &installation.root) {
                 return Err(DeviceError::fatal(format!(
                     "configured Nemu IPC DLL {} is outside selected MuMu installation root {}",
@@ -243,7 +248,16 @@ fn resolve_existing_candidate(
     candidates: Vec<PathBuf>,
 ) -> DeviceResult<PathBuf> {
     if let Some(path) = candidates.iter().find(|path| path.is_file()) {
-        return Ok(path.clone());
+        let path = canonicalize_backend_file(path, &format!("MuMu {label}"))?;
+        let root = canonicalize_install_root(&installation.root, installation.source)?;
+        if !path_is_within_mumu_root(&path, &root) {
+            return Err(DeviceError::fatal(format!(
+                "MuMu {label} resolved outside selected installation root {}: {}",
+                root.display(),
+                path.display()
+            )));
+        }
+        return Ok(path);
     }
     Err(DeviceError::fatal(format!(
         "MuMu {label} discovery selected source={} install_root={} but no candidate file exists; checked: {}",
@@ -257,6 +271,11 @@ fn select_unique_installation(
     roots: Vec<PathBuf>,
     source: MumuInstallSource,
 ) -> DeviceResult<MumuInstallation> {
+    let roots = roots
+        .into_iter()
+        .map(|root| canonicalize_install_root(&root, source))
+        .collect::<DeviceResult<Vec<_>>>()?;
+    let roots = stable_unique_paths(roots);
     if roots.len() != 1 {
         return Err(DeviceError::fatal(format!(
             "MuMu installation discovery is ambiguous for source={}: {}; configure ACTINGCOMMAND_NEMU_FOLDER, ACTINGCOMMAND_ADB_PATH, or an explicit backend path",
@@ -265,7 +284,6 @@ fn select_unique_installation(
         )));
     }
     let root = roots.into_iter().next().expect("one root");
-    require_install_root(&root, source)?;
     Ok(MumuInstallation { root, source })
 }
 
@@ -273,7 +291,7 @@ fn explicit_installation(
     root: PathBuf,
     source: MumuInstallSource,
 ) -> DeviceResult<MumuInstallation> {
-    require_install_root(&root, source)?;
+    let root = canonicalize_install_root(&root, source)?;
     Ok(MumuInstallation { root, source })
 }
 
@@ -303,24 +321,37 @@ fn ensure_same_install_root(
     )))
 }
 
-fn require_backend_file(path: &Path, label: &str) -> DeviceResult<()> {
-    if path.is_file() {
-        return Ok(());
+fn canonicalize_backend_file(path: &Path, label: &str) -> DeviceResult<PathBuf> {
+    let canonical = std::fs::canonicalize(path).map_err(|err| {
+        DeviceError::fatal(format!(
+            "failed to canonicalize {label} {}: {err}",
+            path.display()
+        ))
+    })?;
+    if canonical.is_file() {
+        return Ok(canonical);
     }
     Err(DeviceError::fatal(format!(
         "{label} does not exist or is not a file: {}",
-        path.display()
+        canonical.display()
     )))
 }
 
-fn require_install_root(root: &Path, source: MumuInstallSource) -> DeviceResult<()> {
-    if root.is_dir() {
-        return Ok(());
+fn canonicalize_install_root(root: &Path, source: MumuInstallSource) -> DeviceResult<PathBuf> {
+    let canonical = std::fs::canonicalize(root).map_err(|err| {
+        DeviceError::fatal(format!(
+            "failed to canonicalize MuMu installation root from source={} at {}: {err}",
+            source.as_str(),
+            root.display()
+        ))
+    })?;
+    if canonical.is_dir() {
+        return Ok(canonical);
     }
     Err(DeviceError::fatal(format!(
         "MuMu installation root from source={} does not exist or is not a directory: {}",
         source.as_str(),
-        root.display()
+        canonical.display()
     )))
 }
 
@@ -440,6 +471,8 @@ fn path_component_eq(path: &Path, expected: &str) -> bool {
 mod tests {
     use super::*;
     use std::fs;
+    #[cfg(windows)]
+    use std::process::Command;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     static TEMP_COUNTER: AtomicUsize = AtomicUsize::new(0);
@@ -507,7 +540,10 @@ mod tests {
                 .expect("explicit selection")
                 .expect("installation");
 
-        assert_eq!(selected.root, explicit);
+        assert_eq!(
+            selected.root,
+            fs::canonicalize(explicit).expect("canonical root")
+        );
         assert_eq!(selected.source, MumuInstallSource::ExplicitFolder);
     }
 
@@ -519,13 +555,17 @@ mod tests {
         let other_root = vendor.join("MuMuPlayer-Other");
         let executable = running_root.join("nx_device/13.4/shell/MuMuNxDevice.exe");
         fs::create_dir_all(executable.parent().expect("process parent")).expect("process root");
+        fs::write(&executable, b"fixture").expect("process executable");
         fs::create_dir_all(&other_root).expect("other root");
 
         let selected = resolve_mumu_installation_from_sources(None, &[executable], &[vendor])
             .expect("running selection")
             .expect("installation");
 
-        assert_eq!(selected.root, running_root);
+        assert_eq!(
+            selected.root,
+            fs::canonicalize(running_root).expect("canonical root")
+        );
         assert_eq!(selected.source, MumuInstallSource::RunningProcess);
     }
 
@@ -580,10 +620,12 @@ mod tests {
             .expect("selection")
             .expect("installation");
 
-        assert_eq!(resolve_mumu_adb(&installation).expect("ADB"), adb);
-        assert_eq!(resolve_mumu_capture_dll(&installation).expect("DLL"), dll);
+        let resolved_adb = resolve_mumu_adb(&installation).expect("ADB");
+        let resolved_dll = resolve_mumu_capture_dll(&installation).expect("DLL");
+        assert_eq!(resolved_adb, fs::canonicalize(adb).expect("canonical ADB"));
+        assert_eq!(resolved_dll, fs::canonicalize(dll).expect("canonical DLL"));
         assert_eq!(
-            mumu_root_from_capture_dll(&dll).expect("DLL root"),
+            mumu_root_from_capture_dll(&resolved_dll).expect("DLL root"),
             installation.root
         );
     }
@@ -623,9 +665,18 @@ mod tests {
             .expect("coordinated resolution")
             .expect("MuMu paths");
 
-        assert_eq!(paths.installation.root, root);
-        assert_eq!(paths.adb_path, adb);
-        assert_eq!(paths.capture_dll_path, dll);
+        assert_eq!(
+            paths.installation.root,
+            fs::canonicalize(root).expect("canonical root")
+        );
+        assert_eq!(
+            paths.adb_path,
+            fs::canonicalize(adb).expect("canonical ADB")
+        );
+        assert_eq!(
+            paths.capture_dll_path,
+            fs::canonicalize(dll).expect("canonical DLL")
+        );
     }
 
     #[test]
@@ -643,8 +694,73 @@ mod tests {
             .expect_err("unassociated ADB must fail");
 
         assert!(err.message().contains("does not identify"));
-        assert!(err.message().contains(&adb.display().to_string()));
-        assert!(err.message().contains(&root.display().to_string()));
+        assert!(
+            err.message().contains(
+                &fs::canonicalize(adb)
+                    .expect("canonical ADB")
+                    .display()
+                    .to_string()
+            )
+        );
+        assert!(
+            err.message().contains(
+                &fs::canonicalize(root)
+                    .expect("canonical root")
+                    .display()
+                    .to_string()
+            )
+        );
+    }
+
+    #[test]
+    fn coordinated_backend_paths_reject_parent_traversal_escape() {
+        let temp = TempRoot::new("coordinated-parent-traversal");
+        let selected = temp.path().join("MuMu Player Selected");
+        let escaped = temp.path().join("MuMuPlayer-Escaped");
+        let configured_adb = selected
+            .join("nx_main")
+            .join("..")
+            .join("..")
+            .join("MuMuPlayer-Escaped")
+            .join("nx_main")
+            .join("adb.exe");
+        let escaped_adb = escaped.join("nx_main/adb.exe");
+        let dll = selected.join("nx_device/17.0/shell/sdk/external_renderer_ipc.dll");
+        for file in [&escaped_adb, &dll] {
+            fs::create_dir_all(file.parent().expect("parent")).expect("candidate parent");
+            fs::write(file, b"fixture").expect("candidate file");
+        }
+        fs::create_dir_all(selected.join("nx_main")).expect("lexical ADB parent");
+
+        let err =
+            resolve_mumu_backend_paths(Some(configured_adb), Some(selected.clone()), Some(dll))
+                .expect_err("parent traversal must not escape the selected installation");
+
+        assert!(err.message().contains("not selected root"));
+        assert!(err.message().contains(&selected.display().to_string()));
+    }
+
+    #[test]
+    fn coordinated_backend_paths_reject_directory_reparse_escape() {
+        let temp = TempRoot::new("coordinated-reparse-escape");
+        let selected = temp.path().join("MuMu Player Selected");
+        let escaped = temp.path().join("MuMuPlayer-Escaped");
+        let escaped_adb_dir = escaped.join("nx_main");
+        let configured_adb = selected.join("nx_main/adb.exe");
+        let escaped_adb = escaped_adb_dir.join("adb.exe");
+        let dll = selected.join("nx_device/17.0/shell/sdk/external_renderer_ipc.dll");
+        for file in [&escaped_adb, &dll] {
+            fs::create_dir_all(file.parent().expect("parent")).expect("candidate parent");
+            fs::write(file, b"fixture").expect("candidate file");
+        }
+        create_directory_link(&selected.join("nx_main"), &escaped_adb_dir);
+
+        let err =
+            resolve_mumu_backend_paths(Some(configured_adb), Some(selected.clone()), Some(dll))
+                .expect_err("reparse escape must not leave the selected installation");
+
+        assert!(err.message().contains("not selected root"));
+        assert!(err.message().contains(&selected.display().to_string()));
     }
 
     #[test]
@@ -657,5 +773,25 @@ mod tests {
             .expect("bounded enumeration");
 
         assert!(selected.is_none());
+    }
+
+    #[cfg(windows)]
+    fn create_directory_link(link: &Path, target: &Path) {
+        let output = Command::new("cmd")
+            .args(["/C", "mklink", "/J"])
+            .arg(link)
+            .arg(target)
+            .output()
+            .expect("create junction");
+        assert!(
+            output.status.success(),
+            "failed to create junction: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    #[cfg(unix)]
+    fn create_directory_link(link: &Path, target: &Path) {
+        std::os::unix::fs::symlink(target, link).expect("create directory symlink");
     }
 }

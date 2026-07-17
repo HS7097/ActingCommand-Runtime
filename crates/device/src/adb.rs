@@ -617,7 +617,10 @@ mod tests {
             resolve_adb_path_after_discovery(Some(installation), None).expect("resolved MuMu ADB");
 
         assert_eq!(resolved.source, AdbPathSource::MumuRunningProcess);
-        assert_eq!(Path::new(&resolved.path), adb);
+        assert_eq!(
+            Path::new(&resolved.path),
+            fs::canonicalize(&adb).expect("canonical ADB")
+        );
         let _ = fs::remove_dir_all(temp);
     }
 
