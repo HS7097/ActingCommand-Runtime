@@ -1505,10 +1505,10 @@ mod tests {
         let mut entries = lab_package_entries("task_a", [255, 0, 0]);
         entries.insert(
             "control.json".to_string(),
-            br#"{"game":"azurlane","server":"jp","entry_task_id":"task_a","resource_root":"resources"}"#.to_vec(),
+            br#"{"game":"neutral","server":"test","entry_task_id":"task_a","resource_root":"resources"}"#.to_vec(),
         );
         entries.insert(
-            "resources/navigation/azurlane.jp.navigation.json".to_string(),
+            "resources/navigation/neutral.test.navigation.json".to_string(),
             br#"{}"#.to_vec(),
         );
         let zip = zip_from_map(entries);
@@ -1528,15 +1528,15 @@ mod tests {
         );
         assert_eq!(
             bundle.recognition_pack_path(),
-            Some("resources/recognition/azurlane.jp.pack.json")
+            Some("resources/recognition/neutral.test.pack.json")
         );
         assert_eq!(
             bundle.pages_path(),
-            Some("resources/recognition/azurlane.jp.pages.json")
+            Some("resources/recognition/neutral.test.pages.json")
         );
         assert_eq!(
             bundle.navigation_path(),
-            Some("resources/navigation/azurlane.jp.navigation.json")
+            Some("resources/navigation/neutral.test.navigation.json")
         );
     }
 
@@ -1546,27 +1546,27 @@ mod tests {
 
     fn lab_package_entries(task_id: &str, expected: [u8; 3]) -> BTreeMap<String, Vec<u8>> {
         let operation = format!(
-            r#"{{"schema_version":"0.5","task_id":"{task_id}","game":"azurlane","server_scope":["jp"],"coordinate_space":{{"width":1,"height":1}},"operations":[]}}"#
+            r#"{{"schema_version":"0.5","task_id":"{task_id}","game":"neutral","server_scope":["test"],"coordinate_space":{{"width":1,"height":1}},"operations":[]}}"#
         )
         .into_bytes();
         let pack = format!(
-            r#"{{"schema_version":"0.5","game":"azurlane","server":"jp","coordinate_space":{{"width":1,"height":1}},"targets":[{{"type":"color","id":"home_color","region":{{"x":0,"y":0,"width":1,"height":1}},"expected":[{},{},{}]}}]}}"#,
+            r#"{{"schema_version":"0.5","game":"neutral","server":"test","coordinate_space":{{"width":1,"height":1}},"targets":[{{"type":"color","id":"home_color","region":{{"x":0,"y":0,"width":1,"height":1}},"expected":[{},{},{}]}}]}}"#,
             expected[0], expected[1], expected[2]
         )
         .into_bytes();
-        let pages = br#"{"schema_version":"0.5","pages":[{"id":"azurlane/home","required":["home_color"]}]}"#.to_vec();
+        let pages = br#"{"schema_version":"0.5","pages":[{"id":"neutral/home","required":["home_color"]}]}"#.to_vec();
         let operation_hash = Sha256Hash::digest(&operation);
         let pack_hash = Sha256Hash::digest(&pack);
         let pages_hash = Sha256Hash::digest(&pages);
         let manifest = format!(
-            r#"{{"schema_version":"0.3","entry_task_id":"{task_id}","files":[{{"path":"operations/{task_id}/task.json","sha256":"sha256:{operation_hash}"}},{{"path":"recognition/azurlane.jp.pack.json","sha256":"sha256:{pack_hash}"}},{{"path":"recognition/azurlane.jp.pages.json","sha256":"sha256:{pages_hash}"}}]}}"#
+            r#"{{"schema_version":"0.3","entry_task_id":"{task_id}","files":[{{"path":"operations/{task_id}/task.json","sha256":"sha256:{operation_hash}"}},{{"path":"recognition/neutral.test.pack.json","sha256":"sha256:{pack_hash}"}},{{"path":"recognition/neutral.test.pages.json","sha256":"sha256:{pages_hash}"}}]}}"#
         )
         .into_bytes();
 
         BTreeMap::from([
             (
                 "control.json".to_string(),
-                format!(r#"{{"game":"azurlane","server":"jp","entry_task_id":"{task_id}"}}"#)
+                format!(r#"{{"game":"neutral","server":"test","entry_task_id":"{task_id}"}}"#)
                     .into_bytes(),
             ),
             ("resources/manifest.json".to_string(), manifest),
@@ -1575,11 +1575,11 @@ mod tests {
                 operation,
             ),
             (
-                "resources/recognition/azurlane.jp.pack.json".to_string(),
+                "resources/recognition/neutral.test.pack.json".to_string(),
                 pack,
             ),
             (
-                "resources/recognition/azurlane.jp.pages.json".to_string(),
+                "resources/recognition/neutral.test.pages.json".to_string(),
                 pages,
             ),
         ])
