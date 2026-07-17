@@ -78,7 +78,7 @@ fn write_config(path: &Path, state_root: &Path) {
         "bind_port": 0,
         "secret_fingerprint_salt": "actingd-process-test-salt",
         "instances": [{
-            "alias": "ak.cn",
+            "alias": "node.a",
             "instance_id": instance_id.transport(),
             "application_id": "neutral.application",
             "adb_path": "adb",

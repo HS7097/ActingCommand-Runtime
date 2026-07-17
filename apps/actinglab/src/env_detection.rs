@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 use super::{
-    CliError, CliOutcome, FlagArgs, GlobalOptions, app_state_root, current_unix_ms,
+    CliError, CliOutcome, FlagArgs, GlobalOptions, app_state_root, canonical_game, current_unix_ms,
     effective_resource_root, finish_semantic_result_with_ledger, parse_optional_duration_ms,
     read_user_config, runtime_state_root, semantic_ledger_context,
 };
@@ -107,7 +107,11 @@ pub(super) fn resolve_env_markers_in_value(
         instance: flags
             .optional("--instance")
             .or_else(|| global.instance.clone()),
-        game: flags.optional("--game").or_else(|| global.game.clone()),
+        game: flags
+            .optional("--game")
+            .or_else(|| global.game.clone())
+            .map(|game| canonical_game(&game))
+            .transpose()?,
         server: flags.optional("--server").or_else(|| global.server.clone()),
         env_task: flags.optional("--env-task"),
     };
@@ -271,6 +275,7 @@ fn command_scope(
         .optional("--game")
         .or_else(|| global.game.clone())
         .ok_or_else(|| CliError::usage(format!("{label} requires --game")))?;
+    let game = canonical_game(&game)?;
     let instance = flags
         .optional("--instance")
         .or_else(|| global.instance.clone())

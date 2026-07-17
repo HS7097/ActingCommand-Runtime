@@ -519,22 +519,22 @@ pub fn parse_environment_catalog_value(
 }
 
 pub fn canonical_environment_game(value: &str) -> EnvironmentCatalogResult<String> {
-    match value.to_ascii_lowercase().as_str() {
-        "ak" | "ark" | "arknights" => Ok("arknights".to_string()),
-        "azur" | "azurlane" | "azur_lane" | "al" => Ok("azurlane".to_string()),
-        "ba" | "bluearchive" | "blue_archive" => Ok("bluearchive".to_string()),
-        other => Err(EnvironmentCatalogError::new(format!(
-            "unknown game selector: {other}"
-        ))),
+    let selector = value.trim().to_ascii_lowercase();
+    if selector.is_empty()
+        || selector.len() > 128
+        || !selector
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
+    {
+        return Err(EnvironmentCatalogError::new(format!(
+            "invalid environment game selector: {value}"
+        )));
     }
+    Ok(selector)
 }
 
-pub fn default_environment_server(game: &str) -> &'static str {
-    match game {
-        "arknights" => "cn",
-        "azurlane" | "bluearchive" => "jp",
-        _ => "jp",
-    }
+pub fn default_environment_server(_game: &str) -> &'static str {
+    "default"
 }
 
 #[derive(Debug, Deserialize)]
@@ -1664,10 +1664,21 @@ mod tests {
     }
 
     #[test]
+    fn environment_selectors_are_generic_and_strict() {
+        assert_eq!(
+            canonical_environment_game(" Fixture-Game ").expect("selector"),
+            "fixture-game"
+        );
+        assert_eq!(default_environment_server("fixture-game"), "default");
+        assert!(canonical_environment_game("fixture/game").is_err());
+        assert!(canonical_environment_game(" ").is_err());
+    }
+
+    #[test]
     fn flat_catalog_is_normalized_and_validated() {
         let catalog = parse_environment_catalog_value(json!({
             "schema_version": "env-detections.v1",
-            "game": "arknights",
+            "game": "fixture-game-a",
             "detections": [{
                 "detector_id": "detect_ui_theme",
                 "detector_version": "1",
@@ -1686,7 +1697,7 @@ mod tests {
         catalog.validate().expect("validate flat catalog");
 
         let detector = catalog.detector("detect_ui_theme").expect("detector");
-        assert_eq!(detector.game_id.as_deref(), Some("arknights"));
+        assert_eq!(detector.game_id.as_deref(), Some("fixture-game-a"));
         assert_eq!(detector.keys[0].stale_threshold(), 0.6);
         assert_eq!(
             detector.keys[0].candidates[0].region,
@@ -1831,8 +1842,8 @@ mod tests {
         EnvironmentStateEngine::new(
             EnvironmentStateScope {
                 instance_id: "envinst_a".to_string(),
-                game_id: "arknights".to_string(),
-                server_id: "cn".to_string(),
+                game_id: "fixture-game-a".to_string(),
+                server_id: "region-a".to_string(),
                 resource_pack_id: "test-pack".to_string(),
             },
             EnvironmentDetectorState {
@@ -1853,8 +1864,8 @@ mod tests {
             detections: vec![EnvDetector {
                 id: detector_id.to_string(),
                 version: Some("1".to_string()),
-                game_id: Some("arknights".to_string()),
-                server_id: Some("cn".to_string()),
+                game_id: Some("fixture-game-a".to_string()),
+                server_id: Some("region-a".to_string()),
                 resource_pack_id: Some("test-pack".to_string()),
                 match_metric: Some("ccorr_normed".to_string()),
                 steps: Vec::new(),
@@ -1881,8 +1892,8 @@ mod tests {
     fn decision_context() -> EnvironmentDetectionContext {
         EnvironmentDetectionContext {
             instance_id: "envinst_a".to_string(),
-            game_id: "arknights".to_string(),
-            server_id: "cn".to_string(),
+            game_id: "fixture-game-a".to_string(),
+            server_id: "region-a".to_string(),
             resource_pack_hash: "hash".to_string(),
             generated_at_unix_ms: 100,
         }
@@ -1900,8 +1911,8 @@ mod tests {
         EnvDetectionResult {
             schema_version: ENV_RESULT_SCHEMA_VERSION.to_string(),
             instance_id: "envinst_a".to_string(),
-            game_id: "arknights".to_string(),
-            server_id: "cn".to_string(),
+            game_id: "fixture-game-a".to_string(),
+            server_id: "region-a".to_string(),
             detector_id: "detect_ui_theme".to_string(),
             detector_version: "1".to_string(),
             resource_pack_id: "test-pack".to_string(),
@@ -1931,12 +1942,12 @@ mod tests {
             ledger_position: 1,
             context: InstanceFactContext {
                 instance_id: "envinst_a".to_string(),
-                game_id: "arknights".to_string(),
-                server_id: "cn".to_string(),
+                game_id: "fixture-game-a".to_string(),
+                server_id: "region-a".to_string(),
             },
             records: vec![FactRecord {
                 scope: FactScope::Server {
-                    server_id: "cn".to_string(),
+                    server_id: "region-a".to_string(),
                 },
                 key: "env.ui_theme".to_string(),
                 content: FactContent::Inline {

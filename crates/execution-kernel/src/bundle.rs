@@ -98,7 +98,7 @@ mod tests {
             "0000000000000000000000000000000000000000000000000000000000000000",
         )
         .expect("expected hash");
-        let error = ExternallyVerifiedBundle::load("ak.cn", b"not-a-zip", expected)
+        let error = ExternallyVerifiedBundle::load("node.a", b"not-a-zip", expected)
             .expect_err("hash mismatch");
 
         assert!(matches!(

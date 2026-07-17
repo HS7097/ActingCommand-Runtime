@@ -6,9 +6,10 @@ use std::process::Command;
 
 use actingcommand_actinglab_architecture::{
     contract_dependency_violations, extract_command_inventory, inspect_contract_fact_matching,
-    inspect_global_append_ingress, inspect_lab_source, inspect_persisted_event_ownership,
-    inspect_producer_event_capabilities, inspect_public_api, lab_removability_violations,
-    ledger_owns_query_matching, resource_tooling_removability_violations, validate_line_ratchet,
+    inspect_generic_runtime_identity, inspect_global_append_ingress, inspect_lab_source,
+    inspect_persisted_event_ownership, inspect_producer_event_capabilities, inspect_public_api,
+    lab_removability_violations, ledger_owns_query_matching,
+    resource_tooling_removability_violations, validate_line_ratchet,
     workspace_dependency_violations,
 };
 use sha2::{Digest, Sha256};
@@ -119,6 +120,79 @@ fn collect_rust_files(root: &Path, files: &mut Vec<PathBuf>) {
         if path.is_dir() {
             collect_rust_files(&path, files);
         } else if path.extension().is_some_and(|extension| extension == "rs") {
+            files.push(path);
+        }
+    }
+}
+
+#[test]
+fn c2_runtime_code_contracts_defaults_and_fixtures_are_project_neutral() {
+    let root = workspace_root();
+    let owned_roots = [
+        "apps/actingctl",
+        "apps/actingd",
+        "benchmarks/workloads",
+        "contracts",
+        "crates/actingcommand-contract",
+        "crates/artifact-store",
+        "crates/device",
+        "crates/execution-kernel",
+        "crates/ledger",
+        "crates/onnx-provider-support",
+        "crates/pack-containment",
+        "crates/page-detector",
+        "crates/recognition",
+        "crates/recognition-pack",
+        "crates/runtime-client",
+        "crates/runtime-host",
+        "crates/scheduler",
+        "crates/vision-ffi",
+        "tests",
+    ];
+    let mut files = Vec::new();
+    for owned_root in owned_roots {
+        collect_generic_runtime_files(&root.join(owned_root), &mut files);
+    }
+
+    let mut violations = Vec::new();
+    for path in files {
+        let source = fs::read_to_string(&path)
+            .unwrap_or_else(|error| panic!("read {}: {error}", path.display()));
+        let display = path
+            .strip_prefix(&root)
+            .unwrap_or(&path)
+            .display()
+            .to_string();
+        violations.extend(inspect_generic_runtime_identity(&display, &source));
+    }
+
+    assert!(
+        violations.is_empty(),
+        "C2 generic Runtime boundary violations:\n{}",
+        violations.join("\n")
+    );
+}
+
+fn collect_generic_runtime_files(root: &Path, files: &mut Vec<PathBuf>) {
+    let entries =
+        fs::read_dir(root).unwrap_or_else(|error| panic!("read {}: {error}", root.display()));
+    for entry in entries {
+        let entry = entry.unwrap_or_else(|error| panic!("read {} entry: {error}", root.display()));
+        let path = entry.path();
+        if path.is_dir() {
+            collect_generic_runtime_files(&path, files);
+            continue;
+        }
+        if path
+            .extension()
+            .and_then(|extension| extension.to_str())
+            .is_some_and(|extension| {
+                matches!(
+                    extension,
+                    "rs" | "json" | "toml" | "yaml" | "yml" | "sql" | "md"
+                )
+            })
+        {
             files.push(path);
         }
     }

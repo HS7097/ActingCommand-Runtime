@@ -146,16 +146,16 @@ impl Drop for FakeCapture {
 
 impl ExecutionBackendProvider for FakeProvider {
     fn instance_aliases(&self) -> Vec<String> {
-        vec!["ak.cn".to_string()]
+        vec!["node.a".to_string()]
     }
 
     fn resolve(&self, instance_alias: &str) -> Option<ResolvedExecutionInstance> {
-        (instance_alias == "ak.cn")
+        (instance_alias == "node.a")
             .then(|| ResolvedExecutionInstance::new(self.instance_id, "127.0.0.1:16384"))
     }
 
     fn open_input(&self, instance_alias: &str) -> DeviceResult<Box<dyn InputBackend>> {
-        assert_eq!(instance_alias, "ak.cn");
+        assert_eq!(instance_alias, "node.a");
         self.state.opens.fetch_add(1, Ordering::AcqRel);
         Ok(Box::new(FakeBackend {
             state: Arc::clone(&self.state),
@@ -164,7 +164,7 @@ impl ExecutionBackendProvider for FakeProvider {
     }
 
     fn open_capture(&self, instance_alias: &str) -> DeviceResult<Box<dyn CaptureBackend>> {
-        assert_eq!(instance_alias, "ak.cn");
+        assert_eq!(instance_alias, "node.a");
         self.state.capture_opens.fetch_add(1, Ordering::AcqRel);
         Ok(Box::new(FakeCapture {
             state: Arc::clone(&self.state),
@@ -177,7 +177,7 @@ impl ExecutionBackendProvider for FakeProvider {
         instance_alias: &str,
         _action: actingcommand_contract::ApplicationLifecycleAction,
     ) -> DeviceResult<()> {
-        assert_eq!(instance_alias, "ak.cn");
+        assert_eq!(instance_alias, "node.a");
         Ok(())
     }
 }
@@ -325,7 +325,7 @@ fn typed_client_discovers_runtime_and_routes_queries_and_input() {
     let status = client.status().expect("status");
     assert_eq!(status.owner_epoch(), host.runtime_info().owner_epoch());
     assert_eq!(status.instances().len(), 1);
-    assert_eq!(status.instances()[0].instance_alias(), "ak.cn");
+    assert_eq!(status.instances()[0].instance_alias(), "node.a");
     assert!(!status.instances()[0].lease_active());
     assert!(
         client.monitor_status().expect("monitor status").instances()[0]
@@ -335,7 +335,7 @@ fn typed_client_discovers_runtime_and_routes_queries_and_input() {
     let monitor_policy = RuntimeMonitorPolicy::new(1_000, "home", false).expect("monitor policy");
     assert_eq!(
         client
-            .configure_monitor("ak.cn", monitor_policy.clone())
+            .configure_monitor("node.a", monitor_policy.clone())
             .expect("configure monitor")
             .policy(),
         Some(&monitor_policy)
@@ -350,12 +350,12 @@ fn typed_client_discovers_runtime_and_routes_queries_and_input() {
     );
     assert!(
         client
-            .clear_monitor("ak.cn")
+            .clear_monitor("node.a")
             .expect("clear monitor")
             .policy()
             .is_none()
     );
-    let token = client.acquire_lease("ak.cn").expect("lease");
+    let token = client.acquire_lease("node.a").expect("lease");
     assert!(client.status().expect("leased status").instances()[0].lease_active());
     client
         .input(&token, InputAction::Tap { x: 10, y: 20 })
@@ -396,7 +396,7 @@ fn typed_client_records_client_actions_and_approval_decisions_through_runtime() 
                 "overview",
                 "refresh",
                 ClientActionKind::Button,
-                Some("ak.cn".to_owned()),
+                Some("node.a".to_owned()),
                 None,
             )
             .expect("client action"),
@@ -452,7 +452,7 @@ fn subscription_waits_for_new_events_and_returns_a_resumable_batch() {
     let producer = client(&root);
     let producer_thread = thread::spawn(move || {
         thread::sleep(Duration::from_millis(25));
-        let token = producer.acquire_lease("ak.cn").expect("producer lease");
+        let token = producer.acquire_lease("node.a").expect("producer lease");
         producer.release_lease(&token).expect("producer release");
     });
 
@@ -608,13 +608,13 @@ fn debug_session_correlates_runtime_capture_scheduler_input_and_release() {
     let session = client.begin_debug_session().expect("debug session");
 
     let observation = session
-        .observe_readonly("ak.cn")
+        .observe_readonly("node.a")
         .expect("debug observation");
     assert!(matches!(
         observation.result(),
         Some(RuntimeResult::ReadonlyObservationCompleted { .. })
     ));
-    let token = session.acquire_lease("ak.cn").expect("debug lease");
+    let token = session.acquire_lease("node.a").expect("debug lease");
     session
         .input(&token, InputAction::Tap { x: 10, y: 20 })
         .expect("debug input");
@@ -693,10 +693,10 @@ fn typed_client_queues_polls_and_cancels_connection_bound_leases() {
     let host = host(&root, Arc::clone(&state), 1_000);
     let first = client(&root);
     let second = client(&root);
-    let first_token = first.acquire_lease("ak.cn").expect("first lease");
+    let first_token = first.acquire_lease("node.a").expect("first lease");
     let queued = second
         .queue_lease(
-            "ak.cn",
+            "node.a",
             LeaseQueuePolicy::new(LeasePriority::Normal, 1_000).expect("queue policy"),
         )
         .expect("queue lease");
@@ -718,10 +718,10 @@ fn typed_client_queues_polls_and_cancels_connection_bound_leases() {
     };
     second.release_lease(&second_token).expect("release second");
 
-    let third = first.acquire_lease("ak.cn").expect("third lease");
+    let third = first.acquire_lease("node.a").expect("third lease");
     let queued = second
         .queue_lease(
-            "ak.cn",
+            "node.a",
             LeaseQueuePolicy::new(LeasePriority::Normal, 1_000).expect("queue policy"),
         )
         .expect("queue lease");
@@ -746,7 +746,7 @@ fn readonly_observation_returns_host_receipt_and_correlated_projection() {
     let client = client(&root);
 
     let output = client
-        .observe_readonly("ak.cn")
+        .observe_readonly("node.a")
         .expect("readonly observation");
 
     assert_eq!(state.capture_opens.load(Ordering::Acquire), 1);
@@ -795,7 +795,7 @@ fn capture_sequence_client_returns_exact_artifact_backed_frames_without_input() 
 
     let output = client
         .capture_sequence(
-            "ak.cn",
+            "node.a",
             CaptureSequenceSpec::new(3, 1).expect("sequence spec"),
         )
         .expect("capture sequence");
@@ -829,7 +829,7 @@ fn capture_failure_is_reported_to_runtime_and_never_returns_fake_success() {
     let client = client(&root);
 
     let error = client
-        .observe_readonly("ak.cn")
+        .observe_readonly("node.a")
         .expect_err("capture failure must remain visible");
 
     assert_eq!(state.capture_opens.load(Ordering::Acquire), 1);
@@ -853,12 +853,12 @@ fn capture_failure_latches_the_daemon_session_without_retry_or_fallback() {
     let host = host(&root, Arc::clone(&state), 1_000);
     let client = client(&root);
     client
-        .observe_readonly("ak.cn")
+        .observe_readonly("node.a")
         .expect_err("first capture must fail");
     state.fail_capture.store(false, Ordering::Release);
 
     let second = client
-        .observe_readonly("ak.cn")
+        .observe_readonly("node.a")
         .expect_err("latched session must not reopen");
 
     assert!(second.is_fatal());
@@ -878,7 +878,7 @@ fn malformed_daemon_frame_is_rejected_without_observation_success() {
     let client = client(&root);
 
     let error = client
-        .observe_readonly("ak.cn")
+        .observe_readonly("node.a")
         .expect_err("invalid frame must remain visible");
 
     assert_eq!(
@@ -899,7 +899,7 @@ fn safe_reset_uses_one_runtime_request_and_returns_ledger_projection() {
     let host = host(&root, Arc::clone(&state), 1_000);
     let client = client(&root);
 
-    let output = client.safe_reset("ak.cn").expect("safe reset");
+    let output = client.safe_reset("node.a").expect("safe reset");
 
     assert!(matches!(
         output.receipt().result(),
@@ -926,7 +926,7 @@ fn safe_reset_backend_failure_is_visible_and_releases_authority() {
     let client = client(&root);
 
     let error = client
-        .safe_reset("ak.cn")
+        .safe_reset("node.a")
         .expect_err("reset backend failure must be visible");
 
     assert_eq!(
@@ -949,7 +949,7 @@ fn runtime_input_proxy_renews_before_short_lease_expiry() {
     let client = client(&root);
     let mut proxy = RuntimeInputProxy::connect_with_heartbeat(
         client.clone(),
-        "ak.cn",
+        "node.a",
         Duration::from_millis(50),
     )
     .expect("runtime input proxy");
@@ -974,14 +974,14 @@ fn dropping_runtime_input_proxy_releases_authority_but_keeps_the_daemon_session(
     let client = client(&root);
     let proxy = RuntimeInputProxy::connect_with_heartbeat(
         client.clone(),
-        "ak.cn",
+        "node.a",
         Duration::from_millis(20),
     )
     .expect("runtime input proxy");
 
     drop(proxy);
     assert_eq!(state.closes.load(Ordering::Acquire), 0);
-    let replacement = client.acquire_lease("ak.cn").expect("replacement lease");
+    let replacement = client.acquire_lease("node.a").expect("replacement lease");
     client
         .release_lease(&replacement)
         .expect("replacement release");
@@ -997,7 +997,7 @@ fn long_input_extends_only_its_response_wait() {
     let state = Arc::new(FakeState::default());
     let host = host(&root, Arc::clone(&state), 5_000);
     let client = client_with_timeout(&root, Duration::from_millis(1_000));
-    let token = client.acquire_lease("ak.cn").expect("lease");
+    let token = client.acquire_lease("node.a").expect("lease");
 
     client
         .input(

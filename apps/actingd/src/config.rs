@@ -236,7 +236,7 @@ mod tests {
             "bind_port": 0,
             "secret_fingerprint_salt": "0123456789abcdef",
             "instances": [{
-                "alias": "ak.cn",
+                "alias": "node.a",
                 "instance_id": id.transport(),
                 "application_id": "neutral.application",
                 "adb_path": "adb",
@@ -303,7 +303,7 @@ mod tests {
             "bind_host": "127.0.0.1",
             "secret_fingerprint_salt": "0123456789abcdef",
             "instances": [{
-                "alias": "ak.cn",
+                "alias": "node.a",
                 "instance_id": id.transport(),
                 "application_id": "neutral.application",
                 "adb_path": "adb",
@@ -330,7 +330,7 @@ mod tests {
             "bind_host": "127.0.0.1",
             "secret_fingerprint_salt": "0123456789abcdef",
             "instances": [{
-                "alias": "ak.cn",
+                "alias": "node.a",
                 "instance_id": id.transport(),
                 "application_id": "neutral.application",
                 "adb_path": "adb",
