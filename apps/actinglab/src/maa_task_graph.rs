@@ -4,7 +4,6 @@ use super::{CliError, CliOutcome, FlagArgs, ResolvedResourceRoot};
 use actingcommand_lab::{JsonDocument, compile_maa_task_graph};
 use serde::Serialize;
 use serde_json::Value;
-use std::path::{Path, PathBuf};
 
 pub(super) fn run_resource_maa_task_compile(
     flags: &FlagArgs,
@@ -12,7 +11,7 @@ pub(super) fn run_resource_maa_task_compile(
 ) -> CliOutcome<Value> {
     let tasks_root = flags
         .optional_path("--maa-tasks")
-        .unwrap_or_else(|| default_maa_tasks_root(resource_root));
+        .ok_or_else(|| CliError::usage("resource compile-maa requires --maa-tasks <dir>"))?;
     let graph = compile_maa_task_graph(&tasks_root)?;
     let stats = graph.stats();
     let selected_task = flags
@@ -56,26 +55,4 @@ struct MaaTaskCompileResponse {
     maa_tasks_root: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     selected_task: Option<JsonDocument>,
-}
-
-fn default_maa_tasks_root(resource_root: &ResolvedResourceRoot) -> PathBuf {
-    let relative = Path::new("upstream-derived")
-        .join("upstream")
-        .join("MaaAssistantArknights")
-        .join("resource")
-        .join("tasks");
-    let candidates = [
-        resource_root.input.join(&relative),
-        resource_root
-            .root
-            .parent()
-            .map(|parent| parent.join(&relative))
-            .unwrap_or_else(|| resource_root.root.join(&relative)),
-        resource_root.root.join(&relative),
-    ];
-    candidates
-        .iter()
-        .find(|path| path.is_dir())
-        .cloned()
-        .unwrap_or_else(|| candidates[0].clone())
 }

@@ -16,8 +16,11 @@ impl<P: LabPorts> Lab<P> {
         &mut self,
         request: PackageBuildTaskRequest,
     ) -> LabResult<PackageBuildTaskResponse> {
-        let env = request.env.clone();
+        let mut env = request.env.clone();
         let prepared = prepare_package_build_task(request)?;
+        env.game.get_or_insert_with(|| prepared.game().to_string());
+        env.server
+            .get_or_insert_with(|| prepared.server().to_string());
         let environment = resolve_environment_snapshot(
             self,
             &env,
@@ -47,7 +50,7 @@ impl PackageBuildCatalog {
         self.inner.task_ids()
     }
 
-    pub fn default_entry_task(&self) -> String {
+    pub fn default_entry_task(&self) -> LabResult<String> {
         self.inner.default_entry_task()
     }
 

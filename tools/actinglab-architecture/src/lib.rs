@@ -150,6 +150,96 @@ pub fn inspect_generic_runtime_identity(path: &str, source: &str) -> Vec<String>
     violations
 }
 
+/// Rejects built-in game identities from product and resource-authoring code.
+pub fn inspect_generic_authoring_identity(path: &str, source: &str) -> Result<Vec<String>, String> {
+    let file = syn::parse_file(source).map_err(|err| format!("failed to parse {path}: {err}"))?;
+    let mut visitor = GenericAuthoringIdentityVisitor {
+        path,
+        violations: Vec::new(),
+    };
+    visitor.visit_file(&file);
+    Ok(visitor.violations)
+}
+
+struct GenericAuthoringIdentityVisitor<'a> {
+    path: &'a str,
+    violations: Vec<String>,
+}
+
+impl Visit<'_> for GenericAuthoringIdentityVisitor<'_> {
+    fn visit_item_mod(&mut self, node: &syn::ItemMod) {
+        if has_cfg_test(&node.attrs) {
+            return;
+        }
+        syn::visit::visit_item_mod(self, node);
+    }
+
+    fn visit_item_fn(&mut self, node: &syn::ItemFn) {
+        if has_cfg_test(&node.attrs) {
+            return;
+        }
+        syn::visit::visit_item_fn(self, node);
+    }
+
+    fn visit_impl_item_fn(&mut self, node: &syn::ImplItemFn) {
+        if has_cfg_test(&node.attrs) {
+            return;
+        }
+        syn::visit::visit_impl_item_fn(self, node);
+    }
+
+    fn visit_lit_str(&mut self, node: &syn::LitStr) {
+        let value = node.value();
+        let normalized = value.trim().to_ascii_lowercase();
+        if is_forbidden_authoring_identity(&normalized)
+            || normalized
+                .split(|character: char| !character.is_ascii_alphanumeric())
+                .any(is_forbidden_authoring_identity)
+        {
+            self.violations.push(format!(
+                "{}: production code contains built-in game identity {value:?}",
+                self.path
+            ));
+        }
+    }
+
+    fn visit_ident(&mut self, node: &syn::Ident) {
+        let value = node.to_string();
+        if is_forbidden_authoring_identity(&value.to_ascii_lowercase()) {
+            self.violations.push(format!(
+                "{}: production code contains built-in game identifier {value}",
+                self.path
+            ));
+        }
+    }
+}
+
+fn is_forbidden_authoring_identity(value: &str) -> bool {
+    matches!(
+        value,
+        "ak" | "al"
+            | "ark"
+            | "arknights"
+            | "azur"
+            | "azurlane"
+            | "azur_lane"
+            | "ba"
+            | "bluearchive"
+            | "blue_archive"
+            | "maaassistantarknights"
+    )
+}
+
+fn has_cfg_test(attributes: &[syn::Attribute]) -> bool {
+    attributes.iter().any(|attribute| {
+        attribute.path().is_ident("cfg")
+            && matches!(
+                &attribute.meta,
+                syn::Meta::List(list) if list.tokens.to_string().split_whitespace().any(|token| token == "test")
+            )
+    })
+}
+
 /// Finds public APIs that expose `serde_json::Value`, including imported aliases.
 pub fn inspect_public_api(path: &str, source: &str) -> Result<Vec<String>, String> {
     let file = syn::parse_file(source).map_err(|err| format!("failed to parse {path}: {err}"))?;
@@ -2122,6 +2212,29 @@ mod tests {
 
         assert_eq!(violations.len(), 1);
         assert!(violations[0].contains("arknights"));
+    }
+
+    #[test]
+    fn generic_authoring_guard_rejects_production_identity_and_skips_tests() {
+        let forbidden = r#"fn select() -> &'static str { "arknights.cn" }"#;
+        let test_only = r#"
+            #[cfg(test)]
+            mod tests {
+                const GAME: &str = "arknights";
+            }
+        "#;
+
+        assert_eq!(
+            super::inspect_generic_authoring_identity("fixture.rs", forbidden)
+                .unwrap()
+                .len(),
+            1
+        );
+        assert!(
+            super::inspect_generic_authoring_identity("fixture.rs", test_only)
+                .unwrap()
+                .is_empty()
+        );
     }
 
     #[test]

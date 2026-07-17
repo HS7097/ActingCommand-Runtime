@@ -122,12 +122,39 @@ fn looks_like_resource_root(path: &Path) -> bool {
 }
 
 pub fn canonical_game(value: &str) -> CliOutcome<String> {
-    match value.to_ascii_lowercase().as_str() {
-        "ak" | "ark" | "arknights" => Ok("arknights".to_string()),
-        "azur" | "azurlane" | "azur_lane" | "al" => Ok("azurlane".to_string()),
-        "ba" | "bluearchive" | "blue_archive" => Ok("bluearchive".to_string()),
-        other => Err(CliError::usage(format!("unknown game selector: {other}"))),
+    canonical_resource_identifier("game", value)
+}
+
+pub fn canonical_server(value: &str) -> CliOutcome<String> {
+    canonical_resource_identifier("server", value)
+}
+
+fn canonical_resource_identifier(label: &str, value: &str) -> CliOutcome<String> {
+    let normalized = value.trim().to_ascii_lowercase();
+    if normalized.is_empty()
+        || normalized.len() > 128
+        || !normalized
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
+    {
+        return Err(CliError::usage(format!(
+            "invalid {label} selector: {value}"
+        )));
     }
+    Ok(normalized)
+}
+
+pub fn canonical_locale(value: &str) -> CliOutcome<String> {
+    let normalized = value.trim();
+    if normalized.is_empty()
+        || normalized.len() > 128
+        || !normalized
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
+    {
+        return Err(CliError::usage(format!("invalid locale: {value}")));
+    }
+    Ok(normalized.to_string())
 }
 
 #[derive(Debug)]
@@ -211,14 +238,32 @@ impl OperationConverter {
         let game = game_override
             .map(str::to_string)
             .or_else(|| string_field(&first.data, "game"))
-            .unwrap_or_else(|| "bluearchive".to_string());
+            .ok_or_else(|| {
+                CliError::package_invalid(
+                    "resource metadata requires game in the first operation bundle or an explicit override",
+                )
+            })
+            .and_then(|value| canonical_game(&value))?;
         let server = server_override
             .map(str::to_string)
             .or_else(|| first_server_scope(&first.data))
-            .unwrap_or_else(|| "jp".to_string());
-        let locale = locale_override
+            .ok_or_else(|| {
+                CliError::package_invalid(
+                    "resource metadata requires a non-empty server_scope in the first operation bundle or an explicit override",
+                )
+            })
+            .and_then(|value| canonical_server(&value))?;
+        let locale = match locale_override
             .map(str::to_string)
-            .unwrap_or_else(|| default_locale(&game).to_string());
+            .or_else(|| string_field(&first.data, "locale"))
+        {
+            Some(value) => canonical_locale(&value)?,
+            None => existing_pack_locale(&root, &game, &server)?.ok_or_else(|| {
+                CliError::package_invalid(
+                    "resource metadata requires locale in the first operation bundle, an existing matching recognition pack, or an explicit override",
+                )
+            })?,
+        };
         let coordinate_space =
             first.data.get("coordinate_space").cloned().ok_or_else(|| {
                 CliError::package_invalid("first bundle missing coordinate_space")
@@ -406,6 +451,67 @@ impl OperationConverter {
     fn validate_bundles(&self) -> CliOutcome<()> {
         let mut errors = Vec::new();
         for bundle in &self.bundles {
+            match required_string(&bundle.data, "game").and_then(|value| canonical_game(&value)) {
+                Ok(game) if game == self.game => {}
+                Ok(game) => errors.push(format!(
+                    "{}: game '{}' does not match selected game '{}'",
+                    bundle.task_json_path().display(),
+                    game,
+                    self.game
+                )),
+                Err(error) => errors.push(format!(
+                    "{}: {}",
+                    bundle.task_json_path().display(),
+                    error.message
+                )),
+            }
+            match bundle.data.get("server_scope").and_then(Value::as_array) {
+                Some(servers) if !servers.is_empty() => {
+                    let mut selected = false;
+                    for server in servers {
+                        match server.as_str().map(canonical_server) {
+                            Some(Ok(server)) if server == self.server => selected = true,
+                            Some(Ok(_)) => {}
+                            Some(Err(error)) => errors.push(format!(
+                                "{}: {}",
+                                bundle.task_json_path().display(),
+                                error.message
+                            )),
+                            None => errors.push(format!(
+                                "{}: server_scope entries must be strings",
+                                bundle.task_json_path().display()
+                            )),
+                        }
+                    }
+                    if !selected {
+                        errors.push(format!(
+                            "{}: server_scope does not include selected server '{}'",
+                            bundle.task_json_path().display(),
+                            self.server
+                        ));
+                    }
+                }
+                _ => errors.push(format!(
+                    "{}: server_scope must be a non-empty string array",
+                    bundle.task_json_path().display()
+                )),
+            }
+            if let Some(locale) = string_field(&bundle.data, "locale") {
+                match canonical_locale(&locale) {
+                    Ok(locale) if locale == self.locale => {}
+                    Ok(locale) => errors.push(format!(
+                        "{}: locale '{}' does not match selected locale '{}'",
+                        bundle.task_json_path().display(),
+                        locale,
+                        self.locale
+                    )),
+                    Err(error) => errors.push(format!(
+                        "{}: {}",
+                        bundle.task_json_path().display(),
+                        error.message
+                    )),
+                }
+            }
             if !matches!(
                 bundle.data.get("schema_version").and_then(Value::as_str),
                 Some("0.3" | "0.4" | "0.5")
@@ -2366,13 +2472,23 @@ fn first_server_scope(bundle: &Value) -> Option<String> {
         .map(str::to_string)
 }
 
-fn default_locale(game: &str) -> &'static str {
-    match game {
-        "arknights" => "zh-CN",
-        "azurlane" => "ja-JP",
-        "bluearchive" => "ja-JP",
-        _ => "ja-JP",
+fn existing_pack_locale(root: &Path, game: &str, server: &str) -> CliOutcome<Option<String>> {
+    let path = root
+        .join("recognition")
+        .join(format!("{game}.{server}.pack.json"));
+    if !path.is_file() {
+        return Ok(None);
     }
+    let pack = read_json_value(&path)?;
+    let pack_game = canonical_game(&required_string(&pack, "game")?)?;
+    let pack_server = canonical_server(&required_string(&pack, "server")?)?;
+    if pack_game != game || pack_server != server {
+        return Err(CliError::package_invalid(format!(
+            "recognition pack {} declares {pack_game}.{pack_server}, expected {game}.{server}",
+            path.display()
+        )));
+    }
+    canonical_locale(&required_string(&pack, "locale")?).map(Some)
 }
 
 #[cfg(test)]

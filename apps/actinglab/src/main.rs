@@ -27,6 +27,7 @@ use actingcommand_recognition::{MatchMetric, Rect as RecognitionRect, Scene, Sce
 use actingcommand_recognition_pack::{
     PackRect, RecognitionEvaluator, TargetEvaluation, TargetKind, load_pack_from_json_str,
 };
+use actingcommand_resource_tooling::{canonical_game, canonical_locale, canonical_server};
 use actingcommand_runtime_client::{RuntimeClient, RuntimeClientConfig};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -741,6 +742,12 @@ fn help_data() -> Value {
                 "--operations <dir>",
                 "--out <dir>",
                 "--maa-tasks <dir>"
+            ],
+            "resource compile-maa": [
+                "--maa-tasks <dir>"
+            ],
+            "session record build-task": [
+                "--locale <locale>"
             ]
         },
         "compatibility_notes": {
@@ -865,15 +872,22 @@ fn run_capabilities(global: &GlobalOptions) -> CliOutcome<Value> {
         Some(root) if root.is_dir() => discover_recognition_packs(&root)?,
         _ => Vec::new(),
     };
+    let recognition_match_policy = discovered
+        .iter()
+        .map(|pack| {
+            json!({
+                "game": pack.get("game"),
+                "server": pack.get("server"),
+                "locale": pack.get("locale"),
+                "match_metric": pack.get("match_metric")
+            })
+        })
+        .collect::<Vec<_>>();
     Ok(json!({
         "commands": command_capabilities(),
         "session_layer": session_layer_capability_contract(),
         "exit_codes": exit_code_table(),
-        "recognition_match_policy": [
-            {"family": "BAAH", "game": "ba", "match_metric": "ccoeff_normed"},
-            {"family": "MAA", "game": "ark", "match_metric": "ccoeff_normed"},
-            {"family": "Alas", "game": "azur", "match_metric": "ccorr_normed+color"}
-        ],
+        "recognition_match_policy": recognition_match_policy,
         "capture_backends": [
             {"id": "adb", "backend": "adb_screencap", "external_tool": false},
             {"id": "droidcast_raw", "backend": "droidcast_raw", "external_tool_env": "ACTINGCOMMAND_DROIDCAST_RAW_APK"},
@@ -6887,9 +6901,10 @@ fn build_session_record_task(
     }
     let out = flags.required_path("--out")?;
     let dry_run = global.dry_run || flags.bool("--dry-run");
-    let (game, server) = session_record_game_server(global, config, flags, instance_id)?;
+    let (game, server, locale) = session_record_selector(global, config, flags, instance_id)?;
     let state_dir = record_path.parent().unwrap_or_else(|| Path::new("."));
-    let draft = session_record_build_draft(&record, flags, &out, &game, &server, state_dir)?;
+    let draft =
+        session_record_build_draft(&record, flags, &out, &game, &server, &locale, state_dir)?;
     let authoring = session_record_authoring_input(&record, &draft)?;
     if !dry_run {
         resource_authoring::materialize_record_authoring(&out, &authoring)?;
@@ -6903,6 +6918,7 @@ fn build_session_record_task(
         "task_id": record.task_id,
         "game": game,
         "server": server,
+        "locale": locale,
         "out": out.display().to_string(),
         "task_dir": draft.task_dir.display().to_string(),
         "task_path": draft.task_path.display().to_string(),
@@ -6958,7 +6974,7 @@ fn promote_session_record_task(
     }
     let dry_run = global.dry_run || flags.bool("--dry-run");
     let force = flags.bool("--force");
-    let (game, server) = session_record_game_server(global, config, flags, instance_id)?;
+    let (game, server, locale) = session_record_selector(global, config, flags, instance_id)?;
     let state_dir = record_path.parent().unwrap_or_else(|| Path::new("."));
     let draft = session_record_build_draft(
         &record,
@@ -6966,6 +6982,7 @@ fn promote_session_record_task(
         &resource_root.root,
         &game,
         &server,
+        &locale,
         state_dir,
     )?;
     let authoring_input = session_record_authoring_input(&record, &draft)?;
@@ -7032,6 +7049,7 @@ fn promote_session_record_task(
         "task_id": record.task_id,
         "game": game,
         "server": server,
+        "locale": locale,
         "repo": resource_root.input.display().to_string(),
         "resource_root": resource_root.root.display().to_string(),
         "resource_layout": resource_root.layout,
@@ -7061,6 +7079,7 @@ fn session_record_build_draft(
     out: &Path,
     game: &str,
     server: &str,
+    locale: &str,
     state_dir: &Path,
 ) -> CliOutcome<SessionRecordBuildDraft> {
     let task_dir_name = safe_task_dir_name(&record.task_id)?;
@@ -7358,6 +7377,7 @@ fn session_record_build_draft(
         "task_id": record.task_id,
         "game": game,
         "server_scope": [server],
+        "locale": locale,
         "goal": flags
             .optional("--goal")
             .filter(|value| value != "true")
@@ -7381,6 +7401,7 @@ fn session_record_build_draft(
             "source": "session_record",
             "game": game,
             "server": server,
+            "locale": locale,
             "resolution": {"width": width, "height": height},
             "recorded_at_unix_ms": recorded_at_unix_ms,
             "runtime_version": RUNTIME_VERSION,
@@ -7706,12 +7727,12 @@ fn parse_record_build_resolution(flags: &FlagArgs) -> CliOutcome<Option<(u32, u3
     Ok(Some((width, height)))
 }
 
-fn session_record_game_server(
+fn session_record_selector(
     global: &GlobalOptions,
     config: &UserConfig,
     flags: &FlagArgs,
     instance_id: &str,
-) -> CliOutcome<(String, String)> {
+) -> CliOutcome<(String, String, String)> {
     let instance = config.instances.get(instance_id);
     let game = flags
         .optional("--game")
@@ -7727,8 +7748,18 @@ fn session_record_game_server(
         .filter(|value| value != "true")
         .or_else(|| global.server.clone())
         .or_else(|| instance.and_then(|instance| instance.server.clone()))
-        .unwrap_or_else(|| default_server_for_game(&game).to_string());
-    Ok((game, server))
+        .ok_or_else(|| {
+            CliError::usage(
+                "record build-task requires --server or configured instance.<id>.server",
+            )
+        })?;
+    let server = canonical_server(&server)?;
+    let locale = flags
+        .optional("--locale")
+        .filter(|value| value != "true")
+        .ok_or_else(|| CliError::usage("record build-task requires --locale"))?;
+    let locale = canonical_locale(&locale)?;
+    Ok((game, server, locale))
 }
 
 fn safe_task_dir_name(task_id: &str) -> CliOutcome<String> {
@@ -10974,25 +11005,9 @@ fn recognition_selector(global: &GlobalOptions) -> CliOutcome<(String, String)> 
     let server = global
         .server
         .clone()
-        .unwrap_or_else(|| default_server_for_game(&game).to_string());
+        .ok_or_else(|| CliError::usage("--server is required when --pack is omitted"))?;
+    let server = canonical_server(&server)?;
     Ok((game, server))
-}
-
-fn canonical_game(value: &str) -> CliOutcome<String> {
-    match value.to_ascii_lowercase().as_str() {
-        "ak" | "ark" | "arknights" => Ok("arknights".to_string()),
-        "azur" | "azurlane" | "azur_lane" | "al" => Ok("azurlane".to_string()),
-        "ba" | "bluearchive" | "blue_archive" => Ok("bluearchive".to_string()),
-        other => Err(CliError::usage(format!("unknown game selector: {other}"))),
-    }
-}
-
-fn default_server_for_game(game: &str) -> &'static str {
-    match game {
-        "arknights" => "cn",
-        "azurlane" | "bluearchive" => "jp",
-        _ => "jp",
-    }
 }
 
 fn create_package_blocked_result_zip(
@@ -11233,11 +11248,11 @@ fn discover_recognition_packs(root: &Path) -> CliOutcome<Vec<Value>> {
             "path": pack.display().to_string(),
             "game": value.get("game").and_then(Value::as_str),
             "server": value.get("server").and_then(Value::as_str),
+            "locale": value.get("locale").and_then(Value::as_str),
             "match_metric": value
                 .get("defaults")
                 .and_then(|defaults| defaults.get("match_metric"))
                 .and_then(Value::as_str)
-                .unwrap_or("ccorr_normed")
         }));
     }
     Ok(discovered)
@@ -14561,6 +14576,7 @@ mod tests {
             &temp.path().join("out"),
             "arknights",
             "cn",
+            "zh-CN",
             &state_dir,
         );
         let err = match result {
@@ -15786,6 +15802,8 @@ mod tests {
                 "arknights",
                 "--server",
                 "cn",
+                "--locale",
+                "zh-CN",
                 "--client-version",
                 "record-test-client",
             ],
@@ -16258,6 +16276,8 @@ mod tests {
                 "arknights",
                 "--server",
                 "cn",
+                "--locale",
+                "zh-CN",
             ],
             true,
         );
@@ -16409,6 +16429,8 @@ mod tests {
                 "arknights",
                 "--server",
                 "cn",
+                "--locale",
+                "zh-CN",
             ],
             true,
         );
@@ -16551,6 +16573,8 @@ mod tests {
                 "arknights",
                 "--server",
                 "cn",
+                "--locale",
+                "zh-CN",
             ],
             true,
         );
@@ -16570,6 +16594,8 @@ mod tests {
                 "arknights",
                 "--server",
                 "cn",
+                "--locale",
+                "zh-CN",
             ],
             true,
         );
@@ -16594,6 +16620,8 @@ mod tests {
                 "arknights",
                 "--server",
                 "cn",
+                "--locale",
+                "zh-CN",
                 "--force",
             ],
             true,
@@ -16741,6 +16769,8 @@ mod tests {
                 "arknights",
                 "--server",
                 "cn",
+                "--locale",
+                "zh-CN",
             ],
             true,
         );
@@ -16798,6 +16828,8 @@ mod tests {
                 "arknights",
                 "--server",
                 "cn",
+                "--locale",
+                "zh-CN",
                 "--force",
             ],
             true,
@@ -16881,6 +16913,8 @@ mod tests {
                 "arknights",
                 "--server",
                 "cn",
+                "--locale",
+                "zh-CN",
                 "--resolution",
                 "1280x720",
             ],
@@ -16994,6 +17028,8 @@ mod tests {
                 "arknights",
                 "--server",
                 "cn",
+                "--locale",
+                "zh-CN",
             ],
             true,
         );
@@ -17106,6 +17142,8 @@ mod tests {
                 "arknights",
                 "--server",
                 "cn",
+                "--locale",
+                "zh-CN",
             ],
             true,
         );
@@ -18171,6 +18209,8 @@ mod tests {
                 "arknights",
                 "--server",
                 "cn",
+                "--locale",
+                "zh-CN",
                 "--dry-run",
             ],
             true,
@@ -20430,6 +20470,21 @@ mod tests {
     }
 
     #[test]
+    fn help_lists_required_external_authoring_metadata() {
+        let help = help_data();
+        assert_eq!(
+            help.pointer("/command_options/resource compile-maa/0")
+                .and_then(Value::as_str),
+            Some("--maa-tasks <dir>")
+        );
+        assert_eq!(
+            help.pointer("/command_options/session record build-task/0")
+                .and_then(Value::as_str),
+            Some("--locale <locale>")
+        );
+    }
+
+    #[test]
     fn help_documents_recognize_target_shared_output_shape() {
         let help = help_data();
         let note = help
@@ -21574,7 +21629,9 @@ mod tests {
                 "--resource-root",
                 temp.path().to_str().unwrap(),
                 "--game",
-                "ark",
+                "arknights",
+                "--server",
+                "cn",
                 "session",
                 "recover",
                 "--scene",
@@ -21615,7 +21672,9 @@ mod tests {
                 "--resource-root",
                 temp.path().to_str().unwrap(),
                 "--game",
-                "ark",
+                "arknights",
+                "--server",
+                "cn",
                 "session",
                 "recover",
                 "--to",
@@ -21653,7 +21712,9 @@ mod tests {
                 "--resource-root",
                 temp.path().to_str().unwrap(),
                 "--game",
-                "ark",
+                "arknights",
+                "--server",
+                "cn",
                 "session",
                 "recover",
                 "--scene",
@@ -21688,7 +21749,9 @@ mod tests {
                 "--resource-root",
                 temp.path().to_str().unwrap(),
                 "--game",
-                "ark",
+                "arknights",
+                "--server",
+                "cn",
                 "session",
                 "recover",
                 "--startup-login",
@@ -21732,7 +21795,9 @@ mod tests {
                 "--resource-root",
                 temp.path().to_str().unwrap(),
                 "--game",
-                "ark",
+                "arknights",
+                "--server",
+                "cn",
                 "session",
                 "recover",
                 "--startup-login",
@@ -21767,7 +21832,9 @@ mod tests {
                 "--resource-root",
                 temp.path().to_str().unwrap(),
                 "--game",
-                "ark",
+                "arknights",
+                "--server",
+                "cn",
                 "session",
                 "recover",
                 "--startup-login",

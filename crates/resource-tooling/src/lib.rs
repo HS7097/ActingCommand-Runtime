@@ -30,5 +30,5 @@ pub use package_publish::{
 pub use package_validate::validate_package;
 pub use resource_convert::{
     Bundle, ConvertOutputs, OperationConverter, ResolvedResourceRoot, canonical_game,
-    resolve_resource_root, resource_convert,
+    canonical_locale, canonical_server, resolve_resource_root, resource_convert,
 };

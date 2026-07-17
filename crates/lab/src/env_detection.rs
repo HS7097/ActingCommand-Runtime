@@ -11,7 +11,7 @@ use actingcommand_execution_kernel::{
     EnvironmentCatalogError, EnvironmentDecisionError, EnvironmentDetectionContext,
     EnvironmentDetectionEngine, EnvironmentDetectorState, EnvironmentKeyState,
     EnvironmentStateEngine, EnvironmentStateError, EnvironmentStateScope,
-    canonical_environment_game, collect_environment_pointer_keys, default_environment_server,
+    canonical_environment_game, canonical_environment_server, collect_environment_pointer_keys,
     parse_environment_catalog_value,
 };
 use actingcommand_recognition::{Scene, ScenePixelFormat};
@@ -460,10 +460,12 @@ impl EnvCommandContext {
         }
         let resource_root = resolve_resource_root(&scope.resource_root);
         let game_id = canonical_game(&scope.game)?;
-        let server_id = scope
-            .server
-            .clone()
-            .unwrap_or_else(|| default_server_for_game(&game_id).to_string());
+        let server_id = canonical_server(
+            scope
+                .server
+                .as_deref()
+                .ok_or_else(|| LabError::usage("env detection requires --server"))?,
+        )?;
         let env_dir = resource_root.join(ENV_DETECTION_DIR);
         let salt_dir = scope.state_root.join(ENV_DETECTION_DIR);
         let salt = read_or_create_local_salt(&salt_dir, now_ms)?;
@@ -561,8 +563,8 @@ fn canonical_game(value: &str) -> EnvResult<String> {
     canonical_environment_game(value).map_err(environment_catalog_error)
 }
 
-fn default_server_for_game(game: &str) -> &'static str {
-    default_environment_server(game)
+fn canonical_server(value: &str) -> LabResult<String> {
+    canonical_environment_server(value).map_err(environment_catalog_error)
 }
 
 trait EnvDetectionStepLabExt {
