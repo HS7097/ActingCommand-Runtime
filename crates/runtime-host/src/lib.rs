@@ -9,6 +9,7 @@
 
 mod agent_dispatcher;
 mod approval;
+mod emulator_control;
 mod error;
 mod events;
 mod fact_store;
@@ -30,6 +31,7 @@ mod time;
 pub use strategy::StrategicPlanPreparation;
 
 pub use agent_dispatcher::AgentDispatcherConfig;
+pub use emulator_control::admit_emulator_capabilities;
 pub use error::*;
 pub use host::*;
 pub use performance::{PerformanceMonitorConfig, PipelinePerformanceSignal};
