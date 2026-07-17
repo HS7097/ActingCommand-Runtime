@@ -1138,6 +1138,117 @@ fn agent_dispatcher_operations_require_agent_adapter_origin() {
 }
 
 #[test]
+fn planning_document_is_bounded_content_addressed_and_typed() {
+    let document = RuntimePlanningDocument::encode(
+        RuntimePlanningDocumentKind::EvaluationTime,
+        &serde_json::json!({"unix_ms": 10, "monotonic_ms": 20}),
+    )
+    .expect("planning document");
+    let decoded: serde_json::Value = document
+        .decode(RuntimePlanningDocumentKind::EvaluationTime)
+        .expect("typed decode");
+    assert_eq!(decoded["unix_ms"], 10);
+
+    let encoded = serde_json::to_value(&document).expect("document JSON");
+    let mut tampered = encoded.clone();
+    tampered["document"]["unix_ms"] = serde_json::json!(11);
+    let tampered: RuntimePlanningDocument = serde_json::from_value(tampered).expect("wire shape");
+    assert_eq!(
+        tampered.validate().expect_err("hash mismatch").code(),
+        "planning_document_hash_mismatch"
+    );
+
+    let wrong_kind: RuntimePlanningDocument =
+        serde_json::from_value(encoded).expect("planning document");
+    assert_eq!(
+        wrong_kind
+            .decode::<serde_json::Value>(RuntimePlanningDocumentKind::EvaluationFacts)
+            .expect_err("kind mismatch")
+            .code(),
+        "planning_document_kind_mismatch"
+    );
+
+    assert_eq!(
+        RuntimePlanningDocument::encode(
+            RuntimePlanningDocumentKind::EvaluationFacts,
+            &vec![1_u8, 2, 3],
+        )
+        .expect_err("array documents are not allowed")
+        .code(),
+        "planning_document_not_object"
+    );
+    assert_eq!(
+        RuntimePlanningDocument::encode(
+            RuntimePlanningDocumentKind::EvaluationFacts,
+            &serde_json::json!({"padding": "x".repeat(MAX_RUNTIME_PLANNING_DOCUMENT_BYTES)}),
+        )
+        .expect_err("oversized document")
+        .code(),
+        "planning_document_size_invalid"
+    );
+}
+
+#[test]
+fn planning_operations_are_strict_and_require_agent_adapter_origin() {
+    let report = RuntimePlanningDocument::encode(
+        RuntimePlanningDocumentKind::StrategicReport,
+        &serde_json::json!({"report_id": "report:a"}),
+    )
+    .expect("report document");
+    let evidence = observation_artifact();
+    let request = RuntimeStrategicReportRequest::new(report, vec![evidence])
+        .expect("strategic report request");
+    let operation = RuntimeOperation::PrepareStrategicReport {
+        request: Box::new(request),
+    };
+    let ids = issuer();
+    RuntimeRequest::new(
+        ids.mint_request_id().expect("request"),
+        ids.mint_correlation_id().expect("correlation"),
+        None,
+        EventActor::Agent,
+        EventSource::Adapter,
+        1,
+        operation.clone(),
+    )
+    .expect("agent planning request");
+
+    let ids = issuer();
+    assert_eq!(
+        RuntimeRequest::new(
+            ids.mint_request_id().expect("request"),
+            ids.mint_correlation_id().expect("correlation"),
+            None,
+            EventActor::Cli,
+            EventSource::Cli,
+            1,
+            operation,
+        )
+        .expect_err("CLI cannot invoke planning authority")
+        .code(),
+        "invalid_agent_dispatcher_origin"
+    );
+
+    let trend = RuntimePlanningDocument::encode(
+        RuntimePlanningDocumentKind::MaintenanceTrendPolicy,
+        &serde_json::json!({"minimum_duration_samples": 4}),
+    )
+    .expect("trend policy");
+    let query = RuntimeMaintenanceQuery::new(
+        "node.a",
+        "task.a",
+        crate::FactScope::Instance {
+            instance_id: "node.a".to_owned(),
+        },
+        "resource.primary",
+        10,
+        trend,
+    )
+    .expect("maintenance query");
+    query.validate().expect("valid maintenance query");
+}
+
+#[test]
 fn query_result_remains_typed_without_generic_value_payload() {
     let result = RuntimeResult::Events { events: Vec::new() };
     let value = serde_json::to_value(result).expect("result json");

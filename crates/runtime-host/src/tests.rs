@@ -23,10 +23,11 @@ use actingcommand_contract::{
     ProposalClass, ProposalDisposition, ProposalDocument, ProposalKind, ProposalPatchOperation,
     PublicEventPayload, RUNTIME_INFO_FILE, ReleasePayload, ReleaseResourceVersion,
     ReleaseTransitionKind, ResourceAuthoringEvent, ResourceAuthoringPhase, RuntimeCaptureBackend,
-    RuntimeErrorCode, RuntimeMonitorPolicy, RuntimeOperation, RuntimeReceipt, RuntimeReceiptState,
-    RuntimeReleaseSet, RuntimeRequest, RuntimeResult, StatePayload, StateRecoveryAction,
-    StateValidationResult, TaskOutcome, TaskPayload, TaskSemanticFact, TaskTemplateInstantiation,
-    TerminalEvent,
+    RuntimeErrorCode, RuntimeMonitorPolicy, RuntimeOperation, RuntimePlanningDocument,
+    RuntimePlanningDocumentKind, RuntimeReceipt, RuntimeReceiptState, RuntimeReleaseSet,
+    RuntimeRequest, RuntimeResult, RuntimeStrategicReportRequest, StatePayload,
+    StateRecoveryAction, StateValidationResult, TaskOutcome, TaskPayload, TaskSemanticFact,
+    TaskTemplateInstantiation, TerminalEvent,
 };
 use actingcommand_device::{
     CaptureBackend, CaptureBackendName, DeviceError, DeviceResult, Frame, InputBackend, PixelFormat,
@@ -8181,6 +8182,38 @@ fn proposal_rejects_unverified_reports_and_invalid_packs_without_partial_activat
         .len(),
         1
     );
+    drop(client);
+    host.close().expect("close runtime");
+}
+
+#[test]
+fn planning_ipc_rejects_invalid_typed_documents_without_poisoning_runtime() {
+    let root = TempDir::new().expect("tempdir");
+    let host = RuntimeHost::start(
+        config(&root),
+        Arc::new(FakeProvider::one(
+            POLICY_INSTANCE_ALIAS,
+            instance_id(),
+            Arc::new(FakeState::default()),
+        )),
+    )
+    .expect("runtime host");
+    let evidence = host
+        .store_test_report(b"synthetic planning evidence")
+        .expect("planning evidence");
+    let report = RuntimePlanningDocument::encode(
+        RuntimePlanningDocumentKind::StrategicReport,
+        &serde_json::json!({"not": "a strategic report"}),
+    )
+    .expect("typed planning envelope");
+    let mut client = TestClient::connect(&host);
+    let request = RuntimeStrategicReportRequest::new(report, vec![evidence])
+        .expect("strategic report request");
+    let request = client.agent_request(RuntimeOperation::PrepareStrategicReport {
+        request: Box::new(request),
+    });
+    assert_eq!(client.send(&request).state(), RuntimeReceiptState::Denied);
+    assert!(host.fatal_error().expect("runtime health").is_none());
     drop(client);
     host.close().expect("close runtime");
 }

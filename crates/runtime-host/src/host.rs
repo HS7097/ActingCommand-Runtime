@@ -64,9 +64,10 @@ use actingcommand_contract::{
     RuntimeCaptureBackend, RuntimeControlPlaneStatus, RuntimeDebugEvent, RuntimeDebugOperation,
     RuntimeDebugPhase, RuntimeErrorCode, RuntimeErrorProjection, RuntimeEventBatch,
     RuntimeEvidenceExportRequest, RuntimeEvidenceExportSummary, RuntimeEvidenceScreenshotCounts,
-    RuntimeInfo, RuntimeInstanceStatus, RuntimeMonitorPolicy, RuntimeOperation,
-    RuntimePayloadDraft, RuntimeReceipt, RuntimeReceiptState, RuntimeReleaseSet, RuntimeRequest,
-    RuntimeResult, RuntimeSubscriptionRequest, SchedulerPayloadDraft, StatePayload,
+    RuntimeInfo, RuntimeInstanceStatus, RuntimeMaintenanceQuery, RuntimeMonitorPolicy,
+    RuntimeOperation, RuntimePayloadDraft, RuntimePlanningDocument, RuntimePlanningDocumentKind,
+    RuntimeReceipt, RuntimeReceiptState, RuntimeReleaseSet, RuntimeRequest, RuntimeResult,
+    RuntimeStrategicPlanResult, RuntimeSubscriptionRequest, SchedulerPayloadDraft, StatePayload,
     StatePayloadDraft, TaskOutcome, TaskPayload, TaskPayloadDraft, TaskSemanticFact, TerminalEvent,
     ValidatedRuntimeRequest,
 };
@@ -90,8 +91,8 @@ use actingcommand_pack_containment::{
 use actingcommand_policy::{
     CatalogSources, DecisionReasonChain, DispatchIntent, EvaluationFacts, EvaluationResources,
     EvaluationTime, ForwardProjection, ForwardProjectionConfig, MaintenanceAssessment,
-    StrategicEvidencePointer, StrategicReport, assess_predictive_maintenance, project_forward,
-    project_strategic_report,
+    MaintenanceTrendPolicy, StrategicEvidencePointer, StrategicReport,
+    assess_predictive_maintenance, project_forward, project_strategic_report,
 };
 use actingcommand_runtime_state::{ReleaseArtifactSources, RuntimeStateStore};
 use actingcommand_scheduler::{
@@ -3165,6 +3166,19 @@ impl HostShared {
             RuntimeOperation::RecordAgentResponse { response } => {
                 self.record_agent_response(request, validated, response)
             }
+            RuntimeOperation::PrepareStrategicReport { request } => {
+                self.prepare_strategic_report_ipc(request.report(), request.evidence())
+            }
+            RuntimeOperation::ProjectPolicyForward { request } => self.project_policy_forward_ipc(
+                request.facts(),
+                request.resources(),
+                request.time(),
+                request.seed(),
+                request.config(),
+            ),
+            RuntimeOperation::AssessPredictiveMaintenance { query } => {
+                self.assess_predictive_maintenance_ipc(query)
+            }
             RuntimeOperation::CompileProposal { proposal } => self.compile_proposal(proposal),
             RuntimeOperation::PromoteProposal { proposal } => self.promote_proposal(proposal),
         }
@@ -4190,6 +4204,126 @@ impl HostShared {
         lock(&self.agent_dispatcher, "project_agent_session")?
             .context(&self.ledger, status)
             .map_err(agent_request_failure)
+    }
+
+    fn prepare_strategic_report_ipc(
+        &self,
+        report: &RuntimePlanningDocument,
+        evidence: &[ProjectedArtifactReference],
+    ) -> Result<OperationSuccess, RequestFailure> {
+        let report: StrategicReport = decode_planning_document(
+            report,
+            RuntimePlanningDocumentKind::StrategicReport,
+            "prepare_strategic_report",
+        )?;
+        let prepared = self
+            .prepare_strategic_report(&report, evidence)
+            .map_err(planning_request_failure)?;
+        let projection = encode_planning_document(
+            RuntimePlanningDocumentKind::StrategicProjection,
+            prepared.projection(),
+            "prepare_strategic_report",
+        )?;
+        let plan = RuntimeStrategicPlanResult::new(
+            prepared.report().clone(),
+            projection,
+            prepared.proposal().cloned(),
+            prepared.preview().cloned(),
+        )
+        .map_err(|_| {
+            RequestFailure::poison_without_terminal(RuntimeHostError::fatal(
+                "strategic_plan_result_invalid",
+                "prepare_strategic_report",
+                RuntimeErrorCode::RuntimeFatal,
+            ))
+        })?;
+        Ok(OperationSuccess {
+            state: RuntimeReceiptState::Completed,
+            terminal: None,
+            result: RuntimeResult::StrategicPlanPrepared {
+                plan: Box::new(plan),
+            },
+        })
+    }
+
+    fn project_policy_forward_ipc(
+        &self,
+        facts: &RuntimePlanningDocument,
+        resources: &RuntimePlanningDocument,
+        time: &RuntimePlanningDocument,
+        seed: u64,
+        config: &RuntimePlanningDocument,
+    ) -> Result<OperationSuccess, RequestFailure> {
+        let facts: EvaluationFacts = decode_planning_document(
+            facts,
+            RuntimePlanningDocumentKind::EvaluationFacts,
+            "project_policy_forward",
+        )?;
+        let resources: EvaluationResources = decode_planning_document(
+            resources,
+            RuntimePlanningDocumentKind::EvaluationResources,
+            "project_policy_forward",
+        )?;
+        let time: EvaluationTime = decode_planning_document(
+            time,
+            RuntimePlanningDocumentKind::EvaluationTime,
+            "project_policy_forward",
+        )?;
+        let config: ForwardProjectionConfig = decode_planning_document(
+            config,
+            RuntimePlanningDocumentKind::ForwardProjectionConfig,
+            "project_policy_forward",
+        )?;
+        let projection = self
+            .project_policy_forward(&facts, &resources, time, seed, config)
+            .map_err(planning_request_failure)?;
+        let projection = encode_planning_document(
+            RuntimePlanningDocumentKind::ForwardProjection,
+            &projection,
+            "project_policy_forward",
+        )?;
+        Ok(OperationSuccess {
+            state: RuntimeReceiptState::Completed,
+            terminal: None,
+            result: RuntimeResult::PolicyForwardProjected {
+                projection: Box::new(projection),
+            },
+        })
+    }
+
+    fn assess_predictive_maintenance_ipc(
+        &self,
+        query: &RuntimeMaintenanceQuery,
+    ) -> Result<OperationSuccess, RequestFailure> {
+        let trend_policy: MaintenanceTrendPolicy = decode_planning_document(
+            query.trend_policy(),
+            RuntimePlanningDocumentKind::MaintenanceTrendPolicy,
+            "assess_predictive_maintenance",
+        )?;
+        let query = MaintenanceLedgerQuery::new(
+            query.instance_id(),
+            query.task_id(),
+            query.fact_scope().clone(),
+            query.fact_key(),
+            query.as_of_unix_ms(),
+            trend_policy,
+        )
+        .map_err(planning_request_failure)?;
+        let assessment = self
+            .assess_and_publish_predictive_maintenance(&query)
+            .map_err(planning_request_failure)?;
+        let assessment = encode_planning_document(
+            RuntimePlanningDocumentKind::MaintenanceAssessment,
+            &assessment,
+            "assess_predictive_maintenance",
+        )?;
+        Ok(OperationSuccess {
+            state: RuntimeReceiptState::Completed,
+            terminal: None,
+            result: RuntimeResult::PredictiveMaintenanceAssessed {
+                assessment: Box::new(assessment),
+            },
+        })
     }
 
     fn compile_proposal(
@@ -10261,6 +10395,52 @@ fn constant_time_digest_eq(left: &[u8; 32], right: &[u8; 32]) -> bool {
 }
 
 fn agent_request_failure(error: RuntimeHostError) -> RequestFailure {
+    if error.is_fatal() {
+        RequestFailure::poison_without_terminal(error)
+    } else {
+        RequestFailure::request(error, RuntimeReceiptState::Denied, None)
+    }
+}
+
+fn decode_planning_document<T>(
+    document: &RuntimePlanningDocument,
+    kind: RuntimePlanningDocumentKind,
+    operation: &'static str,
+) -> Result<T, RequestFailure>
+where
+    T: serde::de::DeserializeOwned,
+{
+    document.decode(kind).map_err(|_| {
+        RequestFailure::request(
+            RuntimeHostError::request(
+                "planning_document_invalid",
+                operation,
+                RuntimeErrorCode::InvalidRequest,
+            ),
+            RuntimeReceiptState::Denied,
+            None,
+        )
+    })
+}
+
+fn encode_planning_document<T>(
+    kind: RuntimePlanningDocumentKind,
+    value: &T,
+    operation: &'static str,
+) -> Result<RuntimePlanningDocument, RequestFailure>
+where
+    T: serde::Serialize,
+{
+    RuntimePlanningDocument::encode(kind, value).map_err(|_| {
+        RequestFailure::poison_without_terminal(RuntimeHostError::fatal(
+            "planning_result_encode_failed",
+            operation,
+            RuntimeErrorCode::RuntimeFatal,
+        ))
+    })
+}
+
+fn planning_request_failure(error: RuntimeHostError) -> RequestFailure {
     if error.is_fatal() {
         RequestFailure::poison_without_terminal(error)
     } else {
