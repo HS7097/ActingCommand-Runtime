@@ -3,9 +3,7 @@
 //! Pure read-only recognition decisions over caller-supplied resources and scenes.
 
 use actingcommand_contract::{EnvResolved, NeedsDetection};
-use actingcommand_page_detector::{
-    PageDetector, PageEvaluation, PageTargetEvaluation, require_all_page_evaluations,
-};
+use actingcommand_page_detector::{PageDetector, PageEvaluation, PageTargetEvaluation};
 use actingcommand_recognition::{MatchMetric, Scene};
 use actingcommand_recognition_pack::{
     PackRect, RecognitionEvaluator, TargetEvaluation, TargetKind,
@@ -197,10 +195,9 @@ pub fn detect_current_page(
     command: &str,
     env_resolved: Vec<EnvResolved>,
 ) -> ReadonlyRecognitionResult<PageDetectionResponse> {
-    let outcomes = detector
+    let evaluations = detector
         .evaluate_all(evaluator, scene)
         .map_err(page_error)?;
-    let evaluations = require_all_page_evaluations(outcomes).map_err(page_error)?;
     let matched = evaluations.iter().find(|evaluation| evaluation.matched);
     let page = matched
         .map(|evaluation| evaluation.page_id.clone())

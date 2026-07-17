@@ -244,24 +244,28 @@ impl PageDetector {
         self.evaluate_page_definition(evaluator, scene, page)
     }
 
-    pub fn evaluate_all(&self, evaluator: &RecognitionEvaluator, scene: &Scene) -> PageBatchResult {
-        self.evaluate_all_with(evaluator, scene, |_, page| {
-            self.evaluate_page_definition(evaluator, scene, page)
-        })
-    }
-
-    pub fn evaluate_all_complete(
+    pub fn evaluate_all(
         &self,
         evaluator: &RecognitionEvaluator,
         scene: &Scene,
     ) -> PageDetectorResult<Vec<PageEvaluation>> {
         let outcomes = self
-            .evaluate_all(evaluator, scene)
+            .evaluate_all_outcomes(evaluator, scene)
             .map_err(|error| PageDetectorError::fatal(error.to_string()))?;
         require_all_page_evaluations(outcomes)
     }
 
-    fn evaluate_all_with(
+    pub fn evaluate_all_outcomes(
+        &self,
+        evaluator: &RecognitionEvaluator,
+        scene: &Scene,
+    ) -> PageBatchResult {
+        self.evaluate_all_outcomes_with(evaluator, scene, |_, page| {
+            self.evaluate_page_definition(evaluator, scene, page)
+        })
+    }
+
+    fn evaluate_all_outcomes_with(
         &self,
         evaluator: &RecognitionEvaluator,
         scene: &Scene,
@@ -285,13 +289,19 @@ impl PageDetector {
                     result: Ok(evaluation),
                 }),
                 Ok(evaluation) => {
-                    return Err(self.batch_error(
-                        PageDetectorError::fatal(format!(
-                            "page evaluation invariant failed at index {index}: expected page_id '{}', got '{}'",
-                            page.id, evaluation.page_id
-                        )),
-                        completed,
+                    let cause = PageDetectorError::fatal(format!(
+                        "page evaluation invariant failed at index {index}: expected page_id '{}', got '{}'",
+                        page.id, evaluation.page_id
+                    ));
+                    completed.push(PageOutcome {
                         index,
+                        page_id: page.id.clone(),
+                        result: Err(cause.clone()),
+                    });
+                    return Err(self.batch_error(
+                        cause,
+                        completed,
+                        index + 1,
                         PageUnexecutedReason::BatchTerminated,
                     ));
                 }
@@ -1000,11 +1010,10 @@ mod tests {
     #[test]
     fn evaluate_all_returns_all_pages() {
         let fixture = Fixture::new();
-        let outcomes = fixture
+        let evaluations = fixture
             .detector
             .evaluate_all(&fixture.evaluator, &scene_colors(true, true, false))
             .expect("evaluate all");
-        let evaluations = require_all_page_evaluations(outcomes).expect("all pages successful");
 
         assert_eq!(evaluations.len(), 2);
         assert!(
@@ -1037,7 +1046,7 @@ mod tests {
         .expect("detector");
 
         let outcomes = detector
-            .evaluate_all(&fixture.evaluator, &scene_colors(true, true, false))
+            .evaluate_all_outcomes(&fixture.evaluator, &scene_colors(true, true, false))
             .expect("page failures do not terminate the batch");
 
         assert_eq!(outcomes.len(), 3);
@@ -1064,6 +1073,11 @@ mod tests {
 
         let error = require_all_page_evaluations(outcomes).expect_err("partial batch");
         assert_fatal_contains(error, "1 failed page(s)");
+
+        let compatibility_error = detector
+            .evaluate_all(&fixture.evaluator, &scene_colors(true, true, false))
+            .expect_err("compatibility entry point remains fail-loud");
+        assert_fatal_contains(compatibility_error, "1 failed page(s)");
     }
 
     #[test]
@@ -1071,7 +1085,7 @@ mod tests {
         let fixture = Fixture::new();
         let error = fixture
             .detector
-            .evaluate_all(
+            .evaluate_all_outcomes(
                 &fixture.evaluator,
                 &scene_from_colors(12, 8, true, true, false),
             )
@@ -1121,7 +1135,7 @@ mod tests {
         let scene = scene_colors(true, true, false);
 
         let error = detector
-            .evaluate_all_with(&fixture.evaluator, &scene, |index, page| {
+            .evaluate_all_outcomes_with(&fixture.evaluator, &scene, |index, page| {
                 let mut evaluation =
                     detector.evaluate_page_definition(&fixture.evaluator, &scene, page)?;
                 if index == 1 {
@@ -1131,27 +1145,30 @@ mod tests {
             })
             .expect_err("invariant failure terminates the batch");
 
-        assert_eq!(error.completed.len(), 1);
+        assert_eq!(error.completed.len(), 2);
         assert_eq!(error.completed[0].index, 0);
         assert!(error.completed[0].result.is_ok());
+        assert_eq!(error.completed[1].index, 1);
+        assert_eq!(error.completed[1].page_id, "fixture/settings_page");
+        let attempted_error = error.completed[1]
+            .result
+            .as_ref()
+            .expect_err("attempted invariant failure is preserved");
+        assert_fatal_contains(
+            attempted_error.clone(),
+            "expected page_id 'fixture/settings_page'",
+        );
         assert_eq!(
             error
                 .unexecuted
                 .iter()
                 .map(|page| (page.index, page.page_id.as_str(), page.reason))
                 .collect::<Vec<_>>(),
-            vec![
-                (
-                    1,
-                    "fixture/settings_page",
-                    PageUnexecutedReason::BatchTerminated,
-                ),
-                (
-                    2,
-                    "fixture/final_page",
-                    PageUnexecutedReason::BatchTerminated,
-                ),
-            ]
+            vec![(
+                2,
+                "fixture/final_page",
+                PageUnexecutedReason::BatchTerminated,
+            ),]
         );
         assert_fatal_contains(error.cause, "invariant failed");
     }

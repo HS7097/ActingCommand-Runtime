@@ -4451,7 +4451,7 @@ fn detect_current_page(
     scene: &Scene,
 ) -> CliOutcome<PageDetectionOutcome> {
     let evaluations = detector
-        .evaluate_all_complete(evaluator, scene)
+        .evaluate_all(evaluator, scene)
         .map_err(|err| CliError::usage(err.to_string()))?;
     if let Some(match_eval) = evaluations.iter().find(|evaluation| evaluation.matched) {
         return Ok(PageDetectionOutcome {
