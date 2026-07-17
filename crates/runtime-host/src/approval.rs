@@ -82,6 +82,52 @@ impl ApprovalProjection {
             .map(|decision| decision.approval_id().to_owned())
             .collect()
     }
+
+    pub(crate) fn active_for_plan(
+        &self,
+        plan_id: &str,
+        catalog_hash: &str,
+        catalog_version: u64,
+    ) -> BTreeSet<String> {
+        self.latest
+            .values()
+            .filter(|decision| {
+                decision.disposition().grants_authority()
+                    && matches!(
+                        decision.target(),
+                        ApprovalTarget::Plan {
+                            plan_id: target_plan,
+                            catalog_hash: target_hash,
+                            catalog_version: target_version,
+                        } if target_plan == plan_id
+                            && target_hash == catalog_hash
+                            && *target_version == catalog_version
+                    )
+            })
+            .map(|decision| decision.approval_id().to_owned())
+            .collect()
+    }
+
+    pub(crate) fn active_for_catalog(
+        &self,
+        catalog_hash: &str,
+        catalog_version: u64,
+    ) -> BTreeSet<String> {
+        self.latest
+            .values()
+            .filter(|decision| {
+                decision.disposition().grants_authority()
+                    && matches!(
+                        decision.target(),
+                        ApprovalTarget::Catalog {
+                            catalog_hash: target_hash,
+                            catalog_version: target_version,
+                        } if target_hash == catalog_hash && *target_version == catalog_version
+                    )
+            })
+            .map(|decision| decision.approval_id().to_owned())
+            .collect()
+    }
 }
 
 fn valid_client_origin(actor: EventActor, source: EventSource) -> bool {
