@@ -258,6 +258,60 @@ fn query_filters_by_sequence_and_all_typed_correlation_ids() {
 }
 
 #[test]
+fn query_pages_are_bounded_ordered_and_pinned_to_the_requested_snapshot() {
+    let temp = TempDir::new().expect("temp");
+    let ledger = GlobalLedger::open(config(&temp, "writer-paged-query")).expect("ledger");
+    let mut expected = Vec::new();
+    for index in 0..9 {
+        expected.push(
+            ledger
+                .append(event(&format!("evt-page-{index}")))
+                .expect("append paged event"),
+        );
+    }
+    let snapshot = expected[6].sequence();
+
+    let first = ledger
+        .query_page(EventQuery::default(), 0, snapshot, 3)
+        .expect("first page");
+    let second = ledger
+        .query_page(
+            EventQuery::default(),
+            first.last().expect("first tail").sequence(),
+            snapshot,
+            3,
+        )
+        .expect("second page");
+    let third = ledger
+        .query_page(
+            EventQuery::default(),
+            second.last().expect("second tail").sequence(),
+            snapshot,
+            3,
+        )
+        .expect("third page");
+    let collected = first
+        .into_iter()
+        .chain(second)
+        .chain(third)
+        .collect::<Vec<_>>();
+    assert_eq!(collected, expected[..7]);
+    assert!(
+        ledger
+            .query_page(EventQuery::default(), snapshot, snapshot, 3)
+            .expect("terminal page")
+            .is_empty()
+    );
+    assert_eq!(
+        ledger
+            .query_page(EventQuery::default(), 0, snapshot, 0)
+            .expect_err("zero page size")
+            .code(),
+        "invalid_query_page"
+    );
+}
+
+#[test]
 fn subscription_replays_after_cursor_then_receives_live_events() {
     let temp = TempDir::new().expect("temp");
     let ledger = GlobalLedger::open(config(&temp, "writer-one")).expect("ledger");

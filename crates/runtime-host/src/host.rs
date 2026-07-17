@@ -63,6 +63,7 @@ use actingcommand_contract::{
     ResourceAuthoringEvent, ResourceAuthoringPayloadDraft, ResourceAuthoringPhase, RetentionClass,
     RuntimeCaptureBackend, RuntimeControlPlaneStatus, RuntimeDebugEvent, RuntimeDebugOperation,
     RuntimeDebugPhase, RuntimeErrorCode, RuntimeErrorProjection, RuntimeEventBatch,
+    RuntimeEventQueryCursor, RuntimeEventQueryPage, RuntimeEventQueryPageRequest,
     RuntimeEvidenceExportRequest, RuntimeEvidenceExportSummary, RuntimeEvidenceScreenshotCounts,
     RuntimeInfo, RuntimeInstanceStatus, RuntimeMaintenanceQuery, RuntimeMonitorPolicy,
     RuntimeOperation, RuntimePayloadDraft, RuntimePlanningDocument, RuntimePlanningDocumentKind,
@@ -2912,8 +2913,8 @@ impl HostShared {
         let result: RuntimeHostResult<()> = (|| {
             let mut policy = lock(&self.policy, "record_policy_planning_signal")?;
             policy.validate_planning_signal(&signal)?;
-            if let Some(existing) = policy.planning_signal(&signal.signal_id) {
-                return if existing == &signal {
+            if let Some(existing) = policy.planning_signal(&signal.signal_id)? {
+                return if existing == signal {
                     Ok(())
                 } else {
                     Err(RuntimeHostError::fatal(
@@ -2932,7 +2933,7 @@ impl HostShared {
                 links,
                 PolicyPayloadDraft::planning_signal_observed(signal.clone(), AuditInput::new()),
             )?;
-            policy.commit_planning_signal(signal.clone())?;
+            policy.commit_planning_signal(persisted.sequence(), signal.clone())?;
             drop(policy);
             let Some(config) = &self.agent_dispatcher_config else {
                 return Ok(());
@@ -3125,15 +3126,11 @@ impl HostShared {
             RuntimeOperation::Input { token, action } => {
                 self.input(validated, token, action, connection_id)
             }
-            RuntimeOperation::QueryEvents { query, profile } => self
-                .ledger
-                .project(query.clone(), *profile)
-                .map(|events| OperationSuccess {
-                    state: RuntimeReceiptState::Completed,
-                    terminal: None,
-                    result: RuntimeResult::Events { events },
-                })
-                .map_err(|_| RequestFailure::poison(ledger_error("query_runtime_events"), None)),
+            RuntimeOperation::QueryEvents {
+                query,
+                profile,
+                page,
+            } => self.query_events(query, *profile, page),
             RuntimeOperation::SubscribeEvents { request } => self.subscribe_events(request),
             RuntimeOperation::DebugPackage { request } => self.debug_package(validated, request),
             RuntimeOperation::ExportEvidence { request } => {
@@ -3248,6 +3245,125 @@ impl HostShared {
             terminal: None,
             result: RuntimeResult::EventBatch { batch },
         })
+    }
+
+    fn query_events(
+        &self,
+        query: &EventQuery,
+        profile: actingcommand_contract::ProjectionProfile,
+        request: &RuntimeEventQueryPageRequest,
+    ) -> Result<OperationSuccess, RequestFailure> {
+        let current_ledger_position = self.ledger.latest_sequence().map_err(|_| {
+            RequestFailure::poison_without_terminal(ledger_error("query_runtime_event_position"))
+        })?;
+        let (snapshot_ledger_position, after_sequence) = match request.cursor() {
+            Some(cursor) => {
+                if cursor.snapshot_ledger_position() > current_ledger_position
+                    || !cursor.matches(query, profile).map_err(|_| {
+                        RequestFailure::request(
+                            RuntimeHostError::request(
+                                "runtime_event_query_cursor_invalid",
+                                "query_runtime_events",
+                                RuntimeErrorCode::ProtocolInvalid,
+                            ),
+                            RuntimeReceiptState::Denied,
+                            None,
+                        )
+                    })?
+                {
+                    return Err(RequestFailure::request(
+                        RuntimeHostError::request(
+                            "runtime_event_query_cursor_invalid",
+                            "query_runtime_events",
+                            RuntimeErrorCode::ProtocolInvalid,
+                        ),
+                        RuntimeReceiptState::Denied,
+                        None,
+                    ));
+                }
+                (cursor.snapshot_ledger_position(), cursor.after_sequence())
+            }
+            None => (current_ledger_position, 0),
+        };
+        let fetch_limit = usize::from(request.limit())
+            .checked_add(1)
+            .ok_or_else(|| RequestFailure::poison(protocol_error("query_runtime_events"), None))?;
+        let mut events = self
+            .ledger
+            .project_page(
+                query.clone(),
+                profile,
+                after_sequence,
+                snapshot_ledger_position,
+                fetch_limit,
+            )
+            .map_err(|_| RequestFailure::poison(ledger_error("query_runtime_events"), None))?;
+        let source_has_more = events.len() > usize::from(request.limit());
+        if source_has_more {
+            events.pop();
+        }
+        let original_count = events.len();
+        loop {
+            let has_more = source_has_more || events.len() < original_count;
+            let next_cursor = if has_more {
+                let last = events.last().ok_or_else(|| {
+                    RequestFailure::request(
+                        RuntimeHostError::request(
+                            "runtime_event_query_response_too_large",
+                            "query_runtime_events",
+                            RuntimeErrorCode::ProtocolInvalid,
+                        ),
+                        RuntimeReceiptState::Denied,
+                        None,
+                    )
+                })?;
+                Some(
+                    RuntimeEventQueryCursor::new(
+                        snapshot_ledger_position,
+                        last.sequence,
+                        query,
+                        profile,
+                    )
+                    .map_err(|_| {
+                        RequestFailure::poison(protocol_error("query_runtime_events"), None)
+                    })?,
+                )
+            } else {
+                None
+            };
+            match RuntimeEventQueryPage::new(
+                events.clone(),
+                snapshot_ledger_position,
+                request.limit(),
+                has_more,
+                next_cursor,
+            ) {
+                Ok(page) => {
+                    return Ok(OperationSuccess {
+                        state: RuntimeReceiptState::Completed,
+                        terminal: None,
+                        result: RuntimeResult::EventPage { page },
+                    });
+                }
+                Err(error)
+                    if error.code() == "runtime_event_query_response_too_large"
+                        && events.len() > 1 =>
+                {
+                    events.pop();
+                }
+                Err(error) => {
+                    return Err(RequestFailure::request(
+                        RuntimeHostError::request(
+                            error.code(),
+                            "query_runtime_events",
+                            RuntimeErrorCode::ProtocolInvalid,
+                        ),
+                        RuntimeReceiptState::Denied,
+                        None,
+                    ));
+                }
+            }
+        }
     }
 
     fn debug_package(

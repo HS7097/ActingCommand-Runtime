@@ -23,11 +23,11 @@ use actingcommand_contract::{
     ProjectionPayload, ProjectionProfile, ProposalClass, ProposalDisposition, ProposalDocument,
     ProposalKind, ProposalPatchOperation, PublicEventPayload, RUNTIME_INFO_FILE, ReleasePayload,
     ReleaseResourceVersion, ReleaseTransitionKind, ResourceAuthoringEvent, ResourceAuthoringPhase,
-    RuntimeCaptureBackend, RuntimeErrorCode, RuntimeMonitorPolicy, RuntimeOperation,
-    RuntimePlanningDocument, RuntimePlanningDocumentKind, RuntimeReceipt, RuntimeReceiptState,
-    RuntimeReleaseSet, RuntimeRequest, RuntimeResult, RuntimeStrategicReportRequest, StatePayload,
-    StateRecoveryAction, StateValidationResult, TaskOutcome, TaskPayload, TaskSemanticFact,
-    TaskTemplateInstantiation, TerminalEvent,
+    RuntimeCaptureBackend, RuntimeErrorCode, RuntimeEventQueryCursor, RuntimeEventQueryPageRequest,
+    RuntimeMonitorPolicy, RuntimeOperation, RuntimePlanningDocument, RuntimePlanningDocumentKind,
+    RuntimeReceipt, RuntimeReceiptState, RuntimeReleaseSet, RuntimeRequest, RuntimeResult,
+    RuntimeStrategicReportRequest, StatePayload, StateRecoveryAction, StateValidationResult,
+    TaskOutcome, TaskPayload, TaskSemanticFact, TaskTemplateInstantiation, TerminalEvent,
 };
 use actingcommand_device::{
     CaptureBackend, CaptureBackendName, DeviceError, DeviceResult, Frame, InputBackend, PixelFormat,
@@ -537,56 +537,72 @@ fn event_types_for_request(
     connection_id: ConnectionId,
     request_id: actingcommand_contract::RequestId,
 ) -> Vec<EventType> {
-    let query = runtime_request(
-        ids,
-        RuntimeOperation::QueryEvents {
-            query: EventQuery {
-                request_id: Some(request_id),
-                ..EventQuery::default()
+    let mut cursor: Option<RuntimeEventQueryCursor> = None;
+    let mut event_types = Vec::new();
+    loop {
+        let query = runtime_request(
+            ids,
+            RuntimeOperation::QueryEvents {
+                query: EventQuery {
+                    request_id: Some(request_id),
+                    ..EventQuery::default()
+                },
+                profile: ProjectionProfile::Forensic,
+                page: RuntimeEventQueryPageRequest::new(128, cursor.clone()).expect("event page"),
             },
-            profile: ProjectionProfile::Forensic,
-        },
-    );
-    let receipt = host
-        .process_request_for_test(&query, connection_id)
-        .expect("event query");
-    let RuntimeResult::Events { events } = receipt.result().expect("events result") else {
-        panic!("expected event projection");
-    };
-    events.iter().map(|event| event.event_type).collect()
+        );
+        let receipt = host
+            .process_request_for_test(&query, connection_id)
+            .expect("event query");
+        let RuntimeResult::EventPage { page } = receipt.result().expect("events result") else {
+            panic!("expected event projection");
+        };
+        event_types.extend(page.events().iter().map(|event| event.event_type));
+        cursor = page.next_cursor().cloned();
+        if !page.has_more() {
+            return event_types;
+        }
+    }
 }
 
 fn event_types_for_correlation(
     client: &mut TestClient,
     correlation_id: actingcommand_contract::CorrelationId,
 ) -> Vec<EventType> {
-    let query = client.request(RuntimeOperation::QueryEvents {
-        query: EventQuery {
+    projected_events(
+        client,
+        EventQuery {
             correlation_id: Some(correlation_id),
             ..EventQuery::default()
         },
-        profile: ProjectionProfile::Forensic,
-    });
-    let receipt = client.send(&query);
-    let RuntimeResult::Events { events } = receipt.result().expect("events result") else {
-        panic!("expected event projection");
-    };
-    events.iter().map(|event| event.event_type).collect()
+    )
+    .into_iter()
+    .map(|event| event.event_type)
+    .collect()
 }
 
 fn projected_events(
     client: &mut TestClient,
     query: EventQuery,
 ) -> Vec<actingcommand_contract::ProjectedEvent> {
-    let request = client.request(RuntimeOperation::QueryEvents {
-        query,
-        profile: ProjectionProfile::Forensic,
-    });
-    let receipt = client.send(&request);
-    let RuntimeResult::Events { events } = receipt.result().expect("events result") else {
-        panic!("expected event projection");
-    };
-    events.clone()
+    let mut cursor: Option<RuntimeEventQueryCursor> = None;
+    let mut events = Vec::new();
+    loop {
+        let request = client.request(RuntimeOperation::QueryEvents {
+            query: query.clone(),
+            profile: ProjectionProfile::Forensic,
+            page: RuntimeEventQueryPageRequest::new(128, cursor.clone()).expect("event page"),
+        });
+        let receipt = client.send(&request);
+        let RuntimeResult::EventPage { page } = receipt.result().expect("events result") else {
+            panic!("expected event projection");
+        };
+        events.extend_from_slice(page.events());
+        cursor = page.next_cursor().cloned();
+        if !page.has_more() {
+            return events;
+        }
+    }
 }
 
 fn project_snapshot(
@@ -1672,6 +1688,44 @@ fn project_interface_projects_runtime_domains_and_rejects_unknown_versions() {
         rejected.error_projection().expect("typed rejection").code,
         RuntimeErrorCode::ProtocolInvalid
     );
+}
+
+#[test]
+fn project_interface_v1_rejects_decision_history_that_requires_pagination() {
+    let root = TempDir::new().expect("tempdir");
+    let host = host_with_state(&root, POLICY_INSTANCE_ALIAS, Arc::new(FakeState::default()));
+    host.activate_policy_catalog(&policy_sources(1))
+        .expect("activate catalog");
+
+    for index in 0..=actingcommand_contract::DEFAULT_PROJECT_DECISION_PAGE_SIZE {
+        let (_, intent, reason_chain) = evaluated_policy_dispatch_at(
+            &host,
+            PolicyTrigger::Reconciliation,
+            POLICY_NOW_UNIX_MS + u64::from(index) * 60_000,
+            10_000 + u64::from(index),
+        );
+        assert_eq!(
+            host.admit_policy_dispatch(&intent, &reason_chain, &policy_context(&host, &intent))
+                .expect_err("unapproved decision")
+                .code(),
+            "policy_approval_fact_missing"
+        );
+    }
+
+    let mut client = TestClient::connect(&host);
+    let request = client.request(RuntimeOperation::ProjectInterface {
+        request: ProjectInterfaceRequest::new(vec![
+            actingcommand_contract::PROJECT_INTERFACE_CONTRACT_V1.to_owned(),
+        ])
+        .expect("v1 request"),
+    });
+    let denied = client.send(&request);
+    assert_eq!(denied.state(), RuntimeReceiptState::Denied);
+    assert_eq!(
+        denied.error_projection().expect("typed denial").code,
+        RuntimeErrorCode::ProtocolInvalid
+    );
+    host.close().expect("close host");
 }
 
 #[test]
@@ -3953,12 +4007,14 @@ fn typed_ipc_routes_input_once_and_correlates_ledger_events() {
             ..EventQuery::default()
         },
         profile: ProjectionProfile::Forensic,
+        page: RuntimeEventQueryPageRequest::default(),
     });
     let receipt = client.send(&query);
-    let RuntimeResult::Events { events } = receipt.result().expect("events result") else {
+    let RuntimeResult::EventPage { page } = receipt.result().expect("events result") else {
         panic!("expected event projection");
     };
-    let event_types = events
+    let event_types = page
+        .events()
         .iter()
         .map(|event| event.event_type)
         .collect::<Vec<_>>();
@@ -3978,13 +4034,14 @@ fn typed_ipc_routes_input_once_and_correlates_ledger_events() {
             ..EventQuery::default()
         },
         profile: ProjectionProfile::Forensic,
+        page: RuntimeEventQueryPageRequest::default(),
     });
     let receipt = client.send(&query);
-    let RuntimeResult::Events { events } = receipt.result().expect("events result") else {
+    let RuntimeResult::EventPage { page } = receipt.result().expect("events result") else {
         panic!("expected input event projection");
     };
     assert_eq!(
-        events
+        page.events()
             .iter()
             .map(|event| event.event_type)
             .collect::<Vec<_>>(),
@@ -3998,6 +4055,7 @@ fn typed_ipc_routes_input_once_and_correlates_ledger_events() {
     let all_events = client.request(RuntimeOperation::QueryEvents {
         query: EventQuery::default(),
         profile: ProjectionProfile::Forensic,
+        page: RuntimeEventQueryPageRequest::default(),
     });
     let receipt = client.send(&all_events);
     let encoded = serde_json::to_string(receipt.result().expect("events")).expect("encode events");
@@ -4059,11 +4117,13 @@ fn one_correlation_queries_the_complete_lease_input_release_sequence() {
             ..EventQuery::default()
         },
         profile: ProjectionProfile::Forensic,
+        page: RuntimeEventQueryPageRequest::default(),
     });
     let receipt = client.send(&query);
-    let RuntimeResult::Events { events } = receipt.result().expect("events result") else {
+    let RuntimeResult::EventPage { page } = receipt.result().expect("events result") else {
         panic!("expected event projection");
     };
+    let events = page.events();
     assert_eq!(
         events
             .iter()
@@ -4163,14 +4223,16 @@ fn runtime_is_the_single_writer_for_one_correlated_resource_authoring_sequence()
                 ..EventQuery::default()
             },
             profile: ProjectionProfile::Forensic,
+            page: RuntimeEventQueryPageRequest::default(),
         },
     );
     let receipt = host
         .process_request_for_test(&query, connection)
         .expect("event query");
-    let RuntimeResult::Events { events } = receipt.result().expect("events result") else {
+    let RuntimeResult::EventPage { page } = receipt.result().expect("events result") else {
         panic!("expected events");
     };
+    let events = page.events();
     assert_eq!(
         events
             .iter()
@@ -4243,15 +4305,16 @@ fn runtime_rejects_forged_non_lab_resource_authoring_ingress_without_ledger_effe
                 ..EventQuery::default()
             },
             profile: ProjectionProfile::Forensic,
+            page: RuntimeEventQueryPageRequest::default(),
         },
     );
     let receipt = host
         .process_request_for_test(&query, connection)
         .expect("event query");
-    let RuntimeResult::Events { events } = receipt.result().expect("events result") else {
+    let RuntimeResult::EventPage { page } = receipt.result().expect("events result") else {
         panic!("expected events");
     };
-    assert!(events.is_empty());
+    assert!(page.events().is_empty());
     host.close().expect("close host");
 }
 
@@ -4288,11 +4351,13 @@ fn typed_client_action_is_idempotent_and_public_projection_hides_the_value() {
             ..EventQuery::default()
         },
         profile: ProjectionProfile::Ui,
+        page: RuntimeEventQueryPageRequest::default(),
     });
     let receipt = client.send(&query);
-    let RuntimeResult::Events { events } = receipt.result().expect("events") else {
+    let RuntimeResult::EventPage { page } = receipt.result().expect("events") else {
         panic!("expected events")
     };
+    let events = page.events();
     assert_eq!(events.len(), 1);
     let ProjectionPayload::Public(payload) = &events[0].payload else {
         panic!("expected public projection")
@@ -4521,15 +4586,17 @@ fn acquire_idempotency_recovers_its_durable_terminal_without_a_connection_cache(
                 ..EventQuery::default()
             },
             profile: ProjectionProfile::Forensic,
+            page: RuntimeEventQueryPageRequest::default(),
         },
     )
     .expect("query request");
     let receipt = host
         .process_request_for_test(&query, connection)
         .expect("query receipt");
-    let RuntimeResult::Events { events } = receipt.result().expect("events result") else {
+    let RuntimeResult::EventPage { page } = receipt.result().expect("events result") else {
         panic!("expected event projection");
     };
+    let events = page.events();
     assert_eq!(
         events
             .iter()
@@ -5040,6 +5107,145 @@ fn information_planning_signals_are_queryable_and_subscription_pages_are_lossles
     assert_eq!(observed, expected);
     drop(client);
     host.close().expect("close host");
+}
+
+#[test]
+fn event_pages_freeze_the_snapshot_and_planning_recovery_uses_a_compact_checkpoint() {
+    const SIGNAL_COUNT: u64 = 300;
+
+    let root = TempDir::new().expect("tempdir");
+    let host = host_with_state(&root, POLICY_INSTANCE_ALIAS, Arc::new(FakeState::default()));
+    let first_signal = PolicyPlanningSignalEventData {
+        signal_id: "signal:bounded-history-0".to_owned(),
+        instance_id: POLICY_INSTANCE_ALIAS.to_owned(),
+        task_id: None,
+        kind: PolicyPlanningSignalKind::GoalMissed,
+        fact_code: "goal.bounded-history.0".to_owned(),
+        observed_at_unix_ms: POLICY_NOW_UNIX_MS,
+        detection_budget: None,
+    };
+    host.record_policy_planning_signal(first_signal.clone())
+        .expect("record first signal");
+    for index in 1..SIGNAL_COUNT {
+        host.record_policy_planning_signal(PolicyPlanningSignalEventData {
+            signal_id: format!("signal:bounded-history-{index}"),
+            instance_id: POLICY_INSTANCE_ALIAS.to_owned(),
+            task_id: None,
+            kind: PolicyPlanningSignalKind::GoalMissed,
+            fact_code: format!("goal.bounded-history.{index}"),
+            observed_at_unix_ms: POLICY_NOW_UNIX_MS + index,
+            detection_budget: None,
+        })
+        .expect("record planning signal");
+    }
+
+    let query = EventQuery {
+        event_type: Some(EventType::PolicyPlanningSignalObserved),
+        ..EventQuery::default()
+    };
+    let mut client = TestClient::connect(&host);
+    let first_request = client.request(RuntimeOperation::QueryEvents {
+        query: query.clone(),
+        profile: ProjectionProfile::Forensic,
+        page: RuntimeEventQueryPageRequest::new(31, None).expect("first page request"),
+    });
+    let first_receipt = client.send(&first_request);
+    let RuntimeResult::EventPage { page } = first_receipt.result().expect("first page") else {
+        panic!("expected event page")
+    };
+    let snapshot = page.snapshot_ledger_position();
+    let first_cursor = page.next_cursor().cloned().expect("continuation cursor");
+    let mut sequences = page
+        .events()
+        .iter()
+        .map(|event| event.sequence)
+        .collect::<Vec<_>>();
+
+    let late_signal = PolicyPlanningSignalEventData {
+        signal_id: "signal:bounded-history-late".to_owned(),
+        instance_id: POLICY_INSTANCE_ALIAS.to_owned(),
+        task_id: None,
+        kind: PolicyPlanningSignalKind::GoalMissed,
+        fact_code: "goal.bounded-history.late".to_owned(),
+        observed_at_unix_ms: POLICY_NOW_UNIX_MS + SIGNAL_COUNT,
+        detection_budget: None,
+    };
+    host.record_policy_planning_signal(late_signal)
+        .expect("record interleaved signal");
+
+    let mismatched = client.request(RuntimeOperation::QueryEvents {
+        query: EventQuery::default(),
+        profile: ProjectionProfile::Forensic,
+        page: RuntimeEventQueryPageRequest::new(31, Some(first_cursor.clone()))
+            .expect("mismatched page request"),
+    });
+    let denied = client.send(&mismatched);
+    assert_eq!(denied.state(), RuntimeReceiptState::Denied);
+    assert_eq!(
+        denied.error_projection().expect("typed cursor denial").code,
+        RuntimeErrorCode::ProtocolInvalid
+    );
+
+    let mut cursor = Some(first_cursor);
+    while let Some(current) = cursor {
+        let request = client.request(RuntimeOperation::QueryEvents {
+            query: query.clone(),
+            profile: ProjectionProfile::Forensic,
+            page: RuntimeEventQueryPageRequest::new(31, Some(current))
+                .expect("continuation request"),
+        });
+        let receipt = client.send(&request);
+        let RuntimeResult::EventPage { page } = receipt.result().expect("continuation page") else {
+            panic!("expected event page")
+        };
+        assert_eq!(page.snapshot_ledger_position(), snapshot);
+        assert!(
+            serde_json::to_vec(page).expect("page encoding").len()
+                <= actingcommand_contract::MAX_RUNTIME_EVENT_QUERY_RESPONSE_BYTES
+        );
+        sequences.extend(page.events().iter().map(|event| event.sequence));
+        cursor = page.next_cursor().cloned();
+    }
+    assert_eq!(sequences.len(), SIGNAL_COUNT as usize);
+    assert!(sequences.windows(2).all(|pair| pair[0] < pair[1]));
+    assert!(sequences.iter().all(|sequence| *sequence <= snapshot));
+
+    let all_signals = projected_events(&mut client, query.clone());
+    assert_eq!(all_signals.len(), SIGNAL_COUNT as usize + 1);
+    let latest_signal_sequence = all_signals.last().expect("latest planning signal").sequence;
+    drop(client);
+    host.close().expect("close host");
+
+    let state = RuntimeStateStore::open(root.path(), b"runtime-host-test-salt")
+        .expect("open compact state");
+    let checkpoint = state
+        .read_projection_entry("policy.planning-signal.v1", "checkpoint")
+        .expect("read checkpoint")
+        .expect("planning checkpoint");
+    let checkpoint_payload: serde_json::Value =
+        serde_json::from_slice(checkpoint.payload()).expect("checkpoint payload");
+    assert!(
+        checkpoint_payload["through_sequence"]
+            .as_u64()
+            .expect("checkpoint sequence")
+            >= latest_signal_sequence
+    );
+    drop(state);
+
+    fs::remove_file(root.path().join(RUNTIME_STATE_DATABASE_FILE))
+        .expect("remove compact projection database");
+
+    let reopened = host_with_state(&root, POLICY_INSTANCE_ALIAS, Arc::new(FakeState::default()));
+    reopened
+        .record_policy_planning_signal(first_signal)
+        .expect("replay compacted signal identity");
+    let mut client = TestClient::connect(&reopened);
+    assert_eq!(
+        projected_events(&mut client, query).len(),
+        SIGNAL_COUNT as usize + 1
+    );
+    drop(client);
+    reopened.close().expect("close reopened host");
 }
 
 #[test]
