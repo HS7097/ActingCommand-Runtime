@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 use actingcommand_device::{
-    CaptureBackendChoice, CaptureBackendConfig, CaptureBackendName, DeviceError, DeviceResult,
-    Frame, InputBackend, MaaTouchValidationConfig, PixelFormat, TouchBackendChoice,
+    AdbConfig, CaptureBackendChoice, CaptureBackendConfig, CaptureBackendName, DeviceError,
+    DeviceResult, Frame, InputBackend, MaaTouchValidationConfig, PixelFormat, TouchBackendChoice,
     TouchBackendConfig, TouchBackendDiagnostics, TouchBackendName, combine_operation_and_close,
-    create_capture_backend, create_touch_backend, resolve_adb_path,
+    create_capture_backend, create_touch_backend,
 };
 use actingcommand_execution_kernel::{
     DryRunAction, DryRunResult, DryRunStatus, DryRunTaskLoop, load_task_plan_from_json_str,
@@ -270,7 +270,7 @@ fn resolve_adb_for_device_commands(
     if !commands_need_device(commands) || !config.adb.adb_path.trim().is_empty() {
         return Ok(());
     }
-    config.adb.adb_path = resolve_adb_path(None)?.path;
+    config.adb = AdbConfig::resolve(None)?.0;
     Ok(())
 }
 
