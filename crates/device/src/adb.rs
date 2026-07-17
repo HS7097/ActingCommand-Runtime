@@ -588,6 +588,18 @@ mod tests {
     }
 
     #[test]
+    fn join_pipe_reader_returns_fatal_error_when_reader_panics() {
+        let reader = thread::spawn(|| -> io::Result<Vec<u8>> {
+            panic!("injected reader panic");
+        });
+
+        let err = join_pipe_reader(reader, "stdout").expect_err("reader panic must be fatal");
+
+        assert_eq!(err.severity(), crate::DeviceErrorSeverity::Fatal);
+        assert!(err.message().contains("stdout reader thread panicked"));
+    }
+
+    #[test]
     fn resolve_adb_path_uses_path_baseline_with_warning_when_mumu_and_config_are_absent() {
         let _guard = ENV_LOCK
             .lock()
