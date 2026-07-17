@@ -7,12 +7,13 @@ use actingcommand_contract::{
     AgentWakeId, ApplicationLifecycleAction, ApprovalDecisionRecord, CaptureSequenceSpec,
     CatalogProposal, ClientActionRecord, ContainedTaskRequest, CorrelationId, EventActor,
     EventQuery, EventSource, IdentifierIssuer, InputAction, IssuedCorrelationId, LeaseQueuePolicy,
-    LeaseQueueStatus, LeaseToken, OwnerEpoch, PackageDebugRequest, ProjectedEvent,
-    ProjectionProfile, ProposalPreview, ProposalPromotion, RUNTIME_INFO_FILE, RequestId,
-    ResourceAuthoringEvent, RuntimeControlPlaneStatus, RuntimeDebugEvent, RuntimeEventBatch,
-    RuntimeEvidenceExportRequest, RuntimeInfo, RuntimeMonitorInstanceStatus, RuntimeMonitorPolicy,
-    RuntimeMonitorRegistryStatus, RuntimeOperation, RuntimeReceipt, RuntimeRequest, RuntimeResult,
-    RuntimeSubscriptionRequest, TerminalEvent,
+    LeaseQueueStatus, LeaseToken, OwnerEpoch, PackageDebugRequest, ProjectInterfaceRequest,
+    ProjectInterfaceSnapshot, ProjectedEvent, ProjectionProfile, ProposalPreview,
+    ProposalPromotion, RUNTIME_INFO_FILE, RequestId, ResourceAuthoringEvent,
+    RuntimeControlPlaneStatus, RuntimeDebugEvent, RuntimeEventBatch, RuntimeEvidenceExportRequest,
+    RuntimeInfo, RuntimeMonitorInstanceStatus, RuntimeMonitorPolicy, RuntimeMonitorRegistryStatus,
+    RuntimeOperation, RuntimeReceipt, RuntimeRequest, RuntimeResult, RuntimeSubscriptionRequest,
+    TerminalEvent,
 };
 use serde::Serialize;
 use std::fmt;
@@ -124,6 +125,12 @@ pub struct RuntimeClient {
     shared: Arc<RuntimeClientShared>,
 }
 
+/// Read-only project projection client. It exposes neither device operations nor ledger writes.
+#[derive(Clone)]
+pub struct RuntimeProjectClient {
+    client: RuntimeClient,
+}
+
 /// Correlation-scoped authoring ingress. Runtime remains the only global-ledger writer.
 #[derive(Clone)]
 pub struct RuntimeAuthoringSession {
@@ -229,6 +236,26 @@ impl RuntimeClient {
         match self.execute("runtime_status", RuntimeOperation::Status)? {
             RuntimeResult::Status { status } => Ok(status),
             _ => Err(self.unexpected_result("runtime_status")),
+        }
+    }
+
+    pub fn project_snapshot(
+        &self,
+        request: ProjectInterfaceRequest,
+    ) -> RuntimeClientResult<ProjectInterfaceSnapshot> {
+        match self.execute(
+            "runtime_project_interface",
+            RuntimeOperation::ProjectInterface { request },
+        )? {
+            RuntimeResult::ProjectInterface { response } => {
+                response.into_snapshot().map_err(|_| {
+                    RuntimeClientError::fatal(
+                        "runtime_project_interface_invalid",
+                        "runtime_project_interface",
+                    )
+                })
+            }
+            _ => Err(self.unexpected_result("runtime_project_interface")),
         }
     }
 
@@ -925,6 +952,34 @@ impl RuntimeClient {
             .connection
             .lock()
             .map_err(|_| RuntimeClientError::fatal("runtime_connection_poisoned", operation))
+    }
+}
+
+impl RuntimeProjectClient {
+    pub fn connect(config: RuntimeClientConfig) -> RuntimeClientResult<Self> {
+        RuntimeClient::connect(config).map(|client| Self { client })
+    }
+
+    pub fn runtime_info(&self) -> &RuntimeInfo {
+        self.client.runtime_info()
+    }
+
+    pub fn snapshot(&self) -> RuntimeClientResult<ProjectInterfaceSnapshot> {
+        self.client
+            .project_snapshot(ProjectInterfaceRequest::current())
+    }
+
+    pub fn snapshot_with_versions(
+        &self,
+        accepted_versions: Vec<String>,
+    ) -> RuntimeClientResult<ProjectInterfaceSnapshot> {
+        let request = ProjectInterfaceRequest::new(accepted_versions).map_err(|_| {
+            RuntimeClientError::fatal(
+                "runtime_project_versions_invalid",
+                "runtime_project_interface",
+            )
+        })?;
+        self.client.project_snapshot(request)
     }
 }
 

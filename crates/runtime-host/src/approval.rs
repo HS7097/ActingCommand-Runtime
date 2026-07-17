@@ -72,6 +72,10 @@ impl ApprovalProjection {
         Ok(())
     }
 
+    pub(crate) fn records(&self) -> Vec<ApprovalDecisionRecord> {
+        self.latest.values().cloned().collect()
+    }
+
     pub(crate) fn active_for_dispatch(&self, intent: &DispatchIntent) -> BTreeSet<String> {
         self.latest
             .values()

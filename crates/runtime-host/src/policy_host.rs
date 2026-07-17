@@ -210,6 +210,20 @@ struct SeenDispatch {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PolicyDispatchProjectionState {
+    Intent,
+    Admitted,
+    Rejected,
+    Completed,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct PolicyDispatchProjection {
+    pub(crate) data: PolicyDispatchEventData,
+    pub(crate) state: PolicyDispatchProjectionState,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum DispatchLifecycle {
     Intent,
     Admitted,
@@ -376,6 +390,21 @@ impl PolicyHost {
 
     pub(crate) fn active_loaded(&self) -> Option<LoadedCatalog> {
         self.active.clone()
+    }
+
+    pub(crate) fn project_dispatches(&self) -> Vec<PolicyDispatchProjection> {
+        self.seen_dispatches
+            .values()
+            .map(|dispatch| PolicyDispatchProjection {
+                data: dispatch.data.clone(),
+                state: match dispatch.lifecycle {
+                    DispatchLifecycle::Intent => PolicyDispatchProjectionState::Intent,
+                    DispatchLifecycle::Admitted => PolicyDispatchProjectionState::Admitted,
+                    DispatchLifecycle::Rejected => PolicyDispatchProjectionState::Rejected,
+                    DispatchLifecycle::Completed => PolicyDispatchProjectionState::Completed,
+                },
+            })
+            .collect()
     }
 
     pub(crate) fn switch_active(

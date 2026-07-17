@@ -365,6 +365,20 @@ impl InstanceFactStore {
         Ok(snapshot)
     }
 
+    pub(crate) fn active_records(&self) -> Vec<FactRecord> {
+        let mut records = self
+            .active
+            .values()
+            .map(|stored| stored.record.clone())
+            .collect::<Vec<_>>();
+        records.sort_by(|left, right| {
+            left.scope
+                .cmp(&right.scope)
+                .then_with(|| left.key.cmp(&right.key))
+        });
+        records
+    }
+
     pub(crate) fn overlay_policy_facts(
         &self,
         facts: &EvaluationFacts,

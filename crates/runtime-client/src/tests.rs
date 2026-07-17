@@ -98,6 +98,11 @@ struct FakeProvider {
     state: Arc<FakeState>,
 }
 
+struct NeutralProjectProvider {
+    instance_id: InstanceId,
+    state: Arc<FakeState>,
+}
+
 struct FakeCapture {
     state: Arc<FakeState>,
     closed: bool,
@@ -177,6 +182,37 @@ impl ExecutionBackendProvider for FakeProvider {
     }
 }
 
+impl ExecutionBackendProvider for NeutralProjectProvider {
+    fn instance_aliases(&self) -> Vec<String> {
+        vec!["instance-neutral".to_owned()]
+    }
+
+    fn resolve(&self, instance_alias: &str) -> Option<ResolvedExecutionInstance> {
+        (instance_alias == "instance-neutral")
+            .then(|| ResolvedExecutionInstance::new(self.instance_id, "local-neutral-endpoint"))
+    }
+
+    fn open_input(&self, _instance_alias: &str) -> DeviceResult<Box<dyn InputBackend>> {
+        self.state.opens.fetch_add(1, Ordering::AcqRel);
+        Err(DeviceError::fatal("project interface opened input"))
+    }
+
+    fn open_capture(&self, _instance_alias: &str) -> DeviceResult<Box<dyn CaptureBackend>> {
+        self.state.capture_opens.fetch_add(1, Ordering::AcqRel);
+        Err(DeviceError::fatal("project interface opened capture"))
+    }
+
+    fn control_application(
+        &self,
+        _instance_alias: &str,
+        _action: actingcommand_contract::ApplicationLifecycleAction,
+    ) -> DeviceResult<()> {
+        Err(DeviceError::fatal(
+            "project interface controlled application",
+        ))
+    }
+}
+
 fn instance_id() -> InstanceId {
     *IdentifierIssuer::new()
         .expect("identifier issuer")
@@ -225,6 +261,54 @@ fn client_with_timeout(root: &TempDir, io_timeout: Duration) -> RuntimeClient {
             .with_io_timeout(io_timeout),
     )
     .expect("runtime client")
+}
+
+#[test]
+fn project_interface_is_consistent_across_clients_and_read_only() {
+    let root = TempDir::new().expect("tempdir");
+    let state = Arc::new(FakeState::default());
+    let host = RuntimeHost::start(
+        RuntimeHostConfig::new(root.path(), b"project-interface-test-salt")
+            .with_io_timeout(Duration::from_millis(500)),
+        Arc::new(NeutralProjectProvider {
+            instance_id: instance_id(),
+            state: Arc::clone(&state),
+        }),
+    )
+    .expect("runtime host");
+    let clients = [
+        (EventActor::Cli, EventSource::Cli),
+        (EventActor::Ui, EventSource::Ui),
+        (EventActor::Agent, EventSource::Adapter),
+    ]
+    .map(|(actor, source)| {
+        RuntimeProjectClient::connect(
+            RuntimeClientConfig::new(root.path(), actor, source)
+                .with_io_timeout(Duration::from_millis(500)),
+        )
+        .expect("project client")
+    });
+    let snapshots = clients
+        .iter()
+        .map(|client| client.snapshot().expect("project snapshot"))
+        .collect::<Vec<_>>();
+    assert!(snapshots.windows(2).all(|pair| pair[0] == pair[1]));
+    assert_eq!(snapshots[0].instances[0].instance_alias, "instance-neutral");
+    assert!(snapshots[0].project.is_none());
+    assert!(snapshots[0].catalog.is_none());
+    assert_eq!(state.opens.load(Ordering::Acquire), 0);
+    assert_eq!(state.capture_opens.load(Ordering::Acquire), 0);
+
+    let error = clients[0]
+        .snapshot_with_versions(vec!["actingcommand.project-interface.v9".to_owned()])
+        .expect_err("unknown contract version must fail loud");
+    assert_eq!(error.code(), "runtime_request_rejected");
+    assert_eq!(
+        error.projection().expect("typed rejection").code,
+        RuntimeErrorCode::ProtocolInvalid
+    );
+    assert!(!error.is_fatal());
+    drop(host);
 }
 
 #[test]

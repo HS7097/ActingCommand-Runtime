@@ -17,9 +17,9 @@ use actingcommand_contract::{
     MonitorDiagnosis, MonitorDisposition, MonitorObservation, MonitorPayload,
     MonitorRecoveryCoordinationReason, MonitorRecoveryKind, OriginModule, PerformanceControlLevel,
     PerformanceMonitorHealth, PolicyExecutionOutcome, PolicyFailureClass, PolicyFailureDisposition,
-    PolicyPayload, PolicyPlanningSignalEventData, PolicyPlanningSignalKind,
-    ProjectedArtifactReference, ProjectionPayload, ProjectionProfile, ProposalClass,
-    ProposalDisposition, ProposalDocument, ProposalKind, ProposalPatchOperation,
+    PolicyPayload, PolicyPlanningSignalEventData, PolicyPlanningSignalKind, ProjectDecisionState,
+    ProjectInterfaceRequest, ProjectedArtifactReference, ProjectionPayload, ProjectionProfile,
+    ProposalClass, ProposalDisposition, ProposalDocument, ProposalKind, ProposalPatchOperation,
     PublicEventPayload, RUNTIME_INFO_FILE, ReleasePayload, ReleaseResourceVersion,
     ReleaseTransitionKind, ResourceAuthoringEvent, ResourceAuthoringPhase, RuntimeCaptureBackend,
     RuntimeErrorCode, RuntimeMonitorPolicy, RuntimeOperation, RuntimeReceipt, RuntimeReceiptState,
@@ -930,6 +930,76 @@ fn policy_resources() -> EvaluationResources {
             active_heavy_dispatches: 0,
         }],
     }
+}
+
+#[test]
+fn project_interface_projects_runtime_domains_and_rejects_unknown_versions() {
+    let root = TempDir::new().expect("tempdir");
+    let state = Arc::new(FakeState::default());
+    let host = host_with_state(&root, POLICY_INSTANCE_ALIAS, Arc::clone(&state));
+    host.activate_policy_catalog(&policy_sources(1))
+        .expect("activate catalog");
+    host.publish_fact(stored_fact(
+        FactScope::Instance {
+            instance_id: POLICY_INSTANCE_ALIAS.to_owned(),
+        },
+        "resource.current",
+        ContractFactValue::Integer(5),
+        "snapshot:project-interface",
+        Vec::new(),
+    ))
+    .expect("publish fact");
+    let (_, intent, reason_chain) = evaluated_policy_dispatch(&host, PolicyTrigger::Recovery);
+    record_policy_approval(&host, &intent);
+    host.admit_policy_dispatch(
+        &intent,
+        &reason_chain,
+        &PolicyAdmissionContext {
+            fact_ledger_position: intent.input_ledger_position,
+            fact_snapshot_id: intent.fact_snapshot_id.clone(),
+            approval_fact_ids: BTreeSet::new(),
+            fencing_owner_epoch: host.runtime_info().owner_epoch(),
+            now_unix_ms: POLICY_NOW_UNIX_MS,
+        },
+    )
+    .expect("admit dispatch");
+
+    let mut client = TestClient::connect(&host);
+    let request = client.request(RuntimeOperation::ProjectInterface {
+        request: ProjectInterfaceRequest::current(),
+    });
+    let receipt = client.send(&request);
+    let RuntimeResult::ProjectInterface { response } = receipt.result().expect("result") else {
+        panic!("expected project interface response");
+    };
+    let snapshot = response.snapshot();
+    assert_eq!(
+        snapshot.project.as_ref().expect("project").project_id,
+        "fixture.catalog-a"
+    );
+    assert_eq!(snapshot.catalog.as_ref().expect("catalog").goal_count, 1);
+    assert_eq!(snapshot.instances.len(), 1);
+    assert_eq!(snapshot.facts.len(), 1);
+    assert_eq!(snapshot.goals.len(), 1);
+    assert_eq!(snapshot.decisions.len(), 1);
+    assert_eq!(snapshot.decisions[0].state, ProjectDecisionState::Admitted);
+    assert_eq!(snapshot.approvals.len(), 1);
+    assert!(!snapshot.runtime.fatal);
+    assert_eq!(state.open_count.load(Ordering::Acquire), 0);
+    assert_eq!(state.capture_open_count.load(Ordering::Acquire), 0);
+
+    let unsupported = client.request(RuntimeOperation::ProjectInterface {
+        request: ProjectInterfaceRequest::new(vec![
+            "actingcommand.project-interface.v9".to_owned(),
+        ])
+        .expect("well-formed version request"),
+    });
+    let rejected = client.send(&unsupported);
+    assert_eq!(rejected.state(), RuntimeReceiptState::Denied);
+    assert_eq!(
+        rejected.error_projection().expect("typed rejection").code,
+        RuntimeErrorCode::ProtocolInvalid
+    );
 }
 
 fn neutral_contained_task_package() -> Vec<u8> {
