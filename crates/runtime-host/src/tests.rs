@@ -41,9 +41,11 @@ use actingcommand_policy::{
     StrategicTemplate,
 };
 use actingcommand_runtime_state::{
-    RUNTIME_STATE_DATABASE_FILE, RUNTIME_STATE_INTEGRITY_KEY_FILE, RuntimeStateStore,
+    RUNTIME_STATE_DATABASE_FILE, RUNTIME_STATE_INTEGRITY_KEY_FILE, ReleaseArtifactSources,
+    RuntimeStateStore,
 };
 use actingcommand_scheduler::{ConnectionId, SchedulerConfig};
+use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self, OpenOptions};
 use std::io::{Cursor, Write};
@@ -578,20 +580,43 @@ fn config(root: &TempDir) -> RuntimeHostConfig {
         })
 }
 
-fn release_set(version: &str, marker: char) -> RuntimeReleaseSet {
-    RuntimeReleaseSet::new(
+fn release_set(
+    root: &Path,
+    version: &str,
+    marker: char,
+) -> (RuntimeReleaseSet, ReleaseArtifactSources) {
+    let source_root = root.join(format!("release-source-{version}-{marker}"));
+    fs::create_dir(&source_root).expect("release source root");
+    let runtime = source_root.join("runtime.bin");
+    let ui = source_root.join("ui.bin");
+    let resource = source_root.join("resource.bin");
+    let runtime_bytes = format!("runtime:{version}:{marker}");
+    let ui_bytes = format!("ui:{version}:{marker}");
+    let resource_bytes = format!("resource:{version}:{marker}");
+    fs::write(&runtime, runtime_bytes.as_bytes()).expect("runtime artifact");
+    fs::write(&ui, ui_bytes.as_bytes()).expect("UI artifact");
+    fs::write(&resource, resource_bytes.as_bytes()).expect("resource artifact");
+    let manifest = RuntimeReleaseSet::new(
         version,
+        format!("sha256:{:x}", Sha256::digest(runtime_bytes.as_bytes())),
         version,
+        format!("sha256:{:x}", Sha256::digest(ui_bytes.as_bytes())),
         vec![
             ReleaseResourceVersion::new(
                 "project-neutral",
                 version,
-                format!("sha256:{}", marker.to_string().repeat(64)),
+                format!("sha256:{:x}", Sha256::digest(resource_bytes.as_bytes())),
             )
             .expect("resource version"),
         ],
     )
-    .expect("release set")
+    .expect("release set");
+    let sources = ReleaseArtifactSources::new(
+        runtime,
+        ui,
+        BTreeMap::from([("project-neutral".to_owned(), resource)]),
+    );
+    (manifest, sources)
 }
 
 fn host_with_state(root: &TempDir, alias: &str, state: Arc<FakeState>) -> RuntimeHost {
@@ -5554,8 +5579,8 @@ fn performance_stutter_is_ledger_visible_and_enriches_policy_failure() {
 fn release_sets_switch_atomically_rollback_and_recover_without_duplicate_events() {
     let root = TempDir::new().expect("tempdir");
     let runtime_instance_id = instance_id();
-    let first = release_set("1.0.0", 'a');
-    let second = release_set("2.0.0", 'b');
+    let (first, first_sources) = release_set(root.path(), "1.0.0", 'a');
+    let (second, second_sources) = release_set(root.path(), "2.0.0", 'b');
     let host = RuntimeHost::start(
         config(&root),
         Arc::new(FakeProvider::one(
@@ -5567,10 +5592,11 @@ fn release_sets_switch_atomically_rollback_and_recover_without_duplicate_events(
     .expect("runtime host");
 
     assert_eq!(
-        host.stage_release_set(first.clone()).expect("stage first"),
+        host.stage_release_set(first.clone(), &first_sources)
+            .expect("stage first"),
         first
     );
-    host.stage_release_set(second.clone())
+    host.stage_release_set(second.clone(), &second_sources)
         .expect("stage second");
     assert_eq!(
         host.activate_release_set(first.release_id())
@@ -5659,7 +5685,7 @@ fn release_sets_switch_atomically_rollback_and_recover_without_duplicate_events(
 fn committed_release_without_ledger_outcome_is_reconciled_on_restart() {
     let root = TempDir::new().expect("tempdir");
     let runtime_instance_id = instance_id();
-    let release = release_set("1.0.0", 'c');
+    let (release, sources) = release_set(root.path(), "1.0.0", 'c');
     let host = RuntimeHost::start(
         config(&root),
         Arc::new(FakeProvider::one(
@@ -5669,7 +5695,7 @@ fn committed_release_without_ledger_outcome_is_reconciled_on_restart() {
         )),
     )
     .expect("runtime host");
-    host.stage_release_set(release.clone())
+    host.stage_release_set(release.clone(), &sources)
         .expect("stage release");
     host.close().expect("close host");
 
@@ -6861,6 +6887,14 @@ fn policy_dispatch_crash_child_process() {
     let (_, intent, reason_chain) = evaluated_policy_dispatch(&host, PolicyTrigger::FactsChanged);
     assert_eq!(intent.catalog_hash, catalog.catalog_hash());
     record_policy_approval(&host, &intent);
+    if std::env::var_os("ACTINGCOMMAND_POLICY_CRASH_POINT").is_some() {
+        fs::write(
+            Path::new(&root).join("dispatch-before-crash.json"),
+            serde_json::to_vec(&(intent.clone(), reason_chain.clone()))
+                .expect("pending dispatch bytes"),
+        )
+        .expect("pending dispatch marker");
+    }
     let admission = host
         .admit_policy_dispatch(&intent, &reason_chain, &policy_context(&host, &intent))
         .expect("child policy admission");
@@ -6872,6 +6906,162 @@ fn policy_dispatch_crash_child_process() {
     .expect("admitted dispatch marker");
     fs::write(Path::new(&root).join("child-ready"), b"ready").expect("child marker");
     std::process::exit(0);
+}
+
+#[test]
+fn orphaned_policy_admission_is_reconciled_after_real_process_kill() {
+    for (point, expected_effect, expected_lease_grants) in [
+        ("after_policy_intent", EffectDisposition::NotPerformed, 0),
+        ("after_lease_grant", EffectDisposition::Indeterminate, 1),
+        ("after_budget_commit", EffectDisposition::Indeterminate, 1),
+    ] {
+        let root = TempDir::new().expect("tempdir");
+        let shared_instance_id = instance_id();
+        fs::write(
+            root.path().join("instance.json"),
+            serde_json::to_vec(&shared_instance_id).expect("instance bytes"),
+        )
+        .expect("instance file");
+        let marker = root.path().join("policy-crash-marker");
+        let mut child = Command::new(std::env::current_exe().expect("test executable"))
+            .args([
+                "--exact",
+                "tests::policy_dispatch_crash_child_process",
+                "--nocapture",
+            ])
+            .env("ACTINGCOMMAND_POLICY_CRASH_ROOT", root.path())
+            .env("ACTINGCOMMAND_POLICY_CRASH_POINT", point)
+            .env("ACTINGCOMMAND_POLICY_CRASH_MARKER", &marker)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("spawn crash child");
+        let deadline = Instant::now() + Duration::from_secs(20);
+        while !marker.is_file() {
+            assert!(Instant::now() < deadline, "crash marker timeout at {point}");
+            assert!(
+                child.try_wait().expect("poll crash child").is_none(),
+                "crash child exited before {point}"
+            );
+            thread::sleep(Duration::from_millis(10));
+        }
+        child.kill().expect("kill crash child");
+        let status = child.wait().expect("wait crash child");
+        assert!(!status.success());
+
+        let (intent, reason_chain): (DispatchIntent, DecisionReasonChain) = serde_json::from_slice(
+            &fs::read(root.path().join("dispatch-before-crash.json"))
+                .expect("pending dispatch marker"),
+        )
+        .expect("pending dispatch JSON");
+        let host = RuntimeHost::start(
+            config(&root),
+            Arc::new(FakeProvider::one(
+                POLICY_INSTANCE_ALIAS,
+                shared_instance_id,
+                Arc::new(FakeState::default()),
+            )),
+        )
+        .expect("recovered runtime host");
+        assert!(
+            host.pinned_policy_catalog(&intent.decision_id)
+                .expect("pinned catalog")
+                .is_none()
+        );
+        assert!(matches!(
+            host.admit_policy_dispatch(&intent, &reason_chain, &policy_context(&host, &intent))
+                .expect("replay reconciled dispatch"),
+            PolicyDispatchAdmission::ReplaySuppressed { .. }
+        ));
+
+        let mut client = TestClient::connect(&host);
+        let events = projected_events(&mut client, EventQuery::default());
+        assert_eq!(
+            events
+                .iter()
+                .filter(|event| event.event_type == EventType::PolicyDispatchIntent)
+                .count(),
+            1
+        );
+        assert_eq!(
+            events
+                .iter()
+                .filter(|event| event.event_type == EventType::PolicyDispatchAdmitted)
+                .count(),
+            0
+        );
+        assert_eq!(
+            events
+                .iter()
+                .filter(|event| event.event_type == EventType::PolicyDispatchRejected)
+                .count(),
+            1
+        );
+        assert_eq!(
+            events
+                .iter()
+                .filter(|event| event.event_type == EventType::LeaseGranted)
+                .count(),
+            expected_lease_grants
+        );
+        let rejection = events
+            .iter()
+            .find(|event| event.event_type == EventType::PolicyDispatchRejected)
+            .expect("reconciled rejection");
+        let ProjectionPayload::Full(payload) = &rejection.payload else {
+            panic!("expected forensic rejection payload")
+        };
+        let EventPayload::Policy(PolicyPayload::DispatchRejected(_)) = payload.as_ref() else {
+            panic!("expected policy rejection payload")
+        };
+        assert_eq!(payload.effect_disposition(), Some(expected_effect));
+        drop(client);
+
+        thread::sleep(Duration::from_millis(50));
+        let (_, next_intent, next_reasons) =
+            evaluated_policy_dispatch(&host, PolicyTrigger::Recovery);
+        record_policy_approval(&host, &next_intent);
+        let admission = host
+            .admit_policy_dispatch(
+                &next_intent,
+                &next_reasons,
+                &policy_context(&host, &next_intent),
+            )
+            .expect("post-recovery admission");
+        let PolicyDispatchAdmission::Granted { admission, .. } = admission else {
+            panic!("expected post-recovery grant")
+        };
+        assert_eq!(admission.budget.task_daily_used, 1);
+        assert_eq!(admission.budget.activity_window_used, 1);
+        host.close().expect("close recovered host");
+
+        let reopened = RuntimeHost::start(
+            config(&root),
+            Arc::new(FakeProvider::one(
+                POLICY_INSTANCE_ALIAS,
+                shared_instance_id,
+                Arc::new(FakeState::default()),
+            )),
+        )
+        .expect("reopen reconciled runtime host");
+        assert!(
+            reopened
+                .pinned_policy_catalog(&intent.decision_id)
+                .expect("reopened pinned catalog")
+                .is_none()
+        );
+        let mut client = TestClient::connect(&reopened);
+        assert_eq!(
+            projected_events(&mut client, EventQuery::default())
+                .iter()
+                .filter(|event| event.event_type == EventType::PolicyDispatchRejected)
+                .count(),
+            1
+        );
+        drop(client);
+        reopened.close().expect("close reopened host");
+    }
 }
 
 #[test]
