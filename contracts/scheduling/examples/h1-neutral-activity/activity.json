@@ -1,0 +1,46 @@
+{
+  "schema_version": "actingcommand.scheduling.v1",
+  "catalog": {
+    "catalog_id": "fixture.h1-neutral-activity",
+    "catalog_version": 1,
+    "approval_refs": ["approval:h1-neutral-activity"]
+  },
+  "profiles": [
+    {
+      "id": "neutral-activity",
+      "scope": {
+        "kind": "game",
+        "game_id": "neutral-game"
+      },
+      "windows": [
+        {
+          "weekdays": [1, 2, 3, 4, 5, 6, 7],
+          "utc_offset_minutes": 0,
+          "start_minute_of_day": 0,
+          "end_minute_of_day": 1439
+        }
+      ],
+      "daily_budget": 24,
+      "max_window_iterations": 6,
+      "session_max_ms": 7200000,
+      "minimum_interval_ms": 60000,
+      "maximum_interval_ms": 300000,
+      "seed_source": "ledger",
+      "resample_policy": "same_round_stable",
+      "importance_milli": 1000,
+      "goals": [
+        {
+          "id": "neutral-refined-target",
+          "metric": {
+            "kind": "pool",
+            "pool_id": "neutral-refined-material"
+          },
+          "target": 80,
+          "deadline_unix_ms": 172800000,
+          "strategic_weight_milli": 1000,
+          "best_effort": true
+        }
+      ]
+    }
+  ]
+}
