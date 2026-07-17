@@ -600,7 +600,9 @@ impl ProjectInterfaceSnapshot {
         validate_decisions(&self.decisions, self.ledger_position)?;
         if let Some(page) = &self.decision_page {
             page.validate()?;
-            if usize::from(page.returned_count()) != self.decisions.len() {
+            if page.snapshot_ledger_position() != self.ledger_position
+                || usize::from(page.returned_count()) != self.decisions.len()
+            {
                 return Err(ProjectInterfaceError::new("project_decision_page_invalid"));
             }
         }
@@ -1078,6 +1080,22 @@ mod tests {
                 .expect_err("cursor cannot exceed snapshot")
                 .code(),
             "project_decision_cursor_invalid"
+        );
+    }
+
+    #[test]
+    fn snapshot_rejects_a_decision_page_from_another_ledger_position() {
+        let mut snapshot = snapshot();
+        snapshot.decision_page = Some(
+            ProjectDecisionPage::new(6, DEFAULT_PROJECT_DECISION_PAGE_SIZE, 1, false, None)
+                .expect("decision page"),
+        );
+        assert_eq!(
+            snapshot
+                .validate()
+                .expect_err("mixed snapshot position")
+                .code(),
+            "project_decision_page_invalid"
         );
     }
 }

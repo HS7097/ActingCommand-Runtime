@@ -207,6 +207,7 @@ impl PredictiveMaintenanceRequest {
         task_id: impl Into<String>,
         fact_scope: FactScope,
         fact_key: impl Into<String>,
+        as_of_ledger_position: u64,
         as_of_unix_ms: u64,
         trend_policy: MaintenanceTrendPolicy,
     ) -> RuntimeClientResult<Self> {
@@ -226,6 +227,7 @@ impl PredictiveMaintenanceRequest {
             task_id,
             fact_scope,
             fact_key,
+            as_of_ledger_position,
             as_of_unix_ms,
             policy,
         )
@@ -859,7 +861,7 @@ impl RuntimeClient {
             RuntimeResult::PredictiveMaintenanceAssessed { assessment } => self
                 .decode_policy_document(
                     &assessment,
-                    RuntimePlanningDocumentKind::MaintenanceAssessment,
+                    RuntimePlanningDocumentKind::MaintenanceAssessmentV2,
                     "assess_predictive_maintenance",
                 ),
             _ => Err(self.unexpected_result("assess_predictive_maintenance")),

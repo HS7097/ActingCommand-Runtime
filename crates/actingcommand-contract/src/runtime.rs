@@ -102,6 +102,7 @@ pub enum RuntimePlanningDocumentKind {
     ForwardProjection,
     MaintenanceTrendPolicy,
     MaintenanceAssessment,
+    MaintenanceAssessmentV2,
 }
 
 /// Content-addressed transport envelope for policy types owned by the policy crate.
@@ -305,6 +306,7 @@ pub struct RuntimeMaintenanceQuery {
     task_id: String,
     fact_scope: FactScope,
     fact_key: String,
+    as_of_ledger_position: u64,
     as_of_unix_ms: u64,
     trend_policy: RuntimePlanningDocument,
 }
@@ -315,6 +317,7 @@ impl RuntimeMaintenanceQuery {
         task_id: impl Into<String>,
         fact_scope: FactScope,
         fact_key: impl Into<String>,
+        as_of_ledger_position: u64,
         as_of_unix_ms: u64,
         trend_policy: RuntimePlanningDocument,
     ) -> RuntimeContractResult<Self> {
@@ -323,6 +326,7 @@ impl RuntimeMaintenanceQuery {
             task_id: task_id.into(),
             fact_scope,
             fact_key: fact_key.into(),
+            as_of_ledger_position,
             as_of_unix_ms,
             trend_policy,
         };
@@ -334,7 +338,8 @@ impl RuntimeMaintenanceQuery {
         for value in [&self.instance_id, &self.task_id, &self.fact_key] {
             validate_bounded_text(value, 512, "invalid_maintenance_query")?;
         }
-        if self.as_of_unix_ms == 0
+        if self.as_of_ledger_position == 0
+            || self.as_of_unix_ms == 0
             || self.fact_scope.validate().is_err()
             || matches!(
                 &self.fact_scope,
@@ -361,6 +366,10 @@ impl RuntimeMaintenanceQuery {
 
     pub fn fact_key(&self) -> &str {
         &self.fact_key
+    }
+
+    pub const fn as_of_ledger_position(&self) -> u64 {
+        self.as_of_ledger_position
     }
 
     pub const fn as_of_unix_ms(&self) -> u64 {
@@ -2791,7 +2800,7 @@ impl RuntimeReceipt {
                 projection.validate_kind(RuntimePlanningDocumentKind::ForwardProjection)?
             }
             Some(RuntimeResult::PredictiveMaintenanceAssessed { assessment }) => {
-                assessment.validate_kind(RuntimePlanningDocumentKind::MaintenanceAssessment)?
+                assessment.validate_kind(RuntimePlanningDocumentKind::MaintenanceAssessmentV2)?
             }
             Some(RuntimeResult::ProposalEvaluated { preview }) => preview
                 .validate()

@@ -19,6 +19,7 @@ pub struct MaintenanceLedgerQuery {
     task_id: String,
     fact_scope: FactScope,
     fact_key: String,
+    as_of_ledger_position: u64,
     as_of_unix_ms: u64,
     trend_policy: MaintenanceTrendPolicy,
 }
@@ -29,6 +30,7 @@ impl MaintenanceLedgerQuery {
         task_id: impl Into<String>,
         fact_scope: FactScope,
         fact_key: impl Into<String>,
+        as_of_ledger_position: u64,
         as_of_unix_ms: u64,
         trend_policy: MaintenanceTrendPolicy,
     ) -> RuntimeHostResult<Self> {
@@ -37,6 +39,7 @@ impl MaintenanceLedgerQuery {
             task_id: task_id.into(),
             fact_scope,
             fact_key: fact_key.into(),
+            as_of_ledger_position,
             as_of_unix_ms,
             trend_policy,
         };
@@ -57,6 +60,7 @@ impl MaintenanceLedgerQuery {
                 .chain(self.task_id.chars())
                 .chain(self.fact_key.chars())
                 .any(char::is_control)
+            || self.as_of_ledger_position == 0
             || self.as_of_unix_ms == 0
             || self.fact_scope.validate().is_err()
             || matches!(
@@ -84,6 +88,10 @@ impl MaintenanceLedgerQuery {
 
     pub fn fact_key(&self) -> &str {
         &self.fact_key
+    }
+
+    pub const fn as_of_ledger_position(&self) -> u64 {
+        self.as_of_ledger_position
     }
 
     pub const fn as_of_unix_ms(&self) -> u64 {
@@ -121,11 +129,20 @@ pub(crate) fn collect_maintenance_evidence(
     query: &MaintenanceLedgerQuery,
 ) -> RuntimeHostResult<MaintenanceEvidence> {
     query.validate()?;
+    let latest_ledger_position = ledger
+        .latest_sequence()
+        .map_err(|_| fatal("maintenance_ledger_position_query_failed"))?;
+    if query.as_of_ledger_position() > latest_ledger_position {
+        return Err(request("maintenance_ledger_position_invalid"));
+    }
     let window_start = query
         .as_of_unix_ms
         .saturating_sub(query.trend_policy.lookback_ms);
     let events = ledger
-        .query(EventQuery::default())
+        .query(EventQuery {
+            to_sequence: Some(query.as_of_ledger_position()),
+            ..EventQuery::default()
+        })
         .map_err(|_| fatal("maintenance_ledger_query_failed"))?;
     let mut durations = Vec::new();
     let mut confidences = Vec::new();
@@ -176,6 +193,7 @@ pub(crate) fn collect_maintenance_evidence(
     }
     Ok(MaintenanceEvidence {
         subject_id: query.subject_id(),
+        as_of_ledger_position: query.as_of_ledger_position,
         as_of_unix_ms: query.as_of_unix_ms,
         durations,
         confidences,

@@ -1241,6 +1241,7 @@ fn planning_operations_are_strict_and_require_agent_adapter_origin() {
             instance_id: "node.a".to_owned(),
         },
         "resource.primary",
+        9,
         10,
         trend,
     )

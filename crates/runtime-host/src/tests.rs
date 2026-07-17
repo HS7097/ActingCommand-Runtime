@@ -19,13 +19,13 @@ use actingcommand_contract::{
     PerformanceControlLevel, PerformanceMonitorHealth, PolicyExecutionOutcome, PolicyFailureClass,
     PolicyFailureDisposition, PolicyPayload, PolicyPlanningSignalEventData,
     PolicyPlanningSignalKind, ProjectDecisionPageRequest, ProjectDecisionState,
-    ProjectInterfaceRequest, ProjectedArtifactReference, ProjectionPayload, ProjectionProfile,
-    ProposalClass, ProposalDisposition, ProposalDocument, ProposalKind, ProposalPatchOperation,
-    PublicEventPayload, RUNTIME_INFO_FILE, ReleasePayload, ReleaseResourceVersion,
-    ReleaseTransitionKind, ResourceAuthoringEvent, ResourceAuthoringPhase, RuntimeCaptureBackend,
-    RuntimeErrorCode, RuntimeMonitorPolicy, RuntimeOperation, RuntimePlanningDocument,
-    RuntimePlanningDocumentKind, RuntimeReceipt, RuntimeReceiptState, RuntimeReleaseSet,
-    RuntimeRequest, RuntimeResult, RuntimeStrategicReportRequest, StatePayload,
+    ProjectInterfaceRequest, ProjectInterfaceSnapshot, ProjectedArtifactReference,
+    ProjectionPayload, ProjectionProfile, ProposalClass, ProposalDisposition, ProposalDocument,
+    ProposalKind, ProposalPatchOperation, PublicEventPayload, RUNTIME_INFO_FILE, ReleasePayload,
+    ReleaseResourceVersion, ReleaseTransitionKind, ResourceAuthoringEvent, ResourceAuthoringPhase,
+    RuntimeCaptureBackend, RuntimeErrorCode, RuntimeMonitorPolicy, RuntimeOperation,
+    RuntimePlanningDocument, RuntimePlanningDocumentKind, RuntimeReceipt, RuntimeReceiptState,
+    RuntimeReleaseSet, RuntimeRequest, RuntimeResult, RuntimeStrategicReportRequest, StatePayload,
     StateRecoveryAction, StateValidationResult, TaskOutcome, TaskPayload, TaskSemanticFact,
     TaskTemplateInstantiation, TerminalEvent,
 };
@@ -587,6 +587,20 @@ fn projected_events(
         panic!("expected event projection");
     };
     events.clone()
+}
+
+fn project_snapshot(
+    host: &RuntimeHost,
+    request: ProjectInterfaceRequest,
+) -> ProjectInterfaceSnapshot {
+    let mut client = TestClient::connect(host);
+    let request = client.request(RuntimeOperation::ProjectInterface { request });
+    let receipt = client.send(&request);
+    let RuntimeResult::ProjectInterface { response } = receipt.result().expect("project result")
+    else {
+        panic!("expected project interface response")
+    };
+    response.snapshot().clone()
 }
 
 fn projected_task_semantic_fact(
@@ -1328,6 +1342,8 @@ fn predictive_maintenance_reports_missing_evidence_without_a_signal() {
     let root = TempDir::new().expect("tempdir");
     let state = Arc::new(FakeState::default());
     let host = host_with_state(&root, POLICY_INSTANCE_ALIAS, Arc::clone(&state));
+    let as_of_ledger_position =
+        project_snapshot(&host, ProjectInterfaceRequest::current()).ledger_position;
     let query = MaintenanceLedgerQuery::new(
         POLICY_INSTANCE_ALIAS,
         "fixture.observe",
@@ -1335,6 +1351,7 @@ fn predictive_maintenance_reports_missing_evidence_without_a_signal() {
             instance_id: POLICY_INSTANCE_ALIAS.to_owned(),
         },
         "resource.primary",
+        as_of_ledger_position,
         POLICY_NOW_UNIX_MS,
         MaintenanceTrendPolicy::default(),
     )
@@ -1475,11 +1492,14 @@ fn predictive_maintenance_publishes_one_evidence_pinned_recheck_signal() {
         )),
     )
     .expect("assessment runtime host");
+    let as_of_ledger_position =
+        project_snapshot(&host, ProjectInterfaceRequest::current()).ledger_position;
     let query = MaintenanceLedgerQuery::new(
         POLICY_INSTANCE_ALIAS,
         "fixture.observe",
         fact_scope,
         "resource.primary",
+        as_of_ledger_position,
         last_observed_at,
         MaintenanceTrendPolicy::default(),
     )
@@ -1501,6 +1521,7 @@ fn predictive_maintenance_publishes_one_evidence_pinned_recheck_signal() {
             instance_id: POLICY_INSTANCE_ALIAS.to_owned(),
         },
         "resource.primary",
+        as_of_ledger_position,
         last_observed_at + 1_000,
         MaintenanceTrendPolicy::default(),
     )
@@ -1510,6 +1531,51 @@ fn predictive_maintenance_publishes_one_evidence_pinned_recheck_signal() {
         .expect("later maintenance assessment");
     assert_eq!(later.assessment_id, first.assessment_id);
 
+    host.publish_fact(FactRecord {
+        scope: FactScope::Instance {
+            instance_id: POLICY_INSTANCE_ALIAS.to_owned(),
+        },
+        key: "resource.primary".to_owned(),
+        content: FactContent::Inline {
+            value: ContractFactValue::Integer(10),
+        },
+        observed_at_unix_ms: last_observed_at - 500,
+        expires_at_unix_ms: None,
+        ttl_policy: None,
+        confidence_milli: 700,
+        source_detector: "detector.maintenance".to_owned(),
+        source_snapshot_id: "snapshot:maintenance-late".to_owned(),
+        schema_version: "fact.v1".to_owned(),
+        resource_bundle_hash: "a".repeat(64),
+        invalidate_on: Vec::new(),
+    })
+    .expect("publish backdated maintenance evidence");
+    let pinned_after_late = host
+        .assess_and_publish_predictive_maintenance(&query)
+        .expect("pinned assessment after late event");
+    assert_eq!(pinned_after_late, first);
+
+    let advanced_ledger_position =
+        project_snapshot(&host, ProjectInterfaceRequest::current()).ledger_position;
+    let advanced_query = MaintenanceLedgerQuery::new(
+        POLICY_INSTANCE_ALIAS,
+        "fixture.observe",
+        FactScope::Instance {
+            instance_id: POLICY_INSTANCE_ALIAS.to_owned(),
+        },
+        "resource.primary",
+        advanced_ledger_position,
+        last_observed_at,
+        MaintenanceTrendPolicy::default(),
+    )
+    .expect("advanced maintenance query");
+    let advanced = host
+        .assess_and_publish_predictive_maintenance(&advanced_query)
+        .expect("advanced maintenance assessment");
+    assert_eq!(advanced.confidence_sample_count, 5);
+    assert_ne!(advanced.assessment_id, first.assessment_id);
+    assert_eq!(advanced.as_of_ledger_position, advanced_ledger_position);
+
     let mut client = TestClient::connect(&host);
     let signals = projected_events(
         &mut client,
@@ -1518,7 +1584,7 @@ fn predictive_maintenance_publishes_one_evidence_pinned_recheck_signal() {
             ..EventQuery::default()
         },
     );
-    assert_eq!(signals.len(), 1);
+    assert_eq!(signals.len(), 2);
     assert_eq!(state.open_count.load(Ordering::SeqCst), 0);
     assert_eq!(state.capture_open_count.load(Ordering::SeqCst), 0);
     assert_eq!(state.input_count.load(Ordering::SeqCst), 0);
@@ -1605,6 +1671,16 @@ fn project_interface_pages_decision_history_without_duplicates_or_loss() {
     let host = host_with_state(&root, POLICY_INSTANCE_ALIAS, Arc::new(FakeState::default()));
     host.activate_policy_catalog(&policy_sources(1))
         .expect("activate catalog");
+    host.publish_fact(stored_fact(
+        FactScope::Instance {
+            instance_id: POLICY_INSTANCE_ALIAS.to_owned(),
+        },
+        "resource.current",
+        ContractFactValue::Integer(5),
+        "snapshot:project-page-initial",
+        Vec::new(),
+    ))
+    .expect("publish initial project fact");
 
     let (_, approval_basis, _) =
         evaluated_policy_dispatch_at(&host, PolicyTrigger::FactsChanged, POLICY_NOW_UNIX_MS, 100);
@@ -1627,6 +1703,7 @@ fn project_interface_pages_decision_history_without_duplicates_or_loss() {
     record_policy_approval_disposition(&host, &admitted, ApprovalDisposition::Revoked);
 
     let mut expected = vec![admitted.decision_id.clone()];
+    let mut late_approval_intent = None;
     for index in 0..4_u64 {
         let (_, intent, reason_chain) = evaluated_policy_dispatch_at(
             &host,
@@ -1634,6 +1711,7 @@ fn project_interface_pages_decision_history_without_duplicates_or_loss() {
             POLICY_NOW_UNIX_MS + (index + 2) * 60_000,
             102 + index,
         );
+        late_approval_intent.get_or_insert_with(|| intent.clone());
         expected.push(intent.decision_id.clone());
         assert_eq!(
             host.admit_policy_dispatch(&intent, &reason_chain, &policy_context(&host, &intent))
@@ -1648,6 +1726,7 @@ fn project_interface_pages_decision_history_without_duplicates_or_loss() {
     let mut cursor = None;
     let mut collected = Vec::new();
     let mut collected_states = BTreeMap::new();
+    let mut frozen_projection = None;
     for page_index in 0..4 {
         let request = ProjectInterfaceRequest::current()
             .with_decision_page(
@@ -1661,6 +1740,20 @@ fn project_interface_pages_decision_history_without_duplicates_or_loss() {
             panic!("expected project interface response")
         };
         let snapshot = response.snapshot();
+        let projection = (
+            snapshot.ledger_position,
+            snapshot.catalog.clone(),
+            snapshot.facts.clone(),
+            snapshot.approvals.clone(),
+        );
+        if let Some(frozen) = &frozen_projection {
+            assert_eq!(
+                &projection, frozen,
+                "every page must retain the first page ledger projection"
+            );
+        } else {
+            frozen_projection = Some(projection);
+        }
         assert!(snapshot.decisions.len() <= 2);
         for decision in &snapshot.decisions {
             collected.push(decision.decision_id.clone());
@@ -1672,6 +1765,22 @@ fn project_interface_pages_decision_history_without_duplicates_or_loss() {
         if page_index == 0 {
             host.complete_policy_dispatch(&admitted.decision_id)
                 .expect("complete after snapshot");
+            host.publish_fact(stored_fact(
+                FactScope::Instance {
+                    instance_id: POLICY_INSTANCE_ALIAS.to_owned(),
+                },
+                "resource.current",
+                ContractFactValue::Integer(9),
+                "snapshot:project-page-late",
+                Vec::new(),
+            ))
+            .expect("publish fact after first page");
+            record_policy_approval(
+                &host,
+                late_approval_intent.as_ref().expect("late approval intent"),
+            );
+            host.activate_policy_catalog(&policy_sources(2))
+                .expect("activate catalog after first page");
         }
         if !page.has_more() {
             break;
@@ -1685,6 +1794,25 @@ fn project_interface_pages_decision_history_without_duplicates_or_loss() {
         "later pages must remain bound to the first page ledger snapshot"
     );
     assert!(cursor.is_none());
+    let current = project_snapshot(&host, ProjectInterfaceRequest::current());
+    assert_eq!(
+        current
+            .catalog
+            .as_ref()
+            .expect("current catalog")
+            .catalog_version,
+        2
+    );
+    assert!(
+        current
+            .facts
+            .iter()
+            .any(|fact| fact.source_snapshot_id == "snapshot:project-page-late")
+    );
+    assert_ne!(
+        &current.approvals,
+        &frozen_projection.as_ref().expect("frozen projection").3
+    );
     drop(client);
     host.close().expect("close host");
 }
