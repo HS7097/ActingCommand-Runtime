@@ -44,6 +44,15 @@ pub struct ForegroundSample {
     pub fullscreen: bool,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ProcessMetricCoverage {
+    pub enumerated_processes: u32,
+    pub sampled_processes: u32,
+    pub access_denied_processes_excluded: u32,
+    pub unexpectedly_inaccessible_processes: u32,
+    pub readable_basis_points: u16,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HostSample {
     pub observed_at_unix_ms: u64,
@@ -56,6 +65,7 @@ pub struct HostSample {
     pub foreground: Option<ForegroundSample>,
     pub owned_processes: Vec<ProcessSample>,
     pub third_party_high_load: Vec<ProcessSample>,
+    pub process_coverage: ProcessMetricCoverage,
     pub unavailable_metrics: Vec<HostMetric>,
 }
 

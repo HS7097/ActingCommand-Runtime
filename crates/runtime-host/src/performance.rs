@@ -1952,6 +1952,13 @@ mod tests {
             foreground: None,
             owned_processes: Vec::new(),
             third_party_high_load: Vec::new(),
+            process_coverage: actingcommand_host_metrics::ProcessMetricCoverage {
+                enumerated_processes: 1,
+                sampled_processes: 1,
+                access_denied_processes_excluded: 0,
+                unexpectedly_inaccessible_processes: 0,
+                readable_basis_points: 10_000,
+            },
             unavailable_metrics: vec![HostMetric::Gpu, HostMetric::ForegroundProcess],
         }
     }
