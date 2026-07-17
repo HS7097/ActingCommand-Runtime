@@ -64,37 +64,11 @@ pub fn inspect_lab_source(path: &str, source: &str) -> Result<Vec<String>, Strin
 
 /// Rejects project identities from Runtime-owned code, contracts, defaults, and fixtures.
 pub fn inspect_generic_runtime_identity(path: &str, source: &str) -> Vec<String> {
-    const FORBIDDEN: &[&str] = &[
-        "arknights",
-        "azurlane",
-        "azur_lane",
-        "bluearchive",
-        "blue_archive",
-        "ak.cn",
-        "azur.jp",
-        "ba.jp",
-        "alas.",
-        "baas.",
+    const FORBIDDEN_LITERALS: &[&str] = &[
         "maa.",
         "com.yostar",
         "com.bilibili",
         "com.hypergryph",
-        "game_azur",
-        "game_ark",
-        "game_ba",
-        "server_alas",
-        "server_ak",
-        "server_ark",
-        "server_azur",
-        "server_ba",
-        "server_baas",
-        "server_maa",
-        "\"azur\"",
-        "\"ark\"",
-        "\"ba\"",
-        "'azur'",
-        "'ark'",
-        "'ba'",
         "\u{51fa}\u{6483}",
         "\u{6226}\u{95d8}",
         "\u{5efa}\u{9020}",
@@ -103,25 +77,35 @@ pub fn inspect_generic_runtime_identity(path: &str, source: &str) -> Vec<String>
     ];
     const FORBIDDEN_WORDS: &[&str] = &[
         "ak",
+        "alas",
         "ark",
+        "arknights",
         "azur",
+        "azurlane",
         "ba",
-        "cn",
+        "baas",
+        "bluearchive",
         "gacha",
-        "jp",
-        "ko",
         "originite",
         "pvp",
         "pyroxene",
         "sortie",
-        "tw",
     ];
+    const FORBIDDEN_SEQUENCES: &[&[&str]] = &[
+        &["blue", "archive"],
+        &["server", "cn"],
+        &["server", "jp"],
+        &["server", "ko"],
+        &["server", "maa"],
+        &["server", "tw"],
+    ];
+    const FORBIDDEN_STANDALONE_WORDS: &[&str] = &["cn", "jp", "ko", "tw"];
 
     let normalized_path = path.replace('\\', "/").to_ascii_lowercase();
     let mut violations = Vec::new();
     for (index, line) in source.lines().enumerate() {
         let lower = line.to_ascii_lowercase();
-        for token in FORBIDDEN {
+        for token in FORBIDDEN_LITERALS {
             if !lower.contains(token) {
                 continue;
             }
@@ -137,10 +121,28 @@ pub fn inspect_generic_runtime_identity(path: &str, source: &str) -> Vec<String>
                 index + 1
             ));
         }
+        let words = identifier_words(line);
+        for sequence in FORBIDDEN_SEQUENCES {
+            if contains_word_sequence(&words, sequence) {
+                violations.push(format!(
+                    "{path}:{} contains project-specific token {}",
+                    index + 1,
+                    sequence.join("_")
+                ));
+            }
+        }
+        for word in &words {
+            if FORBIDDEN_WORDS.contains(&word.as_str()) {
+                violations.push(format!(
+                    "{path}:{} contains project-specific word {word}",
+                    index + 1
+                ));
+            }
+        }
         for word in
             lower.split(|character: char| !character.is_ascii_alphanumeric() && character != '_')
         {
-            if FORBIDDEN_WORDS.contains(&word) {
+            if FORBIDDEN_STANDALONE_WORDS.contains(&word) {
                 violations.push(format!(
                     "{path}:{} contains project-specific word {word}",
                     index + 1
@@ -172,6 +174,7 @@ impl Visit<'_> for GenericAuthoringIdentityVisitor<'_> {
         if has_cfg_test(&node.attrs) {
             return;
         }
+        self.record_identifier(&node.ident);
         syn::visit::visit_item_mod(self, node);
     }
 
@@ -179,6 +182,7 @@ impl Visit<'_> for GenericAuthoringIdentityVisitor<'_> {
         if has_cfg_test(&node.attrs) {
             return;
         }
+        self.record_identifier(&node.sig.ident);
         syn::visit::visit_item_fn(self, node);
     }
 
@@ -186,7 +190,64 @@ impl Visit<'_> for GenericAuthoringIdentityVisitor<'_> {
         if has_cfg_test(&node.attrs) {
             return;
         }
+        self.record_identifier(&node.sig.ident);
         syn::visit::visit_impl_item_fn(self, node);
+    }
+
+    fn visit_item_struct(&mut self, node: &syn::ItemStruct) {
+        if has_cfg_test(&node.attrs) {
+            return;
+        }
+        self.record_identifier(&node.ident);
+        syn::visit::visit_item_struct(self, node);
+    }
+
+    fn visit_item_enum(&mut self, node: &syn::ItemEnum) {
+        if has_cfg_test(&node.attrs) {
+            return;
+        }
+        self.record_identifier(&node.ident);
+        syn::visit::visit_item_enum(self, node);
+    }
+
+    fn visit_item_union(&mut self, node: &syn::ItemUnion) {
+        if has_cfg_test(&node.attrs) {
+            return;
+        }
+        self.record_identifier(&node.ident);
+        syn::visit::visit_item_union(self, node);
+    }
+
+    fn visit_item_trait(&mut self, node: &syn::ItemTrait) {
+        if has_cfg_test(&node.attrs) {
+            return;
+        }
+        self.record_identifier(&node.ident);
+        syn::visit::visit_item_trait(self, node);
+    }
+
+    fn visit_item_type(&mut self, node: &syn::ItemType) {
+        if has_cfg_test(&node.attrs) {
+            return;
+        }
+        self.record_identifier(&node.ident);
+        syn::visit::visit_item_type(self, node);
+    }
+
+    fn visit_item_const(&mut self, node: &syn::ItemConst) {
+        if has_cfg_test(&node.attrs) {
+            return;
+        }
+        self.record_identifier(&node.ident);
+        syn::visit::visit_item_const(self, node);
+    }
+
+    fn visit_item_static(&mut self, node: &syn::ItemStatic) {
+        if has_cfg_test(&node.attrs) {
+            return;
+        }
+        self.record_identifier(&node.ident);
+        syn::visit::visit_item_static(self, node);
     }
 
     fn visit_lit_str(&mut self, node: &syn::LitStr) {
@@ -210,22 +271,33 @@ impl Visit<'_> for GenericAuthoringIdentityVisitor<'_> {
     }
 
     fn visit_ident(&mut self, node: &syn::Ident) {
-        let value = node.to_string();
+        self.record_identifier(node);
+    }
+}
+
+impl GenericAuthoringIdentityVisitor<'_> {
+    fn record_identifier(&mut self, identifier: &syn::Ident) {
+        let value = identifier.to_string();
         if contains_forbidden_authoring_identity(&value) {
-            self.violations.push(format!(
+            let violation = format!(
                 "{}: production code contains built-in game identifier {value}",
                 self.path
-            ));
+            );
+            if !self.violations.contains(&violation) {
+                self.violations.push(violation);
+            }
         }
     }
 }
 
 fn contains_forbidden_authoring_identity(value: &str) -> bool {
     let normalized = value.trim().to_ascii_lowercase();
+    let words = identifier_words(value.trim());
     is_forbidden_authoring_identity(&normalized)
-        || normalized
-            .split(|character: char| !character.is_ascii_alphanumeric())
-            .any(is_forbidden_authoring_identity)
+        || words
+            .iter()
+            .any(|word| is_forbidden_authoring_identity(word))
+        || contains_word_sequence(&words, &["blue", "archive"])
 }
 
 fn is_forbidden_authoring_identity(value: &str) -> bool {
@@ -242,6 +314,51 @@ fn is_forbidden_authoring_identity(value: &str) -> bool {
             | "blue_archive"
             | "maaassistantarknights"
     )
+}
+
+fn identifier_words(value: &str) -> Vec<String> {
+    let characters = value.chars().collect::<Vec<_>>();
+    let mut words = Vec::new();
+    let mut current = String::new();
+    let mut previous: Option<char> = None;
+
+    for (index, character) in characters.iter().copied().enumerate() {
+        if !character.is_ascii_alphanumeric() {
+            push_identifier_word(&mut words, &mut current);
+            previous = None;
+            continue;
+        }
+        let next = characters.get(index + 1).copied();
+        let starts_word = previous.is_some_and(|previous| {
+            character.is_ascii_uppercase()
+                && (previous.is_ascii_lowercase()
+                    || previous.is_ascii_digit()
+                    || previous.is_ascii_uppercase()
+                        && next.is_some_and(|next| next.is_ascii_lowercase()))
+        });
+        if starts_word {
+            push_identifier_word(&mut words, &mut current);
+        }
+        current.push(character.to_ascii_lowercase());
+        previous = Some(character);
+    }
+    push_identifier_word(&mut words, &mut current);
+    words
+}
+
+fn push_identifier_word(words: &mut Vec<String>, current: &mut String) {
+    if !current.is_empty() {
+        words.push(std::mem::take(current));
+    }
+}
+
+fn contains_word_sequence(words: &[String], sequence: &[&str]) -> bool {
+    words.windows(sequence.len()).any(|window| {
+        window
+            .iter()
+            .map(String::as_str)
+            .eq(sequence.iter().copied())
+    })
 }
 
 fn has_cfg_test(attributes: &[syn::Attribute]) -> bool {
@@ -2230,8 +2347,15 @@ mod tests {
 
     #[test]
     fn generic_runtime_guard_enforces_compound_token_boundaries_without_generic_false_positives() {
-        let forbidden = "const SERVER_BA: &str = \"fixture\";";
+        let forbidden = r#"
+            const POLICY_BA_MODE: &str = "fixture";
+            struct ArknightsCompiler;
+        "#;
         let allowed = r#"
+            const SERVER_BASE: &str = "neutral";
+            const SERVER_BACKUP: &str = "neutral";
+            const SERVER_BALANCE: &str = "neutral";
+            const OCR_LANGUAGE: &str = "zh_cn";
             fn exercise_plan() {}
             fn recruit_worker() {}
             fn sanity_check() {}
@@ -2239,9 +2363,43 @@ mod tests {
         "#;
 
         let violations = super::inspect_generic_runtime_identity("fixture.rs", forbidden);
-        assert_eq!(violations.len(), 1);
-        assert!(violations[0].contains("project-specific token server_ba"));
+        assert_eq!(violations.len(), 2);
+        assert!(
+            violations
+                .iter()
+                .any(|violation| violation.contains("project-specific word ba"))
+        );
+        assert!(
+            violations
+                .iter()
+                .any(|violation| violation.contains("project-specific word arknights"))
+        );
         assert!(super::inspect_generic_runtime_identity("fixture.rs", allowed).is_empty());
+        let server = super::inspect_generic_runtime_identity(
+            "fixture.rs",
+            "const SERVER_JP: &str = \"neutral\";",
+        );
+        assert_eq!(server.len(), 1);
+        assert!(server[0].contains("project-specific token server_jp"));
+        let standalone =
+            super::inspect_generic_runtime_identity("fixture.rs", "const LOCALE: &str = \"jp\";");
+        assert_eq!(standalone.len(), 1);
+        assert!(standalone[0].contains("project-specific word jp"));
+    }
+
+    #[test]
+    fn identifier_words_cover_common_rust_identifier_styles_and_acronyms() {
+        assert_eq!(
+            super::identifier_words("policy_ba_mode POLICY_BA_MODE policyBaMode PolicyBaMode"),
+            [
+                "policy", "ba", "mode", "policy", "ba", "mode", "policy", "ba", "mode", "policy",
+                "ba", "mode"
+            ]
+        );
+        assert_eq!(
+            super::identifier_words("HTTPServerBAConfig"),
+            ["http", "server", "ba", "config"]
+        );
     }
 
     #[test]
@@ -2271,11 +2429,18 @@ mod tests {
     fn generic_authoring_guard_rejects_compound_identifiers_and_byte_strings() {
         let forbidden = r#"
             fn compile_arknights_graph() {}
+            struct ArknightsCompiler;
+            const POLICY_BA_MODE: bool = true;
             const BLUEARCHIVE_HOME: &[u8] = b"arknights";
         "#;
         let allowed = r#"
             fn backend_banner() {}
             fn exercise_plan() {}
+            fn recruit_worker() {}
+            fn sanity_check() {}
+            const SERVER_BASE: &str = "neutral";
+            const SERVER_BACKUP: &str = "neutral";
+            const SERVER_BALANCE: &str = "neutral";
             const SERVER_BANNER: &[u8] = b"neutral";
         "#;
 
@@ -2285,6 +2450,17 @@ mod tests {
             violations
                 .iter()
                 .any(|violation| violation.contains("compile_arknights_graph"))
+        );
+        assert!(
+            violations
+                .iter()
+                .any(|violation| violation.contains("ArknightsCompiler")),
+            "{violations:#?}"
+        );
+        assert!(
+            violations
+                .iter()
+                .any(|violation| violation.contains("POLICY_BA_MODE"))
         );
         assert!(
             violations
