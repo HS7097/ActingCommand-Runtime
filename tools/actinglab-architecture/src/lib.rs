@@ -62,6 +62,94 @@ pub fn inspect_lab_source(path: &str, source: &str) -> Result<Vec<String>, Strin
         .collect())
 }
 
+/// Rejects project identities from Runtime-owned code, contracts, defaults, and fixtures.
+pub fn inspect_generic_runtime_identity(path: &str, source: &str) -> Vec<String> {
+    const FORBIDDEN: &[&str] = &[
+        "arknights",
+        "azurlane",
+        "azur_lane",
+        "bluearchive",
+        "blue_archive",
+        "ak.cn",
+        "azur.jp",
+        "ba.jp",
+        "alas.",
+        "baas.",
+        "maa.",
+        "com.yostar",
+        "com.bilibili",
+        "com.hypergryph",
+        "game_azur",
+        "game_ark",
+        "game_ba",
+        "server_alas",
+        "server_baas",
+        "server_maa",
+        "\"azur\"",
+        "\"ark\"",
+        "\"ba\"",
+        "'azur'",
+        "'ark'",
+        "'ba'",
+        "\u{51fa}\u{6483}",
+        "\u{6226}\u{95d8}",
+        "\u{5efa}\u{9020}",
+        "\u{9000}\u{5f79}",
+        "\u{5f37}\u{5316}",
+    ];
+    const FORBIDDEN_WORDS: &[&str] = &[
+        "ak",
+        "ark",
+        "azur",
+        "ba",
+        "cn",
+        "exercise",
+        "gacha",
+        "jp",
+        "ko",
+        "originite",
+        "pvp",
+        "pyroxene",
+        "recruit",
+        "sanity",
+        "sortie",
+        "tw",
+    ];
+
+    let normalized_path = path.replace('\\', "/").to_ascii_lowercase();
+    let mut violations = Vec::new();
+    for (index, line) in source.lines().enumerate() {
+        let lower = line.to_ascii_lowercase();
+        for token in FORBIDDEN {
+            if !lower.contains(token) {
+                continue;
+            }
+            // This filename is an external provider artifact, not a Runtime identity or branch.
+            if *token == "maa."
+                && normalized_path.starts_with("crates/vision-ffi/")
+                && lower.contains("external-tools/vision/fastdeploy/fastdeploy_ppocr_maa.dll")
+            {
+                continue;
+            }
+            violations.push(format!(
+                "{path}:{} contains project-specific token {token}",
+                index + 1
+            ));
+        }
+        for word in
+            lower.split(|character: char| !character.is_ascii_alphanumeric() && character != '_')
+        {
+            if FORBIDDEN_WORDS.contains(&word) {
+                violations.push(format!(
+                    "{path}:{} contains project-specific word {word}",
+                    index + 1
+                ));
+            }
+        }
+    }
+    violations
+}
+
 /// Finds public APIs that expose `serde_json::Value`, including imported aliases.
 pub fn inspect_public_api(path: &str, source: &str) -> Result<Vec<String>, String> {
     let file = syn::parse_file(source).map_err(|err| format!("failed to parse {path}: {err}"))?;
@@ -2021,6 +2109,21 @@ fn qualified(module: Option<&str>, name: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn generic_runtime_guard_rejects_project_specific_branch() {
+        let source = r#"
+            fn select(game: &str) -> bool {
+                game == "arknights"
+            }
+        "#;
+
+        let violations =
+            super::inspect_generic_runtime_identity("crates/runtime/src/lib.rs", source);
+
+        assert_eq!(violations.len(), 1);
+        assert!(violations[0].contains("arknights"));
+    }
+
     #[test]
     fn global_append_guard_rejects_any_ingress_other_than_sanitized_event_draft() {
         let forbidden = r#"

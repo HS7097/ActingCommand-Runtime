@@ -1312,28 +1312,30 @@ mod tests {
 
     fn lab_package_entries(task_id: &str, expected: [u8; 3]) -> BTreeMap<String, Vec<u8>> {
         let operation = format!(
-            r#"{{"schema_version":"0.5","task_id":"{task_id}","game":"azurlane","server_scope":["jp"],"coordinate_space":{{"width":1,"height":1}},"operations":[]}}"#
+            r#"{{"schema_version":"0.5","task_id":"{task_id}","game":"fixture-game-b","server_scope":["region-a"],"coordinate_space":{{"width":1,"height":1}},"operations":[]}}"#
         )
         .into_bytes();
         let pack = format!(
-            r#"{{"schema_version":"0.5","game":"azurlane","server":"jp","coordinate_space":{{"width":1,"height":1}},"targets":[{{"type":"color","id":"home_color","region":{{"x":0,"y":0,"width":1,"height":1}},"expected":[{},{},{}]}}]}}"#,
+            r#"{{"schema_version":"0.5","game":"fixture-game-b","server":"region-a","coordinate_space":{{"width":1,"height":1}},"targets":[{{"type":"color","id":"home_color","region":{{"x":0,"y":0,"width":1,"height":1}},"expected":[{},{},{}]}}]}}"#,
             expected[0], expected[1], expected[2]
         )
         .into_bytes();
-        let pages = br#"{"schema_version":"0.5","pages":[{"id":"azurlane/home","required":["home_color"]}]}"#.to_vec();
+        let pages = br#"{"schema_version":"0.5","pages":[{"id":"fixture-game-b/home","required":["home_color"]}]}"#.to_vec();
         let operation_hash = Sha256Hash::digest(&operation);
         let pack_hash = Sha256Hash::digest(&pack);
         let pages_hash = Sha256Hash::digest(&pages);
         let manifest = format!(
-            r#"{{"schema_version":"0.3","entry_task_id":"{task_id}","files":[{{"path":"operations/{task_id}/task.json","sha256":"sha256:{operation_hash}"}},{{"path":"recognition/azurlane.jp.pack.json","sha256":"sha256:{pack_hash}"}},{{"path":"recognition/azurlane.jp.pages.json","sha256":"sha256:{pages_hash}"}}]}}"#
+            r#"{{"schema_version":"0.3","entry_task_id":"{task_id}","files":[{{"path":"operations/{task_id}/task.json","sha256":"sha256:{operation_hash}"}},{{"path":"recognition/fixture-game-b.region-a.pack.json","sha256":"sha256:{pack_hash}"}},{{"path":"recognition/fixture-game-b.region-a.pages.json","sha256":"sha256:{pages_hash}"}}]}}"#
         )
         .into_bytes();
 
         BTreeMap::from([
             (
                 "control.json".to_string(),
-                format!(r#"{{"game":"azurlane","server":"jp","entry_task_id":"{task_id}"}}"#)
-                    .into_bytes(),
+                format!(
+                    r#"{{"game":"fixture-game-b","server":"region-a","entry_task_id":"{task_id}"}}"#
+                )
+                .into_bytes(),
             ),
             ("resources/manifest.json".to_string(), manifest),
             (
@@ -1341,11 +1343,11 @@ mod tests {
                 operation,
             ),
             (
-                "resources/recognition/azurlane.jp.pack.json".to_string(),
+                "resources/recognition/fixture-game-b.region-a.pack.json".to_string(),
                 pack,
             ),
             (
-                "resources/recognition/azurlane.jp.pages.json".to_string(),
+                "resources/recognition/fixture-game-b.region-a.pages.json".to_string(),
                 pages,
             ),
         ])

@@ -40,28 +40,17 @@ pub use state::*;
 pub use taskflow::*;
 pub use types::{
     AcquisitionCapture, ContractResult, DurationMillis, ENGINE_DELEGATED, ENGINE_NATIVE,
-    EngineKind, GAME_ARK, GAME_AZUR, GAME_BA, GameKey, LogEvent, Metadata, ProfileId,
-    ProfileSummary, RUNTIME_DEGRADED, RUNTIME_FATAL, RUNTIME_RUNNING, RUNTIME_STARTING,
-    RUNTIME_STOPPED, RUNTIME_STOPPING, RUNTIME_UNKNOWN, Resolution, Resource, ResourceHistoryPoint,
-    ResourceKey, RuntimeCapability, RuntimeContext, RuntimeError, RuntimeState, RuntimeStatus,
-    SERVER_ALAS_CN, SERVER_ALAS_EN, SERVER_ALAS_JP, SERVER_ALAS_TW, SERVER_BAAS_CN,
-    SERVER_BAAS_GLOBAL_EN, SERVER_BAAS_JP, SERVER_BAAS_KO, SERVER_BAAS_ZH_TW, SERVER_MAA_BILIBILI,
-    SERVER_MAA_OFFICIAL, SERVER_MAA_TXWY, SERVER_MAA_YOSTAR_EN, SERVER_MAA_YOSTAR_JP,
-    SERVER_MAA_YOSTAR_KR, SEVERITY_DEGRADED, SEVERITY_ERROR, SEVERITY_FATAL, SEVERITY_INFO,
-    SEVERITY_WARNING, SchedulerSummary, ServerKey, Severity, TaskRunId, Timestamp,
+    EngineKind, GameKey, LogEvent, Metadata, ProfileId, ProfileSummary, RUNTIME_DEGRADED,
+    RUNTIME_FATAL, RUNTIME_RUNNING, RUNTIME_STARTING, RUNTIME_STOPPED, RUNTIME_STOPPING,
+    RUNTIME_UNKNOWN, Resolution, Resource, ResourceHistoryPoint, ResourceKey, RuntimeCapability,
+    RuntimeContext, RuntimeError, RuntimeState, RuntimeStatus, SEVERITY_DEGRADED, SEVERITY_ERROR,
+    SEVERITY_FATAL, SEVERITY_INFO, SEVERITY_WARNING, SchedulerSummary, ServerKey, Severity,
+    TaskRunId, Timestamp,
 };
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn server_key_constants_keep_backend_variant_names() {
-        let _: ServerKey = SERVER_ALAS_JP.to_string();
-        assert_eq!(SERVER_ALAS_JP, "alas.jp");
-        assert_eq!(SERVER_BAAS_GLOBAL_EN, "baas.global_en");
-        assert_eq!(SERVER_MAA_YOSTAR_JP, "maa.yostar_jp");
-    }
 
     #[test]
     fn runtime_error_can_be_used_as_contract_error() {

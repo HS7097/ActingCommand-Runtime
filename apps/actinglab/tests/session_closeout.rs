@@ -154,7 +154,7 @@ fn runtime_clients_reconnect_without_restoring_session_file_authority() {
         &[
             "--json",
             "--instance",
-            "ak.cn",
+            "node.a",
             "session",
             "stream",
             "--max-frames",
