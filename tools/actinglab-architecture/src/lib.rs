@@ -83,6 +83,10 @@ pub fn inspect_generic_runtime_identity(path: &str, source: &str) -> Vec<String>
         "game_ark",
         "game_ba",
         "server_alas",
+        "server_ak",
+        "server_ark",
+        "server_azur",
+        "server_ba",
         "server_baas",
         "server_maa",
         "\"azur\"",
@@ -103,15 +107,12 @@ pub fn inspect_generic_runtime_identity(path: &str, source: &str) -> Vec<String>
         "azur",
         "ba",
         "cn",
-        "exercise",
         "gacha",
         "jp",
         "ko",
         "originite",
         "pvp",
         "pyroxene",
-        "recruit",
-        "sanity",
         "sortie",
         "tw",
     ];
@@ -190,12 +191,7 @@ impl Visit<'_> for GenericAuthoringIdentityVisitor<'_> {
 
     fn visit_lit_str(&mut self, node: &syn::LitStr) {
         let value = node.value();
-        let normalized = value.trim().to_ascii_lowercase();
-        if is_forbidden_authoring_identity(&normalized)
-            || normalized
-                .split(|character: char| !character.is_ascii_alphanumeric())
-                .any(is_forbidden_authoring_identity)
-        {
+        if contains_forbidden_authoring_identity(&value) {
             self.violations.push(format!(
                 "{}: production code contains built-in game identity {value:?}",
                 self.path
@@ -203,15 +199,33 @@ impl Visit<'_> for GenericAuthoringIdentityVisitor<'_> {
         }
     }
 
+    fn visit_lit_byte_str(&mut self, node: &syn::LitByteStr) {
+        let value = node.value();
+        if contains_forbidden_authoring_identity(&String::from_utf8_lossy(&value)) {
+            self.violations.push(format!(
+                "{}: production code contains built-in game identity in byte string {value:?}",
+                self.path
+            ));
+        }
+    }
+
     fn visit_ident(&mut self, node: &syn::Ident) {
         let value = node.to_string();
-        if is_forbidden_authoring_identity(&value.to_ascii_lowercase()) {
+        if contains_forbidden_authoring_identity(&value) {
             self.violations.push(format!(
                 "{}: production code contains built-in game identifier {value}",
                 self.path
             ));
         }
     }
+}
+
+fn contains_forbidden_authoring_identity(value: &str) -> bool {
+    let normalized = value.trim().to_ascii_lowercase();
+    is_forbidden_authoring_identity(&normalized)
+        || normalized
+            .split(|character: char| !character.is_ascii_alphanumeric())
+            .any(is_forbidden_authoring_identity)
 }
 
 fn is_forbidden_authoring_identity(value: &str) -> bool {
@@ -2215,6 +2229,22 @@ mod tests {
     }
 
     #[test]
+    fn generic_runtime_guard_enforces_compound_token_boundaries_without_generic_false_positives() {
+        let forbidden = "const SERVER_BA: &str = \"fixture\";";
+        let allowed = r#"
+            fn exercise_plan() {}
+            fn recruit_worker() {}
+            fn sanity_check() {}
+            fn backend_banner() {}
+        "#;
+
+        let violations = super::inspect_generic_runtime_identity("fixture.rs", forbidden);
+        assert_eq!(violations.len(), 1);
+        assert!(violations[0].contains("project-specific token server_ba"));
+        assert!(super::inspect_generic_runtime_identity("fixture.rs", allowed).is_empty());
+    }
+
+    #[test]
     fn generic_authoring_guard_rejects_production_identity_and_skips_tests() {
         let forbidden = r#"fn select() -> &'static str { "arknights.cn" }"#;
         let test_only = r#"
@@ -2232,6 +2262,42 @@ mod tests {
         );
         assert!(
             super::inspect_generic_authoring_identity("fixture.rs", test_only)
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn generic_authoring_guard_rejects_compound_identifiers_and_byte_strings() {
+        let forbidden = r#"
+            fn compile_arknights_graph() {}
+            const BLUEARCHIVE_HOME: &[u8] = b"arknights";
+        "#;
+        let allowed = r#"
+            fn backend_banner() {}
+            fn exercise_plan() {}
+            const SERVER_BANNER: &[u8] = b"neutral";
+        "#;
+
+        let violations =
+            super::inspect_generic_authoring_identity("fixture.rs", forbidden).unwrap();
+        assert!(
+            violations
+                .iter()
+                .any(|violation| violation.contains("compile_arknights_graph"))
+        );
+        assert!(
+            violations
+                .iter()
+                .any(|violation| violation.contains("BLUEARCHIVE_HOME"))
+        );
+        assert!(
+            violations
+                .iter()
+                .any(|violation| violation.contains("byte string"))
+        );
+        assert!(
+            super::inspect_generic_authoring_identity("fixture.rs", allowed)
                 .unwrap()
                 .is_empty()
         );
