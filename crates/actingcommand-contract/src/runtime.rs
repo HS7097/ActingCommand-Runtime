@@ -15,14 +15,15 @@
 use crate::{
     ActionId, AgentSessionContext, AgentSessionId, AgentSessionResponse, AgentSessionStatus,
     AgentWakeId, ApprovalDecisionRecord, ApprovalDisposition, ArtifactKind, ArtifactLinksDraft,
-    ArtifactMediaType, ArtifactRedactionState, CausationId, ClientActionRecord, CorrelationId,
-    EffectDisposition, EventActor, EventId, EventLinksDraft, EventQuery, EventSource, EventType,
-    EvidenceCompleteness, FrameId, HolderId, IdentifierIssuanceError, IdentifierIssuer, InstanceId,
-    IssuedCausationId, IssuedCorrelationId, IssuedFrameId, IssuedHolderId, IssuedRecognitionId,
-    IssuedRequestId, IssuedRunId, IssuedTaskId, LeaseId, OwnerEpoch, ProjectedArtifactReference,
-    ProjectedEvent, ProjectionProfile, RecognitionId, RecognitionVerdict, RequestId,
-    ResourceAuthoringPhase, RunId, RuntimeMonitorInstanceStatus, RuntimeMonitorPolicy,
-    RuntimeMonitorRegistryStatus, SubscriptionCursor, TaskOutcome,
+    ArtifactMediaType, ArtifactRedactionState, CatalogProposal, CausationId, ClientActionRecord,
+    CorrelationId, EffectDisposition, EventActor, EventId, EventLinksDraft, EventQuery,
+    EventSource, EventType, EvidenceCompleteness, FrameId, HolderId, IdentifierIssuanceError,
+    IdentifierIssuer, InstanceId, IssuedCausationId, IssuedCorrelationId, IssuedFrameId,
+    IssuedHolderId, IssuedRecognitionId, IssuedRequestId, IssuedRunId, IssuedTaskId, LeaseId,
+    OwnerEpoch, ProjectedArtifactReference, ProjectedEvent, ProjectionProfile, ProposalPreview,
+    ProposalPromotion, RecognitionId, RecognitionVerdict, RequestId, ResourceAuthoringPhase, RunId,
+    RuntimeMonitorInstanceStatus, RuntimeMonitorPolicy, RuntimeMonitorRegistryStatus,
+    SubscriptionCursor, TaskOutcome,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
@@ -1526,6 +1527,12 @@ pub enum RuntimeOperation {
     RecordAgentResponse {
         response: AgentSessionResponse,
     },
+    CompileProposal {
+        proposal: Box<CatalogProposal>,
+    },
+    PromoteProposal {
+        proposal: Box<CatalogProposal>,
+    },
 }
 
 impl RuntimeOperation {
@@ -1604,6 +1611,9 @@ impl RuntimeOperation {
             Self::RecordAgentResponse { response } => response
                 .validate()
                 .map_err(|_| RuntimeContractError::new("invalid_agent_response")),
+            Self::CompileProposal { proposal } | Self::PromoteProposal { proposal } => proposal
+                .validate()
+                .map_err(|_| RuntimeContractError::new("invalid_catalog_proposal")),
             Self::AcquireLease { instance_alias, .. }
             | Self::ObserveReadonly { instance_alias }
             | Self::SafeReset { instance_alias, .. }
@@ -1725,6 +1735,8 @@ impl fmt::Debug for RuntimeOperation {
             Self::RecordAgentResponse { .. } => {
                 "RuntimeOperation::RecordAgentResponse(<typed-response>)"
             }
+            Self::CompileProposal { .. } => "RuntimeOperation::CompileProposal(<typed-proposal>)",
+            Self::PromoteProposal { .. } => "RuntimeOperation::PromoteProposal(<typed-proposal>)",
         })
     }
 }
@@ -1804,6 +1816,8 @@ impl RuntimeRequest {
                 | RuntimeOperation::ResumeAgentSession { .. }
                 | RuntimeOperation::AgentSessionStatus { .. }
                 | RuntimeOperation::RecordAgentResponse { .. }
+                | RuntimeOperation::CompileProposal { .. }
+                | RuntimeOperation::PromoteProposal { .. }
         ) && (self.actor != EventActor::Agent || self.source != EventSource::Adapter)
         {
             return Err(RuntimeContractError::new("invalid_agent_dispatcher_origin"));
@@ -2153,6 +2167,12 @@ pub enum RuntimeResult {
     AgentResponseRecorded {
         status: AgentSessionStatus,
     },
+    ProposalEvaluated {
+        preview: ProposalPreview,
+    },
+    ProposalPromoted {
+        promotion: ProposalPromotion,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -2277,6 +2297,12 @@ impl RuntimeReceipt {
             Some(RuntimeResult::AgentResponseRecorded { status }) => status
                 .validate()
                 .map_err(|_| RuntimeContractError::new("invalid_agent_session_status"))?,
+            Some(RuntimeResult::ProposalEvaluated { preview }) => preview
+                .validate()
+                .map_err(|_| RuntimeContractError::new("invalid_proposal_preview"))?,
+            Some(RuntimeResult::ProposalPromoted { promotion }) => promotion
+                .validate()
+                .map_err(|_| RuntimeContractError::new("invalid_proposal_promotion"))?,
             _ => {}
         }
         Ok(())

@@ -9,10 +9,10 @@ use super::{
 use crate::{
     AgentAttentionState, AgentSessionEventData, AgentSessionId, AgentWakeData, AgentWakeId,
     AgentWakeKind, ApprovalDecisionRecord, ApprovalDisposition, ApprovalTarget, ApprovalTargetKind,
-    ClientActionKind, ClientActionRecord, FactInvalidationEventData, FactRecord, FactScope,
-    HolderId, InputAction, LeaseId, LeasePriority, MonitorDecision, MonitorDiagnosis,
-    MonitorDisposition, MonitorObservation, MonitorRecoveryCoordinationReason, MonitorRecoveryKind,
-    PerformanceContext, PerformanceControlEventData, PerformanceControlLevel,
+    CatalogPromotionAuthorization, ClientActionKind, ClientActionRecord, FactInvalidationEventData,
+    FactRecord, FactScope, HolderId, InputAction, LeaseId, LeasePriority, MonitorDecision,
+    MonitorDiagnosis, MonitorDisposition, MonitorObservation, MonitorRecoveryCoordinationReason,
+    MonitorRecoveryKind, PerformanceContext, PerformanceControlEventData, PerformanceControlLevel,
     PerformanceControlReason, PerformanceDeadlineDisposition, PerformanceMonitorHealth,
     PerformanceMonitorStateEventData, PerformancePressureEventData, PerformancePressureRecord,
     PerformanceStutterEventData, PerformanceSummaryEventData, ReleaseTransitionData,
@@ -844,6 +844,7 @@ pub struct CatalogTransitionEventData {
     pub catalog_version: u64,
     pub catalog_hash: String,
     pub previous_catalog_hash: Option<String>,
+    pub promotion: Option<CatalogPromotionAuthorization>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -859,6 +860,8 @@ pub struct CatalogTransitionPayload {
     catalog_hash: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     previous_catalog_hash: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    promotion: Option<CatalogPromotionAuthorization>,
     audit: SanitizedAudit,
 }
 
@@ -877,6 +880,10 @@ impl CatalogTransitionPayload {
 
     pub fn previous_catalog_hash(&self) -> Option<&str> {
         self.previous_catalog_hash.as_deref()
+    }
+
+    pub const fn promotion(&self) -> Option<&CatalogPromotionAuthorization> {
+        self.promotion.as_ref()
     }
 }
 
@@ -2685,6 +2692,7 @@ impl CatalogTransitionDraft {
             catalog_version: self.data.catalog_version,
             catalog_hash: self.data.catalog_hash,
             previous_catalog_hash: self.data.previous_catalog_hash,
+            promotion: self.data.promotion,
             audit: self.audit.sanitize(fingerprinter)?,
         })
     }
@@ -3253,6 +3261,9 @@ fn validate_catalog_transition_data(
             ));
         }
     }
+    if let Some(promotion) = &data.promotion {
+        promotion.validate()?;
+    }
     Ok(())
 }
 
@@ -3305,6 +3316,7 @@ fn validate_catalog_payload(payload: &CatalogPayload) -> Result<(), Sanitization
         catalog_version: value.catalog_version,
         catalog_hash: value.catalog_hash.clone(),
         previous_catalog_hash: value.previous_catalog_hash.clone(),
+        promotion: value.promotion.clone(),
     })
 }
 

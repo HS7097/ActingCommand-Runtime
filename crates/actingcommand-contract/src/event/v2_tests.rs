@@ -189,6 +189,7 @@ fn all_payload_drafts(mut input: impl FnMut() -> AuditInput) -> Vec<EventPayload
         catalog_version: 2,
         catalog_hash: format!("sha256:{}", "c".repeat(64)),
         previous_catalog_hash: Some(format!("sha256:{}", "b".repeat(64))),
+        promotion: None,
     };
     let migration = StateMigrationData::new(
         format!("migration:{}", "d".repeat(64)),
