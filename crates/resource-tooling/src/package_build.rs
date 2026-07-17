@@ -130,6 +130,14 @@ impl PreparedPackageBuildTask {
         &self.resource_root
     }
 
+    pub fn game(&self) -> &str {
+        &self.converter.game
+    }
+
+    pub fn server(&self) -> &str {
+        &self.converter.server
+    }
+
     pub fn required_environment_keys(&self) -> CliOutcome<Vec<String>> {
         let mut keys = generated_output_environment_keys(&self.outputs)?;
         keys.extend(selected_operation_environment_keys(
@@ -268,7 +276,7 @@ impl PackageBuildCatalog {
             .collect()
     }
 
-    pub fn default_entry_task(&self) -> String {
+    pub fn default_entry_task(&self) -> CliOutcome<String> {
         default_entry_task(&self.converter)
     }
 
@@ -473,25 +481,19 @@ fn find_bundle<'a>(converter: &'a OperationConverter, task_id: &str) -> CliOutco
         })
 }
 
-fn default_entry_task(converter: &OperationConverter) -> String {
+fn default_entry_task(converter: &OperationConverter) -> CliOutcome<String> {
     if converter
         .bundles
         .iter()
         .any(|bundle| bundle.task_id == "return_home")
     {
-        "return_home".to_string()
+        Ok("return_home".to_string())
     } else {
         converter
             .bundles
             .first()
             .map(|bundle| bundle.task_id.clone())
-            .unwrap_or_else(|| {
-                format!(
-                    "{}.{}",
-                    converter.game,
-                    default_server_for_game(&converter.game)
-                )
-            })
+            .ok_or_else(|| CliError::package_invalid("package catalog has no operation bundles"))
     }
 }
 
@@ -3091,14 +3093,6 @@ fn validate_capture_backend(value: &str) -> CliOutcome<()> {
     }
 }
 
-fn default_server_for_game(game: &str) -> &'static str {
-    match game {
-        "arknights" => "cn",
-        "azurlane" | "bluearchive" => "jp",
-        _ => "jp",
-    }
-}
-
 fn hex_sha256(bytes: &[u8]) -> String {
     format!("{:x}", Sha256::digest(bytes))
 }
@@ -3834,6 +3828,7 @@ mod tests {
                 "task_id": "operator_task",
                 "game": "arknights",
                 "server_scope": ["cn"],
+                "locale": "zh-CN",
                 "goal": "fixture",
                 "coordinate_space": {"width": 1280, "height": 720},
                 "defaults": {"template_threshold": 0.9, "color_max_distance": 20.0},
@@ -3860,6 +3855,7 @@ mod tests {
                 "task_id": "return_home",
                 "game": "arknights",
                 "server_scope": ["cn"],
+                "locale": "zh-CN",
                 "goal": "fixture",
                 "coordinate_space": {"width": 1280, "height": 720},
                 "defaults": {"template_threshold": 0.9, "color_max_distance": 20.0},
@@ -3919,6 +3915,7 @@ mod tests {
                 "task_id": "recruit_task",
                 "game": "arknights",
                 "server_scope": ["cn"],
+                "locale": "zh-CN",
                 "goal": "fixture",
                 "coordinate_space": {"width": 1280, "height": 720},
                 "defaults": {"template_threshold": 0.9, "color_max_distance": 20.0},

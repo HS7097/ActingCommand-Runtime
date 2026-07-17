@@ -266,6 +266,7 @@ version = "0.1.0"
 dependencies = [
  "actingcommand-contract",
  "actingcommand-pack-containment",
+ "actingcommand-policy",
  "actingcommand-recognition-pack",
  "serde",
  "serde_json",

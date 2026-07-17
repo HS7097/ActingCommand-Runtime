@@ -519,6 +519,14 @@ pub fn parse_environment_catalog_value(
 }
 
 pub fn canonical_environment_game(value: &str) -> EnvironmentCatalogResult<String> {
+    canonical_environment_selector("game", value)
+}
+
+pub fn canonical_environment_server(value: &str) -> EnvironmentCatalogResult<String> {
+    canonical_environment_selector("server", value)
+}
+
+fn canonical_environment_selector(label: &str, value: &str) -> EnvironmentCatalogResult<String> {
     let selector = value.trim().to_ascii_lowercase();
     if selector.is_empty()
         || selector.len() > 128
@@ -527,14 +535,10 @@ pub fn canonical_environment_game(value: &str) -> EnvironmentCatalogResult<Strin
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
     {
         return Err(EnvironmentCatalogError::new(format!(
-            "invalid environment game selector: {value}"
+            "invalid environment {label} selector: {value}"
         )));
     }
     Ok(selector)
-}
-
-pub fn default_environment_server(_game: &str) -> &'static str {
-    "default"
 }
 
 #[derive(Debug, Deserialize)]
@@ -1671,7 +1675,10 @@ mod tests {
             canonical_environment_game(" Fixture-Game ").expect("selector"),
             "fixture-game"
         );
-        assert_eq!(default_environment_server("fixture-game"), "default");
+        assert_eq!(
+            canonical_environment_server(" Fixture-Server ").expect("server selector"),
+            "fixture-server"
+        );
         assert!(canonical_environment_game("fixture/game").is_err());
         assert!(canonical_environment_game(" ").is_err());
     }

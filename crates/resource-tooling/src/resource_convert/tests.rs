@@ -435,6 +435,7 @@ fn write_synthetic_maa_convert_fixture() -> (tempfile::TempDir, PathBuf) {
             "task_id": "synthetic-maa",
             "game": "arknights",
             "server_scope": ["cn"],
+            "locale": "zh-CN",
             "coordinate_space": {"width":1280,"height":720},
             "defaults": {"template_threshold":0.5},
             "anchors": [{
@@ -1314,8 +1315,12 @@ fn build_primitives_allows_explicit_trusted_unguarded_coordinate() {
 }
 
 #[test]
-fn arknights_default_locale_matches_current_resource_pack() {
-    assert_eq!(default_locale("arknights"), "zh-CN");
-    assert_eq!(default_locale("bluearchive"), "ja-JP");
-    assert_eq!(default_locale("azurlane"), "ja-JP");
+fn resource_selectors_are_generic_and_path_safe() {
+    assert_eq!(
+        canonical_game(" Fixture-Game.4 ").unwrap(),
+        "fixture-game.4"
+    );
+    assert_eq!(canonical_server(" Test_Shard ").unwrap(), "test_shard");
+    assert!(canonical_game("fixture/game").is_err());
+    assert!(canonical_server(" ").is_err());
 }

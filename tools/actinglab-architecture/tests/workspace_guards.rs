@@ -6,10 +6,10 @@ use std::process::Command;
 
 use actingcommand_actinglab_architecture::{
     contract_dependency_violations, extract_command_inventory, inspect_contract_fact_matching,
-    inspect_generic_runtime_identity, inspect_global_append_ingress, inspect_lab_source,
-    inspect_persisted_event_ownership, inspect_producer_event_capabilities, inspect_public_api,
-    lab_removability_violations, ledger_owns_query_matching,
-    resource_tooling_removability_violations, validate_line_ratchet,
+    inspect_generic_authoring_identity, inspect_generic_runtime_identity,
+    inspect_global_append_ingress, inspect_lab_source, inspect_persisted_event_ownership,
+    inspect_producer_event_capabilities, inspect_public_api, lab_removability_violations,
+    ledger_owns_query_matching, resource_tooling_removability_violations, validate_line_ratchet,
     workspace_dependency_violations,
 };
 use sha2::{Digest, Sha256};
@@ -169,6 +169,46 @@ fn c2_runtime_code_contracts_defaults_and_fixtures_are_project_neutral() {
     assert!(
         violations.is_empty(),
         "C2 generic Runtime boundary violations:\n{}",
+        violations.join("\n")
+    );
+}
+
+#[test]
+fn r2f_product_and_authoring_paths_have_no_builtin_game_identity() {
+    let root = workspace_root();
+    let owned_roots = [
+        "apps/actinglab/src",
+        "apps/device-test/src",
+        "crates/lab/src",
+        "crates/resource-tooling/src",
+    ];
+    let mut files = Vec::new();
+    for owned_root in owned_roots {
+        collect_rust_files(&root.join(owned_root), &mut files);
+    }
+
+    let mut violations = Vec::new();
+    for path in files {
+        if path.file_name().is_some_and(|name| name == "tests.rs")
+            || path
+                .components()
+                .any(|component| component.as_os_str() == "tests")
+        {
+            continue;
+        }
+        let source = fs::read_to_string(&path)
+            .unwrap_or_else(|error| panic!("read {}: {error}", path.display()));
+        let display = path
+            .strip_prefix(&root)
+            .unwrap_or(&path)
+            .display()
+            .to_string();
+        violations.extend(inspect_generic_authoring_identity(&display, &source).unwrap());
+    }
+
+    assert!(
+        violations.is_empty(),
+        "R2-F generic authoring boundary violations:\n{}",
         violations.join("\n")
     );
 }
