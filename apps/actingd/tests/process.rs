@@ -2,15 +2,28 @@
 
 use actingcommand_contract::{
     AgentPayload, AgentSessionId, ApplicationLifecycleAction, EventActor, EventPayload, EventQuery,
-    EventSource, EventType, IdentifierIssuer, InstanceId, PolicyPlanningSignalEventData,
-    PolicyPlanningSignalKind, ProjectionPayload, ProjectionProfile, RUNTIME_INFO_FILE, RuntimeInfo,
-    RuntimeOperation, RuntimeReceipt, RuntimeReceiptState, RuntimeRequest, RuntimeResult,
+    EventSource, EventType, FactScope, IdentifierIssuer, InstanceId, PolicyPlanningSignalEventData,
+    PolicyPlanningSignalKind, ProjectedArtifactReference, ProjectionPayload, ProjectionProfile,
+    RUNTIME_INFO_FILE, RuntimeInfo, RuntimeOperation, RuntimeReceipt, RuntimeReceiptState,
+    RuntimeRequest, RuntimeResult,
 };
-use actingcommand_device::{CaptureBackend, DeviceError, DeviceResult, InputBackend};
-use actingcommand_runtime_client::{RuntimeClient, RuntimeClientConfig};
+use actingcommand_device::{
+    CaptureBackend, CaptureBackendName, DeviceError, DeviceResult, Frame, InputBackend, PixelFormat,
+};
+use actingcommand_policy::{
+    CatalogDocumentSource, CatalogSources, CohortBudgets, Comparison, EvaluationFacts,
+    EvaluationResources, EvaluationTime, FactValue, ForwardProjectionConfig, HostResourceSnapshot,
+    InstanceSnapshot, LoadProfile, MaintenanceDisposition, MaintenanceTrendPolicy, MetricRef,
+    OutlierMetric, OutlierPolicy, PoolValueSnapshot, PredicateSpec, ScopeSelector, StrategicBand,
+    StrategicEvidencePointer, StrategicGoal, StrategicInstanceAssessment, StrategicReport,
+    StrategicTemplate,
+};
+use actingcommand_runtime_client::{
+    PredictiveMaintenanceRequest, RuntimeClient, RuntimeClientConfig,
+};
 use actingcommand_runtime_host::{
-    AgentDispatcherConfig, ExecutionBackendProvider, ResolvedExecutionInstance, RuntimeHost,
-    RuntimeHostConfig,
+    AgentDispatcherConfig, CatalogGeneration, ExecutionBackendProvider, ResolvedExecutionInstance,
+    RuntimeHost, RuntimeHostConfig,
 };
 use serde_json::json;
 use std::fs;
@@ -25,6 +38,7 @@ use tempfile::TempDir;
 
 const INSTANCE_ALIAS: &str = "node.a";
 const PROCESS_TEST_SALT: &str = "actingd-process-test-salt";
+const POLICY_NOW_UNIX_MS: u64 = 1_699_963_200_000;
 
 struct ChildGuard(Child);
 
@@ -148,6 +162,66 @@ fn actingd_dispatcher_recovers_fake_backend_wake_and_replays_resume() {
 }
 
 #[test]
+fn actingd_exposes_typed_planning_capabilities_to_a_separate_client_process() {
+    let root = TempDir::new().expect("tempdir");
+    let config_path = root.path().join("actingd.json");
+    let instance_id = instance_id();
+    let (base, evidence, evidence_sequence) = seed_planning_state(root.path(), instance_id);
+    let report = strategic_report(&base, &evidence, evidence_sequence);
+    write_config(&config_path, root.path(), instance_id, false);
+
+    let child = start_actingd(&config_path);
+    let mut child = ChildGuard(child);
+    wait_for_runtime_info(&mut child.0, root.path());
+    let client = connect_agent(root.path());
+
+    let plan = client
+        .prepare_strategic_report(&report, vec![evidence])
+        .expect("prepare strategic report through daemon IPC");
+    assert_eq!(plan.projection().catalog_version, base.catalog_version());
+    assert_eq!(plan.projection().instances.len(), 1);
+
+    let forward = client
+        .project_policy_forward(
+            &policy_facts(),
+            &policy_resources(),
+            EvaluationTime {
+                unix_ms: POLICY_NOW_UNIX_MS,
+                monotonic_ms: POLICY_NOW_UNIX_MS,
+            },
+            17,
+            ForwardProjectionConfig::for_hours(1, 32).expect("forward config"),
+        )
+        .expect("project policy through daemon IPC");
+    assert_eq!(forward.catalog_version, base.catalog_version());
+
+    let maintenance = client
+        .assess_predictive_maintenance(
+            PredictiveMaintenanceRequest::new(
+                INSTANCE_ALIAS,
+                "fixture.observe",
+                FactScope::Instance {
+                    instance_id: INSTANCE_ALIAS.to_owned(),
+                },
+                "resource.primary",
+                POLICY_NOW_UNIX_MS,
+                MaintenanceTrendPolicy::default(),
+            )
+            .expect("maintenance request"),
+        )
+        .expect("assess maintenance through daemon IPC");
+    assert_eq!(
+        maintenance.disposition,
+        MaintenanceDisposition::EvidenceInsufficient
+    );
+    assert!(child.0.try_wait().expect("process state").is_none());
+
+    drop(client);
+    child.0.kill().expect("kill actingd");
+    child.0.wait().expect("wait actingd");
+}
+
+#[test]
 fn invalid_startup_returns_nonzero() {
     let output = Command::new(env!("CARGO_BIN_EXE_actingcommand-actingd"))
         .args(["--config", "missing-actingd-config.json"])
@@ -254,6 +328,215 @@ fn seed_agent_wake(state_root: &Path, instance_id: InstanceId) {
     host.close().expect("close seed runtime host");
 }
 
+fn seed_planning_state(
+    state_root: &Path,
+    instance_id: InstanceId,
+) -> (CatalogGeneration, ProjectedArtifactReference, u64) {
+    let host = RuntimeHost::start(
+        RuntimeHostConfig::new(state_root, PROCESS_TEST_SALT.as_bytes()),
+        Arc::new(PlanningSeedProvider { instance_id }),
+    )
+    .expect("seed planning runtime host");
+    let base = host
+        .activate_policy_catalog(&strategy_policy_sources(1))
+        .expect("activate planning catalog");
+    let client = connect(state_root);
+    let observation = client
+        .observe_readonly(INSTANCE_ALIAS)
+        .expect("seed verified planning evidence");
+    let evidence = match observation.receipt().result() {
+        Some(RuntimeResult::ReadonlyObservationCompleted { observation }) => {
+            observation.artifact().clone()
+        }
+        _ => panic!("expected readonly observation"),
+    };
+    let evidence_sequence = client
+        .query_events(
+            EventQuery {
+                event_type: Some(EventType::ArtifactVerified),
+                ..EventQuery::default()
+            },
+            ProjectionProfile::Forensic,
+        )
+        .expect("query verified planning evidence")
+        .into_iter()
+        .find(|event| event.artifacts.iter().any(|artifact| artifact == &evidence))
+        .expect("verified planning evidence event")
+        .sequence;
+    drop(client);
+    host.close().expect("close planning seed runtime");
+    (base, evidence, evidence_sequence)
+}
+
+fn policy_sources(version: u64) -> CatalogSources {
+    let mut sources = CatalogSources {
+        tasks: CatalogDocumentSource::new(
+            "memory://process/tasks.json",
+            include_bytes!("../../../contracts/scheduling/examples/catalog-a/tasks.json").to_vec(),
+        ),
+        pools: CatalogDocumentSource::new(
+            "memory://process/pools.json",
+            include_bytes!("../../../contracts/scheduling/examples/catalog-a/pools.json").to_vec(),
+        ),
+        activity: CatalogDocumentSource::new(
+            "memory://process/activity.json",
+            include_bytes!("../../../contracts/scheduling/examples/catalog-a/activity.json")
+                .to_vec(),
+        ),
+        timeline: CatalogDocumentSource::new(
+            "memory://process/timeline.json",
+            include_bytes!("../../../contracts/scheduling/examples/catalog-a/timeline.json")
+                .to_vec(),
+        ),
+    };
+    for source in [
+        &mut sources.tasks,
+        &mut sources.pools,
+        &mut sources.activity,
+        &mut sources.timeline,
+    ] {
+        let mut document: serde_json::Value =
+            serde_json::from_slice(&source.bytes).expect("policy fixture JSON");
+        document["catalog"]["catalog_version"] = serde_json::json!(version);
+        source.bytes = serde_json::to_vec_pretty(&document).expect("policy fixture bytes");
+    }
+    sources
+}
+
+fn strategy_policy_sources(version: u64) -> CatalogSources {
+    let mut sources = policy_sources(version);
+    let game_scope = serde_json::json!({"kind": "game", "game_id": "fixture-game-a"});
+    let mut tasks: serde_json::Value =
+        serde_json::from_slice(&sources.tasks.bytes).expect("strategy task fixture");
+    tasks["tasks"][0]["scope"] = game_scope.clone();
+    tasks["tasks"][0]["trigger"]["predicates"][1]["scope"] = game_scope.clone();
+    sources.tasks.bytes = serde_json::to_vec_pretty(&tasks).expect("strategy task bytes");
+    let mut pools: serde_json::Value =
+        serde_json::from_slice(&sources.pools.bytes).expect("strategy pool fixture");
+    pools["pools"][0]["scope"] = game_scope;
+    sources.pools.bytes = serde_json::to_vec_pretty(&pools).expect("strategy pool bytes");
+    sources
+}
+
+fn strategic_report(
+    base: &CatalogGeneration,
+    evidence: &ProjectedArtifactReference,
+    as_of_ledger_position: u64,
+) -> StrategicReport {
+    let artifact_id = serde_json::to_value(evidence.artifact_id)
+        .expect("artifact id JSON")
+        .as_str()
+        .expect("artifact id string")
+        .to_owned();
+    StrategicReport::new(
+        "fixture-game-a",
+        base.catalog_hash(),
+        base.catalog_version(),
+        base.catalog_version() + 1,
+        as_of_ledger_position,
+        POLICY_NOW_UNIX_MS,
+        format!("sha256:{}", "d".repeat(64)),
+        format!("sha256:{}", "e".repeat(64)),
+        vec![StrategicEvidencePointer {
+            artifact_id,
+            sha256: evidence.sha256.clone(),
+        }],
+        vec![StrategicGoal {
+            goal_id: "goal.primary".to_owned(),
+            goal_version: 1,
+            metric: MetricRef::Fact {
+                fact_key: "resource.primary".to_owned(),
+            },
+            templates: vec![StrategicTemplate {
+                template_id: "template.primary".to_owned(),
+                task_template_ids: vec!["fixture.observe".to_owned()],
+                activity_profile_template_id: "fixture-activity-game".to_owned(),
+                eligibility: PredicateSpec::Fact {
+                    scope: ScopeSelector::Game {
+                        game_id: "fixture-game-a".to_owned(),
+                    },
+                    fact_key: "feature.enabled".to_owned(),
+                    comparison: Comparison::Eq,
+                    value: FactValue::Boolean(true),
+                    max_age_ms: Some(60_000),
+                },
+                match_bands: vec![StrategicBand::Actionable],
+                minimum_urgency_milli: 0,
+                maximum_urgency_milli: 1_000_000,
+                strategic_weight_milli: 500,
+                load_profile: LoadProfile::Weighted {
+                    cpu_milli: 200,
+                    gpu_milli: 100,
+                    io_milli: 300,
+                },
+                risk_class: "standard".to_owned(),
+                budget_class: "bounded".to_owned(),
+            }],
+            outlier_policy: OutlierPolicy {
+                metric: OutlierMetric::Shortfall,
+                mad_multiplier_milli: 2_000,
+                top_n: 1,
+            },
+        }],
+        vec![StrategicInstanceAssessment {
+            goal_id: "goal.primary".to_owned(),
+            instance_id: INSTANCE_ALIAS.to_owned(),
+            game_id: "fixture-game-a".to_owned(),
+            fact_snapshot_id: "snapshot:strategy-a".to_owned(),
+            current_projection: Some(50),
+            production_rate_per_hour: Some(100),
+            target: 100,
+            deadline_unix_ms: POLICY_NOW_UNIX_MS + 3_600_000,
+            available: true,
+            capability_ids: vec!["operation.observe".to_owned()],
+        }],
+        CohortBudgets {
+            max_active: 1,
+            max_prompt: 1,
+        },
+    )
+    .expect("strategic report")
+}
+
+fn policy_facts() -> EvaluationFacts {
+    EvaluationFacts {
+        ledger_position: 1,
+        fact_snapshot_id: "snapshot:process-a".to_owned(),
+        facts: Vec::new(),
+        outcomes: Vec::new(),
+        tasks: Vec::new(),
+        instances: vec![InstanceSnapshot {
+            instance_id: INSTANCE_ALIAS.to_owned(),
+            server_id: "fixture-server-a".to_owned(),
+            game_id: "fixture-game-a".to_owned(),
+            host_id: "fixture-host-a".to_owned(),
+            available: true,
+            capability_operation_ids: vec!["operation.observe".to_owned()],
+            preferred_task_ids: Vec::new(),
+        }],
+    }
+}
+
+fn policy_resources() -> EvaluationResources {
+    EvaluationResources {
+        pools: vec![PoolValueSnapshot {
+            pool_id: "fixture-pool-a".to_owned(),
+            value: 10,
+            observed_at_unix_ms: POLICY_NOW_UNIX_MS,
+        }],
+        hosts: vec![HostResourceSnapshot {
+            host_id: "fixture-host-a".to_owned(),
+            cpu_available_milli: 1_000,
+            gpu_available_milli: 1_000,
+            io_available_milli: 1_000,
+            host_responsiveness_basis_points: 10_000,
+            third_party_pressure_basis_points: 0,
+            heavy_dispatch_limit: 1,
+            active_heavy_dispatches: 0,
+        }],
+    }
+}
+
 fn instance_id() -> InstanceId {
     *IdentifierIssuer::new()
         .expect("identifier issuer")
@@ -327,6 +610,53 @@ fn unix_ms_now() -> u64 {
 
 struct FakeProvider {
     instance_id: InstanceId,
+}
+
+struct PlanningSeedProvider {
+    instance_id: InstanceId,
+}
+
+struct PlanningSeedCapture;
+
+impl CaptureBackend for PlanningSeedCapture {
+    fn capture(&mut self) -> DeviceResult<Frame> {
+        Frame::from_pixels(
+            2,
+            1,
+            vec![255, 0, 0, 0, 255, 0],
+            PixelFormat::Rgb8,
+            CaptureBackendName::AdbScreencap,
+        )
+    }
+}
+
+impl ExecutionBackendProvider for PlanningSeedProvider {
+    fn instance_aliases(&self) -> Vec<String> {
+        vec![INSTANCE_ALIAS.to_owned()]
+    }
+
+    fn resolve(&self, instance_alias: &str) -> Option<ResolvedExecutionInstance> {
+        (instance_alias == INSTANCE_ALIAS)
+            .then(|| ResolvedExecutionInstance::new(self.instance_id, "local-planning-seed"))
+    }
+
+    fn open_input(&self, _instance_alias: &str) -> DeviceResult<Box<dyn InputBackend>> {
+        Err(DeviceError::fatal("planning seed opened input backend"))
+    }
+
+    fn open_capture(&self, _instance_alias: &str) -> DeviceResult<Box<dyn CaptureBackend>> {
+        Ok(Box::new(PlanningSeedCapture))
+    }
+
+    fn control_application(
+        &self,
+        _instance_alias: &str,
+        _action: ApplicationLifecycleAction,
+    ) -> DeviceResult<()> {
+        Err(DeviceError::fatal(
+            "planning seed controlled application backend",
+        ))
+    }
 }
 
 impl ExecutionBackendProvider for FakeProvider {
