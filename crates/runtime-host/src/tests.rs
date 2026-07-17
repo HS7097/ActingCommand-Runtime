@@ -8,31 +8,35 @@ use actingcommand_artifact_store::read_projected_verified;
 use actingcommand_contract::{
     AgentAttentionState, AgentPayload, AgentResponseDisposition, AgentSessionId,
     AgentSessionResponse, AgentWakeKind, ApplicationLifecycleAction, ApprovalDecisionRecord,
-    ApprovalDisposition, ApprovalTarget, CaptureSequenceSpec, CatalogDeclarationPatch,
-    CatalogPayload, CatalogProposal, ClientActionKind, ClientActionRecord, ClientActionValue,
-    ContainedTaskRequest, EffectDisposition, EventActor, EventPayload, EventQuery, EventSource,
-    EventType, FactContent, FactRecord, FactScope, FactValue as ContractFactValue,
-    IdentifierIssuer, InputAction, InstanceFactContext, InstanceId, IssuedCorrelationId,
-    LeasePriority, LeaseQueuePolicy, LeaseQueueStatus, LeaseToken, MonitorDiagnosis,
-    MonitorDisposition, MonitorObservation, MonitorPayload, MonitorRecoveryCoordinationReason,
-    MonitorRecoveryKind, OriginModule, PerformanceControlLevel, PerformanceMonitorHealth,
-    PolicyExecutionOutcome, PolicyFailureClass, PolicyFailureDisposition, PolicyPayload,
-    PolicyPlanningSignalEventData, PolicyPlanningSignalKind, ProjectedArtifactReference,
-    ProjectionPayload, ProjectionProfile, ProposalClass, ProposalDisposition, ProposalDocument,
-    ProposalKind, ProposalPatchOperation, PublicEventPayload, RUNTIME_INFO_FILE, ReleasePayload,
-    ReleaseResourceVersion, ReleaseTransitionKind, ResourceAuthoringEvent, ResourceAuthoringPhase,
-    RuntimeCaptureBackend, RuntimeErrorCode, RuntimeMonitorPolicy, RuntimeOperation,
-    RuntimeReceipt, RuntimeReceiptState, RuntimeReleaseSet, RuntimeRequest, RuntimeResult,
-    StatePayload, StateRecoveryAction, StateValidationResult, TaskOutcome, TaskPayload,
-    TaskSemanticFact, TaskTemplateInstantiation, TerminalEvent,
+    ApprovalDisposition, ApprovalTarget, ArtifactKind, CaptureSequenceSpec,
+    CatalogDeclarationPatch, CatalogPayload, CatalogProposal, ClientActionKind, ClientActionRecord,
+    ClientActionValue, ContainedTaskRequest, EffectDisposition, EventActor, EventPayload,
+    EventQuery, EventSource, EventType, FactContent, FactRecord, FactScope,
+    FactValue as ContractFactValue, IdentifierIssuer, InputAction, InstanceFactContext, InstanceId,
+    IssuedCorrelationId, LeasePriority, LeaseQueuePolicy, LeaseQueueStatus, LeaseToken,
+    MonitorDiagnosis, MonitorDisposition, MonitorObservation, MonitorPayload,
+    MonitorRecoveryCoordinationReason, MonitorRecoveryKind, OriginModule, PerformanceControlLevel,
+    PerformanceMonitorHealth, PolicyExecutionOutcome, PolicyFailureClass, PolicyFailureDisposition,
+    PolicyPayload, PolicyPlanningSignalEventData, PolicyPlanningSignalKind,
+    ProjectedArtifactReference, ProjectionPayload, ProjectionProfile, ProposalClass,
+    ProposalDisposition, ProposalDocument, ProposalKind, ProposalPatchOperation,
+    PublicEventPayload, RUNTIME_INFO_FILE, ReleasePayload, ReleaseResourceVersion,
+    ReleaseTransitionKind, ResourceAuthoringEvent, ResourceAuthoringPhase, RuntimeCaptureBackend,
+    RuntimeErrorCode, RuntimeMonitorPolicy, RuntimeOperation, RuntimeReceipt, RuntimeReceiptState,
+    RuntimeReleaseSet, RuntimeRequest, RuntimeResult, StatePayload, StateRecoveryAction,
+    StateValidationResult, TaskOutcome, TaskPayload, TaskSemanticFact, TaskTemplateInstantiation,
+    TerminalEvent,
 };
 use actingcommand_device::{
     CaptureBackend, CaptureBackendName, DeviceError, DeviceResult, Frame, InputBackend, PixelFormat,
 };
 use actingcommand_policy::{
-    CatalogDocumentSource, CatalogSources, DecisionReasonChain, DispatchIntent, EvaluationFacts,
-    EvaluationResources, EvaluationTime, FactValue, HostResourceSnapshot, InstanceSnapshot,
-    ObservedOutcome, PoolValueSnapshot,
+    CatalogDocumentSource, CatalogSources, CohortBudgets, Comparison, DecisionReasonChain,
+    DispatchIntent, EvaluationFacts, EvaluationResources, EvaluationTime, FactValue,
+    HostResourceSnapshot, InstanceSnapshot, LoadProfile, MetricRef, ObservedOutcome, OutlierMetric,
+    OutlierPolicy, PoolValueSnapshot, PredicateSpec, ScopeSelector, StrategicBand,
+    StrategicEvidencePointer, StrategicGoal, StrategicInstanceAssessment, StrategicReport,
+    StrategicTemplate,
 };
 use actingcommand_runtime_state::{
     RUNTIME_STATE_DATABASE_FILE, RUNTIME_STATE_INTEGRITY_KEY_FILE, RuntimeStateStore,
@@ -606,6 +610,118 @@ fn policy_sources(version: u64) -> CatalogSources {
     sources
 }
 
+fn strategy_policy_sources(version: u64) -> CatalogSources {
+    let mut sources = policy_sources(version);
+    let game_scope = serde_json::json!({"kind": "game", "game_id": "fixture-game-a"});
+    let mut tasks: serde_json::Value =
+        serde_json::from_slice(&sources.tasks.bytes).expect("strategy task fixture");
+    tasks["tasks"][0]["scope"] = game_scope.clone();
+    tasks["tasks"][0]["trigger"]["predicates"][1]["scope"] = game_scope.clone();
+    sources.tasks.bytes = serde_json::to_vec_pretty(&tasks).expect("strategy task bytes");
+    let mut pools: serde_json::Value =
+        serde_json::from_slice(&sources.pools.bytes).expect("strategy pool fixture");
+    pools["pools"][0]["scope"] = game_scope;
+    sources.pools.bytes = serde_json::to_vec_pretty(&pools).expect("strategy pool bytes");
+    sources
+}
+
+fn strategy_report(
+    base: &CatalogGeneration,
+    evidence: &ProjectedArtifactReference,
+    as_of_ledger_position: u64,
+) -> StrategicReport {
+    let artifact_id = serde_json::to_value(evidence.artifact_id)
+        .expect("artifact id JSON")
+        .as_str()
+        .expect("artifact id string")
+        .to_owned();
+    StrategicReport::new(
+        "fixture-game-a",
+        base.catalog_hash(),
+        base.catalog_version(),
+        base.catalog_version() + 1,
+        as_of_ledger_position,
+        POLICY_NOW_UNIX_MS,
+        format!("sha256:{}", "d".repeat(64)),
+        format!("sha256:{}", "e".repeat(64)),
+        vec![StrategicEvidencePointer {
+            artifact_id,
+            sha256: evidence.sha256.clone(),
+        }],
+        vec![StrategicGoal {
+            goal_id: "goal.primary".to_owned(),
+            goal_version: 1,
+            metric: MetricRef::Fact {
+                fact_key: "resource.primary".to_owned(),
+            },
+            templates: vec![StrategicTemplate {
+                template_id: "template.primary".to_owned(),
+                task_template_ids: vec!["fixture.observe".to_owned()],
+                activity_profile_template_id: "fixture-activity-game".to_owned(),
+                eligibility: PredicateSpec::Fact {
+                    scope: ScopeSelector::Game {
+                        game_id: "fixture-game-a".to_owned(),
+                    },
+                    fact_key: "feature.enabled".to_owned(),
+                    comparison: Comparison::Eq,
+                    value: FactValue::Boolean(true),
+                    max_age_ms: Some(60_000),
+                },
+                match_bands: vec![
+                    StrategicBand::Actionable,
+                    StrategicBand::InfeasibleBestEffort,
+                ],
+                minimum_urgency_milli: 0,
+                maximum_urgency_milli: 1_000_000,
+                strategic_weight_milli: 500,
+                load_profile: LoadProfile::Weighted {
+                    cpu_milli: 200,
+                    gpu_milli: 100,
+                    io_milli: 300,
+                },
+                risk_class: "standard".to_owned(),
+                budget_class: "bounded".to_owned(),
+            }],
+            outlier_policy: OutlierPolicy {
+                metric: OutlierMetric::Shortfall,
+                mad_multiplier_milli: 2_000,
+                top_n: 1,
+            },
+        }],
+        vec![
+            StrategicInstanceAssessment {
+                goal_id: "goal.primary".to_owned(),
+                instance_id: "fixture-instance-a".to_owned(),
+                game_id: "fixture-game-a".to_owned(),
+                fact_snapshot_id: "snapshot:strategy-a".to_owned(),
+                current_projection: Some(50),
+                production_rate_per_hour: Some(100),
+                target: 100,
+                deadline_unix_ms: POLICY_NOW_UNIX_MS + 3_600_000,
+                available: true,
+                capability_ids: vec!["operation.observe".to_owned()],
+            },
+            StrategicInstanceAssessment {
+                goal_id: "goal.primary".to_owned(),
+                instance_id: "fixture-instance-b".to_owned(),
+                game_id: "fixture-game-a".to_owned(),
+                fact_snapshot_id: "snapshot:strategy-b".to_owned(),
+                current_projection: Some(0),
+                production_rate_per_hour: Some(10),
+                target: 100,
+                deadline_unix_ms: POLICY_NOW_UNIX_MS + 3_600_000,
+                available: true,
+                capability_ids: vec!["operation.observe".to_owned()],
+            },
+        ],
+        CohortBudgets {
+            max_active: 2,
+            max_prompt: 1,
+        },
+    )
+    .expect("strategic report")
+}
+
 fn evaluated_policy_dispatch(
     host: &RuntimeHost,
     trigger: PolicyTrigger,
@@ -732,6 +848,21 @@ fn unverified_report(
         artifact_id
     ));
     reference
+}
+
+fn verified_artifact_sequence(host: &RuntimeHost, reference: &ProjectedArtifactReference) -> u64 {
+    let mut client = TestClient::connect(host);
+    projected_events(
+        &mut client,
+        EventQuery {
+            event_type: Some(EventType::ArtifactVerified),
+            ..EventQuery::default()
+        },
+    )
+    .into_iter()
+    .find(|event| event.artifacts.iter().any(|artifact| artifact == reference))
+    .expect("artifact verification event")
+    .sequence
 }
 
 fn policy_facts() -> EvaluationFacts {
@@ -5777,6 +5908,201 @@ fn proposal_rejects_unverified_reports_and_invalid_packs_without_partial_activat
         )
         .len(),
         1
+    );
+    drop(client);
+    host.close().expect("close runtime");
+}
+
+#[test]
+fn strategic_report_is_local_deterministic_and_promotes_only_after_approval() {
+    let root = TempDir::new().expect("tempdir");
+    let fake_state = Arc::new(FakeState::default());
+    let host = RuntimeHost::start(
+        config(&root),
+        Arc::new(FakeProvider::one(
+            POLICY_INSTANCE_ALIAS,
+            instance_id(),
+            Arc::clone(&fake_state),
+        )),
+    )
+    .expect("runtime host");
+    let base = host
+        .activate_policy_catalog(&strategy_policy_sources(1))
+        .expect("strategy base catalog");
+    let evidence = host
+        .store_test_report(b"synthetic pinned strategy evidence")
+        .expect("strategy evidence");
+    let report = strategy_report(
+        &base,
+        &evidence,
+        verified_artifact_sequence(&host, &evidence),
+    );
+
+    let first = host
+        .prepare_strategic_report(&report, std::slice::from_ref(&evidence))
+        .expect("first strategy preparation");
+    let second = host
+        .prepare_strategic_report(&report, std::slice::from_ref(&evidence))
+        .expect("replayed strategy preparation");
+    assert_eq!(first, second);
+    assert_eq!(first.report().kind(), ArtifactKind::StrategyReport);
+    assert_eq!(first.projection().instances.len(), 2);
+    assert!(first.projection().instances.iter().any(|projection| {
+        projection.band == StrategicBand::InfeasibleBestEffort
+            && projection.planning_disposition
+                == actingcommand_policy::PlanningDisposition::ExecutionContinues
+    }));
+    assert_eq!(first.projection().additions.tasks.len(), 2);
+    assert_eq!(first.projection().additions.activity_profiles.len(), 2);
+    assert!(
+        first
+            .projection()
+            .additions
+            .tasks
+            .iter()
+            .all(|task| matches!(task.scope, ScopeSelector::Instance { .. }))
+    );
+    assert!(
+        first
+            .projection()
+            .additions
+            .activity_profiles
+            .iter()
+            .all(|profile| matches!(profile.scope, ScopeSelector::Instance { .. }))
+    );
+    let proposal = first.proposal().expect("mechanical catalog proposal");
+    assert_eq!(proposal.class(), ProposalClass::B);
+    assert_eq!(proposal.report_refs(), [first.report().clone()]);
+    assert_eq!(
+        first
+            .preview()
+            .expect("strategy proposal preview")
+            .proposal_id(),
+        proposal.proposal_id()
+    );
+    assert_eq!(
+        host.active_policy_catalog()
+            .expect("active catalog")
+            .expect("catalog")
+            .catalog_hash(),
+        base.catalog_hash()
+    );
+    let stored =
+        read_projected_verified(root.path(), first.report()).expect("local strategic report bytes");
+    assert_eq!(
+        serde_json::from_slice::<StrategicReport>(&stored).expect("stored strategic report"),
+        report
+    );
+
+    let mut client = TestClient::connect(&host);
+    let strategy_artifacts = projected_events(
+        &mut client,
+        EventQuery {
+            event_type: Some(EventType::ArtifactVerified),
+            ..EventQuery::default()
+        },
+    )
+    .into_iter()
+    .flat_map(|event| event.artifacts)
+    .filter(|artifact| artifact.kind() == ArtifactKind::StrategyReport)
+    .count();
+    assert_eq!(strategy_artifacts, 1);
+    assert!(
+        projected_events(
+            &mut client,
+            EventQuery {
+                event_type: Some(EventType::PolicyExecutionRecorded),
+                ..EventQuery::default()
+            }
+        )
+        .is_empty()
+    );
+    let request = client.agent_request(RuntimeOperation::PromoteProposal {
+        proposal: Box::new(proposal.clone()),
+    });
+    assert_eq!(client.send(&request).state(), RuntimeReceiptState::Denied);
+    record_target_approval(
+        &mut client,
+        "approval:strategy-plan",
+        first
+            .preview()
+            .expect("strategy preview")
+            .approval_target()
+            .expect("strategy approval target"),
+    );
+    let request = client.agent_request(RuntimeOperation::PromoteProposal {
+        proposal: Box::new(proposal.clone()),
+    });
+    assert_eq!(
+        client.send(&request).state(),
+        RuntimeReceiptState::Completed
+    );
+    assert_eq!(
+        host.active_policy_catalog()
+            .expect("active catalog")
+            .expect("catalog")
+            .catalog_version(),
+        2
+    );
+    assert_eq!(fake_state.open_count.load(Ordering::SeqCst), 0);
+    assert_eq!(fake_state.capture_open_count.load(Ordering::SeqCst), 0);
+    assert_eq!(fake_state.input_count.load(Ordering::SeqCst), 0);
+    drop(client);
+    host.close().expect("close runtime");
+}
+
+#[test]
+fn strategic_report_rejects_unverified_evidence_without_artifact_or_catalog_change() {
+    let root = TempDir::new().expect("tempdir");
+    let host = RuntimeHost::start(
+        config(&root),
+        Arc::new(FakeProvider::one(
+            POLICY_INSTANCE_ALIAS,
+            instance_id(),
+            Arc::new(FakeState::default()),
+        )),
+    )
+    .expect("runtime host");
+    let base = host
+        .activate_policy_catalog(&strategy_policy_sources(1))
+        .expect("strategy base catalog");
+    let evidence = host
+        .store_test_report(b"synthetic pinned strategy evidence")
+        .expect("strategy evidence");
+    let evidence_sequence = verified_artifact_sequence(&host, &evidence);
+    let report = strategy_report(&base, &evidence, evidence_sequence);
+    let stale_report = strategy_report(&base, &evidence, evidence_sequence - 1);
+    let error = host
+        .prepare_strategic_report(&stale_report, std::slice::from_ref(&evidence))
+        .expect_err("evidence newer than the report as-of position must fail");
+    assert_eq!(error.code(), "strategic_evidence_unverified");
+    let ids = IdentifierIssuer::new().expect("identifier issuer");
+    let forged = unverified_report(&evidence, &ids);
+
+    let error = host
+        .prepare_strategic_report(&report, &[forged])
+        .expect_err("unverified strategy evidence must fail");
+    assert_eq!(error.code(), "strategic_evidence_unverified");
+    assert!(host.fatal_error().expect("runtime health").is_none());
+    assert_eq!(
+        host.active_policy_catalog()
+            .expect("active catalog")
+            .expect("catalog")
+            .catalog_hash(),
+        base.catalog_hash()
+    );
+    let mut client = TestClient::connect(&host);
+    assert!(
+        projected_events(
+            &mut client,
+            EventQuery {
+                event_type: Some(EventType::ArtifactVerified),
+                ..EventQuery::default()
+            }
+        )
+        .iter()
+        .flat_map(|event| event.artifacts.iter())
+        .all(|artifact| artifact.kind() != ArtifactKind::StrategyReport)
     );
     drop(client);
     host.close().expect("close runtime");
