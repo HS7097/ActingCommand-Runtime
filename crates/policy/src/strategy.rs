@@ -1387,7 +1387,7 @@ mod tests {
                         "entrypoint": {"operation_id": "operation.observe"},
                         "procedure_ref": "procedure.observe",
                         "priority": 10,
-                        "trigger": {"kind": "clock", "schedule": {"kind": "interval", "every_ms": 60000, "anchor_unix_ms": 1}},
+                        "trigger": {"kind": "clock", "schedule": {"kind": "interval", "clock_source": {"kind": "local"}, "every_ms": 60000, "anchor_ms": 1}},
                         "feedback_stop": {"kind": "outcome", "task_id": "template.observe", "outcome_key": "completed", "comparison": "eq", "value": {"type": "boolean", "value": true}},
                         "consumes": [], "produces": [],
                         "on_failure": {"action": "continue", "retry_limit": 1, "retry_backoff_ms": 1000, "escalation_threshold": 2},

@@ -15,7 +15,13 @@
       "event_kind": "reset",
       "schedule": {
         "kind": "daily",
-        "utc_offset_minutes": 0,
+        "clock_source": {
+          "kind": "server",
+          "timezone_id": "etc/utc",
+          "utc_offset_minutes": 0,
+          "dst_offset_minutes": 0,
+          "maintenance_drift_ms": 0
+        },
         "minutes_of_day": [240]
       },
       "duration_ms": 0,

@@ -179,6 +179,7 @@ pub fn project_forward(
     let mut pools = initialize_pools(catalog, resources, time.unix_ms)?;
     let hosts = resources.hosts.clone();
     let mut current = time.unix_ms;
+    let mut current_monotonic = time.monotonic_ms;
     let mut steps = Vec::new();
     let mut gaps = BTreeMap::<(String, String, String), ForwardEvidenceGap>::new();
     let mut next_wake = None;
@@ -194,7 +195,10 @@ pub fn project_forward(
             catalog,
             &projected_facts,
             &current_resources,
-            EvaluationTime { unix_ms: current },
+            EvaluationTime {
+                unix_ms: current,
+                monotonic_ms: current_monotonic,
+            },
             seed.wrapping_add(u64::from(step_index)),
         )
         .map_err(ForwardError::evaluation)?;
@@ -210,7 +214,11 @@ pub fn project_forward(
                     "the evaluator returned a non-advancing wake time",
                 ));
             }
-            current = wake.min(horizon_end_unix_ms);
+            let next = wake.min(horizon_end_unix_ms);
+            current_monotonic = current_monotonic
+                .checked_add(next - current)
+                .ok_or_else(|| ForwardError::overflow("projection monotonic time overflowed"))?;
+            current = next;
             continue;
         }
         if let Some(gap) = uncertain_effect_gap(catalog, &evaluation.dispatch_intents)? {
@@ -270,6 +278,9 @@ pub fn project_forward(
                 .checked_sub(before_waste)
                 .ok_or_else(|| ForwardError::invalid("projected waste regressed"))?,
         });
+        current_monotonic = current_monotonic
+            .checked_add(completed_at - current)
+            .ok_or_else(|| ForwardError::overflow("projection monotonic time overflowed"))?;
         current = completed_at;
     }
     if current < horizon_end_unix_ms && evaluation_budget_exhausted {
@@ -1057,7 +1068,10 @@ mod tests {
             &catalog,
             &facts(true),
             &resources(119),
-            EvaluationTime { unix_ms: NOW },
+            EvaluationTime {
+                unix_ms: NOW,
+                monotonic_ms: NOW,
+            },
             11,
             config,
         )
@@ -1066,7 +1080,10 @@ mod tests {
             &catalog,
             &facts(true),
             &resources(119),
-            EvaluationTime { unix_ms: NOW },
+            EvaluationTime {
+                unix_ms: NOW,
+                monotonic_ms: NOW,
+            },
             11,
             config,
         )
@@ -1085,6 +1102,7 @@ mod tests {
             &resources(10),
             EvaluationTime {
                 unix_ms: NOW + 60_000,
+                monotonic_ms: NOW + 60_000,
             },
             5,
             ForwardProjectionConfig::for_hours(1, 32).expect("config"),
@@ -1111,7 +1129,10 @@ mod tests {
             &catalog(),
             &facts(true),
             &resources(120),
-            EvaluationTime { unix_ms: NOW + 1 },
+            EvaluationTime {
+                unix_ms: NOW + 1,
+                monotonic_ms: NOW + 1,
+            },
             9,
             ForwardProjectionConfig::for_hours(2, 1).expect("config"),
         )

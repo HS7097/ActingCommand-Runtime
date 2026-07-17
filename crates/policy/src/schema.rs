@@ -20,6 +20,8 @@ pub const MAX_REFERENCES_PER_TASK: usize = 128;
 pub const MAX_WINDOWS_PER_PROFILE: usize = 128;
 pub const MAX_GOALS_PER_PROFILE: usize = 128;
 pub const MAX_INSTANCE_OVERRIDES_PER_TASK: usize = 128;
+pub const MAX_BUDGET_COUNT: u32 = 1_000_000;
+pub const MAX_CLOCK_DRIFT_MS: i64 = 604_800_000;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(transparent)]
@@ -314,20 +316,42 @@ pub enum PredicateSpec {
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum ClockSchedule {
     Interval {
+        clock_source: ClockSource,
         every_ms: u64,
-        anchor_unix_ms: u64,
+        anchor_ms: u64,
     },
     At {
-        unix_ms: u64,
+        clock_source: ClockSource,
+        at_ms: u64,
     },
     Daily {
-        utc_offset_minutes: i16,
+        clock_source: ClockSource,
         minutes_of_day: Vec<u16>,
     },
     Weekly {
-        utc_offset_minutes: i16,
+        clock_source: ClockSource,
         weekday: u8,
         minute_of_day: u16,
+    },
+}
+
+/// Selects the independently pinned clock coordinate used by a schedule.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum ClockSource {
+    Local,
+    Server {
+        timezone_id: String,
+        utc_offset_minutes: i16,
+        dst_offset_minutes: i16,
+        maintenance_drift_ms: i64,
+    },
+    Reveal {
+        reveal_source: String,
+        timezone_id: String,
+        utc_offset_minutes: i16,
+        dst_offset_minutes: i16,
+        maintenance_drift_ms: i64,
     },
 }
 
@@ -610,6 +634,60 @@ mod tests {
 
         for schema in schemas {
             serde_json::from_str::<serde_json::Value>(schema).expect("schema JSON");
+        }
+    }
+
+    #[test]
+    fn published_schema_bounds_match_compiler_constants() {
+        let tasks: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../contracts/scheduling/tasks.schema.json"
+        ))
+        .expect("tasks schema");
+        let activity: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../contracts/scheduling/activity.schema.json"
+        ))
+        .expect("activity schema");
+        let pools: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../contracts/scheduling/pools.schema.json"
+        ))
+        .expect("pools schema");
+        let common: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../contracts/scheduling/common.schema.json"
+        ))
+        .expect("common schema");
+
+        assert_eq!(
+            tasks["$defs"]["loopBudget"]["properties"]["daily_limit"]["minimum"],
+            1
+        );
+        assert_eq!(
+            tasks["$defs"]["loopBudget"]["properties"]["daily_limit"]["maximum"],
+            MAX_BUDGET_COUNT
+        );
+        assert_eq!(
+            activity["$defs"]["profile"]["properties"]["daily_budget"]["minimum"],
+            1
+        );
+        assert_eq!(
+            activity["$defs"]["profile"]["properties"]["daily_budget"]["maximum"],
+            MAX_BUDGET_COUNT
+        );
+        assert_eq!(
+            pools["$defs"]["pool"]["properties"]["projection"]["properties"]["amount"]["minimum"],
+            1
+        );
+        let schedules = common["$defs"]["clockSchedule"]["oneOf"]
+            .as_array()
+            .expect("clock schedule variants");
+        assert_eq!(
+            schedules[0]["properties"]["clock_source"]["$ref"],
+            "#/$defs/clockSource"
+        );
+        for schedule in &schedules[1..] {
+            assert_eq!(
+                schedule["properties"]["clock_source"]["$ref"],
+                "#/$defs/wallClockSource"
+            );
         }
     }
 }
