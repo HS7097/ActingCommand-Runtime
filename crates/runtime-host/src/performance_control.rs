@@ -165,6 +165,17 @@ impl PerformanceBalanceController {
         workloads: &[PerformanceControlWorkload],
     ) -> RuntimeHostResult<Vec<PerformanceControlEventData>> {
         observation.validate()?;
+        if let Some(previous) = self.last_observed_at_unix_ms
+            && observation.observed_at_unix_ms == previous
+        {
+            if self.last_observation.as_ref() == Some(&observation) {
+                return Ok(Vec::new());
+            }
+            return Err(control_fatal(
+                "performance_control_sample_identity_conflict",
+                "observe_performance_contention",
+            ));
+        }
         self.sync_workloads(workloads)?;
         if let Some(previous) = self.last_observed_at_unix_ms {
             let jump_threshold = duration_ms(self.config.clock_jump_threshold)?;
@@ -686,6 +697,44 @@ mod tests {
                 .expect("cooldown")
                 .is_empty()
         );
+    }
+
+    #[test]
+    fn duplicate_sample_identity_cannot_advance_hysteresis() {
+        let mut controller =
+            PerformanceBalanceController::new(PerformanceControlConfig::default()).expect("new");
+        let pressure = observation(1_000, Some(5_000), Some(0));
+        assert!(
+            controller
+                .observe(pressure.clone(), &[])
+                .expect("first")
+                .is_empty()
+        );
+        assert_eq!(controller.candidate_samples, 1);
+        assert!(
+            controller
+                .observe(pressure.clone(), &[])
+                .expect("idempotent duplicate")
+                .is_empty()
+        );
+        assert_eq!(controller.candidate_samples, 1);
+        assert_eq!(controller.level, PerformanceControlLevel::Normal);
+
+        let conflict = controller
+            .observe(observation(1_000, Some(10_000), Some(0)), &[])
+            .expect_err("same sample identity cannot carry different evidence");
+        assert_eq!(
+            conflict.code(),
+            "performance_control_sample_identity_conflict"
+        );
+        assert_eq!(controller.candidate_samples, 1);
+        assert_eq!(controller.level, PerformanceControlLevel::Normal);
+
+        let events = controller
+            .observe(observation(3_000, Some(5_000), Some(0)), &[])
+            .expect("second fresh sample");
+        assert_eq!(events.len(), 1);
+        assert_eq!(controller.level, PerformanceControlLevel::DispatchPaused);
     }
 
     #[test]
