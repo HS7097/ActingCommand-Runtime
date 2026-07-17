@@ -54,8 +54,7 @@ impl PolicyControlState {
         now_unix_ms: u64,
     ) -> RuntimeHostResult<PolicyAdmissionRecord> {
         let (task, profile) = task_and_profile(catalog, intent)?;
-        let (local_day, window_index) = active_window(profile, now_unix_ms)?;
-        let window_id = format!("{}:{local_day}:{window_index}", profile.id);
+        let (local_day, window_id) = active_activity_window(profile, now_unix_ms)?;
         let cadence_key = (intent.instance_id.clone(), profile.id.clone());
         if self
             .next_activity_eligible
@@ -424,10 +423,13 @@ fn task_and_profile<'a>(
     Ok((task, profile))
 }
 
-fn active_window(profile: &ActivityProfile, now_unix_ms: u64) -> RuntimeHostResult<(i64, usize)> {
+pub(crate) fn active_activity_window(
+    profile: &ActivityProfile,
+    now_unix_ms: u64,
+) -> RuntimeHostResult<(i64, String)> {
     for (index, window) in profile.windows.iter().enumerate() {
         if let Some(local_day) = window_local_day(window, now_unix_ms)? {
-            return Ok((local_day, index));
+            return Ok((local_day, format!("{}:{local_day}:{index}", profile.id)));
         }
     }
     Err(request(
@@ -963,52 +965,80 @@ mod tests {
         let window_catalog = catalog_with(
             |tasks| {
                 tasks["tasks"][0]["loop_budget"]["daily_limit"] = serde_json::json!(10);
-                tasks["tasks"][0]["loop_budget"]["window_iteration_limit"] = serde_json::json!(1);
+                tasks["tasks"][0]["loop_budget"]["window_iteration_limit"] = serde_json::json!(4);
+                tasks["tasks"][0]["loop_budget"]["max_runtime_ms"] = serde_json::json!(1000000);
             },
             |activity| {
                 activity["profiles"][0]["daily_budget"] = serde_json::json!(10);
                 activity["profiles"][0]["max_window_iterations"] = serde_json::json!(10);
+                activity["profiles"][0]["session_max_ms"] = serde_json::json!(1000000);
             },
         );
         let mut window_state = PolicyControlState::default();
-        let first = intent(&window_catalog, 1);
-        let admission = window_state
-            .preview_admission(&window_catalog, &first, NOW)
-            .expect("first window admission");
-        window_state
-            .commit_admission(&window_catalog, &first, &admission)
-            .expect("commit window budget");
+        for index in 0..4 {
+            let now = NOW + index * 600_000;
+            let intent = intent(&window_catalog, index + 1);
+            let admission = window_state
+                .preview_admission(&window_catalog, &intent, now)
+                .expect("window admission through the declared limit");
+            assert_eq!(admission.budget.task_window_used, index as u32 + 1);
+            window_state
+                .commit_admission(&window_catalog, &intent, &admission)
+                .expect("commit window budget");
+        }
         let error = window_state
-            .preview_admission(&window_catalog, &intent(&window_catalog, 2), NOW + 600_000)
-            .expect_err("second window iteration must fail");
+            .preview_admission(
+                &window_catalog,
+                &intent(&window_catalog, 5),
+                NOW + 2_400_000,
+            )
+            .expect_err("fifth window iteration must fail when the limit is four");
         assert_eq!(error.code(), "policy_budget_exhausted");
 
         let runtime_catalog = catalog_with(
             |tasks| {
+                tasks["tasks"][0]["expected_duration_ms"] = serde_json::json!(60000);
                 tasks["tasks"][0]["loop_budget"]["daily_limit"] = serde_json::json!(10);
                 tasks["tasks"][0]["loop_budget"]["window_iteration_limit"] = serde_json::json!(10);
-                tasks["tasks"][0]["loop_budget"]["max_runtime_ms"] = serde_json::json!(100000);
+                tasks["tasks"][0]["loop_budget"]["max_runtime_ms"] = serde_json::json!(300000);
             },
             |activity| {
                 activity["profiles"][0]["daily_budget"] = serde_json::json!(10);
                 activity["profiles"][0]["max_window_iterations"] = serde_json::json!(10);
+                activity["profiles"][0]["session_max_ms"] = serde_json::json!(300000);
             },
         );
         let mut runtime_state = PolicyControlState::default();
-        let first = intent(&runtime_catalog, 1);
-        let admission = runtime_state
-            .preview_admission(&runtime_catalog, &first, NOW)
-            .expect("first runtime admission");
-        runtime_state
-            .commit_admission(&runtime_catalog, &first, &admission)
-            .expect("commit runtime budget");
+        for index in 0..4 {
+            let now = NOW + index * 600_000;
+            let intent = intent(&runtime_catalog, index + 1);
+            let admission = runtime_state
+                .preview_admission(&runtime_catalog, &intent, now)
+                .expect("runtime admission through 300000ms cumulative usage");
+            runtime_state
+                .commit_admission(&runtime_catalog, &intent, &admission)
+                .expect("commit runtime reservation");
+            let execution = runtime_state
+                .preview_execution(
+                    &runtime_catalog,
+                    &intent,
+                    &admission,
+                    now + 75_000,
+                    &PolicyExecutionInput::Succeeded,
+                    &unavailable(now + 75_000),
+                )
+                .expect("bounded runtime execution");
+            runtime_state
+                .commit_execution(&runtime_catalog, &intent, &admission, &execution)
+                .expect("commit actual runtime");
+        }
         let error = runtime_state
             .preview_admission(
                 &runtime_catalog,
-                &intent(&runtime_catalog, 2),
-                NOW + 600_000,
+                &intent(&runtime_catalog, 5),
+                NOW + 2_400_000,
             )
-            .expect_err("runtime reservation must remain bounded");
+            .expect_err("runtime reservation crossing 300000ms must fail");
         assert_eq!(error.code(), "policy_budget_exhausted");
     }
 

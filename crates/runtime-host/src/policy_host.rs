@@ -2,18 +2,19 @@
 
 //! Runtime-owned catalog generations and replayable policy admission state.
 
-use crate::policy_control::{PolicyControlState, PolicyExecutionInput};
+use crate::policy_control::{PolicyControlState, PolicyExecutionInput, active_activity_window};
 use crate::{PerformanceControlWorkload, RuntimeHostError, RuntimeHostResult};
 use actingcommand_contract::{
     EventPayload, LeaseToken, OwnerEpoch, PerformanceContext, PolicyAdmissionRecord,
-    PolicyDispatchEventData, PolicyExecutionEventData, PolicyExecutionOutcome, PolicyPayload,
-    PolicyPlanningSignalEventData, PolicyReasonRecord, RuntimeErrorCode,
+    PolicyDetectionBudgetRecord, PolicyDispatchEventData, PolicyExecutionEventData,
+    PolicyExecutionOutcome, PolicyPayload, PolicyPlanningSignalEventData, PolicyPlanningSignalKind,
+    PolicyReasonRecord, RuntimeErrorCode,
 };
 use actingcommand_ledger::GlobalLedger;
 use actingcommand_policy::{
-    CatalogDocumentSource, CatalogSources, CompiledCatalog, DecisionReasonChain, DispatchIntent,
-    DispatchPrerequisites, EvaluationFacts, EvaluationResources, EvaluationTime, PolicyEvaluation,
-    ScopeSelector, compile_catalog, evaluate,
+    ActivityProfile, CatalogDocumentSource, CatalogSources, CompiledCatalog, DecisionReasonChain,
+    DispatchIntent, DispatchPrerequisites, EvaluationFacts, EvaluationResources, EvaluationTime,
+    InstanceSnapshot, PolicyEvaluation, ScopeSelector, compile_catalog, evaluate,
 };
 use actingcommand_runtime_state::RuntimeStateStore;
 use serde::{Deserialize, Serialize};
@@ -180,6 +181,7 @@ pub struct PolicyCycle {
     pub directive: PolicyRecomputeDirective,
     pub evaluation: Option<PolicyEvaluation>,
     pub pending_dispatch_intents: Vec<DispatchIntent>,
+    pub detection_planning_signals: Vec<PolicyPlanningSignalEventData>,
     pub measurement: Option<PolicyEvaluationMeasurement>,
 }
 
@@ -379,7 +381,19 @@ pub(crate) struct PolicyHost {
     seen_dispatches: BTreeMap<String, SeenDispatch>,
     pinned_dispatches: BTreeMap<String, CatalogGeneration>,
     planning_signals: BTreeMap<String, PolicyPlanningSignalEventData>,
+    detection_quota: DetectionQuotaState,
     control: PolicyControlState,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct DetectionQuotaState {
+    windows: BTreeMap<(String, String), DetectionQuotaUsage>,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+struct DetectionQuotaUsage {
+    dispatch_used: u32,
+    runtime_reserved_ms: u64,
 }
 
 impl PolicyHost {
@@ -398,6 +412,7 @@ impl PolicyHost {
             seen_dispatches: BTreeMap::new(),
             pinned_dispatches: BTreeMap::new(),
             planning_signals: BTreeMap::new(),
+            detection_quota: DetectionQuotaState::default(),
             control: PolicyControlState::default(),
         };
         host.recover_dispatches(ledger)?;
@@ -477,6 +492,7 @@ impl PolicyHost {
                 directive,
                 evaluation: None,
                 pending_dispatch_intents: Vec::new(),
+                detection_planning_signals: Vec::new(),
                 measurement: None,
             });
         }
@@ -494,17 +510,27 @@ impl PolicyHost {
                 "measure_policy_evaluation",
             )
         })?;
-        let pending_dispatch_intents = evaluation
+        let pending_dispatch_intents: Vec<DispatchIntent> = evaluation
             .dispatch_intents
             .iter()
             .filter(|intent| !self.seen_dispatches.contains_key(&intent.decision_id))
             .cloned()
             .collect();
+        let detection_planning_signals = preview_detection_planning_signals(
+            &self.detection_quota,
+            &self.planning_signals,
+            &active.compiled,
+            facts,
+            &evaluation,
+            &pending_dispatch_intents,
+            time.unix_ms,
+        )?;
         let requested_recompute = directive.kind;
         Ok(PolicyCycle {
             directive,
             evaluation: Some(evaluation),
             pending_dispatch_intents,
+            detection_planning_signals,
             measurement: Some(PolicyEvaluationMeasurement {
                 sampled_at_monotonic_ms,
                 elapsed_micros,
@@ -885,6 +911,7 @@ impl PolicyHost {
         &mut self,
         data: PolicyPlanningSignalEventData,
     ) -> RuntimeHostResult<()> {
+        self.validate_planning_signal(&data)?;
         if let Some(existing) = self.planning_signals.get(&data.signal_id) {
             return if existing == &data {
                 Ok(())
@@ -895,7 +922,54 @@ impl PolicyHost {
                 ))
             };
         }
+        self.detection_quota.commit_signal(&data)?;
         self.planning_signals.insert(data.signal_id.clone(), data);
+        Ok(())
+    }
+
+    pub(crate) fn validate_planning_signal(
+        &self,
+        data: &PolicyPlanningSignalEventData,
+    ) -> RuntimeHostResult<()> {
+        let Some(budget) = &data.detection_budget else {
+            return Ok(());
+        };
+        let catalog = self.store.load_generation(&budget.catalog_hash)?;
+        let profile = catalog
+            .compiled
+            .catalog()
+            .activity
+            .profiles
+            .iter()
+            .find(|profile| profile.id == budget.profile_id)
+            .ok_or_else(|| {
+                fatal(
+                    "policy_detection_budget_profile_mismatch",
+                    "validate_policy_detection_budget",
+                )
+            })?;
+        let (_, expected_window_id) = active_activity_window(profile, data.observed_at_unix_ms)
+            .map_err(|_| {
+                fatal(
+                    "policy_detection_budget_window_mismatch",
+                    "validate_policy_detection_budget",
+                )
+            })?;
+        let instance_scope_matches = match &profile.scope {
+            ScopeSelector::Instance { instance_id } => instance_id == &data.instance_id,
+            ScopeSelector::Server { .. } | ScopeSelector::Game { .. } => true,
+        };
+        if !instance_scope_matches
+            || budget.window_id != expected_window_id
+            || budget.dispatch_limit != profile.detection_budget.window_dispatch_limit
+            || budget.runtime_limit_ms != profile.detection_budget.window_runtime_ms
+            || budget.reservation_ms != profile.detection_budget.expected_duration_ms
+        {
+            return Err(fatal(
+                "policy_detection_budget_profile_mismatch",
+                "validate_policy_detection_budget",
+            ));
+        }
         Ok(())
     }
 
@@ -905,6 +979,7 @@ impl PolicyHost {
             .map_err(|_| fatal("policy_recovery_failed", "recover_policy_dispatches"))?;
         let mut seen_dispatches = BTreeMap::new();
         let mut planning_signals = BTreeMap::new();
+        let mut detection_quota = DetectionQuotaState::default();
         let mut control = PolicyControlState::default();
         for event in events {
             let EventPayload::Policy(payload) = event.payload() else {
@@ -1002,6 +1077,8 @@ impl PolicyHost {
                 }
                 PolicyPayload::PlanningSignalObserved(payload) => {
                     let data = planning_signal_event_data(payload);
+                    self.validate_planning_signal(&data)?;
+                    detection_quota.commit_signal(&data)?;
                     if planning_signals
                         .insert(data.signal_id.clone(), data)
                         .is_some()
@@ -1030,9 +1107,292 @@ impl PolicyHost {
         self.seen_dispatches = seen_dispatches;
         self.pinned_dispatches = pinned_dispatches;
         self.planning_signals = planning_signals;
+        self.detection_quota = detection_quota;
         self.control = control;
         Ok(())
     }
+}
+
+impl DetectionQuotaState {
+    fn preview(
+        &self,
+        profile: &ActivityProfile,
+        catalog_hash: &str,
+        instance_id: &str,
+        now_unix_ms: u64,
+    ) -> RuntimeHostResult<(PolicyPlanningSignalKind, PolicyDetectionBudgetRecord)> {
+        let (_, window_id) = active_activity_window(profile, now_unix_ms)?;
+        let usage = self
+            .windows
+            .get(&(instance_id.to_owned(), window_id.clone()))
+            .copied()
+            .unwrap_or_default();
+        let next_dispatch = usage.dispatch_used.checked_add(1).ok_or_else(|| {
+            fatal(
+                "policy_detection_budget_overflow",
+                "reserve_policy_detection_budget",
+            )
+        })?;
+        let next_runtime = usage
+            .runtime_reserved_ms
+            .checked_add(profile.detection_budget.expected_duration_ms)
+            .ok_or_else(|| {
+                fatal(
+                    "policy_detection_budget_overflow",
+                    "reserve_policy_detection_budget",
+                )
+            })?;
+        let exhausted = next_dispatch > profile.detection_budget.window_dispatch_limit
+            || next_runtime > profile.detection_budget.window_runtime_ms;
+        Ok((
+            if exhausted {
+                PolicyPlanningSignalKind::DetectionQuotaExhausted
+            } else {
+                PolicyPlanningSignalKind::DetectionReserved
+            },
+            PolicyDetectionBudgetRecord {
+                catalog_hash: catalog_hash.to_owned(),
+                profile_id: profile.id.clone(),
+                window_id,
+                dispatch_used: if exhausted {
+                    usage.dispatch_used
+                } else {
+                    next_dispatch
+                },
+                dispatch_limit: profile.detection_budget.window_dispatch_limit,
+                runtime_reserved_ms: if exhausted {
+                    usage.runtime_reserved_ms
+                } else {
+                    next_runtime
+                },
+                runtime_limit_ms: profile.detection_budget.window_runtime_ms,
+                reservation_ms: profile.detection_budget.expected_duration_ms,
+            },
+        ))
+    }
+
+    fn commit_signal(&mut self, data: &PolicyPlanningSignalEventData) -> RuntimeHostResult<()> {
+        let detection_kind = matches!(
+            data.kind,
+            PolicyPlanningSignalKind::DetectionReserved
+                | PolicyPlanningSignalKind::DetectionQuotaExhausted
+        );
+        if !detection_kind {
+            return if data.detection_budget.is_none() {
+                Ok(())
+            } else {
+                Err(fatal(
+                    "policy_detection_budget_unexpected",
+                    "commit_policy_detection_budget",
+                ))
+            };
+        }
+        let budget = data.detection_budget.as_ref().ok_or_else(|| {
+            fatal(
+                "policy_detection_budget_missing",
+                "commit_policy_detection_budget",
+            )
+        })?;
+        let key = (data.instance_id.clone(), budget.window_id.clone());
+        let current = self.windows.get(&key).copied().unwrap_or_default();
+        match data.kind {
+            PolicyPlanningSignalKind::DetectionReserved => {
+                let expected_dispatch = current.dispatch_used.checked_add(1).ok_or_else(|| {
+                    fatal(
+                        "policy_detection_budget_overflow",
+                        "commit_policy_detection_budget",
+                    )
+                })?;
+                let expected_runtime = current
+                    .runtime_reserved_ms
+                    .checked_add(budget.reservation_ms)
+                    .ok_or_else(|| {
+                        fatal(
+                            "policy_detection_budget_overflow",
+                            "commit_policy_detection_budget",
+                        )
+                    })?;
+                if budget.dispatch_used != expected_dispatch
+                    || budget.runtime_reserved_ms != expected_runtime
+                    || budget.dispatch_used > budget.dispatch_limit
+                    || budget.runtime_reserved_ms > budget.runtime_limit_ms
+                {
+                    return Err(fatal(
+                        "policy_detection_budget_receipt_mismatch",
+                        "commit_policy_detection_budget",
+                    ));
+                }
+                self.windows.insert(
+                    key,
+                    DetectionQuotaUsage {
+                        dispatch_used: budget.dispatch_used,
+                        runtime_reserved_ms: budget.runtime_reserved_ms,
+                    },
+                );
+            }
+            PolicyPlanningSignalKind::DetectionQuotaExhausted => {
+                if budget.dispatch_used != current.dispatch_used
+                    || budget.runtime_reserved_ms != current.runtime_reserved_ms
+                    || budget.dispatch_used < budget.dispatch_limit
+                        && budget
+                            .runtime_reserved_ms
+                            .checked_add(budget.reservation_ms)
+                            .is_some_and(|next| next <= budget.runtime_limit_ms)
+                {
+                    return Err(fatal(
+                        "policy_detection_budget_receipt_mismatch",
+                        "commit_policy_detection_budget",
+                    ));
+                }
+            }
+            _ => unreachable!("detection kind checked above"),
+        }
+        Ok(())
+    }
+}
+
+fn preview_detection_planning_signals(
+    state: &DetectionQuotaState,
+    existing_signals: &BTreeMap<String, PolicyPlanningSignalEventData>,
+    catalog: &CompiledCatalog,
+    facts: &EvaluationFacts,
+    evaluation: &PolicyEvaluation,
+    pending_dispatch_intents: &[DispatchIntent],
+    now_unix_ms: u64,
+) -> RuntimeHostResult<Vec<PolicyPlanningSignalEventData>> {
+    if now_unix_ms == 0 {
+        return Err(fatal(
+            "policy_detection_time_invalid",
+            "plan_policy_detection",
+        ));
+    }
+    let ordinary_instances = pending_dispatch_intents
+        .iter()
+        .map(|intent| intent.instance_id.as_str())
+        .collect::<BTreeSet<_>>();
+    let mut staged = state.clone();
+    let mut emitted_ids = BTreeSet::new();
+    let mut signals = Vec::new();
+    for decision in &evaluation.decisions {
+        let Some(instance_id) = decision.instance_id.as_deref() else {
+            continue;
+        };
+        if decision.detection_suggestions.is_empty() || ordinary_instances.contains(instance_id) {
+            continue;
+        }
+        let instance = facts
+            .instances
+            .iter()
+            .find(|instance| instance.instance_id == instance_id)
+            .ok_or_else(|| fatal("policy_detection_instance_missing", "plan_policy_detection"))?;
+        let profile = matching_activity_profile(&catalog.catalog().activity.profiles, instance)
+            .ok_or_else(|| request("policy_activity_profile_missing", "plan_policy_detection"))?;
+        for suggestion in &decision.detection_suggestions {
+            let reservation_id = detection_signal_id(
+                "reserved",
+                &[
+                    &facts.fact_snapshot_id,
+                    catalog.catalog_hash(),
+                    &decision.task_id,
+                    instance_id,
+                    &scope_identity(&suggestion.scope),
+                    &suggestion.fact_key,
+                    &suggestion.reason,
+                ],
+            );
+            if existing_signals.contains_key(&reservation_id)
+                || emitted_ids.contains(&reservation_id)
+            {
+                continue;
+            }
+            let (kind, budget) =
+                match staged.preview(profile, catalog.catalog_hash(), instance_id, now_unix_ms) {
+                    Ok(value) => value,
+                    Err(error) if error.code() == "policy_activity_window_closed" => continue,
+                    Err(error) => return Err(error),
+                };
+            let signal_id = if kind == PolicyPlanningSignalKind::DetectionQuotaExhausted {
+                detection_signal_id(
+                    "exhausted",
+                    &[
+                        instance_id,
+                        &budget.catalog_hash,
+                        &profile.id,
+                        &budget.window_id,
+                    ],
+                )
+            } else {
+                reservation_id
+            };
+            if kind == PolicyPlanningSignalKind::DetectionQuotaExhausted
+                && let Some(existing) = existing_signals.get(&signal_id)
+            {
+                if emitted_ids.insert(signal_id) {
+                    signals.push(existing.clone());
+                }
+                continue;
+            }
+            if existing_signals.contains_key(&signal_id) || !emitted_ids.insert(signal_id.clone()) {
+                continue;
+            }
+            let signal = PolicyPlanningSignalEventData {
+                signal_id,
+                instance_id: instance_id.to_owned(),
+                task_id: Some(decision.task_id.clone()),
+                kind,
+                fact_code: format!("{}.{}", suggestion.fact_key, suggestion.reason),
+                observed_at_unix_ms: now_unix_ms,
+                detection_budget: Some(budget),
+            };
+            staged.commit_signal(&signal)?;
+            signals.push(signal);
+        }
+    }
+    Ok(signals)
+}
+
+fn matching_activity_profile<'a>(
+    profiles: &'a [ActivityProfile],
+    instance: &InstanceSnapshot,
+) -> Option<&'a ActivityProfile> {
+    profiles
+        .iter()
+        .filter(|profile| match &profile.scope {
+            ScopeSelector::Instance { instance_id } => instance_id == &instance.instance_id,
+            ScopeSelector::Server { server_id } => server_id == &instance.server_id,
+            ScopeSelector::Game { game_id } => game_id == &instance.game_id,
+        })
+        .max_by(|left, right| {
+            scope_specificity(&left.scope)
+                .cmp(&scope_specificity(&right.scope))
+                .then_with(|| right.id.cmp(&left.id))
+        })
+}
+
+const fn scope_specificity(scope: &ScopeSelector) -> u8 {
+    match scope {
+        ScopeSelector::Instance { .. } => 3,
+        ScopeSelector::Server { .. } => 2,
+        ScopeSelector::Game { .. } => 1,
+    }
+}
+
+fn scope_identity(scope: &ScopeSelector) -> String {
+    match scope {
+        ScopeSelector::Instance { instance_id } => format!("instance:{instance_id}"),
+        ScopeSelector::Server { server_id } => format!("server:{server_id}"),
+        ScopeSelector::Game { game_id } => format!("game:{game_id}"),
+    }
+}
+
+fn detection_signal_id(kind: &str, components: &[&str]) -> String {
+    let mut digest = Sha256::new();
+    digest.update(kind.as_bytes());
+    for component in components {
+        digest.update([0]);
+        digest.update(component.as_bytes());
+    }
+    format!("signal:detection:{kind}:{:x}", digest.finalize())
 }
 
 fn event_data(payload: &actingcommand_contract::PolicyDispatchPayload) -> PolicyDispatchEventData {
@@ -1130,6 +1490,7 @@ fn planning_signal_event_data(
         kind: payload.kind(),
         fact_code: payload.fact_code().to_owned(),
         observed_at_unix_ms: payload.observed_at_unix_ms(),
+        detection_budget: payload.detection_budget().cloned(),
     }
 }
 

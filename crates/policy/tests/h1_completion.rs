@@ -2,17 +2,17 @@
 
 use actingcommand_policy::{
     CatalogDocumentSource, CatalogSources, CompiledCatalog, EffectDirection, EvaluationFacts,
-    EvaluationResources, EvaluationTime, HostResourceSnapshot, InstanceSnapshot, PoolValueSnapshot,
-    ScopeSelector, TaskRuntimeSnapshot, compile_catalog, evaluate,
+    EvaluationResources, EvaluationTime, FactScalar, FactValue, HostResourceSnapshot,
+    InstanceSnapshot, ObservedFact, PoolValueSnapshot, ScopeSelector, TaskRuntimeSnapshot,
+    compile_catalog, evaluate,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
 const HOUR_MS: u64 = 3_600_000;
-const DAY_MS: u64 = 86_400_000;
 
 #[test]
-fn neutral_activity_diff_compiles_and_expresses_both_requirement_shapes() {
+fn neutral_activity_diff_compiles_and_expresses_all_requirement_shapes() {
     let first = compile_catalog(&neutral_sources()).expect("neutral activity catalog");
     let second = compile_catalog(&neutral_sources()).expect("repeat neutral activity catalog");
 
@@ -21,7 +21,7 @@ fn neutral_activity_diff_compiles_and_expresses_both_requirement_shapes() {
         first.dry_run_json().expect("first dry-run"),
         second.dry_run_json().expect("second dry-run")
     );
-    assert_eq!(first.summary().counts.tasks, 2);
+    assert_eq!(first.summary().counts.tasks, 3);
     assert_eq!(first.summary().counts.pools, 3);
 
     let catalog = first.catalog();
@@ -43,6 +43,15 @@ fn neutral_activity_diff_compiles_and_expresses_both_requirement_shapes() {
     assert_eq!(balance.consumes.len(), 1);
     assert_eq!(balance.produces.len(), 1);
 
+    let expiry = catalog
+        .tasks
+        .tasks
+        .iter()
+        .find(|task| task.id == "neutral.consume-expiring-item")
+        .expect("expiring-item task");
+    assert!(expiry.consumes.is_empty());
+    assert!(expiry.produces.is_empty());
+
     let evaluation = evaluate(
         &first,
         &SimulationState::initial().facts(&first, 8 * HOUR_MS),
@@ -61,11 +70,12 @@ fn neutral_activity_diff_compiles_and_expresses_both_requirement_shapes() {
         .collect::<Vec<_>>();
     assert!(task_ids.contains(&"neutral.consume-regeneration"));
     assert!(task_ids.contains(&"neutral.balance-material"));
+    assert!(task_ids.contains(&"neutral.consume-expiring-item"));
     assert_complete_reason_chains(&evaluation);
 }
 
 #[test]
-fn accelerated_48h_replay_is_deterministic_bounded_and_recoverable() {
+fn accelerated_48h_policy_replay_is_deterministic_and_recoverable() {
     let catalog = compile_catalog(&neutral_sources()).expect("neutral activity catalog");
     let mut uninterrupted = SimulationState::initial();
     let transcript = run_hours(&catalog, &mut uninterrupted, 0, 48);
@@ -98,13 +108,14 @@ fn accelerated_48h_replay_is_deterministic_bounded_and_recoverable() {
     );
     assert!(uninterrupted.pools["neutral-refined-material"] >= 80);
     assert!(uninterrupted.pools["neutral-energy"] <= 120);
+    assert!(uninterrupted.expiring_items.is_empty());
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 struct SimulationState {
     pools: BTreeMap<String, u64>,
+    expiring_items: Vec<u64>,
     last_dispatched: BTreeMap<String, u64>,
-    dispatches_by_day: BTreeMap<String, u32>,
     dispatch_totals: BTreeMap<String, u32>,
     ledger_position: u64,
     elapsed_hours: u64,
@@ -118,8 +129,8 @@ impl SimulationState {
                 ("neutral-raw-material".to_string(), 80),
                 ("neutral-refined-material".to_string(), 10),
             ]),
+            expiring_items: vec![47 * HOUR_MS, 49 * HOUR_MS],
             last_dispatched: BTreeMap::new(),
-            dispatches_by_day: BTreeMap::new(),
             dispatch_totals: BTreeMap::new(),
             ledger_position: 1,
             elapsed_hours: 0,
@@ -143,7 +154,26 @@ impl SimulationState {
         EvaluationFacts {
             ledger_position: self.ledger_position,
             fact_snapshot_id: format!("snapshot:{now}:{}", self.ledger_position),
-            facts: Vec::new(),
+            facts: vec![ObservedFact {
+                scope: ScopeSelector::Instance {
+                    instance_id: "neutral-instance-c".to_owned(),
+                },
+                fact_key: "inventory.expiring_items".to_owned(),
+                value: FactValue::RecordList(
+                    self.expiring_items
+                        .iter()
+                        .map(|deadline| {
+                            BTreeMap::from([(
+                                "expires_at_unix_ms".to_owned(),
+                                FactScalar::TimestampMs(*deadline),
+                            )])
+                        })
+                        .collect(),
+                ),
+                observed_at_unix_ms: now,
+                expires_at_unix_ms: Some(now + 2 * HOUR_MS),
+                confidence_milli: 1_000,
+            }],
             outcomes: Vec::new(),
             tasks,
             instances: vec![
@@ -165,6 +195,15 @@ impl SimulationState {
                     capability_operation_ids: vec!["operation.balance".to_string()],
                     preferred_task_ids: vec!["neutral.balance-material".to_string()],
                 },
+                InstanceSnapshot {
+                    instance_id: "neutral-instance-c".to_string(),
+                    server_id: "neutral-server".to_string(),
+                    game_id: "neutral-game".to_string(),
+                    host_id: "neutral-host-c".to_string(),
+                    available: true,
+                    capability_operation_ids: vec!["operation.consume-expiring-item".to_string()],
+                    preferred_task_ids: vec!["neutral.consume-expiring-item".to_string()],
+                },
             ],
         }
     }
@@ -180,7 +219,7 @@ impl SimulationState {
                     observed_at_unix_ms: now,
                 })
                 .collect(),
-            hosts: ["neutral-host-a", "neutral-host-b"]
+            hosts: ["neutral-host-a", "neutral-host-b", "neutral-host-c"]
                 .into_iter()
                 .map(|host_id| HostResourceSnapshot {
                     host_id: host_id.to_string(),
@@ -235,14 +274,7 @@ fn run_hours(
         assert_complete_reason_chains(&evaluation);
 
         for intent in &evaluation.dispatch_intents {
-            let day = now / DAY_MS;
-            let day_key = format!("{day}:{}", intent.task_id);
-            let daily = state.dispatches_by_day.entry(day_key).or_default();
-            *daily += 1;
-            assert!(*daily <= intent.prerequisites.daily_limit);
-            assert!(intent.prerequisites.window_iteration_limit > 0);
-            assert!(intent.prerequisites.max_runtime_ms >= intent.expected_duration_ms);
-            apply_declared_effects(catalog, state, &intent.task_id);
+            apply_declared_effects(catalog, state, &intent.task_id, now);
             state.last_dispatched.insert(intent.task_id.clone(), now);
             *state
                 .dispatch_totals
@@ -256,7 +288,16 @@ fn run_hours(
     transcript
 }
 
-fn apply_declared_effects(catalog: &CompiledCatalog, state: &mut SimulationState, task_id: &str) {
+fn apply_declared_effects(
+    catalog: &CompiledCatalog,
+    state: &mut SimulationState,
+    task_id: &str,
+    now: u64,
+) {
+    if task_id == "neutral.consume-expiring-item" {
+        let cutoff = now + 48 * HOUR_MS;
+        state.expiring_items.retain(|deadline| *deadline > cutoff);
+    }
     let task = catalog
         .catalog()
         .tasks

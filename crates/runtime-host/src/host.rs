@@ -420,6 +420,7 @@ impl RuntimeHost {
             governance_capability_sha256: config.governance_capability_sha256,
             governance_connections: Mutex::new(BTreeSet::new()),
             fact_write_gate: Mutex::new(()),
+            detection_write_gate: Mutex::new(()),
             state_write_gate: Mutex::new(()),
             agent_write_gate: Mutex::new(()),
             proposal_write_gate: Mutex::new(()),
@@ -726,6 +727,17 @@ impl RuntimeHost {
         &self,
         signal: PolicyPlanningSignalEventData,
     ) -> RuntimeHostResult<()> {
+        if matches!(
+            signal.kind,
+            actingcommand_contract::PolicyPlanningSignalKind::DetectionReserved
+                | actingcommand_contract::PolicyPlanningSignalKind::DetectionQuotaExhausted
+        ) {
+            return Err(RuntimeHostError::request(
+                "policy_detection_signal_runtime_owned",
+                "record_policy_planning_signal",
+                RuntimeErrorCode::InvalidRequest,
+            ));
+        }
         self.shared_ref("record_policy_planning_signal")?
             .record_policy_planning_signal(signal)
     }
@@ -1429,6 +1441,8 @@ struct HostShared {
     governance_connections: Mutex<BTreeSet<ConnectionId>>,
     // Ledger append and fact projection commit are one ordered Runtime-owned transition.
     fact_write_gate: Mutex<()>,
+    // Detection quota preview, ledger append, and replay-state commit are one ordered transition.
+    detection_write_gate: Mutex<()>,
     // State and release pointer changes are serialized with their ledger facts.
     state_write_gate: Mutex<()>,
     // Agent session transitions are ledger-first and serialized across IPC and timeout sweeps.
@@ -2039,6 +2053,7 @@ impl HostShared {
         seed: u64,
         trigger: PolicyTrigger,
     ) -> RuntimeHostResult<PolicyCycle> {
+        let _detection_gate = lock(&self.detection_write_gate, "plan_policy_detection")?;
         let facts = {
             let _gate = lock(&self.fact_write_gate, "project_policy_facts")?;
             self.synchronize_fact_store_under_gate()?;
@@ -2082,6 +2097,9 @@ impl HostShared {
             trigger,
             observed_monotonic_ms,
         )?;
+        for signal in &cycle.detection_planning_signals {
+            self.record_policy_planning_signal(signal.clone())?;
+        }
         lock(
             &self.trusted_policy_dispatches,
             "record_trusted_policy_dispatches",
@@ -2175,6 +2193,7 @@ impl HostShared {
                     kind: actingcommand_contract::PolicyPlanningSignalKind::DriftPredicted,
                     fact_code: "maintenance_recheck_suggested".to_owned(),
                     observed_at_unix_ms,
+                    detection_budget: None,
                 })?;
             }
             Ok(assessment)
@@ -2624,6 +2643,7 @@ impl HostShared {
     ) -> RuntimeHostResult<()> {
         let result: RuntimeHostResult<()> = (|| {
             let mut policy = lock(&self.policy, "record_policy_planning_signal")?;
+            policy.validate_planning_signal(&signal)?;
             if let Some(existing) = policy.planning_signal(&signal.signal_id) {
                 return if existing == &signal {
                     Ok(())

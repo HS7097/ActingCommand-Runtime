@@ -183,6 +183,7 @@ fn all_payload_drafts(mut input: impl FnMut() -> AuditInput) -> Vec<EventPayload
         kind: PolicyPlanningSignalKind::GoalMissed,
         fact_code: "goal.primary.missed".to_owned(),
         observed_at_unix_ms: 1_752_147_201_000,
+        detection_budget: None,
     };
     let catalog_data = CatalogTransitionEventData {
         catalog_id: "catalog:fixture-a".to_owned(),
