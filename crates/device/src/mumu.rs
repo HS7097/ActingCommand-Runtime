@@ -9,6 +9,7 @@ const NEMU_IPC_DLL_NAME: &str = "external_renderer_ipc.dll";
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum MumuInstallSource {
     ExplicitFolder,
+    ConfiguredBackendPath,
     RunningProcess,
     VendorEnumeration,
 }
@@ -17,6 +18,7 @@ impl MumuInstallSource {
     pub(crate) fn as_str(self) -> &'static str {
         match self {
             Self::ExplicitFolder => "explicit_folder",
+            Self::ConfiguredBackendPath => "configured_backend_path",
             Self::RunningProcess => "running_process",
             Self::VendorEnumeration => "vendor_enumeration",
         }
@@ -27,6 +29,13 @@ impl MumuInstallSource {
 pub(crate) struct MumuInstallation {
     pub(crate) root: PathBuf,
     pub(crate) source: MumuInstallSource,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct MumuBackendPaths {
+    pub(crate) installation: MumuInstallation,
+    pub(crate) adb_path: PathBuf,
+    pub(crate) capture_dll_path: PathBuf,
 }
 
 pub(crate) fn resolve_mumu_installation(
@@ -90,6 +99,86 @@ pub(crate) fn resolve_mumu_capture_dll(installation: &MumuInstallation) -> Devic
         "Nemu capture DLL",
         mumu_capture_dll_candidates(&installation.root)?,
     )
+}
+
+pub(crate) fn resolve_mumu_backend_paths(
+    configured_adb: Option<PathBuf>,
+    explicit_root: Option<PathBuf>,
+    explicit_dll: Option<PathBuf>,
+) -> DeviceResult<Option<MumuBackendPaths>> {
+    let configured_adb = configured_adb.filter(|path| !path.as_os_str().is_empty());
+    let explicit_dll = explicit_dll.filter(|path| !path.as_os_str().is_empty());
+    let adb_root = configured_adb.as_deref().and_then(mumu_root_from_path);
+    let dll_root = explicit_dll.as_deref().and_then(mumu_root_from_capture_dll);
+
+    let installation = if let Some(root) = explicit_root {
+        let installation = explicit_installation(root, MumuInstallSource::ExplicitFolder)?;
+        let adb_label = configured_adb
+            .as_deref()
+            .map(|path| format!("configured ADB {}", path.display()))
+            .unwrap_or_else(|| "configured ADB".to_string());
+        let dll_label = explicit_dll
+            .as_deref()
+            .map(|path| format!("configured Nemu IPC DLL {}", path.display()))
+            .unwrap_or_else(|| "configured Nemu IPC DLL".to_string());
+        ensure_optional_root_matches(&adb_label, adb_root.as_deref(), &installation)?;
+        ensure_optional_root_matches(&dll_label, dll_root.as_deref(), &installation)?;
+        installation
+    } else if let Some(root) = adb_root.clone() {
+        let installation = explicit_installation(root, MumuInstallSource::ConfiguredBackendPath)?;
+        let dll_label = explicit_dll
+            .as_deref()
+            .map(|path| format!("configured Nemu IPC DLL {}", path.display()))
+            .unwrap_or_else(|| "configured Nemu IPC DLL".to_string());
+        ensure_optional_root_matches(&dll_label, dll_root.as_deref(), &installation)?;
+        installation
+    } else if let Some(root) = dll_root.clone() {
+        explicit_installation(root, MumuInstallSource::ConfiguredBackendPath)?
+    } else {
+        let Some(installation) = resolve_mumu_installation(None)? else {
+            return Ok(None);
+        };
+        installation
+    };
+
+    let adb_path = match configured_adb {
+        Some(path) => {
+            require_backend_file(&path, "configured ADB executable")?;
+            let root = adb_root.ok_or_else(|| {
+                DeviceError::fatal(format!(
+                    "configured ADB {} does not identify the selected MuMu installation root {}; ADB and Nemu capture must share one installation identity",
+                    path.display(),
+                    installation.root.display()
+                ))
+            })?;
+            ensure_same_install_root("configured ADB", &root, &installation)?;
+            path
+        }
+        None => resolve_mumu_adb(&installation)?,
+    };
+    let capture_dll_path = match explicit_dll {
+        Some(path) => {
+            require_backend_file(&path, "configured Nemu IPC DLL")?;
+            if !path_is_within_mumu_root(&path, &installation.root) {
+                return Err(DeviceError::fatal(format!(
+                    "configured Nemu IPC DLL {} is outside selected MuMu installation root {}",
+                    path.display(),
+                    installation.root.display()
+                )));
+            }
+            if let Some(root) = dll_root {
+                ensure_same_install_root("configured Nemu IPC DLL", &root, &installation)?;
+            }
+            path
+        }
+        None => resolve_mumu_capture_dll(&installation)?,
+    };
+
+    Ok(Some(MumuBackendPaths {
+        installation,
+        adb_path,
+        capture_dll_path,
+    }))
 }
 
 pub(crate) fn mumu_adb_candidates(root: &Path) -> DeviceResult<Vec<PathBuf>> {
@@ -178,6 +267,50 @@ fn select_unique_installation(
     let root = roots.into_iter().next().expect("one root");
     require_install_root(&root, source)?;
     Ok(MumuInstallation { root, source })
+}
+
+fn explicit_installation(
+    root: PathBuf,
+    source: MumuInstallSource,
+) -> DeviceResult<MumuInstallation> {
+    require_install_root(&root, source)?;
+    Ok(MumuInstallation { root, source })
+}
+
+fn ensure_optional_root_matches(
+    label: &str,
+    root: Option<&Path>,
+    installation: &MumuInstallation,
+) -> DeviceResult<()> {
+    if let Some(root) = root {
+        ensure_same_install_root(label, root, installation)?;
+    }
+    Ok(())
+}
+
+fn ensure_same_install_root(
+    label: &str,
+    root: &Path,
+    installation: &MumuInstallation,
+) -> DeviceResult<()> {
+    if same_mumu_install_root(root, &installation.root) {
+        return Ok(());
+    }
+    Err(DeviceError::fatal(format!(
+        "{label} belongs to MuMu installation root {}, not selected root {}; ADB and Nemu capture must share one installation identity",
+        root.display(),
+        installation.root.display()
+    )))
+}
+
+fn require_backend_file(path: &Path, label: &str) -> DeviceResult<()> {
+    if path.is_file() {
+        return Ok(());
+    }
+    Err(DeviceError::fatal(format!(
+        "{label} does not exist or is not a file: {}",
+        path.display()
+    )))
 }
 
 fn require_install_root(root: &Path, source: MumuInstallSource) -> DeviceResult<()> {
@@ -453,6 +586,65 @@ mod tests {
             mumu_root_from_capture_dll(&dll).expect("DLL root"),
             installation.root
         );
+    }
+
+    #[test]
+    fn coordinated_backend_paths_reject_cross_installation_inputs() {
+        let temp = TempRoot::new("coordinated-mismatch");
+        let first = temp.path().join("MuMu Player First");
+        let second = temp.path().join("MuMuPlayer-Second");
+        let adb = first.join("nx_main/adb.exe");
+        let dll = second.join("nx_device/15.1/shell/sdk/external_renderer_ipc.dll");
+        for file in [&adb, &dll] {
+            fs::create_dir_all(file.parent().expect("parent")).expect("candidate parent");
+            fs::write(file, b"fixture").expect("candidate file");
+        }
+
+        let err = resolve_mumu_backend_paths(Some(adb.clone()), None, Some(dll.clone()))
+            .expect_err("cross-installation inputs must fail");
+
+        assert!(err.message().contains("one installation identity"));
+        assert!(err.message().contains(&first.display().to_string()));
+        assert!(err.message().contains(&second.display().to_string()));
+    }
+
+    #[test]
+    fn coordinated_backend_paths_preserve_one_installation_identity() {
+        let temp = TempRoot::new("coordinated-same-root");
+        let root = temp.path().join("MuMuPlayer-Future");
+        let adb = root.join("nx_device/16.0/shell/adb.exe");
+        let dll = root.join("nx_device/16.0/shell/sdk/external_renderer_ipc.dll");
+        for file in [&adb, &dll] {
+            fs::create_dir_all(file.parent().expect("parent")).expect("candidate parent");
+            fs::write(file, b"fixture").expect("candidate file");
+        }
+
+        let paths = resolve_mumu_backend_paths(Some(adb.clone()), None, Some(dll.clone()))
+            .expect("coordinated resolution")
+            .expect("MuMu paths");
+
+        assert_eq!(paths.installation.root, root);
+        assert_eq!(paths.adb_path, adb);
+        assert_eq!(paths.capture_dll_path, dll);
+    }
+
+    #[test]
+    fn coordinated_backend_paths_reject_unassociated_adb() {
+        let temp = TempRoot::new("coordinated-unassociated");
+        let root = temp.path().join("MuMu Player Configured");
+        let adb = temp.path().join("platform-tools/adb.exe");
+        let dll = root.join("nx_device/16.0/shell/sdk/external_renderer_ipc.dll");
+        for file in [&adb, &dll] {
+            fs::create_dir_all(file.parent().expect("parent")).expect("candidate parent");
+            fs::write(file, b"fixture").expect("candidate file");
+        }
+
+        let err = resolve_mumu_backend_paths(Some(adb.clone()), Some(root.clone()), Some(dll))
+            .expect_err("unassociated ADB must fail");
+
+        assert!(err.message().contains("does not identify"));
+        assert!(err.message().contains(&adb.display().to_string()));
+        assert!(err.message().contains(&root.display().to_string()));
     }
 
     #[test]

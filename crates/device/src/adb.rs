@@ -25,11 +25,21 @@ pub struct AdbConfig {
 impl Default for AdbConfig {
     fn default() -> Self {
         Self {
-            adb_path: resolve_adb_path(None)
-                .map(|resolved| resolved.path)
-                .unwrap_or_default(),
+            // Discovery is fallible and must be requested through `resolve`.
+            adb_path: String::new(),
             command_timeout: Duration::from_secs(12),
         }
+    }
+}
+
+impl AdbConfig {
+    pub fn resolve(configured: Option<&str>) -> DeviceResult<(Self, ResolvedAdbPath)> {
+        let resolved = resolve_adb_path(configured)?;
+        let config = Self {
+            adb_path: resolved.path.clone(),
+            ..Self::default()
+        };
+        Ok((config, resolved))
     }
 }
 
@@ -82,6 +92,7 @@ fn resolve_adb_path_after_discovery(
     if let Some(installation) = installation {
         let source = match installation.source {
             MumuInstallSource::ExplicitFolder => AdbPathSource::MumuFolderEnvironment,
+            MumuInstallSource::ConfiguredBackendPath => AdbPathSource::UserConfig,
             MumuInstallSource::RunningProcess => AdbPathSource::MumuRunningProcess,
             MumuInstallSource::VendorEnumeration => AdbPathSource::MumuVendorEnumeration,
         };
@@ -534,6 +545,14 @@ mod tests {
         let err = adb.run(&["version"]).expect_err("empty adb must fail");
 
         assert!(err.to_string().contains("non-MuMu baseline channel"));
+    }
+
+    #[test]
+    fn default_adb_config_is_inert_until_fallible_resolution() {
+        let config = AdbConfig::default();
+
+        assert!(config.adb_path.is_empty());
+        assert_eq!(config.command_timeout, Duration::from_secs(12));
     }
 
     #[test]
