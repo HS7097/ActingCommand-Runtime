@@ -56,6 +56,17 @@ struct ProcessRecord {
     counters: ProcessCounters,
 }
 
+struct ProcessScan {
+    records: Vec<ProcessRecord>,
+    inaccessible_processes: usize,
+}
+
+enum ProcessRecordOutcome {
+    Skipped,
+    Sampled(ProcessRecord),
+    Inaccessible,
+}
+
 struct OwnedHandle(HANDLE);
 
 impl Drop for OwnedHandle {
@@ -180,15 +191,16 @@ impl HostSampler for WindowsHostSampler {
             Some(previous) => observed_at_unix_ms - previous,
             None => 0,
         };
-        let process_records = process_samples(
+        let process_scan = process_samples(
             total_delta,
             elapsed_ms,
             &self.previous_processes,
             owned_processes,
         )?;
+        let inaccessible_processes = process_scan.inaccessible_processes;
         let mut next_processes = BTreeMap::new();
         let mut all_processes = BTreeMap::new();
-        for record in process_records {
+        for record in process_scan.records {
             next_processes.insert(record.sample.pid, record.counters);
             all_processes.insert(record.sample.pid, record.sample);
         }
@@ -287,6 +299,7 @@ impl HostSampler for WindowsHostSampler {
         if !process_rates_available {
             unavailable.extend([HostMetric::ProcessCpu, HostMetric::ProcessIo]);
         }
+        mark_partial_process_metrics(&mut unavailable, inaccessible_processes);
         if owned_processes
             .keys()
             .any(|pid| !all_processes.contains_key(pid))
@@ -359,7 +372,7 @@ fn process_samples(
     elapsed_ms: u64,
     previous: &BTreeMap<u32, ProcessCounters>,
     owned: &BTreeMap<u32, String>,
-) -> Result<Vec<ProcessRecord>, &'static str> {
+) -> Result<ProcessScan, &'static str> {
     // SAFETY: Toolhelp owns a stable snapshot; PROCESSENTRY32W has the required size.
     unsafe {
         let snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
@@ -373,18 +386,26 @@ fn process_samples(
         if Process32FirstW(snapshot, &mut entry) == 0 {
             return Err("performance_process_enumeration_failed");
         }
-        let mut records = Vec::new();
+        let mut scan = ProcessScan {
+            records: Vec::new(),
+            inaccessible_processes: 0,
+        };
         loop {
-            if let Some(record) =
-                process_record(&entry, total_system_delta, elapsed_ms, previous, owned)
-            {
-                records.push(record);
+            match process_record(&entry, total_system_delta, elapsed_ms, previous, owned) {
+                ProcessRecordOutcome::Skipped => {}
+                ProcessRecordOutcome::Sampled(record) => scan.records.push(record),
+                ProcessRecordOutcome::Inaccessible => {
+                    scan.inaccessible_processes = scan
+                        .inaccessible_processes
+                        .checked_add(1)
+                        .ok_or("performance_process_count_overflow")?;
+                }
             }
             if Process32NextW(snapshot, &mut entry) == 0 {
                 break;
             }
         }
-        Ok(records)
+        Ok(scan)
     }
 }
 
@@ -394,15 +415,15 @@ unsafe fn process_record(
     elapsed_ms: u64,
     previous: &BTreeMap<u32, ProcessCounters>,
     owned: &BTreeMap<u32, String>,
-) -> Option<ProcessRecord> {
+) -> ProcessRecordOutcome {
     let pid = entry.th32ProcessID;
     if pid == 0 {
-        return None;
+        return ProcessRecordOutcome::Skipped;
     }
     let handle =
         unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_VM_READ, 0, pid) };
     if handle.is_null() {
-        return None;
+        return ProcessRecordOutcome::Inaccessible;
     }
     let _handle = OwnedHandle(handle);
     let mut creation: FILETIME = unsafe { zeroed() };
@@ -410,13 +431,16 @@ unsafe fn process_record(
     let mut kernel: FILETIME = unsafe { zeroed() };
     let mut user: FILETIME = unsafe { zeroed() };
     let mut memory: PROCESS_MEMORY_COUNTERS = unsafe { zeroed() };
-    memory.cb = u32::try_from(size_of::<PROCESS_MEMORY_COUNTERS>()).ok()?;
+    let Ok(memory_size) = u32::try_from(size_of::<PROCESS_MEMORY_COUNTERS>()) else {
+        return ProcessRecordOutcome::Inaccessible;
+    };
+    memory.cb = memory_size;
     let mut io: IO_COUNTERS = unsafe { zeroed() };
     if unsafe { GetProcessTimes(handle, &mut creation, &mut exit, &mut kernel, &mut user) } == 0
         || unsafe { K32GetProcessMemoryInfo(handle, &mut memory, memory.cb) } == 0
         || unsafe { GetProcessIoCounters(handle, &mut io) } == 0
     {
-        return None;
+        return ProcessRecordOutcome::Inaccessible;
     }
     let counters = ProcessCounters {
         cpu_100ns: filetime(kernel).saturating_add(filetime(user)),
@@ -455,7 +479,7 @@ unsafe fn process_record(
     } else {
         ProcessOwnership::ThirdParty
     };
-    Some(ProcessRecord {
+    ProcessRecordOutcome::Sampled(ProcessRecord {
         sample: ProcessSample {
             pid,
             process_name,
@@ -466,6 +490,19 @@ unsafe fn process_record(
         },
         counters,
     })
+}
+
+fn mark_partial_process_metrics(
+    unavailable: &mut BTreeSet<HostMetric>,
+    inaccessible_processes: usize,
+) {
+    if inaccessible_processes > 0 {
+        unavailable.extend([
+            HostMetric::ProcessCpu,
+            HostMetric::ProcessRam,
+            HostMetric::ProcessIo,
+        ]);
+    }
 }
 
 fn foreground_summary(processes: &BTreeMap<u32, ProcessSample>) -> Option<ForegroundSample> {
@@ -656,5 +693,23 @@ mod tests {
         assert_eq!(nonnegative_to_u32_milli(1.25), 1_250);
         assert_eq!(seconds_to_micros(-1.0), 0);
         assert_eq!(seconds_to_micros(0.025), 25_000);
+    }
+
+    #[test]
+    fn inaccessible_processes_make_process_metrics_explicitly_partial() {
+        let mut unavailable = BTreeSet::new();
+        mark_partial_process_metrics(&mut unavailable, 1);
+        assert_eq!(
+            unavailable,
+            BTreeSet::from([
+                HostMetric::ProcessCpu,
+                HostMetric::ProcessRam,
+                HostMetric::ProcessIo,
+            ])
+        );
+
+        let mut complete = BTreeSet::new();
+        mark_partial_process_metrics(&mut complete, 0);
+        assert!(complete.is_empty());
     }
 }

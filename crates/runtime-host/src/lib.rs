@@ -43,6 +43,7 @@ pub use planning::MaintenanceLedgerQuery;
 pub use policy_control::PolicyExecutionInput;
 pub use policy_host::{
     CatalogGeneration, PolicyAdmissionContext, PolicyCadence, PolicyCycle, PolicyDispatchAdmission,
+    PolicyEvaluationCost, PolicyEvaluationExecution, PolicyEvaluationMeasurement,
     PolicyRecomputeDirective, PolicyRecomputeKind, PolicyRecomputeReason, PolicyTrigger,
 };
 pub use provider::*;
