@@ -413,6 +413,18 @@ mod tests {
     }
 
     #[test]
+    fn legacy_schema_version_rejects_the_complete_catalog() {
+        let sources = mutate_tasks(|tasks| {
+            tasks["schema_version"] = serde_json::json!("task-catalog.v0-draft");
+        });
+        let error = compile_catalog(&sources).expect_err("legacy schema must fail");
+        assert!(error.diagnostics().iter().any(|diagnostic| {
+            diagnostic.code == CatalogDiagnosticCode::UnsupportedSchemaVersion
+                && diagnostic.json_path == "/schema_version"
+        }));
+    }
+
+    #[test]
     fn dangling_pool_reference_rejects_the_complete_catalog() {
         let sources = mutate_tasks(|tasks| {
             tasks["tasks"][0]["produces"][0]["pool_id"] = serde_json::json!("fixture-pool-missing");
