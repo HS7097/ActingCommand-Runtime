@@ -471,7 +471,7 @@ mod tests {
         assert!(first.catalog_hash().starts_with("sha256:"));
         assert_eq!(
             first.catalog_hash(),
-            "sha256:9ee4623e6057a650960ca1bd5287e4b4c6e042429ab31a93d3b95cf3aebbc7c4"
+            "sha256:24dc8c0b4d63c03ad77ebe8a57e91186070ee0d379f17a3374060207cc3f257c"
         );
         assert_eq!(first.summary().counts.tasks, 1);
         let report: serde_json::Value =

@@ -897,7 +897,8 @@ fn rewrite_predicate_task_ids(predicate: &mut PredicateSpec, mapping: &BTreeMap<
         }
         PredicateSpec::Clock { .. }
         | PredicateSpec::ResourceProjection { .. }
-        | PredicateSpec::Fact { .. } => {}
+        | PredicateSpec::Fact { .. }
+        | PredicateSpec::RecordDeadline { .. } => {}
     }
 }
 
@@ -916,6 +917,7 @@ fn merge_activity_profile(
         || existing.daily_budget != incoming.daily_budget
         || existing.max_window_iterations != incoming.max_window_iterations
         || existing.session_max_ms != incoming.session_max_ms
+        || existing.detection_budget != incoming.detection_budget
         || existing.minimum_interval_ms != incoming.minimum_interval_ms
         || existing.maximum_interval_ms != incoming.maximum_interval_ms
         || existing.seed_source != incoming.seed_source
@@ -1204,7 +1206,7 @@ fn require_game_predicate_scopes(predicate: &PredicateSpec, game_id: &str) -> St
             Ok(())
         }
         PredicateSpec::Not { predicate } => require_game_predicate_scopes(predicate, game_id),
-        PredicateSpec::Fact { scope, .. } => {
+        PredicateSpec::Fact { scope, .. } | PredicateSpec::RecordDeadline { scope, .. } => {
             require_game_scope(scope, game_id, "template fact predicate")
         }
         PredicateSpec::Clock { .. }
@@ -1415,6 +1417,7 @@ mod tests {
                         "id": "template.activity", "scope": {"kind": "game", "game_id": "fixture-game"},
                         "windows": [{"weekdays": [1,2,3,4,5,6,7], "utc_offset_minutes": 0, "start_minute_of_day": 0, "end_minute_of_day": 1439}],
                         "daily_budget": 10, "max_window_iterations": 5, "session_max_ms": 60000,
+                        "detection_budget": {"window_dispatch_limit": 2, "window_runtime_ms": 30000, "expected_duration_ms": 10000},
                         "minimum_interval_ms": 1000, "maximum_interval_ms": 2000,
                         "seed_source": "ledger", "resample_policy": "same_round_stable",
                         "importance_milli": 100, "goals": []

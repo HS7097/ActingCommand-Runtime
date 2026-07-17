@@ -179,6 +179,69 @@
       },
       "strategic_weight_milli": 1000,
       "instance_overrides": []
+    },
+    {
+      "id": "neutral.consume-expiring-item",
+      "scope": {
+        "kind": "instance",
+        "instance_id": "neutral-instance-c"
+      },
+      "entrypoint": {
+        "operation_id": "operation.consume-expiring-item"
+      },
+      "procedure_ref": "procedure.consume-expiring-item",
+      "priority": 140,
+      "trigger": {
+        "kind": "record_deadline",
+        "scope": {
+          "kind": "instance",
+          "instance_id": "neutral-instance-c"
+        },
+        "fact_key": "inventory.expiring_items",
+        "timestamp_field": "expires_at_unix_ms",
+        "within_ms": 172800000,
+        "max_age_ms": 7200000
+      },
+      "feedback_stop": {
+        "kind": "clock",
+        "schedule": {
+          "kind": "at",
+          "clock_source": {
+            "kind": "server",
+            "timezone_id": "etc/utc",
+            "utc_offset_minutes": 0,
+            "dst_offset_minutes": 0,
+            "maintenance_drift_ms": 0
+          },
+          "at_ms": 4102444800000
+        }
+      },
+      "consumes": [],
+      "produces": [],
+      "on_failure": {
+        "action": "continue",
+        "retry_limit": 2,
+        "retry_backoff_ms": 30000,
+        "escalation_threshold": 3
+      },
+      "sensitive": false,
+      "next_run_clamp_ms": 86400000,
+      "yield_points": ["after_item_consumption"],
+      "expected_duration_ms": 60000,
+      "cooldown_ms": 1000,
+      "load_profile": {
+        "kind": "weighted",
+        "cpu_milli": 100,
+        "gpu_milli": 100,
+        "io_milli": 100
+      },
+      "loop_budget": {
+        "daily_limit": 24,
+        "window_iteration_limit": 6,
+        "max_runtime_ms": 300000
+      },
+      "strategic_weight_milli": 1000,
+      "instance_overrides": []
     }
   ]
 }

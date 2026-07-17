@@ -716,6 +716,20 @@ pub struct PolicyPlanningSignalEventData {
     pub kind: PolicyPlanningSignalKind,
     pub fact_code: String,
     pub observed_at_unix_ms: u64,
+    pub detection_budget: Option<PolicyDetectionBudgetRecord>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PolicyDetectionBudgetRecord {
+    pub catalog_hash: String,
+    pub profile_id: String,
+    pub window_id: String,
+    pub dispatch_used: u32,
+    pub dispatch_limit: u32,
+    pub runtime_reserved_ms: u64,
+    pub runtime_limit_ms: u64,
+    pub reservation_ms: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -729,6 +743,8 @@ pub struct PolicyPlanningSignalPayload {
     kind: PolicyPlanningSignalKind,
     fact_code: String,
     observed_at_unix_ms: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    detection_budget: Option<PolicyDetectionBudgetRecord>,
     audit: SanitizedAudit,
 }
 
@@ -755,6 +771,10 @@ impl PolicyPlanningSignalPayload {
 
     pub const fn observed_at_unix_ms(&self) -> u64 {
         self.observed_at_unix_ms
+    }
+
+    pub const fn detection_budget(&self) -> Option<&PolicyDetectionBudgetRecord> {
+        self.detection_budget.as_ref()
     }
 }
 
@@ -2673,6 +2693,7 @@ impl PolicyPlanningSignalDraft {
             kind: self.data.kind,
             fact_code: self.data.fact_code,
             observed_at_unix_ms: self.data.observed_at_unix_ms,
+            detection_budget: self.data.detection_budget,
             audit: self.audit.sanitize(fingerprinter)?,
         })
     }
@@ -3003,6 +3024,43 @@ fn validate_policy_planning_signal_data(
             "observed_at_unix_ms",
         ));
     }
+    let detection_kind = matches!(
+        data.kind,
+        PolicyPlanningSignalKind::DetectionReserved
+            | PolicyPlanningSignalKind::DetectionQuotaExhausted
+    );
+    if detection_kind != data.detection_budget.is_some() {
+        return Err(SanitizationError::new(
+            "invalid_policy_detection_budget_presence",
+            "detection_budget",
+        ));
+    }
+    if let Some(budget) = &data.detection_budget {
+        validate_catalog_hash(&budget.catalog_hash, "detection_budget.catalog_hash")?;
+        validate_policy_token(&budget.profile_id, "detection_budget.profile_id")?;
+        validate_policy_token(&budget.window_id, "detection_budget.window_id")?;
+        let exhausted = budget.dispatch_used >= budget.dispatch_limit
+            || budget
+                .runtime_reserved_ms
+                .checked_add(budget.reservation_ms)
+                .is_none_or(|next| next > budget.runtime_limit_ms);
+        if budget.dispatch_limit == 0
+            || budget.runtime_limit_ms == 0
+            || budget.reservation_ms == 0
+            || budget.dispatch_used > budget.dispatch_limit
+            || budget.runtime_reserved_ms > budget.runtime_limit_ms
+            || data.kind == PolicyPlanningSignalKind::DetectionReserved
+                && (budget.dispatch_used == 0
+                    || budget.runtime_reserved_ms == 0
+                    || budget.runtime_reserved_ms < budget.reservation_ms)
+            || data.kind == PolicyPlanningSignalKind::DetectionQuotaExhausted && !exhausted
+        {
+            return Err(SanitizationError::new(
+                "invalid_policy_detection_budget",
+                "detection_budget",
+            ));
+        }
+    }
     Ok(())
 }
 
@@ -3208,6 +3266,7 @@ fn validate_policy_payload(payload: &PolicyPayload) -> Result<(), SanitizationEr
                 kind: value.kind,
                 fact_code: value.fact_code.clone(),
                 observed_at_unix_ms: value.observed_at_unix_ms,
+                detection_budget: value.detection_budget.clone(),
             })?;
             None
         }

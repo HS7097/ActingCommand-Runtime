@@ -23,6 +23,11 @@
       "daily_budget": 24,
       "max_window_iterations": 4,
       "session_max_ms": 7200000,
+      "detection_budget": {
+        "window_dispatch_limit": 4,
+        "window_runtime_ms": 300000,
+        "expected_duration_ms": 60000
+      },
       "minimum_interval_ms": 60000,
       "maximum_interval_ms": 300000,
       "seed_source": "ledger",
@@ -59,6 +64,11 @@
       "daily_budget": 24,
       "max_window_iterations": 4,
       "session_max_ms": 7200000,
+      "detection_budget": {
+        "window_dispatch_limit": 4,
+        "window_runtime_ms": 300000,
+        "expected_duration_ms": 60000
+      },
       "minimum_interval_ms": 60000,
       "maximum_interval_ms": 300000,
       "seed_source": "ledger",

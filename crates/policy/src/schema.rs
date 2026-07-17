@@ -301,6 +301,13 @@ pub enum PredicateSpec {
         value: FactValue,
         max_age_ms: Option<u64>,
     },
+    RecordDeadline {
+        scope: ScopeSelector,
+        fact_key: String,
+        timestamp_field: String,
+        within_ms: u64,
+        max_age_ms: Option<u64>,
+    },
     DependencyCompleted {
         task_id: String,
         terminal_states: Vec<TaskTerminalState>,
@@ -453,12 +460,21 @@ pub struct ActivityProfile {
     pub daily_budget: u32,
     pub max_window_iterations: u32,
     pub session_max_ms: u64,
+    pub detection_budget: DetectionBudget,
     pub minimum_interval_ms: u64,
     pub maximum_interval_ms: u64,
     pub seed_source: SeedSource,
     pub resample_policy: ResamplePolicy,
     pub importance_milli: u16,
     pub goals: Vec<GoalTarget>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DetectionBudget {
+    pub window_dispatch_limit: u32,
+    pub window_runtime_ms: u64,
+    pub expected_duration_ms: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
