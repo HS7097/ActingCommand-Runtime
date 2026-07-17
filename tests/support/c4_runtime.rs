@@ -182,7 +182,7 @@ pub struct RuntimeChild {
 
 impl RuntimeChild {
     pub fn spawn(root: &Path, child_test_name: &str) -> Self {
-        Self::spawn_for_instance(root, child_test_name, "ak.cn")
+        Self::spawn_for_instance(root, child_test_name, "node.a")
     }
 
     pub fn spawn_for_instance(root: &Path, child_test_name: &str, instance_alias: &str) -> Self {

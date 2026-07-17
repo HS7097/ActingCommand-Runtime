@@ -59,6 +59,8 @@ pub enum ProbeClickEffect {
 pub struct ResourcePolicy {
     pub kind: ResourcePolicyKind,
     #[serde(default)]
+    pub resource_key: Option<String>,
+    #[serde(default)]
     pub max_cost: Option<u32>,
     #[serde(default)]
     pub premium_currency_allowed: bool,
@@ -72,12 +74,7 @@ pub struct ResourcePolicy {
 #[serde(rename_all = "snake_case")]
 pub enum ResourcePolicyKind {
     FreeReward,
-    #[serde(rename = "azurlane.oil")]
-    AzurlaneOil,
-    #[serde(rename = "bluearchive.ap")]
-    BluearchiveAp,
-    #[serde(rename = "arknights.sanity")]
-    ArknightsSanity,
+    RegeneratingResource,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -508,6 +505,7 @@ fn validate_resource_policy(
         ProbeClickEffect::NavigationOnly => {
             if let Some(policy) = policy {
                 reject_premium_or_refill(step_id, policy)?;
+                validate_resource_key(step_id, policy.resource_key.as_deref())?;
             }
             Ok(())
         }
@@ -518,6 +516,7 @@ fn validate_resource_policy(
                 ))
             })?;
             reject_premium_or_refill(step_id, policy)?;
+            validate_resource_key(step_id, policy.resource_key.as_deref())?;
             if policy.kind != ResourcePolicyKind::FreeReward {
                 return Err(TaskLoopError::fatal(format!(
                     "probe step '{step_id}' free_claim requires resource_policy.kind=free_reward"
@@ -537,16 +536,12 @@ fn validate_resource_policy(
                 ))
             })?;
             reject_premium_or_refill(step_id, policy)?;
-            match policy.kind {
-                ResourcePolicyKind::AzurlaneOil
-                | ResourcePolicyKind::BluearchiveAp
-                | ResourcePolicyKind::ArknightsSanity => {}
-                ResourcePolicyKind::FreeReward => {
-                    return Err(TaskLoopError::fatal(format!(
-                        "probe step '{step_id}' consume_regenerating_resource requires oil/AP/sanity policy kind"
-                    )));
-                }
+            if policy.kind != ResourcePolicyKind::RegeneratingResource {
+                return Err(TaskLoopError::fatal(format!(
+                    "probe step '{step_id}' consume_regenerating_resource requires resource_policy.kind=regenerating_resource"
+                )));
             }
+            validate_required_resource_key(step_id, policy.resource_key.as_deref())?;
             if policy.max_cost.is_none() {
                 return Err(TaskLoopError::fatal(format!(
                     "probe step '{step_id}' consume_regenerating_resource requires max_cost"
@@ -555,6 +550,27 @@ fn validate_resource_policy(
             Ok(())
         }
     }
+}
+
+fn validate_resource_key(step_id: &str, resource_key: Option<&str>) -> TaskLoopResult<()> {
+    if let Some(resource_key) = resource_key
+        && (resource_key.trim().is_empty() || resource_key.len() > 128)
+    {
+        return Err(TaskLoopError::fatal(format!(
+            "probe step '{step_id}' resource_policy.resource_key must contain 1 to 128 bytes"
+        )));
+    }
+    Ok(())
+}
+
+fn validate_required_resource_key(step_id: &str, resource_key: Option<&str>) -> TaskLoopResult<()> {
+    validate_resource_key(step_id, resource_key)?;
+    if resource_key.is_none() {
+        return Err(TaskLoopError::fatal(format!(
+            "probe step '{step_id}' consume_regenerating_resource requires resource_policy.resource_key"
+        )));
+    }
+    Ok(())
 }
 
 fn reject_premium_or_refill(step_id: &str, policy: &ResourcePolicy) -> TaskLoopResult<()> {
@@ -595,7 +611,6 @@ const NAVIGATION_DANGEROUS_WORDS: &[&str] = &[
     "receive",
     "reward",
     "battle",
-    "sortie",
     "start",
     "buy",
     "purchase",
@@ -615,11 +630,6 @@ const NAVIGATION_DANGEROUS_WORDS: &[&str] = &[
     "\u{53d7}\u{53d6}",
     "\u{8cfc}\u{5165}",
     "\u{78ba}\u{8a8d}",
-    "\u{51fa}\u{6483}",
-    "\u{6226}\u{95d8}",
-    "\u{5efa}\u{9020}",
-    "\u{9000}\u{5f79}",
-    "\u{5f37}\u{5316}",
 ];
 
 const FREE_CLAIM_DANGEROUS_WORDS: &[&str] = &[
@@ -630,8 +640,6 @@ const FREE_CLAIM_DANGEROUS_WORDS: &[&str] = &[
     "gem",
     "diamond",
     "stone",
-    "pyroxene",
-    "originite",
     "confirm_purchase",
     "refill",
     "recover",
@@ -643,21 +651,14 @@ const FREE_CLAIM_DANGEROUS_WORDS: &[&str] = &[
     "awaken",
     "build",
     "construct",
-    "gacha",
-    "recruit",
-    "sortie",
     "battle",
     "shop",
     "\u{8d2d}\u{4e70}",
     "\u{8cfc}\u{5165}",
     "\u{88dc}\u{5145}",
-    "\u{6f14}\u{4e60}",
-    "\u{6f14}\u{7fd2}",
 ];
 
 const CONSUME_DANGEROUS_WORDS: &[&str] = &[
-    "exercise",
-    "pvp",
     "buy",
     "purchase",
     "refill",
@@ -666,11 +667,7 @@ const CONSUME_DANGEROUS_WORDS: &[&str] = &[
     "gem",
     "diamond",
     "stone",
-    "pyroxene",
-    "originite",
     "confirm_purchase",
-    "gacha",
-    "recruit",
     "build",
     "construct",
     "retire",
@@ -680,9 +677,6 @@ const CONSUME_DANGEROUS_WORDS: &[&str] = &[
     "enhance",
     "awaken",
     "shop",
-    "\u{6f14}\u{4e60}",
-    "\u{6f14}\u{7fd2}",
-    "\u{7ade}\u{6280}",
     "\u{8d2d}\u{4e70}",
     "\u{8cfc}\u{5165}",
     "\u{88dc}\u{5145}",
@@ -706,7 +700,6 @@ const DANGEROUS_WORDS: &[&str] = &[
     "awaken",
     "build",
     "construct",
-    "sortie",
     "battle",
     "fight",
     "start",
@@ -720,11 +713,6 @@ const DANGEROUS_WORDS: &[&str] = &[
     "领取",
     "購入",
     "確認",
-    "出撃",
-    "戦闘",
-    "建造",
-    "退役",
-    "強化",
 ];
 
 #[cfg(test)]
@@ -916,7 +904,7 @@ mod tests {
         let probe = ProbeDecisionLoop::new(override_probe_plan()).expect("probe");
         let mut overrides = ProbeReferenceOverrides::new();
         overrides.insert_click_target("navigation/home_to_task", rect(46, 217, 40, 40));
-        overrides.insert_page("bluearchive/task_center");
+        overrides.insert_page("fixture/task_center");
 
         probe
             .validate_with_overrides(&fixture.detector, &fixture.evaluator, &overrides)
@@ -929,7 +917,7 @@ mod tests {
         let probe = ProbeDecisionLoop::new(ProbePlan {
             steps: vec![ProbeStep {
                 id: "return_home".to_string(),
-                page_id: Some("bluearchive/task_center".to_string()),
+                page_id: Some("fixture/task_center".to_string()),
                 action: ProbeAction::Click {
                     target_id: "fixture/click".to_string(),
                     effect: ProbeClickEffect::NavigationOnly,
@@ -945,7 +933,7 @@ mod tests {
         })
         .expect("probe");
         let mut overrides = ProbeReferenceOverrides::new();
-        overrides.insert_page("bluearchive/task_center");
+        overrides.insert_page("fixture/task_center");
 
         let decision = probe
             .decide_step_with_known_page(
@@ -954,7 +942,7 @@ mod tests {
                 &fixture.evaluator,
                 &scene(true),
                 &overrides,
-                Some("bluearchive/task_center"),
+                Some("fixture/task_center"),
             )
             .expect("external guard");
 
@@ -967,7 +955,7 @@ mod tests {
         let probe = ProbeDecisionLoop::new(ProbePlan {
             steps: vec![ProbeStep {
                 id: "return_home".to_string(),
-                page_id: Some("bluearchive/task_center".to_string()),
+                page_id: Some("fixture/task_center".to_string()),
                 action: ProbeAction::Click {
                     target_id: "fixture/click".to_string(),
                     effect: ProbeClickEffect::NavigationOnly,
@@ -983,7 +971,7 @@ mod tests {
         })
         .expect("probe");
         let mut overrides = ProbeReferenceOverrides::new();
-        overrides.insert_page("bluearchive/task_center");
+        overrides.insert_page("fixture/task_center");
 
         let decision = probe
             .decide_step_with_known_page(
@@ -1124,7 +1112,8 @@ mod tests {
                     target_id: "fixture/start_battle".to_string(),
                     effect: ProbeClickEffect::ConsumeRegeneratingResource,
                     resource_policy: Some(ResourcePolicy {
-                        kind: ResourcePolicyKind::BluearchiveAp,
+                        kind: ResourcePolicyKind::RegeneratingResource,
+                        resource_key: Some("fixture.energy".to_string()),
                         max_cost: Some(10),
                         premium_currency_allowed: false,
                         auto_refill_allowed: false,
@@ -1144,16 +1133,17 @@ mod tests {
     }
 
     #[test]
-    fn consume_rejects_exercise_and_missing_max_cost() {
+    fn consume_rejects_prohibited_action_and_missing_max_cost() {
         let err = ProbeDecisionLoop::new(ProbePlan {
             steps: vec![ProbeStep {
-                id: "exercise".to_string(),
+                id: "premium_purchase".to_string(),
                 page_id: Some("fixture/home_page".to_string()),
                 action: ProbeAction::Click {
-                    target_id: "fixture/exercise_start".to_string(),
+                    target_id: "fixture/premium_purchase".to_string(),
                     effect: ProbeClickEffect::ConsumeRegeneratingResource,
                     resource_policy: Some(ResourcePolicy {
-                        kind: ResourcePolicyKind::AzurlaneOil,
+                        kind: ResourcePolicyKind::RegeneratingResource,
+                        resource_key: Some("fixture.energy".to_string()),
                         max_cost: Some(10),
                         premium_currency_allowed: false,
                         auto_refill_allowed: false,
@@ -1168,9 +1158,9 @@ mod tests {
             }],
             ..valid_probe_plan()
         })
-        .expect_err("exercise must be rejected");
+        .expect_err("prohibited action must be rejected");
 
-        assert_fatal_contains(err, "exercise");
+        assert_fatal_contains(err, "purchase");
 
         let err = ProbeDecisionLoop::new(ProbePlan {
             steps: vec![ProbeStep {
@@ -1180,7 +1170,8 @@ mod tests {
                     target_id: "fixture/start_battle".to_string(),
                     effect: ProbeClickEffect::ConsumeRegeneratingResource,
                     resource_policy: Some(ResourcePolicy {
-                        kind: ResourcePolicyKind::ArknightsSanity,
+                        kind: ResourcePolicyKind::RegeneratingResource,
+                        resource_key: Some("fixture.energy".to_string()),
                         max_cost: None,
                         premium_currency_allowed: false,
                         auto_refill_allowed: false,
@@ -1198,6 +1189,34 @@ mod tests {
         .expect_err("missing max cost");
 
         assert_fatal_contains(err, "max_cost");
+
+        let err = ProbeDecisionLoop::new(ProbePlan {
+            steps: vec![ProbeStep {
+                id: "start_battle".to_string(),
+                page_id: Some("fixture/home_page".to_string()),
+                action: ProbeAction::Click {
+                    target_id: "fixture/start_battle".to_string(),
+                    effect: ProbeClickEffect::ConsumeRegeneratingResource,
+                    resource_policy: Some(ResourcePolicy {
+                        kind: ResourcePolicyKind::RegeneratingResource,
+                        resource_key: None,
+                        max_cost: Some(10),
+                        premium_currency_allowed: false,
+                        auto_refill_allowed: false,
+                        cost_allowed: true,
+                    }),
+                },
+                expect_after: Some(ProbeExpectation {
+                    page_id: "fixture/home_page".to_string(),
+                    timeout_ms: None,
+                    interval_ms: None,
+                }),
+            }],
+            ..valid_probe_plan()
+        })
+        .expect_err("missing resource key");
+
+        assert_fatal_contains(err, "resource_key");
     }
 
     #[test]
@@ -1340,7 +1359,7 @@ mod tests {
                     resource_policy: None,
                 },
                 expect_after: Some(ProbeExpectation {
-                    page_id: "bluearchive/task_center".to_string(),
+                    page_id: "fixture/task_center".to_string(),
                     timeout_ms: Some(3000),
                     interval_ms: Some(100),
                 }),
@@ -1351,6 +1370,7 @@ mod tests {
     fn free_reward_policy() -> ResourcePolicy {
         ResourcePolicy {
             kind: ResourcePolicyKind::FreeReward,
+            resource_key: None,
             max_cost: None,
             premium_currency_allowed: false,
             auto_refill_allowed: false,

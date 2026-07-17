@@ -109,16 +109,16 @@ impl CaptureBackend for FileCapture {
 
 impl ExecutionBackendProvider for FileProvider {
     fn instance_aliases(&self) -> Vec<String> {
-        vec!["ak.cn".to_string()]
+        vec!["node.a".to_string()]
     }
 
     fn resolve(&self, instance_alias: &str) -> Option<ResolvedExecutionInstance> {
-        (instance_alias == "ak.cn")
+        (instance_alias == "node.a")
             .then(|| ResolvedExecutionInstance::new(self.instance_id, "<sealed-process-test>"))
     }
 
     fn open_input(&self, instance_alias: &str) -> DeviceResult<Box<dyn InputBackend>> {
-        if instance_alias != "ak.cn" {
+        if instance_alias != "node.a" {
             return Err(DeviceError::fatal("sealed process-test instance mismatch"));
         }
         let backend = FileBackend {
@@ -130,7 +130,7 @@ impl ExecutionBackendProvider for FileProvider {
     }
 
     fn open_capture(&self, instance_alias: &str) -> DeviceResult<Box<dyn CaptureBackend>> {
-        if instance_alias != "ak.cn" {
+        if instance_alias != "node.a" {
             return Err(DeviceError::fatal("sealed process-test instance mismatch"));
         }
         Ok(Box::new(FileCapture))
@@ -328,11 +328,11 @@ fn hard_kill_restart_fences_every_old_input_and_enforces_takeover_cooldown() {
     let first_status = first_client.status().expect("first Runtime status");
     assert_eq!(first_status.owner_epoch(), first_info.owner_epoch());
     assert_eq!(first_status.instances().len(), 1);
-    assert_eq!(first_status.instances()[0].instance_alias(), "ak.cn");
+    assert_eq!(first_status.instances()[0].instance_alias(), "node.a");
     assert!(!first_status.instances()[0].takeover_cooldown_active());
     let monitor_policy = RuntimeMonitorPolicy::new(1_000, "home", false).expect("monitor policy");
     first_client
-        .configure_monitor("ak.cn", monitor_policy.clone())
+        .configure_monitor("node.a", monitor_policy.clone())
         .expect("configure persistent monitor");
     let monitor_wait = Instant::now();
     let first_monitor_run_count = loop {
@@ -355,7 +355,7 @@ fn hard_kill_restart_fences_every_old_input_and_enforces_takeover_cooldown() {
         );
         thread::sleep(Duration::from_millis(10));
     };
-    let old_token = first_client.acquire_lease("ak.cn").expect("old lease");
+    let old_token = first_client.acquire_lease("node.a").expect("old lease");
     first_client
         .input(&old_token, InputAction::Reset)
         .expect("old Runtime input");
@@ -390,7 +390,7 @@ fn hard_kill_restart_fences_every_old_input_and_enforces_takeover_cooldown() {
         Some(RuntimeErrorCode::RecognitionFailed)
     );
     let cooldown = second_client
-        .acquire_lease("ak.cn")
+        .acquire_lease("node.a")
         .expect_err("takeover cooldown must reject acquisition");
     let cooldown = cooldown.projection().expect("cooldown projection");
     assert_eq!(cooldown.code, RuntimeErrorCode::LeaseCooldown);
@@ -410,7 +410,7 @@ fn hard_kill_restart_fences_every_old_input_and_enforces_takeover_cooldown() {
 
     thread::sleep(Duration::from_millis(retry_after_ms.saturating_add(100)));
     let new_token = second_client
-        .acquire_lease("ak.cn")
+        .acquire_lease("node.a")
         .expect("lease after takeover cooldown");
     let active_status = second_client.status().expect("active Runtime status");
     assert!(active_status.instances()[0].lease_active());

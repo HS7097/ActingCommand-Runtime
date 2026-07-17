@@ -262,13 +262,10 @@ components:
     ServerKey:
       type: string
       pattern: "^[a-z][a-z0-9]*(?:[._-][a-z0-9]+)*$"
-      description: Backend-specific server variant key. Examples include alas.jp, alas.en, alas.tw, baas.global_en, baas.ko, maa.bilibili, maa.official, maa.yostar_jp.
+      description: Opaque server or deployment variant key supplied by an external project definition.
       examples:
-        - alas.jp
-        - alas.en
-        - baas.global_en
-        - maa.bilibili
-        - maa.yostar_jp
+        - engine-a.region-1
+        - engine-b.region-2
     RuntimeStatus:
       type: object
       required: [state, stateDir, version, scheduler]
@@ -317,7 +314,8 @@ components:
           type: string
         game:
           type: string
-          enum: [Azur, Ark, BA]
+          minLength: 1
+          maxLength: 128
         server:
           $ref: "#/components/schemas/ServerKey"
         locale:

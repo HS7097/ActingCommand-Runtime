@@ -64,7 +64,7 @@ fn runtime_request_round_trips_and_builds_verified_event_links() {
         EventActor::Lab,
         EventSource::Lab,
         42,
-        RuntimeOperation::acquire_lease("azur.jp", holder_id),
+        RuntimeOperation::acquire_lease("node.b", holder_id),
     )
     .expect("request");
     let encoded = serde_json::to_string(&request).expect("serialize request");
@@ -506,30 +506,30 @@ fn c3b_queue_policy_and_status_are_closed_bounded_and_strict() {
 fn runtime_status_is_sorted_strict_and_state_aware() {
     let ids = issuer();
     let owner_epoch = *ids.mint_owner_epoch().expect("owner epoch").transport();
-    let ak = RuntimeInstanceStatus::new(
-        "ak.cn",
-        *ids.mint_instance_id().expect("ak instance").transport(),
+    let first = RuntimeInstanceStatus::new(
+        "node.a",
+        *ids.mint_instance_id().expect("first instance").transport(),
         true,
         1,
         false,
         true,
         true,
     )
-    .expect("ak status");
-    let ba = RuntimeInstanceStatus::new(
-        "ba.jp",
-        *ids.mint_instance_id().expect("ba instance").transport(),
+    .expect("first status");
+    let second = RuntimeInstanceStatus::new(
+        "node.c",
+        *ids.mint_instance_id().expect("second instance").transport(),
         false,
         0,
         true,
         false,
         false,
     )
-    .expect("ba status");
-    let status = RuntimeControlPlaneStatus::new(owner_epoch, vec![ba, ak]).expect("status");
+    .expect("second status");
+    let status = RuntimeControlPlaneStatus::new(owner_epoch, vec![second, first]).expect("status");
 
     assert_eq!(status.owner_epoch(), owner_epoch);
-    assert_eq!(status.instances()[0].instance_alias(), "ak.cn");
+    assert_eq!(status.instances()[0].instance_alias(), "node.a");
     assert!(status.instances()[0].lease_active());
     assert_eq!(status.instances()[0].queued_request_count(), 1);
     assert!(status.instances()[0].destructive_step_active());
@@ -558,7 +558,7 @@ fn runtime_status_is_sorted_strict_and_state_aware() {
     assert!(serde_json::from_value::<RuntimeControlPlaneStatus>(unknown).is_err());
     assert_eq!(
         RuntimeInstanceStatus::new(
-            "ak.cn",
+            "node.a",
             status.instances()[0].instance_id(),
             false,
             0,
@@ -578,18 +578,18 @@ fn runtime_monitor_operations_and_receipts_are_strict() {
     let owner_epoch = *ids.mint_owner_epoch().expect("owner epoch").transport();
     let policy = RuntimeMonitorPolicy::new(1_000, "home", true).expect("policy");
     let configure = request(RuntimeOperation::ConfigureMonitor {
-        instance_alias: "ak.cn".to_string(),
+        instance_alias: "node.a".to_string(),
         policy: policy.clone(),
     });
     configure.validate().expect("configure request");
     request(RuntimeOperation::ClearMonitor {
-        instance_alias: "ak.cn".to_string(),
+        instance_alias: "node.a".to_string(),
     })
     .validate()
     .expect("clear request");
 
     let configured = RuntimeMonitorInstanceStatus::configured(
-        "ak.cn",
+        "node.a",
         policy,
         RuntimeMonitorState::scheduled(10).expect("state"),
     )
@@ -691,7 +691,7 @@ fn c3b_queue_operations_and_cancelled_receipt_are_strict_typed_contracts() {
     let queued_request_id = *ids.mint_request_id().expect("queued request").transport();
     let operations = [
         RuntimeOperation::queue_lease(
-            "ak.cn",
+            "node.a",
             ids.mint_holder_id().expect("holder"),
             LeaseQueuePolicy::new(LeasePriority::High, 1_000).expect("policy"),
         ),
@@ -764,7 +764,7 @@ fn readonly_capability_is_issuer_owned_and_binds_observation_context() {
     );
 
     let request = request(RuntimeOperation::ObserveReadonly {
-        instance_alias: "ak.cn".to_string(),
+        instance_alias: "node.a".to_string(),
     });
     let links = issued.event_links(&request.validate().expect("validated request"));
     assert_eq!(links.instance_id(), Some(&instance_id));
@@ -947,7 +947,7 @@ fn capture_sequence_contract_is_bounded_exact_and_strict() {
     );
 
     let operation = RuntimeOperation::CaptureSequence {
-        instance_alias: "ak.cn".to_string(),
+        instance_alias: "node.a".to_string(),
         spec: pair_spec,
     };
     request(operation.clone())
@@ -963,7 +963,7 @@ fn capture_sequence_contract_is_bounded_exact_and_strict() {
 
     RuntimeReceipt::success(
         &request(RuntimeOperation::CaptureSequence {
-            instance_alias: "ak.cn".to_string(),
+            instance_alias: "node.a".to_string(),
             spec: pair_spec,
         }),
         RuntimeReceiptState::Completed,
@@ -980,10 +980,10 @@ fn c4_operations_round_trip_without_generic_payloads() {
     let ids = issuer();
     let operations = [
         RuntimeOperation::ObserveReadonly {
-            instance_alias: "ak.cn".to_string(),
+            instance_alias: "node.a".to_string(),
         },
         RuntimeOperation::SafeReset {
-            instance_alias: "ak.cn".to_string(),
+            instance_alias: "node.a".to_string(),
             holder_id: *ids.mint_holder_id().expect("holder").transport(),
         },
     ];
@@ -999,7 +999,7 @@ fn c4_operations_round_trip_without_generic_payloads() {
 
     assert!(
         serde_json::from_str::<RuntimeOperation>(
-            r#"{"operation":"begin_readonly_observation","instance_alias":"ak.cn"}"#,
+            r#"{"operation":"begin_readonly_observation","instance_alias":"node.a"}"#,
         )
         .is_err()
     );
