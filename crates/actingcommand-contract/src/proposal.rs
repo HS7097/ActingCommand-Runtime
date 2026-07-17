@@ -301,8 +301,10 @@ impl CatalogProposal {
         let mut reports = BTreeSet::new();
         for reference in &self.report_refs {
             reference.validate()?;
-            if reference.kind() != ArtifactKind::TextReport
-                || reference.object_key().is_none()
+            if !matches!(
+                reference.kind(),
+                ArtifactKind::TextReport | ArtifactKind::StrategyReport
+            ) || reference.object_key().is_none()
                 || reference.redaction_state() == ArtifactRedactionState::Pending
                 || !reports.insert(reference.artifact_id)
             {

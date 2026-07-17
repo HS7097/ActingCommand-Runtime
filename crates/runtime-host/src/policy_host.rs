@@ -194,6 +194,10 @@ impl LoadedCatalog {
     pub(crate) fn sources(&self) -> &CatalogSources {
         &self.sources
     }
+
+    pub(crate) fn compiled(&self) -> &CompiledCatalog {
+        &self.compiled
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -368,6 +372,10 @@ impl PolicyHost {
 
     pub(crate) fn active_sources(&self) -> Option<CatalogSources> {
         self.active.as_ref().map(|catalog| catalog.sources.clone())
+    }
+
+    pub(crate) fn active_loaded(&self) -> Option<LoadedCatalog> {
+        self.active.clone()
     }
 
     pub(crate) fn switch_active(

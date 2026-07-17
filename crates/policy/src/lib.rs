@@ -9,9 +9,11 @@ mod compiler;
 mod evaluator;
 mod schema;
 mod source;
+mod strategy;
 mod validation;
 
 pub use compiler::*;
 pub use evaluator::*;
 pub use schema::*;
 pub use source::{CatalogDocumentSource, CatalogSources};
+pub use strategy::*;
