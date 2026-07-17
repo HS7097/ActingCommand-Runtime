@@ -16,6 +16,7 @@ use crate::performance::{
 use crate::performance_control::{PerformanceBalanceController, PerformanceDispatchGate};
 use crate::policy_host::{LoadedCatalog, PolicyExecutionPreparation, PolicyHost};
 use crate::proposal::prepare_proposal;
+use crate::strategy::{StrategicPlanPreparation, build_strategy_proposal};
 use crate::time::unix_ms_now;
 use crate::{
     AgentDispatcherConfig, CatalogGeneration, FatalState, PerformanceControlConfig,
@@ -30,13 +31,11 @@ use actingcommand_artifact_store::{
     EvidenceJsonDocument, EvidencePackage, PackageVerification, PersistedFrameEvidence,
     read_projected_verified,
 };
-#[cfg(test)]
-use actingcommand_contract::ArtifactLinksDraft;
 use actingcommand_contract::{
     AgentPayloadDraft, AgentSessionContext, AgentSessionId, AgentSessionResponse,
     AgentSessionStatus, AgentWakeId, AgentWakeKind, AgentWakeTrigger, ApplicationLifecycleAction,
     ApplicationPayload, ApplicationPayloadDraft, ApprovalDecisionRecord, ApprovalPayload,
-    ApprovalPayloadDraft, ArtifactIssuePolicy, ArtifactKind, ArtifactProducer,
+    ApprovalPayloadDraft, ArtifactIssuePolicy, ArtifactKind, ArtifactLinksDraft, ArtifactProducer,
     ArtifactRedactionState, AuditInput, CapturePayloadDraft, CaptureSequence, CaptureSequenceSpec,
     CatalogPayloadDraft, CatalogPromotionAuthorization, CatalogProposal,
     CatalogTransitionEventData, ClientActionRecord, ClientPayload, ClientPayloadDraft,
@@ -81,7 +80,7 @@ use actingcommand_pack_containment::{
 };
 use actingcommand_policy::{
     CatalogSources, DecisionReasonChain, DispatchIntent, EvaluationFacts, EvaluationResources,
-    EvaluationTime,
+    EvaluationTime, StrategicEvidencePointer, StrategicReport, project_strategic_report,
 };
 use actingcommand_runtime_state::RuntimeStateStore;
 use actingcommand_scheduler::{
@@ -89,6 +88,7 @@ use actingcommand_scheduler::{
     PreparedLeaseTransfer, QueueAdmissionDecision, QueueLeaseRequest, QueuePoll, QueuedLease,
     SchedulerConfig, SchedulerError, SeedScheduler, TransferPreparation,
 };
+use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fs::{self, OpenOptions};
 use std::io::{Read, Write};
@@ -552,6 +552,15 @@ impl RuntimeHost {
     ) -> RuntimeHostResult<ProjectedArtifactReference> {
         self.shared_ref("store_test_report")?
             .store_test_report(bytes)
+    }
+
+    pub fn prepare_strategic_report(
+        &self,
+        report: &StrategicReport,
+        evidence: &[ProjectedArtifactReference],
+    ) -> RuntimeHostResult<StrategicPlanPreparation> {
+        self.shared_ref("prepare_strategic_report")?
+            .prepare_strategic_report(report, evidence)
     }
 
     pub fn evaluate_policy_cycle(
@@ -3570,6 +3579,192 @@ impl HostShared {
             })?;
         }
         Ok(())
+    }
+
+    fn prepare_strategic_report(
+        &self,
+        report: &StrategicReport,
+        evidence: &[ProjectedArtifactReference],
+    ) -> RuntimeHostResult<StrategicPlanPreparation> {
+        let result = (|| {
+            let _gate = lock(&self.proposal_write_gate, "prepare_strategic_report")?;
+            report.validate().map_err(|_| {
+                RuntimeHostError::request(
+                    "strategic_report_invalid",
+                    "prepare_strategic_report",
+                    RuntimeErrorCode::InvalidRequest,
+                )
+            })?;
+            self.verify_strategic_evidence(report, evidence)?;
+            let ledger_position = self
+                .ledger
+                .latest_sequence()
+                .map_err(|_| ledger_error("prepare_strategic_report"))?;
+            if report.as_of_ledger_position() > ledger_position {
+                return Err(RuntimeHostError::request(
+                    "strategic_report_position_unavailable",
+                    "prepare_strategic_report",
+                    RuntimeErrorCode::InvalidRequest,
+                ));
+            }
+            let loaded = lock(&self.policy, "prepare_strategic_report")?
+                .active_loaded()
+                .ok_or_else(|| {
+                    RuntimeHostError::request(
+                        "strategic_catalog_unavailable",
+                        "prepare_strategic_report",
+                        RuntimeErrorCode::InvalidRequest,
+                    )
+                })?;
+            let projection =
+                project_strategic_report(loaded.compiled(), report).map_err(|error| {
+                    RuntimeHostError::request(
+                        error.code(),
+                        "prepare_strategic_report",
+                        RuntimeErrorCode::InvalidRequest,
+                    )
+                })?;
+            let bytes = report.canonical_bytes().map_err(|_| {
+                RuntimeHostError::fatal(
+                    "strategic_report_encode_failed",
+                    "prepare_strategic_report",
+                    RuntimeErrorCode::RuntimeFatal,
+                )
+            })?;
+            let report_reference = self.store_or_reuse_strategic_report(&bytes)?;
+            let proposal = build_strategy_proposal(&projection, report_reference.clone())?;
+            let preview = proposal
+                .as_ref()
+                .map(|proposal| {
+                    prepare_proposal(loaded.generation(), loaded.sources(), proposal)
+                        .and_then(|prepared| prepared.into_ready().map(|(preview, _)| preview))
+                })
+                .transpose()?;
+            StrategicPlanPreparation::new(report_reference, projection, proposal, preview)
+        })();
+        if let Err(error) = &result
+            && error.is_fatal()
+        {
+            self.fatal.mark(error.clone())?;
+        }
+        result
+    }
+
+    fn verify_strategic_evidence(
+        &self,
+        report: &StrategicReport,
+        evidence: &[ProjectedArtifactReference],
+    ) -> RuntimeHostResult<()> {
+        let verified_events = self
+            .ledger
+            .query(EventQuery {
+                event_type: Some(EventType::ArtifactVerified),
+                ..EventQuery::default()
+            })
+            .map_err(|_| ledger_error("verify_strategic_evidence"))?;
+        let mut pointers = Vec::with_capacity(evidence.len());
+        for reference in evidence {
+            reference.validate().map_err(|_| {
+                RuntimeHostError::request(
+                    "strategic_evidence_invalid",
+                    "verify_strategic_evidence",
+                    RuntimeErrorCode::InvalidRequest,
+                )
+            })?;
+            let verified_sequence = proposal_report_verified_sequence(&verified_events, reference);
+            if reference.object_key().is_none()
+                || reference.redaction_state() == ArtifactRedactionState::Pending
+                || verified_sequence.is_none()
+                || verified_sequence
+                    .is_some_and(|sequence| sequence > report.as_of_ledger_position())
+            {
+                return Err(RuntimeHostError::request(
+                    "strategic_evidence_unverified",
+                    "verify_strategic_evidence",
+                    RuntimeErrorCode::InvalidRequest,
+                ));
+            }
+            read_projected_verified(self.artifacts.root(), reference).map_err(|_| {
+                RuntimeHostError::fatal(
+                    "strategic_evidence_unavailable",
+                    "verify_strategic_evidence",
+                    RuntimeErrorCode::RuntimeFatal,
+                )
+            })?;
+            pointers.push(strategic_evidence_pointer(reference)?);
+        }
+        pointers.sort();
+        if pointers != report.evidence() {
+            return Err(RuntimeHostError::request(
+                "strategic_evidence_mismatch",
+                "verify_strategic_evidence",
+                RuntimeErrorCode::InvalidRequest,
+            ));
+        }
+        Ok(())
+    }
+
+    fn store_or_reuse_strategic_report(
+        &self,
+        bytes: &[u8],
+    ) -> RuntimeHostResult<ProjectedArtifactReference> {
+        let sha256 = format!("sha256:{:x}", Sha256::digest(bytes));
+        let events = self
+            .ledger
+            .query(EventQuery {
+                event_type: Some(EventType::ArtifactVerified),
+                ..EventQuery::default()
+            })
+            .map_err(|_| ledger_error("find_strategic_report"))?;
+        let mut existing = Vec::new();
+        for reference in events
+            .iter()
+            .flat_map(PersistedEvent::artifacts)
+            .filter(|reference| {
+                reference.kind() == ArtifactKind::StrategyReport && reference.sha256() == sha256
+            })
+        {
+            let reference = reference.project(true);
+            existing.push((artifact_id_text(&reference)?, reference));
+        }
+        existing.sort_by(|left, right| left.0.cmp(&right.0));
+        if let Some((_, reference)) = existing.into_iter().next() {
+            let stored = read_projected_verified(self.artifacts.root(), &reference)
+                .map_err(|_| artifact_store_error("read_strategic_report"))?;
+            if stored != bytes {
+                return Err(RuntimeHostError::fatal(
+                    "strategic_report_identity_conflict",
+                    "read_strategic_report",
+                    RuntimeErrorCode::RuntimeFatal,
+                ));
+            }
+            return Ok(reference);
+        }
+        let context = ArtifactWriteContext::new(
+            ArtifactLinksDraft::default(),
+            self.events.system_links()?,
+            unix_ms_now()?,
+        );
+        let mut sink = RuntimeArtifactEventSink {
+            ledger: &self.ledger,
+            events: &self.events,
+        };
+        self.artifacts
+            .put(
+                ArtifactWriteRequest::new(
+                    ArtifactKind::StrategyReport,
+                    bytes,
+                    context,
+                    ArtifactIssuePolicy::new(
+                        ArtifactProducer::ArtifactStore,
+                        RetentionClass::Adaptive,
+                        ArtifactRedactionState::Applied,
+                    ),
+                ),
+                &mut sink,
+            )
+            .map(|stored| stored.reference().project(true))
+            .map_err(|_| artifact_store_error("store_strategic_report"))
     }
 
     #[cfg(test)]
@@ -9143,12 +9338,42 @@ fn proposal_report_is_verified(
     events: &[PersistedEvent],
     reference: &ProjectedArtifactReference,
 ) -> bool {
-    events.iter().any(|event| {
+    proposal_report_verified_sequence(events, reference).is_some()
+}
+
+fn proposal_report_verified_sequence(
+    events: &[PersistedEvent],
+    reference: &ProjectedArtifactReference,
+) -> Option<u64> {
+    events.iter().find_map(|event| {
         event
             .artifacts()
             .iter()
             .any(|artifact| artifact.project(true) == *reference)
+            .then_some(event.sequence())
     })
+}
+
+fn strategic_evidence_pointer(
+    reference: &ProjectedArtifactReference,
+) -> RuntimeHostResult<StrategicEvidencePointer> {
+    Ok(StrategicEvidencePointer {
+        artifact_id: artifact_id_text(reference)?,
+        sha256: reference.sha256.clone(),
+    })
+}
+
+fn artifact_id_text(reference: &ProjectedArtifactReference) -> RuntimeHostResult<String> {
+    serde_json::to_value(reference.artifact_id)
+        .ok()
+        .and_then(|value| value.as_str().map(str::to_owned))
+        .ok_or_else(|| {
+            RuntimeHostError::fatal(
+                "artifact_identity_encode_failed",
+                "prepare_strategic_report",
+                RuntimeErrorCode::RuntimeFatal,
+            )
+        })
 }
 
 fn ledger_error(operation: &'static str) -> RuntimeHostError {

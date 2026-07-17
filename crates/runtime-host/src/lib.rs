@@ -22,7 +22,10 @@ mod policy_control;
 mod policy_host;
 mod proposal;
 mod provider;
+mod strategy;
 mod time;
+
+pub use strategy::StrategicPlanPreparation;
 
 pub use agent_dispatcher::AgentDispatcherConfig;
 pub use error::*;
