@@ -606,6 +606,7 @@ fn projected_task_semantic_fact(
 
 fn config(root: &TempDir) -> RuntimeHostConfig {
     RuntimeHostConfig::new(root.path(), b"runtime-host-test-salt")
+        .with_policy_inputs(PolicyInputSnapshot::new(policy_facts(), policy_resources()))
         .with_governance_capability(TEST_GOVERNANCE_CAPABILITY)
         .with_io_timeout(Duration::from_millis(500))
         .with_scheduler(SchedulerConfig {
@@ -923,7 +924,7 @@ fn evaluated_policy_dispatch_at(
     seed: u64,
 ) -> (PolicyCycle, DispatchIntent, DecisionReasonChain) {
     let cycle = host
-        .evaluate_policy_cycle(
+        .evaluate_policy_cycle_with_test_inputs(
             &policy_facts(),
             &policy_resources(),
             EvaluationTime {
@@ -1120,6 +1121,16 @@ fn detection_policy_facts(ordinary_ready: bool, snapshot_id: &str) -> Evaluation
         },
         fact_key: "ordinary.ready".to_owned(),
         value: FactValue::Boolean(ordinary_ready),
+        observed_at_unix_ms: POLICY_NOW_UNIX_MS,
+        expires_at_unix_ms: Some(POLICY_NOW_UNIX_MS + 60_000),
+        confidence_milli: 1_000,
+    });
+    facts.facts.push(ObservedFact {
+        scope: ScopeSelector::Instance {
+            instance_id: POLICY_INSTANCE_ALIAS.to_owned(),
+        },
+        fact_key: "test.snapshot_revision".to_owned(),
+        value: FactValue::String(snapshot_id.to_owned()),
         observed_at_unix_ms: POLICY_NOW_UNIX_MS,
         expires_at_unix_ms: Some(POLICY_NOW_UNIX_MS + 60_000),
         confidence_milli: 1_000,
@@ -1344,7 +1355,7 @@ fn predictive_maintenance_publishes_one_evidence_pinned_recheck_signal() {
         facts.fact_snapshot_id = format!("snapshot:maintenance-cycle-{index}");
         facts.outcomes[0].observed_at_unix_ms = next_evaluation_at;
         let cycle = host
-            .evaluate_policy_cycle(
+            .evaluate_policy_cycle_with_test_inputs(
                 &facts,
                 &policy_resources(),
                 EvaluationTime {
@@ -4881,7 +4892,7 @@ fn policy_evaluation_consumes_runtime_owned_fact_projection() {
     .expect("publish policy fact");
 
     let cycle = host
-        .evaluate_policy_cycle(
+        .evaluate_policy_cycle_with_test_inputs(
             &policy_facts(),
             &policy_resources(),
             EvaluationTime {
@@ -5020,7 +5031,7 @@ fn policy_cadence_is_explicit_and_clock_jumps_force_full_recompute() {
     let resources = policy_resources();
 
     let startup = host
-        .evaluate_policy_cycle(
+        .evaluate_policy_cycle_with_test_inputs(
             &facts,
             &resources,
             EvaluationTime {
@@ -5049,7 +5060,7 @@ fn policy_cadence_is_explicit_and_clock_jumps_force_full_recompute() {
     assert!(startup_measurement.cost.work_units > 0);
 
     let cooldown = host
-        .evaluate_policy_cycle(
+        .evaluate_policy_cycle_with_test_inputs(
             &facts,
             &resources,
             EvaluationTime {
@@ -5066,7 +5077,7 @@ fn policy_cadence_is_explicit_and_clock_jumps_force_full_recompute() {
     assert!(cooldown.measurement.is_none());
 
     let incremental = host
-        .evaluate_policy_cycle(
+        .evaluate_policy_cycle_with_test_inputs(
             &facts,
             &resources,
             EvaluationTime {
@@ -5095,7 +5106,7 @@ fn policy_cadence_is_explicit_and_clock_jumps_force_full_recompute() {
     );
 
     let clock_jump = host
-        .evaluate_policy_cycle(
+        .evaluate_policy_cycle_with_test_inputs(
             &facts,
             &resources,
             EvaluationTime {
@@ -5115,7 +5126,7 @@ fn policy_cadence_is_explicit_and_clock_jumps_force_full_recompute() {
     );
 
     let reconciliation = host
-        .evaluate_policy_cycle(
+        .evaluate_policy_cycle_with_test_inputs(
             &facts,
             &resources,
             EvaluationTime {
@@ -5605,7 +5616,7 @@ fn detection_quota_is_persistent_informational_and_never_starves_ordinary_work()
         .expect("activate detection catalog");
 
     let ordinary = host
-        .evaluate_policy_cycle(
+        .evaluate_policy_cycle_with_test_inputs(
             &detection_policy_facts(true, "snapshot:detection-ordinary"),
             &policy_resources(),
             EvaluationTime {
@@ -5625,7 +5636,7 @@ fn detection_quota_is_persistent_informational_and_never_starves_ordinary_work()
 
     for index in 1_u64..=2 {
         let cycle = host
-            .evaluate_policy_cycle(
+            .evaluate_policy_cycle_with_test_inputs(
                 &detection_policy_facts(false, &format!("snapshot:detection-reserved-{index}")),
                 &policy_resources(),
                 EvaluationTime {
@@ -5661,7 +5672,7 @@ fn detection_quota_is_persistent_informational_and_never_starves_ordinary_work()
         .expect("upgrade detection catalog without resetting quota");
 
     let exhausted = host
-        .evaluate_policy_cycle(
+        .evaluate_policy_cycle_with_test_inputs(
             &detection_policy_facts(false, "snapshot:detection-exhausted"),
             &policy_resources(),
             EvaluationTime {
@@ -5680,7 +5691,7 @@ fn detection_quota_is_persistent_informational_and_never_starves_ordinary_work()
     );
 
     let ordinary_after_exhaustion = host
-        .evaluate_policy_cycle(
+        .evaluate_policy_cycle_with_test_inputs(
             &detection_policy_facts(true, "snapshot:detection-ordinary-after-exhaustion"),
             &policy_resources(),
             EvaluationTime {
@@ -5760,7 +5771,7 @@ fn detection_quota_is_persistent_informational_and_never_starves_ordinary_work()
     )
     .expect("reopen detection runtime");
     let recovered = reopened
-        .evaluate_policy_cycle(
+        .evaluate_policy_cycle_with_test_inputs(
             &detection_policy_facts(false, "snapshot:detection-after-restart"),
             &policy_resources(),
             EvaluationTime {
@@ -6154,6 +6165,214 @@ fn policy_admission_rejects_stale_and_tampered_trusted_context() {
 }
 
 #[test]
+fn runtime_owned_policy_inputs_supply_time_and_reject_unknown_resource_hosts() {
+    let root = TempDir::new().expect("tempdir");
+    let clock = Arc::new(ManualRuntimeClock::new(POLICY_NOW_UNIX_MS, 7_000));
+    let host = RuntimeHost::start(
+        config(&root)
+            .with_runtime_clock(clock)
+            .with_policy_inputs(PolicyInputSnapshot::new(policy_facts(), policy_resources())),
+        Arc::new(FakeProvider::one(
+            POLICY_INSTANCE_ALIAS,
+            instance_id(),
+            Arc::new(FakeState::default()),
+        )),
+    )
+    .expect("runtime host");
+    host.activate_policy_catalog(&policy_sources(1))
+        .expect("activate catalog");
+    let cycle = host
+        .evaluate_policy_cycle(PolicyTrigger::FactsChanged)
+        .expect("Runtime-owned policy evaluation");
+    let intent = cycle
+        .evaluation
+        .expect("policy evaluation")
+        .dispatch_intents
+        .into_iter()
+        .next()
+        .expect("dispatch intent");
+    assert_eq!(
+        intent.prerequisites.evaluated_at_unix_ms,
+        POLICY_NOW_UNIX_MS
+    );
+    host.close().expect("close host");
+
+    let invalid_root = TempDir::new().expect("tempdir");
+    let mut invalid_facts = policy_facts();
+    invalid_facts.instances[0].host_id = "caller-forged-host".to_owned();
+    let invalid = RuntimeHost::start(
+        config(&invalid_root)
+            .with_policy_inputs(PolicyInputSnapshot::new(invalid_facts, policy_resources())),
+        Arc::new(FakeProvider::one(
+            POLICY_INSTANCE_ALIAS,
+            instance_id(),
+            Arc::new(FakeState::default()),
+        )),
+    )
+    .expect("runtime host with invalid policy inputs");
+    invalid
+        .activate_policy_catalog(&policy_sources(1))
+        .expect("activate catalog");
+    let error = invalid
+        .evaluate_policy_cycle(PolicyTrigger::FactsChanged)
+        .expect_err("unknown resource host must fail");
+    assert_eq!(error.code(), "policy_resource_metadata_untrusted");
+    assert!(!error.is_fatal());
+    invalid.close().expect("close invalid host");
+}
+
+#[test]
+fn fact_replacement_invalidates_an_already_evaluated_dispatch() {
+    let root = TempDir::new().expect("tempdir");
+    let host = host_with_state(&root, POLICY_INSTANCE_ALIAS, Arc::new(FakeState::default()));
+    host.activate_policy_catalog(&policy_sources(1))
+        .expect("activate catalog");
+    let scope = FactScope::Instance {
+        instance_id: POLICY_INSTANCE_ALIAS.to_owned(),
+    };
+    host.publish_fact(stored_fact(
+        scope.clone(),
+        "env.authority",
+        ContractFactValue::Boolean(true),
+        "snapshot:authority-a",
+        Vec::new(),
+    ))
+    .expect("publish initial fact revision");
+    let (_, intent, reasons) = evaluated_policy_dispatch(&host, PolicyTrigger::FactsChanged);
+    record_policy_approval(&host, &intent);
+    host.publish_fact(stored_fact(
+        scope,
+        "env.authority",
+        ContractFactValue::Boolean(true),
+        "snapshot:authority-b",
+        Vec::new(),
+    ))
+    .expect("replace fact revision");
+
+    let error = host
+        .admit_policy_dispatch(&intent, &reasons, &policy_context(&host, &intent))
+        .expect_err("superseded fact revision must invalidate dispatch");
+    assert_eq!(error.code(), "policy_facts_stale");
+    let mut client = TestClient::connect(&host);
+    assert!(
+        projected_events(
+            &mut client,
+            EventQuery {
+                event_type: Some(EventType::LeaseGranted),
+                ..EventQuery::default()
+            }
+        )
+        .is_empty()
+    );
+    drop(client);
+    host.close().expect("close host");
+}
+
+#[test]
+fn concurrent_fact_replacement_and_admission_are_ledger_ordered() {
+    let root = TempDir::new().expect("tempdir");
+    let host = Arc::new(host_with_state(
+        &root,
+        POLICY_INSTANCE_ALIAS,
+        Arc::new(FakeState::default()),
+    ));
+    host.activate_policy_catalog(&policy_sources(1))
+        .expect("activate catalog");
+    let scope = FactScope::Instance {
+        instance_id: POLICY_INSTANCE_ALIAS.to_owned(),
+    };
+    host.publish_fact(stored_fact(
+        scope.clone(),
+        "env.concurrent_authority",
+        ContractFactValue::Boolean(true),
+        "snapshot:concurrent-a",
+        Vec::new(),
+    ))
+    .expect("publish initial fact revision");
+    let (_, intent, reasons) = evaluated_policy_dispatch(&host, PolicyTrigger::FactsChanged);
+    record_policy_approval(&host, &intent);
+    let barrier = Arc::new(Barrier::new(3));
+
+    let publisher = {
+        let host = Arc::clone(&host);
+        let barrier = Arc::clone(&barrier);
+        thread::spawn(move || {
+            barrier.wait();
+            host.publish_fact(stored_fact(
+                scope,
+                "env.concurrent_authority",
+                ContractFactValue::Boolean(true),
+                "snapshot:concurrent-b",
+                Vec::new(),
+            ))
+        })
+    };
+    let admitting = {
+        let host = Arc::clone(&host);
+        let barrier = Arc::clone(&barrier);
+        let context = policy_context(&host, &intent);
+        let intent = intent.clone();
+        let reasons = reasons.clone();
+        thread::spawn(move || {
+            barrier.wait();
+            host.admit_policy_dispatch(&intent, &reasons, &context)
+        })
+    };
+    barrier.wait();
+    publisher
+        .join()
+        .expect("publisher thread")
+        .expect("replacement fact");
+    let admission = admitting.join().expect("admission thread");
+
+    let mut client = TestClient::connect(&host);
+    let replacement_sequence = projected_events(
+        &mut client,
+        EventQuery {
+            event_type: Some(EventType::FactPublished),
+            ..EventQuery::default()
+        },
+    )
+    .into_iter()
+    .map(|event| event.sequence)
+    .max()
+    .expect("replacement fact sequence");
+    match admission {
+        Ok(PolicyDispatchAdmission::Granted { .. }) => {
+            let intent_sequence = projected_events(
+                &mut client,
+                EventQuery {
+                    event_type: Some(EventType::PolicyDispatchIntent),
+                    ..EventQuery::default()
+                },
+            )
+            .into_iter()
+            .map(|event| event.sequence)
+            .max()
+            .expect("policy intent sequence");
+            assert!(intent_sequence < replacement_sequence);
+        }
+        Err(error) => {
+            assert_eq!(error.code(), "policy_facts_stale");
+            assert!(
+                projected_events(
+                    &mut client,
+                    EventQuery {
+                        event_type: Some(EventType::PolicyDispatchIntent),
+                        ..EventQuery::default()
+                    }
+                )
+                .is_empty()
+            );
+        }
+        Ok(other) => panic!("unexpected admission: {other:?}"),
+    }
+    drop(client);
+    let host = Arc::try_unwrap(host).unwrap_or_else(|_| panic!("exclusive runtime host"));
+    host.close().expect("close host");
+}
+
+#[test]
 fn game_and_server_scope_changes_cannot_reuse_a_trusted_decision_identity() {
     let root = TempDir::new().expect("tempdir");
     let host = host_with_state(&root, POLICY_INSTANCE_ALIAS, Arc::new(FakeState::default()));
@@ -6182,7 +6401,7 @@ fn game_and_server_scope_changes_cannot_reuse_a_trusted_decision_identity() {
             facts.instances[0].game_id = "fixture-game-b".to_owned();
         }
         let cycle = host
-            .evaluate_policy_cycle(
+            .evaluate_policy_cycle_with_test_inputs(
                 &facts,
                 &policy_resources(),
                 EvaluationTime {
@@ -7368,7 +7587,7 @@ fn proposal_a_b_c_pipeline_requires_reports_and_authoritative_approvals() {
         preview_a.target_catalog_hash().expect("target hash")
     );
     let cycle = host
-        .evaluate_policy_cycle(
+        .evaluate_policy_cycle_with_test_inputs(
             &policy_facts(),
             &policy_resources(),
             EvaluationTime {
@@ -7868,7 +8087,7 @@ fn policy_pending_crash_child_process() {
     host.activate_policy_catalog(&pending_policy_sources(1))
         .expect("pending child catalog activation");
     let cycle = host
-        .evaluate_policy_cycle(
+        .evaluate_policy_cycle_with_test_inputs(
             &pending_policy_facts(),
             &pending_policy_resources(),
             EvaluationTime {
@@ -8203,7 +8422,7 @@ fn nonempty_pending_policy_work_is_rebuilt_after_real_process_crash() {
     )
     .expect("recovered pending runtime host");
     let cycle = host
-        .evaluate_policy_cycle(
+        .evaluate_policy_cycle_with_test_inputs(
             &pending_policy_facts(),
             &pending_policy_resources(),
             EvaluationTime {
