@@ -9,7 +9,7 @@ use actingcommand_contract::{
     EventQuery, EventSource, FactScope, IdentifierIssuer, InputAction, IssuedCorrelationId,
     LeaseQueuePolicy, LeaseQueueStatus, LeaseToken, OwnerEpoch, PackageDebugRequest,
     ProjectDecisionPageCursor, ProjectDecisionPageRequest, ProjectInterfaceRequest,
-    ProjectInterfaceSnapshot, ProjectedArtifactReference, ProjectedEvent, ProjectionProfile,
+    ProjectLedgerSnapshot, ProjectedArtifactReference, ProjectedEvent, ProjectionProfile,
     ProposalPreview, ProposalPromotion, RUNTIME_INFO_FILE, RequestId, ResourceAuthoringEvent,
     RuntimeControlPlaneStatus, RuntimeDebugEvent, RuntimeEventBatch, RuntimeEventQueryPage,
     RuntimeEventQueryPageRequest, RuntimeEvidenceExportRequest, RuntimeForwardProjectionRequest,
@@ -324,7 +324,7 @@ impl RuntimeClient {
     pub fn project_snapshot(
         &self,
         request: ProjectInterfaceRequest,
-    ) -> RuntimeClientResult<ProjectInterfaceSnapshot> {
+    ) -> RuntimeClientResult<ProjectLedgerSnapshot> {
         match self.execute(
             "runtime_project_interface",
             RuntimeOperation::ProjectInterface { request },
@@ -1234,7 +1234,11 @@ impl RuntimeProjectClient {
         self.client.runtime_info()
     }
 
-    pub fn snapshot(&self) -> RuntimeClientResult<ProjectInterfaceSnapshot> {
+    pub fn status(&self) -> RuntimeClientResult<RuntimeControlPlaneStatus> {
+        self.client.status()
+    }
+
+    pub fn snapshot(&self) -> RuntimeClientResult<ProjectLedgerSnapshot> {
         self.client
             .project_snapshot(ProjectInterfaceRequest::current())
     }
@@ -1243,7 +1247,7 @@ impl RuntimeProjectClient {
         &self,
         limit: u16,
         cursor: Option<ProjectDecisionPageCursor>,
-    ) -> RuntimeClientResult<ProjectInterfaceSnapshot> {
+    ) -> RuntimeClientResult<ProjectLedgerSnapshot> {
         let page = ProjectDecisionPageRequest::new(limit, cursor).map_err(|_| {
             RuntimeClientError::fatal("runtime_project_page_invalid", "runtime_project_interface")
         })?;
@@ -1261,7 +1265,7 @@ impl RuntimeProjectClient {
     pub fn snapshot_with_versions(
         &self,
         accepted_versions: Vec<String>,
-    ) -> RuntimeClientResult<ProjectInterfaceSnapshot> {
+    ) -> RuntimeClientResult<ProjectLedgerSnapshot> {
         let request = ProjectInterfaceRequest::new(accepted_versions).map_err(|_| {
             RuntimeClientError::fatal(
                 "runtime_project_versions_invalid",
