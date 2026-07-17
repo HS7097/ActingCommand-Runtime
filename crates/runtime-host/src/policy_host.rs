@@ -26,6 +26,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 const CATALOG_STATE_SCHEMA: &str = "actingcommand.catalog-state.v1";
+const LEGACY_CATALOG_POINTER_SCHEMA: &str = "actingcommand.catalog-pointer-file.v1";
 const ACTIVE_POINTER_FILE: &str = "active.json";
 const ACTIVE_POINTER_STATE_KEY: &str = "policy.catalog.active";
 const GENERATIONS_DIR: &str = "generations";
@@ -1343,7 +1344,7 @@ impl CatalogStore {
         self.state
             .migrate_legacy_json_document(
                 ACTIVE_POINTER_STATE_KEY,
-                CATALOG_STATE_SCHEMA,
+                LEGACY_CATALOG_POINTER_SCHEMA,
                 CATALOG_STATE_SCHEMA,
                 &canonical,
             )

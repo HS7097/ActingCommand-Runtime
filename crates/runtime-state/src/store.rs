@@ -9,10 +9,11 @@ use rusqlite::{
     Connection, OptionalExtension, Transaction, TransactionBehavior, params, types::Type,
 };
 use sha2::{Digest, Sha256};
-use std::collections::BTreeSet;
-use std::fs::{self, OpenOptions};
-use std::io::Write;
+use std::collections::{BTreeMap, BTreeSet};
+use std::fs::{self, File, OpenOptions};
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, MutexGuard};
 use std::time::Duration;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -20,9 +21,11 @@ use std::time::{SystemTime, UNIX_EPOCH};
 pub const RUNTIME_STATE_SCHEMA_VERSION: &str = "actingcommand.runtime-state.v1";
 pub const RUNTIME_STATE_DATABASE_FILE: &str = "runtime-state.sqlite";
 pub const RUNTIME_STATE_INTEGRITY_KEY_FILE: &str = "runtime-state.key";
+pub const RUNTIME_RELEASE_BLOB_DIRECTORY: &str = "release-blobs";
 
 const MAX_STATE_DOCUMENT_BYTES: usize = 1024 * 1024;
 const BUSY_TIMEOUT: Duration = Duration::from_secs(5);
+static RELEASE_TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StateDocument {
@@ -64,6 +67,67 @@ impl StateDocument {
 pub struct StagedRelease {
     manifest: RuntimeReleaseSet,
     created: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReleaseArtifactSources {
+    runtime: PathBuf,
+    ui: PathBuf,
+    resources: BTreeMap<String, PathBuf>,
+}
+
+impl ReleaseArtifactSources {
+    pub fn new(
+        runtime: impl Into<PathBuf>,
+        ui: impl Into<PathBuf>,
+        resources: BTreeMap<String, PathBuf>,
+    ) -> Self {
+        Self {
+            runtime: runtime.into(),
+            ui: ui.into(),
+            resources,
+        }
+    }
+
+    pub fn runtime(&self) -> &Path {
+        &self.runtime
+    }
+
+    pub fn ui(&self) -> &Path {
+        &self.ui
+    }
+
+    pub fn resources(&self) -> &BTreeMap<String, PathBuf> {
+        &self.resources
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ReleaseArtifactKey {
+    Runtime,
+    Ui,
+    Resource(String),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResolvedReleaseArtifact {
+    release_id: String,
+    content_sha256: String,
+    path: PathBuf,
+}
+
+impl ResolvedReleaseArtifact {
+    pub fn release_id(&self) -> &str {
+        &self.release_id
+    }
+
+    pub fn content_sha256(&self) -> &str {
+        &self.content_sha256
+    }
+
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
 }
 
 impl StagedRelease {
@@ -112,6 +176,7 @@ impl ReleaseTransitionPreview {
 /// it is an integrity boundary, not encryption or DRM.
 pub struct RuntimeStateStore {
     database_path: PathBuf,
+    release_blobs: PathBuf,
     connection: Mutex<Connection>,
     integrity_key: Box<[u8]>,
 }
@@ -124,6 +189,7 @@ impl RuntimeStateStore {
         fs::create_dir_all(root)
             .map_err(|_| fatal("state_root_create_failed", "open_runtime_state"))?;
         require_regular_directory(root)?;
+        let release_blobs = prepare_release_blob_store(root)?;
         let database_path = root.join(RUNTIME_STATE_DATABASE_FILE);
         let database_existed = database_path.exists();
         if database_existed {
@@ -164,6 +230,7 @@ impl RuntimeStateStore {
         }
         let store = Self {
             database_path,
+            release_blobs,
             connection: Mutex::new(connection),
             integrity_key,
         };
@@ -200,10 +267,9 @@ impl RuntimeStateStore {
         if current.as_ref().map(|row| row.payload_sha256.as_str()) != expected_payload_sha256 {
             return Err(request("state_document_changed", "write_state_document"));
         }
-        if let Some(current) = current
-            .as_ref()
-            .filter(|row| row.payload_sha256 == payload_sha256)
-        {
+        if let Some(current) = current.as_ref().filter(|row| {
+            row.schema_version == schema_version && row.payload_sha256 == payload_sha256
+        }) {
             let current = DocumentRow {
                 state_key: current.state_key.clone(),
                 schema_version: current.schema_version.clone(),
@@ -263,6 +329,12 @@ impl RuntimeStateStore {
     ) -> RuntimeStateResult<StateMigrationData> {
         validate_document_input(state_key, to_schema_version, payload)?;
         validate_version(from_schema_version, "migrate_state_document")?;
+        if from_schema_version == to_schema_version {
+            return Err(request(
+                "state_migration_schema_unchanged",
+                "migrate_state_document",
+            ));
+        }
         let payload_sha256 = sha256(payload);
         let migration_id = migration_id(
             state_key,
@@ -287,6 +359,7 @@ impl RuntimeStateStore {
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(|_| fatal("state_transaction_begin_failed", "migrate_state_document"))?;
         let current = query_document(&transaction, state_key)?;
+        let existing_migration = query_migration(&transaction, data.migration_id())?;
         match current {
             Some(current) if current.payload_sha256 != payload_sha256 => {
                 return Err(fatal(
@@ -295,6 +368,12 @@ impl RuntimeStateStore {
                 ));
             }
             None => {
+                if existing_migration.is_some() {
+                    return Err(fatal(
+                        "state_migration_state_missing",
+                        "migrate_state_document",
+                    ));
+                }
                 let integrity_tag = self.document_integrity_tag(
                     state_key,
                     to_schema_version,
@@ -314,29 +393,67 @@ impl RuntimeStateStore {
                     &integrity_tag,
                 )?;
             }
-            Some(_) => {}
+            Some(current) if current.schema_version == from_schema_version => {
+                if existing_migration.is_some() {
+                    return Err(fatal(
+                        "state_migration_state_conflict",
+                        "migrate_state_document",
+                    ));
+                }
+                let revision = current
+                    .revision
+                    .checked_add(1)
+                    .ok_or_else(|| fatal("state_revision_overflow", "migrate_state_document"))?;
+                let integrity_tag = self.document_integrity_tag(
+                    state_key,
+                    to_schema_version,
+                    revision,
+                    payload,
+                    &payload_sha256,
+                    Some(&current.payload_sha256),
+                );
+                insert_document_revision(
+                    &transaction,
+                    state_key,
+                    to_schema_version,
+                    revision,
+                    payload,
+                    &payload_sha256,
+                    Some(&current.payload_sha256),
+                    &integrity_tag,
+                )?;
+            }
+            Some(current) if current.schema_version == to_schema_version => {
+                let existing = existing_migration.as_ref().ok_or_else(|| {
+                    fatal("state_migration_record_missing", "migrate_state_document")
+                })?;
+                let existing = self.validate_migration_row(existing, "migrate_state_document")?;
+                if existing.data != data {
+                    return Err(fatal(
+                        "state_migration_identity_conflict",
+                        "migrate_state_document",
+                    ));
+                }
+            }
+            Some(_) => {
+                return Err(fatal(
+                    "state_migration_schema_conflict",
+                    "migrate_state_document",
+                ));
+            }
         }
         let integrity_tag = self.integrity_tag(
             "state-migration-v1",
             &[migration_id.as_bytes(), data_json.as_slice()],
         );
-        let inserted = transaction
-            .execute(
-                "INSERT OR IGNORE INTO state_migrations
-                 (migration_id, data_json, integrity_tag) VALUES (?1, ?2, ?3)",
-                params![migration_id, data_json, integrity_tag],
-            )
-            .map_err(|_| fatal("state_migration_write_failed", "migrate_state_document"))?;
-        if inserted == 0 {
-            let existing = query_migration(&transaction, data.migration_id())?
-                .ok_or_else(|| fatal("state_migration_missing", "migrate_state_document"))?;
-            let existing = self.validate_migration_row(&existing, "migrate_state_document")?;
-            if existing.data != data {
-                return Err(fatal(
-                    "state_migration_identity_conflict",
-                    "migrate_state_document",
-                ));
-            }
+        if existing_migration.is_none() {
+            transaction
+                .execute(
+                    "INSERT INTO state_migrations
+                     (migration_id, data_json, integrity_tag) VALUES (?1, ?2, ?3)",
+                    params![migration_id, data_json, integrity_tag],
+                )
+                .map_err(|_| fatal("state_migration_write_failed", "migrate_state_document"))?;
         }
         transaction
             .commit()
@@ -437,10 +554,15 @@ impl RuntimeStateStore {
         .collect()
     }
 
-    pub fn stage_release(&self, manifest: RuntimeReleaseSet) -> RuntimeStateResult<StagedRelease> {
+    pub fn stage_release(
+        &self,
+        manifest: RuntimeReleaseSet,
+        sources: &ReleaseArtifactSources,
+    ) -> RuntimeStateResult<StagedRelease> {
         manifest
             .validate()
             .map_err(|_| request("release_manifest_invalid", "stage_release"))?;
+        self.publish_release_artifacts(&manifest, sources)?;
         let manifest_json = serde_json::to_vec(&manifest)
             .map_err(|_| fatal("release_manifest_encode_failed", "stage_release"))?;
         let manifest_sha256 = manifest.manifest_sha256();
@@ -482,6 +604,33 @@ impl RuntimeStateStore {
             }
         }
         Ok(StagedRelease { manifest, created })
+    }
+
+    pub fn resolve_active_release_artifact(
+        &self,
+        key: &ReleaseArtifactKey,
+    ) -> RuntimeStateResult<ResolvedReleaseArtifact> {
+        let active = self
+            .active_release()?
+            .ok_or_else(|| request("release_active_missing", "resolve_release_artifact"))?;
+        let content_sha256 = match key {
+            ReleaseArtifactKey::Runtime => active.manifest.runtime_content_sha256(),
+            ReleaseArtifactKey::Ui => active.manifest.ui_content_sha256(),
+            ReleaseArtifactKey::Resource(resource_id) => active
+                .manifest
+                .resources()
+                .iter()
+                .find(|resource| resource.resource_id() == resource_id)
+                .map(|resource| resource.content_sha256())
+                .ok_or_else(|| request("release_resource_unknown", "resolve_release_artifact"))?,
+        };
+        let path = self.release_blob_path(content_sha256, "resolve_release_artifact")?;
+        verify_release_blob(&path, content_sha256, "resolve_release_artifact")?;
+        Ok(ResolvedReleaseArtifact {
+            release_id: active.manifest.release_id().to_owned(),
+            content_sha256: content_sha256.to_owned(),
+            path,
+        })
     }
 
     pub fn release_generations(&self) -> RuntimeStateResult<Vec<RuntimeReleaseSet>> {
@@ -888,7 +1037,110 @@ impl RuntimeStateStore {
         {
             return Err(fatal("release_generation_integrity_mismatch", operation));
         }
+        self.verify_release_artifacts(&manifest, operation)?;
         Ok(manifest)
+    }
+
+    fn publish_release_artifacts(
+        &self,
+        manifest: &RuntimeReleaseSet,
+        sources: &ReleaseArtifactSources,
+    ) -> RuntimeStateResult<()> {
+        let expected_resources = manifest
+            .resources()
+            .iter()
+            .map(|resource| resource.resource_id().to_owned())
+            .collect::<BTreeSet<_>>();
+        if sources.resources.keys().cloned().collect::<BTreeSet<_>>() != expected_resources {
+            return Err(request(
+                "release_artifact_sources_mismatch",
+                "stage_release",
+            ));
+        }
+        self.publish_release_artifact(sources.runtime(), manifest.runtime_content_sha256())?;
+        self.publish_release_artifact(sources.ui(), manifest.ui_content_sha256())?;
+        for resource in manifest.resources() {
+            let source = sources
+                .resources
+                .get(resource.resource_id())
+                .ok_or_else(|| request("release_artifact_sources_mismatch", "stage_release"))?;
+            self.publish_release_artifact(source, resource.content_sha256())?;
+        }
+        Ok(())
+    }
+
+    fn publish_release_artifact(
+        &self,
+        source: &Path,
+        expected_sha256: &str,
+    ) -> RuntimeStateResult<()> {
+        let destination = self.release_blob_path(expected_sha256, "stage_release")?;
+        if destination.exists() {
+            return verify_release_blob(&destination, expected_sha256, "stage_release");
+        }
+        require_release_regular_file(source, "release_artifact_source_invalid", "stage_release")?;
+        let digest = expected_sha256
+            .strip_prefix("sha256:")
+            .ok_or_else(|| request("release_artifact_hash_invalid", "stage_release"))?;
+        let temporary = self.release_blobs.join(format!(
+            ".{digest}.{}.{}.tmp",
+            std::process::id(),
+            RELEASE_TEMP_COUNTER.fetch_add(1, Ordering::Relaxed)
+        ));
+        let result = copy_and_hash_release_artifact(source, &temporary, expected_sha256);
+        if let Err(error) = result {
+            remove_release_temporary(&temporary)?;
+            return Err(error);
+        }
+        match fs::rename(&temporary, &destination) {
+            Ok(()) => sync_state_directory(&self.release_blobs)?,
+            Err(_) if destination.exists() => {
+                remove_release_temporary(&temporary)?;
+                verify_release_blob(&destination, expected_sha256, "stage_release")?;
+            }
+            Err(_) => {
+                remove_release_temporary(&temporary)?;
+                return Err(fatal("release_artifact_publish_failed", "stage_release"));
+            }
+        }
+        verify_release_blob(&destination, expected_sha256, "stage_release")
+    }
+
+    fn verify_release_artifacts(
+        &self,
+        manifest: &RuntimeReleaseSet,
+        operation: &'static str,
+    ) -> RuntimeStateResult<()> {
+        for content_sha256 in std::iter::once(manifest.runtime_content_sha256())
+            .chain(std::iter::once(manifest.ui_content_sha256()))
+            .chain(
+                manifest
+                    .resources()
+                    .iter()
+                    .map(|resource| resource.content_sha256()),
+            )
+        {
+            let path = self.release_blob_path(content_sha256, operation)?;
+            verify_release_blob(&path, content_sha256, operation)?;
+        }
+        Ok(())
+    }
+
+    fn release_blob_path(
+        &self,
+        content_sha256: &str,
+        operation: &'static str,
+    ) -> RuntimeStateResult<PathBuf> {
+        let digest = content_sha256
+            .strip_prefix("sha256:")
+            .filter(|digest| {
+                digest.len() == 64
+                    && digest
+                        .bytes()
+                        .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
+            })
+            .ok_or_else(|| request("release_artifact_hash_invalid", operation))?;
+        Ok(self.release_blobs.join(digest))
     }
 
     fn validate_pointer_row(
@@ -1384,6 +1636,100 @@ fn validate_version(value: &str, operation: &'static str) -> RuntimeStateResult<
     Ok(())
 }
 
+fn prepare_release_blob_store(root: &Path) -> RuntimeStateResult<PathBuf> {
+    let path = root.join(RUNTIME_RELEASE_BLOB_DIRECTORY);
+    if path.exists() {
+        require_regular_directory(&path)?;
+    } else {
+        fs::create_dir(&path)
+            .map_err(|_| fatal("release_artifact_root_create_failed", "open_runtime_state"))?;
+        require_regular_directory(&path)?;
+        sync_state_directory(root)?;
+    }
+    Ok(path)
+}
+
+fn copy_and_hash_release_artifact(
+    source: &Path,
+    destination: &Path,
+    expected_sha256: &str,
+) -> RuntimeStateResult<()> {
+    let mut source =
+        File::open(source).map_err(|_| fatal("release_artifact_read_failed", "stage_release"))?;
+    let mut destination = OpenOptions::new()
+        .create_new(true)
+        .write(true)
+        .open(destination)
+        .map_err(|_| fatal("release_artifact_stage_failed", "stage_release"))?;
+    let mut digest = Sha256::new();
+    let mut buffer = [0_u8; 64 * 1024];
+    loop {
+        let read = source
+            .read(&mut buffer)
+            .map_err(|_| fatal("release_artifact_read_failed", "stage_release"))?;
+        if read == 0 {
+            break;
+        }
+        digest.update(&buffer[..read]);
+        destination
+            .write_all(&buffer[..read])
+            .map_err(|_| fatal("release_artifact_stage_failed", "stage_release"))?;
+    }
+    destination
+        .sync_all()
+        .map_err(|_| fatal("release_artifact_stage_failed", "stage_release"))?;
+    let actual = format!("sha256:{:x}", digest.finalize());
+    if actual != expected_sha256 {
+        return Err(fatal("release_artifact_hash_mismatch", "stage_release"));
+    }
+    Ok(())
+}
+
+fn verify_release_blob(
+    path: &Path,
+    expected_sha256: &str,
+    operation: &'static str,
+) -> RuntimeStateResult<()> {
+    require_release_regular_file(path, "release_artifact_unavailable", operation)?;
+    let mut file =
+        File::open(path).map_err(|_| fatal("release_artifact_read_failed", operation))?;
+    let mut digest = Sha256::new();
+    let mut buffer = [0_u8; 64 * 1024];
+    loop {
+        let read = file
+            .read(&mut buffer)
+            .map_err(|_| fatal("release_artifact_read_failed", operation))?;
+        if read == 0 {
+            break;
+        }
+        digest.update(&buffer[..read]);
+    }
+    if format!("sha256:{:x}", digest.finalize()) != expected_sha256 {
+        return Err(fatal("release_artifact_hash_mismatch", operation));
+    }
+    Ok(())
+}
+
+fn require_release_regular_file(
+    path: &Path,
+    code: &'static str,
+    operation: &'static str,
+) -> RuntimeStateResult<()> {
+    let metadata = fs::symlink_metadata(path).map_err(|_| fatal(code, operation))?;
+    if !metadata.is_file() || is_link_or_reparse(&metadata) {
+        return Err(fatal(code, operation));
+    }
+    Ok(())
+}
+
+fn remove_release_temporary(path: &Path) -> RuntimeStateResult<()> {
+    match fs::remove_file(path) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(_) => Err(fatal("release_artifact_cleanup_failed", "stage_release")),
+    }
+}
+
 fn require_regular_directory(path: &Path) -> RuntimeStateResult<()> {
     let metadata = fs::symlink_metadata(path)
         .map_err(|_| fatal("state_root_inspect_failed", "open_runtime_state"))?;
@@ -1569,20 +1915,43 @@ mod tests {
     use std::thread;
     use tempfile::TempDir;
 
-    fn release(version: &str, marker: char) -> RuntimeReleaseSet {
-        RuntimeReleaseSet::new(
+    fn release(
+        root: &Path,
+        version: &str,
+        marker: char,
+    ) -> (RuntimeReleaseSet, ReleaseArtifactSources) {
+        let source_root = root.join(format!("release-source-{version}-{marker}"));
+        fs::create_dir(&source_root).expect("release source root");
+        let runtime = source_root.join("runtime.bin");
+        let ui = source_root.join("ui.bin");
+        let resource = source_root.join("resource.bin");
+        let runtime_bytes = format!("runtime:{version}:{marker}");
+        let ui_bytes = format!("ui:{version}:{marker}");
+        let resource_bytes = format!("resource:{version}:{marker}");
+        fs::write(&runtime, runtime_bytes.as_bytes()).expect("runtime artifact");
+        fs::write(&ui, ui_bytes.as_bytes()).expect("UI artifact");
+        fs::write(&resource, resource_bytes.as_bytes()).expect("resource artifact");
+        let manifest = RuntimeReleaseSet::new(
             version,
+            sha256(runtime_bytes.as_bytes()),
             version,
+            sha256(ui_bytes.as_bytes()),
             vec![
                 ReleaseResourceVersion::new(
                     "project-a",
                     version,
-                    format!("sha256:{}", marker.to_string().repeat(64)),
+                    sha256(resource_bytes.as_bytes()),
                 )
                 .expect("resource"),
             ],
         )
-        .expect("release")
+        .expect("release");
+        let sources = ReleaseArtifactSources::new(
+            runtime,
+            ui,
+            BTreeMap::from([("project-a".to_owned(), resource)]),
+        );
+        (manifest, sources)
     }
 
     #[test]
@@ -1623,6 +1992,9 @@ mod tests {
     fn legacy_migration_is_idempotent_and_conflicts_fail_loudly() {
         let root = TempDir::new().expect("tempdir");
         let store = RuntimeStateStore::open(root.path(), b"0123456789abcdef").expect("store");
+        let legacy = store
+            .write_json_document("policy.active", "pointer-json.v1", br#"{"value":1}"#, None)
+            .expect("legacy document");
         let first = store
             .migrate_legacy_json_document(
                 "policy.active",
@@ -1641,6 +2013,13 @@ mod tests {
             .expect("migration replay");
         assert_eq!(first, replay);
         assert_eq!(store.migrations().expect("migrations"), vec![first]);
+        let migrated = store
+            .read_json_document("policy.active")
+            .expect("read migrated document")
+            .expect("migrated document");
+        assert_eq!(migrated.schema_version(), "pointer.v1");
+        assert_eq!(migrated.revision(), 2);
+        assert_eq!(migrated.payload_sha256(), legacy.payload_sha256());
         assert_eq!(
             store
                 .migrate_legacy_json_document(
@@ -1653,17 +2032,101 @@ mod tests {
                 .code(),
             "state_migration_content_conflict"
         );
+        assert_eq!(
+            store
+                .migrate_legacy_json_document(
+                    "policy.active",
+                    "pointer.v1",
+                    "pointer.v1",
+                    br#"{"value":1}"#,
+                )
+                .expect_err("unchanged schema")
+                .code(),
+            "state_migration_schema_unchanged"
+        );
+    }
+
+    #[test]
+    fn document_identity_includes_schema_version() {
+        let root = TempDir::new().expect("tempdir");
+        let store = RuntimeStateStore::open(root.path(), b"0123456789abcdef").expect("store");
+        let first = store
+            .write_json_document("policy.active", "pointer.v1", br#"{"value":1}"#, None)
+            .expect("first document");
+        let second = store
+            .write_json_document(
+                "policy.active",
+                "pointer.v2",
+                br#"{"value":1}"#,
+                Some(first.payload_sha256()),
+            )
+            .expect("schema-only revision");
+        assert_eq!(second.revision(), 2);
+        assert_eq!(second.schema_version(), "pointer.v2");
+        assert_eq!(second.payload_sha256(), first.payload_sha256());
+    }
+
+    #[test]
+    fn migration_rejects_unexpected_current_schema() {
+        let root = TempDir::new().expect("tempdir");
+        let store = RuntimeStateStore::open(root.path(), b"0123456789abcdef").expect("store");
+        store
+            .write_json_document(
+                "policy.active",
+                "pointer.unexpected",
+                br#"{"value":1}"#,
+                None,
+            )
+            .expect("unexpected document");
+        let error = store
+            .migrate_legacy_json_document(
+                "policy.active",
+                "pointer-json.v1",
+                "pointer.v1",
+                br#"{"value":1}"#,
+            )
+            .expect_err("unexpected schema must fail");
+        assert_eq!(error.code(), "state_migration_schema_conflict");
+        assert!(error.is_fatal());
+    }
+
+    #[test]
+    fn migration_rejects_target_schema_without_matching_record() {
+        let root = TempDir::new().expect("tempdir");
+        let store = RuntimeStateStore::open(root.path(), b"0123456789abcdef").expect("store");
+        store
+            .write_json_document("policy.active", "pointer.v1", br#"{"value":1}"#, None)
+            .expect("target document");
+        let error = store
+            .migrate_legacy_json_document(
+                "policy.active",
+                "pointer-json.v1",
+                "pointer.v1",
+                br#"{"value":1}"#,
+            )
+            .expect_err("missing migration record must fail");
+        assert_eq!(error.code(), "state_migration_record_missing");
+        assert!(error.is_fatal());
     }
 
     #[test]
     fn release_generations_switch_atomically_and_rollback_only_to_history() {
         let root = TempDir::new().expect("tempdir");
         let store = RuntimeStateStore::open(root.path(), b"0123456789abcdef").expect("store");
-        let first = release("1.0.0", 'a');
-        let second = release("2.0.0", 'b');
-        let never_active = release("3.0.0", 'c');
-        for manifest in [first.clone(), second.clone(), never_active.clone()] {
-            assert!(store.stage_release(manifest).expect("stage").created());
+        let (first, first_sources) = release(root.path(), "1.0.0", 'a');
+        let (second, second_sources) = release(root.path(), "2.0.0", 'b');
+        let (never_active, never_active_sources) = release(root.path(), "3.0.0", 'c');
+        for (manifest, sources) in [
+            (first.clone(), first_sources),
+            (second.clone(), second_sources),
+            (never_active.clone(), never_active_sources),
+        ] {
+            assert!(
+                store
+                    .stage_release(manifest, &sources)
+                    .expect("stage")
+                    .created()
+            );
         }
         let activate_first = store
             .preview_release_transition(ReleaseTransitionKind::Activate, first.release_id())
@@ -1699,13 +2162,101 @@ mod tests {
     }
 
     #[test]
+    fn release_staging_requires_complete_matching_artifacts() {
+        let root = TempDir::new().expect("tempdir");
+        let store = RuntimeStateStore::open(root.path(), b"0123456789abcdef").expect("store");
+        let (manifest, sources) = release(root.path(), "1.0.0", 'a');
+        fs::remove_file(sources.ui()).expect("remove UI source");
+        let error = store
+            .stage_release(manifest.clone(), &sources)
+            .expect_err("missing source must fail");
+        assert_eq!(error.code(), "release_artifact_source_invalid");
+        assert!(error.is_fatal());
+        assert!(store.release_generations().expect("generations").is_empty());
+
+        fs::write(sources.ui(), b"tampered UI").expect("tampered UI source");
+        let error = store
+            .stage_release(manifest, &sources)
+            .expect_err("hash mismatch must fail");
+        assert_eq!(error.code(), "release_artifact_hash_mismatch");
+        assert!(error.is_fatal());
+        assert!(store.release_generations().expect("generations").is_empty());
+    }
+
+    #[test]
+    fn release_identity_changes_when_same_version_has_different_bytes() {
+        let root = TempDir::new().expect("tempdir");
+        let (first, _) = release(root.path(), "1.0.0", 'a');
+        let (second, _) = release(root.path(), "1.0.0", 'b');
+        assert_eq!(first.runtime_version(), second.runtime_version());
+        assert_eq!(first.ui_version(), second.ui_version());
+        assert_ne!(first.release_id(), second.release_id());
+    }
+
+    #[test]
+    fn active_release_resolves_only_verified_content_addressed_artifacts() {
+        let root = TempDir::new().expect("tempdir");
+        let store = RuntimeStateStore::open(root.path(), b"0123456789abcdef").expect("store");
+        let (manifest, sources) = release(root.path(), "1.0.0", 'a');
+        store
+            .stage_release(manifest.clone(), &sources)
+            .expect("stage release");
+        let preview = store
+            .preview_release_transition(ReleaseTransitionKind::Activate, manifest.release_id())
+            .expect("preview activation");
+        store
+            .commit_release_transition(&preview)
+            .expect("activate release");
+
+        let runtime = store
+            .resolve_active_release_artifact(&ReleaseArtifactKey::Runtime)
+            .expect("resolve runtime artifact");
+        assert_eq!(runtime.release_id(), manifest.release_id());
+        assert_eq!(runtime.content_sha256(), manifest.runtime_content_sha256());
+        assert_eq!(
+            fs::read(runtime.path()).expect("runtime bytes"),
+            b"runtime:1.0.0:a"
+        );
+
+        fs::write(runtime.path(), b"tampered runtime").expect("tamper runtime blob");
+        let error = store
+            .active_release()
+            .expect_err("tampered active artifact must fail");
+        assert_eq!(error.code(), "release_artifact_hash_mismatch");
+        assert!(error.is_fatal());
+    }
+
+    #[test]
+    fn release_activation_rejects_missing_staged_artifact() {
+        let root = TempDir::new().expect("tempdir");
+        let store = RuntimeStateStore::open(root.path(), b"0123456789abcdef").expect("store");
+        let (manifest, sources) = release(root.path(), "1.0.0", 'a');
+        store
+            .stage_release(manifest.clone(), &sources)
+            .expect("stage release");
+        let runtime = store
+            .release_blob_path(manifest.runtime_content_sha256(), "test")
+            .expect("runtime blob path");
+        fs::remove_file(runtime).expect("remove runtime blob");
+        let error = store
+            .preview_release_transition(ReleaseTransitionKind::Activate, manifest.release_id())
+            .expect_err("missing artifact must fail");
+        assert_eq!(error.code(), "release_artifact_unavailable");
+        assert!(error.is_fatal());
+    }
+
+    #[test]
     fn stale_transition_preview_cannot_replace_a_new_pointer() {
         let root = TempDir::new().expect("tempdir");
         let store = RuntimeStateStore::open(root.path(), b"0123456789abcdef").expect("store");
-        let first = release("1.0.0", 'a');
-        let second = release("2.0.0", 'b');
-        store.stage_release(first.clone()).expect("stage first");
-        store.stage_release(second.clone()).expect("stage second");
+        let (first, first_sources) = release(root.path(), "1.0.0", 'a');
+        let (second, second_sources) = release(root.path(), "2.0.0", 'b');
+        store
+            .stage_release(first.clone(), &first_sources)
+            .expect("stage first");
+        store
+            .stage_release(second.clone(), &second_sources)
+            .expect("stage second");
         let stale = store
             .preview_release_transition(ReleaseTransitionKind::Activate, first.release_id())
             .expect("stale preview");
@@ -1763,10 +2314,14 @@ mod tests {
         ] {
             let root = TempDir::new().expect("tempdir");
             let store = RuntimeStateStore::open(root.path(), b"0123456789abcdef").expect("store");
-            let first = release("1.0.0", 'a');
-            let second = release("2.0.0", 'b');
-            store.stage_release(first.clone()).expect("stage first");
-            store.stage_release(second.clone()).expect("stage second");
+            let (first, first_sources) = release(root.path(), "1.0.0", 'a');
+            let (second, second_sources) = release(root.path(), "2.0.0", 'b');
+            store
+                .stage_release(first.clone(), &first_sources)
+                .expect("stage first");
+            store
+                .stage_release(second.clone(), &second_sources)
+                .expect("stage second");
             let first_preview = store
                 .preview_release_transition(ReleaseTransitionKind::Activate, first.release_id())
                 .expect("first preview");
@@ -1808,9 +2363,9 @@ mod tests {
     fn committed_release_transition_replay_is_idempotent() {
         let root = TempDir::new().expect("tempdir");
         let store = RuntimeStateStore::open(root.path(), b"0123456789abcdef").expect("store");
-        let manifest = release("1.0.0", 'a');
+        let (manifest, sources) = release(root.path(), "1.0.0", 'a');
         store
-            .stage_release(manifest.clone())
+            .stage_release(manifest.clone(), &sources)
             .expect("stage release");
         let preview = store
             .preview_release_transition(ReleaseTransitionKind::Activate, manifest.release_id())
@@ -1830,10 +2385,14 @@ mod tests {
         let root = TempDir::new().expect("tempdir");
         let store =
             Arc::new(RuntimeStateStore::open(root.path(), b"0123456789abcdef").expect("store"));
-        let first = release("1.0.0", 'a');
-        let second = release("2.0.0", 'b');
-        store.stage_release(first.clone()).expect("stage first");
-        store.stage_release(second.clone()).expect("stage second");
+        let (first, first_sources) = release(root.path(), "1.0.0", 'a');
+        let (second, second_sources) = release(root.path(), "2.0.0", 'b');
+        store
+            .stage_release(first.clone(), &first_sources)
+            .expect("stage first");
+        store
+            .stage_release(second.clone(), &second_sources)
+            .expect("stage second");
         let first_preview = store
             .preview_release_transition(ReleaseTransitionKind::Activate, first.release_id())
             .expect("first preview");

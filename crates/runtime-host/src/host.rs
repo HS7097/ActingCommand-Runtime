@@ -15,7 +15,9 @@ use crate::performance::{
 };
 use crate::performance_control::{PerformanceBalanceController, PerformanceDispatchGate};
 use crate::planning::collect_maintenance_evidence;
-use crate::policy_host::{LoadedCatalog, PolicyExecutionPreparation, PolicyHost};
+use crate::policy_host::{
+    LoadedCatalog, PolicyDispatchProjectionState, PolicyExecutionPreparation, PolicyHost,
+};
 use crate::project_interface::{
     ProjectDiagnosticProjection, ProjectInterfaceProjection, retain_recent_diagnostics,
 };
@@ -53,8 +55,8 @@ use actingcommand_contract::{
     LeaseToken, MAX_GOVERNANCE_CAPABILITY_BYTES, MAX_INSTANCE_ALIAS_BYTES,
     MIN_GOVERNANCE_CAPABILITY_BYTES, MonitorPayloadDraft, MonitorRecoveryCoordinationReason,
     OriginModule, PackageDebugLayout, PackageDebugRequest, PackageDebugSummary, PerformanceContext,
-    PerformancePayloadDraft, PolicyDispatchEventData, PolicyExecutionEventData, PolicyPayloadDraft,
-    PolicyPlanningSignalEventData, PolicyReasonRecord, ProjectInterfaceRequest,
+    PerformancePayloadDraft, PolicyDispatchEventData, PolicyExecutionEventData, PolicyPayload,
+    PolicyPayloadDraft, PolicyPlanningSignalEventData, PolicyReasonRecord, ProjectInterfaceRequest,
     ProjectedArtifactReference, ProposalClass, ProposalPromotion, RUNTIME_INFO_FILE,
     ReadonlyObservation, RecognitionPayloadDraft, RecognitionVerdict, ReleasePayload,
     ReleasePayloadDraft, ReleaseTransitionKind, RequestId, ResourceAuthoringEvent,
@@ -91,7 +93,7 @@ use actingcommand_policy::{
     StrategicEvidencePointer, StrategicReport, assess_predictive_maintenance, project_forward,
     project_strategic_report,
 };
-use actingcommand_runtime_state::RuntimeStateStore;
+use actingcommand_runtime_state::{ReleaseArtifactSources, RuntimeStateStore};
 use actingcommand_scheduler::{
     CancelledQueuedLease, ConnectionId, LeasePreparation, LeaseReleaseReason, LeaseTransferReason,
     PreparedLeaseTransfer, QueueAdmissionDecision, QueueLeaseRequest, QueuePoll, QueuedLease,
@@ -117,6 +119,19 @@ const MAX_REQUEST_CACHE_ENTRIES: usize = 4096;
 const MAX_TRUSTED_POLICY_DISPATCHES: usize = 16_384;
 const MAX_MONITOR_PROBES_PER_TICK: usize = 16;
 const POLICY_CONNECTION_VALUE: u64 = u64::MAX;
+
+#[cfg(test)]
+fn policy_crash_test_barrier(point: &str) {
+    if std::env::var("ACTINGCOMMAND_POLICY_CRASH_POINT").as_deref() != Ok(point) {
+        return;
+    }
+    let marker =
+        std::env::var_os("ACTINGCOMMAND_POLICY_CRASH_MARKER").expect("policy crash marker path");
+    fs::write(marker, point.as_bytes()).expect("policy crash marker");
+    loop {
+        thread::sleep(Duration::from_secs(60));
+    }
+}
 
 #[derive(Clone)]
 pub struct RuntimeHostConfig {
@@ -317,12 +332,13 @@ impl RuntimeHost {
             RuntimeStateStore::open(&config.state_root, &config.secret_fingerprint_salt)
                 .map_err(|error| RuntimeHostError::state(&error))?,
         );
-        let policy = PolicyHost::open(
+        let mut policy = PolicyHost::open(
             &config.state_root,
             Arc::clone(&state),
             &ledger,
             config.policy_cadence.clone(),
         )?;
+        reconcile_policy_dispatches(&mut policy, &ledger, &events)?;
         ApprovalProjection::recover(&ledger)?;
         reconcile_runtime_state(&state, &ledger, &events)?;
         let agent_instance_ids = registered_instances
@@ -561,9 +577,10 @@ impl RuntimeHost {
     pub fn stage_release_set(
         &self,
         manifest: RuntimeReleaseSet,
+        sources: &ReleaseArtifactSources,
     ) -> RuntimeHostResult<RuntimeReleaseSet> {
         self.shared_ref("stage_release_set")?
-            .stage_release_set(manifest)
+            .stage_release_set(manifest, sources)
     }
 
     pub fn active_release_set(&self) -> RuntimeHostResult<Option<RuntimeReleaseSet>> {
@@ -1159,6 +1176,67 @@ fn reconcile_runtime_state(
     Ok(())
 }
 
+fn reconcile_policy_dispatches(
+    policy: &mut PolicyHost,
+    ledger: &GlobalLedger,
+    events: &RuntimeEvents,
+) -> RuntimeHostResult<()> {
+    let pending = policy
+        .project_dispatches()
+        .into_iter()
+        .filter(|dispatch| dispatch.state == PolicyDispatchProjectionState::Intent)
+        .collect::<Vec<_>>();
+    if pending.is_empty() {
+        return Ok(());
+    }
+    let persisted = ledger
+        .query(EventQuery::default())
+        .map_err(|_| ledger_error("reconcile_policy_dispatches"))?;
+    for dispatch in pending {
+        let intent = persisted
+            .iter()
+            .find(|event| {
+                event.event_type() == EventType::PolicyDispatchIntent
+                    && matches!(
+                        event.payload(),
+                        EventPayload::Policy(PolicyPayload::DispatchIntent(payload))
+                            if payload.decision_id() == dispatch.data.decision_id.as_str()
+                    )
+            })
+            .ok_or_else(|| {
+                policy_admission_fatal(
+                    "policy_dispatch_intent_missing",
+                    "reconcile_policy_dispatches",
+                )
+            })?;
+        let lease_granted = persisted.iter().any(|event| {
+            event.sequence() > intent.sequence()
+                && event.event_type() == EventType::LeaseGranted
+                && event.links().request_id() == intent.links().request_id()
+                && event.links().correlation_id() == intent.links().correlation_id()
+                && event.links().instance_id() == intent.links().instance_id()
+        });
+        let effect = if lease_granted {
+            EffectDisposition::Indeterminate
+        } else {
+            EffectDisposition::NotPerformed
+        };
+        let draft = events.draft(
+            EventSeverity::Error,
+            EventSource::Scheduler,
+            OriginModule::Policy,
+            EventActor::Scheduler,
+            events.system_links()?,
+            PolicyPayloadDraft::dispatch_rejected(dispatch.data, effect, AuditInput::new()),
+        )?;
+        let draft = events.sanitize(draft)?;
+        ledger
+            .append(draft)
+            .map_err(|_| ledger_error("reconcile_policy_dispatches"))?;
+    }
+    policy.refresh_dispatches(ledger)
+}
+
 fn ledger_has_release_stage(ledger: &GlobalLedger, release_id: &str) -> RuntimeHostResult<bool> {
     Ok(
         release_event_identities(ledger, EventType::ReleaseStaged, |payload| match payload {
@@ -1604,12 +1682,13 @@ impl HostShared {
     fn stage_release_set(
         &self,
         manifest: RuntimeReleaseSet,
+        sources: &ReleaseArtifactSources,
     ) -> RuntimeHostResult<RuntimeReleaseSet> {
         let result: RuntimeHostResult<RuntimeReleaseSet> = (|| {
             let _gate = lock(&self.state_write_gate, "stage_release_set")?;
             let staged = self
                 .state
-                .stage_release(manifest)
+                .stage_release(manifest, sources)
                 .map_err(|error| RuntimeHostError::state(&error))?;
             let manifest = staged.manifest().clone();
             if !ledger_has_release_stage(&self.ledger, manifest.release_id())? {
@@ -2277,6 +2356,8 @@ impl HostShared {
             self.events.fingerprinter(),
             plan,
             || {
+                #[cfg(test)]
+                policy_crash_test_barrier("after_policy_intent");
                 if let Some(error) = gate_error.clone() {
                     return CriticalActionReport::Failed {
                         error: RequestFailure::request(error, RuntimeReceiptState::Denied, None),
@@ -2347,12 +2428,16 @@ impl HostShared {
                 match admission {
                     Ok(success) => match success.result {
                         RuntimeResult::LeaseGranted { token } => {
+                            #[cfg(test)]
+                            policy_crash_test_barrier("after_lease_grant");
                             if let Err(error) = policy.commit_admission(intent, &admission_record) {
                                 return CriticalActionReport::Failed {
                                     error: RequestFailure::poison_without_terminal(error),
                                     effect: EffectDisposition::Indeterminate,
                                 };
                             }
+                            #[cfg(test)]
+                            policy_crash_test_barrier("after_budget_commit");
                             CriticalActionReport::Succeeded {
                                 value: (token, catalog, admission_record),
                                 effect: DefiniteEffectDisposition::Performed,
