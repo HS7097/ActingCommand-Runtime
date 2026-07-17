@@ -1141,7 +1141,7 @@ fn pack_error(err: actingcommand_recognition_pack::RecognitionPackError) -> Devi
     DeviceError::fatal(err.to_string())
 }
 
-fn page_error(err: actingcommand_page_detector::PageDetectorError) -> DeviceError {
+fn page_error(err: impl std::fmt::Display) -> DeviceError {
     DeviceError::fatal(err.to_string())
 }
 

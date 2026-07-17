@@ -8,6 +8,7 @@ use std::error::Error;
 use std::fmt;
 
 pub type PageDetectorResult<T> = Result<T, PageDetectorError>;
+pub type PageBatchResult = Result<Vec<PageOutcome>, BatchLevelError>;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PageDetectorErrorSeverity {
@@ -90,6 +91,60 @@ pub struct PageEvaluation {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PageOutcome {
+    pub index: usize,
+    pub page_id: String,
+    pub result: PageDetectorResult<PageEvaluation>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PageUnexecutedReason {
+    BatchValidationFailed,
+    BatchTerminated,
+}
+
+impl fmt::Display for PageUnexecutedReason {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::BatchValidationFailed => formatter.write_str("batch_validation_failed"),
+            Self::BatchTerminated => formatter.write_str("batch_terminated"),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UnexecutedPage {
+    pub index: usize,
+    pub page_id: String,
+    pub reason: PageUnexecutedReason,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BatchLevelError {
+    pub cause: PageDetectorError,
+    pub completed: Vec<PageOutcome>,
+    pub unexecuted: Vec<UnexecutedPage>,
+}
+
+impl fmt::Display for BatchLevelError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            formatter,
+            "page evaluation batch terminated after {} completed page(s), leaving {} unexecuted page(s): {}",
+            self.completed.len(),
+            self.unexecuted.len(),
+            self.cause
+        )
+    }
+}
+
+impl Error for BatchLevelError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        Some(&self.cause)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PageTargetEvaluation {
     pub target_id: String,
     pub role: PageTargetRole,
@@ -108,6 +163,34 @@ pub enum PageTargetRole {
 pub fn load_page_set_from_json_str(json: &str) -> PageDetectorResult<PageSet> {
     serde_json::from_str(json)
         .map_err(|err| PageDetectorError::fatal(format!("failed to parse page set JSON: {err}")))
+}
+
+pub fn require_all_page_evaluations(
+    outcomes: Vec<PageOutcome>,
+) -> PageDetectorResult<Vec<PageEvaluation>> {
+    let mut evaluations = Vec::with_capacity(outcomes.len());
+    let mut failures = Vec::new();
+
+    for outcome in outcomes {
+        match outcome.result {
+            Ok(evaluation) => evaluations.push(evaluation),
+            Err(error) => failures.push(format!(
+                "[{}] '{}': {}",
+                outcome.index, outcome.page_id, error
+            )),
+        }
+    }
+
+    if failures.is_empty() {
+        Ok(evaluations)
+    } else {
+        Err(PageDetectorError::fatal(format!(
+            "page evaluation batch completed with {} successful page(s) and {} failed page(s): {}",
+            evaluations.len(),
+            failures.len(),
+            failures.join("; ")
+        )))
+    }
 }
 
 impl PageDetector {
@@ -166,12 +249,96 @@ impl PageDetector {
         evaluator: &RecognitionEvaluator,
         scene: &Scene,
     ) -> PageDetectorResult<Vec<PageEvaluation>> {
-        self.validate(evaluator)?;
-        self.page_set
+        let outcomes = self
+            .evaluate_all_outcomes(evaluator, scene)
+            .map_err(|error| PageDetectorError::fatal(error.to_string()))?;
+        require_all_page_evaluations(outcomes)
+    }
+
+    pub fn evaluate_all_outcomes(
+        &self,
+        evaluator: &RecognitionEvaluator,
+        scene: &Scene,
+    ) -> PageBatchResult {
+        self.evaluate_all_outcomes_with(evaluator, scene, |_, page| {
+            self.evaluate_page_definition(evaluator, scene, page)
+        })
+    }
+
+    fn evaluate_all_outcomes_with(
+        &self,
+        evaluator: &RecognitionEvaluator,
+        scene: &Scene,
+        mut evaluate: impl FnMut(usize, &PageDefinition) -> PageDetectorResult<PageEvaluation>,
+    ) -> PageBatchResult {
+        if let Err(cause) = validate_batch_request(evaluator, scene) {
+            return Err(self.batch_error(
+                cause,
+                Vec::new(),
+                0,
+                PageUnexecutedReason::BatchValidationFailed,
+            ));
+        }
+
+        let mut completed = Vec::with_capacity(self.page_set.pages.len());
+        for (index, page) in self.page_set.pages.iter().enumerate() {
+            match evaluate(index, page) {
+                Ok(evaluation) if evaluation.page_id == page.id => completed.push(PageOutcome {
+                    index,
+                    page_id: page.id.clone(),
+                    result: Ok(evaluation),
+                }),
+                Ok(evaluation) => {
+                    let cause = PageDetectorError::fatal(format!(
+                        "page evaluation invariant failed at index {index}: expected page_id '{}', got '{}'",
+                        page.id, evaluation.page_id
+                    ));
+                    completed.push(PageOutcome {
+                        index,
+                        page_id: page.id.clone(),
+                        result: Err(cause.clone()),
+                    });
+                    return Err(self.batch_error(
+                        cause,
+                        completed,
+                        index + 1,
+                        PageUnexecutedReason::BatchTerminated,
+                    ));
+                }
+                Err(error) => completed.push(PageOutcome {
+                    index,
+                    page_id: page.id.clone(),
+                    result: Err(error),
+                }),
+            }
+        }
+        Ok(completed)
+    }
+
+    fn batch_error(
+        &self,
+        cause: PageDetectorError,
+        completed: Vec<PageOutcome>,
+        first_unexecuted: usize,
+        reason: PageUnexecutedReason,
+    ) -> BatchLevelError {
+        let unexecuted = self
+            .page_set
             .pages
             .iter()
-            .map(|page| self.evaluate_page_definition(evaluator, scene, page))
-            .collect()
+            .enumerate()
+            .skip(first_unexecuted)
+            .map(|(index, page)| UnexecutedPage {
+                index,
+                page_id: page.id.clone(),
+                reason,
+            })
+            .collect();
+        BatchLevelError {
+            cause,
+            completed,
+            unexecuted,
+        }
     }
 
     fn page(&self, page_id: &str) -> PageDetectorResult<&PageDefinition> {
@@ -230,6 +397,26 @@ impl PageDetector {
             message,
         })
     }
+}
+
+fn validate_batch_request(
+    evaluator: &RecognitionEvaluator,
+    scene: &Scene,
+) -> PageDetectorResult<()> {
+    let expected =
+        evaluator.pack().coordinate_space.as_ref().ok_or_else(|| {
+            PageDetectorError::fatal("recognition pack coordinate_space is required")
+        })?;
+    if scene.width() != expected.width || scene.height() != expected.height {
+        return Err(PageDetectorError::fatal(format!(
+            "scene dimensions {}x{} do not match pack coordinate_space {}x{}",
+            scene.width(),
+            scene.height(),
+            expected.width,
+            expected.height
+        )));
+    }
+    Ok(())
 }
 
 fn validate_page_set(page_set: &PageSet) -> PageDetectorResult<()> {
@@ -837,6 +1024,153 @@ mod tests {
         assert!(evaluations.iter().any(|evaluation| {
             evaluation.page_id == "fixture/settings_page" && evaluation.matched
         }));
+    }
+
+    #[test]
+    fn evaluate_all_keeps_order_and_continues_after_page_error() {
+        let fixture = Fixture::new();
+        let detector = PageDetector::new(PageSet {
+            pages: vec![
+                home_page(),
+                PageDefinition {
+                    id: "fixture/broken_page".to_string(),
+                    required: vec!["fixture/missing".to_string()],
+                    any_of: Vec::new(),
+                    optional: Vec::new(),
+                    forbidden: Vec::new(),
+                },
+                settings_page(),
+            ],
+            ..base_page_set()
+        })
+        .expect("detector");
+
+        let outcomes = detector
+            .evaluate_all_outcomes(&fixture.evaluator, &scene_colors(true, true, false))
+            .expect("page failures do not terminate the batch");
+
+        assert_eq!(outcomes.len(), 3);
+        assert_eq!(
+            outcomes
+                .iter()
+                .map(|outcome| (outcome.index, outcome.page_id.as_str()))
+                .collect::<Vec<_>>(),
+            vec![
+                (0, "fixture/home_page"),
+                (1, "fixture/broken_page"),
+                (2, "fixture/settings_page"),
+            ]
+        );
+        assert!(outcomes[0].result.as_ref().expect("home result").matched);
+        assert!(outcomes[1].result.is_err());
+        assert!(
+            outcomes[2]
+                .result
+                .as_ref()
+                .expect("settings result")
+                .matched
+        );
+
+        let error = require_all_page_evaluations(outcomes).expect_err("partial batch");
+        assert_fatal_contains(error, "1 failed page(s)");
+
+        let compatibility_error = detector
+            .evaluate_all(&fixture.evaluator, &scene_colors(true, true, false))
+            .expect_err("compatibility entry point remains fail-loud");
+        assert_fatal_contains(compatibility_error, "1 failed page(s)");
+    }
+
+    #[test]
+    fn evaluate_all_reports_batch_validation_before_any_page_runs() {
+        let fixture = Fixture::new();
+        let error = fixture
+            .detector
+            .evaluate_all_outcomes(
+                &fixture.evaluator,
+                &scene_from_colors(12, 8, true, true, false),
+            )
+            .expect_err("coordinate mismatch terminates the batch");
+
+        assert!(error.completed.is_empty());
+        assert_eq!(
+            error
+                .unexecuted
+                .iter()
+                .map(|page| (page.index, page.page_id.as_str(), page.reason))
+                .collect::<Vec<_>>(),
+            vec![
+                (
+                    0,
+                    "fixture/home_page",
+                    PageUnexecutedReason::BatchValidationFailed,
+                ),
+                (
+                    1,
+                    "fixture/settings_page",
+                    PageUnexecutedReason::BatchValidationFailed,
+                ),
+            ]
+        );
+        assert_fatal_contains(error.cause, "coordinate_space");
+    }
+
+    #[test]
+    fn evaluate_all_preserves_completed_and_unexecuted_on_mid_batch_invariant_failure() {
+        let fixture = Fixture::new();
+        let detector = PageDetector::new(PageSet {
+            pages: vec![
+                home_page(),
+                settings_page(),
+                PageDefinition {
+                    id: "fixture/final_page".to_string(),
+                    required: vec!["fixture/home_anchor".to_string()],
+                    any_of: Vec::new(),
+                    optional: Vec::new(),
+                    forbidden: Vec::new(),
+                },
+            ],
+            ..base_page_set()
+        })
+        .expect("detector");
+        let scene = scene_colors(true, true, false);
+
+        let error = detector
+            .evaluate_all_outcomes_with(&fixture.evaluator, &scene, |index, page| {
+                let mut evaluation =
+                    detector.evaluate_page_definition(&fixture.evaluator, &scene, page)?;
+                if index == 1 {
+                    evaluation.page_id = "fixture/wrong_page".to_string();
+                }
+                Ok(evaluation)
+            })
+            .expect_err("invariant failure terminates the batch");
+
+        assert_eq!(error.completed.len(), 2);
+        assert_eq!(error.completed[0].index, 0);
+        assert!(error.completed[0].result.is_ok());
+        assert_eq!(error.completed[1].index, 1);
+        assert_eq!(error.completed[1].page_id, "fixture/settings_page");
+        let attempted_error = error.completed[1]
+            .result
+            .as_ref()
+            .expect_err("attempted invariant failure is preserved");
+        assert_fatal_contains(
+            attempted_error.clone(),
+            "expected page_id 'fixture/settings_page'",
+        );
+        assert_eq!(
+            error
+                .unexecuted
+                .iter()
+                .map(|page| (page.index, page.page_id.as_str(), page.reason))
+                .collect::<Vec<_>>(),
+            vec![(
+                2,
+                "fixture/final_page",
+                PageUnexecutedReason::BatchTerminated,
+            ),]
+        );
+        assert_fatal_contains(error.cause, "invariant failed");
     }
 
     #[test]

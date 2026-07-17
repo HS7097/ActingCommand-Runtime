@@ -325,7 +325,7 @@ fn match_metric_name(metric: MatchMetric) -> &'static str {
     }
 }
 
-fn page_error(error: actingcommand_page_detector::PageDetectorError) -> ReadonlyRecognitionError {
+fn page_error(error: impl fmt::Display) -> ReadonlyRecognitionError {
     ReadonlyRecognitionError::new(error.to_string())
 }
 
@@ -541,6 +541,44 @@ mod tests {
             .expect("current page");
         assert_eq!(current.page, "fixture/home");
         assert!(current.matched);
+    }
+
+    #[test]
+    fn detect_current_page_rejects_partial_batch_instead_of_returning_a_match() {
+        let engine = engine();
+        let detector = PageDetector::new(PageSet {
+            schema_version: "0.3".to_string(),
+            pages: vec![
+                PageDefinition {
+                    id: "fixture/home".to_string(),
+                    required: vec!["home_anchor".to_string()],
+                    any_of: Vec::new(),
+                    optional: Vec::new(),
+                    forbidden: Vec::new(),
+                },
+                PageDefinition {
+                    id: "fixture/broken".to_string(),
+                    required: vec!["missing_anchor".to_string()],
+                    any_of: Vec::new(),
+                    optional: Vec::new(),
+                    forbidden: Vec::new(),
+                },
+            ],
+        })
+        .expect("detector");
+
+        let error = detect_current_page(
+            &engine.evaluator,
+            &detector,
+            &scene([255, 0, 0]),
+            "fixture-command",
+            Vec::new(),
+        )
+        .expect_err("partial page batch must not return a match");
+
+        assert!(error.message().contains("1 successful page(s)"));
+        assert!(error.message().contains("fixture/broken"));
+        assert!(error.message().contains("target id not found"));
     }
 
     #[test]
