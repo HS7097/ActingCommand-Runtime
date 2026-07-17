@@ -75,8 +75,8 @@ use actingcommand_execution_kernel::{
 };
 use actingcommand_ledger::critical::{
     CatalogTransitionTarget, CriticalActionReport, CriticalEventPlan, CriticalExecutionError,
-    CriticalOperation, DefiniteEffectDisposition, LeaseTransitionTarget, ReleaseTransitionTarget,
-    execute_critical,
+    CriticalOperation, DefiniteEffectDisposition, EventAppender, LeaseTransitionTarget,
+    ReleaseTransitionTarget, execute_critical,
 };
 use actingcommand_ledger::{
     GlobalLedger, GlobalLedgerConfig, PersistedEvent, project_subscription_event,
@@ -98,6 +98,7 @@ use actingcommand_scheduler::{
     SchedulerConfig, SchedulerError, SeedScheduler, TransferPreparation,
 };
 use sha2::{Digest, Sha256};
+use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fs::{self, OpenOptions};
 use std::io::{Read, Write};
@@ -117,6 +118,27 @@ const MAX_REQUEST_CACHE_ENTRIES: usize = 4096;
 const MAX_TRUSTED_POLICY_DISPATCHES: usize = 16_384;
 const MAX_MONITOR_PROBES_PER_TICK: usize = 16;
 const POLICY_CONNECTION_VALUE: u64 = u64::MAX;
+
+/// Runtime-owned policy inputs supplied by trusted host integrations.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PolicyInputSnapshot {
+    facts: EvaluationFacts,
+    resources: EvaluationResources,
+}
+
+impl PolicyInputSnapshot {
+    pub fn new(facts: EvaluationFacts, resources: EvaluationResources) -> Self {
+        Self { facts, resources }
+    }
+
+    pub fn facts(&self) -> &EvaluationFacts {
+        &self.facts
+    }
+
+    pub fn resources(&self) -> &EvaluationResources {
+        &self.resources
+    }
+}
 
 #[cfg(test)]
 fn policy_crash_test_barrier(point: &str) {
@@ -146,6 +168,7 @@ pub struct RuntimeHostConfig {
     governance_capability_sha256: Option<[u8; 32]>,
     governance_capability_invalid: bool,
     clock: Arc<dyn RuntimeClock>,
+    policy_inputs: Option<PolicyInputSnapshot>,
 }
 
 impl RuntimeHostConfig {
@@ -164,6 +187,7 @@ impl RuntimeHostConfig {
             governance_capability_sha256: None,
             governance_capability_invalid: false,
             clock: Arc::new(SystemRuntimeClock::new()),
+            policy_inputs: None,
         }
     }
 
@@ -230,6 +254,12 @@ impl RuntimeHostConfig {
         self
     }
 
+    /// Installs the trusted policy snapshot used by Runtime-owned evaluation.
+    pub fn with_policy_inputs(mut self, policy_inputs: PolicyInputSnapshot) -> Self {
+        self.policy_inputs = Some(policy_inputs);
+        self
+    }
+
     pub fn state_root(&self) -> &Path {
         &self.state_root
     }
@@ -282,6 +312,10 @@ impl std::fmt::Debug for RuntimeHostConfig {
                     .map(|_| "<redacted-digest>"),
             )
             .field("clock", &"<runtime-owned>")
+            .field(
+                "policy_inputs",
+                &self.policy_inputs.as_ref().map(|_| "<runtime-owned>"),
+            )
             .finish()
     }
 }
@@ -433,6 +467,7 @@ impl RuntimeHost {
             agent_write_gate: Mutex::new(()),
             proposal_write_gate: Mutex::new(()),
             facts: Mutex::new(facts),
+            policy_inputs: Mutex::new(config.policy_inputs),
             owner: Mutex::new(owner),
             ledger,
             artifacts,
@@ -645,7 +680,14 @@ impl RuntimeHost {
             .prepare_strategic_report(report, evidence)
     }
 
-    pub fn evaluate_policy_cycle(
+    /// Evaluates one policy cycle from Runtime-owned facts, resources, time, and seed.
+    pub fn evaluate_policy_cycle(&self, trigger: PolicyTrigger) -> RuntimeHostResult<PolicyCycle> {
+        self.shared_ref("evaluate_policy_cycle")?
+            .evaluate_policy_cycle(trigger)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn evaluate_policy_cycle_with_test_inputs(
         &self,
         facts: &EvaluationFacts,
         resources: &EvaluationResources,
@@ -654,7 +696,7 @@ impl RuntimeHost {
         trigger: PolicyTrigger,
     ) -> RuntimeHostResult<PolicyCycle> {
         self.shared_ref("evaluate_policy_cycle")?
-            .evaluate_policy_cycle(facts, resources, time, seed, trigger)
+            .evaluate_policy_cycle_with_test_inputs(facts, resources, time, seed, trigger)
     }
 
     /// Runs a bounded future dry-run through the same pure policy evaluator used for admission.
@@ -1449,6 +1491,7 @@ struct HostShared {
     // Proposal recompilation, approval checks, and catalog activation form one ordered gate.
     proposal_write_gate: Mutex<()>,
     facts: Mutex<InstanceFactStore>,
+    policy_inputs: Mutex<Option<PolicyInputSnapshot>>,
     ledger: GlobalLedger,
     artifacts: ArtifactStore,
     state: Arc<RuntimeStateStore>,
@@ -1472,6 +1515,31 @@ struct HostShared {
     clock: Arc<dyn RuntimeClock>,
     clock_origin_monotonic_ms: u64,
     fatal: FatalState,
+}
+
+struct PolicyAdmissionAppender<'a> {
+    ledger: &'a GlobalLedger,
+    initial_fact_gate: RefCell<Option<MutexGuard<'a, ()>>>,
+}
+
+impl<'a> PolicyAdmissionAppender<'a> {
+    fn new(ledger: &'a GlobalLedger, initial_fact_gate: MutexGuard<'a, ()>) -> Self {
+        Self {
+            ledger,
+            initial_fact_gate: RefCell::new(Some(initial_fact_gate)),
+        }
+    }
+}
+
+impl EventAppender for PolicyAdmissionAppender<'_> {
+    fn append_durable(
+        &self,
+        draft: actingcommand_contract::SanitizedEventDraft,
+    ) -> actingcommand_ledger::GlobalLedgerResult<PersistedEvent> {
+        let event = self.ledger.append(draft)?;
+        self.initial_fact_gate.borrow_mut().take();
+        Ok(event)
+    }
 }
 
 #[derive(Clone)]
@@ -2048,7 +2116,17 @@ impl HostShared {
         }
     }
 
-    fn evaluate_policy_cycle(
+    fn evaluate_policy_cycle(&self, trigger: PolicyTrigger) -> RuntimeHostResult<PolicyCycle> {
+        let sample = self.runtime_clock_sample()?;
+        let time = EvaluationTime {
+            unix_ms: sample.unix_ms,
+            monotonic_ms: sample.monotonic_ms,
+        };
+        self.evaluate_policy_cycle_authoritative(time, None, trigger, sample.monotonic_ms)
+    }
+
+    #[cfg(test)]
+    fn evaluate_policy_cycle_with_test_inputs(
         &self,
         facts: &EvaluationFacts,
         resources: &EvaluationResources,
@@ -2056,42 +2134,38 @@ impl HostShared {
         seed: u64,
         trigger: PolicyTrigger,
     ) -> RuntimeHostResult<PolicyCycle> {
-        let _detection_gate = lock(&self.detection_write_gate, "plan_policy_detection")?;
-        let facts = {
-            let _gate = lock(&self.fact_write_gate, "project_policy_facts")?;
-            self.synchronize_fact_store_under_gate()?;
-            let ledger_position = self
-                .ledger
-                .latest_sequence()
-                .map_err(|_| ledger_error("read_policy_fact_position"))?;
-            lock(&self.facts, "project_policy_facts")?
-                .overlay_policy_facts(facts, ledger_position)?
-        };
         {
-            let registered = lock(
-                &self.registered_instances,
-                "validate_policy_instance_metadata",
-            )?;
-            if facts.instances.iter().any(|snapshot| {
-                !registered
-                    .values()
-                    .any(|instance| instance.instance_alias == snapshot.instance_id)
-            }) {
-                return Err(policy_admission_request(
-                    "policy_instance_metadata_untrusted",
-                    "evaluate_policy_cycle",
-                ));
-            }
+            let _gate = lock(&self.fact_write_gate, "set_test_policy_inputs")?;
+            *lock(&self.policy_inputs, "set_test_policy_inputs")? =
+                Some(PolicyInputSnapshot::new(facts.clone(), resources.clone()));
         }
+        self.evaluate_policy_cycle_authoritative(time, Some(seed), trigger, self.monotonic_ms()?)
+    }
+
+    fn evaluate_policy_cycle_authoritative(
+        &self,
+        time: EvaluationTime,
+        seed: Option<u64>,
+        trigger: PolicyTrigger,
+        observed_monotonic_ms: u64,
+    ) -> RuntimeHostResult<PolicyCycle> {
+        let _detection_gate = lock(&self.detection_write_gate, "plan_policy_detection")?;
+        let (facts, resources) = {
+            let _gate = lock(&self.fact_write_gate, "project_policy_facts")?;
+            self.project_authoritative_policy_inputs_under_gate("evaluate_policy_cycle")?
+        };
         let workloads = lock(&self.policy, "read_policy_performance_workloads")?
             .active_performance_workloads()?;
-        let mut controlled_resources = resources.clone();
+        let mut controlled_resources = resources;
         lock(
             &self.performance_control,
             "apply_policy_performance_control",
         )?
         .apply_to_resources(&mut controlled_resources.hosts, &workloads)?;
-        let observed_monotonic_ms = self.monotonic_ms()?;
+        let seed = match seed {
+            Some(seed) => seed,
+            None => runtime_policy_seed(&facts.fact_snapshot_id, time, self.owner_epoch)?,
+        };
         let cycle = lock(&self.policy, "evaluate_policy_cycle")?.evaluate(
             &facts,
             &controlled_resources,
@@ -2111,6 +2185,72 @@ impl HostShared {
         Ok(cycle)
     }
 
+    fn project_authoritative_policy_inputs_under_gate(
+        &self,
+        operation: &'static str,
+    ) -> RuntimeHostResult<(EvaluationFacts, EvaluationResources)> {
+        self.synchronize_fact_store_under_gate()?;
+        let inputs = lock(&self.policy_inputs, "read_policy_inputs")?
+            .clone()
+            .ok_or_else(|| policy_admission_request("policy_inputs_unconfigured", operation))?;
+        self.validate_policy_input_authority(&inputs, operation)?;
+        let ledger_position = self
+            .ledger
+            .latest_sequence()
+            .map_err(|_| ledger_error("read_policy_fact_position"))?;
+        let facts = lock(&self.facts, "project_policy_facts")?.overlay_policy_facts(
+            inputs.facts(),
+            inputs.resources(),
+            ledger_position,
+        )?;
+        Ok((facts, inputs.resources().clone()))
+    }
+
+    fn validate_policy_input_authority(
+        &self,
+        inputs: &PolicyInputSnapshot,
+        operation: &'static str,
+    ) -> RuntimeHostResult<()> {
+        let registered = lock(
+            &self.registered_instances,
+            "validate_policy_instance_metadata",
+        )?;
+        let registered_aliases = registered
+            .values()
+            .map(|instance| instance.instance_alias.as_str())
+            .collect::<BTreeSet<_>>();
+        let snapshot_aliases = inputs
+            .facts()
+            .instances
+            .iter()
+            .map(|instance| instance.instance_id.as_str())
+            .collect::<BTreeSet<_>>();
+        if registered_aliases != snapshot_aliases {
+            return Err(policy_admission_request(
+                "policy_instance_metadata_untrusted",
+                operation,
+            ));
+        }
+        let host_ids = inputs
+            .resources()
+            .hosts
+            .iter()
+            .map(|host| host.host_id.as_str())
+            .collect::<BTreeSet<_>>();
+        if inputs
+            .facts()
+            .instances
+            .iter()
+            .any(|instance| !host_ids.contains(instance.host_id.as_str()))
+        {
+            return Err(policy_admission_request(
+                "policy_resource_metadata_untrusted",
+                operation,
+            ));
+        }
+        Ok(())
+    }
+
     fn project_policy_forward(
         &self,
         facts: &EvaluationFacts,
@@ -2126,7 +2266,7 @@ impl HostShared {
                 .ledger
                 .latest_sequence()
                 .map_err(|_| ledger_error("project_forward_fact_position"))?;
-            fact_projection.overlay_policy_facts(facts, ledger_position)?
+            fact_projection.overlay_policy_facts(facts, resources, ledger_position)?
         };
         let (catalog, workloads) = {
             let policy = lock(&self.policy, "project_forward_catalog")?;
@@ -2394,12 +2534,22 @@ impl HostShared {
         let event = self.events.sanitize(event)?;
         let plan = CriticalEventPlan::new(CriticalOperation::PolicyDispatch, event)
             .map_err(|_| critical_plan_error())?;
+        let fact_gate = lock(&self.fact_write_gate, "validate_policy_fact_freshness")?;
+        let (current_facts, _) =
+            self.project_authoritative_policy_inputs_under_gate("admit_policy_dispatch")?;
+        if current_facts.fact_snapshot_id != trusted.intent.fact_snapshot_id {
+            return Err(policy_admission_request(
+                "policy_facts_stale",
+                "admit_policy_dispatch",
+            ));
+        }
+        let appender = PolicyAdmissionAppender::new(&self.ledger, fact_gate);
         let success_links = links.clone();
         let failure_links = links;
         let success_data = data.clone();
         let failure_data = data;
         let result = execute_critical(
-            &self.ledger,
+            &appender,
             self.events.fingerprinter(),
             plan,
             || {
@@ -9956,6 +10106,24 @@ fn policy_contract_error(operation: &'static str) -> RuntimeHostError {
         operation,
         RuntimeErrorCode::RuntimeFatal,
     )
+}
+
+fn runtime_policy_seed(
+    fact_snapshot_id: &str,
+    time: EvaluationTime,
+    owner_epoch: actingcommand_contract::OwnerEpoch,
+) -> RuntimeHostResult<u64> {
+    let bytes = serde_json::to_vec(&(fact_snapshot_id, time, owner_epoch)).map_err(|_| {
+        RuntimeHostError::fatal(
+            "policy_seed_encode_failed",
+            "derive_policy_seed",
+            RuntimeErrorCode::RuntimeFatal,
+        )
+    })?;
+    let digest = Sha256::digest(bytes);
+    let mut seed = [0_u8; 8];
+    seed.copy_from_slice(&digest[..8]);
+    Ok(u64::from_be_bytes(seed))
 }
 
 fn policy_admission_request(code: &'static str, operation: &'static str) -> RuntimeHostError {
