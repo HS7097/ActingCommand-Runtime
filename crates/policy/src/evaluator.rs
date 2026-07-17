@@ -2952,6 +2952,37 @@ mod tests {
     }
 
     #[test]
+    fn server_clock_accepts_independently_bounded_utc_and_dst_offsets() {
+        for (utc_offset_minutes, dst_offset_minutes, expected) in [
+            (
+                crate::MIN_UTC_OFFSET_MINUTES,
+                crate::MIN_DST_OFFSET_MINUTES,
+                -960,
+            ),
+            (
+                crate::MAX_UTC_OFFSET_MINUTES,
+                crate::MAX_DST_OFFSET_MINUTES,
+                960,
+            ),
+        ] {
+            let coordinate = ClockCoordinate::new(
+                &ClockSource::Server {
+                    timezone_id: "fixture/zone".to_owned(),
+                    utc_offset_minutes,
+                    dst_offset_minutes,
+                    maintenance_drift_ms: 0,
+                },
+                EvaluationTime {
+                    unix_ms: NOW,
+                    monotonic_ms: NOW,
+                },
+            )
+            .expect("bounded clock coordinate");
+            assert_eq!(coordinate.utc_offset_minutes, expected);
+        }
+    }
+
+    #[test]
     fn stale_fact_is_not_silently_false() {
         let catalog = catalog(|tasks| {
             tasks["tasks"][0]["trigger"] = serde_json::json!({
