@@ -2,7 +2,9 @@
 
 //! Runtime-owned catalog generations and replayable policy admission state.
 
-use crate::policy_control::{PolicyControlState, PolicyExecutionInput, active_activity_window};
+use crate::policy_control::{
+    PolicyControlState, PolicyExecutionInput, PolicyExecutionTiming, active_activity_window,
+};
 use crate::{PerformanceControlWorkload, RuntimeHostError, RuntimeHostResult};
 use actingcommand_contract::{
     EventPayload, LeaseToken, OwnerEpoch, PerformanceContext, PolicyAdmissionRecord,
@@ -840,6 +842,27 @@ impl PolicyHost {
             })
     }
 
+    pub(crate) fn replay_execution(
+        &self,
+        decision_id: &str,
+        input: &PolicyExecutionInput,
+    ) -> RuntimeHostResult<Option<PolicyExecutionEventData>> {
+        let dispatch = self
+            .seen_dispatches
+            .get(decision_id)
+            .ok_or_else(|| request("policy_dispatch_unknown", "replay_policy_execution_outcome"))?;
+        let Some(existing) = &dispatch.execution else {
+            return Ok(None);
+        };
+        if !execution_input_matches(&existing.outcome, input) {
+            return Err(fatal(
+                "policy_execution_identity_conflict",
+                "replay_policy_execution_outcome",
+            ));
+        }
+        Ok(Some(existing.clone()))
+    }
+
     pub(crate) fn execution_instance_id(&self, decision_id: &str) -> RuntimeHostResult<&str> {
         self.seen_dispatches
             .get(decision_id)
@@ -941,6 +964,7 @@ impl PolicyHost {
         &self,
         decision_id: &str,
         observed_at_unix_ms: u64,
+        runtime_ms: u64,
         input: &PolicyExecutionInput,
         perf_context: &PerformanceContext,
     ) -> RuntimeHostResult<PolicyExecutionPreparation> {
@@ -951,9 +975,7 @@ impl PolicyHost {
             )
         })?;
         if let Some(existing) = &dispatch.execution {
-            if existing.observed_at_unix_ms != observed_at_unix_ms
-                || !execution_input_matches(&existing.outcome, input)
-            {
+            if !execution_input_matches(&existing.outcome, input) {
                 return Err(fatal(
                     "policy_execution_identity_conflict",
                     "prepare_policy_execution_outcome",
@@ -980,7 +1002,10 @@ impl PolicyHost {
                 &catalog.compiled,
                 &intent,
                 admission,
-                observed_at_unix_ms,
+                PolicyExecutionTiming {
+                    observed_at_unix_ms,
+                    runtime_ms,
+                },
                 input,
                 perf_context,
             )

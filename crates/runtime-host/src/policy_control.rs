@@ -26,6 +26,12 @@ pub enum PolicyExecutionInput {
     },
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct PolicyExecutionTiming {
+    pub(crate) observed_at_unix_ms: u64,
+    pub(crate) runtime_ms: u64,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct FailureStreak {
     error_code: String,
@@ -215,14 +221,15 @@ impl PolicyControlState {
         catalog: &CompiledCatalog,
         intent: &DispatchIntent,
         admission: &PolicyAdmissionRecord,
-        observed_at_unix_ms: u64,
+        timing: PolicyExecutionTiming,
         input: &PolicyExecutionInput,
         perf_context: &PerformanceContext,
     ) -> RuntimeHostResult<PolicyExecutionEventData> {
+        let PolicyExecutionTiming {
+            observed_at_unix_ms,
+            runtime_ms,
+        } = timing;
         let (task, _) = task_and_profile(catalog, intent)?;
-        let runtime_ms = observed_at_unix_ms
-            .checked_sub(admission.activity.admitted_at_unix_ms)
-            .ok_or_else(|| request("policy_execution_time_reversed", "classify_policy_outcome"))?;
         let (task_runtime_used_ms, activity_runtime_used_ms) =
             actual_runtime_totals(intent, admission, runtime_ms)?;
         let runtime_exceeded = task_runtime_used_ms > admission.budget.task_runtime_limit_ms
@@ -347,11 +354,18 @@ impl PolicyControlState {
             PolicyExecutionOutcome::Succeeded { .. } => PerformanceContext::unavailable(1),
             PolicyExecutionOutcome::Failed { failure } => failure.perf_context.as_ref().clone(),
         };
+        let runtime_ms = match &data.outcome {
+            PolicyExecutionOutcome::Succeeded { runtime_ms } => *runtime_ms,
+            PolicyExecutionOutcome::Failed { failure } => failure.runtime_ms,
+        };
         let expected = self.preview_execution(
             catalog,
             intent,
             admission,
-            data.observed_at_unix_ms,
+            PolicyExecutionTiming {
+                observed_at_unix_ms: data.observed_at_unix_ms,
+                runtime_ms,
+            },
             &input,
             &perf_context,
         )?;
@@ -361,10 +375,6 @@ impl PolicyControlState {
                 "commit_policy_outcome",
             ));
         }
-        let runtime_ms = match &data.outcome {
-            PolicyExecutionOutcome::Succeeded { runtime_ms } => *runtime_ms,
-            PolicyExecutionOutcome::Failed { failure } => failure.runtime_ms,
-        };
         let (task_runtime_used_ms, activity_runtime_used_ms) =
             actual_runtime_totals(intent, admission, runtime_ms)?;
         let task_window_key = (
@@ -700,7 +710,10 @@ mod tests {
                     &catalog,
                     &intent,
                     &admission,
-                    NOW + 100,
+                    PolicyExecutionTiming {
+                        observed_at_unix_ms: NOW + 100,
+                        runtime_ms: 100,
+                    },
                     &PolicyExecutionInput::Failed {
                         error_code: "transient.capture".to_owned(),
                         class: PolicyFailureClass::Recoverable,
@@ -751,7 +764,10 @@ mod tests {
                     &catalog,
                     &intent,
                     &admission,
-                    NOW + 100,
+                    PolicyExecutionTiming {
+                        observed_at_unix_ms: NOW + 100,
+                        runtime_ms: 100,
+                    },
                     &PolicyExecutionInput::Failed {
                         error_code: "transient.capture".to_owned(),
                         class: PolicyFailureClass::Recoverable,
@@ -798,7 +814,10 @@ mod tests {
                 &catalog,
                 &intent,
                 &admission,
-                NOW + 100,
+                PolicyExecutionTiming {
+                    observed_at_unix_ms: NOW + 100,
+                    runtime_ms: 100,
+                },
                 &PolicyExecutionInput::Failed {
                     error_code: "transient.capture".to_owned(),
                     class: PolicyFailureClass::Recoverable,
@@ -833,7 +852,10 @@ mod tests {
                     &catalog,
                     &intent,
                     &admission,
-                    NOW + 100,
+                    PolicyExecutionTiming {
+                        observed_at_unix_ms: NOW + 100,
+                        runtime_ms: 100,
+                    },
                     &PolicyExecutionInput::Failed {
                         error_code: error_code.to_owned(),
                         class,
@@ -870,7 +892,10 @@ mod tests {
                 &catalog,
                 &intent,
                 &admission,
-                NOW + 100,
+                PolicyExecutionTiming {
+                    observed_at_unix_ms: NOW + 100,
+                    runtime_ms: 100,
+                },
                 &PolicyExecutionInput::Failed {
                     error_code: "transient.capture".to_owned(),
                     class: PolicyFailureClass::Recoverable,
@@ -909,7 +934,10 @@ mod tests {
                         &catalog,
                         &intent,
                         &admission,
-                        NOW + 100,
+                        PolicyExecutionTiming {
+                            observed_at_unix_ms: NOW + 100,
+                            runtime_ms: 100,
+                        },
                         &PolicyExecutionInput::Failed {
                             error_code: "transient.capture".to_owned(),
                             class: PolicyFailureClass::Recoverable,
@@ -1023,7 +1051,10 @@ mod tests {
                     &runtime_catalog,
                     &intent,
                     &admission,
-                    now + 75_000,
+                    PolicyExecutionTiming {
+                        observed_at_unix_ms: now + 75_000,
+                        runtime_ms: 75_000,
+                    },
                     &PolicyExecutionInput::Succeeded,
                     &unavailable(now + 75_000),
                 )
@@ -1070,7 +1101,10 @@ mod tests {
                 &catalog,
                 &first,
                 &admission,
-                NOW + 80000,
+                PolicyExecutionTiming {
+                    observed_at_unix_ms: NOW + 80000,
+                    runtime_ms: 80_000,
+                },
                 &PolicyExecutionInput::Succeeded,
                 &unavailable(NOW + 80000),
             )
