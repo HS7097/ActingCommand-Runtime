@@ -10,9 +10,9 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use crate::{
-    ActivityProfile, ClockSchedule, Comparison, CompiledCatalog, FactValue, LoadProfile,
-    MAX_TEXT_BYTES, ObservationRef, PoolSpec, PredicateSpec, ResourceEffectSpec, ScopeSelector,
-    TaskSpec, TaskTerminalState,
+    ActivityProfile, ClockSchedule, ClockSource, Comparison, CompiledCatalog, FactValue,
+    LoadProfile, MAX_TEXT_BYTES, ObservationRef, PoolSpec, PredicateSpec, ResourceEffectSpec,
+    ScopeSelector, TaskSpec, TaskTerminalState,
 };
 
 pub const MAX_EVALUATION_FACTS: usize = 16_384;
@@ -126,6 +126,7 @@ pub struct EvaluationResources {
 #[serde(deny_unknown_fields)]
 pub struct EvaluationTime {
     pub unix_ms: u64,
+    pub monotonic_ms: u64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -199,8 +200,20 @@ pub struct DispatchIntent {
     pub approval_refs: Vec<String>,
     pub reason_chain_id: String,
     pub expected_duration_ms: u64,
+    #[serde(default)]
+    pub yield_points: Vec<String>,
     pub load_profile: LoadProfile,
     pub prerequisites: DispatchPrerequisites,
+}
+
+/// Bounded look-ahead metadata for warming the next task package without granting execution.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PreloadHint {
+    pub task_id: String,
+    pub package_ref: String,
+    pub confidence_milli: u16,
+    pub not_before_unix_ms: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -230,6 +243,7 @@ pub struct DecisionReasonChain {
 pub struct PolicyEvaluation {
     pub decisions: Vec<TaskDecision>,
     pub next_wake_unix_ms: Option<u64>,
+    pub preload_hint: Option<PreloadHint>,
     pub dispatch_intents: Vec<DispatchIntent>,
     pub reason_chains: Vec<DecisionReasonChain>,
 }
@@ -314,12 +328,11 @@ pub fn evaluate(
         .map(|host| (host.host_id.as_str(), HostRemaining::from(host)))
         .collect();
 
-    let mut next_wake = catalog_bundle
-        .timeline
-        .events
-        .iter()
-        .filter_map(|event| next_schedule_occurrence(&event.schedule, time.unix_ms))
-        .min();
+    let mut next_wake = None;
+    for event in &catalog_bundle.timeline.events {
+        next_wake = min_wake(next_wake, next_schedule_occurrence(&event.schedule, time)?);
+    }
+    let mut preload_hint = None;
     let placement_context = PlacementContext {
         profiles: catalog_bundle.activity.profiles.as_slice(),
         pool_specs: &pool_specs,
@@ -365,6 +378,21 @@ pub fn evaluate(
                 time,
             )?;
             next_wake = min_wake(next_wake, trigger.next_wake_unix_ms);
+            if let Some(not_before_unix_ms) = trigger.next_wake_unix_ms {
+                consider_preload_hint(
+                    &mut preload_hint,
+                    PreloadHint {
+                        task_id: task.id.clone(),
+                        package_ref: task.procedure_ref.clone(),
+                        confidence_milli: if trigger.suggestions.is_empty() {
+                            750
+                        } else {
+                            250
+                        },
+                        not_before_unix_ms,
+                    },
+                );
+            }
 
             let mut task_work = TaskWork::new(task.id.clone(), instance.instance_id.clone());
             match trigger.truth {
@@ -419,21 +447,41 @@ pub fn evaluate(
                             ));
                             let facts_fresh_until_unix_ms =
                                 min_wake(trigger.fresh_until_unix_ms, stop.fresh_until_unix_ms);
-                            match build_candidate(
-                                work.len(),
-                                task,
-                                state,
-                                instance,
-                                &placement_context,
-                                facts_fresh_until_unix_ms,
-                            )? {
-                                PlacementResult::Candidate(candidate) => {
-                                    task_work.rank = Some(candidate.rank.clone());
-                                    candidates.push(candidate);
-                                }
-                                PlacementResult::Blocked(blocked_reason) => {
-                                    task_work.state = SchedulingDecisionState::Blocked;
-                                    task_work.reasons.push(blocked_reason);
+                            let cooldown_until = state
+                                .and_then(|state| state.last_dispatched_unix_ms)
+                                .map(|last| {
+                                    last.checked_add(task.cooldown_ms).ok_or_else(|| {
+                                        PolicyEvaluationError::overflow(format!(
+                                            "task '{}' cooldown overflowed",
+                                            task.id
+                                        ))
+                                    })
+                                })
+                                .transpose()?;
+                            if cooldown_until.is_some_and(|until| time.unix_ms < until) {
+                                task_work.state = SchedulingDecisionState::Deferred;
+                                task_work.reasons.push(reason(
+                                    "task_cooldown_active",
+                                    "the task-specific dispatch cooldown has not elapsed",
+                                ));
+                                next_wake = min_wake(next_wake, cooldown_until);
+                            } else {
+                                match build_candidate(
+                                    work.len(),
+                                    task,
+                                    state,
+                                    instance,
+                                    &placement_context,
+                                    facts_fresh_until_unix_ms,
+                                )? {
+                                    PlacementResult::Candidate(candidate) => {
+                                        task_work.rank = Some(candidate.rank.clone());
+                                        candidates.push(candidate);
+                                    }
+                                    PlacementResult::Blocked(blocked_reason) => {
+                                        task_work.state = SchedulingDecisionState::Blocked;
+                                        task_work.reasons.push(blocked_reason);
+                                    }
                                 }
                             }
                         }
@@ -540,6 +588,7 @@ pub fn evaluate(
             approval_refs: catalog_bundle.tasks.catalog.approval_refs.clone(),
             reason_chain_id,
             expected_duration_ms: candidate.expected_duration_ms,
+            yield_points: candidate.yield_points,
             load_profile: candidate.load_profile,
             prerequisites: DispatchPrerequisites {
                 fencing_required: true,
@@ -568,6 +617,7 @@ pub fn evaluate(
     Ok(PolicyEvaluation {
         decisions: work.into_iter().map(TaskDecision::from).collect(),
         next_wake_unix_ms: next_wake,
+        preload_hint,
         dispatch_intents,
         reason_chains,
     })
@@ -633,6 +683,7 @@ struct PlacementCandidate {
     operation_id: String,
     procedure_ref: String,
     expected_duration_ms: u64,
+    yield_points: Vec<String>,
     load_profile: LoadProfile,
     load: ResourceLoad,
     rank: TaskRank,
@@ -774,6 +825,7 @@ fn build_candidate(
         operation_id: task.entrypoint.operation_id.clone(),
         procedure_ref: task.procedure_ref.clone(),
         expected_duration_ms: task.expected_duration_ms,
+        yield_points: task.yield_points.clone(),
         load_profile,
         load,
         rank,
@@ -1147,7 +1199,7 @@ fn evaluate_predicate(
             Ok(result)
         }
         PredicateSpec::Clock { schedule } => {
-            let (latest, next) = schedule_occurrences(schedule, time.unix_ms);
+            let (latest, next) = schedule_occurrences(schedule, time)?;
             let last_dispatched = task_state.and_then(|state| state.last_dispatched_unix_ms);
             let due = latest
                 .is_some_and(|occurrence| last_dispatched.is_none_or(|last| last < occurrence));
@@ -1493,41 +1545,123 @@ fn scope_matches_instance(scope: &ScopeSelector, instance: &InstanceSnapshot) ->
     }
 }
 
-fn schedule_occurrences(schedule: &ClockSchedule, now: u64) -> (Option<u64>, Option<u64>) {
-    match schedule {
+fn schedule_occurrences(
+    schedule: &ClockSchedule,
+    time: EvaluationTime,
+) -> PolicyEvaluationResult<(Option<u64>, Option<u64>)> {
+    let source = match schedule {
+        ClockSchedule::Interval { clock_source, .. }
+        | ClockSchedule::At { clock_source, .. }
+        | ClockSchedule::Daily { clock_source, .. }
+        | ClockSchedule::Weekly { clock_source, .. } => clock_source,
+    };
+    let clock = ClockCoordinate::new(source, time)?;
+    let occurrences = match schedule {
         ClockSchedule::Interval {
             every_ms,
-            anchor_unix_ms,
+            anchor_ms,
+            ..
         } => {
-            if now < *anchor_unix_ms {
-                return (None, Some(*anchor_unix_ms));
-            }
-            let elapsed = now - *anchor_unix_ms;
-            let latest = anchor_unix_ms.saturating_add((elapsed / every_ms) * every_ms);
-            let next = latest.checked_add(*every_ms);
-            (Some(latest), next)
-        }
-        ClockSchedule::At { unix_ms } => {
-            if now < *unix_ms {
-                (None, Some(*unix_ms))
+            if clock.now_ms < *anchor_ms {
+                (None, Some(*anchor_ms))
             } else {
-                (Some(*unix_ms), None)
+                let elapsed = clock.now_ms - *anchor_ms;
+                let latest = anchor_ms.saturating_add((elapsed / every_ms) * every_ms);
+                (Some(latest), latest.checked_add(*every_ms))
             }
         }
-        ClockSchedule::Daily {
-            utc_offset_minutes,
-            minutes_of_day,
-        } => daily_occurrences(*utc_offset_minutes, minutes_of_day, now),
+        ClockSchedule::At { at_ms, .. } => {
+            if clock.now_ms < *at_ms {
+                (None, Some(*at_ms))
+            } else {
+                (Some(*at_ms), None)
+            }
+        }
+        ClockSchedule::Daily { minutes_of_day, .. } => {
+            daily_occurrences(clock.utc_offset_minutes, minutes_of_day, clock.now_ms)
+        }
         ClockSchedule::Weekly {
-            utc_offset_minutes,
             weekday,
             minute_of_day,
-        } => weekly_occurrences(*utc_offset_minutes, *weekday, *minute_of_day, now),
-    }
+            ..
+        } => weekly_occurrences(
+            clock.utc_offset_minutes,
+            *weekday,
+            *minute_of_day,
+            clock.now_ms,
+        ),
+    };
+    Ok((
+        occurrences
+            .0
+            .map(|value| clock.to_unix_ms(value))
+            .transpose()?,
+        occurrences
+            .1
+            .map(|value| clock.to_unix_ms(value))
+            .transpose()?,
+    ))
 }
 
-fn next_schedule_occurrence(schedule: &ClockSchedule, now: u64) -> Option<u64> {
-    schedule_occurrences(schedule, now).1
+fn next_schedule_occurrence(
+    schedule: &ClockSchedule,
+    time: EvaluationTime,
+) -> PolicyEvaluationResult<Option<u64>> {
+    Ok(schedule_occurrences(schedule, time)?.1)
+}
+
+struct ClockCoordinate {
+    now_ms: u64,
+    unix_delta_ms: i128,
+    utc_offset_minutes: i16,
+}
+
+impl ClockCoordinate {
+    fn new(source: &ClockSource, time: EvaluationTime) -> PolicyEvaluationResult<Self> {
+        match source {
+            ClockSource::Local => Ok(Self {
+                now_ms: time.monotonic_ms,
+                unix_delta_ms: i128::from(time.unix_ms) - i128::from(time.monotonic_ms),
+                utc_offset_minutes: 0,
+            }),
+            ClockSource::Server {
+                utc_offset_minutes,
+                dst_offset_minutes,
+                maintenance_drift_ms,
+                ..
+            }
+            | ClockSource::Reveal {
+                utc_offset_minutes,
+                dst_offset_minutes,
+                maintenance_drift_ms,
+                ..
+            } => {
+                let nominal_now = i128::from(time.unix_ms) - i128::from(*maintenance_drift_ms);
+                let now_ms = u64::try_from(nominal_now).map_err(|_| {
+                    PolicyEvaluationError::overflow(
+                        "clock maintenance drift moved the evaluation before the Unix epoch",
+                    )
+                })?;
+                let effective_offset = i32::from(*utc_offset_minutes)
+                    .checked_add(i32::from(*dst_offset_minutes))
+                    .and_then(|value| i16::try_from(value).ok())
+                    .ok_or_else(|| {
+                        PolicyEvaluationError::overflow("clock UTC/DST offset overflowed")
+                    })?;
+                Ok(Self {
+                    now_ms,
+                    unix_delta_ms: i128::from(*maintenance_drift_ms),
+                    utc_offset_minutes: effective_offset,
+                })
+            }
+        }
+    }
+
+    fn to_unix_ms(&self, coordinate_ms: u64) -> PolicyEvaluationResult<u64> {
+        u64::try_from(i128::from(coordinate_ms) + self.unix_delta_ms).map_err(|_| {
+            PolicyEvaluationError::overflow("clock occurrence cannot be represented as Unix time")
+        })
+    }
 }
 
 fn daily_occurrences(offset_minutes: i16, minutes: &[u16], now: u64) -> (Option<u64>, Option<u64>) {
@@ -1616,6 +1750,17 @@ fn min_wake(left: Option<u64>, right: Option<u64>) -> Option<u64> {
         (Some(left), Some(right)) => Some(left.min(right)),
         (Some(value), None) | (None, Some(value)) => Some(value),
         (None, None) => None,
+    }
+}
+
+fn consider_preload_hint(current: &mut Option<PreloadHint>, candidate: PreloadHint) {
+    let replace = current.as_ref().is_none_or(|existing| {
+        candidate.not_before_unix_ms < existing.not_before_unix_ms
+            || (candidate.not_before_unix_ms == existing.not_before_unix_ms
+                && candidate.task_id < existing.task_id)
+    });
+    if replace {
+        *current = Some(candidate);
     }
 }
 
@@ -1987,7 +2132,10 @@ mod tests {
             &catalog,
             &facts,
             &resources,
-            EvaluationTime { unix_ms: NOW },
+            EvaluationTime {
+                unix_ms: NOW,
+                monotonic_ms: NOW,
+            },
             7,
         )
         .expect("first evaluation");
@@ -1995,7 +2143,10 @@ mod tests {
             &catalog,
             &facts,
             &resources,
-            EvaluationTime { unix_ms: NOW },
+            EvaluationTime {
+                unix_ms: NOW,
+                monotonic_ms: NOW,
+            },
             7,
         )
         .expect("second evaluation");
@@ -2033,7 +2184,10 @@ mod tests {
             &catalog,
             &base_facts(),
             &base_resources(),
-            EvaluationTime { unix_ms: NOW },
+            EvaluationTime {
+                unix_ms: NOW,
+                monotonic_ms: NOW,
+            },
             1,
         )
         .expect("evaluation");
@@ -2087,7 +2241,10 @@ mod tests {
             &catalog,
             &facts,
             &base_resources(),
-            EvaluationTime { unix_ms: NOW },
+            EvaluationTime {
+                unix_ms: NOW,
+                monotonic_ms: NOW,
+            },
             1,
         )
         .expect("fresh record-list fact");
@@ -2098,7 +2255,10 @@ mod tests {
             &catalog,
             &facts,
             &base_resources(),
-            EvaluationTime { unix_ms: NOW + 6 },
+            EvaluationTime {
+                unix_ms: NOW + 6,
+                monotonic_ms: NOW + 6,
+            },
             1,
         )
         .expect("expired record-list fact");
@@ -2121,6 +2281,7 @@ mod tests {
         });
         let late_time = EvaluationTime {
             unix_ms: 200_000_000,
+            monotonic_ms: 200_000_000,
         };
         let mut facts = base_facts();
         facts.tasks = vec![
@@ -2175,7 +2336,10 @@ mod tests {
             &catalog,
             &facts,
             &resources,
-            EvaluationTime { unix_ms: NOW },
+            EvaluationTime {
+                unix_ms: NOW,
+                monotonic_ms: NOW,
+            },
             4,
         )
         .expect("evaluation");
@@ -2211,7 +2375,10 @@ mod tests {
             &catalog,
             &base_facts(),
             &resources,
-            EvaluationTime { unix_ms: NOW },
+            EvaluationTime {
+                unix_ms: NOW,
+                monotonic_ms: NOW,
+            },
             4,
         )
         .expect("evaluation");
@@ -2247,7 +2414,10 @@ mod tests {
             &catalog,
             &base_facts(),
             &resources,
-            EvaluationTime { unix_ms: NOW },
+            EvaluationTime {
+                unix_ms: NOW,
+                monotonic_ms: NOW,
+            },
             4,
         )
         .expect("evaluation");
@@ -2299,7 +2469,10 @@ mod tests {
             &catalog,
             &facts,
             &base_resources(),
-            EvaluationTime { unix_ms: NOW },
+            EvaluationTime {
+                unix_ms: NOW,
+                monotonic_ms: NOW,
+            },
             9,
         )
         .expect("evaluation");
@@ -2327,7 +2500,10 @@ mod tests {
             &catalog,
             &facts,
             &base_resources(),
-            EvaluationTime { unix_ms: NOW },
+            EvaluationTime {
+                unix_ms: NOW,
+                monotonic_ms: NOW,
+            },
             10,
         )
         .expect("evaluation");
@@ -2367,7 +2543,10 @@ mod tests {
             &catalog,
             &facts,
             &base_resources(),
-            EvaluationTime { unix_ms: NOW },
+            EvaluationTime {
+                unix_ms: NOW,
+                monotonic_ms: NOW,
+            },
             11,
         )
         .expect("evaluation");
@@ -2406,7 +2585,10 @@ mod tests {
             &catalog,
             &base_facts(),
             &resources,
-            EvaluationTime { unix_ms: NOW },
+            EvaluationTime {
+                unix_ms: NOW,
+                monotonic_ms: NOW,
+            },
             5,
         )
         .expect("evaluation");
@@ -2438,7 +2620,10 @@ mod tests {
             &catalog,
             &base_facts(),
             &base_resources(),
-            EvaluationTime { unix_ms: NOW },
+            EvaluationTime {
+                unix_ms: NOW,
+                monotonic_ms: NOW,
+            },
             12,
         )
         .expect("evaluation");
@@ -2466,13 +2651,102 @@ mod tests {
             &catalog,
             &facts,
             &base_resources(),
-            EvaluationTime { unix_ms: NOW },
+            EvaluationTime {
+                unix_ms: NOW,
+                monotonic_ms: NOW,
+            },
             6,
         )
         .expect("evaluation");
 
         assert_eq!(result.decisions[0].eligibility, EligibilityState::False);
         assert_eq!(result.next_wake_unix_ms, Some(NOW + 3_600_000));
+        let preload = result.preload_hint.expect("preload hint");
+        assert_eq!(preload.task_id, "fixture.observe");
+        assert_eq!(
+            preload.package_ref,
+            catalog.catalog().tasks.tasks[0].procedure_ref
+        );
+        assert_eq!(preload.not_before_unix_ms, NOW + 3_600_000);
+    }
+
+    #[test]
+    fn cooldown_defers_an_otherwise_due_task() {
+        let catalog = catalog(|tasks| {
+            tasks["tasks"][0]["trigger"] = due_clock();
+            tasks["tasks"][0]["feedback_stop"] = false_fact();
+            tasks["tasks"][0]["cooldown_ms"] = serde_json::json!(1_000);
+        });
+        let mut facts = base_facts();
+        facts.tasks.push(TaskRuntimeSnapshot {
+            task_id: "fixture.observe".to_owned(),
+            instance_id: "fixture-instance-a".to_owned(),
+            last_dispatched_unix_ms: Some(NOW - 100),
+            eligible_since_unix_ms: Some(NOW - 100),
+            terminal_state: None,
+        });
+
+        let result = evaluate(
+            &catalog,
+            &facts,
+            &base_resources(),
+            EvaluationTime {
+                unix_ms: NOW,
+                monotonic_ms: NOW,
+            },
+            6,
+        )
+        .expect("evaluation");
+
+        assert!(result.dispatch_intents.is_empty());
+        assert_eq!(result.decisions[0].state, SchedulingDecisionState::Deferred);
+        assert_eq!(result.next_wake_unix_ms, Some(NOW + 900));
+    }
+
+    #[test]
+    fn local_clock_uses_monotonic_coordinate_and_projects_to_unix() {
+        let schedule = ClockSchedule::Interval {
+            clock_source: ClockSource::Local,
+            every_ms: 100,
+            anchor_ms: 0,
+        };
+
+        assert_eq!(
+            schedule_occurrences(
+                &schedule,
+                EvaluationTime {
+                    unix_ms: 10_000,
+                    monotonic_ms: 250,
+                }
+            )
+            .expect("local clock"),
+            (Some(9_950), Some(10_050))
+        );
+    }
+
+    #[test]
+    fn server_clock_applies_dst_and_maintenance_drift() {
+        let schedule = ClockSchedule::Daily {
+            clock_source: ClockSource::Server {
+                timezone_id: "fixture/zone".to_owned(),
+                utc_offset_minutes: 540,
+                dst_offset_minutes: 60,
+                maintenance_drift_ms: 3_600_000,
+            },
+            minutes_of_day: vec![0],
+        };
+
+        assert_eq!(
+            schedule_occurrences(
+                &schedule,
+                EvaluationTime {
+                    unix_ms: 86_400_000,
+                    monotonic_ms: 86_400_000,
+                }
+            )
+            .expect("server clock"),
+            (Some(54_000_000), Some(140_400_000))
+        );
     }
 
     #[test]
@@ -2504,7 +2778,10 @@ mod tests {
             &catalog,
             &facts,
             &base_resources(),
-            EvaluationTime { unix_ms: NOW },
+            EvaluationTime {
+                unix_ms: NOW,
+                monotonic_ms: NOW,
+            },
             7,
         )
         .expect("evaluation");
@@ -2529,7 +2806,10 @@ mod tests {
             &catalog,
             &facts,
             &base_resources(),
-            EvaluationTime { unix_ms: NOW },
+            EvaluationTime {
+                unix_ms: NOW,
+                monotonic_ms: NOW,
+            },
             8,
         )
         .expect_err("invalid host reference");
@@ -2654,7 +2934,7 @@ mod tests {
     fn due_clock() -> serde_json::Value {
         serde_json::json!({
             "kind": "clock",
-            "schedule": {"kind": "interval", "every_ms": 3600000, "anchor_unix_ms": 0}
+            "schedule": {"kind": "interval", "clock_source": {"kind": "local"}, "every_ms": 3600000, "anchor_ms": 0}
         })
     }
 

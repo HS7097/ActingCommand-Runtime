@@ -669,6 +669,7 @@ mod tests {
             approval_refs: catalog.catalog().tasks.catalog.approval_refs.clone(),
             reason_chain_id: format!("reason:fixture-{suffix}"),
             expected_duration_ms: task.expected_duration_ms,
+            yield_points: task.yield_points.clone(),
             load_profile: LoadProfile::Light,
             prerequisites: DispatchPrerequisites {
                 fencing_required: true,

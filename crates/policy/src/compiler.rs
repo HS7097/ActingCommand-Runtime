@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
+use std::collections::BTreeMap;
 use std::error::Error;
 use std::fmt;
 
@@ -39,6 +40,15 @@ pub struct CatalogCounts {
     pub timeline_events: usize,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DiagnosticStatistics {
+    pub total: usize,
+    pub errors: usize,
+    pub warnings: usize,
+    pub by_code: BTreeMap<String, usize>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CompiledCatalog {
     catalog: CatalogBundle,
@@ -72,6 +82,7 @@ impl CompiledCatalog {
             status: DryRunStatus::Accepted,
             summary: &self.summary,
             warnings: &self.warnings,
+            diagnostic_statistics: diagnostic_statistics(&self.warnings),
         })
         .map_err(DryRunSerializationError)
     }
@@ -91,6 +102,7 @@ impl CatalogCompileFailure {
         canonical_serialized(&RejectedDryRunReport {
             status: DryRunStatus::Rejected,
             diagnostics: &self.diagnostics,
+            diagnostic_statistics: diagnostic_statistics(&self.diagnostics),
         })
         .map_err(DryRunSerializationError)
     }
@@ -140,12 +152,37 @@ struct AcceptedDryRunReport<'a> {
     status: DryRunStatus,
     summary: &'a CatalogIrSummary,
     warnings: &'a [CatalogDiagnostic],
+    diagnostic_statistics: DiagnosticStatistics,
 }
 
 #[derive(Serialize)]
 struct RejectedDryRunReport<'a> {
     status: DryRunStatus,
     diagnostics: &'a [CatalogDiagnostic],
+    diagnostic_statistics: DiagnosticStatistics,
+}
+
+fn diagnostic_statistics(diagnostics: &[CatalogDiagnostic]) -> DiagnosticStatistics {
+    let mut by_code = BTreeMap::new();
+    let mut errors = 0;
+    let mut warnings = 0;
+    for diagnostic in diagnostics {
+        match diagnostic.severity {
+            DiagnosticSeverity::Error => errors += 1,
+            DiagnosticSeverity::Warning => warnings += 1,
+        }
+        let code = serde_json::to_value(diagnostic.code)
+            .ok()
+            .and_then(|value| value.as_str().map(str::to_owned))
+            .expect("catalog diagnostic codes serialize as strings");
+        *by_code.entry(code).or_insert(0) += 1;
+    }
+    DiagnosticStatistics {
+        total: diagnostics.len(),
+        errors,
+        warnings,
+        by_code,
+    }
 }
 
 pub fn compile_catalog(sources: &CatalogSources) -> Result<CompiledCatalog, CatalogCompileFailure> {
@@ -395,6 +432,33 @@ mod tests {
         sources
     }
 
+    fn mutate_pools(mutator: impl FnOnce(&mut serde_json::Value)) -> CatalogSources {
+        let mut sources = example_sources();
+        let mut pools: serde_json::Value =
+            serde_json::from_slice(&sources.pools.bytes).expect("pools JSON");
+        mutator(&mut pools);
+        sources.pools.bytes = serde_json::to_vec_pretty(&pools).expect("pools bytes");
+        sources
+    }
+
+    fn mutate_activity(mutator: impl FnOnce(&mut serde_json::Value)) -> CatalogSources {
+        let mut sources = example_sources();
+        let mut activity: serde_json::Value =
+            serde_json::from_slice(&sources.activity.bytes).expect("activity JSON");
+        mutator(&mut activity);
+        sources.activity.bytes = serde_json::to_vec_pretty(&activity).expect("activity bytes");
+        sources
+    }
+
+    fn mutate_timeline(mutator: impl FnOnce(&mut serde_json::Value)) -> CatalogSources {
+        let mut sources = example_sources();
+        let mut timeline: serde_json::Value =
+            serde_json::from_slice(&sources.timeline.bytes).expect("timeline JSON");
+        mutator(&mut timeline);
+        sources.timeline.bytes = serde_json::to_vec_pretty(&timeline).expect("timeline bytes");
+        sources
+    }
+
     #[test]
     fn neutral_catalog_compiles_to_stable_hash_and_dry_run() {
         let first = compile_catalog(&example_sources()).expect("first compile");
@@ -407,9 +471,15 @@ mod tests {
         assert!(first.catalog_hash().starts_with("sha256:"));
         assert_eq!(
             first.catalog_hash(),
-            "sha256:11a92a2565d996214372c78192aa4072047636b6f1e1efcec25965931a9b932d"
+            "sha256:9ee4623e6057a650960ca1bd5287e4b4c6e042429ab31a93d3b95cf3aebbc7c4"
         );
         assert_eq!(first.summary().counts.tasks, 1);
+        let report: serde_json::Value =
+            serde_json::from_slice(&first.dry_run_json().expect("dry-run JSON"))
+                .expect("dry-run report");
+        assert_eq!(report["diagnostic_statistics"]["total"], 0);
+        assert_eq!(report["diagnostic_statistics"]["errors"], 0);
+        assert_eq!(report["diagnostic_statistics"]["warnings"], 0);
     }
 
     #[test]
@@ -556,6 +626,95 @@ mod tests {
         assert_eq!(
             first.dry_run_json().expect("first rejection report"),
             second.dry_run_json().expect("second rejection report")
+        );
+        let report: serde_json::Value =
+            serde_json::from_slice(&first.dry_run_json().expect("rejection JSON"))
+                .expect("rejection report");
+        assert!(
+            report["diagnostic_statistics"]["total"]
+                .as_u64()
+                .is_some_and(|count| count > 0)
+        );
+        assert!(
+            report["diagnostic_statistics"]["by_code"]["dangling_reference"]
+                .as_u64()
+                .is_some_and(|count| count > 0)
+        );
+    }
+
+    #[test]
+    fn compiler_enforces_frozen_projection_and_budget_boundaries() {
+        let projection_zero = mutate_pools(|pools| {
+            pools["pools"][0]["projection"]["amount"] = serde_json::json!(0);
+        });
+        assert!(compile_catalog(&projection_zero).is_err());
+
+        for value in [1_u32, crate::MAX_BUDGET_COUNT] {
+            let tasks = mutate_tasks(|tasks| {
+                tasks["tasks"][0]["loop_budget"]["daily_limit"] = serde_json::json!(value);
+                tasks["tasks"][0]["loop_budget"]["window_iteration_limit"] =
+                    serde_json::json!(value);
+            });
+            compile_catalog(&tasks).expect("task budget boundary must compile");
+
+            let activity = mutate_activity(|activity| {
+                activity["profiles"][0]["daily_budget"] = serde_json::json!(value);
+                activity["profiles"][0]["max_window_iterations"] = serde_json::json!(value);
+            });
+            compile_catalog(&activity).expect("activity budget boundary must compile");
+        }
+
+        for value in [0_u64, u64::from(crate::MAX_BUDGET_COUNT) + 1] {
+            let tasks = mutate_tasks(|tasks| {
+                tasks["tasks"][0]["loop_budget"]["daily_limit"] = serde_json::json!(value);
+            });
+            assert!(compile_catalog(&tasks).is_err());
+
+            let activity = mutate_activity(|activity| {
+                activity["profiles"][0]["daily_budget"] = serde_json::json!(value);
+            });
+            assert!(compile_catalog(&activity).is_err());
+        }
+    }
+
+    #[test]
+    fn local_clock_rejects_absolute_schedule_and_reveal_identity_changes_hash() {
+        let local_at = mutate_timeline(|timeline| {
+            timeline["events"][0]["schedule"] = serde_json::json!({
+                "kind": "at",
+                "clock_source": {"kind": "local"},
+                "at_ms": 1
+            });
+        });
+        assert!(compile_catalog(&local_at).is_err());
+
+        let first = mutate_timeline(|timeline| {
+            timeline["events"][0]["schedule"]["clock_source"] = serde_json::json!({
+                "kind": "reveal",
+                "reveal_source": "evidence:alpha",
+                "timezone_id": "fixture/zone",
+                "utc_offset_minutes": 0,
+                "dst_offset_minutes": 0,
+                "maintenance_drift_ms": 0
+            });
+        });
+        let second = mutate_timeline(|timeline| {
+            timeline["events"][0]["schedule"]["clock_source"] = serde_json::json!({
+                "kind": "reveal",
+                "reveal_source": "evidence:beta",
+                "timezone_id": "fixture/zone",
+                "utc_offset_minutes": 0,
+                "dst_offset_minutes": 0,
+                "maintenance_drift_ms": 0
+            });
+        });
+        assert_ne!(
+            compile_catalog(&first)
+                .expect("first reveal catalog")
+                .catalog_hash(),
+            compile_catalog(&second)
+                .expect("second reveal catalog")
+                .catalog_hash()
         );
     }
 }
