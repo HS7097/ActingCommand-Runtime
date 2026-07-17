@@ -11,7 +11,6 @@ use actingcommand_execution_kernel::{
 };
 use actingcommand_page_detector::{
     PageDetector, PageEvaluation, PageTargetRole, load_page_set_from_json_str,
-    require_all_page_evaluations,
 };
 use actingcommand_recognition::{Scene, ScenePixelFormat};
 use actingcommand_recognition_pack::{
@@ -419,10 +418,9 @@ fn run_detect_page_command(
     )?;
 
     if options.all {
-        let outcomes = detector
+        let evaluations = detector
             .evaluate_all(&evaluator, &scene)
             .map_err(page_error)?;
-        let evaluations = require_all_page_evaluations(outcomes).map_err(page_error)?;
         return Ok(evaluations
             .iter()
             .map(format_page_evaluation)

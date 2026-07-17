@@ -8,7 +8,7 @@ use crate::{
 };
 use actingcommand_contract::{InputAction, TaskOutcome};
 use actingcommand_device::{Frame, PixelFormat};
-use actingcommand_page_detector::{PageDetector, require_all_page_evaluations};
+use actingcommand_page_detector::PageDetector;
 use actingcommand_recognition::{Scene, ScenePixelFormat};
 use actingcommand_recognition_pack::RecognitionEvaluator;
 use serde::Deserialize;
@@ -383,16 +383,9 @@ impl PreparedContainedTask {
                     height: frame.height,
                 })
                 .map_err(ContainedTaskRunError::Boundary)?;
-            let outcomes = self
+            let page = self
                 .detector
                 .evaluate_all(&self.evaluator, &scene)
-                .map_err(|error| {
-                    ContainedTaskError::with_detail(
-                        "contained_task_recognition_failed",
-                        error.to_string(),
-                    )
-                })?;
-            let page = require_all_page_evaluations(outcomes)
                 .map_err(|error| {
                     ContainedTaskError::with_detail(
                         "contained_task_recognition_failed",
