@@ -6486,6 +6486,26 @@ fn policy_dispatch_crash_child_process() {
         .admit_policy_dispatch(&intent, &reason_chain, &policy_context(&host))
         .expect("child policy admission");
     assert!(matches!(admission, PolicyDispatchAdmission::Granted { .. }));
+    let pending_before_crash = host
+        .evaluate_policy_cycle(
+            &policy_facts(),
+            &policy_resources(),
+            EvaluationTime {
+                unix_ms: POLICY_NOW_UNIX_MS,
+            },
+            7,
+            PolicyTrigger::Recovery,
+        )
+        .expect("child pending-set projection")
+        .pending_dispatch_intents
+        .into_iter()
+        .map(|pending| pending.decision_id)
+        .collect::<Vec<_>>();
+    fs::write(
+        Path::new(&root).join("pending-before-crash.json"),
+        serde_json::to_vec(&pending_before_crash).expect("pending-set bytes"),
+    )
+    .expect("pending-set marker");
     fs::write(Path::new(&root).join("child-ready"), b"ready").expect("child marker");
     std::process::exit(0);
 }
@@ -6529,7 +6549,16 @@ fn policy_dispatch_survives_real_process_crash_without_second_lease_side_effect(
         .expect("catalog");
     let (cycle, intent, reason_chain) = evaluated_policy_dispatch(&host, PolicyTrigger::Recovery);
     assert_eq!(cycle.directive.kind, PolicyRecomputeKind::Full);
-    assert!(cycle.pending_dispatch_intents.is_empty());
+    let pending_before_crash: Vec<String> = serde_json::from_slice(
+        &fs::read(root.path().join("pending-before-crash.json")).expect("pending-set marker"),
+    )
+    .expect("pending-set JSON");
+    let recovered_pending = cycle
+        .pending_dispatch_intents
+        .iter()
+        .map(|pending| pending.decision_id.clone())
+        .collect::<Vec<_>>();
+    assert_eq!(recovered_pending, pending_before_crash);
     assert_eq!(intent.catalog_hash, catalog.catalog_hash());
     let replay = host
         .admit_policy_dispatch(&intent, &reason_chain, &policy_context(&host))
