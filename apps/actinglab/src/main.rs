@@ -11935,6 +11935,8 @@ mod tests {
     mod contained_semantic;
     #[path = "semantic_fixture.rs"]
     mod semantic_fixture;
+    #[path = "test_env.rs"]
+    mod test_env;
     use actingcommand_contract::{IdentifierIssuer, InstanceId};
     use actingcommand_device::{CaptureBackend, DeviceError, DeviceResult};
     use actingcommand_runtime_host::{
@@ -11947,6 +11949,7 @@ mod tests {
     use std::process::Stdio;
     use std::sync::{Arc, Mutex};
     use tempfile::TempDir;
+    use test_env::TrustedRemoteEnvGuard;
 
     static ENV_LOCK: Mutex<()> = Mutex::new(());
     fn env_lock() -> std::sync::MutexGuard<'static, ()> {
@@ -12353,10 +12356,7 @@ mod tests {
     #[test]
     fn runtime_endpoint_policy_allows_loopback_without_auth() {
         let _guard = env_lock();
-        unsafe {
-            env::remove_var(TRUSTED_REMOTE_TOKEN_ENV);
-            env::remove_var(TRUSTED_REMOTE_CLIENT_CERT_ENV);
-        }
+        let _trusted_remote_env = TrustedRemoteEnvGuard::clear();
         let policy = runtime_endpoint_policy("http://127.0.0.1:4317").unwrap();
         assert_eq!(policy.channel, RuntimeEndpointChannel::LocalDirect);
         assert_eq!(policy.scheme, "http");
@@ -12368,10 +12368,7 @@ mod tests {
     #[test]
     fn runtime_endpoint_policy_blocks_remote_http() {
         let _guard = env_lock();
-        unsafe {
-            env::remove_var(TRUSTED_REMOTE_TOKEN_ENV);
-            env::remove_var(TRUSTED_REMOTE_CLIENT_CERT_ENV);
-        }
+        let _trusted_remote_env = TrustedRemoteEnvGuard::clear();
         let err = runtime_endpoint_policy("http://example.invalid:4317").unwrap_err();
         assert_eq!(err.code, "trusted_remote_transport_blocked");
         assert_eq!(err.exit_code(), 3);
@@ -12380,10 +12377,7 @@ mod tests {
     #[test]
     fn runtime_endpoint_policy_blocks_remote_https_without_auth() {
         let _guard = env_lock();
-        unsafe {
-            env::remove_var(TRUSTED_REMOTE_TOKEN_ENV);
-            env::remove_var(TRUSTED_REMOTE_CLIENT_CERT_ENV);
-        }
+        let _trusted_remote_env = TrustedRemoteEnvGuard::clear();
         let err = runtime_endpoint_policy("https://example.invalid:4317").unwrap_err();
         assert_eq!(err.code, "trusted_remote_auth_required");
         assert_eq!(err.exit_code(), 3);
@@ -12392,14 +12386,8 @@ mod tests {
     #[test]
     fn runtime_endpoint_policy_accepts_remote_https_with_token() {
         let _guard = env_lock();
-        unsafe {
-            env::set_var(TRUSTED_REMOTE_TOKEN_ENV, "test-token");
-            env::remove_var(TRUSTED_REMOTE_CLIENT_CERT_ENV);
-        }
+        let _trusted_remote_env = TrustedRemoteEnvGuard::with_token("test-token");
         let policy = runtime_endpoint_policy("https://example.invalid:4317").unwrap();
-        unsafe {
-            env::remove_var(TRUSTED_REMOTE_TOKEN_ENV);
-        }
         assert_eq!(policy.channel, RuntimeEndpointChannel::TrustedRemote);
         assert_eq!(policy.scheme, "https");
         assert_eq!(policy.auth_material, Some("token"));
@@ -12407,6 +12395,8 @@ mod tests {
 
     #[test]
     fn session_transport_check_reports_loopback_policy() {
+        let _guard = env_lock();
+        let _trusted_remote_env = TrustedRemoteEnvGuard::clear();
         let result = run_cli(
             [
                 "--json",
@@ -12444,10 +12434,7 @@ mod tests {
     #[test]
     fn session_transport_plan_reports_reserved_trusted_channel_without_listener() {
         let _guard = env_lock();
-        unsafe {
-            env::remove_var(TRUSTED_REMOTE_TOKEN_ENV);
-            env::remove_var(TRUSTED_REMOTE_CLIENT_CERT_ENV);
-        }
+        let _trusted_remote_env = TrustedRemoteEnvGuard::clear();
         let result = run_cli(["--json", "session", "transport", "plan"], true);
 
         assert_eq!(result.exit_code(), 0);
@@ -12537,10 +12524,7 @@ mod tests {
     #[test]
     fn session_transport_plan_blocks_remote_http_without_tcp_probe() {
         let _guard = env_lock();
-        unsafe {
-            env::remove_var(TRUSTED_REMOTE_TOKEN_ENV);
-            env::remove_var(TRUSTED_REMOTE_CLIENT_CERT_ENV);
-        }
+        let _trusted_remote_env = TrustedRemoteEnvGuard::clear();
         let result = run_cli(
             [
                 "--json",
@@ -12613,10 +12597,7 @@ mod tests {
     #[test]
     fn session_transport_plan_accepts_remote_https_policy_but_keeps_listener_reserved() {
         let _guard = env_lock();
-        unsafe {
-            env::set_var(TRUSTED_REMOTE_TOKEN_ENV, "test-token");
-            env::remove_var(TRUSTED_REMOTE_CLIENT_CERT_ENV);
-        }
+        let _trusted_remote_env = TrustedRemoteEnvGuard::with_token("test-token");
         let result = run_cli(
             [
                 "--json",
@@ -12628,10 +12609,6 @@ mod tests {
             ],
             true,
         );
-        unsafe {
-            env::remove_var(TRUSTED_REMOTE_TOKEN_ENV);
-        }
-
         assert_eq!(result.exit_code(), 0);
         let data = result.envelope.data.as_ref().unwrap();
         assert_eq!(data.get("status").and_then(Value::as_str), Some("reserved"));
@@ -12699,10 +12676,7 @@ mod tests {
     #[test]
     fn session_transport_check_blocks_remote_http() {
         let _guard = env_lock();
-        unsafe {
-            env::remove_var(TRUSTED_REMOTE_TOKEN_ENV);
-            env::remove_var(TRUSTED_REMOTE_CLIENT_CERT_ENV);
-        }
+        let _trusted_remote_env = TrustedRemoteEnvGuard::clear();
         let result = run_cli(
             [
                 "--json",
@@ -12734,11 +12708,8 @@ mod tests {
     #[test]
     fn status_blocks_untrusted_remote_runtime_endpoint() {
         let _guard = env_lock();
-        unsafe {
-            set_missing_config_env();
-            env::remove_var(TRUSTED_REMOTE_TOKEN_ENV);
-            env::remove_var(TRUSTED_REMOTE_CLIENT_CERT_ENV);
-        }
+        set_missing_config_env();
+        let _trusted_remote_env = TrustedRemoteEnvGuard::clear();
         let result = run_cli(
             [
                 "--json",
@@ -12758,11 +12729,8 @@ mod tests {
     #[test]
     fn doctor_reports_remote_endpoint_policy_without_blocking() {
         let _guard = env_lock();
-        unsafe {
-            set_missing_config_env();
-            env::remove_var(TRUSTED_REMOTE_TOKEN_ENV);
-            env::remove_var(TRUSTED_REMOTE_CLIENT_CERT_ENV);
-        }
+        set_missing_config_env();
+        let _trusted_remote_env = TrustedRemoteEnvGuard::clear();
         let result = run_cli(
             [
                 "--json",
