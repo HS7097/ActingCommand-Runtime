@@ -312,6 +312,59 @@ fn query_pages_are_bounded_ordered_and_pinned_to_the_requested_snapshot() {
 }
 
 #[test]
+fn indexed_event_pages_visit_history_once_and_retain_only_each_page() {
+    const EVENT_COUNT: u64 = 4_096;
+    const PAGE_EVENTS: usize = 64;
+
+    let events = (1..=EVENT_COUNT)
+        .map(|sequence| {
+            PersistedEvent::from_sanitized(sequence, event("evt-linear-page"))
+                .expect("persisted event")
+        })
+        .collect::<Vec<_>>();
+    let indexes = projection::EventIndexes::from_events(&events);
+    let query = EventQuery {
+        event_type: Some(EventType::CommandReceived),
+        ..EventQuery::default()
+    };
+    let mut after_sequence = 0;
+    let mut total_visited = 0;
+    let mut max_retained = 0;
+    let mut page_count = 0;
+
+    while after_sequence < EVENT_COUNT {
+        let (page, visited) = indexes.query_page_with_visit_count(
+            &events,
+            &query,
+            after_sequence,
+            EVENT_COUNT,
+            PAGE_EVENTS,
+        );
+        assert!(!page.is_empty());
+        total_visited += visited;
+        max_retained = max_retained.max(page.len());
+        page_count += 1;
+        after_sequence = page.last().expect("page tail").sequence();
+    }
+
+    assert_eq!(page_count, EVENT_COUNT as usize / PAGE_EVENTS);
+    assert_eq!(total_visited, EVENT_COUNT as usize);
+    assert_eq!(max_retained, PAGE_EVENTS);
+    let (missing, visited) = indexes.query_page_with_visit_count(
+        &events,
+        &EventQuery {
+            event_type: Some(EventType::FactPublished),
+            ..EventQuery::default()
+        },
+        0,
+        EVENT_COUNT,
+        PAGE_EVENTS,
+    );
+    assert!(missing.is_empty());
+    assert_eq!(visited, 0);
+}
+
+#[test]
 fn subscription_replays_after_cursor_then_receives_live_events() {
     let temp = TempDir::new().expect("temp");
     let ledger = GlobalLedger::open(config(&temp, "writer-one")).expect("ledger");
