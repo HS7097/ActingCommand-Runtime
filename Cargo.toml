@@ -16,6 +16,7 @@ members = [
     "crates/lab",
     "crates/page-detector",
     "crates/pack-containment",
+    "crates/policy",
     "crates/onnx-provider-support",
     "crates/recognition",
     "crates/recognition-pack",
@@ -45,6 +46,7 @@ actingcommand-lab = { path = "crates/lab" }
 actingcommand-onnx-provider-support = { path = "crates/onnx-provider-support" }
 actingcommand-page-detector = { path = "crates/page-detector" }
 actingcommand-pack-containment = { path = "crates/pack-containment" }
+actingcommand-policy = { path = "crates/policy" }
 actingcommand-recognition = { path = "crates/recognition" }
 actingcommand-recognition-pack = { path = "crates/recognition-pack" }
 actingcommand-resource-tooling = { path = "crates/resource-tooling" }
