@@ -6,8 +6,8 @@ use actingcommand_device::{
     MinitouchConfig, TouchBackendChoice, TouchBackendConfig,
 };
 use actingcommand_runtime_host::{
-    ExecutionBackendRegistration, ExecutionBackendRegistry, PerformanceMonitorConfig,
-    RuntimeHostConfig,
+    AgentDispatcherConfig, ExecutionBackendRegistration, ExecutionBackendRegistry,
+    PerformanceMonitorConfig, RuntimeHostConfig,
 };
 use serde::Deserialize;
 use std::fs;
@@ -30,7 +30,17 @@ pub(super) struct ActingdConfigFile {
     secret_fingerprint_salt: String,
     #[serde(default)]
     governance_capability: Option<String>,
+    #[serde(default)]
+    agent_dispatcher: Option<AgentDispatcherConfigFile>,
     instances: Vec<InstanceConfig>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct AgentDispatcherConfigFile {
+    max_attempts: u16,
+    max_session_ms: u64,
+    max_projection_events: u16,
 }
 
 #[derive(Deserialize)]
@@ -116,7 +126,21 @@ impl ActingdConfigFile {
         if let Some(capability) = self.governance_capability {
             host = host.with_governance_capability(capability);
         }
+        if let Some(dispatcher) = self.agent_dispatcher {
+            host = host.with_agent_dispatcher(dispatcher.runtime_config()?);
+        }
         Ok(RuntimeAssembly { host, registry })
+    }
+}
+
+impl AgentDispatcherConfigFile {
+    fn runtime_config(self) -> Result<AgentDispatcherConfig, &'static str> {
+        AgentDispatcherConfig::new(
+            self.max_attempts,
+            self.max_session_ms,
+            self.max_projection_events,
+        )
+        .map_err(|_| "agent_dispatcher_config_invalid")
     }
 }
 
@@ -352,6 +376,44 @@ mod tests {
         assert_eq!(
             config.assemble().err(),
             Some("capture_backend_must_be_explicit")
+        );
+    }
+
+    #[test]
+    fn agent_dispatcher_configuration_is_explicit_and_bounded() {
+        let id = IdentifierIssuer::new()
+            .expect("issuer")
+            .mint_instance_id()
+            .expect("instance id");
+        let base = json!({
+            "schema_version": CONFIG_SCHEMA_VERSION,
+            "state_root": "state",
+            "bind_host": "127.0.0.1",
+            "secret_fingerprint_salt": "0123456789abcdef",
+            "agent_dispatcher": {
+                "max_attempts": 2,
+                "max_session_ms": 60_000,
+                "max_projection_events": 8
+            },
+            "instances": [{
+                "alias": "node.a",
+                "instance_id": id.transport(),
+                "application_id": "neutral.application",
+                "adb_path": "adb",
+                "touch_backend": "maatouch",
+                "capture_backend": "adb"
+            }]
+        });
+        let config =
+            serde_json::from_value::<ActingdConfigFile>(base.clone()).expect("typed config");
+        config.assemble().expect("bounded dispatcher config");
+
+        let mut invalid = base;
+        invalid["agent_dispatcher"]["max_attempts"] = json!(0);
+        let config = serde_json::from_value::<ActingdConfigFile>(invalid).expect("typed config");
+        assert_eq!(
+            config.assemble().err(),
+            Some("agent_dispatcher_config_invalid")
         );
     }
 }

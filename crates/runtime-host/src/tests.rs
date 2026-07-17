@@ -7510,6 +7510,201 @@ fn agent_session_start_and_completion_are_idempotent() {
 }
 
 #[test]
+fn agent_terminal_history_allows_restart_without_dispatcher_config() {
+    let root = TempDir::new().expect("tempdir");
+    let runtime_instance_id = instance_id();
+    let host = RuntimeHost::start(
+        config(&root)
+            .with_agent_dispatcher(AgentDispatcherConfig::new(2, 60_000, 2).expect("agent config")),
+        Arc::new(FakeProvider::one(
+            POLICY_INSTANCE_ALIAS,
+            runtime_instance_id,
+            Arc::new(FakeState::default()),
+        )),
+    )
+    .expect("runtime host");
+    host.record_policy_planning_signal(PolicyPlanningSignalEventData {
+        signal_id: "signal:terminal-history-a".to_owned(),
+        instance_id: POLICY_INSTANCE_ALIAS.to_owned(),
+        task_id: None,
+        kind: PolicyPlanningSignalKind::TimelineReached,
+        fact_code: "timeline.review.due".to_owned(),
+        observed_at_unix_ms: unix_ms_now().expect("wall clock"),
+        detection_budget: None,
+    })
+    .expect("timeline wake signal");
+    host.close().expect("close runtime with pending wake");
+    let error = RuntimeHost::start(
+        config(&root),
+        Arc::new(FakeProvider::one(
+            POLICY_INSTANCE_ALIAS,
+            runtime_instance_id,
+            Arc::new(FakeState::default()),
+        )),
+    )
+    .err()
+    .expect("pending wake must retain dispatcher config");
+    assert_eq!(error.code(), "agent_dispatcher_config_missing");
+
+    let host = RuntimeHost::start(
+        config(&root)
+            .with_agent_dispatcher(AgentDispatcherConfig::new(2, 60_000, 2).expect("agent config")),
+        Arc::new(FakeProvider::one(
+            POLICY_INSTANCE_ALIAS,
+            runtime_instance_id,
+            Arc::new(FakeState::default()),
+        )),
+    )
+    .expect("reopen runtime with pending wake");
+    let mut client = TestClient::connect(&host);
+    let wakes = projected_events(
+        &mut client,
+        EventQuery {
+            event_type: Some(EventType::AgentWakeRequested),
+            ..EventQuery::default()
+        },
+    );
+    let ProjectionPayload::Full(payload) = &wakes[0].payload else {
+        panic!("expected forensic wake payload")
+    };
+    let EventPayload::Agent(AgentPayload::WakeRequested(payload)) = payload.as_ref() else {
+        panic!("expected agent wake payload")
+    };
+    let request = client.agent_request(RuntimeOperation::StartAgentSession {
+        wake_id: payload.wake().wake_id(),
+    });
+    let receipt = client.send(&request);
+    let RuntimeResult::AgentSessionOpened { context } =
+        receipt.result().expect("agent session result")
+    else {
+        panic!("expected agent session context")
+    };
+    let response = AgentSessionResponse::new(
+        context.status().session_id(),
+        AgentResponseDisposition::Completed,
+        "fake_sidecar_completed",
+        unix_ms_now().expect("wall clock"),
+    )
+    .expect("agent response");
+    let request = client.agent_request(RuntimeOperation::RecordAgentResponse { response });
+    let receipt = client.send(&request);
+    let RuntimeResult::AgentResponseRecorded { status } =
+        receipt.result().expect("agent response result")
+    else {
+        panic!("expected agent response status")
+    };
+    assert_eq!(status.state(), AgentAttentionState::Completed);
+    drop(client);
+    host.close().expect("close runtime");
+
+    let reopened = RuntimeHost::start(
+        config(&root),
+        Arc::new(FakeProvider::one(
+            POLICY_INSTANCE_ALIAS,
+            runtime_instance_id,
+            Arc::new(FakeState::default()),
+        )),
+    )
+    .expect("terminal history must not require dispatcher config");
+    reopened.close().expect("close reopened runtime");
+}
+
+#[test]
+fn agent_resume_request_replays_across_reconnect_and_restart() {
+    let root = TempDir::new().expect("tempdir");
+    let runtime_instance_id = instance_id();
+    let agent_config = AgentDispatcherConfig::new(2, 60_000, 2).expect("agent config");
+    let host = RuntimeHost::start(
+        config(&root).with_agent_dispatcher(agent_config.clone()),
+        Arc::new(FakeProvider::one(
+            POLICY_INSTANCE_ALIAS,
+            runtime_instance_id,
+            Arc::new(FakeState::default()),
+        )),
+    )
+    .expect("runtime host");
+    host.record_policy_planning_signal(PolicyPlanningSignalEventData {
+        signal_id: "signal:resume-replay-a".to_owned(),
+        instance_id: POLICY_INSTANCE_ALIAS.to_owned(),
+        task_id: None,
+        kind: PolicyPlanningSignalKind::DriftPredicted,
+        fact_code: "goal.primary.drift_predicted".to_owned(),
+        observed_at_unix_ms: unix_ms_now().expect("wall clock"),
+        detection_budget: None,
+    })
+    .expect("drift wake signal");
+    let mut client = TestClient::connect(&host);
+    let wakes = projected_events(
+        &mut client,
+        EventQuery {
+            event_type: Some(EventType::AgentWakeRequested),
+            ..EventQuery::default()
+        },
+    );
+    let ProjectionPayload::Full(payload) = &wakes[0].payload else {
+        panic!("expected forensic wake payload")
+    };
+    let EventPayload::Agent(AgentPayload::WakeRequested(payload)) = payload.as_ref() else {
+        panic!("expected agent wake payload")
+    };
+    let request = client.agent_request(RuntimeOperation::StartAgentSession {
+        wake_id: payload.wake().wake_id(),
+    });
+    let receipt = client.send(&request);
+    let RuntimeResult::AgentSessionOpened { context } =
+        receipt.result().expect("agent session result")
+    else {
+        panic!("expected agent session context")
+    };
+    let resume = client.agent_request(RuntimeOperation::ResumeAgentSession {
+        session_id: context.status().session_id(),
+    });
+    let first = client.send(&resume);
+    drop(client);
+
+    let mut reconnected = TestClient::connect(&host);
+    assert_eq!(reconnected.send(&resume), first);
+    assert_eq!(
+        projected_events(
+            &mut reconnected,
+            EventQuery {
+                event_type: Some(EventType::AgentSessionResumed),
+                ..EventQuery::default()
+            },
+        )
+        .len(),
+        1
+    );
+    drop(reconnected);
+    host.close().expect("close runtime");
+
+    let reopened = RuntimeHost::start(
+        config(&root).with_agent_dispatcher(agent_config),
+        Arc::new(FakeProvider::one(
+            POLICY_INSTANCE_ALIAS,
+            runtime_instance_id,
+            Arc::new(FakeState::default()),
+        )),
+    )
+    .expect("reopen runtime");
+    let mut recovered = TestClient::connect(&reopened);
+    assert_eq!(recovered.send(&resume), first);
+    assert_eq!(
+        projected_events(
+            &mut recovered,
+            EventQuery {
+                event_type: Some(EventType::AgentSessionResumed),
+                ..EventQuery::default()
+            },
+        )
+        .len(),
+        1
+    );
+    drop(recovered);
+    reopened.close().expect("close reopened runtime");
+}
+
+#[test]
 fn agent_session_timeout_escalates_to_human() {
     let root = TempDir::new().expect("tempdir");
     let host = RuntimeHost::start(
