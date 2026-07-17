@@ -8,7 +8,7 @@ use actingcommand_contract::{
     AgentSessionBudget, AgentSessionContext, AgentSessionEventData, AgentSessionId,
     AgentSessionResponse, AgentSessionStatus, AgentWakeData, AgentWakeId, CorrelationId,
     EventPayload, EventQuery, EventType, InstanceId, PolicyPayload, PolicyPlanningSignalKind,
-    ProjectedEvent, ProjectionProfile, RequestId, RuntimeErrorCode,
+    ProjectedEvent, ProjectionProfile, RequestId, RuntimeErrorCode, TerminalEvent,
 };
 use actingcommand_ledger::{GlobalLedger, PersistedEvent};
 use std::collections::BTreeMap;
@@ -78,6 +78,14 @@ pub(crate) enum AgentSessionPreparation {
     Replay(AgentSessionStatus),
 }
 
+pub(crate) enum AgentResumePreparation {
+    New(AgentSessionEventData),
+    Replay {
+        status: AgentSessionStatus,
+        terminal: TerminalEvent,
+    },
+}
+
 pub(crate) enum AgentResponsePreparation {
     Retry(AgentSessionEventData),
     Complete(AgentSessionEventData),
@@ -92,7 +100,16 @@ pub(crate) struct AgentDispatcherState {
     sessions: BTreeMap<AgentSessionId, AgentSessionStatus>,
     session_by_wake: BTreeMap<AgentWakeId, AgentSessionId>,
     active_by_scope: BTreeMap<(CorrelationId, InstanceId), AgentSessionId>,
+    resume_requests: BTreeMap<RequestId, AgentResumeRecord>,
     response_requests: BTreeMap<RequestId, AgentSessionEventData>,
+}
+
+#[derive(Clone)]
+struct AgentResumeRecord {
+    session_id: AgentSessionId,
+    correlation_id: CorrelationId,
+    status: AgentSessionStatus,
+    terminal: TerminalEvent,
 }
 
 impl AgentDispatcherState {
@@ -145,8 +162,16 @@ impl AgentDispatcherState {
         Ok(state)
     }
 
-    pub(crate) fn is_empty(&self) -> bool {
-        self.wakes.is_empty() && self.sessions.is_empty()
+    pub(crate) fn has_live_obligations(&self) -> bool {
+        self.wakes
+            .keys()
+            .any(|wake_id| !self.session_by_wake.contains_key(wake_id))
+            || self.sessions.values().any(|status| {
+                matches!(
+                    status.state(),
+                    AgentAttentionState::PausedNeedsAgent | AgentAttentionState::Active
+                )
+            })
     }
 
     pub(crate) fn has_wake_for_trigger(
@@ -196,9 +221,31 @@ impl AgentDispatcherState {
 
     pub(crate) fn prepare_resume(
         &self,
+        request_id: RequestId,
+        correlation_id: CorrelationId,
         session_id: AgentSessionId,
         observed_at_unix_ms: u64,
-    ) -> RuntimeHostResult<AgentSessionEventData> {
+    ) -> RuntimeHostResult<AgentResumePreparation> {
+        if let Some(existing) = self.resume_requests.get(&request_id) {
+            return if existing.session_id == session_id && existing.correlation_id == correlation_id
+            {
+                Ok(AgentResumePreparation::Replay {
+                    status: existing.status.clone(),
+                    terminal: existing.terminal,
+                })
+            } else {
+                Err(fatal(
+                    "agent_resume_request_conflict",
+                    "resume_agent_session",
+                ))
+            };
+        }
+        if self.response_requests.contains_key(&request_id) {
+            return Err(fatal(
+                "agent_resume_request_conflict",
+                "resume_agent_session",
+            ));
+        }
         let current = self.session(session_id)?;
         if current.expired_at(observed_at_unix_ms) {
             return Err(request("agent_session_expired", "resume_agent_session"));
@@ -207,6 +254,7 @@ impl AgentDispatcherState {
             .resumed(observed_at_unix_ms)
             .map_err(|_| request("agent_session_not_active", "resume_agent_session"))?;
         AgentSessionEventData::new(status, None)
+            .map(AgentResumePreparation::New)
             .map_err(|_| fatal("agent_session_event_invalid", "resume_agent_session"))
     }
 
@@ -425,13 +473,33 @@ impl AgentDispatcherState {
             }
             _ => return Err(fatal("agent_session_event_invalid", "apply_agent_event")),
         }
+        let resume_request =
+            if event_type == EventType::AgentSessionResumed {
+                let request_id =
+                    event.links().request_id().copied().ok_or_else(|| {
+                        fatal("agent_resume_request_missing", "apply_agent_event")
+                    })?;
+                let correlation_id = event.links().correlation_id().copied().ok_or_else(|| {
+                    fatal("agent_resume_correlation_missing", "apply_agent_event")
+                })?;
+                if self.resume_requests.contains_key(&request_id)
+                    || self.response_requests.contains_key(&request_id)
+                {
+                    return Err(fatal("agent_resume_request_conflict", "apply_agent_event"));
+                }
+                Some((request_id, correlation_id))
+            } else {
+                None
+            };
         let response_request_id = if let Some(response) = data.response() {
             let request_id = event
                 .links()
                 .request_id()
                 .copied()
                 .ok_or_else(|| fatal("agent_response_request_missing", "apply_agent_event"))?;
-            if self.response_requests.contains_key(&request_id) {
+            if self.response_requests.contains_key(&request_id)
+                || self.resume_requests.contains_key(&request_id)
+            {
                 return Err(fatal(
                     "agent_response_request_conflict",
                     "apply_agent_event",
@@ -465,6 +533,20 @@ impl AgentDispatcherState {
         self.sessions.insert(status.session_id(), status.clone());
         self.session_by_wake
             .insert(status.wake_id(), status.session_id());
+        if let Some((request_id, correlation_id)) = resume_request {
+            self.resume_requests.insert(
+                request_id,
+                AgentResumeRecord {
+                    session_id: status.session_id(),
+                    correlation_id,
+                    status: status.clone(),
+                    terminal: TerminalEvent {
+                        sequence: event.sequence(),
+                        event_id: *event.event_id(),
+                    },
+                },
+            );
+        }
         if let Some(request_id) = response_request_id {
             self.response_requests.insert(request_id, data.clone());
         }

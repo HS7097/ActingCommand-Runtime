@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 use crate::agent_dispatcher::{
-    AgentDispatcherState, AgentResponsePreparation, AgentSessionPreparation,
+    AgentDispatcherState, AgentResponsePreparation, AgentResumePreparation, AgentSessionPreparation,
 };
 use crate::approval::ApprovalProjection;
 use crate::events::RuntimeEvents;
@@ -410,7 +410,7 @@ impl RuntimeHost {
                 &registered_instances,
                 agent_config,
             )?;
-        } else if !agent_dispatcher.is_empty() {
+        } else if agent_dispatcher.has_live_obligations() {
             return Err(RuntimeHostError::fatal(
                 "agent_dispatcher_config_missing",
                 "start_runtime_host",
@@ -4075,24 +4075,35 @@ impl HostShared {
         let _gate = lock(&self.agent_write_gate, "resume_agent_session")
             .map_err(RequestFailure::poison_without_terminal)?;
         let observed_at_unix_ms = unix_ms_now().map_err(RequestFailure::poison_without_terminal)?;
-        let data = lock(&self.agent_dispatcher, "resume_agent_session")?
-            .prepare_resume(session_id, observed_at_unix_ms)
+        let preparation = lock(&self.agent_dispatcher, "resume_agent_session")?
+            .prepare_resume(
+                request.request_id(),
+                request.correlation_id(),
+                session_id,
+                observed_at_unix_ms,
+            )
             .map_err(agent_request_failure)?;
-        let persisted = self.append_event(
-            EventSeverity::Info,
-            request.source(),
-            OriginModule::AgentDispatcher,
-            request.actor(),
-            validated.event_links(Some(data.status().instance_id()), None, None),
-            AgentPayloadDraft::session_resumed(data.clone(), AuditInput::new()),
-        )?;
-        lock(&self.agent_dispatcher, "commit_agent_session_resume")?
-            .apply_event(&persisted, None)
-            .map_err(RequestFailure::poison_without_terminal)?;
-        let context = self.agent_session_context(data.status().clone())?;
+        let (status, terminal) = match preparation {
+            AgentResumePreparation::Replay { status, terminal } => (status, terminal),
+            AgentResumePreparation::New(data) => {
+                let persisted = self.append_event(
+                    EventSeverity::Info,
+                    request.source(),
+                    OriginModule::AgentDispatcher,
+                    request.actor(),
+                    validated.event_links(Some(data.status().instance_id()), None, None),
+                    AgentPayloadDraft::session_resumed(data.clone(), AuditInput::new()),
+                )?;
+                lock(&self.agent_dispatcher, "commit_agent_session_resume")?
+                    .apply_event(&persisted, None)
+                    .map_err(RequestFailure::poison_without_terminal)?;
+                (data.status().clone(), terminal(&persisted))
+            }
+        };
+        let context = self.agent_session_context(status)?;
         Ok(OperationSuccess {
             state: RuntimeReceiptState::Completed,
-            terminal: Some(terminal(&persisted)),
+            terminal: Some(terminal),
             result: RuntimeResult::AgentSessionObserved {
                 context: Box::new(context),
             },
