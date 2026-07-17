@@ -17,12 +17,13 @@ use actingcommand_ledger::GlobalLedger;
 use actingcommand_policy::{
     ActivityProfile, CatalogDocumentSource, CatalogSources, CompiledCatalog, DecisionReasonChain,
     DispatchIntent, DispatchPrerequisites, EvaluationFacts, EvaluationResources, EvaluationTime,
-    InstanceSnapshot, PolicyEvaluation, ScopeSelector, compile_catalog, evaluate,
+    InstanceSnapshot, MAX_EVALUATION_INSTANCES, PolicyEvaluation, ScopeSelector, compile_catalog,
+    evaluate,
 };
 use actingcommand_runtime_state::RuntimeStateStore;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -47,6 +48,8 @@ const PLANNING_SIGNAL_CHECKPOINT_KEY: &str = "checkpoint";
 const PLANNING_SIGNAL_PROJECTION_SCHEMA: &str = "actingcommand.policy-planning-signal.v1";
 const DETECTION_QUOTA_PROJECTION_SCHEMA: &str = "actingcommand.policy-detection-quota.v1";
 const PLANNING_SIGNAL_RECOVERY_PAGE_EVENTS: usize = 256;
+// One evaluation can reference at most one current activity window per bounded instance.
+const MAX_DETECTION_QUOTA_CACHE_WINDOWS: usize = MAX_EVALUATION_INSTANCES;
 static NEXT_TEMPORARY_ID: AtomicU64 = AtomicU64::new(1);
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -439,6 +442,7 @@ pub(crate) struct PolicyHost {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 struct DetectionQuotaState {
     windows: BTreeMap<(String, String), DetectionQuotaUsage>,
+    recency: VecDeque<(String, String)>,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -1245,8 +1249,7 @@ impl PolicyHost {
                 ));
             }
             staged_quota
-                .windows
-                .insert((data.instance_id.clone(), budget.window_id.clone()), usage);
+                .cache_usage((data.instance_id.clone(), budget.window_id.clone()), usage)?;
             quota_already_projected = quota_sequence == sequence;
         }
         if !quota_already_projected {
@@ -1532,27 +1535,28 @@ impl DetectionQuotaState {
     ) -> RuntimeHostResult<()> {
         let key = (instance_id.to_owned(), window_id.to_owned());
         if self.windows.contains_key(&key) {
+            self.touch(&key);
             return Ok(());
         }
         if let Some((_, usage)) = store.load_detection_quota(instance_id, window_id)? {
-            self.windows.insert(key, usage);
+            self.cache_usage(key, usage)?;
         }
         Ok(())
     }
 
     fn preview(
-        &self,
+        &mut self,
         profile: &ActivityProfile,
         catalog_hash: &str,
         instance_id: &str,
         now_unix_ms: u64,
     ) -> RuntimeHostResult<(PolicyPlanningSignalKind, PolicyDetectionBudgetRecord)> {
         let (_, window_id) = active_activity_window(profile, now_unix_ms)?;
-        let usage = self
-            .windows
-            .get(&(instance_id.to_owned(), window_id.clone()))
-            .copied()
-            .unwrap_or_default();
+        let key = (instance_id.to_owned(), window_id.clone());
+        let usage = self.windows.get(&key).copied().unwrap_or_default();
+        if self.windows.contains_key(&key) {
+            self.touch(&key);
+        }
         let next_dispatch = usage.dispatch_used.checked_add(1).ok_or_else(|| {
             fatal(
                 "policy_detection_budget_overflow",
@@ -1621,6 +1625,9 @@ impl DetectionQuotaState {
         })?;
         let key = (data.instance_id.clone(), budget.window_id.clone());
         let current = self.windows.get(&key).copied().unwrap_or_default();
+        if self.windows.contains_key(&key) {
+            self.touch(&key);
+        }
         match data.kind {
             PolicyPlanningSignalKind::DetectionReserved => {
                 let expected_dispatch = current.dispatch_used.checked_add(1).ok_or_else(|| {
@@ -1648,13 +1655,13 @@ impl DetectionQuotaState {
                         "commit_policy_detection_budget",
                     ));
                 }
-                self.windows.insert(
+                self.cache_usage(
                     key,
                     DetectionQuotaUsage {
                         dispatch_used: budget.dispatch_used,
                         runtime_reserved_ms: budget.runtime_reserved_ms,
                     },
-                );
+                )?;
             }
             PolicyPlanningSignalKind::DetectionQuotaExhausted => {
                 if budget.dispatch_used != current.dispatch_used
@@ -1674,6 +1681,37 @@ impl DetectionQuotaState {
             _ => unreachable!("detection kind checked above"),
         }
         Ok(())
+    }
+
+    fn cache_usage(
+        &mut self,
+        key: (String, String),
+        usage: DetectionQuotaUsage,
+    ) -> RuntimeHostResult<()> {
+        self.windows.insert(key.clone(), usage);
+        self.touch(&key);
+        while self.windows.len() > MAX_DETECTION_QUOTA_CACHE_WINDOWS {
+            let oldest = self.recency.pop_front().ok_or_else(|| {
+                fatal(
+                    "policy_detection_quota_cache_invariant",
+                    "cache_policy_detection_quota",
+                )
+            })?;
+            if self.windows.remove(&oldest).is_none() {
+                return Err(fatal(
+                    "policy_detection_quota_cache_invariant",
+                    "cache_policy_detection_quota",
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    fn touch(&mut self, key: &(String, String)) {
+        if let Some(position) = self.recency.iter().position(|candidate| candidate == key) {
+            self.recency.remove(position);
+        }
+        self.recency.push_back(key.clone());
     }
 }
 
@@ -2632,4 +2670,56 @@ fn fatal(code: &'static str, operation: &'static str) -> RuntimeHostError {
 
 fn request(code: &'static str, operation: &'static str) -> RuntimeHostError {
     RuntimeHostError::request(code, operation, RuntimeErrorCode::InvalidRequest)
+}
+
+#[cfg(test)]
+mod detection_quota_cache_tests {
+    use super::*;
+
+    #[test]
+    fn detection_quota_cache_evicts_lru_windows_at_the_evaluation_bound() {
+        const OVERFLOW: usize = 16;
+
+        let mut state = DetectionQuotaState::default();
+        for index in 0..MAX_DETECTION_QUOTA_CACHE_WINDOWS + OVERFLOW {
+            state
+                .cache_usage(
+                    quota_key(index),
+                    DetectionQuotaUsage {
+                        dispatch_used: 1,
+                        runtime_reserved_ms: 1,
+                    },
+                )
+                .expect("cache quota usage");
+        }
+
+        assert_eq!(state.windows.len(), MAX_DETECTION_QUOTA_CACHE_WINDOWS);
+        assert_eq!(state.recency.len(), MAX_DETECTION_QUOTA_CACHE_WINDOWS);
+        for index in 0..OVERFLOW {
+            assert!(!state.windows.contains_key(&quota_key(index)));
+        }
+
+        let touched = quota_key(OVERFLOW);
+        state.touch(&touched);
+        state
+            .cache_usage(
+                quota_key(MAX_DETECTION_QUOTA_CACHE_WINDOWS + OVERFLOW),
+                DetectionQuotaUsage {
+                    dispatch_used: 2,
+                    runtime_reserved_ms: 2,
+                },
+            )
+            .expect("cache next quota usage");
+
+        assert!(state.windows.contains_key(&touched));
+        assert!(!state.windows.contains_key(&quota_key(OVERFLOW + 1)));
+        assert_eq!(
+            state.recency.iter().cloned().collect::<BTreeSet<_>>(),
+            state.windows.keys().cloned().collect::<BTreeSet<_>>()
+        );
+    }
+
+    fn quota_key(index: usize) -> (String, String) {
+        (format!("instance-{index}"), format!("window-{index}"))
+    }
 }
