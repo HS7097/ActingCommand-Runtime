@@ -8,11 +8,13 @@ use crate::policy_host::{
 use crate::{RuntimeHostError, RuntimeHostResult};
 use actingcommand_contract::{
     ApprovalDecisionRecord, ApprovalTarget, EventSeverity, EventType, FactRecord, FactScope,
-    ProjectApprovalView, ProjectCatalogView, ProjectDecisionPage, ProjectDecisionPageCursor,
-    ProjectDecisionState, ProjectDecisionView, ProjectDiagnosticView, ProjectFactContentState,
-    ProjectFactView, ProjectGoalMetricView, ProjectGoalView, ProjectInstanceView,
-    ProjectInterfaceRequest, ProjectInterfaceResponse, ProjectInterfaceSnapshot,
-    ProjectRuntimeView, ProjectScopeView, ProjectView, RuntimeControlPlaneStatus, RuntimeErrorCode,
+    PROJECT_INTERFACE_CONTRACT_V2, PROJECT_INTERFACE_CONTRACT_V3, ProjectApprovalView,
+    ProjectCatalogView, ProjectCurrentView, ProjectDecisionPage, ProjectDecisionPageCursor,
+    ProjectDecisionPageRequest, ProjectDecisionState, ProjectDecisionView, ProjectDiagnosticView,
+    ProjectFactContentState, ProjectFactView, ProjectGoalMetricView, ProjectGoalView,
+    ProjectInstanceView, ProjectInterfaceRequest, ProjectInterfaceResponse,
+    ProjectInterfaceSnapshot, ProjectLedgerSnapshot, ProjectRuntimeView, ProjectScopeView,
+    ProjectView, RuntimeControlPlaneStatus, RuntimeErrorCode,
 };
 use actingcommand_policy::{MetricRef, ScopeSelector};
 
@@ -27,6 +29,7 @@ pub(crate) struct ProjectDiagnosticProjection {
 
 pub(crate) struct ProjectInterfaceProjection {
     pub(crate) ledger_position: u64,
+    pub(crate) current_ledger_position: u64,
     pub(crate) catalog: Option<LoadedCatalog>,
     pub(crate) instances: RuntimeControlPlaneStatus,
     pub(crate) facts: Vec<FactRecord>,
@@ -82,7 +85,20 @@ impl ProjectInterfaceProjection {
             negotiated_version == actingcommand_contract::PROJECT_INTERFACE_CONTRACT_V1;
         if legacy_contract && older_decisions_exist {
             return Err(RuntimeHostError::request(
-                "project_interface_v1_requires_v2",
+                "project_interface_v1_requires_v3",
+                "project_runtime_interface",
+                RuntimeErrorCode::ProtocolInvalid,
+            ));
+        }
+        if negotiated_version == PROJECT_INTERFACE_CONTRACT_V2
+            && (older_decisions_exist
+                || request
+                    .decision_page()
+                    .and_then(ProjectDecisionPageRequest::cursor)
+                    .is_some())
+        {
+            return Err(RuntimeHostError::request(
+                "project_interface_v2_requires_v3",
                 "project_runtime_interface",
                 RuntimeErrorCode::ProtocolInvalid,
             ));
@@ -105,9 +121,10 @@ impl ProjectInterfaceProjection {
             })
             .collect::<Vec<_>>();
         loop {
-            let decision_page = if negotiated_version
-                == actingcommand_contract::PROJECT_INTERFACE_CONTRACT_V2
-            {
+            let decision_page = if matches!(
+                negotiated_version,
+                PROJECT_INTERFACE_CONTRACT_V3 | PROJECT_INTERFACE_CONTRACT_V2
+            ) {
                 let has_more = older_decisions_exist || decisions.len() < original_decision_count;
                 let next_cursor = if has_more {
                     let (intent_sequence, decision) = decisions.last().ok_or_else(|| {
@@ -147,42 +164,81 @@ impl ProjectInterfaceProjection {
             } else {
                 None
             };
-            let snapshot = ProjectInterfaceSnapshot {
-                ledger_position: self.ledger_position,
-                project: project.clone(),
-                instances: instances.clone(),
-                catalog: catalog.clone(),
-                facts: facts.clone(),
-                goals: goals.clone(),
-                decisions: decisions
-                    .iter()
-                    .map(|(_, decision)| decision.clone())
-                    .collect(),
-                decision_page,
-                approvals: approvals.clone(),
-                runtime: ProjectRuntimeView {
-                    owner_epoch: self.instances.owner_epoch(),
-                    ledger_position: self.ledger_position,
-                    fatal: self.fatal,
-                    instance_count: self.instances.instances().len() as u32,
-                },
-                diagnostics: diagnostics.clone(),
+            let projected_decisions = decisions
+                .iter()
+                .map(|(_, decision)| decision.clone())
+                .collect();
+            let response = if negotiated_version == PROJECT_INTERFACE_CONTRACT_V3 {
+                let decision_page = decision_page.ok_or_else(|| {
+                    RuntimeHostError::fatal(
+                        "project_decision_page_missing",
+                        "project_runtime_interface",
+                        RuntimeErrorCode::RuntimeFatal,
+                    )
+                })?;
+                ProjectInterfaceResponse::new_current(
+                    negotiated_version,
+                    ProjectLedgerSnapshot {
+                        ledger_position: self.ledger_position,
+                        project: project.clone(),
+                        catalog: catalog.clone(),
+                        facts: facts.clone(),
+                        goals: goals.clone(),
+                        decisions: projected_decisions,
+                        decision_page,
+                        approvals: approvals.clone(),
+                        diagnostics: diagnostics.clone(),
+                    },
+                    ProjectCurrentView {
+                        observed_ledger_position: self.current_ledger_position,
+                        owner_epoch: self.instances.owner_epoch(),
+                        fatal: self.fatal,
+                        instances: instances.clone(),
+                    },
+                )
+            } else {
+                ProjectInterfaceResponse::new_legacy(
+                    negotiated_version,
+                    ProjectInterfaceSnapshot {
+                        ledger_position: self.ledger_position,
+                        project: project.clone(),
+                        instances: instances.clone(),
+                        catalog: catalog.clone(),
+                        facts: facts.clone(),
+                        goals: goals.clone(),
+                        decisions: projected_decisions,
+                        decision_page,
+                        approvals: approvals.clone(),
+                        runtime: ProjectRuntimeView {
+                            owner_epoch: self.instances.owner_epoch(),
+                            ledger_position: self.ledger_position,
+                            fatal: self.fatal,
+                            instance_count: self.instances.instances().len() as u32,
+                        },
+                        diagnostics: diagnostics.clone(),
+                    },
+                )
             };
-            match ProjectInterfaceResponse::new(negotiated_version, snapshot) {
+            match response {
                 Ok(response) => return Ok(response),
                 Err(error)
                     if error.code() == "project_interface_response_too_large"
                         && decisions.len() > 1
-                        && !legacy_contract =>
+                        && negotiated_version == PROJECT_INTERFACE_CONTRACT_V3 =>
                 {
                     decisions.pop();
                 }
                 Err(error)
                     if error.code() == "project_interface_response_too_large"
-                        && legacy_contract =>
+                        && decisions.len() > 1
+                        && negotiated_version != PROJECT_INTERFACE_CONTRACT_V3 =>
                 {
                     return Err(RuntimeHostError::request(
-                        "project_interface_v1_requires_v2",
+                        if legacy_contract {
+                            "project_interface_v1_requires_v3"
+                        } else {
+                            "project_interface_v2_requires_v3"
+                        },
                         "project_runtime_interface",
                         RuntimeErrorCode::ProtocolInvalid,
                     ));

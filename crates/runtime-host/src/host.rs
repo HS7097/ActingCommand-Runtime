@@ -5009,6 +5009,7 @@ impl HostShared {
             .is_some();
         let response = ProjectInterfaceProjection {
             ledger_position,
+            current_ledger_position,
             catalog,
             instances: status,
             facts,
