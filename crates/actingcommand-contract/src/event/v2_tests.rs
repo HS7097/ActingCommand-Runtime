@@ -132,6 +132,8 @@ fn all_payload_drafts(mut input: impl FnMut() -> AuditInput) -> Vec<EventPayload
         task_id: "task:fixture-a".to_owned(),
         instance_id: "instance:fixture-a".to_owned(),
         operation_id: "operation:fixture-a".to_owned(),
+        package_digest: format!("sha256:{}", "c".repeat(64)),
+        procedure_binding_digest: format!("sha256:{}", "d".repeat(64)),
         reason_chain_id: "reason:fixture-a".to_owned(),
         reasons: vec![PolicyReasonRecord {
             code: "eligible".to_owned(),

@@ -22,6 +22,7 @@ mod performance_control;
 mod planning;
 mod policy_control;
 mod policy_host;
+mod procedure_manifest;
 mod project_interface;
 mod proposal;
 mod provider;
@@ -47,6 +48,7 @@ pub use policy_host::{
     PolicyEvaluationCost, PolicyEvaluationExecution, PolicyEvaluationMeasurement,
     PolicyRecomputeDirective, PolicyRecomputeKind, PolicyRecomputeReason, PolicyTrigger,
 };
+pub use procedure_manifest::{ProcedureBinding, ProcedureManifest};
 pub use provider::*;
 
 #[cfg(test)]
