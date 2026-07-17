@@ -8,6 +8,9 @@ use sha2::{Digest, Sha256};
 
 use crate::CatalogBundle;
 
+const ECMASCRIPT_SAFE_INTEGER_MIN: i64 = -9_007_199_254_740_991;
+const ECMASCRIPT_SAFE_INTEGER_MAX: u64 = 9_007_199_254_740_991;
+
 pub(crate) fn catalog_hash(bundle: &CatalogBundle) -> Result<String, String> {
     let envelope = serde_json::json!({
         "activity": &bundle.activity,
@@ -36,11 +39,18 @@ fn write_value(value: &Value, output: &mut Vec<u8>) -> Result<(), String> {
         Value::Null => output.extend_from_slice(b"null"),
         Value::Bool(true) => output.extend_from_slice(b"true"),
         Value::Bool(false) => output.extend_from_slice(b"false"),
-        Value::Number(number) if number.is_i64() || number.is_u64() => {
+        Value::Number(number) => {
+            let safe = number.as_i64().is_some_and(|value| {
+                value >= ECMASCRIPT_SAFE_INTEGER_MIN && value <= ECMASCRIPT_SAFE_INTEGER_MAX as i64
+            }) || number
+                .as_u64()
+                .is_some_and(|value| value <= ECMASCRIPT_SAFE_INTEGER_MAX);
+            if !safe {
+                return Err(
+                    "scheduling canonicalization requires ECMAScript safe integers".to_owned(),
+                );
+            }
             output.extend_from_slice(number.to_string().as_bytes());
-        }
-        Value::Number(_) => {
-            return Err("scheduling canonicalization accepts integers only".to_owned());
         }
         Value::String(text) => {
             let encoded = serde_json::to_string(text).map_err(|error| error.to_string())?;
@@ -94,6 +104,23 @@ mod tests {
     fn canonical_json_rejects_floating_point_values() {
         let error = canonical_json(&serde_json::json!({"value": 1.5}))
             .expect_err("floating point input must fail");
-        assert!(error.contains("integers only"));
+        assert!(error.contains("safe integers"));
+    }
+
+    #[test]
+    fn canonical_json_enforces_ecmascript_safe_integer_boundaries() {
+        for accepted in [
+            serde_json::json!(-9_007_199_254_740_991_i64),
+            serde_json::json!(9_007_199_254_740_991_u64),
+        ] {
+            canonical_json(&accepted).expect("safe integer");
+        }
+        for rejected in [
+            serde_json::json!(-9_007_199_254_740_992_i64),
+            serde_json::json!(9_007_199_254_740_992_u64),
+        ] {
+            let error = canonical_json(&rejected).expect_err("unsafe integer");
+            assert!(error.contains("safe integers"));
+        }
     }
 }

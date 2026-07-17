@@ -18,9 +18,9 @@ use actingcommand_contract::{
     MonitorPayload, MonitorRecoveryCoordinationReason, MonitorRecoveryKind, OriginModule,
     PerformanceControlLevel, PerformanceMonitorHealth, PolicyExecutionOutcome, PolicyFailureClass,
     PolicyFailureDisposition, PolicyPayload, PolicyPlanningSignalEventData,
-    PolicyPlanningSignalKind, ProjectDecisionState, ProjectInterfaceRequest,
-    ProjectedArtifactReference, ProjectionPayload, ProjectionProfile, ProposalClass,
-    ProposalDisposition, ProposalDocument, ProposalKind, ProposalPatchOperation,
+    PolicyPlanningSignalKind, ProjectDecisionPageRequest, ProjectDecisionState,
+    ProjectInterfaceRequest, ProjectedArtifactReference, ProjectionPayload, ProjectionProfile,
+    ProposalClass, ProposalDisposition, ProposalDocument, ProposalKind, ProposalPatchOperation,
     PublicEventPayload, RUNTIME_INFO_FILE, ReleasePayload, ReleaseResourceVersion,
     ReleaseTransitionKind, ResourceAuthoringEvent, ResourceAuthoringPhase, RuntimeCaptureBackend,
     RuntimeErrorCode, RuntimeMonitorPolicy, RuntimeOperation, RuntimeReceipt, RuntimeReceiptState,
@@ -1488,6 +1488,9 @@ fn project_interface_projects_runtime_domains_and_rejects_unknown_versions() {
     assert_eq!(snapshot.goals.len(), 1);
     assert_eq!(snapshot.decisions.len(), 1);
     assert_eq!(snapshot.decisions[0].state, ProjectDecisionState::Admitted);
+    let decision_page = snapshot.decision_page.as_ref().expect("decision page");
+    assert_eq!(decision_page.returned_count(), 1);
+    assert!(!decision_page.has_more());
     assert_eq!(snapshot.approvals.len(), 1);
     assert!(!snapshot.runtime.fatal);
     assert_eq!(state.open_count.load(Ordering::Acquire), 0);
@@ -1505,6 +1508,96 @@ fn project_interface_projects_runtime_domains_and_rejects_unknown_versions() {
         rejected.error_projection().expect("typed rejection").code,
         RuntimeErrorCode::ProtocolInvalid
     );
+}
+
+#[test]
+fn project_interface_pages_decision_history_without_duplicates_or_loss() {
+    let root = TempDir::new().expect("tempdir");
+    let host = host_with_state(&root, POLICY_INSTANCE_ALIAS, Arc::new(FakeState::default()));
+    host.activate_policy_catalog(&policy_sources(1))
+        .expect("activate catalog");
+
+    let (_, approval_basis, _) =
+        evaluated_policy_dispatch_at(&host, PolicyTrigger::FactsChanged, POLICY_NOW_UNIX_MS, 100);
+    record_policy_approval(&host, &approval_basis);
+    let (_, admitted, admitted_reason) = evaluated_policy_dispatch_at(
+        &host,
+        PolicyTrigger::Reconciliation,
+        POLICY_NOW_UNIX_MS + 60_000,
+        101,
+    );
+    assert!(matches!(
+        host.admit_policy_dispatch(
+            &admitted,
+            &admitted_reason,
+            &policy_context(&host, &admitted),
+        )
+        .expect("approved dispatch"),
+        PolicyDispatchAdmission::Granted { .. }
+    ));
+    record_policy_approval_disposition(&host, &admitted, ApprovalDisposition::Revoked);
+
+    let mut expected = vec![admitted.decision_id.clone()];
+    for index in 0..4_u64 {
+        let (_, intent, reason_chain) = evaluated_policy_dispatch_at(
+            &host,
+            PolicyTrigger::Reconciliation,
+            POLICY_NOW_UNIX_MS + (index + 2) * 60_000,
+            102 + index,
+        );
+        expected.push(intent.decision_id.clone());
+        assert_eq!(
+            host.admit_policy_dispatch(&intent, &reason_chain, &policy_context(&host, &intent))
+                .expect_err("unapproved dispatch must be rejected")
+                .code(),
+            "policy_approval_fact_missing"
+        );
+    }
+    expected.reverse();
+
+    let mut client = TestClient::connect(&host);
+    let mut cursor = None;
+    let mut collected = Vec::new();
+    let mut collected_states = BTreeMap::new();
+    for page_index in 0..4 {
+        let request = ProjectInterfaceRequest::current()
+            .with_decision_page(
+                ProjectDecisionPageRequest::new(2, cursor.clone()).expect("page request"),
+            )
+            .expect("paged project request");
+        let request = client.request(RuntimeOperation::ProjectInterface { request });
+        let receipt = client.send(&request);
+        let RuntimeResult::ProjectInterface { response } = receipt.result().expect("page result")
+        else {
+            panic!("expected project interface response")
+        };
+        let snapshot = response.snapshot();
+        assert!(snapshot.decisions.len() <= 2);
+        for decision in &snapshot.decisions {
+            collected.push(decision.decision_id.clone());
+            collected_states.insert(decision.decision_id.clone(), decision.state);
+        }
+        let page = snapshot.decision_page.as_ref().expect("decision page");
+        assert_eq!(usize::from(page.returned_count()), snapshot.decisions.len());
+        cursor = page.next_cursor().cloned();
+        if page_index == 0 {
+            host.complete_policy_dispatch(&admitted.decision_id)
+                .expect("complete after snapshot");
+        }
+        if !page.has_more() {
+            break;
+        }
+    }
+
+    assert_eq!(collected, expected);
+    assert_eq!(
+        collected_states.get(&admitted.decision_id),
+        Some(&ProjectDecisionState::Admitted),
+        "later pages must remain bound to the first page ledger snapshot"
+    );
+    assert!(cursor.is_none());
+    drop(client);
+    host.close().expect("close host");
 }
 
 fn neutral_contained_task_package() -> Vec<u8> {
@@ -4659,6 +4752,71 @@ fn runtime_fact_store_shares_server_facts_invalidates_and_recovers_from_ledger()
 }
 
 #[test]
+fn information_planning_signals_are_queryable_and_subscription_pages_are_lossless() {
+    let root = TempDir::new().expect("tempdir");
+    let host = host_with_state(&root, POLICY_INSTANCE_ALIAS, Arc::new(FakeState::default()));
+    for index in 0..5_u64 {
+        host.record_policy_planning_signal(PolicyPlanningSignalEventData {
+            signal_id: format!("signal:projection-{index}"),
+            instance_id: POLICY_INSTANCE_ALIAS.to_owned(),
+            task_id: None,
+            kind: PolicyPlanningSignalKind::GoalMissed,
+            fact_code: format!("goal.fixture.projection-{index}"),
+            observed_at_unix_ms: POLICY_NOW_UNIX_MS + index,
+            detection_budget: None,
+        })
+        .expect("record planning signal");
+    }
+
+    let query = EventQuery {
+        event_type: Some(EventType::PolicyPlanningSignalObserved),
+        minimum_severity: Some(EventSeverity::Info),
+        ..EventQuery::default()
+    };
+    let mut client = TestClient::connect(&host);
+    let expected = projected_events(&mut client, query.clone())
+        .into_iter()
+        .map(|event| event.sequence)
+        .collect::<Vec<_>>();
+    assert_eq!(expected.len(), 5);
+
+    let mut cursor = actingcommand_contract::SubscriptionCursor::default();
+    let mut observed = Vec::new();
+    for _ in 0..8 {
+        let subscription = actingcommand_contract::RuntimeSubscriptionRequest::new(
+            query.clone(),
+            ProjectionProfile::Forensic,
+            cursor,
+            100,
+            2,
+        )
+        .expect("subscription request");
+        let request = client.request(RuntimeOperation::SubscribeEvents {
+            request: subscription,
+        });
+        let receipt = client.send(&request);
+        let RuntimeResult::EventBatch { batch } = receipt.result().expect("event batch") else {
+            panic!("expected event batch")
+        };
+        assert!(!batch.timed_out(), "planning signal page must not be empty");
+        assert!(batch.events().len() <= 2);
+        assert!(batch.events().iter().all(|event| {
+            event.event_type == EventType::PolicyPlanningSignalObserved
+                && event.severity == EventSeverity::Info
+        }));
+        observed.extend(batch.events().iter().map(|event| event.sequence));
+        cursor = batch.next_cursor();
+        if observed.len() == expected.len() {
+            break;
+        }
+    }
+
+    assert_eq!(observed, expected);
+    drop(client);
+    host.close().expect("close host");
+}
+
+#[test]
 fn policy_evaluation_consumes_runtime_owned_fact_projection() {
     let root = TempDir::new().expect("tempdir");
     let state = Arc::new(FakeState::default());
@@ -5586,6 +5744,85 @@ fn approval_decision_is_authoritative_target_bound_and_revocable() {
     assert_eq!(events.len(), 2);
     drop(client);
     host.close().expect("close host");
+}
+
+#[test]
+fn approval_history_compacts_without_losing_durable_target_identity() {
+    let root = TempDir::new().expect("tempdir");
+    let registered_id = instance_id();
+    let host = RuntimeHost::start(
+        config(&root),
+        Arc::new(FakeProvider::one(
+            POLICY_INSTANCE_ALIAS,
+            registered_id,
+            Arc::new(FakeState::default()),
+        )),
+    )
+    .expect("runtime host");
+    let target = ApprovalTarget::Catalog {
+        catalog_hash: format!("sha256:{}", "a".repeat(64)),
+        catalog_version: 1,
+    };
+    let mut client = TestClient::connect(&host);
+    client.authenticate_governance();
+    for index in 0..257 {
+        let approval_id = format!("approval:history-{index}");
+        let request = client.governance_request(RuntimeOperation::RecordApprovalDecision {
+            decision: ApprovalDecisionRecord::new(
+                approval_id,
+                ApprovalDisposition::Rejected,
+                target.clone(),
+                "history_compaction",
+            )
+            .expect("approval decision"),
+        });
+        assert_eq!(
+            client.send(&request).state(),
+            RuntimeReceiptState::Completed
+        );
+    }
+    drop(client);
+
+    let mut client = TestClient::connect(&host);
+    let request = client.request(RuntimeOperation::ProjectInterface {
+        request: ProjectInterfaceRequest::current(),
+    });
+    let receipt = client.send(&request);
+    let RuntimeResult::ProjectInterface { response } = receipt.result().expect("projection result")
+    else {
+        panic!("expected project interface response")
+    };
+    assert_eq!(response.snapshot().approvals.len(), 256);
+    drop(client);
+    host.close().expect("close host");
+
+    let reopened = RuntimeHost::start(
+        config(&root),
+        Arc::new(FakeProvider::one(
+            POLICY_INSTANCE_ALIAS,
+            registered_id,
+            Arc::new(FakeState::default()),
+        )),
+    )
+    .expect("reopen runtime host");
+    let mut client = TestClient::connect(&reopened);
+    client.authenticate_governance();
+    let conflict = client.governance_request(RuntimeOperation::RecordApprovalDecision {
+        decision: ApprovalDecisionRecord::new(
+            "approval:history-0",
+            ApprovalDisposition::Approved,
+            ApprovalTarget::Catalog {
+                catalog_hash: format!("sha256:{}", "b".repeat(64)),
+                catalog_version: 1,
+            },
+            "conflicting_target",
+        )
+        .expect("conflicting approval"),
+    });
+    assert_eq!(client.send(&conflict).state(), RuntimeReceiptState::Denied);
+    assert!(reopened.fatal_error().expect("runtime health").is_none());
+    drop(client);
+    reopened.close().expect("close reopened host");
 }
 
 #[test]

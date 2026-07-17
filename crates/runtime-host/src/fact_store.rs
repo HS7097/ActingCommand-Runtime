@@ -13,13 +13,16 @@ use actingcommand_policy::{
     EvaluationFacts, FactScalar as PolicyFactScalar, FactValue as PolicyFactValue,
     InstanceSnapshot, ObservedFact, ScopeSelector,
 };
+use actingcommand_runtime_state::RuntimeStateStore;
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
+use std::sync::Arc;
 
 type FactIdentity = (FactScope, String);
 type InvalidationIdentity = (FactScope, String, String, EventId);
 const MAX_ACTIVE_FACTS: usize = 256;
-const MAX_FACT_TOMBSTONES: usize = 65_536;
+const FACT_TOMBSTONE_NAMESPACE: &str = "fact.tombstone.v1";
+const MAX_RECENT_FACT_TOMBSTONES: usize = 256;
 
 #[derive(Clone)]
 struct StoredFact {
@@ -31,6 +34,7 @@ struct StoredFact {
 #[derive(Clone)]
 struct InvalidationTombstone {
     data: FactInvalidationEventData,
+    sequence: u64,
 }
 
 #[derive(Clone)]
@@ -39,15 +43,20 @@ pub(crate) struct InstanceFactStore {
     invalidated: BTreeMap<(FactIdentity, String), InvalidationTombstone>,
     pending: BTreeMap<InvalidationIdentity, FactInvalidationEventData>,
     last_sequence: u64,
+    state: Arc<RuntimeStateStore>,
 }
 
 impl InstanceFactStore {
-    pub(crate) fn recover(ledger: &GlobalLedger) -> RuntimeHostResult<Self> {
+    pub(crate) fn recover(
+        ledger: &GlobalLedger,
+        state: Arc<RuntimeStateStore>,
+    ) -> RuntimeHostResult<Self> {
         let mut store = Self {
             active: BTreeMap::new(),
             invalidated: BTreeMap::new(),
             pending: BTreeMap::new(),
             last_sequence: 0,
+            state,
         };
         let events = ledger
             .query(Default::default())
@@ -109,6 +118,9 @@ impl InstanceFactStore {
         if self
             .invalidated
             .contains_key(&(identity.clone(), record.source_snapshot_id.clone()))
+            || self
+                .persisted_tombstone(&record.scope, &record.key, &record.source_snapshot_id)?
+                .is_some()
         {
             return Err(fact_request(
                 "fact_source_snapshot_invalidated",
@@ -149,6 +161,15 @@ impl InstanceFactStore {
         if self
             .invalidated
             .contains_key(&(identity.clone(), record.source_snapshot_id.clone()))
+        {
+            return Err(fact_fatal(
+                "fact_source_snapshot_republished",
+                "commit_fact",
+            ));
+        }
+        if self
+            .persisted_tombstone(&record.scope, &record.key, &record.source_snapshot_id)?
+            .is_some_and(|tombstone| tombstone.sequence <= sequence)
         {
             return Err(fact_fatal(
                 "fact_source_snapshot_republished",
@@ -218,6 +239,7 @@ impl InstanceFactStore {
     pub(crate) fn acknowledge_generated_invalidation(
         &mut self,
         data: &FactInvalidationEventData,
+        sequence: u64,
     ) -> RuntimeHostResult<()> {
         let tombstone_key = (
             (data.scope.clone(), data.key.clone()),
@@ -236,6 +258,15 @@ impl InstanceFactStore {
                 "acknowledge_fact_invalidation",
             ));
         }
+        self.persist_tombstone(data, sequence)?;
+        let tombstone = self.invalidated.get_mut(&tombstone_key).ok_or_else(|| {
+            fact_fatal(
+                "fact_generated_invalidation_missing",
+                "acknowledge_fact_invalidation",
+            )
+        })?;
+        tombstone.sequence = sequence;
+        self.trim_recent_tombstones()?;
         Ok(())
     }
 
@@ -264,8 +295,26 @@ impl InstanceFactStore {
             }
             if persisted {
                 self.pending.remove(&invalidation_identity(&data));
+                self.persist_tombstone(&data, sequence)?;
+                let tombstone = self.invalidated.get_mut(&tombstone_key).ok_or_else(|| {
+                    fact_fatal(
+                        "fact_invalidation_target_missing",
+                        "commit_fact_invalidation",
+                    )
+                })?;
+                tombstone.sequence = sequence;
+                self.trim_recent_tombstones()?;
             }
             return self.advance(sequence, "commit_fact_invalidation");
+        }
+        if let Some(existing) =
+            self.persisted_tombstone(&data.scope, &data.key, &data.source_snapshot_id)?
+            && existing.data != data
+        {
+            return Err(fact_fatal(
+                "fact_invalidation_identity_conflict",
+                "commit_fact_invalidation",
+            ));
         }
         let active = self.active.get(&identity).ok_or_else(|| {
             fact_fatal(
@@ -284,19 +333,95 @@ impl InstanceFactStore {
                 "commit_fact_invalidation",
             ));
         }
-        if self.invalidated.len() >= MAX_FACT_TOMBSTONES {
-            return Err(fact_fatal(
-                "fact_tombstone_capacity_exceeded",
-                "commit_fact_invalidation",
-            ));
-        }
         self.active.remove(&identity);
-        self.invalidated
-            .insert(tombstone_key, InvalidationTombstone { data: data.clone() });
-        if !persisted {
+        self.invalidated.insert(
+            tombstone_key,
+            InvalidationTombstone {
+                data: data.clone(),
+                sequence,
+            },
+        );
+        if persisted {
+            self.persist_tombstone(&data, sequence)?;
+            self.trim_recent_tombstones()?;
+        } else {
             self.pending.insert(invalidation_identity(&data), data);
         }
         self.advance(sequence, "commit_fact_invalidation")
+    }
+
+    fn persisted_tombstone(
+        &self,
+        scope: &FactScope,
+        key: &str,
+        source_snapshot_id: &str,
+    ) -> RuntimeHostResult<Option<InvalidationTombstone>> {
+        let entry_key = fact_tombstone_key(scope, key, source_snapshot_id)?;
+        let Some(entry) = self
+            .state
+            .read_projection_entry(FACT_TOMBSTONE_NAMESPACE, &entry_key)
+            .map_err(|error| RuntimeHostError::state(&error))?
+        else {
+            return Ok(None);
+        };
+        let data = serde_json::from_slice::<FactInvalidationEventData>(entry.payload())
+            .map_err(|_| fact_fatal("fact_tombstone_projection_invalid", "read_fact_tombstone"))?;
+        if &data.scope != scope || data.key != key || data.source_snapshot_id != source_snapshot_id
+        {
+            return Err(fact_fatal(
+                "fact_tombstone_projection_identity_mismatch",
+                "read_fact_tombstone",
+            ));
+        }
+        Ok(Some(InvalidationTombstone {
+            data,
+            sequence: entry.ledger_sequence(),
+        }))
+    }
+
+    fn persist_tombstone(
+        &self,
+        data: &FactInvalidationEventData,
+        sequence: u64,
+    ) -> RuntimeHostResult<()> {
+        let payload = serde_json::to_vec(data).map_err(|_| {
+            fact_fatal(
+                "fact_tombstone_projection_encode_failed",
+                "persist_fact_tombstone",
+            )
+        })?;
+        self.state
+            .write_projection_entry(
+                FACT_TOMBSTONE_NAMESPACE,
+                &fact_tombstone_key(&data.scope, &data.key, &data.source_snapshot_id)?,
+                sequence,
+                &payload,
+            )
+            .map_err(|error| RuntimeHostError::state(&error))?;
+        Ok(())
+    }
+
+    fn trim_recent_tombstones(&mut self) -> RuntimeHostResult<()> {
+        while self.invalidated.len() > MAX_RECENT_FACT_TOMBSTONES {
+            let candidate = self
+                .invalidated
+                .iter()
+                .filter(|(_, tombstone)| {
+                    !self
+                        .pending
+                        .contains_key(&invalidation_identity(&tombstone.data))
+                })
+                .min_by_key(|(identity, tombstone)| (tombstone.sequence, *identity))
+                .map(|(identity, _)| identity.clone())
+                .ok_or_else(|| {
+                    fact_fatal(
+                        "fact_tombstone_compaction_blocked",
+                        "compact_fact_tombstones",
+                    )
+                })?;
+            self.invalidated.remove(&candidate);
+        }
+        Ok(())
     }
 
     #[cfg(test)]
@@ -458,6 +583,20 @@ impl InstanceFactStore {
     }
 }
 
+fn fact_tombstone_key(
+    scope: &FactScope,
+    key: &str,
+    source_snapshot_id: &str,
+) -> RuntimeHostResult<String> {
+    let identity = serde_json::to_vec(&(scope, key, source_snapshot_id)).map_err(|_| {
+        fact_fatal(
+            "fact_tombstone_identity_encode_failed",
+            "identify_fact_tombstone",
+        )
+    })?;
+    Ok(format!("{:x}", Sha256::digest(identity)))
+}
+
 fn invalidation_identity(data: &FactInvalidationEventData) -> InvalidationIdentity {
     (
         data.scope.clone(),
@@ -567,6 +706,25 @@ mod tests {
     use super::*;
     use actingcommand_contract::{FactTtlPolicy, FactTtlSource};
     use actingcommand_policy::{ObservedOutcome, TaskRuntimeSnapshot};
+    use tempfile::TempDir;
+
+    fn store_with_state(state: Arc<RuntimeStateStore>) -> InstanceFactStore {
+        InstanceFactStore {
+            active: BTreeMap::new(),
+            invalidated: BTreeMap::new(),
+            pending: BTreeMap::new(),
+            last_sequence: 0,
+            state,
+        }
+    }
+
+    fn empty_store() -> (TempDir, InstanceFactStore) {
+        let root = TempDir::new().expect("tempdir");
+        let state = Arc::new(
+            RuntimeStateStore::open(root.path(), b"0123456789abcdef").expect("state store"),
+        );
+        (root, store_with_state(state))
+    }
 
     fn record(scope: FactScope, snapshot: &str, invalidate_on: Vec<EventType>) -> FactRecord {
         FactRecord {
@@ -593,12 +751,7 @@ mod tests {
 
     #[test]
     fn server_fact_is_shared_and_instance_fact_remains_isolated() {
-        let mut store = InstanceFactStore {
-            active: BTreeMap::new(),
-            invalidated: BTreeMap::new(),
-            pending: BTreeMap::new(),
-            last_sequence: 0,
-        };
+        let (_root, mut store) = empty_store();
         let issuer = actingcommand_contract::IdentifierIssuer::new().expect("issuer");
         store
             .commit_publish(
@@ -652,12 +805,7 @@ mod tests {
 
     #[test]
     fn event_invalidation_removes_only_the_matching_snapshot() {
-        let mut store = InstanceFactStore {
-            active: BTreeMap::new(),
-            invalidated: BTreeMap::new(),
-            pending: BTreeMap::new(),
-            last_sequence: 0,
-        };
+        let (_root, mut store) = empty_store();
         let issuer = actingcommand_contract::IdentifierIssuer::new().expect("issuer");
         let published = *issuer.mint_event_id().expect("event").transport();
         let trigger = *issuer.mint_event_id().expect("event").transport();
@@ -680,12 +828,7 @@ mod tests {
 
     #[test]
     fn policy_snapshot_identity_covers_every_evaluator_fact_dimension() {
-        let store = InstanceFactStore {
-            active: BTreeMap::new(),
-            invalidated: BTreeMap::new(),
-            pending: BTreeMap::new(),
-            last_sequence: 0,
-        };
+        let (_root, store) = empty_store();
         let base = EvaluationFacts {
             ledger_position: 1,
             fact_snapshot_id: "caller-snapshot-a".to_owned(),
@@ -763,5 +906,72 @@ mod tests {
                 canonical.fact_snapshot_id
             );
         }
+    }
+
+    #[test]
+    fn fact_tombstones_compact_in_memory_without_losing_durable_rejection() {
+        let root = TempDir::new().expect("tempdir");
+        let state = Arc::new(
+            RuntimeStateStore::open(root.path(), b"0123456789abcdef").expect("state store"),
+        );
+        let mut store = store_with_state(Arc::clone(&state));
+        let issuer = actingcommand_contract::IdentifierIssuer::new().expect("issuer");
+        let scope = FactScope::Instance {
+            instance_id: "instance-a".to_owned(),
+        };
+        let mut first = None;
+        let mut sequence = 1_u64;
+
+        for index in 0..(MAX_RECENT_FACT_TOMBSTONES + 32) {
+            let snapshot = format!("snapshot:compaction-{index}");
+            let fact = record(scope.clone(), &snapshot, vec![EventType::RuntimeTakeover]);
+            first.get_or_insert_with(|| fact.clone());
+            store
+                .commit_publish(
+                    fact,
+                    sequence,
+                    *issuer.mint_event_id().expect("publish event").transport(),
+                )
+                .expect("publish fact");
+            sequence += 1;
+            store
+                .commit_invalidation(
+                    FactInvalidationEventData {
+                        scope: scope.clone(),
+                        key: "env.theme".to_owned(),
+                        source_snapshot_id: snapshot,
+                        invalidated_at_unix_ms: 2_000 + index as u64,
+                        invalidated_by_event_id: *issuer
+                            .mint_event_id()
+                            .expect("invalidation event")
+                            .transport(),
+                        invalidated_by_event_type: EventType::RuntimeTakeover,
+                    },
+                    sequence,
+                )
+                .expect("invalidate fact");
+            sequence += 1;
+        }
+
+        assert_eq!(store.invalidated.len(), MAX_RECENT_FACT_TOMBSTONES);
+        assert_eq!(store.active_count(), 0);
+        let first = first.expect("first fact");
+        assert_eq!(
+            store
+                .preview_publish(&first)
+                .expect_err("compacted tombstone must still reject republish")
+                .code(),
+            "fact_source_snapshot_invalidated"
+        );
+
+        drop(store);
+        let recovered = store_with_state(state);
+        assert_eq!(
+            recovered
+                .preview_publish(&first)
+                .expect_err("durable tombstone must survive projection reconstruction")
+                .code(),
+            "fact_source_snapshot_invalidated"
+        );
     }
 }
