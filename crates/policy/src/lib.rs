@@ -7,6 +7,7 @@
 mod canonical;
 mod compiler;
 mod evaluator;
+mod forward;
 mod schema;
 mod source;
 mod strategy;
@@ -14,6 +15,7 @@ mod validation;
 
 pub use compiler::*;
 pub use evaluator::*;
+pub use forward::*;
 pub use schema::*;
 pub use source::{CatalogDocumentSource, CatalogSources};
 pub use strategy::*;

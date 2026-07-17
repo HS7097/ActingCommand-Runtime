@@ -18,6 +18,7 @@ mod monitor;
 mod owner;
 mod performance;
 mod performance_control;
+mod planning;
 mod policy_control;
 mod policy_host;
 mod project_interface;
@@ -36,6 +37,7 @@ pub use performance_control::{
     PerformanceControlConfig, PerformanceControlDirective, PerformanceControlObservation,
     PerformanceControlWorkload,
 };
+pub use planning::MaintenanceLedgerQuery;
 pub use policy_control::PolicyExecutionInput;
 pub use policy_host::{
     CatalogGeneration, PolicyAdmissionContext, PolicyCadence, PolicyCycle, PolicyDispatchAdmission,
