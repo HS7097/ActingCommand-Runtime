@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeSet;
 
-pub const RUNTIME_RELEASE_SET_SCHEMA_VERSION: &str = "actingcommand.release-set.v1";
+pub const RUNTIME_RELEASE_SET_SCHEMA_VERSION: &str = "actingcommand.release-set.v2";
 
 const MAX_IDENTIFIER_BYTES: usize = 128;
 const MAX_RELEASE_RESOURCES: usize = 64;
@@ -60,14 +60,18 @@ pub struct RuntimeReleaseSet {
     schema_version: String,
     release_id: String,
     runtime_version: String,
+    runtime_content_sha256: String,
     ui_version: String,
+    ui_content_sha256: String,
     resources: Vec<ReleaseResourceVersion>,
 }
 
 impl RuntimeReleaseSet {
     pub fn new(
         runtime_version: impl Into<String>,
+        runtime_content_sha256: impl Into<String>,
         ui_version: impl Into<String>,
+        ui_content_sha256: impl Into<String>,
         mut resources: Vec<ReleaseResourceVersion>,
     ) -> Result<Self, SanitizationError> {
         resources.sort_by(|left, right| left.resource_id.cmp(&right.resource_id));
@@ -75,7 +79,9 @@ impl RuntimeReleaseSet {
             schema_version: RUNTIME_RELEASE_SET_SCHEMA_VERSION.to_owned(),
             release_id: String::new(),
             runtime_version: runtime_version.into(),
+            runtime_content_sha256: runtime_content_sha256.into(),
             ui_version: ui_version.into(),
+            ui_content_sha256: ui_content_sha256.into(),
             resources,
         };
         value.validate_components()?;
@@ -113,8 +119,16 @@ impl RuntimeReleaseSet {
         &self.runtime_version
     }
 
+    pub fn runtime_content_sha256(&self) -> &str {
+        &self.runtime_content_sha256
+    }
+
     pub fn ui_version(&self) -> &str {
         &self.ui_version
+    }
+
+    pub fn ui_content_sha256(&self) -> &str {
+        &self.ui_content_sha256
     }
 
     pub fn resources(&self) -> &[ReleaseResourceVersion] {
@@ -129,7 +143,9 @@ impl RuntimeReleaseSet {
 
     fn validate_components(&self) -> Result<(), SanitizationError> {
         validate_version(&self.runtime_version, "runtime_version")?;
+        validate_sha256(&self.runtime_content_sha256, "runtime_content_sha256")?;
         validate_version(&self.ui_version, "ui_version")?;
+        validate_sha256(&self.ui_content_sha256, "ui_content_sha256")?;
         if self.resources.is_empty() || self.resources.len() > MAX_RELEASE_RESOURCES {
             return Err(SanitizationError::new(
                 "invalid_release_resource_count",
@@ -386,14 +402,18 @@ fn release_id_for(value: &RuntimeReleaseSet) -> Result<String, SanitizationError
     struct Identity<'a> {
         schema_version: &'a str,
         runtime_version: &'a str,
+        runtime_content_sha256: &'a str,
         ui_version: &'a str,
+        ui_content_sha256: &'a str,
         resources: &'a [ReleaseResourceVersion],
     }
 
     let bytes = serde_json::to_vec(&Identity {
         schema_version: &value.schema_version,
         runtime_version: &value.runtime_version,
+        runtime_content_sha256: &value.runtime_content_sha256,
         ui_version: &value.ui_version,
+        ui_content_sha256: &value.ui_content_sha256,
         resources: &value.resources,
     })
     .map_err(|_| SanitizationError::new("release_set_encode_failed", "release_set"))?;
@@ -458,7 +478,9 @@ mod tests {
     fn release_identity_is_canonical_and_tamper_evident() {
         let left = RuntimeReleaseSet::new(
             "1.2.3",
+            hash('c'),
             "2.3.4",
+            hash('d'),
             vec![
                 ReleaseResourceVersion::new("project-b", "b1", hash('b')).expect("resource"),
                 ReleaseResourceVersion::new("project-a", "a1", hash('a')).expect("resource"),
@@ -467,7 +489,9 @@ mod tests {
         .expect("release set");
         let right = RuntimeReleaseSet::new(
             "1.2.3",
+            hash('c'),
             "2.3.4",
+            hash('d'),
             vec![
                 ReleaseResourceVersion::new("project-a", "a1", hash('a')).expect("resource"),
                 ReleaseResourceVersion::new("project-b", "b1", hash('b')).expect("resource"),
@@ -476,6 +500,16 @@ mod tests {
         .expect("release set");
         assert_eq!(left, right);
         assert_eq!(left.resources()[0].resource_id(), "project-a");
+
+        let rebuilt = RuntimeReleaseSet::new(
+            "1.2.3",
+            hash('e'),
+            "2.3.4",
+            hash('d'),
+            left.resources().to_vec(),
+        )
+        .expect("rebuilt release set");
+        assert_ne!(left.release_id(), rebuilt.release_id());
 
         let mut value = serde_json::to_value(&left).expect("release JSON");
         value["runtime_version"] = serde_json::json!("9.9.9");
@@ -491,13 +525,19 @@ mod tests {
         let duplicate =
             ReleaseResourceVersion::new("project-a", "a1", hash('a')).expect("resource");
         assert_eq!(
-            RuntimeReleaseSet::new("1.0.0", "1.0.0", vec![duplicate.clone(), duplicate],)
-                .expect_err("duplicate resource")
-                .code(),
+            RuntimeReleaseSet::new(
+                "1.0.0",
+                hash('c'),
+                "1.0.0",
+                hash('d'),
+                vec![duplicate.clone(), duplicate],
+            )
+            .expect_err("duplicate resource")
+            .code(),
             "release_resources_not_canonical"
         );
         assert_eq!(
-            RuntimeReleaseSet::new("1.0.0", "1.0.0", Vec::new())
+            RuntimeReleaseSet::new("1.0.0", hash('c'), "1.0.0", hash('d'), Vec::new())
                 .expect_err("empty release")
                 .code(),
             "invalid_release_resource_count"

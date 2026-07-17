@@ -203,7 +203,9 @@ fn all_payload_drafts(mut input: impl FnMut() -> AuditInput) -> Vec<EventPayload
     .expect("state migration");
     let release = RuntimeReleaseSet::new(
         "1.0.0",
+        format!("sha256:{}", "d".repeat(64)),
         "1.0.0",
+        format!("sha256:{}", "e".repeat(64)),
         vec![
             ReleaseResourceVersion::new(
                 "project-neutral",
