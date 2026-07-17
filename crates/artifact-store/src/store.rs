@@ -88,6 +88,20 @@ impl StoredArtifact {
     }
 }
 
+/// Store-issued identity held before an artifact transaction is published.
+pub struct PreparedArtifact {
+    issued: StoreIssuedArtifact,
+    path: PathBuf,
+    context: ArtifactWriteContext,
+}
+
+impl PreparedArtifact {
+    /// Returns the reserved reference used to preflight dependent records.
+    pub const fn reference(&self) -> &ArtifactReference {
+        self.issued.reference()
+    }
+}
+
 pub struct ArtifactStore {
     root: PathBuf,
     artifacts: ArtifactStoreIssuer,
@@ -140,13 +154,19 @@ impl ArtifactStore {
         request: ArtifactWriteRequest<'_>,
         sink: &mut dyn ArtifactEventSink,
     ) -> ArtifactStoreResult<StoredArtifact> {
-        let _writer = self.writer.lock().map_err(|_| {
-            ArtifactStoreError::fatal(
-                "artifact_writer_poisoned",
-                "store_artifact",
-                "artifact writer lock is poisoned",
-            )
-        })?;
+        let bytes = request.bytes;
+        let prepared = self.prepare(request)?;
+        self.commit_prepared(prepared, bytes, sink)
+    }
+
+    /// Reserves store-issued artifact identity without publishing bytes or ledger events.
+    ///
+    /// Callers may use the projected reference to validate a larger transaction, then either
+    /// abandon the preparation or commit it exactly once through `commit_prepared`.
+    pub fn prepare(
+        &self,
+        request: ArtifactWriteRequest<'_>,
+    ) -> ArtifactStoreResult<PreparedArtifact> {
         let issued = self
             .artifacts
             .issue(
@@ -163,15 +183,37 @@ impl ArtifactStore {
                     error.to_string(),
                 )
             })?;
-        let final_path = safe_object_path(&self.root, issued.reference().object_key())?;
+        let path = safe_object_path(&self.root, issued.reference().object_key())?;
+        Ok(PreparedArtifact {
+            issued,
+            path,
+            context: request.context,
+        })
+    }
 
-        let result = self.write_and_verify(request.bytes, &final_path, issued.reference());
+    /// Publishes bytes and ledger events for one previously prepared artifact.
+    pub fn commit_prepared(
+        &self,
+        prepared: PreparedArtifact,
+        bytes: &[u8],
+        sink: &mut dyn ArtifactEventSink,
+    ) -> ArtifactStoreResult<StoredArtifact> {
+        let _writer = self.writer.lock().map_err(|_| {
+            ArtifactStoreError::fatal(
+                "artifact_writer_poisoned",
+                "store_artifact",
+                "artifact writer lock is poisoned",
+            )
+        })?;
+        verify_bytes(bytes, prepared.issued.reference())?;
+
+        let result = self.write_and_verify(bytes, &prepared.path, prepared.issued.reference());
         if let Err(error) = result {
             return Err(self.report_failure(
                 error,
                 sink,
-                &request.context,
-                &issued,
+                &prepared.context,
+                &prepared.issued,
                 ArtifactPayloadDraft::store_failed(
                     DiagnosticCode::ArtifactWriteFailed,
                     AuditInput::new(),
@@ -181,21 +223,21 @@ impl ArtifactStore {
 
         if let Err(error) = self.append_event(
             sink,
-            &request.context,
+            &prepared.context,
             EventSeverity::Info,
             ArtifactPayloadDraft::created(AuditInput::new()),
-            issued.clone(),
+            prepared.issued.clone(),
         ) {
-            return Err(cleanup_published(&final_path, error));
+            return Err(cleanup_published(&prepared.path, error));
         }
 
-        if let Err(error) = verify_file(&final_path, issued.reference()) {
-            let error = cleanup_published(&final_path, error);
+        if let Err(error) = verify_file(&prepared.path, prepared.issued.reference()) {
+            let error = cleanup_published(&prepared.path, error);
             return Err(self.report_failure(
                 error,
                 sink,
-                &request.context,
-                &issued,
+                &prepared.context,
+                &prepared.issued,
                 ArtifactPayloadDraft::verification_failed(
                     DiagnosticCode::ArtifactVerifyFailed,
                     AuditInput::new(),
@@ -205,17 +247,17 @@ impl ArtifactStore {
 
         if let Err(error) = self.append_event(
             sink,
-            &request.context,
+            &prepared.context,
             EventSeverity::Info,
             ArtifactPayloadDraft::verified(AuditInput::new()),
-            issued.clone(),
+            prepared.issued.clone(),
         ) {
-            return Err(cleanup_published(&final_path, error));
+            return Err(cleanup_published(&prepared.path, error));
         }
 
         Ok(StoredArtifact {
-            issued,
-            path: final_path,
+            issued: prepared.issued,
+            path: prepared.path,
         })
     }
 
@@ -523,6 +565,10 @@ fn verify_file(path: &Path, reference: &ArtifactReference) -> ArtifactStoreResul
             error.to_string(),
         )
     })?;
+    verify_bytes(&bytes, reference)
+}
+
+fn verify_bytes(bytes: &[u8], reference: &ArtifactReference) -> ArtifactStoreResult<()> {
     let byte_count = u64::try_from(bytes.len()).map_err(|_| {
         ArtifactStoreError::fatal(
             "artifact_verify_failed",
@@ -530,7 +576,7 @@ fn verify_file(path: &Path, reference: &ArtifactReference) -> ArtifactStoreResul
             "artifact byte count exceeds u64",
         )
     })?;
-    if byte_count != reference.byte_count() || canonical_sha256(&bytes) != reference.sha256() {
+    if byte_count != reference.byte_count() || canonical_sha256(bytes) != reference.sha256() {
         return Err(ArtifactStoreError::fatal(
             "artifact_hash_mismatch",
             "verify_artifact",
@@ -642,6 +688,46 @@ mod tests {
         ) -> Result<Sha256Fingerprint, SanitizationError> {
             Sha256Fingerprint::new(format!("sha256:{}", "a".repeat(64)), original)
         }
+    }
+
+    #[test]
+    fn prepared_artifact_has_no_side_effect_until_committed() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let store = ArtifactStore::open(temp.path()).expect("store");
+        let mut sink = RecordingSink::default();
+        let prepared = store
+            .prepare(request(b"prepared artifact bytes"))
+            .expect("prepared artifact");
+        let reference = prepared.reference().clone();
+
+        assert!(sink.event_types.is_empty());
+        assert!(all_files(temp.path()).is_empty());
+
+        let stored = store
+            .commit_prepared(prepared, b"prepared artifact bytes", &mut sink)
+            .expect("committed artifact");
+        assert_eq!(stored.reference(), &reference);
+        assert_eq!(
+            sink.event_types,
+            [EventType::ArtifactCreated, EventType::ArtifactVerified]
+        );
+    }
+
+    #[test]
+    fn prepared_artifact_rejects_different_bytes_before_publication() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let store = ArtifactStore::open(temp.path()).expect("store");
+        let mut sink = RecordingSink::default();
+        let prepared = store
+            .prepare(request(b"expected artifact bytes"))
+            .expect("prepared artifact");
+
+        let error = store
+            .commit_prepared(prepared, b"different artifact bytes", &mut sink)
+            .expect_err("mismatched prepared bytes");
+        assert_eq!(error.code(), "artifact_hash_mismatch");
+        assert!(sink.event_types.is_empty());
+        assert!(all_files(temp.path()).is_empty());
     }
 
     #[test]

@@ -25,6 +25,12 @@ const MAX_ACTIVE_FACTS: usize = 256;
 const FACT_TOMBSTONE_NAMESPACE: &str = "fact.tombstone.v1";
 const MAX_RECENT_FACT_TOMBSTONES: usize = 256;
 
+#[derive(Clone, Copy)]
+enum PolicyFactConflictDisposition {
+    FatalInvariant,
+    RejectCaller,
+}
+
 #[derive(Clone)]
 struct StoredFact {
     record: FactRecord,
@@ -634,6 +640,38 @@ impl InstanceFactStore {
         resources: &EvaluationResources,
         ledger_position: u64,
     ) -> RuntimeHostResult<EvaluationFacts> {
+        self.overlay_policy_facts_with_disposition(
+            facts,
+            resources,
+            ledger_position,
+            PolicyFactConflictDisposition::FatalInvariant,
+            "project_policy_facts",
+        )
+    }
+
+    pub(crate) fn overlay_external_policy_facts(
+        &self,
+        facts: &EvaluationFacts,
+        resources: &EvaluationResources,
+        ledger_position: u64,
+    ) -> RuntimeHostResult<EvaluationFacts> {
+        self.overlay_policy_facts_with_disposition(
+            facts,
+            resources,
+            ledger_position,
+            PolicyFactConflictDisposition::RejectCaller,
+            "project_policy_forward",
+        )
+    }
+
+    fn overlay_policy_facts_with_disposition(
+        &self,
+        facts: &EvaluationFacts,
+        resources: &EvaluationResources,
+        ledger_position: u64,
+        conflict_disposition: PolicyFactConflictDisposition,
+        operation: &'static str,
+    ) -> RuntimeHostResult<EvaluationFacts> {
         let mut projected = facts.clone();
         let contexts = projected
             .instances
@@ -661,10 +699,16 @@ impl InstanceFactStore {
             let scope = policy_scope(&identity.0);
             let fact_key = identity.1.clone();
             if !seen.insert(policy_fact_identity(&scope, &fact_key)) {
-                return Err(fact_fatal(
-                    "policy_fact_authority_conflict",
-                    "project_policy_facts",
-                ));
+                return Err(match conflict_disposition {
+                    PolicyFactConflictDisposition::FatalInvariant => {
+                        fact_fatal("policy_fact_authority_conflict", operation)
+                    }
+                    PolicyFactConflictDisposition::RejectCaller => RuntimeHostError::request(
+                        "policy_fact_authority_conflict",
+                        operation,
+                        RuntimeErrorCode::InvalidRequest,
+                    ),
+                });
             }
             let FactContent::Inline { value } = &stored.record.content else {
                 continue;
