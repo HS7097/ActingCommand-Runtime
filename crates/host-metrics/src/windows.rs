@@ -29,8 +29,12 @@ use windows_sys::Win32::System::Performance::{
 use windows_sys::Win32::System::ProcessStatus::{K32GetProcessMemoryInfo, PROCESS_MEMORY_COUNTERS};
 use windows_sys::Win32::System::SystemInformation::{GlobalMemoryStatusEx, MEMORYSTATUSEX};
 use windows_sys::Win32::System::Threading::{
-    GetProcessIoCounters, GetProcessTimes, GetSystemTimes, IO_COUNTERS, OpenProcess,
-    PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_VM_READ,
+    GetProcessInformation, GetProcessIoCounters, GetProcessTimes, GetSystemTimes, IO_COUNTERS,
+    OpenProcess, PROCESS_PROTECTION_LEVEL_INFORMATION, PROCESS_QUERY_LIMITED_INFORMATION,
+    PROCESS_VM_READ, PROTECTION_LEVEL_ANTIMALWARE_LIGHT, PROTECTION_LEVEL_AUTHENTICODE,
+    PROTECTION_LEVEL_CODEGEN_LIGHT, PROTECTION_LEVEL_LSA_LIGHT, PROTECTION_LEVEL_PPL_APP,
+    PROTECTION_LEVEL_WINDOWS, PROTECTION_LEVEL_WINDOWS_LIGHT, PROTECTION_LEVEL_WINTCB,
+    PROTECTION_LEVEL_WINTCB_LIGHT, ProcessProtectionLevelInfo,
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     GetForegroundWindow, GetWindowRect, GetWindowThreadProcessId,
@@ -63,14 +67,16 @@ struct ProcessRecord {
 struct ProcessScan {
     records: Vec<ProcessRecord>,
     enumerated_processes: usize,
-    access_denied_processes: usize,
+    audited_protected_processes: usize,
+    unconfirmed_access_denied_processes: usize,
     inaccessible_processes: usize,
 }
 
 enum ProcessRecordOutcome {
     Skipped,
     Sampled(ProcessRecord),
-    AccessDenied,
+    AuditedProtected,
+    UnconfirmedAccessDenied,
     Inaccessible,
 }
 
@@ -445,7 +451,8 @@ where
     let mut scan = ProcessScan {
         records: Vec::new(),
         enumerated_processes: 0,
-        access_denied_processes: 0,
+        audited_protected_processes: 0,
+        unconfirmed_access_denied_processes: 0,
         inaccessible_processes: 0,
     };
     loop {
@@ -455,9 +462,15 @@ where
                 scan.enumerated_processes = checked_process_count(scan.enumerated_processes)?;
                 scan.records.push(record);
             }
-            ProcessRecordOutcome::AccessDenied => {
+            ProcessRecordOutcome::AuditedProtected => {
                 scan.enumerated_processes = checked_process_count(scan.enumerated_processes)?;
-                scan.access_denied_processes = checked_process_count(scan.access_denied_processes)?;
+                scan.audited_protected_processes =
+                    checked_process_count(scan.audited_protected_processes)?;
+            }
+            ProcessRecordOutcome::UnconfirmedAccessDenied => {
+                scan.enumerated_processes = checked_process_count(scan.enumerated_processes)?;
+                scan.unconfirmed_access_denied_processes =
+                    checked_process_count(scan.unconfirmed_access_denied_processes)?;
             }
             ProcessRecordOutcome::Inaccessible => {
                 scan.enumerated_processes = checked_process_count(scan.enumerated_processes)?;
@@ -484,7 +497,7 @@ unsafe fn process_record(
     let handle =
         unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_VM_READ, 0, pid) };
     if handle.is_null() {
-        return process_access_failure(unsafe { GetLastError() });
+        return process_access_failure(entry, unsafe { GetLastError() });
     }
     let _handle = OwnedHandle(handle);
     let mut creation: FILETIME = unsafe { zeroed() };
@@ -498,13 +511,13 @@ unsafe fn process_record(
     memory.cb = memory_size;
     let mut io: IO_COUNTERS = unsafe { zeroed() };
     if unsafe { GetProcessTimes(handle, &mut creation, &mut exit, &mut kernel, &mut user) } == 0 {
-        return process_access_failure(unsafe { GetLastError() });
+        return process_access_failure(entry, unsafe { GetLastError() });
     }
     if unsafe { K32GetProcessMemoryInfo(handle, &mut memory, memory.cb) } == 0 {
-        return process_access_failure(unsafe { GetLastError() });
+        return process_access_failure(entry, unsafe { GetLastError() });
     }
     if unsafe { GetProcessIoCounters(handle, &mut io) } == 0 {
-        return process_access_failure(unsafe { GetLastError() });
+        return process_access_failure(entry, unsafe { GetLastError() });
     }
     let counters = ProcessCounters {
         cpu_100ns: filetime(kernel).saturating_add(filetime(user)),
@@ -556,12 +569,63 @@ unsafe fn process_record(
     })
 }
 
-fn process_access_failure(error: u32) -> ProcessRecordOutcome {
-    if error == ERROR_ACCESS_DENIED {
-        ProcessRecordOutcome::AccessDenied
-    } else {
-        ProcessRecordOutcome::Inaccessible
+fn process_access_failure(entry: &PROCESSENTRY32W, error: u32) -> ProcessRecordOutcome {
+    if error != ERROR_ACCESS_DENIED {
+        return ProcessRecordOutcome::Inaccessible;
     }
+    classify_process_access_failure(error, audited_protected_process(entry))
+}
+
+fn classify_process_access_failure(error: u32, audited_protected: bool) -> ProcessRecordOutcome {
+    match (error, audited_protected) {
+        (ERROR_ACCESS_DENIED, true) => ProcessRecordOutcome::AuditedProtected,
+        (ERROR_ACCESS_DENIED, false) => ProcessRecordOutcome::UnconfirmedAccessDenied,
+        _ => ProcessRecordOutcome::Inaccessible,
+    }
+}
+
+fn audited_protected_process(entry: &PROCESSENTRY32W) -> bool {
+    if audited_system_process(entry) {
+        return true;
+    }
+    // A denied process is excluded only when a limited query independently confirms PPL state.
+    let handle = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, entry.th32ProcessID) };
+    if handle.is_null() {
+        return false;
+    }
+    let handle = OwnedHandle(handle);
+    let mut protection = PROCESS_PROTECTION_LEVEL_INFORMATION::default();
+    let Ok(size) = u32::try_from(size_of::<PROCESS_PROTECTION_LEVEL_INFORMATION>()) else {
+        return false;
+    };
+    unsafe {
+        GetProcessInformation(
+            handle.0,
+            ProcessProtectionLevelInfo,
+            (&raw mut protection).cast(),
+            size,
+        ) != 0
+            && confirmed_protection_level(protection.ProtectionLevel)
+    }
+}
+
+fn audited_system_process(entry: &PROCESSENTRY32W) -> bool {
+    entry.th32ProcessID == 4 && process_name(&entry.szExeFile).eq_ignore_ascii_case("System")
+}
+
+fn confirmed_protection_level(level: u32) -> bool {
+    matches!(
+        level,
+        PROTECTION_LEVEL_WINTCB_LIGHT
+            | PROTECTION_LEVEL_WINDOWS
+            | PROTECTION_LEVEL_WINDOWS_LIGHT
+            | PROTECTION_LEVEL_ANTIMALWARE_LIGHT
+            | PROTECTION_LEVEL_LSA_LIGHT
+            | PROTECTION_LEVEL_WINTCB
+            | PROTECTION_LEVEL_CODEGEN_LIGHT
+            | PROTECTION_LEVEL_AUTHENTICODE
+            | PROTECTION_LEVEL_PPL_APP
+    )
 }
 
 fn checked_process_count(value: usize) -> Result<usize, &'static str> {
@@ -573,6 +637,8 @@ fn checked_process_count(value: usize) -> Result<usize, &'static str> {
 fn process_coverage(scan: &ProcessScan) -> Result<ProcessMetricCoverage, &'static str> {
     let sampled = scan.records.len();
     let readable_denominator = sampled
+        .checked_add(scan.unconfirmed_access_denied_processes)
+        .ok_or("performance_process_count_overflow")?
         .checked_add(scan.inaccessible_processes)
         .ok_or("performance_process_count_overflow")?;
     let sampled_processes = process_count_u32(sampled)?;
@@ -585,7 +651,10 @@ fn process_coverage(scan: &ProcessScan) -> Result<ProcessMetricCoverage, &'stati
     Ok(ProcessMetricCoverage {
         enumerated_processes: process_count_u32(scan.enumerated_processes)?,
         sampled_processes,
-        access_denied_processes_excluded: process_count_u32(scan.access_denied_processes)?,
+        audited_protected_processes_excluded: process_count_u32(scan.audited_protected_processes)?,
+        unconfirmed_access_denied_processes: process_count_u32(
+            scan.unconfirmed_access_denied_processes,
+        )?,
         unexpectedly_inaccessible_processes: process_count_u32(scan.inaccessible_processes)?,
         readable_basis_points,
     })
@@ -599,9 +668,10 @@ fn mark_partial_process_metrics(
     unavailable: &mut BTreeSet<HostMetric>,
     coverage: ProcessMetricCoverage,
 ) {
-    // Access-denied Windows system/PPL processes are explicitly excluded from the denominator;
-    // unexpected failures still make the sample partial below the declared coverage threshold.
-    if coverage.sampled_processes == 0
+    // Only independently confirmed Windows system/PPL processes leave the denominator. Ordinary
+    // access denials remain unknown and make process-derived pressure unavailable.
+    if coverage.unconfirmed_access_denied_processes > 0
+        || coverage.sampled_processes == 0
         || coverage.readable_basis_points < MIN_PROCESS_READABLE_BASIS_POINTS
     {
         unavailable.extend([
@@ -817,15 +887,20 @@ mod tests {
 
     fn coverage_fixture(
         sampled: usize,
-        access_denied: usize,
+        audited_protected: usize,
+        unconfirmed_access_denied: usize,
         inaccessible: usize,
     ) -> ProcessMetricCoverage {
         process_coverage(&ProcessScan {
             records: (1..=sampled)
                 .map(|pid| process_record_fixture(u32::try_from(pid).expect("pid")))
                 .collect(),
-            enumerated_processes: sampled + access_denied + inaccessible,
-            access_denied_processes: access_denied,
+            enumerated_processes: sampled
+                + audited_protected
+                + unconfirmed_access_denied
+                + inaccessible,
+            audited_protected_processes: audited_protected,
+            unconfirmed_access_denied_processes: unconfirmed_access_denied,
             inaccessible_processes: inaccessible,
         })
         .expect("coverage")
@@ -850,10 +925,11 @@ mod tests {
     }
 
     #[test]
-    fn access_denied_processes_are_audited_but_excluded_from_coverage() {
-        let coverage = coverage_fixture(1, 1, 0);
+    fn audited_protected_processes_are_excluded_from_coverage() {
+        let coverage = coverage_fixture(1, 1, 0, 0);
         assert_eq!(coverage.enumerated_processes, 2);
-        assert_eq!(coverage.access_denied_processes_excluded, 1);
+        assert_eq!(coverage.audited_protected_processes_excluded, 1);
+        assert_eq!(coverage.unconfirmed_access_denied_processes, 0);
         assert_eq!(coverage.readable_basis_points, 10_000);
 
         let mut unavailable = BTreeSet::new();
@@ -862,9 +938,65 @@ mod tests {
     }
 
     #[test]
+    fn ordinary_access_denials_remain_unknown_and_hide_process_pressure() {
+        assert!(matches!(
+            classify_process_access_failure(ERROR_ACCESS_DENIED, false),
+            ProcessRecordOutcome::UnconfirmedAccessDenied
+        ));
+        let coverage = coverage_fixture(1, 0, 99, 0);
+        assert_eq!(coverage.enumerated_processes, 100);
+        assert_eq!(coverage.audited_protected_processes_excluded, 0);
+        assert_eq!(coverage.unconfirmed_access_denied_processes, 99);
+        assert_eq!(coverage.readable_basis_points, 100);
+
+        let mut unavailable = BTreeSet::new();
+        mark_partial_process_metrics(&mut unavailable, coverage);
+        assert_eq!(
+            unavailable,
+            BTreeSet::from([
+                HostMetric::ProcessCpu,
+                HostMetric::ProcessRam,
+                HostMetric::ProcessIo,
+            ])
+        );
+
+        let mut threshold_boundary = BTreeSet::new();
+        let boundary_coverage = coverage_fixture(99, 0, 1, 0);
+        assert_eq!(boundary_coverage.readable_basis_points, 9_900);
+        mark_partial_process_metrics(&mut threshold_boundary, boundary_coverage);
+        assert!(threshold_boundary.contains(&HostMetric::ProcessCpu));
+        assert!(threshold_boundary.contains(&HostMetric::ProcessRam));
+        assert!(threshold_boundary.contains(&HostMetric::ProcessIo));
+    }
+
+    #[test]
+    fn only_access_denied_with_audited_protection_is_excluded() {
+        assert!(matches!(
+            classify_process_access_failure(ERROR_ACCESS_DENIED, true),
+            ProcessRecordOutcome::AuditedProtected
+        ));
+        assert!(matches!(
+            classify_process_access_failure(ERROR_NO_MORE_FILES, true),
+            ProcessRecordOutcome::Inaccessible
+        ));
+        assert!(confirmed_protection_level(PROTECTION_LEVEL_WINDOWS));
+        assert!(!confirmed_protection_level(u32::MAX));
+
+        // SAFETY: the zeroed fixture is initialized before the pure identity check.
+        let mut system: PROCESSENTRY32W = unsafe { zeroed() };
+        system.th32ProcessID = 4;
+        for (slot, value) in system.szExeFile.iter_mut().zip("System".encode_utf16()) {
+            *slot = value;
+        }
+        assert!(audited_system_process(&system));
+        system.th32ProcessID = 40;
+        assert!(!audited_system_process(&system));
+    }
+
+    #[test]
     fn insufficient_readable_coverage_makes_process_metrics_partial() {
         let mut unavailable = BTreeSet::new();
-        mark_partial_process_metrics(&mut unavailable, coverage_fixture(98, 0, 2));
+        mark_partial_process_metrics(&mut unavailable, coverage_fixture(98, 0, 0, 2));
         assert_eq!(
             unavailable,
             BTreeSet::from([
@@ -875,7 +1007,7 @@ mod tests {
         );
 
         let mut complete = BTreeSet::new();
-        mark_partial_process_metrics(&mut complete, coverage_fixture(99, 0, 1));
+        mark_partial_process_metrics(&mut complete, coverage_fixture(99, 0, 0, 1));
         assert!(complete.is_empty());
     }
 
@@ -900,7 +1032,8 @@ mod tests {
         assert_eq!(
             coverage.enumerated_processes,
             coverage.sampled_processes
-                + coverage.access_denied_processes_excluded
+                + coverage.audited_protected_processes_excluded
+                + coverage.unconfirmed_access_denied_processes
                 + coverage.unexpectedly_inaccessible_processes
         );
     }

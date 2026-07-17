@@ -48,7 +48,8 @@ pub struct ForegroundSample {
 pub struct ProcessMetricCoverage {
     pub enumerated_processes: u32,
     pub sampled_processes: u32,
-    pub access_denied_processes_excluded: u32,
+    pub audited_protected_processes_excluded: u32,
+    pub unconfirmed_access_denied_processes: u32,
     pub unexpectedly_inaccessible_processes: u32,
     pub readable_basis_points: u16,
 }

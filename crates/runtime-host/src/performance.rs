@@ -1955,7 +1955,8 @@ mod tests {
             process_coverage: actingcommand_host_metrics::ProcessMetricCoverage {
                 enumerated_processes: 1,
                 sampled_processes: 1,
-                access_denied_processes_excluded: 0,
+                audited_protected_processes_excluded: 0,
+                unconfirmed_access_denied_processes: 0,
                 unexpectedly_inaccessible_processes: 0,
                 readable_basis_points: 10_000,
             },
@@ -2094,6 +2095,39 @@ mod tests {
                 .expect("consumed observation"),
             None
         );
+    }
+
+    #[test]
+    fn incomplete_process_coverage_propagates_unknown_third_party_pressure() {
+        let mut denied_heavy = sample(1_000, 4_000);
+        denied_heavy.process_coverage = actingcommand_host_metrics::ProcessMetricCoverage {
+            enumerated_processes: 100,
+            sampled_processes: 1,
+            audited_protected_processes_excluded: 0,
+            unconfirmed_access_denied_processes: 99,
+            unexpectedly_inaccessible_processes: 0,
+            readable_basis_points: 100,
+        };
+        denied_heavy.unavailable_metrics.extend([
+            HostMetric::ProcessCpu,
+            HostMetric::ProcessRam,
+            HostMetric::ProcessIo,
+        ]);
+        let mut monitor = monitor(vec![Ok(denied_heavy)]);
+        monitor.tick(1_000).expect("host sample");
+        monitor
+            .record_pipeline_signal(
+                PipelinePerformanceSignal::new("fixture-instance", 1_500, 2_000)
+                    .expect("pipeline signal"),
+            )
+            .expect("pipeline sample");
+
+        let observation = monitor
+            .control_observation(1_500)
+            .expect("observation")
+            .expect("responsiveness observation");
+        assert_eq!(observation.host_responsiveness_basis_points, Some(5_000));
+        assert_eq!(observation.third_party_pressure_basis_points, None);
     }
 
     #[test]
