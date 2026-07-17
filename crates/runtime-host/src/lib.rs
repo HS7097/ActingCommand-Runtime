@@ -29,6 +29,7 @@ mod strategy;
 mod time;
 
 pub use strategy::StrategicPlanPreparation;
+pub use time::{RuntimeClock, RuntimeClockSample, SystemRuntimeClock};
 
 pub use agent_dispatcher::AgentDispatcherConfig;
 pub use emulator_control::admit_emulator_capabilities;

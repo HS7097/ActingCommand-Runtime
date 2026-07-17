@@ -52,7 +52,7 @@ use std::io::{Cursor, Write};
 use std::net::TcpStream;
 use std::path::Path;
 use std::process::{Command, Stdio};
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Barrier};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -60,6 +60,42 @@ use tempfile::TempDir;
 use zip::{ZipWriter, write::FileOptions};
 
 const TEST_GOVERNANCE_CAPABILITY: &str = "runtime-host-governance-test-capability";
+
+struct ManualRuntimeClock {
+    unix_ms: AtomicU64,
+    monotonic_ms: AtomicU64,
+}
+
+impl ManualRuntimeClock {
+    fn new(unix_ms: u64, monotonic_ms: u64) -> Self {
+        Self {
+            unix_ms: AtomicU64::new(unix_ms),
+            monotonic_ms: AtomicU64::new(monotonic_ms),
+        }
+    }
+
+    fn advance(&self, duration_ms: u64) {
+        self.unix_ms.fetch_add(duration_ms, Ordering::SeqCst);
+        self.monotonic_ms.fetch_add(duration_ms, Ordering::SeqCst);
+    }
+
+    fn set_unix_ms(&self, unix_ms: u64) {
+        self.unix_ms.store(unix_ms, Ordering::SeqCst);
+    }
+
+    fn set_monotonic_ms(&self, monotonic_ms: u64) {
+        self.monotonic_ms.store(monotonic_ms, Ordering::SeqCst);
+    }
+}
+
+impl RuntimeClock for ManualRuntimeClock {
+    fn sample(&self) -> RuntimeHostResult<RuntimeClockSample> {
+        Ok(RuntimeClockSample {
+            unix_ms: self.unix_ms.load(Ordering::SeqCst),
+            monotonic_ms: self.monotonic_ms.load(Ordering::SeqCst),
+        })
+    }
+}
 
 #[derive(Default)]
 struct FakeState {
@@ -1290,8 +1326,9 @@ fn predictive_maintenance_publishes_one_evidence_pinned_recheck_signal() {
     for (index, (&duration_ms, &confidence_milli)) in
         durations.iter().zip(confidences.iter()).enumerate()
     {
+        let clock = Arc::new(ManualRuntimeClock::new(next_evaluation_at, 0));
         let host = RuntimeHost::start(
-            config(&root),
+            config(&root).with_runtime_clock(clock.clone()),
             Arc::new(FakeProvider::one(
                 POLICY_INSTANCE_ALIAS,
                 registered_id,
@@ -1350,12 +1387,9 @@ fn predictive_maintenance_publishes_one_evidence_pinned_recheck_signal() {
             panic!("expected maintenance dispatch admission")
         };
         last_observed_at = next_evaluation_at + duration_ms;
-        host.record_policy_dispatch_outcome(
-            &intent.decision_id,
-            last_observed_at,
-            &PolicyExecutionInput::Succeeded,
-        )
-        .expect("maintenance execution outcome");
+        clock.advance(duration_ms);
+        host.record_policy_dispatch_outcome(&intent.decision_id, &PolicyExecutionInput::Succeeded)
+            .expect("maintenance execution outcome");
         host.publish_fact(FactRecord {
             scope: fact_scope.clone(),
             key: "resource.primary".to_owned(),
@@ -5327,8 +5361,12 @@ fn policy_budget_recovery_keeps_the_window_count_across_runtime_restarts() {
     let registered_id = instance_id();
 
     for index in 0_u64..4 {
+        let clock = Arc::new(ManualRuntimeClock::new(
+            POLICY_NOW_UNIX_MS + index * 600_000,
+            0,
+        ));
         let host = RuntimeHost::start(
-            config(&root),
+            config(&root).with_runtime_clock(clock.clone()),
             Arc::new(FakeProvider::one(
                 POLICY_INSTANCE_ALIAS,
                 registered_id,
@@ -5356,12 +5394,9 @@ fn policy_budget_recovery_keeps_the_window_count_across_runtime_restarts() {
             panic!("expected budget admission")
         };
         assert_eq!(admission.budget.task_window_used, index as u32 + 1);
-        host.record_policy_dispatch_outcome(
-            &intent.decision_id,
-            admission.activity.admitted_at_unix_ms + 75_000,
-            &PolicyExecutionInput::Succeeded,
-        )
-        .expect("record bounded execution");
+        clock.advance(75_000);
+        host.record_policy_dispatch_outcome(&intent.decision_id, &PolicyExecutionInput::Succeeded)
+            .expect("record bounded execution");
         host.close().expect("close budget runtime host");
     }
 
@@ -5388,6 +5423,89 @@ fn policy_budget_recovery_keeps_the_window_count_across_runtime_restarts() {
 }
 
 #[test]
+fn policy_completion_charges_runtime_owned_monotonic_elapsed_time() {
+    for (case, completion_unix_ms, elapsed_ms) in [
+        ("zero", POLICY_NOW_UNIX_MS, 0),
+        ("wall-clock-rollback", 1, 125),
+        ("wall-clock-future", u64::MAX, 250),
+    ] {
+        let root = TempDir::new().expect("tempdir");
+        let clock = Arc::new(ManualRuntimeClock::new(POLICY_NOW_UNIX_MS, 1_000));
+        let host = RuntimeHost::start(
+            config(&root).with_runtime_clock(clock.clone()),
+            Arc::new(FakeProvider::one(
+                POLICY_INSTANCE_ALIAS,
+                instance_id(),
+                Arc::new(FakeState::default()),
+            )),
+        )
+        .unwrap_or_else(|error| panic!("{case}: start runtime host: {error}"));
+        host.activate_policy_catalog(&policy_sources(1))
+            .unwrap_or_else(|error| panic!("{case}: activate policy catalog: {error}"));
+        let (_, intent, reasons) = evaluated_policy_dispatch(&host, PolicyTrigger::FactsChanged);
+        record_policy_approval(&host, &intent);
+        let admission = host
+            .admit_policy_dispatch(&intent, &reasons, &policy_context(&host, &intent))
+            .unwrap_or_else(|error| panic!("{case}: policy admission: {error}"));
+        let PolicyDispatchAdmission::Granted { admission, .. } = admission else {
+            panic!("{case}: expected granted policy admission")
+        };
+
+        clock.set_unix_ms(completion_unix_ms);
+        clock.set_monotonic_ms(1_000 + elapsed_ms);
+        let outcome = host
+            .record_policy_dispatch_outcome(&intent.decision_id, &PolicyExecutionInput::Succeeded)
+            .unwrap_or_else(|error| panic!("{case}: record policy outcome: {error}"));
+        assert_eq!(
+            outcome.observed_at_unix_ms,
+            admission.activity.admitted_at_unix_ms + elapsed_ms,
+            "{case}: wall-clock value must not control the authoritative completion time"
+        );
+        assert_eq!(
+            outcome.outcome,
+            PolicyExecutionOutcome::Succeeded {
+                runtime_ms: elapsed_ms
+            },
+            "{case}: budget charge must use Runtime monotonic elapsed time"
+        );
+        host.close()
+            .unwrap_or_else(|error| panic!("{case}: close runtime host: {error}"));
+    }
+}
+
+#[test]
+fn policy_completion_rejects_runtime_monotonic_clock_regression() {
+    let root = TempDir::new().expect("tempdir");
+    let clock = Arc::new(ManualRuntimeClock::new(POLICY_NOW_UNIX_MS, 1_000));
+    let host = RuntimeHost::start(
+        config(&root).with_runtime_clock(clock.clone()),
+        Arc::new(FakeProvider::one(
+            POLICY_INSTANCE_ALIAS,
+            instance_id(),
+            Arc::new(FakeState::default()),
+        )),
+    )
+    .expect("runtime host");
+    host.activate_policy_catalog(&policy_sources(1))
+        .expect("activate policy catalog");
+    let (_, intent, reasons) = evaluated_policy_dispatch(&host, PolicyTrigger::FactsChanged);
+    record_policy_approval(&host, &intent);
+    host.admit_policy_dispatch(&intent, &reasons, &policy_context(&host, &intent))
+        .expect("policy admission");
+
+    clock.set_monotonic_ms(999);
+    let error = host
+        .record_policy_dispatch_outcome(&intent.decision_id, &PolicyExecutionInput::Succeeded)
+        .expect_err("monotonic regression must fail loudly");
+    assert!(error.is_fatal());
+    assert_eq!(error.code(), "monotonic_clock_regressed");
+    let close_error = host
+        .close()
+        .expect_err("fatal clock regression must poison the runtime");
+    assert_eq!(close_error.code(), "monotonic_clock_regressed");
+}
+
+#[test]
 fn accelerated_48h_replay_consumes_runtime_owned_counts_and_runtime_budget() {
     const HOUR_MS: u64 = 3_600_000;
     let root = TempDir::new().expect("tempdir");
@@ -5396,8 +5514,10 @@ fn accelerated_48h_replay_consumes_runtime_owned_counts_and_runtime_budget() {
 
     for day in 0_u64..2 {
         for iteration in 0_u64..4 {
+            let unix_ms = start_unix_ms + (day * 24 + iteration * 6) * HOUR_MS;
+            let clock = Arc::new(ManualRuntimeClock::new(unix_ms, 0));
             let host = RuntimeHost::start(
-                config(&root),
+                config(&root).with_runtime_clock(clock.clone()),
                 Arc::new(FakeProvider::one(
                     POLICY_INSTANCE_ALIAS,
                     registered_id,
@@ -5409,7 +5529,6 @@ fn accelerated_48h_replay_consumes_runtime_owned_counts_and_runtime_budget() {
                 host.activate_policy_catalog(&budget_policy_sources(1))
                     .expect("activate accelerated budget catalog");
             }
-            let unix_ms = start_unix_ms + (day * 24 + iteration * 6) * HOUR_MS;
             let (_, intent, reasons) = evaluated_policy_dispatch_at(
                 &host,
                 if day == 0 && iteration == 0 {
@@ -5435,9 +5554,9 @@ fn accelerated_48h_replay_consumes_runtime_owned_counts_and_runtime_budget() {
                 admission.budget.task_runtime_reserved_ms,
                 iteration * 75_000 + 60_000
             );
+            clock.advance(75_000);
             host.record_policy_dispatch_outcome(
                 &intent.decision_id,
-                admission.activity.admitted_at_unix_ms + 75_000,
                 &PolicyExecutionInput::Succeeded,
             )
             .expect("accelerated bounded execution");
@@ -6160,7 +6279,16 @@ fn measured_contention_gates_deadline_dispatch_and_records_the_conflict() {
 #[test]
 fn policy_failure_activity_and_planning_facts_recover_without_duplicate_side_effects() {
     let root = TempDir::new().expect("tempdir");
-    let host = host_with_state(&root, POLICY_INSTANCE_ALIAS, Arc::new(FakeState::default()));
+    let clock = Arc::new(ManualRuntimeClock::new(POLICY_NOW_UNIX_MS, 0));
+    let host = RuntimeHost::start(
+        config(&root).with_runtime_clock(clock.clone()),
+        Arc::new(FakeProvider::one(
+            POLICY_INSTANCE_ALIAS,
+            instance_id(),
+            Arc::new(FakeState::default()),
+        )),
+    )
+    .expect("runtime host");
     host.activate_policy_catalog(&policy_sources(1))
         .expect("activate policy catalog");
     let (_, intent, reasons) = evaluated_policy_dispatch(&host, PolicyTrigger::FactsChanged);
@@ -6222,12 +6350,9 @@ fn policy_failure_activity_and_planning_facts_recover_without_duplicate_side_eff
         error_code: "transient.capture".to_owned(),
         class: PolicyFailureClass::Recoverable,
     };
+    clock.advance(100);
     let outcome = host
-        .record_policy_dispatch_outcome(
-            &intent.decision_id,
-            POLICY_NOW_UNIX_MS + 100,
-            &failure_input,
-        )
+        .record_policy_dispatch_outcome(&intent.decision_id, &failure_input)
         .expect("policy failure outcome");
     let PolicyExecutionOutcome::Failed { failure } = &outcome.outcome else {
         panic!("expected classified failure")
@@ -6289,11 +6414,7 @@ fn policy_failure_activity_and_planning_facts_recover_without_duplicate_side_eff
 
     let reopened = host_with_state(&root, POLICY_INSTANCE_ALIAS, Arc::new(FakeState::default()));
     let replay = reopened
-        .record_policy_dispatch_outcome(
-            &intent.decision_id,
-            POLICY_NOW_UNIX_MS + 100,
-            &failure_input,
-        )
+        .record_policy_dispatch_outcome(&intent.decision_id, &failure_input)
         .expect("replay recovered policy outcome");
     assert_eq!(replay, outcome);
     for signal in signals {
@@ -6324,8 +6445,11 @@ fn policy_failure_activity_and_planning_facts_recover_without_duplicate_side_eff
 #[test]
 fn performance_stutter_is_ledger_visible_and_enriches_policy_failure() {
     let root = TempDir::new().expect("tempdir");
+    let clock = Arc::new(ManualRuntimeClock::new(POLICY_NOW_UNIX_MS, 0));
     let host = RuntimeHost::start(
-        config(&root).with_performance_monitor(PerformanceMonitorConfig::default()),
+        config(&root)
+            .with_runtime_clock(clock.clone())
+            .with_performance_monitor(PerformanceMonitorConfig::default()),
         Arc::new(FakeProvider::one(
             POLICY_INSTANCE_ALIAS,
             instance_id(),
@@ -6347,10 +6471,10 @@ fn performance_stutter_is_ledger_visible_and_enriches_policy_failure() {
     )
     .expect("record pipeline performance");
 
+    clock.advance(100);
     let outcome = host
         .record_policy_dispatch_outcome(
             &intent.decision_id,
-            POLICY_NOW_UNIX_MS + 100,
             &PolicyExecutionInput::Failed {
                 error_code: "transient.capture".to_owned(),
                 class: PolicyFailureClass::Recoverable,
