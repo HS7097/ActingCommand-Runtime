@@ -566,6 +566,23 @@ impl RuntimeHost {
             .activate_policy_catalog(sources)
     }
 
+    #[cfg(test)]
+    pub(crate) fn activate_policy_catalog_with_expected_for_test(
+        &self,
+        sources: &CatalogSources,
+        expected: CatalogGeneration,
+    ) -> RuntimeHostResult<CatalogGeneration> {
+        let shared = self.shared_ref("activate_policy_catalog_with_expected_for_test")?;
+        let catalog = lock(&shared.policy, "stage_policy_catalog_for_cas_test")?.stage(sources)?;
+        shared.switch_policy_catalog(
+            catalog,
+            Some(expected),
+            EventAction::CatalogActivate,
+            CatalogTransitionTarget::Activated,
+            None,
+        )
+    }
+
     pub fn rollback_policy_catalog(
         &self,
         catalog_hash: &str,
@@ -1953,8 +1970,12 @@ impl HostShared {
                     effect: DefiniteEffectDisposition::Performed,
                 },
                 Err(error) => CriticalActionReport::Failed {
+                    effect: if error.is_fatal() {
+                        EffectDisposition::Indeterminate
+                    } else {
+                        EffectDisposition::NotPerformed
+                    },
                     error,
-                    effect: EffectDisposition::Indeterminate,
                 },
             },
             |_, _| {
@@ -1997,7 +2018,9 @@ impl HostShared {
         match result {
             Ok(receipt) => Ok(receipt.into_value()),
             Err(CriticalExecutionError::Action { error, .. }) => {
-                self.fatal.mark(error.clone())?;
+                if error.is_fatal() {
+                    self.fatal.mark(error.clone())?;
+                }
                 Err(error)
             }
             Err(error) => {
@@ -2057,6 +2080,7 @@ impl HostShared {
             time,
             seed,
             trigger,
+            observed_monotonic_ms,
         )?;
         lock(
             &self.trusted_policy_dispatches,

@@ -383,6 +383,7 @@ pub(crate) struct PerformanceMonitor {
     sampling_stopped: bool,
     pipeline_stopped: bool,
     last_summary_unix_ms: Option<u64>,
+    last_control_sample_unix_ms: Option<u64>,
 }
 
 impl PerformanceMonitor {
@@ -406,6 +407,7 @@ impl PerformanceMonitor {
             sampling_stopped: false,
             pipeline_stopped: false,
             last_summary_unix_ms: None,
+            last_control_sample_unix_ms: None,
         }
     }
 
@@ -441,6 +443,7 @@ impl PerformanceMonitor {
             sampling_stopped: false,
             pipeline_stopped: false,
             last_summary_unix_ms: None,
+            last_control_sample_unix_ms: None,
         })
     }
 
@@ -854,7 +857,7 @@ impl PerformanceMonitor {
     }
 
     pub(crate) fn control_observation(
-        &self,
+        &mut self,
         observed_at_unix_ms: u64,
     ) -> RuntimeHostResult<Option<PerformanceControlObservation>> {
         if observed_at_unix_ms == 0 {
@@ -863,8 +866,56 @@ impl PerformanceMonitor {
                 "read_performance_control_observation",
             ));
         }
-        let latest_system = self.system_samples.back();
-        let pipeline = self.pipeline_samples.iter().rev().take(64);
+        let config = self.config.as_ref().ok_or_else(|| {
+            performance_fatal(
+                "performance_monitor_disabled",
+                "read_performance_control_observation",
+            )
+        })?;
+        let freshness_ms = duration_ms(config.sample_interval)?
+            .checked_mul(2)
+            .ok_or_else(|| {
+                performance_fatal(
+                    "performance_control_duration_overflow",
+                    "read_performance_control_observation",
+                )
+            })?;
+        if self
+            .system_samples
+            .back()
+            .is_some_and(|sample| sample.observed_at_unix_ms > observed_at_unix_ms)
+            || self
+                .pipeline_samples
+                .back()
+                .is_some_and(|sample| sample.observed_at_unix_ms > observed_at_unix_ms)
+        {
+            return Err(performance_fatal(
+                "performance_control_sample_time_invalid",
+                "read_performance_control_observation",
+            ));
+        }
+        let last_sample = self.last_control_sample_unix_ms;
+        let latest_system = self.system_samples.back().filter(|sample| {
+            is_fresh_control_sample(
+                sample.observed_at_unix_ms,
+                observed_at_unix_ms,
+                last_sample,
+                freshness_ms,
+            )
+        });
+        let pipeline = self
+            .pipeline_samples
+            .iter()
+            .rev()
+            .take(64)
+            .filter(|sample| {
+                is_fresh_control_sample(
+                    sample.observed_at_unix_ms,
+                    observed_at_unix_ms,
+                    last_sample,
+                    freshness_ms,
+                )
+            });
         let responsiveness = pipeline
             .filter_map(pipeline_responsiveness_basis_points)
             .min();
@@ -880,8 +931,34 @@ impl PerformanceMonitor {
         if responsiveness.is_none() && third_party_pressure.is_none() {
             return Ok(None);
         }
+        let source_sample_unix_ms = latest_system
+            .map(|sample| sample.observed_at_unix_ms)
+            .into_iter()
+            .chain(
+                self.pipeline_samples
+                    .iter()
+                    .rev()
+                    .take(64)
+                    .filter(|sample| {
+                        is_fresh_control_sample(
+                            sample.observed_at_unix_ms,
+                            observed_at_unix_ms,
+                            last_sample,
+                            freshness_ms,
+                        ) && pipeline_responsiveness_basis_points(sample).is_some()
+                    })
+                    .map(|sample| sample.observed_at_unix_ms),
+            )
+            .max()
+            .ok_or_else(|| {
+                performance_fatal(
+                    "performance_control_sample_missing",
+                    "read_performance_control_observation",
+                )
+            })?;
+        self.last_control_sample_unix_ms = Some(source_sample_unix_ms);
         Ok(Some(PerformanceControlObservation {
-            observed_at_unix_ms,
+            observed_at_unix_ms: source_sample_unix_ms,
             host_responsiveness_basis_points: responsiveness,
             third_party_pressure_basis_points: third_party_pressure,
             foreground_fullscreen: latest_system
@@ -1782,6 +1859,17 @@ fn duration_ms(duration: Duration) -> RuntimeHostResult<u64> {
     })
 }
 
+fn is_fresh_control_sample(
+    sample_unix_ms: u64,
+    observed_at_unix_ms: u64,
+    last_sample_unix_ms: Option<u64>,
+    freshness_ms: u64,
+) -> bool {
+    sample_unix_ms <= observed_at_unix_ms
+        && last_sample_unix_ms.is_none_or(|last| sample_unix_ms > last)
+        && observed_at_unix_ms - sample_unix_ms <= freshness_ms
+}
+
 fn valid_process_label(pid: u32, label: &str) -> bool {
     pid > 0 && !label.is_empty() && label.len() <= 260 && !label.chars().any(char::is_control)
 }
@@ -1970,7 +2058,7 @@ mod tests {
 
     #[test]
     fn pipeline_probes_synthesize_responsiveness_without_faking_missing_samples() {
-        let empty = monitor(Vec::new());
+        let mut empty = monitor(Vec::new());
         assert_eq!(
             empty.control_observation(1_000).expect("empty observation"),
             None
@@ -1990,8 +2078,54 @@ mod tests {
             .control_observation(1_500)
             .expect("observation")
             .expect("measured observation");
+        assert_eq!(observation.observed_at_unix_ms, 1_500);
         assert_eq!(observation.host_responsiveness_basis_points, Some(5_000));
         assert_eq!(observation.third_party_pressure_basis_points, Some(0));
+        assert_eq!(
+            monitor
+                .control_observation(1_600)
+                .expect("consumed observation"),
+            None
+        );
+    }
+
+    #[test]
+    fn sampler_failures_do_not_relabel_old_control_evidence_as_fresh() {
+        let mut monitor = monitor(vec![
+            Ok(sample(1_000, 4_000)),
+            Err("performance_counter_failed"),
+            Err("performance_counter_failed"),
+        ]);
+        monitor.tick(1_000).expect("host sample");
+        monitor
+            .record_pipeline_signal(
+                PipelinePerformanceSignal::new("fixture-instance", 1_500, 2_000)
+                    .expect("pipeline sample"),
+            )
+            .expect("pipeline sample");
+        assert_eq!(
+            monitor
+                .control_observation(1_500)
+                .expect("fresh observation")
+                .expect("fresh observation")
+                .observed_at_unix_ms,
+            1_500
+        );
+
+        monitor.tick(3_000).expect("first sampler failure");
+        assert_eq!(
+            monitor
+                .control_observation(3_000)
+                .expect("first degraded observation"),
+            None
+        );
+        monitor.tick(5_000).expect("second sampler failure");
+        assert_eq!(
+            monitor
+                .control_observation(5_000)
+                .expect("second degraded observation"),
+            None
+        );
     }
 
     #[test]

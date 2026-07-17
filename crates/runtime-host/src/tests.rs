@@ -4695,6 +4695,16 @@ fn policy_cadence_is_explicit_and_clock_jumps_force_full_recompute() {
         PolicyRecomputeReason::StartupOrRecovery
     );
     assert!(startup.evaluation.is_some());
+    let startup_measurement = startup.measurement.expect("startup measurement");
+    assert_eq!(
+        startup_measurement.requested_recompute,
+        PolicyRecomputeKind::Full
+    );
+    assert_eq!(
+        startup_measurement.execution,
+        PolicyEvaluationExecution::FullCatalogScan
+    );
+    assert!(startup_measurement.cost.work_units > 0);
 
     let cooldown = host
         .evaluate_policy_cycle(
@@ -4711,6 +4721,7 @@ fn policy_cadence_is_explicit_and_clock_jumps_force_full_recompute() {
     assert_eq!(cooldown.directive.kind, PolicyRecomputeKind::Deferred);
     assert_eq!(cooldown.directive.reason, PolicyRecomputeReason::Cooldown);
     assert!(cooldown.evaluation.is_none());
+    assert!(cooldown.measurement.is_none());
 
     let incremental = host
         .evaluate_policy_cycle(
@@ -4726,6 +4737,20 @@ fn policy_cadence_is_explicit_and_clock_jumps_force_full_recompute() {
         .expect("incremental policy cycle");
     assert_eq!(incremental.directive.kind, PolicyRecomputeKind::Incremental);
     assert_eq!(incremental.directive.reason, PolicyRecomputeReason::Event);
+    let incremental_measurement = incremental.measurement.expect("incremental measurement");
+    assert_eq!(
+        incremental_measurement.requested_recompute,
+        PolicyRecomputeKind::Incremental
+    );
+    assert_eq!(
+        incremental_measurement.execution,
+        PolicyEvaluationExecution::FullCatalogScan
+    );
+    assert_eq!(incremental_measurement.cost, startup_measurement.cost);
+    assert!(
+        incremental_measurement.sampled_at_monotonic_ms
+            >= startup_measurement.sampled_at_monotonic_ms
+    );
 
     let clock_jump = host
         .evaluate_policy_cycle(
@@ -4764,6 +4789,55 @@ fn policy_cadence_is_explicit_and_clock_jumps_force_full_recompute() {
         reconciliation.directive.reason,
         PolicyRecomputeReason::Reconciliation
     );
+    host.close().expect("close host");
+}
+
+#[test]
+fn catalog_cas_conflict_preserves_nonfatal_identity_and_effect() {
+    let root = TempDir::new().expect("tempdir");
+    let host = host_with_state(&root, POLICY_INSTANCE_ALIAS, Arc::new(FakeState::default()));
+    let first = host
+        .activate_policy_catalog(&policy_sources(1))
+        .expect("activate first catalog");
+    let second = host
+        .activate_policy_catalog(&policy_sources(2))
+        .expect("activate second catalog");
+
+    let error = host
+        .activate_policy_catalog_with_expected_for_test(&policy_sources(3), first)
+        .expect_err("stale compare-and-swap must fail");
+    assert_eq!(error.code(), "catalog_active_generation_changed");
+    assert_eq!(error.operation(), "switch_active_catalog");
+    assert!(!error.is_fatal());
+    assert!(host.fatal_error().expect("runtime health").is_none());
+    assert_eq!(
+        host.active_policy_catalog()
+            .expect("active catalog")
+            .expect("active generation"),
+        second
+    );
+
+    let mut client = TestClient::connect(&host);
+    let failures = projected_events(
+        &mut client,
+        EventQuery {
+            event_type: Some(EventType::CatalogTransitionFailed),
+            ..EventQuery::default()
+        },
+    );
+    let ProjectionPayload::Full(payload) =
+        &failures.last().expect("catalog transition failure").payload
+    else {
+        panic!("expected full catalog transition failure payload");
+    };
+    assert_eq!(
+        payload.effect_disposition(),
+        Some(EffectDisposition::NotPerformed)
+    );
+
+    host.activate_policy_catalog(&policy_sources(3))
+        .expect("runtime remains usable after stale compare-and-swap");
+    drop(client);
     host.close().expect("close host");
 }
 

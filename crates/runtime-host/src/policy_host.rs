@@ -24,6 +24,7 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::Instant;
 
 const CATALOG_STATE_SCHEMA: &str = "actingcommand.catalog-state.v1";
 const LEGACY_CATALOG_POINTER_SCHEMA: &str = "actingcommand.catalog-pointer-file.v1";
@@ -144,11 +145,42 @@ pub struct PolicyRecomputeDirective {
     pub eligible_at_unix_ms: u64,
 }
 
+/// Separates cadence requests from the current full scan without changing the pure evaluator API.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PolicyEvaluationExecution {
+    FullCatalogScan,
+}
+
+/// Deterministic input cardinalities used to budget a policy evaluation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PolicyEvaluationCost {
+    pub catalog_records: u64,
+    pub catalog_tasks: u64,
+    pub fact_records: u64,
+    pub outcome_records: u64,
+    pub task_state_records: u64,
+    pub instance_records: u64,
+    pub resource_records: u64,
+    pub task_instance_pairs: u64,
+    pub work_units: u64,
+}
+
+/// Runtime-side timing and cost evidence for one non-deferred policy evaluation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PolicyEvaluationMeasurement {
+    pub sampled_at_monotonic_ms: u64,
+    pub elapsed_micros: u64,
+    pub requested_recompute: PolicyRecomputeKind,
+    pub execution: PolicyEvaluationExecution,
+    pub cost: PolicyEvaluationCost,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PolicyCycle {
     pub directive: PolicyRecomputeDirective,
     pub evaluation: Option<PolicyEvaluation>,
     pub pending_dispatch_intents: Vec<DispatchIntent>,
+    pub measurement: Option<PolicyEvaluationMeasurement>,
 }
 
 /// Correlates an admission request; Runtime rebuilds approval authority and current time.
@@ -437,6 +469,7 @@ impl PolicyHost {
         time: EvaluationTime,
         seed: u64,
         trigger: PolicyTrigger,
+        sampled_at_monotonic_ms: u64,
     ) -> RuntimeHostResult<PolicyCycle> {
         let directive = self.cadence.observe(trigger, time.unix_ms)?;
         if directive.kind == PolicyRecomputeKind::Deferred {
@@ -444,24 +477,41 @@ impl PolicyHost {
                 directive,
                 evaluation: None,
                 pending_dispatch_intents: Vec::new(),
+                measurement: None,
             });
         }
         let active = self
             .active
             .as_ref()
             .ok_or_else(|| request("policy_catalog_unavailable", "evaluate_policy_cycle"))?;
+        let cost = policy_evaluation_cost(&active.compiled, facts, resources)?;
+        let started = Instant::now();
         let evaluation = evaluate(&active.compiled, facts, resources, time, seed)
             .map_err(|_| request("policy_evaluation_rejected", "evaluate_policy_cycle"))?;
+        let elapsed_micros = u64::try_from(started.elapsed().as_micros()).map_err(|_| {
+            fatal(
+                "policy_evaluation_measurement_overflow",
+                "measure_policy_evaluation",
+            )
+        })?;
         let pending_dispatch_intents = evaluation
             .dispatch_intents
             .iter()
             .filter(|intent| !self.seen_dispatches.contains_key(&intent.decision_id))
             .cloned()
             .collect();
+        let requested_recompute = directive.kind;
         Ok(PolicyCycle {
             directive,
             evaluation: Some(evaluation),
             pending_dispatch_intents,
+            measurement: Some(PolicyEvaluationMeasurement {
+                sampled_at_monotonic_ms,
+                elapsed_micros,
+                requested_recompute,
+                execution: PolicyEvaluationExecution::FullCatalogScan,
+                cost,
+            }),
         })
     }
 
@@ -1429,6 +1479,74 @@ fn remove_directory_if_exists(path: &Path) -> RuntimeHostResult<()> {
             "stage_catalog_generation",
         )),
     }
+}
+
+fn policy_evaluation_cost(
+    catalog: &CompiledCatalog,
+    facts: &EvaluationFacts,
+    resources: &EvaluationResources,
+) -> RuntimeHostResult<PolicyEvaluationCost> {
+    let counts = catalog.summary().counts;
+    let catalog_tasks = count_u64(counts.tasks)?;
+    let catalog_records = [
+        counts.tasks,
+        counts.pools,
+        counts.activity_profiles,
+        counts.timeline_events,
+    ]
+    .into_iter()
+    .try_fold(0_u64, |total, count| {
+        total
+            .checked_add(count_u64(count)?)
+            .ok_or_else(policy_evaluation_measurement_overflow)
+    })?;
+    let fact_records = count_u64(facts.facts.len())?;
+    let outcome_records = count_u64(facts.outcomes.len())?;
+    let task_state_records = count_u64(facts.tasks.len())?;
+    let instance_records = count_u64(facts.instances.len())?;
+    let resource_records = count_u64(resources.pools.len())?
+        .checked_add(count_u64(resources.hosts.len())?)
+        .ok_or_else(policy_evaluation_measurement_overflow)?;
+    let task_instance_pairs = catalog_tasks
+        .checked_mul(instance_records)
+        .ok_or_else(policy_evaluation_measurement_overflow)?;
+    let work_units = [
+        catalog_records,
+        fact_records,
+        outcome_records,
+        task_state_records,
+        instance_records,
+        resource_records,
+        task_instance_pairs,
+    ]
+    .into_iter()
+    .try_fold(0_u64, |total, count| {
+        total
+            .checked_add(count)
+            .ok_or_else(policy_evaluation_measurement_overflow)
+    })?;
+    Ok(PolicyEvaluationCost {
+        catalog_records,
+        catalog_tasks,
+        fact_records,
+        outcome_records,
+        task_state_records,
+        instance_records,
+        resource_records,
+        task_instance_pairs,
+        work_units,
+    })
+}
+
+fn count_u64(value: usize) -> RuntimeHostResult<u64> {
+    u64::try_from(value).map_err(|_| policy_evaluation_measurement_overflow())
+}
+
+fn policy_evaluation_measurement_overflow() -> RuntimeHostError {
+    fatal(
+        "policy_evaluation_measurement_overflow",
+        "measure_policy_evaluation",
+    )
 }
 
 #[cfg(unix)]
