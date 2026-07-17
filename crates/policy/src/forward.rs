@@ -662,6 +662,7 @@ pub struct ConfidenceEvidence {
 #[serde(deny_unknown_fields)]
 pub struct MaintenanceEvidence {
     pub subject_id: String,
+    pub as_of_ledger_position: u64,
     pub as_of_unix_ms: u64,
     pub durations: Vec<DurationEvidence>,
     pub confidences: Vec<ConfidenceEvidence>,
@@ -680,6 +681,7 @@ pub enum MaintenanceDisposition {
 pub struct MaintenanceAssessment {
     pub assessment_id: String,
     pub subject_id: String,
+    pub as_of_ledger_position: u64,
     pub as_of_unix_ms: u64,
     pub disposition: MaintenanceDisposition,
     pub duration_sample_count: u16,
@@ -708,16 +710,26 @@ pub fn assess_predictive_maintenance(
 ) -> ForwardResult<MaintenanceAssessment> {
     policy.validate()?;
     validate_subject(&evidence.subject_id)?;
-    if evidence.as_of_unix_ms == 0
+    if evidence.as_of_ledger_position == 0
+        || evidence.as_of_unix_ms == 0
         || evidence.durations.len() > MAX_MAINTENANCE_SAMPLES
         || evidence.confidences.len() > MAX_MAINTENANCE_SAMPLES
     {
         return Err(ForwardError::invalid("maintenance evidence is invalid"));
     }
     let window_start = evidence.as_of_unix_ms.saturating_sub(policy.lookback_ms);
-    let durations = bounded_durations(&evidence.durations, window_start, evidence.as_of_unix_ms)?;
-    let confidences =
-        bounded_confidences(&evidence.confidences, window_start, evidence.as_of_unix_ms)?;
+    let durations = bounded_durations(
+        &evidence.durations,
+        window_start,
+        evidence.as_of_ledger_position,
+        evidence.as_of_unix_ms,
+    )?;
+    let confidences = bounded_confidences(
+        &evidence.confidences,
+        window_start,
+        evidence.as_of_ledger_position,
+        evidence.as_of_unix_ms,
+    )?;
     validate_combined_evidence_identity(&durations, &confidences)?;
     let duration_count = u16::try_from(durations.len())
         .map_err(|_| ForwardError::overflow("duration evidence count overflowed"))?;
@@ -728,6 +740,7 @@ pub fn assess_predictive_maintenance(
     let mut assessment = MaintenanceAssessment {
         assessment_id,
         subject_id: evidence.subject_id.clone(),
+        as_of_ledger_position: evidence.as_of_ledger_position,
         as_of_unix_ms: evidence.as_of_unix_ms,
         disposition: MaintenanceDisposition::EvidenceInsufficient,
         duration_sample_count: duration_count,
@@ -789,6 +802,7 @@ pub fn assess_predictive_maintenance(
 fn bounded_durations(
     samples: &[DurationEvidence],
     window_start: u64,
+    evidence_ledger_position: u64,
     as_of: u64,
 ) -> ForwardResult<Vec<DurationEvidence>> {
     let mut selected = samples
@@ -801,6 +815,7 @@ fn bounded_durations(
         selected
             .iter()
             .map(|sample| (sample.ledger_sequence, sample.observed_at_unix_ms)),
+        evidence_ledger_position,
         as_of,
     )?;
     if selected.iter().any(|sample| sample.duration_ms == 0) {
@@ -812,6 +827,7 @@ fn bounded_durations(
 fn bounded_confidences(
     samples: &[ConfidenceEvidence],
     window_start: u64,
+    evidence_ledger_position: u64,
     as_of: u64,
 ) -> ForwardResult<Vec<ConfidenceEvidence>> {
     let mut selected = samples
@@ -824,6 +840,7 @@ fn bounded_confidences(
         selected
             .iter()
             .map(|sample| (sample.ledger_sequence, sample.observed_at_unix_ms)),
+        evidence_ledger_position,
         as_of,
     )?;
     if selected
@@ -839,11 +856,17 @@ fn bounded_confidences(
 
 fn validate_evidence_order(
     samples: impl Iterator<Item = (u64, u64)>,
+    as_of_ledger_position: u64,
     as_of: u64,
 ) -> ForwardResult<()> {
     let mut sequences = BTreeSet::new();
     for (sequence, timestamp) in samples {
-        if sequence == 0 || timestamp == 0 || timestamp > as_of || !sequences.insert(sequence) {
+        if sequence == 0
+            || sequence > as_of_ledger_position
+            || timestamp == 0
+            || timestamp > as_of
+            || !sequences.insert(sequence)
+        {
             return Err(ForwardError::invalid(
                 "maintenance evidence identity or time is invalid",
             ));
@@ -946,9 +969,10 @@ fn maintenance_assessment_id(
     policy: MaintenanceTrendPolicy,
 ) -> String {
     let mut hasher = Sha256::new();
-    hasher.update(b"actingcommand-maintenance-assessment-v1");
+    hasher.update(b"actingcommand-maintenance-assessment-v2");
     hasher.update((evidence.subject_id.len() as u64).to_be_bytes());
     hasher.update(evidence.subject_id.as_bytes());
+    hasher.update(evidence.as_of_ledger_position.to_be_bytes());
     hasher.update(policy.minimum_duration_samples.to_be_bytes());
     hasher.update(policy.minimum_confidence_samples.to_be_bytes());
     hasher.update(policy.lookback_ms.to_be_bytes());
@@ -1178,6 +1202,7 @@ mod tests {
         .collect();
         MaintenanceEvidence {
             subject_id: "maintenance:neutral".to_owned(),
+            as_of_ledger_position: 20,
             as_of_unix_ms: NOW,
             durations,
             confidences,
@@ -1208,6 +1233,15 @@ mod tests {
     }
 
     #[test]
+    fn maintenance_rejects_evidence_after_the_ledger_bound() {
+        let mut evidence = maintenance_evidence(true);
+        evidence.as_of_ledger_position = 12;
+        let error = assess_predictive_maintenance(&evidence, MaintenanceTrendPolicy::default())
+            .expect_err("late ledger evidence must not cross the query bound");
+        assert_eq!(error.code(), "forward_projection_invalid");
+    }
+
+    #[test]
     fn maintenance_suggestion_is_evidence_pinned_and_deterministic() {
         let evidence = maintenance_evidence(true);
         let first = assess_predictive_maintenance(&evidence, MaintenanceTrendPolicy::default())
@@ -1218,6 +1252,21 @@ mod tests {
         assert_eq!(first.disposition, MaintenanceDisposition::RecheckSuggested);
         assert_eq!(first.first_ledger_sequence, Some(1));
         assert_eq!(first.last_ledger_sequence, Some(13));
+    }
+
+    #[test]
+    fn maintenance_assessment_identity_includes_the_ledger_bound() {
+        let first_evidence = maintenance_evidence(true);
+        let mut later_evidence = first_evidence.clone();
+        later_evidence.as_of_ledger_position += 1;
+        let first =
+            assess_predictive_maintenance(&first_evidence, MaintenanceTrendPolicy::default())
+                .expect("first assessment");
+        let later =
+            assess_predictive_maintenance(&later_evidence, MaintenanceTrendPolicy::default())
+                .expect("later assessment");
+        assert_ne!(first.assessment_id, later.assessment_id);
+        assert_eq!(later.as_of_ledger_position, 21);
     }
 
     #[test]

@@ -4305,6 +4305,7 @@ impl HostShared {
             query.task_id(),
             query.fact_scope().clone(),
             query.fact_key(),
+            query.as_of_ledger_position(),
             query.as_of_unix_ms(),
             trend_policy,
         )
@@ -4313,7 +4314,7 @@ impl HostShared {
             .assess_and_publish_predictive_maintenance(&query)
             .map_err(planning_request_failure)?;
         let assessment = encode_planning_document(
-            RuntimePlanningDocumentKind::MaintenanceAssessment,
+            RuntimePlanningDocumentKind::MaintenanceAssessmentV2,
             &assessment,
             "assess_predictive_maintenance",
         )?;
@@ -4786,30 +4787,52 @@ impl HostShared {
                 RuntimeErrorCode::ProtocolInvalid,
             ))
         })?;
-        let status = self.control_plane_status_projection()?;
-        let facts = {
-            let _gate = lock(&self.fact_write_gate, "project_runtime_facts")?;
-            self.synchronize_fact_store_under_gate()
-                .map_err(RequestFailure::poison_without_terminal)?;
-            lock(&self.facts, "project_runtime_facts")?.active_records()
-        };
-        let approvals = ApprovalProjection::recover(&self.ledger, Arc::clone(&self.state))
-            .map_err(RequestFailure::poison_without_terminal)?
-            .records();
-        let ledger_position = self.ledger.latest_sequence().map_err(|_| {
+        let current_ledger_position = self.ledger.latest_sequence().map_err(|_| {
             RequestFailure::poison_without_terminal(ledger_error("project_runtime_position"))
         })?;
         let decision_page = request
             .decision_page()
             .cloned()
             .unwrap_or_else(ProjectDecisionPageRequest::default);
+        let ledger_position = decision_page
+            .cursor()
+            .map_or(current_ledger_position, |cursor| {
+                cursor.snapshot_ledger_position()
+            });
+        if ledger_position == 0 || ledger_position > current_ledger_position {
+            return Err(project_interface_failure(RuntimeHostError::request(
+                "project_decision_cursor_invalid",
+                "project_runtime_interface",
+                RuntimeErrorCode::ProtocolInvalid,
+            )));
+        }
+        let status = self.control_plane_status_projection()?;
+        let facts = InstanceFactStore::active_records_at(&self.ledger, ledger_position)
+            .map_err(RequestFailure::poison_without_terminal)?;
+        let approvals =
+            ApprovalProjection::records_at(&self.ledger, Arc::clone(&self.state), ledger_position)
+                .map_err(RequestFailure::poison_without_terminal)?;
         let (catalog, decisions) = {
-            let policy = lock(&self.policy, "project_runtime_policy")?;
+            let mut policy = lock(&self.policy, "project_runtime_policy")?;
+            policy
+                .refresh_dispatches(&self.ledger)
+                .map_err(RequestFailure::poison_without_terminal)?;
             (
-                policy.active_loaded(),
-                policy.project_dispatches(ledger_position, &decision_page)?,
+                policy
+                    .active_loaded_at(&self.ledger, ledger_position)
+                    .map_err(project_interface_failure)?,
+                policy.project_dispatches(current_ledger_position, &decision_page)?,
             )
         };
+        if decisions.snapshot_ledger_position != ledger_position {
+            return Err(RequestFailure::poison_without_terminal(
+                RuntimeHostError::fatal(
+                    "project_snapshot_position_mismatch",
+                    "project_runtime_interface",
+                    RuntimeErrorCode::RuntimeFatal,
+                ),
+            ));
+        }
         let diagnostics = self
             .ledger
             .query(EventQuery {

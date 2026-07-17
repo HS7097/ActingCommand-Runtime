@@ -20,6 +20,7 @@ use std::sync::Arc;
 
 type FactIdentity = (FactScope, String);
 type InvalidationIdentity = (FactScope, String, String, EventId);
+type HistoricalInvalidationIdentity = (FactIdentity, String);
 const MAX_ACTIVE_FACTS: usize = 256;
 const FACT_TOMBSTONE_NAMESPACE: &str = "fact.tombstone.v1";
 const MAX_RECENT_FACT_TOMBSTONES: usize = 256;
@@ -37,6 +38,116 @@ struct InvalidationTombstone {
     sequence: u64,
 }
 
+#[derive(Default)]
+struct HistoricalFactProjection {
+    active: BTreeMap<FactIdentity, (FactRecord, EventId)>,
+    invalidated: BTreeMap<HistoricalInvalidationIdentity, FactInvalidationEventData>,
+}
+
+impl HistoricalFactProjection {
+    fn replay(&mut self, event: &PersistedEvent) -> RuntimeHostResult<()> {
+        match event.payload() {
+            EventPayload::Fact(FactPayload::Published(payload)) => {
+                self.publish(payload.record().clone(), *event.event_id())
+            }
+            EventPayload::Fact(FactPayload::Invalidated(payload)) => {
+                self.invalidate(payload.invalidation().clone())
+            }
+            _ => {
+                let invalidations = self
+                    .active
+                    .values()
+                    .filter(|(record, _)| record.invalidate_on.contains(&event.event_type()))
+                    .map(|(record, _)| FactInvalidationEventData {
+                        scope: record.scope.clone(),
+                        key: record.key.clone(),
+                        source_snapshot_id: record.source_snapshot_id.clone(),
+                        invalidated_at_unix_ms: event.timestamp_unix_ms(),
+                        invalidated_by_event_id: *event.event_id(),
+                        invalidated_by_event_type: event.event_type(),
+                    })
+                    .collect::<Vec<_>>();
+                for invalidation in invalidations {
+                    self.invalidate(invalidation)?;
+                }
+                Ok(())
+            }
+        }
+    }
+
+    fn publish(&mut self, record: FactRecord, event_id: EventId) -> RuntimeHostResult<()> {
+        record
+            .validate()
+            .map_err(|_| fact_fatal("fact_record_invalid", "project_fact_history"))?;
+        let identity = (record.scope.clone(), record.key.clone());
+        if self
+            .invalidated
+            .contains_key(&(identity.clone(), record.source_snapshot_id.clone()))
+        {
+            return Err(fact_fatal(
+                "fact_source_snapshot_republished",
+                "project_fact_history",
+            ));
+        }
+        if let Some((existing, existing_event_id)) = self.active.get(&identity)
+            && existing.source_snapshot_id == record.source_snapshot_id
+        {
+            if existing != &record || existing_event_id != &event_id {
+                return Err(fact_fatal(
+                    "fact_source_snapshot_identity_conflict",
+                    "project_fact_history",
+                ));
+            }
+            return Ok(());
+        }
+        if !self.active.contains_key(&identity) && self.active.len() >= MAX_ACTIVE_FACTS {
+            return Err(fact_fatal(
+                "fact_store_capacity_exceeded",
+                "project_fact_history",
+            ));
+        }
+        self.active.insert(identity, (record, event_id));
+        Ok(())
+    }
+
+    fn invalidate(&mut self, data: FactInvalidationEventData) -> RuntimeHostResult<()> {
+        let identity = (data.scope.clone(), data.key.clone());
+        let invalidation_identity = (identity.clone(), data.source_snapshot_id.clone());
+        if let Some(existing) = self.invalidated.get(&invalidation_identity) {
+            if existing != &data {
+                return Err(fact_fatal(
+                    "fact_invalidation_identity_conflict",
+                    "project_fact_history",
+                ));
+            }
+            return Ok(());
+        }
+        let (active, _) = self.active.get(&identity).ok_or_else(|| {
+            fact_fatal("fact_invalidation_target_missing", "project_fact_history")
+        })?;
+        if active.source_snapshot_id != data.source_snapshot_id
+            || !active
+                .invalidate_on
+                .contains(&data.invalidated_by_event_type)
+        {
+            return Err(fact_fatal(
+                "fact_invalidation_target_mismatch",
+                "project_fact_history",
+            ));
+        }
+        self.active.remove(&identity);
+        self.invalidated.insert(invalidation_identity, data);
+        Ok(())
+    }
+
+    fn records(self) -> Vec<FactRecord> {
+        self.active
+            .into_values()
+            .map(|(record, _)| record)
+            .collect()
+    }
+}
+
 #[derive(Clone)]
 pub(crate) struct InstanceFactStore {
     active: BTreeMap<FactIdentity, StoredFact>,
@@ -47,6 +158,32 @@ pub(crate) struct InstanceFactStore {
 }
 
 impl InstanceFactStore {
+    pub(crate) fn active_records_at(
+        ledger: &GlobalLedger,
+        ledger_position: u64,
+    ) -> RuntimeHostResult<Vec<FactRecord>> {
+        let latest = ledger
+            .latest_sequence()
+            .map_err(|_| fact_fatal("fact_store_query_failed", "project_fact_history"))?;
+        if ledger_position == 0 || ledger_position > latest {
+            return Err(fact_fatal(
+                "fact_ledger_position_invalid",
+                "project_fact_history",
+            ));
+        }
+        let events = ledger
+            .query(EventQuery {
+                to_sequence: Some(ledger_position),
+                ..EventQuery::default()
+            })
+            .map_err(|_| fact_fatal("fact_store_query_failed", "project_fact_history"))?;
+        let mut projection = HistoricalFactProjection::default();
+        for event in events {
+            projection.replay(&event)?;
+        }
+        Ok(projection.records())
+    }
+
     pub(crate) fn recover(
         ledger: &GlobalLedger,
         state: Arc<RuntimeStateStore>,
@@ -489,20 +626,6 @@ impl InstanceFactStore {
             .validate()
             .map_err(|_| fact_fatal("fact_snapshot_invalid", "read_fact_snapshot"))?;
         Ok(snapshot)
-    }
-
-    pub(crate) fn active_records(&self) -> Vec<FactRecord> {
-        let mut records = self
-            .active
-            .values()
-            .map(|stored| stored.record.clone())
-            .collect::<Vec<_>>();
-        records.sort_by(|left, right| {
-            left.scope
-                .cmp(&right.scope)
-                .then_with(|| left.key.cmp(&right.key))
-        });
-        records
     }
 
     pub(crate) fn overlay_policy_facts(

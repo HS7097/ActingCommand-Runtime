@@ -3,9 +3,9 @@
 use actingcommand_contract::{
     AgentPayload, AgentSessionId, ApplicationLifecycleAction, EventActor, EventPayload, EventQuery,
     EventSource, EventType, FactScope, IdentifierIssuer, InstanceId, PolicyPlanningSignalEventData,
-    PolicyPlanningSignalKind, ProjectedArtifactReference, ProjectionPayload, ProjectionProfile,
-    RUNTIME_INFO_FILE, RuntimeInfo, RuntimeOperation, RuntimeReceipt, RuntimeReceiptState,
-    RuntimeRequest, RuntimeResult,
+    PolicyPlanningSignalKind, ProjectInterfaceRequest, ProjectedArtifactReference,
+    ProjectionPayload, ProjectionProfile, RUNTIME_INFO_FILE, RuntimeInfo, RuntimeOperation,
+    RuntimeReceipt, RuntimeReceiptState, RuntimeRequest, RuntimeResult,
 };
 use actingcommand_device::{
     CaptureBackend, CaptureBackendName, DeviceError, DeviceResult, Frame, InputBackend, PixelFormat,
@@ -195,6 +195,10 @@ fn actingd_exposes_typed_planning_capabilities_to_a_separate_client_process() {
         .expect("project policy through daemon IPC");
     assert_eq!(forward.catalog_version, base.catalog_version());
 
+    let as_of_ledger_position = client
+        .project_snapshot(ProjectInterfaceRequest::current())
+        .expect("project ledger position")
+        .ledger_position;
     let maintenance = client
         .assess_predictive_maintenance(
             PredictiveMaintenanceRequest::new(
@@ -204,6 +208,7 @@ fn actingd_exposes_typed_planning_capabilities_to_a_separate_client_process() {
                     instance_id: INSTANCE_ALIAS.to_owned(),
                 },
                 "resource.primary",
+                as_of_ledger_position,
                 POLICY_NOW_UNIX_MS,
                 MaintenanceTrendPolicy::default(),
             )

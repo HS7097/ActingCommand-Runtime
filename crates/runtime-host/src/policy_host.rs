@@ -7,10 +7,10 @@ use crate::policy_control::{
 };
 use crate::{PerformanceControlWorkload, ProcedureManifest, RuntimeHostError, RuntimeHostResult};
 use actingcommand_contract::{
-    EventPayload, LeaseToken, OwnerEpoch, PerformanceContext, PolicyAdmissionRecord,
-    PolicyDetectionBudgetRecord, PolicyDispatchEventData, PolicyExecutionEventData,
-    PolicyExecutionOutcome, PolicyPayload, PolicyPlanningSignalEventData, PolicyPlanningSignalKind,
-    PolicyReasonRecord, ProjectDecisionPageRequest, RuntimeErrorCode,
+    CatalogPayload, EventPayload, EventQuery, LeaseToken, OwnerEpoch, PerformanceContext,
+    PolicyAdmissionRecord, PolicyDetectionBudgetRecord, PolicyDispatchEventData,
+    PolicyExecutionEventData, PolicyExecutionOutcome, PolicyPayload, PolicyPlanningSignalEventData,
+    PolicyPlanningSignalKind, PolicyReasonRecord, ProjectDecisionPageRequest, RuntimeErrorCode,
 };
 use actingcommand_ledger::GlobalLedger;
 use actingcommand_policy::{
@@ -485,6 +485,56 @@ impl PolicyHost {
 
     pub(crate) fn active_loaded(&self) -> Option<LoadedCatalog> {
         self.active.clone()
+    }
+
+    pub(crate) fn active_loaded_at(
+        &self,
+        ledger: &GlobalLedger,
+        ledger_position: u64,
+    ) -> RuntimeHostResult<Option<LoadedCatalog>> {
+        let latest = ledger
+            .latest_sequence()
+            .map_err(|_| fatal("catalog_projection_query_failed", "project_policy_catalog"))?;
+        if ledger_position == 0 || ledger_position > latest {
+            return Err(request(
+                "catalog_projection_position_invalid",
+                "project_policy_catalog",
+            ));
+        }
+        let events = ledger
+            .query(EventQuery {
+                to_sequence: Some(ledger_position),
+                ..EventQuery::default()
+            })
+            .map_err(|_| fatal("catalog_projection_query_failed", "project_policy_catalog"))?;
+        let mut projected = None;
+        for event in events {
+            let transition = match event.payload() {
+                EventPayload::Catalog(CatalogPayload::Activated(payload))
+                | EventPayload::Catalog(CatalogPayload::RolledBack(payload)) => payload,
+                _ => continue,
+            };
+            projected = Some((
+                transition.catalog_id().to_owned(),
+                transition.catalog_version(),
+                transition.catalog_hash().to_owned(),
+            ));
+        }
+        let Some((catalog_id, catalog_version, catalog_hash)) = projected else {
+            return Ok(None);
+        };
+        let loaded = self.store.load_generation(&catalog_hash)?;
+        let generation = loaded.generation();
+        if generation.catalog_id() != catalog_id
+            || generation.catalog_version() != catalog_version
+            || generation.catalog_hash() != catalog_hash
+        {
+            return Err(fatal(
+                "catalog_projection_identity_mismatch",
+                "project_policy_catalog",
+            ));
+        }
+        Ok(Some(loaded))
     }
 
     pub(crate) fn project_dispatches(
