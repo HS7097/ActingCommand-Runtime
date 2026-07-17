@@ -9136,7 +9136,7 @@ fn orphaned_policy_admission_is_reconciled_after_real_process_kill() {
 }
 
 #[test]
-fn policy_dispatch_survives_real_process_crash_without_second_lease_side_effect() {
+fn policy_dispatch_accepts_one_late_outcome_after_process_crash() {
     let root = TempDir::new().expect("tempdir");
     let shared_instance_id = instance_id();
     fs::write(
@@ -9159,8 +9159,9 @@ fn policy_dispatch_survives_real_process_crash_without_second_lease_side_effect(
     assert!(status.success());
     assert!(root.path().join("child-ready").is_file());
 
+    let recovery_clock = Arc::new(ManualRuntimeClock::new(POLICY_NOW_UNIX_MS + 10_000, 0));
     let host = RuntimeHost::start(
-        config(&root),
+        config(&root).with_runtime_clock(recovery_clock),
         Arc::new(FakeProvider::one(
             POLICY_INSTANCE_ALIAS,
             shared_instance_id,
@@ -9187,6 +9188,18 @@ fn policy_dispatch_survives_real_process_crash_without_second_lease_side_effect(
         replay,
         PolicyDispatchAdmission::ReplaySuppressed { .. }
     ));
+    let outcome = host
+        .record_policy_dispatch_outcome(&intent.decision_id, &PolicyExecutionInput::Succeeded)
+        .expect("record late outcome after crash");
+    assert_eq!(
+        host.record_policy_dispatch_outcome(&intent.decision_id, &PolicyExecutionInput::Succeeded,)
+            .expect("replay late outcome"),
+        outcome
+    );
+    let PolicyExecutionOutcome::Succeeded { runtime_ms } = &outcome.outcome else {
+        panic!("expected successful late outcome")
+    };
+    assert!(*runtime_ms <= 10_000);
     let mut client = TestClient::connect(&host);
     let events = projected_events(&mut client, EventQuery::default());
     assert_eq!(
@@ -9203,8 +9216,59 @@ fn policy_dispatch_survives_real_process_crash_without_second_lease_side_effect(
             .count(),
         1
     );
+    assert_eq!(
+        events
+            .iter()
+            .filter(|event| event.event_type == EventType::PolicyExecutionRecorded)
+            .count(),
+        1
+    );
+    assert_eq!(
+        events
+            .iter()
+            .filter(|event| event.event_type == EventType::PolicyDispatchCompleted)
+            .count(),
+        1
+    );
     drop(client);
     host.close().expect("close recovered host");
+
+    let reopened = RuntimeHost::start(
+        config(&root).with_runtime_clock(Arc::new(ManualRuntimeClock::new(
+            POLICY_NOW_UNIX_MS + 20_000,
+            0,
+        ))),
+        Arc::new(FakeProvider::one(
+            POLICY_INSTANCE_ALIAS,
+            shared_instance_id,
+            Arc::new(FakeState::default()),
+        )),
+    )
+    .expect("reopen runtime after late outcome");
+    assert_eq!(
+        reopened
+            .record_policy_dispatch_outcome(&intent.decision_id, &PolicyExecutionInput::Succeeded,)
+            .expect("replay late outcome after second restart"),
+        outcome
+    );
+    let mut client = TestClient::connect(&reopened);
+    let events = projected_events(&mut client, EventQuery::default());
+    assert_eq!(
+        events
+            .iter()
+            .filter(|event| event.event_type == EventType::PolicyExecutionRecorded)
+            .count(),
+        1
+    );
+    assert_eq!(
+        events
+            .iter()
+            .filter(|event| event.event_type == EventType::PolicyDispatchCompleted)
+            .count(),
+        1
+    );
+    drop(client);
+    reopened.close().expect("close replayed late outcome host");
 }
 
 #[test]
