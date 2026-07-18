@@ -131,10 +131,10 @@ pub fn inspect_generic_runtime_identity(path: &str, source: &str) -> Vec<String>
                 ));
             }
         }
-        for word in &words {
-            if FORBIDDEN_WORDS.contains(&word.as_str()) {
+        for forbidden in FORBIDDEN_WORDS {
+            if identifier_contains_compacted_word(line, forbidden) {
                 violations.push(format!(
-                    "{path}:{} contains project-specific word {word}",
+                    "{path}:{} contains project-specific word {forbidden}",
                     index + 1
                 ));
             }
@@ -359,6 +359,28 @@ fn contains_word_sequence(words: &[String], sequence: &[&str]) -> bool {
             .map(String::as_str)
             .eq(sequence.iter().copied())
     })
+}
+
+fn identifier_contains_compacted_word(value: &str, expected: &str) -> bool {
+    value
+        .split(|character: char| !character.is_ascii_alphanumeric() && character != '_')
+        .filter(|identifier| !identifier.is_empty())
+        .any(|identifier| {
+            let words = identifier_words(identifier);
+            (0..words.len()).any(|start| {
+                let mut compacted = String::new();
+                for word in &words[start..] {
+                    compacted.push_str(word);
+                    if compacted == expected {
+                        return true;
+                    }
+                    if compacted.len() >= expected.len() {
+                        break;
+                    }
+                }
+                false
+            })
+        })
 }
 
 fn has_cfg_test(attributes: &[syn::Attribute]) -> bool {
@@ -2400,6 +2422,55 @@ mod tests {
             super::identifier_words("HTTPServerBAConfig"),
             ["http", "server", "ba", "config"]
         );
+        assert_eq!(super::identifier_words("PvPMode"), ["pv", "p", "mode"]);
+        assert_eq!(
+            super::identifier_words("BaaSAdapter"),
+            ["baa", "s", "adapter"]
+        );
+    }
+
+    #[test]
+    fn generic_runtime_guard_rejects_every_acronym_casing_without_substring_false_positives() {
+        for identity in ["pvp", "baas"] {
+            for variant in casing_variants(identity) {
+                let source = format!("struct {variant}Adapter;");
+                let violations = super::inspect_generic_runtime_identity("fixture.rs", &source);
+                assert!(
+                    violations
+                        .iter()
+                        .any(|violation| violation.contains(identity)),
+                    "{variant} escaped the {identity} guard: {violations:#?}"
+                );
+            }
+        }
+
+        let allowed = r#"
+            struct BaselineAdapter;
+            struct DatabaseReader;
+            struct PivotalPolicy;
+            struct PvPacedWorker;
+            struct BaaStateCache;
+        "#;
+        assert!(super::inspect_generic_runtime_identity("fixture.rs", allowed).is_empty());
+    }
+
+    fn casing_variants(value: &str) -> Vec<String> {
+        let bytes = value.as_bytes();
+        (0..(1_usize << bytes.len()))
+            .map(|mask| {
+                bytes
+                    .iter()
+                    .enumerate()
+                    .map(|(index, byte)| {
+                        if mask & (1 << index) == 0 {
+                            char::from(byte.to_ascii_lowercase())
+                        } else {
+                            char::from(byte.to_ascii_uppercase())
+                        }
+                    })
+                    .collect()
+            })
+            .collect()
     }
 
     #[test]
