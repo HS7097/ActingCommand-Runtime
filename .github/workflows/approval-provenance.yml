@@ -49,4 +49,5 @@ jobs:
           GH_TOKEN: ${{ secrets.ACTINGCOMMAND_WORKFLOW_READ_TOKEN }}
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-        run: target/debug/approval-provenance-guard --base "$BASE_SHA" --head "$HEAD_SHA"
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: target/debug/approval-provenance-guard --base "$BASE_SHA" --head "$HEAD_SHA" --pull-request "$PR_NUMBER"

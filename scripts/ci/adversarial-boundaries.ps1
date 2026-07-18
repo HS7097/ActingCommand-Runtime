@@ -33,6 +33,11 @@ Invoke-AdversarialCase 'false approval' @(
     'approval_provenance::tests::fake_comment_id_and_api_failure_are_fatal',
     '--', '--exact'
 )
+Invoke-AdversarialCase 'scope-only approval reuse' @(
+    'test', '-p', $architecture, '--lib',
+    'approval_provenance::tests::scope_only_approval_reuse_cannot_authorize_poison_c',
+    '--', '--exact'
+)
 Invoke-AdversarialCase 'raw identity wrappers and closures' @(
     'test', '-p', $architecture, '--lib',
     'generic_domain::tests::identity_branches_reject_unlisted_methods_wrappers_and_closures',
@@ -67,4 +72,4 @@ Invoke-AdversarialCase 'resource root flag conflicts' @(
     '--', '--exact'
 )
 
-Write-Host 'all eight adversarial boundary regressions executed and passed'
+Write-Host 'all nine adversarial boundary regressions executed and passed'

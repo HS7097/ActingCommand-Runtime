@@ -69,7 +69,7 @@ Verify approval records against the private Workflow repository and independentl
 protected base-to-head surface delta from exact commits:
 
 ```text
-cargo run -p actingcommand-actinglab-architecture --bin approval-provenance-guard -- --base <full-base-sha> --head <full-head-sha>
+cargo run -p actingcommand-actinglab-architecture --bin approval-provenance-guard -- --base <full-base-sha> --head <full-head-sha> --pull-request <number>
 ```
 
 The command requires an authenticated `gh` session with read access to
@@ -77,6 +77,10 @@ The command requires an authenticated `gh` session with read access to
 author or timestamp drift, body-hash drift, and an out-of-scope surface delta all fail the gate.
 The base and head must be full commit SHAs in one ancestry chain; both are inspected through
 temporary detached worktrees so uncommitted candidate state cannot become evidence.
+Scope-only approvals are retired and cannot authorize a new delta. Each active approval comment
+must contain one machine-readable binding for the exact Runtime repository, pull request, base,
+approved subject commit, and sorted scopes. Product changes after that subject fail the gate; only
+the registry and generated surface-manifest provenance commit may follow it.
 
 The protected `pull_request_target` workflow builds this verifier only from the PR base and never
 executes candidate code. Configure `ACTINGCOMMAND_WORKFLOW_READ_TOKEN` as a fine-grained read-only
