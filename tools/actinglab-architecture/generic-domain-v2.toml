@@ -2,6 +2,18 @@
 
 schema_version = "actingcommand.generic-domain.v2"
 [[approval]]
+id = "approval.issue44_r10"
+repository = "HS7097/ActingCommand-Workflow"
+issue = 54
+comment_id = 5012656084
+author = "HS7097"
+author_id = 103177863
+created_at = "2026-07-18T19:42:24Z"
+updated_at = "2026-07-18T19:42:24Z"
+content_sha256 = "209acbbcf8adffa469936c34069bc9a69fbda5fb20d8bf7c7bc8d2dba4bc57e7"
+scope = ["approval.provenance", "identity.allowance", "surface.mapping", "workspace.discovery"]
+
+[[approval]]
 id = "approval.issue44_r8"
 repository = "HS7097/ActingCommand-Workflow"
 issue = 54
@@ -4086,6 +4098,19 @@ source_issue = 44
 source_pr = 113
 
 [[identity_allowance]]
+id = "allowance.fragment_818152b33b077eac1c98d0875b6d342c6db83e35"
+kind = "technical_adapter"
+exact_path = "crates/resource-tooling/src/package_build.rs"
+selector = "rust:fn:page_anchor_matches"
+scope = ["identity.branch"]
+tokens = []
+sha256 = "0cfac210463685e068319712fd23b2a6bbedaa559615cc763e5b29e60bdf56fe"
+purpose = "Allows namespaced and unnamespaced neutral page-anchor compatibility in this exact Runtime adapter fragment."
+approval_id = "approval.issue44_r10"
+source_issue = 44
+source_pr = 122
+
+[[identity_allowance]]
 id = "allowance.fragment_8243216fea8c5605038f3a327fd3af966bdcba11"
 kind = "test_fixture"
 exact_path = "crates/resource-tooling/src/resource_convert/tests.rs"
@@ -5358,6 +5383,19 @@ purpose = "Allows neutral identity fixture values in this exact test fragment."
 approval_id = "approval.issue44_r8b"
 source_issue = 44
 source_pr = 113
+
+[[identity_allowance]]
+id = "allowance.fragment_ca98aab520327b6105f1838174ea91a4aa97507d"
+kind = "technical_adapter"
+exact_path = "crates/execution-kernel/src/run.rs"
+selector = "rust:fn:page_anchor_matches"
+scope = ["identity.branch"]
+tokens = []
+sha256 = "57a81f9685c15fc8cd821657b9900e868e352515587b74bb96f01b03752b3ecd"
+purpose = "Allows namespaced and unnamespaced neutral page-anchor compatibility in this exact Runtime adapter fragment."
+approval_id = "approval.issue44_r10"
+source_issue = 44
+source_pr = 122
 
 [[identity_allowance]]
 id = "allowance.fragment_caa429380c65edad6fde9ec2b4de943cd18ab018"
