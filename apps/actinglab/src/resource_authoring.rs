@@ -171,28 +171,34 @@ fn projected_authoring_identity(
     event: &ProjectedEvent,
 ) -> CliOutcome<Option<(ResourceAuthoringPhase, &str, &str, &str)>> {
     let projected = match &event.payload {
-        ProjectionPayload::Full(EventPayload::ResourceAuthoring(payload)) => Some((
-            payload.phase(),
-            payload.draft_id(),
-            payload.target_label(),
-            payload.target_fingerprint(),
-        )),
-        ProjectionPayload::Public(PublicEventPayload::ResourceAuthoring(payload)) => Some((
-            payload.authoring_phase().ok_or_else(|| {
-                authoring_recovery_error("authoring recovery projection is missing its phase")
-            })?,
-            payload.draft_id().ok_or_else(|| {
-                authoring_recovery_error("authoring recovery projection is missing its draft")
-            })?,
-            payload.target_label().ok_or_else(|| {
-                authoring_recovery_error("authoring recovery projection is missing its target")
-            })?,
-            payload.target_fingerprint().ok_or_else(|| {
-                authoring_recovery_error(
-                    "authoring recovery projection is missing its target fingerprint",
-                )
-            })?,
-        )),
+        ProjectionPayload::Full(projected) => match projected.as_ref() {
+            EventPayload::ResourceAuthoring(payload) => Some((
+                payload.phase(),
+                payload.draft_id(),
+                payload.target_label(),
+                payload.target_fingerprint(),
+            )),
+            _ => None,
+        },
+        ProjectionPayload::Public(projected) => match projected.as_ref() {
+            PublicEventPayload::ResourceAuthoring(payload) => Some((
+                payload.authoring_phase().ok_or_else(|| {
+                    authoring_recovery_error("authoring recovery projection is missing its phase")
+                })?,
+                payload.draft_id().ok_or_else(|| {
+                    authoring_recovery_error("authoring recovery projection is missing its draft")
+                })?,
+                payload.target_label().ok_or_else(|| {
+                    authoring_recovery_error("authoring recovery projection is missing its target")
+                })?,
+                payload.target_fingerprint().ok_or_else(|| {
+                    authoring_recovery_error(
+                        "authoring recovery projection is missing its target fingerprint",
+                    )
+                })?,
+            )),
+            _ => None,
+        },
         _ => None,
     };
     if projected.is_none() && is_resource_authoring_event(event.event_type) {

@@ -10,6 +10,7 @@
 pub mod adb;
 pub mod capture;
 pub mod discovery;
+pub mod emulator;
 pub mod error;
 pub mod input;
 pub mod maatouch;
@@ -22,6 +23,7 @@ mod vendor_stdio;
 pub use adb::*;
 pub use capture::*;
 pub use discovery::*;
+pub use emulator::*;
 pub use error::*;
 pub use input::*;
 pub use maatouch::*;

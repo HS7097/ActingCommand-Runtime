@@ -1,14 +1,24 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 use super::{
-    CapturePolicyReason, CapturePressureState, DiagnosticCode, EventAction, EventFamily, EventType,
-    EvidenceCompleteness, RecognitionVerdict, RecoveryReason, ResourceAuthoringPhase,
+    ArtifactRedactionState, CapturePolicyReason, CapturePressureState, DiagnosticCode, EventAction,
+    EventFamily, EventType, EvidenceCompleteness, PolicyFailureClass, PolicyFailureDisposition,
+    PolicyPlanningSignalKind, RecognitionVerdict, RecoveryReason, ResourceAuthoringPhase,
     RetentionClass, SanitizationError, Sensitivity, TaskOutcome,
 };
 use crate::{
-    HolderId, InputAction, LeaseId, LeasePriority, MonitorDecision, MonitorDiagnosis,
-    MonitorDisposition, MonitorObservation, MonitorRecoveryCoordinationReason, MonitorRecoveryKind,
-    RequestId,
+    AgentAttentionState, AgentSessionEventData, AgentSessionId, AgentWakeData, AgentWakeId,
+    AgentWakeKind, ApprovalDecisionRecord, ApprovalDisposition, ApprovalTarget, ApprovalTargetKind,
+    CatalogPromotionAuthorization, ClientActionKind, ClientActionRecord, FactInvalidationEventData,
+    FactRecord, FactScope, HolderId, InputAction, LeaseId, LeasePriority, MonitorDecision,
+    MonitorDiagnosis, MonitorDisposition, MonitorObservation, MonitorRecoveryCoordinationReason,
+    MonitorRecoveryKind, PerformanceContext, PerformanceControlEventData, PerformanceControlLevel,
+    PerformanceControlReason, PerformanceDeadlineDisposition, PerformanceMonitorHealth,
+    PerformanceMonitorStateEventData, PerformancePressureEventData, PerformancePressureRecord,
+    PerformanceStutterEventData, PerformanceSummaryEventData, ReleaseTransitionData,
+    ReleaseTransitionKind, RequestId, RuntimeReleaseSet, StateMigrationData,
+    validate_fact_invalidation, validate_performance_control, validate_performance_monitor_state,
+    validate_performance_stutter, validate_performance_summary,
 };
 use serde::de;
 use serde::{Deserialize, Deserializer, Serialize};
@@ -17,7 +27,12 @@ use std::fmt;
 pub const COMMAND_PAYLOAD_SCHEMA: &str = "actingcommand.payload.command.v2";
 pub const RUNTIME_PAYLOAD_SCHEMA: &str = "actingcommand.payload.runtime.v1";
 pub const MONITOR_PAYLOAD_SCHEMA: &str = "actingcommand.payload.monitor.v1";
+pub const PERFORMANCE_PAYLOAD_SCHEMA: &str = "actingcommand.payload.performance.v1";
+pub const FACT_PAYLOAD_SCHEMA: &str = "actingcommand.payload.fact.v1";
+pub const APPROVAL_PAYLOAD_SCHEMA: &str = "actingcommand.payload.approval.v1";
 pub const SCHEDULER_PAYLOAD_SCHEMA: &str = "actingcommand.payload.scheduler.v3";
+pub const POLICY_PAYLOAD_SCHEMA: &str = "actingcommand.payload.policy.v1";
+pub const CATALOG_PAYLOAD_SCHEMA: &str = "actingcommand.payload.catalog.v1";
 pub const LEASE_PAYLOAD_SCHEMA: &str = "actingcommand.payload.lease.v3";
 pub const TASK_PAYLOAD_SCHEMA: &str = "actingcommand.payload.task.v3";
 pub const APPLICATION_PAYLOAD_SCHEMA: &str = "actingcommand.payload.application.v1";
@@ -27,6 +42,9 @@ pub const RECOGNITION_PAYLOAD_SCHEMA: &str = "actingcommand.payload.recognition.
 pub const ARTIFACT_PAYLOAD_SCHEMA: &str = "actingcommand.payload.artifact.v1";
 pub const RESOURCE_AUTHORING_PAYLOAD_SCHEMA: &str = "actingcommand.payload.resource_authoring.v1";
 pub const CLIENT_PAYLOAD_SCHEMA: &str = "actingcommand.payload.client.v2";
+pub const STATE_PAYLOAD_SCHEMA: &str = "actingcommand.payload.state.v1";
+pub const RELEASE_PAYLOAD_SCHEMA: &str = "actingcommand.payload.release.v1";
+pub const AGENT_PAYLOAD_SCHEMA: &str = "actingcommand.payload.agent.v1";
 pub const LEDGER_PAYLOAD_SCHEMA: &str = "actingcommand.payload.ledger.v2";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -281,6 +299,109 @@ pub struct MonitorRecoveryCoordinationPayload {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+pub struct PerformancePressurePayload {
+    action: EventAction,
+    observed_at_unix_ms: u64,
+    pressure: PerformancePressureRecord,
+    audit: SanitizedAudit,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PerformanceStutterPayload {
+    action: EventAction,
+    instance_id: String,
+    observed_at_unix_ms: u64,
+    frame_gap_ms: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    capture_latency_ms: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    recognition_latency_ms: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    action_effect_latency_ms: Option<u64>,
+    audit: SanitizedAudit,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PerformanceSummaryPayload {
+    action: EventAction,
+    context: PerformanceContext,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    foreground: Option<crate::PerformanceForegroundSummary>,
+    owned_processes: Vec<crate::PerformanceProcessSummary>,
+    third_party_high_load: Vec<crate::PerformanceProcessSummary>,
+    audit: SanitizedAudit,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PerformanceMonitorStatePayload {
+    action: EventAction,
+    observed_at_unix_ms: u64,
+    health: PerformanceMonitorHealth,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    failure_code: Option<String>,
+    consecutive_failures: u16,
+    terminal: bool,
+    unavailable_metrics: Vec<crate::PerformanceMetric>,
+    audit: SanitizedAudit,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PerformanceControlPayload {
+    action: EventAction,
+    observed_at_unix_ms: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    instance_id: Option<String>,
+    previous_level: PerformanceControlLevel,
+    level: PerformanceControlLevel,
+    reason: PerformanceControlReason,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    host_responsiveness_basis_points: Option<u16>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    third_party_pressure_basis_points: Option<u16>,
+    recovery: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    deadline_disposition: Option<PerformanceDeadlineDisposition>,
+    audit: SanitizedAudit,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FactPublishedPayload {
+    action: EventAction,
+    record: Box<FactRecord>,
+    audit: SanitizedAudit,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FactInvalidatedPayload {
+    action: EventAction,
+    invalidation: FactInvalidationEventData,
+    audit: SanitizedAudit,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ClientActionPayload {
+    action: EventAction,
+    record: ClientActionRecord,
+    audit: SanitizedAudit,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ApprovalDecisionPayload {
+    action: EventAction,
+    decision: ApprovalDecisionRecord,
+    audit: SanitizedAudit,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct SchedulerQueuePayload {
     action: EventAction,
     priority: LeasePriority,
@@ -391,6 +512,488 @@ pub struct ResourceAuthoringPayload {
     #[serde(skip_serializing_if = "Option::is_none")]
     failure_code: Option<String>,
     audit: SanitizedAudit,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PolicyReasonRecord {
+    pub code: String,
+    pub detail: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PolicyDispatchEventData {
+    pub decision_id: String,
+    pub task_id: String,
+    pub instance_id: String,
+    pub operation_id: String,
+    pub package_digest: String,
+    pub procedure_binding_digest: String,
+    pub reason_chain_id: String,
+    pub reasons: Vec<PolicyReasonRecord>,
+    pub catalog_hash: String,
+    pub catalog_version: u64,
+    pub input_ledger_position: u64,
+    pub fact_snapshot_id: String,
+    pub approval_fact_ids: Vec<String>,
+    pub urgency_milli: u16,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PolicyActivitySample {
+    pub profile_id: String,
+    pub local_day: i64,
+    pub window_id: String,
+    pub admitted_at_unix_ms: u64,
+    pub seed: u64,
+    pub interval_ms: u64,
+    pub next_eligible_unix_ms: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PolicyBudgetReceipt {
+    pub task_daily_used: u32,
+    pub task_daily_limit: u32,
+    pub task_window_used: u32,
+    pub task_window_limit: u32,
+    pub task_runtime_reserved_ms: u64,
+    pub task_runtime_limit_ms: u64,
+    pub activity_daily_used: u32,
+    pub activity_daily_limit: u32,
+    pub activity_window_used: u32,
+    pub activity_window_limit: u32,
+    pub activity_runtime_reserved_ms: u64,
+    pub activity_runtime_limit_ms: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PolicyAdmissionRecord {
+    pub activity: PolicyActivitySample,
+    pub budget: PolicyBudgetReceipt,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct PolicyFailureRecord {
+    pub error_code: String,
+    pub reported_success: bool,
+    pub original_class: PolicyFailureClass,
+    pub effective_class: PolicyFailureClass,
+    pub consecutive_same_error: u16,
+    #[serde(default)]
+    pub escalation_streak: u16,
+    #[serde(default)]
+    pub performance_tax_exempt: bool,
+    pub retry_attempt: u16,
+    pub disposition: PolicyFailureDisposition,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub retry_at_unix_ms: Option<u64>,
+    pub runtime_ms: u64,
+    pub sensitive: bool,
+    #[serde(default = "legacy_performance_context")]
+    pub perf_context: Box<PerformanceContext>,
+}
+
+fn legacy_performance_context() -> Box<PerformanceContext> {
+    Box::new(PerformanceContext::legacy_unavailable())
+}
+
+#[derive(Default)]
+struct LegacyOptionalU16(Option<u16>);
+
+impl<'de> Deserialize<'de> for LegacyOptionalU16 {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        u16::deserialize(deserializer).map(|value| Self(Some(value)))
+    }
+}
+
+impl<'de> Deserialize<'de> for PolicyFailureRecord {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct Wire {
+            error_code: String,
+            reported_success: bool,
+            original_class: PolicyFailureClass,
+            effective_class: PolicyFailureClass,
+            consecutive_same_error: u16,
+            #[serde(default)]
+            escalation_streak: LegacyOptionalU16,
+            #[serde(default)]
+            performance_tax_exempt: bool,
+            retry_attempt: u16,
+            disposition: PolicyFailureDisposition,
+            retry_at_unix_ms: Option<u64>,
+            runtime_ms: u64,
+            sensitive: bool,
+            #[serde(default = "legacy_performance_context")]
+            perf_context: Box<PerformanceContext>,
+        }
+
+        let wire = Wire::deserialize(deserializer)?;
+        Ok(Self {
+            error_code: wire.error_code,
+            reported_success: wire.reported_success,
+            original_class: wire.original_class,
+            effective_class: wire.effective_class,
+            consecutive_same_error: wire.consecutive_same_error,
+            escalation_streak: wire
+                .escalation_streak
+                .0
+                .unwrap_or(wire.consecutive_same_error),
+            performance_tax_exempt: wire.performance_tax_exempt,
+            retry_attempt: wire.retry_attempt,
+            disposition: wire.disposition,
+            retry_at_unix_ms: wire.retry_at_unix_ms,
+            runtime_ms: wire.runtime_ms,
+            sensitive: wire.sensitive,
+            perf_context: wire.perf_context,
+        })
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum PolicyExecutionOutcome {
+    Succeeded { runtime_ms: u64 },
+    Failed { failure: PolicyFailureRecord },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PolicyExecutionEventData {
+    pub decision_id: String,
+    pub task_id: String,
+    pub instance_id: String,
+    pub observed_at_unix_ms: u64,
+    pub outcome: PolicyExecutionOutcome,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PolicyExecutionPayload {
+    action: EventAction,
+    decision_id: String,
+    task_id: String,
+    instance_id: String,
+    observed_at_unix_ms: u64,
+    outcome: PolicyExecutionOutcome,
+    audit: SanitizedAudit,
+}
+
+impl PolicyExecutionPayload {
+    pub fn decision_id(&self) -> &str {
+        &self.decision_id
+    }
+
+    pub fn task_id(&self) -> &str {
+        &self.task_id
+    }
+
+    pub fn instance_id(&self) -> &str {
+        &self.instance_id
+    }
+
+    pub const fn observed_at_unix_ms(&self) -> u64 {
+        self.observed_at_unix_ms
+    }
+
+    pub const fn outcome(&self) -> &PolicyExecutionOutcome {
+        &self.outcome
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PolicyPlanningSignalEventData {
+    pub signal_id: String,
+    pub instance_id: String,
+    pub task_id: Option<String>,
+    pub kind: PolicyPlanningSignalKind,
+    pub fact_code: String,
+    pub observed_at_unix_ms: u64,
+    pub detection_budget: Option<PolicyDetectionBudgetRecord>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PolicyDetectionBudgetRecord {
+    pub catalog_hash: String,
+    pub profile_id: String,
+    pub window_id: String,
+    pub dispatch_used: u32,
+    pub dispatch_limit: u32,
+    pub runtime_reserved_ms: u64,
+    pub runtime_limit_ms: u64,
+    pub reservation_ms: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PolicyPlanningSignalPayload {
+    action: EventAction,
+    signal_id: String,
+    instance_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    task_id: Option<String>,
+    kind: PolicyPlanningSignalKind,
+    fact_code: String,
+    observed_at_unix_ms: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    detection_budget: Option<PolicyDetectionBudgetRecord>,
+    audit: SanitizedAudit,
+}
+
+impl PolicyPlanningSignalPayload {
+    pub fn signal_id(&self) -> &str {
+        &self.signal_id
+    }
+
+    pub fn instance_id(&self) -> &str {
+        &self.instance_id
+    }
+
+    pub fn task_id(&self) -> Option<&str> {
+        self.task_id.as_deref()
+    }
+
+    pub const fn kind(&self) -> PolicyPlanningSignalKind {
+        self.kind
+    }
+
+    pub fn fact_code(&self) -> &str {
+        &self.fact_code
+    }
+
+    pub const fn observed_at_unix_ms(&self) -> u64 {
+        self.observed_at_unix_ms
+    }
+
+    pub const fn detection_budget(&self) -> Option<&PolicyDetectionBudgetRecord> {
+        self.detection_budget.as_ref()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PolicyDispatchPayload {
+    action: EventAction,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    diagnostic_code: Option<DiagnosticCode>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    effect_disposition: Option<EffectDisposition>,
+    decision_id: String,
+    task_id: String,
+    instance_id: String,
+    operation_id: String,
+    #[serde(default)]
+    package_digest: String,
+    #[serde(default)]
+    procedure_binding_digest: String,
+    reason_chain_id: String,
+    reasons: Vec<PolicyReasonRecord>,
+    catalog_hash: String,
+    catalog_version: u64,
+    input_ledger_position: u64,
+    fact_snapshot_id: String,
+    approval_fact_ids: Vec<String>,
+    #[serde(default)]
+    urgency_milli: u16,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    admission: Option<Box<PolicyAdmissionRecord>>,
+    audit: SanitizedAudit,
+}
+
+impl PolicyDispatchPayload {
+    pub fn decision_id(&self) -> &str {
+        &self.decision_id
+    }
+
+    pub fn task_id(&self) -> &str {
+        &self.task_id
+    }
+
+    pub fn instance_id(&self) -> &str {
+        &self.instance_id
+    }
+
+    pub fn operation_id(&self) -> &str {
+        &self.operation_id
+    }
+
+    pub fn package_digest(&self) -> &str {
+        &self.package_digest
+    }
+
+    pub fn procedure_binding_digest(&self) -> &str {
+        &self.procedure_binding_digest
+    }
+
+    pub fn reason_chain_id(&self) -> &str {
+        &self.reason_chain_id
+    }
+
+    pub fn reasons(&self) -> &[PolicyReasonRecord] {
+        &self.reasons
+    }
+
+    pub fn catalog_hash(&self) -> &str {
+        &self.catalog_hash
+    }
+
+    pub const fn catalog_version(&self) -> u64 {
+        self.catalog_version
+    }
+
+    pub const fn input_ledger_position(&self) -> u64 {
+        self.input_ledger_position
+    }
+
+    pub fn fact_snapshot_id(&self) -> &str {
+        &self.fact_snapshot_id
+    }
+
+    pub fn approval_fact_ids(&self) -> &[String] {
+        &self.approval_fact_ids
+    }
+
+    pub fn admission(&self) -> Option<&PolicyAdmissionRecord> {
+        self.admission.as_deref()
+    }
+
+    pub const fn urgency_milli(&self) -> u16 {
+        self.urgency_milli
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CatalogTransitionEventData {
+    pub catalog_id: String,
+    pub catalog_version: u64,
+    pub catalog_hash: String,
+    pub previous_catalog_hash: Option<String>,
+    pub promotion: Option<CatalogPromotionAuthorization>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CatalogTransitionPayload {
+    action: EventAction,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    diagnostic_code: Option<DiagnosticCode>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    effect_disposition: Option<EffectDisposition>,
+    catalog_id: String,
+    catalog_version: u64,
+    catalog_hash: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    previous_catalog_hash: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    promotion: Option<CatalogPromotionAuthorization>,
+    audit: SanitizedAudit,
+}
+
+impl CatalogTransitionPayload {
+    pub fn catalog_id(&self) -> &str {
+        &self.catalog_id
+    }
+
+    pub const fn catalog_version(&self) -> u64 {
+        self.catalog_version
+    }
+
+    pub fn catalog_hash(&self) -> &str {
+        &self.catalog_hash
+    }
+
+    pub fn previous_catalog_hash(&self) -> Option<&str> {
+        self.previous_catalog_hash.as_deref()
+    }
+
+    pub const fn promotion(&self) -> Option<&CatalogPromotionAuthorization> {
+        self.promotion.as_ref()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct StateMigrationPayload {
+    action: EventAction,
+    migration: StateMigrationData,
+    audit: SanitizedAudit,
+}
+
+impl StateMigrationPayload {
+    pub const fn migration(&self) -> &StateMigrationData {
+        &self.migration
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ReleaseStagedPayload {
+    action: EventAction,
+    effect_disposition: EffectDisposition,
+    manifest: RuntimeReleaseSet,
+    audit: SanitizedAudit,
+}
+
+impl ReleaseStagedPayload {
+    pub const fn manifest(&self) -> &RuntimeReleaseSet {
+        &self.manifest
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ReleaseTransitionPayload {
+    action: EventAction,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    diagnostic_code: Option<DiagnosticCode>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    effect_disposition: Option<EffectDisposition>,
+    transition: ReleaseTransitionData,
+    audit: SanitizedAudit,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AgentWakePayload {
+    action: EventAction,
+    wake: AgentWakeData,
+    audit: SanitizedAudit,
+}
+
+impl AgentWakePayload {
+    pub const fn wake(&self) -> &AgentWakeData {
+        &self.wake
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AgentSessionPayload {
+    action: EventAction,
+    session: AgentSessionEventData,
+    audit: SanitizedAudit,
+}
+
+impl AgentSessionPayload {
+    pub const fn session(&self) -> &AgentSessionEventData {
+        &self.session
+    }
+}
+
+impl ReleaseTransitionPayload {
+    pub const fn transition(&self) -> &ReleaseTransitionData {
+        &self.transition
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -785,6 +1388,15 @@ common_detail_accessors!(OutcomePayload);
 common_detail_accessors!(DiagnosticOutcomePayload);
 common_detail_accessors!(MonitorOutcomePayload);
 common_detail_accessors!(MonitorRecoveryCoordinationPayload);
+common_detail_accessors!(PerformancePressurePayload);
+common_detail_accessors!(PerformanceStutterPayload);
+common_detail_accessors!(PerformanceSummaryPayload);
+common_detail_accessors!(PerformanceMonitorStatePayload);
+common_detail_accessors!(PerformanceControlPayload);
+common_detail_accessors!(FactPublishedPayload);
+common_detail_accessors!(FactInvalidatedPayload);
+common_detail_accessors!(ClientActionPayload);
+common_detail_accessors!(ApprovalDecisionPayload);
 common_detail_accessors!(SchedulerQueuePayload);
 common_detail_accessors!(SchedulerPreemptionPayload);
 common_detail_accessors!(LeaseTransferPayload);
@@ -794,6 +1406,132 @@ common_detail_accessors!(CaptureDedupWindowPayload);
 common_detail_accessors!(CapturePolicyPayload);
 common_detail_accessors!(ArtifactExportPayload);
 common_detail_accessors!(ArtifactExportFailurePayload);
+
+macro_rules! plain_payload_detail {
+    ($($type:ty),+ $(,)?) => {
+        $(
+            impl PayloadDetail for $type {
+                fn action(&self) -> EventAction {
+                    self.action
+                }
+
+                fn diagnostic_code(&self) -> Option<DiagnosticCode> {
+                    None
+                }
+
+                fn effect_disposition(&self) -> Option<EffectDisposition> {
+                    None
+                }
+
+                fn audit(&self) -> &SanitizedAudit {
+                    &self.audit
+                }
+            }
+        )+
+    };
+}
+
+plain_payload_detail!(
+    PerformancePressurePayload,
+    PerformanceStutterPayload,
+    PerformanceSummaryPayload,
+    PerformanceMonitorStatePayload,
+    PerformanceControlPayload,
+    FactPublishedPayload,
+    FactInvalidatedPayload,
+    ClientActionPayload,
+    ApprovalDecisionPayload,
+);
+
+impl PerformancePressurePayload {
+    pub const fn observed_at_unix_ms(&self) -> u64 {
+        self.observed_at_unix_ms
+    }
+
+    pub const fn pressure(&self) -> &PerformancePressureRecord {
+        &self.pressure
+    }
+}
+
+impl PerformanceStutterPayload {
+    pub fn instance_id(&self) -> &str {
+        &self.instance_id
+    }
+
+    pub const fn observed_at_unix_ms(&self) -> u64 {
+        self.observed_at_unix_ms
+    }
+
+    pub const fn frame_gap_ms(&self) -> u64 {
+        self.frame_gap_ms
+    }
+}
+
+impl PerformanceSummaryPayload {
+    pub const fn context(&self) -> &PerformanceContext {
+        &self.context
+    }
+}
+
+impl PerformanceMonitorStatePayload {
+    pub const fn observed_at_unix_ms(&self) -> u64 {
+        self.observed_at_unix_ms
+    }
+
+    pub const fn health(&self) -> PerformanceMonitorHealth {
+        self.health
+    }
+
+    pub fn failure_code(&self) -> Option<&str> {
+        self.failure_code.as_deref()
+    }
+}
+
+impl PerformanceControlPayload {
+    pub const fn observed_at_unix_ms(&self) -> u64 {
+        self.observed_at_unix_ms
+    }
+
+    pub fn instance_id(&self) -> Option<&str> {
+        self.instance_id.as_deref()
+    }
+
+    pub const fn level(&self) -> PerformanceControlLevel {
+        self.level
+    }
+
+    pub const fn reason(&self) -> PerformanceControlReason {
+        self.reason
+    }
+
+    pub const fn deadline_disposition(&self) -> Option<PerformanceDeadlineDisposition> {
+        self.deadline_disposition
+    }
+}
+
+impl FactPublishedPayload {
+    pub fn record(&self) -> &FactRecord {
+        self.record.as_ref()
+    }
+}
+
+impl FactInvalidatedPayload {
+    pub const fn invalidation(&self) -> &FactInvalidationEventData {
+        &self.invalidation
+    }
+}
+
+impl ClientActionPayload {
+    pub const fn record(&self) -> &ClientActionRecord {
+        &self.record
+    }
+}
+
+impl ApprovalDecisionPayload {
+    pub const fn decision(&self) -> &ApprovalDecisionRecord {
+        &self.decision
+    }
+}
 
 impl ResourceAuthoringPayload {
     pub const fn phase(&self) -> ResourceAuthoringPhase {
@@ -1195,6 +1933,168 @@ observation_detail!(CapturePolicyPayload);
 observation_detail!(SchedulerQueuePayload);
 observation_detail!(SchedulerPreemptionPayload);
 
+impl PayloadDetail for PolicyDispatchPayload {
+    fn action(&self) -> EventAction {
+        self.action
+    }
+
+    fn diagnostic_code(&self) -> Option<DiagnosticCode> {
+        self.diagnostic_code
+    }
+
+    fn effect_disposition(&self) -> Option<EffectDisposition> {
+        self.effect_disposition
+    }
+
+    fn audit(&self) -> &SanitizedAudit {
+        &self.audit
+    }
+}
+
+impl PayloadDetail for PolicyExecutionPayload {
+    fn action(&self) -> EventAction {
+        self.action
+    }
+
+    fn diagnostic_code(&self) -> Option<DiagnosticCode> {
+        None
+    }
+
+    fn effect_disposition(&self) -> Option<EffectDisposition> {
+        None
+    }
+
+    fn audit(&self) -> &SanitizedAudit {
+        &self.audit
+    }
+}
+
+impl PayloadDetail for PolicyPlanningSignalPayload {
+    fn action(&self) -> EventAction {
+        self.action
+    }
+
+    fn diagnostic_code(&self) -> Option<DiagnosticCode> {
+        None
+    }
+
+    fn effect_disposition(&self) -> Option<EffectDisposition> {
+        None
+    }
+
+    fn audit(&self) -> &SanitizedAudit {
+        &self.audit
+    }
+}
+
+impl PayloadDetail for CatalogTransitionPayload {
+    fn action(&self) -> EventAction {
+        self.action
+    }
+
+    fn diagnostic_code(&self) -> Option<DiagnosticCode> {
+        self.diagnostic_code
+    }
+
+    fn effect_disposition(&self) -> Option<EffectDisposition> {
+        self.effect_disposition
+    }
+
+    fn audit(&self) -> &SanitizedAudit {
+        &self.audit
+    }
+}
+
+impl PayloadDetail for StateMigrationPayload {
+    fn action(&self) -> EventAction {
+        self.action
+    }
+
+    fn diagnostic_code(&self) -> Option<DiagnosticCode> {
+        None
+    }
+
+    fn effect_disposition(&self) -> Option<EffectDisposition> {
+        Some(EffectDisposition::Performed)
+    }
+
+    fn audit(&self) -> &SanitizedAudit {
+        &self.audit
+    }
+}
+
+impl PayloadDetail for ReleaseStagedPayload {
+    fn action(&self) -> EventAction {
+        self.action
+    }
+
+    fn diagnostic_code(&self) -> Option<DiagnosticCode> {
+        None
+    }
+
+    fn effect_disposition(&self) -> Option<EffectDisposition> {
+        Some(self.effect_disposition)
+    }
+
+    fn audit(&self) -> &SanitizedAudit {
+        &self.audit
+    }
+}
+
+impl PayloadDetail for ReleaseTransitionPayload {
+    fn action(&self) -> EventAction {
+        self.action
+    }
+
+    fn diagnostic_code(&self) -> Option<DiagnosticCode> {
+        self.diagnostic_code
+    }
+
+    fn effect_disposition(&self) -> Option<EffectDisposition> {
+        self.effect_disposition
+    }
+
+    fn audit(&self) -> &SanitizedAudit {
+        &self.audit
+    }
+}
+
+impl PayloadDetail for AgentWakePayload {
+    fn action(&self) -> EventAction {
+        self.action
+    }
+
+    fn diagnostic_code(&self) -> Option<DiagnosticCode> {
+        None
+    }
+
+    fn effect_disposition(&self) -> Option<EffectDisposition> {
+        None
+    }
+
+    fn audit(&self) -> &SanitizedAudit {
+        &self.audit
+    }
+}
+
+impl PayloadDetail for AgentSessionPayload {
+    fn action(&self) -> EventAction {
+        self.action
+    }
+
+    fn diagnostic_code(&self) -> Option<DiagnosticCode> {
+        None
+    }
+
+    fn effect_disposition(&self) -> Option<EffectDisposition> {
+        None
+    }
+
+    fn audit(&self) -> &SanitizedAudit {
+        &self.audit
+    }
+}
+
 impl PayloadDetail for LeaseTransferPayload {
     fn action(&self) -> EventAction {
         self.action
@@ -1445,6 +2345,106 @@ struct ResourceAuthoringDraft {
     audit: AuditInput,
 }
 
+struct PolicyDispatchDraft {
+    data: PolicyDispatchEventData,
+    admission: Option<Box<PolicyAdmissionRecord>>,
+    diagnostic_code: Option<DiagnosticCode>,
+    effect_disposition: Option<EffectDisposition>,
+    audit: AuditInput,
+}
+
+struct PolicyExecutionDraft {
+    data: PolicyExecutionEventData,
+    audit: AuditInput,
+}
+
+struct PerformancePressureDraft {
+    data: PerformancePressureEventData,
+    audit: AuditInput,
+}
+
+struct PerformanceStutterDraft {
+    data: PerformanceStutterEventData,
+    audit: AuditInput,
+}
+
+struct PerformanceSummaryDraft {
+    data: PerformanceSummaryEventData,
+    audit: AuditInput,
+}
+
+struct PerformanceMonitorStateDraft {
+    data: PerformanceMonitorStateEventData,
+    audit: AuditInput,
+}
+
+struct PerformanceControlDraft {
+    data: PerformanceControlEventData,
+    audit: AuditInput,
+}
+
+struct FactPublishedDraft {
+    record: Box<FactRecord>,
+    audit: AuditInput,
+}
+
+struct FactInvalidatedDraft {
+    invalidation: FactInvalidationEventData,
+    audit: AuditInput,
+}
+
+struct ClientActionDraft {
+    record: ClientActionRecord,
+    audit: AuditInput,
+}
+
+struct ApprovalDecisionDraft {
+    decision: ApprovalDecisionRecord,
+    audit: AuditInput,
+}
+
+struct PolicyPlanningSignalDraft {
+    data: PolicyPlanningSignalEventData,
+    audit: AuditInput,
+}
+
+struct CatalogTransitionDraft {
+    action: EventAction,
+    data: CatalogTransitionEventData,
+    diagnostic_code: Option<DiagnosticCode>,
+    effect_disposition: Option<EffectDisposition>,
+    audit: AuditInput,
+}
+
+struct StateMigrationDraft {
+    migration: StateMigrationData,
+    audit: AuditInput,
+}
+
+struct ReleaseStagedDraft {
+    manifest: RuntimeReleaseSet,
+    audit: AuditInput,
+}
+
+struct ReleaseTransitionDraft {
+    action: EventAction,
+    transition: ReleaseTransitionData,
+    diagnostic_code: Option<DiagnosticCode>,
+    effect_disposition: Option<EffectDisposition>,
+    audit: AuditInput,
+}
+
+struct AgentWakeDraft {
+    wake: AgentWakeData,
+    audit: AuditInput,
+}
+
+struct AgentSessionDraft {
+    action: EventAction,
+    session: AgentSessionEventData,
+    audit: AuditInput,
+}
+
 struct TaskSemanticDraft {
     fact: TaskSemanticFact,
     audit: AuditInput,
@@ -1486,6 +2486,323 @@ impl ResourceAuthoringDraft {
             target_fingerprint: self.target_fingerprint,
             changed_paths: self.changed_paths,
             failure_code: self.failure_code,
+            audit: self.audit.sanitize(fingerprinter)?,
+        })
+    }
+}
+
+impl PolicyDispatchDraft {
+    fn sanitize(
+        self,
+        fingerprinter: &dyn SecretFingerprinter,
+    ) -> Result<PolicyDispatchPayload, SanitizationError> {
+        validate_policy_dispatch_data(&self.data)?;
+        Ok(PolicyDispatchPayload {
+            action: EventAction::PolicyDispatch,
+            diagnostic_code: self.diagnostic_code,
+            effect_disposition: self.effect_disposition,
+            decision_id: self.data.decision_id,
+            task_id: self.data.task_id,
+            instance_id: self.data.instance_id,
+            operation_id: self.data.operation_id,
+            package_digest: self.data.package_digest,
+            procedure_binding_digest: self.data.procedure_binding_digest,
+            reason_chain_id: self.data.reason_chain_id,
+            reasons: self.data.reasons,
+            catalog_hash: self.data.catalog_hash,
+            catalog_version: self.data.catalog_version,
+            input_ledger_position: self.data.input_ledger_position,
+            fact_snapshot_id: self.data.fact_snapshot_id,
+            approval_fact_ids: self.data.approval_fact_ids,
+            urgency_milli: self.data.urgency_milli,
+            admission: self.admission,
+            audit: self.audit.sanitize(fingerprinter)?,
+        })
+    }
+}
+
+impl PolicyExecutionDraft {
+    fn sanitize(
+        self,
+        fingerprinter: &dyn SecretFingerprinter,
+    ) -> Result<PolicyExecutionPayload, SanitizationError> {
+        validate_policy_execution_data(&self.data)?;
+        Ok(PolicyExecutionPayload {
+            action: EventAction::PolicyExecution,
+            decision_id: self.data.decision_id,
+            task_id: self.data.task_id,
+            instance_id: self.data.instance_id,
+            observed_at_unix_ms: self.data.observed_at_unix_ms,
+            outcome: self.data.outcome,
+            audit: self.audit.sanitize(fingerprinter)?,
+        })
+    }
+}
+
+impl PerformancePressureDraft {
+    fn sanitize(
+        self,
+        fingerprinter: &dyn SecretFingerprinter,
+    ) -> Result<PerformancePressurePayload, SanitizationError> {
+        if self.data.observed_at_unix_ms == 0
+            || self.data.pressure.last_observed_at_unix_ms != self.data.observed_at_unix_ms
+        {
+            return Err(SanitizationError::new(
+                "invalid_performance_pressure_time",
+                "performance_pressure",
+            ));
+        }
+        self.data.pressure.validate()?;
+        Ok(PerformancePressurePayload {
+            action: EventAction::PerformanceObserve,
+            observed_at_unix_ms: self.data.observed_at_unix_ms,
+            pressure: self.data.pressure,
+            audit: self.audit.sanitize(fingerprinter)?,
+        })
+    }
+}
+
+impl PerformanceStutterDraft {
+    fn sanitize(
+        self,
+        fingerprinter: &dyn SecretFingerprinter,
+    ) -> Result<PerformanceStutterPayload, SanitizationError> {
+        validate_performance_stutter(&self.data)?;
+        Ok(PerformanceStutterPayload {
+            action: EventAction::PerformanceObserve,
+            instance_id: self.data.instance_id,
+            observed_at_unix_ms: self.data.observed_at_unix_ms,
+            frame_gap_ms: self.data.frame_gap_ms,
+            capture_latency_ms: self.data.capture_latency_ms,
+            recognition_latency_ms: self.data.recognition_latency_ms,
+            action_effect_latency_ms: self.data.action_effect_latency_ms,
+            audit: self.audit.sanitize(fingerprinter)?,
+        })
+    }
+}
+
+impl PerformanceSummaryDraft {
+    fn sanitize(
+        self,
+        fingerprinter: &dyn SecretFingerprinter,
+    ) -> Result<PerformanceSummaryPayload, SanitizationError> {
+        validate_performance_summary(&self.data)?;
+        Ok(PerformanceSummaryPayload {
+            action: EventAction::PerformanceObserve,
+            context: self.data.context,
+            foreground: self.data.foreground,
+            owned_processes: self.data.owned_processes,
+            third_party_high_load: self.data.third_party_high_load,
+            audit: self.audit.sanitize(fingerprinter)?,
+        })
+    }
+}
+
+impl PerformanceMonitorStateDraft {
+    fn sanitize(
+        self,
+        fingerprinter: &dyn SecretFingerprinter,
+    ) -> Result<PerformanceMonitorStatePayload, SanitizationError> {
+        validate_performance_monitor_state(&self.data)?;
+        Ok(PerformanceMonitorStatePayload {
+            action: EventAction::PerformanceObserve,
+            observed_at_unix_ms: self.data.observed_at_unix_ms,
+            health: self.data.health,
+            failure_code: self.data.failure_code,
+            consecutive_failures: self.data.consecutive_failures,
+            terminal: self.data.terminal,
+            unavailable_metrics: self.data.unavailable_metrics,
+            audit: self.audit.sanitize(fingerprinter)?,
+        })
+    }
+}
+
+impl PerformanceControlDraft {
+    fn sanitize(
+        self,
+        fingerprinter: &dyn SecretFingerprinter,
+    ) -> Result<PerformanceControlPayload, SanitizationError> {
+        validate_performance_control(&self.data)?;
+        Ok(PerformanceControlPayload {
+            action: EventAction::PerformanceObserve,
+            observed_at_unix_ms: self.data.observed_at_unix_ms,
+            instance_id: self.data.instance_id,
+            previous_level: self.data.previous_level,
+            level: self.data.level,
+            reason: self.data.reason,
+            host_responsiveness_basis_points: self.data.host_responsiveness_basis_points,
+            third_party_pressure_basis_points: self.data.third_party_pressure_basis_points,
+            recovery: self.data.recovery,
+            deadline_disposition: self.data.deadline_disposition,
+            audit: self.audit.sanitize(fingerprinter)?,
+        })
+    }
+}
+
+impl FactPublishedDraft {
+    fn sanitize(
+        self,
+        fingerprinter: &dyn SecretFingerprinter,
+    ) -> Result<FactPublishedPayload, SanitizationError> {
+        self.record.validate()?;
+        Ok(FactPublishedPayload {
+            action: EventAction::FactPublish,
+            record: self.record,
+            audit: self.audit.sanitize(fingerprinter)?,
+        })
+    }
+}
+
+impl FactInvalidatedDraft {
+    fn sanitize(
+        self,
+        fingerprinter: &dyn SecretFingerprinter,
+    ) -> Result<FactInvalidatedPayload, SanitizationError> {
+        validate_fact_invalidation(&self.invalidation)?;
+        Ok(FactInvalidatedPayload {
+            action: EventAction::FactInvalidate,
+            invalidation: self.invalidation,
+            audit: self.audit.sanitize(fingerprinter)?,
+        })
+    }
+}
+
+impl ClientActionDraft {
+    fn sanitize(
+        self,
+        fingerprinter: &dyn SecretFingerprinter,
+    ) -> Result<ClientActionPayload, SanitizationError> {
+        self.record.validate()?;
+        Ok(ClientActionPayload {
+            action: EventAction::ClientAction,
+            record: self.record,
+            audit: self.audit.sanitize(fingerprinter)?,
+        })
+    }
+}
+
+impl ApprovalDecisionDraft {
+    fn sanitize(
+        self,
+        fingerprinter: &dyn SecretFingerprinter,
+    ) -> Result<ApprovalDecisionPayload, SanitizationError> {
+        self.decision.validate()?;
+        Ok(ApprovalDecisionPayload {
+            action: EventAction::ApprovalDecision,
+            decision: self.decision,
+            audit: self.audit.sanitize(fingerprinter)?,
+        })
+    }
+}
+
+impl PolicyPlanningSignalDraft {
+    fn sanitize(
+        self,
+        fingerprinter: &dyn SecretFingerprinter,
+    ) -> Result<PolicyPlanningSignalPayload, SanitizationError> {
+        validate_policy_planning_signal_data(&self.data)?;
+        Ok(PolicyPlanningSignalPayload {
+            action: EventAction::PolicyPlanning,
+            signal_id: self.data.signal_id,
+            instance_id: self.data.instance_id,
+            task_id: self.data.task_id,
+            kind: self.data.kind,
+            fact_code: self.data.fact_code,
+            observed_at_unix_ms: self.data.observed_at_unix_ms,
+            detection_budget: self.data.detection_budget,
+            audit: self.audit.sanitize(fingerprinter)?,
+        })
+    }
+}
+
+impl CatalogTransitionDraft {
+    fn sanitize(
+        self,
+        fingerprinter: &dyn SecretFingerprinter,
+    ) -> Result<CatalogTransitionPayload, SanitizationError> {
+        validate_catalog_transition_data(&self.data)?;
+        Ok(CatalogTransitionPayload {
+            action: self.action,
+            diagnostic_code: self.diagnostic_code,
+            effect_disposition: self.effect_disposition,
+            catalog_id: self.data.catalog_id,
+            catalog_version: self.data.catalog_version,
+            catalog_hash: self.data.catalog_hash,
+            previous_catalog_hash: self.data.previous_catalog_hash,
+            promotion: self.data.promotion,
+            audit: self.audit.sanitize(fingerprinter)?,
+        })
+    }
+}
+
+impl StateMigrationDraft {
+    fn sanitize(
+        self,
+        fingerprinter: &dyn SecretFingerprinter,
+    ) -> Result<StateMigrationPayload, SanitizationError> {
+        self.migration.validate()?;
+        Ok(StateMigrationPayload {
+            action: EventAction::StateMigrate,
+            migration: self.migration,
+            audit: self.audit.sanitize(fingerprinter)?,
+        })
+    }
+}
+
+impl ReleaseStagedDraft {
+    fn sanitize(
+        self,
+        fingerprinter: &dyn SecretFingerprinter,
+    ) -> Result<ReleaseStagedPayload, SanitizationError> {
+        self.manifest.validate()?;
+        Ok(ReleaseStagedPayload {
+            action: EventAction::ReleaseStage,
+            effect_disposition: EffectDisposition::Performed,
+            manifest: self.manifest,
+            audit: self.audit.sanitize(fingerprinter)?,
+        })
+    }
+}
+
+impl ReleaseTransitionDraft {
+    fn sanitize(
+        self,
+        fingerprinter: &dyn SecretFingerprinter,
+    ) -> Result<ReleaseTransitionPayload, SanitizationError> {
+        self.transition.validate()?;
+        Ok(ReleaseTransitionPayload {
+            action: self.action,
+            diagnostic_code: self.diagnostic_code,
+            effect_disposition: self.effect_disposition,
+            transition: self.transition,
+            audit: self.audit.sanitize(fingerprinter)?,
+        })
+    }
+}
+
+impl AgentWakeDraft {
+    fn sanitize(
+        self,
+        fingerprinter: &dyn SecretFingerprinter,
+    ) -> Result<AgentWakePayload, SanitizationError> {
+        self.wake.validate()?;
+        Ok(AgentWakePayload {
+            action: EventAction::AgentWake,
+            wake: self.wake,
+            audit: self.audit.sanitize(fingerprinter)?,
+        })
+    }
+}
+
+impl AgentSessionDraft {
+    fn sanitize(
+        self,
+        fingerprinter: &dyn SecretFingerprinter,
+    ) -> Result<AgentSessionPayload, SanitizationError> {
+        self.session.validate()?;
+        Ok(AgentSessionPayload {
+            action: self.action,
+            session: self.session,
             audit: self.audit.sanitize(fingerprinter)?,
         })
     }
@@ -1581,6 +2898,664 @@ fn validate_resource_authoring_token(
         ));
     }
     Ok(())
+}
+
+fn validate_policy_dispatch_data(data: &PolicyDispatchEventData) -> Result<(), SanitizationError> {
+    validate_policy_token(&data.decision_id, "decision_id")?;
+    validate_policy_token(&data.task_id, "task_id")?;
+    validate_policy_token(&data.instance_id, "instance_id")?;
+    validate_policy_token(&data.operation_id, "operation_id")?;
+    validate_policy_digest(&data.package_digest, "package_digest")?;
+    validate_policy_digest(&data.procedure_binding_digest, "procedure_binding_digest")?;
+    validate_policy_token(&data.reason_chain_id, "reason_chain_id")?;
+    validate_policy_token(&data.fact_snapshot_id, "fact_snapshot_id")?;
+    validate_catalog_hash(&data.catalog_hash, "catalog_hash")?;
+    if data.catalog_version == 0 || data.input_ledger_position == 0 || data.urgency_milli > 1_000 {
+        return Err(SanitizationError::new(
+            "invalid_policy_dispatch_position",
+            "catalog_version_or_input_position",
+        ));
+    }
+    if data.reasons.is_empty() || data.reasons.len() > 128 {
+        return Err(SanitizationError::new(
+            "invalid_policy_reason_chain",
+            "reasons",
+        ));
+    }
+    for reason in &data.reasons {
+        validate_policy_token(&reason.code, "reason_code")?;
+        validate_policy_text(&reason.detail, "reason_detail")?;
+    }
+    if data.approval_fact_ids.len() > 64 {
+        return Err(SanitizationError::new(
+            "invalid_policy_approval_facts",
+            "approval_fact_ids",
+        ));
+    }
+    for approval in &data.approval_fact_ids {
+        validate_policy_token(approval, "approval_fact_ids")?;
+    }
+    Ok(())
+}
+
+fn validate_policy_admission(value: &PolicyAdmissionRecord) -> Result<(), SanitizationError> {
+    validate_policy_token(&value.activity.profile_id, "activity_profile_id")?;
+    validate_policy_token(&value.activity.window_id, "activity_window_id")?;
+    if value.activity.admitted_at_unix_ms == 0
+        || value.activity.next_eligible_unix_ms < value.activity.admitted_at_unix_ms
+        || value.activity.next_eligible_unix_ms - value.activity.admitted_at_unix_ms
+            != value.activity.interval_ms
+    {
+        return Err(SanitizationError::new(
+            "invalid_policy_activity_sample",
+            "activity",
+        ));
+    }
+    let budget = &value.budget;
+    if budget.task_daily_used == 0
+        || budget.task_daily_used > budget.task_daily_limit
+        || budget.task_window_used == 0
+        || budget.task_window_used > budget.task_window_limit
+        || budget.task_runtime_reserved_ms == 0
+        || budget.task_runtime_reserved_ms > budget.task_runtime_limit_ms
+        || budget.activity_daily_used == 0
+        || budget.activity_daily_used > budget.activity_daily_limit
+        || budget.activity_window_used == 0
+        || budget.activity_window_used > budget.activity_window_limit
+        || budget.activity_runtime_reserved_ms == 0
+        || budget.activity_runtime_reserved_ms > budget.activity_runtime_limit_ms
+    {
+        return Err(SanitizationError::new(
+            "invalid_policy_budget_receipt",
+            "budget",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_policy_execution_data(
+    data: &PolicyExecutionEventData,
+) -> Result<(), SanitizationError> {
+    validate_policy_token(&data.decision_id, "decision_id")?;
+    validate_policy_token(&data.task_id, "task_id")?;
+    validate_policy_token(&data.instance_id, "instance_id")?;
+    if data.observed_at_unix_ms == 0 {
+        return Err(SanitizationError::new(
+            "invalid_policy_execution_time",
+            "observed_at_unix_ms",
+        ));
+    }
+    if let PolicyExecutionOutcome::Failed { failure } = &data.outcome {
+        validate_policy_token(&failure.error_code, "error_code")?;
+        failure.perf_context.validate()?;
+        let retry_scheduled = failure.disposition == PolicyFailureDisposition::RetryScheduled;
+        if failure.consecutive_same_error == 0
+            || failure.escalation_streak > failure.consecutive_same_error
+            || (!failure.performance_tax_exempt && failure.escalation_streak == 0)
+            || failure.performance_tax_exempt
+                && (failure.original_class != PolicyFailureClass::Recoverable
+                    || failure.effective_class != PolicyFailureClass::Recoverable
+                    || failure.sensitive
+                    || failure.reported_success
+                    || !failure.perf_context.pressure_observed())
+            || retry_scheduled != failure.retry_at_unix_ms.is_some()
+            || retry_scheduled
+                && (failure.retry_attempt == 0
+                    || failure.effective_class != PolicyFailureClass::Recoverable
+                    || failure
+                        .retry_at_unix_ms
+                        .is_some_and(|retry_at| retry_at <= data.observed_at_unix_ms))
+            || !retry_scheduled && failure.retry_attempt != 0
+            || failure.original_class == PolicyFailureClass::Severe
+                && failure.effective_class != PolicyFailureClass::Severe
+            || failure.effective_class == PolicyFailureClass::Severe
+                && failure.disposition != PolicyFailureDisposition::PausedTask
+            || failure.reported_success
+                && (failure.error_code != "policy_runtime_budget_exceeded"
+                    || failure.original_class != PolicyFailureClass::Severe
+                    || failure.effective_class != PolicyFailureClass::Severe)
+            || failure.sensitive
+                && (failure.effective_class != PolicyFailureClass::Severe
+                    || failure.disposition != PolicyFailureDisposition::PausedTask)
+        {
+            return Err(SanitizationError::new(
+                "invalid_policy_failure_record",
+                "outcome",
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn validate_policy_planning_signal_data(
+    data: &PolicyPlanningSignalEventData,
+) -> Result<(), SanitizationError> {
+    validate_policy_token(&data.signal_id, "signal_id")?;
+    validate_policy_token(&data.instance_id, "instance_id")?;
+    if let Some(task_id) = &data.task_id {
+        validate_policy_token(task_id, "task_id")?;
+    }
+    validate_policy_token(&data.fact_code, "fact_code")?;
+    if data.observed_at_unix_ms == 0 {
+        return Err(SanitizationError::new(
+            "invalid_policy_planning_signal_time",
+            "observed_at_unix_ms",
+        ));
+    }
+    let detection_kind = matches!(
+        data.kind,
+        PolicyPlanningSignalKind::DetectionReserved
+            | PolicyPlanningSignalKind::DetectionQuotaExhausted
+    );
+    if detection_kind != data.detection_budget.is_some() {
+        return Err(SanitizationError::new(
+            "invalid_policy_detection_budget_presence",
+            "detection_budget",
+        ));
+    }
+    if let Some(budget) = &data.detection_budget {
+        validate_catalog_hash(&budget.catalog_hash, "detection_budget.catalog_hash")?;
+        validate_policy_token(&budget.profile_id, "detection_budget.profile_id")?;
+        validate_policy_token(&budget.window_id, "detection_budget.window_id")?;
+        let exhausted = budget.dispatch_used >= budget.dispatch_limit
+            || budget
+                .runtime_reserved_ms
+                .checked_add(budget.reservation_ms)
+                .is_none_or(|next| next > budget.runtime_limit_ms);
+        if budget.dispatch_limit == 0
+            || budget.runtime_limit_ms == 0
+            || budget.reservation_ms == 0
+            || data.kind == PolicyPlanningSignalKind::DetectionReserved
+                && (budget.dispatch_used == 0
+                    || budget.runtime_reserved_ms == 0
+                    || budget.runtime_reserved_ms < budget.reservation_ms
+                    || budget.dispatch_used > budget.dispatch_limit
+                    || budget.runtime_reserved_ms > budget.runtime_limit_ms)
+            || data.kind == PolicyPlanningSignalKind::DetectionQuotaExhausted && !exhausted
+        {
+            return Err(SanitizationError::new(
+                "invalid_policy_detection_budget",
+                "detection_budget",
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn validate_performance_payload(payload: &PerformancePayload) -> Result<(), SanitizationError> {
+    match payload {
+        PerformancePayload::PressureStarted(value)
+            if value.action == EventAction::PerformanceObserve =>
+        {
+            if value.observed_at_unix_ms == 0
+                || value.pressure.last_observed_at_unix_ms != value.observed_at_unix_ms
+                || value.pressure.started_at_unix_ms != value.observed_at_unix_ms
+            {
+                return Err(SanitizationError::new(
+                    "invalid_performance_pressure_time",
+                    "performance_pressure",
+                ));
+            }
+            value.pressure.validate()
+        }
+        PerformancePayload::PressureEnded(value)
+            if value.action == EventAction::PerformanceObserve =>
+        {
+            if value.observed_at_unix_ms == 0
+                || value.pressure.last_observed_at_unix_ms != value.observed_at_unix_ms
+                || value.pressure.started_at_unix_ms >= value.observed_at_unix_ms
+            {
+                return Err(SanitizationError::new(
+                    "invalid_performance_pressure_time",
+                    "performance_pressure",
+                ));
+            }
+            value.pressure.validate()
+        }
+        PerformancePayload::StutterDetected(value)
+            if value.action == EventAction::PerformanceObserve =>
+        {
+            validate_performance_stutter(&PerformanceStutterEventData {
+                instance_id: value.instance_id.clone(),
+                observed_at_unix_ms: value.observed_at_unix_ms,
+                frame_gap_ms: value.frame_gap_ms,
+                capture_latency_ms: value.capture_latency_ms,
+                recognition_latency_ms: value.recognition_latency_ms,
+                action_effect_latency_ms: value.action_effect_latency_ms,
+            })
+        }
+        PerformancePayload::Summary(value) if value.action == EventAction::PerformanceObserve => {
+            validate_performance_summary(&PerformanceSummaryEventData {
+                context: value.context.clone(),
+                foreground: value.foreground.clone(),
+                owned_processes: value.owned_processes.clone(),
+                third_party_high_load: value.third_party_high_load.clone(),
+            })
+        }
+        PerformancePayload::MonitorDegraded(value)
+            if value.action == EventAction::PerformanceObserve
+                && value.health == PerformanceMonitorHealth::Degraded
+                && value.failure_code.is_some() =>
+        {
+            validate_performance_monitor_state(&PerformanceMonitorStateEventData {
+                observed_at_unix_ms: value.observed_at_unix_ms,
+                health: value.health,
+                failure_code: value.failure_code.clone(),
+                consecutive_failures: value.consecutive_failures,
+                terminal: value.terminal,
+                unavailable_metrics: value.unavailable_metrics.clone(),
+            })
+        }
+        PerformancePayload::MonitorRecovered(value)
+            if value.action == EventAction::PerformanceObserve
+                && matches!(
+                    value.health,
+                    PerformanceMonitorHealth::Healthy | PerformanceMonitorHealth::Partial
+                )
+                && value.failure_code.is_none()
+                && value.consecutive_failures == 0
+                && !value.terminal =>
+        {
+            validate_performance_monitor_state(&PerformanceMonitorStateEventData {
+                observed_at_unix_ms: value.observed_at_unix_ms,
+                health: value.health,
+                failure_code: None,
+                consecutive_failures: 0,
+                terminal: false,
+                unavailable_metrics: value.unavailable_metrics.clone(),
+            })
+        }
+        PerformancePayload::BalanceChanged(value)
+            if value.action == EventAction::PerformanceObserve =>
+        {
+            validate_performance_control(&PerformanceControlEventData {
+                observed_at_unix_ms: value.observed_at_unix_ms,
+                instance_id: value.instance_id.clone(),
+                previous_level: value.previous_level,
+                level: value.level,
+                reason: value.reason,
+                host_responsiveness_basis_points: value.host_responsiveness_basis_points,
+                third_party_pressure_basis_points: value.third_party_pressure_basis_points,
+                recovery: value.recovery,
+                deadline_disposition: value.deadline_disposition,
+            })
+        }
+        _ => Err(SanitizationError::new(
+            "invalid_performance_payload",
+            "performance_payload",
+        )),
+    }
+}
+
+fn validate_fact_payload(payload: &FactPayload) -> Result<(), SanitizationError> {
+    match payload {
+        FactPayload::Published(value) if value.action == EventAction::FactPublish => {
+            value.record.validate()
+        }
+        FactPayload::Invalidated(value) if value.action == EventAction::FactInvalidate => {
+            validate_fact_invalidation(&value.invalidation)
+        }
+        _ => Err(SanitizationError::new(
+            "invalid_fact_payload",
+            "fact_payload",
+        )),
+    }
+}
+
+fn validate_client_action_payload(payload: &ClientPayload) -> Result<(), SanitizationError> {
+    if let ClientPayload::Action(value) = payload {
+        if value.action == EventAction::ClientAction {
+            return value.record.validate();
+        }
+        return Err(SanitizationError::new(
+            "invalid_client_action_payload",
+            "client_action_payload",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_approval_payload(payload: &ApprovalPayload) -> Result<(), SanitizationError> {
+    match payload {
+        ApprovalPayload::Decision(value) if value.action == EventAction::ApprovalDecision => {
+            value.decision.validate()
+        }
+        _ => Err(SanitizationError::new(
+            "invalid_approval_payload",
+            "approval_payload",
+        )),
+    }
+}
+
+fn validate_policy_payload(payload: &PolicyPayload) -> Result<(), SanitizationError> {
+    let dispatch = match payload {
+        PolicyPayload::DispatchIntent(value)
+            if value.action == EventAction::PolicyDispatch
+                && value.diagnostic_code.is_none()
+                && value.effect_disposition.is_none()
+                && value.admission.is_none() =>
+        {
+            Some(value)
+        }
+        PolicyPayload::DispatchAdmitted(value)
+            if value.action == EventAction::PolicyDispatch
+                && value.diagnostic_code.is_none()
+                && value.effect_disposition == Some(EffectDisposition::Performed)
+                && value.admission.is_some() =>
+        {
+            Some(value)
+        }
+        PolicyPayload::DispatchRejected(value)
+            if value.action == EventAction::PolicyDispatch
+                && value.diagnostic_code == Some(DiagnosticCode::PolicyRejected)
+                && matches!(
+                    value.effect_disposition,
+                    Some(EffectDisposition::NotPerformed | EffectDisposition::Indeterminate)
+                )
+                && value.admission.is_none() =>
+        {
+            Some(value)
+        }
+        PolicyPayload::DispatchCompleted(value)
+            if value.action == EventAction::PolicyDispatch
+                && value.diagnostic_code.is_none()
+                && value.effect_disposition == Some(EffectDisposition::Performed)
+                && value.admission.is_some() =>
+        {
+            Some(value)
+        }
+        PolicyPayload::ExecutionRecorded(value) if value.action == EventAction::PolicyExecution => {
+            validate_policy_execution_data(&PolicyExecutionEventData {
+                decision_id: value.decision_id.clone(),
+                task_id: value.task_id.clone(),
+                instance_id: value.instance_id.clone(),
+                observed_at_unix_ms: value.observed_at_unix_ms,
+                outcome: value.outcome.clone(),
+            })?;
+            None
+        }
+        PolicyPayload::PlanningSignalObserved(value)
+            if value.action == EventAction::PolicyPlanning =>
+        {
+            validate_policy_planning_signal_data(&PolicyPlanningSignalEventData {
+                signal_id: value.signal_id.clone(),
+                instance_id: value.instance_id.clone(),
+                task_id: value.task_id.clone(),
+                kind: value.kind,
+                fact_code: value.fact_code.clone(),
+                observed_at_unix_ms: value.observed_at_unix_ms,
+                detection_budget: value.detection_budget.clone(),
+            })?;
+            None
+        }
+        _ => {
+            return Err(SanitizationError::new(
+                "invalid_policy_payload",
+                "policy_payload",
+            ));
+        }
+    };
+    let Some(value) = dispatch else {
+        return Ok(());
+    };
+    validate_policy_dispatch_data(&PolicyDispatchEventData {
+        decision_id: value.decision_id.clone(),
+        task_id: value.task_id.clone(),
+        instance_id: value.instance_id.clone(),
+        operation_id: value.operation_id.clone(),
+        package_digest: value.package_digest.clone(),
+        procedure_binding_digest: value.procedure_binding_digest.clone(),
+        reason_chain_id: value.reason_chain_id.clone(),
+        reasons: value.reasons.clone(),
+        catalog_hash: value.catalog_hash.clone(),
+        catalog_version: value.catalog_version,
+        input_ledger_position: value.input_ledger_position,
+        fact_snapshot_id: value.fact_snapshot_id.clone(),
+        approval_fact_ids: value.approval_fact_ids.clone(),
+        urgency_milli: value.urgency_milli,
+    })?;
+    if let Some(admission) = &value.admission {
+        validate_policy_admission(admission)?;
+    }
+    Ok(())
+}
+
+fn validate_catalog_transition_data(
+    data: &CatalogTransitionEventData,
+) -> Result<(), SanitizationError> {
+    validate_policy_token(&data.catalog_id, "catalog_id")?;
+    validate_catalog_hash(&data.catalog_hash, "catalog_hash")?;
+    if data.catalog_version == 0 {
+        return Err(SanitizationError::new(
+            "invalid_catalog_version",
+            "catalog_version",
+        ));
+    }
+    if let Some(previous) = &data.previous_catalog_hash {
+        validate_catalog_hash(previous, "previous_catalog_hash")?;
+        if previous == &data.catalog_hash {
+            return Err(SanitizationError::new(
+                "invalid_catalog_transition",
+                "previous_catalog_hash",
+            ));
+        }
+    }
+    if let Some(promotion) = &data.promotion {
+        promotion.validate()?;
+    }
+    Ok(())
+}
+
+fn validate_catalog_payload(payload: &CatalogPayload) -> Result<(), SanitizationError> {
+    let value = match payload {
+        CatalogPayload::TransitionIntent(value)
+            if matches!(
+                value.action,
+                EventAction::CatalogActivate | EventAction::CatalogRollback
+            ) && value.diagnostic_code.is_none()
+                && value.effect_disposition.is_none() =>
+        {
+            value
+        }
+        CatalogPayload::Activated(value)
+            if value.action == EventAction::CatalogActivate
+                && value.diagnostic_code.is_none()
+                && value.effect_disposition == Some(EffectDisposition::Performed) =>
+        {
+            value
+        }
+        CatalogPayload::RolledBack(value)
+            if value.action == EventAction::CatalogRollback
+                && value.diagnostic_code.is_none()
+                && value.effect_disposition == Some(EffectDisposition::Performed) =>
+        {
+            value
+        }
+        CatalogPayload::TransitionFailed(value)
+            if matches!(
+                value.action,
+                EventAction::CatalogActivate | EventAction::CatalogRollback
+            ) && value.diagnostic_code == Some(DiagnosticCode::CatalogTransitionFailed)
+                && matches!(
+                    value.effect_disposition,
+                    Some(EffectDisposition::NotPerformed | EffectDisposition::Indeterminate)
+                ) =>
+        {
+            value
+        }
+        _ => {
+            return Err(SanitizationError::new(
+                "invalid_catalog_transition_lifecycle",
+                "catalog_payload",
+            ));
+        }
+    };
+    validate_catalog_transition_data(&CatalogTransitionEventData {
+        catalog_id: value.catalog_id.clone(),
+        catalog_version: value.catalog_version,
+        catalog_hash: value.catalog_hash.clone(),
+        previous_catalog_hash: value.previous_catalog_hash.clone(),
+        promotion: value.promotion.clone(),
+    })
+}
+
+fn validate_release_payload(payload: &ReleasePayload) -> Result<(), SanitizationError> {
+    match payload {
+        ReleasePayload::Staged(value) => {
+            if value.action != EventAction::ReleaseStage
+                || value.effect_disposition != EffectDisposition::Performed
+            {
+                return Err(SanitizationError::new(
+                    "invalid_release_stage_lifecycle",
+                    "release_payload",
+                ));
+            }
+            value.manifest.validate()
+        }
+        ReleasePayload::TransitionIntent(value)
+            if value.action == release_action(value.transition.kind())
+                && value.diagnostic_code.is_none()
+                && value.effect_disposition.is_none() =>
+        {
+            value.transition.validate()
+        }
+        ReleasePayload::Activated(value)
+            if value.action == EventAction::ReleaseActivate
+                && value.transition.kind() == ReleaseTransitionKind::Activate
+                && value.diagnostic_code.is_none()
+                && value.effect_disposition == Some(EffectDisposition::Performed) =>
+        {
+            value.transition.validate()
+        }
+        ReleasePayload::RolledBack(value)
+            if value.action == EventAction::ReleaseRollback
+                && value.transition.kind() == ReleaseTransitionKind::Rollback
+                && value.diagnostic_code.is_none()
+                && value.effect_disposition == Some(EffectDisposition::Performed) =>
+        {
+            value.transition.validate()
+        }
+        ReleasePayload::TransitionFailed(value)
+            if value.action == release_action(value.transition.kind())
+                && value.diagnostic_code == Some(DiagnosticCode::ReleaseTransitionFailed)
+                && matches!(
+                    value.effect_disposition,
+                    Some(EffectDisposition::NotPerformed | EffectDisposition::Indeterminate)
+                ) =>
+        {
+            value.transition.validate()
+        }
+        _ => Err(SanitizationError::new(
+            "invalid_release_transition_lifecycle",
+            "release_payload",
+        )),
+    }
+}
+
+fn validate_agent_payload(payload: &AgentPayload) -> Result<(), SanitizationError> {
+    match payload {
+        AgentPayload::WakeRequested(value) if value.action == EventAction::AgentWake => {
+            value.wake.validate()
+        }
+        AgentPayload::SessionStarted(value)
+            if value.action == EventAction::AgentSessionStart
+                && value.session.response().is_none()
+                && value.session.status().state() == AgentAttentionState::Active
+                && value.session.status().attempts_used() == 1 =>
+        {
+            value.session.validate()
+        }
+        AgentPayload::SessionResumed(value)
+            if value.action == EventAction::AgentSessionResume
+                && value.session.response().is_none()
+                && value.session.status().state() == AgentAttentionState::Active =>
+        {
+            value.session.validate()
+        }
+        AgentPayload::ResponseRecorded(value)
+            if value.action == EventAction::AgentSessionRespond
+                && value.session.status().state() == AgentAttentionState::Active
+                && value.session.response().is_some_and(|response| {
+                    response.disposition() == crate::AgentResponseDisposition::RetryableFailure
+                }) =>
+        {
+            value.session.validate()
+        }
+        AgentPayload::SessionCompleted(value)
+            if value.action == EventAction::AgentSessionComplete
+                && value.session.status().state() == AgentAttentionState::Completed
+                && value.session.response().is_some_and(|response| {
+                    response.disposition() == crate::AgentResponseDisposition::Completed
+                }) =>
+        {
+            value.session.validate()
+        }
+        AgentPayload::SessionEscalated(value)
+            if value.action == EventAction::AgentSessionEscalate
+                && value.session.status().state() == AgentAttentionState::PausedNeedsHuman
+                && value.session.response().is_some_and(|response| {
+                    matches!(
+                        response.disposition(),
+                        crate::AgentResponseDisposition::RetryableFailure
+                            | crate::AgentResponseDisposition::NeedsHuman
+                    )
+                }) =>
+        {
+            value.session.validate()
+        }
+        _ => Err(SanitizationError::new(
+            "invalid_agent_session_lifecycle",
+            "agent_payload",
+        )),
+    }
+}
+
+fn validate_policy_token(value: &str, field: &'static str) -> Result<(), SanitizationError> {
+    if value.is_empty()
+        || value.len() > 256
+        || value.chars().any(char::is_control)
+        || value.chars().any(char::is_whitespace)
+    {
+        Err(SanitizationError::new("invalid_policy_token", field))
+    } else {
+        Ok(())
+    }
+}
+
+fn validate_policy_text(value: &str, field: &'static str) -> Result<(), SanitizationError> {
+    if value.is_empty() || value.len() > 1_024 || value.chars().any(char::is_control) {
+        Err(SanitizationError::new("invalid_policy_text", field))
+    } else {
+        Ok(())
+    }
+}
+
+fn validate_policy_digest(value: &str, field: &'static str) -> Result<(), SanitizationError> {
+    let valid = value.strip_prefix("sha256:").is_some_and(|digest| {
+        digest.len() == 64
+            && digest
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
+    });
+    if valid {
+        Ok(())
+    } else {
+        Err(SanitizationError::new("invalid_policy_digest", field))
+    }
+}
+
+fn validate_catalog_hash(value: &str, field: &'static str) -> Result<(), SanitizationError> {
+    let valid = value.strip_prefix("sha256:").is_some_and(|digest| {
+        digest.len() == 64
+            && digest
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
+    });
+    if valid {
+        Ok(())
+    } else {
+        Err(SanitizationError::new("invalid_catalog_hash", field))
+    }
 }
 
 impl ObservationDraft {
@@ -2612,6 +4587,7 @@ impl ArtifactPayloadDraft {
 }
 
 enum ClientDraftKind {
+    Action(ClientActionDraft),
     UiAction(ObservationDraft),
     CliCommand(ObservationDraft),
     LabRequest(ObservationDraft),
@@ -2620,6 +4596,10 @@ enum ClientDraftKind {
 pub struct ClientPayloadDraft(ClientDraftKind);
 
 impl ClientPayloadDraft {
+    pub fn action(record: ClientActionRecord, audit: AuditInput) -> Self {
+        Self(ClientDraftKind::Action(ClientActionDraft { record, audit }))
+    }
+
     pub fn ui_action(action: EventAction, audit: AuditInput) -> Self {
         Self(ClientDraftKind::UiAction(ObservationDraft::new(
             action, audit,
@@ -2685,11 +4665,400 @@ impl LedgerPayloadDraft {
     }
 }
 
+enum PerformanceDraftKind {
+    PressureStarted(PerformancePressureDraft),
+    PressureEnded(PerformancePressureDraft),
+    StutterDetected(PerformanceStutterDraft),
+    Summary(Box<PerformanceSummaryDraft>),
+    MonitorDegraded(PerformanceMonitorStateDraft),
+    MonitorRecovered(PerformanceMonitorStateDraft),
+    BalanceChanged(PerformanceControlDraft),
+}
+
+pub struct PerformancePayloadDraft(PerformanceDraftKind);
+
+impl PerformancePayloadDraft {
+    pub fn pressure_started(data: PerformancePressureEventData, audit: AuditInput) -> Self {
+        Self(PerformanceDraftKind::PressureStarted(
+            PerformancePressureDraft { data, audit },
+        ))
+    }
+
+    pub fn pressure_ended(data: PerformancePressureEventData, audit: AuditInput) -> Self {
+        Self(PerformanceDraftKind::PressureEnded(
+            PerformancePressureDraft { data, audit },
+        ))
+    }
+
+    pub fn stutter_detected(data: PerformanceStutterEventData, audit: AuditInput) -> Self {
+        Self(PerformanceDraftKind::StutterDetected(
+            PerformanceStutterDraft { data, audit },
+        ))
+    }
+
+    pub fn summary(data: PerformanceSummaryEventData, audit: AuditInput) -> Self {
+        Self(PerformanceDraftKind::Summary(Box::new(
+            PerformanceSummaryDraft { data, audit },
+        )))
+    }
+
+    pub fn monitor_degraded(data: PerformanceMonitorStateEventData, audit: AuditInput) -> Self {
+        Self(PerformanceDraftKind::MonitorDegraded(
+            PerformanceMonitorStateDraft { data, audit },
+        ))
+    }
+
+    pub fn monitor_recovered(data: PerformanceMonitorStateEventData, audit: AuditInput) -> Self {
+        Self(PerformanceDraftKind::MonitorRecovered(
+            PerformanceMonitorStateDraft { data, audit },
+        ))
+    }
+
+    pub fn balance_changed(data: PerformanceControlEventData, audit: AuditInput) -> Self {
+        Self(PerformanceDraftKind::BalanceChanged(
+            PerformanceControlDraft { data, audit },
+        ))
+    }
+}
+
+enum FactDraftKind {
+    Published(FactPublishedDraft),
+    Invalidated(FactInvalidatedDraft),
+}
+
+pub struct FactPayloadDraft(FactDraftKind);
+
+impl FactPayloadDraft {
+    pub fn published(record: FactRecord, audit: AuditInput) -> Self {
+        Self(FactDraftKind::Published(FactPublishedDraft {
+            record: Box::new(record),
+            audit,
+        }))
+    }
+
+    pub fn invalidated(invalidation: FactInvalidationEventData, audit: AuditInput) -> Self {
+        Self(FactDraftKind::Invalidated(FactInvalidatedDraft {
+            invalidation,
+            audit,
+        }))
+    }
+}
+
+enum ApprovalDraftKind {
+    Decision(ApprovalDecisionDraft),
+}
+
+pub struct ApprovalPayloadDraft(ApprovalDraftKind);
+
+impl ApprovalPayloadDraft {
+    pub fn decision(decision: ApprovalDecisionRecord, audit: AuditInput) -> Self {
+        Self(ApprovalDraftKind::Decision(ApprovalDecisionDraft {
+            decision,
+            audit,
+        }))
+    }
+}
+
+enum PolicyDraftKind {
+    Intent(PolicyDispatchDraft),
+    Admitted(PolicyDispatchDraft),
+    Rejected(PolicyDispatchDraft),
+    Completed(PolicyDispatchDraft),
+    Execution(PolicyExecutionDraft),
+    PlanningSignal(PolicyPlanningSignalDraft),
+}
+
+pub struct PolicyPayloadDraft(PolicyDraftKind);
+
+impl PolicyPayloadDraft {
+    pub fn dispatch_intent(data: PolicyDispatchEventData, audit: AuditInput) -> Self {
+        Self(PolicyDraftKind::Intent(PolicyDispatchDraft {
+            data,
+            admission: None,
+            diagnostic_code: None,
+            effect_disposition: None,
+            audit,
+        }))
+    }
+
+    pub fn dispatch_admitted(
+        data: PolicyDispatchEventData,
+        admission: PolicyAdmissionRecord,
+        audit: AuditInput,
+    ) -> Self {
+        Self(PolicyDraftKind::Admitted(PolicyDispatchDraft {
+            data,
+            admission: Some(Box::new(admission)),
+            diagnostic_code: None,
+            effect_disposition: Some(EffectDisposition::Performed),
+            audit,
+        }))
+    }
+
+    pub fn dispatch_rejected(
+        data: PolicyDispatchEventData,
+        effect_disposition: EffectDisposition,
+        audit: AuditInput,
+    ) -> Self {
+        Self(PolicyDraftKind::Rejected(PolicyDispatchDraft {
+            data,
+            admission: None,
+            diagnostic_code: Some(DiagnosticCode::PolicyRejected),
+            effect_disposition: Some(effect_disposition),
+            audit,
+        }))
+    }
+
+    pub fn dispatch_completed(
+        data: PolicyDispatchEventData,
+        admission: PolicyAdmissionRecord,
+        audit: AuditInput,
+    ) -> Self {
+        Self(PolicyDraftKind::Completed(PolicyDispatchDraft {
+            data,
+            admission: Some(Box::new(admission)),
+            diagnostic_code: None,
+            effect_disposition: Some(EffectDisposition::Performed),
+            audit,
+        }))
+    }
+
+    pub fn execution_recorded(data: PolicyExecutionEventData, audit: AuditInput) -> Self {
+        Self(PolicyDraftKind::Execution(PolicyExecutionDraft {
+            data,
+            audit,
+        }))
+    }
+
+    pub fn planning_signal_observed(
+        data: PolicyPlanningSignalEventData,
+        audit: AuditInput,
+    ) -> Self {
+        Self(PolicyDraftKind::PlanningSignal(PolicyPlanningSignalDraft {
+            data,
+            audit,
+        }))
+    }
+}
+
+enum CatalogDraftKind {
+    TransitionIntent(CatalogTransitionDraft),
+    Activated(CatalogTransitionDraft),
+    RolledBack(CatalogTransitionDraft),
+    TransitionFailed(CatalogTransitionDraft),
+}
+
+pub struct CatalogPayloadDraft(CatalogDraftKind);
+
+impl CatalogPayloadDraft {
+    pub fn transition_intent(
+        action: EventAction,
+        data: CatalogTransitionEventData,
+        audit: AuditInput,
+    ) -> Self {
+        Self(CatalogDraftKind::TransitionIntent(CatalogTransitionDraft {
+            action,
+            data,
+            diagnostic_code: None,
+            effect_disposition: None,
+            audit,
+        }))
+    }
+
+    pub fn activated(data: CatalogTransitionEventData, audit: AuditInput) -> Self {
+        Self(CatalogDraftKind::Activated(CatalogTransitionDraft {
+            action: EventAction::CatalogActivate,
+            data,
+            diagnostic_code: None,
+            effect_disposition: Some(EffectDisposition::Performed),
+            audit,
+        }))
+    }
+
+    pub fn rolled_back(data: CatalogTransitionEventData, audit: AuditInput) -> Self {
+        Self(CatalogDraftKind::RolledBack(CatalogTransitionDraft {
+            action: EventAction::CatalogRollback,
+            data,
+            diagnostic_code: None,
+            effect_disposition: Some(EffectDisposition::Performed),
+            audit,
+        }))
+    }
+
+    pub fn transition_failed(
+        action: EventAction,
+        data: CatalogTransitionEventData,
+        effect_disposition: EffectDisposition,
+        audit: AuditInput,
+    ) -> Self {
+        Self(CatalogDraftKind::TransitionFailed(CatalogTransitionDraft {
+            action,
+            data,
+            diagnostic_code: Some(DiagnosticCode::CatalogTransitionFailed),
+            effect_disposition: Some(effect_disposition),
+            audit,
+        }))
+    }
+}
+
+enum StateDraftKind {
+    Migrated(StateMigrationDraft),
+}
+
+pub struct StatePayloadDraft(StateDraftKind);
+
+impl StatePayloadDraft {
+    pub fn migrated(migration: StateMigrationData, audit: AuditInput) -> Self {
+        Self(StateDraftKind::Migrated(StateMigrationDraft {
+            migration,
+            audit,
+        }))
+    }
+}
+
+enum ReleaseDraftKind {
+    Staged(ReleaseStagedDraft),
+    TransitionIntent(ReleaseTransitionDraft),
+    Activated(ReleaseTransitionDraft),
+    RolledBack(ReleaseTransitionDraft),
+    TransitionFailed(ReleaseTransitionDraft),
+}
+
+pub struct ReleasePayloadDraft(ReleaseDraftKind);
+
+impl ReleasePayloadDraft {
+    pub fn staged(manifest: RuntimeReleaseSet, audit: AuditInput) -> Self {
+        Self(ReleaseDraftKind::Staged(ReleaseStagedDraft {
+            manifest,
+            audit,
+        }))
+    }
+
+    pub fn transition_intent(transition: ReleaseTransitionData, audit: AuditInput) -> Self {
+        Self(ReleaseDraftKind::TransitionIntent(ReleaseTransitionDraft {
+            action: release_action(transition.kind()),
+            transition,
+            diagnostic_code: None,
+            effect_disposition: None,
+            audit,
+        }))
+    }
+
+    pub fn activated(transition: ReleaseTransitionData, audit: AuditInput) -> Self {
+        Self(ReleaseDraftKind::Activated(ReleaseTransitionDraft {
+            action: EventAction::ReleaseActivate,
+            transition,
+            diagnostic_code: None,
+            effect_disposition: Some(EffectDisposition::Performed),
+            audit,
+        }))
+    }
+
+    pub fn rolled_back(transition: ReleaseTransitionData, audit: AuditInput) -> Self {
+        Self(ReleaseDraftKind::RolledBack(ReleaseTransitionDraft {
+            action: EventAction::ReleaseRollback,
+            transition,
+            diagnostic_code: None,
+            effect_disposition: Some(EffectDisposition::Performed),
+            audit,
+        }))
+    }
+
+    pub fn transition_failed(
+        transition: ReleaseTransitionData,
+        effect_disposition: EffectDisposition,
+        audit: AuditInput,
+    ) -> Self {
+        Self(ReleaseDraftKind::TransitionFailed(ReleaseTransitionDraft {
+            action: release_action(transition.kind()),
+            transition,
+            diagnostic_code: Some(DiagnosticCode::ReleaseTransitionFailed),
+            effect_disposition: Some(effect_disposition),
+            audit,
+        }))
+    }
+}
+
+enum AgentDraftKind {
+    WakeRequested(AgentWakeDraft),
+    SessionStarted(AgentSessionDraft),
+    SessionResumed(AgentSessionDraft),
+    ResponseRecorded(AgentSessionDraft),
+    SessionCompleted(AgentSessionDraft),
+    SessionEscalated(AgentSessionDraft),
+}
+
+pub struct AgentPayloadDraft(AgentDraftKind);
+
+impl AgentPayloadDraft {
+    pub fn wake_requested(wake: AgentWakeData, audit: AuditInput) -> Self {
+        Self(AgentDraftKind::WakeRequested(AgentWakeDraft {
+            wake,
+            audit,
+        }))
+    }
+
+    pub fn session_started(session: AgentSessionEventData, audit: AuditInput) -> Self {
+        Self(AgentDraftKind::SessionStarted(AgentSessionDraft {
+            action: EventAction::AgentSessionStart,
+            session,
+            audit,
+        }))
+    }
+
+    pub fn session_resumed(session: AgentSessionEventData, audit: AuditInput) -> Self {
+        Self(AgentDraftKind::SessionResumed(AgentSessionDraft {
+            action: EventAction::AgentSessionResume,
+            session,
+            audit,
+        }))
+    }
+
+    pub fn response_recorded(session: AgentSessionEventData, audit: AuditInput) -> Self {
+        Self(AgentDraftKind::ResponseRecorded(AgentSessionDraft {
+            action: EventAction::AgentSessionRespond,
+            session,
+            audit,
+        }))
+    }
+
+    pub fn session_completed(session: AgentSessionEventData, audit: AuditInput) -> Self {
+        Self(AgentDraftKind::SessionCompleted(AgentSessionDraft {
+            action: EventAction::AgentSessionComplete,
+            session,
+            audit,
+        }))
+    }
+
+    pub fn session_escalated(session: AgentSessionEventData, audit: AuditInput) -> Self {
+        Self(AgentDraftKind::SessionEscalated(AgentSessionDraft {
+            action: EventAction::AgentSessionEscalate,
+            session,
+            audit,
+        }))
+    }
+}
+
+const fn release_action(kind: ReleaseTransitionKind) -> EventAction {
+    match kind {
+        ReleaseTransitionKind::Activate => EventAction::ReleaseActivate,
+        ReleaseTransitionKind::Rollback => EventAction::ReleaseRollback,
+    }
+}
+
 pub enum EventPayloadDraft {
     Runtime(RuntimePayloadDraft),
     Monitor(MonitorPayloadDraft),
+    Performance(PerformancePayloadDraft),
+    Fact(FactPayloadDraft),
+    Approval(ApprovalPayloadDraft),
     Command(CommandPayloadDraft),
     Scheduler(SchedulerPayloadDraft),
+    Policy(PolicyPayloadDraft),
+    Catalog(CatalogPayloadDraft),
+    State(StatePayloadDraft),
+    Release(ReleasePayloadDraft),
+    Agent(AgentPayloadDraft),
     Lease(LeasePayloadDraft),
     Task(TaskPayloadDraft),
     Application(ApplicationPayloadDraft),
@@ -2715,7 +5084,15 @@ macro_rules! payload_draft_from {
 payload_draft_from!(CommandPayloadDraft, Command);
 payload_draft_from!(RuntimePayloadDraft, Runtime);
 payload_draft_from!(MonitorPayloadDraft, Monitor);
+payload_draft_from!(PerformancePayloadDraft, Performance);
+payload_draft_from!(FactPayloadDraft, Fact);
+payload_draft_from!(ApprovalPayloadDraft, Approval);
 payload_draft_from!(SchedulerPayloadDraft, Scheduler);
+payload_draft_from!(PolicyPayloadDraft, Policy);
+payload_draft_from!(CatalogPayloadDraft, Catalog);
+payload_draft_from!(StatePayloadDraft, State);
+payload_draft_from!(ReleasePayloadDraft, Release);
+payload_draft_from!(AgentPayloadDraft, Agent);
 payload_draft_from!(LeasePayloadDraft, Lease);
 payload_draft_from!(TaskPayloadDraft, Task);
 payload_draft_from!(ApplicationPayloadDraft, Application);
@@ -2775,11 +5152,123 @@ pub enum MonitorPayload {
     rename_all = "snake_case",
     deny_unknown_fields
 )]
+pub enum PerformancePayload {
+    PressureStarted(PerformancePressurePayload),
+    PressureEnded(PerformancePressurePayload),
+    StutterDetected(PerformanceStutterPayload),
+    Summary(Box<PerformanceSummaryPayload>),
+    MonitorDegraded(PerformanceMonitorStatePayload),
+    MonitorRecovered(PerformanceMonitorStatePayload),
+    BalanceChanged(PerformanceControlPayload),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(
+    tag = "kind",
+    content = "data",
+    rename_all = "snake_case",
+    deny_unknown_fields
+)]
+pub enum FactPayload {
+    Published(FactPublishedPayload),
+    Invalidated(FactInvalidatedPayload),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(
+    tag = "kind",
+    content = "data",
+    rename_all = "snake_case",
+    deny_unknown_fields
+)]
+pub enum ApprovalPayload {
+    Decision(ApprovalDecisionPayload),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(
+    tag = "kind",
+    content = "data",
+    rename_all = "snake_case",
+    deny_unknown_fields
+)]
 pub enum SchedulerPayload {
     Admitted(ObservationPayload),
     Queued(SchedulerQueuePayload),
     Denied(DiagnosticPayload),
     Preempted(SchedulerPreemptionPayload),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(
+    tag = "kind",
+    content = "data",
+    rename_all = "snake_case",
+    deny_unknown_fields
+)]
+pub enum PolicyPayload {
+    DispatchIntent(PolicyDispatchPayload),
+    DispatchAdmitted(PolicyDispatchPayload),
+    DispatchRejected(PolicyDispatchPayload),
+    DispatchCompleted(PolicyDispatchPayload),
+    ExecutionRecorded(PolicyExecutionPayload),
+    PlanningSignalObserved(PolicyPlanningSignalPayload),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(
+    tag = "kind",
+    content = "data",
+    rename_all = "snake_case",
+    deny_unknown_fields
+)]
+pub enum CatalogPayload {
+    TransitionIntent(CatalogTransitionPayload),
+    Activated(CatalogTransitionPayload),
+    RolledBack(CatalogTransitionPayload),
+    TransitionFailed(CatalogTransitionPayload),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(
+    tag = "kind",
+    content = "data",
+    rename_all = "snake_case",
+    deny_unknown_fields
+)]
+pub enum StatePayload {
+    Migrated(StateMigrationPayload),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(
+    tag = "kind",
+    content = "data",
+    rename_all = "snake_case",
+    deny_unknown_fields
+)]
+pub enum ReleasePayload {
+    Staged(ReleaseStagedPayload),
+    TransitionIntent(ReleaseTransitionPayload),
+    Activated(ReleaseTransitionPayload),
+    RolledBack(ReleaseTransitionPayload),
+    TransitionFailed(ReleaseTransitionPayload),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(
+    tag = "kind",
+    content = "data",
+    rename_all = "snake_case",
+    deny_unknown_fields
+)]
+pub enum AgentPayload {
+    WakeRequested(AgentWakePayload),
+    SessionStarted(AgentSessionPayload),
+    SessionResumed(AgentSessionPayload),
+    ResponseRecorded(AgentSessionPayload),
+    SessionCompleted(AgentSessionPayload),
+    SessionEscalated(AgentSessionPayload),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -2917,6 +5406,7 @@ impl FamilyPayload for ResourceAuthoringPayload {
     deny_unknown_fields
 )]
 pub enum ClientPayload {
+    Action(ClientActionPayload),
     UiAction(ObservationPayload),
     CliCommand(ObservationPayload),
     LabRequest(ObservationPayload),
@@ -2973,11 +5463,73 @@ family_payload!(MonitorPayload, {
     RecoveryAdmitted => EventType::MonitorRecoveryAdmitted,
     RecoveryDeferred => EventType::MonitorRecoveryDeferred,
 });
+impl FamilyPayload for PerformancePayload {
+    fn event_type(&self) -> EventType {
+        match self {
+            Self::PressureStarted(_) => EventType::PerformancePressureStarted,
+            Self::PressureEnded(_) => EventType::PerformancePressureEnded,
+            Self::StutterDetected(_) => EventType::PerformanceStutterDetected,
+            Self::Summary(_) => EventType::PerformanceSummary,
+            Self::MonitorDegraded(_) => EventType::PerformanceMonitorDegraded,
+            Self::MonitorRecovered(_) => EventType::PerformanceMonitorRecovered,
+            Self::BalanceChanged(_) => EventType::PerformanceBalanceChanged,
+        }
+    }
+
+    fn detail(&self) -> &dyn PayloadDetail {
+        match self {
+            Self::PressureStarted(detail) | Self::PressureEnded(detail) => detail,
+            Self::StutterDetected(detail) => detail,
+            Self::Summary(detail) => detail.as_ref(),
+            Self::MonitorDegraded(detail) | Self::MonitorRecovered(detail) => detail,
+            Self::BalanceChanged(detail) => detail,
+        }
+    }
+}
+family_payload!(FactPayload, {
+    Published => EventType::FactPublished,
+    Invalidated => EventType::FactInvalidated,
+});
+family_payload!(ApprovalPayload, {
+    Decision => EventType::ApprovalDecision,
+});
 family_payload!(SchedulerPayload, {
     Admitted => EventType::SchedulerAdmitted,
     Queued => EventType::SchedulerQueued,
     Denied => EventType::SchedulerDenied,
     Preempted => EventType::SchedulerPreempted,
+});
+family_payload!(PolicyPayload, {
+    DispatchIntent => EventType::PolicyDispatchIntent,
+    DispatchAdmitted => EventType::PolicyDispatchAdmitted,
+    DispatchRejected => EventType::PolicyDispatchRejected,
+    DispatchCompleted => EventType::PolicyDispatchCompleted,
+    ExecutionRecorded => EventType::PolicyExecutionRecorded,
+    PlanningSignalObserved => EventType::PolicyPlanningSignalObserved,
+});
+family_payload!(CatalogPayload, {
+    TransitionIntent => EventType::CatalogTransitionIntent,
+    Activated => EventType::CatalogActivated,
+    RolledBack => EventType::CatalogRolledBack,
+    TransitionFailed => EventType::CatalogTransitionFailed,
+});
+family_payload!(StatePayload, {
+    Migrated => EventType::StateMigrated,
+});
+family_payload!(ReleasePayload, {
+    Staged => EventType::ReleaseStaged,
+    TransitionIntent => EventType::ReleaseTransitionIntent,
+    Activated => EventType::ReleaseActivated,
+    RolledBack => EventType::ReleaseRolledBack,
+    TransitionFailed => EventType::ReleaseTransitionFailed,
+});
+family_payload!(AgentPayload, {
+    WakeRequested => EventType::AgentWakeRequested,
+    SessionStarted => EventType::AgentSessionStarted,
+    SessionResumed => EventType::AgentSessionResumed,
+    ResponseRecorded => EventType::AgentResponseRecorded,
+    SessionCompleted => EventType::AgentSessionCompleted,
+    SessionEscalated => EventType::AgentSessionEscalated,
 });
 family_payload!(LeasePayload, {
     Requested => EventType::LeaseRequested,
@@ -3051,6 +5603,7 @@ family_payload!(ArtifactPayload, {
     ExportFailed => EventType::ArtifactExportFailed,
 });
 family_payload!(ClientPayload, {
+    Action => EventType::ClientAction,
     UiAction => EventType::UiAction,
     CliCommand => EventType::CliCommand,
     LabRequest => EventType::LabRequest,
@@ -3069,8 +5622,16 @@ family_payload!(LedgerPayload, {
 pub enum EventPayload {
     Runtime(RuntimePayload),
     Monitor(MonitorPayload),
+    Performance(PerformancePayload),
+    Fact(FactPayload),
+    Approval(ApprovalPayload),
     Command(CommandPayload),
     Scheduler(SchedulerPayload),
+    Policy(PolicyPayload),
+    Catalog(CatalogPayload),
+    State(StatePayload),
+    Release(ReleasePayload),
+    Agent(AgentPayload),
     Lease(LeasePayload),
     Task(TaskPayload),
     Application(ApplicationPayload),
@@ -3117,6 +5678,42 @@ impl EventPayloadDraft {
                     MonitorPayload::RecoveryDeferred(detail.sanitize(fingerprinter)?)
                 }
             }),
+            Self::Performance(value) => EventPayload::Performance(match value.0 {
+                PerformanceDraftKind::PressureStarted(detail) => {
+                    PerformancePayload::PressureStarted(detail.sanitize(fingerprinter)?)
+                }
+                PerformanceDraftKind::PressureEnded(detail) => {
+                    PerformancePayload::PressureEnded(detail.sanitize(fingerprinter)?)
+                }
+                PerformanceDraftKind::StutterDetected(detail) => {
+                    PerformancePayload::StutterDetected(detail.sanitize(fingerprinter)?)
+                }
+                PerformanceDraftKind::Summary(detail) => {
+                    PerformancePayload::Summary(Box::new(detail.sanitize(fingerprinter)?))
+                }
+                PerformanceDraftKind::MonitorDegraded(detail) => {
+                    PerformancePayload::MonitorDegraded(detail.sanitize(fingerprinter)?)
+                }
+                PerformanceDraftKind::MonitorRecovered(detail) => {
+                    PerformancePayload::MonitorRecovered(detail.sanitize(fingerprinter)?)
+                }
+                PerformanceDraftKind::BalanceChanged(detail) => {
+                    PerformancePayload::BalanceChanged(detail.sanitize(fingerprinter)?)
+                }
+            }),
+            Self::Fact(value) => EventPayload::Fact(match value.0 {
+                FactDraftKind::Published(detail) => {
+                    FactPayload::Published(detail.sanitize(fingerprinter)?)
+                }
+                FactDraftKind::Invalidated(detail) => {
+                    FactPayload::Invalidated(detail.sanitize(fingerprinter)?)
+                }
+            }),
+            Self::Approval(value) => EventPayload::Approval(match value.0 {
+                ApprovalDraftKind::Decision(detail) => {
+                    ApprovalPayload::Decision(detail.sanitize(fingerprinter)?)
+                }
+            }),
             Self::Command(value) => EventPayload::Command(match value.0 {
                 CommandDraftKind::Received(detail) => {
                     CommandPayload::Received(detail.sanitize(fingerprinter)?)
@@ -3140,6 +5737,82 @@ impl EventPayloadDraft {
                 }
                 SchedulerDraftKind::Preempted(detail) => {
                     SchedulerPayload::Preempted(detail.sanitize(fingerprinter)?)
+                }
+            }),
+            Self::Policy(value) => EventPayload::Policy(match value.0 {
+                PolicyDraftKind::Intent(detail) => {
+                    PolicyPayload::DispatchIntent(detail.sanitize(fingerprinter)?)
+                }
+                PolicyDraftKind::Admitted(detail) => {
+                    PolicyPayload::DispatchAdmitted(detail.sanitize(fingerprinter)?)
+                }
+                PolicyDraftKind::Rejected(detail) => {
+                    PolicyPayload::DispatchRejected(detail.sanitize(fingerprinter)?)
+                }
+                PolicyDraftKind::Completed(detail) => {
+                    PolicyPayload::DispatchCompleted(detail.sanitize(fingerprinter)?)
+                }
+                PolicyDraftKind::Execution(detail) => {
+                    PolicyPayload::ExecutionRecorded(detail.sanitize(fingerprinter)?)
+                }
+                PolicyDraftKind::PlanningSignal(detail) => {
+                    PolicyPayload::PlanningSignalObserved(detail.sanitize(fingerprinter)?)
+                }
+            }),
+            Self::Catalog(value) => EventPayload::Catalog(match value.0 {
+                CatalogDraftKind::TransitionIntent(detail) => {
+                    CatalogPayload::TransitionIntent(detail.sanitize(fingerprinter)?)
+                }
+                CatalogDraftKind::Activated(detail) => {
+                    CatalogPayload::Activated(detail.sanitize(fingerprinter)?)
+                }
+                CatalogDraftKind::RolledBack(detail) => {
+                    CatalogPayload::RolledBack(detail.sanitize(fingerprinter)?)
+                }
+                CatalogDraftKind::TransitionFailed(detail) => {
+                    CatalogPayload::TransitionFailed(detail.sanitize(fingerprinter)?)
+                }
+            }),
+            Self::State(value) => EventPayload::State(match value.0 {
+                StateDraftKind::Migrated(detail) => {
+                    StatePayload::Migrated(detail.sanitize(fingerprinter)?)
+                }
+            }),
+            Self::Release(value) => EventPayload::Release(match value.0 {
+                ReleaseDraftKind::Staged(detail) => {
+                    ReleasePayload::Staged(detail.sanitize(fingerprinter)?)
+                }
+                ReleaseDraftKind::TransitionIntent(detail) => {
+                    ReleasePayload::TransitionIntent(detail.sanitize(fingerprinter)?)
+                }
+                ReleaseDraftKind::Activated(detail) => {
+                    ReleasePayload::Activated(detail.sanitize(fingerprinter)?)
+                }
+                ReleaseDraftKind::RolledBack(detail) => {
+                    ReleasePayload::RolledBack(detail.sanitize(fingerprinter)?)
+                }
+                ReleaseDraftKind::TransitionFailed(detail) => {
+                    ReleasePayload::TransitionFailed(detail.sanitize(fingerprinter)?)
+                }
+            }),
+            Self::Agent(value) => EventPayload::Agent(match value.0 {
+                AgentDraftKind::WakeRequested(detail) => {
+                    AgentPayload::WakeRequested(detail.sanitize(fingerprinter)?)
+                }
+                AgentDraftKind::SessionStarted(detail) => {
+                    AgentPayload::SessionStarted(detail.sanitize(fingerprinter)?)
+                }
+                AgentDraftKind::SessionResumed(detail) => {
+                    AgentPayload::SessionResumed(detail.sanitize(fingerprinter)?)
+                }
+                AgentDraftKind::ResponseRecorded(detail) => {
+                    AgentPayload::ResponseRecorded(detail.sanitize(fingerprinter)?)
+                }
+                AgentDraftKind::SessionCompleted(detail) => {
+                    AgentPayload::SessionCompleted(detail.sanitize(fingerprinter)?)
+                }
+                AgentDraftKind::SessionEscalated(detail) => {
+                    AgentPayload::SessionEscalated(detail.sanitize(fingerprinter)?)
                 }
             }),
             Self::Lease(value) => EventPayload::Lease(match value.0 {
@@ -3280,6 +5953,9 @@ impl EventPayloadDraft {
                 EventPayload::ResourceAuthoring(value.0.sanitize(fingerprinter)?)
             }
             Self::Client(value) => EventPayload::Client(match value.0 {
+                ClientDraftKind::Action(detail) => {
+                    ClientPayload::Action(detail.sanitize(fingerprinter)?)
+                }
                 ClientDraftKind::UiAction(detail) => {
                     ClientPayload::UiAction(detail.sanitize(fingerprinter)?)
                 }
@@ -3312,8 +5988,16 @@ impl EventPayload {
         match self {
             Self::Runtime(_) => RUNTIME_PAYLOAD_SCHEMA,
             Self::Monitor(_) => MONITOR_PAYLOAD_SCHEMA,
+            Self::Performance(_) => PERFORMANCE_PAYLOAD_SCHEMA,
+            Self::Fact(_) => FACT_PAYLOAD_SCHEMA,
+            Self::Approval(_) => APPROVAL_PAYLOAD_SCHEMA,
             Self::Command(_) => COMMAND_PAYLOAD_SCHEMA,
             Self::Scheduler(_) => SCHEDULER_PAYLOAD_SCHEMA,
+            Self::Policy(_) => POLICY_PAYLOAD_SCHEMA,
+            Self::Catalog(_) => CATALOG_PAYLOAD_SCHEMA,
+            Self::State(_) => STATE_PAYLOAD_SCHEMA,
+            Self::Release(_) => RELEASE_PAYLOAD_SCHEMA,
+            Self::Agent(_) => AGENT_PAYLOAD_SCHEMA,
             Self::Lease(_) => LEASE_PAYLOAD_SCHEMA,
             Self::Task(_) => TASK_PAYLOAD_SCHEMA,
             Self::Application(_) => APPLICATION_PAYLOAD_SCHEMA,
@@ -3331,6 +6015,24 @@ impl EventPayload {
         let detail = self.family_payload().detail();
         let mut sensitivity = detail.audit().sensitivity();
         if detail.diagnostic_code().is_some() {
+            sensitivity = sensitivity.max(Sensitivity::Internal);
+        }
+        if matches!(self, Self::Performance(_)) {
+            sensitivity = sensitivity.max(Sensitivity::Internal);
+        }
+        if let Self::Fact(payload) = self {
+            sensitivity = sensitivity.max(fact_sensitivity(payload));
+        }
+        if matches!(
+            self,
+            Self::Approval(_) | Self::Client(ClientPayload::Action(_))
+        ) {
+            sensitivity = sensitivity.max(Sensitivity::Internal);
+        }
+        if matches!(self, Self::State(_) | Self::Release(_)) {
+            sensitivity = sensitivity.max(Sensitivity::Internal);
+        }
+        if matches!(self, Self::Agent(_)) {
             sensitivity = sensitivity.max(Sensitivity::Internal);
         }
         sensitivity
@@ -3356,6 +6058,39 @@ impl EventPayload {
                 &value.changed_paths,
                 value.failure_code.as_deref(),
             )?;
+        }
+        if let Self::Policy(value) = self {
+            validate_policy_payload(value)?;
+        }
+        if let Self::Performance(value) = self {
+            validate_performance_payload(value)?;
+        }
+        if let Self::Fact(value) = self {
+            validate_fact_payload(value)?;
+        }
+        if let Self::Approval(value) = self {
+            validate_approval_payload(value)?;
+        }
+        if let Self::Client(value) = self {
+            validate_client_action_payload(value)?;
+        }
+        if let Self::Catalog(value) = self {
+            validate_catalog_payload(value)?;
+        }
+        if let Self::State(StatePayload::Migrated(value)) = self {
+            if value.action != EventAction::StateMigrate {
+                return Err(SanitizationError::new(
+                    "invalid_state_migration_lifecycle",
+                    "state_payload",
+                ));
+            }
+            value.migration.validate()?;
+        }
+        if let Self::Release(value) = self {
+            validate_release_payload(value)?;
+        }
+        if let Self::Agent(value) = self {
+            validate_agent_payload(value)?;
         }
         match self {
             Self::Task(TaskPayload::Semantic(value)) if value.validate().is_err() => {
@@ -3450,6 +6185,20 @@ impl EventPayload {
         let event_type = self.event_type();
         let detail = self.family_payload().detail();
         let authoring = resource_authoring(self);
+        let policy_dispatch = policy_dispatch(self);
+        let policy_execution = policy_execution(self);
+        let policy_signal = policy_planning_signal(self);
+        let catalog_transition = catalog_transition(self);
+        let performance_pressure = performance_pressure(self);
+        let performance_stutter = performance_stutter(self);
+        let performance_summary = performance_summary(self);
+        let performance_state = performance_monitor_state(self);
+        let performance_control = performance_control(self);
+        let fact_identity = fact_identity(self);
+        let client_action = client_action(self);
+        let approval = approval_decision(self);
+        let agent_wake = agent_wake(self);
+        let agent_session = agent_session(self);
         let payload = PublicPayload {
             event_type,
             action: detail.action(),
@@ -3476,7 +6225,7 @@ impl EventPayload {
             retention_class: capture_policy(self).map(CapturePolicyPayload::retention_class),
             capture_policy_reason: capture_policy(self).map(CapturePolicyPayload::reason),
             task_outcome: artifact_export(self).map(|value| value.0),
-            task_semantic_fact: task_semantic_fact(self).cloned(),
+            task_semantic_fact: task_semantic_fact(self).cloned().map(Box::new),
             evidence_completeness: artifact_export(self).map(|value| value.1),
             artifact_count: artifact_export(self).map(|value| value.2),
             monitor_diagnosis: monitor_outcome(self).map(|value| value.observation.diagnosis()),
@@ -3490,12 +6239,96 @@ impl EventPayload {
             target_fingerprint: authoring.map(|value| value.target_fingerprint.clone()),
             changed_path_count: authoring.map(|value| value.changed_paths.len() as u64),
             failure_code: authoring.and_then(|value| value.failure_code.clone()),
+            decision_id: policy_dispatch.map(|value| value.decision_id.clone().into_boxed_str()),
+            reason_chain_id: policy_dispatch
+                .map(|value| value.reason_chain_id.clone().into_boxed_str()),
+            reason_count: policy_dispatch.map(|value| value.reasons.len() as u64),
+            input_ledger_position: policy_dispatch.map(|value| value.input_ledger_position),
+            fact_snapshot_id: policy_dispatch
+                .map(|value| value.fact_snapshot_id.clone().into_boxed_str()),
+            approval_fact_count: policy_dispatch.map(|value| value.approval_fact_ids.len() as u64),
+            catalog_id: catalog_transition.map(|value| value.catalog_id.clone().into_boxed_str()),
+            catalog_hash: policy_dispatch
+                .map(|value| value.catalog_hash.clone().into_boxed_str())
+                .or_else(|| {
+                    catalog_transition.map(|value| value.catalog_hash.clone().into_boxed_str())
+                }),
+            catalog_version: policy_dispatch
+                .map(|value| value.catalog_version)
+                .or_else(|| catalog_transition.map(|value| value.catalog_version)),
+            previous_catalog_hash: catalog_transition.and_then(|value| {
+                value
+                    .previous_catalog_hash
+                    .clone()
+                    .map(String::into_boxed_str)
+            }),
+            policy_admission: policy_dispatch.and_then(|value| value.admission.clone()),
+            policy_execution_outcome: policy_execution.map(|value| Box::new(value.outcome.clone())),
+            policy_signal_id: policy_signal.map(|value| value.signal_id.clone().into_boxed_str()),
+            policy_signal_kind: policy_signal.map(|value| value.kind),
+            policy_signal_fact_code: policy_signal
+                .map(|value| value.fact_code.clone().into_boxed_str()),
+            performance_pressure: performance_pressure
+                .map(|value| Box::new(value.pressure.clone())),
+            performance_context: performance_summary.map(|value| Box::new(value.context.clone())),
+            performance_frame_gap_ms: performance_stutter.map(|value| value.frame_gap_ms),
+            performance_monitor_health: performance_state.map(|value| value.health),
+            performance_control_level: performance_control.map(|value| value.level),
+            performance_control_reason: performance_control.map(|value| value.reason),
+            performance_deadline_disposition: performance_control
+                .and_then(|value| value.deadline_disposition),
+            fact_scope: fact_identity.map(|value| Box::new(value.0.clone())),
+            fact_key: fact_identity.map(|value| value.1.to_owned().into_boxed_str()),
+            fact_source_snapshot_id: fact_identity.map(|value| value.2.to_owned().into_boxed_str()),
+            client_surface_id: client_action
+                .map(|value| value.record().surface_id().to_owned().into_boxed_str()),
+            client_control_id: client_action
+                .map(|value| value.record().control_id().to_owned().into_boxed_str()),
+            client_action_kind: client_action.map(|value| value.record().kind()),
+            approval_id: approval
+                .map(|value| value.decision().approval_id().to_owned().into_boxed_str()),
+            approval_disposition: approval.map(|value| value.decision().disposition()),
+            approval_target_kind: approval.map(|value| value.decision().target().kind()),
+            approval_target_id: approval.and_then(|value| {
+                approval_target_id(value.decision().target())
+                    .map(|id| id.to_owned().into_boxed_str())
+            }),
+            approval_catalog_hash: approval.map(|value| {
+                value
+                    .decision()
+                    .target()
+                    .catalog_hash()
+                    .to_owned()
+                    .into_boxed_str()
+            }),
+            approval_catalog_version: approval
+                .map(|value| value.decision().target().catalog_version()),
+            agent_wake_id: agent_wake
+                .map(AgentWakeData::wake_id)
+                .or_else(|| agent_session.map(|value| value.status().wake_id())),
+            agent_session_id: agent_session.map(|value| value.status().session_id()),
+            agent_wake_kind: agent_wake.map(AgentWakeData::kind),
+            agent_attention_state: agent_wake
+                .map(AgentWakeData::attention_state)
+                .or_else(|| agent_session.map(|value| value.status().state())),
+            agent_attempts_used: agent_session.map(|value| value.status().attempts_used()),
+            agent_attempt_limit: agent_wake
+                .map(|value| value.budget().max_attempts())
+                .or_else(|| agent_session.map(|value| value.status().budget().max_attempts())),
         };
         match self {
             Self::Runtime(_) => PublicEventPayload::Runtime(payload),
             Self::Monitor(_) => PublicEventPayload::Monitor(payload),
+            Self::Performance(_) => PublicEventPayload::Performance(payload),
+            Self::Fact(_) => PublicEventPayload::Fact(payload),
+            Self::Approval(_) => PublicEventPayload::Approval(payload),
             Self::Command(_) => PublicEventPayload::Command(payload),
             Self::Scheduler(_) => PublicEventPayload::Scheduler(payload),
+            Self::Policy(_) => PublicEventPayload::Policy(payload),
+            Self::Catalog(_) => PublicEventPayload::Catalog(payload),
+            Self::State(_) => PublicEventPayload::State(payload),
+            Self::Release(_) => PublicEventPayload::Release(payload),
+            Self::Agent(_) => PublicEventPayload::Agent(payload),
             Self::Lease(_) => PublicEventPayload::Lease(payload),
             Self::Task(_) => PublicEventPayload::Task(payload),
             Self::Application(_) => PublicEventPayload::Application(payload),
@@ -3513,8 +6346,16 @@ impl EventPayload {
         match self {
             Self::Runtime(value) => value,
             Self::Monitor(value) => value,
+            Self::Performance(value) => value,
+            Self::Fact(value) => value,
+            Self::Approval(value) => value,
             Self::Command(value) => value,
             Self::Scheduler(value) => value,
+            Self::Policy(value) => value,
+            Self::Catalog(value) => value,
+            Self::State(value) => value,
+            Self::Release(value) => value,
+            Self::Agent(value) => value,
             Self::Lease(value) => value,
             Self::Task(value) => value,
             Self::Application(value) => value,
@@ -3533,6 +6374,115 @@ fn monitor_outcome(payload: &EventPayload) -> Option<&MonitorOutcomePayload> {
     match payload {
         EventPayload::Monitor(MonitorPayload::Completed(value)) => Some(value),
         _ => None,
+    }
+}
+
+fn performance_pressure(payload: &EventPayload) -> Option<&PerformancePressurePayload> {
+    match payload {
+        EventPayload::Performance(PerformancePayload::PressureStarted(value))
+        | EventPayload::Performance(PerformancePayload::PressureEnded(value)) => Some(value),
+        _ => None,
+    }
+}
+
+fn performance_stutter(payload: &EventPayload) -> Option<&PerformanceStutterPayload> {
+    match payload {
+        EventPayload::Performance(PerformancePayload::StutterDetected(value)) => Some(value),
+        _ => None,
+    }
+}
+
+fn performance_summary(payload: &EventPayload) -> Option<&PerformanceSummaryPayload> {
+    match payload {
+        EventPayload::Performance(PerformancePayload::Summary(value)) => Some(value.as_ref()),
+        _ => None,
+    }
+}
+
+fn performance_monitor_state(payload: &EventPayload) -> Option<&PerformanceMonitorStatePayload> {
+    match payload {
+        EventPayload::Performance(PerformancePayload::MonitorDegraded(value))
+        | EventPayload::Performance(PerformancePayload::MonitorRecovered(value)) => Some(value),
+        _ => None,
+    }
+}
+
+fn performance_control(payload: &EventPayload) -> Option<&PerformanceControlPayload> {
+    match payload {
+        EventPayload::Performance(PerformancePayload::BalanceChanged(value)) => Some(value),
+        _ => None,
+    }
+}
+
+fn fact_identity(payload: &EventPayload) -> Option<(&FactScope, &str, &str)> {
+    match payload {
+        EventPayload::Fact(FactPayload::Published(value)) => Some((
+            &value.record.scope,
+            &value.record.key,
+            &value.record.source_snapshot_id,
+        )),
+        EventPayload::Fact(FactPayload::Invalidated(value)) => Some((
+            &value.invalidation.scope,
+            &value.invalidation.key,
+            &value.invalidation.source_snapshot_id,
+        )),
+        _ => None,
+    }
+}
+
+fn client_action(payload: &EventPayload) -> Option<&ClientActionPayload> {
+    match payload {
+        EventPayload::Client(ClientPayload::Action(value)) => Some(value),
+        _ => None,
+    }
+}
+
+fn approval_decision(payload: &EventPayload) -> Option<&ApprovalDecisionPayload> {
+    match payload {
+        EventPayload::Approval(ApprovalPayload::Decision(value)) => Some(value),
+        _ => None,
+    }
+}
+
+fn agent_wake(payload: &EventPayload) -> Option<&AgentWakeData> {
+    match payload {
+        EventPayload::Agent(AgentPayload::WakeRequested(value)) => Some(value.wake()),
+        _ => None,
+    }
+}
+
+fn agent_session(payload: &EventPayload) -> Option<&AgentSessionEventData> {
+    match payload {
+        EventPayload::Agent(
+            AgentPayload::SessionStarted(value)
+            | AgentPayload::SessionResumed(value)
+            | AgentPayload::ResponseRecorded(value)
+            | AgentPayload::SessionCompleted(value)
+            | AgentPayload::SessionEscalated(value),
+        ) => Some(value.session()),
+        _ => None,
+    }
+}
+
+fn approval_target_id(target: &ApprovalTarget) -> Option<&str> {
+    match target {
+        ApprovalTarget::Catalog { .. } => None,
+        ApprovalTarget::Plan { plan_id, .. } => Some(plan_id),
+        ApprovalTarget::Decision { decision_id, .. } => Some(decision_id),
+    }
+}
+
+fn fact_sensitivity(payload: &FactPayload) -> Sensitivity {
+    let FactPayload::Published(value) = payload else {
+        return Sensitivity::Internal;
+    };
+    let crate::FactContent::Artifact { artifact } = &value.record().content else {
+        return Sensitivity::Internal;
+    };
+    match artifact.redaction_state() {
+        ArtifactRedactionState::Pending => Sensitivity::Secret,
+        ArtifactRedactionState::Applied => Sensitivity::Sensitive,
+        ArtifactRedactionState::NotRequired => Sensitivity::Internal,
     }
 }
 
@@ -3614,6 +6564,40 @@ fn task_semantic_fact(payload: &EventPayload) -> Option<&TaskSemanticFact> {
     }
 }
 
+fn policy_dispatch(payload: &EventPayload) -> Option<&PolicyDispatchPayload> {
+    match payload {
+        EventPayload::Policy(PolicyPayload::DispatchIntent(value))
+        | EventPayload::Policy(PolicyPayload::DispatchAdmitted(value))
+        | EventPayload::Policy(PolicyPayload::DispatchRejected(value))
+        | EventPayload::Policy(PolicyPayload::DispatchCompleted(value)) => Some(value),
+        _ => None,
+    }
+}
+
+fn policy_execution(payload: &EventPayload) -> Option<&PolicyExecutionPayload> {
+    match payload {
+        EventPayload::Policy(PolicyPayload::ExecutionRecorded(value)) => Some(value),
+        _ => None,
+    }
+}
+
+fn policy_planning_signal(payload: &EventPayload) -> Option<&PolicyPlanningSignalPayload> {
+    match payload {
+        EventPayload::Policy(PolicyPayload::PlanningSignalObserved(value)) => Some(value),
+        _ => None,
+    }
+}
+
+fn catalog_transition(payload: &EventPayload) -> Option<&CatalogTransitionPayload> {
+    match payload {
+        EventPayload::Catalog(CatalogPayload::TransitionIntent(value))
+        | EventPayload::Catalog(CatalogPayload::Activated(value))
+        | EventPayload::Catalog(CatalogPayload::RolledBack(value))
+        | EventPayload::Catalog(CatalogPayload::TransitionFailed(value)) => Some(value),
+        _ => None,
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PublicPayload {
@@ -3650,7 +6634,7 @@ pub struct PublicPayload {
     #[serde(skip_serializing_if = "Option::is_none")]
     task_outcome: Option<TaskOutcome>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    task_semantic_fact: Option<TaskSemanticFact>,
+    task_semantic_fact: Option<Box<TaskSemanticFact>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     evidence_completeness: Option<EvidenceCompleteness>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -3675,6 +6659,86 @@ pub struct PublicPayload {
     changed_path_count: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     failure_code: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    decision_id: Option<Box<str>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    reason_chain_id: Option<Box<str>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    reason_count: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    input_ledger_position: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    fact_snapshot_id: Option<Box<str>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    approval_fact_count: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    catalog_id: Option<Box<str>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    catalog_hash: Option<Box<str>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    catalog_version: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    previous_catalog_hash: Option<Box<str>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    policy_admission: Option<Box<PolicyAdmissionRecord>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    policy_execution_outcome: Option<Box<PolicyExecutionOutcome>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    policy_signal_id: Option<Box<str>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    policy_signal_kind: Option<PolicyPlanningSignalKind>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    policy_signal_fact_code: Option<Box<str>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    performance_pressure: Option<Box<PerformancePressureRecord>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    performance_context: Option<Box<PerformanceContext>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    performance_frame_gap_ms: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    performance_monitor_health: Option<PerformanceMonitorHealth>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    performance_control_level: Option<PerformanceControlLevel>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    performance_control_reason: Option<PerformanceControlReason>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    performance_deadline_disposition: Option<PerformanceDeadlineDisposition>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    fact_scope: Option<Box<FactScope>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    fact_key: Option<Box<str>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    fact_source_snapshot_id: Option<Box<str>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    client_surface_id: Option<Box<str>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    client_control_id: Option<Box<str>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    client_action_kind: Option<ClientActionKind>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    approval_id: Option<Box<str>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    approval_disposition: Option<ApprovalDisposition>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    approval_target_kind: Option<ApprovalTargetKind>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    approval_target_id: Option<Box<str>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    approval_catalog_hash: Option<Box<str>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    approval_catalog_version: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    agent_wake_id: Option<AgentWakeId>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    agent_session_id: Option<AgentSessionId>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    agent_wake_kind: Option<AgentWakeKind>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    agent_attention_state: Option<AgentAttentionState>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    agent_attempts_used: Option<u16>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    agent_attempt_limit: Option<u16>,
 }
 
 impl PublicPayload {
@@ -3746,8 +6810,8 @@ impl PublicPayload {
         self.task_outcome
     }
 
-    pub const fn task_semantic_fact(&self) -> Option<&TaskSemanticFact> {
-        self.task_semantic_fact.as_ref()
+    pub fn task_semantic_fact(&self) -> Option<&TaskSemanticFact> {
+        self.task_semantic_fact.as_deref()
     }
 
     pub const fn evidence_completeness(&self) -> Option<EvidenceCompleteness> {
@@ -3799,6 +6863,166 @@ impl PublicPayload {
     pub fn failure_code(&self) -> Option<&str> {
         self.failure_code.as_deref()
     }
+
+    pub fn decision_id(&self) -> Option<&str> {
+        self.decision_id.as_deref()
+    }
+
+    pub fn reason_chain_id(&self) -> Option<&str> {
+        self.reason_chain_id.as_deref()
+    }
+
+    pub const fn reason_count(&self) -> Option<u64> {
+        self.reason_count
+    }
+
+    pub const fn input_ledger_position(&self) -> Option<u64> {
+        self.input_ledger_position
+    }
+
+    pub fn fact_snapshot_id(&self) -> Option<&str> {
+        self.fact_snapshot_id.as_deref()
+    }
+
+    pub const fn approval_fact_count(&self) -> Option<u64> {
+        self.approval_fact_count
+    }
+
+    pub fn catalog_id(&self) -> Option<&str> {
+        self.catalog_id.as_deref()
+    }
+
+    pub fn catalog_hash(&self) -> Option<&str> {
+        self.catalog_hash.as_deref()
+    }
+
+    pub const fn catalog_version(&self) -> Option<u64> {
+        self.catalog_version
+    }
+
+    pub fn previous_catalog_hash(&self) -> Option<&str> {
+        self.previous_catalog_hash.as_deref()
+    }
+
+    pub fn policy_admission(&self) -> Option<&PolicyAdmissionRecord> {
+        self.policy_admission.as_deref()
+    }
+
+    pub fn policy_execution_outcome(&self) -> Option<&PolicyExecutionOutcome> {
+        self.policy_execution_outcome.as_deref()
+    }
+
+    pub fn policy_signal_id(&self) -> Option<&str> {
+        self.policy_signal_id.as_deref()
+    }
+
+    pub const fn policy_signal_kind(&self) -> Option<PolicyPlanningSignalKind> {
+        self.policy_signal_kind
+    }
+
+    pub fn policy_signal_fact_code(&self) -> Option<&str> {
+        self.policy_signal_fact_code.as_deref()
+    }
+
+    pub fn performance_pressure(&self) -> Option<&PerformancePressureRecord> {
+        self.performance_pressure.as_deref()
+    }
+
+    pub fn performance_context(&self) -> Option<&PerformanceContext> {
+        self.performance_context.as_deref()
+    }
+
+    pub const fn performance_frame_gap_ms(&self) -> Option<u64> {
+        self.performance_frame_gap_ms
+    }
+
+    pub const fn performance_monitor_health(&self) -> Option<PerformanceMonitorHealth> {
+        self.performance_monitor_health
+    }
+
+    pub const fn performance_control_level(&self) -> Option<PerformanceControlLevel> {
+        self.performance_control_level
+    }
+
+    pub const fn performance_control_reason(&self) -> Option<PerformanceControlReason> {
+        self.performance_control_reason
+    }
+
+    pub const fn performance_deadline_disposition(&self) -> Option<PerformanceDeadlineDisposition> {
+        self.performance_deadline_disposition
+    }
+
+    pub fn fact_scope(&self) -> Option<&FactScope> {
+        self.fact_scope.as_deref()
+    }
+
+    pub fn fact_key(&self) -> Option<&str> {
+        self.fact_key.as_deref()
+    }
+
+    pub fn fact_source_snapshot_id(&self) -> Option<&str> {
+        self.fact_source_snapshot_id.as_deref()
+    }
+
+    pub fn client_surface_id(&self) -> Option<&str> {
+        self.client_surface_id.as_deref()
+    }
+
+    pub fn client_control_id(&self) -> Option<&str> {
+        self.client_control_id.as_deref()
+    }
+
+    pub const fn client_action_kind(&self) -> Option<ClientActionKind> {
+        self.client_action_kind
+    }
+
+    pub fn approval_id(&self) -> Option<&str> {
+        self.approval_id.as_deref()
+    }
+
+    pub const fn approval_disposition(&self) -> Option<ApprovalDisposition> {
+        self.approval_disposition
+    }
+
+    pub const fn approval_target_kind(&self) -> Option<ApprovalTargetKind> {
+        self.approval_target_kind
+    }
+
+    pub fn approval_target_id(&self) -> Option<&str> {
+        self.approval_target_id.as_deref()
+    }
+
+    pub fn approval_catalog_hash(&self) -> Option<&str> {
+        self.approval_catalog_hash.as_deref()
+    }
+
+    pub const fn approval_catalog_version(&self) -> Option<u64> {
+        self.approval_catalog_version
+    }
+
+    pub const fn agent_wake_id(&self) -> Option<AgentWakeId> {
+        self.agent_wake_id
+    }
+
+    pub const fn agent_session_id(&self) -> Option<AgentSessionId> {
+        self.agent_session_id
+    }
+
+    pub const fn agent_wake_kind(&self) -> Option<AgentWakeKind> {
+        self.agent_wake_kind
+    }
+
+    pub const fn agent_attention_state(&self) -> Option<AgentAttentionState> {
+        self.agent_attention_state
+    }
+
+    pub const fn agent_attempts_used(&self) -> Option<u16> {
+        self.agent_attempts_used
+    }
+
+    pub const fn agent_attempt_limit(&self) -> Option<u16> {
+        self.agent_attempt_limit
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -3811,8 +7035,16 @@ impl PublicPayload {
 pub enum PublicEventPayload {
     Runtime(PublicPayload),
     Monitor(PublicPayload),
+    Performance(PublicPayload),
+    Fact(PublicPayload),
+    Approval(PublicPayload),
     Command(PublicPayload),
     Scheduler(PublicPayload),
+    Policy(PublicPayload),
+    Catalog(PublicPayload),
+    State(PublicPayload),
+    Release(PublicPayload),
+    Agent(PublicPayload),
     Lease(PublicPayload),
     Task(PublicPayload),
     Application(PublicPayload),
@@ -3834,8 +7066,8 @@ pub enum PublicEventPayload {
 )]
 pub enum ProjectionPayload {
     Omitted,
-    Public(PublicEventPayload),
-    Full(EventPayload),
+    Public(Box<PublicEventPayload>),
+    Full(Box<EventPayload>),
 }
 
 fn validate_fingerprint(candidate: &str, original: &str) -> Result<(), SanitizationError> {

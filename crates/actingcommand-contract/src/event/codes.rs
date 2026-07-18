@@ -61,6 +61,7 @@ closed_code!(OriginModule {
     Actinglab => "actinglab",
     Runtime => "runtime",
     Scheduler => "scheduler",
+    Policy => "policy",
     DeviceProxy => "device-proxy",
     Capture => "capture",
     CapturePipeline => "capture-pipeline",
@@ -69,6 +70,10 @@ closed_code!(OriginModule {
     ArtifactStore => "artifact-store",
     EvidenceExporter => "evidence-exporter",
     GlobalLedger => "global-ledger",
+    PerformanceMonitor => "performance-monitor",
+    FactStore => "fact-store",
+    Governance => "governance",
+    AgentDispatcher => "agent-dispatcher",
     ProcessTest => "process-test",
 });
 
@@ -87,11 +92,31 @@ closed_code!(EventAction {
     RuntimeDebugObserve => "runtime.debug_observe",
     RuntimeDebugDo => "runtime.debug_do",
     RuntimeDebugEnsure => "runtime.debug_ensure",
+    PolicyDispatch => "policy.dispatch",
+    PolicyExecution => "policy.execution",
+    PolicyPlanning => "policy.planning",
+    CatalogActivate => "catalog.activate",
+    CatalogRollback => "catalog.rollback",
     RuntimeDebugWait => "runtime.debug_wait",
     MonitorConfigure => "monitor.configure",
     MonitorClear => "monitor.clear",
     MonitorProbe => "monitor.probe",
     MonitorRecovery => "monitor.recovery",
+    PerformanceObserve => "performance.observe",
+    FactPublish => "fact.publish",
+    FactInvalidate => "fact.invalidate",
+    ClientAction => "client.action",
+    ApprovalDecision => "approval.decision",
+    StateMigrate => "state.migrate",
+    ReleaseStage => "release.stage",
+    ReleaseActivate => "release.activate",
+    ReleaseRollback => "release.rollback",
+    AgentWake => "agent.wake",
+    AgentSessionStart => "agent.session_start",
+    AgentSessionResume => "agent.session_resume",
+    AgentSessionRespond => "agent.session_respond",
+    AgentSessionComplete => "agent.session_complete",
+    AgentSessionEscalate => "agent.session_escalate",
     ProcessAcceptance => "process.acceptance",
     ScheduleAdmit => "schedule.admit",
     LeaseAcquire => "lease.acquire",
@@ -145,6 +170,9 @@ closed_code!(DiagnosticCode {
     InputFailed => "input.failed",
     ApplicationFailed => "application.failed",
     CommandRejected => "command.rejected",
+    PolicyRejected => "policy.rejected",
+    CatalogTransitionFailed => "catalog.transition_failed",
+    ReleaseTransitionFailed => "release.transition_failed",
 });
 
 closed_code!(RecognitionVerdict {
@@ -182,6 +210,26 @@ closed_code!(TaskOutcome {
     Success => "success",
     Failure => "failure",
     Cancelled => "cancelled",
+});
+
+closed_code!(PolicyFailureClass {
+    Recoverable => "recoverable",
+    Severe => "severe",
+});
+
+closed_code!(PolicyFailureDisposition {
+    Continue => "continue",
+    RetryScheduled => "retry_scheduled",
+    PausedTask => "paused_task",
+});
+
+closed_code!(PolicyPlanningSignalKind {
+    GoalMissed => "goal_missed",
+    FeasibilityRed => "feasibility_red",
+    DriftPredicted => "drift_predicted",
+    TimelineReached => "timeline_reached",
+    DetectionReserved => "detection_reserved",
+    DetectionQuotaExhausted => "detection_quota_exhausted",
 });
 
 closed_code!(EvidenceCompleteness {

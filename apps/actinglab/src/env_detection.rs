@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 use super::{
-    CliError, CliOutcome, FlagArgs, GlobalOptions, app_state_root, current_unix_ms,
-    effective_resource_root, finish_semantic_result_with_ledger, parse_optional_duration_ms,
-    read_user_config, runtime_state_root, semantic_ledger_context,
+    CliError, CliOutcome, FlagArgs, GlobalOptions, app_state_root, canonical_game,
+    canonical_server, current_unix_ms, effective_resource_root, finish_semantic_result_with_ledger,
+    parse_optional_duration_ms, read_user_config, runtime_state_root, semantic_ledger_context,
 };
 use actingcommand_contract::InputAction;
 use actingcommand_device::{
@@ -107,8 +107,16 @@ pub(super) fn resolve_env_markers_in_value(
         instance: flags
             .optional("--instance")
             .or_else(|| global.instance.clone()),
-        game: flags.optional("--game").or_else(|| global.game.clone()),
-        server: flags.optional("--server").or_else(|| global.server.clone()),
+        game: flags
+            .optional("--game")
+            .or_else(|| global.game.clone())
+            .map(|game| canonical_game(&game))
+            .transpose()?,
+        server: flags
+            .optional("--server")
+            .or_else(|| global.server.clone())
+            .map(|server| canonical_server(&server))
+            .transpose()?,
         env_task: flags.optional("--env-task"),
     };
     let mut lab = build_readonly_lab()?;
@@ -271,16 +279,22 @@ fn command_scope(
         .optional("--game")
         .or_else(|| global.game.clone())
         .ok_or_else(|| CliError::usage(format!("{label} requires --game")))?;
+    let game = canonical_game(&game)?;
     let instance = flags
         .optional("--instance")
         .or_else(|| global.instance.clone())
         .ok_or_else(|| CliError::usage(format!("{label} requires --instance")))?;
+    let server = flags
+        .optional("--server")
+        .or_else(|| global.server.clone())
+        .ok_or_else(|| CliError::usage(format!("{label} requires --server")))?;
+    let server = canonical_server(&server)?;
     Ok(EnvScopeRequest {
         resource_root,
         state_root: app_state_root()?,
         instance,
         game,
-        server: flags.optional("--server").or_else(|| global.server.clone()),
+        server: Some(server),
     })
 }
 

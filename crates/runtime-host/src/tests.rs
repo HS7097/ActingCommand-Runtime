@@ -6,30 +6,99 @@ use crate::monitor::MONITOR_FILE_NAME;
 use crate::time::unix_ms_now;
 use actingcommand_artifact_store::read_projected_verified;
 use actingcommand_contract::{
-    ApplicationLifecycleAction, CaptureSequenceSpec, ContainedTaskRequest, EffectDisposition,
-    EventActor, EventPayload, EventQuery, EventSource, EventType, IdentifierIssuer, InputAction,
-    InstanceId, IssuedCorrelationId, LeasePriority, LeaseQueuePolicy, LeaseQueueStatus, LeaseToken,
-    MonitorDiagnosis, MonitorDisposition, MonitorObservation, MonitorPayload,
-    MonitorRecoveryCoordinationReason, MonitorRecoveryKind, OriginModule, ProjectionPayload,
-    ProjectionProfile, PublicEventPayload, RUNTIME_INFO_FILE, ResourceAuthoringEvent,
-    ResourceAuthoringPhase, RuntimeCaptureBackend, RuntimeErrorCode, RuntimeMonitorPolicy,
-    RuntimeOperation, RuntimeReceipt, RuntimeReceiptState, RuntimeRequest, RuntimeResult,
-    TaskOutcome, TaskPayload, TaskSemanticFact,
+    AgentAttentionState, AgentPayload, AgentResponseDisposition, AgentSessionId,
+    AgentSessionResponse, AgentWakeKind, ApplicationLifecycleAction, ApprovalDecisionRecord,
+    ApprovalDisposition, ApprovalTarget, ArtifactKind, CaptureSequenceSpec,
+    CatalogDeclarationPatch, CatalogPayload, CatalogProposal, ClientActionKind, ClientActionRecord,
+    ClientActionValue, ContainedTaskRequest, EffectDisposition, EventActor, EventPayload,
+    EventQuery, EventSeverity, EventSource, EventType, FactContent, FactRecord, FactScope,
+    FactTtlPolicy, FactTtlSource, FactValue as ContractFactValue, IdentifierIssuer, InputAction,
+    InstanceFactContext, InstanceId, IssuedCorrelationId, LeasePriority, LeaseQueuePolicy,
+    LeaseQueueStatus, LeaseToken, MAX_RUNTIME_PLANNING_DOCUMENT_BYTES, MonitorDiagnosis,
+    MonitorDisposition, MonitorObservation, MonitorPayload, MonitorRecoveryCoordinationReason,
+    MonitorRecoveryKind, OriginModule, PerformanceControlLevel, PerformanceMonitorHealth,
+    PolicyExecutionOutcome, PolicyFailureClass, PolicyFailureDisposition, PolicyPayload,
+    PolicyPlanningSignalEventData, PolicyPlanningSignalKind, ProjectDecisionPageRequest,
+    ProjectDecisionState, ProjectInterfaceRequest, ProjectLedgerSnapshot,
+    ProjectedArtifactReference, ProjectionPayload, ProjectionProfile, ProposalClass,
+    ProposalDisposition, ProposalDocument, ProposalKind, ProposalPatchOperation,
+    PublicEventPayload, RUNTIME_INFO_FILE, ReleasePayload, ReleaseResourceVersion,
+    ReleaseTransitionKind, ResourceAuthoringEvent, ResourceAuthoringPhase, RuntimeCaptureBackend,
+    RuntimeErrorCode, RuntimeEventQueryCursor, RuntimeEventQueryPageRequest,
+    RuntimeForwardProjectionRequest, RuntimeMonitorPolicy, RuntimeOperation,
+    RuntimePlanningDocument, RuntimePlanningDocumentKind, RuntimeReceipt, RuntimeReceiptState,
+    RuntimeReleaseSet, RuntimeRequest, RuntimeResult, RuntimeStrategicReportRequest, StatePayload,
+    StateRecoveryAction, StateValidationResult, TaskOutcome, TaskPayload, TaskSemanticFact,
+    TaskTemplateInstantiation, TerminalEvent,
 };
 use actingcommand_device::{
     CaptureBackend, CaptureBackendName, DeviceError, DeviceResult, Frame, InputBackend, PixelFormat,
 };
+use actingcommand_policy::{
+    CatalogDocumentSource, CatalogSources, CohortBudgets, Comparison, DecisionReasonChain,
+    DispatchIntent, EvaluationFacts, EvaluationResources, EvaluationTime, FactValue,
+    ForwardProjectionConfig, HostResourceSnapshot, InstanceSnapshot, LoadProfile,
+    MaintenanceDisposition, MaintenanceTrendPolicy, MetricRef, ObservedFact, ObservedOutcome,
+    OutlierMetric, OutlierPolicy, PoolValueSnapshot, PredicateSpec, ScopeSelector, StrategicBand,
+    StrategicEvidencePointer, StrategicGoal, StrategicInstanceAssessment, StrategicReport,
+    StrategicTemplate,
+};
+use actingcommand_runtime_state::{
+    RUNTIME_STATE_DATABASE_FILE, RUNTIME_STATE_INTEGRITY_KEY_FILE, ReleaseArtifactSources,
+    RuntimeStateStore,
+};
 use actingcommand_scheduler::{ConnectionId, SchedulerConfig};
+use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self, OpenOptions};
 use std::io::{Cursor, Write};
 use std::net::TcpStream;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::path::Path;
+use std::process::{Command, Stdio};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Barrier};
 use std::thread;
 use std::time::{Duration, Instant};
 use tempfile::TempDir;
 use zip::{ZipWriter, write::FileOptions};
+
+const TEST_GOVERNANCE_CAPABILITY: &str = "runtime-host-governance-test-capability";
+
+struct ManualRuntimeClock {
+    unix_ms: AtomicU64,
+    monotonic_ms: AtomicU64,
+}
+
+impl ManualRuntimeClock {
+    fn new(unix_ms: u64, monotonic_ms: u64) -> Self {
+        Self {
+            unix_ms: AtomicU64::new(unix_ms),
+            monotonic_ms: AtomicU64::new(monotonic_ms),
+        }
+    }
+
+    fn advance(&self, duration_ms: u64) {
+        self.unix_ms.fetch_add(duration_ms, Ordering::SeqCst);
+        self.monotonic_ms.fetch_add(duration_ms, Ordering::SeqCst);
+    }
+
+    fn set_unix_ms(&self, unix_ms: u64) {
+        self.unix_ms.store(unix_ms, Ordering::SeqCst);
+    }
+
+    fn set_monotonic_ms(&self, monotonic_ms: u64) {
+        self.monotonic_ms.store(monotonic_ms, Ordering::SeqCst);
+    }
+}
+
+impl RuntimeClock for ManualRuntimeClock {
+    fn sample(&self) -> RuntimeHostResult<RuntimeClockSample> {
+        Ok(RuntimeClockSample {
+            unix_ms: self.unix_ms.load(Ordering::SeqCst),
+            monotonic_ms: self.monotonic_ms.load(Ordering::SeqCst),
+        })
+    }
+}
 
 #[derive(Default)]
 struct FakeState {
@@ -296,9 +365,18 @@ struct TestClient {
 
 impl TestClient {
     fn connect(host: &RuntimeHost) -> Self {
-        let stream =
-            TcpStream::connect(host.runtime_info().socket_addr().expect("runtime address"))
-                .expect("connect runtime");
+        Self::connect_address(host.runtime_info().socket_addr().expect("runtime address"))
+    }
+
+    fn connect_state_root(root: &Path) -> Self {
+        let bytes = fs::read(root.join(RUNTIME_INFO_FILE)).expect("runtime info bytes");
+        let info: actingcommand_contract::RuntimeInfo =
+            serde_json::from_slice(&bytes).expect("runtime info");
+        Self::connect_address(info.socket_addr().expect("runtime address"))
+    }
+
+    fn connect_address(address: std::net::SocketAddr) -> Self {
+        let stream = TcpStream::connect(address).expect("connect runtime");
         stream
             .set_read_timeout(Some(Duration::from_secs(2)))
             .expect("read timeout");
@@ -332,6 +410,44 @@ impl TestClient {
             operation,
         )
         .expect("runtime request")
+    }
+
+    fn agent_request(&self, operation: RuntimeOperation) -> RuntimeRequest {
+        RuntimeRequest::new(
+            self.ids.mint_request_id().expect("request id"),
+            self.ids.mint_correlation_id().expect("correlation id"),
+            None,
+            EventActor::Agent,
+            EventSource::Adapter,
+            unix_ms_now().expect("wall clock"),
+            operation,
+        )
+        .expect("agent runtime request")
+    }
+
+    fn governance_request(&self, operation: RuntimeOperation) -> RuntimeRequest {
+        RuntimeRequest::new(
+            self.ids.mint_request_id().expect("request id"),
+            self.ids.mint_correlation_id().expect("correlation id"),
+            None,
+            EventActor::User,
+            EventSource::Ui,
+            unix_ms_now().expect("wall clock"),
+            operation,
+        )
+        .expect("governance runtime request")
+    }
+
+    fn authenticate_governance(&mut self) {
+        let request = self.governance_request(RuntimeOperation::AuthenticateGovernance {
+            capability: TEST_GOVERNANCE_CAPABILITY.to_owned(),
+        });
+        let receipt = self.send(&request);
+        assert_eq!(receipt.state(), RuntimeReceiptState::Completed);
+        assert!(matches!(
+            receipt.result(),
+            Some(RuntimeResult::GovernanceAuthenticated)
+        ));
     }
 
     fn send(&mut self, request: &RuntimeRequest) -> RuntimeReceipt {
@@ -423,74 +539,109 @@ fn event_types_for_request(
     connection_id: ConnectionId,
     request_id: actingcommand_contract::RequestId,
 ) -> Vec<EventType> {
-    let query = runtime_request(
-        ids,
-        RuntimeOperation::QueryEvents {
-            query: EventQuery {
-                request_id: Some(request_id),
-                ..EventQuery::default()
+    let mut cursor: Option<RuntimeEventQueryCursor> = None;
+    let mut event_types = Vec::new();
+    loop {
+        let query = runtime_request(
+            ids,
+            RuntimeOperation::QueryEvents {
+                query: EventQuery {
+                    request_id: Some(request_id),
+                    ..EventQuery::default()
+                },
+                profile: ProjectionProfile::Forensic,
+                page: RuntimeEventQueryPageRequest::new(128, cursor.clone()).expect("event page"),
             },
-            profile: ProjectionProfile::Forensic,
-        },
-    );
-    let receipt = host
-        .process_request_for_test(&query, connection_id)
-        .expect("event query");
-    let RuntimeResult::Events { events } = receipt.result().expect("events result") else {
-        panic!("expected event projection");
-    };
-    events.iter().map(|event| event.event_type).collect()
+        );
+        let receipt = host
+            .process_request_for_test(&query, connection_id)
+            .expect("event query");
+        let RuntimeResult::EventPage { page } = receipt.result().expect("events result") else {
+            panic!("expected event projection");
+        };
+        event_types.extend(page.events().iter().map(|event| event.event_type));
+        cursor = page.next_cursor().cloned();
+        if !page.has_more() {
+            return event_types;
+        }
+    }
 }
 
 fn event_types_for_correlation(
     client: &mut TestClient,
     correlation_id: actingcommand_contract::CorrelationId,
 ) -> Vec<EventType> {
-    let query = client.request(RuntimeOperation::QueryEvents {
-        query: EventQuery {
+    projected_events(
+        client,
+        EventQuery {
             correlation_id: Some(correlation_id),
             ..EventQuery::default()
         },
-        profile: ProjectionProfile::Forensic,
-    });
-    let receipt = client.send(&query);
-    let RuntimeResult::Events { events } = receipt.result().expect("events result") else {
-        panic!("expected event projection");
-    };
-    events.iter().map(|event| event.event_type).collect()
+    )
+    .into_iter()
+    .map(|event| event.event_type)
+    .collect()
 }
 
 fn projected_events(
     client: &mut TestClient,
     query: EventQuery,
 ) -> Vec<actingcommand_contract::ProjectedEvent> {
-    let request = client.request(RuntimeOperation::QueryEvents {
-        query,
-        profile: ProjectionProfile::Forensic,
-    });
+    let mut cursor: Option<RuntimeEventQueryCursor> = None;
+    let mut events = Vec::new();
+    loop {
+        let request = client.request(RuntimeOperation::QueryEvents {
+            query: query.clone(),
+            profile: ProjectionProfile::Forensic,
+            page: RuntimeEventQueryPageRequest::new(128, cursor.clone()).expect("event page"),
+        });
+        let receipt = client.send(&request);
+        let RuntimeResult::EventPage { page } = receipt.result().expect("events result") else {
+            panic!("expected event projection");
+        };
+        events.extend_from_slice(page.events());
+        cursor = page.next_cursor().cloned();
+        if !page.has_more() {
+            return events;
+        }
+    }
+}
+
+fn project_snapshot(host: &RuntimeHost, request: ProjectInterfaceRequest) -> ProjectLedgerSnapshot {
+    let mut client = TestClient::connect(host);
+    let request = client.request(RuntimeOperation::ProjectInterface { request });
     let receipt = client.send(&request);
-    let RuntimeResult::Events { events } = receipt.result().expect("events result") else {
-        panic!("expected event projection");
+    let RuntimeResult::ProjectInterface { response } = receipt.result().expect("project result")
+    else {
+        panic!("expected project interface response")
     };
-    events.clone()
+    response
+        .snapshot()
+        .expect("current project snapshot")
+        .clone()
 }
 
 fn projected_task_semantic_fact(
     event: &actingcommand_contract::ProjectedEvent,
 ) -> Option<&TaskSemanticFact> {
     match &event.payload {
-        ProjectionPayload::Public(PublicEventPayload::Task(payload)) => {
-            payload.task_semantic_fact()
-        }
-        ProjectionPayload::Full(EventPayload::Task(TaskPayload::Semantic(payload))) => {
-            Some(payload.fact())
-        }
+        ProjectionPayload::Public(projected) => match projected.as_ref() {
+            PublicEventPayload::Task(payload) => payload.task_semantic_fact(),
+            _ => None,
+        },
+        ProjectionPayload::Full(projected) => match projected.as_ref() {
+            EventPayload::Task(TaskPayload::Semantic(payload)) => Some(payload.fact()),
+            _ => None,
+        },
         _ => None,
     }
 }
 
 fn config(root: &TempDir) -> RuntimeHostConfig {
     RuntimeHostConfig::new(root.path(), b"runtime-host-test-salt")
+        .with_policy_inputs(PolicyInputSnapshot::new(policy_facts(), policy_resources()))
+        .with_procedure_manifest(procedure_manifest())
+        .with_governance_capability(TEST_GOVERNANCE_CAPABILITY)
         .with_io_timeout(Duration::from_millis(500))
         .with_scheduler(SchedulerConfig {
             maximum_client_heartbeat_interval_ms: 20,
@@ -500,12 +651,1371 @@ fn config(root: &TempDir) -> RuntimeHostConfig {
         })
 }
 
+fn procedure_manifest() -> ProcedureManifest {
+    procedure_manifest_with_primary(
+        b"fixture procedure observe package v1",
+        vec!["after_observation".to_owned()],
+    )
+}
+
+fn procedure_manifest_with_primary(
+    primary_package: &[u8],
+    primary_yield_points: Vec<String>,
+) -> ProcedureManifest {
+    ProcedureManifest::new(
+        [
+            "procedure.observe",
+            "procedure.observe-b",
+            "procedure.detect",
+        ]
+        .into_iter()
+        .map(|procedure_ref| {
+            let (package_digest, yield_points) = if procedure_ref == "procedure.observe" {
+                (
+                    format!("sha256:{:x}", Sha256::digest(primary_package)),
+                    primary_yield_points.clone(),
+                )
+            } else {
+                (
+                    format!("sha256:{:x}", Sha256::digest(procedure_ref.as_bytes())),
+                    vec!["after_observation".to_owned()],
+                )
+            };
+            ProcedureBinding::new(
+                procedure_ref,
+                package_digest,
+                "operation.observe",
+                yield_points,
+            )
+            .expect("procedure binding")
+        }),
+    )
+    .expect("procedure manifest")
+}
+
+fn release_set(
+    root: &Path,
+    version: &str,
+    marker: char,
+) -> (RuntimeReleaseSet, ReleaseArtifactSources) {
+    let source_root = root.join(format!("release-source-{version}-{marker}"));
+    fs::create_dir(&source_root).expect("release source root");
+    let runtime = source_root.join("runtime.bin");
+    let ui = source_root.join("ui.bin");
+    let resource = source_root.join("resource.bin");
+    let runtime_bytes = format!("runtime:{version}:{marker}");
+    let ui_bytes = format!("ui:{version}:{marker}");
+    let resource_bytes = format!("resource:{version}:{marker}");
+    fs::write(&runtime, runtime_bytes.as_bytes()).expect("runtime artifact");
+    fs::write(&ui, ui_bytes.as_bytes()).expect("UI artifact");
+    fs::write(&resource, resource_bytes.as_bytes()).expect("resource artifact");
+    let manifest = RuntimeReleaseSet::new(
+        version,
+        format!("sha256:{:x}", Sha256::digest(runtime_bytes.as_bytes())),
+        version,
+        format!("sha256:{:x}", Sha256::digest(ui_bytes.as_bytes())),
+        vec![
+            ReleaseResourceVersion::new(
+                "project-neutral",
+                version,
+                format!("sha256:{:x}", Sha256::digest(resource_bytes.as_bytes())),
+            )
+            .expect("resource version"),
+        ],
+    )
+    .expect("release set");
+    let sources = ReleaseArtifactSources::new(
+        runtime,
+        ui,
+        BTreeMap::from([("project-neutral".to_owned(), resource)]),
+    );
+    (manifest, sources)
+}
+
 fn host_with_state(root: &TempDir, alias: &str, state: Arc<FakeState>) -> RuntimeHost {
     RuntimeHost::start(
         config(root),
         Arc::new(FakeProvider::one(alias, instance_id(), state)),
     )
     .expect("runtime host")
+}
+
+const POLICY_INSTANCE_ALIAS: &str = "fixture-instance-a";
+const POLICY_INSTANCE_ALIAS_B: &str = "fixture-instance-b";
+const POLICY_NOW_UNIX_MS: u64 = 1_699_963_200_000;
+
+fn policy_sources(version: u64) -> CatalogSources {
+    let mut sources = CatalogSources {
+        tasks: CatalogDocumentSource::new(
+            "memory://fixture/tasks.json",
+            include_bytes!("../../../contracts/scheduling/examples/catalog-a/tasks.json").to_vec(),
+        ),
+        pools: CatalogDocumentSource::new(
+            "memory://fixture/pools.json",
+            include_bytes!("../../../contracts/scheduling/examples/catalog-a/pools.json").to_vec(),
+        ),
+        activity: CatalogDocumentSource::new(
+            "memory://fixture/activity.json",
+            include_bytes!("../../../contracts/scheduling/examples/catalog-a/activity.json")
+                .to_vec(),
+        ),
+        timeline: CatalogDocumentSource::new(
+            "memory://fixture/timeline.json",
+            include_bytes!("../../../contracts/scheduling/examples/catalog-a/timeline.json")
+                .to_vec(),
+        ),
+    };
+    for source in [
+        &mut sources.tasks,
+        &mut sources.pools,
+        &mut sources.activity,
+        &mut sources.timeline,
+    ] {
+        let mut document: serde_json::Value =
+            serde_json::from_slice(&source.bytes).expect("policy fixture JSON");
+        document["catalog"]["catalog_version"] = serde_json::json!(version);
+        source.bytes = serde_json::to_vec_pretty(&document).expect("policy fixture bytes");
+    }
+    sources
+}
+
+fn budget_policy_sources(version: u64) -> CatalogSources {
+    let mut sources = policy_sources(version);
+    let mut tasks: serde_json::Value =
+        serde_json::from_slice(&sources.tasks.bytes).expect("budget task fixture");
+    tasks["tasks"][0]["expected_duration_ms"] = serde_json::json!(60000);
+    tasks["tasks"][0]["cooldown_ms"] = serde_json::json!(0);
+    tasks["tasks"][0]["loop_budget"] = serde_json::json!({
+        "daily_limit": 4,
+        "window_iteration_limit": 4,
+        "max_runtime_ms": 300000
+    });
+    sources.tasks.bytes = serde_json::to_vec_pretty(&tasks).expect("budget task bytes");
+
+    let mut activity: serde_json::Value =
+        serde_json::from_slice(&sources.activity.bytes).expect("budget activity fixture");
+    activity["profiles"][0]["daily_budget"] = serde_json::json!(10);
+    activity["profiles"][0]["max_window_iterations"] = serde_json::json!(10);
+    activity["profiles"][0]["session_max_ms"] = serde_json::json!(1000000);
+    activity["profiles"][0]["minimum_interval_ms"] = serde_json::json!(1);
+    activity["profiles"][0]["maximum_interval_ms"] = serde_json::json!(1);
+    activity["profiles"][0]["windows"] = serde_json::json!([{
+        "weekdays": [1, 2, 3, 4, 5, 6, 7],
+        "utc_offset_minutes": 0,
+        "start_minute_of_day": 0,
+        "end_minute_of_day": 0
+    }]);
+    sources.activity.bytes = serde_json::to_vec_pretty(&activity).expect("budget activity bytes");
+    sources
+}
+
+fn high_volume_forward_policy_sources(version: u64) -> CatalogSources {
+    let mut sources = policy_sources(version);
+    let mut tasks: serde_json::Value =
+        serde_json::from_slice(&sources.tasks.bytes).expect("forward task fixture");
+    tasks["tasks"][0]["trigger"] = serde_json::json!({
+        "kind": "clock",
+        "schedule": {
+            "kind": "interval",
+            "clock_source": {"kind": "local"},
+            "every_ms": 1,
+            "anchor_ms": 0
+        }
+    });
+    tasks["tasks"][0]["expected_duration_ms"] = serde_json::json!(1);
+    tasks["tasks"][0]["cooldown_ms"] = serde_json::json!(0);
+    tasks["tasks"][0]["loop_budget"] = serde_json::json!({
+        "daily_limit": 1_000_000,
+        "window_iteration_limit": 1_000_000,
+        "max_runtime_ms": 1_000_000
+    });
+    sources.tasks.bytes = serde_json::to_vec_pretty(&tasks).expect("forward task bytes");
+
+    let mut activity: serde_json::Value =
+        serde_json::from_slice(&sources.activity.bytes).expect("forward activity fixture");
+    activity["profiles"][0]["windows"] = serde_json::json!([{
+        "weekdays": [1, 2, 3, 4, 5, 6, 7],
+        "utc_offset_minutes": 0,
+        "start_minute_of_day": 0,
+        "end_minute_of_day": 0
+    }]);
+    activity["profiles"][0]["daily_budget"] = serde_json::json!(1_000_000);
+    activity["profiles"][0]["max_window_iterations"] = serde_json::json!(1_000_000);
+    activity["profiles"][0]["session_max_ms"] = serde_json::json!(1_000_000);
+    activity["profiles"][0]["minimum_interval_ms"] = serde_json::json!(1);
+    activity["profiles"][0]["maximum_interval_ms"] = serde_json::json!(1);
+    sources.activity.bytes = serde_json::to_vec_pretty(&activity).expect("forward activity bytes");
+    sources
+}
+
+fn pending_policy_sources(version: u64) -> CatalogSources {
+    let mut sources = policy_sources(version);
+    let mut tasks: serde_json::Value =
+        serde_json::from_slice(&sources.tasks.bytes).expect("pending task fixture");
+    let mut second = tasks["tasks"][0].clone();
+    second["id"] = serde_json::json!("fixture.observe-b");
+    second["scope"] =
+        serde_json::json!({"kind": "instance", "instance_id": POLICY_INSTANCE_ALIAS_B});
+    second["procedure_ref"] = serde_json::json!("procedure.observe-b");
+    second["feedback_stop"]["task_id"] = serde_json::json!("fixture.observe-b");
+    second["produces"] = serde_json::json!([]);
+    second["instance_overrides"] = serde_json::json!([]);
+    tasks["tasks"]
+        .as_array_mut()
+        .expect("pending tasks array")
+        .push(second);
+    sources.tasks.bytes = serde_json::to_vec_pretty(&tasks).expect("pending task bytes");
+    sources
+}
+
+fn detection_policy_sources(version: u64) -> CatalogSources {
+    detection_policy_sources_with_budget(version, 2, 20_000, 10_000)
+}
+
+fn detection_policy_sources_with_budget(
+    version: u64,
+    window_dispatch_limit: u32,
+    window_runtime_ms: u64,
+    expected_duration_ms: u64,
+) -> CatalogSources {
+    let mut sources = policy_sources(version);
+    let mut tasks: serde_json::Value =
+        serde_json::from_slice(&sources.tasks.bytes).expect("detection task fixture");
+    tasks["tasks"][0]["trigger"] = serde_json::json!({
+        "kind": "fact",
+        "scope": {"kind": "instance", "instance_id": POLICY_INSTANCE_ALIAS},
+        "fact_key": "ordinary.ready",
+        "comparison": "eq",
+        "value": {"type": "boolean", "value": true},
+        "max_age_ms": 60000
+    });
+    let mut detection = tasks["tasks"][0].clone();
+    detection["id"] = serde_json::json!("fixture.detect");
+    detection["procedure_ref"] = serde_json::json!("procedure.detect");
+    detection["priority"] = serde_json::json!(50);
+    detection["trigger"] = serde_json::json!({
+        "kind": "fact",
+        "scope": {"kind": "instance", "instance_id": POLICY_INSTANCE_ALIAS},
+        "fact_key": "detection.required",
+        "comparison": "eq",
+        "value": {"type": "boolean", "value": true},
+        "max_age_ms": 60000
+    });
+    detection["feedback_stop"]["task_id"] = serde_json::json!("fixture.detect");
+    detection["produces"] = serde_json::json!([]);
+    detection["instance_overrides"] = serde_json::json!([]);
+    tasks["tasks"]
+        .as_array_mut()
+        .expect("detection tasks array")
+        .push(detection);
+    sources.tasks.bytes = serde_json::to_vec_pretty(&tasks).expect("detection task bytes");
+
+    let mut activity: serde_json::Value =
+        serde_json::from_slice(&sources.activity.bytes).expect("detection activity fixture");
+    activity["profiles"][0]["detection_budget"] = serde_json::json!({
+        "window_dispatch_limit": window_dispatch_limit,
+        "window_runtime_ms": window_runtime_ms,
+        "expected_duration_ms": expected_duration_ms
+    });
+    sources.activity.bytes =
+        serde_json::to_vec_pretty(&activity).expect("detection activity bytes");
+    sources
+}
+
+fn strategy_policy_sources(version: u64) -> CatalogSources {
+    let mut sources = policy_sources(version);
+    let game_scope = serde_json::json!({"kind": "game", "game_id": "fixture-game-a"});
+    let mut tasks: serde_json::Value =
+        serde_json::from_slice(&sources.tasks.bytes).expect("strategy task fixture");
+    tasks["tasks"][0]["scope"] = game_scope.clone();
+    tasks["tasks"][0]["trigger"]["predicates"][1]["scope"] = game_scope.clone();
+    sources.tasks.bytes = serde_json::to_vec_pretty(&tasks).expect("strategy task bytes");
+    let mut pools: serde_json::Value =
+        serde_json::from_slice(&sources.pools.bytes).expect("strategy pool fixture");
+    pools["pools"][0]["scope"] = game_scope;
+    sources.pools.bytes = serde_json::to_vec_pretty(&pools).expect("strategy pool bytes");
+    sources
+}
+
+fn large_strategy_policy_sources(version: u64) -> CatalogSources {
+    let mut sources = strategy_policy_sources(version);
+    let mut tasks: serde_json::Value =
+        serde_json::from_slice(&sources.tasks.bytes).expect("large strategy task fixture");
+    tasks["tasks"][0]["yield_points"] = serde_json::Value::Array(
+        (0..128)
+            .map(|index| {
+                serde_json::Value::String(format!("checkpoint.{index:03}.{}", "x".repeat(108)))
+            })
+            .collect(),
+    );
+    sources.tasks.bytes = serde_json::to_vec_pretty(&tasks).expect("large strategy task bytes");
+    sources
+}
+
+fn strategy_report(
+    base: &CatalogGeneration,
+    evidence: &ProjectedArtifactReference,
+    as_of_ledger_position: u64,
+) -> StrategicReport {
+    strategy_report_with_assessments(
+        base,
+        evidence,
+        as_of_ledger_position,
+        vec![
+            StrategicInstanceAssessment {
+                goal_id: "goal.primary".to_owned(),
+                instance_id: "fixture-instance-a".to_owned(),
+                game_id: "fixture-game-a".to_owned(),
+                fact_snapshot_id: "snapshot:strategy-a".to_owned(),
+                current_projection: Some(50),
+                production_rate_per_hour: Some(100),
+                target: 100,
+                deadline_unix_ms: POLICY_NOW_UNIX_MS + 3_600_000,
+                available: true,
+                capability_ids: vec!["operation.observe".to_owned()],
+            },
+            StrategicInstanceAssessment {
+                goal_id: "goal.primary".to_owned(),
+                instance_id: "fixture-instance-b".to_owned(),
+                game_id: "fixture-game-a".to_owned(),
+                fact_snapshot_id: "snapshot:strategy-b".to_owned(),
+                current_projection: Some(0),
+                production_rate_per_hour: Some(10),
+                target: 100,
+                deadline_unix_ms: POLICY_NOW_UNIX_MS + 3_600_000,
+                available: true,
+                capability_ids: vec!["operation.observe".to_owned()],
+            },
+        ],
+    )
+}
+
+fn strategy_report_with_assessments(
+    base: &CatalogGeneration,
+    evidence: &ProjectedArtifactReference,
+    as_of_ledger_position: u64,
+    assessments: Vec<StrategicInstanceAssessment>,
+) -> StrategicReport {
+    let max_active = u16::try_from(assessments.len()).expect("bounded assessment count");
+    let artifact_id = serde_json::to_value(evidence.artifact_id)
+        .expect("artifact id JSON")
+        .as_str()
+        .expect("artifact id string")
+        .to_owned();
+    StrategicReport::new(
+        "fixture-game-a",
+        base.catalog_hash(),
+        base.catalog_version(),
+        base.catalog_version() + 1,
+        as_of_ledger_position,
+        POLICY_NOW_UNIX_MS,
+        format!("sha256:{}", "d".repeat(64)),
+        format!("sha256:{}", "e".repeat(64)),
+        vec![StrategicEvidencePointer {
+            artifact_id,
+            sha256: evidence.sha256.clone(),
+        }],
+        vec![StrategicGoal {
+            goal_id: "goal.primary".to_owned(),
+            goal_version: 1,
+            metric: MetricRef::Fact {
+                fact_key: "resource.primary".to_owned(),
+            },
+            templates: vec![StrategicTemplate {
+                template_id: "template.primary".to_owned(),
+                task_template_ids: vec!["fixture.observe".to_owned()],
+                activity_profile_template_id: "fixture-activity-game".to_owned(),
+                eligibility: PredicateSpec::Fact {
+                    scope: ScopeSelector::Game {
+                        game_id: "fixture-game-a".to_owned(),
+                    },
+                    fact_key: "feature.enabled".to_owned(),
+                    comparison: Comparison::Eq,
+                    value: FactValue::Boolean(true),
+                    max_age_ms: Some(60_000),
+                },
+                match_bands: vec![
+                    StrategicBand::Actionable,
+                    StrategicBand::InfeasibleBestEffort,
+                ],
+                minimum_urgency_milli: 0,
+                maximum_urgency_milli: 1_000_000,
+                strategic_weight_milli: 500,
+                load_profile: LoadProfile::Weighted {
+                    cpu_milli: 200,
+                    gpu_milli: 100,
+                    io_milli: 300,
+                },
+                risk_class: "standard".to_owned(),
+                budget_class: "bounded".to_owned(),
+            }],
+            outlier_policy: OutlierPolicy {
+                metric: OutlierMetric::Shortfall,
+                mad_multiplier_milli: 2_000,
+                top_n: 1,
+            },
+        }],
+        assessments,
+        CohortBudgets {
+            max_active,
+            max_prompt: 1,
+        },
+    )
+    .expect("strategic report")
+}
+
+fn evaluated_policy_dispatch(
+    host: &RuntimeHost,
+    trigger: PolicyTrigger,
+) -> (PolicyCycle, DispatchIntent, DecisionReasonChain) {
+    evaluated_policy_dispatch_at(host, trigger, POLICY_NOW_UNIX_MS, 7)
+}
+
+fn evaluated_policy_dispatch_at(
+    host: &RuntimeHost,
+    trigger: PolicyTrigger,
+    unix_ms: u64,
+    seed: u64,
+) -> (PolicyCycle, DispatchIntent, DecisionReasonChain) {
+    let cycle = host
+        .evaluate_policy_cycle_with_test_inputs(
+            &policy_facts(),
+            &policy_resources(),
+            EvaluationTime {
+                unix_ms,
+                monotonic_ms: unix_ms,
+            },
+            seed,
+            trigger,
+        )
+        .expect("evaluate policy dispatch");
+    let evaluation = cycle.evaluation.as_ref().expect("policy evaluation");
+    let intent = evaluation
+        .dispatch_intents
+        .first()
+        .unwrap_or_else(|| panic!("dispatch intent: {evaluation:#?}"))
+        .clone();
+    let reason_chain = evaluation
+        .reason_chains
+        .iter()
+        .find(|chain| chain.id == intent.reason_chain_id)
+        .expect("dispatch reason chain")
+        .clone();
+    (cycle, intent, reason_chain)
+}
+
+fn policy_context(host: &RuntimeHost, intent: &DispatchIntent) -> PolicyAdmissionContext {
+    PolicyAdmissionContext {
+        fact_ledger_position: intent.input_ledger_position,
+        fact_snapshot_id: intent.fact_snapshot_id.clone(),
+        approval_fact_ids: BTreeSet::from(["approval:fixture-a".to_owned()]),
+        fencing_owner_epoch: host.runtime_info().owner_epoch(),
+        now_unix_ms: intent.prerequisites.evaluated_at_unix_ms,
+    }
+}
+
+fn record_policy_approval(host: &RuntimeHost, intent: &DispatchIntent) -> TerminalEvent {
+    record_policy_approval_disposition(host, intent, ApprovalDisposition::Approved)
+}
+
+fn record_policy_approval_disposition(
+    host: &RuntimeHost,
+    intent: &DispatchIntent,
+    disposition: ApprovalDisposition,
+) -> TerminalEvent {
+    let decision = ApprovalDecisionRecord::new(
+        "approval:fixture-a",
+        disposition,
+        ApprovalTarget::Catalog {
+            catalog_hash: intent.catalog_hash.clone(),
+            catalog_version: intent.catalog_version,
+        },
+        "user_confirmed",
+    )
+    .expect("approval decision");
+    let mut client = TestClient::connect(host);
+    client.authenticate_governance();
+    let request = client.governance_request(RuntimeOperation::RecordApprovalDecision { decision });
+    let receipt = client.send(&request);
+    assert_eq!(receipt.state(), RuntimeReceiptState::Completed);
+    assert!(matches!(
+        receipt.result(),
+        Some(RuntimeResult::ApprovalDecisionRecorded {
+            approval_id,
+            disposition: recorded,
+        }) if approval_id == "approval:fixture-a" && *recorded == disposition
+    ));
+    receipt.terminal().expect("approval terminal")
+}
+
+fn record_target_approval(client: &mut TestClient, approval_id: &str, target: ApprovalTarget) {
+    client.authenticate_governance();
+    let decision = ApprovalDecisionRecord::new(
+        approval_id,
+        ApprovalDisposition::Approved,
+        target,
+        "proposal_reviewed",
+    )
+    .expect("proposal approval");
+    let request = client.governance_request(RuntimeOperation::RecordApprovalDecision { decision });
+    let receipt = client.send(&request);
+    assert_eq!(receipt.state(), RuntimeReceiptState::Completed);
+}
+
+fn proposal_version_patches(version: u64) -> Vec<CatalogDeclarationPatch> {
+    [
+        ProposalDocument::Tasks,
+        ProposalDocument::Pools,
+        ProposalDocument::Activity,
+        ProposalDocument::Timeline,
+    ]
+    .into_iter()
+    .map(|document| {
+        CatalogDeclarationPatch::new(
+            document,
+            ProposalPatchOperation::Replace,
+            "/catalog/catalog_version",
+            Some(version.to_string()),
+        )
+        .expect("catalog version patch")
+    })
+    .collect()
+}
+
+fn unverified_report(
+    reference: &ProjectedArtifactReference,
+    ids: &IdentifierIssuer,
+) -> ProjectedArtifactReference {
+    let mut reference = reference.clone();
+    reference.artifact_id = *ids
+        .mint_artifact_id()
+        .expect("unverified artifact id")
+        .transport();
+    let artifact_id = serde_json::to_value(reference.artifact_id)
+        .expect("artifact id JSON")
+        .as_str()
+        .expect("artifact id string")
+        .to_owned();
+    reference.object_key = Some(format!(
+        "artifacts/{}/{}.txt",
+        &reference.sha256[7..9],
+        artifact_id
+    ));
+    reference
+}
+
+fn verified_artifact_sequence(host: &RuntimeHost, reference: &ProjectedArtifactReference) -> u64 {
+    let mut client = TestClient::connect(host);
+    projected_events(
+        &mut client,
+        EventQuery {
+            event_type: Some(EventType::ArtifactVerified),
+            ..EventQuery::default()
+        },
+    )
+    .into_iter()
+    .find(|event| event.artifacts.iter().any(|artifact| artifact == reference))
+    .expect("artifact verification event")
+    .sequence
+}
+
+fn policy_facts() -> EvaluationFacts {
+    EvaluationFacts {
+        ledger_position: 1,
+        fact_snapshot_id: "snapshot:fixture-a".to_owned(),
+        facts: Vec::new(),
+        outcomes: vec![ObservedOutcome {
+            task_id: "fixture.observe".to_owned(),
+            instance_id: POLICY_INSTANCE_ALIAS.to_owned(),
+            outcome_key: "completed".to_owned(),
+            value: FactValue::Boolean(false),
+            observed_at_unix_ms: POLICY_NOW_UNIX_MS,
+        }],
+        tasks: Vec::new(),
+        instances: vec![InstanceSnapshot {
+            instance_id: POLICY_INSTANCE_ALIAS.to_owned(),
+            server_id: "fixture-server-a".to_owned(),
+            game_id: "fixture-game-a".to_owned(),
+            host_id: "fixture-host-a".to_owned(),
+            available: true,
+            capability_operation_ids: vec!["operation.observe".to_owned()],
+            preferred_task_ids: Vec::new(),
+        }],
+    }
+}
+
+fn pending_policy_facts() -> EvaluationFacts {
+    let mut facts = policy_facts();
+    facts.fact_snapshot_id = "snapshot:pending-a".to_owned();
+    facts.outcomes.push(ObservedOutcome {
+        task_id: "fixture.observe-b".to_owned(),
+        instance_id: POLICY_INSTANCE_ALIAS_B.to_owned(),
+        outcome_key: "completed".to_owned(),
+        value: FactValue::Boolean(false),
+        observed_at_unix_ms: POLICY_NOW_UNIX_MS,
+    });
+    facts.instances.push(InstanceSnapshot {
+        instance_id: POLICY_INSTANCE_ALIAS_B.to_owned(),
+        server_id: "fixture-server-b".to_owned(),
+        game_id: "fixture-game-a".to_owned(),
+        host_id: "fixture-host-b".to_owned(),
+        available: true,
+        capability_operation_ids: vec!["operation.observe".to_owned()],
+        preferred_task_ids: Vec::new(),
+    });
+    facts
+}
+
+fn detection_policy_facts(ordinary_ready: bool, snapshot_id: &str) -> EvaluationFacts {
+    let mut facts = policy_facts();
+    facts.fact_snapshot_id = snapshot_id.to_owned();
+    facts.facts.push(ObservedFact {
+        scope: ScopeSelector::Instance {
+            instance_id: POLICY_INSTANCE_ALIAS.to_owned(),
+        },
+        fact_key: "ordinary.ready".to_owned(),
+        value: FactValue::Boolean(ordinary_ready),
+        observed_at_unix_ms: POLICY_NOW_UNIX_MS,
+        expires_at_unix_ms: Some(POLICY_NOW_UNIX_MS + 60_000),
+        confidence_milli: 1_000,
+    });
+    facts.facts.push(ObservedFact {
+        scope: ScopeSelector::Instance {
+            instance_id: POLICY_INSTANCE_ALIAS.to_owned(),
+        },
+        fact_key: "test.snapshot_revision".to_owned(),
+        value: FactValue::String(snapshot_id.to_owned()),
+        observed_at_unix_ms: POLICY_NOW_UNIX_MS,
+        expires_at_unix_ms: Some(POLICY_NOW_UNIX_MS + 60_000),
+        confidence_milli: 1_000,
+    });
+    facts
+}
+
+fn stored_fact(
+    scope: FactScope,
+    key: &str,
+    value: ContractFactValue,
+    source_snapshot_id: &str,
+    invalidate_on: Vec<EventType>,
+) -> FactRecord {
+    FactRecord {
+        scope,
+        key: key.to_owned(),
+        content: FactContent::Inline { value },
+        observed_at_unix_ms: POLICY_NOW_UNIX_MS,
+        expires_at_unix_ms: Some(POLICY_NOW_UNIX_MS + 60_000),
+        ttl_policy: Some(FactTtlPolicy {
+            minimum_ms: 1_000,
+            maximum_ms: 120_000,
+            source: FactTtlSource::DetectorContract,
+        }),
+        confidence_milli: 900,
+        source_detector: "detector.fixture".to_owned(),
+        source_snapshot_id: source_snapshot_id.to_owned(),
+        schema_version: "fact.v1".to_owned(),
+        resource_bundle_hash: "a".repeat(64),
+        invalidate_on,
+    }
+}
+
+fn policy_resources() -> EvaluationResources {
+    EvaluationResources {
+        pools: vec![PoolValueSnapshot {
+            pool_id: "fixture-pool-a".to_owned(),
+            value: 10,
+            observed_at_unix_ms: POLICY_NOW_UNIX_MS,
+        }],
+        hosts: vec![HostResourceSnapshot {
+            host_id: "fixture-host-a".to_owned(),
+            cpu_available_milli: 1_000,
+            gpu_available_milli: 1_000,
+            io_available_milli: 1_000,
+            host_responsiveness_basis_points: 10_000,
+            third_party_pressure_basis_points: 0,
+            heavy_dispatch_limit: 1,
+            active_heavy_dispatches: 0,
+        }],
+    }
+}
+
+fn forward_projection_request(
+    facts: &EvaluationFacts,
+    config: ForwardProjectionConfig,
+) -> RuntimeForwardProjectionRequest {
+    RuntimeForwardProjectionRequest::new(
+        RuntimePlanningDocument::encode(RuntimePlanningDocumentKind::EvaluationFacts, facts)
+            .expect("evaluation facts document"),
+        RuntimePlanningDocument::encode(
+            RuntimePlanningDocumentKind::EvaluationResources,
+            &policy_resources(),
+        )
+        .expect("evaluation resources document"),
+        RuntimePlanningDocument::encode(
+            RuntimePlanningDocumentKind::EvaluationTime,
+            &EvaluationTime {
+                unix_ms: POLICY_NOW_UNIX_MS,
+                monotonic_ms: POLICY_NOW_UNIX_MS,
+            },
+        )
+        .expect("evaluation time document"),
+        17,
+        RuntimePlanningDocument::encode(
+            RuntimePlanningDocumentKind::ForwardProjectionConfig,
+            &config,
+        )
+        .expect("forward config document"),
+    )
+    .expect("forward projection request")
+}
+
+fn pending_policy_resources() -> EvaluationResources {
+    let mut resources = policy_resources();
+    resources.hosts.push(HostResourceSnapshot {
+        host_id: "fixture-host-b".to_owned(),
+        cpu_available_milli: 1_000,
+        gpu_available_milli: 1_000,
+        io_available_milli: 1_000,
+        host_responsiveness_basis_points: 10_000,
+        third_party_pressure_basis_points: 0,
+        heavy_dispatch_limit: 1,
+        active_heavy_dispatches: 0,
+    });
+    resources
+}
+
+#[test]
+fn forward_projection_reuses_policy_state_without_runtime_side_effects() {
+    let root = TempDir::new().expect("tempdir");
+    let state = Arc::new(FakeState::default());
+    let host = host_with_state(&root, POLICY_INSTANCE_ALIAS, Arc::clone(&state));
+    host.activate_policy_catalog(&policy_sources(1))
+        .expect("activate policy catalog");
+    host.publish_fact(stored_fact(
+        FactScope::Instance {
+            instance_id: POLICY_INSTANCE_ALIAS.to_owned(),
+        },
+        "resource.projection_only",
+        ContractFactValue::Boolean(true),
+        "snapshot:forward-read-only",
+        vec![EventType::CatalogActivated],
+    ))
+    .expect("publish projection fact");
+    host.activate_policy_catalog(&policy_sources(2))
+        .expect("activate invalidating catalog");
+    let mut client = TestClient::connect(&host);
+    let before = projected_events(&mut client, EventQuery::default());
+    drop(client);
+
+    let config = ForwardProjectionConfig::for_hours(2, 64).expect("projection config");
+    let first = host
+        .project_policy_forward(
+            &policy_facts(),
+            &policy_resources(),
+            EvaluationTime {
+                unix_ms: POLICY_NOW_UNIX_MS,
+                monotonic_ms: POLICY_NOW_UNIX_MS,
+            },
+            17,
+            config,
+        )
+        .expect("forward projection");
+    let second = host
+        .project_policy_forward(
+            &policy_facts(),
+            &policy_resources(),
+            EvaluationTime {
+                unix_ms: POLICY_NOW_UNIX_MS,
+                monotonic_ms: POLICY_NOW_UNIX_MS,
+            },
+            17,
+            config,
+        )
+        .expect("replayed forward projection");
+    assert_eq!(first, second);
+    assert!(!first.steps.is_empty());
+
+    let mut client = TestClient::connect(&host);
+    let after = projected_events(&mut client, EventQuery::default());
+    assert_eq!(before, after);
+    assert!(
+        after
+            .iter()
+            .all(|event| event.event_type != EventType::FactInvalidated)
+    );
+    assert_eq!(state.open_count.load(Ordering::SeqCst), 0);
+    assert_eq!(state.capture_open_count.load(Ordering::SeqCst), 0);
+    assert_eq!(state.input_count.load(Ordering::SeqCst), 0);
+    drop(client);
+    let snapshot = host
+        .instance_fact_snapshot(InstanceFactContext {
+            instance_id: POLICY_INSTANCE_ALIAS.to_owned(),
+            server_id: "fixture-server-a".to_owned(),
+            game_id: "fixture-game-a".to_owned(),
+        })
+        .expect("synchronize fact snapshot");
+    assert!(
+        snapshot
+            .records
+            .iter()
+            .all(|record| record.key != "resource.projection_only")
+    );
+    host.close().expect("close host");
+}
+
+#[test]
+fn predictive_maintenance_reports_missing_evidence_without_a_signal() {
+    let root = TempDir::new().expect("tempdir");
+    let state = Arc::new(FakeState::default());
+    let host = host_with_state(&root, POLICY_INSTANCE_ALIAS, Arc::clone(&state));
+    let as_of_ledger_position =
+        project_snapshot(&host, ProjectInterfaceRequest::current()).ledger_position;
+    let query = MaintenanceLedgerQuery::new(
+        POLICY_INSTANCE_ALIAS,
+        "fixture.observe",
+        FactScope::Instance {
+            instance_id: POLICY_INSTANCE_ALIAS.to_owned(),
+        },
+        "resource.primary",
+        as_of_ledger_position,
+        POLICY_NOW_UNIX_MS,
+        MaintenanceTrendPolicy::default(),
+    )
+    .expect("maintenance query");
+
+    let assessment = host
+        .assess_and_publish_predictive_maintenance(&query)
+        .expect("maintenance assessment");
+    assert_eq!(
+        assessment.disposition,
+        MaintenanceDisposition::EvidenceInsufficient
+    );
+    let mut client = TestClient::connect(&host);
+    assert!(
+        projected_events(
+            &mut client,
+            EventQuery {
+                event_type: Some(EventType::PolicyPlanningSignalObserved),
+                ..EventQuery::default()
+            }
+        )
+        .is_empty()
+    );
+    assert_eq!(state.open_count.load(Ordering::SeqCst), 0);
+    assert_eq!(state.capture_open_count.load(Ordering::SeqCst), 0);
+    assert_eq!(state.input_count.load(Ordering::SeqCst), 0);
+    drop(client);
+    host.close().expect("close host");
+}
+
+#[test]
+fn predictive_maintenance_publishes_one_evidence_pinned_recheck_signal() {
+    let root = TempDir::new().expect("tempdir");
+    let state = Arc::new(FakeState::default());
+    let registered_id = instance_id();
+    let durations = [100_u64, 110, 200, 240];
+    let confidences = [950_u16, 940, 800, 780];
+    let fact_scope = FactScope::Instance {
+        instance_id: POLICY_INSTANCE_ALIAS.to_owned(),
+    };
+    let mut next_evaluation_at = POLICY_NOW_UNIX_MS;
+    let mut last_observed_at = POLICY_NOW_UNIX_MS;
+
+    for (index, (&duration_ms, &confidence_milli)) in
+        durations.iter().zip(confidences.iter()).enumerate()
+    {
+        let clock = Arc::new(ManualRuntimeClock::new(next_evaluation_at, 0));
+        let host = RuntimeHost::start(
+            config(&root).with_runtime_clock(clock.clone()),
+            Arc::new(FakeProvider::one(
+                POLICY_INSTANCE_ALIAS,
+                registered_id,
+                Arc::clone(&state),
+            )),
+        )
+        .expect("maintenance runtime host");
+        if index == 0 {
+            host.activate_policy_catalog(&policy_sources(1))
+                .expect("activate policy catalog");
+        }
+        let mut facts = policy_facts();
+        facts.fact_snapshot_id = format!("snapshot:maintenance-cycle-{index}");
+        facts.outcomes[0].observed_at_unix_ms = next_evaluation_at;
+        let cycle = host
+            .evaluate_policy_cycle_with_test_inputs(
+                &facts,
+                &policy_resources(),
+                EvaluationTime {
+                    unix_ms: next_evaluation_at,
+                    monotonic_ms: next_evaluation_at,
+                },
+                100 + u64::try_from(index).expect("bounded maintenance index"),
+                PolicyTrigger::Reconciliation,
+            )
+            .expect("maintenance policy evaluation");
+        let evaluation = cycle.evaluation.expect("maintenance evaluation");
+        let intent = evaluation
+            .dispatch_intents
+            .first()
+            .expect("maintenance dispatch intent")
+            .clone();
+        let reasons = evaluation
+            .reason_chains
+            .iter()
+            .find(|chain| chain.id == intent.reason_chain_id)
+            .expect("maintenance reason chain")
+            .clone();
+        if index == 0 {
+            record_policy_approval(&host, &intent);
+        }
+        let admission = host
+            .admit_policy_dispatch(
+                &intent,
+                &reasons,
+                &PolicyAdmissionContext {
+                    fact_ledger_position: intent.input_ledger_position,
+                    fact_snapshot_id: intent.fact_snapshot_id.clone(),
+                    approval_fact_ids: BTreeSet::new(),
+                    fencing_owner_epoch: host.runtime_info().owner_epoch(),
+                    now_unix_ms: next_evaluation_at,
+                },
+            )
+            .expect("maintenance dispatch admission");
+        let PolicyDispatchAdmission::Granted { admission, .. } = admission else {
+            panic!("expected maintenance dispatch admission")
+        };
+        last_observed_at = next_evaluation_at + duration_ms;
+        clock.advance(duration_ms);
+        host.record_policy_dispatch_outcome(&intent.decision_id, &PolicyExecutionInput::Succeeded)
+            .expect("maintenance execution outcome");
+        host.publish_fact(FactRecord {
+            scope: fact_scope.clone(),
+            key: "resource.primary".to_owned(),
+            content: FactContent::Inline {
+                value: ContractFactValue::Integer(10),
+            },
+            observed_at_unix_ms: last_observed_at,
+            expires_at_unix_ms: None,
+            ttl_policy: None,
+            confidence_milli,
+            source_detector: "detector.maintenance".to_owned(),
+            source_snapshot_id: format!("snapshot:maintenance-{index}"),
+            schema_version: "fact.v1".to_owned(),
+            resource_bundle_hash: "a".repeat(64),
+            invalidate_on: Vec::new(),
+        })
+        .expect("maintenance confidence fact");
+        next_evaluation_at = admission.activity.next_eligible_unix_ms + 1;
+        host.close().expect("close maintenance runtime host");
+    }
+
+    let host = RuntimeHost::start(
+        config(&root),
+        Arc::new(FakeProvider::one(
+            POLICY_INSTANCE_ALIAS,
+            registered_id,
+            Arc::clone(&state),
+        )),
+    )
+    .expect("assessment runtime host");
+    let as_of_ledger_position =
+        project_snapshot(&host, ProjectInterfaceRequest::current()).ledger_position;
+    let query = MaintenanceLedgerQuery::new(
+        POLICY_INSTANCE_ALIAS,
+        "fixture.observe",
+        fact_scope,
+        "resource.primary",
+        as_of_ledger_position,
+        last_observed_at,
+        MaintenanceTrendPolicy::default(),
+    )
+    .expect("maintenance query");
+    let first = host
+        .assess_and_publish_predictive_maintenance(&query)
+        .expect("maintenance assessment");
+    let second = host
+        .assess_and_publish_predictive_maintenance(&query)
+        .expect("replayed maintenance assessment");
+    assert_eq!(first, second);
+    assert_eq!(first.disposition, MaintenanceDisposition::RecheckSuggested);
+    assert_eq!(first.duration_sample_count, 4);
+    assert_eq!(first.confidence_sample_count, 4);
+    let later_query = MaintenanceLedgerQuery::new(
+        POLICY_INSTANCE_ALIAS,
+        "fixture.observe",
+        FactScope::Instance {
+            instance_id: POLICY_INSTANCE_ALIAS.to_owned(),
+        },
+        "resource.primary",
+        as_of_ledger_position,
+        last_observed_at + 1_000,
+        MaintenanceTrendPolicy::default(),
+    )
+    .expect("later maintenance query");
+    let later = host
+        .assess_and_publish_predictive_maintenance(&later_query)
+        .expect("later maintenance assessment");
+    assert_eq!(later.assessment_id, first.assessment_id);
+
+    host.publish_fact(FactRecord {
+        scope: FactScope::Instance {
+            instance_id: POLICY_INSTANCE_ALIAS.to_owned(),
+        },
+        key: "resource.primary".to_owned(),
+        content: FactContent::Inline {
+            value: ContractFactValue::Integer(10),
+        },
+        observed_at_unix_ms: last_observed_at - 500,
+        expires_at_unix_ms: None,
+        ttl_policy: None,
+        confidence_milli: 700,
+        source_detector: "detector.maintenance".to_owned(),
+        source_snapshot_id: "snapshot:maintenance-late".to_owned(),
+        schema_version: "fact.v1".to_owned(),
+        resource_bundle_hash: "a".repeat(64),
+        invalidate_on: Vec::new(),
+    })
+    .expect("publish backdated maintenance evidence");
+    let pinned_after_late = host
+        .assess_and_publish_predictive_maintenance(&query)
+        .expect("pinned assessment after late event");
+    assert_eq!(pinned_after_late, first);
+
+    let advanced_ledger_position =
+        project_snapshot(&host, ProjectInterfaceRequest::current()).ledger_position;
+    let advanced_query = MaintenanceLedgerQuery::new(
+        POLICY_INSTANCE_ALIAS,
+        "fixture.observe",
+        FactScope::Instance {
+            instance_id: POLICY_INSTANCE_ALIAS.to_owned(),
+        },
+        "resource.primary",
+        advanced_ledger_position,
+        last_observed_at,
+        MaintenanceTrendPolicy::default(),
+    )
+    .expect("advanced maintenance query");
+    let advanced = host
+        .assess_and_publish_predictive_maintenance(&advanced_query)
+        .expect("advanced maintenance assessment");
+    assert_eq!(advanced.confidence_sample_count, 5);
+    assert_ne!(advanced.assessment_id, first.assessment_id);
+    assert_eq!(advanced.as_of_ledger_position, advanced_ledger_position);
+
+    let mut client = TestClient::connect(&host);
+    let signals = projected_events(
+        &mut client,
+        EventQuery {
+            event_type: Some(EventType::PolicyPlanningSignalObserved),
+            ..EventQuery::default()
+        },
+    );
+    assert_eq!(signals.len(), 2);
+    assert_eq!(state.open_count.load(Ordering::SeqCst), 0);
+    assert_eq!(state.capture_open_count.load(Ordering::SeqCst), 0);
+    assert_eq!(state.input_count.load(Ordering::SeqCst), 0);
+    drop(client);
+    host.close().expect("close host");
+}
+
+#[test]
+fn project_interface_projects_runtime_domains_and_rejects_unknown_versions() {
+    let root = TempDir::new().expect("tempdir");
+    let state = Arc::new(FakeState::default());
+    let host = host_with_state(&root, POLICY_INSTANCE_ALIAS, Arc::clone(&state));
+    host.activate_policy_catalog(&policy_sources(1))
+        .expect("activate catalog");
+    host.publish_fact(stored_fact(
+        FactScope::Instance {
+            instance_id: POLICY_INSTANCE_ALIAS.to_owned(),
+        },
+        "resource.current",
+        ContractFactValue::Integer(5),
+        "snapshot:project-interface",
+        Vec::new(),
+    ))
+    .expect("publish fact");
+    let (_, intent, reason_chain) = evaluated_policy_dispatch(&host, PolicyTrigger::Recovery);
+    record_policy_approval(&host, &intent);
+    host.admit_policy_dispatch(
+        &intent,
+        &reason_chain,
+        &PolicyAdmissionContext {
+            fact_ledger_position: intent.input_ledger_position,
+            fact_snapshot_id: intent.fact_snapshot_id.clone(),
+            approval_fact_ids: BTreeSet::new(),
+            fencing_owner_epoch: host.runtime_info().owner_epoch(),
+            now_unix_ms: POLICY_NOW_UNIX_MS,
+        },
+    )
+    .expect("admit dispatch");
+
+    let mut client = TestClient::connect(&host);
+    let request = client.request(RuntimeOperation::ProjectInterface {
+        request: ProjectInterfaceRequest::current(),
+    });
+    let receipt = client.send(&request);
+    let RuntimeResult::ProjectInterface { response } = receipt.result().expect("result") else {
+        panic!("expected project interface response");
+    };
+    let snapshot = response.snapshot().expect("current project snapshot");
+    assert_eq!(
+        snapshot.project.as_ref().expect("project").project_id,
+        "fixture.catalog-a"
+    );
+    assert_eq!(snapshot.catalog.as_ref().expect("catalog").goal_count, 1);
+    let current = response.current().expect("current runtime view");
+    assert_eq!(current.instances.len(), 1);
+    assert_eq!(snapshot.facts.len(), 1);
+    assert_eq!(snapshot.goals.len(), 1);
+    assert_eq!(snapshot.decisions.len(), 1);
+    assert_eq!(snapshot.decisions[0].state, ProjectDecisionState::Admitted);
+    let decision_page = &snapshot.decision_page;
+    assert_eq!(decision_page.returned_count(), 1);
+    assert!(!decision_page.has_more());
+    assert_eq!(snapshot.approvals.len(), 1);
+    assert!(!current.fatal);
+    assert_eq!(state.open_count.load(Ordering::Acquire), 0);
+    assert_eq!(state.capture_open_count.load(Ordering::Acquire), 0);
+
+    let unsupported = client.request(RuntimeOperation::ProjectInterface {
+        request: ProjectInterfaceRequest::new(vec![
+            "actingcommand.project-interface.v9".to_owned(),
+        ])
+        .expect("well-formed version request"),
+    });
+    let rejected = client.send(&unsupported);
+    assert_eq!(rejected.state(), RuntimeReceiptState::Denied);
+    assert_eq!(
+        rejected.error_projection().expect("typed rejection").code,
+        RuntimeErrorCode::ProtocolInvalid
+    );
+}
+
+#[test]
+fn project_interface_v1_rejects_decision_history_that_requires_pagination() {
+    let root = TempDir::new().expect("tempdir");
+    let host = host_with_state(&root, POLICY_INSTANCE_ALIAS, Arc::new(FakeState::default()));
+    host.activate_policy_catalog(&policy_sources(1))
+        .expect("activate catalog");
+
+    for index in 0..=actingcommand_contract::DEFAULT_PROJECT_DECISION_PAGE_SIZE {
+        let (_, intent, reason_chain) = evaluated_policy_dispatch_at(
+            &host,
+            PolicyTrigger::Reconciliation,
+            POLICY_NOW_UNIX_MS + u64::from(index) * 60_000,
+            10_000 + u64::from(index),
+        );
+        assert_eq!(
+            host.admit_policy_dispatch(&intent, &reason_chain, &policy_context(&host, &intent))
+                .expect_err("unapproved decision")
+                .code(),
+            "policy_approval_fact_missing"
+        );
+    }
+
+    let mut client = TestClient::connect(&host);
+    let request = client.request(RuntimeOperation::ProjectInterface {
+        request: ProjectInterfaceRequest::new(vec![
+            actingcommand_contract::PROJECT_INTERFACE_CONTRACT_V1.to_owned(),
+        ])
+        .expect("v1 request"),
+    });
+    let denied = client.send(&request);
+    assert_eq!(denied.state(), RuntimeReceiptState::Denied);
+    assert_eq!(
+        denied.error_projection().expect("typed denial").code,
+        RuntimeErrorCode::ProtocolInvalid
+    );
+    let request = ProjectInterfaceRequest::new(vec![
+        actingcommand_contract::PROJECT_INTERFACE_CONTRACT_V2.to_owned(),
+    ])
+    .expect("v2 request")
+    .with_decision_page(ProjectDecisionPageRequest::new(2, None).expect("v2 page request"))
+    .expect("paged v2 request");
+    let request = client.request(RuntimeOperation::ProjectInterface { request });
+    let denied = client.send(&request);
+    assert_eq!(denied.state(), RuntimeReceiptState::Denied);
+    assert_eq!(
+        denied.error_projection().expect("typed denial").code,
+        RuntimeErrorCode::ProtocolInvalid
+    );
+    host.close().expect("close host");
+}
+
+#[test]
+fn project_interface_pages_decision_history_without_duplicates_or_loss() {
+    let root = TempDir::new().expect("tempdir");
+    let host = host_with_state(&root, POLICY_INSTANCE_ALIAS, Arc::new(FakeState::default()));
+    host.activate_policy_catalog(&policy_sources(1))
+        .expect("activate catalog");
+    host.publish_fact(stored_fact(
+        FactScope::Instance {
+            instance_id: POLICY_INSTANCE_ALIAS.to_owned(),
+        },
+        "resource.current",
+        ContractFactValue::Integer(5),
+        "snapshot:project-page-initial",
+        Vec::new(),
+    ))
+    .expect("publish initial project fact");
+
+    let (_, approval_basis, _) =
+        evaluated_policy_dispatch_at(&host, PolicyTrigger::FactsChanged, POLICY_NOW_UNIX_MS, 100);
+    record_policy_approval(&host, &approval_basis);
+    let (_, admitted, admitted_reason) = evaluated_policy_dispatch_at(
+        &host,
+        PolicyTrigger::Reconciliation,
+        POLICY_NOW_UNIX_MS + 60_000,
+        101,
+    );
+    assert!(matches!(
+        host.admit_policy_dispatch(
+            &admitted,
+            &admitted_reason,
+            &policy_context(&host, &admitted),
+        )
+        .expect("approved dispatch"),
+        PolicyDispatchAdmission::Granted { .. }
+    ));
+    record_policy_approval_disposition(&host, &admitted, ApprovalDisposition::Revoked);
+
+    let mut expected = vec![admitted.decision_id.clone()];
+    let mut late_approval_intent = None;
+    for index in 0..4_u64 {
+        let (_, intent, reason_chain) = evaluated_policy_dispatch_at(
+            &host,
+            PolicyTrigger::Reconciliation,
+            POLICY_NOW_UNIX_MS + (index + 2) * 60_000,
+            102 + index,
+        );
+        late_approval_intent.get_or_insert_with(|| intent.clone());
+        expected.push(intent.decision_id.clone());
+        assert_eq!(
+            host.admit_policy_dispatch(&intent, &reason_chain, &policy_context(&host, &intent))
+                .expect_err("unapproved dispatch must be rejected")
+                .code(),
+            "policy_approval_fact_missing"
+        );
+    }
+    expected.reverse();
+
+    let mut client = TestClient::connect(&host);
+    let mut cursor = None;
+    let mut collected = Vec::new();
+    let mut collected_states = BTreeMap::new();
+    let mut frozen_projection = None;
+    let mut queued_waiter = None;
+    for page_index in 0..4 {
+        let request = ProjectInterfaceRequest::current()
+            .with_decision_page(
+                ProjectDecisionPageRequest::new(2, cursor.clone()).expect("page request"),
+            )
+            .expect("paged project request");
+        let request = client.request(RuntimeOperation::ProjectInterface { request });
+        let receipt = client.send(&request);
+        let RuntimeResult::ProjectInterface { response } = receipt.result().expect("page result")
+        else {
+            panic!("expected project interface response")
+        };
+        let snapshot = response.snapshot().expect("current project snapshot");
+        let current = response.current().expect("current runtime view");
+        assert!(current.observed_ledger_position >= snapshot.ledger_position);
+        let current_instance = current.instances.first().expect("project instance");
+        if page_index == 0 {
+            assert!(current_instance.lease_active);
+            assert_eq!(current_instance.queued_request_count, 0);
+        } else {
+            assert!(current_instance.lease_active);
+            assert_eq!(current_instance.queued_request_count, 1);
+        }
+        let projection = (
+            snapshot.ledger_position,
+            snapshot.catalog.clone(),
+            snapshot.facts.clone(),
+            snapshot.approvals.clone(),
+        );
+        if let Some(frozen) = &frozen_projection {
+            assert_eq!(
+                &projection, frozen,
+                "every page must retain the first page ledger projection"
+            );
+        } else {
+            frozen_projection = Some(projection);
+        }
+        assert!(snapshot.decisions.len() <= 2);
+        for decision in &snapshot.decisions {
+            collected.push(decision.decision_id.clone());
+            collected_states.insert(decision.decision_id.clone(), decision.state);
+        }
+        let page = &snapshot.decision_page;
+        assert_eq!(usize::from(page.returned_count()), snapshot.decisions.len());
+        cursor = page.next_cursor().cloned();
+        if page_index == 0 {
+            let mut waiter = TestClient::connect(&host);
+            let queued = waiter.request(RuntimeOperation::queue_lease(
+                POLICY_INSTANCE_ALIAS,
+                waiter.ids.mint_holder_id().expect("waiter holder"),
+                LeaseQueuePolicy::new(LeasePriority::Normal, 60_000).expect("queue policy"),
+            ));
+            assert!(matches!(
+                waiter.send(&queued).result(),
+                Some(RuntimeResult::LeaseQueued { .. })
+            ));
+            queued_waiter = Some(waiter);
+            host.complete_policy_dispatch(&admitted.decision_id)
+                .expect("complete after snapshot");
+            host.publish_fact(stored_fact(
+                FactScope::Instance {
+                    instance_id: POLICY_INSTANCE_ALIAS.to_owned(),
+                },
+                "resource.current",
+                ContractFactValue::Integer(9),
+                "snapshot:project-page-late",
+                Vec::new(),
+            ))
+            .expect("publish fact after first page");
+            record_policy_approval(
+                &host,
+                late_approval_intent.as_ref().expect("late approval intent"),
+            );
+            host.activate_policy_catalog(&policy_sources(2))
+                .expect("activate catalog after first page");
+        }
+        if !page.has_more() {
+            break;
+        }
+    }
+
+    assert_eq!(collected, expected);
+    assert_eq!(
+        collected_states.get(&admitted.decision_id),
+        Some(&ProjectDecisionState::Admitted),
+        "later pages must remain bound to the first page ledger snapshot"
+    );
+    assert!(cursor.is_none());
+    let current = project_snapshot(&host, ProjectInterfaceRequest::current());
+    assert_eq!(
+        current
+            .catalog
+            .as_ref()
+            .expect("current catalog")
+            .catalog_version,
+        2
+    );
+    assert!(
+        current
+            .facts
+            .iter()
+            .any(|fact| fact.source_snapshot_id == "snapshot:project-page-late")
+    );
+    assert_ne!(
+        &current.approvals,
+        &frozen_projection.as_ref().expect("frozen projection").3
+    );
+    drop(queued_waiter);
+    drop(client);
+    host.close().expect("close host");
 }
 
 fn neutral_contained_task_package() -> Vec<u8> {
@@ -622,13 +2132,13 @@ fn concurrent_acquire(
 #[test]
 fn runtime_status_lists_configured_instances_and_live_scheduler_state() {
     let root = TempDir::new().expect("tempdir");
-    let ak_state = Arc::new(FakeState::default());
-    let ba_state = Arc::new(FakeState::default());
+    let state_a = Arc::new(FakeState::default());
+    let state_b = Arc::new(FakeState::default());
     let host = RuntimeHost::start(
         config(&root),
         Arc::new(FakeProvider::from_entries([
-            ("ba.jp".to_string(), instance_id(), Arc::clone(&ba_state)),
-            ("ak.cn".to_string(), instance_id(), Arc::clone(&ak_state)),
+            ("node.c".to_string(), instance_id(), Arc::clone(&state_b)),
+            ("node.a".to_string(), instance_id(), Arc::clone(&state_a)),
         ])),
     )
     .expect("runtime host");
@@ -642,19 +2152,19 @@ fn runtime_status_lists_configured_instances_and_live_scheduler_state() {
     };
     assert_eq!(status.owner_epoch(), host.runtime_info().owner_epoch());
     assert_eq!(status.instances().len(), 2);
-    assert_eq!(status.instances()[0].instance_alias(), "ak.cn");
-    assert_eq!(status.instances()[1].instance_alias(), "ba.jp");
+    assert_eq!(status.instances()[0].instance_alias(), "node.a");
+    assert_eq!(status.instances()[1].instance_alias(), "node.c");
     assert!(
         status
             .instances()
             .iter()
             .all(|instance| !instance.lease_active())
     );
-    assert_eq!(ak_state.open_count.load(Ordering::Acquire), 0);
-    assert_eq!(ba_state.open_count.load(Ordering::Acquire), 0);
+    assert_eq!(state_a.open_count.load(Ordering::Acquire), 0);
+    assert_eq!(state_b.open_count.load(Ordering::Acquire), 0);
 
     let acquire = owner.request(RuntimeOperation::acquire_lease(
-        "ak.cn",
+        "node.a",
         owner.ids.mint_holder_id().expect("owner holder"),
     ));
     let acquire = owner.send(&acquire);
@@ -664,7 +2174,7 @@ fn runtime_status_lists_configured_instances_and_live_scheduler_state() {
     ));
     let mut waiter = TestClient::connect(&host);
     let queued = waiter.request(RuntimeOperation::queue_lease(
-        "ak.cn",
+        "node.a",
         waiter.ids.mint_holder_id().expect("waiter holder"),
         LeaseQueuePolicy::new(LeasePriority::Normal, 1_000).expect("queue policy"),
     ));
@@ -680,11 +2190,11 @@ fn runtime_status_lists_configured_instances_and_live_scheduler_state() {
     let RuntimeResult::Status { status } = live.result().expect("live status result") else {
         panic!("expected live runtime status");
     };
-    let ak = &status.instances()[0];
-    assert!(ak.lease_active());
-    assert_eq!(ak.queued_request_count(), 1);
-    assert!(!ak.takeover_cooldown_active());
-    assert_eq!(ak_state.open_count.load(Ordering::Acquire), 0);
+    let active = &status.instances()[0];
+    assert!(active.lease_active());
+    assert_eq!(active.queued_request_count(), 1);
+    assert!(!active.takeover_cooldown_active());
+    assert_eq!(state_a.open_count.load(Ordering::Acquire), 0);
 
     drop(waiter);
     drop(owner);
@@ -700,23 +2210,23 @@ fn runtime_registry_is_immutable_and_rejects_duplicate_instance_ids() {
         Arc::new(
             FakeProvider::from_entries([
                 (
-                    "ak.cn".to_string(),
+                    "node.a".to_string(),
                     instance_id(),
                     Arc::new(FakeState::default()),
                 ),
                 (
-                    "hidden.jp".to_string(),
+                    "hidden.node".to_string(),
                     instance_id(),
                     Arc::clone(&hidden_state),
                 ),
             ])
-            .with_inventory(["ak.cn".to_string()]),
+            .with_inventory(["node.a".to_string()]),
         ),
     )
     .expect("runtime host");
     let mut client = TestClient::connect(&host);
     let hidden = client.request(RuntimeOperation::acquire_lease(
-        "hidden.jp",
+        "hidden.node",
         client.ids.mint_holder_id().expect("hidden holder"),
     ));
     let hidden = client.send(&hidden);
@@ -735,12 +2245,12 @@ fn runtime_registry_is_immutable_and_rejects_duplicate_instance_ids() {
         config(&duplicate_root),
         Arc::new(FakeProvider::from_entries([
             (
-                "ak.cn".to_string(),
+                "node.a".to_string(),
                 duplicate_id,
                 Arc::new(FakeState::default()),
             ),
             (
-                "ba.jp".to_string(),
+                "node.c".to_string(),
                 duplicate_id,
                 Arc::new(FakeState::default()),
             ),
@@ -765,7 +2275,7 @@ fn runtime_monitor_policy_persists_and_idempotent_updates_do_not_rewrite_state()
     let host = RuntimeHost::start(
         config(&root),
         Arc::new(FakeProvider::one(
-            "ak.cn",
+            "node.a",
             configured_id,
             Arc::clone(&state),
         )),
@@ -774,7 +2284,7 @@ fn runtime_monitor_policy_persists_and_idempotent_updates_do_not_rewrite_state()
     let mut client = TestClient::connect(&host);
     let policy = RuntimeMonitorPolicy::new(1_000, "home", false).expect("policy");
     let configure = client.request(RuntimeOperation::ConfigureMonitor {
-        instance_alias: "ak.cn".to_string(),
+        instance_alias: "node.a".to_string(),
         policy: policy.clone(),
     });
     let configured = client.send(&configure);
@@ -814,7 +2324,7 @@ fn runtime_monitor_policy_persists_and_idempotent_updates_do_not_rewrite_state()
     let first_length = fs::metadata(&journal).expect("monitor metadata").len();
 
     let repeated = client.request(RuntimeOperation::ConfigureMonitor {
-        instance_alias: "ak.cn".to_string(),
+        instance_alias: "node.a".to_string(),
         policy: policy.clone(),
     });
     assert!(matches!(
@@ -836,7 +2346,7 @@ fn runtime_monitor_policy_persists_and_idempotent_updates_do_not_rewrite_state()
 
     let reopened = RuntimeHost::start(
         config(&root),
-        Arc::new(FakeProvider::one("ak.cn", configured_id, state)),
+        Arc::new(FakeProvider::one("node.a", configured_id, state)),
     )
     .expect("reopened runtime");
     let mut client = TestClient::connect(&reopened);
@@ -852,7 +2362,7 @@ fn runtime_monitor_policy_persists_and_idempotent_updates_do_not_rewrite_state()
     );
 
     let clear = client.request(RuntimeOperation::ClearMonitor {
-        instance_alias: "ak.cn".to_string(),
+        instance_alias: "node.a".to_string(),
     });
     assert!(matches!(
         client.send(&clear).result(),
@@ -860,7 +2370,7 @@ fn runtime_monitor_policy_persists_and_idempotent_updates_do_not_rewrite_state()
     ));
     let cleared_length = fs::metadata(&journal).expect("monitor metadata").len();
     let repeated_clear = client.request(RuntimeOperation::ClearMonitor {
-        instance_alias: "ak.cn".to_string(),
+        instance_alias: "node.a".to_string(),
     });
     assert!(matches!(
         client.send(&repeated_clear).result(),
@@ -878,10 +2388,10 @@ fn runtime_monitor_policy_persists_and_idempotent_updates_do_not_rewrite_state()
 fn resident_monitor_runs_without_a_client_and_records_artifact_backed_lifecycle() {
     let root = TempDir::new().expect("tempdir");
     let state = Arc::new(FakeState::default());
-    let host = host_with_state(&root, "ak.cn", Arc::clone(&state));
+    let host = host_with_state(&root, "node.a", Arc::clone(&state));
     let mut client = TestClient::connect(&host);
     let configure = client.request(RuntimeOperation::ConfigureMonitor {
-        instance_alias: "ak.cn".to_string(),
+        instance_alias: "node.a".to_string(),
         policy: RuntimeMonitorPolicy::new(200, "home", false).expect("monitor policy"),
     });
     assert_eq!(
@@ -916,9 +2426,10 @@ fn resident_monitor_runs_without_a_client_and_records_artifact_backed_lifecycle(
         },
     );
     let event = completed.last().expect("monitor completion event");
-    let ProjectionPayload::Full(EventPayload::Monitor(MonitorPayload::Completed(detail))) =
-        &event.payload
-    else {
+    let ProjectionPayload::Full(payload) = &event.payload else {
+        panic!("expected full monitor completion payload");
+    };
+    let EventPayload::Monitor(MonitorPayload::Completed(detail)) = payload.as_ref() else {
         panic!("expected full monitor completion payload");
     };
     assert_eq!(detail.observation().diagnosis(), MonitorDiagnosis::Healthy);
@@ -961,7 +2472,7 @@ fn resident_monitor_runs_without_a_client_and_records_artifact_backed_lifecycle(
     assert_eq!(state.input_count.load(Ordering::Acquire), 0);
 
     let clear = client.request(RuntimeOperation::ClearMonitor {
-        instance_alias: "ak.cn".to_string(),
+        instance_alias: "node.a".to_string(),
     });
     assert_eq!(client.send(&clear).state(), RuntimeReceiptState::Completed);
     thread::sleep(Duration::from_millis(300));
@@ -979,10 +2490,10 @@ fn resident_monitor_runs_without_a_client_and_records_artifact_backed_lifecycle(
 fn resident_monitor_uses_completion_based_cadence_without_a_tight_loop() {
     let root = TempDir::new().expect("tempdir");
     let state = Arc::new(FakeState::default());
-    let host = host_with_state(&root, "ak.cn", Arc::clone(&state));
+    let host = host_with_state(&root, "node.a", Arc::clone(&state));
     let mut client = TestClient::connect(&host);
     let configure = client.request(RuntimeOperation::ConfigureMonitor {
-        instance_alias: "ak.cn".to_string(),
+        instance_alias: "node.a".to_string(),
         policy: RuntimeMonitorPolicy::new(100, "home", false).expect("monitor policy"),
     });
     assert_eq!(
@@ -993,7 +2504,7 @@ fn resident_monitor_uses_completion_based_cadence_without_a_tight_loop() {
         state.monitor_observation_count.load(Ordering::Acquire) >= 3
     });
     let clear = client.request(RuntimeOperation::ClearMonitor {
-        instance_alias: "ak.cn".to_string(),
+        instance_alias: "node.a".to_string(),
     });
     assert_eq!(client.send(&clear).state(), RuntimeReceiptState::Completed);
 
@@ -1018,10 +2529,10 @@ fn monitor_recovery_is_scheduler_admitted_without_executing_an_effect() {
     let root = TempDir::new().expect("tempdir");
     let state = Arc::new(FakeState::default());
     state.monitor_mode.store(1, Ordering::Release);
-    let host = host_with_state(&root, "ak.cn", Arc::clone(&state));
+    let host = host_with_state(&root, "node.a", Arc::clone(&state));
     let mut client = TestClient::connect(&host);
     let configure = client.request(RuntimeOperation::ConfigureMonitor {
-        instance_alias: "ak.cn".to_string(),
+        instance_alias: "node.a".to_string(),
         policy: RuntimeMonitorPolicy::new(500, "home", true).expect("monitor policy"),
     });
     assert_eq!(
@@ -1039,7 +2550,7 @@ fn monitor_recovery_is_scheduler_admitted_without_executing_an_effect() {
         .is_empty()
     });
     let clear = client.request(RuntimeOperation::ClearMonitor {
-        instance_alias: "ak.cn".to_string(),
+        instance_alias: "node.a".to_string(),
     });
     assert_eq!(client.send(&clear).state(), RuntimeReceiptState::Completed);
 
@@ -1050,9 +2561,11 @@ fn monitor_recovery_is_scheduler_admitted_without_executing_an_effect() {
             ..EventQuery::default()
         },
     );
-    let ProjectionPayload::Full(EventPayload::Monitor(MonitorPayload::RecoveryAdmitted(detail))) =
-        &admitted.last().expect("recovery admission").payload
+    let ProjectionPayload::Full(payload) = &admitted.last().expect("recovery admission").payload
     else {
+        panic!("expected full recovery admission payload");
+    };
+    let EventPayload::Monitor(MonitorPayload::RecoveryAdmitted(detail)) = payload.as_ref() else {
         panic!("expected full recovery admission payload");
     };
     assert_eq!(detail.recovery(), MonitorRecoveryKind::WakeStandby);
@@ -1081,11 +2594,11 @@ fn monitor_recovery_is_deferred_by_an_active_fenced_lease() {
     let root = TempDir::new().expect("tempdir");
     let state = Arc::new(FakeState::default());
     state.monitor_mode.store(1, Ordering::Release);
-    let host = host_with_state(&root, "ak.cn", Arc::clone(&state));
+    let host = host_with_state(&root, "node.a", Arc::clone(&state));
     let mut client = TestClient::connect(&host);
-    let (_, token) = client.acquire("ak.cn");
+    let (_, token) = client.acquire("node.a");
     let configure = client.request(RuntimeOperation::ConfigureMonitor {
-        instance_alias: "ak.cn".to_string(),
+        instance_alias: "node.a".to_string(),
         policy: RuntimeMonitorPolicy::new(500, "home", true).expect("monitor policy"),
     });
     assert_eq!(
@@ -1103,7 +2616,7 @@ fn monitor_recovery_is_deferred_by_an_active_fenced_lease() {
         .is_empty()
     });
     let clear = client.request(RuntimeOperation::ClearMonitor {
-        instance_alias: "ak.cn".to_string(),
+        instance_alias: "node.a".to_string(),
     });
     assert_eq!(client.send(&clear).state(), RuntimeReceiptState::Completed);
 
@@ -1116,9 +2629,10 @@ fn monitor_recovery_is_deferred_by_an_active_fenced_lease() {
     );
     let event = deferred.last().expect("recovery deferral");
     assert_eq!(event.links.lease_id(), Some(&token.lease_id()));
-    let ProjectionPayload::Full(EventPayload::Monitor(MonitorPayload::RecoveryDeferred(detail))) =
-        &event.payload
-    else {
+    let ProjectionPayload::Full(payload) = &event.payload else {
+        panic!("expected full recovery deferral payload");
+    };
+    let EventPayload::Monitor(MonitorPayload::RecoveryDeferred(detail)) = payload.as_ref() else {
         panic!("expected full recovery deferral payload");
     };
     assert_eq!(detail.recovery(), MonitorRecoveryKind::WakeStandby);
@@ -1144,10 +2658,10 @@ fn monitor_capture_failure_is_persisted_without_fake_success() {
     let root = TempDir::new().expect("tempdir");
     let state = Arc::new(FakeState::default());
     state.fail_capture.store(true, Ordering::Release);
-    let host = host_with_state(&root, "ak.cn", Arc::clone(&state));
+    let host = host_with_state(&root, "node.a", Arc::clone(&state));
     let mut client = TestClient::connect(&host);
     let configure = client.request(RuntimeOperation::ConfigureMonitor {
-        instance_alias: "ak.cn".to_string(),
+        instance_alias: "node.a".to_string(),
         policy: RuntimeMonitorPolicy::new(500, "home", false).expect("monitor policy"),
     });
     assert_eq!(
@@ -1167,7 +2681,7 @@ fn monitor_capture_failure_is_persisted_without_fake_success() {
         )
     });
     let clear = client.request(RuntimeOperation::ClearMonitor {
-        instance_alias: "ak.cn".to_string(),
+        instance_alias: "node.a".to_string(),
     });
     assert_eq!(client.send(&clear).state(), RuntimeReceiptState::Completed);
     assert!(
@@ -1223,12 +2737,12 @@ fn runtime_restart_fails_when_monitor_evidence_is_missing() {
     let state = Arc::new(FakeState::default());
     let host = RuntimeHost::start(
         config(&root),
-        Arc::new(FakeProvider::one("ak.cn", instance_id, Arc::clone(&state))),
+        Arc::new(FakeProvider::one("node.a", instance_id, Arc::clone(&state))),
     )
     .expect("runtime host");
     let mut client = TestClient::connect(&host);
     let configure = client.request(RuntimeOperation::ConfigureMonitor {
-        instance_alias: "ak.cn".to_string(),
+        instance_alias: "node.a".to_string(),
         policy: RuntimeMonitorPolicy::new(500, "home", false).expect("monitor policy"),
     });
     assert_eq!(
@@ -1252,7 +2766,7 @@ fn runtime_restart_fails_when_monitor_evidence_is_missing() {
         .expect("monitor artifact object key")
         .to_string();
     let clear = client.request(RuntimeOperation::ClearMonitor {
-        instance_alias: "ak.cn".to_string(),
+        instance_alias: "node.a".to_string(),
     });
     assert_eq!(client.send(&clear).state(), RuntimeReceiptState::Completed);
     drop(client);
@@ -1261,7 +2775,7 @@ fn runtime_restart_fails_when_monitor_evidence_is_missing() {
 
     let restarted = RuntimeHost::start(
         config(&root),
-        Arc::new(FakeProvider::one("ak.cn", instance_id, state)),
+        Arc::new(FakeProvider::one("node.a", instance_id, state)),
     );
     let error = match restarted {
         Ok(host) => {
@@ -1279,10 +2793,10 @@ fn invalid_monitor_provider_observation_poison_runtime_after_recording_failure()
     let root = TempDir::new().expect("tempdir");
     let state = Arc::new(FakeState::default());
     state.monitor_mode.store(usize::MAX, Ordering::Release);
-    let host = host_with_state(&root, "ak.cn", state);
+    let host = host_with_state(&root, "node.a", state);
     let mut client = TestClient::connect(&host);
     let configure = client.request(RuntimeOperation::ConfigureMonitor {
-        instance_alias: "ak.cn".to_string(),
+        instance_alias: "node.a".to_string(),
         policy: RuntimeMonitorPolicy::new(500, "home", false).expect("monitor policy"),
     });
     assert_eq!(
@@ -1311,7 +2825,7 @@ fn corrupt_monitor_registry_fails_runtime_startup() {
     let result = RuntimeHost::start(
         config(&root),
         Arc::new(FakeProvider::one(
-            "ak.cn",
+            "node.a",
             instance_id(),
             Arc::new(FakeState::default()),
         )),
@@ -1331,13 +2845,13 @@ fn corrupt_monitor_registry_fails_runtime_startup() {
 fn zero_stagger_host_requests_produce_one_grant_and_one_busy_denial() {
     let root = TempDir::new().expect("tempdir");
     let state = Arc::new(FakeState::default());
-    let host = host_with_state(&root, "ak.cn", Arc::clone(&state));
+    let host = host_with_state(&root, "node.a", Arc::clone(&state));
     let first = TestClient::connect(&host);
     let second = TestClient::connect(&host);
     let start = Arc::new(Barrier::new(3));
     let completed = Arc::new(Barrier::new(3));
-    let first = concurrent_acquire(first, "ak.cn", Arc::clone(&start), Arc::clone(&completed));
-    let second = concurrent_acquire(second, "ak.cn", Arc::clone(&start), Arc::clone(&completed));
+    let first = concurrent_acquire(first, "node.a", Arc::clone(&start), Arc::clone(&completed));
+    let second = concurrent_acquire(second, "node.a", Arc::clone(&start), Arc::clone(&completed));
 
     start.wait();
     completed.wait();
@@ -1368,11 +2882,11 @@ fn zero_stagger_host_requests_produce_one_grant_and_one_busy_denial() {
 fn queued_release_transfers_only_after_the_durable_transfer_fact() {
     let root = TempDir::new().expect("tempdir");
     let state = Arc::new(FakeState::default());
-    let host = host_with_state(&root, "ak.cn", Arc::clone(&state));
+    let host = host_with_state(&root, "node.a", Arc::clone(&state));
     let mut first = TestClient::connect(&host);
     let mut second = TestClient::connect(&host);
-    let (_, old_token) = first.acquire("ak.cn");
-    let (queued_request, status) = second.queue("ak.cn", LeasePriority::Normal, 2_000);
+    let (_, old_token) = first.acquire("node.a");
+    let (queued_request, status) = second.queue("node.a", LeasePriority::Normal, 2_000);
     assert!(!status.preempt_requested());
 
     let release = first.request(RuntimeOperation::ReleaseLease {
@@ -1424,13 +2938,13 @@ fn queued_release_transfers_only_after_the_durable_transfer_fact() {
 fn high_priority_queue_transfers_immediately_at_an_idle_safe_boundary() {
     let root = TempDir::new().expect("tempdir");
     let state = Arc::new(FakeState::default());
-    let host = host_with_state(&root, "ak.cn", Arc::clone(&state));
+    let host = host_with_state(&root, "node.a", Arc::clone(&state));
     let mut first = TestClient::connect(&host);
     let mut second = TestClient::connect(&host);
-    let (_, old_token) = first.acquire("ak.cn");
+    let (_, old_token) = first.acquire("node.a");
     let holder = second.ids.mint_holder_id().expect("holder id");
     let queued_request = second.request(RuntimeOperation::queue_lease(
-        "ak.cn",
+        "node.a",
         holder,
         LeaseQueuePolicy::new(LeasePriority::High, 2_000).expect("queue policy"),
     ));
@@ -1472,10 +2986,10 @@ fn high_priority_preemption_waits_for_the_durable_input_outcome() {
     let root = TempDir::new().expect("tempdir");
     let state = Arc::new(FakeState::default());
     state.block_input.store(true, Ordering::Release);
-    let host = host_with_state(&root, "ak.cn", Arc::clone(&state));
+    let host = host_with_state(&root, "node.a", Arc::clone(&state));
     let mut first = TestClient::connect(&host);
     let mut second = TestClient::connect(&host);
-    let (_, old_token) = first.acquire("ak.cn");
+    let (_, old_token) = first.acquire("node.a");
     let input_token = old_token.clone();
     let input_thread = thread::spawn(move || {
         let input = first.request(RuntimeOperation::Input {
@@ -1489,7 +3003,7 @@ fn high_priority_preemption_waits_for_the_durable_input_outcome() {
         state.input_started.load(Ordering::Acquire)
     });
 
-    let (queued_request, status) = second.queue("ak.cn", LeasePriority::High, 2_000);
+    let (queued_request, status) = second.queue("node.a", LeasePriority::High, 2_000);
     assert!(status.preempt_requested());
     let poll = second.request(RuntimeOperation::PollQueuedLease {
         queued_request_id: status.request_id(),
@@ -1548,12 +3062,12 @@ fn high_priority_preemption_waits_for_the_durable_input_outcome() {
 fn queued_request_is_connection_bound_and_cancellation_is_ledger_visible() {
     let root = TempDir::new().expect("tempdir");
     let state = Arc::new(FakeState::default());
-    let host = host_with_state(&root, "ak.cn", state);
+    let host = host_with_state(&root, "node.a", state);
     let mut first = TestClient::connect(&host);
     let mut second = TestClient::connect(&host);
     let mut intruder = TestClient::connect(&host);
-    let (_, token) = first.acquire("ak.cn");
-    let (queued_request, status) = second.queue("ak.cn", LeasePriority::Normal, 2_000);
+    let (_, token) = first.acquire("node.a");
+    let (queued_request, status) = second.queue("node.a", LeasePriority::Normal, 2_000);
 
     let poll = intruder.request(RuntimeOperation::PollQueuedLease {
         queued_request_id: status.request_id(),
@@ -1594,11 +3108,11 @@ fn queued_request_is_connection_bound_and_cancellation_is_ledger_visible() {
 fn disconnect_promotes_another_connections_queue_without_opening_a_backend() {
     let root = TempDir::new().expect("tempdir");
     let state = Arc::new(FakeState::default());
-    let host = host_with_state(&root, "ak.cn", Arc::clone(&state));
+    let host = host_with_state(&root, "node.a", Arc::clone(&state));
     let mut first = TestClient::connect(&host);
     let mut second = TestClient::connect(&host);
-    let _ = first.acquire("ak.cn");
-    let (queued_request, status) = second.queue("ak.cn", LeasePriority::Normal, 2_000);
+    let _ = first.acquire("node.a");
+    let (queued_request, status) = second.queue("node.a", LeasePriority::Normal, 2_000);
     drop(first);
 
     let started = Instant::now();
@@ -1641,7 +3155,7 @@ fn lease_expiry_promotes_the_queue_and_fences_the_expired_token() {
     let root = TempDir::new().expect("tempdir");
     let state = Arc::new(FakeState::default());
     let provider = Arc::new(FakeProvider::one(
-        "ak.cn",
+        "node.a",
         instance_id(),
         Arc::clone(&state),
     ));
@@ -1657,8 +3171,8 @@ fn lease_expiry_promotes_the_queue_and_fences_the_expired_token() {
     .expect("runtime host");
     let mut first = TestClient::connect(&host);
     let mut second = TestClient::connect(&host);
-    let (_, expired_token) = first.acquire("ak.cn");
-    let (queued_request, status) = second.queue("ak.cn", LeasePriority::Normal, 1_000);
+    let (_, expired_token) = first.acquire("node.a");
+    let (queued_request, status) = second.queue("node.a", LeasePriority::Normal, 1_000);
 
     let started = Instant::now();
     let new_token = loop {
@@ -1701,11 +3215,11 @@ fn lease_expiry_promotes_the_queue_and_fences_the_expired_token() {
 fn queued_timeout_is_a_visible_terminal_denial() {
     let root = TempDir::new().expect("tempdir");
     let state = Arc::new(FakeState::default());
-    let host = host_with_state(&root, "ak.cn", state);
+    let host = host_with_state(&root, "node.a", state);
     let mut first = TestClient::connect(&host);
     let mut second = TestClient::connect(&host);
-    let (_, token) = first.acquire("ak.cn");
-    let (queued_request, status) = second.queue("ak.cn", LeasePriority::Normal, 50);
+    let (_, token) = first.acquire("node.a");
+    let (queued_request, status) = second.queue("node.a", LeasePriority::Normal, 50);
     thread::sleep(Duration::from_millis(100));
 
     let poll = second.request(RuntimeOperation::PollQueuedLease {
@@ -1735,11 +3249,11 @@ fn queued_timeout_is_a_visible_terminal_denial() {
 #[test]
 fn different_instances_acquire_and_execute_independently() {
     let root = TempDir::new().expect("tempdir");
-    let ak_state = Arc::new(FakeState::default());
-    let ba_state = Arc::new(FakeState::default());
+    let state_a = Arc::new(FakeState::default());
+    let state_b = Arc::new(FakeState::default());
     let provider = FakeProvider::from_entries([
-        ("ak.cn".to_string(), instance_id(), Arc::clone(&ak_state)),
-        ("ba.jp".to_string(), instance_id(), Arc::clone(&ba_state)),
+        ("node.a".to_string(), instance_id(), Arc::clone(&state_a)),
+        ("node.c".to_string(), instance_id(), Arc::clone(&state_b)),
     ]);
     let host = RuntimeHost::start(config(&root), Arc::new(provider)).expect("runtime host");
     let first = TestClient::connect(&host);
@@ -1761,19 +3275,19 @@ fn different_instances_acquire_and_execute_independently() {
             );
         })
     };
-    let first = run(first, "ak.cn", Arc::clone(&start));
-    let second = run(second, "ba.jp", Arc::clone(&start));
+    let first = run(first, "node.a", Arc::clone(&start));
+    let second = run(second, "node.c", Arc::clone(&start));
 
     start.wait();
     first.join().expect("first instance client");
     second.join().expect("second instance client");
-    for state in [&ak_state, &ba_state] {
+    for state in [&state_a, &state_b] {
         assert_eq!(state.open_count.load(Ordering::Acquire), 1);
         assert_eq!(state.input_count.load(Ordering::Acquire), 1);
         assert_eq!(state.close_count.load(Ordering::Acquire), 0);
     }
     host.close().expect("close host");
-    for state in [&ak_state, &ba_state] {
+    for state in [&state_a, &state_b] {
         assert_eq!(state.close_count.load(Ordering::Acquire), 1);
     }
 }
@@ -1782,14 +3296,14 @@ fn different_instances_acquire_and_execute_independently() {
 fn readonly_observation_uses_one_correlation_and_typed_durable_events() {
     let root = TempDir::new().expect("tempdir");
     let state = Arc::new(FakeState::default());
-    let host = host_with_state(&root, "ak.cn", Arc::clone(&state));
+    let host = host_with_state(&root, "node.a", Arc::clone(&state));
     let mut client = TestClient::connect(&host);
     let correlation = client.ids.mint_correlation_id().expect("correlation");
     let correlation_id = *correlation.transport();
     let observe = client.request_with_correlation(
         correlation,
         RuntimeOperation::ObserveReadonly {
-            instance_alias: "ak.cn".to_string(),
+            instance_alias: "node.a".to_string(),
         },
     );
     let completed = client.send(&observe);
@@ -1832,17 +3346,46 @@ fn readonly_observation_uses_one_correlation_and_typed_durable_events() {
 }
 
 #[test]
+fn enabled_performance_monitor_collects_runtime_capture_pipeline_events() {
+    let root = TempDir::new().expect("tempdir");
+    let state = Arc::new(FakeState::default());
+    let host = RuntimeHost::start(
+        config(&root).with_performance_monitor(PerformanceMonitorConfig::default()),
+        Arc::new(FakeProvider::one("node.alpha", instance_id(), state)),
+    )
+    .expect("runtime host");
+    let mut client = TestClient::connect(&host);
+    let request = client.request(RuntimeOperation::ObserveReadonly {
+        instance_alias: "node.alpha".to_owned(),
+    });
+    assert_eq!(
+        client.send(&request).state(),
+        RuntimeReceiptState::Completed
+    );
+    let observed_at_unix_ms = unix_ms_now().expect("wall clock");
+    let context = host
+        .performance_context_for_test("node.alpha", observed_at_unix_ms)
+        .expect("performance context");
+    assert!(context.max_capture_latency_ms.is_some());
+    assert!(context.max_recognition_latency_ms.is_some());
+    assert_eq!(context.max_action_effect_latency_ms, None);
+    assert!(host.fatal_error().expect("runtime health").is_none());
+    drop(client);
+    host.close().expect("close host");
+}
+
+#[test]
 fn bounded_capture_sequence_returns_unique_verified_observations_without_input() {
     let root = TempDir::new().expect("tempdir");
     let state = Arc::new(FakeState::default());
-    let host = host_with_state(&root, "ak.cn", Arc::clone(&state));
+    let host = host_with_state(&root, "node.a", Arc::clone(&state));
     let mut client = TestClient::connect(&host);
     let correlation = client.ids.mint_correlation_id().expect("correlation");
     let correlation_id = *correlation.transport();
     let capture = client.request_with_correlation(
         correlation,
         RuntimeOperation::CaptureSequence {
-            instance_alias: "ak.cn".to_string(),
+            instance_alias: "node.a".to_string(),
             spec: CaptureSequenceSpec::new(3, 5).expect("sequence spec"),
         },
     );
@@ -1925,14 +3468,14 @@ fn capture_sequence_partial_failure_keeps_evidence_without_fake_success_or_input
     let root = TempDir::new().expect("tempdir");
     let state = Arc::new(FakeState::default());
     state.fail_capture_on.store(2, Ordering::Release);
-    let host = host_with_state(&root, "ak.cn", Arc::clone(&state));
+    let host = host_with_state(&root, "node.a", Arc::clone(&state));
     let mut client = TestClient::connect(&host);
     let correlation = client.ids.mint_correlation_id().expect("correlation");
     let correlation_id = *correlation.transport();
     let request = client.request_with_correlation(
         correlation,
         RuntimeOperation::CaptureSequence {
-            instance_alias: "ak.cn".to_string(),
+            instance_alias: "node.a".to_string(),
             spec: CaptureSequenceSpec::new(3, 0).expect("sequence spec"),
         },
     );
@@ -1978,10 +3521,10 @@ fn capture_sequence_partial_failure_keeps_evidence_without_fake_success_or_input
 fn capture_sequence_bounds_are_rejected_before_backend_open() {
     let root = TempDir::new().expect("tempdir");
     let state = Arc::new(FakeState::default());
-    let host = host_with_state(&root, "ak.cn", Arc::clone(&state));
+    let host = host_with_state(&root, "node.a", Arc::clone(&state));
     let mut client = TestClient::connect(&host);
     let valid = client.request(RuntimeOperation::CaptureSequence {
-        instance_alias: "ak.cn".to_string(),
+        instance_alias: "node.a".to_string(),
         spec: CaptureSequenceSpec::new(1, 0).expect("valid spec"),
     });
     let mut encoded = serde_json::to_value(valid).expect("request JSON");
@@ -2003,12 +3546,12 @@ fn capture_sequence_bounds_are_rejected_before_backend_open() {
 fn readonly_artifact_store_failure_is_fatal_without_fake_success() {
     let root = TempDir::new().expect("tempdir");
     let state = Arc::new(FakeState::default());
-    let host = host_with_state(&root, "ak.cn", Arc::clone(&state));
+    let host = host_with_state(&root, "node.a", Arc::clone(&state));
     fs::write(root.path().join("artifacts"), b"blocks artifact directory")
         .expect("block artifact directory");
     let mut client = TestClient::connect(&host);
     let observe = client.request(RuntimeOperation::ObserveReadonly {
-        instance_alias: "ak.cn".to_string(),
+        instance_alias: "node.a".to_string(),
     });
 
     let failed = client.send(&observe);
@@ -2039,14 +3582,14 @@ fn readonly_failures_are_visible_and_terminal_without_fake_success() {
     let root = TempDir::new().expect("tempdir");
     let state = Arc::new(FakeState::default());
     state.fail_capture.store(true, Ordering::Release);
-    let host = host_with_state(&root, "ak.cn", Arc::clone(&state));
+    let host = host_with_state(&root, "node.a", Arc::clone(&state));
     let mut client = TestClient::connect(&host);
     let correlation = client.ids.mint_correlation_id().expect("correlation");
     let correlation_id = *correlation.transport();
     let observe = client.request_with_correlation(
         correlation,
         RuntimeOperation::ObserveReadonly {
-            instance_alias: "ak.cn".to_string(),
+            instance_alias: "node.a".to_string(),
         },
     );
     let failed = client.send(&observe);
@@ -2073,13 +3616,13 @@ fn readonly_failures_are_visible_and_terminal_without_fake_success() {
 fn safe_reset_owns_lease_input_and_release_under_one_correlation() {
     let root = TempDir::new().expect("tempdir");
     let state = Arc::new(FakeState::default());
-    let host = host_with_state(&root, "ak.cn", Arc::clone(&state));
+    let host = host_with_state(&root, "node.a", Arc::clone(&state));
     let mut client = TestClient::connect(&host);
     let correlation = client.ids.mint_correlation_id().expect("correlation");
     let correlation_id = *correlation.transport();
     let request = client.request_with_correlation(
         correlation,
-        RuntimeOperation::safe_reset("ak.cn", client.ids.mint_holder_id().expect("holder")),
+        RuntimeOperation::safe_reset("node.a", client.ids.mint_holder_id().expect("holder")),
     );
     let receipt = client.send(&request);
     assert_eq!(receipt.state(), RuntimeReceiptState::Completed);
@@ -2444,11 +3987,11 @@ fn contained_task_terminal_is_absorbing_and_rejections_are_audited() {
 fn safe_reset_replay_without_connection_cache_does_not_repeat_input() {
     let root = TempDir::new().expect("tempdir");
     let state = Arc::new(FakeState::default());
-    let host = host_with_state(&root, "ak.cn", Arc::clone(&state));
+    let host = host_with_state(&root, "node.a", Arc::clone(&state));
     let ids = IdentifierIssuer::new().expect("identifier issuer");
     let request = runtime_request(
         &ids,
-        RuntimeOperation::safe_reset("ak.cn", ids.mint_holder_id().expect("holder")),
+        RuntimeOperation::safe_reset("node.a", ids.mint_holder_id().expect("holder")),
     );
     let connection = ConnectionId::new(77).expect("connection");
 
@@ -2479,13 +4022,13 @@ fn safe_reset_replay_recovers_from_durable_ledger_after_host_restart() {
     let ids = IdentifierIssuer::new().expect("identifier issuer");
     let request = runtime_request(
         &ids,
-        RuntimeOperation::safe_reset("ak.cn", ids.mint_holder_id().expect("holder")),
+        RuntimeOperation::safe_reset("node.a", ids.mint_holder_id().expect("holder")),
     );
     let connection = ConnectionId::new(88).expect("connection");
     let first = RuntimeHost::start(
         config(&root),
         Arc::new(FakeProvider::one(
-            "ak.cn",
+            "node.a",
             fixed_instance,
             Arc::clone(&state),
         )),
@@ -2499,7 +4042,7 @@ fn safe_reset_replay_recovers_from_durable_ledger_after_host_restart() {
     let second = RuntimeHost::start(
         config(&root),
         Arc::new(FakeProvider::one(
-            "ak.cn",
+            "node.a",
             fixed_instance,
             Arc::clone(&state),
         )),
@@ -2520,7 +4063,7 @@ fn safe_reset_replay_recovers_from_durable_ledger_after_host_restart() {
 fn typed_ipc_routes_input_once_and_correlates_ledger_events() {
     let root = TempDir::new().expect("tempdir");
     let state = Arc::new(FakeState::default());
-    let host = host_with_state(&root, "ak.cn", Arc::clone(&state));
+    let host = host_with_state(&root, "node.a", Arc::clone(&state));
     let mut client = TestClient::connect(&host);
     let health = client.request(RuntimeOperation::Health);
     let health = client.send_result(&health);
@@ -2530,7 +4073,7 @@ fn typed_ipc_routes_input_once_and_correlates_ledger_events() {
         host.fatal_error()
     );
     let acquire_request = client.request(RuntimeOperation::acquire_lease(
-        "ak.cn",
+        "node.a",
         client.ids.mint_holder_id().expect("holder id"),
     ));
     let acquire_receipt = client.send_result(&acquire_request);
@@ -2602,12 +4145,14 @@ fn typed_ipc_routes_input_once_and_correlates_ledger_events() {
             ..EventQuery::default()
         },
         profile: ProjectionProfile::Forensic,
+        page: RuntimeEventQueryPageRequest::default(),
     });
     let receipt = client.send(&query);
-    let RuntimeResult::Events { events } = receipt.result().expect("events result") else {
+    let RuntimeResult::EventPage { page } = receipt.result().expect("events result") else {
         panic!("expected event projection");
     };
-    let event_types = events
+    let event_types = page
+        .events()
         .iter()
         .map(|event| event.event_type)
         .collect::<Vec<_>>();
@@ -2627,13 +4172,14 @@ fn typed_ipc_routes_input_once_and_correlates_ledger_events() {
             ..EventQuery::default()
         },
         profile: ProjectionProfile::Forensic,
+        page: RuntimeEventQueryPageRequest::default(),
     });
     let receipt = client.send(&query);
-    let RuntimeResult::Events { events } = receipt.result().expect("events result") else {
+    let RuntimeResult::EventPage { page } = receipt.result().expect("events result") else {
         panic!("expected input event projection");
     };
     assert_eq!(
-        events
+        page.events()
             .iter()
             .map(|event| event.event_type)
             .collect::<Vec<_>>(),
@@ -2647,6 +4193,7 @@ fn typed_ipc_routes_input_once_and_correlates_ledger_events() {
     let all_events = client.request(RuntimeOperation::QueryEvents {
         query: EventQuery::default(),
         profile: ProjectionProfile::Forensic,
+        page: RuntimeEventQueryPageRequest::default(),
     });
     let receipt = client.send(&all_events);
     let encoded = serde_json::to_string(receipt.result().expect("events")).expect("encode events");
@@ -2669,13 +4216,13 @@ fn typed_ipc_routes_input_once_and_correlates_ledger_events() {
 fn one_correlation_queries_the_complete_lease_input_release_sequence() {
     let root = TempDir::new().expect("tempdir");
     let state = Arc::new(FakeState::default());
-    let host = host_with_state(&root, "ak.cn", state);
+    let host = host_with_state(&root, "node.a", state);
     let mut client = TestClient::connect(&host);
     let correlation_id = client.ids.mint_correlation_id().expect("correlation id");
     let correlation_transport = *correlation_id.transport();
     let acquire = client.request_with_correlation(
         correlation_id,
-        RuntimeOperation::acquire_lease("ak.cn", client.ids.mint_holder_id().expect("holder id")),
+        RuntimeOperation::acquire_lease("node.a", client.ids.mint_holder_id().expect("holder id")),
     );
     let acquire_id = acquire.request_id();
     let receipt = client.send(&acquire);
@@ -2708,11 +4255,13 @@ fn one_correlation_queries_the_complete_lease_input_release_sequence() {
             ..EventQuery::default()
         },
         profile: ProjectionProfile::Forensic,
+        page: RuntimeEventQueryPageRequest::default(),
     });
     let receipt = client.send(&query);
-    let RuntimeResult::Events { events } = receipt.result().expect("events result") else {
+    let RuntimeResult::EventPage { page } = receipt.result().expect("events result") else {
         panic!("expected event projection");
     };
+    let events = page.events();
     assert_eq!(
         events
             .iter()
@@ -2759,7 +4308,7 @@ fn one_correlation_queries_the_complete_lease_input_release_sequence() {
 fn runtime_is_the_single_writer_for_one_correlated_resource_authoring_sequence() {
     let root = TempDir::new().expect("tempdir");
     let state = Arc::new(FakeState::default());
-    let host = host_with_state(&root, "ak.cn", state);
+    let host = host_with_state(&root, "node.a", state);
     let ids = IdentifierIssuer::new().expect("identifier issuer");
     let correlation = ids.mint_correlation_id().expect("correlation id");
     let correlation_transport = *correlation.transport();
@@ -2812,14 +4361,16 @@ fn runtime_is_the_single_writer_for_one_correlated_resource_authoring_sequence()
                 ..EventQuery::default()
             },
             profile: ProjectionProfile::Forensic,
+            page: RuntimeEventQueryPageRequest::default(),
         },
     );
     let receipt = host
         .process_request_for_test(&query, connection)
         .expect("event query");
-    let RuntimeResult::Events { events } = receipt.result().expect("events result") else {
+    let RuntimeResult::EventPage { page } = receipt.result().expect("events result") else {
         panic!("expected events");
     };
+    let events = page.events();
     assert_eq!(
         events
             .iter()
@@ -2838,8 +4389,9 @@ fn runtime_is_the_single_writer_for_one_correlated_resource_authoring_sequence()
         assert_eq!(event.origin.module(), OriginModule::ResourceTooling);
         assert_eq!(event.origin.actor(), EventActor::Lab);
         assert!(matches!(
-            event.payload,
-            ProjectionPayload::Full(EventPayload::ResourceAuthoring(_))
+            &event.payload,
+            ProjectionPayload::Full(payload)
+                if matches!(payload.as_ref(), EventPayload::ResourceAuthoring(_))
         ));
     }
     host.close().expect("close host");
@@ -2849,7 +4401,7 @@ fn runtime_is_the_single_writer_for_one_correlated_resource_authoring_sequence()
 fn runtime_rejects_forged_non_lab_resource_authoring_ingress_without_ledger_effect() {
     let root = TempDir::new().expect("tempdir");
     let state = Arc::new(FakeState::default());
-    let host = host_with_state(&root, "ak.cn", state);
+    let host = host_with_state(&root, "node.a", state);
     let ids = IdentifierIssuer::new().expect("identifier issuer");
     let correlation = ids.mint_correlation_id().expect("correlation id");
     let correlation_transport = *correlation.transport();
@@ -2891,15 +4443,242 @@ fn runtime_rejects_forged_non_lab_resource_authoring_ingress_without_ledger_effe
                 ..EventQuery::default()
             },
             profile: ProjectionProfile::Forensic,
+            page: RuntimeEventQueryPageRequest::default(),
         },
     );
     let receipt = host
         .process_request_for_test(&query, connection)
         .expect("event query");
-    let RuntimeResult::Events { events } = receipt.result().expect("events result") else {
+    let RuntimeResult::EventPage { page } = receipt.result().expect("events result") else {
         panic!("expected events");
     };
-    assert!(events.is_empty());
+    assert!(page.events().is_empty());
+    host.close().expect("close host");
+}
+
+#[test]
+fn typed_client_action_is_idempotent_and_public_projection_hides_the_value() {
+    let root = TempDir::new().expect("tempdir");
+    let host = host_with_state(&root, "node.alpha", Arc::new(FakeState::default()));
+    let mut client = TestClient::connect(&host);
+    let secret_hash = format!("sha256:{}", "e".repeat(64));
+    let request = client.request(RuntimeOperation::RecordClientAction {
+        action: ClientActionRecord::new(
+            "settings",
+            "account_token",
+            ClientActionKind::Input,
+            Some("node.alpha".to_owned()),
+            Some(ClientActionValue::Redacted {
+                sha256: secret_hash.clone(),
+                byte_count: 24,
+            }),
+        )
+        .expect("client action"),
+    });
+    let first = client.send(&request);
+    let replay = client.send(&request);
+    assert_eq!(first, replay);
+    assert!(matches!(
+        first.result(),
+        Some(RuntimeResult::ClientActionRecorded)
+    ));
+
+    let query = client.request(RuntimeOperation::QueryEvents {
+        query: EventQuery {
+            event_type: Some(EventType::ClientAction),
+            ..EventQuery::default()
+        },
+        profile: ProjectionProfile::Ui,
+        page: RuntimeEventQueryPageRequest::default(),
+    });
+    let receipt = client.send(&query);
+    let RuntimeResult::EventPage { page } = receipt.result().expect("events") else {
+        panic!("expected events")
+    };
+    let events = page.events();
+    assert_eq!(events.len(), 1);
+    let ProjectionPayload::Public(payload) = &events[0].payload else {
+        panic!("expected public projection")
+    };
+    let PublicEventPayload::Client(payload) = payload.as_ref() else {
+        panic!("expected client projection")
+    };
+    assert_eq!(payload.client_surface_id(), Some("settings"));
+    assert_eq!(payload.client_control_id(), Some("account_token"));
+    assert!(
+        !serde_json::to_string(&events)
+            .expect("events JSON")
+            .contains(&secret_hash)
+    );
+    drop(client);
+    host.close().expect("close host");
+}
+
+#[test]
+fn client_fact_request_id_cannot_cross_typed_operation_boundaries() {
+    let root = TempDir::new().expect("tempdir");
+    let host = host_with_state(&root, "fixture-instance-a", Arc::new(FakeState::default()));
+    let ids = IdentifierIssuer::new().expect("identifier issuer");
+    let request_id = ids.mint_request_id().expect("request id");
+    let action = RuntimeRequest::new(
+        request_id,
+        ids.mint_correlation_id().expect("action correlation"),
+        None,
+        EventActor::Cli,
+        EventSource::Cli,
+        unix_ms_now().expect("wall clock"),
+        RuntimeOperation::RecordClientAction {
+            action: ClientActionRecord::new(
+                "settings",
+                "refresh",
+                ClientActionKind::Button,
+                None,
+                None,
+            )
+            .expect("client action"),
+        },
+    )
+    .expect("action request");
+    let action_other_correlation = RuntimeRequest::new(
+        request_id,
+        ids.mint_correlation_id().expect("other correlation"),
+        None,
+        EventActor::Cli,
+        EventSource::Cli,
+        unix_ms_now().expect("wall clock"),
+        action.operation().clone(),
+    )
+    .expect("action request with another correlation");
+    let approval = RuntimeRequest::new(
+        request_id,
+        ids.mint_correlation_id().expect("approval correlation"),
+        None,
+        EventActor::User,
+        EventSource::Ui,
+        unix_ms_now().expect("wall clock"),
+        RuntimeOperation::RecordApprovalDecision {
+            decision: ApprovalDecisionRecord::new(
+                "approval:request-boundary",
+                ApprovalDisposition::Approved,
+                ApprovalTarget::Catalog {
+                    catalog_hash: format!("sha256:{}", "a".repeat(64)),
+                    catalog_version: 1,
+                },
+                "user_confirmed",
+            )
+            .expect("approval decision"),
+        },
+    )
+    .expect("approval request");
+    let connection = ConnectionId::new(99).expect("connection id");
+    let authentication = RuntimeRequest::new(
+        ids.mint_request_id().expect("authentication request"),
+        ids.mint_correlation_id()
+            .expect("authentication correlation"),
+        None,
+        EventActor::User,
+        EventSource::Ui,
+        unix_ms_now().expect("wall clock"),
+        RuntimeOperation::AuthenticateGovernance {
+            capability: TEST_GOVERNANCE_CAPABILITY.to_owned(),
+        },
+    )
+    .expect("authentication request");
+    assert_eq!(
+        host.process_request_for_test(&authentication, connection)
+            .expect("authentication receipt")
+            .state(),
+        RuntimeReceiptState::Completed
+    );
+
+    assert_eq!(
+        host.process_request_for_test(&action, connection)
+            .expect("action receipt")
+            .state(),
+        RuntimeReceiptState::Completed
+    );
+    let correlation_collision = host
+        .process_request_for_test(&action_other_correlation, connection)
+        .expect("correlation collision receipt");
+    assert_eq!(correlation_collision.state(), RuntimeReceiptState::Denied);
+    let collision = host
+        .process_request_for_test(&approval, connection)
+        .expect("collision receipt");
+    assert_eq!(collision.state(), RuntimeReceiptState::Denied);
+    assert_eq!(
+        collision.error_projection().expect("collision error").code,
+        RuntimeErrorCode::InvalidRequest
+    );
+    assert_eq!(
+        event_types_for_request(&host, &ids, connection, action.request_id()),
+        vec![EventType::ClientAction]
+    );
+    host.close().expect("close host");
+}
+
+#[test]
+fn concurrent_approval_targets_commit_exactly_one_authoritative_fact() {
+    let root = TempDir::new().expect("tempdir");
+    let host = host_with_state(&root, "fixture-instance-a", Arc::new(FakeState::default()));
+    let first = TestClient::connect(&host);
+    let second = TestClient::connect(&host);
+    let start = Arc::new(Barrier::new(3));
+    let run = |mut client: TestClient, marker: char, start: Arc<Barrier>| {
+        thread::spawn(move || {
+            client.authenticate_governance();
+            let request = client.governance_request(RuntimeOperation::RecordApprovalDecision {
+                decision: ApprovalDecisionRecord::new(
+                    "approval:concurrent-target",
+                    ApprovalDisposition::Approved,
+                    ApprovalTarget::Catalog {
+                        catalog_hash: format!("sha256:{}", marker.to_string().repeat(64)),
+                        catalog_version: 1,
+                    },
+                    "user_confirmed",
+                )
+                .expect("approval decision"),
+            });
+            start.wait();
+            client.send(&request)
+        })
+    };
+    let first = run(first, 'a', Arc::clone(&start));
+    let second = run(second, 'b', Arc::clone(&start));
+    start.wait();
+    let receipts = [
+        first.join().expect("first approval writer"),
+        second.join().expect("second approval writer"),
+    ];
+    assert_eq!(
+        receipts
+            .iter()
+            .filter(|receipt| receipt.state() == RuntimeReceiptState::Completed)
+            .count(),
+        1
+    );
+    assert_eq!(
+        receipts
+            .iter()
+            .filter(|receipt| receipt.state() == RuntimeReceiptState::Denied)
+            .count(),
+        1
+    );
+    assert!(receipts.iter().any(|receipt| {
+        receipt
+            .error_projection()
+            .is_some_and(|error| error.code == RuntimeErrorCode::InvalidRequest)
+    }));
+
+    let mut client = TestClient::connect(&host);
+    let events = projected_events(
+        &mut client,
+        EventQuery {
+            event_type: Some(EventType::ApprovalDecision),
+            ..EventQuery::default()
+        },
+    );
+    assert_eq!(events.len(), 1);
+    drop(client);
     host.close().expect("close host");
 }
 
@@ -2907,7 +4686,7 @@ fn runtime_rejects_forged_non_lab_resource_authoring_ingress_without_ledger_effe
 fn acquire_idempotency_recovers_its_durable_terminal_without_a_connection_cache() {
     let root = TempDir::new().expect("tempdir");
     let state = Arc::new(FakeState::default());
-    let host = host_with_state(&root, "ak.cn", Arc::clone(&state));
+    let host = host_with_state(&root, "node.a", Arc::clone(&state));
     let ids = IdentifierIssuer::new().expect("identifier issuer");
     let request = RuntimeRequest::new(
         ids.mint_request_id().expect("request id"),
@@ -2916,7 +4695,7 @@ fn acquire_idempotency_recovers_its_durable_terminal_without_a_connection_cache(
         EventActor::Cli,
         EventSource::Cli,
         unix_ms_now().expect("wall clock"),
-        RuntimeOperation::acquire_lease("ak.cn", ids.mint_holder_id().expect("holder id")),
+        RuntimeOperation::acquire_lease("node.a", ids.mint_holder_id().expect("holder id")),
     )
     .expect("runtime request");
     let connection = ConnectionId::new(99).expect("connection id");
@@ -2945,15 +4724,17 @@ fn acquire_idempotency_recovers_its_durable_terminal_without_a_connection_cache(
                 ..EventQuery::default()
             },
             profile: ProjectionProfile::Forensic,
+            page: RuntimeEventQueryPageRequest::default(),
         },
     )
     .expect("query request");
     let receipt = host
         .process_request_for_test(&query, connection)
         .expect("query receipt");
-    let RuntimeResult::Events { events } = receipt.result().expect("events result") else {
+    let RuntimeResult::EventPage { page } = receipt.result().expect("events result") else {
         panic!("expected event projection");
     };
+    let events = page.events();
     assert_eq!(
         events
             .iter()
@@ -2973,12 +4754,12 @@ fn acquire_idempotency_recovers_its_durable_terminal_without_a_connection_cache(
 fn renew_and_release_idempotency_survive_connection_cache_loss() {
     let root = TempDir::new().expect("tempdir");
     let state = Arc::new(FakeState::default());
-    let host = host_with_state(&root, "ak.cn", Arc::clone(&state));
+    let host = host_with_state(&root, "node.a", Arc::clone(&state));
     let ids = IdentifierIssuer::new().expect("identifier issuer");
     let connection_id = ConnectionId::new(99).expect("connection id");
     let acquire = runtime_request(
         &ids,
-        RuntimeOperation::acquire_lease("ak.cn", ids.mint_holder_id().expect("holder id")),
+        RuntimeOperation::acquire_lease("node.a", ids.mint_holder_id().expect("holder id")),
     );
     let receipt = host
         .process_request_for_test(&acquire, connection_id)
@@ -3042,13 +4823,13 @@ fn renew_and_release_idempotency_survive_connection_cache_loss() {
 fn second_owner_is_rejected_and_clean_restart_gets_a_new_epoch() {
     let root = TempDir::new().expect("tempdir");
     let state = Arc::new(FakeState::default());
-    let first = host_with_state(&root, "ak.cn", Arc::clone(&state));
+    let first = host_with_state(&root, "node.a", Arc::clone(&state));
     assert!(root.path().join(RUNTIME_INFO_FILE).is_file());
     let first_epoch = first.runtime_info().owner_epoch();
     let error = match RuntimeHost::start(
         config(&root),
         Arc::new(FakeProvider::one(
-            "ak.cn",
+            "node.a",
             instance_id(),
             Arc::clone(&state),
         )),
@@ -3064,7 +4845,7 @@ fn second_owner_is_rejected_and_clean_restart_gets_a_new_epoch() {
     first.close().expect("close first host");
     assert!(!root.path().join(RUNTIME_INFO_FILE).exists());
 
-    let second = host_with_state(&root, "ak.cn", state);
+    let second = host_with_state(&root, "node.a", state);
     assert_ne!(second.runtime_info().owner_epoch(), first_epoch);
     second.close().expect("close second host");
 }
@@ -3073,7 +4854,7 @@ fn second_owner_is_rejected_and_clean_restart_gets_a_new_epoch() {
 fn owner_journal_recovers_only_an_incomplete_final_record() {
     let root = TempDir::new().expect("tempdir");
     let state = Arc::new(FakeState::default());
-    host_with_state(&root, "ak.cn", Arc::clone(&state))
+    host_with_state(&root, "node.a", Arc::clone(&state))
         .close()
         .expect("close initial host");
     let owner_path = root.path().join(crate::owner::OWNER_FILE_NAME);
@@ -3084,7 +4865,7 @@ fn owner_journal_recovers_only_an_incomplete_final_record() {
         .write_all(br#"{"incomplete"#)
         .expect("append incomplete tail");
 
-    let recovered = host_with_state(&root, "ak.cn", state);
+    let recovered = host_with_state(&root, "node.a", state);
     recovered.close().expect("close recovered host");
     let content = std::fs::read(&owner_path).expect("read owner journal");
     assert!(content.ends_with(b"\n"));
@@ -3095,7 +4876,7 @@ fn owner_journal_recovers_only_an_incomplete_final_record() {
 fn complete_owner_journal_corruption_is_fatal() {
     let root = TempDir::new().expect("tempdir");
     let state = Arc::new(FakeState::default());
-    host_with_state(&root, "ak.cn", Arc::clone(&state))
+    host_with_state(&root, "node.a", Arc::clone(&state))
         .close()
         .expect("close initial host");
     let owner_path = root.path().join(crate::owner::OWNER_FILE_NAME);
@@ -3107,7 +4888,7 @@ fn complete_owner_journal_corruption_is_fatal() {
         .expect("append corruption");
     let result = RuntimeHost::start(
         config(&root),
-        Arc::new(FakeProvider::one("ak.cn", instance_id(), state)),
+        Arc::new(FakeProvider::one("node.a", instance_id(), state)),
     );
     let error = match result {
         Ok(host) => {
@@ -3124,14 +4905,14 @@ fn complete_owner_journal_corruption_is_fatal() {
 fn connection_drop_revokes_lease_without_opening_the_lazy_backend() {
     let root = TempDir::new().expect("tempdir");
     let state = Arc::new(FakeState::default());
-    let host = host_with_state(&root, "ak.cn", Arc::clone(&state));
+    let host = host_with_state(&root, "node.a", Arc::clone(&state));
     let mut client = TestClient::connect(&host);
-    let _ = client.acquire("ak.cn");
+    let _ = client.acquire("node.a");
     drop(client);
     assert_eq!(state.open_count.load(Ordering::Acquire), 0);
 
     let mut replacement = TestClient::connect(&host);
-    let (_, token) = replacement.acquire("ak.cn");
+    let (_, token) = replacement.acquire("node.a");
     let release = replacement.request(RuntimeOperation::ReleaseLease { token });
     assert_eq!(
         replacement.send(&release).state(),
@@ -3146,9 +4927,9 @@ fn connection_drop_revokes_lease_without_opening_the_lazy_backend() {
 fn every_fencing_field_is_checked_before_backend_use() {
     let root = TempDir::new().expect("tempdir");
     let state = Arc::new(FakeState::default());
-    let host = host_with_state(&root, "ak.cn", Arc::clone(&state));
+    let host = host_with_state(&root, "node.a", Arc::clone(&state));
     let mut client = TestClient::connect(&host);
-    let (_, token) = client.acquire("ak.cn");
+    let (_, token) = client.acquire("node.a");
     let ids = IdentifierIssuer::new().expect("identifier issuer");
     let stale_epoch = LeaseToken::new(
         *ids.mint_owner_epoch().expect("owner epoch").transport(),
@@ -3219,9 +5000,9 @@ fn backend_failure_is_visible_and_revokes_the_guard() {
     let root = TempDir::new().expect("tempdir");
     let state = Arc::new(FakeState::default());
     state.fail_input.store(true, Ordering::Release);
-    let host = host_with_state(&root, "ak.cn", Arc::clone(&state));
+    let host = host_with_state(&root, "node.a", Arc::clone(&state));
     let mut client = TestClient::connect(&host);
-    let (_, token) = client.acquire("ak.cn");
+    let (_, token) = client.acquire("node.a");
     let input = client.request(RuntimeOperation::Input {
         token,
         action: InputAction::Reset,
@@ -3245,7 +5026,7 @@ fn expired_unopened_lease_is_reclaimed_before_a_new_grant() {
     let root = TempDir::new().expect("tempdir");
     let state = Arc::new(FakeState::default());
     let provider = Arc::new(FakeProvider::one(
-        "ak.cn",
+        "node.a",
         instance_id(),
         Arc::clone(&state),
     ));
@@ -3260,14 +5041,4849 @@ fn expired_unopened_lease_is_reclaimed_before_a_new_grant() {
     )
     .expect("runtime host");
     let mut first = TestClient::connect(&host);
-    let _ = first.acquire("ak.cn");
+    let _ = first.acquire("node.a");
     thread::sleep(Duration::from_millis(1_100));
     assert_eq!(state.open_count.load(Ordering::Acquire), 0);
     let mut second = TestClient::connect(&host);
-    let (_, token) = second.acquire("ak.cn");
+    let (_, token) = second.acquire("node.a");
     let release = second.request(RuntimeOperation::ReleaseLease { token });
     second.send(&release);
     drop(first);
     drop(second);
     host.close().expect("close host");
+}
+
+#[test]
+fn runtime_fact_store_shares_server_facts_invalidates_and_recovers_from_ledger() {
+    let root = TempDir::new().expect("tempdir");
+    let state = Arc::new(FakeState::default());
+    let registered_id = instance_id();
+    let provider = Arc::new(FakeProvider::one(
+        POLICY_INSTANCE_ALIAS,
+        registered_id,
+        Arc::clone(&state),
+    ));
+    let host = RuntimeHost::start(config(&root), provider).expect("runtime host");
+    let server_record = stored_fact(
+        FactScope::Server {
+            server_id: "fixture-server-a".to_owned(),
+        },
+        "env.ui_theme",
+        ContractFactValue::String("Neutral".to_owned()),
+        "snapshot:server-theme",
+        vec![EventType::PolicyPlanningSignalObserved],
+    );
+    let instance_record = stored_fact(
+        FactScope::Instance {
+            instance_id: POLICY_INSTANCE_ALIAS.to_owned(),
+        },
+        "inventory.items",
+        ContractFactValue::RecordList(Vec::new()),
+        "snapshot:instance-inventory",
+        Vec::new(),
+    );
+    let published = host
+        .publish_fact(server_record.clone())
+        .expect("publish server fact");
+    assert_eq!(
+        host.publish_fact(server_record.clone())
+            .expect("idempotent fact publication"),
+        published
+    );
+    host.publish_fact(instance_record)
+        .expect("publish instance fact");
+
+    let primary = host
+        .instance_fact_snapshot(InstanceFactContext {
+            instance_id: POLICY_INSTANCE_ALIAS.to_owned(),
+            server_id: "fixture-server-a".to_owned(),
+            game_id: "fixture-game-a".to_owned(),
+        })
+        .expect("primary snapshot");
+    let peer = host
+        .instance_fact_snapshot(InstanceFactContext {
+            instance_id: "fixture-instance-b".to_owned(),
+            server_id: "fixture-server-a".to_owned(),
+            game_id: "fixture-game-a".to_owned(),
+        })
+        .expect("peer snapshot");
+    assert_eq!(primary.records.len(), 2);
+    assert_eq!(peer.records.len(), 1);
+
+    host.record_policy_planning_signal(PolicyPlanningSignalEventData {
+        signal_id: "signal:fact-invalidation".to_owned(),
+        instance_id: POLICY_INSTANCE_ALIAS.to_owned(),
+        task_id: None,
+        kind: PolicyPlanningSignalKind::GoalMissed,
+        fact_code: "goal.fixture.missed".to_owned(),
+        observed_at_unix_ms: POLICY_NOW_UNIX_MS + 1,
+        detection_budget: None,
+    })
+    .expect("record invalidating event");
+    let after = host
+        .instance_fact_snapshot(InstanceFactContext {
+            instance_id: POLICY_INSTANCE_ALIAS.to_owned(),
+            server_id: "fixture-server-a".to_owned(),
+            game_id: "fixture-game-a".to_owned(),
+        })
+        .expect("snapshot after invalidation");
+    assert_eq!(after.records.len(), 1);
+    assert_eq!(after.records[0].key, "inventory.items");
+    let stale = host
+        .publish_fact(server_record)
+        .expect_err("invalidated source snapshot must not be resurrected");
+    assert_eq!(stale.code(), "fact_source_snapshot_invalidated");
+    assert!(!stale.is_fatal());
+
+    let mut client = TestClient::connect(&host);
+    assert_eq!(
+        projected_events(
+            &mut client,
+            EventQuery {
+                event_type: Some(EventType::FactPublished),
+                ..EventQuery::default()
+            }
+        )
+        .len(),
+        2
+    );
+    assert_eq!(
+        projected_events(
+            &mut client,
+            EventQuery {
+                event_type: Some(EventType::FactInvalidated),
+                ..EventQuery::default()
+            }
+        )
+        .len(),
+        1
+    );
+    drop(client);
+    host.close().expect("close host");
+
+    let reopened = RuntimeHost::start(
+        config(&root),
+        Arc::new(FakeProvider::one(
+            POLICY_INSTANCE_ALIAS,
+            registered_id,
+            state,
+        )),
+    )
+    .expect("reopen runtime host");
+    let recovered = reopened
+        .instance_fact_snapshot(InstanceFactContext {
+            instance_id: POLICY_INSTANCE_ALIAS.to_owned(),
+            server_id: "fixture-server-a".to_owned(),
+            game_id: "fixture-game-a".to_owned(),
+        })
+        .expect("recovered snapshot");
+    assert_eq!(recovered.records.len(), 1);
+    assert_eq!(recovered.records[0].key, "inventory.items");
+    reopened.close().expect("close reopened host");
+}
+
+#[test]
+fn information_planning_signals_are_queryable_and_subscription_pages_are_lossless() {
+    let root = TempDir::new().expect("tempdir");
+    let host = host_with_state(&root, POLICY_INSTANCE_ALIAS, Arc::new(FakeState::default()));
+    for index in 0..5_u64 {
+        host.record_policy_planning_signal(PolicyPlanningSignalEventData {
+            signal_id: format!("signal:projection-{index}"),
+            instance_id: POLICY_INSTANCE_ALIAS.to_owned(),
+            task_id: None,
+            kind: PolicyPlanningSignalKind::GoalMissed,
+            fact_code: format!("goal.fixture.projection-{index}"),
+            observed_at_unix_ms: POLICY_NOW_UNIX_MS + index,
+            detection_budget: None,
+        })
+        .expect("record planning signal");
+    }
+
+    let query = EventQuery {
+        event_type: Some(EventType::PolicyPlanningSignalObserved),
+        minimum_severity: Some(EventSeverity::Info),
+        ..EventQuery::default()
+    };
+    let mut client = TestClient::connect(&host);
+    let expected = projected_events(&mut client, query.clone())
+        .into_iter()
+        .map(|event| event.sequence)
+        .collect::<Vec<_>>();
+    assert_eq!(expected.len(), 5);
+
+    let mut cursor = actingcommand_contract::SubscriptionCursor::default();
+    let mut observed = Vec::new();
+    for _ in 0..8 {
+        let subscription = actingcommand_contract::RuntimeSubscriptionRequest::new(
+            query.clone(),
+            ProjectionProfile::Forensic,
+            cursor,
+            100,
+            2,
+        )
+        .expect("subscription request");
+        let request = client.request(RuntimeOperation::SubscribeEvents {
+            request: subscription,
+        });
+        let receipt = client.send(&request);
+        let RuntimeResult::EventBatch { batch } = receipt.result().expect("event batch") else {
+            panic!("expected event batch")
+        };
+        assert!(!batch.timed_out(), "planning signal page must not be empty");
+        assert!(batch.events().len() <= 2);
+        assert!(batch.events().iter().all(|event| {
+            event.event_type == EventType::PolicyPlanningSignalObserved
+                && event.severity == EventSeverity::Info
+        }));
+        observed.extend(batch.events().iter().map(|event| event.sequence));
+        cursor = batch.next_cursor();
+        if observed.len() == expected.len() {
+            break;
+        }
+    }
+
+    assert_eq!(observed, expected);
+    drop(client);
+    host.close().expect("close host");
+}
+
+#[test]
+fn event_pages_freeze_the_snapshot_and_planning_recovery_uses_a_compact_checkpoint() {
+    const SIGNAL_COUNT: u64 = 300;
+
+    let root = TempDir::new().expect("tempdir");
+    let host = host_with_state(&root, POLICY_INSTANCE_ALIAS, Arc::new(FakeState::default()));
+    let first_signal = PolicyPlanningSignalEventData {
+        signal_id: "signal:bounded-history-0".to_owned(),
+        instance_id: POLICY_INSTANCE_ALIAS.to_owned(),
+        task_id: None,
+        kind: PolicyPlanningSignalKind::GoalMissed,
+        fact_code: "goal.bounded-history.0".to_owned(),
+        observed_at_unix_ms: POLICY_NOW_UNIX_MS,
+        detection_budget: None,
+    };
+    host.record_policy_planning_signal(first_signal.clone())
+        .expect("record first signal");
+    for index in 1..SIGNAL_COUNT {
+        host.record_policy_planning_signal(PolicyPlanningSignalEventData {
+            signal_id: format!("signal:bounded-history-{index}"),
+            instance_id: POLICY_INSTANCE_ALIAS.to_owned(),
+            task_id: None,
+            kind: PolicyPlanningSignalKind::GoalMissed,
+            fact_code: format!("goal.bounded-history.{index}"),
+            observed_at_unix_ms: POLICY_NOW_UNIX_MS + index,
+            detection_budget: None,
+        })
+        .expect("record planning signal");
+    }
+
+    let query = EventQuery {
+        event_type: Some(EventType::PolicyPlanningSignalObserved),
+        ..EventQuery::default()
+    };
+    let mut client = TestClient::connect(&host);
+    let first_request = client.request(RuntimeOperation::QueryEvents {
+        query: query.clone(),
+        profile: ProjectionProfile::Forensic,
+        page: RuntimeEventQueryPageRequest::new(31, None).expect("first page request"),
+    });
+    let first_receipt = client.send(&first_request);
+    let RuntimeResult::EventPage { page } = first_receipt.result().expect("first page") else {
+        panic!("expected event page")
+    };
+    let snapshot = page.snapshot_ledger_position();
+    let first_cursor = page.next_cursor().cloned().expect("continuation cursor");
+    let mut sequences = page
+        .events()
+        .iter()
+        .map(|event| event.sequence)
+        .collect::<Vec<_>>();
+
+    let late_signal = PolicyPlanningSignalEventData {
+        signal_id: "signal:bounded-history-late".to_owned(),
+        instance_id: POLICY_INSTANCE_ALIAS.to_owned(),
+        task_id: None,
+        kind: PolicyPlanningSignalKind::GoalMissed,
+        fact_code: "goal.bounded-history.late".to_owned(),
+        observed_at_unix_ms: POLICY_NOW_UNIX_MS + SIGNAL_COUNT,
+        detection_budget: None,
+    };
+    host.record_policy_planning_signal(late_signal)
+        .expect("record interleaved signal");
+
+    let mismatched = client.request(RuntimeOperation::QueryEvents {
+        query: EventQuery::default(),
+        profile: ProjectionProfile::Forensic,
+        page: RuntimeEventQueryPageRequest::new(31, Some(first_cursor.clone()))
+            .expect("mismatched page request"),
+    });
+    let denied = client.send(&mismatched);
+    assert_eq!(denied.state(), RuntimeReceiptState::Denied);
+    assert_eq!(
+        denied.error_projection().expect("typed cursor denial").code,
+        RuntimeErrorCode::ProtocolInvalid
+    );
+
+    let mut cursor = Some(first_cursor);
+    while let Some(current) = cursor {
+        let request = client.request(RuntimeOperation::QueryEvents {
+            query: query.clone(),
+            profile: ProjectionProfile::Forensic,
+            page: RuntimeEventQueryPageRequest::new(31, Some(current))
+                .expect("continuation request"),
+        });
+        let receipt = client.send(&request);
+        let RuntimeResult::EventPage { page } = receipt.result().expect("continuation page") else {
+            panic!("expected event page")
+        };
+        assert_eq!(page.snapshot_ledger_position(), snapshot);
+        assert!(
+            serde_json::to_vec(page).expect("page encoding").len()
+                <= actingcommand_contract::MAX_RUNTIME_EVENT_QUERY_RESPONSE_BYTES
+        );
+        sequences.extend(page.events().iter().map(|event| event.sequence));
+        cursor = page.next_cursor().cloned();
+    }
+    assert_eq!(sequences.len(), SIGNAL_COUNT as usize);
+    assert!(sequences.windows(2).all(|pair| pair[0] < pair[1]));
+    assert!(sequences.iter().all(|sequence| *sequence <= snapshot));
+
+    let all_signals = projected_events(&mut client, query.clone());
+    assert_eq!(all_signals.len(), SIGNAL_COUNT as usize + 1);
+    let latest_signal_sequence = all_signals.last().expect("latest planning signal").sequence;
+    drop(client);
+    host.close().expect("close host");
+
+    let state = RuntimeStateStore::open(root.path(), b"runtime-host-test-salt")
+        .expect("open compact state");
+    let checkpoint = state
+        .read_projection_entry("policy.planning-signal.v1", "checkpoint")
+        .expect("read checkpoint")
+        .expect("planning checkpoint");
+    let checkpoint_payload: serde_json::Value =
+        serde_json::from_slice(checkpoint.payload()).expect("checkpoint payload");
+    assert!(
+        checkpoint_payload["through_sequence"]
+            .as_u64()
+            .expect("checkpoint sequence")
+            >= latest_signal_sequence
+    );
+    drop(state);
+
+    fs::remove_file(root.path().join(RUNTIME_STATE_DATABASE_FILE))
+        .expect("remove compact projection database");
+
+    let reopened = host_with_state(&root, POLICY_INSTANCE_ALIAS, Arc::new(FakeState::default()));
+    reopened
+        .record_policy_planning_signal(first_signal)
+        .expect("replay compacted signal identity");
+    let mut client = TestClient::connect(&reopened);
+    assert_eq!(
+        projected_events(&mut client, query).len(),
+        SIGNAL_COUNT as usize + 1
+    );
+    drop(client);
+    reopened.close().expect("close reopened host");
+}
+
+#[test]
+fn policy_evaluation_consumes_runtime_owned_fact_projection() {
+    let root = TempDir::new().expect("tempdir");
+    let state = Arc::new(FakeState::default());
+    let host = host_with_state(&root, POLICY_INSTANCE_ALIAS, state);
+    let mut sources = policy_sources(1);
+    let mut tasks: serde_json::Value =
+        serde_json::from_slice(&sources.tasks.bytes).expect("tasks fixture");
+    tasks["tasks"][0]["trigger"] = serde_json::json!({
+        "kind": "fact",
+        "scope": {"kind": "server", "server_id": "fixture-server-a"},
+        "fact_key": "env.ui_theme",
+        "comparison": "eq",
+        "value": {"type": "string", "value": "Neutral"},
+        "max_age_ms": 60_000
+    });
+    sources.tasks.bytes = serde_json::to_vec_pretty(&tasks).expect("tasks bytes");
+    host.activate_policy_catalog(&sources)
+        .expect("activate policy catalog");
+    host.publish_fact(stored_fact(
+        FactScope::Server {
+            server_id: "fixture-server-a".to_owned(),
+        },
+        "env.ui_theme",
+        ContractFactValue::String("Neutral".to_owned()),
+        "snapshot:policy-theme",
+        Vec::new(),
+    ))
+    .expect("publish policy fact");
+
+    let cycle = host
+        .evaluate_policy_cycle_with_test_inputs(
+            &policy_facts(),
+            &policy_resources(),
+            EvaluationTime {
+                unix_ms: POLICY_NOW_UNIX_MS,
+                monotonic_ms: POLICY_NOW_UNIX_MS,
+            },
+            7,
+            PolicyTrigger::FactsChanged,
+        )
+        .expect("evaluate fact-backed policy");
+    let evaluation = cycle.evaluation.expect("policy evaluation");
+    assert_eq!(evaluation.dispatch_intents.len(), 1);
+    assert!(
+        evaluation.dispatch_intents[0]
+            .fact_snapshot_id
+            .starts_with("snapshot:policy-fact:")
+    );
+    host.close().expect("close host");
+}
+
+#[test]
+fn fact_snapshot_catches_up_with_critical_ledger_events() {
+    let root = TempDir::new().expect("tempdir");
+    let state = Arc::new(FakeState::default());
+    let host = host_with_state(&root, POLICY_INSTANCE_ALIAS, state);
+    host.activate_policy_catalog(&policy_sources(1))
+        .expect("activate first catalog");
+    host.publish_fact(stored_fact(
+        FactScope::Instance {
+            instance_id: POLICY_INSTANCE_ALIAS.to_owned(),
+        },
+        "env.ui_theme",
+        ContractFactValue::String("Neutral".to_owned()),
+        "snapshot:critical-event",
+        vec![EventType::CatalogActivated],
+    ))
+    .expect("publish fact");
+    host.activate_policy_catalog(&policy_sources(2))
+        .expect("activate second catalog");
+
+    let snapshot = host
+        .instance_fact_snapshot(InstanceFactContext {
+            instance_id: POLICY_INSTANCE_ALIAS.to_owned(),
+            server_id: "fixture-server-a".to_owned(),
+            game_id: "fixture-game-a".to_owned(),
+        })
+        .expect("synchronized fact snapshot");
+    assert!(snapshot.records.is_empty());
+
+    let mut client = TestClient::connect(&host);
+    assert_eq!(
+        projected_events(
+            &mut client,
+            EventQuery {
+                event_type: Some(EventType::FactInvalidated),
+                ..EventQuery::default()
+            }
+        )
+        .len(),
+        1
+    );
+    drop(client);
+    host.close().expect("close host");
+}
+
+#[test]
+fn runtime_startup_materializes_a_missed_critical_fact_invalidation() {
+    let root = TempDir::new().expect("tempdir");
+    let registered_id = instance_id();
+    let host = RuntimeHost::start(
+        config(&root),
+        Arc::new(FakeProvider::one(
+            POLICY_INSTANCE_ALIAS,
+            registered_id,
+            Arc::new(FakeState::default()),
+        )),
+    )
+    .expect("runtime host");
+    host.activate_policy_catalog(&policy_sources(1))
+        .expect("activate first catalog");
+    host.publish_fact(stored_fact(
+        FactScope::Instance {
+            instance_id: POLICY_INSTANCE_ALIAS.to_owned(),
+        },
+        "env.ui_theme",
+        ContractFactValue::String("Neutral".to_owned()),
+        "snapshot:restart-critical-event",
+        vec![EventType::CatalogActivated],
+    ))
+    .expect("publish fact");
+    host.activate_policy_catalog(&policy_sources(2))
+        .expect("activate second catalog");
+    host.close().expect("close without reading facts");
+
+    let reopened = RuntimeHost::start(
+        config(&root),
+        Arc::new(FakeProvider::one(
+            POLICY_INSTANCE_ALIAS,
+            registered_id,
+            Arc::new(FakeState::default()),
+        )),
+    )
+    .expect("reopen runtime host");
+    let snapshot = reopened
+        .instance_fact_snapshot(InstanceFactContext {
+            instance_id: POLICY_INSTANCE_ALIAS.to_owned(),
+            server_id: "fixture-server-a".to_owned(),
+            game_id: "fixture-game-a".to_owned(),
+        })
+        .expect("recovered snapshot");
+    assert!(snapshot.records.is_empty());
+    let mut client = TestClient::connect(&reopened);
+    assert_eq!(
+        projected_events(
+            &mut client,
+            EventQuery {
+                event_type: Some(EventType::FactInvalidated),
+                ..EventQuery::default()
+            }
+        )
+        .len(),
+        1
+    );
+    drop(client);
+    reopened.close().expect("close reopened host");
+}
+
+#[test]
+fn policy_cadence_is_explicit_and_clock_jumps_force_full_recompute() {
+    let root = TempDir::new().expect("tempdir");
+    let state = Arc::new(FakeState::default());
+    let host = host_with_state(&root, POLICY_INSTANCE_ALIAS, state);
+    host.activate_policy_catalog(&policy_sources(1))
+        .expect("activate policy catalog");
+    let facts = policy_facts();
+    let resources = policy_resources();
+
+    let startup = host
+        .evaluate_policy_cycle_with_test_inputs(
+            &facts,
+            &resources,
+            EvaluationTime {
+                unix_ms: POLICY_NOW_UNIX_MS,
+                monotonic_ms: POLICY_NOW_UNIX_MS,
+            },
+            7,
+            PolicyTrigger::FactsChanged,
+        )
+        .expect("startup policy cycle");
+    assert_eq!(startup.directive.kind, PolicyRecomputeKind::Full);
+    assert_eq!(
+        startup.directive.reason,
+        PolicyRecomputeReason::StartupOrRecovery
+    );
+    assert!(startup.evaluation.is_some());
+    let startup_measurement = startup.measurement.expect("startup measurement");
+    assert_eq!(
+        startup_measurement.requested_recompute,
+        PolicyRecomputeKind::Full
+    );
+    assert_eq!(
+        startup_measurement.execution,
+        PolicyEvaluationExecution::FullCatalogScan
+    );
+    assert!(startup_measurement.cost.work_units > 0);
+
+    let cooldown = host
+        .evaluate_policy_cycle_with_test_inputs(
+            &facts,
+            &resources,
+            EvaluationTime {
+                unix_ms: POLICY_NOW_UNIX_MS + 100,
+                monotonic_ms: POLICY_NOW_UNIX_MS + 100,
+            },
+            7,
+            PolicyTrigger::ResourcesChanged,
+        )
+        .expect("cooldown policy cycle");
+    assert_eq!(cooldown.directive.kind, PolicyRecomputeKind::Deferred);
+    assert_eq!(cooldown.directive.reason, PolicyRecomputeReason::Cooldown);
+    assert!(cooldown.evaluation.is_none());
+    assert!(cooldown.measurement.is_none());
+
+    let incremental = host
+        .evaluate_policy_cycle_with_test_inputs(
+            &facts,
+            &resources,
+            EvaluationTime {
+                unix_ms: POLICY_NOW_UNIX_MS + 1_100,
+                monotonic_ms: POLICY_NOW_UNIX_MS + 1_100,
+            },
+            7,
+            PolicyTrigger::FactsChanged,
+        )
+        .expect("incremental policy cycle");
+    assert_eq!(incremental.directive.kind, PolicyRecomputeKind::Incremental);
+    assert_eq!(incremental.directive.reason, PolicyRecomputeReason::Event);
+    let incremental_measurement = incremental.measurement.expect("incremental measurement");
+    assert_eq!(
+        incremental_measurement.requested_recompute,
+        PolicyRecomputeKind::Incremental
+    );
+    assert_eq!(
+        incremental_measurement.execution,
+        PolicyEvaluationExecution::FullCatalogScan
+    );
+    assert_eq!(incremental_measurement.cost, startup_measurement.cost);
+    assert!(
+        incremental_measurement.sampled_at_monotonic_ms
+            >= startup_measurement.sampled_at_monotonic_ms
+    );
+
+    let clock_jump = host
+        .evaluate_policy_cycle_with_test_inputs(
+            &facts,
+            &resources,
+            EvaluationTime {
+                unix_ms: POLICY_NOW_UNIX_MS + 7_000,
+                monotonic_ms: POLICY_NOW_UNIX_MS + 7_000,
+            },
+            7,
+            PolicyTrigger::ClockObserved {
+                previous_unix_ms: POLICY_NOW_UNIX_MS + 1_100,
+            },
+        )
+        .expect("clock-jump policy cycle");
+    assert_eq!(clock_jump.directive.kind, PolicyRecomputeKind::Full);
+    assert_eq!(
+        clock_jump.directive.reason,
+        PolicyRecomputeReason::ClockJump
+    );
+
+    let reconciliation = host
+        .evaluate_policy_cycle_with_test_inputs(
+            &facts,
+            &resources,
+            EvaluationTime {
+                unix_ms: POLICY_NOW_UNIX_MS + 67_000,
+                monotonic_ms: POLICY_NOW_UNIX_MS + 67_000,
+            },
+            7,
+            PolicyTrigger::Reconciliation,
+        )
+        .expect("reconciliation policy cycle");
+    assert_eq!(reconciliation.directive.kind, PolicyRecomputeKind::Full);
+    assert_eq!(
+        reconciliation.directive.reason,
+        PolicyRecomputeReason::Reconciliation
+    );
+    host.close().expect("close host");
+}
+
+#[test]
+fn catalog_cas_conflict_preserves_nonfatal_identity_and_effect() {
+    let root = TempDir::new().expect("tempdir");
+    let host = host_with_state(&root, POLICY_INSTANCE_ALIAS, Arc::new(FakeState::default()));
+    let first = host
+        .activate_policy_catalog(&policy_sources(1))
+        .expect("activate first catalog");
+    let second = host
+        .activate_policy_catalog(&policy_sources(2))
+        .expect("activate second catalog");
+
+    let error = host
+        .activate_policy_catalog_with_expected_for_test(&policy_sources(3), first)
+        .expect_err("stale compare-and-swap must fail");
+    assert_eq!(error.code(), "catalog_active_generation_changed");
+    assert_eq!(error.operation(), "switch_active_catalog");
+    assert!(!error.is_fatal());
+    assert!(host.fatal_error().expect("runtime health").is_none());
+    assert_eq!(
+        host.active_policy_catalog()
+            .expect("active catalog")
+            .expect("active generation"),
+        second
+    );
+
+    let mut client = TestClient::connect(&host);
+    let failures = projected_events(
+        &mut client,
+        EventQuery {
+            event_type: Some(EventType::CatalogTransitionFailed),
+            ..EventQuery::default()
+        },
+    );
+    let ProjectionPayload::Full(payload) =
+        &failures.last().expect("catalog transition failure").payload
+    else {
+        panic!("expected full catalog transition failure payload");
+    };
+    assert_eq!(
+        payload.effect_disposition(),
+        Some(EffectDisposition::NotPerformed)
+    );
+
+    host.activate_policy_catalog(&policy_sources(3))
+        .expect("runtime remains usable after stale compare-and-swap");
+    drop(client);
+    host.close().expect("close host");
+}
+
+#[test]
+fn policy_host_revalidates_admission_pins_versions_and_replays_without_side_effects() {
+    let root = TempDir::new().expect("tempdir");
+    let state = Arc::new(FakeState::default());
+    let host = host_with_state(&root, POLICY_INSTANCE_ALIAS, Arc::clone(&state));
+    let first_catalog = host
+        .activate_policy_catalog(&policy_sources(1))
+        .expect("activate first catalog");
+    let (_, intent, reasons) = evaluated_policy_dispatch(&host, PolicyTrigger::FactsChanged);
+
+    let forged_approval = policy_context(&host, &intent);
+    let error = host
+        .admit_policy_dispatch(&intent, &reasons, &forged_approval)
+        .expect_err("caller-supplied approval IDs must not grant authority");
+    assert_eq!(error.code(), "policy_approval_fact_missing");
+    record_policy_approval(&host, &intent);
+
+    let mut tampered_intent = intent.clone();
+    tampered_intent.decision_id = "decision:tampered".to_owned();
+    tampered_intent.reason_chain_id = "reason:tampered".to_owned();
+    tampered_intent.approval_refs.clear();
+    let mut tampered_reasons = reasons.clone();
+    tampered_reasons.id = "reason:tampered".to_owned();
+    tampered_reasons.decision_id = "decision:tampered".to_owned();
+    let error = host
+        .admit_policy_dispatch(
+            &tampered_intent,
+            &tampered_reasons,
+            &policy_context(&host, &tampered_intent),
+        )
+        .expect_err("catalog approval requirements cannot be stripped");
+    assert_eq!(error.code(), "policy_decision_not_host_evaluated");
+
+    let (_, approved_intent, approved_reasons) = evaluated_policy_dispatch_at(
+        &host,
+        PolicyTrigger::Reconciliation,
+        POLICY_NOW_UNIX_MS + 60_000,
+        8,
+    );
+
+    let admission = host
+        .admit_policy_dispatch(
+            &approved_intent,
+            &approved_reasons,
+            &policy_context(&host, &approved_intent),
+        )
+        .expect("policy admission");
+    assert!(matches!(admission, PolicyDispatchAdmission::Granted { .. }));
+    assert_eq!(
+        host.pinned_policy_catalog(&approved_intent.decision_id)
+            .expect("pinned catalog")
+            .expect("catalog pin")
+            .catalog_hash(),
+        first_catalog.catalog_hash()
+    );
+
+    let mut client = TestClient::connect(&host);
+    let before = projected_events(&mut client, EventQuery::default());
+    let mut stale_context = policy_context(&host, &approved_intent);
+    stale_context.now_unix_ms = POLICY_NOW_UNIX_MS + 60_000;
+    let replay = host
+        .admit_policy_dispatch(&approved_intent, &approved_reasons, &stale_context)
+        .expect("exact replay is suppressed before mutable-state revalidation");
+    assert!(matches!(
+        replay,
+        PolicyDispatchAdmission::ReplaySuppressed { .. }
+    ));
+    let after = projected_events(&mut client, EventQuery::default());
+    assert_eq!(before.len(), after.len());
+    assert_eq!(
+        after
+            .iter()
+            .filter(|event| event.event_type == EventType::PolicyDispatchIntent)
+            .count(),
+        2
+    );
+    assert_eq!(
+        after
+            .iter()
+            .filter(|event| event.event_type == EventType::LeaseGranted)
+            .count(),
+        1
+    );
+    assert_eq!(
+        after
+            .iter()
+            .filter(|event| event.event_type == EventType::PolicyDispatchRejected)
+            .count(),
+        1
+    );
+
+    let second_catalog = host
+        .activate_policy_catalog(&policy_sources(2))
+        .expect("activate second catalog");
+    assert_ne!(first_catalog.catalog_hash(), second_catalog.catalog_hash());
+    assert_eq!(
+        host.pinned_policy_catalog(&approved_intent.decision_id)
+            .expect("pinned catalog")
+            .expect("catalog pin")
+            .catalog_hash(),
+        first_catalog.catalog_hash()
+    );
+
+    let mut old_new_intent = intent.clone();
+    old_new_intent.decision_id = "decision:fixture-b".to_owned();
+    old_new_intent.reason_chain_id = "reason:fixture-b".to_owned();
+    let mut old_new_reasons = reasons.clone();
+    old_new_reasons.id = "reason:fixture-b".to_owned();
+    old_new_reasons.decision_id = "decision:fixture-b".to_owned();
+    let error = host
+        .admit_policy_dispatch(
+            &old_new_intent,
+            &old_new_reasons,
+            &policy_context(&host, &old_new_intent),
+        )
+        .expect_err("new admission cannot use the old catalog");
+    assert_eq!(error.code(), "policy_decision_not_host_evaluated");
+
+    host.complete_policy_dispatch(&approved_intent.decision_id)
+        .expect("complete policy dispatch");
+    assert!(
+        host.pinned_policy_catalog(&approved_intent.decision_id)
+            .expect("pinned catalog")
+            .is_none()
+    );
+    let rolled_back = host
+        .rollback_policy_catalog(first_catalog.catalog_hash())
+        .expect("rollback policy catalog");
+    assert_eq!(rolled_back, first_catalog);
+    let events = projected_events(&mut client, EventQuery::default());
+    assert!(
+        events
+            .iter()
+            .any(|event| event.event_type == EventType::CatalogActivated)
+    );
+    assert!(
+        events
+            .iter()
+            .any(|event| event.event_type == EventType::CatalogRolledBack)
+    );
+    assert!(
+        events
+            .iter()
+            .any(|event| event.event_type == EventType::PolicyDispatchCompleted)
+    );
+    assert_eq!(state.open_count.load(Ordering::Acquire), 0);
+    drop(client);
+    host.close().expect("close host");
+
+    let reopened = host_with_state(&root, POLICY_INSTANCE_ALIAS, Arc::new(FakeState::default()));
+    assert_eq!(
+        reopened
+            .active_policy_catalog()
+            .expect("active catalog")
+            .expect("catalog")
+            .catalog_hash(),
+        first_catalog.catalog_hash()
+    );
+    let replay = reopened
+        .admit_policy_dispatch(
+            &approved_intent,
+            &approved_reasons,
+            &policy_context(&reopened, &approved_intent),
+        )
+        .expect("replay after restart");
+    assert!(matches!(
+        replay,
+        PolicyDispatchAdmission::ReplaySuppressed { .. }
+    ));
+    reopened.close().expect("close reopened host");
+}
+
+#[test]
+fn policy_budget_recovery_keeps_the_window_count_across_runtime_restarts() {
+    let root = TempDir::new().expect("tempdir");
+    let registered_id = instance_id();
+
+    for index in 0_u64..4 {
+        let clock = Arc::new(ManualRuntimeClock::new(
+            POLICY_NOW_UNIX_MS + index * 600_000,
+            0,
+        ));
+        let host = RuntimeHost::start(
+            config(&root).with_runtime_clock(clock.clone()),
+            Arc::new(FakeProvider::one(
+                POLICY_INSTANCE_ALIAS,
+                registered_id,
+                Arc::new(FakeState::default()),
+            )),
+        )
+        .expect("budget runtime host");
+        if index == 0 {
+            host.activate_policy_catalog(&budget_policy_sources(1))
+                .expect("activate budget catalog");
+        }
+        let (_, intent, reasons) = evaluated_policy_dispatch_at(
+            &host,
+            PolicyTrigger::Recovery,
+            POLICY_NOW_UNIX_MS + index * 600_000,
+            100 + index,
+        );
+        if index == 0 {
+            record_policy_approval(&host, &intent);
+        }
+        let admission = host
+            .admit_policy_dispatch(&intent, &reasons, &policy_context(&host, &intent))
+            .expect("budget admission");
+        let PolicyDispatchAdmission::Granted { admission, .. } = admission else {
+            panic!("expected budget admission")
+        };
+        assert_eq!(admission.budget.task_window_used, index as u32 + 1);
+        clock.advance(75_000);
+        host.record_policy_dispatch_outcome(&intent.decision_id, &PolicyExecutionInput::Succeeded)
+            .expect("record bounded execution");
+        host.close().expect("close budget runtime host");
+    }
+
+    let host = RuntimeHost::start(
+        config(&root),
+        Arc::new(FakeProvider::one(
+            POLICY_INSTANCE_ALIAS,
+            registered_id,
+            Arc::new(FakeState::default()),
+        )),
+    )
+    .expect("reopen exhausted budget runtime");
+    let (_, intent, reasons) = evaluated_policy_dispatch_at(
+        &host,
+        PolicyTrigger::Recovery,
+        POLICY_NOW_UNIX_MS + 2_400_000,
+        104,
+    );
+    let error = host
+        .admit_policy_dispatch(&intent, &reasons, &policy_context(&host, &intent))
+        .expect_err("fifth window admission must remain rejected after restart");
+    assert_eq!(error.code(), "policy_budget_exhausted");
+    host.close().expect("close exhausted budget runtime");
+}
+
+#[test]
+fn policy_completion_charges_runtime_owned_monotonic_elapsed_time() {
+    for (case, completion_unix_ms, elapsed_ms) in [
+        ("zero", POLICY_NOW_UNIX_MS, 0),
+        ("wall-clock-rollback", 1, 125),
+        ("wall-clock-future", u64::MAX, 250),
+    ] {
+        let root = TempDir::new().expect("tempdir");
+        let clock = Arc::new(ManualRuntimeClock::new(POLICY_NOW_UNIX_MS, 1_000));
+        let host = RuntimeHost::start(
+            config(&root).with_runtime_clock(clock.clone()),
+            Arc::new(FakeProvider::one(
+                POLICY_INSTANCE_ALIAS,
+                instance_id(),
+                Arc::new(FakeState::default()),
+            )),
+        )
+        .unwrap_or_else(|error| panic!("{case}: start runtime host: {error}"));
+        host.activate_policy_catalog(&policy_sources(1))
+            .unwrap_or_else(|error| panic!("{case}: activate policy catalog: {error}"));
+        let (_, intent, reasons) = evaluated_policy_dispatch(&host, PolicyTrigger::FactsChanged);
+        record_policy_approval(&host, &intent);
+        let admission = host
+            .admit_policy_dispatch(&intent, &reasons, &policy_context(&host, &intent))
+            .unwrap_or_else(|error| panic!("{case}: policy admission: {error}"));
+        let PolicyDispatchAdmission::Granted { admission, .. } = admission else {
+            panic!("{case}: expected granted policy admission")
+        };
+
+        clock.set_unix_ms(completion_unix_ms);
+        clock.set_monotonic_ms(1_000 + elapsed_ms);
+        let outcome = host
+            .record_policy_dispatch_outcome(&intent.decision_id, &PolicyExecutionInput::Succeeded)
+            .unwrap_or_else(|error| panic!("{case}: record policy outcome: {error}"));
+        assert_eq!(
+            outcome.observed_at_unix_ms,
+            admission.activity.admitted_at_unix_ms + elapsed_ms,
+            "{case}: wall-clock value must not control the authoritative completion time"
+        );
+        assert_eq!(
+            outcome.outcome,
+            PolicyExecutionOutcome::Succeeded {
+                runtime_ms: elapsed_ms
+            },
+            "{case}: budget charge must use Runtime monotonic elapsed time"
+        );
+        host.close()
+            .unwrap_or_else(|error| panic!("{case}: close runtime host: {error}"));
+    }
+}
+
+#[test]
+fn policy_completion_rejects_runtime_monotonic_clock_regression() {
+    let root = TempDir::new().expect("tempdir");
+    let clock = Arc::new(ManualRuntimeClock::new(POLICY_NOW_UNIX_MS, 1_000));
+    let host = RuntimeHost::start(
+        config(&root).with_runtime_clock(clock.clone()),
+        Arc::new(FakeProvider::one(
+            POLICY_INSTANCE_ALIAS,
+            instance_id(),
+            Arc::new(FakeState::default()),
+        )),
+    )
+    .expect("runtime host");
+    host.activate_policy_catalog(&policy_sources(1))
+        .expect("activate policy catalog");
+    let (_, intent, reasons) = evaluated_policy_dispatch(&host, PolicyTrigger::FactsChanged);
+    record_policy_approval(&host, &intent);
+    host.admit_policy_dispatch(&intent, &reasons, &policy_context(&host, &intent))
+        .expect("policy admission");
+
+    clock.set_monotonic_ms(999);
+    let error = host
+        .record_policy_dispatch_outcome(&intent.decision_id, &PolicyExecutionInput::Succeeded)
+        .expect_err("monotonic regression must fail loudly");
+    assert!(error.is_fatal());
+    assert_eq!(error.code(), "monotonic_clock_regressed");
+    let close_error = host
+        .close()
+        .expect_err("fatal clock regression must poison the runtime");
+    assert_eq!(close_error.code(), "monotonic_clock_regressed");
+}
+
+#[test]
+fn accelerated_48h_replay_consumes_runtime_owned_counts_and_runtime_budget() {
+    const HOUR_MS: u64 = 3_600_000;
+    let root = TempDir::new().expect("tempdir");
+    let registered_id = instance_id();
+    let start_unix_ms = POLICY_NOW_UNIX_MS + 12 * HOUR_MS;
+
+    for day in 0_u64..2 {
+        for iteration in 0_u64..4 {
+            let unix_ms = start_unix_ms + (day * 24 + iteration * 6) * HOUR_MS;
+            let clock = Arc::new(ManualRuntimeClock::new(unix_ms, 0));
+            let host = RuntimeHost::start(
+                config(&root).with_runtime_clock(clock.clone()),
+                Arc::new(FakeProvider::one(
+                    POLICY_INSTANCE_ALIAS,
+                    registered_id,
+                    Arc::new(FakeState::default()),
+                )),
+            )
+            .expect("accelerated budget runtime");
+            if day == 0 && iteration == 0 {
+                host.activate_policy_catalog(&budget_policy_sources(1))
+                    .expect("activate accelerated budget catalog");
+            }
+            let (_, intent, reasons) = evaluated_policy_dispatch_at(
+                &host,
+                if day == 0 && iteration == 0 {
+                    PolicyTrigger::FactsChanged
+                } else {
+                    PolicyTrigger::Reconciliation
+                },
+                unix_ms,
+                200 + day * 10 + iteration,
+            );
+            if day == 0 && iteration == 0 {
+                record_policy_approval(&host, &intent);
+            }
+            let admission = host
+                .admit_policy_dispatch(&intent, &reasons, &policy_context(&host, &intent))
+                .expect("accelerated budget admission");
+            let PolicyDispatchAdmission::Granted { admission, .. } = admission else {
+                panic!("expected accelerated budget admission")
+            };
+            assert_eq!(admission.budget.task_daily_used, iteration as u32 + 1);
+            assert_eq!(admission.budget.task_window_used, iteration as u32 + 1);
+            assert_eq!(
+                admission.budget.task_runtime_reserved_ms,
+                iteration * 75_000 + 60_000
+            );
+            clock.advance(75_000);
+            host.record_policy_dispatch_outcome(
+                &intent.decision_id,
+                &PolicyExecutionInput::Succeeded,
+            )
+            .expect("accelerated bounded execution");
+            host.close().expect("close accelerated budget iteration");
+        }
+
+        let host = RuntimeHost::start(
+            config(&root),
+            Arc::new(FakeProvider::one(
+                POLICY_INSTANCE_ALIAS,
+                registered_id,
+                Arc::new(FakeState::default()),
+            )),
+        )
+        .expect("accelerated exhausted budget runtime");
+        let final_hour = day * 24 + 23;
+        let (_, intent, reasons) = evaluated_policy_dispatch_at(
+            &host,
+            PolicyTrigger::Reconciliation,
+            start_unix_ms + final_hour * HOUR_MS,
+            209 + day * 10,
+        );
+        let error = host
+            .admit_policy_dispatch(&intent, &reasons, &policy_context(&host, &intent))
+            .expect_err("fifth daily/window execution must exhaust the production budget");
+        assert_eq!(error.code(), "policy_budget_exhausted");
+        host.close()
+            .expect("close accelerated exhausted budget runtime");
+    }
+}
+
+#[test]
+fn detection_quota_is_persistent_informational_and_never_starves_ordinary_work() {
+    let root = TempDir::new().expect("tempdir");
+    let registered_id = instance_id();
+    let host = RuntimeHost::start(
+        config(&root),
+        Arc::new(FakeProvider::one(
+            POLICY_INSTANCE_ALIAS,
+            registered_id,
+            Arc::new(FakeState::default()),
+        )),
+    )
+    .expect("detection runtime host");
+    host.activate_policy_catalog(&detection_policy_sources(1))
+        .expect("activate detection catalog");
+
+    let ordinary = host
+        .evaluate_policy_cycle_with_test_inputs(
+            &detection_policy_facts(true, "snapshot:detection-ordinary"),
+            &policy_resources(),
+            EvaluationTime {
+                unix_ms: POLICY_NOW_UNIX_MS,
+                monotonic_ms: POLICY_NOW_UNIX_MS,
+            },
+            1,
+            PolicyTrigger::FactsChanged,
+        )
+        .expect("ordinary-first detection cycle");
+    assert_eq!(ordinary.pending_dispatch_intents.len(), 1);
+    assert_eq!(
+        ordinary.pending_dispatch_intents[0].task_id,
+        "fixture.observe"
+    );
+    assert!(ordinary.detection_planning_signals.is_empty());
+
+    for index in 1_u64..=2 {
+        let cycle = host
+            .evaluate_policy_cycle_with_test_inputs(
+                &detection_policy_facts(false, &format!("snapshot:detection-reserved-{index}")),
+                &policy_resources(),
+                EvaluationTime {
+                    unix_ms: POLICY_NOW_UNIX_MS + index * 2_000,
+                    monotonic_ms: POLICY_NOW_UNIX_MS + index * 2_000,
+                },
+                index + 1,
+                PolicyTrigger::FactsChanged,
+            )
+            .expect("reserve detection quota");
+        assert!(cycle.pending_dispatch_intents.is_empty());
+        assert_eq!(cycle.detection_planning_signals.len(), 1);
+        let signal = &cycle.detection_planning_signals[0];
+        assert_eq!(signal.kind, PolicyPlanningSignalKind::DetectionReserved);
+        let budget = signal.detection_budget.as_ref().expect("detection budget");
+        assert_eq!(
+            budget.dispatch_used,
+            u32::try_from(index).expect("small detection index")
+        );
+        assert_eq!(budget.runtime_reserved_ms, index * 10_000);
+        if index == 1 {
+            let mut forged = signal.clone();
+            forged.signal_id = "signal:detection:caller-forged".to_owned();
+            let error = host
+                .record_policy_planning_signal(forged)
+                .expect_err("callers cannot forge runtime-owned detection quota events");
+            assert_eq!(error.code(), "policy_detection_signal_runtime_owned");
+            assert!(!error.is_fatal());
+        }
+    }
+
+    host.activate_policy_catalog(&detection_policy_sources(2))
+        .expect("upgrade detection catalog without resetting quota");
+
+    let exhausted = host
+        .evaluate_policy_cycle_with_test_inputs(
+            &detection_policy_facts(false, "snapshot:detection-exhausted"),
+            &policy_resources(),
+            EvaluationTime {
+                unix_ms: POLICY_NOW_UNIX_MS + 6_000,
+                monotonic_ms: POLICY_NOW_UNIX_MS + 6_000,
+            },
+            4,
+            PolicyTrigger::FactsChanged,
+        )
+        .expect("exhaust detection quota");
+    assert!(exhausted.pending_dispatch_intents.is_empty());
+    assert_eq!(exhausted.detection_planning_signals.len(), 1);
+    assert_eq!(
+        exhausted.detection_planning_signals[0].kind,
+        PolicyPlanningSignalKind::DetectionQuotaExhausted
+    );
+
+    let ordinary_after_exhaustion = host
+        .evaluate_policy_cycle_with_test_inputs(
+            &detection_policy_facts(true, "snapshot:detection-ordinary-after-exhaustion"),
+            &policy_resources(),
+            EvaluationTime {
+                unix_ms: POLICY_NOW_UNIX_MS + 7_000,
+                monotonic_ms: POLICY_NOW_UNIX_MS + 7_000,
+            },
+            5,
+            PolicyTrigger::FactsChanged,
+        )
+        .expect("ordinary work after detection quota exhaustion");
+    assert_eq!(ordinary_after_exhaustion.pending_dispatch_intents.len(), 1);
+    assert_eq!(
+        ordinary_after_exhaustion.pending_dispatch_intents[0].task_id,
+        "fixture.observe"
+    );
+    assert!(
+        ordinary_after_exhaustion
+            .detection_planning_signals
+            .is_empty()
+    );
+
+    let mut client = TestClient::connect(&host);
+    let signals = projected_events(
+        &mut client,
+        EventQuery {
+            event_type: Some(EventType::PolicyPlanningSignalObserved),
+            ..EventQuery::default()
+        },
+    );
+    assert_eq!(signals.len(), 3);
+    assert!(
+        signals
+            .iter()
+            .all(|event| event.severity == EventSeverity::Info)
+    );
+    assert_eq!(
+        signals
+            .iter()
+            .filter(|event| {
+                matches!(
+                    &event.payload,
+                    ProjectionPayload::Full(payload)
+                        if matches!(
+                            payload.as_ref(),
+                            EventPayload::Policy(PolicyPayload::PlanningSignalObserved(signal))
+                                if signal.kind()
+                                    == PolicyPlanningSignalKind::DetectionQuotaExhausted
+                        )
+                )
+            })
+            .count(),
+        1
+    );
+    drop(client);
+    let mut dispatch_client = TestClient::connect(&host);
+    assert!(
+        projected_events(
+            &mut dispatch_client,
+            EventQuery {
+                event_type: Some(EventType::PolicyDispatchIntent),
+                ..EventQuery::default()
+            },
+        )
+        .is_empty(),
+        "detection reservations must not be recorded as ordinary dispatch success"
+    );
+    drop(dispatch_client);
+    host.close().expect("close detection runtime");
+
+    let reopened = RuntimeHost::start(
+        config(&root),
+        Arc::new(FakeProvider::one(
+            POLICY_INSTANCE_ALIAS,
+            registered_id,
+            Arc::new(FakeState::default()),
+        )),
+    )
+    .expect("reopen detection runtime");
+    let recovered = reopened
+        .evaluate_policy_cycle_with_test_inputs(
+            &detection_policy_facts(false, "snapshot:detection-after-restart"),
+            &policy_resources(),
+            EvaluationTime {
+                unix_ms: POLICY_NOW_UNIX_MS + 9_000,
+                monotonic_ms: POLICY_NOW_UNIX_MS + 9_000,
+            },
+            6,
+            PolicyTrigger::Recovery,
+        )
+        .expect("recover exhausted detection quota");
+    assert_eq!(recovered.detection_planning_signals.len(), 1);
+    assert_eq!(
+        recovered.detection_planning_signals[0].kind,
+        PolicyPlanningSignalKind::DetectionQuotaExhausted
+    );
+    assert!(recovered.pending_dispatch_intents.is_empty());
+    reopened.close().expect("close recovered detection runtime");
+}
+
+#[test]
+fn tightened_detection_quota_preserves_historical_usage_and_recovers() {
+    let root = TempDir::new().expect("tempdir");
+    let registered_id = instance_id();
+    let host = RuntimeHost::start(
+        config(&root),
+        Arc::new(FakeProvider::one(
+            POLICY_INSTANCE_ALIAS,
+            registered_id,
+            Arc::new(FakeState::default()),
+        )),
+    )
+    .expect("detection runtime host");
+    host.activate_policy_catalog(&detection_policy_sources_with_budget(1, 3, 30_000, 10_000))
+        .expect("activate initial detection catalog");
+
+    for index in 1_u64..=2 {
+        let cycle = host
+            .evaluate_policy_cycle_with_test_inputs(
+                &detection_policy_facts(false, &format!("snapshot:tighten-{index}")),
+                &policy_resources(),
+                EvaluationTime {
+                    unix_ms: POLICY_NOW_UNIX_MS + index * 1_000,
+                    monotonic_ms: POLICY_NOW_UNIX_MS + index * 1_000,
+                },
+                index,
+                PolicyTrigger::FactsChanged,
+            )
+            .expect("reserve initial detection quota");
+        assert_eq!(
+            cycle.detection_planning_signals[0].kind,
+            PolicyPlanningSignalKind::DetectionReserved
+        );
+    }
+
+    host.activate_policy_catalog(&detection_policy_sources_with_budget(2, 1, 5_000, 5_000))
+        .expect("tighten detection catalog");
+    let exhausted = host
+        .evaluate_policy_cycle_with_test_inputs(
+            &detection_policy_facts(false, "snapshot:tightened-exhausted"),
+            &policy_resources(),
+            EvaluationTime {
+                unix_ms: POLICY_NOW_UNIX_MS + 3_000,
+                monotonic_ms: POLICY_NOW_UNIX_MS + 3_000,
+            },
+            3,
+            PolicyTrigger::CatalogChanged,
+        )
+        .expect("tightened quota is informational");
+    assert_eq!(exhausted.detection_planning_signals.len(), 1);
+    let signal = &exhausted.detection_planning_signals[0];
+    assert_eq!(
+        signal.kind,
+        PolicyPlanningSignalKind::DetectionQuotaExhausted
+    );
+    let budget = signal.detection_budget.as_ref().expect("detection budget");
+    assert_eq!(budget.dispatch_used, 2);
+    assert_eq!(budget.dispatch_limit, 1);
+    assert_eq!(budget.runtime_reserved_ms, 20_000);
+    assert_eq!(budget.runtime_limit_ms, 5_000);
+    host.close().expect("close tightened detection runtime");
+
+    let reopened = RuntimeHost::start(
+        config(&root),
+        Arc::new(FakeProvider::one(
+            POLICY_INSTANCE_ALIAS,
+            registered_id,
+            Arc::new(FakeState::default()),
+        )),
+    )
+    .expect("reopen tightened detection runtime");
+    let recovered = reopened
+        .evaluate_policy_cycle_with_test_inputs(
+            &detection_policy_facts(false, "snapshot:tightened-recovered"),
+            &policy_resources(),
+            EvaluationTime {
+                unix_ms: POLICY_NOW_UNIX_MS + 4_000,
+                monotonic_ms: POLICY_NOW_UNIX_MS + 4_000,
+            },
+            4,
+            PolicyTrigger::Recovery,
+        )
+        .expect("recover historical over-limit quota");
+    assert_eq!(recovered.detection_planning_signals.len(), 1);
+    assert_eq!(
+        recovered.detection_planning_signals[0].kind,
+        PolicyPlanningSignalKind::DetectionQuotaExhausted
+    );
+    reopened.close().expect("close recovered detection runtime");
+}
+
+#[test]
+fn approval_decision_is_authoritative_target_bound_and_revocable() {
+    let root = TempDir::new().expect("tempdir");
+    let host = host_with_state(&root, POLICY_INSTANCE_ALIAS, Arc::new(FakeState::default()));
+    host.activate_policy_catalog(&policy_sources(1))
+        .expect("activate catalog");
+    let (_, intent, reasons) = evaluated_policy_dispatch(&host, PolicyTrigger::FactsChanged);
+    let forged = policy_context(&host, &intent);
+    assert_eq!(
+        host.admit_policy_dispatch(&intent, &reasons, &forged)
+            .expect_err("caller approval set is not authoritative")
+            .code(),
+        "policy_approval_fact_missing"
+    );
+
+    record_policy_approval(&host, &intent);
+    let (_, approved_intent, approved_reasons) = evaluated_policy_dispatch_at(
+        &host,
+        PolicyTrigger::Reconciliation,
+        POLICY_NOW_UNIX_MS + 60_000,
+        8,
+    );
+    assert!(matches!(
+        host.admit_policy_dispatch(
+            &approved_intent,
+            &approved_reasons,
+            &policy_context(&host, &approved_intent),
+        )
+        .expect("approved dispatch"),
+        PolicyDispatchAdmission::Granted { .. }
+    ));
+
+    let mut client = TestClient::connect(&host);
+    client.authenticate_governance();
+    let conflicting = client.governance_request(RuntimeOperation::RecordApprovalDecision {
+        decision: ApprovalDecisionRecord::new(
+            "approval:fixture-a",
+            ApprovalDisposition::Approved,
+            ApprovalTarget::Catalog {
+                catalog_hash: format!("sha256:{}", "f".repeat(64)),
+                catalog_version: 1,
+            },
+            "user_confirmed",
+        )
+        .expect("conflicting approval"),
+    });
+    assert_eq!(
+        client.send(&conflicting).state(),
+        RuntimeReceiptState::Denied
+    );
+    drop(client);
+
+    host.complete_policy_dispatch(&approved_intent.decision_id)
+        .expect("complete approved dispatch");
+    record_policy_approval_disposition(&host, &approved_intent, ApprovalDisposition::Revoked);
+    let (_, after_revoke, after_revoke_reasons) = evaluated_policy_dispatch_at(
+        &host,
+        PolicyTrigger::Reconciliation,
+        POLICY_NOW_UNIX_MS + 120_000,
+        9,
+    );
+    assert_eq!(
+        host.admit_policy_dispatch(
+            &after_revoke,
+            &after_revoke_reasons,
+            &policy_context(&host, &after_revoke),
+        )
+        .expect_err("revoked approval must not authorize a new dispatch")
+        .code(),
+        "policy_approval_fact_missing"
+    );
+
+    let mut client = TestClient::connect(&host);
+    let events = projected_events(
+        &mut client,
+        EventQuery {
+            event_type: Some(EventType::ApprovalDecision),
+            ..EventQuery::default()
+        },
+    );
+    assert_eq!(events.len(), 2);
+    drop(client);
+    host.close().expect("close host");
+}
+
+#[test]
+fn approval_history_compacts_without_losing_durable_target_identity() {
+    let root = TempDir::new().expect("tempdir");
+    let registered_id = instance_id();
+    let host = RuntimeHost::start(
+        config(&root),
+        Arc::new(FakeProvider::one(
+            POLICY_INSTANCE_ALIAS,
+            registered_id,
+            Arc::new(FakeState::default()),
+        )),
+    )
+    .expect("runtime host");
+    let target = ApprovalTarget::Catalog {
+        catalog_hash: format!("sha256:{}", "a".repeat(64)),
+        catalog_version: 1,
+    };
+    let mut client = TestClient::connect(&host);
+    client.authenticate_governance();
+    for index in 0..257 {
+        let approval_id = format!("approval:history-{index}");
+        let request = client.governance_request(RuntimeOperation::RecordApprovalDecision {
+            decision: ApprovalDecisionRecord::new(
+                approval_id,
+                ApprovalDisposition::Rejected,
+                target.clone(),
+                "history_compaction",
+            )
+            .expect("approval decision"),
+        });
+        assert_eq!(
+            client.send(&request).state(),
+            RuntimeReceiptState::Completed
+        );
+    }
+    drop(client);
+
+    let mut client = TestClient::connect(&host);
+    let request = client.request(RuntimeOperation::ProjectInterface {
+        request: ProjectInterfaceRequest::current(),
+    });
+    let receipt = client.send(&request);
+    let RuntimeResult::ProjectInterface { response } = receipt.result().expect("projection result")
+    else {
+        panic!("expected project interface response")
+    };
+    assert_eq!(
+        response
+            .snapshot()
+            .expect("current project snapshot")
+            .approvals
+            .len(),
+        256
+    );
+    drop(client);
+    host.close().expect("close host");
+
+    let reopened = RuntimeHost::start(
+        config(&root),
+        Arc::new(FakeProvider::one(
+            POLICY_INSTANCE_ALIAS,
+            registered_id,
+            Arc::new(FakeState::default()),
+        )),
+    )
+    .expect("reopen runtime host");
+    let mut client = TestClient::connect(&reopened);
+    client.authenticate_governance();
+    let conflict = client.governance_request(RuntimeOperation::RecordApprovalDecision {
+        decision: ApprovalDecisionRecord::new(
+            "approval:history-0",
+            ApprovalDisposition::Approved,
+            ApprovalTarget::Catalog {
+                catalog_hash: format!("sha256:{}", "b".repeat(64)),
+                catalog_version: 1,
+            },
+            "conflicting_target",
+        )
+        .expect("conflicting approval"),
+    });
+    assert_eq!(client.send(&conflict).state(), RuntimeReceiptState::Denied);
+    assert!(reopened.fatal_error().expect("runtime health").is_none());
+    drop(client);
+    reopened.close().expect("close reopened host");
+}
+
+#[test]
+fn governance_authority_is_capability_authenticated_and_connection_bound() {
+    let root = TempDir::new().expect("tempdir");
+    let host = host_with_state(&root, POLICY_INSTANCE_ALIAS, Arc::new(FakeState::default()));
+    let target = ApprovalTarget::Catalog {
+        catalog_hash: format!("sha256:{}", "a".repeat(64)),
+        catalog_version: 1,
+    };
+    let approval = |disposition| {
+        ApprovalDecisionRecord::new(
+            "approval:governance-boundary",
+            disposition,
+            target.clone(),
+            "user_confirmed",
+        )
+        .expect("approval decision")
+    };
+
+    let mut client = TestClient::connect(&host);
+    let unauthenticated = client.governance_request(RuntimeOperation::RecordApprovalDecision {
+        decision: approval(ApprovalDisposition::Approved),
+    });
+    let receipt = client.send(&unauthenticated);
+    assert_eq!(receipt.state(), RuntimeReceiptState::Denied);
+    assert_eq!(
+        receipt.error_projection().expect("denial").code,
+        RuntimeErrorCode::InvalidRequest
+    );
+
+    let wrong_capability = client.governance_request(RuntimeOperation::AuthenticateGovernance {
+        capability: "wrong-governance-capability-value".to_owned(),
+    });
+    let receipt = client.send(&wrong_capability);
+    assert_eq!(receipt.state(), RuntimeReceiptState::Denied);
+    assert_eq!(
+        receipt.error_projection().expect("denial").code,
+        RuntimeErrorCode::InvalidRequest
+    );
+
+    client.authenticate_governance();
+    let approved = client.governance_request(RuntimeOperation::RecordApprovalDecision {
+        decision: approval(ApprovalDisposition::Approved),
+    });
+    assert_eq!(
+        client.send(&approved).state(),
+        RuntimeReceiptState::Completed
+    );
+
+    let mut other = TestClient::connect(&host);
+    let forged_revocation = other.governance_request(RuntimeOperation::RecordApprovalDecision {
+        decision: approval(ApprovalDisposition::Revoked),
+    });
+    let receipt = other.send(&forged_revocation);
+    assert_eq!(receipt.state(), RuntimeReceiptState::Denied);
+    assert_eq!(
+        receipt.error_projection().expect("denial").code,
+        RuntimeErrorCode::InvalidRequest
+    );
+
+    let revoked = client.governance_request(RuntimeOperation::RecordApprovalDecision {
+        decision: approval(ApprovalDisposition::Revoked),
+    });
+    assert_eq!(
+        client.send(&revoked).state(),
+        RuntimeReceiptState::Completed
+    );
+
+    let events = projected_events(
+        &mut other,
+        EventQuery {
+            event_type: Some(EventType::ApprovalDecision),
+            ..EventQuery::default()
+        },
+    );
+    assert_eq!(events.len(), 2);
+    assert!(events.iter().all(|event| {
+        event.origin.source() == EventSource::Ui
+            && event.origin.module() == OriginModule::Governance
+            && event.origin.actor() == EventActor::User
+    }));
+    drop(client);
+    drop(other);
+    host.close().expect("close host");
+}
+
+#[test]
+fn historical_agent_approval_poisoning_is_fatal_during_recovery() {
+    let root = TempDir::new().expect("tempdir");
+    let instance = instance_id();
+    let host = RuntimeHost::start(
+        config(&root),
+        Arc::new(FakeProvider::one(
+            POLICY_INSTANCE_ALIAS,
+            instance,
+            Arc::new(FakeState::default()),
+        )),
+    )
+    .expect("runtime host");
+    host.append_approval_event_for_test(
+        EventSource::Adapter,
+        EventActor::Agent,
+        ApprovalDecisionRecord::new(
+            "approval:historical-agent",
+            ApprovalDisposition::Approved,
+            ApprovalTarget::Catalog {
+                catalog_hash: format!("sha256:{}", "a".repeat(64)),
+                catalog_version: 1,
+            },
+            "agent_claimed_approval",
+        )
+        .expect("approval decision"),
+    )
+    .expect("historical malicious approval fixture");
+    host.close().expect("close host");
+
+    let error = match RuntimeHost::start(
+        config(&root),
+        Arc::new(FakeProvider::one(
+            POLICY_INSTANCE_ALIAS,
+            instance,
+            Arc::new(FakeState::default()),
+        )),
+    ) {
+        Ok(host) => {
+            host.close().expect("close unexpected host");
+            panic!("historical Agent approval must prevent recovery")
+        }
+        Err(error) => error,
+    };
+    assert!(error.is_fatal());
+    assert_eq!(error.code(), "approval_projection_origin_invalid");
+}
+
+#[test]
+fn policy_admission_rejects_stale_and_tampered_trusted_context() {
+    let root = TempDir::new().expect("tempdir");
+    let host = host_with_state(&root, POLICY_INSTANCE_ALIAS, Arc::new(FakeState::default()));
+    let mut sources = policy_sources(1);
+    let mut tasks: serde_json::Value =
+        serde_json::from_slice(&sources.tasks.bytes).expect("tasks fixture");
+    tasks["tasks"][0]["trigger"] = serde_json::json!({
+        "kind": "fact",
+        "scope": {"kind": "instance", "instance_id": POLICY_INSTANCE_ALIAS},
+        "fact_key": "env.ephemeral",
+        "comparison": "eq",
+        "value": {"type": "string", "value": "Neutral"},
+        "max_age_ms": 20
+    });
+    sources.tasks.bytes = serde_json::to_vec_pretty(&tasks).expect("tasks bytes");
+    host.activate_policy_catalog(&sources)
+        .expect("activate catalog");
+    let mut ephemeral = stored_fact(
+        FactScope::Instance {
+            instance_id: POLICY_INSTANCE_ALIAS.to_owned(),
+        },
+        "env.ephemeral",
+        ContractFactValue::String("Neutral".to_owned()),
+        "snapshot:ephemeral",
+        Vec::new(),
+    );
+    ephemeral.expires_at_unix_ms = Some(POLICY_NOW_UNIX_MS + 20);
+    ephemeral.ttl_policy = Some(FactTtlPolicy {
+        minimum_ms: 1,
+        maximum_ms: 100,
+        source: FactTtlSource::DetectorContract,
+    });
+    host.publish_fact(ephemeral)
+        .expect("publish ephemeral fact");
+
+    let (_, intent, reasons) = evaluated_policy_dispatch(&host, PolicyTrigger::FactsChanged);
+    record_policy_approval(&host, &intent);
+    let mut forged_decision = intent.clone();
+    forged_decision.decision_id = "decision:forged".to_owned();
+    assert_eq!(
+        host.admit_policy_dispatch(
+            &forged_decision,
+            &reasons,
+            &policy_context(&host, &forged_decision),
+        )
+        .expect_err("forged decision identity must fail")
+        .code(),
+        "policy_decision_not_host_evaluated"
+    );
+
+    let mut wrong_profile = intent.clone();
+    wrong_profile.prerequisites.activity_profile_id = "profile:forged".to_owned();
+    assert_eq!(
+        host.admit_policy_dispatch(
+            &wrong_profile,
+            &reasons,
+            &policy_context(&host, &wrong_profile),
+        )
+        .expect_err("caller-selected profile must fail")
+        .code(),
+        "policy_trusted_context_mismatch"
+    );
+
+    thread::sleep(Duration::from_millis(30));
+    let mut forged_time = policy_context(&host, &intent);
+    forged_time.now_unix_ms = 1;
+    assert_eq!(
+        host.admit_policy_dispatch(&intent, &reasons, &forged_time)
+            .expect_err("expired fact must fail admission")
+            .code(),
+        "policy_facts_stale"
+    );
+    host.close().expect("close host");
+}
+
+#[test]
+fn runtime_owned_policy_inputs_supply_time_and_reject_unknown_resource_hosts() {
+    let root = TempDir::new().expect("tempdir");
+    let clock = Arc::new(ManualRuntimeClock::new(POLICY_NOW_UNIX_MS, 7_000));
+    let host = RuntimeHost::start(
+        config(&root)
+            .with_runtime_clock(clock)
+            .with_policy_inputs(PolicyInputSnapshot::new(policy_facts(), policy_resources())),
+        Arc::new(FakeProvider::one(
+            POLICY_INSTANCE_ALIAS,
+            instance_id(),
+            Arc::new(FakeState::default()),
+        )),
+    )
+    .expect("runtime host");
+    host.activate_policy_catalog(&policy_sources(1))
+        .expect("activate catalog");
+    let cycle = host
+        .evaluate_policy_cycle(PolicyTrigger::FactsChanged)
+        .expect("Runtime-owned policy evaluation");
+    let intent = cycle
+        .evaluation
+        .expect("policy evaluation")
+        .dispatch_intents
+        .into_iter()
+        .next()
+        .expect("dispatch intent");
+    assert_eq!(
+        intent.prerequisites.evaluated_at_unix_ms,
+        POLICY_NOW_UNIX_MS
+    );
+    host.close().expect("close host");
+
+    let invalid_root = TempDir::new().expect("tempdir");
+    let mut invalid_facts = policy_facts();
+    invalid_facts.instances[0].host_id = "caller-forged-host".to_owned();
+    let invalid = RuntimeHost::start(
+        config(&invalid_root)
+            .with_policy_inputs(PolicyInputSnapshot::new(invalid_facts, policy_resources())),
+        Arc::new(FakeProvider::one(
+            POLICY_INSTANCE_ALIAS,
+            instance_id(),
+            Arc::new(FakeState::default()),
+        )),
+    )
+    .expect("runtime host with invalid policy inputs");
+    invalid
+        .activate_policy_catalog(&policy_sources(1))
+        .expect("activate catalog");
+    let error = invalid
+        .evaluate_policy_cycle(PolicyTrigger::FactsChanged)
+        .expect_err("unknown resource host must fail");
+    assert_eq!(error.code(), "policy_resource_metadata_untrusted");
+    assert!(!error.is_fatal());
+    invalid.close().expect("close invalid host");
+}
+
+#[test]
+fn fact_replacement_invalidates_an_already_evaluated_dispatch() {
+    let root = TempDir::new().expect("tempdir");
+    let host = host_with_state(&root, POLICY_INSTANCE_ALIAS, Arc::new(FakeState::default()));
+    host.activate_policy_catalog(&policy_sources(1))
+        .expect("activate catalog");
+    let scope = FactScope::Instance {
+        instance_id: POLICY_INSTANCE_ALIAS.to_owned(),
+    };
+    host.publish_fact(stored_fact(
+        scope.clone(),
+        "env.authority",
+        ContractFactValue::Boolean(true),
+        "snapshot:authority-a",
+        Vec::new(),
+    ))
+    .expect("publish initial fact revision");
+    let (_, intent, reasons) = evaluated_policy_dispatch(&host, PolicyTrigger::FactsChanged);
+    record_policy_approval(&host, &intent);
+    host.publish_fact(stored_fact(
+        scope,
+        "env.authority",
+        ContractFactValue::Boolean(true),
+        "snapshot:authority-b",
+        Vec::new(),
+    ))
+    .expect("replace fact revision");
+
+    let error = host
+        .admit_policy_dispatch(&intent, &reasons, &policy_context(&host, &intent))
+        .expect_err("superseded fact revision must invalidate dispatch");
+    assert_eq!(error.code(), "policy_facts_stale");
+    let mut client = TestClient::connect(&host);
+    assert!(
+        projected_events(
+            &mut client,
+            EventQuery {
+                event_type: Some(EventType::LeaseGranted),
+                ..EventQuery::default()
+            }
+        )
+        .is_empty()
+    );
+    drop(client);
+    host.close().expect("close host");
+}
+
+#[test]
+fn procedure_alias_rebinding_reports_package_digest_mismatch_before_lease() {
+    let root = TempDir::new().expect("tempdir");
+    let host = host_with_state(&root, POLICY_INSTANCE_ALIAS, Arc::new(FakeState::default()));
+    host.activate_policy_catalog(&policy_sources(1))
+        .expect("activate catalog");
+    let (_, intent, reasons) = evaluated_policy_dispatch(&host, PolicyTrigger::FactsChanged);
+    let original_package_digest = intent
+        .package_digest
+        .as_deref()
+        .expect("bound package digest")
+        .to_owned();
+    record_policy_approval(&host, &intent);
+
+    host.replace_procedure_manifest_for_test(procedure_manifest_with_primary(
+        b"fixture procedure observe package v2",
+        vec!["after_observation".to_owned()],
+    ))
+    .expect("replace trusted procedure manifest");
+    let error = host
+        .admit_policy_dispatch(&intent, &reasons, &policy_context(&host, &intent))
+        .expect_err("old alias binding must not reach lease admission");
+    assert_eq!(error.code(), "procedure_package_digest_mismatch");
+
+    let replacement = host
+        .evaluate_policy_cycle_with_test_inputs(
+            &policy_facts(),
+            &policy_resources(),
+            EvaluationTime {
+                unix_ms: POLICY_NOW_UNIX_MS + 60_000,
+                monotonic_ms: POLICY_NOW_UNIX_MS + 60_000,
+            },
+            7,
+            PolicyTrigger::Reconciliation,
+        )
+        .expect("evaluate replacement binding")
+        .evaluation
+        .expect("replacement evaluation")
+        .dispatch_intents
+        .into_iter()
+        .next()
+        .expect("replacement intent");
+    assert_ne!(replacement.decision_id, intent.decision_id);
+    assert_ne!(
+        replacement.package_digest.as_deref(),
+        Some(original_package_digest.as_str())
+    );
+
+    let mut client = TestClient::connect(&host);
+    assert!(
+        projected_events(
+            &mut client,
+            EventQuery {
+                event_type: Some(EventType::LeaseGranted),
+                ..EventQuery::default()
+            }
+        )
+        .is_empty()
+    );
+    drop(client);
+    host.close().expect("close host");
+}
+
+#[test]
+fn procedure_manifest_rejects_yield_point_mismatch_during_evaluation() {
+    let root = TempDir::new().expect("tempdir");
+    let host = RuntimeHost::start(
+        config(&root).with_procedure_manifest(procedure_manifest_with_primary(
+            b"fixture procedure observe package v1",
+            vec!["different_boundary".to_owned()],
+        )),
+        Arc::new(FakeProvider::one(
+            POLICY_INSTANCE_ALIAS,
+            instance_id(),
+            Arc::new(FakeState::default()),
+        )),
+    )
+    .expect("runtime host");
+    host.activate_policy_catalog(&policy_sources(1))
+        .expect("activate catalog");
+    let error = host
+        .evaluate_policy_cycle_with_test_inputs(
+            &policy_facts(),
+            &policy_resources(),
+            EvaluationTime {
+                unix_ms: POLICY_NOW_UNIX_MS,
+                monotonic_ms: POLICY_NOW_UNIX_MS,
+            },
+            7,
+            PolicyTrigger::FactsChanged,
+        )
+        .expect_err("manifest yield points must match the catalog intent");
+    assert_eq!(error.code(), "procedure_yield_points_mismatch");
+    assert!(host.fatal_error().expect("runtime health").is_none());
+    host.close().expect("close host");
+}
+
+#[test]
+fn policy_evaluation_fails_explicitly_without_a_procedure_manifest() {
+    let root = TempDir::new().expect("tempdir");
+    let host = RuntimeHost::start(
+        RuntimeHostConfig::new(root.path(), b"missing-procedure-manifest-test")
+            .with_policy_inputs(PolicyInputSnapshot::new(policy_facts(), policy_resources())),
+        Arc::new(FakeProvider::one(
+            POLICY_INSTANCE_ALIAS,
+            instance_id(),
+            Arc::new(FakeState::default()),
+        )),
+    )
+    .expect("runtime host");
+    host.activate_policy_catalog(&policy_sources(1))
+        .expect("activate catalog");
+    let error = host
+        .evaluate_policy_cycle_with_test_inputs(
+            &policy_facts(),
+            &policy_resources(),
+            EvaluationTime {
+                unix_ms: POLICY_NOW_UNIX_MS,
+                monotonic_ms: POLICY_NOW_UNIX_MS,
+            },
+            7,
+            PolicyTrigger::FactsChanged,
+        )
+        .expect_err("unconfigured manifest must not produce an unbound intent");
+    assert_eq!(error.code(), "procedure_manifest_unconfigured");
+    assert!(!error.is_fatal());
+    host.close().expect("close host");
+}
+
+#[test]
+fn concurrent_fact_replacement_and_admission_are_ledger_ordered() {
+    let root = TempDir::new().expect("tempdir");
+    let host = Arc::new(host_with_state(
+        &root,
+        POLICY_INSTANCE_ALIAS,
+        Arc::new(FakeState::default()),
+    ));
+    host.activate_policy_catalog(&policy_sources(1))
+        .expect("activate catalog");
+    let scope = FactScope::Instance {
+        instance_id: POLICY_INSTANCE_ALIAS.to_owned(),
+    };
+    host.publish_fact(stored_fact(
+        scope.clone(),
+        "env.concurrent_authority",
+        ContractFactValue::Boolean(true),
+        "snapshot:concurrent-a",
+        Vec::new(),
+    ))
+    .expect("publish initial fact revision");
+    let (_, intent, reasons) = evaluated_policy_dispatch(&host, PolicyTrigger::FactsChanged);
+    record_policy_approval(&host, &intent);
+    let barrier = Arc::new(Barrier::new(3));
+
+    let publisher = {
+        let host = Arc::clone(&host);
+        let barrier = Arc::clone(&barrier);
+        thread::spawn(move || {
+            barrier.wait();
+            host.publish_fact(stored_fact(
+                scope,
+                "env.concurrent_authority",
+                ContractFactValue::Boolean(true),
+                "snapshot:concurrent-b",
+                Vec::new(),
+            ))
+        })
+    };
+    let admitting = {
+        let host = Arc::clone(&host);
+        let barrier = Arc::clone(&barrier);
+        let context = policy_context(&host, &intent);
+        let intent = intent.clone();
+        let reasons = reasons.clone();
+        thread::spawn(move || {
+            barrier.wait();
+            host.admit_policy_dispatch(&intent, &reasons, &context)
+        })
+    };
+    barrier.wait();
+    publisher
+        .join()
+        .expect("publisher thread")
+        .expect("replacement fact");
+    let admission = admitting.join().expect("admission thread");
+
+    let mut client = TestClient::connect(&host);
+    let replacement_sequence = projected_events(
+        &mut client,
+        EventQuery {
+            event_type: Some(EventType::FactPublished),
+            ..EventQuery::default()
+        },
+    )
+    .into_iter()
+    .map(|event| event.sequence)
+    .max()
+    .expect("replacement fact sequence");
+    match admission {
+        Ok(PolicyDispatchAdmission::Granted { .. }) => {
+            let intent_sequence = projected_events(
+                &mut client,
+                EventQuery {
+                    event_type: Some(EventType::PolicyDispatchIntent),
+                    ..EventQuery::default()
+                },
+            )
+            .into_iter()
+            .map(|event| event.sequence)
+            .max()
+            .expect("policy intent sequence");
+            assert!(intent_sequence < replacement_sequence);
+        }
+        Err(error) => {
+            assert_eq!(error.code(), "policy_facts_stale");
+            assert!(
+                projected_events(
+                    &mut client,
+                    EventQuery {
+                        event_type: Some(EventType::PolicyDispatchIntent),
+                        ..EventQuery::default()
+                    }
+                )
+                .is_empty()
+            );
+        }
+        Ok(other) => panic!("unexpected admission: {other:?}"),
+    }
+    drop(client);
+    let host = Arc::try_unwrap(host).unwrap_or_else(|_| panic!("exclusive runtime host"));
+    host.close().expect("close host");
+}
+
+#[test]
+fn game_and_server_scope_changes_cannot_reuse_a_trusted_decision_identity() {
+    let root = TempDir::new().expect("tempdir");
+    let host = host_with_state(&root, POLICY_INSTANCE_ALIAS, Arc::new(FakeState::default()));
+    host.activate_policy_catalog(&policy_sources(1))
+        .expect("activate catalog");
+    let (_, trusted, trusted_reasons) =
+        evaluated_policy_dispatch(&host, PolicyTrigger::FactsChanged);
+
+    let mut wrong_instance = trusted.clone();
+    wrong_instance.instance_id = "fixture-instance-b".to_owned();
+    assert_eq!(
+        host.admit_policy_dispatch(
+            &wrong_instance,
+            &trusted_reasons,
+            &policy_context(&host, &wrong_instance),
+        )
+        .expect_err("instance scope cannot be widened by the caller")
+        .code(),
+        "policy_trusted_context_mismatch"
+    );
+
+    for (index, mut facts) in [policy_facts(), policy_facts()].into_iter().enumerate() {
+        if index == 0 {
+            facts.instances[0].server_id = "fixture-server-b".to_owned();
+        } else {
+            facts.instances[0].game_id = "fixture-game-b".to_owned();
+        }
+        let cycle = host
+            .evaluate_policy_cycle_with_test_inputs(
+                &facts,
+                &policy_resources(),
+                EvaluationTime {
+                    unix_ms: POLICY_NOW_UNIX_MS + 60_000 * (index as u64 + 1),
+                    monotonic_ms: POLICY_NOW_UNIX_MS + 60_000 * (index as u64 + 1),
+                },
+                8 + index as u64,
+                PolicyTrigger::Reconciliation,
+            )
+            .expect("scope-changed policy evaluation");
+        let changed = cycle
+            .evaluation
+            .expect("scope-changed evaluation")
+            .dispatch_intents
+            .into_iter()
+            .next()
+            .expect("scope-changed intent");
+        assert_ne!(changed.fact_snapshot_id, trusted.fact_snapshot_id);
+        assert_ne!(changed.decision_id, trusted.decision_id);
+
+        let mut mixed = changed;
+        mixed.decision_id = trusted.decision_id.clone();
+        mixed.reason_chain_id = trusted.reason_chain_id.clone();
+        assert_eq!(
+            host.admit_policy_dispatch(&mixed, &trusted_reasons, &policy_context(&host, &mixed),)
+                .expect_err("scope changes cannot reuse an old decision identity")
+                .code(),
+            "policy_trusted_context_mismatch"
+        );
+    }
+    host.close().expect("close host");
+}
+
+#[test]
+fn measured_contention_gates_deadline_dispatch_and_records_the_conflict() {
+    let root = TempDir::new().expect("tempdir");
+    let state = Arc::new(FakeState::default());
+    let host = host_with_state(&root, POLICY_INSTANCE_ALIAS, state);
+    let mut sources = policy_sources(1);
+    let mut activity: serde_json::Value =
+        serde_json::from_slice(&sources.activity.bytes).expect("activity fixture");
+    activity["profiles"][0]["goals"][0]["deadline_unix_ms"] = serde_json::json!(POLICY_NOW_UNIX_MS);
+    sources.activity.bytes = serde_json::to_vec_pretty(&activity).expect("activity bytes");
+    host.activate_policy_catalog(&sources)
+        .expect("activate catalog");
+    host.observe_performance_control_for_test(PerformanceControlObservation {
+        observed_at_unix_ms: POLICY_NOW_UNIX_MS - 2_000,
+        host_responsiveness_basis_points: Some(7_000),
+        third_party_pressure_basis_points: Some(0),
+        foreground_fullscreen: false,
+    })
+    .expect("first contention sample");
+    host.observe_performance_control_for_test(PerformanceControlObservation {
+        observed_at_unix_ms: POLICY_NOW_UNIX_MS,
+        host_responsiveness_basis_points: Some(7_000),
+        third_party_pressure_basis_points: Some(0),
+        foreground_fullscreen: false,
+    })
+    .expect("second contention sample");
+    assert_eq!(
+        host.performance_control_directive(POLICY_INSTANCE_ALIAS)
+            .expect("directive")
+            .level,
+        PerformanceControlLevel::DispatchPaused
+    );
+
+    let (_, intent, reasons) = evaluated_policy_dispatch(&host, PolicyTrigger::FactsChanged);
+    assert_eq!(intent.prerequisites.urgency_milli, 1_000);
+    let error = host
+        .admit_policy_dispatch(&intent, &reasons, &policy_context(&host, &intent))
+        .expect_err("deadline must not bypass a measured contention gate");
+    assert_eq!(error.code(), "performance_capacity_deadline_conflict");
+
+    let mut client = TestClient::connect(&host);
+    let events = projected_events(&mut client, EventQuery::default());
+    assert!(
+        events
+            .iter()
+            .any(|event| event.event_type == EventType::PerformanceBalanceChanged)
+    );
+    assert!(
+        events
+            .iter()
+            .any(|event| event.event_type == EventType::PolicyDispatchRejected)
+    );
+    assert!(
+        !events
+            .iter()
+            .any(|event| event.event_type == EventType::LeaseGranted)
+    );
+    host.close().expect("close host");
+}
+
+#[test]
+fn policy_failure_activity_and_planning_facts_recover_without_duplicate_side_effects() {
+    let root = TempDir::new().expect("tempdir");
+    let clock = Arc::new(ManualRuntimeClock::new(POLICY_NOW_UNIX_MS, 0));
+    let host = RuntimeHost::start(
+        config(&root).with_runtime_clock(clock.clone()),
+        Arc::new(FakeProvider::one(
+            POLICY_INSTANCE_ALIAS,
+            instance_id(),
+            Arc::new(FakeState::default()),
+        )),
+    )
+    .expect("runtime host");
+    host.activate_policy_catalog(&policy_sources(1))
+        .expect("activate policy catalog");
+    let (_, intent, reasons) = evaluated_policy_dispatch(&host, PolicyTrigger::FactsChanged);
+    record_policy_approval(&host, &intent);
+    let admission = host
+        .admit_policy_dispatch(&intent, &reasons, &policy_context(&host, &intent))
+        .expect("policy admission");
+    let PolicyDispatchAdmission::Granted {
+        admission: budget_record,
+        ..
+    } = admission
+    else {
+        panic!("expected granted policy admission")
+    };
+    assert_eq!(budget_record.budget.task_daily_used, 1);
+    assert_eq!(budget_record.budget.activity_window_used, 1);
+    assert!(budget_record.activity.seed > 0);
+
+    let signals = [
+        (
+            "signal:goal-missed-a",
+            PolicyPlanningSignalKind::GoalMissed,
+            "goal.primary.missed",
+        ),
+        (
+            "signal:feasibility-red-a",
+            PolicyPlanningSignalKind::FeasibilityRed,
+            "goal.primary.feasibility_red",
+        ),
+        (
+            "signal:drift-predicted-a",
+            PolicyPlanningSignalKind::DriftPredicted,
+            "goal.primary.drift_predicted",
+        ),
+    ]
+    .map(
+        |(signal_id, kind, fact_code)| PolicyPlanningSignalEventData {
+            signal_id: signal_id.to_owned(),
+            instance_id: POLICY_INSTANCE_ALIAS.to_owned(),
+            task_id: Some(intent.task_id.clone()),
+            kind,
+            fact_code: fact_code.to_owned(),
+            observed_at_unix_ms: POLICY_NOW_UNIX_MS + 50,
+            detection_budget: None,
+        },
+    );
+    for signal in &signals {
+        host.record_policy_planning_signal(signal.clone())
+            .expect("planning signal");
+    }
+    assert!(
+        host.pinned_policy_catalog(&intent.decision_id)
+            .expect("catalog pin")
+            .is_some(),
+        "informational planning facts must not pause or complete execution"
+    );
+
+    let failure_input = PolicyExecutionInput::Failed {
+        error_code: "transient.capture".to_owned(),
+        class: PolicyFailureClass::Recoverable,
+    };
+    clock.advance(100);
+    let outcome = host
+        .record_policy_dispatch_outcome(&intent.decision_id, &failure_input)
+        .expect("policy failure outcome");
+    let PolicyExecutionOutcome::Failed { failure } = &outcome.outcome else {
+        panic!("expected classified failure")
+    };
+    assert_eq!(failure.consecutive_same_error, 1);
+    assert_eq!(failure.escalation_streak, 1);
+    assert!(!failure.performance_tax_exempt);
+    assert_eq!(
+        failure.perf_context.health,
+        PerformanceMonitorHealth::Unavailable
+    );
+    assert_eq!(
+        failure.perf_context.window_end_unix_ms,
+        POLICY_NOW_UNIX_MS + 100
+    );
+    assert_eq!(
+        failure.perf_context.window_start_unix_ms,
+        POLICY_NOW_UNIX_MS + 100 - 30_000
+    );
+    assert_eq!(failure.effective_class, PolicyFailureClass::Recoverable);
+    assert_eq!(
+        failure.disposition,
+        PolicyFailureDisposition::RetryScheduled
+    );
+    assert!(
+        host.pinned_policy_catalog(&intent.decision_id)
+            .expect("catalog pin")
+            .is_none()
+    );
+
+    let mut client = TestClient::connect(&host);
+    let events = projected_events(&mut client, EventQuery::default());
+    assert_eq!(
+        events
+            .iter()
+            .filter(|event| event.event_type == EventType::PolicyPlanningSignalObserved)
+            .count(),
+        3
+    );
+    assert_eq!(
+        events
+            .iter()
+            .filter(|event| event.event_type == EventType::PolicyExecutionRecorded)
+            .count(),
+        1
+    );
+    assert!(events.iter().any(|event| {
+        match &event.payload {
+            ProjectionPayload::Full(payload) => matches!(
+                payload.as_ref(),
+                EventPayload::Policy(PolicyPayload::DispatchAdmitted(payload))
+                    if payload.admission() == Some(&budget_record)
+            ),
+            _ => false,
+        }
+    }));
+    drop(client);
+    host.close().expect("close host");
+
+    let reopened = host_with_state(&root, POLICY_INSTANCE_ALIAS, Arc::new(FakeState::default()));
+    let replay = reopened
+        .record_policy_dispatch_outcome(&intent.decision_id, &failure_input)
+        .expect("replay recovered policy outcome");
+    assert_eq!(replay, outcome);
+    for signal in signals {
+        reopened
+            .record_policy_planning_signal(signal)
+            .expect("replay recovered planning signal");
+    }
+    let mut client = TestClient::connect(&reopened);
+    let recovered = projected_events(&mut client, EventQuery::default());
+    assert_eq!(
+        recovered
+            .iter()
+            .filter(|event| event.event_type == EventType::PolicyPlanningSignalObserved)
+            .count(),
+        3
+    );
+    assert_eq!(
+        recovered
+            .iter()
+            .filter(|event| event.event_type == EventType::PolicyExecutionRecorded)
+            .count(),
+        1
+    );
+    drop(client);
+    reopened.close().expect("close reopened host");
+}
+
+#[test]
+fn performance_stutter_is_ledger_visible_and_enriches_policy_failure() {
+    let root = TempDir::new().expect("tempdir");
+    let clock = Arc::new(ManualRuntimeClock::new(POLICY_NOW_UNIX_MS, 0));
+    let host = RuntimeHost::start(
+        config(&root)
+            .with_runtime_clock(clock.clone())
+            .with_performance_monitor(PerformanceMonitorConfig::default()),
+        Arc::new(FakeProvider::one(
+            POLICY_INSTANCE_ALIAS,
+            instance_id(),
+            Arc::new(FakeState::default()),
+        )),
+    )
+    .expect("runtime host");
+    host.activate_policy_catalog(&policy_sources(1))
+        .expect("activate policy catalog");
+    let (_, intent, reasons) = evaluated_policy_dispatch(&host, PolicyTrigger::FactsChanged);
+    record_policy_approval(&host, &intent);
+    host.admit_policy_dispatch(&intent, &reasons, &policy_context(&host, &intent))
+        .expect("policy admission");
+    host.record_pipeline_performance(
+        PipelinePerformanceSignal::new(POLICY_INSTANCE_ALIAS, POLICY_NOW_UNIX_MS + 90, 1_500)
+            .expect("pipeline signal")
+            .with_capture_latency(900)
+            .expect("capture latency"),
+    )
+    .expect("record pipeline performance");
+
+    clock.advance(100);
+    let outcome = host
+        .record_policy_dispatch_outcome(
+            &intent.decision_id,
+            &PolicyExecutionInput::Failed {
+                error_code: "transient.capture".to_owned(),
+                class: PolicyFailureClass::Recoverable,
+            },
+        )
+        .expect("policy failure outcome");
+    let PolicyExecutionOutcome::Failed { failure } = outcome.outcome else {
+        panic!("expected failure")
+    };
+    assert_eq!(failure.perf_context.max_frame_gap_ms, Some(1_500));
+    assert_eq!(failure.perf_context.max_capture_latency_ms, Some(900));
+    assert!(!failure.perf_context.related_event_ids.is_empty());
+
+    let mut client = TestClient::connect(&host);
+    let events = projected_events(&mut client, EventQuery::default());
+    assert_eq!(
+        events
+            .iter()
+            .filter(|event| event.event_type == EventType::PerformanceStutterDetected)
+            .count(),
+        1
+    );
+    drop(client);
+    host.close().expect("close host");
+}
+
+#[test]
+fn release_sets_switch_atomically_rollback_and_recover_without_duplicate_events() {
+    let root = TempDir::new().expect("tempdir");
+    let runtime_instance_id = instance_id();
+    let (first, first_sources) = release_set(root.path(), "1.0.0", 'a');
+    let (second, second_sources) = release_set(root.path(), "2.0.0", 'b');
+    let host = RuntimeHost::start(
+        config(&root),
+        Arc::new(FakeProvider::one(
+            "neutral-release",
+            runtime_instance_id,
+            Arc::new(FakeState::default()),
+        )),
+    )
+    .expect("runtime host");
+
+    assert_eq!(
+        host.stage_release_set(first.clone(), &first_sources)
+            .expect("stage first"),
+        first
+    );
+    host.stage_release_set(second.clone(), &second_sources)
+        .expect("stage second");
+    assert_eq!(
+        host.activate_release_set(first.release_id())
+            .expect("activate first"),
+        first
+    );
+    assert_eq!(
+        host.activate_release_set(second.release_id())
+            .expect("activate second"),
+        second
+    );
+    assert_eq!(
+        host.rollback_release_set(first.release_id())
+            .expect("rollback first"),
+        first
+    );
+    assert_eq!(
+        host.active_release_set().expect("active release"),
+        Some(first.clone())
+    );
+    let mut client = TestClient::connect(&host);
+    let events = projected_events(&mut client, EventQuery::default());
+    assert_eq!(
+        events
+            .iter()
+            .filter(|event| event.event_type == EventType::ReleaseStaged)
+            .count(),
+        2
+    );
+    assert_eq!(
+        events
+            .iter()
+            .filter(|event| event.event_type == EventType::ReleaseActivated)
+            .count(),
+        2
+    );
+    assert_eq!(
+        events
+            .iter()
+            .filter(|event| event.event_type == EventType::ReleaseRolledBack)
+            .count(),
+        1
+    );
+    drop(client);
+    host.close().expect("close host");
+
+    let reopened = RuntimeHost::start(
+        RuntimeHostConfig::new(root.path(), b"rotated-fingerprint-salt"),
+        Arc::new(FakeProvider::one(
+            "neutral-release",
+            runtime_instance_id,
+            Arc::new(FakeState::default()),
+        )),
+    )
+    .expect("reopen runtime host");
+    assert_eq!(
+        reopened.active_release_set().expect("recovered release"),
+        Some(first)
+    );
+    let mut client = TestClient::connect(&reopened);
+    let events = projected_events(&mut client, EventQuery::default());
+    assert_eq!(
+        events
+            .iter()
+            .filter(|event| event.event_type == EventType::ReleaseStaged)
+            .count(),
+        2
+    );
+    assert_eq!(
+        events
+            .iter()
+            .filter(|event| {
+                matches!(
+                    event.event_type,
+                    EventType::ReleaseActivated | EventType::ReleaseRolledBack
+                )
+            })
+            .count(),
+        3
+    );
+    drop(client);
+    reopened.close().expect("close reopened host");
+}
+
+#[test]
+fn committed_release_without_ledger_outcome_is_reconciled_on_restart() {
+    let root = TempDir::new().expect("tempdir");
+    let runtime_instance_id = instance_id();
+    let (release, sources) = release_set(root.path(), "1.0.0", 'c');
+    let host = RuntimeHost::start(
+        config(&root),
+        Arc::new(FakeProvider::one(
+            "neutral-release",
+            runtime_instance_id,
+            Arc::new(FakeState::default()),
+        )),
+    )
+    .expect("runtime host");
+    host.stage_release_set(release.clone(), &sources)
+        .expect("stage release");
+    host.close().expect("close host");
+
+    let state =
+        RuntimeStateStore::open(root.path(), b"different-bootstrap-seed").expect("runtime state");
+    let preview = state
+        .preview_release_transition(ReleaseTransitionKind::Activate, release.release_id())
+        .expect("transition preview");
+    state
+        .commit_release_transition(&preview)
+        .expect("commit transition without ledger outcome");
+    drop(state);
+
+    let reopened = RuntimeHost::start(
+        config(&root),
+        Arc::new(FakeProvider::one(
+            "neutral-release",
+            runtime_instance_id,
+            Arc::new(FakeState::default()),
+        )),
+    )
+    .expect("reopen runtime host");
+    assert_eq!(
+        reopened.active_release_set().expect("active release"),
+        Some(release)
+    );
+    let mut client = TestClient::connect(&reopened);
+    let events = projected_events(
+        &mut client,
+        EventQuery {
+            event_type: Some(EventType::ReleaseActivated),
+            ..EventQuery::default()
+        },
+    );
+    assert_eq!(events.len(), 1);
+    let ProjectionPayload::Full(payload) = &events[0].payload else {
+        panic!("expected forensic release payload")
+    };
+    let EventPayload::Release(ReleasePayload::Activated(payload)) = payload.as_ref() else {
+        panic!("expected release activation")
+    };
+    assert_eq!(
+        payload.transition().validation_result(),
+        StateValidationResult::Recovered
+    );
+    assert_eq!(
+        payload.transition().recovery_action(),
+        StateRecoveryAction::ReplayedCommitted
+    );
+    drop(client);
+    reopened.close().expect("close reopened host");
+}
+
+#[test]
+fn legacy_catalog_pointer_migrates_once_into_authoritative_state() {
+    let root = TempDir::new().expect("tempdir");
+    let runtime_instance_id = instance_id();
+    let host = RuntimeHost::start(
+        config(&root),
+        Arc::new(FakeProvider::one(
+            "neutral-release",
+            runtime_instance_id,
+            Arc::new(FakeState::default()),
+        )),
+    )
+    .expect("runtime host");
+    let catalog = host
+        .activate_policy_catalog(&policy_sources(1))
+        .expect("activate catalog");
+    host.close().expect("close host");
+
+    for name in [
+        RUNTIME_STATE_DATABASE_FILE.to_owned(),
+        format!("{RUNTIME_STATE_DATABASE_FILE}-wal"),
+        format!("{RUNTIME_STATE_DATABASE_FILE}-shm"),
+        RUNTIME_STATE_INTEGRITY_KEY_FILE.to_owned(),
+    ] {
+        let path = root.path().join(name);
+        if path.exists() {
+            fs::remove_file(path).expect("remove current state file");
+        }
+    }
+    let legacy = root
+        .path()
+        .join("policy")
+        .join("catalogs")
+        .join("active.json");
+    fs::write(
+        &legacy,
+        serde_json::to_vec_pretty(&serde_json::json!({
+            "schema_version": "actingcommand.catalog-state.v1",
+            "generation": catalog,
+        }))
+        .expect("legacy pointer"),
+    )
+    .expect("write legacy pointer");
+
+    let reopened = RuntimeHost::start(
+        config(&root),
+        Arc::new(FakeProvider::one(
+            "neutral-release",
+            runtime_instance_id,
+            Arc::new(FakeState::default()),
+        )),
+    )
+    .expect("reopen runtime host");
+    assert_eq!(
+        reopened
+            .active_policy_catalog()
+            .expect("active catalog")
+            .expect("catalog")
+            .catalog_hash(),
+        catalog.catalog_hash()
+    );
+    assert!(!legacy.exists());
+    let mut client = TestClient::connect(&reopened);
+    let events = projected_events(
+        &mut client,
+        EventQuery {
+            event_type: Some(EventType::StateMigrated),
+            ..EventQuery::default()
+        },
+    );
+    assert_eq!(events.len(), 1);
+    let ProjectionPayload::Full(payload) = &events[0].payload else {
+        panic!("expected forensic state payload")
+    };
+    let EventPayload::State(StatePayload::Migrated(payload)) = payload.as_ref() else {
+        panic!("expected state migration")
+    };
+    assert_eq!(payload.migration().state_key(), "policy.catalog.active");
+    drop(client);
+    reopened.close().expect("close reopened host");
+}
+
+#[test]
+fn agent_dispatcher_sidecar_child_process() {
+    let Ok(root) = std::env::var("ACTINGCOMMAND_AGENT_SIDECAR_ROOT") else {
+        return;
+    };
+    let mode = std::env::var("ACTINGCOMMAND_AGENT_SIDECAR_MODE").expect("sidecar mode");
+    let mut client = TestClient::connect_state_root(Path::new(&root));
+    match mode.as_str() {
+        "start" => {
+            let subscription = actingcommand_contract::RuntimeSubscriptionRequest::new(
+                EventQuery {
+                    event_type: Some(EventType::AgentWakeRequested),
+                    ..EventQuery::default()
+                },
+                ProjectionProfile::Normal,
+                actingcommand_contract::SubscriptionCursor::default(),
+                1_000,
+                8,
+            )
+            .expect("wake subscription");
+            let request = client.agent_request(RuntimeOperation::SubscribeEvents {
+                request: subscription,
+            });
+            let receipt = client.send(&request);
+            let RuntimeResult::EventBatch { batch } =
+                receipt.result().expect("wake subscription result")
+            else {
+                panic!("expected wake event batch")
+            };
+            let wake_id = batch
+                .events()
+                .iter()
+                .find_map(|event| match &event.payload {
+                    ProjectionPayload::Public(payload) => match payload.as_ref() {
+                        PublicEventPayload::Agent(payload) => payload.agent_wake_id(),
+                        _ => None,
+                    },
+                    _ => None,
+                })
+                .expect("projected wake id");
+            let request = client.agent_request(RuntimeOperation::StartAgentSession { wake_id });
+            let receipt = client.send(&request);
+            let RuntimeResult::AgentSessionOpened { context } =
+                receipt.result().expect("agent session result")
+            else {
+                panic!("expected agent session context")
+            };
+            assert_eq!(context.status().state(), AgentAttentionState::Active);
+            assert_eq!(context.projection().len(), 2);
+            fs::write(
+                Path::new(&root).join("agent-session.json"),
+                serde_json::to_vec(&context.status().session_id()).expect("session id bytes"),
+            )
+            .expect("session marker");
+        }
+        "resume" => {
+            let session_id: AgentSessionId = serde_json::from_str(
+                &std::env::var("ACTINGCOMMAND_AGENT_SESSION_ID").expect("session id"),
+            )
+            .expect("typed session id");
+            let request = client.agent_request(RuntimeOperation::ResumeAgentSession { session_id });
+            let receipt = client.send(&request);
+            let RuntimeResult::AgentSessionObserved { context } =
+                receipt.result().expect("agent resume result")
+            else {
+                panic!("expected resumed agent session")
+            };
+            assert_eq!(context.status().state(), AgentAttentionState::Active);
+            let response = AgentSessionResponse::new(
+                session_id,
+                AgentResponseDisposition::RetryableFailure,
+                "fake_sidecar_failed",
+                unix_ms_now().expect("wall clock"),
+            )
+            .expect("agent response");
+            let request = client.agent_request(RuntimeOperation::RecordAgentResponse { response });
+            let receipt = client.send(&request);
+            let RuntimeResult::AgentResponseRecorded { status } =
+                receipt.result().expect("agent response result")
+            else {
+                panic!("expected agent response status")
+            };
+            assert_eq!(status.state(), AgentAttentionState::PausedNeedsHuman);
+            fs::write(Path::new(&root).join("agent-resumed"), b"done").expect("resume marker");
+        }
+        other => panic!("unexpected sidecar mode: {other}"),
+    }
+}
+
+#[test]
+fn detachable_agent_sidecar_recovers_and_escalates_without_device_authority() {
+    let root = TempDir::new().expect("tempdir");
+    let shared_instance_id = instance_id();
+    let fake_state = Arc::new(FakeState::default());
+    let agent_config = AgentDispatcherConfig::new(1, 60_000, 2).expect("agent config");
+    let host = RuntimeHost::start(
+        config(&root).with_agent_dispatcher(agent_config.clone()),
+        Arc::new(FakeProvider::one(
+            POLICY_INSTANCE_ALIAS,
+            shared_instance_id,
+            Arc::clone(&fake_state),
+        )),
+    )
+    .expect("runtime host");
+    host.record_policy_planning_signal(PolicyPlanningSignalEventData {
+        signal_id: "signal:timeline-review-a".to_owned(),
+        instance_id: POLICY_INSTANCE_ALIAS.to_owned(),
+        task_id: None,
+        kind: PolicyPlanningSignalKind::TimelineReached,
+        fact_code: "timeline.review.due".to_owned(),
+        observed_at_unix_ms: unix_ms_now().expect("wall clock"),
+        detection_budget: None,
+    })
+    .expect("timeline wake signal");
+    let mut observer = TestClient::connect(&host);
+    let wakes = projected_events(
+        &mut observer,
+        EventQuery {
+            event_type: Some(EventType::AgentWakeRequested),
+            ..EventQuery::default()
+        },
+    );
+    assert_eq!(wakes.len(), 1);
+    let ProjectionPayload::Full(payload) = &wakes[0].payload else {
+        panic!("expected forensic wake payload")
+    };
+    let EventPayload::Agent(AgentPayload::WakeRequested(payload)) = payload.as_ref() else {
+        panic!("expected agent wake payload")
+    };
+    assert_eq!(payload.wake().kind(), AgentWakeKind::TimelineReached);
+    assert_eq!(
+        payload.wake().attention_state(),
+        AgentAttentionState::PausedNeedsAgent
+    );
+    let start = Command::new(std::env::current_exe().expect("test executable"))
+        .args([
+            "--exact",
+            "tests::agent_dispatcher_sidecar_child_process",
+            "--nocapture",
+        ])
+        .env("ACTINGCOMMAND_AGENT_SIDECAR_ROOT", root.path())
+        .env("ACTINGCOMMAND_AGENT_SIDECAR_MODE", "start")
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .expect("run starting sidecar");
+    assert!(start.success());
+    let session_id: AgentSessionId = serde_json::from_slice(
+        &fs::read(root.path().join("agent-session.json")).expect("session marker"),
+    )
+    .expect("session id");
+    drop(observer);
+    host.close().expect("close runtime with active agent");
+
+    let recovered = RuntimeHost::start(
+        config(&root).with_agent_dispatcher(agent_config),
+        Arc::new(FakeProvider::one(
+            POLICY_INSTANCE_ALIAS,
+            shared_instance_id,
+            Arc::clone(&fake_state),
+        )),
+    )
+    .expect("recovered runtime host");
+    let resume = Command::new(std::env::current_exe().expect("test executable"))
+        .args([
+            "--exact",
+            "tests::agent_dispatcher_sidecar_child_process",
+            "--nocapture",
+        ])
+        .env("ACTINGCOMMAND_AGENT_SIDECAR_ROOT", root.path())
+        .env("ACTINGCOMMAND_AGENT_SIDECAR_MODE", "resume")
+        .env(
+            "ACTINGCOMMAND_AGENT_SESSION_ID",
+            serde_json::to_string(&session_id).expect("session id JSON"),
+        )
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .expect("run resumed sidecar");
+    assert!(resume.success());
+    assert!(root.path().join("agent-resumed").is_file());
+
+    let mut observer = TestClient::connect(&recovered);
+    for (event_type, expected) in [
+        (EventType::AgentWakeRequested, 1),
+        (EventType::AgentSessionStarted, 1),
+        (EventType::AgentSessionResumed, 1),
+        (EventType::AgentSessionEscalated, 1),
+    ] {
+        assert_eq!(
+            projected_events(
+                &mut observer,
+                EventQuery {
+                    event_type: Some(event_type),
+                    ..EventQuery::default()
+                },
+            )
+            .len(),
+            expected
+        );
+    }
+    let request = observer.agent_request(RuntimeOperation::AgentSessionStatus { session_id });
+    let receipt = observer.send(&request);
+    let RuntimeResult::AgentSessionObserved { context } =
+        receipt.result().expect("agent status result")
+    else {
+        panic!("expected agent status")
+    };
+    assert_eq!(
+        context.status().state(),
+        AgentAttentionState::PausedNeedsHuman
+    );
+    assert_eq!(fake_state.open_count.load(Ordering::SeqCst), 0);
+    assert_eq!(fake_state.capture_open_count.load(Ordering::SeqCst), 0);
+    assert_eq!(fake_state.input_count.load(Ordering::SeqCst), 0);
+    let drift = PolicyPlanningSignalEventData {
+        signal_id: "signal:drift-review-a".to_owned(),
+        instance_id: POLICY_INSTANCE_ALIAS.to_owned(),
+        task_id: None,
+        kind: PolicyPlanningSignalKind::DriftPredicted,
+        fact_code: "goal.primary.drift_predicted".to_owned(),
+        observed_at_unix_ms: unix_ms_now().expect("wall clock"),
+        detection_budget: None,
+    };
+    recovered
+        .record_policy_planning_signal(drift.clone())
+        .expect("drift wake signal");
+    recovered
+        .record_policy_planning_signal(drift)
+        .expect("idempotent drift signal");
+    let wakes = projected_events(
+        &mut observer,
+        EventQuery {
+            event_type: Some(EventType::AgentWakeRequested),
+            ..EventQuery::default()
+        },
+    );
+    assert_eq!(wakes.len(), 2);
+    assert!(wakes.iter().any(|event| {
+        matches!(
+            &event.payload,
+            ProjectionPayload::Full(payload)
+                if matches!(
+                    payload.as_ref(),
+                    EventPayload::Agent(AgentPayload::WakeRequested(payload))
+                        if payload.wake().kind() == AgentWakeKind::DriftPredicted
+                )
+        )
+    }));
+    drop(observer);
+    recovered.close().expect("close recovered runtime");
+}
+
+#[test]
+fn agent_session_start_and_completion_are_idempotent() {
+    let root = TempDir::new().expect("tempdir");
+    let fake_state = Arc::new(FakeState::default());
+    let host = RuntimeHost::start(
+        config(&root)
+            .with_agent_dispatcher(AgentDispatcherConfig::new(2, 60_000, 2).expect("agent config")),
+        Arc::new(FakeProvider::one(
+            POLICY_INSTANCE_ALIAS,
+            instance_id(),
+            Arc::clone(&fake_state),
+        )),
+    )
+    .expect("runtime host");
+    host.record_policy_planning_signal(PolicyPlanningSignalEventData {
+        signal_id: "signal:agent-completion-a".to_owned(),
+        instance_id: POLICY_INSTANCE_ALIAS.to_owned(),
+        task_id: None,
+        kind: PolicyPlanningSignalKind::TimelineReached,
+        fact_code: "timeline.review.due".to_owned(),
+        observed_at_unix_ms: unix_ms_now().expect("wall clock"),
+        detection_budget: None,
+    })
+    .expect("timeline wake signal");
+    let mut client = TestClient::connect(&host);
+    let wakes = projected_events(
+        &mut client,
+        EventQuery {
+            event_type: Some(EventType::AgentWakeRequested),
+            ..EventQuery::default()
+        },
+    );
+    let ProjectionPayload::Full(payload) = &wakes[0].payload else {
+        panic!("expected forensic wake payload")
+    };
+    let EventPayload::Agent(AgentPayload::WakeRequested(payload)) = payload.as_ref() else {
+        panic!("expected agent wake payload")
+    };
+    let wake_id = payload.wake().wake_id();
+
+    let first = client.agent_request(RuntimeOperation::StartAgentSession { wake_id });
+    let first = client.send(&first);
+    let RuntimeResult::AgentSessionOpened { context } =
+        first.result().expect("first session result")
+    else {
+        panic!("expected first session context")
+    };
+    let session_id = context.status().session_id();
+    let replay = client.agent_request(RuntimeOperation::StartAgentSession { wake_id });
+    let replay = client.send(&replay);
+    let RuntimeResult::AgentSessionOpened { context } = replay.result().expect("replay result")
+    else {
+        panic!("expected replayed session context")
+    };
+    assert_eq!(context.status().session_id(), session_id);
+    assert_eq!(
+        projected_events(
+            &mut client,
+            EventQuery {
+                event_type: Some(EventType::AgentSessionStarted),
+                ..EventQuery::default()
+            },
+        )
+        .len(),
+        1
+    );
+
+    let response = AgentSessionResponse::new(
+        session_id,
+        AgentResponseDisposition::Completed,
+        "fake_sidecar_completed",
+        unix_ms_now().expect("wall clock"),
+    )
+    .expect("agent response");
+    let request = client.agent_request(RuntimeOperation::RecordAgentResponse { response });
+    for reconnect in [false, true] {
+        if reconnect {
+            drop(client);
+            client = TestClient::connect(&host);
+        }
+        let receipt = client.send(&request);
+        let RuntimeResult::AgentResponseRecorded { status } =
+            receipt.result().expect("completion result")
+        else {
+            panic!("expected completion status")
+        };
+        assert_eq!(status.state(), AgentAttentionState::Completed);
+    }
+    assert_eq!(
+        projected_events(
+            &mut client,
+            EventQuery {
+                event_type: Some(EventType::AgentSessionCompleted),
+                ..EventQuery::default()
+            },
+        )
+        .len(),
+        1
+    );
+    assert_eq!(fake_state.open_count.load(Ordering::SeqCst), 0);
+    assert_eq!(fake_state.capture_open_count.load(Ordering::SeqCst), 0);
+    assert_eq!(fake_state.input_count.load(Ordering::SeqCst), 0);
+    drop(client);
+    host.close().expect("close runtime");
+}
+
+#[test]
+fn agent_terminal_history_allows_restart_without_dispatcher_config() {
+    let root = TempDir::new().expect("tempdir");
+    let runtime_instance_id = instance_id();
+    let host = RuntimeHost::start(
+        config(&root)
+            .with_agent_dispatcher(AgentDispatcherConfig::new(2, 60_000, 2).expect("agent config")),
+        Arc::new(FakeProvider::one(
+            POLICY_INSTANCE_ALIAS,
+            runtime_instance_id,
+            Arc::new(FakeState::default()),
+        )),
+    )
+    .expect("runtime host");
+    host.record_policy_planning_signal(PolicyPlanningSignalEventData {
+        signal_id: "signal:terminal-history-a".to_owned(),
+        instance_id: POLICY_INSTANCE_ALIAS.to_owned(),
+        task_id: None,
+        kind: PolicyPlanningSignalKind::TimelineReached,
+        fact_code: "timeline.review.due".to_owned(),
+        observed_at_unix_ms: unix_ms_now().expect("wall clock"),
+        detection_budget: None,
+    })
+    .expect("timeline wake signal");
+    host.close().expect("close runtime with pending wake");
+    let error = RuntimeHost::start(
+        config(&root),
+        Arc::new(FakeProvider::one(
+            POLICY_INSTANCE_ALIAS,
+            runtime_instance_id,
+            Arc::new(FakeState::default()),
+        )),
+    )
+    .err()
+    .expect("pending wake must retain dispatcher config");
+    assert_eq!(error.code(), "agent_dispatcher_config_missing");
+
+    let host = RuntimeHost::start(
+        config(&root)
+            .with_agent_dispatcher(AgentDispatcherConfig::new(2, 60_000, 2).expect("agent config")),
+        Arc::new(FakeProvider::one(
+            POLICY_INSTANCE_ALIAS,
+            runtime_instance_id,
+            Arc::new(FakeState::default()),
+        )),
+    )
+    .expect("reopen runtime with pending wake");
+    let mut client = TestClient::connect(&host);
+    let wakes = projected_events(
+        &mut client,
+        EventQuery {
+            event_type: Some(EventType::AgentWakeRequested),
+            ..EventQuery::default()
+        },
+    );
+    let ProjectionPayload::Full(payload) = &wakes[0].payload else {
+        panic!("expected forensic wake payload")
+    };
+    let EventPayload::Agent(AgentPayload::WakeRequested(payload)) = payload.as_ref() else {
+        panic!("expected agent wake payload")
+    };
+    let request = client.agent_request(RuntimeOperation::StartAgentSession {
+        wake_id: payload.wake().wake_id(),
+    });
+    let receipt = client.send(&request);
+    let RuntimeResult::AgentSessionOpened { context } =
+        receipt.result().expect("agent session result")
+    else {
+        panic!("expected agent session context")
+    };
+    let response = AgentSessionResponse::new(
+        context.status().session_id(),
+        AgentResponseDisposition::Completed,
+        "fake_sidecar_completed",
+        unix_ms_now().expect("wall clock"),
+    )
+    .expect("agent response");
+    let request = client.agent_request(RuntimeOperation::RecordAgentResponse { response });
+    let receipt = client.send(&request);
+    let RuntimeResult::AgentResponseRecorded { status } =
+        receipt.result().expect("agent response result")
+    else {
+        panic!("expected agent response status")
+    };
+    assert_eq!(status.state(), AgentAttentionState::Completed);
+    drop(client);
+    host.close().expect("close runtime");
+
+    let reopened = RuntimeHost::start(
+        config(&root),
+        Arc::new(FakeProvider::one(
+            POLICY_INSTANCE_ALIAS,
+            runtime_instance_id,
+            Arc::new(FakeState::default()),
+        )),
+    )
+    .expect("terminal history must not require dispatcher config");
+    reopened.close().expect("close reopened runtime");
+}
+
+#[test]
+fn agent_resume_request_replays_across_reconnect_and_restart() {
+    let root = TempDir::new().expect("tempdir");
+    let runtime_instance_id = instance_id();
+    let agent_config = AgentDispatcherConfig::new(2, 60_000, 2).expect("agent config");
+    let host = RuntimeHost::start(
+        config(&root).with_agent_dispatcher(agent_config.clone()),
+        Arc::new(FakeProvider::one(
+            POLICY_INSTANCE_ALIAS,
+            runtime_instance_id,
+            Arc::new(FakeState::default()),
+        )),
+    )
+    .expect("runtime host");
+    host.record_policy_planning_signal(PolicyPlanningSignalEventData {
+        signal_id: "signal:resume-replay-a".to_owned(),
+        instance_id: POLICY_INSTANCE_ALIAS.to_owned(),
+        task_id: None,
+        kind: PolicyPlanningSignalKind::DriftPredicted,
+        fact_code: "goal.primary.drift_predicted".to_owned(),
+        observed_at_unix_ms: unix_ms_now().expect("wall clock"),
+        detection_budget: None,
+    })
+    .expect("drift wake signal");
+    let mut client = TestClient::connect(&host);
+    let wakes = projected_events(
+        &mut client,
+        EventQuery {
+            event_type: Some(EventType::AgentWakeRequested),
+            ..EventQuery::default()
+        },
+    );
+    let ProjectionPayload::Full(payload) = &wakes[0].payload else {
+        panic!("expected forensic wake payload")
+    };
+    let EventPayload::Agent(AgentPayload::WakeRequested(payload)) = payload.as_ref() else {
+        panic!("expected agent wake payload")
+    };
+    let request = client.agent_request(RuntimeOperation::StartAgentSession {
+        wake_id: payload.wake().wake_id(),
+    });
+    let receipt = client.send(&request);
+    let RuntimeResult::AgentSessionOpened { context } =
+        receipt.result().expect("agent session result")
+    else {
+        panic!("expected agent session context")
+    };
+    let resume = client.agent_request(RuntimeOperation::ResumeAgentSession {
+        session_id: context.status().session_id(),
+    });
+    let first = client.send(&resume);
+    drop(client);
+
+    let mut reconnected = TestClient::connect(&host);
+    assert_eq!(reconnected.send(&resume), first);
+    assert_eq!(
+        projected_events(
+            &mut reconnected,
+            EventQuery {
+                event_type: Some(EventType::AgentSessionResumed),
+                ..EventQuery::default()
+            },
+        )
+        .len(),
+        1
+    );
+    drop(reconnected);
+    host.close().expect("close runtime");
+
+    let reopened = RuntimeHost::start(
+        config(&root).with_agent_dispatcher(agent_config),
+        Arc::new(FakeProvider::one(
+            POLICY_INSTANCE_ALIAS,
+            runtime_instance_id,
+            Arc::new(FakeState::default()),
+        )),
+    )
+    .expect("reopen runtime");
+    let mut recovered = TestClient::connect(&reopened);
+    assert_eq!(recovered.send(&resume), first);
+    assert_eq!(
+        projected_events(
+            &mut recovered,
+            EventQuery {
+                event_type: Some(EventType::AgentSessionResumed),
+                ..EventQuery::default()
+            },
+        )
+        .len(),
+        1
+    );
+    drop(recovered);
+    reopened.close().expect("close reopened runtime");
+}
+
+#[test]
+fn agent_cross_operation_request_ids_are_rejected_before_append_and_survive_restart() {
+    let root = TempDir::new().expect("tempdir");
+    let runtime_instance_id = instance_id();
+    let agent_config = AgentDispatcherConfig::new(3, 60_000, 2).expect("agent config");
+    let host = RuntimeHost::start(
+        config(&root).with_agent_dispatcher(agent_config.clone()),
+        Arc::new(FakeProvider::one(
+            POLICY_INSTANCE_ALIAS,
+            runtime_instance_id,
+            Arc::new(FakeState::default()),
+        )),
+    )
+    .expect("runtime host");
+    host.record_policy_planning_signal(PolicyPlanningSignalEventData {
+        signal_id: "signal:agent-request-collision-a".to_owned(),
+        instance_id: POLICY_INSTANCE_ALIAS.to_owned(),
+        task_id: None,
+        kind: PolicyPlanningSignalKind::DriftPredicted,
+        fact_code: "goal.primary.drift_predicted".to_owned(),
+        observed_at_unix_ms: unix_ms_now().expect("wall clock"),
+        detection_budget: None,
+    })
+    .expect("drift wake signal");
+    let mut client = TestClient::connect(&host);
+    let wakes = projected_events(
+        &mut client,
+        EventQuery {
+            event_type: Some(EventType::AgentWakeRequested),
+            ..EventQuery::default()
+        },
+    );
+    let ProjectionPayload::Full(payload) = &wakes[0].payload else {
+        panic!("expected forensic wake payload")
+    };
+    let EventPayload::Agent(AgentPayload::WakeRequested(payload)) = payload.as_ref() else {
+        panic!("expected agent wake payload")
+    };
+    let start = client.agent_request(RuntimeOperation::StartAgentSession {
+        wake_id: payload.wake().wake_id(),
+    });
+    let start = client.send(&start);
+    let RuntimeResult::AgentSessionOpened { context } =
+        start.result().expect("agent session result")
+    else {
+        panic!("expected agent session context")
+    };
+    let session_id = context.status().session_id();
+    let reuse_request_id =
+        |request: RuntimeRequest, request_id: actingcommand_contract::RequestId| {
+            let mut encoded = serde_json::to_value(request).expect("request JSON");
+            encoded["request_id"] = serde_json::to_value(request_id).expect("request id JSON");
+            serde_json::from_value::<RuntimeRequest>(encoded).expect("reused request id")
+        };
+
+    let resume = client.agent_request(RuntimeOperation::ResumeAgentSession { session_id });
+    let resume_id = resume.request_id();
+    assert_eq!(client.send(&resume).state(), RuntimeReceiptState::Completed);
+    let response = AgentSessionResponse::new(
+        session_id,
+        AgentResponseDisposition::RetryableFailure,
+        "fake_sidecar_failed",
+        unix_ms_now().expect("wall clock"),
+    )
+    .expect("agent response");
+    let response_conflict = reuse_request_id(
+        client.agent_request(RuntimeOperation::RecordAgentResponse {
+            response: response.clone(),
+        }),
+        resume_id,
+    );
+    let denied = host
+        .process_request_for_test(
+            &response_conflict,
+            ConnectionId::new(901).expect("connection"),
+        )
+        .expect("response conflict receipt");
+    assert_eq!(denied.state(), RuntimeReceiptState::Denied);
+    assert_eq!(
+        denied.error_projection().expect("response denial").code,
+        RuntimeErrorCode::InvalidRequest
+    );
+    let resume_events = projected_events(
+        &mut client,
+        EventQuery {
+            request_id: Some(resume_id),
+            ..EventQuery::default()
+        },
+    );
+    assert_eq!(resume_events.len(), 1);
+    assert_eq!(resume_events[0].event_type, EventType::AgentSessionResumed);
+
+    let response_request = client.agent_request(RuntimeOperation::RecordAgentResponse { response });
+    let response_id = response_request.request_id();
+    let response_receipt = client.send(&response_request);
+    let RuntimeResult::AgentResponseRecorded { status } = response_receipt
+        .result()
+        .expect("retryable response result")
+    else {
+        panic!("expected agent response status")
+    };
+    assert_eq!(status.state(), AgentAttentionState::Active);
+    let resume_conflict = reuse_request_id(
+        client.agent_request(RuntimeOperation::ResumeAgentSession { session_id }),
+        response_id,
+    );
+    let denied = host
+        .process_request_for_test(
+            &resume_conflict,
+            ConnectionId::new(902).expect("connection"),
+        )
+        .expect("resume conflict receipt");
+    assert_eq!(denied.state(), RuntimeReceiptState::Denied);
+    assert_eq!(
+        denied.error_projection().expect("resume denial").code,
+        RuntimeErrorCode::InvalidRequest
+    );
+    let response_events = projected_events(
+        &mut client,
+        EventQuery {
+            request_id: Some(response_id),
+            ..EventQuery::default()
+        },
+    );
+    assert_eq!(response_events.len(), 1);
+    assert_eq!(
+        response_events[0].event_type,
+        EventType::AgentResponseRecorded
+    );
+    assert!(host.fatal_error().expect("runtime health").is_none());
+    drop(client);
+    host.close().expect("close runtime");
+
+    let reopened = RuntimeHost::start(
+        config(&root).with_agent_dispatcher(agent_config),
+        Arc::new(FakeProvider::one(
+            POLICY_INSTANCE_ALIAS,
+            runtime_instance_id,
+            Arc::new(FakeState::default()),
+        )),
+    )
+    .expect("reopen runtime after rejected conflicts");
+    for (request, connection_id) in [(&response_conflict, 903), (&resume_conflict, 904)] {
+        let denied = reopened
+            .process_request_for_test(
+                request,
+                ConnectionId::new(connection_id).expect("connection"),
+            )
+            .expect("recovered conflict receipt");
+        assert_eq!(denied.state(), RuntimeReceiptState::Denied);
+        assert_eq!(
+            denied.error_projection().expect("recovered denial").code,
+            RuntimeErrorCode::InvalidRequest
+        );
+    }
+    assert!(
+        reopened
+            .fatal_error()
+            .expect("reopened runtime health")
+            .is_none()
+    );
+    let mut recovered = TestClient::connect(&reopened);
+    assert_eq!(
+        projected_events(
+            &mut recovered,
+            EventQuery {
+                request_id: Some(resume_id),
+                ..EventQuery::default()
+            },
+        )
+        .len(),
+        1
+    );
+    assert_eq!(
+        projected_events(
+            &mut recovered,
+            EventQuery {
+                request_id: Some(response_id),
+                ..EventQuery::default()
+            },
+        )
+        .len(),
+        1
+    );
+    drop(recovered);
+    reopened.close().expect("close reopened runtime");
+}
+
+#[test]
+fn agent_session_timeout_escalates_to_human() {
+    let root = TempDir::new().expect("tempdir");
+    let host = RuntimeHost::start(
+        config(&root)
+            .with_agent_dispatcher(AgentDispatcherConfig::new(2, 20, 2).expect("agent config")),
+        Arc::new(FakeProvider::one(
+            POLICY_INSTANCE_ALIAS,
+            instance_id(),
+            Arc::new(FakeState::default()),
+        )),
+    )
+    .expect("runtime host");
+    host.record_policy_planning_signal(PolicyPlanningSignalEventData {
+        signal_id: "signal:agent-timeout-a".to_owned(),
+        instance_id: POLICY_INSTANCE_ALIAS.to_owned(),
+        task_id: None,
+        kind: PolicyPlanningSignalKind::DriftPredicted,
+        fact_code: "goal.primary.drift_predicted".to_owned(),
+        observed_at_unix_ms: unix_ms_now().expect("wall clock"),
+        detection_budget: None,
+    })
+    .expect("drift wake signal");
+    let mut client = TestClient::connect(&host);
+    let wakes = projected_events(
+        &mut client,
+        EventQuery {
+            event_type: Some(EventType::AgentWakeRequested),
+            ..EventQuery::default()
+        },
+    );
+    let ProjectionPayload::Full(payload) = &wakes[0].payload else {
+        panic!("expected forensic wake payload")
+    };
+    let EventPayload::Agent(AgentPayload::WakeRequested(payload)) = payload.as_ref() else {
+        panic!("expected agent wake payload")
+    };
+    let request = client.agent_request(RuntimeOperation::StartAgentSession {
+        wake_id: payload.wake().wake_id(),
+    });
+    let receipt = client.send(&request);
+    let RuntimeResult::AgentSessionOpened { context } =
+        receipt.result().expect("agent session result")
+    else {
+        panic!("expected agent session context")
+    };
+    let session_id = context.status().session_id();
+
+    let mut state = AgentAttentionState::Active;
+    for _ in 0..200 {
+        thread::sleep(Duration::from_millis(10));
+        let request = client.agent_request(RuntimeOperation::AgentSessionStatus { session_id });
+        let receipt = client.send(&request);
+        let RuntimeResult::AgentSessionObserved { context } =
+            receipt.result().expect("agent status result")
+        else {
+            panic!("expected agent status")
+        };
+        state = context.status().state();
+        if state == AgentAttentionState::PausedNeedsHuman {
+            break;
+        }
+    }
+    assert_eq!(state, AgentAttentionState::PausedNeedsHuman);
+    assert_eq!(
+        projected_events(
+            &mut client,
+            EventQuery {
+                event_type: Some(EventType::AgentSessionEscalated),
+                ..EventQuery::default()
+            },
+        )
+        .len(),
+        1
+    );
+    drop(client);
+    host.close().expect("close runtime");
+}
+
+#[test]
+fn agent_wake_is_reconciled_from_a_committed_planning_signal() {
+    let root = TempDir::new().expect("tempdir");
+    let runtime_instance_id = instance_id();
+    let host = RuntimeHost::start(
+        config(&root),
+        Arc::new(FakeProvider::one(
+            POLICY_INSTANCE_ALIAS,
+            runtime_instance_id,
+            Arc::new(FakeState::default()),
+        )),
+    )
+    .expect("runtime host");
+    host.record_policy_planning_signal(PolicyPlanningSignalEventData {
+        signal_id: "signal:recover-wake-a".to_owned(),
+        instance_id: POLICY_INSTANCE_ALIAS.to_owned(),
+        task_id: None,
+        kind: PolicyPlanningSignalKind::DriftPredicted,
+        fact_code: "goal.primary.drift_predicted".to_owned(),
+        observed_at_unix_ms: unix_ms_now().expect("wall clock"),
+        detection_budget: None,
+    })
+    .expect("planning signal");
+    host.close().expect("close host");
+
+    let reopened = RuntimeHost::start(
+        config(&root)
+            .with_agent_dispatcher(AgentDispatcherConfig::new(2, 60_000, 2).expect("agent config")),
+        Arc::new(FakeProvider::one(
+            POLICY_INSTANCE_ALIAS,
+            runtime_instance_id,
+            Arc::new(FakeState::default()),
+        )),
+    )
+    .expect("reopen runtime");
+    let mut observer = TestClient::connect(&reopened);
+    assert_eq!(
+        projected_events(
+            &mut observer,
+            EventQuery {
+                event_type: Some(EventType::AgentWakeRequested),
+                ..EventQuery::default()
+            },
+        )
+        .len(),
+        1
+    );
+    drop(observer);
+    reopened.close().expect("close reopened runtime");
+}
+
+#[test]
+fn proposal_a_b_c_pipeline_requires_reports_and_authoritative_approvals() {
+    let root = TempDir::new().expect("tempdir");
+    let fake_state = Arc::new(FakeState::default());
+    let host = RuntimeHost::start(
+        config(&root),
+        Arc::new(FakeProvider::one(
+            POLICY_INSTANCE_ALIAS,
+            instance_id(),
+            Arc::clone(&fake_state),
+        )),
+    )
+    .expect("runtime host");
+    let base = host
+        .activate_policy_catalog(&policy_sources(1))
+        .expect("base catalog");
+    let report = host
+        .store_test_report(b"synthetic immutable strategy report")
+        .expect("strategy report");
+    let mut client = TestClient::connect(&host);
+
+    let proposal_a = CatalogProposal::new(
+        base.catalog_hash(),
+        base.catalog_version(),
+        2,
+        vec![report.clone()],
+        ProposalKind::ParameterInstantiation {
+            instantiation: TaskTemplateInstantiation::new(
+                "fixture.observe",
+                "fixture.observe-copy",
+                POLICY_INSTANCE_ALIAS,
+                Some(110),
+                Some(1_100),
+            )
+            .expect("template instantiation"),
+        },
+    )
+    .expect("class A proposal");
+    let request = client.agent_request(RuntimeOperation::CompileProposal {
+        proposal: Box::new(proposal_a.clone()),
+    });
+    let receipt = client.send(&request);
+    let RuntimeResult::ProposalEvaluated { preview: preview_a } =
+        receipt.result().expect("proposal preview")
+    else {
+        panic!("expected proposal preview")
+    };
+    assert_eq!(preview_a.class(), ProposalClass::A);
+    assert_eq!(
+        preview_a.disposition(),
+        ProposalDisposition::ReadyForApproval
+    );
+
+    let request = client.agent_request(RuntimeOperation::PromoteProposal {
+        proposal: Box::new(proposal_a.clone()),
+    });
+    assert_eq!(client.send(&request).state(), RuntimeReceiptState::Denied);
+    record_target_approval(
+        &mut client,
+        "approval:proposal-plan-a",
+        preview_a.approval_target().expect("plan target"),
+    );
+    let request = client.agent_request(RuntimeOperation::PromoteProposal {
+        proposal: Box::new(proposal_a.clone()),
+    });
+    assert_eq!(client.send(&request).state(), RuntimeReceiptState::Denied);
+    record_target_approval(
+        &mut client,
+        "approval:proposal-template-a",
+        ApprovalTarget::Catalog {
+            catalog_hash: base.catalog_hash().to_owned(),
+            catalog_version: base.catalog_version(),
+        },
+    );
+    let request = client.agent_request(RuntimeOperation::PromoteProposal {
+        proposal: Box::new(proposal_a.clone()),
+    });
+    let receipt = client.send(&request);
+    let RuntimeResult::ProposalPromoted {
+        promotion: promotion_a,
+    } = receipt.result().expect("proposal promotion")
+    else {
+        panic!("expected proposal promotion")
+    };
+    assert_eq!(promotion_a.preview().class(), ProposalClass::A);
+    assert_eq!(promotion_a.approval_fact_ids().len(), 2);
+    let activated = projected_events(
+        &mut client,
+        EventQuery {
+            event_type: Some(EventType::CatalogActivated),
+            ..EventQuery::default()
+        },
+    );
+    let authorization = activated
+        .iter()
+        .find_map(|event| match &event.payload {
+            ProjectionPayload::Full(payload) => match payload.as_ref() {
+                EventPayload::Catalog(CatalogPayload::Activated(payload)) => payload.promotion(),
+                _ => None,
+            },
+            _ => None,
+        })
+        .expect("durable proposal authorization");
+    assert_eq!(authorization.proposal_id(), proposal_a.proposal_id());
+    assert_eq!(authorization.class(), ProposalClass::A);
+    assert_eq!(
+        authorization.approval_fact_ids(),
+        promotion_a.approval_fact_ids()
+    );
+    assert_eq!(authorization.report_artifact_ids(), [report.artifact_id]);
+    let active_a = host
+        .active_policy_catalog()
+        .expect("active catalog")
+        .expect("catalog");
+    assert_eq!(active_a.catalog_version(), 2);
+    assert_eq!(
+        active_a.catalog_hash(),
+        preview_a.target_catalog_hash().expect("target hash")
+    );
+    let cycle = host
+        .evaluate_policy_cycle_with_test_inputs(
+            &policy_facts(),
+            &policy_resources(),
+            EvaluationTime {
+                unix_ms: POLICY_NOW_UNIX_MS,
+                monotonic_ms: POLICY_NOW_UNIX_MS,
+            },
+            7,
+            PolicyTrigger::CatalogChanged,
+        )
+        .expect("evaluate promoted catalog");
+    assert!(
+        cycle
+            .evaluation
+            .expect("policy evaluation")
+            .decisions
+            .iter()
+            .any(|decision| decision.task_id == "fixture.observe-copy")
+    );
+    let activated_before_replay = projected_events(
+        &mut client,
+        EventQuery {
+            event_type: Some(EventType::CatalogActivated),
+            ..EventQuery::default()
+        },
+    )
+    .len();
+    let request = client.agent_request(RuntimeOperation::PromoteProposal {
+        proposal: Box::new(proposal_a),
+    });
+    assert_eq!(
+        client.send(&request).state(),
+        RuntimeReceiptState::Completed
+    );
+    assert_eq!(
+        projected_events(
+            &mut client,
+            EventQuery {
+                event_type: Some(EventType::CatalogActivated),
+                ..EventQuery::default()
+            },
+        )
+        .len(),
+        activated_before_replay
+    );
+
+    let mut patches = proposal_version_patches(3);
+    patches.push(
+        CatalogDeclarationPatch::new(
+            ProposalDocument::Tasks,
+            ProposalPatchOperation::Replace,
+            "/tasks/0/priority",
+            Some("111".to_owned()),
+        )
+        .expect("priority patch"),
+    );
+    let proposal_b = CatalogProposal::new(
+        active_a.catalog_hash(),
+        active_a.catalog_version(),
+        3,
+        vec![report.clone()],
+        ProposalKind::CatalogDiff { patches },
+    )
+    .expect("class B proposal");
+    let request = client.agent_request(RuntimeOperation::CompileProposal {
+        proposal: Box::new(proposal_b.clone()),
+    });
+    let receipt = client.send(&request);
+    let RuntimeResult::ProposalEvaluated { preview: preview_b } =
+        receipt.result().expect("class B preview")
+    else {
+        panic!("expected class B preview")
+    };
+    assert_eq!(preview_b.class(), ProposalClass::B);
+    let request = client.agent_request(RuntimeOperation::PromoteProposal {
+        proposal: Box::new(proposal_b.clone()),
+    });
+    assert_eq!(client.send(&request).state(), RuntimeReceiptState::Denied);
+    record_target_approval(
+        &mut client,
+        "approval:proposal-plan-b",
+        preview_b.approval_target().expect("class B plan target"),
+    );
+    let request = client.agent_request(RuntimeOperation::PromoteProposal {
+        proposal: Box::new(proposal_b),
+    });
+    let receipt = client.send(&request);
+    assert!(matches!(
+        receipt.result(),
+        Some(RuntimeResult::ProposalPromoted { promotion })
+            if promotion.preview().class() == ProposalClass::B
+                && promotion.approval_fact_ids() == ["approval:proposal-plan-b"]
+    ));
+    let active_b = host
+        .active_policy_catalog()
+        .expect("active catalog")
+        .expect("catalog");
+    assert_eq!(active_b.catalog_version(), 3);
+
+    let proposal_c = CatalogProposal::new(
+        active_b.catalog_hash(),
+        active_b.catalog_version(),
+        4,
+        vec![report],
+        ProposalKind::LanguageExtension {
+            extension_code: "predicate.new-observation".to_owned(),
+        },
+    )
+    .expect("class C proposal");
+    let request = client.agent_request(RuntimeOperation::CompileProposal {
+        proposal: Box::new(proposal_c.clone()),
+    });
+    let receipt = client.send(&request);
+    assert!(matches!(
+        receipt.result(),
+        Some(RuntimeResult::ProposalEvaluated { preview })
+            if preview.class() == ProposalClass::C
+                && preview.disposition() == ProposalDisposition::NeedsHumanSpecification
+                && preview.approval_target().is_none()
+    ));
+    let request = client.agent_request(RuntimeOperation::PromoteProposal {
+        proposal: Box::new(proposal_c),
+    });
+    assert_eq!(client.send(&request).state(), RuntimeReceiptState::Denied);
+    assert_eq!(
+        host.active_policy_catalog()
+            .expect("active catalog")
+            .expect("catalog")
+            .catalog_version(),
+        3
+    );
+    assert_eq!(fake_state.open_count.load(Ordering::SeqCst), 0);
+    assert_eq!(fake_state.capture_open_count.load(Ordering::SeqCst), 0);
+    assert_eq!(fake_state.input_count.load(Ordering::SeqCst), 0);
+    drop(client);
+    host.close().expect("close runtime");
+}
+
+#[test]
+fn proposal_rejects_unverified_reports_and_invalid_packs_without_partial_activation() {
+    let root = TempDir::new().expect("tempdir");
+    let host = RuntimeHost::start(
+        config(&root),
+        Arc::new(FakeProvider::one(
+            POLICY_INSTANCE_ALIAS,
+            instance_id(),
+            Arc::new(FakeState::default()),
+        )),
+    )
+    .expect("runtime host");
+    let base = host
+        .activate_policy_catalog(&policy_sources(1))
+        .expect("base catalog");
+    let report = host
+        .store_test_report(b"synthetic immutable strategy report")
+        .expect("strategy report");
+    let mut client = TestClient::connect(&host);
+
+    let forged = CatalogProposal::new(
+        base.catalog_hash(),
+        base.catalog_version(),
+        2,
+        vec![unverified_report(&report, &client.ids)],
+        ProposalKind::ParameterInstantiation {
+            instantiation: TaskTemplateInstantiation::new(
+                "fixture.observe",
+                "fixture.unverified",
+                POLICY_INSTANCE_ALIAS,
+                None,
+                None,
+            )
+            .expect("template instantiation"),
+        },
+    )
+    .expect("forged proposal shape");
+    let request = client.agent_request(RuntimeOperation::CompileProposal {
+        proposal: Box::new(forged),
+    });
+    assert_eq!(client.send(&request).state(), RuntimeReceiptState::Denied);
+    assert!(host.fatal_error().expect("runtime health").is_none());
+
+    let mut patches = proposal_version_patches(2);
+    patches.push(
+        CatalogDeclarationPatch::new(
+            ProposalDocument::Tasks,
+            ProposalPatchOperation::Replace,
+            "/tasks/0/priority",
+            Some("\"not-an-integer\"".to_owned()),
+        )
+        .expect("invalid typed priority patch"),
+    );
+    let invalid_pack = CatalogProposal::new(
+        base.catalog_hash(),
+        base.catalog_version(),
+        2,
+        vec![report],
+        ProposalKind::CatalogDiff { patches },
+    )
+    .expect("invalid compiled proposal shape");
+    let request = client.agent_request(RuntimeOperation::CompileProposal {
+        proposal: Box::new(invalid_pack),
+    });
+    assert_eq!(client.send(&request).state(), RuntimeReceiptState::Denied);
+    assert_eq!(
+        host.active_policy_catalog()
+            .expect("active catalog")
+            .expect("catalog")
+            .catalog_hash(),
+        base.catalog_hash()
+    );
+    assert_eq!(
+        fs::read_dir(root.path().join("policy/catalogs/generations"))
+            .expect("catalog generations")
+            .count(),
+        1
+    );
+    assert_eq!(
+        projected_events(
+            &mut client,
+            EventQuery {
+                event_type: Some(EventType::CatalogActivated),
+                ..EventQuery::default()
+            },
+        )
+        .len(),
+        1
+    );
+    drop(client);
+    host.close().expect("close runtime");
+}
+
+#[test]
+fn planning_ipc_rejects_external_authority_fact_conflicts_without_poisoning_runtime() {
+    let root = TempDir::new().expect("tempdir");
+    let host = RuntimeHost::start(
+        config(&root),
+        Arc::new(FakeProvider::one(
+            POLICY_INSTANCE_ALIAS,
+            instance_id(),
+            Arc::new(FakeState::default()),
+        )),
+    )
+    .expect("runtime host");
+    host.activate_policy_catalog(&policy_sources(1))
+        .expect("policy catalog");
+    host.publish_fact(stored_fact(
+        FactScope::Instance {
+            instance_id: POLICY_INSTANCE_ALIAS.to_owned(),
+        },
+        "env.ui_theme",
+        ContractFactValue::String("Neutral".to_owned()),
+        "snapshot:authority-conflict",
+        Vec::new(),
+    ))
+    .expect("authoritative fact");
+    let mut facts = policy_facts();
+    facts.facts.push(ObservedFact {
+        scope: ScopeSelector::Instance {
+            instance_id: POLICY_INSTANCE_ALIAS.to_owned(),
+        },
+        fact_key: "env.ui_theme".to_owned(),
+        value: FactValue::String("CallerValue".to_owned()),
+        observed_at_unix_ms: POLICY_NOW_UNIX_MS,
+        expires_at_unix_ms: Some(POLICY_NOW_UNIX_MS + 60_000),
+        confidence_milli: 1_000,
+    });
+
+    let mut client = TestClient::connect(&host);
+    let request = forward_projection_request(
+        &facts,
+        ForwardProjectionConfig::for_hours(1, 4).expect("projection config"),
+    );
+    let request = client.agent_request(RuntimeOperation::ProjectPolicyForward {
+        request: Box::new(request),
+    });
+    let receipt = client.send(&request);
+    assert_eq!(receipt.state(), RuntimeReceiptState::Denied);
+    assert!(matches!(
+        receipt.error_projection(),
+        Some(error) if error.code == RuntimeErrorCode::InvalidRequest && !error.fatal
+    ));
+    assert!(host.fatal_error().expect("runtime health").is_none());
+    let status = client.request(RuntimeOperation::Status);
+    assert_eq!(client.send(&status).state(), RuntimeReceiptState::Completed);
+    drop(client);
+    host.close().expect("close runtime");
+}
+
+#[test]
+fn planning_ipc_rejects_oversized_forward_projection_without_poisoning_runtime() {
+    let root = TempDir::new().expect("tempdir");
+    let host = RuntimeHost::start(
+        config(&root),
+        Arc::new(FakeProvider::one(
+            POLICY_INSTANCE_ALIAS,
+            instance_id(),
+            Arc::new(FakeState::default()),
+        )),
+    )
+    .expect("runtime host");
+    host.activate_policy_catalog(&high_volume_forward_policy_sources(1))
+        .expect("high-volume policy catalog");
+    let config = ForwardProjectionConfig::next_24_hours();
+    let projection = host
+        .project_policy_forward(
+            &policy_facts(),
+            &policy_resources(),
+            EvaluationTime {
+                unix_ms: POLICY_NOW_UNIX_MS,
+                monotonic_ms: POLICY_NOW_UNIX_MS,
+            },
+            17,
+            config,
+        )
+        .expect("bounded forward projection");
+    assert_eq!(projection.steps.len(), 4_096);
+    assert!(
+        serde_json::to_vec(&projection)
+            .expect("projection bytes")
+            .len()
+            > MAX_RUNTIME_PLANNING_DOCUMENT_BYTES
+    );
+
+    let mut client = TestClient::connect(&host);
+    let request = forward_projection_request(&policy_facts(), config);
+    let request = client.agent_request(RuntimeOperation::ProjectPolicyForward {
+        request: Box::new(request),
+    });
+    let receipt = client.send(&request);
+    assert_eq!(receipt.state(), RuntimeReceiptState::Denied);
+    assert!(matches!(
+        receipt.error_projection(),
+        Some(error) if error.code == RuntimeErrorCode::InvalidRequest && !error.fatal
+    ));
+    assert!(host.fatal_error().expect("runtime health").is_none());
+    let status = client.request(RuntimeOperation::Status);
+    assert_eq!(client.send(&status).state(), RuntimeReceiptState::Completed);
+    drop(client);
+    host.close().expect("close runtime");
+}
+
+#[test]
+fn strategic_planning_overrun_does_not_publish_report_or_poison_runtime() {
+    let root = TempDir::new().expect("tempdir");
+    let host = RuntimeHost::start(
+        config(&root),
+        Arc::new(FakeProvider::one(
+            POLICY_INSTANCE_ALIAS,
+            instance_id(),
+            Arc::new(FakeState::default()),
+        )),
+    )
+    .expect("runtime host");
+    let sources = large_strategy_policy_sources(1);
+    let compiled = actingcommand_policy::compile_catalog(&sources).expect("compiled catalog");
+    let base = host
+        .activate_policy_catalog(&sources)
+        .expect("large strategy catalog");
+    let evidence = host
+        .store_test_report(b"synthetic oversized strategy evidence")
+        .expect("strategy evidence");
+    let assessments = (0..29)
+        .map(|index| StrategicInstanceAssessment {
+            goal_id: "goal.primary".to_owned(),
+            instance_id: format!("fixture-instance-{index:02}"),
+            game_id: "fixture-game-a".to_owned(),
+            fact_snapshot_id: format!("snapshot:strategy-{index:02}"),
+            current_projection: Some(0),
+            production_rate_per_hour: Some(10),
+            target: 100,
+            deadline_unix_ms: POLICY_NOW_UNIX_MS + 3_600_000,
+            available: true,
+            capability_ids: vec!["operation.observe".to_owned()],
+        })
+        .collect();
+    let report = strategy_report_with_assessments(
+        &base,
+        &evidence,
+        verified_artifact_sequence(&host, &evidence),
+        assessments,
+    );
+    let report_document =
+        RuntimePlanningDocument::encode(RuntimePlanningDocumentKind::StrategicReport, &report)
+            .expect("bounded strategic report input");
+    let projection = actingcommand_policy::project_strategic_report(&compiled, &report)
+        .expect("derived strategic projection");
+    assert!(
+        serde_json::to_vec(&projection)
+            .expect("strategic projection bytes")
+            .len()
+            > MAX_RUNTIME_PLANNING_DOCUMENT_BYTES
+    );
+
+    let mut client = TestClient::connect(&host);
+    let request = RuntimeStrategicReportRequest::new(report_document, vec![evidence])
+        .expect("strategic report request");
+    let request = client.agent_request(RuntimeOperation::PrepareStrategicReport {
+        request: Box::new(request),
+    });
+    let receipt = client.send(&request);
+    assert_eq!(receipt.state(), RuntimeReceiptState::Denied);
+    assert!(matches!(
+        receipt.error_projection(),
+        Some(error) if error.code == RuntimeErrorCode::InvalidRequest && !error.fatal
+    ));
+    assert!(host.fatal_error().expect("runtime health").is_none());
+    assert!(
+        projected_events(
+            &mut client,
+            EventQuery {
+                event_type: Some(EventType::ArtifactVerified),
+                ..EventQuery::default()
+            }
+        )
+        .iter()
+        .flat_map(|event| event.artifacts.iter())
+        .all(|artifact| artifact.kind() != ArtifactKind::StrategyReport)
+    );
+    let status = client.request(RuntimeOperation::Status);
+    assert_eq!(client.send(&status).state(), RuntimeReceiptState::Completed);
+    drop(client);
+    host.close().expect("close runtime");
+}
+
+#[test]
+fn planning_ipc_rejects_invalid_typed_documents_without_poisoning_runtime() {
+    let root = TempDir::new().expect("tempdir");
+    let host = RuntimeHost::start(
+        config(&root),
+        Arc::new(FakeProvider::one(
+            POLICY_INSTANCE_ALIAS,
+            instance_id(),
+            Arc::new(FakeState::default()),
+        )),
+    )
+    .expect("runtime host");
+    let evidence = host
+        .store_test_report(b"synthetic planning evidence")
+        .expect("planning evidence");
+    let report = RuntimePlanningDocument::encode(
+        RuntimePlanningDocumentKind::StrategicReport,
+        &serde_json::json!({"not": "a strategic report"}),
+    )
+    .expect("typed planning envelope");
+    let mut client = TestClient::connect(&host);
+    let request = RuntimeStrategicReportRequest::new(report, vec![evidence])
+        .expect("strategic report request");
+    let request = client.agent_request(RuntimeOperation::PrepareStrategicReport {
+        request: Box::new(request),
+    });
+    assert_eq!(client.send(&request).state(), RuntimeReceiptState::Denied);
+    assert!(host.fatal_error().expect("runtime health").is_none());
+    drop(client);
+    host.close().expect("close runtime");
+}
+
+#[test]
+fn strategic_report_is_local_deterministic_and_promotes_only_after_approval() {
+    let root = TempDir::new().expect("tempdir");
+    let fake_state = Arc::new(FakeState::default());
+    let host = RuntimeHost::start(
+        config(&root),
+        Arc::new(FakeProvider::one(
+            POLICY_INSTANCE_ALIAS,
+            instance_id(),
+            Arc::clone(&fake_state),
+        )),
+    )
+    .expect("runtime host");
+    let base = host
+        .activate_policy_catalog(&strategy_policy_sources(1))
+        .expect("strategy base catalog");
+    let evidence = host
+        .store_test_report(b"synthetic pinned strategy evidence")
+        .expect("strategy evidence");
+    let report = strategy_report(
+        &base,
+        &evidence,
+        verified_artifact_sequence(&host, &evidence),
+    );
+
+    let first = host
+        .prepare_strategic_report(&report, std::slice::from_ref(&evidence))
+        .expect("first strategy preparation");
+    let second = host
+        .prepare_strategic_report(&report, std::slice::from_ref(&evidence))
+        .expect("replayed strategy preparation");
+    assert_eq!(first, second);
+    assert_eq!(first.report().kind(), ArtifactKind::StrategyReport);
+    assert_eq!(first.projection().instances.len(), 2);
+    assert!(first.projection().instances.iter().any(|projection| {
+        projection.band == StrategicBand::InfeasibleBestEffort
+            && projection.planning_disposition
+                == actingcommand_policy::PlanningDisposition::ExecutionContinues
+    }));
+    assert_eq!(first.projection().additions.tasks.len(), 2);
+    assert_eq!(first.projection().additions.activity_profiles.len(), 2);
+    assert!(
+        first
+            .projection()
+            .additions
+            .tasks
+            .iter()
+            .all(|task| matches!(task.scope, ScopeSelector::Instance { .. }))
+    );
+    assert!(
+        first
+            .projection()
+            .additions
+            .activity_profiles
+            .iter()
+            .all(|profile| matches!(profile.scope, ScopeSelector::Instance { .. }))
+    );
+    let proposal = first.proposal().expect("mechanical catalog proposal");
+    assert_eq!(proposal.class(), ProposalClass::B);
+    assert_eq!(proposal.report_refs(), [first.report().clone()]);
+    assert_eq!(
+        first
+            .preview()
+            .expect("strategy proposal preview")
+            .proposal_id(),
+        proposal.proposal_id()
+    );
+    assert_eq!(
+        host.active_policy_catalog()
+            .expect("active catalog")
+            .expect("catalog")
+            .catalog_hash(),
+        base.catalog_hash()
+    );
+    let stored =
+        read_projected_verified(root.path(), first.report()).expect("local strategic report bytes");
+    assert_eq!(
+        serde_json::from_slice::<StrategicReport>(&stored).expect("stored strategic report"),
+        report
+    );
+
+    let mut client = TestClient::connect(&host);
+    let strategy_artifacts = projected_events(
+        &mut client,
+        EventQuery {
+            event_type: Some(EventType::ArtifactVerified),
+            ..EventQuery::default()
+        },
+    )
+    .into_iter()
+    .flat_map(|event| event.artifacts)
+    .filter(|artifact| artifact.kind() == ArtifactKind::StrategyReport)
+    .count();
+    assert_eq!(strategy_artifacts, 1);
+    assert!(
+        projected_events(
+            &mut client,
+            EventQuery {
+                event_type: Some(EventType::PolicyExecutionRecorded),
+                ..EventQuery::default()
+            }
+        )
+        .is_empty()
+    );
+    let request = client.agent_request(RuntimeOperation::PromoteProposal {
+        proposal: Box::new(proposal.clone()),
+    });
+    assert_eq!(client.send(&request).state(), RuntimeReceiptState::Denied);
+    record_target_approval(
+        &mut client,
+        "approval:strategy-plan",
+        first
+            .preview()
+            .expect("strategy preview")
+            .approval_target()
+            .expect("strategy approval target"),
+    );
+    let request = client.agent_request(RuntimeOperation::PromoteProposal {
+        proposal: Box::new(proposal.clone()),
+    });
+    assert_eq!(
+        client.send(&request).state(),
+        RuntimeReceiptState::Completed
+    );
+    assert_eq!(
+        host.active_policy_catalog()
+            .expect("active catalog")
+            .expect("catalog")
+            .catalog_version(),
+        2
+    );
+    assert_eq!(fake_state.open_count.load(Ordering::SeqCst), 0);
+    assert_eq!(fake_state.capture_open_count.load(Ordering::SeqCst), 0);
+    assert_eq!(fake_state.input_count.load(Ordering::SeqCst), 0);
+    drop(client);
+    host.close().expect("close runtime");
+}
+
+#[test]
+fn strategic_report_rejects_unverified_evidence_without_artifact_or_catalog_change() {
+    let root = TempDir::new().expect("tempdir");
+    let host = RuntimeHost::start(
+        config(&root),
+        Arc::new(FakeProvider::one(
+            POLICY_INSTANCE_ALIAS,
+            instance_id(),
+            Arc::new(FakeState::default()),
+        )),
+    )
+    .expect("runtime host");
+    let base = host
+        .activate_policy_catalog(&strategy_policy_sources(1))
+        .expect("strategy base catalog");
+    let evidence = host
+        .store_test_report(b"synthetic pinned strategy evidence")
+        .expect("strategy evidence");
+    let evidence_sequence = verified_artifact_sequence(&host, &evidence);
+    let report = strategy_report(&base, &evidence, evidence_sequence);
+    let stale_report = strategy_report(&base, &evidence, evidence_sequence - 1);
+    let error = host
+        .prepare_strategic_report(&stale_report, std::slice::from_ref(&evidence))
+        .expect_err("evidence newer than the report as-of position must fail");
+    assert_eq!(error.code(), "strategic_evidence_unverified");
+    let ids = IdentifierIssuer::new().expect("identifier issuer");
+    let forged = unverified_report(&evidence, &ids);
+
+    let error = host
+        .prepare_strategic_report(&report, &[forged])
+        .expect_err("unverified strategy evidence must fail");
+    assert_eq!(error.code(), "strategic_evidence_unverified");
+    assert!(host.fatal_error().expect("runtime health").is_none());
+    assert_eq!(
+        host.active_policy_catalog()
+            .expect("active catalog")
+            .expect("catalog")
+            .catalog_hash(),
+        base.catalog_hash()
+    );
+    let mut client = TestClient::connect(&host);
+    assert!(
+        projected_events(
+            &mut client,
+            EventQuery {
+                event_type: Some(EventType::ArtifactVerified),
+                ..EventQuery::default()
+            }
+        )
+        .iter()
+        .flat_map(|event| event.artifacts.iter())
+        .all(|artifact| artifact.kind() != ArtifactKind::StrategyReport)
+    );
+    drop(client);
+    host.close().expect("close runtime");
+}
+
+#[test]
+fn policy_dispatch_crash_child_process() {
+    let Ok(root) = std::env::var("ACTINGCOMMAND_POLICY_CRASH_ROOT") else {
+        return;
+    };
+    let instance_bytes = fs::read(Path::new(&root).join("instance.json")).expect("instance bytes");
+    let instance_id: InstanceId =
+        serde_json::from_slice(&instance_bytes).expect("instance identifier");
+    let host = RuntimeHost::start(
+        RuntimeHostConfig::new(&root, b"policy-crash-process-salt")
+            .with_procedure_manifest(procedure_manifest())
+            .with_governance_capability(TEST_GOVERNANCE_CAPABILITY),
+        Arc::new(FakeProvider::one(
+            POLICY_INSTANCE_ALIAS,
+            instance_id,
+            Arc::new(FakeState::default()),
+        )),
+    )
+    .expect("child runtime host");
+    let catalog = host
+        .activate_policy_catalog(&policy_sources(1))
+        .expect("child catalog activation");
+    let (_, intent, reason_chain) = evaluated_policy_dispatch(&host, PolicyTrigger::FactsChanged);
+    assert_eq!(intent.catalog_hash, catalog.catalog_hash());
+    record_policy_approval(&host, &intent);
+    if std::env::var_os("ACTINGCOMMAND_POLICY_CRASH_POINT").is_some() {
+        fs::write(
+            Path::new(&root).join("dispatch-before-crash.json"),
+            serde_json::to_vec(&(intent.clone(), reason_chain.clone()))
+                .expect("pending dispatch bytes"),
+        )
+        .expect("pending dispatch marker");
+    }
+    let admission = host
+        .admit_policy_dispatch(&intent, &reason_chain, &policy_context(&host, &intent))
+        .expect("child policy admission");
+    assert!(matches!(admission, PolicyDispatchAdmission::Granted { .. }));
+    fs::write(
+        Path::new(&root).join("admitted-before-crash.json"),
+        serde_json::to_vec(&(intent, reason_chain)).expect("admitted dispatch bytes"),
+    )
+    .expect("admitted dispatch marker");
+    fs::write(Path::new(&root).join("child-ready"), b"ready").expect("child marker");
+    std::process::exit(0);
+}
+
+#[test]
+fn policy_pending_crash_child_process() {
+    let Ok(root) = std::env::var("ACTINGCOMMAND_POLICY_PENDING_ROOT") else {
+        return;
+    };
+    let instance_bytes =
+        fs::read(Path::new(&root).join("pending-instances.json")).expect("instance bytes");
+    let (instance_a, instance_b): (InstanceId, InstanceId) =
+        serde_json::from_slice(&instance_bytes).expect("instance identifiers");
+    let host = RuntimeHost::start(
+        RuntimeHostConfig::new(&root, b"policy-pending-process-salt")
+            .with_procedure_manifest(procedure_manifest())
+            .with_governance_capability(TEST_GOVERNANCE_CAPABILITY),
+        Arc::new(FakeProvider::from_entries([
+            (
+                POLICY_INSTANCE_ALIAS.to_owned(),
+                instance_a,
+                Arc::new(FakeState::default()),
+            ),
+            (
+                POLICY_INSTANCE_ALIAS_B.to_owned(),
+                instance_b,
+                Arc::new(FakeState::default()),
+            ),
+        ])),
+    )
+    .expect("pending child runtime host");
+    host.activate_policy_catalog(&pending_policy_sources(1))
+        .expect("pending child catalog activation");
+    let cycle = host
+        .evaluate_policy_cycle_with_test_inputs(
+            &pending_policy_facts(),
+            &pending_policy_resources(),
+            EvaluationTime {
+                unix_ms: POLICY_NOW_UNIX_MS,
+                monotonic_ms: POLICY_NOW_UNIX_MS,
+            },
+            7,
+            PolicyTrigger::FactsChanged,
+        )
+        .expect("pending child evaluation");
+    let evaluation = cycle
+        .evaluation
+        .as_ref()
+        .expect("pending child evaluation data");
+    assert_eq!(cycle.pending_dispatch_intents.len(), 2);
+    let pairs = cycle
+        .pending_dispatch_intents
+        .iter()
+        .map(|intent| {
+            let reason = evaluation
+                .reason_chains
+                .iter()
+                .find(|reason| reason.id == intent.reason_chain_id)
+                .expect("pending child reason chain");
+            (intent.clone(), reason.clone())
+        })
+        .collect::<Vec<_>>();
+    let admitted = pairs
+        .iter()
+        .find(|(intent, _)| intent.instance_id == POLICY_INSTANCE_ALIAS)
+        .expect("admitted child intent")
+        .clone();
+    let pending = pairs
+        .iter()
+        .find(|(intent, _)| intent.instance_id == POLICY_INSTANCE_ALIAS_B)
+        .expect("pending child intent")
+        .clone();
+    record_policy_approval(&host, &admitted.0);
+    assert!(matches!(
+        host.admit_policy_dispatch(
+            &admitted.0,
+            &admitted.1,
+            &policy_context(&host, &admitted.0),
+        )
+        .expect("pending child admission"),
+        PolicyDispatchAdmission::Granted { .. }
+    ));
+    fs::write(
+        Path::new(&root).join("nonempty-pending-before-crash.json"),
+        serde_json::to_vec(&(admitted, pending)).expect("pending crash marker bytes"),
+    )
+    .expect("pending crash marker");
+    std::process::exit(86);
+}
+
+#[test]
+fn orphaned_policy_admission_is_reconciled_after_real_process_kill() {
+    for (point, expected_effect, expected_lease_grants) in [
+        ("after_policy_intent", EffectDisposition::NotPerformed, 0),
+        ("after_lease_grant", EffectDisposition::Indeterminate, 1),
+        ("after_budget_commit", EffectDisposition::Indeterminate, 1),
+    ] {
+        let root = TempDir::new().expect("tempdir");
+        let shared_instance_id = instance_id();
+        fs::write(
+            root.path().join("instance.json"),
+            serde_json::to_vec(&shared_instance_id).expect("instance bytes"),
+        )
+        .expect("instance file");
+        let marker = root.path().join("policy-crash-marker");
+        let mut child = Command::new(std::env::current_exe().expect("test executable"))
+            .args([
+                "--exact",
+                "tests::policy_dispatch_crash_child_process",
+                "--nocapture",
+            ])
+            .env("ACTINGCOMMAND_POLICY_CRASH_ROOT", root.path())
+            .env("ACTINGCOMMAND_POLICY_CRASH_POINT", point)
+            .env("ACTINGCOMMAND_POLICY_CRASH_MARKER", &marker)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("spawn crash child");
+        let deadline = Instant::now() + Duration::from_secs(20);
+        while !marker.is_file() {
+            assert!(Instant::now() < deadline, "crash marker timeout at {point}");
+            assert!(
+                child.try_wait().expect("poll crash child").is_none(),
+                "crash child exited before {point}"
+            );
+            thread::sleep(Duration::from_millis(10));
+        }
+        child.kill().expect("kill crash child");
+        let status = child.wait().expect("wait crash child");
+        assert!(!status.success());
+
+        let (intent, reason_chain): (DispatchIntent, DecisionReasonChain) = serde_json::from_slice(
+            &fs::read(root.path().join("dispatch-before-crash.json"))
+                .expect("pending dispatch marker"),
+        )
+        .expect("pending dispatch JSON");
+        let host = RuntimeHost::start(
+            config(&root),
+            Arc::new(FakeProvider::one(
+                POLICY_INSTANCE_ALIAS,
+                shared_instance_id,
+                Arc::new(FakeState::default()),
+            )),
+        )
+        .expect("recovered runtime host");
+        assert!(
+            host.pinned_policy_catalog(&intent.decision_id)
+                .expect("pinned catalog")
+                .is_none()
+        );
+        assert!(matches!(
+            host.admit_policy_dispatch(&intent, &reason_chain, &policy_context(&host, &intent))
+                .expect("replay reconciled dispatch"),
+            PolicyDispatchAdmission::ReplaySuppressed { .. }
+        ));
+
+        let mut client = TestClient::connect(&host);
+        let events = projected_events(&mut client, EventQuery::default());
+        assert_eq!(
+            events
+                .iter()
+                .filter(|event| event.event_type == EventType::PolicyDispatchIntent)
+                .count(),
+            1
+        );
+        assert_eq!(
+            events
+                .iter()
+                .filter(|event| event.event_type == EventType::PolicyDispatchAdmitted)
+                .count(),
+            0
+        );
+        assert_eq!(
+            events
+                .iter()
+                .filter(|event| event.event_type == EventType::PolicyDispatchRejected)
+                .count(),
+            1
+        );
+        assert_eq!(
+            events
+                .iter()
+                .filter(|event| event.event_type == EventType::LeaseGranted)
+                .count(),
+            expected_lease_grants
+        );
+        let rejection = events
+            .iter()
+            .find(|event| event.event_type == EventType::PolicyDispatchRejected)
+            .expect("reconciled rejection");
+        let ProjectionPayload::Full(payload) = &rejection.payload else {
+            panic!("expected forensic rejection payload")
+        };
+        let EventPayload::Policy(PolicyPayload::DispatchRejected(_)) = payload.as_ref() else {
+            panic!("expected policy rejection payload")
+        };
+        assert_eq!(payload.effect_disposition(), Some(expected_effect));
+        drop(client);
+
+        thread::sleep(Duration::from_millis(50));
+        let (_, next_intent, next_reasons) =
+            evaluated_policy_dispatch(&host, PolicyTrigger::Recovery);
+        record_policy_approval(&host, &next_intent);
+        let admission = host
+            .admit_policy_dispatch(
+                &next_intent,
+                &next_reasons,
+                &policy_context(&host, &next_intent),
+            )
+            .expect("post-recovery admission");
+        let PolicyDispatchAdmission::Granted { admission, .. } = admission else {
+            panic!("expected post-recovery grant")
+        };
+        assert_eq!(admission.budget.task_daily_used, 1);
+        assert_eq!(admission.budget.activity_window_used, 1);
+        host.close().expect("close recovered host");
+
+        let reopened = RuntimeHost::start(
+            config(&root),
+            Arc::new(FakeProvider::one(
+                POLICY_INSTANCE_ALIAS,
+                shared_instance_id,
+                Arc::new(FakeState::default()),
+            )),
+        )
+        .expect("reopen reconciled runtime host");
+        assert!(
+            reopened
+                .pinned_policy_catalog(&intent.decision_id)
+                .expect("reopened pinned catalog")
+                .is_none()
+        );
+        let mut client = TestClient::connect(&reopened);
+        assert_eq!(
+            projected_events(&mut client, EventQuery::default())
+                .iter()
+                .filter(|event| event.event_type == EventType::PolicyDispatchRejected)
+                .count(),
+            1
+        );
+        drop(client);
+        reopened.close().expect("close reopened host");
+    }
+}
+
+#[test]
+fn policy_dispatch_accepts_one_late_outcome_after_process_crash() {
+    let root = TempDir::new().expect("tempdir");
+    let shared_instance_id = instance_id();
+    fs::write(
+        root.path().join("instance.json"),
+        serde_json::to_vec(&shared_instance_id).expect("instance bytes"),
+    )
+    .expect("instance file");
+    let status = Command::new(std::env::current_exe().expect("test executable"))
+        .args([
+            "--exact",
+            "tests::policy_dispatch_crash_child_process",
+            "--nocapture",
+        ])
+        .env("ACTINGCOMMAND_POLICY_CRASH_ROOT", root.path())
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .expect("run crash child");
+    assert!(status.success());
+    assert!(root.path().join("child-ready").is_file());
+
+    let recovery_clock = Arc::new(ManualRuntimeClock::new(POLICY_NOW_UNIX_MS + 10_000, 0));
+    let host = RuntimeHost::start(
+        config(&root).with_runtime_clock(recovery_clock),
+        Arc::new(FakeProvider::one(
+            POLICY_INSTANCE_ALIAS,
+            shared_instance_id,
+            Arc::new(FakeState::default()),
+        )),
+    )
+    .expect("recovered runtime host");
+    let catalog = host
+        .active_policy_catalog()
+        .expect("active catalog")
+        .expect("catalog");
+    let (cycle, _, _) = evaluated_policy_dispatch(&host, PolicyTrigger::Recovery);
+    assert_eq!(cycle.directive.kind, PolicyRecomputeKind::Full);
+    let (intent, reason_chain): (DispatchIntent, DecisionReasonChain) = serde_json::from_slice(
+        &fs::read(root.path().join("admitted-before-crash.json"))
+            .expect("admitted dispatch marker"),
+    )
+    .expect("admitted dispatch JSON");
+    assert_eq!(intent.catalog_hash, catalog.catalog_hash());
+    let replay = host
+        .admit_policy_dispatch(&intent, &reason_chain, &policy_context(&host, &intent))
+        .expect("replay after crash");
+    assert!(matches!(
+        replay,
+        PolicyDispatchAdmission::ReplaySuppressed { .. }
+    ));
+    let outcome = host
+        .record_policy_dispatch_outcome(&intent.decision_id, &PolicyExecutionInput::Succeeded)
+        .expect("record late outcome after crash");
+    assert_eq!(
+        host.record_policy_dispatch_outcome(&intent.decision_id, &PolicyExecutionInput::Succeeded,)
+            .expect("replay late outcome"),
+        outcome
+    );
+    let PolicyExecutionOutcome::Succeeded { runtime_ms } = &outcome.outcome else {
+        panic!("expected successful late outcome")
+    };
+    assert!(*runtime_ms <= 10_000);
+    let mut client = TestClient::connect(&host);
+    let events = projected_events(&mut client, EventQuery::default());
+    assert_eq!(
+        events
+            .iter()
+            .filter(|event| event.event_type == EventType::PolicyDispatchIntent)
+            .count(),
+        1
+    );
+    assert_eq!(
+        events
+            .iter()
+            .filter(|event| event.event_type == EventType::LeaseGranted)
+            .count(),
+        1
+    );
+    assert_eq!(
+        events
+            .iter()
+            .filter(|event| event.event_type == EventType::PolicyExecutionRecorded)
+            .count(),
+        1
+    );
+    assert_eq!(
+        events
+            .iter()
+            .filter(|event| event.event_type == EventType::PolicyDispatchCompleted)
+            .count(),
+        1
+    );
+    drop(client);
+    host.close().expect("close recovered host");
+
+    let reopened = RuntimeHost::start(
+        config(&root).with_runtime_clock(Arc::new(ManualRuntimeClock::new(
+            POLICY_NOW_UNIX_MS + 20_000,
+            0,
+        ))),
+        Arc::new(FakeProvider::one(
+            POLICY_INSTANCE_ALIAS,
+            shared_instance_id,
+            Arc::new(FakeState::default()),
+        )),
+    )
+    .expect("reopen runtime after late outcome");
+    assert_eq!(
+        reopened
+            .record_policy_dispatch_outcome(&intent.decision_id, &PolicyExecutionInput::Succeeded,)
+            .expect("replay late outcome after second restart"),
+        outcome
+    );
+    let mut client = TestClient::connect(&reopened);
+    let events = projected_events(&mut client, EventQuery::default());
+    assert_eq!(
+        events
+            .iter()
+            .filter(|event| event.event_type == EventType::PolicyExecutionRecorded)
+            .count(),
+        1
+    );
+    assert_eq!(
+        events
+            .iter()
+            .filter(|event| event.event_type == EventType::PolicyDispatchCompleted)
+            .count(),
+        1
+    );
+    drop(client);
+    reopened.close().expect("close replayed late outcome host");
+}
+
+#[test]
+fn nonempty_pending_policy_work_is_rebuilt_after_real_process_crash() {
+    let root = TempDir::new().expect("tempdir");
+    let instance_a = instance_id();
+    let instance_b = instance_id();
+    fs::write(
+        root.path().join("pending-instances.json"),
+        serde_json::to_vec(&(instance_a, instance_b)).expect("pending instance bytes"),
+    )
+    .expect("pending instance file");
+    let status = Command::new(std::env::current_exe().expect("test executable"))
+        .args([
+            "--exact",
+            "tests::policy_pending_crash_child_process",
+            "--nocapture",
+        ])
+        .env("ACTINGCOMMAND_POLICY_PENDING_ROOT", root.path())
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .expect("run pending crash child");
+    assert!(!status.success());
+
+    let (admitted, pending): (
+        (DispatchIntent, DecisionReasonChain),
+        (DispatchIntent, DecisionReasonChain),
+    ) = serde_json::from_slice(
+        &fs::read(root.path().join("nonempty-pending-before-crash.json"))
+            .expect("nonempty pending marker"),
+    )
+    .expect("nonempty pending marker JSON");
+    assert_ne!(admitted.0.instance_id, pending.0.instance_id);
+
+    let host = RuntimeHost::start(
+        config(&root),
+        Arc::new(FakeProvider::from_entries([
+            (
+                POLICY_INSTANCE_ALIAS.to_owned(),
+                instance_a,
+                Arc::new(FakeState::default()),
+            ),
+            (
+                POLICY_INSTANCE_ALIAS_B.to_owned(),
+                instance_b,
+                Arc::new(FakeState::default()),
+            ),
+        ])),
+    )
+    .expect("recovered pending runtime host");
+    let cycle = host
+        .evaluate_policy_cycle_with_test_inputs(
+            &pending_policy_facts(),
+            &pending_policy_resources(),
+            EvaluationTime {
+                unix_ms: POLICY_NOW_UNIX_MS + 60_000,
+                monotonic_ms: POLICY_NOW_UNIX_MS + 60_000,
+            },
+            8,
+            PolicyTrigger::Recovery,
+        )
+        .expect("rebuild pending policy work");
+    assert!(!cycle.pending_dispatch_intents.is_empty());
+    assert!(cycle.pending_dispatch_intents.iter().any(|intent| {
+        intent.task_id == pending.0.task_id && intent.instance_id == pending.0.instance_id
+    }));
+    assert!(matches!(
+        host.admit_policy_dispatch(
+            &admitted.0,
+            &admitted.1,
+            &policy_context(&host, &admitted.0),
+        )
+        .expect("replay admitted work after crash"),
+        PolicyDispatchAdmission::ReplaySuppressed { .. }
+    ));
+    let mut client = TestClient::connect(&host);
+    assert_eq!(
+        projected_events(
+            &mut client,
+            EventQuery {
+                event_type: Some(EventType::LeaseGranted),
+                ..EventQuery::default()
+            },
+        )
+        .len(),
+        1
+    );
+    drop(client);
+    host.close().expect("close recovered pending runtime");
 }

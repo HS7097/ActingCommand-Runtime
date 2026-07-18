@@ -258,6 +258,113 @@ fn query_filters_by_sequence_and_all_typed_correlation_ids() {
 }
 
 #[test]
+fn query_pages_are_bounded_ordered_and_pinned_to_the_requested_snapshot() {
+    let temp = TempDir::new().expect("temp");
+    let ledger = GlobalLedger::open(config(&temp, "writer-paged-query")).expect("ledger");
+    let mut expected = Vec::new();
+    for index in 0..9 {
+        expected.push(
+            ledger
+                .append(event(&format!("evt-page-{index}")))
+                .expect("append paged event"),
+        );
+    }
+    let snapshot = expected[6].sequence();
+
+    let first = ledger
+        .query_page(EventQuery::default(), 0, snapshot, 3)
+        .expect("first page");
+    let second = ledger
+        .query_page(
+            EventQuery::default(),
+            first.last().expect("first tail").sequence(),
+            snapshot,
+            3,
+        )
+        .expect("second page");
+    let third = ledger
+        .query_page(
+            EventQuery::default(),
+            second.last().expect("second tail").sequence(),
+            snapshot,
+            3,
+        )
+        .expect("third page");
+    let collected = first
+        .into_iter()
+        .chain(second)
+        .chain(third)
+        .collect::<Vec<_>>();
+    assert_eq!(collected, expected[..7]);
+    assert!(
+        ledger
+            .query_page(EventQuery::default(), snapshot, snapshot, 3)
+            .expect("terminal page")
+            .is_empty()
+    );
+    assert_eq!(
+        ledger
+            .query_page(EventQuery::default(), 0, snapshot, 0)
+            .expect_err("zero page size")
+            .code(),
+        "invalid_query_page"
+    );
+}
+
+#[test]
+fn indexed_event_pages_visit_history_once_and_retain_only_each_page() {
+    const EVENT_COUNT: u64 = 4_096;
+    const PAGE_EVENTS: usize = 64;
+
+    let events = (1..=EVENT_COUNT)
+        .map(|sequence| {
+            PersistedEvent::from_sanitized(sequence, event("evt-linear-page"))
+                .expect("persisted event")
+        })
+        .collect::<Vec<_>>();
+    let indexes = projection::EventIndexes::from_events(&events);
+    let query = EventQuery {
+        event_type: Some(EventType::CommandReceived),
+        ..EventQuery::default()
+    };
+    let mut after_sequence = 0;
+    let mut total_visited = 0;
+    let mut max_retained = 0;
+    let mut page_count = 0;
+
+    while after_sequence < EVENT_COUNT {
+        let (page, visited) = indexes.query_page_with_visit_count(
+            &events,
+            &query,
+            after_sequence,
+            EVENT_COUNT,
+            PAGE_EVENTS,
+        );
+        assert!(!page.is_empty());
+        total_visited += visited;
+        max_retained = max_retained.max(page.len());
+        page_count += 1;
+        after_sequence = page.last().expect("page tail").sequence();
+    }
+
+    assert_eq!(page_count, EVENT_COUNT as usize / PAGE_EVENTS);
+    assert_eq!(total_visited, EVENT_COUNT as usize);
+    assert_eq!(max_retained, PAGE_EVENTS);
+    let (missing, visited) = indexes.query_page_with_visit_count(
+        &events,
+        &EventQuery {
+            event_type: Some(EventType::FactPublished),
+            ..EventQuery::default()
+        },
+        0,
+        EVENT_COUNT,
+        PAGE_EVENTS,
+    );
+    assert!(missing.is_empty());
+    assert_eq!(visited, 0);
+}
+
+#[test]
 fn subscription_replays_after_cursor_then_receives_live_events() {
     let temp = TempDir::new().expect("temp");
     let ledger = GlobalLedger::open(config(&temp, "writer-one")).expect("ledger");
@@ -911,7 +1018,7 @@ fn lab_projection_exposes_full_sanitized_fact() {
     assert_eq!(&projected[0].links, persisted.links());
     assert_eq!(
         projected[0].payload,
-        ProjectionPayload::Full(persisted.payload().clone())
+        ProjectionPayload::Full(Box::new(persisted.payload().clone()))
     );
     assert!(projected[0].artifacts.is_empty());
 }

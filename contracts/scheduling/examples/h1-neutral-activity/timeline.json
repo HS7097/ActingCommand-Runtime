@@ -1,0 +1,31 @@
+{
+  "schema_version": "actingcommand.scheduling.v1",
+  "catalog": {
+    "catalog_id": "fixture.h1-neutral-activity",
+    "catalog_version": 1,
+    "approval_refs": ["approval:h1-neutral-activity"]
+  },
+  "events": [
+    {
+      "id": "neutral-daily-boundary",
+      "scope": {
+        "kind": "game",
+        "game_id": "neutral-game"
+      },
+      "event_kind": "reset",
+      "schedule": {
+        "kind": "daily",
+        "clock_source": {
+          "kind": "server",
+          "timezone_id": "etc/utc",
+          "utc_offset_minutes": 0,
+          "dst_offset_minutes": 0,
+          "maintenance_drift_ms": 0
+        },
+        "minutes_of_day": [0]
+      },
+      "duration_ms": 0,
+      "invalidates_fact_prefixes": ["session.", "timeline."]
+    }
+  ]
+}

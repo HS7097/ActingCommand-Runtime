@@ -41,7 +41,7 @@ fn actingctl_observe_and_reset_leave_runtime_alive_and_share_projection_shape() 
             "--state-root",
             root.path().to_str().expect("state root"),
             "--instance",
-            "ak.cn",
+            "node.a",
         ])
         .output()
         .expect("run actingctl observe");
@@ -72,7 +72,7 @@ fn actingctl_observe_and_reset_leave_runtime_alive_and_share_projection_shape() 
             "--state-root",
             root.path().to_str().expect("state root"),
             "--instance",
-            "ak.cn",
+            "node.a",
         ])
         .output()
         .expect("run actingctl reset");
@@ -117,10 +117,10 @@ fn actingctl_status_monitor_and_stream_are_runtime_backed() {
     let state_root = root.path().to_str().expect("state root");
 
     let status = run_json(binary, ["status", "--state-root", state_root]);
-    assert_eq!(status["instances"][0]["instance_alias"], "ak.cn");
+    assert_eq!(status["instances"][0]["instance_alias"], "node.a");
 
     let monitor_status = run_json(binary, ["monitor-status", "--state-root", state_root]);
-    assert_eq!(monitor_status["instances"][0]["instance_alias"], "ak.cn");
+    assert_eq!(monitor_status["instances"][0]["instance_alias"], "node.a");
     assert!(monitor_status["instances"][0].get("policy").is_none());
 
     let configured = run_json(
@@ -130,14 +130,14 @@ fn actingctl_status_monitor_and_stream_are_runtime_backed() {
             "--state-root",
             state_root,
             "--instance",
-            "ak.cn",
+            "node.a",
             "--interval-ms",
             "60000",
             "--expect",
             "home",
         ],
     );
-    assert_eq!(configured["instance_alias"], "ak.cn");
+    assert_eq!(configured["instance_alias"], "node.a");
     assert_eq!(configured["policy"]["expected_page"], "home");
 
     let cleared = run_json(
@@ -147,10 +147,10 @@ fn actingctl_status_monitor_and_stream_are_runtime_backed() {
             "--state-root",
             state_root,
             "--instance",
-            "ak.cn",
+            "node.a",
         ],
     );
-    assert_eq!(cleared["instance_alias"], "ak.cn");
+    assert_eq!(cleared["instance_alias"], "node.a");
     assert!(cleared.get("policy").is_none());
 
     let stream = run_json(
@@ -160,7 +160,7 @@ fn actingctl_status_monitor_and_stream_are_runtime_backed() {
             "--state-root",
             state_root,
             "--instance",
-            "ak.cn",
+            "node.a",
             "--max-frames",
             "2",
             "--interval-ms",
@@ -398,9 +398,10 @@ fn runtime_finishes_and_rebuilds_contained_task_after_client_is_killed() {
     let facts = events
         .iter()
         .filter_map(|event| match &event.payload {
-            ProjectionPayload::Full(EventPayload::Task(TaskPayload::Semantic(payload))) => {
-                Some(payload.fact())
-            }
+            ProjectionPayload::Full(payload) => match payload.as_ref() {
+                EventPayload::Task(TaskPayload::Semantic(payload)) => Some(payload.fact()),
+                _ => None,
+            },
             _ => None,
         })
         .collect::<Vec<_>>();

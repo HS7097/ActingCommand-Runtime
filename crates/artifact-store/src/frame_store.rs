@@ -1814,7 +1814,7 @@ mod tests {
         .with_memory_source(MemorySampleSource::live(sample_memory));
         let mut store = FrameStore::new(temp.path().join("temp"), config).expect("store");
 
-        add_test_frame(&mut store, 1, 10, matched("arknights/home"), "initial");
+        add_test_frame(&mut store, 1, 10, matched("fixture01/home"), "initial");
 
         assert_eq!(SAMPLE_CALLS.load(Ordering::SeqCst), 2);
     }
@@ -1907,9 +1907,9 @@ mod tests {
         let temp = TempDir::new().expect("temp");
         let mut store = small_store(temp.path(), 220);
 
-        add_test_frame(&mut store, 1, 10, matched("arknights/home"), "initial");
-        add_test_frame(&mut store, 2, 10, matched("arknights/home"), "page_wait");
-        add_test_frame(&mut store, 3, 10, matched("arknights/home"), "page_wait");
+        add_test_frame(&mut store, 1, 10, matched("fixture01/home"), "initial");
+        add_test_frame(&mut store, 2, 10, matched("fixture01/home"), "page_wait");
+        add_test_frame(&mut store, 3, 10, matched("fixture01/home"), "page_wait");
 
         let screenshots = store.screenshots();
         assert_eq!(screenshots.len(), 1);
@@ -1922,12 +1922,12 @@ mod tests {
         let temp = TempDir::new().expect("temp");
         let mut store = small_store(temp.path(), 220);
 
-        add_test_frame(&mut store, 1, 10, matched("arknights/home"), "initial");
+        add_test_frame(&mut store, 1, 10, matched("fixture01/home"), "initial");
         add_test_frame(
             &mut store,
             2,
             10,
-            matched("arknights/terminal"),
+            matched("fixture01/terminal"),
             "page_wait",
         );
 
@@ -1941,12 +1941,12 @@ mod tests {
         let temp = TempDir::new().expect("temp");
         let mut store = small_store(temp.path(), 70_000);
 
-        add_test_frame(&mut store, 1, 10, matched("arknights/home"), "initial");
+        add_test_frame(&mut store, 1, 10, matched("fixture01/home"), "initial");
         let outcome = add_test_frame(
             &mut store,
             2,
             30,
-            matched("arknights/terminal"),
+            matched("fixture01/terminal"),
             "page_wait",
         );
 
@@ -1972,9 +1972,9 @@ mod tests {
         let temp = TempDir::new().expect("temp");
         let mut store = small_store(temp.path(), 70_000);
 
-        let first = add_test_frame(&mut store, 1, 10, matched("arknights/home"), "initial");
+        let first = add_test_frame(&mut store, 1, 10, matched("fixture01/home"), "initial");
         assert_eq!(first.storage_state, FrameStorageState::Segment);
-        add_test_frame(&mut store, 2, 10, matched("arknights/home"), "page_wait");
+        add_test_frame(&mut store, 2, 10, matched("fixture01/home"), "page_wait");
 
         let screenshots = store.screenshots();
         assert_eq!(screenshots.len(), 1);
@@ -1987,7 +1987,7 @@ mod tests {
         let temp = TempDir::new().expect("temp");
         let mut store = small_store(temp.path(), 70_000);
 
-        let outcome = add_test_frame(&mut store, 1, 10, matched("arknights/home"), "initial");
+        let outcome = add_test_frame(&mut store, 1, 10, matched("fixture01/home"), "initial");
 
         assert_eq!(outcome.storage_state, FrameStorageState::Segment);
         assert!(!outcome.pause_required);
@@ -1998,7 +1998,7 @@ mod tests {
         let temp = TempDir::new().expect("temp");
         let mut store = small_store(temp.path(), 70_000);
 
-        add_test_frame(&mut store, 1, 10, matched("arknights/home"), "initial");
+        add_test_frame(&mut store, 1, 10, matched("fixture01/home"), "initial");
 
         let screenshots = temp.path().join("screenshots");
         store.materialize(&screenshots).expect("materialize");
@@ -2010,12 +2010,12 @@ mod tests {
         let temp = TempDir::new().expect("temp");
         let mut store = small_store(temp.path(), 70_000);
 
-        add_test_frame(&mut store, 1, 10, matched("arknights/home"), "initial");
+        add_test_frame(&mut store, 1, 10, matched("fixture01/home"), "initial");
         add_test_frame(
             &mut store,
             2,
             20,
-            matched("arknights/terminal"),
+            matched("fixture01/terminal"),
             "page_wait",
         );
 
@@ -2044,7 +2044,7 @@ mod tests {
         let temp = TempDir::new().expect("temp");
         let mut store = small_store(temp.path(), 120_000);
 
-        add_test_frame(&mut store, 1, 10, matched("arknights/home"), "initial");
+        add_test_frame(&mut store, 1, 10, matched("fixture01/home"), "initial");
 
         let diagnostics = store.diagnostics_json();
         assert!(diagnostics["payload_bytes"].as_u64().unwrap() > 0);
@@ -2065,7 +2065,7 @@ mod tests {
         fs::write(&temp_file, b"block directory creation").expect("write blocker");
         let mut store = FrameStore::new(temp_file, test_config(90)).expect("store");
 
-        let outcome = add_test_frame(&mut store, 1, 10, matched("arknights/home"), "initial");
+        let outcome = add_test_frame(&mut store, 1, 10, matched("fixture01/home"), "initial");
 
         assert!(
             outcome
@@ -2088,12 +2088,12 @@ mod tests {
             available_bytes: 20_000_000,
         });
         let mut store = FrameStore::new(temp.path().join("temp"), config).expect("store");
-        add_test_frame(&mut store, 1, 10, matched("arknights/home"), "initial");
+        add_test_frame(&mut store, 1, 10, matched("fixture01/home"), "initial");
         add_test_frame(
             &mut store,
             2,
             20,
-            matched("arknights/terminal"),
+            matched("fixture01/terminal"),
             "page_wait",
         );
         if let FrameStorage::Resident(frame) = &mut store.entries[0].storage {
@@ -2124,7 +2124,7 @@ mod tests {
     fn cleanup_temp_removes_segment_directory() {
         let temp = TempDir::new().expect("temp");
         let mut store = small_store(temp.path(), 90);
-        add_test_frame(&mut store, 1, 10, matched("arknights/home"), "initial");
+        add_test_frame(&mut store, 1, 10, matched("fixture01/home"), "initial");
 
         assert!(temp.path().join("temp").exists());
         assert!(store.cleanup_temp().is_empty());
@@ -2170,7 +2170,7 @@ mod tests {
             &mut store,
             1,
             10,
-            matched("arknights/home"),
+            matched("fixture01/home"),
             "initial",
             later,
         );
@@ -2178,7 +2178,7 @@ mod tests {
             &mut store,
             2,
             10,
-            matched("arknights/home"),
+            matched("fixture01/home"),
             "page_wait",
             earlier,
         );
@@ -2205,7 +2205,7 @@ mod tests {
     fn portable_evidence_projection_requires_successful_materialization() {
         let temp = TempDir::new().expect("temp");
         let mut store = small_store(temp.path(), 220);
-        add_test_frame(&mut store, 1, 10, matched("arknights/home"), "initial");
+        add_test_frame(&mut store, 1, 10, matched("fixture01/home"), "initial");
 
         let error = store
             .portable_evidence_projection()
@@ -2222,7 +2222,7 @@ mod tests {
     fn failed_rematerialization_invalidates_portable_evidence_projection() {
         let temp = TempDir::new().expect("temp");
         let mut store = small_store(temp.path(), 220);
-        add_test_frame(&mut store, 1, 10, matched("arknights/home"), "initial");
+        add_test_frame(&mut store, 1, 10, matched("fixture01/home"), "initial");
         store
             .materialize(&temp.path().join("screenshots"))
             .expect("initial materialization");
@@ -2248,8 +2248,8 @@ mod tests {
     fn portable_evidence_projection_reports_four_way_counts_and_pinned_frames() {
         let temp = TempDir::new().expect("temp");
         let mut store = small_store(temp.path(), 220);
-        add_test_frame(&mut store, 1, 10, matched("arknights/home"), "initial");
-        add_test_frame(&mut store, 2, 10, matched("arknights/home"), "page_wait");
+        add_test_frame(&mut store, 1, 10, matched("fixture01/home"), "initial");
+        add_test_frame(&mut store, 2, 10, matched("fixture01/home"), "page_wait");
         let frame = Frame::from_pixels(
             4,
             4,
@@ -2263,7 +2263,7 @@ mod tests {
                 frame_index: 3,
                 file_name: "frame3.png".to_string(),
                 label: "terminal".to_string(),
-                recognition_state: matched("arknights/home"),
+                recognition_state: matched("fixture01/home"),
                 pinned_reason: Some(PinnedFrameReason::Terminal),
                 frame,
             })

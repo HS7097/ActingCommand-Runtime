@@ -1,0 +1,156 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://actingcommand.local/contracts/scheduling/tasks.schema.json",
+  "title": "ActingCommand Scheduling Tasks v1",
+  "type": "object",
+  "required": ["schema_version", "catalog", "tasks"],
+  "properties": {
+    "schema_version": { "const": "actingcommand.scheduling.v1" },
+    "catalog": { "$ref": "./common.schema.json#/$defs/catalog" },
+    "tasks": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 4096,
+      "items": { "$ref": "#/$defs/task" }
+    }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "operationRef": {
+      "type": "object",
+      "required": ["operation_id"],
+      "properties": {
+        "operation_id": { "$ref": "./common.schema.json#/$defs/identifier" }
+      },
+      "additionalProperties": false
+    },
+    "loadProfile": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": ["kind"],
+          "properties": { "kind": { "const": "light" } },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": ["kind"],
+          "properties": { "kind": { "const": "heavy" } },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": ["kind", "cpu_milli", "gpu_milli", "io_milli"],
+          "properties": {
+            "kind": { "const": "weighted" },
+            "cpu_milli": { "type": "integer", "minimum": 0, "maximum": 1000 },
+            "gpu_milli": { "type": "integer", "minimum": 0, "maximum": 1000 },
+            "io_milli": { "type": "integer", "minimum": 0, "maximum": 1000 }
+          },
+          "additionalProperties": false
+        }
+      ]
+    },
+    "failurePolicy": {
+      "type": "object",
+      "required": ["action", "retry_limit", "retry_backoff_ms", "escalation_threshold"],
+      "properties": {
+        "action": { "enum": ["continue", "pause"] },
+        "retry_limit": { "type": "integer", "minimum": 0, "maximum": 1000 },
+        "retry_backoff_ms": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
+        "escalation_threshold": { "type": "integer", "minimum": 1, "maximum": 1000 }
+      },
+      "additionalProperties": false
+    },
+    "loopBudget": {
+      "type": "object",
+      "required": ["daily_limit", "window_iteration_limit", "max_runtime_ms"],
+      "properties": {
+        "daily_limit": { "type": "integer", "minimum": 1, "maximum": 1000000 },
+        "window_iteration_limit": { "type": "integer", "minimum": 1, "maximum": 1000000 },
+        "max_runtime_ms": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 }
+      },
+      "additionalProperties": false
+    },
+    "instanceOverride": {
+      "type": "object",
+      "required": ["instance_id", "enabled", "priority", "strategic_weight_milli", "load_profile"],
+      "properties": {
+        "instance_id": { "$ref": "./common.schema.json#/$defs/identifier" },
+        "enabled": { "type": ["boolean", "null"] },
+        "priority": { "type": ["integer", "null"], "minimum": -32768, "maximum": 32767 },
+        "strategic_weight_milli": { "type": ["integer", "null"], "minimum": 0, "maximum": 10000 },
+        "load_profile": {
+          "oneOf": [
+            { "$ref": "#/$defs/loadProfile" },
+            { "type": "null" }
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "task": {
+      "type": "object",
+      "required": [
+        "id",
+        "scope",
+        "entrypoint",
+        "procedure_ref",
+        "priority",
+        "trigger",
+        "feedback_stop",
+        "consumes",
+        "produces",
+        "on_failure",
+        "sensitive",
+        "next_run_clamp_ms",
+        "yield_points",
+        "expected_duration_ms",
+        "cooldown_ms",
+        "load_profile",
+        "loop_budget",
+        "strategic_weight_milli",
+        "instance_overrides"
+      ],
+      "properties": {
+        "id": { "$ref": "./common.schema.json#/$defs/identifier" },
+        "scope": { "$ref": "./common.schema.json#/$defs/scope" },
+        "entrypoint": { "$ref": "#/$defs/operationRef" },
+        "procedure_ref": { "$ref": "./common.schema.json#/$defs/identifier" },
+        "priority": { "type": "integer", "minimum": -32768, "maximum": 32767 },
+        "trigger": { "$ref": "./common.schema.json#/$defs/predicate" },
+        "feedback_stop": { "$ref": "./common.schema.json#/$defs/predicate" },
+        "consumes": {
+          "type": "array",
+          "maxItems": 128,
+          "items": { "$ref": "./common.schema.json#/$defs/resourceEffect" }
+        },
+        "produces": {
+          "type": "array",
+          "maxItems": 128,
+          "items": { "$ref": "./common.schema.json#/$defs/resourceEffect" }
+        },
+        "on_failure": { "$ref": "#/$defs/failurePolicy" },
+        "sensitive": { "type": "boolean" },
+        "next_run_clamp_ms": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 },
+        "yield_points": {
+          "type": "array",
+          "maxItems": 128,
+          "uniqueItems": true,
+          "items": { "$ref": "./common.schema.json#/$defs/identifier" }
+        },
+        "expected_duration_ms": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 },
+        "cooldown_ms": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
+        "load_profile": { "$ref": "#/$defs/loadProfile" },
+        "loop_budget": { "$ref": "#/$defs/loopBudget" },
+        "strategic_weight_milli": { "type": "integer", "minimum": 0, "maximum": 10000 },
+        "instance_overrides": {
+          "type": "array",
+          "maxItems": 128,
+          "items": { "$ref": "#/$defs/instanceOverride" }
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}

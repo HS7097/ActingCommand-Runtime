@@ -21,13 +21,17 @@ pub enum ArtifactKind {
     EvidenceManifest,
     #[serde(rename = "report.text")]
     TextReport,
+    #[serde(rename = "report.strategy")]
+    StrategyReport,
 }
 
 impl ArtifactKind {
     pub const fn media_type(self) -> ArtifactMediaType {
         match self {
             Self::CaptureFrame => ArtifactMediaType::ImagePng,
-            Self::DiagnosticJson | Self::EvidenceManifest => ArtifactMediaType::ApplicationJson,
+            Self::DiagnosticJson | Self::EvidenceManifest | Self::StrategyReport => {
+                ArtifactMediaType::ApplicationJson
+            }
             Self::EvidenceArchive => ArtifactMediaType::ApplicationZip,
             Self::TextReport => ArtifactMediaType::TextPlain,
         }
@@ -39,14 +43,15 @@ impl ArtifactKind {
             | Self::DiagnosticJson
             | Self::EvidenceArchive
             | Self::EvidenceManifest
-            | Self::TextReport => RetentionClass::Adaptive,
+            | Self::TextReport
+            | Self::StrategyReport => RetentionClass::Adaptive,
         }
     }
 
     pub const fn extension(self) -> &'static str {
         match self {
             Self::CaptureFrame => "png",
-            Self::DiagnosticJson | Self::EvidenceManifest => "json",
+            Self::DiagnosticJson | Self::EvidenceManifest | Self::StrategyReport => "json",
             Self::EvidenceArchive => "zip",
             Self::TextReport => "txt",
         }
@@ -150,6 +155,7 @@ non_disclosing_enum_deserialize!(ArtifactKind {
     "evidence.archive" => EvidenceArchive,
     "evidence.manifest" => EvidenceManifest,
     "report.text" => TextReport,
+    "report.strategy" => StrategyReport,
 });
 non_disclosing_enum_deserialize!(ArtifactMediaType {
     "image/png" => ImagePng,

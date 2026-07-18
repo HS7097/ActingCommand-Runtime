@@ -394,18 +394,18 @@ mod tests {
     fn monitor_registry_persists_and_idempotent_updates_do_not_append() {
         let root = TempDir::new().expect("tempdir");
         let mut registry =
-            MonitorRegistry::open(root.path(), ["ak.cn".to_string()]).expect("registry");
+            MonitorRegistry::open(root.path(), ["node.a".to_string()]).expect("registry");
         let policy = RuntimeMonitorPolicy::new(1_000, "home", false).expect("policy");
         assert!(
             registry
-                .configure("ak.cn", policy.clone(), 10)
+                .configure("node.a", policy.clone(), 10)
                 .expect("configure")
                 .changed
         );
         let length = registry.file.metadata().expect("metadata").len();
         assert!(
             !registry
-                .configure("ak.cn", policy, 20)
+                .configure("node.a", policy, 20)
                 .expect("idempotent configure")
                 .changed
         );
@@ -413,7 +413,7 @@ mod tests {
         drop(registry);
 
         let mut reopened =
-            MonitorRegistry::open(root.path(), ["ak.cn".to_string()]).expect("reopen");
+            MonitorRegistry::open(root.path(), ["node.a".to_string()]).expect("reopen");
         let owner_epoch = *IdentifierIssuer::new()
             .expect("issuer")
             .mint_owner_epoch()
@@ -424,9 +424,9 @@ mod tests {
                 .policy()
                 .is_some()
         );
-        assert!(reopened.clear("ak.cn").expect("clear").changed);
+        assert!(reopened.clear("node.a").expect("clear").changed);
         let length = reopened.file.metadata().expect("metadata").len();
-        assert!(!reopened.clear("ak.cn").expect("idempotent clear").changed);
+        assert!(!reopened.clear("node.a").expect("idempotent clear").changed);
         assert_eq!(reopened.file.metadata().expect("metadata").len(), length);
     }
 
@@ -436,7 +436,7 @@ mod tests {
         std::fs::write(root.path().join(MONITOR_FILE_NAME), b"not-json\n")
             .expect("write corruption");
         assert_eq!(
-            MonitorRegistry::open(root.path(), ["ak.cn".to_string()])
+            MonitorRegistry::open(root.path(), ["node.a".to_string()])
                 .err()
                 .expect("corrupt registry")
                 .code(),
@@ -448,10 +448,10 @@ mod tests {
     fn due_probe_completion_does_not_overwrite_a_newer_policy() {
         let root = TempDir::new().expect("tempdir");
         let mut registry =
-            MonitorRegistry::open(root.path(), ["ak.cn".to_string()]).expect("registry");
+            MonitorRegistry::open(root.path(), ["node.a".to_string()]).expect("registry");
         let first = RuntimeMonitorPolicy::new(1_000, "home", false).expect("first policy");
         registry
-            .configure("ak.cn", first, 10)
+            .configure("node.a", first, 10)
             .expect("configure first policy");
         assert!(registry.due(9, 1).expect("not due").is_empty());
         let probe = registry.due(10, 1).expect("due probe").remove(0);
@@ -459,7 +459,7 @@ mod tests {
         let replacement =
             RuntimeMonitorPolicy::new(2_000, "campaign", false).expect("replacement policy");
         registry
-            .configure("ak.cn", replacement.clone(), 20)
+            .configure("node.a", replacement.clone(), 20)
             .expect("configure replacement");
         let decision = MonitorDecision::new(
             actingcommand_contract::MonitorDiagnosis::Healthy,

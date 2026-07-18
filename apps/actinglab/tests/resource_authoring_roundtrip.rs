@@ -236,6 +236,8 @@ fn recorded_resource_is_deterministically_packaged_and_runs_from_containment() {
             "arknights",
             "--server",
             "cn",
+            "--locale",
+            "zh-CN",
         ],
     );
 

@@ -13,17 +13,22 @@
 //! ```
 
 use crate::{
-    ActionId, ArtifactKind, ArtifactLinksDraft, ArtifactMediaType, ArtifactRedactionState,
-    CausationId, CorrelationId, EffectDisposition, EventActor, EventId, EventLinksDraft,
-    EventQuery, EventSource, EventType, EvidenceCompleteness, FrameId, HolderId,
+    ActionId, AgentSessionContext, AgentSessionId, AgentSessionResponse, AgentSessionStatus,
+    AgentWakeId, ApprovalDecisionRecord, ApprovalDisposition, ArtifactKind, ArtifactLinksDraft,
+    ArtifactMediaType, ArtifactRedactionState, CatalogProposal, CausationId, ClientActionRecord,
+    CorrelationId, EffectDisposition, EventActor, EventId, EventLinksDraft, EventQuery,
+    EventSource, EventType, EvidenceCompleteness, FactScope, FrameId, HolderId,
     IdentifierIssuanceError, IdentifierIssuer, InstanceId, IssuedCausationId, IssuedCorrelationId,
     IssuedFrameId, IssuedHolderId, IssuedRecognitionId, IssuedRequestId, IssuedRunId, IssuedTaskId,
-    LeaseId, OwnerEpoch, ProjectedArtifactReference, ProjectedEvent, ProjectionProfile,
-    RecognitionId, RecognitionVerdict, RequestId, ResourceAuthoringPhase, RunId,
+    LeaseId, OwnerEpoch, ProjectInterfaceRequest, ProjectInterfaceResponse,
+    ProjectedArtifactReference, ProjectedEvent, ProjectionProfile, ProposalPreview,
+    ProposalPromotion, RecognitionId, RecognitionVerdict, RequestId, ResourceAuthoringPhase, RunId,
     RuntimeMonitorInstanceStatus, RuntimeMonitorPolicy, RuntimeMonitorRegistryStatus,
     SubscriptionCursor, TaskOutcome,
 };
+use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use std::collections::BTreeSet;
 use std::error::Error;
 use std::fmt;
@@ -47,6 +52,17 @@ pub const MAX_CONTAINED_TASK_PATH_BYTES: usize = 32 * 1024;
 pub const MAX_EVIDENCE_OUTPUT_PATH_BYTES: usize = 32 * 1024;
 pub const MAX_RUNTIME_SUBSCRIPTION_WAIT_MS: u64 = 30_000;
 pub const MAX_RUNTIME_SUBSCRIPTION_EVENTS: u16 = 256;
+pub const DEFAULT_RUNTIME_EVENT_QUERY_EVENTS: u16 = 128;
+pub const MAX_RUNTIME_EVENT_QUERY_EVENTS: u16 = 256;
+pub const MAX_RUNTIME_EVENT_QUERY_RESPONSE_BYTES: usize = 768 * 1024;
+pub const MIN_GOVERNANCE_CAPABILITY_BYTES: usize = 32;
+pub const MAX_GOVERNANCE_CAPABILITY_BYTES: usize = 1024;
+pub const RUNTIME_PLANNING_DOCUMENT_SCHEMA_VERSION: &str =
+    "actingcommand.runtime.planning-document.v1";
+pub const MAX_RUNTIME_PLANNING_DOCUMENT_BYTES: usize = 512 * 1024;
+pub const MAX_RUNTIME_PLANNING_REQUEST_BYTES: usize = 768 * 1024;
+pub const MAX_RUNTIME_PLANNING_RESPONSE_BYTES: usize = 768 * 1024;
+pub const MAX_RUNTIME_STRATEGIC_EVIDENCE: usize = 64;
 
 pub type RuntimeContractResult<T> = Result<T, RuntimeContractError>;
 
@@ -76,6 +92,421 @@ impl fmt::Display for RuntimeContractError {
 }
 
 impl Error for RuntimeContractError {}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RuntimePlanningDocumentKind {
+    StrategicReport,
+    StrategicProjection,
+    EvaluationFacts,
+    EvaluationResources,
+    EvaluationTime,
+    ForwardProjectionConfig,
+    ForwardProjection,
+    MaintenanceTrendPolicy,
+    MaintenanceAssessment,
+    MaintenanceAssessmentV2,
+}
+
+/// Content-addressed transport envelope for policy types owned by the policy crate.
+///
+/// The IPC contract intentionally does not depend on the policy implementation crate. Both the
+/// Runtime host and typed client decode this bounded document at their explicit domain boundary.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RuntimePlanningDocument {
+    schema_version: String,
+    kind: RuntimePlanningDocumentKind,
+    sha256: String,
+    document: serde_json::Value,
+}
+
+impl RuntimePlanningDocument {
+    pub fn encode<T>(kind: RuntimePlanningDocumentKind, value: &T) -> RuntimeContractResult<Self>
+    where
+        T: Serialize,
+    {
+        let document = serde_json::to_value(value)
+            .map_err(|_| RuntimeContractError::new("planning_document_encode_failed"))?;
+        let bytes = planning_document_bytes(&document)?;
+        let envelope = Self {
+            schema_version: RUNTIME_PLANNING_DOCUMENT_SCHEMA_VERSION.to_owned(),
+            kind,
+            sha256: format!("sha256:{:x}", Sha256::digest(bytes)),
+            document,
+        };
+        envelope.validate()?;
+        Ok(envelope)
+    }
+
+    pub fn decode<T>(&self, expected: RuntimePlanningDocumentKind) -> RuntimeContractResult<T>
+    where
+        T: DeserializeOwned,
+    {
+        self.validate_kind(expected)?;
+        serde_json::from_value(self.document.clone())
+            .map_err(|_| RuntimeContractError::new("planning_document_decode_failed"))
+    }
+
+    pub fn validate(&self) -> RuntimeContractResult<()> {
+        if self.schema_version != RUNTIME_PLANNING_DOCUMENT_SCHEMA_VERSION {
+            return Err(RuntimeContractError::new(
+                "unsupported_planning_document_schema",
+            ));
+        }
+        let bytes = planning_document_bytes(&self.document)?;
+        let expected = format!("sha256:{:x}", Sha256::digest(bytes));
+        if self.sha256 != expected {
+            return Err(RuntimeContractError::new("planning_document_hash_mismatch"));
+        }
+        Ok(())
+    }
+
+    pub fn validate_kind(
+        &self,
+        expected: RuntimePlanningDocumentKind,
+    ) -> RuntimeContractResult<()> {
+        self.validate()?;
+        if self.kind != expected {
+            return Err(RuntimeContractError::new("planning_document_kind_mismatch"));
+        }
+        Ok(())
+    }
+
+    pub const fn kind(&self) -> RuntimePlanningDocumentKind {
+        self.kind
+    }
+
+    pub fn sha256(&self) -> &str {
+        &self.sha256
+    }
+
+    fn byte_count(&self) -> RuntimeContractResult<usize> {
+        planning_document_bytes(&self.document).map(|bytes| bytes.len())
+    }
+}
+
+impl fmt::Debug for RuntimePlanningDocument {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("RuntimePlanningDocument")
+            .field("kind", &self.kind)
+            .field("sha256", &self.sha256)
+            .field("document", &"<redacted-policy-document>")
+            .finish()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RuntimeStrategicReportRequest {
+    report: RuntimePlanningDocument,
+    evidence: Vec<ProjectedArtifactReference>,
+}
+
+impl RuntimeStrategicReportRequest {
+    pub fn new(
+        report: RuntimePlanningDocument,
+        evidence: Vec<ProjectedArtifactReference>,
+    ) -> RuntimeContractResult<Self> {
+        let request = Self { report, evidence };
+        request.validate()?;
+        Ok(request)
+    }
+
+    pub fn validate(&self) -> RuntimeContractResult<()> {
+        self.report
+            .validate_kind(RuntimePlanningDocumentKind::StrategicReport)?;
+        if self.evidence.is_empty() || self.evidence.len() > MAX_RUNTIME_STRATEGIC_EVIDENCE {
+            return Err(RuntimeContractError::new("invalid_strategic_evidence"));
+        }
+        for reference in &self.evidence {
+            reference
+                .validate()
+                .map_err(|_| RuntimeContractError::new("invalid_strategic_evidence"))?;
+        }
+        Ok(())
+    }
+
+    pub const fn report(&self) -> &RuntimePlanningDocument {
+        &self.report
+    }
+
+    pub fn evidence(&self) -> &[ProjectedArtifactReference] {
+        &self.evidence
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RuntimeForwardProjectionRequest {
+    facts: RuntimePlanningDocument,
+    resources: RuntimePlanningDocument,
+    time: RuntimePlanningDocument,
+    seed: u64,
+    config: RuntimePlanningDocument,
+}
+
+impl RuntimeForwardProjectionRequest {
+    pub fn new(
+        facts: RuntimePlanningDocument,
+        resources: RuntimePlanningDocument,
+        time: RuntimePlanningDocument,
+        seed: u64,
+        config: RuntimePlanningDocument,
+    ) -> RuntimeContractResult<Self> {
+        let request = Self {
+            facts,
+            resources,
+            time,
+            seed,
+            config,
+        };
+        request.validate()?;
+        Ok(request)
+    }
+
+    pub fn validate(&self) -> RuntimeContractResult<()> {
+        validate_planning_documents(&[
+            (&self.facts, RuntimePlanningDocumentKind::EvaluationFacts),
+            (
+                &self.resources,
+                RuntimePlanningDocumentKind::EvaluationResources,
+            ),
+            (&self.time, RuntimePlanningDocumentKind::EvaluationTime),
+            (
+                &self.config,
+                RuntimePlanningDocumentKind::ForwardProjectionConfig,
+            ),
+        ])
+    }
+
+    pub const fn facts(&self) -> &RuntimePlanningDocument {
+        &self.facts
+    }
+
+    pub const fn resources(&self) -> &RuntimePlanningDocument {
+        &self.resources
+    }
+
+    pub const fn time(&self) -> &RuntimePlanningDocument {
+        &self.time
+    }
+
+    pub const fn seed(&self) -> u64 {
+        self.seed
+    }
+
+    pub const fn config(&self) -> &RuntimePlanningDocument {
+        &self.config
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RuntimeMaintenanceQuery {
+    instance_id: String,
+    task_id: String,
+    fact_scope: FactScope,
+    fact_key: String,
+    as_of_ledger_position: u64,
+    as_of_unix_ms: u64,
+    trend_policy: RuntimePlanningDocument,
+}
+
+impl RuntimeMaintenanceQuery {
+    pub fn new(
+        instance_id: impl Into<String>,
+        task_id: impl Into<String>,
+        fact_scope: FactScope,
+        fact_key: impl Into<String>,
+        as_of_ledger_position: u64,
+        as_of_unix_ms: u64,
+        trend_policy: RuntimePlanningDocument,
+    ) -> RuntimeContractResult<Self> {
+        let query = Self {
+            instance_id: instance_id.into(),
+            task_id: task_id.into(),
+            fact_scope,
+            fact_key: fact_key.into(),
+            as_of_ledger_position,
+            as_of_unix_ms,
+            trend_policy,
+        };
+        query.validate()?;
+        Ok(query)
+    }
+
+    pub fn validate(&self) -> RuntimeContractResult<()> {
+        for value in [&self.instance_id, &self.task_id, &self.fact_key] {
+            validate_bounded_text(value, 512, "invalid_maintenance_query")?;
+        }
+        if self.as_of_ledger_position == 0
+            || self.as_of_unix_ms == 0
+            || self.fact_scope.validate().is_err()
+            || matches!(
+                &self.fact_scope,
+                FactScope::Instance { instance_id } if instance_id != &self.instance_id
+            )
+        {
+            return Err(RuntimeContractError::new("invalid_maintenance_query"));
+        }
+        self.trend_policy
+            .validate_kind(RuntimePlanningDocumentKind::MaintenanceTrendPolicy)
+    }
+
+    pub fn instance_id(&self) -> &str {
+        &self.instance_id
+    }
+
+    pub fn task_id(&self) -> &str {
+        &self.task_id
+    }
+
+    pub const fn fact_scope(&self) -> &FactScope {
+        &self.fact_scope
+    }
+
+    pub fn fact_key(&self) -> &str {
+        &self.fact_key
+    }
+
+    pub const fn as_of_ledger_position(&self) -> u64 {
+        self.as_of_ledger_position
+    }
+
+    pub const fn as_of_unix_ms(&self) -> u64 {
+        self.as_of_unix_ms
+    }
+
+    pub const fn trend_policy(&self) -> &RuntimePlanningDocument {
+        &self.trend_policy
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RuntimeStrategicPlanResult {
+    report: ProjectedArtifactReference,
+    projection: RuntimePlanningDocument,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    proposal: Option<Box<CatalogProposal>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    preview: Option<ProposalPreview>,
+}
+
+impl RuntimeStrategicPlanResult {
+    pub fn new(
+        report: ProjectedArtifactReference,
+        projection: RuntimePlanningDocument,
+        proposal: Option<CatalogProposal>,
+        preview: Option<ProposalPreview>,
+    ) -> RuntimeContractResult<Self> {
+        let plan = Self {
+            report,
+            projection,
+            proposal: proposal.map(Box::new),
+            preview,
+        };
+        plan.validate()?;
+        Ok(plan)
+    }
+
+    pub fn validate(&self) -> RuntimeContractResult<()> {
+        self.report
+            .validate()
+            .map_err(|_| RuntimeContractError::new("invalid_strategic_plan_result"))?;
+        if self.report.kind() != ArtifactKind::StrategyReport
+            || self.report.object_key().is_none()
+            || self.report.redaction_state() == ArtifactRedactionState::Pending
+            || self.proposal.is_some() != self.preview.is_some()
+        {
+            return Err(RuntimeContractError::new("invalid_strategic_plan_result"));
+        }
+        self.projection
+            .validate_kind(RuntimePlanningDocumentKind::StrategicProjection)?;
+        if let Some(proposal) = &self.proposal {
+            proposal
+                .validate()
+                .map_err(|_| RuntimeContractError::new("invalid_strategic_plan_result"))?;
+        }
+        if let Some(preview) = &self.preview {
+            preview
+                .validate()
+                .map_err(|_| RuntimeContractError::new("invalid_strategic_plan_result"))?;
+        }
+        if let (Some(proposal), Some(preview)) = (&self.proposal, &self.preview)
+            && proposal.proposal_id() != preview.proposal_id()
+        {
+            return Err(RuntimeContractError::new("invalid_strategic_plan_result"));
+        }
+        let mut byte_count = self.projection.byte_count()?;
+        if let Some(proposal) = &self.proposal {
+            byte_count = byte_count
+                .checked_add(planning_result_bytes(proposal.as_ref())?)
+                .ok_or_else(|| RuntimeContractError::new("planning_response_size_invalid"))?;
+        }
+        if let Some(preview) = &self.preview {
+            byte_count = byte_count
+                .checked_add(planning_result_bytes(preview)?)
+                .ok_or_else(|| RuntimeContractError::new("planning_response_size_invalid"))?;
+        }
+        if byte_count > MAX_RUNTIME_PLANNING_RESPONSE_BYTES {
+            return Err(RuntimeContractError::new("planning_response_size_invalid"));
+        }
+        Ok(())
+    }
+
+    pub fn into_parts(
+        self,
+    ) -> (
+        ProjectedArtifactReference,
+        RuntimePlanningDocument,
+        Option<CatalogProposal>,
+        Option<ProposalPreview>,
+    ) {
+        (
+            self.report,
+            self.projection,
+            self.proposal.map(|value| *value),
+            self.preview,
+        )
+    }
+}
+
+fn planning_document_bytes(document: &serde_json::Value) -> RuntimeContractResult<Vec<u8>> {
+    if !document.is_object() {
+        return Err(RuntimeContractError::new("planning_document_not_object"));
+    }
+    let bytes = serde_json::to_vec(document)
+        .map_err(|_| RuntimeContractError::new("planning_document_encode_failed"))?;
+    if bytes.is_empty() || bytes.len() > MAX_RUNTIME_PLANNING_DOCUMENT_BYTES {
+        return Err(RuntimeContractError::new("planning_document_size_invalid"));
+    }
+    Ok(bytes)
+}
+
+fn planning_result_bytes(value: &impl Serialize) -> RuntimeContractResult<usize> {
+    serde_json::to_vec(value)
+        .map(|bytes| bytes.len())
+        .map_err(|_| RuntimeContractError::new("planning_result_encode_failed"))
+}
+
+fn validate_planning_documents(
+    documents: &[(&RuntimePlanningDocument, RuntimePlanningDocumentKind)],
+) -> RuntimeContractResult<()> {
+    let mut total = 0_usize;
+    for (document, kind) in documents {
+        document.validate_kind(*kind)?;
+        total = total
+            .checked_add(document.byte_count()?)
+            .ok_or_else(|| RuntimeContractError::new("planning_request_size_invalid"))?;
+    }
+    if total > MAX_RUNTIME_PLANNING_REQUEST_BYTES {
+        return Err(RuntimeContractError::new("planning_request_size_invalid"));
+    }
+    Ok(())
+}
 
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
@@ -1385,6 +1816,214 @@ pub struct RuntimeEventBatch {
     timed_out: bool,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RuntimeEventQueryCursor {
+    snapshot_ledger_position: u64,
+    after_sequence: u64,
+    query_fingerprint: String,
+}
+
+impl RuntimeEventQueryCursor {
+    pub fn new(
+        snapshot_ledger_position: u64,
+        after_sequence: u64,
+        query: &EventQuery,
+        profile: ProjectionProfile,
+    ) -> RuntimeContractResult<Self> {
+        let cursor = Self {
+            snapshot_ledger_position,
+            after_sequence,
+            query_fingerprint: event_query_fingerprint(query, profile)?,
+        };
+        cursor.validate()?;
+        Ok(cursor)
+    }
+
+    pub fn validate(&self) -> RuntimeContractResult<()> {
+        if self.snapshot_ledger_position == 0
+            || self.after_sequence == 0
+            || self.after_sequence > self.snapshot_ledger_position
+        {
+            return Err(RuntimeContractError::new(
+                "invalid_runtime_event_query_cursor",
+            ));
+        }
+        validate_canonical_sha256(&self.query_fingerprint)
+            .map_err(|_| RuntimeContractError::new("invalid_runtime_event_query_cursor"))
+    }
+
+    pub fn matches(
+        &self,
+        query: &EventQuery,
+        profile: ProjectionProfile,
+    ) -> RuntimeContractResult<bool> {
+        Ok(self.query_fingerprint == event_query_fingerprint(query, profile)?)
+    }
+
+    pub const fn snapshot_ledger_position(&self) -> u64 {
+        self.snapshot_ledger_position
+    }
+
+    pub const fn after_sequence(&self) -> u64 {
+        self.after_sequence
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RuntimeEventQueryPageRequest {
+    limit: u16,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    cursor: Option<RuntimeEventQueryCursor>,
+}
+
+impl RuntimeEventQueryPageRequest {
+    pub fn new(limit: u16, cursor: Option<RuntimeEventQueryCursor>) -> RuntimeContractResult<Self> {
+        let request = Self { limit, cursor };
+        request.validate()?;
+        Ok(request)
+    }
+
+    pub fn validate(&self) -> RuntimeContractResult<()> {
+        if self.limit == 0 || self.limit > MAX_RUNTIME_EVENT_QUERY_EVENTS {
+            return Err(RuntimeContractError::new(
+                "invalid_runtime_event_query_page",
+            ));
+        }
+        if let Some(cursor) = &self.cursor {
+            cursor.validate()?;
+        }
+        Ok(())
+    }
+
+    pub const fn limit(&self) -> u16 {
+        self.limit
+    }
+
+    pub const fn cursor(&self) -> Option<&RuntimeEventQueryCursor> {
+        self.cursor.as_ref()
+    }
+}
+
+impl Default for RuntimeEventQueryPageRequest {
+    fn default() -> Self {
+        Self {
+            limit: DEFAULT_RUNTIME_EVENT_QUERY_EVENTS,
+            cursor: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RuntimeEventQueryPage {
+    events: Vec<ProjectedEvent>,
+    snapshot_ledger_position: u64,
+    requested_limit: u16,
+    returned_count: u16,
+    has_more: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    next_cursor: Option<RuntimeEventQueryCursor>,
+}
+
+impl RuntimeEventQueryPage {
+    pub fn new(
+        events: Vec<ProjectedEvent>,
+        snapshot_ledger_position: u64,
+        requested_limit: u16,
+        has_more: bool,
+        next_cursor: Option<RuntimeEventQueryCursor>,
+    ) -> RuntimeContractResult<Self> {
+        let returned_count = u16::try_from(events.len())
+            .map_err(|_| RuntimeContractError::new("invalid_runtime_event_query_page"))?;
+        let page = Self {
+            events,
+            snapshot_ledger_position,
+            requested_limit,
+            returned_count,
+            has_more,
+            next_cursor,
+        };
+        page.validate()?;
+        Ok(page)
+    }
+
+    pub fn validate(&self) -> RuntimeContractResult<()> {
+        if self.requested_limit == 0
+            || self.requested_limit > MAX_RUNTIME_EVENT_QUERY_EVENTS
+            || self.returned_count as usize != self.events.len()
+            || self.returned_count > self.requested_limit
+            || self.has_more != self.next_cursor.is_some()
+            || (self.events.is_empty() && self.has_more)
+        {
+            return Err(RuntimeContractError::new(
+                "invalid_runtime_event_query_page",
+            ));
+        }
+        let mut previous = 0;
+        for event in &self.events {
+            if event.sequence <= previous || event.sequence > self.snapshot_ledger_position {
+                return Err(RuntimeContractError::new(
+                    "invalid_runtime_event_query_page",
+                ));
+            }
+            previous = event.sequence;
+        }
+        if let Some(cursor) = &self.next_cursor {
+            cursor.validate()?;
+            if cursor.snapshot_ledger_position != self.snapshot_ledger_position
+                || self.events.last().map(|event| event.sequence) != Some(cursor.after_sequence)
+            {
+                return Err(RuntimeContractError::new(
+                    "invalid_runtime_event_query_page",
+                ));
+            }
+        }
+        let encoded = serde_json::to_vec(self)
+            .map_err(|_| RuntimeContractError::new("runtime_event_query_page_encode_failed"))?;
+        if encoded.len() > MAX_RUNTIME_EVENT_QUERY_RESPONSE_BYTES {
+            return Err(RuntimeContractError::new(
+                "runtime_event_query_response_too_large",
+            ));
+        }
+        Ok(())
+    }
+
+    pub fn events(&self) -> &[ProjectedEvent] {
+        &self.events
+    }
+
+    pub const fn snapshot_ledger_position(&self) -> u64 {
+        self.snapshot_ledger_position
+    }
+
+    pub const fn requested_limit(&self) -> u16 {
+        self.requested_limit
+    }
+
+    pub const fn returned_count(&self) -> u16 {
+        self.returned_count
+    }
+
+    pub const fn has_more(&self) -> bool {
+        self.has_more
+    }
+
+    pub const fn next_cursor(&self) -> Option<&RuntimeEventQueryCursor> {
+        self.next_cursor.as_ref()
+    }
+}
+
+fn event_query_fingerprint(
+    query: &EventQuery,
+    profile: ProjectionProfile,
+) -> RuntimeContractResult<String> {
+    let bytes = serde_json::to_vec(&(query, profile))
+        .map_err(|_| RuntimeContractError::new("runtime_event_query_fingerprint_failed"))?;
+    Ok(format!("sha256:{:x}", Sha256::digest(bytes)))
+}
+
 impl RuntimeEventBatch {
     pub fn new(
         events: Vec<ProjectedEvent>,
@@ -1434,6 +2073,9 @@ impl RuntimeEventBatch {
 pub enum RuntimeOperation {
     Health,
     Status,
+    ProjectInterface {
+        request: ProjectInterfaceRequest,
+    },
     MonitorStatus,
     ConfigureMonitor {
         instance_alias: String,
@@ -1491,6 +2133,7 @@ pub enum RuntimeOperation {
     QueryEvents {
         query: EventQuery,
         profile: ProjectionProfile,
+        page: RuntimeEventQueryPageRequest,
     },
     SubscribeEvents {
         request: RuntimeSubscriptionRequest,
@@ -1506,6 +2149,42 @@ pub enum RuntimeOperation {
     },
     RecordDebugEvent {
         event: RuntimeDebugEvent,
+    },
+    RecordClientAction {
+        action: ClientActionRecord,
+    },
+    AuthenticateGovernance {
+        capability: String,
+    },
+    RecordApprovalDecision {
+        decision: ApprovalDecisionRecord,
+    },
+    StartAgentSession {
+        wake_id: AgentWakeId,
+    },
+    ResumeAgentSession {
+        session_id: AgentSessionId,
+    },
+    AgentSessionStatus {
+        session_id: AgentSessionId,
+    },
+    RecordAgentResponse {
+        response: AgentSessionResponse,
+    },
+    PrepareStrategicReport {
+        request: Box<RuntimeStrategicReportRequest>,
+    },
+    ProjectPolicyForward {
+        request: Box<RuntimeForwardProjectionRequest>,
+    },
+    AssessPredictiveMaintenance {
+        query: Box<RuntimeMaintenanceQuery>,
+    },
+    CompileProposal {
+        proposal: Box<CatalogProposal>,
+    },
+    PromoteProposal {
+        proposal: Box<CatalogProposal>,
     },
 }
 
@@ -1566,13 +2245,43 @@ impl RuntimeOperation {
             | Self::Status
             | Self::MonitorStatus
             | Self::PollQueuedLease { .. }
-            | Self::CancelQueuedLease { .. }
-            | Self::QueryEvents { .. } => Ok(()),
+            | Self::CancelQueuedLease { .. } => Ok(()),
+            Self::QueryEvents { page, .. } => page.validate(),
+            Self::ProjectInterface { request } => request
+                .validate()
+                .map_err(|_| RuntimeContractError::new("invalid_project_interface_request")),
             Self::SubscribeEvents { request } => request.validate(),
             Self::DebugPackage { request } => request.validate(),
             Self::ExportEvidence { request } => request.validate(),
             Self::RecordAuthoringEvent { event } => event.validate(),
             Self::RecordDebugEvent { event } => event.validate(),
+            Self::RecordClientAction { action } => action
+                .validate()
+                .map_err(|_| RuntimeContractError::new("invalid_client_action")),
+            Self::AuthenticateGovernance { capability } => {
+                if !(MIN_GOVERNANCE_CAPABILITY_BYTES..=MAX_GOVERNANCE_CAPABILITY_BYTES)
+                    .contains(&capability.len())
+                    || capability.chars().any(char::is_control)
+                {
+                    return Err(RuntimeContractError::new("invalid_governance_capability"));
+                }
+                Ok(())
+            }
+            Self::RecordApprovalDecision { decision } => decision
+                .validate()
+                .map_err(|_| RuntimeContractError::new("invalid_approval_decision")),
+            Self::StartAgentSession { .. }
+            | Self::ResumeAgentSession { .. }
+            | Self::AgentSessionStatus { .. } => Ok(()),
+            Self::RecordAgentResponse { response } => response
+                .validate()
+                .map_err(|_| RuntimeContractError::new("invalid_agent_response")),
+            Self::PrepareStrategicReport { request } => request.validate(),
+            Self::ProjectPolicyForward { request } => request.validate(),
+            Self::AssessPredictiveMaintenance { query } => query.validate(),
+            Self::CompileProposal { proposal } | Self::PromoteProposal { proposal } => proposal
+                .validate()
+                .map_err(|_| RuntimeContractError::new("invalid_catalog_proposal")),
             Self::AcquireLease { instance_alias, .. }
             | Self::ObserveReadonly { instance_alias }
             | Self::SafeReset { instance_alias, .. }
@@ -1629,6 +2338,7 @@ impl RuntimeOperation {
             | Self::RunContainedTask { instance_alias, .. }
             | Self::ConfigureMonitor { instance_alias, .. }
             | Self::ClearMonitor { instance_alias } => Some(instance_alias),
+            Self::RecordClientAction { action } => action.instance_alias(),
             _ => None,
         }
     }
@@ -1648,6 +2358,9 @@ impl fmt::Debug for RuntimeOperation {
         formatter.write_str(match self {
             Self::Health => "RuntimeOperation::Health",
             Self::Status => "RuntimeOperation::Status",
+            Self::ProjectInterface { .. } => {
+                "RuntimeOperation::ProjectInterface(<version-negotiation>)"
+            }
             Self::MonitorStatus => "RuntimeOperation::MonitorStatus",
             Self::ConfigureMonitor { .. } => "RuntimeOperation::ConfigureMonitor(<redacted>)",
             Self::ClearMonitor { .. } => "RuntimeOperation::ClearMonitor(<redacted>)",
@@ -1677,6 +2390,36 @@ impl fmt::Debug for RuntimeOperation {
             Self::RecordDebugEvent { .. } => {
                 "RuntimeOperation::RecordDebugEvent(<typed-debug-event>)"
             }
+            Self::RecordClientAction { .. } => {
+                "RuntimeOperation::RecordClientAction(<typed-redacted-action>)"
+            }
+            Self::AuthenticateGovernance { .. } => {
+                "RuntimeOperation::AuthenticateGovernance(<redacted-capability>)"
+            }
+            Self::RecordApprovalDecision { .. } => {
+                "RuntimeOperation::RecordApprovalDecision(<typed-approval>)"
+            }
+            Self::StartAgentSession { .. } => "RuntimeOperation::StartAgentSession(<opaque-wake>)",
+            Self::ResumeAgentSession { .. } => {
+                "RuntimeOperation::ResumeAgentSession(<opaque-session>)"
+            }
+            Self::AgentSessionStatus { .. } => {
+                "RuntimeOperation::AgentSessionStatus(<opaque-session>)"
+            }
+            Self::RecordAgentResponse { .. } => {
+                "RuntimeOperation::RecordAgentResponse(<typed-response>)"
+            }
+            Self::PrepareStrategicReport { .. } => {
+                "RuntimeOperation::PrepareStrategicReport(<typed-planning-document>)"
+            }
+            Self::ProjectPolicyForward { .. } => {
+                "RuntimeOperation::ProjectPolicyForward(<typed-planning-documents>)"
+            }
+            Self::AssessPredictiveMaintenance { .. } => {
+                "RuntimeOperation::AssessPredictiveMaintenance(<typed-ledger-query>)"
+            }
+            Self::CompileProposal { .. } => "RuntimeOperation::CompileProposal(<typed-proposal>)",
+            Self::PromoteProposal { .. } => "RuntimeOperation::PromoteProposal(<typed-proposal>)",
         })
     }
 }
@@ -1749,6 +2492,29 @@ impl RuntimeRequest {
         ) && (self.actor != EventActor::Lab || self.source != EventSource::Lab)
         {
             return Err(RuntimeContractError::new("invalid_runtime_debug_origin"));
+        }
+        if matches!(
+            self.operation,
+            RuntimeOperation::AuthenticateGovernance { .. }
+                | RuntimeOperation::RecordApprovalDecision { .. }
+        ) && (self.actor != EventActor::User || self.source != EventSource::Ui)
+        {
+            return Err(RuntimeContractError::new("invalid_governance_origin"));
+        }
+        if matches!(
+            self.operation,
+            RuntimeOperation::StartAgentSession { .. }
+                | RuntimeOperation::ResumeAgentSession { .. }
+                | RuntimeOperation::AgentSessionStatus { .. }
+                | RuntimeOperation::RecordAgentResponse { .. }
+                | RuntimeOperation::PrepareStrategicReport { .. }
+                | RuntimeOperation::ProjectPolicyForward { .. }
+                | RuntimeOperation::AssessPredictiveMaintenance { .. }
+                | RuntimeOperation::CompileProposal { .. }
+                | RuntimeOperation::PromoteProposal { .. }
+        ) && (self.actor != EventActor::Agent || self.source != EventSource::Adapter)
+        {
+            return Err(RuntimeContractError::new("invalid_agent_dispatcher_origin"));
         }
         self.operation.validate()?;
         Ok(ValidatedRuntimeRequest { request: self })
@@ -2010,6 +2776,9 @@ pub enum RuntimeResult {
     Status {
         status: RuntimeControlPlaneStatus,
     },
+    ProjectInterface {
+        response: Box<ProjectInterfaceResponse>,
+    },
     MonitorStatus {
         status: RuntimeMonitorRegistryStatus,
     },
@@ -2063,8 +2832,8 @@ pub enum RuntimeResult {
     InputCommitted {
         action_id: ActionId,
     },
-    Events {
-        events: Vec<ProjectedEvent>,
+    EventPage {
+        page: RuntimeEventQueryPage,
     },
     EventBatch {
         batch: RuntimeEventBatch,
@@ -2080,6 +2849,36 @@ pub enum RuntimeResult {
     },
     DebugEventRecorded {
         phase: RuntimeDebugPhase,
+    },
+    ClientActionRecorded,
+    GovernanceAuthenticated,
+    ApprovalDecisionRecorded {
+        approval_id: String,
+        disposition: ApprovalDisposition,
+    },
+    AgentSessionOpened {
+        context: Box<AgentSessionContext>,
+    },
+    AgentSessionObserved {
+        context: Box<AgentSessionContext>,
+    },
+    AgentResponseRecorded {
+        status: AgentSessionStatus,
+    },
+    StrategicPlanPrepared {
+        plan: Box<RuntimeStrategicPlanResult>,
+    },
+    PolicyForwardProjected {
+        projection: Box<RuntimePlanningDocument>,
+    },
+    PredictiveMaintenanceAssessed {
+        assessment: Box<RuntimePlanningDocument>,
+    },
+    ProposalEvaluated {
+        preview: ProposalPreview,
+    },
+    ProposalPromoted {
+        promotion: ProposalPromotion,
     },
 }
 
@@ -2164,6 +2963,9 @@ impl RuntimeReceipt {
         }
         match &self.result {
             Some(RuntimeResult::Status { status }) => status.validate()?,
+            Some(RuntimeResult::ProjectInterface { response }) => response
+                .validate()
+                .map_err(|_| RuntimeContractError::new("invalid_project_interface_response"))?,
             Some(RuntimeResult::MonitorStatus { status }) => status
                 .validate()
                 .map_err(|_| RuntimeContractError::new("invalid_runtime_monitor_status"))?,
@@ -2180,6 +2982,7 @@ impl RuntimeReceipt {
                 observation.validate()?
             }
             Some(RuntimeResult::CaptureSequenceCompleted { sequence }) => sequence.validate()?,
+            Some(RuntimeResult::EventPage { page }) => page.validate()?,
             Some(RuntimeResult::EventBatch { batch }) => batch.validate()?,
             Some(RuntimeResult::PackageDebugCompleted { summary }) => summary.validate()?,
             Some(RuntimeResult::EvidenceExportCompleted { summary }) => summary.validate()?,
@@ -2196,6 +2999,28 @@ impl RuntimeReceipt {
             {
                 return Err(RuntimeContractError::new("invalid_contained_task_result"));
             }
+            Some(
+                RuntimeResult::AgentSessionOpened { context }
+                | RuntimeResult::AgentSessionObserved { context },
+            ) => context
+                .validate()
+                .map_err(|_| RuntimeContractError::new("invalid_agent_session_context"))?,
+            Some(RuntimeResult::AgentResponseRecorded { status }) => status
+                .validate()
+                .map_err(|_| RuntimeContractError::new("invalid_agent_session_status"))?,
+            Some(RuntimeResult::StrategicPlanPrepared { plan }) => plan.validate()?,
+            Some(RuntimeResult::PolicyForwardProjected { projection }) => {
+                projection.validate_kind(RuntimePlanningDocumentKind::ForwardProjection)?
+            }
+            Some(RuntimeResult::PredictiveMaintenanceAssessed { assessment }) => {
+                assessment.validate_kind(RuntimePlanningDocumentKind::MaintenanceAssessmentV2)?
+            }
+            Some(RuntimeResult::ProposalEvaluated { preview }) => preview
+                .validate()
+                .map_err(|_| RuntimeContractError::new("invalid_proposal_preview"))?,
+            Some(RuntimeResult::ProposalPromoted { promotion }) => promotion
+                .validate()
+                .map_err(|_| RuntimeContractError::new("invalid_proposal_promotion"))?,
             _ => {}
         }
         Ok(())

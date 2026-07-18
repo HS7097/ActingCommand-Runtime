@@ -1,0 +1,30 @@
+{
+  "schema_version": "actingcommand.scheduling.v1",
+  "catalog": {
+    "catalog_id": "fixture.catalog-a",
+    "catalog_version": 1,
+    "approval_refs": ["approval:fixture-a"]
+  },
+  "pools": [
+    {
+      "id": "fixture-pool-a",
+      "scope": {
+        "kind": "instance",
+        "instance_id": "fixture-instance-a"
+      },
+      "capacity": 120,
+      "projection": {
+        "amount": 1,
+        "per_ms": 360000
+      },
+      "observation": {
+        "kind": "fact",
+        "fact_key": "resource.primary"
+      },
+      "group_delay": {
+        "minimum_delay_ms": 60000,
+        "maximum_delay_ms": 300000
+      }
+    }
+  ]
+}

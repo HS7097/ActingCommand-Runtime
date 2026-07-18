@@ -1,0 +1,71 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://actingcommand.local/contracts/scheduling/diagnostic.schema.json",
+  "title": "ActingCommand Scheduling Catalog Diagnostic v1",
+  "type": "object",
+  "required": [
+    "code",
+    "severity",
+    "json_path",
+    "source",
+    "reason",
+    "schema_version",
+    "catalog_id",
+    "catalog_version"
+  ],
+  "properties": {
+    "code": {
+      "enum": [
+        "document_too_large",
+        "catalog_too_large",
+        "invalid_json",
+        "duplicate_key",
+        "unsupported_schema_version",
+        "unknown_field",
+        "descriptor_mismatch",
+        "limit_exceeded",
+        "duplicate_id",
+        "dangling_reference",
+        "type_mismatch",
+        "missing_required_field",
+        "predicate_unreachable",
+        "predicate_uncomputable",
+        "loop_budget_missing",
+        "effect_incompatible",
+        "approval_missing"
+      ]
+    },
+    "severity": { "enum": ["error", "warning"] },
+    "json_path": { "type": "string", "maxLength": 1024 },
+    "source": {
+      "type": "object",
+      "required": ["document", "source_uri", "line", "column"],
+      "properties": {
+        "document": { "enum": ["tasks", "pools", "activity", "timeline"] },
+        "source_uri": { "type": "string", "minLength": 1, "maxLength": 1024 },
+        "line": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 },
+        "column": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 }
+      },
+      "additionalProperties": false
+    },
+    "reason": { "type": "string", "minLength": 1, "maxLength": 1024 },
+    "schema_version": {
+      "oneOf": [
+        { "const": "actingcommand.scheduling.v1" },
+        { "type": "null" }
+      ]
+    },
+    "catalog_id": {
+      "oneOf": [
+        { "$ref": "./common.schema.json#/$defs/identifier" },
+        { "type": "null" }
+      ]
+    },
+    "catalog_version": {
+      "type": ["integer", "null"],
+      "minimum": 1,
+      "maximum": 9007199254740991
+    }
+  },
+  "additionalProperties": false
+}

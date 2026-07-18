@@ -208,21 +208,21 @@ fn kernel(state: Arc<Mutex<FakeState>>, instances: &[(&str, InstanceId, &str)]) 
 fn input_and_capture_open_lazily_once_and_share_one_daemon_session() {
     let state = Arc::new(Mutex::new(FakeState::default()));
     let instance_id = instance();
-    let kernel = kernel(Arc::clone(&state), &[("ak.cn", instance_id, "private-ak")]);
+    let kernel = kernel(Arc::clone(&state), &[("node.a", instance_id, "private-a")]);
     assert_eq!(
-        kernel.resolve("ak.cn").expect("resolve").instance_id(),
+        kernel.resolve("node.a").expect("resolve").instance_id(),
         instance_id
     );
     assert_eq!(state.lock().expect("state").input_opens, 0);
 
     kernel
-        .input("ak.cn", InputAction::Reset)
+        .input("node.a", InputAction::Reset)
         .expect("first input");
     kernel
-        .input("ak.cn", InputAction::Tap { x: 1, y: 2 })
+        .input("node.a", InputAction::Tap { x: 1, y: 2 })
         .expect("second input");
-    let first = kernel.capture("ak.cn").expect("first capture");
-    let second = kernel.capture("ak.cn").expect("second capture");
+    let first = kernel.capture("node.a").expect("first capture");
+    let second = kernel.capture("node.a").expect("second capture");
     assert_eq!((first.width, first.height), (2, 1));
     assert_eq!((second.width, second.height), (2, 1));
 
@@ -269,21 +269,21 @@ fn instance_sessions_are_partitioned_and_identity_mismatch_is_fatal() {
     let kernel = kernel(
         Arc::clone(&state),
         &[
-            ("ak.cn", first, "private-ak"),
-            ("azur.jp", second, "private-azur"),
-            ("ak.alias", first, "different-private-endpoint"),
+            ("node.a", first, "private-a"),
+            ("node.b", second, "private-b"),
+            ("node.a.shadow", first, "different-private-endpoint"),
         ],
     );
     kernel
-        .input("ak.cn", InputAction::Reset)
+        .input("node.a", InputAction::Reset)
         .expect("first instance");
     kernel
-        .input("azur.jp", InputAction::Reset)
+        .input("node.b", InputAction::Reset)
         .expect("second instance");
     assert_eq!(state.lock().expect("state").input_opens, 2);
     assert_eq!(
         kernel
-            .capture("ak.alias")
+            .capture("node.a.shadow")
             .expect_err("identity mismatch")
             .code(),
         "execution_instance_identity_mismatch"
@@ -301,9 +301,9 @@ fn input_failure_terminates_session_without_reopen_or_fallback() {
         fail_input: true,
         ..FakeState::default()
     }));
-    let kernel = kernel(Arc::clone(&state), &[("ak.cn", instance(), "private-ak")]);
+    let kernel = kernel(Arc::clone(&state), &[("node.a", instance(), "private-a")]);
     let error = kernel
-        .input("ak.cn", InputAction::Reset)
+        .input("node.a", InputAction::Reset)
         .expect_err("input failure");
     assert_eq!(error.code(), "input_backend_operation_failed");
     assert!(!error.is_fatal());
@@ -316,7 +316,7 @@ fn input_failure_terminates_session_without_reopen_or_fallback() {
     }
     assert_eq!(
         kernel
-            .input("ak.cn", InputAction::Reset)
+            .input("node.a", InputAction::Reset)
             .expect_err("terminal session cannot reopen")
             .code(),
         "execution_session_closed"
@@ -331,17 +331,17 @@ fn capture_failure_terminates_session_and_closes_open_input() {
         fail_capture: true,
         ..FakeState::default()
     }));
-    let kernel = kernel(Arc::clone(&state), &[("ak.cn", instance(), "private-ak")]);
+    let kernel = kernel(Arc::clone(&state), &[("node.a", instance(), "private-a")]);
     kernel
-        .input("ak.cn", InputAction::Reset)
+        .input("node.a", InputAction::Reset)
         .expect("open input");
-    let error = kernel.capture("ak.cn").expect_err("capture failure");
+    let error = kernel.capture("node.a").expect_err("capture failure");
     assert_eq!(error.code(), "capture_backend_operation_failed");
     assert!(!error.is_fatal());
     assert_eq!(state.lock().expect("state").input_closes, 1);
     assert_eq!(
         kernel
-            .capture("ak.cn")
+            .capture("node.a")
             .expect_err("terminal session")
             .code(),
         "execution_session_closed"
@@ -358,10 +358,10 @@ fn backend_open_and_close_failures_surface_without_private_details() {
     }));
     let input_kernel = kernel(
         Arc::clone(&input_state),
-        &[("ak.cn", instance(), "private-ak")],
+        &[("node.a", instance(), "private-a")],
     );
     let error = input_kernel
-        .input("ak.cn", InputAction::Reset)
+        .input("node.a", InputAction::Reset)
         .expect_err("input open");
     assert_eq!(error.code(), "input_backend_open_failed");
     assert!(error.is_fatal());
@@ -374,11 +374,11 @@ fn backend_open_and_close_failures_surface_without_private_details() {
     }));
     let capture_kernel = kernel(
         Arc::clone(&capture_state),
-        &[("ak.cn", instance(), "private-ak")],
+        &[("node.a", instance(), "private-a")],
     );
     assert_eq!(
         capture_kernel
-            .capture("ak.cn")
+            .capture("node.a")
             .expect_err("capture open")
             .code(),
         "capture_backend_open_failed"
@@ -391,10 +391,10 @@ fn backend_open_and_close_failures_surface_without_private_details() {
     }));
     let close_kernel = kernel(
         Arc::clone(&close_state),
-        &[("ak.cn", instance(), "private-ak")],
+        &[("node.a", instance(), "private-a")],
     );
     close_kernel
-        .input("ak.cn", InputAction::Reset)
+        .input("node.a", InputAction::Reset)
         .expect("open input");
     let error = close_kernel.close().expect_err("close failure");
     assert_eq!(error.code(), "input_backend_close_failed");
@@ -407,9 +407,9 @@ fn backend_panic_is_caught_and_latched_terminal() {
         panic_input: true,
         ..FakeState::default()
     }));
-    let kernel = kernel(Arc::clone(&state), &[("ak.cn", instance(), "private-ak")]);
+    let kernel = kernel(Arc::clone(&state), &[("node.a", instance(), "private-a")]);
     let error = kernel
-        .input("ak.cn", InputAction::Reset)
+        .input("node.a", InputAction::Reset)
         .expect_err("panic must surface");
     assert_eq!(error.code(), "execution_session_response_lost");
     assert_eq!(error.secondary_code(), Some("execution_session_panicked"));
@@ -417,7 +417,7 @@ fn backend_panic_is_caught_and_latched_terminal() {
     assert!(!format!("{error:?} {error}").contains("private input panic detail"));
     assert_eq!(
         kernel
-            .input("ak.cn", InputAction::Reset)
+            .input("node.a", InputAction::Reset)
             .expect_err("panic session latched")
             .code(),
         "execution_session_closed"
@@ -429,9 +429,9 @@ fn backend_panic_is_caught_and_latched_terminal() {
 fn drop_closes_daemon_owned_input_session() {
     let state = Arc::new(Mutex::new(FakeState::default()));
     {
-        let kernel = kernel(Arc::clone(&state), &[("ak.cn", instance(), "private-ak")]);
+        let kernel = kernel(Arc::clone(&state), &[("node.a", instance(), "private-a")]);
         kernel
-            .input("ak.cn", InputAction::Reset)
+            .input("node.a", InputAction::Reset)
             .expect("open input");
     }
     assert_eq!(state.lock().expect("state").input_closes, 1);

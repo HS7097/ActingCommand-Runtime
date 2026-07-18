@@ -1,0 +1,64 @@
+{
+  "schema_version": "actingcommand.scheduling.v1",
+  "catalog": {
+    "catalog_id": "fixture.h1-neutral-activity",
+    "catalog_version": 1,
+    "approval_refs": ["approval:h1-neutral-activity"]
+  },
+  "pools": [
+    {
+      "id": "neutral-energy",
+      "scope": {
+        "kind": "instance",
+        "instance_id": "neutral-instance-a"
+      },
+      "capacity": 120,
+      "projection": {
+        "amount": 1,
+        "per_ms": 600000
+      },
+      "observation": {
+        "kind": "fact",
+        "fact_key": "resource.energy"
+      },
+      "group_delay": {
+        "minimum_delay_ms": 60000,
+        "maximum_delay_ms": 300000
+      }
+    },
+    {
+      "id": "neutral-raw-material",
+      "scope": {
+        "kind": "instance",
+        "instance_id": "neutral-instance-b"
+      },
+      "capacity": 100,
+      "projection": {
+        "amount": 1,
+        "per_ms": 86400000
+      },
+      "observation": {
+        "kind": "fact",
+        "fact_key": "resource.raw_material"
+      },
+      "group_delay": null
+    },
+    {
+      "id": "neutral-refined-material",
+      "scope": {
+        "kind": "instance",
+        "instance_id": "neutral-instance-b"
+      },
+      "capacity": 100,
+      "projection": {
+        "amount": 1,
+        "per_ms": 86400000
+      },
+      "observation": {
+        "kind": "fact",
+        "fact_key": "resource.refined_material"
+      },
+      "group_delay": null
+    }
+  ]
+}

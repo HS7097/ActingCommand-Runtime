@@ -289,7 +289,7 @@ fn session_status_and_monitor_policy_project_resident_runtime_without_legacy_sta
     let host = RuntimeHost::start(
         RuntimeHostConfig::new(&runtime_root, b"actinglab-runtime-session-adapter-test"),
         Arc::new(FakeProvider {
-            instance_alias: "ak.cn",
+            instance_alias: "node.a",
             instance_id,
             state,
             frame_size: 1,
@@ -310,7 +310,7 @@ fn session_status_and_monitor_policy_project_resident_runtime_without_legacy_sta
     );
     assert_eq!(
         status["data"]["diagnostics"]["instances"]["instances"][0]["instance_alias"],
-        "ak.cn"
+        "node.a"
     );
 
     let unconfigured = run_actinglab_json(
@@ -320,7 +320,7 @@ fn session_status_and_monitor_policy_project_resident_runtime_without_legacy_sta
         [
             "--json",
             "--instance",
-            "ak.cn",
+            "node.a",
             "session",
             "monitor-policy",
             "status",
@@ -335,7 +335,7 @@ fn session_status_and_monitor_policy_project_resident_runtime_without_legacy_sta
         [
             "--json",
             "--instance",
-            "ak.cn",
+            "node.a",
             "session",
             "monitor-policy",
             "set",
@@ -359,7 +359,7 @@ fn session_status_and_monitor_policy_project_resident_runtime_without_legacy_sta
         [
             "--json",
             "--instance",
-            "ak.cn",
+            "node.a",
             "session",
             "monitor-policy",
             "clear",
@@ -388,7 +388,7 @@ fn session_stream_projects_runtime_capture_sequence_without_legacy_state() {
     let host = RuntimeHost::start(
         RuntimeHostConfig::new(&runtime_root, b"actinglab-runtime-stream-adapter-test"),
         Arc::new(FakeProvider {
-            instance_alias: "ak.cn",
+            instance_alias: "node.a",
             instance_id,
             state: Arc::clone(&state),
             frame_size: 2,
@@ -403,7 +403,7 @@ fn session_stream_projects_runtime_capture_sequence_without_legacy_state() {
         [
             "--json",
             "--instance",
-            "ak.cn",
+            "node.a",
             "session",
             "stream",
             "--max-frames",
@@ -480,7 +480,7 @@ fn session_stream_projects_runtime_capture_sequence_without_legacy_state() {
         [
             "--json",
             "--instance",
-            "ak.cn",
+            "node.a",
             "session",
             "stream",
             "--max-frames",
@@ -532,7 +532,7 @@ fn runtime_backed_session_clients_fail_visibly_when_runtime_is_unavailable() {
             [
                 "--json",
                 "--instance",
-                "ak.cn",
+                "node.a",
                 "session",
                 "monitor-policy",
                 "status",
@@ -545,7 +545,7 @@ fn runtime_backed_session_clients_fail_visibly_when_runtime_is_unavailable() {
             [
                 "--json",
                 "--instance",
-                "ak.cn",
+                "node.a",
                 "session",
                 "stream",
                 "--max-frames",
@@ -631,7 +631,7 @@ fn lab_package_debug_is_a_correlated_runtime_request_without_device_authority() 
     let host = RuntimeHost::start(
         RuntimeHostConfig::new(&runtime_root, b"actinglab-runtime-package-debug-test"),
         Arc::new(FakeProvider {
-            instance_alias: "ak.cn",
+            instance_alias: "node.a",
             instance_id,
             state: Arc::clone(&state),
             frame_size: 2,
@@ -743,7 +743,7 @@ fn runtime_owned_evidence_export_has_a_sealed_offline_replay_path() {
     let host = RuntimeHost::start(
         RuntimeHostConfig::new(&runtime_root, b"actinglab-runtime-evidence-export-test"),
         Arc::new(FakeProvider {
-            instance_alias: "ak.cn",
+            instance_alias: "node.a",
             instance_id,
             state: Arc::clone(&state),
             frame_size: 2,
@@ -921,7 +921,7 @@ fn runtime_debug_session_exports_verified_debug_full_capture_evidence() {
     let host = RuntimeHost::start(
         RuntimeHostConfig::new(&runtime_root, b"actinglab-runtime-captured-evidence-test"),
         Arc::new(FakeProvider {
-            instance_alias: "ak.cn",
+            instance_alias: "node.a",
             instance_id,
             state: Arc::clone(&state),
             frame_size: 2,
@@ -943,7 +943,7 @@ fn runtime_debug_session_exports_verified_debug_full_capture_evidence() {
         .expect("debug package");
     session
         .capture_sequence(
-            "ak.cn",
+            "node.a",
             CaptureSequenceSpec::new(1, 0).expect("capture spec"),
         )
         .expect("Runtime capture sequence");
@@ -1005,7 +1005,7 @@ fn production_do_uses_runtime_capture_and_fenced_input() {
     let host = RuntimeHost::start(
         RuntimeHostConfig::new(&runtime_root, b"actinglab-runtime-drive-test"),
         Arc::new(FakeProvider {
-            instance_alias: "ak.cn",
+            instance_alias: "node.a",
             instance_id,
             state: Arc::clone(&state),
             frame_size: 1,
@@ -1017,7 +1017,7 @@ fn production_do_uses_runtime_capture_and_fenced_input() {
         .args([
             "--json",
             "--instance",
-            "ak.cn",
+            "node.a",
             "do",
             "home_button",
             "--capture",
@@ -1077,7 +1077,7 @@ fn online_lab2_observe_and_do_share_runtime_authority_without_local_state() {
     let host = RuntimeHost::start(
         RuntimeHostConfig::new(&runtime_root, b"actinglab-runtime-lab2-test"),
         Arc::new(FakeProvider {
-            instance_alias: "ak.cn",
+            instance_alias: "node.a",
             instance_id,
             state: Arc::clone(&state),
             frame_size: 1,
@@ -1092,7 +1092,7 @@ fn online_lab2_observe_and_do_share_runtime_authority_without_local_state() {
         [
             "--json",
             "--instance",
-            "ak.cn",
+            "node.a",
             "observe",
             "--capture",
             "--zip",
@@ -1115,7 +1115,7 @@ fn online_lab2_observe_and_do_share_runtime_authority_without_local_state() {
         [
             "--json",
             "--instance",
-            "ak.cn",
+            "node.a",
             "do",
             "home_button",
             "--capture",
@@ -1201,7 +1201,7 @@ fn online_lab2_do_guard_failure_records_observation_without_runtime_input() {
     let host = RuntimeHost::start(
         RuntimeHostConfig::new(&runtime_root, b"actinglab-runtime-lab2-guard-test"),
         Arc::new(FakeProvider {
-            instance_alias: "ak.cn",
+            instance_alias: "node.a",
             instance_id,
             state: Arc::clone(&state),
             frame_size: 1,
@@ -1216,7 +1216,7 @@ fn online_lab2_do_guard_failure_records_observation_without_runtime_input() {
         [
             "--json",
             "--instance",
-            "ak.cn",
+            "node.a",
             "do",
             "home_button",
             "--capture",
@@ -1296,7 +1296,7 @@ fn online_lab2_ensure_and_wait_use_runtime_authority_without_local_state() {
     let host = RuntimeHost::start(
         RuntimeHostConfig::new(&runtime_root, b"actinglab-runtime-lab2-route-test"),
         Arc::new(FakeProvider {
-            instance_alias: "ak.cn",
+            instance_alias: "node.a",
             instance_id,
             state: Arc::clone(&state),
             frame_size: 1,
@@ -1311,7 +1311,7 @@ fn online_lab2_ensure_and_wait_use_runtime_authority_without_local_state() {
         [
             "--json",
             "--instance",
-            "ak.cn",
+            "node.a",
             "wait",
             "--capture",
             "--page",
@@ -1335,7 +1335,7 @@ fn online_lab2_ensure_and_wait_use_runtime_authority_without_local_state() {
         [
             "--json",
             "--instance",
-            "ak.cn",
+            "node.a",
             "ensure",
             "--capture",
             "--to",
@@ -1365,7 +1365,7 @@ fn online_lab2_ensure_and_wait_use_runtime_authority_without_local_state() {
         [
             "--json",
             "--instance",
-            "ak.cn",
+            "node.a",
             "wait",
             "--capture",
             "--stable",
@@ -1531,7 +1531,7 @@ fn production_tap_uses_runtime_proxy_without_local_adb_configuration() {
     let host = RuntimeHost::start(
         RuntimeHostConfig::new(&runtime_root, b"actinglab-runtime-proxy-test"),
         Arc::new(FakeProvider {
-            instance_alias: "ak.cn",
+            instance_alias: "node.a",
             instance_id,
             state: Arc::clone(&state),
             frame_size: 1,
@@ -1540,7 +1540,7 @@ fn production_tap_uses_runtime_proxy_without_local_adb_configuration() {
     .expect("runtime host");
 
     let output = Command::new(env!("CARGO_BIN_EXE_actinglab"))
-        .args(["--instance", "ak.cn", "tap", "10", "20"])
+        .args(["--instance", "node.a", "tap", "10", "20"])
         .env("ACTINGLAB_CONFIG_PATH", &config_path)
         .env("ACTINGCOMMAND_RUNTIME_STATE_ROOT", &runtime_root)
         .env_remove("ACTINGLAB_REQUIRE_SESSION_DAEMON")
@@ -1665,7 +1665,7 @@ fn production_lab_run_routes_device_effects_through_runtime_only() {
                 && matches!(
                     &event.payload,
                     ProjectionPayload::Full(payload)
-                        if payload.action() == EventAction::RuntimeTaskRun
+                        if payload.as_ref().action() == EventAction::RuntimeTaskRun
                 )
         })
         .expect("Runtime Lab run terminal");
@@ -1705,7 +1705,7 @@ fn production_lab_run_routes_device_effects_through_runtime_only() {
     let actions = correlated
         .iter()
         .filter_map(|event| match &event.payload {
-            ProjectionPayload::Full(payload) => Some(payload.action()),
+            ProjectionPayload::Full(payload) => Some(payload.as_ref().action()),
             _ => None,
         })
         .collect::<Vec<_>>();
@@ -1809,9 +1809,10 @@ fn runtime_finishes_and_rebuilds_lab_run_after_actinglab_client_is_killed() {
     let facts = events
         .iter()
         .filter_map(|event| match &event.payload {
-            ProjectionPayload::Full(EventPayload::Task(TaskPayload::Semantic(payload))) => {
-                Some(payload.fact())
-            }
+            ProjectionPayload::Full(payload) => match payload.as_ref() {
+                EventPayload::Task(TaskPayload::Semantic(payload)) => Some(payload.fact()),
+                _ => None,
+            },
             _ => None,
         })
         .collect::<Vec<_>>();

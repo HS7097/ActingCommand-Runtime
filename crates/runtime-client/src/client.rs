@@ -3,16 +3,28 @@
 use crate::ipc::{DEFAULT_RUNTIME_MAX_FRAME_BYTES, exchange};
 use crate::{RuntimeClientError, RuntimeClientResult};
 use actingcommand_contract::{
-    ActionId, ApplicationLifecycleAction, CaptureSequenceSpec, ContainedTaskRequest, CorrelationId,
-    EventActor, EventQuery, EventSource, IdentifierIssuer, InputAction, IssuedCorrelationId,
+    ActionId, AgentSessionContext, AgentSessionId, AgentSessionResponse, AgentSessionStatus,
+    AgentWakeId, ApplicationLifecycleAction, ApprovalDecisionRecord, CaptureSequenceSpec,
+    CatalogProposal, ClientActionRecord, ContainedTaskRequest, CorrelationId, EventActor,
+    EventQuery, EventSource, FactScope, IdentifierIssuer, InputAction, IssuedCorrelationId,
     LeaseQueuePolicy, LeaseQueueStatus, LeaseToken, OwnerEpoch, PackageDebugRequest,
-    ProjectedEvent, ProjectionProfile, RUNTIME_INFO_FILE, RequestId, ResourceAuthoringEvent,
-    RuntimeControlPlaneStatus, RuntimeDebugEvent, RuntimeEventBatch, RuntimeEvidenceExportRequest,
-    RuntimeInfo, RuntimeMonitorInstanceStatus, RuntimeMonitorPolicy, RuntimeMonitorRegistryStatus,
-    RuntimeOperation, RuntimeReceipt, RuntimeRequest, RuntimeResult, RuntimeSubscriptionRequest,
-    TerminalEvent,
+    ProjectDecisionPageCursor, ProjectDecisionPageRequest, ProjectInterfaceRequest,
+    ProjectLedgerSnapshot, ProjectedArtifactReference, ProjectedEvent, ProjectionProfile,
+    ProposalPreview, ProposalPromotion, RUNTIME_INFO_FILE, RequestId, ResourceAuthoringEvent,
+    RuntimeControlPlaneStatus, RuntimeDebugEvent, RuntimeEventBatch, RuntimeEventQueryPage,
+    RuntimeEventQueryPageRequest, RuntimeEvidenceExportRequest, RuntimeForwardProjectionRequest,
+    RuntimeInfo, RuntimeMaintenanceQuery, RuntimeMonitorInstanceStatus, RuntimeMonitorPolicy,
+    RuntimeMonitorRegistryStatus, RuntimeOperation, RuntimePlanningDocument,
+    RuntimePlanningDocumentKind, RuntimeReceipt, RuntimeRequest, RuntimeResult,
+    RuntimeStrategicReportRequest, RuntimeSubscriptionRequest, TerminalEvent,
+};
+use actingcommand_policy::{
+    EvaluationFacts, EvaluationResources, EvaluationTime, ForwardProjection,
+    ForwardProjectionConfig, MaintenanceAssessment, MaintenanceTrendPolicy, StrategicProjection,
+    StrategicReport,
 };
 use serde::Serialize;
+use serde::de::DeserializeOwned;
 use std::fmt;
 use std::fs;
 use std::net::TcpStream;
@@ -122,6 +134,12 @@ pub struct RuntimeClient {
     shared: Arc<RuntimeClientShared>,
 }
 
+/// Read-only project projection client. It exposes neither device operations nor ledger writes.
+#[derive(Clone)]
+pub struct RuntimeProjectClient {
+    client: RuntimeClient,
+}
+
 /// Correlation-scoped authoring ingress. Runtime remains the only global-ledger writer.
 #[derive(Clone)]
 pub struct RuntimeAuthoringSession {
@@ -148,6 +166,79 @@ pub struct RuntimeFlowOutput {
 pub enum LeaseAdmission {
     Granted(LeaseToken),
     Queued(LeaseQueueStatus),
+}
+
+/// Typed client projection of one strategic report preparation completed by resident Runtime.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RuntimeStrategicPlan {
+    report: ProjectedArtifactReference,
+    projection: StrategicProjection,
+    proposal: Option<CatalogProposal>,
+    preview: Option<ProposalPreview>,
+}
+
+impl RuntimeStrategicPlan {
+    pub const fn report(&self) -> &ProjectedArtifactReference {
+        &self.report
+    }
+
+    pub const fn projection(&self) -> &StrategicProjection {
+        &self.projection
+    }
+
+    pub const fn proposal(&self) -> Option<&CatalogProposal> {
+        self.proposal.as_ref()
+    }
+
+    pub const fn preview(&self) -> Option<&ProposalPreview> {
+        self.preview.as_ref()
+    }
+}
+
+/// Typed maintenance query converted to the policy-independent wire envelope at send time.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PredictiveMaintenanceRequest {
+    transport: RuntimeMaintenanceQuery,
+}
+
+impl PredictiveMaintenanceRequest {
+    pub fn new(
+        instance_id: impl Into<String>,
+        task_id: impl Into<String>,
+        fact_scope: FactScope,
+        fact_key: impl Into<String>,
+        as_of_ledger_position: u64,
+        as_of_unix_ms: u64,
+        trend_policy: MaintenanceTrendPolicy,
+    ) -> RuntimeClientResult<Self> {
+        trend_policy.validate().map_err(|_| {
+            RuntimeClientError::fatal(
+                "maintenance_trend_policy_invalid",
+                "build_predictive_maintenance_request",
+            )
+        })?;
+        let policy = encode_policy_document(
+            RuntimePlanningDocumentKind::MaintenanceTrendPolicy,
+            &trend_policy,
+            "build_predictive_maintenance_request",
+        )?;
+        let transport = RuntimeMaintenanceQuery::new(
+            instance_id,
+            task_id,
+            fact_scope,
+            fact_key,
+            as_of_ledger_position,
+            as_of_unix_ms,
+            policy,
+        )
+        .map_err(|_| {
+            RuntimeClientError::fatal(
+                "predictive_maintenance_request_invalid",
+                "build_predictive_maintenance_request",
+            )
+        })?;
+        Ok(Self { transport })
+    }
 }
 
 impl RuntimeFlowOutput {
@@ -227,6 +318,26 @@ impl RuntimeClient {
         match self.execute("runtime_status", RuntimeOperation::Status)? {
             RuntimeResult::Status { status } => Ok(status),
             _ => Err(self.unexpected_result("runtime_status")),
+        }
+    }
+
+    pub fn project_snapshot(
+        &self,
+        request: ProjectInterfaceRequest,
+    ) -> RuntimeClientResult<ProjectLedgerSnapshot> {
+        match self.execute(
+            "runtime_project_interface",
+            RuntimeOperation::ProjectInterface { request },
+        )? {
+            RuntimeResult::ProjectInterface { response } => {
+                response.into_snapshot().map_err(|_| {
+                    RuntimeClientError::fatal(
+                        "runtime_project_interface_invalid",
+                        "runtime_project_interface",
+                    )
+                })
+            }
+            _ => Err(self.unexpected_result("runtime_project_interface")),
         }
     }
 
@@ -519,16 +630,311 @@ impl RuntimeClient {
         }
     }
 
+    pub fn record_client_action(
+        &self,
+        action: ClientActionRecord,
+    ) -> RuntimeClientResult<TerminalEvent> {
+        action.validate().map_err(|_| {
+            RuntimeClientError::fatal("client_action_invalid", "record_client_action")
+        })?;
+        let receipt = self.execute_receipt(
+            "record_client_action",
+            RuntimeOperation::RecordClientAction { action },
+            None,
+        )?;
+        if !matches!(receipt.result(), Some(RuntimeResult::ClientActionRecorded)) {
+            return Err(self.unexpected_result("record_client_action"));
+        }
+        receipt
+            .terminal()
+            .ok_or_else(|| self.unexpected_result("record_client_action"))
+    }
+
+    pub fn record_approval_decision(
+        &self,
+        decision: ApprovalDecisionRecord,
+    ) -> RuntimeClientResult<TerminalEvent> {
+        decision.validate().map_err(|_| {
+            RuntimeClientError::fatal("approval_decision_invalid", "record_approval_decision")
+        })?;
+        let approval_id = decision.approval_id().to_owned();
+        let disposition = decision.disposition();
+        let receipt = self.execute_receipt(
+            "record_approval_decision",
+            RuntimeOperation::RecordApprovalDecision { decision },
+            None,
+        )?;
+        if !matches!(
+            receipt.result(),
+            Some(RuntimeResult::ApprovalDecisionRecorded {
+                approval_id: recorded_id,
+                disposition: recorded_disposition,
+            }) if recorded_id == &approval_id && *recorded_disposition == disposition
+        ) {
+            return Err(self.unexpected_result("record_approval_decision"));
+        }
+        receipt
+            .terminal()
+            .ok_or_else(|| self.unexpected_result("record_approval_decision"))
+    }
+
+    /// Authenticates this connection for governance writes without extending authority to peers.
+    pub fn authenticate_governance(
+        &self,
+        capability: impl Into<String>,
+    ) -> RuntimeClientResult<()> {
+        match self.execute(
+            "authenticate_governance",
+            RuntimeOperation::AuthenticateGovernance {
+                capability: capability.into(),
+            },
+        )? {
+            RuntimeResult::GovernanceAuthenticated => Ok(()),
+            _ => Err(self.unexpected_result("authenticate_governance")),
+        }
+    }
+
+    pub fn start_agent_session(
+        &self,
+        wake_id: AgentWakeId,
+    ) -> RuntimeClientResult<AgentSessionContext> {
+        match self.execute(
+            "start_agent_session",
+            RuntimeOperation::StartAgentSession { wake_id },
+        )? {
+            RuntimeResult::AgentSessionOpened { context } => Ok(*context),
+            _ => Err(self.unexpected_result("start_agent_session")),
+        }
+    }
+
+    pub fn resume_agent_session(
+        &self,
+        session_id: AgentSessionId,
+    ) -> RuntimeClientResult<AgentSessionContext> {
+        match self.execute(
+            "resume_agent_session",
+            RuntimeOperation::ResumeAgentSession { session_id },
+        )? {
+            RuntimeResult::AgentSessionObserved { context } => Ok(*context),
+            _ => Err(self.unexpected_result("resume_agent_session")),
+        }
+    }
+
+    pub fn agent_session_status(
+        &self,
+        session_id: AgentSessionId,
+    ) -> RuntimeClientResult<AgentSessionContext> {
+        match self.execute(
+            "agent_session_status",
+            RuntimeOperation::AgentSessionStatus { session_id },
+        )? {
+            RuntimeResult::AgentSessionObserved { context } => Ok(*context),
+            _ => Err(self.unexpected_result("agent_session_status")),
+        }
+    }
+
+    pub fn record_agent_response(
+        &self,
+        response: AgentSessionResponse,
+    ) -> RuntimeClientResult<AgentSessionStatus> {
+        response.validate().map_err(|_| {
+            RuntimeClientError::fatal("agent_response_invalid", "record_agent_response")
+        })?;
+        match self.execute(
+            "record_agent_response",
+            RuntimeOperation::RecordAgentResponse { response },
+        )? {
+            RuntimeResult::AgentResponseRecorded { status } => Ok(status),
+            _ => Err(self.unexpected_result("record_agent_response")),
+        }
+    }
+
+    pub fn prepare_strategic_report(
+        &self,
+        report: &StrategicReport,
+        evidence: Vec<ProjectedArtifactReference>,
+    ) -> RuntimeClientResult<RuntimeStrategicPlan> {
+        report.validate().map_err(|_| {
+            RuntimeClientError::fatal("strategic_report_invalid", "prepare_strategic_report")
+        })?;
+        let report = encode_policy_document(
+            RuntimePlanningDocumentKind::StrategicReport,
+            report,
+            "prepare_strategic_report",
+        )?;
+        let request = RuntimeStrategicReportRequest::new(report, evidence).map_err(|_| {
+            RuntimeClientError::fatal(
+                "strategic_report_request_invalid",
+                "prepare_strategic_report",
+            )
+        })?;
+        match self.execute(
+            "prepare_strategic_report",
+            RuntimeOperation::PrepareStrategicReport {
+                request: Box::new(request),
+            },
+        )? {
+            RuntimeResult::StrategicPlanPrepared { plan } => {
+                let (report, projection, proposal, preview) = plan.into_parts();
+                let projection = self.decode_policy_document(
+                    &projection,
+                    RuntimePlanningDocumentKind::StrategicProjection,
+                    "prepare_strategic_report",
+                )?;
+                Ok(RuntimeStrategicPlan {
+                    report,
+                    projection,
+                    proposal,
+                    preview,
+                })
+            }
+            _ => Err(self.unexpected_result("prepare_strategic_report")),
+        }
+    }
+
+    pub fn project_policy_forward(
+        &self,
+        facts: &EvaluationFacts,
+        resources: &EvaluationResources,
+        time: EvaluationTime,
+        seed: u64,
+        config: ForwardProjectionConfig,
+    ) -> RuntimeClientResult<ForwardProjection> {
+        config.validate().map_err(|_| {
+            RuntimeClientError::fatal(
+                "forward_projection_config_invalid",
+                "project_policy_forward",
+            )
+        })?;
+        let request = RuntimeForwardProjectionRequest::new(
+            encode_policy_document(
+                RuntimePlanningDocumentKind::EvaluationFacts,
+                facts,
+                "project_policy_forward",
+            )?,
+            encode_policy_document(
+                RuntimePlanningDocumentKind::EvaluationResources,
+                resources,
+                "project_policy_forward",
+            )?,
+            encode_policy_document(
+                RuntimePlanningDocumentKind::EvaluationTime,
+                &time,
+                "project_policy_forward",
+            )?,
+            seed,
+            encode_policy_document(
+                RuntimePlanningDocumentKind::ForwardProjectionConfig,
+                &config,
+                "project_policy_forward",
+            )?,
+        )
+        .map_err(|_| {
+            RuntimeClientError::fatal(
+                "forward_projection_request_invalid",
+                "project_policy_forward",
+            )
+        })?;
+        let operation = RuntimeOperation::ProjectPolicyForward {
+            request: Box::new(request),
+        };
+        match self.execute("project_policy_forward", operation)? {
+            RuntimeResult::PolicyForwardProjected { projection } => self.decode_policy_document(
+                &projection,
+                RuntimePlanningDocumentKind::ForwardProjection,
+                "project_policy_forward",
+            ),
+            _ => Err(self.unexpected_result("project_policy_forward")),
+        }
+    }
+
+    pub fn assess_predictive_maintenance(
+        &self,
+        request: PredictiveMaintenanceRequest,
+    ) -> RuntimeClientResult<MaintenanceAssessment> {
+        match self.execute(
+            "assess_predictive_maintenance",
+            RuntimeOperation::AssessPredictiveMaintenance {
+                query: Box::new(request.transport),
+            },
+        )? {
+            RuntimeResult::PredictiveMaintenanceAssessed { assessment } => self
+                .decode_policy_document(
+                    &assessment,
+                    RuntimePlanningDocumentKind::MaintenanceAssessmentV2,
+                    "assess_predictive_maintenance",
+                ),
+            _ => Err(self.unexpected_result("assess_predictive_maintenance")),
+        }
+    }
+
+    pub fn compile_proposal(
+        &self,
+        proposal: CatalogProposal,
+    ) -> RuntimeClientResult<ProposalPreview> {
+        proposal
+            .validate()
+            .map_err(|_| RuntimeClientError::fatal("proposal_invalid", "compile_proposal"))?;
+        match self.execute(
+            "compile_proposal",
+            RuntimeOperation::CompileProposal {
+                proposal: Box::new(proposal),
+            },
+        )? {
+            RuntimeResult::ProposalEvaluated { preview } => Ok(preview),
+            _ => Err(self.unexpected_result("compile_proposal")),
+        }
+    }
+
+    pub fn promote_proposal(
+        &self,
+        proposal: CatalogProposal,
+    ) -> RuntimeClientResult<ProposalPromotion> {
+        proposal
+            .validate()
+            .map_err(|_| RuntimeClientError::fatal("proposal_invalid", "promote_proposal"))?;
+        match self.execute(
+            "promote_proposal",
+            RuntimeOperation::PromoteProposal {
+                proposal: Box::new(proposal),
+            },
+        )? {
+            RuntimeResult::ProposalPromoted { promotion } => Ok(promotion),
+            _ => Err(self.unexpected_result("promote_proposal")),
+        }
+    }
+
     pub fn query_events(
         &self,
         query: EventQuery,
         profile: ProjectionProfile,
     ) -> RuntimeClientResult<Vec<ProjectedEvent>> {
+        let page =
+            self.query_event_page(query, profile, RuntimeEventQueryPageRequest::default())?;
+        if page.has_more() {
+            return Err(RuntimeClientError::fatal(
+                "runtime_event_query_requires_pagination",
+                "query_runtime_events",
+            ));
+        }
+        Ok(page.events().to_vec())
+    }
+
+    pub fn query_event_page(
+        &self,
+        query: EventQuery,
+        profile: ProjectionProfile,
+        page: RuntimeEventQueryPageRequest,
+    ) -> RuntimeClientResult<RuntimeEventQueryPage> {
         match self.execute(
             "query_runtime_events",
-            RuntimeOperation::QueryEvents { query, profile },
+            RuntimeOperation::QueryEvents {
+                query,
+                profile,
+                page,
+            },
         )? {
-            RuntimeResult::Events { events } => Ok(events),
+            RuntimeResult::EventPage { page } => Ok(page),
             _ => Err(self.unexpected_result("query_runtime_events")),
         }
     }
@@ -744,6 +1150,25 @@ impl RuntimeClient {
             .map_err(|_| RuntimeClientError::fatal("runtime_identifier_issue_failed", operation))
     }
 
+    fn decode_policy_document<T>(
+        &self,
+        document: &RuntimePlanningDocument,
+        kind: RuntimePlanningDocumentKind,
+        operation: &'static str,
+    ) -> RuntimeClientResult<T>
+    where
+        T: DeserializeOwned,
+    {
+        document.decode(kind).map_err(|_| {
+            let error =
+                RuntimeClientError::fatal("runtime_planning_document_decode_failed", operation);
+            match self.connection(operation) {
+                Ok(mut connection) => connection.latch(error),
+                Err(lock_error) => lock_error,
+            }
+        })
+    }
+
     fn flow_output(
         &self,
         receipt: RuntimeReceipt,
@@ -784,6 +1209,70 @@ impl RuntimeClient {
             .connection
             .lock()
             .map_err(|_| RuntimeClientError::fatal("runtime_connection_poisoned", operation))
+    }
+}
+
+fn encode_policy_document<T>(
+    kind: RuntimePlanningDocumentKind,
+    value: &T,
+    operation: &'static str,
+) -> RuntimeClientResult<RuntimePlanningDocument>
+where
+    T: Serialize,
+{
+    RuntimePlanningDocument::encode(kind, value).map_err(|_| {
+        RuntimeClientError::fatal("runtime_planning_document_encode_failed", operation)
+    })
+}
+
+impl RuntimeProjectClient {
+    pub fn connect(config: RuntimeClientConfig) -> RuntimeClientResult<Self> {
+        RuntimeClient::connect(config).map(|client| Self { client })
+    }
+
+    pub fn runtime_info(&self) -> &RuntimeInfo {
+        self.client.runtime_info()
+    }
+
+    pub fn status(&self) -> RuntimeClientResult<RuntimeControlPlaneStatus> {
+        self.client.status()
+    }
+
+    pub fn snapshot(&self) -> RuntimeClientResult<ProjectLedgerSnapshot> {
+        self.client
+            .project_snapshot(ProjectInterfaceRequest::current())
+    }
+
+    pub fn snapshot_page(
+        &self,
+        limit: u16,
+        cursor: Option<ProjectDecisionPageCursor>,
+    ) -> RuntimeClientResult<ProjectLedgerSnapshot> {
+        let page = ProjectDecisionPageRequest::new(limit, cursor).map_err(|_| {
+            RuntimeClientError::fatal("runtime_project_page_invalid", "runtime_project_interface")
+        })?;
+        let request = ProjectInterfaceRequest::current()
+            .with_decision_page(page)
+            .map_err(|_| {
+                RuntimeClientError::fatal(
+                    "runtime_project_page_invalid",
+                    "runtime_project_interface",
+                )
+            })?;
+        self.client.project_snapshot(request)
+    }
+
+    pub fn snapshot_with_versions(
+        &self,
+        accepted_versions: Vec<String>,
+    ) -> RuntimeClientResult<ProjectLedgerSnapshot> {
+        let request = ProjectInterfaceRequest::new(accepted_versions).map_err(|_| {
+            RuntimeClientError::fatal(
+                "runtime_project_versions_invalid",
+                "runtime_project_interface",
+            )
+        })?;
+        self.client.project_snapshot(request)
     }
 }
 

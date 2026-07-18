@@ -147,6 +147,18 @@ typed_id!(
 typed_id!(ArtifactId, IssuedArtifactId, "artifact_", mint_artifact_id);
 typed_id!(OwnerEpoch, IssuedOwnerEpoch, "epoch_", mint_owner_epoch);
 typed_id!(HolderId, IssuedHolderId, "holder_", mint_holder_id);
+typed_id!(
+    AgentWakeId,
+    IssuedAgentWakeId,
+    "agent_wake_",
+    mint_agent_wake_id
+);
+typed_id!(
+    AgentSessionId,
+    IssuedAgentSessionId,
+    "agent_session_",
+    mint_agent_session_id
+);
 
 macro_rules! verified_transport {
     ($issued:ident, $transport:ident) => {
@@ -219,6 +231,10 @@ pub struct IdentifierIssuanceError {
 impl IdentifierIssuanceError {
     const fn new(code: &'static str) -> Self {
         Self { code }
+    }
+
+    pub(crate) const fn contract_invalid() -> Self {
+        Self::new("identifier_contract_invalid")
     }
 
     pub const fn code(self) -> &'static str {
