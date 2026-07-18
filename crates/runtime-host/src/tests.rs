@@ -9465,10 +9465,18 @@ fn policy_dispatch_crash_child_process() {
     assert!(matches!(admission, PolicyDispatchAdmission::Granted { .. }));
     fs::write(
         Path::new(&root).join("admitted-before-crash.json"),
-        serde_json::to_vec(&(intent, reason_chain)).expect("admitted dispatch bytes"),
+        serde_json::to_vec(&(intent.clone(), reason_chain)).expect("admitted dispatch bytes"),
     )
     .expect("admitted dispatch marker");
     fs::write(Path::new(&root).join("child-ready"), b"ready").expect("child marker");
+    if matches!(
+        std::env::var("ACTINGCOMMAND_POLICY_CRASH_POINT").as_deref(),
+        Ok("after_policy_execution") | Ok("after_policy_completion")
+    ) {
+        host.record_policy_dispatch_outcome(&intent.decision_id, &PolicyExecutionInput::Succeeded)
+            .expect("record child outcome");
+        panic!("policy outcome crash barrier returned unexpectedly");
+    }
     std::process::exit(0);
 }
 
@@ -9848,6 +9856,138 @@ fn policy_dispatch_accepts_one_late_outcome_after_process_crash() {
     );
     drop(client);
     reopened.close().expect("close replayed late outcome host");
+}
+
+#[test]
+fn policy_dispatch_outcome_append_boundaries_recover_completion_exactly_once() {
+    for point in ["after_policy_execution", "after_policy_completion"] {
+        let root = TempDir::new().expect("tempdir");
+        let shared_instance_id = instance_id();
+        fs::write(
+            root.path().join("instance.json"),
+            serde_json::to_vec(&shared_instance_id).expect("instance bytes"),
+        )
+        .expect("instance file");
+        let marker = root.path().join("policy-outcome-crash-marker");
+        let mut child = Command::new(std::env::current_exe().expect("test executable"))
+            .args([
+                "--exact",
+                "tests::policy_dispatch_crash_child_process",
+                "--nocapture",
+            ])
+            .env("ACTINGCOMMAND_POLICY_CRASH_ROOT", root.path())
+            .env("ACTINGCOMMAND_POLICY_CRASH_POINT", point)
+            .env("ACTINGCOMMAND_POLICY_CRASH_MARKER", &marker)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("spawn outcome crash child");
+        let deadline = Instant::now() + Duration::from_secs(20);
+        while !marker.is_file() {
+            assert!(
+                Instant::now() < deadline,
+                "outcome crash marker timeout at {point}"
+            );
+            assert!(
+                child
+                    .try_wait()
+                    .expect("poll outcome crash child")
+                    .is_none(),
+                "outcome crash child exited before {point}"
+            );
+            thread::sleep(Duration::from_millis(10));
+        }
+        child.kill().expect("kill outcome crash child");
+        let status = child.wait().expect("wait outcome crash child");
+        assert!(!status.success());
+
+        let (intent, _): (DispatchIntent, DecisionReasonChain) = serde_json::from_slice(
+            &fs::read(root.path().join("admitted-before-crash.json"))
+                .expect("admitted dispatch marker"),
+        )
+        .expect("admitted dispatch JSON");
+        let host = RuntimeHost::start(
+            config(&root),
+            Arc::new(FakeProvider::one(
+                POLICY_INSTANCE_ALIAS,
+                shared_instance_id,
+                Arc::new(FakeState::default()),
+            )),
+        )
+        .expect("recover outcome crash");
+        let outcome = host
+            .record_policy_dispatch_outcome(&intent.decision_id, &PolicyExecutionInput::Succeeded)
+            .expect("replay recovered outcome");
+        assert!(matches!(
+            outcome.outcome,
+            PolicyExecutionOutcome::Succeeded { .. }
+        ));
+        assert!(
+            host.pinned_policy_catalog(&intent.decision_id)
+                .expect("read recovered pin")
+                .is_none()
+        );
+        let mut client = TestClient::connect(&host);
+        let events = projected_events(&mut client, EventQuery::default());
+        assert_eq!(
+            events
+                .iter()
+                .filter(|event| event.event_type == EventType::PolicyExecutionRecorded)
+                .count(),
+            1,
+            "execution count at {point}"
+        );
+        assert_eq!(
+            events
+                .iter()
+                .filter(|event| event.event_type == EventType::PolicyDispatchCompleted)
+                .count(),
+            1,
+            "completion count at {point}"
+        );
+        drop(client);
+        host.close().expect("close recovered outcome host");
+
+        let reopened = RuntimeHost::start(
+            config(&root),
+            Arc::new(FakeProvider::one(
+                POLICY_INSTANCE_ALIAS,
+                shared_instance_id,
+                Arc::new(FakeState::default()),
+            )),
+        )
+        .expect("reopen recovered outcome host");
+        assert_eq!(
+            reopened
+                .record_policy_dispatch_outcome(
+                    &intent.decision_id,
+                    &PolicyExecutionInput::Succeeded,
+                )
+                .expect("replay after second restart"),
+            outcome
+        );
+        let mut client = TestClient::connect(&reopened);
+        let events = projected_events(&mut client, EventQuery::default());
+        assert_eq!(
+            events
+                .iter()
+                .filter(|event| event.event_type == EventType::PolicyExecutionRecorded)
+                .count(),
+            1,
+            "execution count after restart at {point}"
+        );
+        assert_eq!(
+            events
+                .iter()
+                .filter(|event| event.event_type == EventType::PolicyDispatchCompleted)
+                .count(),
+            1,
+            "completion count after restart at {point}"
+        );
+        drop(client);
+        reopened.close().expect("close replayed outcome host");
+    }
 }
 
 #[test]

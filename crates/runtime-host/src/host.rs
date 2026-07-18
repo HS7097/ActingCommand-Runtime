@@ -1291,13 +1291,33 @@ fn reconcile_policy_dispatches(
     ledger: &GlobalLedger,
     events: &RuntimeEvents,
 ) -> RuntimeHostResult<()> {
+    let pending_completions = policy.pending_dispatch_completions();
     let pending = policy.pending_dispatches();
-    if pending.is_empty() {
+    if pending_completions.is_empty() && pending.is_empty() {
         return Ok(());
     }
-    let persisted = ledger
-        .query(EventQuery::default())
-        .map_err(|_| ledger_error("reconcile_policy_dispatches"))?;
+    for decision_id in pending_completions {
+        let (dispatch, admission) = policy.completion_data(&decision_id)?;
+        let draft = events.draft(
+            EventSeverity::Info,
+            EventSource::Scheduler,
+            OriginModule::Policy,
+            EventActor::Scheduler,
+            events.system_links()?,
+            PolicyPayloadDraft::dispatch_completed(dispatch, admission, AuditInput::new()),
+        )?;
+        let draft = events.sanitize(draft)?;
+        ledger
+            .append(draft)
+            .map_err(|_| ledger_error("reconcile_policy_dispatch_completion"))?;
+    }
+    let persisted = if pending.is_empty() {
+        Vec::new()
+    } else {
+        ledger
+            .query(EventQuery::default())
+            .map_err(|_| ledger_error("reconcile_policy_dispatches"))?
+    };
     for dispatch in pending {
         let intent = persisted
             .iter()
@@ -2844,83 +2864,89 @@ impl HostShared {
     ) -> RuntimeHostResult<PolicyExecutionEventData> {
         let result: RuntimeHostResult<PolicyExecutionEventData> = (|| {
             let _gate = lock(&self.policy_outcome_gate, "record_policy_dispatch_outcome")?;
-            let (instance_id, admitted_at_unix_ms) = {
-                let policy = lock(&self.policy, "read_policy_dispatch_instance")?;
-                if let Some(existing) = policy.replay_execution(decision_id, input)? {
-                    return Ok(existing);
+            let replay = lock(&self.policy, "replay_policy_dispatch_outcome")?
+                .replay_execution(decision_id, input)?;
+            let data = if let Some(existing) = replay {
+                existing
+            } else {
+                let (instance_id, admitted_at_unix_ms) = {
+                    let policy = lock(&self.policy, "read_policy_dispatch_instance")?;
+                    (
+                        policy.execution_instance_id(decision_id)?.to_owned(),
+                        policy.admitted_at(decision_id)?,
+                    )
+                };
+                let sample = self.runtime_clock_sample()?;
+                let clock = lock(&self.policy_dispatch_clocks, "read_policy_dispatch_start")?
+                    .get(decision_id)
+                    .copied()
+                    .ok_or_else(|| {
+                        RuntimeHostError::fatal(
+                            "policy_dispatch_clock_missing",
+                            "record_policy_dispatch_outcome",
+                            RuntimeErrorCode::RuntimeFatal,
+                        )
+                    })?;
+                if clock.admitted_at_unix_ms != admitted_at_unix_ms {
+                    return Err(RuntimeHostError::fatal(
+                        "policy_dispatch_clock_identity_conflict",
+                        "record_policy_dispatch_outcome",
+                        RuntimeErrorCode::RuntimeFatal,
+                    ));
                 }
-                (
-                    policy.execution_instance_id(decision_id)?.to_owned(),
-                    policy.admitted_at(decision_id)?,
-                )
-            };
-            let sample = self.runtime_clock_sample()?;
-            let clock = lock(&self.policy_dispatch_clocks, "read_policy_dispatch_start")?
-                .get(decision_id)
-                .copied()
+                let runtime_ms = match clock.started_at_monotonic_ms {
+                    Some(started_at_monotonic_ms) => {
+                        sample.monotonic_ms.checked_sub(started_at_monotonic_ms)
+                    }
+                    None => sample.unix_ms.checked_sub(admitted_at_unix_ms),
+                }
                 .ok_or_else(|| {
                     RuntimeHostError::fatal(
-                        "policy_dispatch_clock_missing",
+                        "policy_dispatch_clock_regressed",
                         "record_policy_dispatch_outcome",
                         RuntimeErrorCode::RuntimeFatal,
                     )
                 })?;
-            if clock.admitted_at_unix_ms != admitted_at_unix_ms {
-                return Err(RuntimeHostError::fatal(
-                    "policy_dispatch_clock_identity_conflict",
-                    "record_policy_dispatch_outcome",
-                    RuntimeErrorCode::RuntimeFatal,
-                ));
-            }
-            let runtime_ms = match clock.started_at_monotonic_ms {
-                Some(started_at_monotonic_ms) => {
-                    sample.monotonic_ms.checked_sub(started_at_monotonic_ms)
+                let observed_at_unix_ms =
+                    admitted_at_unix_ms.checked_add(runtime_ms).ok_or_else(|| {
+                        RuntimeHostError::fatal(
+                            "policy_execution_time_overflow",
+                            "record_policy_dispatch_outcome",
+                            RuntimeErrorCode::RuntimeFatal,
+                        )
+                    })?;
+                let perf_context = self.performance_context(&instance_id, observed_at_unix_ms)?;
+                let mut policy = lock(&self.policy, "record_policy_dispatch_outcome")?;
+                match policy.prepare_execution(
+                    decision_id,
+                    observed_at_unix_ms,
+                    runtime_ms,
+                    input,
+                    &perf_context,
+                )? {
+                    PolicyExecutionPreparation::New(data) => {
+                        let links = self.events.system_links()?;
+                        self.append_event_raw(
+                            policy_execution_severity(&data),
+                            EventSource::Scheduler,
+                            OriginModule::Policy,
+                            EventActor::Scheduler,
+                            links,
+                            PolicyPayloadDraft::execution_recorded(data.clone(), AuditInput::new()),
+                        )?;
+                        #[cfg(test)]
+                        policy_crash_test_barrier("after_policy_execution");
+                        policy.commit_execution(&data)?;
+                        data
+                    }
+                    PolicyExecutionPreparation::Replay(data) => data,
                 }
-                None => sample.unix_ms.checked_sub(admitted_at_unix_ms),
-            }
-            .ok_or_else(|| {
-                RuntimeHostError::fatal(
-                    "policy_dispatch_clock_regressed",
-                    "record_policy_dispatch_outcome",
-                    RuntimeErrorCode::RuntimeFatal,
-                )
-            })?;
-            let observed_at_unix_ms =
-                admitted_at_unix_ms.checked_add(runtime_ms).ok_or_else(|| {
-                    RuntimeHostError::fatal(
-                        "policy_execution_time_overflow",
-                        "record_policy_dispatch_outcome",
-                        RuntimeErrorCode::RuntimeFatal,
-                    )
-                })?;
-            let perf_context = self.performance_context(&instance_id, observed_at_unix_ms)?;
-            let mut policy = lock(&self.policy, "record_policy_dispatch_outcome")?;
-            let data = match policy.prepare_execution(
-                decision_id,
-                observed_at_unix_ms,
-                runtime_ms,
-                input,
-                &perf_context,
-            )? {
-                PolicyExecutionPreparation::New(data) => {
-                    let links = self.events.system_links()?;
-                    self.append_event_raw(
-                        policy_execution_severity(&data),
-                        EventSource::Scheduler,
-                        OriginModule::Policy,
-                        EventActor::Scheduler,
-                        links,
-                        PolicyPayloadDraft::execution_recorded(data.clone(), AuditInput::new()),
-                    )?;
-                    policy.commit_execution(&data)?;
-                    data
-                }
-                PolicyExecutionPreparation::Replay(data) => data,
             };
+            let mut policy = lock(&self.policy, "complete_policy_dispatch_outcome")?;
             if policy.dispatch_needs_completion(decision_id)? {
                 let (dispatch, admission) = policy.completion_data(decision_id)?;
                 let links = self.events.system_links()?;
-                self.append_event_raw(
+                let completed = self.append_event_raw(
                     EventSeverity::Info,
                     EventSource::Scheduler,
                     OriginModule::Policy,
@@ -2928,7 +2954,9 @@ impl HostShared {
                     links,
                     PolicyPayloadDraft::dispatch_completed(dispatch, admission, AuditInput::new()),
                 )?;
-                policy.complete_dispatch(decision_id)?;
+                #[cfg(test)]
+                policy_crash_test_barrier("after_policy_completion");
+                policy.complete_dispatch(decision_id, completed.sequence())?;
             }
             lock(&self.policy_dispatch_clocks, "clear_policy_dispatch_start")?.remove(decision_id);
             Ok(data)
