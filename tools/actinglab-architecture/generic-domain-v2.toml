@@ -15,6 +15,7 @@ path = "tools/actinglab-architecture/generic-domain-surfaces-v2.jsonl"
 sha256 = "3701e4e672ae40f1fc79f3969f8b873814f514e1fca85bf3ac6b6a1dcace18d2"
 approval_id = "approval.issue44_r8"
 source_issue = 44
+source_pr = 112
 
 [[concept]]
 id = "agent.agent"
