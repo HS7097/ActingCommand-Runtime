@@ -2,6 +2,7 @@
 
 //! Source-derived architecture guards for ActingCommand Runtime ownership rules.
 
+pub mod approval_provenance;
 pub mod external_compat;
 pub mod generic_domain;
 

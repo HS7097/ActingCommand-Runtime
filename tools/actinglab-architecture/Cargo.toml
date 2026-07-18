@@ -20,6 +20,10 @@ path = "src/generic_domain_main.rs"
 name = "external-compat-guard"
 path = "src/external_compat_main.rs"
 
+[[bin]]
+name = "approval-provenance-guard"
+path = "src/approval_provenance_main.rs"
+
 [dependencies]
 proc-macro2 = "1"
 quote = "1"
