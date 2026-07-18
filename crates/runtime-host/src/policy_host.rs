@@ -698,6 +698,16 @@ impl PolicyHost {
             .collect()
     }
 
+    pub(crate) fn pending_dispatch_completions(&self) -> Vec<String> {
+        self.seen_dispatches
+            .iter()
+            .filter(|(_, dispatch)| {
+                dispatch.lifecycle == DispatchLifecycle::Admitted && dispatch.execution.is_some()
+            })
+            .map(|(decision_id, _)| decision_id.clone())
+            .collect()
+    }
+
     pub(crate) fn switch_active(
         &mut self,
         catalog: LoadedCatalog,
@@ -1085,13 +1095,34 @@ impl PolicyHost {
         Ok((dispatch.data.clone(), admission))
     }
 
-    pub(crate) fn complete_dispatch(&mut self, decision_id: &str) -> RuntimeHostResult<()> {
+    pub(crate) fn complete_dispatch(
+        &mut self,
+        decision_id: &str,
+        completed_sequence: u64,
+    ) -> RuntimeHostResult<()> {
+        let dispatch = self.seen_dispatches.get_mut(decision_id).ok_or_else(|| {
+            fatal(
+                "policy_dispatch_state_incomplete",
+                "complete_policy_dispatch",
+            )
+        })?;
+        if dispatch.lifecycle != DispatchLifecycle::Admitted
+            || dispatch.execution.is_none()
+            || dispatch.completed_sequence.is_some()
+        {
+            return Err(fatal(
+                "policy_dispatch_completion_incomplete",
+                "complete_policy_dispatch",
+            ));
+        }
         if self.pinned_dispatches.remove(decision_id).is_none() {
             return Err(request(
                 "policy_dispatch_not_pinned",
                 "complete_policy_dispatch",
             ));
         }
+        dispatch.lifecycle = DispatchLifecycle::Completed;
+        dispatch.completed_sequence = Some(completed_sequence);
         Ok(())
     }
 
