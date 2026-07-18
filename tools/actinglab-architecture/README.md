@@ -34,4 +34,12 @@ cargo run -p actingcommand-actinglab-architecture --bin generic-domain-guard -- 
 
 Snapshot output is inventory evidence only. It does not approve new concepts or surfaces.
 
+Validate exact files, hashes, provenance, and allowed scopes in the isolated compatibility zone:
+
+```text
+cargo run -p actingcommand-actinglab-architecture --bin external-compat-guard -- --check
+```
+
+The external-compat manifest does not authorize identities outside its registered data files.
+
 The snapshot defines the A0 completion denominator. Its pipeline exemption table may only shrink after A0.
