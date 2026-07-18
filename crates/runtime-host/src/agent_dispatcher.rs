@@ -234,17 +234,11 @@ impl AgentDispatcherState {
                     terminal: existing.terminal,
                 })
             } else {
-                Err(fatal(
-                    "agent_resume_request_conflict",
-                    "resume_agent_session",
-                ))
+                Err(request_identity_conflict(AgentRequestKind::Resume))
             };
         }
         if self.response_requests.contains_key(&request_id) {
-            return Err(request(
-                "agent_resume_request_conflict",
-                "resume_agent_session",
-            ));
+            return Err(request_identity_conflict(AgentRequestKind::Resume));
         }
         let current = self.session(session_id)?;
         if current.expired_at(observed_at_unix_ms) {
@@ -268,17 +262,11 @@ impl AgentDispatcherState {
             return if existing.response() == Some(response) {
                 Ok(AgentResponsePreparation::Replay(existing.status().clone()))
             } else {
-                Err(fatal(
-                    "agent_response_request_conflict",
-                    "record_agent_response",
-                ))
+                Err(request_identity_conflict(AgentRequestKind::Response))
             };
         }
         if self.resume_requests.contains_key(&request_id) {
-            return Err(request(
-                "agent_response_request_conflict",
-                "record_agent_response",
-            ));
+            return Err(request_identity_conflict(AgentRequestKind::Response));
         }
         let current = self.session(response.session_id())?;
         if current.expired_at(runtime_observed_at_unix_ms) {
@@ -565,6 +553,23 @@ impl AgentDispatcherState {
 
 fn request(code: &'static str, operation: &'static str) -> RuntimeHostError {
     RuntimeHostError::request(code, operation, RuntimeErrorCode::InvalidRequest)
+}
+
+#[derive(Clone, Copy)]
+enum AgentRequestKind {
+    Resume,
+    Response,
+}
+
+fn request_identity_conflict(kind: AgentRequestKind) -> RuntimeHostError {
+    match kind {
+        AgentRequestKind::Resume => {
+            request("agent_resume_request_conflict", "resume_agent_session")
+        }
+        AgentRequestKind::Response => {
+            request("agent_response_request_conflict", "record_agent_response")
+        }
+    }
 }
 
 fn fatal(code: &'static str, operation: &'static str) -> RuntimeHostError {

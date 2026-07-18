@@ -8285,7 +8285,7 @@ fn agent_resume_request_replays_across_reconnect_and_restart() {
 }
 
 #[test]
-fn agent_cross_operation_request_ids_are_rejected_before_append_and_survive_restart() {
+fn agent_request_id_conflicts_are_denied_before_append_and_survive_restart() {
     let root = TempDir::new().expect("tempdir");
     let runtime_instance_id = instance_id();
     let agent_config = AgentDispatcherConfig::new(3, 60_000, 2).expect("agent config");
@@ -8342,6 +8342,28 @@ fn agent_cross_operation_request_ids_are_rejected_before_append_and_survive_rest
     let resume = client.agent_request(RuntimeOperation::ResumeAgentSession { session_id });
     let resume_id = resume.request_id();
     assert_eq!(client.send(&resume).state(), RuntimeReceiptState::Completed);
+    let conflicting_session_id = *IdentifierIssuer::new()
+        .expect("identifier issuer")
+        .mint_agent_session_id()
+        .expect("conflicting session id")
+        .transport();
+    let resume_same_operation_conflict = reuse_request_id(
+        client.agent_request(RuntimeOperation::ResumeAgentSession {
+            session_id: conflicting_session_id,
+        }),
+        resume_id,
+    );
+    let denied = host
+        .process_request_for_test(
+            &resume_same_operation_conflict,
+            ConnectionId::new(901).expect("connection"),
+        )
+        .expect("same-operation resume conflict receipt");
+    assert_eq!(denied.state(), RuntimeReceiptState::Denied);
+    assert!(matches!(
+        denied.error_projection(),
+        Some(error) if error.code == RuntimeErrorCode::InvalidRequest && !error.fatal
+    ));
     let response = AgentSessionResponse::new(
         session_id,
         AgentResponseDisposition::RetryableFailure,
@@ -8358,7 +8380,7 @@ fn agent_cross_operation_request_ids_are_rejected_before_append_and_survive_rest
     let denied = host
         .process_request_for_test(
             &response_conflict,
-            ConnectionId::new(901).expect("connection"),
+            ConnectionId::new(902).expect("connection"),
         )
         .expect("response conflict receipt");
     assert_eq!(denied.state(), RuntimeReceiptState::Denied);
@@ -8386,6 +8408,30 @@ fn agent_cross_operation_request_ids_are_rejected_before_append_and_survive_rest
         panic!("expected agent response status")
     };
     assert_eq!(status.state(), AgentAttentionState::Active);
+    let conflicting_response = AgentSessionResponse::new(
+        session_id,
+        AgentResponseDisposition::NeedsHuman,
+        "conflicting_sidecar_result",
+        unix_ms_now().expect("wall clock"),
+    )
+    .expect("conflicting agent response");
+    let response_same_operation_conflict = reuse_request_id(
+        client.agent_request(RuntimeOperation::RecordAgentResponse {
+            response: conflicting_response,
+        }),
+        response_id,
+    );
+    let denied = host
+        .process_request_for_test(
+            &response_same_operation_conflict,
+            ConnectionId::new(903).expect("connection"),
+        )
+        .expect("same-operation response conflict receipt");
+    assert_eq!(denied.state(), RuntimeReceiptState::Denied);
+    assert!(matches!(
+        denied.error_projection(),
+        Some(error) if error.code == RuntimeErrorCode::InvalidRequest && !error.fatal
+    ));
     let resume_conflict = reuse_request_id(
         client.agent_request(RuntimeOperation::ResumeAgentSession { session_id }),
         response_id,
@@ -8393,7 +8439,7 @@ fn agent_cross_operation_request_ids_are_rejected_before_append_and_survive_rest
     let denied = host
         .process_request_for_test(
             &resume_conflict,
-            ConnectionId::new(902).expect("connection"),
+            ConnectionId::new(904).expect("connection"),
         )
         .expect("resume conflict receipt");
     assert_eq!(denied.state(), RuntimeReceiptState::Denied);
@@ -8414,6 +8460,8 @@ fn agent_cross_operation_request_ids_are_rejected_before_append_and_survive_rest
         EventType::AgentResponseRecorded
     );
     assert!(host.fatal_error().expect("runtime health").is_none());
+    let status = client.request(RuntimeOperation::Status);
+    assert_eq!(client.send(&status).state(), RuntimeReceiptState::Completed);
     drop(client);
     host.close().expect("close runtime");
 
@@ -8426,7 +8474,12 @@ fn agent_cross_operation_request_ids_are_rejected_before_append_and_survive_rest
         )),
     )
     .expect("reopen runtime after rejected conflicts");
-    for (request, connection_id) in [(&response_conflict, 903), (&resume_conflict, 904)] {
+    for (request, connection_id) in [
+        (&resume_same_operation_conflict, 905),
+        (&response_conflict, 906),
+        (&response_same_operation_conflict, 907),
+        (&resume_conflict, 908),
+    ] {
         let denied = reopened
             .process_request_for_test(
                 request,
