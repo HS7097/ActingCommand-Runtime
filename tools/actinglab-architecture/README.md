@@ -46,6 +46,10 @@ surfaces, and refreshing the manifest without a matching approved mapping is not
 Identity allowances bind one exact file and AST/structured selector to a fragment hash, purpose,
 scope, and content-addressed approval. They cannot authorize another function or field in the same
 file. Raw strings on the nine identity axes are rejected; typed identity comparisons remain valid.
+Workspace package discovery reconciles every Cargo manifest under `apps/`, `benchmarks/`, `crates/`,
+`providers/`, and `tools/` with the workspace member/exclude lists. Root files, `.github/`, scripts,
+declared members, and protected data roots are itemized. An undeclared package or unknown protected
+file type fails the guard instead of shrinking the scanned surface.
 
 Validate exact files, hashes, provenance, and allowed scopes in the isolated compatibility zone:
 
