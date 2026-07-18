@@ -6,7 +6,7 @@ use std::process::Command;
 
 use actingcommand_actinglab_architecture::external_compat::load_and_validate_external_compat;
 use actingcommand_actinglab_architecture::generic_domain::{
-    load_generic_domain_registry, validate_workspace_genericity,
+    GENERIC_DOMAIN_REGISTRY_PATH, load_generic_domain_registry, validate_workspace_genericity,
 };
 use actingcommand_actinglab_architecture::{
     contract_dependency_violations, extract_command_inventory, inspect_contract_fact_matching,
@@ -28,7 +28,7 @@ fn workspace_root() -> PathBuf {
 #[test]
 fn c2_generic_domain_registry_matches_every_workspace_member_and_protected_root() {
     let root = workspace_root();
-    let registry_path = root.join("tools/actinglab-architecture/generic-domain-v1.toml");
+    let registry_path = root.join(GENERIC_DOMAIN_REGISTRY_PATH);
     let registry = load_generic_domain_registry(&registry_path)
         .unwrap_or_else(|error| panic!("load {}: {error}", registry_path.display()));
     validate_workspace_genericity(&root, &registry)

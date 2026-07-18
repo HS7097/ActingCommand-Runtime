@@ -9,15 +9,22 @@ use std::path::{Component, Path, PathBuf};
 use quote::ToTokens;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use syn::parse::{Parse, ParseStream};
 use syn::visit::Visit;
-use syn::{BinOp, Expr, ExprBinary, ExprMatch, ImplItem, Item, Lit, Member, Visibility};
+use syn::{
+    Attribute, BinOp, Expr, ExprBinary, ExprMatch, Fields, Ident, ImplItem, Item, Lit, LitStr,
+    Member, Token, Visibility, braced,
+};
 
 use crate::external_compat::{EXTERNAL_COMPAT_MANIFEST_PATH, load_and_validate_external_compat};
 use crate::{inspect_generic_runtime_identity_with_allowances, known_project_identity_tokens};
 
-pub const GENERIC_DOMAIN_SCHEMA_VERSION: &str = "actingcommand.generic-domain.v1";
+pub const GENERIC_DOMAIN_SCHEMA_VERSION: &str = "actingcommand.generic-domain.v2";
 pub const GENERIC_DOMAIN_REGISTRY_PATH: &str =
-    "tools/actinglab-architecture/generic-domain-v1.toml";
+    "tools/actinglab-architecture/generic-domain-v2.toml";
+pub const GENERIC_DOMAIN_SURFACE_SCHEMA_VERSION: &str = "actingcommand.generic-domain-surfaces.v2";
+pub const GENERIC_DOMAIN_SURFACE_MANIFEST_PATH: &str =
+    "tools/actinglab-architecture/generic-domain-surfaces-v2.jsonl";
 pub const REQUIRED_PROTECTED_ROOTS: &[&str] = &[
     "benchmarks/workloads",
     "contracts",
@@ -31,11 +38,55 @@ pub const REQUIRED_PROTECTED_ROOTS: &[&str] = &[
 pub struct GenericDomainRegistry {
     pub schema_version: String,
     #[serde(default)]
+    pub surface_manifest: Option<SurfaceManifestReference>,
+    #[serde(default)]
+    pub approval: Vec<SurfaceApproval>,
+    #[serde(default)]
     pub concept: Vec<GenericConcept>,
     #[serde(default)]
     pub identity_allowance: Vec<IdentityAllowance>,
     #[serde(default)]
     pub surface: Vec<ProtectedSurface>,
+}
+
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct SurfaceManifestReference {
+    pub path: String,
+    pub sha256: String,
+    pub approval_id: String,
+    pub source_issue: u64,
+    #[serde(default)]
+    pub source_pr: Option<u64>,
+}
+
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+struct SurfaceManifestHeader {
+    pub schema_version: String,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct SurfaceRecord {
+    pub surface_id: String,
+    pub kind: String,
+    pub stable_path: String,
+    pub selector: String,
+    pub concept_ids: Vec<String>,
+    pub fingerprint: String,
+}
+
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct SurfaceApproval {
+    pub id: String,
+    pub repository: String,
+    pub issue: u64,
+    pub comment_id: u64,
+    pub author: String,
+    pub content_sha256: String,
+    pub scope: Vec<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
@@ -54,8 +105,10 @@ pub struct ProtectedSurface {
     pub surface_id: String,
     pub kind: String,
     pub stable_path: String,
+    pub selector: String,
     pub concept_ids: Vec<String>,
     pub fingerprint: String,
+    pub approval_id: String,
     pub source_issue: u64,
     #[serde(default)]
     pub source_pr: Option<u64>,
@@ -78,8 +131,10 @@ pub struct IdentityAllowance {
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct SurfaceSnapshot {
+    pub surface_id: String,
     pub kind: String,
     pub stable_path: String,
+    pub selector: String,
     pub fingerprint: String,
 }
 
@@ -90,7 +145,82 @@ pub fn parse_generic_domain_registry(source: &str) -> Result<GenericDomainRegist
 pub fn load_generic_domain_registry(path: &Path) -> Result<GenericDomainRegistry, String> {
     let source = fs::read_to_string(path)
         .map_err(|error| format!("failed to read {}: {error}", path.display()))?;
-    parse_generic_domain_registry(&source)
+    let mut registry = parse_generic_domain_registry(&source)?;
+    let Some(reference) = registry.surface_manifest.clone() else {
+        return Ok(registry);
+    };
+    let workspace_root = path
+        .parent()
+        .and_then(Path::parent)
+        .and_then(Path::parent)
+        .ok_or_else(|| format!("registry path {} is not under tools/<name>", path.display()))?;
+    validate_stable_path(&reference.path)?;
+    if reference.path != GENERIC_DOMAIN_SURFACE_MANIFEST_PATH {
+        return Err(format!(
+            "generic-domain registry references unexpected surface manifest {}",
+            reference.path
+        ));
+    }
+    let manifest_path = workspace_root.join(&reference.path);
+    let bytes = fs::read(&manifest_path)
+        .map_err(|error| format!("failed to read {}: {error}", manifest_path.display()))?;
+    let actual = format!("{:x}", Sha256::digest(&bytes));
+    if actual != reference.sha256 {
+        return Err(format!(
+            "surface manifest hash drifted: registered {}, actual {actual}",
+            reference.sha256
+        ));
+    }
+    let source = std::str::from_utf8(&bytes)
+        .map_err(|error| format!("surface manifest is not UTF-8: {error}"))?;
+    let mut lines = source.lines();
+    let header: SurfaceManifestHeader = serde_json::from_str(
+        lines
+            .next()
+            .ok_or_else(|| "surface manifest is empty".to_string())?,
+    )
+    .map_err(|error| format!("invalid surface manifest header: {error}"))?;
+    if header.schema_version != GENERIC_DOMAIN_SURFACE_SCHEMA_VERSION {
+        return Err(format!(
+            "unsupported surface manifest schema_version {}; expected {GENERIC_DOMAIN_SURFACE_SCHEMA_VERSION}",
+            header.schema_version
+        ));
+    }
+    let mut records = Vec::new();
+    for (index, line) in lines.enumerate() {
+        if line.trim().is_empty() {
+            return Err(format!(
+                "surface manifest contains a blank record at line {}",
+                index + 2
+            ));
+        }
+        records.push(
+            serde_json::from_str::<SurfaceRecord>(line).map_err(|error| {
+                format!(
+                    "invalid surface manifest record at line {}: {error}",
+                    index + 2
+                )
+            })?,
+        );
+    }
+    if !registry.surface.is_empty() {
+        return Err("registry cannot combine inline and external surfaces".to_string());
+    }
+    registry.surface = records
+        .into_iter()
+        .map(|surface| ProtectedSurface {
+            surface_id: surface.surface_id,
+            kind: surface.kind,
+            stable_path: surface.stable_path,
+            selector: surface.selector,
+            concept_ids: surface.concept_ids,
+            fingerprint: surface.fingerprint,
+            approval_id: reference.approval_id.clone(),
+            source_issue: reference.source_issue,
+            source_pr: reference.source_pr,
+        })
+        .collect();
+    Ok(registry)
 }
 
 pub fn validate_generic_domain_registry(registry: &GenericDomainRegistry) -> Result<(), String> {
@@ -104,8 +234,105 @@ pub fn validate_generic_domain_registry(registry: &GenericDomainRegistry) -> Res
     if registry.concept.is_empty() {
         errors.push("generic-domain registry contains no concepts".to_string());
     }
+    if registry.approval.is_empty() {
+        errors.push("generic-domain registry contains no surface approvals".to_string());
+    }
     if registry.surface.is_empty() {
         errors.push("generic-domain registry contains no protected surfaces".to_string());
+    }
+
+    let mut approval_ids = HashSet::new();
+    let mut previous_approval = None;
+    for approval in &registry.approval {
+        if !is_surface_id(&approval.id) {
+            errors.push(format!("surface approval has invalid id {}", approval.id));
+        }
+        if !approval_ids.insert(approval.id.as_str()) {
+            errors.push(format!("duplicate surface approval id {}", approval.id));
+        }
+        if previous_approval.is_some_and(|previous: &str| previous >= approval.id.as_str()) {
+            errors.push(format!(
+                "surface approval ids are not strictly sorted at {}",
+                approval.id
+            ));
+        }
+        previous_approval = Some(approval.id.as_str());
+        if approval.repository != "HS7097/ActingCommand-Workflow" {
+            errors.push(format!(
+                "surface approval {} has untrusted repository {}",
+                approval.id, approval.repository
+            ));
+        }
+        if approval.author != "HS7097" {
+            errors.push(format!(
+                "surface approval {} has untrusted author {}",
+                approval.id, approval.author
+            ));
+        }
+        if approval.issue == 0 || approval.comment_id == 0 {
+            errors.push(format!(
+                "surface approval {} has no issue/comment source",
+                approval.id
+            ));
+        }
+        if !is_sha256(&approval.content_sha256) {
+            errors.push(format!(
+                "surface approval {} content_sha256 must be lowercase SHA-256",
+                approval.id
+            ));
+        }
+        if approval.scope.is_empty() {
+            errors.push(format!("surface approval {} has no scope", approval.id));
+        }
+        let mut scopes = HashSet::new();
+        let mut previous_scope = None;
+        for scope in &approval.scope {
+            if !is_surface_id(scope) {
+                errors.push(format!(
+                    "surface approval {} has invalid scope {scope}",
+                    approval.id
+                ));
+            }
+            if !scopes.insert(scope.as_str()) {
+                errors.push(format!(
+                    "surface approval {} repeats scope {scope}",
+                    approval.id
+                ));
+            }
+            if previous_scope.is_some_and(|previous: &str| previous >= scope.as_str()) {
+                errors.push(format!(
+                    "surface approval {} scopes are not strictly sorted at {scope}",
+                    approval.id
+                ));
+            }
+            previous_scope = Some(scope.as_str());
+        }
+        if !scopes.contains("surface.mapping") {
+            errors.push(format!(
+                "surface approval {} does not authorize surface.mapping",
+                approval.id
+            ));
+        }
+    }
+    if let Some(reference) = &registry.surface_manifest {
+        if reference.path != GENERIC_DOMAIN_SURFACE_MANIFEST_PATH {
+            errors.push(format!(
+                "surface manifest has unexpected path {}",
+                reference.path
+            ));
+        }
+        if !is_sha256(&reference.sha256) {
+            errors.push("surface manifest sha256 must be lowercase SHA-256".to_string());
+        }
+        if !approval_ids.contains(reference.approval_id.as_str()) {
+            errors.push(format!(
+                "surface manifest references unknown approval {}",
+                reference.approval_id
+            ));
+        }
+        if reference.source_issue == 0 || reference.source_pr == Some(0) {
+            errors.push("surface manifest has invalid source issue/PR".to_string());
+        }
     }
 
     let mut concept_ids = HashSet::new();
@@ -256,7 +483,7 @@ pub fn validate_generic_domain_registry(registry: &GenericDomainRegistry) -> Res
     }
 
     let mut surface_ids = HashSet::new();
-    let mut stable_paths = HashSet::new();
+    let mut surface_keys = HashSet::new();
     let mut previous_surface = None;
     for surface in &registry.surface {
         if !is_surface_id(&surface.surface_id) {
@@ -272,7 +499,25 @@ pub fn validate_generic_domain_registry(registry: &GenericDomainRegistry) -> Res
             ));
         }
         previous_surface = Some(surface.surface_id.as_str());
-        if !matches!(surface.kind.as_str(), "protected_root" | "workspace_member") {
+        if !matches!(
+            surface.kind.as_str(),
+            "rust_public_item"
+                | "rust_wire_item"
+                | "rust_public_field"
+                | "rust_wire_field"
+                | "rust_public_variant"
+                | "rust_wire_variant"
+                | "rust_public_impl_item"
+                | "rust_wire_attribute"
+                | "rust_cli_attribute"
+                | "rust_match_literal"
+                | "rust_macro_item"
+                | "rust_macro_variant"
+                | "rust_macro_wire_value"
+                | "structured_key"
+                | "structured_value"
+                | "text_record"
+        ) {
             errors.push(format!(
                 "surface {} has invalid kind {}",
                 surface.surface_id, surface.kind
@@ -281,10 +526,28 @@ pub fn validate_generic_domain_registry(registry: &GenericDomainRegistry) -> Res
         if let Err(error) = validate_stable_path(&surface.stable_path) {
             errors.push(format!("surface {} {error}", surface.surface_id));
         }
-        if !stable_paths.insert(surface.stable_path.as_str()) {
+        if surface.selector.trim().is_empty() {
             errors.push(format!(
-                "duplicate protected stable_path {}",
-                surface.stable_path
+                "surface {} has an empty selector",
+                surface.surface_id
+            ));
+        }
+        if !surface_keys.insert((
+            surface.kind.as_str(),
+            surface.stable_path.as_str(),
+            surface.selector.as_str(),
+        )) {
+            errors.push(format!(
+                "duplicate protected surface {} {} {}",
+                surface.kind, surface.stable_path, surface.selector
+            ));
+        }
+        let expected_surface_id =
+            surface_id_for(&surface.kind, &surface.stable_path, &surface.selector);
+        if surface.surface_id != expected_surface_id {
+            errors.push(format!(
+                "surface {} has unstable id; expected {expected_surface_id}",
+                surface.surface_id
             ));
         }
         if surface.concept_ids.is_empty() {
@@ -322,6 +585,12 @@ pub fn validate_generic_domain_registry(registry: &GenericDomainRegistry) -> Res
                 surface.surface_id
             ));
         }
+        if !approval_ids.contains(surface.approval_id.as_str()) {
+            errors.push(format!(
+                "surface {} references unknown approval {}",
+                surface.surface_id, surface.approval_id
+            ));
+        }
         if surface.source_issue == 0 {
             errors.push(format!(
                 "surface {} has no source_issue",
@@ -345,14 +614,42 @@ pub fn validate_generic_domain_registry(registry: &GenericDomainRegistry) -> Res
 }
 
 pub fn workspace_surface_snapshot(root: &Path) -> Result<Vec<SurfaceSnapshot>, String> {
-    let mut snapshots = workspace_members(root)?
-        .into_iter()
-        .map(|stable_path| snapshot_for_root(root, "workspace_member", &stable_path))
-        .collect::<Result<Vec<_>, _>>()?;
-    for stable_path in REQUIRED_PROTECTED_ROOTS {
-        snapshots.push(snapshot_for_root(root, "protected_root", stable_path)?);
+    let mut roots = workspace_members(root)?;
+    roots.extend(
+        REQUIRED_PROTECTED_ROOTS
+            .iter()
+            .map(|path| (*path).to_string()),
+    );
+    roots.sort();
+    roots.dedup();
+
+    let mut files = Vec::new();
+    for stable_path in roots {
+        collect_protected_files(&root.join(stable_path), &mut files)?;
     }
-    snapshots.sort_by(|left, right| left.stable_path.cmp(&right.stable_path));
+    files.sort();
+    files.dedup();
+
+    let mut snapshots = Vec::new();
+    for file in files {
+        let relative = file
+            .strip_prefix(root)
+            .map_err(|_| format!("{} escaped workspace root", file.display()))?;
+        let relative = normalize_path(relative)?;
+        if relative == GENERIC_DOMAIN_REGISTRY_PATH
+            || relative == GENERIC_DOMAIN_SURFACE_MANIFEST_PATH
+        {
+            continue;
+        }
+        snapshots.extend(snapshot_for_file(&file, &relative)?);
+    }
+    snapshots.sort_by(|left, right| left.surface_id.cmp(&right.surface_id));
+    if snapshots
+        .windows(2)
+        .any(|pair| pair[0].surface_id == pair[1].surface_id)
+    {
+        return Err("surface inventory produced duplicate stable ids".to_string());
+    }
     Ok(snapshots)
 }
 
@@ -365,40 +662,53 @@ pub fn validate_workspace_surface_registry(
     let registered = registry
         .surface
         .iter()
-        .map(|surface| (surface.stable_path.as_str(), surface))
+        .map(|surface| (surface.surface_id.as_str(), surface))
         .collect::<HashMap<_, _>>();
-    let expected_paths = expected
+    let expected_ids = expected
         .iter()
-        .map(|snapshot| snapshot.stable_path.clone())
+        .map(|snapshot| snapshot.surface_id.clone())
         .collect::<HashSet<_>>();
     let mut errors = Vec::new();
 
     for snapshot in &expected {
-        let Some(surface) = registered.get(snapshot.stable_path.as_str()) else {
+        let Some(surface) = registered.get(snapshot.surface_id.as_str()) else {
             errors.push(format!(
-                "unmapped protected surface {}",
-                snapshot.stable_path
+                "unmapped protected surface {} {} {} ({})",
+                snapshot.kind, snapshot.stable_path, snapshot.selector, snapshot.surface_id
             ));
             continue;
         };
-        if surface.kind != snapshot.kind {
+        if surface.kind != snapshot.kind
+            || surface.stable_path != snapshot.stable_path
+            || surface.selector != snapshot.selector
+        {
             errors.push(format!(
-                "surface {} kind drifted: registered {}, actual {}",
-                snapshot.stable_path, surface.kind, snapshot.kind
+                "surface {} identity drifted: registered {} {} {}, actual {} {} {}",
+                snapshot.surface_id,
+                surface.kind,
+                surface.stable_path,
+                surface.selector,
+                snapshot.kind,
+                snapshot.stable_path,
+                snapshot.selector
             ));
         }
         if surface.fingerprint != snapshot.fingerprint {
             errors.push(format!(
-                "surface {} fingerprint drifted: registered {}, actual {}",
-                snapshot.stable_path, surface.fingerprint, snapshot.fingerprint
+                "surface {} fingerprint drifted at {} {}: registered {}, actual {}",
+                snapshot.surface_id,
+                snapshot.stable_path,
+                snapshot.selector,
+                surface.fingerprint,
+                snapshot.fingerprint
             ));
         }
     }
     for surface in &registry.surface {
-        if !expected_paths.contains(&surface.stable_path) {
+        if !expected_ids.contains(&surface.surface_id) {
             errors.push(format!(
-                "registered surface {} no longer exists",
-                surface.stable_path
+                "registered surface {} no longer exists at {} {}",
+                surface.surface_id, surface.stable_path, surface.selector
             ));
         }
     }
@@ -449,6 +759,7 @@ pub fn validate_workspace_genericity(
         let relative = normalize_path(relative)?;
         covered_paths.insert(relative.clone());
         if relative == GENERIC_DOMAIN_REGISTRY_PATH
+            || relative == GENERIC_DOMAIN_SURFACE_MANIFEST_PATH
             || relative == EXTERNAL_COMPAT_MANIFEST_PATH
             || external_paths.contains(relative.as_str())
         {
@@ -619,54 +930,6 @@ fn workspace_members(root: &Path) -> Result<Vec<String>, String> {
     Ok(result)
 }
 
-fn snapshot_for_root(
-    root: &Path,
-    kind: &str,
-    stable_path: &str,
-) -> Result<SurfaceSnapshot, String> {
-    validate_stable_path(stable_path)?;
-    let target = root.join(stable_path);
-    if !target.is_dir() {
-        return Err(format!(
-            "protected surface root {} is not a directory",
-            target.display()
-        ));
-    }
-    let mut files = Vec::new();
-    collect_protected_files(&target, &mut files)?;
-    files.sort();
-    let mut records = Vec::new();
-    for file in files {
-        let relative = file
-            .strip_prefix(root)
-            .map_err(|_| format!("{} escaped workspace root", file.display()))?;
-        let relative = normalize_path(relative)?;
-        if relative == "tools/actinglab-architecture/generic-domain-v1.toml" {
-            continue;
-        }
-        let source = fs::read_to_string(&file)
-            .map_err(|error| format!("failed to read {}: {error}", file.display()))?;
-        if file.extension().is_some_and(|extension| extension == "rs") {
-            let inventory = rust_surface_inventory(&relative, &source)?;
-            if !inventory.is_empty() {
-                records.push(format!("{relative}\n{}", inventory.join("\n")));
-            }
-        } else {
-            records.push(format!(
-                "{relative}\n{}",
-                source.replace("\r\n", "\n").replace('\r', "\n")
-            ));
-        }
-    }
-    records.sort();
-    let fingerprint = format!("{:x}", Sha256::digest(records.join("\n--\n").as_bytes()));
-    Ok(SurfaceSnapshot {
-        kind: kind.to_string(),
-        stable_path: stable_path.to_string(),
-        fingerprint,
-    })
-}
-
 fn collect_protected_files(root: &Path, files: &mut Vec<PathBuf>) -> Result<(), String> {
     let entries = fs::read_dir(root)
         .map_err(|error| format!("failed to read directory {}: {error}", root.display()))?;
@@ -705,127 +968,504 @@ fn is_protected_file(path: &Path) -> bool {
         })
 }
 
-fn rust_surface_inventory(path: &str, source: &str) -> Result<Vec<String>, String> {
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct RawSurface {
+    kind: &'static str,
+    selector: String,
+    content: String,
+}
+
+fn snapshot_for_file(path: &Path, stable_path: &str) -> Result<Vec<SurfaceSnapshot>, String> {
+    let source = fs::read_to_string(path)
+        .map_err(|error| format!("failed to read {}: {error}", path.display()))?;
+    let extension = path
+        .extension()
+        .and_then(|value| value.to_str())
+        .unwrap_or("");
+    let raw = match extension {
+        "rs" => rust_surface_inventory(stable_path, &source)?,
+        "json" => structured_json_inventory(stable_path, &source)?,
+        "toml" => structured_toml_inventory(stable_path, &source)?,
+        _ => text_surface_inventory(&source),
+    };
+    Ok(raw
+        .into_iter()
+        .map(|item| {
+            let surface_id = surface_id_for(item.kind, stable_path, &item.selector);
+            let fingerprint = format!("{:x}", Sha256::digest(item.content.as_bytes()));
+            SurfaceSnapshot {
+                surface_id,
+                kind: item.kind.to_string(),
+                stable_path: stable_path.to_string(),
+                selector: item.selector,
+                fingerprint,
+            }
+        })
+        .collect())
+}
+
+fn surface_id_for(kind: &str, stable_path: &str, selector: &str) -> String {
+    let digest = format!(
+        "{:x}",
+        Sha256::digest(format!("{kind}\0{stable_path}\0{selector}").as_bytes())
+    );
+    format!("surface.{}", &digest[..40])
+}
+
+fn rust_surface_inventory(path: &str, source: &str) -> Result<Vec<RawSurface>, String> {
     let file =
         syn::parse_file(source).map_err(|error| format!("failed to parse {path}: {error}"))?;
-    let mut visitor = ProtectedSurfaceVisitor::default();
-    visitor.visit_file(&file);
-    visitor.entries.sort();
-    visitor.entries.dedup();
-    Ok(visitor.entries)
+    let mut collector = RustSurfaceCollector::default();
+    collector.collect_items(&file.items, &[])?;
+    let mut match_collector = MatchLiteralCollector::default();
+    match_collector.visit_file(&file);
+    collector.items.extend(match_collector.items);
+    collector.items.sort_by(|left, right| {
+        (left.kind, left.selector.as_str(), left.content.as_str()).cmp(&(
+            right.kind,
+            right.selector.as_str(),
+            right.content.as_str(),
+        ))
+    });
+    collector.items.dedup();
+    Ok(collector.items)
 }
 
 #[derive(Default)]
-struct ProtectedSurfaceVisitor {
-    entries: Vec<String>,
+struct RustSurfaceCollector {
+    items: Vec<RawSurface>,
 }
 
-impl<'ast> Visit<'ast> for ProtectedSurfaceVisitor {
-    fn visit_item(&mut self, node: &'ast Item) {
-        match node {
-            Item::Const(item) if is_public(&item.vis) => {
-                self.entries
-                    .push(format!("public.const:{}", item.to_token_stream()));
+impl RustSurfaceCollector {
+    fn collect_items(&mut self, items: &[Item], module: &[String]) -> Result<(), String> {
+        for item in items {
+            match item {
+                Item::Const(item) if is_public(&item.vis) => self.push(
+                    "rust_public_item",
+                    qualified(module, &format!("const:{}", item.ident)),
+                    item.to_token_stream(),
+                ),
+                Item::Enum(item) => {
+                    let owner = qualified(module, &item.ident.to_string());
+                    let wire = is_wire_type(&item.attrs);
+                    self.attributes(&owner, &item.attrs);
+                    if is_public(&item.vis) || wire {
+                        let visibility = &item.vis;
+                        let identifier = &item.ident;
+                        let generics = &item.generics;
+                        self.push(
+                            if is_public(&item.vis) {
+                                "rust_public_item"
+                            } else {
+                                "rust_wire_item"
+                            },
+                            format!("enum:{owner}"),
+                            quote::quote!(#visibility enum #identifier #generics),
+                        );
+                        for variant in &item.variants {
+                            let kind = if is_public(&item.vis) {
+                                "rust_public_variant"
+                            } else {
+                                "rust_wire_variant"
+                            };
+                            let selector = format!("variant:{owner}::{}", variant.ident);
+                            self.push(kind, selector.clone(), variant.to_token_stream());
+                            self.attributes(&selector, &variant.attrs);
+                            self.fields(&selector, &variant.fields, true);
+                        }
+                    }
+                }
+                Item::ExternCrate(item) if is_public(&item.vis) => self.push(
+                    "rust_public_item",
+                    qualified(module, &format!("extern:{}", item.ident)),
+                    item.to_token_stream(),
+                ),
+                Item::Fn(item) => {
+                    let owner = qualified(module, &format!("fn:{}", item.sig.ident));
+                    self.attributes(&owner, &item.attrs);
+                    if is_public(&item.vis) {
+                        self.push("rust_public_item", owner, item.sig.to_token_stream());
+                    }
+                }
+                Item::Macro(item) => self.macro_item(item, module)?,
+                Item::Mod(item) => {
+                    let owner = qualified(module, &format!("mod:{}", item.ident));
+                    self.attributes(&owner, &item.attrs);
+                    if is_public(&item.vis) {
+                        self.push("rust_public_item", owner, item.ident.to_token_stream());
+                    }
+                    if let Some((_, nested)) = &item.content {
+                        let mut next = module.to_vec();
+                        next.push(item.ident.to_string());
+                        self.collect_items(nested, &next)?;
+                    }
+                }
+                Item::Static(item) if is_public(&item.vis) => self.push(
+                    "rust_public_item",
+                    qualified(module, &format!("static:{}", item.ident)),
+                    item.to_token_stream(),
+                ),
+                Item::Struct(item) => {
+                    let owner = qualified(module, &item.ident.to_string());
+                    let wire = is_wire_type(&item.attrs);
+                    self.attributes(&owner, &item.attrs);
+                    if is_public(&item.vis) || wire {
+                        let visibility = &item.vis;
+                        let identifier = &item.ident;
+                        let generics = &item.generics;
+                        self.push(
+                            if is_public(&item.vis) {
+                                "rust_public_item"
+                            } else {
+                                "rust_wire_item"
+                            },
+                            format!("struct:{owner}"),
+                            quote::quote!(#visibility struct #identifier #generics),
+                        );
+                        self.fields(&owner, &item.fields, wire);
+                    }
+                }
+                Item::Trait(item) if is_public(&item.vis) => self.push(
+                    "rust_public_item",
+                    qualified(module, &format!("trait:{}", item.ident)),
+                    item.to_token_stream(),
+                ),
+                Item::TraitAlias(item) if is_public(&item.vis) => self.push(
+                    "rust_public_item",
+                    qualified(module, &format!("trait_alias:{}", item.ident)),
+                    item.to_token_stream(),
+                ),
+                Item::Type(item) if is_public(&item.vis) => self.push(
+                    "rust_public_item",
+                    qualified(module, &format!("type:{}", item.ident)),
+                    item.to_token_stream(),
+                ),
+                Item::Union(item) if is_public(&item.vis) => self.push(
+                    "rust_public_item",
+                    qualified(module, &format!("union:{}", item.ident)),
+                    item.to_token_stream(),
+                ),
+                Item::Use(item) if is_public(&item.vis) => self.push(
+                    "rust_public_item",
+                    qualified(
+                        module,
+                        &format!("use:{}", short_hash(&item.to_token_stream().to_string())),
+                    ),
+                    item.to_token_stream(),
+                ),
+                Item::Impl(item) => {
+                    let owner = qualified(module, &item.self_ty.to_token_stream().to_string());
+                    self.attributes(&owner, &item.attrs);
+                    for member in &item.items {
+                        match member {
+                            ImplItem::Const(member) if is_public(&member.vis) => self.push(
+                                "rust_public_impl_item",
+                                format!("impl_const:{owner}::{}", member.ident),
+                                member.to_token_stream(),
+                            ),
+                            ImplItem::Fn(member) if is_public(&member.vis) => self.push(
+                                "rust_public_impl_item",
+                                format!("impl_fn:{owner}::{}", member.sig.ident),
+                                member.sig.to_token_stream(),
+                            ),
+                            ImplItem::Type(member) if is_public(&member.vis) => self.push(
+                                "rust_public_impl_item",
+                                format!("impl_type:{owner}::{}", member.ident),
+                                member.to_token_stream(),
+                            ),
+                            _ => {}
+                        }
+                    }
+                }
+                _ => self.attributes(
+                    &qualified(module, &format!("item: {}", item.to_token_stream())),
+                    item_attrs(item),
+                ),
             }
-            Item::Enum(item) if is_public(&item.vis) => {
-                self.entries
-                    .push(format!("public.enum:{}", item.to_token_stream()));
-            }
-            Item::ExternCrate(item) if is_public(&item.vis) => {
-                self.entries
-                    .push(format!("public.extern:{}", item.to_token_stream()));
-            }
-            Item::Fn(item) if is_public(&item.vis) => {
-                self.entries
-                    .push(format!("public.fn:{}", item.sig.to_token_stream()));
-            }
-            Item::Macro(item)
-                if item
-                    .attrs
-                    .iter()
-                    .any(|attribute| attribute.path().is_ident("macro_export")) =>
-            {
-                self.entries
-                    .push(format!("public.macro:{}", item.mac.path.to_token_stream()));
-            }
-            Item::Mod(item) if is_public(&item.vis) => {
-                self.entries.push(format!("public.mod:{}", item.ident));
-            }
-            Item::Static(item) if is_public(&item.vis) => {
-                self.entries
-                    .push(format!("public.static:{}", item.to_token_stream()));
-            }
-            Item::Struct(item) if is_public(&item.vis) => {
-                self.entries
-                    .push(format!("public.struct:{}", item.to_token_stream()));
-            }
-            Item::Trait(item) if is_public(&item.vis) => {
-                self.entries
-                    .push(format!("public.trait:{}", item.to_token_stream()));
-            }
-            Item::TraitAlias(item) if is_public(&item.vis) => {
-                self.entries
-                    .push(format!("public.trait_alias:{}", item.to_token_stream()));
-            }
-            Item::Type(item) if is_public(&item.vis) => {
-                self.entries
-                    .push(format!("public.type:{}", item.to_token_stream()));
-            }
-            Item::Union(item) if is_public(&item.vis) => {
-                self.entries
-                    .push(format!("public.union:{}", item.to_token_stream()));
-            }
-            Item::Use(item) if is_public(&item.vis) => {
-                self.entries
-                    .push(format!("public.use:{}", item.to_token_stream()));
-            }
-            _ => {}
         }
-        syn::visit::visit_item(self, node);
+        Ok(())
     }
 
-    fn visit_impl_item(&mut self, node: &'ast ImplItem) {
-        match node {
-            ImplItem::Const(item) if is_public(&item.vis) => self
-                .entries
-                .push(format!("public.impl_const:{}", item.to_token_stream())),
-            ImplItem::Fn(item) if is_public(&item.vis) => self
-                .entries
-                .push(format!("public.impl_fn:{}", item.sig.to_token_stream())),
-            ImplItem::Type(item) if is_public(&item.vis) => self
-                .entries
-                .push(format!("public.impl_type:{}", item.to_token_stream())),
-            _ => {}
+    fn fields(&mut self, owner: &str, fields: &Fields, wire: bool) {
+        for (index, field) in fields.iter().enumerate() {
+            let name = field
+                .ident
+                .as_ref()
+                .map(ToString::to_string)
+                .unwrap_or_else(|| index.to_string());
+            let selector = format!("field:{owner}::{name}");
+            let kind = if wire && !is_public(&field.vis) {
+                "rust_wire_field"
+            } else {
+                "rust_public_field"
+            };
+            self.push(kind, selector.clone(), field.to_token_stream());
+            self.attributes(&selector, &field.attrs);
         }
-        syn::visit::visit_impl_item(self, node);
     }
 
-    fn visit_attribute(&mut self, node: &'ast syn::Attribute) {
-        let protected = node.path().segments.last().is_some_and(|segment| {
-            matches!(
-                segment.ident.to_string().as_str(),
-                "arg" | "clap" | "command" | "serde" | "value"
-            )
+    fn attributes(&mut self, owner: &str, attributes: &[Attribute]) {
+        let mut ordinal = HashMap::<String, usize>::new();
+        for attribute in attributes {
+            let Some(name) = attribute
+                .path()
+                .segments
+                .last()
+                .map(|segment| segment.ident.to_string())
+            else {
+                continue;
+            };
+            let kind = match name.as_str() {
+                "serde" | "value" => "rust_wire_attribute",
+                "arg" | "clap" | "command" => "rust_cli_attribute",
+                _ => continue,
+            };
+            let index = ordinal.entry(name.clone()).or_default();
+            self.push(
+                kind,
+                format!("attribute:{owner}:{name}:{}", *index),
+                attribute.to_token_stream(),
+            );
+            *index += 1;
+        }
+    }
+
+    fn macro_item(&mut self, item: &syn::ItemMacro, module: &[String]) -> Result<(), String> {
+        let name = item
+            .mac
+            .path
+            .segments
+            .last()
+            .map(|segment| segment.ident.to_string())
+            .unwrap_or_default();
+        if name == "closed_code" {
+            let definition = syn::parse2::<ClosedCodeDefinition>(item.mac.tokens.clone())
+                .map_err(|error| format!("invalid closed_code invocation: {error}"))?;
+            let owner = qualified(module, &definition.name.to_string());
+            self.push(
+                "rust_macro_item",
+                format!("macro_enum:{owner}"),
+                definition.name.to_token_stream(),
+            );
+            for variant in definition.variant {
+                let selector = format!("macro_variant:{owner}::{}", variant.name);
+                self.push(
+                    "rust_macro_variant",
+                    selector,
+                    variant.name.to_token_stream(),
+                );
+                self.push(
+                    "rust_macro_wire_value",
+                    format!("macro_wire:{owner}::{}", variant.name),
+                    variant.wire.to_token_stream(),
+                );
+            }
+        } else if item
+            .attrs
+            .iter()
+            .any(|attribute| attribute.path().is_ident("macro_export"))
+        {
+            self.push(
+                "rust_macro_item",
+                qualified(module, &format!("macro:{name}")),
+                item.to_token_stream(),
+            );
+        }
+        Ok(())
+    }
+
+    fn push(&mut self, kind: &'static str, selector: String, content: impl ToTokens) {
+        self.items.push(RawSurface {
+            kind,
+            selector,
+            content: content.to_token_stream().to_string(),
         });
-        if protected {
-            self.entries
-                .push(format!("attribute:{}", node.to_token_stream()));
-        }
-        syn::visit::visit_attribute(self, node);
     }
+}
 
-    fn visit_expr_lit(&mut self, node: &'ast syn::ExprLit) {
-        match &node.lit {
-            Lit::Str(value) => self
-                .entries
-                .push(format!("literal.str:{:?}", value.value())),
-            Lit::ByteStr(value) => self
-                .entries
-                .push(format!("literal.bytes:{:?}", value.value())),
-            _ => {}
-        }
-        syn::visit::visit_expr_lit(self, node);
+fn qualified(module: &[String], name: &str) -> String {
+    if module.is_empty() {
+        name.to_string()
+    } else {
+        format!("{}::{name}", module.join("::"))
     }
+}
+
+fn item_attrs(item: &Item) -> &[Attribute] {
+    match item {
+        Item::Const(item) => &item.attrs,
+        Item::Enum(item) => &item.attrs,
+        Item::ExternCrate(item) => &item.attrs,
+        Item::Fn(item) => &item.attrs,
+        Item::ForeignMod(item) => &item.attrs,
+        Item::Impl(item) => &item.attrs,
+        Item::Macro(item) => &item.attrs,
+        Item::Mod(item) => &item.attrs,
+        Item::Static(item) => &item.attrs,
+        Item::Struct(item) => &item.attrs,
+        Item::Trait(item) => &item.attrs,
+        Item::TraitAlias(item) => &item.attrs,
+        Item::Type(item) => &item.attrs,
+        Item::Union(item) => &item.attrs,
+        Item::Use(item) => &item.attrs,
+        _ => &[],
+    }
+}
+
+fn is_wire_type(attributes: &[Attribute]) -> bool {
+    attributes.iter().any(|attribute| {
+        attribute.path().is_ident("serde")
+            || (attribute.path().is_ident("derive") && {
+                let tokens = attribute.to_token_stream().to_string();
+                tokens.contains("Serialize") || tokens.contains("Deserialize")
+            })
+    })
+}
+
+fn short_hash(value: &str) -> String {
+    let digest = format!("{:x}", Sha256::digest(value.as_bytes()));
+    digest[..16].to_string()
+}
+
+struct ClosedCodeDefinition {
+    name: Ident,
+    variant: Vec<ClosedCodeVariant>,
+}
+
+struct ClosedCodeVariant {
+    name: Ident,
+    wire: LitStr,
+}
+
+impl Parse for ClosedCodeDefinition {
+    fn parse(input: ParseStream<'_>) -> syn::Result<Self> {
+        let name = input.parse()?;
+        let content;
+        braced!(content in input);
+        let mut variant = Vec::new();
+        while !content.is_empty() {
+            variant.push(ClosedCodeVariant {
+                name: content.parse()?,
+                wire: {
+                    content.parse::<Token![=>]>()?;
+                    content.parse()?
+                },
+            });
+            if content.peek(Token![,]) {
+                content.parse::<Token![,]>()?;
+            }
+        }
+        Ok(Self { name, variant })
+    }
+}
+
+#[derive(Default)]
+struct MatchLiteralCollector {
+    items: Vec<RawSurface>,
+    ordinal: usize,
+}
+
+impl Visit<'_> for MatchLiteralCollector {
+    fn visit_expr_match(&mut self, node: &ExprMatch) {
+        for arm in &node.arms {
+            let mut strings = PatternStringVisitor::default();
+            strings.visit_pat(&arm.pat);
+            for value in strings.values {
+                self.items.push(RawSurface {
+                    kind: "rust_match_literal",
+                    selector: format!("match_literal:{:06}", self.ordinal),
+                    content: value,
+                });
+                self.ordinal += 1;
+            }
+        }
+        syn::visit::visit_expr_match(self, node);
+    }
+}
+
+fn structured_json_inventory(path: &str, source: &str) -> Result<Vec<RawSurface>, String> {
+    let value: serde_json::Value = serde_json::from_str(source)
+        .map_err(|error| format!("failed to parse protected JSON {path}: {error}"))?;
+    let mut items = Vec::new();
+    collect_structured_value(&value, "", &mut items)?;
+    Ok(items)
+}
+
+fn structured_toml_inventory(path: &str, source: &str) -> Result<Vec<RawSurface>, String> {
+    let value: toml::Value = toml::from_str(source)
+        .map_err(|error| format!("failed to parse protected TOML {path}: {error}"))?;
+    let value = serde_json::to_value(value)
+        .map_err(|error| format!("failed to normalize protected TOML {path}: {error}"))?;
+    let mut items = Vec::new();
+    collect_structured_value(&value, "", &mut items)?;
+    Ok(items)
+}
+
+fn collect_structured_value(
+    value: &serde_json::Value,
+    pointer: &str,
+    items: &mut Vec<RawSurface>,
+) -> Result<(), String> {
+    match value {
+        serde_json::Value::Object(map) => {
+            if map.is_empty() {
+                items.push(RawSurface {
+                    kind: "structured_value",
+                    selector: format!("value:{pointer}"),
+                    content: "{}".to_string(),
+                });
+            }
+            let mut entries = map.iter().collect::<Vec<_>>();
+            entries.sort_by(|left, right| left.0.cmp(right.0));
+            for (key, child) in entries {
+                let child_pointer = format!("{pointer}/{}", escape_json_pointer(key));
+                items.push(RawSurface {
+                    kind: "structured_key",
+                    selector: format!("key:{child_pointer}"),
+                    content: key.clone(),
+                });
+                collect_structured_value(child, &child_pointer, items)?;
+            }
+        }
+        serde_json::Value::Array(values) => {
+            if values.is_empty() {
+                items.push(RawSurface {
+                    kind: "structured_value",
+                    selector: format!("value:{pointer}"),
+                    content: "[]".to_string(),
+                });
+            }
+            for (index, child) in values.iter().enumerate() {
+                collect_structured_value(child, &format!("{pointer}/{index}"), items)?;
+            }
+        }
+        _ => items.push(RawSurface {
+            kind: "structured_value",
+            selector: format!("value:{pointer}"),
+            content: serde_json::to_string(value)
+                .map_err(|error| format!("failed to normalize structured value: {error}"))?,
+        }),
+    }
+    Ok(())
+}
+
+fn escape_json_pointer(value: &str) -> String {
+    value.replace('~', "~0").replace('/', "~1")
+}
+
+fn text_surface_inventory(source: &str) -> Vec<RawSurface> {
+    source
+        .replace("\r\n", "\n")
+        .replace('\r', "\n")
+        .lines()
+        .enumerate()
+        .filter(|(_, line)| !line.trim().is_empty())
+        .map(|(index, line)| RawSurface {
+            kind: "text_record",
+            selector: format!("line:{:06}", index + 1),
+            content: line.to_string(),
+        })
+        .collect()
 }
 
 struct IdentityBranchVisitor<'a> {
@@ -994,9 +1634,23 @@ mod tests {
     use std::time::{SystemTime, UNIX_EPOCH};
 
     fn registry_source() -> String {
+        let surface_id = surface_id_for(
+            "rust_public_item",
+            "crates/example/src/lib.rs",
+            "struct:Summary",
+        );
         format!(
             r#"
-schema_version = "actingcommand.generic-domain.v1"
+schema_version = "actingcommand.generic-domain.v2"
+
+[[approval]]
+id = "approval.issue44_r8"
+repository = "HS7097/ActingCommand-Workflow"
+issue = 54
+comment_id = 5011264343
+author = "HS7097"
+content_sha256 = "{}"
+scope = ["surface.mapping"]
 
 [[concept]]
 id = "identity.game"
@@ -1009,14 +1663,17 @@ status = "active"
 approval_comment_id = 5010683904
 
 [[surface]]
-surface_id = "workspace.member"
-kind = "workspace_member"
-stable_path = "crates/example"
+surface_id = "{surface_id}"
+kind = "rust_public_item"
+stable_path = "crates/example/src/lib.rs"
+selector = "struct:Summary"
 concept_ids = ["identity.game", "structure.value"]
 fingerprint = "{}"
+approval_id = "approval.issue44_r8"
 source_issue = 44
 source_pr = 108
 "#,
+            "a".repeat(64),
             "0".repeat(64)
         )
     }
@@ -1034,7 +1691,7 @@ source_pr = 108
                 "concept_ids = [\"identity.game\", \"structure.value\"]",
                 "concept_ids = [\"identity.unknown\", \"identity.unknown\"]",
             )
-            .replace("crates/example", "crates/*");
+            .replace("crates/example/src/lib.rs", "crates/*/src/lib.rs");
         let registry = parse_generic_domain_registry(&source).unwrap();
         let error = validate_generic_domain_registry(&registry).unwrap_err();
         assert!(error.contains("unknown concept identity.unknown"));
@@ -1155,7 +1812,8 @@ source_pr = 108
         )
         .unwrap();
         let error = validate_workspace_surface_registry(&root, &registry).unwrap_err();
-        assert!(error.contains("crates/example fingerprint drifted"));
+        assert!(error.contains("unmapped protected surface rust_public_field"));
+        assert!(error.contains("field:Summary::status"));
 
         fs::write(
             root.join("crates/example/src/lib.rs"),
@@ -1163,13 +1821,14 @@ source_pr = 108
         )
         .unwrap();
         let error = validate_workspace_surface_registry(&root, &registry).unwrap_err();
-        assert!(error.contains("crates/example fingerprint drifted"));
+        assert!(error.contains("unmapped protected surface rust_cli_attribute"));
+        assert!(error.contains("registered surface"));
 
         fs::create_dir_all(root.join("crates/second/src")).unwrap();
         fs::write(root.join("crates/second/src/lib.rs"), "pub struct Added;\n").unwrap();
         write_workspace_manifest(&root, &["crates/example", "crates/second"]);
         let error = validate_workspace_surface_registry(&root, &registry).unwrap_err();
-        assert!(error.contains("unmapped protected surface crates/second"));
+        assert!(error.contains("unmapped protected surface rust_public_item crates/second"));
 
         fs::remove_dir_all(root).unwrap();
     }
@@ -1289,7 +1948,44 @@ source_pr = 108
         )
         .unwrap();
         let error = validate_workspace_surface_registry(&root, &registry).unwrap_err();
-        assert!(error.contains("contracts fingerprint drifted"));
+        assert!(error.contains("unmapped protected surface structured_key"));
+        assert!(error.contains("/properties/game/default"));
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn workspace_registry_rejects_unregistered_closed_code_variant_and_wire_value() {
+        let root = temporary_workspace("closed-code-drift");
+        write_workspace_manifest(&root, &["crates/example"]);
+        fs::create_dir_all(root.join("crates/example/src")).unwrap();
+        let path = root.join("crates/example/src/lib.rs");
+        fs::write(
+            &path,
+            r#"closed_code!(Status { Ready => "ready" });
+"#,
+        )
+        .unwrap();
+        create_required_roots(&root);
+
+        let snapshots = workspace_surface_snapshot(&root).unwrap();
+        let registry = registry_for_snapshots(&snapshots);
+        validate_workspace_surface_registry(&root, &registry).unwrap();
+
+        fs::write(
+            &path,
+            r#"closed_code!(Status {
+    Ready => "ready",
+    SyntheticFaction => "synthetic.faction",
+});
+"#,
+        )
+        .unwrap();
+        let error = validate_workspace_surface_registry(&root, &registry).unwrap_err();
+        assert!(error.contains("unmapped protected surface rust_macro_variant"));
+        assert!(error.contains("macro_variant:Status::SyntheticFaction"));
+        assert!(error.contains("unmapped protected surface rust_macro_wire_value"));
+        assert!(error.contains("macro_wire:Status::SyntheticFaction"));
 
         fs::remove_dir_all(root).unwrap();
     }
@@ -1366,6 +2062,16 @@ source_pr = 111
     fn registry_for_snapshots(snapshots: &[SurfaceSnapshot]) -> GenericDomainRegistry {
         GenericDomainRegistry {
             schema_version: GENERIC_DOMAIN_SCHEMA_VERSION.to_string(),
+            surface_manifest: None,
+            approval: vec![SurfaceApproval {
+                id: "approval.issue44_r8".to_string(),
+                repository: "HS7097/ActingCommand-Workflow".to_string(),
+                issue: 54,
+                comment_id: 5011264343,
+                author: "HS7097".to_string(),
+                content_sha256: "a".repeat(64),
+                scope: vec!["surface.mapping".to_string()],
+            }],
             concept: vec![GenericConcept {
                 id: "structure.value".to_string(),
                 status: "active".to_string(),
@@ -1375,13 +2081,14 @@ source_pr = 111
             identity_allowance: Vec::new(),
             surface: snapshots
                 .iter()
-                .enumerate()
-                .map(|(index, snapshot)| ProtectedSurface {
-                    surface_id: format!("surface.item_{index:03}"),
+                .map(|snapshot| ProtectedSurface {
+                    surface_id: snapshot.surface_id.clone(),
                     kind: snapshot.kind.clone(),
                     stable_path: snapshot.stable_path.clone(),
+                    selector: snapshot.selector.clone(),
                     concept_ids: vec!["structure.value".to_string()],
                     fingerprint: snapshot.fingerprint.clone(),
+                    approval_id: "approval.issue44_r8".to_string(),
                     source_issue: 44,
                     source_pr: Some(108),
                 })

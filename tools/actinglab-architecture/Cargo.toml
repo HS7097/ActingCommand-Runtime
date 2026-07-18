@@ -21,6 +21,7 @@ name = "external-compat-guard"
 path = "src/external_compat_main.rs"
 
 [dependencies]
+proc-macro2 = "1"
 quote = "1"
 serde = { workspace = true }
 serde_json = { workspace = true }

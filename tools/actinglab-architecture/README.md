@@ -20,19 +20,23 @@ Check the derived inventory against `ratchet/actinglab_commands.json`:
 scripts/actinglab/command-inventory.ps1 -Check
 ```
 
-Validate the approved generic-domain concepts and protected Runtime surfaces:
+Validate approved generic-domain concepts and every registered Runtime surface item:
 
 ```text
 cargo run -p actingcommand-actinglab-architecture --bin generic-domain-guard -- --check
 ```
 
-Print a pending protected-surface inventory for registry review:
+Print a pending item-level surface inventory for registry review:
 
 ```text
 cargo run -p actingcommand-actinglab-architecture --bin generic-domain-guard -- --snapshot
 ```
 
-Snapshot output is inventory evidence only. It does not approve new concepts or surfaces.
+The v2 registry lives in `generic-domain-v2.toml`; its content-addressed item manifest lives in
+`generic-domain-surfaces-v2.jsonl`. Rust public and wire items, `closed_code!` variants and wire
+values, CLI/serde attributes, structured schema values, and protected text records receive stable
+surface IDs. Snapshot output is inventory evidence only. It does not approve new concepts or
+surfaces, and refreshing the manifest without a matching approved mapping is not an acceptance path.
 
 Validate exact files, hashes, provenance, and allowed scopes in the isolated compatibility zone:
 

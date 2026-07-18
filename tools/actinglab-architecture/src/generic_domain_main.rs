@@ -5,7 +5,8 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use actingcommand_actinglab_architecture::generic_domain::{
-    load_generic_domain_registry, validate_workspace_genericity, workspace_surface_snapshot,
+    GENERIC_DOMAIN_REGISTRY_PATH, load_generic_domain_registry, validate_workspace_genericity,
+    workspace_surface_snapshot,
 };
 
 fn main() -> ExitCode {
@@ -22,7 +23,7 @@ fn run() -> Result<(), String> {
     let root = workspace_root()?;
     match env::args().skip(1).collect::<Vec<_>>().as_slice() {
         [flag] if flag == "--check" => {
-            let registry_path = root.join("tools/actinglab-architecture/generic-domain-v1.toml");
+            let registry_path = root.join(GENERIC_DOMAIN_REGISTRY_PATH);
             let registry = load_generic_domain_registry(&registry_path)?;
             validate_workspace_genericity(&root, &registry)?;
             println!("generic-domain registry and identity guard match protected Runtime surfaces");
