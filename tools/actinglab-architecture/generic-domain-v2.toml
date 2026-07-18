@@ -19,9 +19,18 @@ author = "HS7097"
 content_sha256 = "89fe4d69a3e0be4bda12b3731f5911eb065a7ff3f9b66f2bca7a782a7173b8bf"
 scope = ["identity.allowance", "surface.mapping"]
 
+[[approval]]
+id = "approval.issue44_r8c"
+repository = "HS7097/ActingCommand-Workflow"
+issue = 54
+comment_id = 5011427079
+author = "HS7097"
+content_sha256 = "df46ce291a20cbeba38cb1eb129a17f3fbfb9253badf24a8102a52cddb31478d"
+scope = ["identity.allowance", "surface.mapping", "workspace.discovery"]
+
 [surface_manifest]
 path = "tools/actinglab-architecture/generic-domain-surfaces-v2.jsonl"
-sha256 = "cd4d834e9fbd4a2c398e7da9b0b16645577e0a996b00d86edd38f056f18dd9fe"
+sha256 = "53c3f2137d7f00c5d8e856422527c65465258bae9e7c9e07fa879bc90d21fbde"
 approval_id = "approval.issue44_r8"
 source_issue = 44
 source_pr = 112
@@ -1991,6 +2000,19 @@ source_issue = 44
 source_pr = 113
 
 [[identity_allowance]]
+id = "allowance.fragment_04286347ba691123f1d857fc837937da90a462f5"
+kind = "documentation"
+exact_path = "NOTICE.md"
+selector = "text_record:line:000014"
+scope = ["identity.token"]
+tokens = ["arknights","maa"]
+sha256 = "b39e7088d499f0a6c8bdcc27418d17c409f6cce0fc43ae26e3edde0a4c033ab4"
+purpose = "Allows reviewed project and upstream names in this exact documentation record."
+approval_id = "approval.issue44_r8c"
+source_issue = 44
+source_pr = 114
+
+[[identity_allowance]]
 id = "allowance.fragment_05182f7a0b2ffd780054c0e4abd3cc125aefbad1"
 kind = "technical_adapter"
 exact_path = "crates/device/src/touch.rs"
@@ -2225,6 +2247,19 @@ source_issue = 44
 source_pr = 113
 
 [[identity_allowance]]
+id = "allowance.fragment_151c2ca9cbb2a1a5abb17db966147b1a38a8ad50"
+kind = "documentation"
+exact_path = "README.md"
+selector = "text_record:line:000104"
+scope = ["identity.token"]
+tokens = ["arknights"]
+sha256 = "cfe272bbf9c760d7445ec68536bb6d3e135a9d0eed8eb4602ea109feee65128d"
+purpose = "Allows reviewed project and upstream names in this exact documentation record."
+approval_id = "approval.issue44_r8c"
+source_issue = 44
+source_pr = 114
+
+[[identity_allowance]]
 id = "allowance.fragment_159dc65110bd7fd20305786dc0c76cc093a6967a"
 kind = "technical_adapter"
 exact_path = "crates/device/src/maatouch.rs"
@@ -2303,6 +2338,19 @@ source_issue = 44
 source_pr = 113
 
 [[identity_allowance]]
+id = "allowance.fragment_203dd06e780da6fedfd4e55ea9a4a7193dc02cdc"
+kind = "documentation"
+exact_path = "README.en.md"
+selector = "text_record:line:000112"
+scope = ["identity.token"]
+tokens = ["maa"]
+sha256 = "25cc83d9c5228662644e749ed8af7c464ca63df9dfc87683e9d932fe9e976730"
+purpose = "Allows reviewed project and upstream names in this exact documentation record."
+approval_id = "approval.issue44_r8c"
+source_issue = 44
+source_pr = 114
+
+[[identity_allowance]]
 id = "allowance.fragment_22faaf780514a720aaddf90f91faf0e80166c5af"
 kind = "test_fixture"
 exact_path = "crates/resource-tooling/src/maa_task_graph.rs"
@@ -2366,6 +2414,19 @@ purpose = "Allows neutral identity fixture values in this exact test fragment."
 approval_id = "approval.issue44_r8b"
 source_issue = 44
 source_pr = 113
+
+[[identity_allowance]]
+id = "allowance.fragment_27c8fdbb54ba837b76254468b9a2efdd5a24f222"
+kind = "documentation"
+exact_path = "README.en.md"
+selector = "text_record:line:000105"
+scope = ["identity.token"]
+tokens = ["azur","azurlane"]
+sha256 = "3b4a34ce6838d63c3ef8840bfba9f940b8c60a320ca9c5f8557a0fde3788cd63"
+purpose = "Allows reviewed project and upstream names in this exact documentation record."
+approval_id = "approval.issue44_r8c"
+source_issue = 44
+source_pr = 114
 
 [[identity_allowance]]
 id = "allowance.fragment_2841a651e47d69d1cd9c22d2ff4e361dd27440ad"
@@ -2641,6 +2702,19 @@ source_issue = 44
 source_pr = 113
 
 [[identity_allowance]]
+id = "allowance.fragment_35f4f6815326c1c8216138a52af026255cfbdbd6"
+kind = "documentation"
+exact_path = "NOTICE.md"
+selector = "text_record:line:000020"
+scope = ["identity.token"]
+tokens = ["maa"]
+sha256 = "de4597e2a30274796d3c16a3a06204336c12a1489715ba187eebe596cf76455a"
+purpose = "Allows reviewed project and upstream names in this exact documentation record."
+approval_id = "approval.issue44_r8c"
+source_issue = 44
+source_pr = 114
+
+[[identity_allowance]]
 id = "allowance.fragment_375bfbbea66af0a70a25b4adc77169c6f3d925fe"
 kind = "test_fixture"
 exact_path = "crates/device/src/touch.rs"
@@ -2862,6 +2936,19 @@ source_issue = 44
 source_pr = 113
 
 [[identity_allowance]]
+id = "allowance.fragment_45057dc391a0da6bb8ff2223de7f958f5056c353"
+kind = "documentation"
+exact_path = "README.md"
+selector = "text_record:line:000106"
+scope = ["identity.token"]
+tokens = ["blue_archive","bluearchive"]
+sha256 = "a76a298293550ffd16fdead1efb9dc822d2f20cc0b5532900aef6624542939d2"
+purpose = "Allows reviewed project and upstream names in this exact documentation record."
+approval_id = "approval.issue44_r8c"
+source_issue = 44
+source_pr = 114
+
+[[identity_allowance]]
 id = "allowance.fragment_45a6f9c31355e37200cb350005d3b0b982fdcfae"
 kind = "technical_adapter"
 exact_path = "ratchet/actinglab_commands.json"
@@ -2966,6 +3053,32 @@ source_issue = 44
 source_pr = 113
 
 [[identity_allowance]]
+id = "allowance.fragment_4a47cde1c02c86f4599d47678ccd981530d31eb4"
+kind = "documentation"
+exact_path = "NOTICE.md"
+selector = "text_record:line:000019"
+scope = ["identity.token"]
+tokens = ["arknights","maa"]
+sha256 = "8a85f12184402f70e2251b18fa26ca70b8d27e97719e26c7845a190360c26b46"
+purpose = "Allows reviewed project and upstream names in this exact documentation record."
+approval_id = "approval.issue44_r8c"
+source_issue = 44
+source_pr = 114
+
+[[identity_allowance]]
+id = "allowance.fragment_4a5629ca141d975ef1e41f2e1521ba86140e8299"
+kind = "documentation"
+exact_path = "README.en.md"
+selector = "text_record:line:000005"
+scope = ["identity.token"]
+tokens = ["maa"]
+sha256 = "88a9e2fa02f0392ed5db7d7db0f64821345c8f0b52372b0a5e1777ff1c1f9671"
+purpose = "Allows reviewed project and upstream names in this exact documentation record."
+approval_id = "approval.issue44_r8c"
+source_issue = 44
+source_pr = 114
+
+[[identity_allowance]]
 id = "allowance.fragment_4bd0073ff23a60a14a89aa128add31035d481604"
 kind = "technical_adapter"
 exact_path = "crates/device/src/touch.rs"
@@ -2985,11 +3098,11 @@ exact_path = "tools/actinglab-architecture/src/generic_domain.rs"
 selector = "rust:tests::fn:workspace_genericity_requires_exact_allowance_hash_and_registered_surface"
 scope = ["identity.token"]
 tokens = ["maa"]
-sha256 = "0d40eb2a8098b7c62ce0ea3b20472d3afab3f9f4ed74c60933cdacddafa68f9f"
+sha256 = "03a95f8be696c828cde1f2dec4dd35c781966d44da304a03eca842cc5e4a7d11"
 purpose = "Allows detector definitions and adversarial checks in this exact guard fragment."
-approval_id = "approval.issue44_r8b"
+approval_id = "approval.issue44_r8c"
 source_issue = 44
-source_pr = 113
+source_pr = 114
 
 [[identity_allowance]]
 id = "allowance.fragment_4d3e8e4711e9cf9c43f7483335e2dbd1fc4fb363"
@@ -3148,6 +3261,32 @@ source_issue = 44
 source_pr = 113
 
 [[identity_allowance]]
+id = "allowance.fragment_55f2b07852876a32fd9deb411451544202bc9f96"
+kind = "documentation"
+exact_path = "README.md"
+selector = "text_record:line:000005"
+scope = ["identity.token"]
+tokens = ["maa"]
+sha256 = "fce06c7490abaae87e14e3b6d348a0ad442aa35f0fffa4175cadcf1b67cde0bb"
+purpose = "Allows reviewed project and upstream names in this exact documentation record."
+approval_id = "approval.issue44_r8c"
+source_issue = 44
+source_pr = 114
+
+[[identity_allowance]]
+id = "allowance.fragment_56289a200ae05dbe85cbdf8f3b6e911a51467253"
+kind = "documentation"
+exact_path = "NOTICE.md"
+selector = "text_record:line:000045"
+scope = ["identity.token"]
+tokens = ["arknights","maa","maa."]
+sha256 = "c320c82bbf76277d58d8d061635ae14c0e1779f656a0833f3743e24b5064a5ee"
+purpose = "Allows reviewed project and upstream names in this exact documentation record."
+approval_id = "approval.issue44_r8c"
+source_issue = 44
+source_pr = 114
+
+[[identity_allowance]]
 id = "allowance.fragment_56a3a1995e87fbaf5d33c077353e9d2946b670da"
 kind = "test_fixture"
 exact_path = "crates/execution-kernel/src/planning/probe.rs"
@@ -3185,6 +3324,19 @@ purpose = "Allows reviewed upstream interoperability tokens in this exact AST fr
 approval_id = "approval.issue44_r8b"
 source_issue = 44
 source_pr = 113
+
+[[identity_allowance]]
+id = "allowance.fragment_5974c5c66d8a678ffe4c17707a768026c54daf5f"
+kind = "documentation"
+exact_path = "NOTICE.md"
+selector = "text_record:line:000048"
+scope = ["identity.token"]
+tokens = ["maa"]
+sha256 = "20998c5f1e722f2f9fc4e832a0c3c086ae6782be38f3b9282d75eb760b90a742"
+purpose = "Allows reviewed project and upstream names in this exact documentation record."
+approval_id = "approval.issue44_r8c"
+source_issue = 44
+source_pr = 114
 
 [[identity_allowance]]
 id = "allowance.fragment_5aea322351ed6e8572b1dfbd65cb36b62df18d11"
@@ -3226,6 +3378,19 @@ source_issue = 44
 source_pr = 113
 
 [[identity_allowance]]
+id = "allowance.fragment_5d8537cd715ca915844e7b04998168e056143695"
+kind = "documentation"
+exact_path = "NOTICE.md"
+selector = "text_record:line:000013"
+scope = ["identity.token"]
+tokens = ["arknights","maa"]
+sha256 = "15ef654077548f8452e7cb290b3459f8942d1a06624d3dbc4c6d1d13ccf6b7ac"
+purpose = "Allows reviewed project and upstream names in this exact documentation record."
+approval_id = "approval.issue44_r8c"
+source_issue = 44
+source_pr = 114
+
+[[identity_allowance]]
 id = "allowance.fragment_5e81bdab45c395a41c73e249359268d895ebd9e0"
 kind = "technical_adapter"
 exact_path = "crates/device/src/maatouch.rs"
@@ -3250,6 +3415,19 @@ purpose = "Allows reviewed upstream identity metadata in this exact structured f
 approval_id = "approval.issue44_r8b"
 source_issue = 44
 source_pr = 113
+
+[[identity_allowance]]
+id = "allowance.fragment_5ff2adbc5c691529184d38cc57dc96a1d2a55202"
+kind = "documentation"
+exact_path = "README.en.md"
+selector = "text_record:line:000104"
+scope = ["identity.token"]
+tokens = ["arknights"]
+sha256 = "cfe272bbf9c760d7445ec68536bb6d3e135a9d0eed8eb4602ea109feee65128d"
+purpose = "Allows reviewed project and upstream names in this exact documentation record."
+approval_id = "approval.issue44_r8c"
+source_issue = 44
+source_pr = 114
 
 [[identity_allowance]]
 id = "allowance.fragment_621b3d93f4ed054ba22432c3eb17384b4a3ce3bd"
@@ -3382,6 +3560,19 @@ source_issue = 44
 source_pr = 113
 
 [[identity_allowance]]
+id = "allowance.fragment_6d26c39f5393089dd7716570855c9bd988729bc8"
+kind = "documentation"
+exact_path = "README.en.md"
+selector = "text_record:line:000106"
+scope = ["identity.token"]
+tokens = ["blue_archive","bluearchive"]
+sha256 = "a76a298293550ffd16fdead1efb9dc822d2f20cc0b5532900aef6624542939d2"
+purpose = "Allows reviewed project and upstream names in this exact documentation record."
+approval_id = "approval.issue44_r8c"
+source_issue = 44
+source_pr = 114
+
+[[identity_allowance]]
 id = "allowance.fragment_6d3eb98eb618f975faa23f130762c2f1ec6e5e29"
 kind = "test_fixture"
 exact_path = "apps/device-test/src/main.rs"
@@ -3406,6 +3597,19 @@ purpose = "Allows reviewed upstream interoperability tokens in this exact AST fr
 approval_id = "approval.issue44_r8b"
 source_issue = 44
 source_pr = 113
+
+[[identity_allowance]]
+id = "allowance.fragment_6e8eb4e78fb88bf80e29c23f3b6233fd52980c88"
+kind = "documentation"
+exact_path = "NOTICE.md"
+selector = "text_record:line:000021"
+scope = ["identity.token"]
+tokens = ["maa"]
+sha256 = "74e291032c555ba39fa03e65b2c292d737b59ff4c090eaad953afb384f8b57c8"
+purpose = "Allows reviewed project and upstream names in this exact documentation record."
+approval_id = "approval.issue44_r8c"
+source_issue = 44
+source_pr = 114
 
 [[identity_allowance]]
 id = "allowance.fragment_7054bfa0a764d14878aa7e32a6a3e3a0b2055823"
@@ -3471,6 +3675,19 @@ purpose = "Allows reviewed upstream identity metadata in this exact structured f
 approval_id = "approval.issue44_r8b"
 source_issue = 44
 source_pr = 113
+
+[[identity_allowance]]
+id = "allowance.fragment_756ab1d3cef45d1ddc5fd5d963a28bd8738988c4"
+kind = "documentation"
+exact_path = "NOTICE.md"
+selector = "text_record:line:000047"
+scope = ["identity.token"]
+tokens = ["maa"]
+sha256 = "46f9bacada7a7fee02ce122ee2479932234e9770e9b72bae81030cf3eb2bc829"
+purpose = "Allows reviewed project and upstream names in this exact documentation record."
+approval_id = "approval.issue44_r8c"
+source_issue = 44
+source_pr = 114
 
 [[identity_allowance]]
 id = "allowance.fragment_765c2dd5976bc3b13ff390c365b990c0212d28d8"
@@ -3681,6 +3898,19 @@ source_issue = 44
 source_pr = 113
 
 [[identity_allowance]]
+id = "allowance.fragment_839c028397cf060f50f4d8cd0b9d10f44ee6b8b6"
+kind = "documentation"
+exact_path = "README.md"
+selector = "text_record:line:000105"
+scope = ["identity.token"]
+tokens = ["azur","azurlane"]
+sha256 = "3b4a34ce6838d63c3ef8840bfba9f940b8c60a320ca9c5f8557a0fde3788cd63"
+purpose = "Allows reviewed project and upstream names in this exact documentation record."
+approval_id = "approval.issue44_r8c"
+source_issue = 44
+source_pr = 114
+
+[[identity_allowance]]
 id = "allowance.fragment_841fe962c099d0b924cbb6f12a3b6d87fa72fada"
 kind = "technical_adapter"
 exact_path = "apps/device-test/src/probe_run.rs"
@@ -3692,6 +3922,19 @@ purpose = "Allows reviewed upstream interoperability tokens in this exact AST fr
 approval_id = "approval.issue44_r8b"
 source_issue = 44
 source_pr = 113
+
+[[identity_allowance]]
+id = "allowance.fragment_84a704b7c74f99c2f235004b968d01ecb770d050"
+kind = "documentation"
+exact_path = "NOTICE.md"
+selector = "text_record:line:000011"
+scope = ["identity.token"]
+tokens = ["maa"]
+sha256 = "49837b0448d86c9234fc76b0685b583de2c9864b3175a55062446b89ad1ebc9b"
+purpose = "Allows reviewed project and upstream names in this exact documentation record."
+approval_id = "approval.issue44_r8c"
+source_issue = 44
+source_pr = 114
 
 [[identity_allowance]]
 id = "allowance.fragment_84eb51cc059248c5c4a2ba525b4b3c1cf64eafbf"
@@ -4227,6 +4470,19 @@ source_issue = 44
 source_pr = 113
 
 [[identity_allowance]]
+id = "allowance.fragment_a7d6e9c7596bcab6134bbf406e466c7c753bfbb5"
+kind = "documentation"
+exact_path = "NOTICE.md"
+selector = "text_record:line:000015"
+scope = ["identity.token"]
+tokens = ["maa"]
+sha256 = "51fafae66ff18ed992386507babe299c94399c392f59fcdb6c28fb48eeffc6b9"
+purpose = "Allows reviewed project and upstream names in this exact documentation record."
+approval_id = "approval.issue44_r8c"
+source_issue = 44
+source_pr = 114
+
+[[identity_allowance]]
 id = "allowance.fragment_a8607da41367c386b1f898c95e770f158e5b4c1e"
 kind = "test_fixture"
 exact_path = "crates/resource-tooling/src/resource_convert/tests.rs"
@@ -4368,6 +4624,19 @@ purpose = "Allows reviewed upstream interoperability tokens in this exact AST fr
 approval_id = "approval.issue44_r8b"
 source_issue = 44
 source_pr = 113
+
+[[identity_allowance]]
+id = "allowance.fragment_b751eeda27cf5afb691c8c2980ae92852636e837"
+kind = "documentation"
+exact_path = "README.md"
+selector = "text_record:line:000112"
+scope = ["identity.token"]
+tokens = ["maa"]
+sha256 = "73b31ec97d3b43c4c867f5c98eeeaf849ce236fded517b54e79109330644b1ff"
+purpose = "Allows reviewed project and upstream names in this exact documentation record."
+approval_id = "approval.issue44_r8c"
+source_issue = 44
+source_pr = 114
 
 [[identity_allowance]]
 id = "allowance.fragment_b786c158c2b2334045b4cfc88d79b6d44246df41"
@@ -4966,6 +5235,19 @@ purpose = "Allows neutral identity fixture values in this exact test fragment."
 approval_id = "approval.issue44_r8b"
 source_issue = 44
 source_pr = 113
+
+[[identity_allowance]]
+id = "allowance.fragment_dd5cf6983d43066f548878266706c80465283909"
+kind = "documentation"
+exact_path = "NOTICE.md"
+selector = "text_record:line:000046"
+scope = ["identity.token"]
+tokens = ["maa","maa."]
+sha256 = "c2448a507fe472874d84e99e92bdafbee52a6ca1ec3940927d994fe4824a7b21"
+purpose = "Allows reviewed project and upstream names in this exact documentation record."
+approval_id = "approval.issue44_r8c"
+source_issue = 44
+source_pr = 114
 
 [[identity_allowance]]
 id = "allowance.fragment_dfdf6094a2e2d88721ecaf2aeff77032888e6c20"

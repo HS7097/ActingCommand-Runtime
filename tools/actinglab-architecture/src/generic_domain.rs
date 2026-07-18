@@ -29,12 +29,15 @@ pub const GENERIC_DOMAIN_SURFACE_SCHEMA_VERSION: &str = "actingcommand.generic-d
 pub const GENERIC_DOMAIN_SURFACE_MANIFEST_PATH: &str =
     "tools/actinglab-architecture/generic-domain-surfaces-v2.jsonl";
 pub const REQUIRED_PROTECTED_ROOTS: &[&str] = &[
+    ".github",
     "benchmarks/workloads",
     "contracts",
     "ratchet",
     "resources",
+    "scripts",
     "tests",
 ];
+const WORKSPACE_PACKAGE_ROOTS: &[&str] = &["apps", "benchmarks", "crates", "providers", "tools"];
 
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
@@ -443,7 +446,8 @@ pub fn validate_generic_domain_registry(registry: &GenericDomainRegistry) -> Res
         previous_allowance = Some(allowance.id.as_str());
         if !matches!(
             allowance.kind.as_str(),
-            "guard_fixture"
+            "documentation"
+                | "guard_fixture"
                 | "guard_source"
                 | "technical_adapter"
                 | "test_fixture"
@@ -452,6 +456,16 @@ pub fn validate_generic_domain_registry(registry: &GenericDomainRegistry) -> Res
             errors.push(format!(
                 "identity allowance {} has invalid kind {}",
                 allowance.id, allowance.kind
+            ));
+        }
+        if allowance.kind == "documentation"
+            && !(allowance.exact_path.ends_with(".md")
+                || allowance.exact_path == "LICENSE"
+                || allowance.exact_path == "NOTICE")
+        {
+            errors.push(format!(
+                "identity allowance {} documentation target is not a documentation file",
+                allowance.id
             ));
         }
         if let Err(error) = validate_stable_path(&allowance.exact_path) {
@@ -741,21 +755,7 @@ pub fn validate_generic_domain_registry(registry: &GenericDomainRegistry) -> Res
 }
 
 pub fn workspace_surface_snapshot(root: &Path) -> Result<Vec<SurfaceSnapshot>, String> {
-    let mut roots = workspace_members(root)?;
-    roots.extend(
-        REQUIRED_PROTECTED_ROOTS
-            .iter()
-            .map(|path| (*path).to_string()),
-    );
-    roots.sort();
-    roots.dedup();
-
-    let mut files = Vec::new();
-    for stable_path in roots {
-        collect_protected_files(&root.join(stable_path), &mut files)?;
-    }
-    files.sort();
-    files.dedup();
+    let files = protected_files(root)?;
 
     let mut snapshots = Vec::new();
     for file in files {
@@ -789,20 +789,7 @@ pub fn workspace_identity_allowance_candidates(
         .iter()
         .map(|entry| entry.path.as_str())
         .collect::<HashSet<_>>();
-    let mut roots = workspace_members(root)?;
-    roots.extend(
-        REQUIRED_PROTECTED_ROOTS
-            .iter()
-            .map(|path| (*path).to_string()),
-    );
-    roots.sort();
-    roots.dedup();
-    let mut files = Vec::new();
-    for stable_path in roots {
-        collect_protected_files(&root.join(stable_path), &mut files)?;
-    }
-    files.sort();
-    files.dedup();
+    let files = protected_files(root)?;
 
     let mut candidates = Vec::new();
     for file in files {
@@ -932,20 +919,7 @@ pub fn validate_workspace_genericity(
         .collect::<HashSet<_>>();
     let allowance_by_fragment = validate_identity_allowance_fragments(root, registry)?;
 
-    let mut roots = workspace_members(root)?;
-    roots.extend(
-        REQUIRED_PROTECTED_ROOTS
-            .iter()
-            .map(|path| (*path).to_string()),
-    );
-    roots.sort();
-    roots.dedup();
-    let mut files = Vec::new();
-    for stable_path in roots {
-        collect_protected_files(&root.join(&stable_path), &mut files)?;
-    }
-    files.sort();
-    files.dedup();
+    let files = protected_files(root)?;
 
     let mut errors = Vec::new();
     let mut covered_paths = HashSet::new();
@@ -1144,9 +1118,11 @@ fn workspace_members(root: &Path) -> Result<Vec<String>, String> {
         .map_err(|error| format!("failed to read {}: {error}", manifest_path.display()))?;
     let manifest: toml::Value = toml::from_str(&source)
         .map_err(|error| format!("failed to parse {}: {error}", manifest_path.display()))?;
-    let members = manifest
+    let workspace = manifest
         .get("workspace")
-        .and_then(|workspace| workspace.get("members"))
+        .ok_or_else(|| "workspace table is missing".to_string())?;
+    let members = workspace
+        .get("members")
         .and_then(toml::Value::as_array)
         .ok_or_else(|| "workspace members must be an array".to_string())?;
     let mut result = members
@@ -1165,7 +1141,144 @@ fn workspace_members(root: &Path) -> Result<Vec<String>, String> {
     if result.windows(2).any(|pair| pair[0] == pair[1]) {
         return Err("workspace contains duplicate members".to_string());
     }
+    let excluded = workspace
+        .get("exclude")
+        .map(|value| {
+            value
+                .as_array()
+                .ok_or_else(|| "workspace exclude must be an array".to_string())?
+                .iter()
+                .map(|entry| {
+                    entry
+                        .as_str()
+                        .ok_or_else(|| "workspace exclude entry must be a string".to_string())
+                        .and_then(|entry| {
+                            validate_stable_path(entry)?;
+                            Ok(entry.to_string())
+                        })
+                })
+                .collect::<Result<HashSet<_>, _>>()
+        })
+        .transpose()?
+        .unwrap_or_default();
+    let declared = result.iter().cloned().collect::<HashSet<_>>();
+    let discovered = discover_workspace_packages(root)?;
+    let mut errors = Vec::new();
+    for package in &discovered {
+        if !declared.contains(package) && !excluded.contains(package) {
+            errors.push(format!(
+                "workspace package manifest is not declared or excluded: {package}"
+            ));
+        }
+    }
+    for member in &result {
+        if !discovered.contains(member) {
+            errors.push(format!(
+                "workspace member has no discoverable Cargo.toml: {member}"
+            ));
+        }
+    }
+    if !errors.is_empty() {
+        errors.sort();
+        return Err(errors.join("\n"));
+    }
     Ok(result)
+}
+
+fn discover_workspace_packages(root: &Path) -> Result<HashSet<String>, String> {
+    let mut packages = HashSet::new();
+    for package_root in WORKSPACE_PACKAGE_ROOTS {
+        let path = root.join(package_root);
+        if !path.exists() {
+            continue;
+        }
+        collect_package_manifests(root, &path, &mut packages)?;
+    }
+    Ok(packages)
+}
+
+fn collect_package_manifests(
+    workspace_root: &Path,
+    directory: &Path,
+    packages: &mut HashSet<String>,
+) -> Result<(), String> {
+    for entry in fs::read_dir(directory)
+        .map_err(|error| format!("failed to read directory {}: {error}", directory.display()))?
+    {
+        let path = entry
+            .map_err(|error| format!("failed to read directory entry: {error}"))?
+            .path();
+        let metadata = fs::symlink_metadata(&path)
+            .map_err(|error| format!("failed to inspect {}: {error}", path.display()))?;
+        if is_link_or_reparse(&metadata) {
+            return Err(format!(
+                "workspace package discovery encountered a symlink or reparse point: {}",
+                path.display()
+            ));
+        }
+        if metadata.is_dir() {
+            if path
+                .file_name()
+                .is_some_and(|name| name == "target" || name == ".git")
+            {
+                continue;
+            }
+            collect_package_manifests(workspace_root, &path, packages)?;
+        } else if path.file_name().is_some_and(|name| name == "Cargo.toml") {
+            let parent = path
+                .parent()
+                .ok_or_else(|| format!("package manifest has no parent: {}", path.display()))?;
+            let relative =
+                normalize_path(parent.strip_prefix(workspace_root).map_err(|_| {
+                    format!("package manifest escaped workspace: {}", path.display())
+                })?)?;
+            packages.insert(relative);
+        }
+    }
+    Ok(())
+}
+
+fn protected_files(root: &Path) -> Result<Vec<PathBuf>, String> {
+    let mut roots = workspace_members(root)?;
+    roots.extend(
+        REQUIRED_PROTECTED_ROOTS
+            .iter()
+            .map(|path| (*path).to_string()),
+    );
+    roots.sort();
+    roots.dedup();
+    let mut files = Vec::new();
+    for stable_path in roots {
+        collect_protected_files(&root.join(stable_path), &mut files)?;
+    }
+    collect_workspace_root_files(root, &mut files)?;
+    files.sort();
+    files.dedup();
+    Ok(files)
+}
+
+fn collect_workspace_root_files(root: &Path, files: &mut Vec<PathBuf>) -> Result<(), String> {
+    for entry in fs::read_dir(root)
+        .map_err(|error| format!("failed to read workspace root {}: {error}", root.display()))?
+    {
+        let path = entry
+            .map_err(|error| format!("failed to read workspace root entry: {error}"))?
+            .path();
+        let metadata = fs::symlink_metadata(&path)
+            .map_err(|error| format!("failed to inspect {}: {error}", path.display()))?;
+        if metadata.is_dir() || path.file_name().is_some_and(|name| name == ".git") {
+            continue;
+        }
+        if is_link_or_reparse(&metadata) {
+            return Err(format!(
+                "protected workspace root contains a symlink or reparse point: {}",
+                path.display()
+            ));
+        }
+        ensure_protected_text_file(&path)?;
+        files.push(path);
+    }
+    Ok(())
 }
 
 fn collect_protected_files(root: &Path, files: &mut Vec<PathBuf>) -> Result<(), String> {
@@ -1185,25 +1298,60 @@ fn collect_protected_files(root: &Path, files: &mut Vec<PathBuf>) -> Result<(), 
         }
         if metadata.is_dir() {
             collect_protected_files(&path, files)?;
-        } else if is_protected_file(&path) {
+        } else {
+            ensure_protected_text_file(&path)?;
             files.push(path);
         }
     }
     Ok(())
 }
 
-fn is_protected_file(path: &Path) -> bool {
-    if path.file_name().is_some_and(|name| name == "Cargo.toml") {
-        return true;
+fn ensure_protected_text_file(path: &Path) -> Result<(), String> {
+    let name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or_else(|| format!("protected file name is not UTF-8: {}", path.display()))?;
+    if matches!(
+        name,
+        ".gitattributes" | ".gitignore" | "Cargo.lock" | "Cargo.toml" | "LICENSE"
+    ) {
+        return Ok(());
     }
-    path.extension()
+    let known = path
+        .extension()
         .and_then(|extension| extension.to_str())
         .is_some_and(|extension| {
             matches!(
                 extension,
-                "json" | "md" | "rs" | "sql" | "stderr" | "toml" | "txt" | "yaml" | "yml"
+                "bat"
+                    | "cfg"
+                    | "cmd"
+                    | "ini"
+                    | "json"
+                    | "jsonl"
+                    | "lock"
+                    | "md"
+                    | "proto"
+                    | "ps1"
+                    | "ron"
+                    | "rs"
+                    | "sh"
+                    | "sql"
+                    | "stderr"
+                    | "toml"
+                    | "txt"
+                    | "yaml"
+                    | "yml"
             )
-        })
+        });
+    if known {
+        Ok(())
+    } else {
+        Err(format!(
+            "protected Runtime surface has an unknown file type: {}",
+            path.display()
+        ))
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -2753,7 +2901,8 @@ source_pr = 108
         let error = validate_workspace_genericity(&root, &registry).unwrap_err();
         assert!(error.contains("missing selector") || error.contains("fragment hash drifted"));
 
-        let outside = "outside.rs";
+        fs::create_dir_all(root.join("scratch")).unwrap();
+        let outside = "scratch/outside.rs";
         fs::write(root.join(outside), "fn compile_maa_tasks() {}\n").unwrap();
         let outside_fragment = identity_fragments_for_file(&root.join(outside), outside)
             .unwrap()
@@ -2944,6 +3093,80 @@ source_pr = 108
         fs::remove_dir_all(root).unwrap();
     }
 
+    #[test]
+    fn workspace_discovery_rejects_undeclared_package_manifest() {
+        let root = temporary_workspace("undeclared-package");
+        write_workspace_manifest(&root, &["crates/example"]);
+        fs::write(
+            root.join("crates/example/Cargo.toml"),
+            "[package]\nname = \"example\"\nversion = \"0.0.0\"\n\n[dependencies]\nhidden = { path = \"../hidden\" }\n",
+        )
+        .unwrap();
+        fs::create_dir_all(root.join("crates/hidden/src")).unwrap();
+        fs::write(
+            root.join("crates/hidden/Cargo.toml"),
+            "[package]\nname = \"hidden\"\nversion = \"0.0.0\"\n",
+        )
+        .unwrap();
+        create_required_roots(&root);
+
+        let error = workspace_surface_snapshot(&root).unwrap_err();
+        assert!(error.contains("workspace package manifest is not declared or excluded"));
+        assert!(error.contains("crates/hidden"));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn protected_roots_reject_unknown_file_types() {
+        let root = temporary_workspace("unknown-file-type");
+        write_workspace_manifest(&root, &["crates/example"]);
+        fs::create_dir_all(root.join("crates/example/src")).unwrap();
+        fs::write(
+            root.join("crates/example/src/lib.rs"),
+            "pub struct Marker;\n",
+        )
+        .unwrap();
+        create_required_roots(&root);
+        fs::write(root.join("contracts/opaque.random"), b"opaque").unwrap();
+
+        let error = workspace_surface_snapshot(&root).unwrap_err();
+        assert!(error.contains("unknown file type"));
+        assert!(error.contains("opaque.random"));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn proto_and_root_script_are_itemized_protected_surfaces() {
+        let root = temporary_workspace("new-text-surfaces");
+        write_workspace_manifest(&root, &["crates/example"]);
+        fs::create_dir_all(root.join("crates/example/src")).unwrap();
+        fs::write(
+            root.join("crates/example/src/lib.rs"),
+            "pub struct Marker;\n",
+        )
+        .unwrap();
+        create_required_roots(&root);
+        fs::write(
+            root.join("contracts/example.proto"),
+            "message Example { string provider = 1; }\n",
+        )
+        .unwrap();
+        fs::write(root.join("verify.ps1"), "Write-Output 'verify'\n").unwrap();
+
+        let snapshots = workspace_surface_snapshot(&root).unwrap();
+        assert!(
+            snapshots
+                .iter()
+                .any(|surface| surface.stable_path == "contracts/example.proto")
+        );
+        assert!(
+            snapshots
+                .iter()
+                .any(|surface| surface.stable_path == "verify.ps1")
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
     fn temporary_workspace(label: &str) -> PathBuf {
         let nonce = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -2958,6 +3181,16 @@ source_pr = 108
     }
 
     fn write_workspace_manifest(root: &Path, members: &[&str]) {
+        for (index, member) in members.iter().enumerate() {
+            fs::create_dir_all(root.join(member)).unwrap();
+            fs::write(
+                root.join(member).join("Cargo.toml"),
+                format!(
+                    "[package]\nname = \"fixture-{index}\"\nversion = \"0.0.0\"\nedition = \"2024\"\n"
+                ),
+            )
+            .unwrap();
+        }
         let members = members
             .iter()
             .map(|member| format!("    {member:?},"))
