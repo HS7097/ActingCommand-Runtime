@@ -2680,7 +2680,7 @@ concept_ids = [
 ]
 fingerprint = "a2d0c51aad33f1316633af01be94b9e165226a979cf54aae845835772a893da4"
 source_issue = 44
-source_pr = 108
+source_pr = 110
 
 [[surface]]
 surface_id = "protected.resources"
@@ -4309,7 +4309,7 @@ concept_ids = [
 ]
 fingerprint = "9dbe0bcd69af6178517b191b8633232da356e9dd6deff42687e6e9d4ad362e49"
 source_issue = 44
-source_pr = 108
+source_pr = 110
 
 [[surface]]
 surface_id = "workspace.apps_device_test"
@@ -4602,7 +4602,7 @@ concept_ids = [
 ]
 fingerprint = "318631acf3517222672fef7bb92884ed06bad6c1f64a3958cb0997907589d423"
 source_issue = 44
-source_pr = 108
+source_pr = 110
 
 [[surface]]
 surface_id = "workspace.apps_vision_provider_check"
@@ -6784,7 +6784,7 @@ concept_ids = [
 ]
 fingerprint = "1937497c38ee472e0b4f134a327232924d0d9440ed17887d400b98c610a99eba"
 source_issue = 44
-source_pr = 108
+source_pr = 110
 
 [[surface]]
 surface_id = "workspace.crates_ledger"
@@ -8680,7 +8680,7 @@ concept_ids = [
 ]
 fingerprint = "38366a4d0e2a02d3d6f4a177e2a04d57b251a92cad0f2056d08a90b2db1f0876"
 source_issue = 44
-source_pr = 108
+source_pr = 110
 
 [[surface]]
 surface_id = "workspace.crates_runtime_client"
