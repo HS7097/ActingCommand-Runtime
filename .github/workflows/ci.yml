@@ -21,3 +21,5 @@ jobs:
           TEMP: ${{ runner.temp }}
           TMP: ${{ runner.temp }}
         run: cargo test --workspace
+      - name: Adversarial boundaries
+        run: pwsh -NoProfile -File scripts/ci/adversarial-boundaries.ps1
