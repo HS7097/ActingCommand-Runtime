@@ -70,6 +70,42 @@ fn navigate_dry_run_uses_typed_route() {
 }
 
 #[test]
+fn navigate_keeps_effect_and_overlap_permissions_independent() {
+    let state_changing = Fixture::with_navigation("state_changing", false);
+    let mut lab = state_changing.lab();
+    let mut state_changing_ledger = ledger("navigate");
+    let mut request = state_changing.navigate_request();
+    request.allow_destructive = true;
+    assert_eq!(
+        lab.navigate(request, &mut state_changing_ledger)
+            .expect_err("destructive permission cannot authorize a recovery effect")
+            .code,
+        "navigation_effect_not_navigation_only"
+    );
+
+    let overlapping = Fixture::with_navigation("navigation_only", true);
+    let mut lab = overlapping.lab();
+    let mut blocked_ledger = ledger("navigate");
+    assert_eq!(
+        lab.navigate(overlapping.navigate_request(), &mut blocked_ledger)
+            .expect_err("overlap requires explicit permission")
+            .code,
+        "navigation_destructive_overlap"
+    );
+
+    let mut lab = overlapping.lab();
+    let mut allowed_ledger = ledger("navigate");
+    let mut request = overlapping.navigate_request();
+    request.allow_destructive = true;
+    assert_eq!(
+        lab.navigate(request, &mut allowed_ledger)
+            .expect("navigation-only route may use explicit overlap permission")
+            .status,
+        "planned"
+    );
+}
+
+#[test]
 fn tap_target_real_execution_uses_input_port() {
     let fixture = Fixture::new();
     let mut lab = fixture.lab();
@@ -129,8 +165,31 @@ struct Fixture {
 
 impl Fixture {
     fn new() -> Self {
+        Self::with_navigation("navigation_only", false)
+    }
+
+    fn with_navigation(effect: &str, include_destructive_overlap: bool) -> Self {
         let temp = TempDir::new().expect("tempdir");
         let zip_path = temp.path().join("fixture.zip");
+        let destructive_actions = if include_destructive_overlap {
+            r#"[{"page":"fixture/home","click":{"kind":"rect","x":10,"y":20,"width":4,"height":6}}]"#
+        } else {
+            "[]"
+        };
+        let navigation = format!(
+            r#"{{
+                "schema_version":"0.3",
+                "game":"fixture",
+                "navigation":[{{
+                    "id":"home_to_target",
+                    "from_page":"fixture/home",
+                    "to_page":"fixture/target",
+                    "effect":"{effect}",
+                    "click":{{"kind":"rect","x":10,"y":20,"width":4,"height":6}}
+                }}],
+                "destructive_actions":{destructive_actions}
+            }}"#
+        );
         let files = [
             (
                 "control.json",
@@ -166,19 +225,7 @@ impl Fixture {
             ),
             (
                 "resources/navigation/fixture.test.navigation.json",
-            r#"{
-                "schema_version":"0.3",
-                "game":"fixture",
-                "navigation":[{
-                    "id":"home_to_target",
-                    "from_page":"fixture/home",
-                    "to_page":"fixture/target",
-                    "effect":"navigation_only",
-                    "click":{"kind":"rect","x":10,"y":20,"width":4,"height":6}
-                }],
-                "destructive_actions":[]
-            }"#
-                .as_bytes(),
+                navigation.as_bytes(),
             ),
         ];
         write_zip(&zip_path, &files);

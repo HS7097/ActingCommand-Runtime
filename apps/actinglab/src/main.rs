@@ -4436,6 +4436,7 @@ impl RecoveryEffect {
         match value {
             None => Ok(Self::Unclassified),
             Some(Value::String(value)) if value == "navigation_only" => Ok(Self::NavigationOnly),
+            Some(Value::String(value)) if value == "unclassified" => Ok(Self::Unclassified),
             Some(Value::String(_)) => Ok(Self::NonNavigation),
             Some(_) => Err(CliError::usage("navigation effect must be a string")),
         }
@@ -9841,24 +9842,34 @@ struct ResourceUpstreamRoot {
 }
 
 fn resource_upstream_root(flags: &FlagArgs) -> CliOutcome<ResourceUpstreamRoot> {
-    let upstream = flags.optional_path("--upstream-root");
-    let legacy = flags.optional_path("--alas-root");
-    match (upstream, legacy) {
-        (Some(_), Some(_)) => Err(CliError::usage(
+    let upstream = flags.values("--upstream-root");
+    let legacy = flags.values("--alas-root");
+    match (upstream.is_empty(), legacy.is_empty()) {
+        (false, false) => Err(CliError::usage(
             "--upstream-root and --alas-root cannot be used together",
         )),
-        (Some(path), None) => Ok(ResourceUpstreamRoot {
-            path,
-            legacy_flag: false,
-        }),
-        (None, Some(path)) => Ok(ResourceUpstreamRoot {
-            path,
-            legacy_flag: true,
-        }),
-        (None, None) => Err(CliError::usage(
+        (false, true) => resource_upstream_root_value(flags, "--upstream-root", false),
+        (true, false) => resource_upstream_root_value(flags, "--alas-root", true),
+        (true, true) => Err(CliError::usage(
             "missing --upstream-root <value> (legacy alias: --alas-root <value>)",
         )),
     }
+}
+
+fn resource_upstream_root_value(
+    flags: &FlagArgs,
+    name: &str,
+    legacy_flag: bool,
+) -> CliOutcome<ResourceUpstreamRoot> {
+    if flags.values(name).len() != 1 {
+        return Err(CliError::usage(format!(
+            "{name} may be specified only once"
+        )));
+    }
+    Ok(ResourceUpstreamRoot {
+        path: flags.required_path(name)?,
+        legacy_flag,
+    })
 }
 
 fn run_run_report(sub: &str, global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
@@ -11994,7 +12005,8 @@ mod tests {
     };
     use semantic_fixture::{
         run_semantic_cli, seal_semantic_fixture, semantic_resource_root,
-        synthetic_game_resource_root, template_drift_resource_root,
+        semantic_resource_root_with_effect, synthetic_game_resource_root,
+        template_drift_resource_root,
     };
     use std::process::Stdio;
     use std::sync::{Arc, Mutex};
@@ -20291,6 +20303,77 @@ mod tests {
                 .contains("cannot be used together")
         );
 
+        let missing_value_conflict = run_cli(
+            [
+                "--json",
+                "resource",
+                "import-upstream",
+                "--repo",
+                repo.to_str().unwrap(),
+                "--upstream-root",
+                "--alas-root",
+                upstream.to_str().unwrap(),
+            ],
+            true,
+        );
+        assert_ne!(missing_value_conflict.exit_code(), 0);
+        assert!(
+            missing_value_conflict
+                .envelope
+                .error
+                .as_ref()
+                .unwrap()
+                .message
+                .contains("cannot be used together")
+        );
+
+        let missing_value = run_cli(
+            [
+                "--json",
+                "resource",
+                "import-upstream",
+                "--repo",
+                repo.to_str().unwrap(),
+                "--upstream-root",
+            ],
+            true,
+        );
+        assert_ne!(missing_value.exit_code(), 0);
+        assert!(
+            missing_value
+                .envelope
+                .error
+                .as_ref()
+                .unwrap()
+                .message
+                .contains("missing --upstream-root <value>")
+        );
+
+        let duplicate = run_cli(
+            [
+                "--json",
+                "resource",
+                "import-upstream",
+                "--repo",
+                repo.to_str().unwrap(),
+                "--upstream-root",
+                upstream.to_str().unwrap(),
+                "--upstream-root",
+                upstream.to_str().unwrap(),
+            ],
+            true,
+        );
+        assert_ne!(duplicate.exit_code(), 0);
+        assert!(
+            duplicate
+                .envelope
+                .error
+                .as_ref()
+                .unwrap()
+                .message
+                .contains("may be specified only once")
+        );
+
         let commands = command_capabilities();
         for alias in ["resource import-alas", "resource drift-alas"] {
             assert!(
@@ -21110,6 +21193,43 @@ mod tests {
             route[0].get("id").and_then(Value::as_str),
             Some("home_to_target")
         );
+    }
+
+    #[test]
+    fn lab2_ensure_never_allows_unsafe_recovery_effect() {
+        let _guard = env_lock();
+        let _app_env = set_isolated_app_env();
+        unsafe {
+            set_missing_config_env();
+            env::remove_var(SESSION_STATE_ENV);
+        }
+        for (effect, expected_code) in [
+            ("state_changing", "navigation_effect_not_navigation_only"),
+            ("unclassified", "navigation_effect_unclassified"),
+        ] {
+            let temp = semantic_resource_root_with_effect(false, effect);
+            let home = temp.path().join("home.png");
+            fs::write(&home, encode_png(1, 1, [255, 0, 0])).unwrap();
+            let result = run_semantic_cli(
+                &temp,
+                [
+                    "--json",
+                    "--dry-run",
+                    "--resource-root",
+                    temp.path().to_str().unwrap(),
+                    "--game",
+                    "sample",
+                    "ensure",
+                    "target",
+                    "--scene",
+                    home.to_str().unwrap(),
+                    "--allow-destructive",
+                ],
+                true,
+            );
+            assert_eq!(result.exit_code(), 3);
+            assert_eq!(result.envelope.error.as_ref().unwrap().code, expected_code);
+        }
     }
 
     #[test]

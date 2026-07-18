@@ -164,6 +164,7 @@ impl DriveRecoveryEffect {
         match value {
             None => Ok(Self::Unclassified),
             Some(Value::String(value)) if value == "navigation_only" => Ok(Self::NavigationOnly),
+            Some(Value::String(value)) if value == "unclassified" => Ok(Self::Unclassified),
             Some(Value::String(_)) => Ok(Self::NonNavigation),
             Some(_) => Err(DriveDecisionError::invalid(
                 "navigation effect must be a string",
@@ -304,8 +305,25 @@ impl DriveNavigationGraph {
     }
 
     pub fn validate_route(&self, route: &[DriveNavigationEdge]) -> Result<(), DriveDecisionError> {
+        self.validate_route_effects(route)?;
+        self.validate_route_destructive_overlap(route)
+    }
+
+    pub fn validate_route_effects(
+        &self,
+        route: &[DriveNavigationEdge],
+    ) -> Result<(), DriveDecisionError> {
         for edge in route {
             edge.recovery_effect.require_navigation_only(edge.id())?;
+        }
+        Ok(())
+    }
+
+    pub fn validate_route_destructive_overlap(
+        &self,
+        route: &[DriveNavigationEdge],
+    ) -> Result<(), DriveDecisionError> {
+        for edge in route {
             self.validate_resolved_input(edge, edge.input())?;
         }
         Ok(())
@@ -687,6 +705,7 @@ mod tests {
     fn missing_or_non_navigation_effect_is_safety_blocked() {
         for (effect, expected_code) in [
             (None, "navigation_effect_unclassified"),
+            (Some("unclassified"), "navigation_effect_unclassified"),
             (
                 Some("state_changing"),
                 "navigation_effect_not_navigation_only",
