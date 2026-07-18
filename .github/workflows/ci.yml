@@ -24,10 +24,9 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-            !target/tests/**
-          key: ${{ runner.os }}-cargo-${{ steps.toolchain.outputs.cachekey }}-${{ hashFiles('**/Cargo.lock', '**/Cargo.toml') }}
+          key: ${{ runner.os }}-cargo-trybuild-clean-v1-${{ steps.toolchain.outputs.cachekey }}-${{ hashFiles('**/Cargo.lock', '**/Cargo.toml') }}
           restore-keys: |
-            ${{ runner.os }}-cargo-${{ steps.toolchain.outputs.cachekey }}-
+            ${{ runner.os }}-cargo-trybuild-clean-v1-${{ steps.toolchain.outputs.cachekey }}-
       - name: Format
         run: cargo fmt --all -- --check
       - name: Clippy
@@ -37,3 +36,10 @@ jobs:
           TEMP: ${{ runner.temp }}
           TMP: ${{ runner.temp }}
         run: cargo test --workspace
+      - name: Remove trybuild cache artifacts
+        if: always()
+        shell: pwsh
+        run: |
+          if (Test-Path -LiteralPath target/tests) {
+            Remove-Item -LiteralPath target/tests -Recurse -Force -ErrorAction Stop
+          }
