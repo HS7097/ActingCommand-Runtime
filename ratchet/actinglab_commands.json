@@ -51,7 +51,7 @@
     "run <subcommand>",
     "report <subcommand>"
   ],
-  "command_count": 125,
+  "command_count": 127,
   "commands": [
     "help",
     "version",
@@ -129,6 +129,8 @@
     "resource compile-maa",
     "resource import-upstream",
     "resource drift-upstream",
+    "resource import-alas",
+    "resource drift-alas",
     "resource check-release",
     "runtime reset",
     "runtime observe",

@@ -831,10 +831,20 @@ impl OperationConverter {
                     .unwrap_or("");
                 let from = required_string(operation, "from")?;
                 let to = required_string(operation, "to")?;
+                let effect = match operation.get("effect") {
+                    None | Some(Value::Null) => "unclassified",
+                    Some(Value::String(effect)) => effect,
+                    Some(_) => {
+                        return Err(CliError::package_invalid(format!(
+                            "operation '{edge_id}' effect must be a string"
+                        )));
+                    }
+                };
                 let edge = ordered_object([
                     ("id", Value::String(edge_id.clone())),
                     ("from_page", page_or_any(&self.game, &from)),
                     ("to_page", page_or_any(&self.game, &to)),
+                    ("effect", Value::String(effect.to_string())),
                     (
                         "click",
                         click_to_navigation(required_field(operation, "click")?)?,

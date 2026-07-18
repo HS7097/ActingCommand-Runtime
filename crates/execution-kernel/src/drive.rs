@@ -148,7 +148,44 @@ pub struct DriveNavigationEdge {
     from_page: String,
     to_page: String,
     input: DriveSemanticInput,
+    recovery_effect: DriveRecoveryEffect,
     source: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DriveRecoveryEffect {
+    NavigationOnly,
+    NonNavigation,
+    Unclassified,
+}
+
+impl DriveRecoveryEffect {
+    fn parse(value: Option<&Value>) -> Result<Self, DriveDecisionError> {
+        match value {
+            None => Ok(Self::Unclassified),
+            Some(Value::String(value)) if value == "navigation_only" => Ok(Self::NavigationOnly),
+            Some(Value::String(_)) => Ok(Self::NonNavigation),
+            Some(_) => Err(DriveDecisionError::invalid(
+                "navigation effect must be a string",
+            )),
+        }
+    }
+
+    fn require_navigation_only(self, edge_id: &str) -> Result<(), DriveDecisionError> {
+        match self {
+            Self::NavigationOnly => Ok(()),
+            Self::NonNavigation => Err(DriveDecisionError::safety(
+                "navigation_effect_not_navigation_only",
+                format!("navigation edge '{edge_id}' is not classified as navigation_only"),
+                vec!["navigation_only"],
+            )),
+            Self::Unclassified => Err(DriveDecisionError::safety(
+                "navigation_effect_unclassified",
+                format!("navigation edge '{edge_id}' has no typed effect classification"),
+                vec!["navigation_only"],
+            )),
+        }
+    }
 }
 
 impl DriveNavigationEdge {
@@ -268,7 +305,7 @@ impl DriveNavigationGraph {
 
     pub fn validate_route(&self, route: &[DriveNavigationEdge]) -> Result<(), DriveDecisionError> {
         for edge in route {
-            reject_dangerous_semantic_id("navigation edge", edge.id())?;
+            edge.recovery_effect.require_navigation_only(edge.id())?;
             self.validate_resolved_input(edge, edge.input())?;
         }
         Ok(())
@@ -422,6 +459,7 @@ fn parse_navigation_edge(value: &Value) -> Result<DriveNavigationEdge, DriveDeci
         from_page: required_string_field(value, "from_page")?.to_string(),
         to_page: required_string_field(value, "to_page")?.to_string(),
         input: parse_navigation_input(required_value_field(value, "click")?)?,
+        recovery_effect: DriveRecoveryEffect::parse(value.get("effect"))?,
         source: value
             .get("source")
             .and_then(Value::as_str)
@@ -590,8 +628,8 @@ mod tests {
     const NAVIGATION: &str = r#"{
         "game":"fixture01",
         "navigation":[
-            {"id":"home_to_terminal","from_page":"fixture01/home","to_page":"fixture01/terminal","click":{"kind":"rect","x":10,"y":20,"width":20,"height":10}},
-            {"id":"terminal_to_stage","from_page":"fixture01/terminal","to_page":"fixture01/stage","click":{"kind":"target_center","target_id":"stage_entry"}}
+            {"id":"home_to_terminal","from_page":"fixture01/home","to_page":"fixture01/terminal","effect":"navigation_only","click":{"kind":"rect","x":10,"y":20,"width":20,"height":10}},
+            {"id":"terminal_to_stage","from_page":"fixture01/terminal","to_page":"fixture01/stage","effect":"navigation_only","click":{"kind":"target_center","target_id":"stage_entry"}}
         ],
         "destructive_actions":[
             {"page":"fixture01/home","click":{"kind":"rect","x":100,"y":100,"width":20,"height":20}}
@@ -614,7 +652,7 @@ mod tests {
     }
 
     #[test]
-    fn destructive_overlap_and_dangerous_ids_are_safety_blocked() {
+    fn typed_effect_and_destructive_overlap_are_safety_blocked() {
         let graph = DriveNavigationGraph::parse_json(NAVIGATION).expect("graph");
         let edge = DriveNavigationEdge {
             id: "open_shop".to_string(),
@@ -629,15 +667,13 @@ mod tests {
                 },
                 point: DrivePoint { x: 105, y: 105 },
             },
+            recovery_effect: DriveRecoveryEffect::NavigationOnly,
             source: None,
         };
 
-        assert_eq!(
-            reject_dangerous_semantic_id("navigation edge", edge.id())
-                .expect_err("dangerous id")
-                .code(),
-            "semantic_action_requires_destructive_opt_in"
-        );
+        edge.recovery_effect
+            .require_navigation_only(edge.id())
+            .expect("typed effect, not the identifier, controls recovery safety");
         assert_eq!(
             graph
                 .validate_resolved_input(&edge, edge.input())
@@ -645,6 +681,43 @@ mod tests {
                 .code(),
             "navigation_destructive_overlap"
         );
+    }
+
+    #[test]
+    fn missing_or_non_navigation_effect_is_safety_blocked() {
+        for (effect, expected_code) in [
+            (None, "navigation_effect_unclassified"),
+            (
+                Some("state_changing"),
+                "navigation_effect_not_navigation_only",
+            ),
+        ] {
+            let effect_field = effect
+                .map(|value| format!(r#", "effect":"{value}""#))
+                .unwrap_or_default();
+            let source = format!(
+                r#"{{
+                    "navigation":[{{
+                        "id":"open_shop",
+                        "from_page":"fixture/home",
+                        "to_page":"fixture/next"
+                        {effect_field},
+                        "click":{{"kind":"point","x":1,"y":2}}
+                    }}]
+                }}"#
+            );
+            let graph = DriveNavigationGraph::parse_json(&source).expect("graph");
+            let route = graph
+                .find_route("fixture/home", "fixture/next")
+                .expect("route");
+            assert_eq!(
+                graph
+                    .validate_route(&route)
+                    .expect_err("unsafe recovery effect")
+                    .code(),
+                expected_code
+            );
+        }
     }
 
     #[test]

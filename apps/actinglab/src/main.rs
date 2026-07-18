@@ -1054,8 +1054,16 @@ fn session_capture_policy_payload(
     command_name: &str,
 ) -> CliOutcome<Value> {
     flags.expect_positionals(command_name, 0)?;
+    let stale_frame_reference = match flags.optional("--known-stale-frame-ref") {
+        Some(value) if value == "true" => {
+            return Err(CliError::usage(
+                "--known-stale-frame-ref requires an external reference",
+            ));
+        }
+        value => value,
+    };
     Ok(json!({
-        "schema_version": "session.capture_policy.v0.1",
+        "schema_version": "session.capture_policy.v0.2",
         "status": "offline_policy",
         "purpose": "machine-readable fresh-frame and stale-capture policy for Session Layer clients",
         "generated_at_unix_ms": current_unix_ms(),
@@ -1091,7 +1099,11 @@ fn session_capture_policy_payload(
             "must_compare_or_diagnose_before_freeze_conclusion": true,
             "stale_capture_status": "capture_stale_suspected",
             "game_freeze_status": "unverified_without_fresh_backend_evidence",
-            "known_stale_frame_md5": "202752fa3e5cab706774819168639b6c",
+            "known_stale_frame_fingerprint": {
+                "source": "external_reference",
+                "reference": stale_frame_reference,
+                "runtime_default_embedded": false
+            },
             "finding": "FINDING-capture-staleness-2026-06-27"
         },
         "freeze_classification_gate": {
@@ -1277,7 +1289,7 @@ fn session_self_heal_policy_payload(
 ) -> CliOutcome<Value> {
     flags.expect_positionals(command_name, 0)?;
     Ok(json!({
-        "schema_version": "session.self_heal_policy.v0.1",
+        "schema_version": "session.self_heal_policy.v0.2",
         "status": "offline_policy",
         "purpose": "machine-readable Phase C maintenance self-heal policy for Session Layer clients",
         "generated_at_unix_ms": current_unix_ms(),
@@ -2355,7 +2367,7 @@ fn session_capture_policy_view_contract() -> Value {
     json!({
         "query": "session capture-policy",
         "daemon_query": "session request capture-policy",
-        "schema_version": "session.capture_policy.v0.1",
+        "schema_version": "session.capture_policy.v0.2",
         "fresh_frame_policy_field": "fresh_frame_policy",
         "backend_policy_field": "backend_policy",
         "stale_classification_field": "stale_classification",
@@ -2394,7 +2406,7 @@ fn session_self_heal_policy_view_contract() -> Value {
     json!({
         "query": "session self-heal-policy",
         "daemon_query": "session request self-heal-policy",
-        "schema_version": "session.self_heal_policy.v0.1",
+        "schema_version": "session.self_heal_policy.v0.2",
         "phase_c_field": "phase_c",
         "flow_field": "flow",
         "trigger_policy_field": "trigger_policy",
@@ -4408,7 +4420,52 @@ struct NavigationEdge {
     from_page: String,
     to_page: String,
     input: SemanticInput,
+    recovery_effect: RecoveryEffect,
     source: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RecoveryEffect {
+    NavigationOnly,
+    NonNavigation,
+    Unclassified,
+}
+
+impl RecoveryEffect {
+    fn parse(value: Option<&Value>) -> CliOutcome<Self> {
+        match value {
+            None => Ok(Self::Unclassified),
+            Some(Value::String(value)) if value == "navigation_only" => Ok(Self::NavigationOnly),
+            Some(Value::String(_)) => Ok(Self::NonNavigation),
+            Some(_) => Err(CliError::usage("navigation effect must be a string")),
+        }
+    }
+
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::NavigationOnly => "navigation_only",
+            Self::NonNavigation => "non_navigation",
+            Self::Unclassified => "unclassified",
+        }
+    }
+
+    fn require_navigation_only(self, edge_id: &str) -> CliOutcome<()> {
+        match self {
+            Self::NavigationOnly => Ok(()),
+            Self::NonNavigation => Err(CliError::safety_blocked(
+                "navigation_effect_not_navigation_only",
+                format!(
+                    "recovery navigation edge '{edge_id}' is not classified as navigation_only"
+                ),
+                &["navigation_only"],
+            )),
+            Self::Unclassified => Err(CliError::safety_blocked(
+                "navigation_effect_unclassified",
+                format!("recovery navigation edge '{edge_id}' has no typed effect classification"),
+                &["navigation_only"],
+            )),
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -4682,6 +4739,7 @@ fn parse_navigation_edge(value: &Value) -> CliOutcome<NavigationEdge> {
         from_page: required_string_field(value, "from_page")?.to_string(),
         to_page: required_string_field(value, "to_page")?.to_string(),
         input: parse_navigation_input(required_value_field(value, "click")?)?,
+        recovery_effect: RecoveryEffect::parse(value.get("effect"))?,
         source: value
             .get("source")
             .and_then(Value::as_str)
@@ -4873,6 +4931,7 @@ fn navigation_edge_json(edge: &NavigationEdge) -> Value {
         "from_page": edge.from_page,
         "to_page": edge.to_page,
         "input": semantic_input_json(&edge.input),
+        "effect": edge.recovery_effect.as_str(),
         "source": edge.source
     })
 }
@@ -4960,7 +5019,7 @@ fn safe_recovery_route(
         )
     })?;
     for edge in &route {
-        reject_dangerous_semantic_id("recovery navigation edge", &edge.id)?;
+        edge.recovery_effect.require_navigation_only(&edge.id)?;
         reject_destructive_overlap(edge, &graph.destructive_clicks)?;
     }
     Ok(route)
@@ -5262,11 +5321,9 @@ fn rects_intersect(a: PackRect, b: PackRect) -> bool {
 fn reject_dangerous_semantic_id(label: &str, value: &str) -> CliOutcome<()> {
     let lower = value.to_ascii_lowercase();
     let dangerous = [
-        "random_draw",
         "shop",
         "purchase",
         "buy",
-        "recruit",
         "construct",
         "retire",
         "delete",
@@ -5275,8 +5332,6 @@ fn reject_dangerous_semantic_id(label: &str, value: &str) -> CliOutcome<()> {
         "refill",
         "paid",
         "premium",
-        "exercise",
-        "competitive",
     ];
     if dangerous.iter().any(|word| lower.contains(word)) {
         return Err(CliError::safety_blocked(
@@ -9741,16 +9796,33 @@ fn run_resource(sub: &str, global: &GlobalOptions, args: &[String]) -> CliOutcom
         }
         "convert" => resource_convert::run_resource_convert(global, &flags, &resource_root),
         "compile-maa" => maa_task_graph::run_resource_maa_task_compile(&flags, &resource_root),
-        "import-upstream" | "drift-upstream" => {
-            let upstream_root = flags.required_path("--upstream-root")?;
-            Ok(json!({
+        "import-upstream" | "drift-upstream" | "import-alas" | "drift-alas" => {
+            let upstream_root = resource_upstream_root(&flags)?;
+            let canonical_command = match sub {
+                "import-upstream" | "import-alas" => "import-upstream",
+                "drift-upstream" | "drift-alas" => "drift-upstream",
+                _ => unreachable!(),
+            };
+            let deprecated_alias = matches!(sub, "import-alas" | "drift-alas");
+            let mut response = json!({
                 "repo": repo.display().to_string(),
                 "resource_root": resource_root.root.display().to_string(),
                 "resource_layout": resource_root.layout,
-                "upstream_root": upstream_root.display().to_string(),
+                "upstream_root": upstream_root.path.display().to_string(),
                 "status": "reserved",
-                "command": sub
-            }))
+                "command": sub,
+                "canonical_command": canonical_command,
+                "deprecated_alias": deprecated_alias
+            });
+            if (deprecated_alias || upstream_root.legacy_flag)
+                && let Some(object) = response.as_object_mut()
+            {
+                object.insert(
+                    "alas_root".to_string(),
+                    Value::String(upstream_root.path.display().to_string()),
+                );
+            }
+            Ok(response)
         }
         "check-release" => Ok(json!({
             "repo": repo.display().to_string(),
@@ -9760,6 +9832,32 @@ fn run_resource(sub: &str, global: &GlobalOptions, args: &[String]) -> CliOutcom
             "status": if repo.is_dir() { "checked" } else { "missing" }
         })),
         _ => Err(CliError::usage(format!("unknown resource command: {sub}"))),
+    }
+}
+
+struct ResourceUpstreamRoot {
+    path: PathBuf,
+    legacy_flag: bool,
+}
+
+fn resource_upstream_root(flags: &FlagArgs) -> CliOutcome<ResourceUpstreamRoot> {
+    let upstream = flags.optional_path("--upstream-root");
+    let legacy = flags.optional_path("--alas-root");
+    match (upstream, legacy) {
+        (Some(_), Some(_)) => Err(CliError::usage(
+            "--upstream-root and --alas-root cannot be used together",
+        )),
+        (Some(path), None) => Ok(ResourceUpstreamRoot {
+            path,
+            legacy_flag: false,
+        }),
+        (None, Some(path)) => Ok(ResourceUpstreamRoot {
+            path,
+            legacy_flag: true,
+        }),
+        (None, None) => Err(CliError::usage(
+            "missing --upstream-root <value> (legacy alias: --alas-root <value>)",
+        )),
     }
 }
 
@@ -11389,6 +11487,8 @@ fn command_capabilities() -> Vec<Value> {
         command_cap("resource convert", ["offline"], "available"),
         command_cap("resource import-upstream", ["offline"], "reserved"),
         command_cap("resource drift-upstream", ["offline"], "reserved"),
+        command_cap("resource import-alas", ["offline"], "reserved"),
+        command_cap("resource drift-alas", ["offline"], "reserved"),
         command_cap("resource check-release", ["offline"], "available"),
         command_cap("observe", ["offline", "device_optional"], "available"),
         command_cap(
@@ -19171,7 +19271,7 @@ mod tests {
         assert_eq!(
             data.pointer("/envelopes/capture_policy_view/schema_version")
                 .and_then(Value::as_str),
-            Some("session.capture_policy.v0.1")
+            Some("session.capture_policy.v0.2")
         );
         assert_eq!(
             data.pointer("/envelopes/capture_policy_view/stale_classification_field")
@@ -19193,7 +19293,7 @@ mod tests {
         assert_eq!(
             data.pointer("/envelopes/self_heal_policy_view/schema_version")
                 .and_then(Value::as_str),
-            Some("session.self_heal_policy.v0.1")
+            Some("session.self_heal_policy.v0.2")
         );
         assert_eq!(
             data.pointer("/envelopes/self_heal_policy_view/maintenance_boundary_field")
@@ -20055,6 +20155,149 @@ mod tests {
                     "retired command advertised: {command}"
                 );
             }
+        }
+    }
+
+    #[test]
+    fn session_policy_v2_externalizes_stale_frame_fingerprint() {
+        let global = GlobalOptions::default();
+        let flags = FlagArgs::parse(&[
+            "--known-stale-frame-ref".to_string(),
+            "artifact://captures/stale-frame".to_string(),
+        ])
+        .unwrap();
+        let capture =
+            session_capture_policy_payload(&global, &flags, "session capture-policy").unwrap();
+        assert_eq!(
+            capture.get("schema_version").and_then(Value::as_str),
+            Some("session.capture_policy.v0.2")
+        );
+        assert_eq!(
+            capture
+                .pointer("/stale_classification/known_stale_frame_fingerprint/reference")
+                .and_then(Value::as_str),
+            Some("artifact://captures/stale-frame")
+        );
+        assert_eq!(
+            capture
+                .pointer(
+                    "/stale_classification/known_stale_frame_fingerprint/runtime_default_embedded",
+                )
+                .and_then(Value::as_bool),
+            Some(false)
+        );
+        let capture_json = serde_json::to_string(&capture).unwrap();
+        assert!(!capture_json.contains("known_stale_frame_md5"));
+
+        let self_heal = session_self_heal_policy_payload(
+            &global,
+            &FlagArgs::default(),
+            "session self-heal-policy",
+        )
+        .unwrap();
+        assert_eq!(
+            self_heal.get("schema_version").and_then(Value::as_str),
+            Some("session.self_heal_policy.v0.2")
+        );
+        assert_eq!(
+            self_heal
+                .pointer("/maintenance_boundary/competitive_or_exercise_allowed")
+                .and_then(Value::as_bool),
+            Some(false)
+        );
+    }
+
+    #[test]
+    fn resource_upstream_commands_preserve_legacy_cli_aliases() {
+        let temp = TempDir::new().unwrap();
+        let repo = temp.path().join("repo");
+        let upstream = temp.path().join("upstream");
+        fs::create_dir_all(&repo).unwrap();
+        fs::create_dir_all(&upstream).unwrap();
+
+        let current = run_cli(
+            [
+                "--json",
+                "resource",
+                "import-upstream",
+                "--repo",
+                repo.to_str().unwrap(),
+                "--upstream-root",
+                upstream.to_str().unwrap(),
+            ],
+            true,
+        );
+        assert_eq!(current.exit_code(), 0, "{}", current.envelope_json());
+        assert_eq!(
+            current
+                .envelope
+                .data
+                .as_ref()
+                .unwrap()
+                .get("canonical_command")
+                .and_then(Value::as_str),
+            Some("import-upstream")
+        );
+
+        let legacy = run_cli(
+            [
+                "--json",
+                "resource",
+                "import-alas",
+                "--repo",
+                repo.to_str().unwrap(),
+                "--alas-root",
+                upstream.to_str().unwrap(),
+            ],
+            true,
+        );
+        assert_eq!(legacy.exit_code(), 0, "{}", legacy.envelope_json());
+        let legacy_data = legacy.envelope.data.as_ref().unwrap();
+        assert_eq!(
+            legacy_data.get("canonical_command").and_then(Value::as_str),
+            Some("import-upstream")
+        );
+        assert_eq!(
+            legacy_data.get("deprecated_alias").and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            legacy_data.get("alas_root").and_then(Value::as_str),
+            upstream.to_str()
+        );
+
+        let conflict = run_cli(
+            [
+                "--json",
+                "resource",
+                "drift-upstream",
+                "--repo",
+                repo.to_str().unwrap(),
+                "--upstream-root",
+                upstream.to_str().unwrap(),
+                "--alas-root",
+                upstream.to_str().unwrap(),
+            ],
+            true,
+        );
+        assert_ne!(conflict.exit_code(), 0);
+        assert!(
+            conflict
+                .envelope
+                .error
+                .as_ref()
+                .unwrap()
+                .message
+                .contains("cannot be used together")
+        );
+
+        let commands = command_capabilities();
+        for alias in ["resource import-alas", "resource drift-alas"] {
+            assert!(
+                commands.iter().any(|command| {
+                    command.get("command").and_then(Value::as_str) == Some(alias)
+                })
+            );
         }
     }
 
