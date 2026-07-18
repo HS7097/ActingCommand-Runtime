@@ -57,7 +57,7 @@ scope = ["approval.provenance", "compatibility.alias", "external.compat", "ident
 
 [surface_manifest]
 path = "tools/actinglab-architecture/generic-domain-surfaces-v2.jsonl"
-sha256 = "12c7d61f979122f9cdc4bd05f38472df6f45684d8034d02a68d371164ab6f389"
+sha256 = "ff811b5eee2f579da4513e60ed4b81445f4f9fd33c81309c3fad1af9f84ae3fe"
 approval_id = "approval.issue44_r8"
 source_issue = 44
 source_pr = 112
@@ -2053,6 +2053,19 @@ source_issue = 44
 source_pr = 113
 
 [[identity_allowance]]
+id = "allowance.fragment_05301fb1d15dee89e5b5a643905b9b73ad190f67"
+kind = "test_fixture"
+exact_path = "crates/device/src/emulator.rs"
+selector = "rust:tests::fn:fake_backend_rehearses_without_external_authority"
+scope = ["identity.branch"]
+tokens = []
+sha256 = "c1481e724d1933742aca4aebb1b8e0f8ff6e620e3f9e81145d59dd937cd6b656"
+purpose = "Allows neutral identity fixture values in this exact test fragment."
+approval_id = "approval.issue44_r9"
+source_issue = 44
+source_pr = 119
+
+[[identity_allowance]]
 id = "allowance.fragment_054ed8a7cdb7a4da9d808319d76fde2ae9c17c58"
 kind = "test_fixture"
 exact_path = "crates/resource-tooling/src/resource_convert/tests.rs"
@@ -2077,6 +2090,19 @@ purpose = "Allows reviewed upstream interoperability tokens in this exact AST fr
 approval_id = "approval.issue44_r8b"
 source_issue = 44
 source_pr = 113
+
+[[identity_allowance]]
+id = "allowance.fragment_065152b7ddafaaa33da2b5993b96244e8ea678ca"
+kind = "test_fixture"
+exact_path = "crates/device/src/emulator.rs"
+selector = "rust:tests::fn:unavailable_capability_fails_loud"
+scope = ["identity.branch"]
+tokens = []
+sha256 = "c324e045b3d1c74c2bc12370be0e10d6a7b0678ebc4e61404e8cef02ed4edea3"
+purpose = "Allows neutral identity fixture values in this exact test fragment."
+approval_id = "approval.issue44_r9"
+source_issue = 44
+source_pr = 119
 
 [[identity_allowance]]
 id = "allowance.fragment_06ee644ab2ceeb4c06e12131295e752e1f8b5ced"
@@ -2209,6 +2235,19 @@ source_issue = 44
 source_pr = 113
 
 [[identity_allowance]]
+id = "allowance.fragment_0fa9b15883446f4c6781634bbc735481d770de1e"
+kind = "test_fixture"
+exact_path = "crates/device/src/emulator.rs"
+selector = "rust:tests::fn:fake_backend_propagates_probe_failure"
+scope = ["identity.branch"]
+tokens = []
+sha256 = "b31fe76c5b80c2ba07a1db59216387471e6aac0fb3c36fc9c6b3de2e6efdb358"
+purpose = "Allows neutral identity fixture values in this exact test fragment."
+approval_id = "approval.issue44_r9"
+source_issue = 44
+source_pr = 119
+
+[[identity_allowance]]
 id = "allowance.fragment_0fb28e6226a25ebedcaed42c839dda26c5582cdf"
 kind = "technical_adapter"
 exact_path = "crates/device/src/maatouch.rs"
@@ -2258,7 +2297,7 @@ sha256 = "17732c0105d6c686056d2fe585d9f001126c6f76a8e8d8ecc1ae7357640564e9"
 purpose = "Allows neutral identity fixture values in this exact test fragment."
 approval_id = "approval.issue44_r9"
 source_issue = 44
-source_pr = 118
+source_pr = 119
 
 [[identity_allowance]]
 id = "allowance.fragment_14870f25cf3f548bae98c668e41602b749f33758"
@@ -2430,6 +2469,19 @@ source_issue = 44
 source_pr = 113
 
 [[identity_allowance]]
+id = "allowance.fragment_24c0546d5247bfe0cccf37c989ae9bb823aa6315"
+kind = "guard_source"
+exact_path = "tools/actinglab-architecture/src/generic_domain.rs"
+selector = "rust:fn:cargo_compile_inputs"
+scope = ["identity.branch"]
+tokens = []
+sha256 = "62dc035eb3e2368d4fe554a05ffa48ff65a9e6c0001216c6da7922216a1a1075"
+purpose = "Allows detector definitions and adversarial checks in this exact guard fragment."
+approval_id = "approval.issue44_r9"
+source_issue = 44
+source_pr = 119
+
+[[identity_allowance]]
 id = "allowance.fragment_24c3099adffb3c48a985f905bd47300a58dc86d1"
 kind = "technical_adapter"
 exact_path = "apps/actingd/src/config.rs"
@@ -2454,6 +2506,19 @@ purpose = "Allows neutral identity fixture values in this exact test fragment."
 approval_id = "approval.issue44_r8b"
 source_issue = 44
 source_pr = 113
+
+[[identity_allowance]]
+id = "allowance.fragment_266916590a62ec0c3aa39034ecfe8b1e88337a06"
+kind = "technical_adapter"
+exact_path = "crates/lab/src/env_detection.rs"
+selector = "rust:fn:resolve_env_markers_value"
+scope = ["identity.branch"]
+tokens = []
+sha256 = "8adc9a2ba69f6df43c348f920ddd154a7493271a5ddfe3b8957fc673026da688"
+purpose = "Allows reviewed upstream interoperability tokens in this exact AST fragment."
+approval_id = "approval.issue44_r9"
+source_issue = 44
+source_pr = 119
 
 [[identity_allowance]]
 id = "allowance.fragment_26c312870b4e2244e80846e9fe9c2d18ae942374"
@@ -2545,6 +2610,19 @@ purpose = "Allows reviewed upstream interoperability tokens in this exact AST fr
 approval_id = "approval.issue44_r8b"
 source_issue = 44
 source_pr = 113
+
+[[identity_allowance]]
+id = "allowance.fragment_2b0fbb9defa26ffcf157e5e2ea6600ed26aea8e7"
+kind = "technical_adapter"
+exact_path = "crates/resource-tooling/src/resource_convert/mod.rs"
+selector = "rust:impl:96c842ee0d60fa41:OperationConverter::fn:canonical_task"
+scope = ["identity.branch"]
+tokens = []
+sha256 = "063aee509d0bec03a385e31d092443ce85f96f9c4aa43c2abf2f182a81303922"
+purpose = "Allows reviewed upstream interoperability tokens in this exact AST fragment."
+approval_id = "approval.issue44_r9"
+source_issue = 44
+source_pr = 119
 
 [[identity_allowance]]
 id = "allowance.fragment_2c4acd7d8e750a2607f68010e4ed25db7f1697f1"
@@ -2859,6 +2937,19 @@ source_issue = 44
 source_pr = 113
 
 [[identity_allowance]]
+id = "allowance.fragment_3a1549f4f6584e0f50d41bb4fb73d642718db9f1"
+kind = "technical_adapter"
+exact_path = "crates/execution-kernel/src/kernel.rs"
+selector = "rust:impl:96c842ee0d60fa41:ExecutionKernel::fn:resolve"
+scope = ["identity.branch"]
+tokens = []
+sha256 = "687758ba1e4f4ab232b7d182218baedca607c19f6fe16eb3c24b5d52141934bf"
+purpose = "Allows reviewed upstream interoperability tokens in this exact AST fragment."
+approval_id = "approval.issue44_r9"
+source_issue = 44
+source_pr = 119
+
+[[identity_allowance]]
 id = "allowance.fragment_3b42bfbd89888307055ea5e82f77c4fd193a469d"
 kind = "guard_source"
 exact_path = "tools/actinglab-architecture/src/generic_domain.rs"
@@ -2976,6 +3067,19 @@ source_issue = 44
 source_pr = 113
 
 [[identity_allowance]]
+id = "allowance.fragment_42cf03126dcc9be0c66d7e378129238b410bcef0"
+kind = "technical_adapter"
+exact_path = "crates/execution-kernel/src/kernel.rs"
+selector = "rust:impl:96c842ee0d60fa41:ExecutionKernel::fn:observe_monitor"
+scope = ["identity.branch"]
+tokens = []
+sha256 = "8b29cc60c0b91d728b293290cdd4f2002e039a0b876cb61e9a9838a77b8d1fdc"
+purpose = "Allows reviewed upstream interoperability tokens in this exact AST fragment."
+approval_id = "approval.issue44_r9"
+source_issue = 44
+source_pr = 119
+
+[[identity_allowance]]
 id = "allowance.fragment_448d362d1fdb1a49970db93fcd8eff72b5632e6a"
 kind = "guard_source"
 exact_path = "tools/actinglab-architecture/src/generic_domain.rs"
@@ -3067,17 +3171,30 @@ source_issue = 44
 source_pr = 113
 
 [[identity_allowance]]
+id = "allowance.fragment_47c3fac89f9e79ddb404555f11be16e5bf52ab59"
+kind = "test_fixture"
+exact_path = "crates/device/src/emulator.rs"
+selector = "rust:tests::fn:unknown_capability_id_fails_loud"
+scope = ["identity.branch"]
+tokens = []
+sha256 = "46ad4f691e60dc171b70aff354711624b8ff8ad68d437101062bcefdaa6c209b"
+purpose = "Allows neutral identity fixture values in this exact test fragment."
+approval_id = "approval.issue44_r9"
+source_issue = 44
+source_pr = 119
+
+[[identity_allowance]]
 id = "allowance.fragment_47f464b9f8bc5264a0314b87d1e45ca0983d0af5"
 kind = "guard_fixture"
 exact_path = "tools/actinglab-architecture/tests/workspace_guards.rs"
 selector = "rust:fn:c3b_client_device_authority_stays_behind_runtime"
-scope = ["identity.token"]
+scope = ["identity.branch","identity.token"]
 tokens = ["maa"]
 sha256 = "c2b4070645ee39a89447f73ee7d34269196661acb4320e66d9aed18d6657f2c1"
 purpose = "Allows adversarial identity data in this exact guard test fragment."
-approval_id = "approval.issue44_r8b"
+approval_id = "approval.issue44_r9"
 source_issue = 44
-source_pr = 113
+source_pr = 119
 
 [[identity_allowance]]
 id = "allowance.fragment_483bc54ece668615fe26d46ae984e2789bb26be7"
@@ -3834,6 +3951,19 @@ source_issue = 44
 source_pr = 113
 
 [[identity_allowance]]
+id = "allowance.fragment_7c53a8bc5e126fae5e51b23eb3e3b8211c6e37ad"
+kind = "technical_adapter"
+exact_path = "crates/execution-kernel/src/run.rs"
+selector = "rust:fn:select_run_operation"
+scope = ["identity.branch"]
+tokens = []
+sha256 = "9414c166119e273cdfefab7f6c80db852ae886b78971c9102d472abdfa8e1fe9"
+purpose = "Allows reviewed upstream interoperability tokens in this exact AST fragment."
+approval_id = "approval.issue44_r9"
+source_issue = 44
+source_pr = 119
+
+[[identity_allowance]]
 id = "allowance.fragment_7daef34a858aa3d0db02315c1f7c4f37e68d1075"
 kind = "technical_adapter"
 exact_path = "apps/device-test/src/main.rs"
@@ -3916,13 +4046,13 @@ id = "allowance.fragment_8146c6a8074bd988a904131332c8dbd4a691d74c"
 kind = "technical_adapter"
 exact_path = "crates/resource-tooling/src/maa_task_graph.rs"
 selector = "rust:impl:96c842ee0d60fa41:MaaTaskCompiler::fn:materialize_task"
-scope = ["identity.token"]
+scope = ["identity.branch","identity.token"]
 tokens = ["maa"]
 sha256 = "4bbad36ef6961bcbb96f25dd078c725a77b7864a47ed94d9f1781d94bdf13d18"
 purpose = "Allows reviewed upstream interoperability tokens in this exact AST fragment."
-approval_id = "approval.issue44_r8b"
+approval_id = "approval.issue44_r9"
 source_issue = 44
-source_pr = 113
+source_pr = 119
 
 [[identity_allowance]]
 id = "allowance.fragment_816eba36687f873e727aa24992ec39624da4d281"
@@ -3977,6 +4107,19 @@ source_issue = 44
 source_pr = 114
 
 [[identity_allowance]]
+id = "allowance.fragment_83b0135a1961fd76670669b39307c66227084599"
+kind = "test_fixture"
+exact_path = "crates/policy/tests/h1_completion.rs"
+selector = "rust:fn:neutral_activity_diff_compiles_and_expresses_all_requirement_shapes"
+scope = ["identity.branch"]
+tokens = []
+sha256 = "3a2cc83aa0eb994368063f08b69786a4016721dd5b19e43d2e45a636c63d7ffd"
+purpose = "Allows neutral identity fixture values in this exact test fragment."
+approval_id = "approval.issue44_r9"
+source_issue = 44
+source_pr = 119
+
+[[identity_allowance]]
 id = "allowance.fragment_841fe962c099d0b924cbb6f12a3b6d87fa72fada"
 kind = "technical_adapter"
 exact_path = "apps/device-test/src/probe_run.rs"
@@ -4020,13 +4163,13 @@ id = "allowance.fragment_85111cc93957fdd6fc9d79e388a7734b7c51ed5d"
 kind = "guard_fixture"
 exact_path = "tools/actinglab-architecture/tests/workspace_guards.rs"
 selector = "rust:fn:c2_artifact_store_authority_and_dependency_boundary_are_narrow"
-scope = ["identity.token"]
+scope = ["identity.branch","identity.token"]
 tokens = ["maa"]
 sha256 = "2e4ab0ea09c6f098f78179d512dfac2bb1a65c47b94d8175ec9061366f8f2bb3"
 purpose = "Allows adversarial identity data in this exact guard test fragment."
-approval_id = "approval.issue44_r8b"
+approval_id = "approval.issue44_r9"
 source_issue = 44
-source_pr = 113
+source_pr = 119
 
 [[identity_allowance]]
 id = "allowance.fragment_863ac532ebbd909ea8fe8e858c0a52abcc371fbb"
@@ -4172,6 +4315,19 @@ source_issue = 44
 source_pr = 113
 
 [[identity_allowance]]
+id = "allowance.fragment_8e52e9b9715370348ae56f645fc1467cab21b537"
+kind = "technical_adapter"
+exact_path = "benchmarks/rust/src/main.rs"
+selector = "rust:fn:bench_tcp"
+scope = ["identity.branch"]
+tokens = []
+sha256 = "e40510a9c700e18b566ba1d32d98e0fd583b7e482b463ab1af10f63dce0c0980"
+purpose = "Allows reviewed upstream interoperability tokens in this exact AST fragment."
+approval_id = "approval.issue44_r9"
+source_issue = 44
+source_pr = 119
+
+[[identity_allowance]]
 id = "allowance.fragment_8ece8e923514e2fd76f5ab8a652b6543585484b5"
 kind = "test_fixture"
 exact_path = "crates/resource-tooling/src/maa_task_graph.rs"
@@ -4276,6 +4432,45 @@ source_issue = 44
 source_pr = 113
 
 [[identity_allowance]]
+id = "allowance.fragment_958571658e2873a6fa98d35f9b6d65899f0975c2"
+kind = "guard_fixture"
+exact_path = "tools/actinglab-architecture/tests/workspace_guards.rs"
+selector = "rust:fn:c3b_execution_kernel_is_a_daemon_only_backend_shell"
+scope = ["identity.branch"]
+tokens = []
+sha256 = "619f96534c849bcc919719e21637d39e5ba92e6e046ff85102356d2a3afd9a6e"
+purpose = "Allows adversarial identity data in this exact guard test fragment."
+approval_id = "approval.issue44_r9"
+source_issue = 44
+source_pr = 119
+
+[[identity_allowance]]
+id = "allowance.fragment_95f5ed03c9ccb7e0802c4be8509f287ff46428be"
+kind = "guard_fixture"
+exact_path = "tools/actinglab-architecture/tests/workspace_guards.rs"
+selector = "rust:fn:c5_task_planning_is_owned_by_execution_kernel_and_legacy_crate_is_retired"
+scope = ["identity.branch"]
+tokens = []
+sha256 = "0363c0fb32b781036027243fb3ab6ad7ff72d7392cddb1e838485d7ba28766fe"
+purpose = "Allows adversarial identity data in this exact guard test fragment."
+approval_id = "approval.issue44_r9"
+source_issue = 44
+source_pr = 119
+
+[[identity_allowance]]
+id = "allowance.fragment_974ca888c4912683c3c80a1619121bd8c16d9c67"
+kind = "test_fixture"
+exact_path = "apps/actinglab/src/package_build.rs"
+selector = "rust:tests::fn:package_build_pack_split_command_promotes_and_cleans_staging_directory"
+scope = ["identity.branch"]
+tokens = []
+sha256 = "7dbca7c0e4c5d87b6425fe7fcbe2a914fcdb9ad4b64b54d4acd49fdbfac23baa"
+purpose = "Allows neutral identity fixture values in this exact test fragment."
+approval_id = "approval.issue44_r9"
+source_issue = 44
+source_pr = 119
+
+[[identity_allowance]]
 id = "allowance.fragment_97dcbf738e8c57a037884b9fdfcb806c09d960bc"
 kind = "technical_adapter"
 exact_path = "apps/actinglab/src/main.rs"
@@ -4319,13 +4514,13 @@ id = "allowance.fragment_9978078dc291f743d727c967a7990e36b53879d0"
 kind = "technical_adapter"
 exact_path = "apps/device-test/src/main.rs"
 selector = "rust:fn:run_runner_command"
-scope = ["identity.token"]
+scope = ["identity.branch","identity.token"]
 tokens = ["maa"]
 sha256 = "ad27d44f68989326453f556fed165a3f10fc1aa35a561a2410eee407f501cbdc"
 purpose = "Allows reviewed upstream interoperability tokens in this exact AST fragment."
-approval_id = "approval.issue44_r8b"
+approval_id = "approval.issue44_r9"
 source_issue = 44
-source_pr = 113
+source_pr = 119
 
 [[identity_allowance]]
 id = "allowance.fragment_99ab913af2dd858ce050ddff8d22407e2fc51792"
@@ -4365,6 +4560,19 @@ purpose = "Allows reviewed upstream identity metadata in this exact structured f
 approval_id = "approval.issue44_r8b"
 source_issue = 44
 source_pr = 113
+
+[[identity_allowance]]
+id = "allowance.fragment_9bc88dbac01a7f20e3c4ce6fce4a7efed7aa05cd"
+kind = "technical_adapter"
+exact_path = "crates/runtime-host/src/proposal.rs"
+selector = "rust:fn:instantiate_template"
+scope = ["identity.branch"]
+tokens = []
+sha256 = "7db77146c2ab32579745259e812d28b04cda03975cc9f73cf2eee14cd10606af"
+purpose = "Allows reviewed upstream interoperability tokens in this exact AST fragment."
+approval_id = "approval.issue44_r9"
+source_issue = 44
+source_pr = 119
 
 [[identity_allowance]]
 id = "allowance.fragment_9d69a712165c75f371371ca52748e5b5a0aa4cb1"
@@ -4494,7 +4702,7 @@ sha256 = "b478838315963cc51ff91f29a7d733035603db722f6f7b5b76c67ba5a6d3e5a8"
 purpose = "Allows reviewed upstream interoperability tokens in this exact AST fragment."
 approval_id = "approval.issue44_r9"
 source_issue = 44
-source_pr = 118
+source_pr = 119
 
 [[identity_allowance]]
 id = "allowance.fragment_a4c1fdee11758887683064fdd93dfb34451aac22"
@@ -4534,6 +4742,19 @@ purpose = "Allows reviewed upstream interoperability tokens in this exact AST fr
 approval_id = "approval.issue44_r8b"
 source_issue = 44
 source_pr = 113
+
+[[identity_allowance]]
+id = "allowance.fragment_a733f3aeb69383ce5396e3a29995e164cdf67949"
+kind = "test_fixture"
+exact_path = "apps/actingctl/tests/c4_process.rs"
+selector = "rust:fn:runtime_finishes_and_rebuilds_contained_task_after_client_is_killed"
+scope = ["identity.branch"]
+tokens = []
+sha256 = "a451f1b703401076604adf393b30547bb6e3ee4d4b1dd323db1f203d72de3550"
+purpose = "Allows neutral identity fixture values in this exact test fragment."
+approval_id = "approval.issue44_r9"
+source_issue = 44
+source_pr = 119
 
 [[identity_allowance]]
 id = "allowance.fragment_a791192182d30381dd81873005e83acc5162ff41"
@@ -4653,6 +4874,19 @@ source_issue = 44
 source_pr = 113
 
 [[identity_allowance]]
+id = "allowance.fragment_b0dbfd13e3f961022e7caa9119368e44a6f7625a"
+kind = "technical_adapter"
+exact_path = "crates/lab/src/env_detection.rs"
+selector = "rust:impl:96c842ee0d60fa41:EnvCommandContext::fn:from_scope"
+scope = ["identity.branch"]
+tokens = []
+sha256 = "a7253ddb474452f16f37d051438f80fe9a5a62202608633da52267f7124c7968"
+purpose = "Allows reviewed upstream interoperability tokens in this exact AST fragment."
+approval_id = "approval.issue44_r9"
+source_issue = 44
+source_pr = 119
+
+[[identity_allowance]]
 id = "allowance.fragment_b3016652d0fee6381e685628794cae846b9839e8"
 kind = "technical_adapter"
 exact_path = "crates/resource-tooling/src/maa_task_graph.rs"
@@ -4757,6 +4991,19 @@ source_issue = 44
 source_pr = 113
 
 [[identity_allowance]]
+id = "allowance.fragment_b932b4c1d8abf710ce44dc52fc386e8e6e0d59dd"
+kind = "test_fixture"
+exact_path = "crates/device/src/emulator.rs"
+selector = "rust:tests::fn:complete_profile_exposes_available_capability"
+scope = ["identity.branch"]
+tokens = []
+sha256 = "69ac6769a804a3aa033d6bc51ef7e7f4f29574c9f12bea3a089b6e7c8020f1f3"
+purpose = "Allows neutral identity fixture values in this exact test fragment."
+approval_id = "approval.issue44_r9"
+source_issue = 44
+source_pr = 119
+
+[[identity_allowance]]
 id = "allowance.fragment_ba141f0c5b87195e9354154c47b2930fc78ffd25"
 kind = "test_fixture"
 exact_path = "crates/vision-ffi/src/lib.rs"
@@ -4858,7 +5105,7 @@ sha256 = "dde7253198b019c6a28657106815ff792985b61d05d8b4ab81d683d02351ce01"
 purpose = "Allows neutral identity fixture values in this exact test fragment."
 approval_id = "approval.issue44_r9"
 source_issue = 44
-source_pr = 118
+source_pr = 119
 
 [[identity_allowance]]
 id = "allowance.fragment_c1928f0136fdf9ed63904740cb5b5c7e41cef773"
@@ -5043,17 +5290,30 @@ source_issue = 44
 source_pr = 113
 
 [[identity_allowance]]
+id = "allowance.fragment_c99681d4d4564516186444044f7b534fceb53bd1"
+kind = "technical_adapter"
+exact_path = "apps/device-test/src/main.rs"
+selector = "rust:fn:parse_runner_options"
+scope = ["identity.branch"]
+tokens = []
+sha256 = "3a49940b95cfa3990f8de24ea6fa277cab99f78c1f6592381aaeb05749a2e1d6"
+purpose = "Allows reviewed upstream interoperability tokens in this exact AST fragment."
+approval_id = "approval.issue44_r9"
+source_issue = 44
+source_pr = 119
+
+[[identity_allowance]]
 id = "allowance.fragment_c9c59cad318c267d0c379d6926e3136b5ec5e1b6"
 kind = "technical_adapter"
 exact_path = "crates/resource-tooling/src/maa_task_graph.rs"
 selector = "rust:impl:96c842ee0d60fa41:MaaTaskCompiler::fn:expand_task"
-scope = ["identity.token"]
+scope = ["identity.branch","identity.token"]
 tokens = ["maa"]
 sha256 = "db50c42a23fddfee5f1d05f0f473e19d4ed37c45fd34d79d263761a9fff17342"
 purpose = "Allows reviewed upstream interoperability tokens in this exact AST fragment."
-approval_id = "approval.issue44_r8b"
+approval_id = "approval.issue44_r9"
 source_issue = 44
-source_pr = 113
+source_pr = 119
 
 [[identity_allowance]]
 id = "allowance.fragment_c9ff18bef811305f22dc64890add77679c29cec6"
@@ -5108,6 +5368,19 @@ source_issue = 44
 source_pr = 113
 
 [[identity_allowance]]
+id = "allowance.fragment_cb3a3fb05c550723dd2257afd1e97fc3f4709c22"
+kind = "technical_adapter"
+exact_path = "crates/runtime-host/src/emulator_control.rs"
+selector = "rust:fn:admit_emulator_capabilities"
+scope = ["identity.branch"]
+tokens = []
+sha256 = "9406412604fef18a69bc369c43cdc751ed2b0a64507f9271a1233df54b5e3961"
+purpose = "Allows reviewed upstream interoperability tokens in this exact AST fragment."
+approval_id = "approval.issue44_r9"
+source_issue = 44
+source_pr = 119
+
+[[identity_allowance]]
 id = "allowance.fragment_cbc1e6cd1083e4e74a78fd68a17169bed88557bc"
 kind = "guard_fixture"
 exact_path = "tools/actinglab-architecture/tests/workspace_guards.rs"
@@ -5132,6 +5405,19 @@ purpose = "Allows reviewed upstream interoperability tokens in this exact AST fr
 approval_id = "approval.issue44_r8b"
 source_issue = 44
 source_pr = 113
+
+[[identity_allowance]]
+id = "allowance.fragment_ccd06f0e3445ab20d9d2e37239e1ffb5cb12b694"
+kind = "test_fixture"
+exact_path = "apps/actinglab/tests/runtime_input_proxy.rs"
+selector = "rust:fn:lab_package_debug_is_a_correlated_runtime_request_without_device_authority"
+scope = ["identity.branch"]
+tokens = []
+sha256 = "bf0db449af226efd161fa704e5b22bb9f85e8c9fa07653b91fa71bb85654154a"
+purpose = "Allows neutral identity fixture values in this exact test fragment."
+approval_id = "approval.issue44_r9"
+source_issue = 44
+source_pr = 119
 
 [[identity_allowance]]
 id = "allowance.fragment_ccf29bf604ee75ed66c3fa77c6126daca1a36e7e"
@@ -5184,6 +5470,19 @@ purpose = "Allows reviewed upstream interoperability tokens in this exact AST fr
 approval_id = "approval.issue44_r8b"
 source_issue = 44
 source_pr = 113
+
+[[identity_allowance]]
+id = "allowance.fragment_d0b4119df2226c2182ec136c91b10f4d83211a96"
+kind = "test_fixture"
+exact_path = "apps/actinglab/tests/lab2_cli_contract.rs"
+selector = "rust:fn:write_fixture"
+scope = ["identity.branch"]
+tokens = []
+sha256 = "3f714b79f701ad785ed65eb08cde8f51fd0eb85f40a0496335af3a93b09c1ea2"
+purpose = "Allows neutral identity fixture values in this exact test fragment."
+approval_id = "approval.issue44_r9"
+source_issue = 44
+source_pr = 119
 
 [[identity_allowance]]
 id = "allowance.fragment_d22de6959fa5df0fa224291b610e2b20cbeacbe8"
@@ -5340,6 +5639,19 @@ purpose = "Allows reviewed project and upstream names in this exact documentatio
 approval_id = "approval.issue44_r8c"
 source_issue = 44
 source_pr = 114
+
+[[identity_allowance]]
+id = "allowance.fragment_dda6badd43734c9eeaa60bee69be4466792f69ff"
+kind = "technical_adapter"
+exact_path = "crates/resource-tooling/src/package_build.rs"
+selector = "rust:fn:add_resources_json"
+scope = ["identity.branch"]
+tokens = []
+sha256 = "8db467aa2fbec76ae16ff0418353237b6f262e06470302a67279280053964844"
+purpose = "Allows reviewed upstream interoperability tokens in this exact AST fragment."
+approval_id = "approval.issue44_r9"
+source_issue = 44
+source_pr = 119
 
 [[identity_allowance]]
 id = "allowance.fragment_dfdf6094a2e2d88721ecaf2aeff77032888e6c20"
@@ -5537,6 +5849,19 @@ source_issue = 44
 source_pr = 113
 
 [[identity_allowance]]
+id = "allowance.fragment_e45b5033d0cfc20ba7f74b25420f5bd926a070c7"
+kind = "technical_adapter"
+exact_path = "apps/actinglab/src/main.rs"
+selector = "rust:fn:recognition_selector"
+scope = ["identity.branch"]
+tokens = []
+sha256 = "4a29d38e69ea261539264a2cc8a10fa159a1a3ea043cdae8de07121834bec777"
+purpose = "Allows reviewed upstream interoperability tokens in this exact AST fragment."
+approval_id = "approval.issue44_r9"
+source_issue = 44
+source_pr = 119
+
+[[identity_allowance]]
 id = "allowance.fragment_e681e8ea1f36242a61463b45500b827bd832782c"
 kind = "upstream_metadata"
 exact_path = "resources/upstream-manifest.toml"
@@ -5587,6 +5912,19 @@ purpose = "Allows neutral identity fixture values in this exact test fragment."
 approval_id = "approval.issue44_r8b"
 source_issue = 44
 source_pr = 113
+
+[[identity_allowance]]
+id = "allowance.fragment_ea9dca782d166d93a680f4202ecc319d2d7e6493"
+kind = "test_fixture"
+exact_path = "apps/actinglab/tests/runtime_input_proxy.rs"
+selector = "rust:fn:runtime_owned_evidence_export_has_a_sealed_offline_replay_path"
+scope = ["identity.branch"]
+tokens = []
+sha256 = "ec4b463f1d09999d4e2b20b3213e1f93c07304c5ba9e3e0f4d0719a0c3a68542"
+purpose = "Allows neutral identity fixture values in this exact test fragment."
+approval_id = "approval.issue44_r9"
+source_issue = 44
+source_pr = 119
 
 [[identity_allowance]]
 id = "allowance.fragment_eccf0614041ed6405f6fa22e1ee6de3725cb2dd9"
@@ -5641,6 +5979,19 @@ source_issue = 44
 source_pr = 113
 
 [[identity_allowance]]
+id = "allowance.fragment_edbe0904775297ede29fd538bfb613d27680d376"
+kind = "test_fixture"
+exact_path = "apps/actingctl/tests/c4_process.rs"
+selector = "rust:fn:actingctl_runs_neutral_contained_task_without_lab_and_runtime_survives_client_exit"
+scope = ["identity.branch"]
+tokens = []
+sha256 = "8fee2050a61333babfc7a5bafbffb858798272f268ec7a4e498cfd81ea9286dd"
+purpose = "Allows neutral identity fixture values in this exact test fragment."
+approval_id = "approval.issue44_r9"
+source_issue = 44
+source_pr = 119
+
+[[identity_allowance]]
 id = "allowance.fragment_ef5cb22da1b4e64e9f604872ba9d5eb97d80b9e4"
 kind = "test_fixture"
 exact_path = "crates/lab/src/lab_run/tests/bundle_and_actions.rs"
@@ -5680,17 +6031,30 @@ source_issue = 44
 source_pr = 113
 
 [[identity_allowance]]
+id = "allowance.fragment_f05e69861064642472a101e34e794cb35f94d2e8"
+kind = "technical_adapter"
+exact_path = "apps/device-test/src/main.rs"
+selector = "rust:fn:parse_task_dry_run_options"
+scope = ["identity.branch"]
+tokens = []
+sha256 = "2c58a770b33be80e264b06645a59d385f95068bd7e19439a7cd7928c67da7a4d"
+purpose = "Allows reviewed upstream interoperability tokens in this exact AST fragment."
+approval_id = "approval.issue44_r9"
+source_issue = 44
+source_pr = 119
+
+[[identity_allowance]]
 id = "allowance.fragment_f12c5cfe1690c24914ed909c5c24b3ff566748f1"
 kind = "test_fixture"
 exact_path = "crates/resource-tooling/src/resource_convert/tests.rs"
 selector = "rust:fn:resource_convert_rejects_missing_coordinate_space_before_writing_outputs"
-scope = ["identity.token"]
+scope = ["identity.branch","identity.token"]
 tokens = ["maa"]
 sha256 = "459b582cc8a206a7000b8cfa4269a0eb185f85690951d1dcf1512fff78e333c5"
 purpose = "Allows neutral identity fixture values in this exact test fragment."
-approval_id = "approval.issue44_r8b"
+approval_id = "approval.issue44_r9"
 source_issue = 44
-source_pr = 113
+source_pr = 119
 
 [[identity_allowance]]
 id = "allowance.fragment_f1cb57b76d2427b3b2a46939437e0a81de7c32f2"
@@ -5782,6 +6146,19 @@ purpose = "Allows neutral identity fixture values in this exact test fragment."
 approval_id = "approval.issue44_r8b"
 source_issue = 44
 source_pr = 113
+
+[[identity_allowance]]
+id = "allowance.fragment_f95a2e217a76d8b8f1fc800dbbe638636019a0f6"
+kind = "guard_fixture"
+exact_path = "tools/actinglab-architecture/tests/workspace_guards.rs"
+selector = "rust:fn:dependency_path"
+scope = ["identity.branch"]
+tokens = []
+sha256 = "0e4b4b10030b33161fcb0fec90dbdabf33c04afce1e045e7c025a5cda138ceb1"
+purpose = "Allows adversarial identity data in this exact guard test fragment."
+approval_id = "approval.issue44_r9"
+source_issue = 44
+source_pr = 119
 
 [[identity_allowance]]
 id = "allowance.fragment_facbea52f4597258db633e463b0ea5e876bfca73"
@@ -5886,6 +6263,19 @@ purpose = "Allows reviewed upstream interoperability tokens in this exact AST fr
 approval_id = "approval.issue44_r8b"
 source_issue = 44
 source_pr = 113
+
+[[identity_allowance]]
+id = "allowance.fragment_fe5ac81d80260b7f93dd58692ba8b84ef38910e5"
+kind = "test_fixture"
+exact_path = "apps/actinglab/tests/lab2_cli_contract.rs"
+selector = "rust:impl:96c842ee0d60fa41:Lab2Fixture::fn:command"
+scope = ["identity.branch"]
+tokens = []
+sha256 = "ce3642600ccbeb5acb0fa15999ad33d93725de70c99bc877ce17a97a14411e8e"
+purpose = "Allows neutral identity fixture values in this exact test fragment."
+approval_id = "approval.issue44_r9"
+source_issue = 44
+source_pr = 119
 
 [[identity_allowance]]
 id = "allowance.fragment_fe962e65907d33a042576a7e55f52d118cc53471"
