@@ -1,0 +1,23 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+
+schema_version = "actingcommand.tracked-input-policy.v1"
+
+[[non_product]]
+path = "benchmarks/README.md"
+kind = "documentation"
+purpose = "Benchmark usage documentation does not participate in Runtime compilation."
+
+[[non_product]]
+path = "benchmarks/reports"
+kind = "documentation"
+purpose = "Historical benchmark and acceptance reports are retained evidence, not Runtime inputs."
+
+[[non_product]]
+path = "docs"
+kind = "documentation"
+purpose = "Architecture and historical planning documents are not Runtime compilation inputs."
+
+[[non_product]]
+path = "external-tools"
+kind = "external_tool"
+purpose = "Pinned external executable material remains outside Rust product compilation."
