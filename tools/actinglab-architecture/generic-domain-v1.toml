@@ -2113,6 +2113,7 @@ concept_ids = [
 ]
 fingerprint = "47c93a4c18cc3fe9ef82d01f67f30c626f00d99fc5fe423f561a88d65c5a7452"
 source_issue = 44
+source_pr = 108
 
 [[surface]]
 surface_id = "protected.contracts"
@@ -2507,6 +2508,7 @@ concept_ids = [
 ]
 fingerprint = "62e55a9cabf7b84223454d0ed389c290ef0fa823472c8c8f3ec4ac156ea7f22b"
 source_issue = 44
+source_pr = 108
 
 [[surface]]
 surface_id = "protected.ratchet"
@@ -2678,6 +2680,7 @@ concept_ids = [
 ]
 fingerprint = "aa161c20458efb039a0bc203eff4f77ad8d169e74d4e1108e3024c481f1fca1c"
 source_issue = 44
+source_pr = 108
 
 [[surface]]
 surface_id = "protected.resources"
@@ -2889,6 +2892,7 @@ concept_ids = [
 ]
 fingerprint = "7c2a0949e11bb9c8131593a0d0563bf63b9ceb51b95cd0537568cd92d68a04c2"
 source_issue = 44
+source_pr = 108
 
 [[surface]]
 surface_id = "protected.tests"
@@ -3283,6 +3287,7 @@ concept_ids = [
 ]
 fingerprint = "267b1ba7fc029535018d4b274a66701f58913a3dff03345b99834f5f61a401c8"
 source_issue = 44
+source_pr = 108
 
 [[surface]]
 surface_id = "workspace.apps_actingctl"
@@ -3544,6 +3549,7 @@ concept_ids = [
 ]
 fingerprint = "9b5babe1d3c343cfba7dbc49bbb2ce6778775d236fccfd62e74e5b884e23a04f"
 source_issue = 44
+source_pr = 108
 
 [[surface]]
 surface_id = "workspace.apps_actingd"
@@ -3908,6 +3914,7 @@ concept_ids = [
 ]
 fingerprint = "68ca90e0f7899131558a5ec7c0ff51b563fdb8dd0d23061b4eac68f3058152d9"
 source_issue = 44
+source_pr = 108
 
 [[surface]]
 surface_id = "workspace.apps_actinglab"
@@ -4302,6 +4309,7 @@ concept_ids = [
 ]
 fingerprint = "8fcd9cff81309c034857be6f580f2b3aae3a529faea61bc95d26f7ad1fb04f78"
 source_issue = 44
+source_pr = 108
 
 [[surface]]
 surface_id = "workspace.apps_device_test"
@@ -4594,6 +4602,7 @@ concept_ids = [
 ]
 fingerprint = "fa80c7d6073ce9c315b4b73831ed6f107b6754853502c2b24c72b2f739013bed"
 source_issue = 44
+source_pr = 108
 
 [[surface]]
 surface_id = "workspace.apps_vision_provider_check"
@@ -4774,6 +4783,7 @@ concept_ids = [
 ]
 fingerprint = "2d1640f0a92b9c47e311dea8e59cf33fbb2588d0ebaf0906f408e010380c7b87"
 source_issue = 44
+source_pr = 108
 
 [[surface]]
 surface_id = "workspace.benchmarks_rust"
@@ -4984,6 +4994,7 @@ concept_ids = [
 ]
 fingerprint = "f10ff11bf26e7ac0d8ea38af8824d9a38c0025ed4bbd575b5a7a4e78515559d9"
 source_issue = 44
+source_pr = 108
 
 [[surface]]
 surface_id = "workspace.crates_actingcommand_contract"
@@ -5378,6 +5389,7 @@ concept_ids = [
 ]
 fingerprint = "0c46594ea7caa3b74a3ab842853d92ed74c68639082f874cdb6ab2fe2b6d0171"
 source_issue = 44
+source_pr = 108
 
 [[surface]]
 surface_id = "workspace.crates_artifact_store"
@@ -5598,6 +5610,7 @@ concept_ids = [
 ]
 fingerprint = "da62d29452b7a20134ed8975fe5e5637ca1447c3ff0abb9fb931d166467e49e0"
 source_issue = 44
+source_pr = 108
 
 [[surface]]
 surface_id = "workspace.crates_device"
@@ -5902,6 +5915,7 @@ concept_ids = [
 ]
 fingerprint = "9c761322f6afd025d87f25b48910fd501627de06ec5127ba2ccf510b1cc40b04"
 source_issue = 44
+source_pr = 108
 
 [[surface]]
 surface_id = "workspace.crates_execution_kernel"
@@ -6168,6 +6182,7 @@ concept_ids = [
 ]
 fingerprint = "09b95cddf5b69230f2074ea11d0550f6c1b91d5648eeb92ef4506c9a6ec041f0"
 source_issue = 44
+source_pr = 108
 
 [[surface]]
 surface_id = "workspace.crates_host_metrics"
@@ -6374,6 +6389,7 @@ concept_ids = [
 ]
 fingerprint = "4ac2f5e1c50dd8d126efbb01a2dd8219da771e9ec04e2c09c518965b40b00d9a"
 source_issue = 44
+source_pr = 108
 
 [[surface]]
 surface_id = "workspace.crates_lab"
@@ -6768,6 +6784,7 @@ concept_ids = [
 ]
 fingerprint = "4d792bd22931d03a05a32c3054a4cf9d81d40bfcb28596d501408725966b1998"
 source_issue = 44
+source_pr = 108
 
 [[surface]]
 surface_id = "workspace.crates_ledger"
@@ -6988,6 +7005,7 @@ concept_ids = [
 ]
 fingerprint = "2c56c0876feca99c9c27809daf9b516f88760b9b51f07b871a26f6fefe916ef0"
 source_issue = 44
+source_pr = 108
 
 [[surface]]
 surface_id = "workspace.crates_onnx_provider_support"
@@ -7179,6 +7197,7 @@ concept_ids = [
 ]
 fingerprint = "816829c0ed24e4ee70fb092a70413c3d90fe999e5c678b55b943a2d1dbaf1980"
 source_issue = 44
+source_pr = 108
 
 [[surface]]
 surface_id = "workspace.crates_pack_containment"
@@ -7388,6 +7407,7 @@ concept_ids = [
 ]
 fingerprint = "f9ae139a878fec7d135a4cda30323fc50f0a644f94affe7fa769a5d14ab355be"
 source_issue = 44
+source_pr = 108
 
 [[surface]]
 surface_id = "workspace.crates_page_detector"
@@ -7582,6 +7602,7 @@ concept_ids = [
 ]
 fingerprint = "e87a4baee53aff697901db1eef083d0408410c97a62ee6c209ba32fa82c99da8"
 source_issue = 44
+source_pr = 108
 
 [[surface]]
 surface_id = "workspace.crates_policy"
@@ -7946,6 +7967,7 @@ concept_ids = [
 ]
 fingerprint = "cc1446e91fb56e1e44f41f445feebf82fd417a32c5bd79241eaa9368a03afb08"
 source_issue = 44
+source_pr = 108
 
 [[surface]]
 surface_id = "workspace.crates_recognition"
@@ -8182,6 +8204,7 @@ concept_ids = [
 ]
 fingerprint = "8b44648448afda45bd7b8293d0f6cf506f48bfd7a92684f74d2c5d045d1b7598"
 source_issue = 44
+source_pr = 108
 
 [[surface]]
 surface_id = "workspace.crates_recognition_pack"
@@ -8419,6 +8442,7 @@ concept_ids = [
 ]
 fingerprint = "09eccb9dafc5a1344ce5b2699bb711b1d03d18ed505cb28ef27c21d3b00f0c3c"
 source_issue = 44
+source_pr = 108
 
 [[surface]]
 surface_id = "workspace.crates_resource_tooling"
@@ -8656,6 +8680,7 @@ concept_ids = [
 ]
 fingerprint = "cfa51d64b95e6a61a578d394ea01cc540fff319fa01389a7b178655bcbbe9aa4"
 source_issue = 44
+source_pr = 108
 
 [[surface]]
 surface_id = "workspace.crates_runtime_client"
@@ -8978,6 +9003,7 @@ concept_ids = [
 ]
 fingerprint = "36141b634f55c9fed8cba359028741babc3e07c1a4105ab32c56211f69017cd0"
 source_issue = 44
+source_pr = 108
 
 [[surface]]
 surface_id = "workspace.crates_runtime_host"
@@ -9372,6 +9398,7 @@ concept_ids = [
 ]
 fingerprint = "57268bda1494738c10109e4bb651ac88837a8aa3076ff5517b7baeb9c8a34ac7"
 source_issue = 44
+source_pr = 108
 
 [[surface]]
 surface_id = "workspace.crates_runtime_state"
@@ -9606,6 +9633,7 @@ concept_ids = [
 ]
 fingerprint = "94db53ab21e05cf90e41cbce1b23183fee4f5cfd8099cb5c8b187e6559bd36fa"
 source_issue = 44
+source_pr = 108
 
 [[surface]]
 surface_id = "workspace.crates_scheduler"
@@ -9880,6 +9908,7 @@ concept_ids = [
 ]
 fingerprint = "927a15f447e9f3e72693f37099eff3c7a28c188dac829ed8813a839f93bc67b9"
 source_issue = 44
+source_pr = 108
 
 [[surface]]
 surface_id = "workspace.crates_vision_ffi"
@@ -10096,6 +10125,7 @@ concept_ids = [
 ]
 fingerprint = "4edb56586cb45aa3fe83f5b90b0e46ab66b91100ec2d9386d5770463b16e9dd1"
 source_issue = 44
+source_pr = 108
 
 [[surface]]
 surface_id = "workspace.providers_onnxruntime_json"
@@ -10312,6 +10342,7 @@ concept_ids = [
 ]
 fingerprint = "726a971c32d6d79d9b2e5d6f5b960cba2be589724634d41aea7d1eecdec3bd52"
 source_issue = 44
+source_pr = 108
 
 [[surface]]
 surface_id = "workspace.providers_ppocr_onnx_json"
@@ -10528,6 +10559,7 @@ concept_ids = [
 ]
 fingerprint = "3ff985bcc15c55a43568483ad17566c2954e0013be7e02100f126321e6efc819"
 source_issue = 44
+source_pr = 108
 
 [[surface]]
 surface_id = "workspace.tools_actinglab_architecture"
@@ -10922,3 +10954,4 @@ concept_ids = [
 ]
 fingerprint = "3d54d91e71747e71febde93af0f0d0fa01064af04490e8722e9c959d9c71d597"
 source_issue = 44
+source_pr = 108
