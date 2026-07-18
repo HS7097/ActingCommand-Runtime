@@ -4,6 +4,9 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+use actingcommand_actinglab_architecture::generic_domain::{
+    load_generic_domain_registry, validate_workspace_surface_registry,
+};
 use actingcommand_actinglab_architecture::{
     contract_dependency_violations, extract_command_inventory, inspect_contract_fact_matching,
     inspect_generic_authoring_identity, inspect_generic_runtime_identity,
@@ -46,6 +49,16 @@ const GENERIC_RUNTIME_OWNED_ROOTS: &[&str] = &[
     "crates/vision-ffi",
     "tests",
 ];
+
+#[test]
+fn c2_generic_domain_registry_matches_every_workspace_member_and_protected_root() {
+    let root = workspace_root();
+    let registry_path = root.join("tools/actinglab-architecture/generic-domain-v1.toml");
+    let registry = load_generic_domain_registry(&registry_path)
+        .unwrap_or_else(|error| panic!("load {}: {error}", registry_path.display()));
+    validate_workspace_surface_registry(&root, &registry)
+        .unwrap_or_else(|error| panic!("C2 generic-domain registry violations:\n{error}"));
+}
 
 #[test]
 fn a7_interface_amendment_matches_declared_freeze() {

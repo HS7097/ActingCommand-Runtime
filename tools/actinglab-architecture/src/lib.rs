@@ -2,6 +2,8 @@
 
 //! Source-derived architecture guards for ActingCommand Runtime ownership rules.
 
+pub mod generic_domain;
+
 use std::collections::{HashMap, HashSet, VecDeque};
 
 use syn::visit::Visit;
@@ -331,7 +333,7 @@ fn is_forbidden_authoring_identity(value: &str) -> bool {
     )
 }
 
-fn identifier_words(value: &str) -> Vec<String> {
+pub(crate) fn identifier_words(value: &str) -> Vec<String> {
     let characters = value.chars().collect::<Vec<_>>();
     let mut words = Vec::new();
     let mut current = String::new();
