@@ -76,13 +76,11 @@ pub fn inspect_generic_runtime_identity(path: &str, source: &str) -> Vec<String>
         "\u{5f37}\u{5316}",
     ];
     const FORBIDDEN_WORDS: &[&str] = &[
-        "ak",
         "alas",
         "ark",
         "arknights",
         "azur",
         "azurlane",
-        "ba",
         "baas",
         "bluearchive",
         "gacha",
@@ -90,6 +88,11 @@ pub fn inspect_generic_runtime_identity(path: &str, source: &str) -> Vec<String>
         "pvp",
         "pyroxene",
         "sortie",
+    ];
+    const CONTEXTUAL_SHORT_ALIASES: &[&str] = &["ak", "ba"];
+    const SHORT_ALIAS_CONTEXTS: &[&str] = &[
+        "game", "instance", "mode", "package", "policy", "profile", "resource", "server", "task",
+        "theme",
     ];
     const FORBIDDEN_SEQUENCES: &[&[&str]] = &[
         &["blue", "archive"],
@@ -132,9 +135,21 @@ pub fn inspect_generic_runtime_identity(path: &str, source: &str) -> Vec<String>
             }
         }
         for forbidden in FORBIDDEN_WORDS {
-            if identifier_contains_compacted_word(line, forbidden) {
+            if identifier_contains_compacted_word(line, forbidden)
+                || identifier_contains_fused_forbidden_prefix(line, forbidden, FORBIDDEN_WORDS)
+            {
                 violations.push(format!(
                     "{path}:{} contains project-specific word {forbidden}",
+                    index + 1
+                ));
+            }
+        }
+        for alias in CONTEXTUAL_SHORT_ALIASES {
+            if identifier_contains_contextual_short_alias(line, alias, SHORT_ALIAS_CONTEXTS)
+                || contains_qualified_short_alias(line, alias)
+            {
+                violations.push(format!(
+                    "{path}:{} contains project-specific word {alias}",
                     index + 1
                 ));
             }
@@ -381,6 +396,89 @@ fn identifier_contains_compacted_word(value: &str, expected: &str) -> bool {
                 false
             })
         })
+}
+
+/// A following uppercase letter or digit is the only inferred boundary inside a fused segment.
+fn identifier_contains_fused_forbidden_prefix(
+    value: &str,
+    expected: &str,
+    forbidden_words: &[&str],
+) -> bool {
+    value
+        .split(|character: char| !character.is_ascii_alphanumeric() && character != '_')
+        .filter(|identifier| !identifier.is_empty())
+        .flat_map(|identifier| identifier.split('_'))
+        .filter(|segment| !segment.is_empty())
+        .any(|segment| {
+            forbidden_words
+                .iter()
+                .copied()
+                .filter(|candidate| fused_prefix_matches(segment, candidate))
+                .max_by_key(|candidate| candidate.len())
+                .is_some_and(|candidate| candidate == expected)
+        })
+}
+
+fn fused_prefix_matches(segment: &str, expected: &str) -> bool {
+    if expected.len() < 3 || segment.len() <= expected.len() {
+        return false;
+    }
+    let prefix_matches = segment
+        .get(..expected.len())
+        .is_some_and(|prefix| prefix.eq_ignore_ascii_case(expected));
+    let boundary = segment.as_bytes()[expected.len()];
+    prefix_matches && (boundary.is_ascii_uppercase() || boundary.is_ascii_digit())
+}
+
+/// Two-letter aliases are rejected only beside an explicit domain anchor or as a path segment.
+fn identifier_contains_contextual_short_alias(
+    value: &str,
+    expected: &str,
+    context_words: &[&str],
+) -> bool {
+    value
+        .split(|character: char| !character.is_ascii_alphanumeric() && character != '_')
+        .filter(|identifier| !identifier.is_empty())
+        .any(|identifier| {
+            let words = identifier_words(identifier);
+            words.iter().enumerate().any(|(index, word)| {
+                word == expected
+                    && (index
+                        .checked_sub(1)
+                        .and_then(|previous| words.get(previous))
+                        .is_some_and(|word| context_words.contains(&word.as_str()))
+                        || words
+                            .get(index + 1)
+                            .is_some_and(|word| context_words.contains(&word.as_str())))
+            })
+        })
+}
+
+fn contains_qualified_short_alias(value: &str, expected: &str) -> bool {
+    let bytes = value.as_bytes();
+    if bytes.len() < expected.len() {
+        return false;
+    }
+    (0..=bytes.len() - expected.len()).any(|start| {
+        let end = start + expected.len();
+        if !bytes[start..end].eq_ignore_ascii_case(expected.as_bytes())
+            || start
+                .checked_sub(1)
+                .is_some_and(|index| is_identifier_byte(bytes[index]))
+            || bytes.get(end).is_some_and(|byte| is_identifier_byte(*byte))
+        {
+            return false;
+        }
+        let qualified_left = start >= 1 && bytes[start - 1] == b'.'
+            || start >= 2 && &bytes[start - 2..start] == b"::";
+        let qualified_right =
+            bytes.get(end) == Some(&b'.') || bytes.get(end..end + 2) == Some(b"::".as_slice());
+        qualified_left || qualified_right
+    })
+}
+
+fn is_identifier_byte(byte: u8) -> bool {
+    byte.is_ascii_alphanumeric() || byte == b'_'
 }
 
 fn has_cfg_test(attributes: &[syn::Attribute]) -> bool {
@@ -2377,6 +2475,9 @@ mod tests {
             const SERVER_BASE: &str = "neutral";
             const SERVER_BACKUP: &str = "neutral";
             const SERVER_BALANCE: &str = "neutral";
+            const MATRIX_B_A: &str = "neutral";
+            const SCALE_B_A: &str = "neutral";
+            const R_BA: &str = "neutral";
             const OCR_LANGUAGE: &str = "zh_cn";
             fn exercise_plan() {}
             fn recruit_worker() {}
@@ -2430,10 +2531,10 @@ mod tests {
     }
 
     #[test]
-    fn generic_runtime_guard_rejects_every_acronym_casing_without_substring_false_positives() {
+    fn generic_runtime_guard_rejects_fused_high_confidence_prefixes_for_every_casing() {
         for identity in ["pvp", "baas"] {
             for variant in casing_variants(identity) {
-                let source = format!("struct {variant}Adapter;");
+                let source = format!("struct {variant}UI;");
                 let violations = super::inspect_generic_runtime_identity("fixture.rs", &source);
                 assert!(
                     violations
@@ -2444,12 +2545,66 @@ mod tests {
             }
         }
 
+        for (identifier, expected) in [
+            ("PVPUI", "pvp"),
+            ("PVP_UI", "pvp"),
+            ("PvpUi", "pvp"),
+            ("PVP2", "pvp"),
+            ("BAASAPI", "baas"),
+            ("BaaSAdapter", "baas"),
+            ("ALASUI", "alas"),
+            ("ARKNIGHTSAPI", "arknights"),
+            ("AZURLANEUI", "azurlane"),
+        ] {
+            let source = format!("struct {identifier};");
+            let violations = super::inspect_generic_runtime_identity("fixture.rs", &source);
+            assert_eq!(violations.len(), 1, "{identifier}: {violations:#?}");
+            assert!(violations[0].contains(expected));
+        }
+
         let allowed = r#"
             struct BaselineAdapter;
             struct DatabaseReader;
             struct PivotalPolicy;
             struct PvPacedWorker;
             struct BaaStateCache;
+            struct DARKMODE;
+            struct LANDMARKINDEX;
+            struct HTTPServer;
+            struct JSONAPIClient;
+        "#;
+        assert!(super::inspect_generic_runtime_identity("fixture.rs", allowed).is_empty());
+    }
+
+    #[test]
+    fn generic_runtime_guard_requires_context_for_two_letter_aliases() {
+        for (identifier, expected) in [
+            ("GAME_AK_ID", "ak"),
+            ("SERVER_BA_API", "ba"),
+            ("POLICY_BA_MODE", "ba"),
+            ("BA_THEME", "ba"),
+            ("ak.module", "ak"),
+            ("ba::module", "ba"),
+        ] {
+            let source = format!("const VALUE: &str = \"{identifier}\";");
+            let violations = super::inspect_generic_runtime_identity("fixture.rs", &source);
+            assert!(
+                violations
+                    .iter()
+                    .any(|violation| violation.contains(expected)),
+                "{identifier} escaped the contextual {expected} guard: {violations:#?}"
+            );
+        }
+
+        let allowed = r#"
+            struct AKID;
+            struct BAAPI;
+            struct AkId;
+            struct BaApi;
+            const MATRIX_B_A: &str = "neutral";
+            const SCALE_B_A: &str = "neutral";
+            const R_BA: &str = "neutral";
+            const BA_API: &str = "neutral";
         "#;
         assert!(super::inspect_generic_runtime_identity("fixture.rs", allowed).is_empty());
     }
