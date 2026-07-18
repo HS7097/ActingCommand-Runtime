@@ -784,11 +784,7 @@ pub fn workspace_identity_allowance_candidates(
     root: &Path,
 ) -> Result<Vec<IdentityAllowanceCandidate>, String> {
     let external = load_and_validate_external_compat(root)?;
-    let external_paths = external
-        .entry
-        .iter()
-        .map(|entry| entry.path.as_str())
-        .collect::<HashSet<_>>();
+    let external_paths = external.registered_paths().collect::<HashSet<_>>();
     let files = protected_files(root)?;
 
     let mut candidates = Vec::new();
@@ -912,11 +908,7 @@ pub fn validate_workspace_genericity(
 ) -> Result<(), String> {
     validate_workspace_surface_registry(root, registry)?;
     let external = load_and_validate_external_compat(root)?;
-    let external_paths = external
-        .entry
-        .iter()
-        .map(|entry| entry.path.as_str())
-        .collect::<HashSet<_>>();
+    let external_paths = external.registered_paths().collect::<HashSet<_>>();
     let allowance_by_fragment = validate_identity_allowance_fragments(root, registry)?;
 
     let files = protected_files(root)?;
@@ -3214,7 +3206,10 @@ source_pr = 108
         fs::create_dir_all(path.parent().unwrap()).unwrap();
         fs::write(
             path,
-            "schema_version = \"actingcommand.external-compat.v1\"\n",
+            format!(
+                "schema_version = {:?}\n",
+                crate::external_compat::EXTERNAL_COMPAT_SCHEMA_VERSION
+            ),
         )
         .unwrap();
     }

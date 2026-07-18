@@ -58,5 +58,9 @@ cargo run -p actingcommand-actinglab-architecture --bin external-compat-guard --
 ```
 
 The external-compat manifest does not authorize identities outside its registered data files.
+Generated provenance records a fixed generator path, revision, file hash, typed parameters, and an
+exact hashed input set; free-form shell commands are not part of the schema. Consumers receive bytes
+only through `ExternalCompatReader`, which checks a typed capability before I/O and hashes the bytes
+returned by the read.
 
 The snapshot defines the A0 completion denominator. Its pipeline exemption table may only shrink after A0.

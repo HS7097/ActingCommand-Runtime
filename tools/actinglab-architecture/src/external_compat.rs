@@ -9,32 +9,49 @@ use std::path::{Component, Path, PathBuf};
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 
-pub const EXTERNAL_COMPAT_SCHEMA_VERSION: &str = "actingcommand.external-compat.v1";
-pub const EXTERNAL_COMPAT_MANIFEST_PATH: &str = "tests/external-compat/manifest-v1.toml";
+pub const EXTERNAL_COMPAT_SCHEMA_VERSION: &str = "actingcommand.external-compat.v2";
+pub const EXTERNAL_COMPAT_MANIFEST_PATH: &str = "tests/external-compat/manifest-v2.toml";
 const EXTERNAL_COMPAT_DATA_ROOT: &str = "tests/external-compat/data/";
 
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct ExternalCompatManifest {
-    pub schema_version: String,
+    schema_version: String,
     #[serde(default)]
-    pub entry: Vec<ExternalCompatEntry>,
+    entry: Vec<ExternalCompatEntry>,
 }
 
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
-pub struct ExternalCompatEntry {
-    pub id: String,
-    pub path: String,
-    pub sha256: String,
-    pub purpose: String,
-    pub allowed_scope: Vec<String>,
-    pub source: ExternalCompatSource,
+struct ExternalCompatEntry {
+    id: String,
+    path: String,
+    sha256: String,
+    purpose: String,
+    allowed_scope: Vec<ExternalCompatScope>,
+    source: ExternalCompatSource,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum ExternalCompatScope {
+    #[serde(rename = "parser.generated")]
+    ParserGenerated,
+    #[serde(rename = "parser.schema")]
+    ParserSchema,
+}
+
+impl ExternalCompatScope {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::ParserGenerated => "parser.generated",
+            Self::ParserSchema => "parser.schema",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
-pub enum ExternalCompatSource {
+enum ExternalCompatSource {
     Upstream {
         repository_url: String,
         commit_sha: String,
@@ -45,37 +62,91 @@ pub enum ExternalCompatSource {
         generator_path: String,
         generator_revision: String,
         generator_sha256: String,
-        command: String,
         #[serde(default)]
-        parameters: BTreeMap<String, String>,
+        parameters: BTreeMap<String, GeneratedParameter>,
         input: Vec<GeneratedInput>,
     },
 }
 
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
-pub struct GeneratedInput {
-    pub path: String,
-    pub sha256: String,
+#[serde(untagged)]
+enum GeneratedParameter {
+    Boolean(bool),
+    Integer(i64),
+    Identifier(String),
 }
 
-pub fn parse_external_compat_manifest(source: &str) -> Result<ExternalCompatManifest, String> {
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+struct GeneratedInput {
+    path: String,
+    sha256: String,
+}
+
+fn parse_external_compat_manifest(source: &str) -> Result<ExternalCompatManifest, String> {
     toml::from_str(source).map_err(|error| format!("invalid external-compat manifest: {error}"))
 }
 
-pub fn load_external_compat_manifest(path: &Path) -> Result<ExternalCompatManifest, String> {
+fn load_external_compat_manifest(path: &Path) -> Result<ExternalCompatManifest, String> {
     let source = fs::read_to_string(path)
         .map_err(|error| format!("failed to read {}: {error}", path.display()))?;
     parse_external_compat_manifest(&source)
 }
 
-pub fn load_and_validate_external_compat(root: &Path) -> Result<ExternalCompatManifest, String> {
-    let manifest = load_external_compat_manifest(&root.join(EXTERNAL_COMPAT_MANIFEST_PATH))?;
-    validate_external_compat_manifest(root, &manifest)?;
-    Ok(manifest)
+pub struct ExternalCompatReader {
+    root: PathBuf,
+    manifest: ExternalCompatManifest,
 }
 
-pub fn validate_external_compat_manifest(
+impl ExternalCompatReader {
+    /// Opens the validated containment zone without exposing raw manifest paths to consumers.
+    pub fn open(root: &Path) -> Result<Self, String> {
+        let manifest = load_external_compat_manifest(&root.join(EXTERNAL_COMPAT_MANIFEST_PATH))?;
+        validate_external_compat_manifest(root, &manifest)?;
+        Ok(Self {
+            root: root.to_path_buf(),
+            manifest,
+        })
+    }
+
+    /// Authorizes scope before file I/O and verifies the bytes returned to the caller.
+    pub fn read(&self, scope: ExternalCompatScope, path: &str) -> Result<Vec<u8>, String> {
+        let entry = self
+            .manifest
+            .entry
+            .iter()
+            .find(|entry| entry.path == path)
+            .ok_or_else(|| format!("external-compat access uses unregistered path {path}"))?;
+        if !entry.allowed_scope.contains(&scope) {
+            return Err(format!(
+                "external-compat entry {} does not allow scope {}",
+                entry.id,
+                scope.as_str()
+            ));
+        }
+        let resolved = resolve_regular_file(&self.root, path)?;
+        let bytes = fs::read(&resolved)
+            .map_err(|error| format!("failed to read {}: {error}", resolved.display()))?;
+        let actual = format!("{:x}", Sha256::digest(&bytes));
+        if actual != entry.sha256 {
+            return Err(format!(
+                "external-compat entry {} content hash drifted during scoped read: registered {}, actual {actual}",
+                entry.id, entry.sha256
+            ));
+        }
+        Ok(bytes)
+    }
+
+    pub(crate) fn registered_paths(&self) -> impl Iterator<Item = &str> {
+        self.manifest.entry.iter().map(|entry| entry.path.as_str())
+    }
+}
+
+pub fn load_and_validate_external_compat(root: &Path) -> Result<ExternalCompatReader, String> {
+    ExternalCompatReader::open(root)
+}
+
+fn validate_external_compat_manifest(
     root: &Path,
     manifest: &ExternalCompatManifest,
 ) -> Result<(), String> {
@@ -150,27 +221,6 @@ pub fn validate_external_compat_manifest(
     finish_errors(errors)
 }
 
-pub fn validate_external_compat_access(
-    root: &Path,
-    manifest: &ExternalCompatManifest,
-    path: &str,
-    scope: &str,
-) -> Result<(), String> {
-    validate_external_compat_manifest(root, manifest)?;
-    let entry = manifest
-        .entry
-        .iter()
-        .find(|entry| entry.path == path)
-        .ok_or_else(|| format!("external-compat access uses unregistered path {path}"))?;
-    if !entry.allowed_scope.iter().any(|allowed| allowed == scope) {
-        return Err(format!(
-            "external-compat entry {} does not allow scope {scope}",
-            entry.id
-        ));
-    }
-    Ok(())
-}
-
 fn validate_scopes(entry: &ExternalCompatEntry, errors: &mut Vec<String>) {
     if entry.allowed_scope.is_empty() {
         errors.push(format!("entry {} has no allowed_scope", entry.id));
@@ -179,19 +229,17 @@ fn validate_scopes(entry: &ExternalCompatEntry, errors: &mut Vec<String>) {
     let mut seen = HashSet::new();
     let mut previous = None;
     for scope in &entry.allowed_scope {
-        if !is_registry_id(scope) {
-            errors.push(format!("entry {} has invalid scope {scope}", entry.id));
-        }
-        if !seen.insert(scope.as_str()) {
+        let scope = scope.as_str();
+        if !seen.insert(scope) {
             errors.push(format!("entry {} repeats scope {scope}", entry.id));
         }
-        if previous.is_some_and(|left: &str| left >= scope.as_str()) {
+        if previous.is_some_and(|left: &str| left >= scope) {
             errors.push(format!(
                 "entry {} scopes are not strictly sorted at {scope}",
                 entry.id
             ));
         }
-        previous = Some(scope.as_str());
+        previous = Some(scope);
     }
 }
 
@@ -229,7 +277,6 @@ fn validate_entry_source(root: &Path, entry: &ExternalCompatEntry, errors: &mut 
             generator_path,
             generator_revision,
             generator_sha256,
-            command,
             parameters,
             input,
         } => {
@@ -244,14 +291,12 @@ fn validate_entry_source(root: &Path, entry: &ExternalCompatEntry, errors: &mut 
             if !is_git_sha(generator_revision) {
                 errors.push(format!("entry {} has invalid generator revision", entry.id));
             }
-            if command.trim().is_empty() || contains_floating_network_command(command) {
-                errors.push(format!(
-                    "entry {} has invalid deterministic command",
-                    entry.id
-                ));
-            }
             for (key, value) in parameters {
-                if !is_registry_id(key) || value.contains(['*', '?']) {
+                let value_is_valid = match value {
+                    GeneratedParameter::Boolean(_) | GeneratedParameter::Integer(_) => true,
+                    GeneratedParameter::Identifier(value) => is_registry_id(value),
+                };
+                if !is_registry_id(key) || !value_is_valid {
                     errors.push(format!(
                         "entry {} has invalid generator parameter {key}",
                         entry.id
@@ -428,20 +473,6 @@ fn sha256_file(path: &Path) -> Result<String, String> {
     Ok(format!("{:x}", Sha256::digest(bytes)))
 }
 
-fn contains_floating_network_command(command: &str) -> bool {
-    let lower = command.to_ascii_lowercase();
-    [
-        "http://",
-        "https://",
-        "curl ",
-        "wget ",
-        "invoke-webrequest",
-        "git clone",
-    ]
-    .iter()
-    .any(|token| lower.contains(token))
-}
-
 fn is_pinned_repository_url(value: &str) -> bool {
     value.starts_with("https://github.com/")
         && !value.contains([' ', '\t', '\n', '\r', '?', '#', '*'])
@@ -510,7 +541,7 @@ mod tests {
     }
 
     #[test]
-    fn upstream_entry_rejects_unregistered_file_hash_drift_and_scope_overreach() {
+    fn upstream_entry_rejects_unregistered_file_and_hash_drift() {
         let root = fixture_root("upstream");
         let path = "tests/external-compat/data/sample.json";
         write_file(&root, path, b"{\"value\":1}\n");
@@ -522,7 +553,7 @@ mod tests {
                 path: path.to_string(),
                 sha256: hash.clone(),
                 purpose: "parser compatibility".to_string(),
-                allowed_scope: vec!["parser.schema".to_string()],
+                allowed_scope: vec![ExternalCompatScope::ParserSchema],
                 source: ExternalCompatSource::Upstream {
                     repository_url: "https://github.com/example/upstream".to_string(),
                     commit_sha: "1".repeat(40),
@@ -532,10 +563,6 @@ mod tests {
             }],
         };
         validate_external_compat_manifest(&root, &manifest).unwrap();
-        validate_external_compat_access(&root, &manifest, path, "parser.schema").unwrap();
-        let error =
-            validate_external_compat_access(&root, &manifest, path, "runtime.default").unwrap_err();
-        assert!(error.contains("does not allow scope"));
 
         write_file(&root, "tests/external-compat/unregistered.json", b"{}\n");
         let error = validate_external_compat_manifest(&root, &manifest).unwrap_err();
@@ -564,14 +591,15 @@ mod tests {
                 path: output.to_string(),
                 sha256: sha256_file(&root.join(output)).unwrap(),
                 purpose: "generated parser compatibility".to_string(),
-                allowed_scope: vec!["parser.generated".to_string()],
+                allowed_scope: vec![ExternalCompatScope::ParserGenerated],
                 source: ExternalCompatSource::Generated {
                     generator_path: generator.to_string(),
                     generator_revision: "2".repeat(40),
                     generator_sha256: sha256_file(&root.join(generator)).unwrap(),
-                    command: "cargo run -p neutral-generator -- --input inputs/source.json"
-                        .to_string(),
-                    parameters: BTreeMap::from([("format.version".to_string(), "1".to_string())]),
+                    parameters: BTreeMap::from([(
+                        "format.version".to_string(),
+                        GeneratedParameter::Integer(1),
+                    )]),
                     input: vec![GeneratedInput {
                         path: input.to_string(),
                         sha256: sha256_file(&root.join(input)).unwrap(),
@@ -593,7 +621,7 @@ mod tests {
     }
 
     #[test]
-    fn manifest_rejects_wildcards_traversal_and_floating_network_commands() {
+    fn manifest_rejects_wildcards_and_traversal() {
         let root = fixture_root("invalid");
         let path = "tests/external-compat/data/sample.json";
         write_file(&root, path, b"{}\n");
@@ -606,13 +634,17 @@ mod tests {
                 path: "tests/external-compat/data/*.json".to_string(),
                 sha256: sha256_file(&root.join(path)).unwrap(),
                 purpose: "invalid fixture".to_string(),
-                allowed_scope: vec!["parser.schema".to_string()],
+                allowed_scope: vec![ExternalCompatScope::ParserSchema],
                 source: ExternalCompatSource::Generated {
                     generator_path: "../generate.rs".to_string(),
                     generator_revision: "3".repeat(40),
                     generator_sha256: "0".repeat(64),
-                    command: "curl https://example.invalid/input".to_string(),
-                    parameters: BTreeMap::new(),
+                    parameters: BTreeMap::from([(
+                        "source.url".to_string(),
+                        GeneratedParameter::Identifier(
+                            "https://example.invalid/floating".to_string(),
+                        ),
+                    )]),
                     input: vec![GeneratedInput {
                         path: "inputs/*.json".to_string(),
                         sha256: "0".repeat(64),
@@ -622,8 +654,90 @@ mod tests {
         };
         let error = validate_external_compat_manifest(&root, &manifest).unwrap_err();
         assert!(error.contains("invalid exact path"));
-        assert!(error.contains("invalid deterministic command"));
+        assert!(error.contains("invalid generator parameter source.url"));
         assert!(error.contains("unregistered external-compat file"));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn generated_provenance_rejects_arbitrary_command_field() {
+        let source = r#"
+schema_version = "actingcommand.external-compat.v2"
+
+[[entry]]
+id = "compat.generated"
+path = "tests/external-compat/data/generated.json"
+sha256 = "0000000000000000000000000000000000000000000000000000000000000000"
+purpose = "generated parser compatibility"
+allowed_scope = ["parser.generated"]
+
+[entry.source]
+kind = "generated"
+generator_path = "tools/generate.rs"
+generator_revision = "2222222222222222222222222222222222222222"
+generator_sha256 = "0000000000000000000000000000000000000000000000000000000000000000"
+command = "git fetch origin main"
+
+[[entry.source.input]]
+path = "inputs/source.json"
+sha256 = "0000000000000000000000000000000000000000000000000000000000000000"
+"#;
+
+        let error = parse_external_compat_manifest(source).unwrap_err();
+        assert!(error.contains("unknown field `command`"));
+    }
+
+    #[test]
+    fn scoped_reader_authorizes_before_io_and_hashes_returned_bytes() {
+        let root = fixture_root("scoped-reader");
+        let path = "tests/external-compat/data/sample.json";
+        let expected = b"{\"value\":1}\n";
+        write_file(&root, path, expected);
+        let hash = sha256_file(&root.join(path)).unwrap();
+        write_file(
+            &root,
+            EXTERNAL_COMPAT_MANIFEST_PATH,
+            format!(
+                r#"schema_version = "{EXTERNAL_COMPAT_SCHEMA_VERSION}"
+
+[[entry]]
+id = "compat.sample"
+path = "{path}"
+sha256 = "{hash}"
+purpose = "parser compatibility"
+allowed_scope = ["parser.schema"]
+
+[entry.source]
+kind = "upstream"
+repository_url = "https://github.com/example/upstream"
+commit_sha = "1111111111111111111111111111111111111111"
+upstream_path = "fixtures/sample.json"
+sha256 = "{hash}"
+"#
+            )
+            .as_bytes(),
+        );
+        let reader = ExternalCompatReader::open(&root).unwrap();
+
+        fs::remove_file(root.join(path)).unwrap();
+        let error = reader
+            .read(ExternalCompatScope::ParserGenerated, path)
+            .unwrap_err();
+        assert!(error.contains("does not allow scope parser.generated"));
+
+        write_file(&root, path, b"{\"value\":2}\n");
+        let error = reader
+            .read(ExternalCompatScope::ParserSchema, path)
+            .unwrap_err();
+        assert!(error.contains("content hash drifted during scoped read"));
+
+        write_file(&root, path, expected);
+        assert_eq!(
+            reader
+                .read(ExternalCompatScope::ParserSchema, path)
+                .unwrap(),
+            expected
+        );
         fs::remove_dir_all(root).unwrap();
     }
 
