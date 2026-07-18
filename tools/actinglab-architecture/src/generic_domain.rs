@@ -12,7 +12,12 @@ use sha2::{Digest, Sha256};
 use syn::visit::Visit;
 use syn::{BinOp, Expr, ExprBinary, ExprMatch, ImplItem, Item, Lit, Member, Visibility};
 
+use crate::external_compat::{EXTERNAL_COMPAT_MANIFEST_PATH, load_and_validate_external_compat};
+use crate::{inspect_generic_runtime_identity_with_allowances, known_project_identity_tokens};
+
 pub const GENERIC_DOMAIN_SCHEMA_VERSION: &str = "actingcommand.generic-domain.v1";
+pub const GENERIC_DOMAIN_REGISTRY_PATH: &str =
+    "tools/actinglab-architecture/generic-domain-v1.toml";
 pub const REQUIRED_PROTECTED_ROOTS: &[&str] = &[
     "benchmarks/workloads",
     "contracts",
@@ -27,6 +32,8 @@ pub struct GenericDomainRegistry {
     pub schema_version: String,
     #[serde(default)]
     pub concept: Vec<GenericConcept>,
+    #[serde(default)]
+    pub identity_allowance: Vec<IdentityAllowance>,
     #[serde(default)]
     pub surface: Vec<ProtectedSurface>,
 }
@@ -49,6 +56,21 @@ pub struct ProtectedSurface {
     pub stable_path: String,
     pub concept_ids: Vec<String>,
     pub fingerprint: String,
+    pub source_issue: u64,
+    #[serde(default)]
+    pub source_pr: Option<u64>,
+}
+
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct IdentityAllowance {
+    pub id: String,
+    pub kind: String,
+    pub exact_path: String,
+    pub tokens: Vec<String>,
+    pub sha256: String,
+    pub purpose: String,
+    pub approval_comment_id: u64,
     pub source_issue: u64,
     #[serde(default)]
     pub source_pr: Option<u64>,
@@ -132,6 +154,103 @@ pub fn validate_generic_domain_registry(registry: &GenericDomainRegistry) -> Res
             errors.push(format!(
                 "concept {} has invalid replacement {replacement}",
                 concept.id
+            ));
+        }
+    }
+
+    let known_tokens = known_project_identity_tokens();
+    let mut allowance_ids = HashSet::new();
+    let mut allowance_paths = HashSet::new();
+    let mut previous_allowance = None;
+    for allowance in &registry.identity_allowance {
+        if !is_surface_id(&allowance.id) {
+            errors.push(format!(
+                "identity allowance has invalid id {}",
+                allowance.id
+            ));
+        }
+        if !allowance_ids.insert(allowance.id.as_str()) {
+            errors.push(format!("duplicate identity allowance id {}", allowance.id));
+        }
+        if previous_allowance.is_some_and(|previous: &str| previous >= allowance.id.as_str()) {
+            errors.push(format!(
+                "identity allowance ids are not strictly sorted at {}",
+                allowance.id
+            ));
+        }
+        previous_allowance = Some(allowance.id.as_str());
+        if !matches!(
+            allowance.kind.as_str(),
+            "guard_fixture" | "technical_adapter" | "upstream_metadata"
+        ) {
+            errors.push(format!(
+                "identity allowance {} has invalid kind {}",
+                allowance.id, allowance.kind
+            ));
+        }
+        if let Err(error) = validate_stable_path(&allowance.exact_path) {
+            errors.push(format!("identity allowance {} {error}", allowance.id));
+        }
+        if !allowance_paths.insert(allowance.exact_path.as_str()) {
+            errors.push(format!(
+                "duplicate identity allowance exact_path {}",
+                allowance.exact_path
+            ));
+        }
+        if allowance.tokens.is_empty() && allowance.kind != "guard_fixture" {
+            errors.push(format!("identity allowance {} has no tokens", allowance.id));
+        }
+        let mut previous_token = None;
+        let mut tokens = HashSet::new();
+        for token in &allowance.tokens {
+            if !known_tokens.contains(token) {
+                errors.push(format!(
+                    "identity allowance {} references unknown detector token {token}",
+                    allowance.id
+                ));
+            }
+            if !tokens.insert(token.as_str()) {
+                errors.push(format!(
+                    "identity allowance {} repeats token {token}",
+                    allowance.id
+                ));
+            }
+            if previous_token.is_some_and(|previous: &str| previous >= token.as_str()) {
+                errors.push(format!(
+                    "identity allowance {} tokens are not strictly sorted at {token}",
+                    allowance.id
+                ));
+            }
+            previous_token = Some(token.as_str());
+        }
+        if !is_sha256(&allowance.sha256) {
+            errors.push(format!(
+                "identity allowance {} sha256 must be lowercase SHA-256",
+                allowance.id
+            ));
+        }
+        if allowance.purpose.trim().is_empty() || allowance.purpose.len() > 256 {
+            errors.push(format!(
+                "identity allowance {} has invalid purpose",
+                allowance.id
+            ));
+        }
+        if allowance.approval_comment_id == 0 {
+            errors.push(format!(
+                "identity allowance {} has no Alice approval_comment_id",
+                allowance.id
+            ));
+        }
+        if allowance.source_issue == 0 {
+            errors.push(format!(
+                "identity allowance {} has no source_issue",
+                allowance.id
+            ));
+        }
+        if allowance.source_pr == Some(0) {
+            errors.push(format!(
+                "identity allowance {} has invalid source_pr",
+                allowance.id
             ));
         }
     }
@@ -292,6 +411,171 @@ pub fn validate_workspace_surface_registry(
     }
 }
 
+/// Validates every registered Runtime surface against structural and identity boundaries.
+pub fn validate_workspace_genericity(
+    root: &Path,
+    registry: &GenericDomainRegistry,
+) -> Result<(), String> {
+    validate_workspace_surface_registry(root, registry)?;
+    let external = load_and_validate_external_compat(root)?;
+    let external_paths = external
+        .entry
+        .iter()
+        .map(|entry| entry.path.as_str())
+        .collect::<HashSet<_>>();
+    let allowance_by_path = validate_identity_allowance_files(root, registry)?;
+
+    let mut roots = workspace_members(root)?;
+    roots.extend(
+        REQUIRED_PROTECTED_ROOTS
+            .iter()
+            .map(|path| (*path).to_string()),
+    );
+    roots.sort();
+    roots.dedup();
+    let mut files = Vec::new();
+    for stable_path in roots {
+        collect_protected_files(&root.join(&stable_path), &mut files)?;
+    }
+    files.sort();
+    files.dedup();
+
+    let mut errors = Vec::new();
+    let mut covered_paths = HashSet::new();
+    for file in files {
+        let relative = file
+            .strip_prefix(root)
+            .map_err(|_| format!("{} escaped workspace root", file.display()))?;
+        let relative = normalize_path(relative)?;
+        covered_paths.insert(relative.clone());
+        if relative == GENERIC_DOMAIN_REGISTRY_PATH
+            || relative == EXTERNAL_COMPAT_MANIFEST_PATH
+            || external_paths.contains(relative.as_str())
+        {
+            continue;
+        }
+        let source = fs::read_to_string(&file)
+            .map_err(|error| format!("failed to read {}: {error}", file.display()))?;
+        let allowed_tokens = allowance_by_path
+            .get(relative.as_str())
+            .map_or_else(HashSet::new, |allowance| {
+                allowance.tokens.iter().cloned().collect()
+            });
+        errors.extend(inspect_generic_runtime_identity_with_allowances(
+            &relative,
+            &source,
+            &allowed_tokens,
+        ));
+        if file.extension().is_some_and(|extension| extension == "rs")
+            && allowance_by_path
+                .get(relative.as_str())
+                .is_none_or(|allowance| allowance.kind != "guard_fixture")
+        {
+            errors.extend(inspect_identity_axis_branches(&relative, &source)?);
+        }
+    }
+    for allowance in &registry.identity_allowance {
+        if !covered_paths.contains(&allowance.exact_path) {
+            errors.push(format!(
+                "identity allowance {} path is outside registered Runtime surfaces: {}",
+                allowance.id, allowance.exact_path
+            ));
+        }
+    }
+
+    errors.sort();
+    errors.dedup();
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        Err(errors.join("\n"))
+    }
+}
+
+fn validate_identity_allowance_files<'a>(
+    root: &Path,
+    registry: &'a GenericDomainRegistry,
+) -> Result<HashMap<&'a str, &'a IdentityAllowance>, String> {
+    let mut errors = Vec::new();
+    let mut by_path = HashMap::new();
+    for allowance in &registry.identity_allowance {
+        by_path.insert(allowance.exact_path.as_str(), allowance);
+        match resolve_exact_regular_file(root, &allowance.exact_path) {
+            Ok(path) => match fs::read(&path) {
+                Ok(bytes) => {
+                    let actual = format!("{:x}", Sha256::digest(bytes));
+                    if actual != allowance.sha256 {
+                        errors.push(format!(
+                            "identity allowance {} content hash drifted: registered {}, actual {actual}",
+                            allowance.id, allowance.sha256
+                        ));
+                    }
+                }
+                Err(error) => errors.push(format!(
+                    "identity allowance {} failed to read {}: {error}",
+                    allowance.id,
+                    path.display()
+                )),
+            },
+            Err(error) => errors.push(format!("identity allowance {} {error}", allowance.id)),
+        }
+    }
+    if errors.is_empty() {
+        Ok(by_path)
+    } else {
+        errors.sort();
+        Err(errors.join("\n"))
+    }
+}
+
+fn resolve_exact_regular_file(root: &Path, relative: &str) -> Result<PathBuf, String> {
+    validate_stable_path(relative)?;
+    let canonical_root = fs::canonicalize(root).map_err(|error| {
+        format!(
+            "failed to resolve workspace root {}: {error}",
+            root.display()
+        )
+    })?;
+    let mut current = root.to_path_buf();
+    for component in Path::new(relative).components() {
+        let Component::Normal(component) = component else {
+            return Err(format!("has unsafe exact_path {relative}"));
+        };
+        current.push(component);
+        let metadata = fs::symlink_metadata(&current)
+            .map_err(|error| format!("failed to inspect {}: {error}", current.display()))?;
+        if is_link_or_reparse(&metadata) {
+            return Err(format!(
+                "exact_path {relative} crosses a symlink or reparse point at {}",
+                current.display()
+            ));
+        }
+    }
+    let canonical = fs::canonicalize(&current)
+        .map_err(|error| format!("failed to resolve {}: {error}", current.display()))?;
+    if !canonical.starts_with(&canonical_root) {
+        return Err(format!("exact_path {relative} escapes the workspace"));
+    }
+    if !canonical.is_file() {
+        return Err(format!("exact_path {relative} is not a regular file"));
+    }
+    Ok(canonical)
+}
+
+#[cfg(windows)]
+fn is_link_or_reparse(metadata: &fs::Metadata) -> bool {
+    use std::os::windows::fs::MetadataExt;
+
+    const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
+    metadata.file_type().is_symlink()
+        || metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
+}
+
+#[cfg(not(windows))]
+fn is_link_or_reparse(metadata: &fs::Metadata) -> bool {
+    metadata.file_type().is_symlink()
+}
+
 pub fn inspect_identity_axis_branches(path: &str, source: &str) -> Result<Vec<String>, String> {
     let file =
         syn::parse_file(source).map_err(|error| format!("failed to parse {path}: {error}"))?;
@@ -390,7 +674,15 @@ fn collect_protected_files(root: &Path, files: &mut Vec<PathBuf>) -> Result<(), 
         let path = entry
             .map_err(|error| format!("failed to read directory entry: {error}"))?
             .path();
-        if path.is_dir() {
+        let metadata = fs::symlink_metadata(&path)
+            .map_err(|error| format!("failed to inspect {}: {error}", path.display()))?;
+        if is_link_or_reparse(&metadata) {
+            return Err(format!(
+                "protected Runtime surface contains a symlink or reparse point: {}",
+                path.display()
+            ));
+        }
+        if metadata.is_dir() {
             collect_protected_files(&path, files)?;
         } else if is_protected_file(&path) {
             files.push(path);
@@ -408,7 +700,7 @@ fn is_protected_file(path: &Path) -> bool {
         .is_some_and(|extension| {
             matches!(
                 extension,
-                "json" | "md" | "rs" | "sql" | "toml" | "yaml" | "yml"
+                "json" | "md" | "rs" | "sql" | "stderr" | "toml" | "txt" | "yaml" | "yml"
             )
         })
 }
@@ -570,24 +862,6 @@ impl Visit<'_> for IdentityBranchVisitor<'_> {
         }
         syn::visit::visit_expr_match(self, node);
     }
-
-    fn visit_item_const(&mut self, node: &syn::ItemConst) {
-        if let Some(axis) = identifier_axis(&node.ident.to_string())
-            && let Some(value) = expression_string(&node.expr)
-        {
-            self.record(axis, &value);
-        }
-        syn::visit::visit_item_const(self, node);
-    }
-
-    fn visit_item_static(&mut self, node: &syn::ItemStatic) {
-        if let Some(axis) = identifier_axis(&node.ident.to_string())
-            && let Some(value) = expression_string(&node.expr)
-        {
-            self.record(axis, &value);
-        }
-        syn::visit::visit_item_static(self, node);
-    }
 }
 
 impl IdentityBranchVisitor<'_> {
@@ -639,22 +913,13 @@ fn expression_string(expression: &Expr) -> Option<String> {
     }
 }
 
-fn identifier_axis(identifier: &str) -> Option<&'static str> {
-    crate::identifier_words(identifier)
-        .into_iter()
-        .find_map(|word| exact_identity_axis(&word))
-}
-
 fn exact_identity_axis(value: &str) -> Option<&'static str> {
     match value.to_ascii_lowercase().as_str() {
         "game" => Some("game"),
         "package" => Some("package"),
         "profile" => Some("profile"),
         "project" => Some("project"),
-        "provider" => Some("provider"),
-        "resource" => Some("resource"),
         "server" => Some("server"),
-        "task" => Some("task"),
         "theme" => Some("theme"),
         _ => None,
     }
@@ -792,6 +1057,26 @@ source_pr = 108
     }
 
     #[test]
+    fn registry_rejects_broad_or_unverifiable_identity_allowances() {
+        let source = format!(
+            "{}\n{}",
+            registry_source(),
+            identity_allowance_source(
+                "allowance.technical",
+                "technical_adapter",
+                "crates/*/src/lib.rs",
+                &["not-a-detector-token"],
+                &"A".repeat(64),
+            )
+        );
+        let registry = parse_generic_domain_registry(&source).unwrap();
+        let error = validate_generic_domain_registry(&registry).unwrap_err();
+        assert!(error.contains("invalid stable_path"));
+        assert!(error.contains("unknown detector token"));
+        assert!(error.contains("sha256 must be lowercase SHA-256"));
+    }
+
+    #[test]
     fn identity_branches_reject_unknown_concrete_values() {
         let source = r#"
             fn select(game: &str, profile: &str) -> bool {
@@ -801,21 +1086,15 @@ source_pr = 108
                 }
             }
 
-            const defaultGame: &str = "synthetic_game_code";
         "#;
         let violations = inspect_identity_axis_branches("fixture.rs", source).unwrap();
-        assert_eq!(violations.len(), 3);
+        assert_eq!(violations.len(), 2);
         assert!(
             violations
                 .iter()
                 .any(|item| item.contains("unknown_project_code"))
         );
         assert!(violations.iter().any(|item| item.contains("fixed_profile")));
-        assert!(
-            violations
-                .iter()
-                .any(|item| item.contains("synthetic_game_code"))
-        );
     }
 
     #[test]
@@ -878,11 +1157,107 @@ source_pr = 108
         let error = validate_workspace_surface_registry(&root, &registry).unwrap_err();
         assert!(error.contains("crates/example fingerprint drifted"));
 
+        fs::write(
+            root.join("crates/example/src/lib.rs"),
+            "#[arg(long, default_value = \"changed\")]\nstruct Cli;\n",
+        )
+        .unwrap();
+        let error = validate_workspace_surface_registry(&root, &registry).unwrap_err();
+        assert!(error.contains("crates/example fingerprint drifted"));
+
         fs::create_dir_all(root.join("crates/second/src")).unwrap();
         fs::write(root.join("crates/second/src/lib.rs"), "pub struct Added;\n").unwrap();
         write_workspace_manifest(&root, &["crates/example", "crates/second"]);
         let error = validate_workspace_surface_registry(&root, &registry).unwrap_err();
         assert!(error.contains("unmapped protected surface crates/second"));
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn workspace_genericity_scans_cfg_tests_private_helpers_and_fused_tokens() {
+        let root = temporary_workspace("full-genericity");
+        write_workspace_manifest(&root, &["crates/example"]);
+        fs::create_dir_all(root.join("crates/example/src")).unwrap();
+        fs::write(
+            root.join("crates/example/src/lib.rs"),
+            r#"
+                #[cfg(test)]
+                mod tests {
+                    fn private_select(game: &str) -> bool {
+                        game == "unknown_project_code"
+                    }
+
+                    fn BaasPvpLimit() {}
+                }
+            "#,
+        )
+        .unwrap();
+        create_required_roots(&root);
+        write_external_compat_manifest(&root);
+
+        let snapshots = workspace_surface_snapshot(&root).unwrap();
+        let registry = registry_for_snapshots(&snapshots);
+        let error = validate_workspace_genericity(&root, &registry).unwrap_err();
+        assert!(error.contains("unknown_project_code"));
+        assert!(error.contains("project-specific word baas"));
+        assert!(error.contains("project-specific word pvp"));
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn workspace_genericity_requires_exact_allowance_hash_and_registered_surface() {
+        let root = temporary_workspace("identity-allowance");
+        write_workspace_manifest(&root, &["crates/example"]);
+        fs::create_dir_all(root.join("crates/example/src")).unwrap();
+        let path = "crates/example/src/lib.rs";
+        fs::write(root.join(path), "fn compile_maa_tasks() {}\n").unwrap();
+        create_required_roots(&root);
+        write_external_compat_manifest(&root);
+
+        let snapshots = workspace_surface_snapshot(&root).unwrap();
+        let mut registry = registry_for_snapshots(&snapshots);
+        let hash = format!("{:x}", Sha256::digest(fs::read(root.join(path)).unwrap()));
+        registry.identity_allowance.push(IdentityAllowance {
+            id: "allowance.technical".to_string(),
+            kind: "technical_adapter".to_string(),
+            exact_path: path.to_string(),
+            tokens: vec!["maa".to_string()],
+            sha256: hash,
+            purpose: "Exact technical adapter boundary.".to_string(),
+            approval_comment_id: 5010683904,
+            source_issue: 44,
+            source_pr: Some(111),
+        });
+        validate_generic_domain_registry(&registry).unwrap();
+        validate_workspace_genericity(&root, &registry).unwrap();
+
+        fs::write(root.join(path), "fn compile_maa_jobs() {}\n").unwrap();
+        let error = validate_workspace_genericity(&root, &registry).unwrap_err();
+        assert!(error.contains("content hash drifted"));
+
+        let outside = "outside.rs";
+        fs::write(root.join(outside), "fn compile_maa_tasks() {}\n").unwrap();
+        let outside_hash = format!(
+            "{:x}",
+            Sha256::digest(fs::read(root.join(outside)).unwrap())
+        );
+        let snapshots = workspace_surface_snapshot(&root).unwrap();
+        let mut outside_registry = registry_for_snapshots(&snapshots);
+        outside_registry.identity_allowance.push(IdentityAllowance {
+            id: "allowance.outside".to_string(),
+            kind: "technical_adapter".to_string(),
+            exact_path: outside.to_string(),
+            tokens: vec!["maa".to_string()],
+            sha256: outside_hash,
+            purpose: "Counterexample outside registered surfaces.".to_string(),
+            approval_comment_id: 5010683904,
+            source_issue: 44,
+            source_pr: Some(111),
+        });
+        let error = validate_workspace_genericity(&root, &outside_registry).unwrap_err();
+        assert!(error.contains("outside registered Runtime surfaces"));
 
         fs::remove_dir_all(root).unwrap();
     }
@@ -951,6 +1326,43 @@ source_pr = 108
         }
     }
 
+    fn write_external_compat_manifest(root: &Path) {
+        let path = root.join(EXTERNAL_COMPAT_MANIFEST_PATH);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(
+            path,
+            "schema_version = \"actingcommand.external-compat.v1\"\n",
+        )
+        .unwrap();
+    }
+
+    fn identity_allowance_source(
+        id: &str,
+        kind: &str,
+        exact_path: &str,
+        tokens: &[&str],
+        sha256: &str,
+    ) -> String {
+        let tokens = tokens
+            .iter()
+            .map(|token| format!("{token:?}"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        format!(
+            r#"[[identity_allowance]]
+id = {id:?}
+kind = {kind:?}
+exact_path = {exact_path:?}
+tokens = [{tokens}]
+sha256 = {sha256:?}
+purpose = "Exact test allowance."
+approval_comment_id = 5010683904
+source_issue = 44
+source_pr = 111
+"#
+        )
+    }
+
     fn registry_for_snapshots(snapshots: &[SurfaceSnapshot]) -> GenericDomainRegistry {
         GenericDomainRegistry {
             schema_version: GENERIC_DOMAIN_SCHEMA_VERSION.to_string(),
@@ -960,6 +1372,7 @@ source_pr = 108
                 approval_comment_id: 5010683904,
                 replaced_by: None,
             }],
+            identity_allowance: Vec::new(),
             surface: snapshots
                 .iter()
                 .enumerate()

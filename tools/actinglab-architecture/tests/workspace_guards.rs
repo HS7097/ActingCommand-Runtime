@@ -6,11 +6,10 @@ use std::process::Command;
 
 use actingcommand_actinglab_architecture::external_compat::load_and_validate_external_compat;
 use actingcommand_actinglab_architecture::generic_domain::{
-    load_generic_domain_registry, validate_workspace_surface_registry,
+    load_generic_domain_registry, validate_workspace_genericity,
 };
 use actingcommand_actinglab_architecture::{
     contract_dependency_violations, extract_command_inventory, inspect_contract_fact_matching,
-    inspect_generic_authoring_identity, inspect_generic_runtime_identity,
     inspect_global_append_ingress, inspect_lab_source, inspect_persisted_event_ownership,
     inspect_producer_event_capabilities, inspect_public_api, lab_removability_violations,
     ledger_owns_query_matching, resource_tooling_removability_violations, validate_line_ratchet,
@@ -26,38 +25,13 @@ fn workspace_root() -> PathBuf {
         .to_path_buf()
 }
 
-const GENERIC_RUNTIME_OWNED_ROOTS: &[&str] = &[
-    "apps/actingctl",
-    "apps/actingd",
-    "benchmarks/workloads",
-    "contracts",
-    "crates/actingcommand-contract",
-    "crates/artifact-store",
-    "crates/device",
-    "crates/execution-kernel",
-    "crates/host-metrics",
-    "crates/ledger",
-    "crates/onnx-provider-support",
-    "crates/pack-containment",
-    "crates/page-detector",
-    "crates/policy",
-    "crates/recognition",
-    "crates/recognition-pack",
-    "crates/runtime-client",
-    "crates/runtime-host",
-    "crates/runtime-state",
-    "crates/scheduler",
-    "crates/vision-ffi",
-    "tests",
-];
-
 #[test]
 fn c2_generic_domain_registry_matches_every_workspace_member_and_protected_root() {
     let root = workspace_root();
     let registry_path = root.join("tools/actinglab-architecture/generic-domain-v1.toml");
     let registry = load_generic_domain_registry(&registry_path)
         .unwrap_or_else(|error| panic!("load {}: {error}", registry_path.display()));
-    validate_workspace_surface_registry(&root, &registry)
+    validate_workspace_genericity(&root, &registry)
         .unwrap_or_else(|error| panic!("C2 generic-domain registry violations:\n{error}"));
 }
 
@@ -165,121 +139,6 @@ fn collect_rust_files(root: &Path, files: &mut Vec<PathBuf>) {
         if path.is_dir() {
             collect_rust_files(&path, files);
         } else if path.extension().is_some_and(|extension| extension == "rs") {
-            files.push(path);
-        }
-    }
-}
-
-#[test]
-fn c2_runtime_code_contracts_defaults_and_fixtures_are_project_neutral() {
-    let root = workspace_root();
-    let mut files = Vec::new();
-    for owned_root in GENERIC_RUNTIME_OWNED_ROOTS {
-        collect_generic_runtime_files(&root.join(owned_root), &mut files);
-    }
-
-    let mut violations = Vec::new();
-    for path in files {
-        let source = fs::read_to_string(&path)
-            .unwrap_or_else(|error| panic!("read {}: {error}", path.display()));
-        let display = path
-            .strip_prefix(&root)
-            .unwrap_or(&path)
-            .display()
-            .to_string();
-        violations.extend(inspect_generic_runtime_identity(&display, &source));
-    }
-
-    assert!(
-        violations.is_empty(),
-        "C2 generic Runtime boundary violations:\n{}",
-        violations.join("\n")
-    );
-}
-
-#[test]
-fn c2_runtime_guard_covers_policy_and_runtime_owned_core_siblings() {
-    for required_root in [
-        "crates/host-metrics",
-        "crates/policy",
-        "crates/runtime-state",
-    ] {
-        assert!(
-            GENERIC_RUNTIME_OWNED_ROOTS.contains(&required_root),
-            "C2 generic Runtime guard does not cover {required_root}"
-        );
-        let counterexample = "const SERVER_BA: &str = \"neutral\";";
-        let violations = inspect_generic_runtime_identity(
-            &format!("{required_root}/src/lib.rs"),
-            counterexample,
-        );
-        assert!(
-            !violations.is_empty(),
-            "C2 counterexample escaped in {required_root}"
-        );
-    }
-}
-
-#[test]
-fn r2f_product_and_authoring_paths_have_no_builtin_game_identity() {
-    let root = workspace_root();
-    let owned_roots = [
-        "apps/actinglab/src",
-        "apps/device-test/src",
-        "crates/lab/src",
-        "crates/resource-tooling/src",
-    ];
-    let mut files = Vec::new();
-    for owned_root in owned_roots {
-        collect_rust_files(&root.join(owned_root), &mut files);
-    }
-
-    let mut violations = Vec::new();
-    for path in files {
-        if path.file_name().is_some_and(|name| name == "tests.rs")
-            || path
-                .components()
-                .any(|component| component.as_os_str() == "tests")
-        {
-            continue;
-        }
-        let source = fs::read_to_string(&path)
-            .unwrap_or_else(|error| panic!("read {}: {error}", path.display()));
-        let display = path
-            .strip_prefix(&root)
-            .unwrap_or(&path)
-            .display()
-            .to_string();
-        violations.extend(inspect_generic_authoring_identity(&display, &source).unwrap());
-    }
-
-    assert!(
-        violations.is_empty(),
-        "R2-F generic authoring boundary violations:\n{}",
-        violations.join("\n")
-    );
-}
-
-fn collect_generic_runtime_files(root: &Path, files: &mut Vec<PathBuf>) {
-    let entries =
-        fs::read_dir(root).unwrap_or_else(|error| panic!("read {}: {error}", root.display()));
-    for entry in entries {
-        let entry = entry.unwrap_or_else(|error| panic!("read {} entry: {error}", root.display()));
-        let path = entry.path();
-        if path.is_dir() {
-            collect_generic_runtime_files(&path, files);
-            continue;
-        }
-        if path
-            .extension()
-            .and_then(|extension| extension.to_str())
-            .is_some_and(|extension| {
-                matches!(
-                    extension,
-                    "rs" | "json" | "toml" | "yaml" | "yml" | "sql" | "md"
-                )
-            })
-        {
             files.push(path);
         }
     }

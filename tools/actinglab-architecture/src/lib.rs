@@ -13,6 +13,47 @@ use syn::{
     Visibility,
 };
 
+const FORBIDDEN_PROJECT_LITERALS: &[&str] = &[
+    "maa.",
+    "com.yostar",
+    "com.bilibili",
+    "com.hypergryph",
+    "\u{51fa}\u{6483}",
+    "\u{6226}\u{95d8}",
+    "\u{5efa}\u{9020}",
+    "\u{9000}\u{5f79}",
+    "\u{5f37}\u{5316}",
+];
+const FORBIDDEN_PROJECT_WORDS: &[&str] = &[
+    "alas",
+    "ark",
+    "arknights",
+    "azur",
+    "azurlane",
+    "baas",
+    "bluearchive",
+    "gacha",
+    "maa",
+    "originite",
+    "pvp",
+    "pyroxene",
+    "sortie",
+];
+const CONTEXTUAL_PROJECT_ALIASES: &[&str] = &["ak", "ba"];
+const PROJECT_ALIAS_CONTEXTS: &[&str] = &[
+    "game", "instance", "mode", "package", "policy", "profile", "resource", "server", "task",
+    "theme",
+];
+const FORBIDDEN_PROJECT_SEQUENCES: &[&[&str]] = &[
+    &["blue", "archive"],
+    &["server", "cn"],
+    &["server", "jp"],
+    &["server", "ko"],
+    &["server", "maa"],
+    &["server", "tw"],
+];
+const FORBIDDEN_STANDALONE_PROJECT_WORDS: &[&str] = &["cn", "jp", "ko", "tw"];
+
 /// Top-level dispatch arms and the concrete commands they currently expose.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CommandInventory {
@@ -67,59 +108,20 @@ pub fn inspect_lab_source(path: &str, source: &str) -> Result<Vec<String>, Strin
 
 /// Rejects project identities from Runtime-owned code, contracts, defaults, and fixtures.
 pub fn inspect_generic_runtime_identity(path: &str, source: &str) -> Vec<String> {
-    const FORBIDDEN_LITERALS: &[&str] = &[
-        "maa.",
-        "com.yostar",
-        "com.bilibili",
-        "com.hypergryph",
-        "\u{51fa}\u{6483}",
-        "\u{6226}\u{95d8}",
-        "\u{5efa}\u{9020}",
-        "\u{9000}\u{5f79}",
-        "\u{5f37}\u{5316}",
-    ];
-    const FORBIDDEN_WORDS: &[&str] = &[
-        "alas",
-        "ark",
-        "arknights",
-        "azur",
-        "azurlane",
-        "baas",
-        "bluearchive",
-        "gacha",
-        "originite",
-        "pvp",
-        "pyroxene",
-        "sortie",
-    ];
-    const CONTEXTUAL_SHORT_ALIASES: &[&str] = &["ak", "ba"];
-    const SHORT_ALIAS_CONTEXTS: &[&str] = &[
-        "game", "instance", "mode", "package", "policy", "profile", "resource", "server", "task",
-        "theme",
-    ];
-    const FORBIDDEN_SEQUENCES: &[&[&str]] = &[
-        &["blue", "archive"],
-        &["server", "cn"],
-        &["server", "jp"],
-        &["server", "ko"],
-        &["server", "maa"],
-        &["server", "tw"],
-    ];
-    const FORBIDDEN_STANDALONE_WORDS: &[&str] = &["cn", "jp", "ko", "tw"];
+    inspect_generic_runtime_identity_with_allowances(path, source, &HashSet::new())
+}
 
-    let normalized_path = path.replace('\\', "/").to_ascii_lowercase();
+/// Applies the identity guard while honoring registry-validated, exact-path token allowances.
+pub fn inspect_generic_runtime_identity_with_allowances(
+    path: &str,
+    source: &str,
+    allowed_tokens: &HashSet<String>,
+) -> Vec<String> {
     let mut violations = Vec::new();
     for (index, line) in source.lines().enumerate() {
         let lower = line.to_ascii_lowercase();
-        for token in FORBIDDEN_LITERALS {
-            if !lower.contains(token) {
-                continue;
-            }
-            // This filename is an external provider artifact, not a Runtime identity or branch.
-            if *token == "maa."
-                && normalized_path.starts_with("crates/vision-ffi/")
-                && lower.contains("external-tools/vision/fastdeploy/fastdeploy_ppocr_maa.dll")
-            {
+        for token in FORBIDDEN_PROJECT_LITERALS {
+            if !lower.contains(token) || allowed_tokens.contains(*token) {
                 continue;
             }
             violations.push(format!(
@@ -128,39 +130,51 @@ pub fn inspect_generic_runtime_identity(path: &str, source: &str) -> Vec<String>
             ));
         }
         let words = identifier_words(line);
-        for sequence in FORBIDDEN_SEQUENCES {
-            if contains_word_sequence(&words, sequence) {
+        for sequence in FORBIDDEN_PROJECT_SEQUENCES {
+            let token = sequence.join("_");
+            if contains_word_sequence(&words, sequence) && !allowed_tokens.contains(&token) {
                 violations.push(format!(
                     "{path}:{} contains project-specific token {}",
                     index + 1,
-                    sequence.join("_")
+                    token
                 ));
             }
         }
-        for forbidden in FORBIDDEN_WORDS {
+        for forbidden in FORBIDDEN_PROJECT_WORDS {
             if identifier_contains_compacted_word(line, forbidden)
-                || identifier_contains_fused_forbidden_prefix(line, forbidden, FORBIDDEN_WORDS)
+                || identifier_contains_fused_forbidden_prefix(
+                    line,
+                    forbidden,
+                    FORBIDDEN_PROJECT_WORDS,
+                )
             {
+                if allowed_tokens.contains(*forbidden) {
+                    continue;
+                }
                 violations.push(format!(
                     "{path}:{} contains project-specific word {forbidden}",
                     index + 1
                 ));
             }
         }
-        for alias in CONTEXTUAL_SHORT_ALIASES {
-            if identifier_contains_contextual_short_alias(line, alias, SHORT_ALIAS_CONTEXTS)
+        for alias in CONTEXTUAL_PROJECT_ALIASES {
+            if identifier_contains_contextual_short_alias(line, alias, PROJECT_ALIAS_CONTEXTS)
                 || contains_qualified_short_alias(line, alias)
             {
+                if allowed_tokens.contains(*alias) {
+                    continue;
+                }
                 violations.push(format!(
                     "{path}:{} contains project-specific word {alias}",
                     index + 1
                 ));
             }
         }
-        for word in
-            lower.split(|character: char| !character.is_ascii_alphanumeric() && character != '_')
-        {
-            if FORBIDDEN_STANDALONE_WORDS.contains(&word) {
+        for (word, start, end) in ascii_word_spans(&lower) {
+            if FORBIDDEN_STANDALONE_PROJECT_WORDS.contains(&word)
+                && !allowed_tokens.contains(word)
+                && !is_bcp47_locale_subtag(&lower, start, end)
+            {
                 violations.push(format!(
                     "{path}:{} contains project-specific word {word}",
                     index + 1
@@ -169,6 +183,22 @@ pub fn inspect_generic_runtime_identity(path: &str, source: &str) -> Vec<String>
         }
     }
     violations
+}
+
+/// Canonical detector tokens accepted by exact path-scoped allowance records.
+pub fn known_project_identity_tokens() -> HashSet<String> {
+    FORBIDDEN_PROJECT_LITERALS
+        .iter()
+        .chain(FORBIDDEN_PROJECT_WORDS)
+        .chain(CONTEXTUAL_PROJECT_ALIASES)
+        .chain(FORBIDDEN_STANDALONE_PROJECT_WORDS)
+        .map(|token| (*token).to_string())
+        .chain(
+            FORBIDDEN_PROJECT_SEQUENCES
+                .iter()
+                .map(|sequence| sequence.join("_")),
+        )
+        .collect()
 }
 
 /// Rejects built-in game identities from product and resource-authoring code.
@@ -189,81 +219,51 @@ struct GenericAuthoringIdentityVisitor<'a> {
 
 impl Visit<'_> for GenericAuthoringIdentityVisitor<'_> {
     fn visit_item_mod(&mut self, node: &syn::ItemMod) {
-        if has_cfg_test(&node.attrs) {
-            return;
-        }
         self.record_identifier(&node.ident);
         syn::visit::visit_item_mod(self, node);
     }
 
     fn visit_item_fn(&mut self, node: &syn::ItemFn) {
-        if has_cfg_test(&node.attrs) {
-            return;
-        }
         self.record_identifier(&node.sig.ident);
         syn::visit::visit_item_fn(self, node);
     }
 
     fn visit_impl_item_fn(&mut self, node: &syn::ImplItemFn) {
-        if has_cfg_test(&node.attrs) {
-            return;
-        }
         self.record_identifier(&node.sig.ident);
         syn::visit::visit_impl_item_fn(self, node);
     }
 
     fn visit_item_struct(&mut self, node: &syn::ItemStruct) {
-        if has_cfg_test(&node.attrs) {
-            return;
-        }
         self.record_identifier(&node.ident);
         syn::visit::visit_item_struct(self, node);
     }
 
     fn visit_item_enum(&mut self, node: &syn::ItemEnum) {
-        if has_cfg_test(&node.attrs) {
-            return;
-        }
         self.record_identifier(&node.ident);
         syn::visit::visit_item_enum(self, node);
     }
 
     fn visit_item_union(&mut self, node: &syn::ItemUnion) {
-        if has_cfg_test(&node.attrs) {
-            return;
-        }
         self.record_identifier(&node.ident);
         syn::visit::visit_item_union(self, node);
     }
 
     fn visit_item_trait(&mut self, node: &syn::ItemTrait) {
-        if has_cfg_test(&node.attrs) {
-            return;
-        }
         self.record_identifier(&node.ident);
         syn::visit::visit_item_trait(self, node);
     }
 
     fn visit_item_type(&mut self, node: &syn::ItemType) {
-        if has_cfg_test(&node.attrs) {
-            return;
-        }
         self.record_identifier(&node.ident);
         syn::visit::visit_item_type(self, node);
     }
 
     fn visit_item_const(&mut self, node: &syn::ItemConst) {
-        if has_cfg_test(&node.attrs) {
-            return;
-        }
         self.record_identifier(&node.ident);
         syn::visit::visit_item_const(self, node);
     }
 
     fn visit_item_static(&mut self, node: &syn::ItemStatic) {
-        if has_cfg_test(&node.attrs) {
-            return;
-        }
         self.record_identifier(&node.ident);
         syn::visit::visit_item_static(self, node);
     }
@@ -332,6 +332,60 @@ fn is_forbidden_authoring_identity(value: &str) -> bool {
             | "blue_archive"
             | "maaassistantarknights"
     )
+}
+
+fn ascii_word_spans(value: &str) -> Vec<(&str, usize, usize)> {
+    let mut spans = Vec::new();
+    let mut start = None;
+    for (index, character) in value.char_indices() {
+        if character.is_ascii_alphanumeric() || character == '_' {
+            start.get_or_insert(index);
+        } else if let Some(start) = start.take() {
+            spans.push((&value[start..index], start, index));
+        }
+    }
+    if let Some(start) = start {
+        spans.push((&value[start..], start, value.len()));
+    }
+    spans
+}
+
+fn is_bcp47_locale_subtag(line: &str, word_start: usize, word_end: usize) -> bool {
+    let bytes = line.as_bytes();
+    let mut token_start = word_start;
+    while token_start > 0
+        && (bytes[token_start - 1].is_ascii_alphanumeric() || bytes[token_start - 1] == b'-')
+    {
+        token_start -= 1;
+    }
+    let mut token_end = word_end;
+    while token_end < bytes.len()
+        && (bytes[token_end].is_ascii_alphanumeric() || bytes[token_end] == b'-')
+    {
+        token_end += 1;
+    }
+    let token = &line[token_start..token_end];
+    if !token.contains('-') {
+        return false;
+    }
+    let subtags = token.split('-').collect::<Vec<_>>();
+    let Some(language) = subtags.first() else {
+        return false;
+    };
+    if !matches!(*language, "en" | "ja" | "ko" | "zh") {
+        return false;
+    }
+    let region_index = usize::from(subtags.get(1).is_some_and(|part| part.len() == 4)) + 1;
+    let Some(region) = subtags.get(region_index) else {
+        return false;
+    };
+    if region.len() != 2 || !region.bytes().all(|byte| byte.is_ascii_alphabetic()) {
+        return false;
+    }
+    let word = &line[word_start..word_end];
+    subtags
+        .iter()
+        .any(|subtag| subtag.eq_ignore_ascii_case(word))
 }
 
 pub(crate) fn identifier_words(value: &str) -> Vec<String> {
@@ -487,16 +541,6 @@ fn contains_qualified_short_alias(value: &str, expected: &str) -> bool {
 
 fn is_identifier_byte(byte: u8) -> bool {
     byte.is_ascii_alphanumeric() || byte == b'_'
-}
-
-fn has_cfg_test(attributes: &[syn::Attribute]) -> bool {
-    attributes.iter().any(|attribute| {
-        attribute.path().is_ident("cfg")
-            && matches!(
-                &attribute.meta,
-                syn::Meta::List(list) if list.tokens.to_string().split_whitespace().any(|token| token == "test")
-            )
-    })
 }
 
 /// Finds public APIs that expose `serde_json::Value`, including imported aliases.
@@ -2487,6 +2531,7 @@ mod tests {
             const SCALE_B_A: &str = "neutral";
             const R_BA: &str = "neutral";
             const OCR_LANGUAGE: &str = "zh_cn";
+            const LOCALES: &[&str] = &["zh-CN", "ja-JP", "ko-KR", "zh-Hant-TW"];
             fn exercise_plan() {}
             fn recruit_worker() {}
             fn sanity_check() {}
@@ -2516,6 +2561,12 @@ mod tests {
             super::inspect_generic_runtime_identity("fixture.rs", "const LOCALE: &str = \"jp\";");
         assert_eq!(standalone.len(), 1);
         assert!(standalone[0].contains("project-specific word jp"));
+        let invalid_locale = super::inspect_generic_runtime_identity(
+            "fixture.rs",
+            "const LOCALE: &str = \"fixture-JP\";",
+        );
+        assert_eq!(invalid_locale.len(), 1);
+        assert!(invalid_locale[0].contains("project-specific word jp"));
     }
 
     #[test]
@@ -2640,7 +2691,7 @@ mod tests {
     }
 
     #[test]
-    fn generic_authoring_guard_rejects_production_identity_and_skips_tests() {
+    fn generic_authoring_guard_rejects_identities_inside_cfg_test_modules() {
         let forbidden = r#"fn select() -> &'static str { "arknights.cn" }"#;
         let test_only = r#"
             #[cfg(test)]
@@ -2655,11 +2706,27 @@ mod tests {
                 .len(),
             1
         );
+        let violations =
+            super::inspect_generic_authoring_identity("fixture.rs", test_only).unwrap();
         assert!(
-            super::inspect_generic_authoring_identity("fixture.rs", test_only)
-                .unwrap()
-                .is_empty()
+            violations
+                .iter()
+                .any(|violation| violation.contains("arknights"))
         );
+    }
+
+    #[test]
+    fn exact_token_allowances_do_not_hide_unrelated_project_identity() {
+        let source = r#"
+            fn compile_maa_tasks() {}
+            const ARTIFACT: &str = "fastdeploy_ppocr_maa.dll";
+            const GAME: &str = "arknights";
+        "#;
+        let allowed = std::collections::HashSet::from(["maa".to_string(), "maa.".to_string()]);
+        let violations =
+            super::inspect_generic_runtime_identity_with_allowances("adapter.rs", source, &allowed);
+        assert_eq!(violations.len(), 1);
+        assert!(violations[0].contains("arknights"));
     }
 
     #[test]
