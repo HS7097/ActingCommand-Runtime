@@ -17,7 +17,10 @@ use syn::{
 };
 
 use crate::external_compat::{EXTERNAL_COMPAT_MANIFEST_PATH, load_and_validate_external_compat};
-use crate::{inspect_generic_runtime_identity_with_allowances, known_project_identity_tokens};
+use crate::{
+    inspect_generic_runtime_identity, inspect_generic_runtime_identity_with_allowances,
+    known_project_identity_tokens,
+};
 
 pub const GENERIC_DOMAIN_SCHEMA_VERSION: &str = "actingcommand.generic-domain.v2";
 pub const GENERIC_DOMAIN_REGISTRY_PATH: &str =
@@ -75,6 +78,12 @@ pub struct SurfaceRecord {
     pub selector: String,
     pub concept_ids: Vec<String>,
     pub fingerprint: String,
+    #[serde(default)]
+    pub approval_id: Option<String>,
+    #[serde(default)]
+    pub source_issue: Option<u64>,
+    #[serde(default)]
+    pub source_pr: Option<u64>,
 }
 
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
@@ -120,10 +129,12 @@ pub struct IdentityAllowance {
     pub id: String,
     pub kind: String,
     pub exact_path: String,
+    pub selector: String,
+    pub scope: Vec<String>,
     pub tokens: Vec<String>,
     pub sha256: String,
     pub purpose: String,
-    pub approval_comment_id: u64,
+    pub approval_id: String,
     pub source_issue: u64,
     #[serde(default)]
     pub source_pr: Option<u64>,
@@ -136,6 +147,15 @@ pub struct SurfaceSnapshot {
     pub stable_path: String,
     pub selector: String,
     pub fingerprint: String,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct IdentityAllowanceCandidate {
+    pub stable_path: String,
+    pub selector: String,
+    pub fingerprint: String,
+    pub detector_tokens: Vec<String>,
+    pub branch_violations: Vec<String>,
 }
 
 pub fn parse_generic_domain_registry(source: &str) -> Result<GenericDomainRegistry, String> {
@@ -215,9 +235,11 @@ pub fn load_generic_domain_registry(path: &Path) -> Result<GenericDomainRegistry
             selector: surface.selector,
             concept_ids: surface.concept_ids,
             fingerprint: surface.fingerprint,
-            approval_id: reference.approval_id.clone(),
-            source_issue: reference.source_issue,
-            source_pr: reference.source_pr,
+            approval_id: surface
+                .approval_id
+                .unwrap_or_else(|| reference.approval_id.clone()),
+            source_issue: surface.source_issue.unwrap_or(reference.source_issue),
+            source_pr: surface.source_pr.or(reference.source_pr),
         })
         .collect();
     Ok(registry)
@@ -307,13 +329,12 @@ pub fn validate_generic_domain_registry(registry: &GenericDomainRegistry) -> Res
             }
             previous_scope = Some(scope.as_str());
         }
-        if !scopes.contains("surface.mapping") {
-            errors.push(format!(
-                "surface approval {} does not authorize surface.mapping",
-                approval.id
-            ));
-        }
     }
+    let approval_by_id = registry
+        .approval
+        .iter()
+        .map(|approval| (approval.id.as_str(), approval))
+        .collect::<HashMap<_, _>>();
     if let Some(reference) = &registry.surface_manifest {
         if reference.path != GENERIC_DOMAIN_SURFACE_MANIFEST_PATH {
             errors.push(format!(
@@ -327,6 +348,20 @@ pub fn validate_generic_domain_registry(registry: &GenericDomainRegistry) -> Res
         if !approval_ids.contains(reference.approval_id.as_str()) {
             errors.push(format!(
                 "surface manifest references unknown approval {}",
+                reference.approval_id
+            ));
+        }
+        if approval_by_id
+            .get(reference.approval_id.as_str())
+            .is_some_and(|approval| {
+                !approval
+                    .scope
+                    .iter()
+                    .any(|scope| scope == "surface.mapping")
+            })
+        {
+            errors.push(format!(
+                "surface manifest approval {} does not authorize surface.mapping",
                 reference.approval_id
             ));
         }
@@ -387,7 +422,7 @@ pub fn validate_generic_domain_registry(registry: &GenericDomainRegistry) -> Res
 
     let known_tokens = known_project_identity_tokens();
     let mut allowance_ids = HashSet::new();
-    let mut allowance_paths = HashSet::new();
+    let mut allowance_targets = HashSet::new();
     let mut previous_allowance = None;
     for allowance in &registry.identity_allowance {
         if !is_surface_id(&allowance.id) {
@@ -408,7 +443,11 @@ pub fn validate_generic_domain_registry(registry: &GenericDomainRegistry) -> Res
         previous_allowance = Some(allowance.id.as_str());
         if !matches!(
             allowance.kind.as_str(),
-            "guard_fixture" | "technical_adapter" | "upstream_metadata"
+            "guard_fixture"
+                | "guard_source"
+                | "technical_adapter"
+                | "test_fixture"
+                | "upstream_metadata"
         ) {
             errors.push(format!(
                 "identity allowance {} has invalid kind {}",
@@ -418,13 +457,76 @@ pub fn validate_generic_domain_registry(registry: &GenericDomainRegistry) -> Res
         if let Err(error) = validate_stable_path(&allowance.exact_path) {
             errors.push(format!("identity allowance {} {error}", allowance.id));
         }
-        if !allowance_paths.insert(allowance.exact_path.as_str()) {
+        if allowance.kind == "guard_fixture"
+            && !allowance
+                .exact_path
+                .starts_with("tools/actinglab-architecture/tests/")
+        {
             errors.push(format!(
-                "duplicate identity allowance exact_path {}",
-                allowance.exact_path
+                "identity allowance {} guard_fixture is outside the guard test directory",
+                allowance.id
             ));
         }
-        if allowance.tokens.is_empty() && allowance.kind != "guard_fixture" {
+        if allowance.kind == "guard_source"
+            && !allowance
+                .exact_path
+                .starts_with("tools/actinglab-architecture/src/")
+        {
+            errors.push(format!(
+                "identity allowance {} guard_source is outside the guard source directory",
+                allowance.id
+            ));
+        }
+        if allowance.kind == "test_fixture"
+            && !is_test_identity_fragment(&allowance.exact_path, &allowance.selector)
+        {
+            errors.push(format!(
+                "identity allowance {} test_fixture does not target a test fragment",
+                allowance.id
+            ));
+        }
+        if allowance.selector.trim().is_empty()
+            || allowance.selector.contains('*')
+            || allowance.selector.contains('?')
+        {
+            errors.push(format!(
+                "identity allowance {} has invalid selector {}",
+                allowance.id, allowance.selector
+            ));
+        }
+        if !allowance_targets.insert((allowance.exact_path.as_str(), allowance.selector.as_str())) {
+            errors.push(format!(
+                "duplicate identity allowance target {} {}",
+                allowance.exact_path, allowance.selector
+            ));
+        }
+        if allowance.scope.is_empty() {
+            errors.push(format!("identity allowance {} has no scope", allowance.id));
+        }
+        let mut previous_scope = None;
+        let mut scopes = HashSet::new();
+        for scope in &allowance.scope {
+            if !matches!(scope.as_str(), "identity.branch" | "identity.token") {
+                errors.push(format!(
+                    "identity allowance {} has invalid scope {scope}",
+                    allowance.id
+                ));
+            }
+            if !scopes.insert(scope.as_str()) {
+                errors.push(format!(
+                    "identity allowance {} repeats scope {scope}",
+                    allowance.id
+                ));
+            }
+            if previous_scope.is_some_and(|previous: &str| previous >= scope.as_str()) {
+                errors.push(format!(
+                    "identity allowance {} scopes are not strictly sorted at {scope}",
+                    allowance.id
+                ));
+            }
+            previous_scope = Some(scope.as_str());
+        }
+        if allowance.tokens.is_empty() && scopes.contains("identity.token") {
             errors.push(format!("identity allowance {} has no tokens", allowance.id));
         }
         let mut previous_token = None;
@@ -462,10 +564,21 @@ pub fn validate_generic_domain_registry(registry: &GenericDomainRegistry) -> Res
                 allowance.id
             ));
         }
-        if allowance.approval_comment_id == 0 {
+        let allowance_approval = approval_by_id.get(allowance.approval_id.as_str());
+        if allowance_approval.is_none() {
             errors.push(format!(
-                "identity allowance {} has no Alice approval_comment_id",
-                allowance.id
+                "identity allowance {} references unknown approval {}",
+                allowance.id, allowance.approval_id
+            ));
+        } else if allowance_approval.is_some_and(|approval| {
+            !approval
+                .scope
+                .iter()
+                .any(|scope| scope == "identity.allowance")
+        }) {
+            errors.push(format!(
+                "identity allowance {} approval {} does not authorize identity.allowance",
+                allowance.id, allowance.approval_id
             ));
         }
         if allowance.source_issue == 0 {
@@ -591,6 +704,20 @@ pub fn validate_generic_domain_registry(registry: &GenericDomainRegistry) -> Res
                 surface.surface_id, surface.approval_id
             ));
         }
+        if approval_by_id
+            .get(surface.approval_id.as_str())
+            .is_some_and(|approval| {
+                !approval
+                    .scope
+                    .iter()
+                    .any(|scope| scope == "surface.mapping")
+            })
+        {
+            errors.push(format!(
+                "surface {} approval {} does not authorize surface.mapping",
+                surface.surface_id, surface.approval_id
+            ));
+        }
         if surface.source_issue == 0 {
             errors.push(format!(
                 "surface {} has no source_issue",
@@ -651,6 +778,76 @@ pub fn workspace_surface_snapshot(root: &Path) -> Result<Vec<SurfaceSnapshot>, S
         return Err("surface inventory produced duplicate stable ids".to_string());
     }
     Ok(snapshots)
+}
+
+pub fn workspace_identity_allowance_candidates(
+    root: &Path,
+) -> Result<Vec<IdentityAllowanceCandidate>, String> {
+    let external = load_and_validate_external_compat(root)?;
+    let external_paths = external
+        .entry
+        .iter()
+        .map(|entry| entry.path.as_str())
+        .collect::<HashSet<_>>();
+    let mut roots = workspace_members(root)?;
+    roots.extend(
+        REQUIRED_PROTECTED_ROOTS
+            .iter()
+            .map(|path| (*path).to_string()),
+    );
+    roots.sort();
+    roots.dedup();
+    let mut files = Vec::new();
+    for stable_path in roots {
+        collect_protected_files(&root.join(stable_path), &mut files)?;
+    }
+    files.sort();
+    files.dedup();
+
+    let mut candidates = Vec::new();
+    for file in files {
+        let relative = normalize_path(
+            file.strip_prefix(root)
+                .map_err(|_| format!("{} escaped workspace root", file.display()))?,
+        )?;
+        if relative == GENERIC_DOMAIN_REGISTRY_PATH
+            || relative == GENERIC_DOMAIN_SURFACE_MANIFEST_PATH
+            || relative == EXTERNAL_COMPAT_MANIFEST_PATH
+            || external_paths.contains(relative.as_str())
+        {
+            continue;
+        }
+        for fragment in identity_fragments_for_file(&file, &relative)? {
+            let label = format!("{}#{}", relative, fragment.selector);
+            let mut detector_tokens = inspect_generic_runtime_identity(&label, &fragment.content)
+                .into_iter()
+                .filter_map(|violation| {
+                    violation.split_whitespace().last().map(ToString::to_string)
+                })
+                .collect::<Vec<_>>();
+            detector_tokens.sort();
+            detector_tokens.dedup();
+            let branch_violations = if file.extension().is_some_and(|extension| extension == "rs") {
+                inspect_identity_axis_branches(&label, &fragment.content)?
+            } else {
+                Vec::new()
+            };
+            if detector_tokens.is_empty() && branch_violations.is_empty() {
+                continue;
+            }
+            candidates.push(IdentityAllowanceCandidate {
+                stable_path: relative.clone(),
+                selector: fragment.selector,
+                fingerprint: format!("{:x}", Sha256::digest(fragment.content.as_bytes())),
+                detector_tokens,
+                branch_violations,
+            });
+        }
+    }
+    candidates.sort_by(|left, right| {
+        (&left.stable_path, &left.selector).cmp(&(&right.stable_path, &right.selector))
+    });
+    Ok(candidates)
 }
 
 pub fn validate_workspace_surface_registry(
@@ -733,7 +930,7 @@ pub fn validate_workspace_genericity(
         .iter()
         .map(|entry| entry.path.as_str())
         .collect::<HashSet<_>>();
-    let allowance_by_path = validate_identity_allowance_files(root, registry)?;
+    let allowance_by_fragment = validate_identity_allowance_fragments(root, registry)?;
 
     let mut roots = workspace_members(root)?;
     roots.extend(
@@ -765,24 +962,34 @@ pub fn validate_workspace_genericity(
         {
             continue;
         }
-        let source = fs::read_to_string(&file)
-            .map_err(|error| format!("failed to read {}: {error}", file.display()))?;
-        let allowed_tokens = allowance_by_path
-            .get(relative.as_str())
-            .map_or_else(HashSet::new, |allowance| {
-                allowance.tokens.iter().cloned().collect()
+        for fragment in identity_fragments_for_file(&file, &relative)? {
+            let key = (relative.clone(), fragment.selector.clone());
+            let allowance = allowance_by_fragment.get(&key).copied();
+            let allowed_tokens = allowance
+                .filter(|allowance| {
+                    allowance
+                        .scope
+                        .iter()
+                        .any(|scope| scope == "identity.token")
+                })
+                .map_or_else(HashSet::new, |allowance| {
+                    allowance.tokens.iter().cloned().collect()
+                });
+            let label = format!("{}#{}", relative, fragment.selector);
+            errors.extend(inspect_generic_runtime_identity_with_allowances(
+                &label,
+                &fragment.content,
+                &allowed_tokens,
+            ));
+            let branch_allowed = allowance.is_some_and(|allowance| {
+                allowance
+                    .scope
+                    .iter()
+                    .any(|scope| scope == "identity.branch")
             });
-        errors.extend(inspect_generic_runtime_identity_with_allowances(
-            &relative,
-            &source,
-            &allowed_tokens,
-        ));
-        if file.extension().is_some_and(|extension| extension == "rs")
-            && allowance_by_path
-                .get(relative.as_str())
-                .is_none_or(|allowance| allowance.kind != "guard_fixture")
-        {
-            errors.extend(inspect_identity_axis_branches(&relative, &source)?);
+            if file.extension().is_some_and(|extension| extension == "rs") && !branch_allowed {
+                errors.extend(inspect_identity_axis_branches(&label, &fragment.content)?);
+            }
         }
     }
     for allowance in &registry.identity_allowance {
@@ -803,36 +1010,59 @@ pub fn validate_workspace_genericity(
     }
 }
 
-fn validate_identity_allowance_files<'a>(
+fn validate_identity_allowance_fragments<'a>(
     root: &Path,
     registry: &'a GenericDomainRegistry,
-) -> Result<HashMap<&'a str, &'a IdentityAllowance>, String> {
+) -> Result<HashMap<(String, String), &'a IdentityAllowance>, String> {
     let mut errors = Vec::new();
-    let mut by_path = HashMap::new();
+    let mut by_fragment = HashMap::new();
+    let mut fragment_cache = HashMap::<String, Vec<IdentityFragment>>::new();
     for allowance in &registry.identity_allowance {
-        by_path.insert(allowance.exact_path.as_str(), allowance);
         match resolve_exact_regular_file(root, &allowance.exact_path) {
-            Ok(path) => match fs::read(&path) {
-                Ok(bytes) => {
-                    let actual = format!("{:x}", Sha256::digest(bytes));
-                    if actual != allowance.sha256 {
-                        errors.push(format!(
-                            "identity allowance {} content hash drifted: registered {}, actual {actual}",
-                            allowance.id, allowance.sha256
-                        ));
+            Ok(path) => {
+                let fragments = if let Some(fragments) = fragment_cache.get(&allowance.exact_path) {
+                    fragments
+                } else {
+                    match identity_fragments_for_file(&path, &allowance.exact_path) {
+                        Ok(fragments) => {
+                            fragment_cache.insert(allowance.exact_path.clone(), fragments);
+                            fragment_cache
+                                .get(&allowance.exact_path)
+                                .expect("inserted fragment inventory")
+                        }
+                        Err(error) => {
+                            errors.push(format!("identity allowance {} {error}", allowance.id));
+                            continue;
+                        }
                     }
+                };
+                let Some(fragment) = fragments
+                    .iter()
+                    .find(|fragment| fragment.selector == allowance.selector)
+                else {
+                    errors.push(format!(
+                        "identity allowance {} references missing selector {} in {}",
+                        allowance.id, allowance.selector, allowance.exact_path
+                    ));
+                    continue;
+                };
+                let actual = format!("{:x}", Sha256::digest(fragment.content.as_bytes()));
+                if actual != allowance.sha256 {
+                    errors.push(format!(
+                        "identity allowance {} fragment hash drifted: registered {}, actual {actual}",
+                        allowance.id, allowance.sha256
+                    ));
                 }
-                Err(error) => errors.push(format!(
-                    "identity allowance {} failed to read {}: {error}",
-                    allowance.id,
-                    path.display()
-                )),
-            },
+                by_fragment.insert(
+                    (allowance.exact_path.clone(), allowance.selector.clone()),
+                    allowance,
+                );
+            }
             Err(error) => errors.push(format!("identity allowance {} {error}", allowance.id)),
         }
     }
     if errors.is_empty() {
-        Ok(by_path)
+        Ok(by_fragment)
     } else {
         errors.sort();
         Err(errors.join("\n"))
@@ -893,8 +1123,16 @@ pub fn inspect_identity_axis_branches(path: &str, source: &str) -> Result<Vec<St
     let mut visitor = IdentityBranchVisitor {
         path,
         violations: Vec::new(),
+        errors: Vec::new(),
+        aliases: vec![HashMap::new()],
+        collections: vec![HashMap::new()],
+        return_axis: None,
     };
     visitor.visit_file(&file);
+    if !visitor.errors.is_empty() {
+        visitor.errors.sort();
+        return Err(visitor.errors.join("\n"));
+    }
     visitor.violations.sort();
     visitor.violations.dedup();
     Ok(visitor.violations)
@@ -973,6 +1211,204 @@ struct RawSurface {
     kind: &'static str,
     selector: String,
     content: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct IdentityFragment {
+    selector: String,
+    content: String,
+}
+
+fn identity_fragments_for_file(
+    path: &Path,
+    stable_path: &str,
+) -> Result<Vec<IdentityFragment>, String> {
+    let source = fs::read_to_string(path)
+        .map_err(|error| format!("failed to read {}: {error}", path.display()))?;
+    let extension = path
+        .extension()
+        .and_then(|value| value.to_str())
+        .unwrap_or("");
+    let mut fragments = match extension {
+        "rs" => rust_identity_fragments(stable_path, &source)?,
+        "json" => structured_json_inventory(stable_path, &source)?
+            .into_iter()
+            .map(identity_fragment_from_raw)
+            .collect(),
+        "toml" => structured_toml_inventory(stable_path, &source)?
+            .into_iter()
+            .map(identity_fragment_from_raw)
+            .collect(),
+        _ => text_surface_inventory(&source)
+            .into_iter()
+            .map(identity_fragment_from_raw)
+            .collect(),
+    };
+    fragments.sort_by(|left, right| left.selector.cmp(&right.selector));
+    if fragments
+        .windows(2)
+        .any(|pair| pair[0].selector == pair[1].selector)
+    {
+        return Err(format!(
+            "identity inventory produced duplicate selectors for {stable_path}"
+        ));
+    }
+    Ok(fragments)
+}
+
+fn identity_fragment_from_raw(surface: RawSurface) -> IdentityFragment {
+    IdentityFragment {
+        selector: format!("{}:{}", surface.kind, surface.selector),
+        content: surface.content,
+    }
+}
+
+fn rust_identity_fragments(path: &str, source: &str) -> Result<Vec<IdentityFragment>, String> {
+    let file =
+        syn::parse_file(source).map_err(|error| format!("failed to parse {path}: {error}"))?;
+    let mut collector = RustIdentityFragmentCollector::default();
+    if !file.attrs.is_empty() {
+        collector.fragments.push(IdentityFragment {
+            selector: "rust:file_attributes".to_string(),
+            content: file
+                .attrs
+                .iter()
+                .map(ToTokens::to_token_stream)
+                .collect::<proc_macro2::TokenStream>()
+                .to_string(),
+        });
+    }
+    collector.collect_items(&file.items, &[]);
+    let counts =
+        collector
+            .fragments
+            .iter()
+            .fold(HashMap::<String, usize>::new(), |mut counts, fragment| {
+                *counts.entry(fragment.selector.clone()).or_default() += 1;
+                counts
+            });
+    let mut duplicate_ordinals = HashMap::<String, usize>::new();
+    for fragment in &mut collector.fragments {
+        if counts.get(&fragment.selector).copied().unwrap_or_default() > 1 {
+            let base = fragment.selector.clone();
+            let digest = short_hash(&fragment.content);
+            let ordinal = duplicate_ordinals
+                .entry(format!("{base}@{digest}"))
+                .or_default();
+            fragment.selector = format!("{base}@{digest}:{}", *ordinal);
+            *ordinal += 1;
+        }
+    }
+    collector
+        .fragments
+        .sort_by(|left, right| left.selector.cmp(&right.selector));
+    Ok(collector.fragments)
+}
+
+#[derive(Default)]
+struct RustIdentityFragmentCollector {
+    fragments: Vec<IdentityFragment>,
+}
+
+impl RustIdentityFragmentCollector {
+    fn collect_items(&mut self, items: &[Item], module: &[String]) {
+        for item in items {
+            match item {
+                Item::Mod(item) if item.content.is_some() => {
+                    let selector = qualified(module, &format!("mod:{}", item.ident));
+                    let attributes = &item.attrs;
+                    let visibility = &item.vis;
+                    let identifier = &item.ident;
+                    self.push(
+                        format!("rust:{selector}"),
+                        quote::quote!(#(#attributes)* #visibility mod #identifier;),
+                    );
+                    let mut next = module.to_vec();
+                    next.push(item.ident.to_string());
+                    self.collect_items(
+                        &item.content.as_ref().expect("checked inline module").1,
+                        &next,
+                    );
+                }
+                Item::Impl(item) => {
+                    let trait_name = item
+                        .trait_
+                        .as_ref()
+                        .map(|(_, path, _)| path.to_token_stream().to_string())
+                        .unwrap_or_else(|| "inherent".to_string());
+                    let owner = qualified(
+                        module,
+                        &format!(
+                            "impl:{}:{}",
+                            short_hash(&trait_name),
+                            item.self_ty.to_token_stream()
+                        ),
+                    );
+                    for member in &item.items {
+                        let name = match member {
+                            ImplItem::Const(member) => format!("const:{}", member.ident),
+                            ImplItem::Fn(member) => format!("fn:{}", member.sig.ident),
+                            ImplItem::Type(member) => format!("type:{}", member.ident),
+                            ImplItem::Macro(member) => format!(
+                                "macro:{}",
+                                short_hash(&member.to_token_stream().to_string())
+                            ),
+                            ImplItem::Verbatim(member) => {
+                                format!("verbatim:{}", short_hash(&member.to_string()))
+                            }
+                            _ => format!(
+                                "item:{}",
+                                short_hash(&member.to_token_stream().to_string())
+                            ),
+                        };
+                        self.push(format!("rust:{owner}::{name}"), member.to_token_stream());
+                    }
+                }
+                _ => self.push(
+                    format!("rust:{}", identity_item_selector(item, module)),
+                    item.to_token_stream(),
+                ),
+            }
+        }
+    }
+
+    fn push(&mut self, selector: String, content: impl ToTokens) {
+        self.fragments.push(IdentityFragment {
+            selector,
+            content: content.to_token_stream().to_string(),
+        });
+    }
+}
+
+fn identity_item_selector(item: &Item, module: &[String]) -> String {
+    let label = match item {
+        Item::Const(item) => format!("const:{}", item.ident),
+        Item::Enum(item) => format!("enum:{}", item.ident),
+        Item::ExternCrate(item) => format!("extern:{}", item.ident),
+        Item::Fn(item) => format!("fn:{}", item.sig.ident),
+        Item::ForeignMod(item) => format!(
+            "foreign:{}",
+            short_hash(&item.to_token_stream().to_string())
+        ),
+        Item::Macro(item) => format!(
+            "macro:{}",
+            item.ident
+                .as_ref()
+                .map(ToString::to_string)
+                .unwrap_or_else(|| short_hash(&item.to_token_stream().to_string()))
+        ),
+        Item::Mod(item) => format!("mod:{}", item.ident),
+        Item::Static(item) => format!("static:{}", item.ident),
+        Item::Struct(item) => format!("struct:{}", item.ident),
+        Item::Trait(item) => format!("trait:{}", item.ident),
+        Item::TraitAlias(item) => format!("trait_alias:{}", item.ident),
+        Item::Type(item) => format!("type:{}", item.ident),
+        Item::Union(item) => format!("union:{}", item.ident),
+        Item::Use(item) => format!("use:{}", short_hash(&item.to_token_stream().to_string())),
+        Item::Verbatim(item) => format!("verbatim:{}", short_hash(&item.to_string())),
+        _ => format!("item:{}", short_hash(&item.to_token_stream().to_string())),
+    };
+    qualified(module, &label)
 }
 
 fn snapshot_for_file(path: &Path, stable_path: &str) -> Result<Vec<SurfaceSnapshot>, String> {
@@ -1471,43 +1907,229 @@ fn text_surface_inventory(source: &str) -> Vec<RawSurface> {
 struct IdentityBranchVisitor<'a> {
     path: &'a str,
     violations: Vec<String>,
+    errors: Vec<String>,
+    aliases: Vec<HashMap<String, &'static str>>,
+    collections: Vec<HashMap<String, Vec<String>>>,
+    return_axis: Option<&'static str>,
 }
 
 impl Visit<'_> for IdentityBranchVisitor<'_> {
+    fn visit_block(&mut self, node: &syn::Block) {
+        self.aliases.push(HashMap::new());
+        self.collections.push(HashMap::new());
+        syn::visit::visit_block(self, node);
+        self.aliases.pop();
+        self.collections.pop();
+    }
+
+    fn visit_local(&mut self, node: &syn::Local) {
+        if let syn::Pat::Ident(pattern) = &node.pat
+            && let Some(initializer) = &node.init
+        {
+            let name = pattern.ident.to_string();
+            if let Some(axis) = self.axis(&initializer.expr) {
+                self.aliases
+                    .last_mut()
+                    .expect("identity scope")
+                    .insert(name.clone(), axis);
+            }
+            let values = expression_strings(&initializer.expr);
+            if !values.is_empty() {
+                self.collections
+                    .last_mut()
+                    .expect("collection scope")
+                    .insert(name.clone(), values.clone());
+                if let Some(axis) = exact_identity_axis(&name) {
+                    self.record_values(axis, values);
+                }
+            }
+        }
+        syn::visit::visit_local(self, node);
+    }
+
     fn visit_expr_binary(&mut self, node: &ExprBinary) {
         if matches!(node.op, BinOp::Eq(_) | BinOp::Ne(_)) {
-            if let (Some(axis), Some(value)) =
-                (identity_axis(&node.left), expression_string(&node.right))
-            {
-                self.record(axis, &value);
+            if let Some(axis) = self.axis(&node.left) {
+                self.record_values(axis, expression_strings(&node.right));
             }
-            if let (Some(axis), Some(value)) =
-                (identity_axis(&node.right), expression_string(&node.left))
-            {
-                self.record(axis, &value);
+            if let Some(axis) = self.axis(&node.right) {
+                self.record_values(axis, expression_strings(&node.left));
             }
         }
         syn::visit::visit_expr_binary(self, node);
     }
 
+    fn visit_expr_method_call(&mut self, node: &syn::ExprMethodCall) {
+        let method = node.method.to_string();
+        if matches!(
+            method.as_str(),
+            "eq" | "ne" | "starts_with" | "ends_with" | "strip_prefix" | "strip_suffix"
+        ) {
+            if let Some(axis) = self.axis(&node.receiver) {
+                self.record_values(
+                    axis,
+                    node.args.iter().flat_map(expression_strings).collect(),
+                );
+            }
+            for argument in &node.args {
+                if let Some(axis) = self.axis(argument) {
+                    self.record_values(axis, expression_strings(&node.receiver));
+                }
+            }
+        }
+        if matches!(
+            method.as_str(),
+            "contains" | "get" | "get_mut" | "binary_search" | "binary_search_by_key"
+        ) {
+            for argument in &node.args {
+                if let Some(axis) = self.axis(argument) {
+                    self.record_values(axis, self.collection_values(&node.receiver));
+                }
+            }
+        }
+        if matches!(
+            method.as_str(),
+            "unwrap_or" | "get_or_insert" | "replace" | "then_some"
+        ) && let Some(axis) = self.axis(&node.receiver)
+        {
+            self.record_values(
+                axis,
+                node.args.iter().flat_map(expression_strings).collect(),
+            );
+        }
+        if method == "unwrap_or_else"
+            && let Some(axis) = self.axis(&node.receiver)
+        {
+            self.record_values(
+                axis,
+                node.args.iter().flat_map(expression_strings).collect(),
+            );
+        }
+        syn::visit::visit_expr_method_call(self, node);
+    }
+
     fn visit_expr_match(&mut self, node: &ExprMatch) {
-        if let Some(axis) = identity_axis(&node.expr) {
+        if let Some(axis) = self.axis(&node.expr) {
             for arm in &node.arms {
                 let mut strings = PatternStringVisitor::default();
                 strings.visit_pat(&arm.pat);
-                for value in strings.values {
-                    self.record(axis, &value);
-                }
+                self.record_values(axis, strings.values);
             }
         }
         syn::visit::visit_expr_match(self, node);
     }
+
+    fn visit_expr_macro(&mut self, node: &syn::ExprMacro) {
+        if node.mac.path.is_ident("matches") {
+            match syn::parse2::<MatchesExpression>(node.mac.tokens.clone()) {
+                Ok(matches) => {
+                    if let Some(axis) = self.axis(&matches.expression) {
+                        let mut strings = PatternStringVisitor::default();
+                        strings.visit_pat(&matches.pattern);
+                        self.record_values(axis, strings.values);
+                    }
+                }
+                Err(error) => self.errors.push(format!(
+                    "{}: failed to parse matches! identity expression: {error}",
+                    self.path
+                )),
+            }
+        }
+        syn::visit::visit_expr_macro(self, node);
+    }
+
+    fn visit_expr_struct(&mut self, node: &syn::ExprStruct) {
+        for field in &node.fields {
+            if let Member::Named(identifier) = &field.member
+                && let Some(axis) = exact_identity_axis(&identifier.to_string())
+            {
+                self.record_values(axis, expression_strings(&field.expr));
+            }
+        }
+        syn::visit::visit_expr_struct(self, node);
+    }
+
+    fn visit_expr_assign(&mut self, node: &syn::ExprAssign) {
+        if let Some(axis) = self.axis(&node.left) {
+            self.record_values(axis, expression_strings(&node.right));
+        }
+        syn::visit::visit_expr_assign(self, node);
+    }
+
+    fn visit_expr_return(&mut self, node: &syn::ExprReturn) {
+        if let (Some(axis), Some(expression)) = (self.return_axis, &node.expr) {
+            self.record_values(axis, expression_strings(expression));
+        }
+        syn::visit::visit_expr_return(self, node);
+    }
+
+    fn visit_item_const(&mut self, node: &syn::ItemConst) {
+        if let Some(axis) = exact_identity_axis(&node.ident.to_string()) {
+            self.record_values(axis, expression_strings(&node.expr));
+        }
+        syn::visit::visit_item_const(self, node);
+    }
+
+    fn visit_item_static(&mut self, node: &syn::ItemStatic) {
+        if let Some(axis) = exact_identity_axis(&node.ident.to_string()) {
+            self.record_values(axis, expression_strings(&node.expr));
+        }
+        syn::visit::visit_item_static(self, node);
+    }
+
+    fn visit_item_fn(&mut self, node: &syn::ItemFn) {
+        let previous = self.return_axis;
+        self.return_axis = identity_return_axis(&node.sig.ident.to_string());
+        if let Some(axis) = self.return_axis {
+            self.record_values(axis, block_tail_strings(&node.block));
+        }
+        syn::visit::visit_item_fn(self, node);
+        self.return_axis = previous;
+    }
+
+    fn visit_impl_item_fn(&mut self, node: &syn::ImplItemFn) {
+        let previous = self.return_axis;
+        self.return_axis = identity_return_axis(&node.sig.ident.to_string());
+        if let Some(axis) = self.return_axis {
+            self.record_values(axis, block_tail_strings(&node.block));
+        }
+        syn::visit::visit_impl_item_fn(self, node);
+        self.return_axis = previous;
+    }
 }
 
 impl IdentityBranchVisitor<'_> {
+    fn axis(&self, expression: &Expr) -> Option<&'static str> {
+        identity_axis(expression, &self.aliases)
+    }
+
+    fn collection_values(&self, expression: &Expr) -> Vec<String> {
+        let direct = expression_strings(expression);
+        if !direct.is_empty() {
+            return direct;
+        }
+        let Expr::Path(path) = expression else {
+            return Vec::new();
+        };
+        let Some(name) = path.path.get_ident().map(ToString::to_string) else {
+            return Vec::new();
+        };
+        self.collections
+            .iter()
+            .rev()
+            .find_map(|scope| scope.get(&name).cloned())
+            .unwrap_or_default()
+    }
+
+    fn record_values(&mut self, axis: &str, values: Vec<String>) {
+        for value in values {
+            self.record(axis, &value);
+        }
+    }
+
     fn record(&mut self, axis: &str, value: &str) {
         self.violations.push(format!(
-            "{}: built-in identity value {value:?} on axis {axis}",
+            "{}: raw identity string {value:?} on axis {axis}",
             self.path
         ));
     }
@@ -1524,33 +2146,142 @@ impl Visit<'_> for PatternStringVisitor {
     }
 }
 
-fn identity_axis(expression: &Expr) -> Option<&str> {
+struct MatchesExpression {
+    expression: Expr,
+    pattern: syn::Pat,
+    _guard: Option<Expr>,
+}
+
+impl Parse for MatchesExpression {
+    fn parse(input: ParseStream<'_>) -> syn::Result<Self> {
+        let expression = input.parse()?;
+        input.parse::<Token![,]>()?;
+        let pattern = syn::Pat::parse_multi_with_leading_vert(input)?;
+        let guard = if input.peek(Token![if]) {
+            input.parse::<Token![if]>()?;
+            Some(input.parse()?)
+        } else {
+            None
+        };
+        if input.peek(Token![,]) {
+            input.parse::<Token![,]>()?;
+        }
+        Ok(Self {
+            expression,
+            pattern,
+            _guard: guard,
+        })
+    }
+}
+
+fn identity_axis(
+    expression: &Expr,
+    aliases: &[HashMap<String, &'static str>],
+) -> Option<&'static str> {
     match expression {
         Expr::Field(field) => match &field.member {
             Member::Named(identifier) => exact_identity_axis(&identifier.to_string()),
             Member::Unnamed(_) => None,
         },
-        Expr::Path(path) => path
-            .path
-            .segments
-            .last()
-            .and_then(|segment| exact_identity_axis(&segment.ident.to_string())),
-        Expr::Paren(paren) => identity_axis(&paren.expr),
-        Expr::Reference(reference) => identity_axis(&reference.expr),
+        Expr::Path(path) => path.path.segments.last().and_then(|segment| {
+            let name = segment.ident.to_string();
+            exact_identity_axis(&name).or_else(|| {
+                aliases
+                    .iter()
+                    .rev()
+                    .find_map(|scope| scope.get(&name).copied())
+            })
+        }),
+        Expr::Paren(paren) => identity_axis(&paren.expr, aliases),
+        Expr::Group(group) => identity_axis(&group.expr, aliases),
+        Expr::Reference(reference) => identity_axis(&reference.expr, aliases),
+        Expr::Try(expression) => identity_axis(&expression.expr, aliases),
+        Expr::Await(expression) => identity_axis(&expression.base, aliases),
+        Expr::Cast(expression) => identity_axis(&expression.expr, aliases),
+        Expr::Unary(expression) => identity_axis(&expression.expr, aliases),
+        Expr::MethodCall(call)
+            if matches!(
+                call.method.to_string().as_str(),
+                "as_deref"
+                    | "as_ref"
+                    | "as_str"
+                    | "borrow"
+                    | "clone"
+                    | "deref"
+                    | "to_owned"
+                    | "trim"
+            ) =>
+        {
+            identity_axis(&call.receiver, aliases)
+        }
+        Expr::Call(call) if call.args.len() == 1 => identity_axis(&call.args[0], aliases),
         _ => None,
     }
 }
 
-fn expression_string(expression: &Expr) -> Option<String> {
+fn expression_strings(expression: &Expr) -> Vec<String> {
     match expression {
         Expr::Lit(literal) => match &literal.lit {
-            Lit::Str(value) => Some(value.value()),
-            _ => None,
+            Lit::Str(value) => vec![value.value()],
+            _ => Vec::new(),
         },
-        Expr::Paren(paren) => expression_string(&paren.expr),
-        Expr::Reference(reference) => expression_string(&reference.expr),
-        _ => None,
+        Expr::Array(array) => array.elems.iter().flat_map(expression_strings).collect(),
+        Expr::Tuple(tuple) => tuple.elems.iter().flat_map(expression_strings).collect(),
+        Expr::Paren(paren) => expression_strings(&paren.expr),
+        Expr::Group(group) => expression_strings(&group.expr),
+        Expr::Reference(reference) => expression_strings(&reference.expr),
+        Expr::Call(call) => call.args.iter().flat_map(expression_strings).collect(),
+        Expr::MethodCall(call)
+            if matches!(
+                call.method.to_string().as_str(),
+                "into" | "to_owned" | "to_string"
+            ) =>
+        {
+            expression_strings(&call.receiver)
+        }
+        Expr::Closure(closure) => expression_strings(&closure.body),
+        Expr::Block(block) => block_tail_strings(&block.block),
+        Expr::If(expression) => {
+            let mut values = block_tail_strings(&expression.then_branch);
+            if let Some((_, otherwise)) = &expression.else_branch {
+                values.extend(expression_strings(otherwise));
+            }
+            values
+        }
+        Expr::Match(expression) => expression
+            .arms
+            .iter()
+            .flat_map(|arm| expression_strings(&arm.body))
+            .collect(),
+        _ => Vec::new(),
     }
+}
+
+fn block_tail_strings(block: &syn::Block) -> Vec<String> {
+    block
+        .stmts
+        .last()
+        .and_then(|statement| match statement {
+            syn::Stmt::Expr(expression, None) => Some(expression_strings(expression)),
+            _ => None,
+        })
+        .unwrap_or_default()
+}
+
+fn identity_return_axis(name: &str) -> Option<&'static str> {
+    let lower = name.to_ascii_lowercase();
+    const PREFIXES: &[&str] = &[
+        "choose_",
+        "current_",
+        "default_",
+        "effective_",
+        "fallback_",
+        "resolve_",
+        "select_",
+    ];
+    PREFIXES
+        .iter()
+        .find_map(|prefix| lower.strip_prefix(prefix).and_then(exact_identity_axis))
 }
 
 fn exact_identity_axis(value: &str) -> Option<&'static str> {
@@ -1559,7 +2290,10 @@ fn exact_identity_axis(value: &str) -> Option<&'static str> {
         "package" => Some("package"),
         "profile" => Some("profile"),
         "project" => Some("project"),
+        "provider" => Some("provider"),
+        "resource" => Some("resource"),
         "server" => Some("server"),
+        "task" => Some("task"),
         "theme" => Some("theme"),
         _ => None,
     }
@@ -1587,6 +2321,13 @@ fn validate_stable_path(path: &str) -> Result<(), String> {
         return Err(format!("has unsafe stable_path {path}"));
     }
     Ok(())
+}
+
+fn is_test_identity_fragment(path: &str, selector: &str) -> bool {
+    path.contains("/tests/")
+        || path.ends_with("/tests.rs")
+        || selector.contains("::tests::")
+        || selector.starts_with("rust:tests::")
 }
 
 fn normalize_path(path: &Path) -> Result<String, String> {
@@ -1652,6 +2393,15 @@ author = "HS7097"
 content_sha256 = "{}"
 scope = ["surface.mapping"]
 
+[[approval]]
+id = "approval.issue44_r8b"
+repository = "HS7097/ActingCommand-Workflow"
+issue = 54
+comment_id = 5011350539
+author = "HS7097"
+content_sha256 = "{}"
+scope = ["identity.allowance", "surface.mapping"]
+
 [[concept]]
 id = "identity.game"
 status = "active"
@@ -1674,6 +2424,7 @@ source_issue = 44
 source_pr = 108
 "#,
             "a".repeat(64),
+            "b".repeat(64),
             "0".repeat(64)
         )
     }
@@ -1752,6 +2503,105 @@ source_pr = 108
                 .any(|item| item.contains("unknown_project_code"))
         );
         assert!(violations.iter().any(|item| item.contains("fixed_profile")));
+    }
+
+    #[test]
+    fn identity_branches_cover_nine_axes_and_propagation_forms() {
+        let source = r#"
+            struct Context {
+                game: String,
+                server: String,
+                project: String,
+                profile: String,
+                package: String,
+                resource: String,
+                task: String,
+                theme: String,
+                provider: String,
+            }
+
+            struct Defaults {
+                theme: String,
+                provider: String,
+            }
+
+            fn inspect(context: &Context) {
+                let selected = context.game.as_ref();
+                let servers = ["server.alpha", "server.beta"];
+                let package = "package.alpha";
+                let resource = "resource.alpha";
+                let task = "task.alpha";
+                let _ = selected.eq("game.alpha");
+                let _ = servers.contains(&context.server.as_str());
+                let _ = context.resource == "resource.direct";
+                let _ = context.task == "task.direct";
+                let _ = context.provider == "provider.direct";
+                let _ = matches!(context.project.as_ref(), "project.alpha" | "project.beta");
+                let _ = match context.profile.as_str() {
+                    "profile.alpha" => true,
+                    _ => false,
+                };
+                let _ = Defaults {
+                    theme: "theme.alpha".to_string(),
+                    provider: "provider.alpha".to_string(),
+                };
+            }
+
+            fn default_game() -> &'static str { "game.default" }
+        "#;
+        let violations = inspect_identity_axis_branches("fixture.rs", source).unwrap();
+        for axis in [
+            "game", "server", "project", "profile", "package", "resource", "task", "theme",
+            "provider",
+        ] {
+            assert!(
+                violations
+                    .iter()
+                    .any(|violation| violation.contains(&format!("axis {axis}"))),
+                "missing axis {axis}: {violations:#?}"
+            );
+        }
+        assert!(
+            violations
+                .iter()
+                .any(|violation| violation.contains("game.default"))
+        );
+    }
+
+    #[test]
+    fn typed_identity_and_neighboring_names_remain_allowed() {
+        let source = r#"
+            enum GameIdentity { Alpha, Beta }
+            struct Context { game: GameIdentity }
+
+            fn inspect(context: &Context) -> bool {
+                let provider_count = "neutral";
+                context.game == GameIdentity::Alpha && provider_count == "neutral"
+            }
+        "#;
+        assert!(
+            inspect_identity_axis_branches("fixture.rs", source)
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn guard_fixture_allowance_cannot_target_product_code() {
+        let source = format!(
+            "{}\n{}",
+            registry_source(),
+            identity_allowance_source(
+                "allowance.fixture",
+                "guard_fixture",
+                "crates/example/src/lib.rs",
+                &["maa"],
+                &"a".repeat(64),
+            )
+        );
+        let registry = parse_generic_domain_registry(&source).unwrap();
+        let error = validate_generic_domain_registry(&registry).unwrap_err();
+        assert!(error.contains("guard_fixture is outside the guard test directory"));
     }
 
     #[test]
@@ -1877,15 +2727,22 @@ source_pr = 108
 
         let snapshots = workspace_surface_snapshot(&root).unwrap();
         let mut registry = registry_for_snapshots(&snapshots);
-        let hash = format!("{:x}", Sha256::digest(fs::read(root.join(path)).unwrap()));
+        let fragment = identity_fragments_for_file(&root.join(path), path)
+            .unwrap()
+            .into_iter()
+            .find(|fragment| fragment.selector == "rust:fn:compile_maa_tasks")
+            .unwrap();
+        let hash = format!("{:x}", Sha256::digest(fragment.content.as_bytes()));
         registry.identity_allowance.push(IdentityAllowance {
             id: "allowance.technical".to_string(),
             kind: "technical_adapter".to_string(),
             exact_path: path.to_string(),
+            selector: "rust:fn:compile_maa_tasks".to_string(),
+            scope: vec!["identity.token".to_string()],
             tokens: vec!["maa".to_string()],
             sha256: hash,
             purpose: "Exact technical adapter boundary.".to_string(),
-            approval_comment_id: 5010683904,
+            approval_id: "approval.issue44_r8b".to_string(),
             source_issue: 44,
             source_pr: Some(111),
         });
@@ -1894,30 +2751,127 @@ source_pr = 108
 
         fs::write(root.join(path), "fn compile_maa_jobs() {}\n").unwrap();
         let error = validate_workspace_genericity(&root, &registry).unwrap_err();
-        assert!(error.contains("content hash drifted"));
+        assert!(error.contains("missing selector") || error.contains("fragment hash drifted"));
 
         let outside = "outside.rs";
         fs::write(root.join(outside), "fn compile_maa_tasks() {}\n").unwrap();
-        let outside_hash = format!(
-            "{:x}",
-            Sha256::digest(fs::read(root.join(outside)).unwrap())
-        );
+        let outside_fragment = identity_fragments_for_file(&root.join(outside), outside)
+            .unwrap()
+            .into_iter()
+            .find(|fragment| fragment.selector == "rust:fn:compile_maa_tasks")
+            .unwrap();
+        let outside_hash = format!("{:x}", Sha256::digest(outside_fragment.content.as_bytes()));
         let snapshots = workspace_surface_snapshot(&root).unwrap();
         let mut outside_registry = registry_for_snapshots(&snapshots);
         outside_registry.identity_allowance.push(IdentityAllowance {
             id: "allowance.outside".to_string(),
             kind: "technical_adapter".to_string(),
             exact_path: outside.to_string(),
+            selector: "rust:fn:compile_maa_tasks".to_string(),
+            scope: vec!["identity.token".to_string()],
             tokens: vec!["maa".to_string()],
             sha256: outside_hash,
             purpose: "Counterexample outside registered surfaces.".to_string(),
-            approval_comment_id: 5010683904,
+            approval_id: "approval.issue44_r8b".to_string(),
             source_issue: 44,
             source_pr: Some(111),
         });
         let error = validate_workspace_genericity(&root, &outside_registry).unwrap_err();
         assert!(error.contains("outside registered Runtime surfaces"));
 
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn identity_allowance_is_limited_to_one_exact_ast_fragment() {
+        let root = temporary_workspace("fragment-allowance");
+        write_workspace_manifest(&root, &["crates/example"]);
+        fs::create_dir_all(root.join("crates/example/src")).unwrap();
+        let path = "crates/example/src/lib.rs";
+        fs::write(
+            root.join(path),
+            "fn compile_maa_tasks() {}\nfn compile_maa_jobs() {}\n",
+        )
+        .unwrap();
+        create_required_roots(&root);
+        write_external_compat_manifest(&root);
+
+        let snapshots = workspace_surface_snapshot(&root).unwrap();
+        let mut registry = registry_for_snapshots(&snapshots);
+        let fragment = identity_fragments_for_file(&root.join(path), path)
+            .unwrap()
+            .into_iter()
+            .find(|fragment| fragment.selector == "rust:fn:compile_maa_tasks")
+            .unwrap();
+        registry.identity_allowance.push(IdentityAllowance {
+            id: "allowance.fragment".to_string(),
+            kind: "technical_adapter".to_string(),
+            exact_path: path.to_string(),
+            selector: fragment.selector,
+            scope: vec!["identity.token".to_string()],
+            tokens: vec!["maa".to_string()],
+            sha256: format!("{:x}", Sha256::digest(fragment.content.as_bytes())),
+            purpose: "Exact AST fragment counterexample.".to_string(),
+            approval_id: "approval.issue44_r8b".to_string(),
+            source_issue: 44,
+            source_pr: Some(112),
+        });
+
+        let error = validate_workspace_genericity(&root, &registry).unwrap_err();
+        assert!(error.contains("rust:fn:compile_maa_jobs"));
+        assert!(error.contains("project-specific word maa"));
+        assert!(!error.contains("rust:fn:compile_maa_tasks"));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn branch_allowance_is_limited_to_one_exact_test_fragment() {
+        let root = temporary_workspace("branch-allowance");
+        write_workspace_manifest(&root, &["crates/example"]);
+        fs::create_dir_all(root.join("crates/example/tests")).unwrap();
+        fs::create_dir_all(root.join("crates/example/src")).unwrap();
+        fs::write(
+            root.join("crates/example/src/lib.rs"),
+            "pub struct Marker;\n",
+        )
+        .unwrap();
+        let path = "crates/example/tests/identity.rs";
+        fs::write(
+            root.join(path),
+            r#"
+                fn first(game: &str) -> bool { game == "identity.alpha" }
+                fn second(game: &str) -> bool { game == "identity.beta" }
+            "#,
+        )
+        .unwrap();
+        create_required_roots(&root);
+        write_external_compat_manifest(&root);
+
+        let snapshots = workspace_surface_snapshot(&root).unwrap();
+        let mut registry = registry_for_snapshots(&snapshots);
+        let fragment = identity_fragments_for_file(&root.join(path), path)
+            .unwrap()
+            .into_iter()
+            .find(|fragment| fragment.selector == "rust:fn:first")
+            .unwrap();
+        registry.identity_allowance.push(IdentityAllowance {
+            id: "allowance.fragment".to_string(),
+            kind: "test_fixture".to_string(),
+            exact_path: path.to_string(),
+            selector: fragment.selector,
+            scope: vec!["identity.branch".to_string()],
+            tokens: Vec::new(),
+            sha256: format!("{:x}", Sha256::digest(fragment.content.as_bytes())),
+            purpose: "Exact branch fragment counterexample.".to_string(),
+            approval_id: "approval.issue44_r8b".to_string(),
+            source_issue: 44,
+            source_pr: Some(112),
+        });
+
+        let error = validate_workspace_genericity(&root, &registry).unwrap_err();
+        assert!(error.contains("rust:fn:second"));
+        assert!(error.contains("identity.beta"));
+        assert!(!error.contains("identity.alpha"));
         fs::remove_dir_all(root).unwrap();
     }
 
@@ -2049,10 +3003,12 @@ source_pr = 108
 id = {id:?}
 kind = {kind:?}
 exact_path = {exact_path:?}
+selector = "rust:fn:compile_maa_tasks"
+scope = ["identity.token"]
 tokens = [{tokens}]
 sha256 = {sha256:?}
 purpose = "Exact test allowance."
-approval_comment_id = 5010683904
+approval_id = "approval.issue44_r8b"
 source_issue = 44
 source_pr = 111
 "#
@@ -2063,15 +3019,29 @@ source_pr = 111
         GenericDomainRegistry {
             schema_version: GENERIC_DOMAIN_SCHEMA_VERSION.to_string(),
             surface_manifest: None,
-            approval: vec![SurfaceApproval {
-                id: "approval.issue44_r8".to_string(),
-                repository: "HS7097/ActingCommand-Workflow".to_string(),
-                issue: 54,
-                comment_id: 5011264343,
-                author: "HS7097".to_string(),
-                content_sha256: "a".repeat(64),
-                scope: vec!["surface.mapping".to_string()],
-            }],
+            approval: vec![
+                SurfaceApproval {
+                    id: "approval.issue44_r8".to_string(),
+                    repository: "HS7097/ActingCommand-Workflow".to_string(),
+                    issue: 54,
+                    comment_id: 5011264343,
+                    author: "HS7097".to_string(),
+                    content_sha256: "a".repeat(64),
+                    scope: vec!["surface.mapping".to_string()],
+                },
+                SurfaceApproval {
+                    id: "approval.issue44_r8b".to_string(),
+                    repository: "HS7097/ActingCommand-Workflow".to_string(),
+                    issue: 54,
+                    comment_id: 5011350539,
+                    author: "HS7097".to_string(),
+                    content_sha256: "b".repeat(64),
+                    scope: vec![
+                        "identity.allowance".to_string(),
+                        "surface.mapping".to_string(),
+                    ],
+                },
+            ],
             concept: vec![GenericConcept {
                 id: "structure.value".to_string(),
                 status: "active".to_string(),
