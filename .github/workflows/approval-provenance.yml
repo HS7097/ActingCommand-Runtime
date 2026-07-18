@@ -1,0 +1,52 @@
+name: Approval provenance
+
+on:
+  pull_request_target:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require Workflow read credential
+        env:
+          GH_TOKEN: ${{ secrets.ACTINGCOMMAND_WORKFLOW_READ_TOKEN }}
+        run: |
+          if [ -z "$GH_TOKEN" ]; then
+            echo "FATAL: ACTINGCOMMAND_WORKFLOW_READ_TOKEN is required" >&2
+            exit 1
+          fi
+
+      - name: Check out trusted base
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Fetch candidate object without executing it
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          git fetch --no-tags origin "pull/${PR_NUMBER}/head"
+          actual_head="$(git rev-parse FETCH_HEAD)"
+          if [ "$actual_head" != "$EXPECTED_HEAD" ]; then
+            echo "FATAL: fetched candidate $actual_head does not match $EXPECTED_HEAD" >&2
+            exit 1
+          fi
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Build verifier from trusted base
+        run: cargo build -p actingcommand-actinglab-architecture --bin approval-provenance-guard
+
+      - name: Verify external approval and exact surface delta
+        env:
+          GH_TOKEN: ${{ secrets.ACTINGCOMMAND_WORKFLOW_READ_TOKEN }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: target/debug/approval-provenance-guard --base "$BASE_SHA" --head "$HEAD_SHA"

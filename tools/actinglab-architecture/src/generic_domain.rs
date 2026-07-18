@@ -125,6 +125,12 @@ pub struct SurfaceApproval {
     pub issue: u64,
     pub comment_id: u64,
     pub author: String,
+    #[serde(default)]
+    pub author_id: Option<u64>,
+    #[serde(default)]
+    pub created_at: Option<String>,
+    #[serde(default)]
+    pub updated_at: Option<String>,
     pub content_sha256: String,
     pub scope: Vec<String>,
 }
@@ -321,6 +327,23 @@ pub fn validate_generic_domain_registry(registry: &GenericDomainRegistry) -> Res
                 "surface approval {} has untrusted author {}",
                 approval.id, approval.author
             ));
+        }
+        if approval.author_id == Some(0) {
+            errors.push(format!(
+                "surface approval {} has invalid numeric author id",
+                approval.id
+            ));
+        }
+        for (field, value) in [
+            ("created_at", approval.created_at.as_deref()),
+            ("updated_at", approval.updated_at.as_deref()),
+        ] {
+            if value.is_some_and(str::is_empty) {
+                errors.push(format!(
+                    "surface approval {} has empty {field}",
+                    approval.id
+                ));
+            }
         }
         if approval.issue == 0 || approval.comment_id == 0 {
             errors.push(format!(
@@ -4282,6 +4305,9 @@ source_pr = 111
                     issue: 54,
                     comment_id: 5011264343,
                     author: "HS7097".to_string(),
+                    author_id: None,
+                    created_at: None,
+                    updated_at: None,
                     content_sha256: "a".repeat(64),
                     scope: vec!["surface.mapping".to_string()],
                 },
@@ -4291,6 +4317,9 @@ source_pr = 111
                     issue: 54,
                     comment_id: 5011350539,
                     author: "HS7097".to_string(),
+                    author_id: None,
+                    created_at: None,
+                    updated_at: None,
                     content_sha256: "b".repeat(64),
                     scope: vec![
                         "identity.allowance".to_string(),

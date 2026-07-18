@@ -7,6 +7,9 @@ repository = "HS7097/ActingCommand-Workflow"
 issue = 54
 comment_id = 5011264343
 author = "HS7097"
+author_id = 103177863
+created_at = "2026-07-18T12:33:17Z"
+updated_at = "2026-07-18T12:33:17Z"
 content_sha256 = "4dcab0aaab511a64657b6ae9d7ec35fde78a418db04b3eebf9bc4ca82e956c77"
 scope = ["surface.mapping"]
 
@@ -16,6 +19,9 @@ repository = "HS7097/ActingCommand-Workflow"
 issue = 54
 comment_id = 5011350539
 author = "HS7097"
+author_id = 103177863
+created_at = "2026-07-18T13:01:42Z"
+updated_at = "2026-07-18T13:01:42Z"
 content_sha256 = "89fe4d69a3e0be4bda12b3731f5911eb065a7ff3f9b66f2bca7a782a7173b8bf"
 scope = ["identity.allowance", "surface.mapping"]
 
@@ -25,6 +31,9 @@ repository = "HS7097/ActingCommand-Workflow"
 issue = 54
 comment_id = 5011427079
 author = "HS7097"
+author_id = 103177863
+created_at = "2026-07-18T13:26:44Z"
+updated_at = "2026-07-18T13:26:44Z"
 content_sha256 = "df46ce291a20cbeba38cb1eb129a17f3fbfb9253badf24a8102a52cddb31478d"
 scope = ["identity.allowance", "surface.mapping", "workspace.discovery"]
 
@@ -34,6 +43,9 @@ repository = "HS7097/ActingCommand-Workflow"
 issue = 54
 comment_id = 5011483079
 author = "HS7097"
+author_id = 103177863
+created_at = "2026-07-18T13:44:34Z"
+updated_at = "2026-07-18T13:44:34Z"
 content_sha256 = "16caaae9dc5c45c9fad3d33b4c78c2b2686a5ecc4be70c063ac57b92b49439d5"
 scope = ["external.compat", "identity.allowance", "surface.mapping"]
 
@@ -43,7 +55,10 @@ repository = "HS7097/ActingCommand-Workflow"
 issue = 54
 comment_id = 5011549303
 author = "HS7097"
-content_sha256 = "64722ccf7830616b167005017606145d4f0e848eae8732a65ee681d29c1eae71"
+author_id = 103177863
+created_at = "2026-07-18T14:05:51Z"
+updated_at = "2026-07-18T14:05:51Z"
+content_sha256 = "4e3f7dfde3c2b3f1551a9c64e1d5c801d8191a5f09357a1ea93f20dee311d566"
 scope = ["compatibility.alias", "identity.allowance", "safety.effect", "surface.mapping"]
 
 [[approval]]
@@ -52,12 +67,15 @@ repository = "HS7097/ActingCommand-Workflow"
 issue = 54
 comment_id = 5011923710
 author = "HS7097"
+author_id = 103177863
+created_at = "2026-07-18T16:02:09Z"
+updated_at = "2026-07-18T16:02:09Z"
 content_sha256 = "09f3759ecb10f2a63c2c33dc109276ce25c9e482a8e6f3e8f3ae3bccd5314b5d"
 scope = ["approval.provenance", "compatibility.alias", "external.compat", "identity.allowance", "safety.effect", "surface.mapping", "workspace.discovery"]
 
 [surface_manifest]
 path = "tools/actinglab-architecture/generic-domain-surfaces-v2.jsonl"
-sha256 = "ff811b5eee2f579da4513e60ed4b81445f4f9fd33c81309c3fad1af9f84ae3fe"
+sha256 = "579789dc07a078b0de3678604829f99cc5c396c48d5b8c6b20e6bc0b7e7d2ac6"
 approval_id = "approval.issue44_r8"
 source_issue = 44
 source_pr = 112

@@ -64,3 +64,21 @@ only through `ExternalCompatReader`, which checks a typed capability before I/O 
 returned by the read.
 
 The snapshot defines the A0 completion denominator. Its pipeline exemption table may only shrink after A0.
+
+Verify approval records against the private Workflow repository and independently derive the
+protected base-to-head surface delta from exact commits:
+
+```text
+cargo run -p actingcommand-actinglab-architecture --bin approval-provenance-guard -- --base <full-base-sha> --head <full-head-sha>
+```
+
+The command requires an authenticated `gh` session with read access to
+`HS7097/ActingCommand-Workflow`. Missing authentication, API/network failure, a false comment ID,
+author or timestamp drift, body-hash drift, and an out-of-scope surface delta all fail the gate.
+The base and head must be full commit SHAs in one ancestry chain; both are inspected through
+temporary detached worktrees so uncommitted candidate state cannot become evidence.
+
+The protected `pull_request_target` workflow builds this verifier only from the PR base and never
+executes candidate code. Configure `ACTINGCOMMAND_WORKFLOW_READ_TOKEN` as a fine-grained read-only
+repository secret for the private Workflow repository; an absent or unusable credential fails the
+job instead of skipping approval verification.
