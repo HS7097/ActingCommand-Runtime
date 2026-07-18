@@ -3351,12 +3351,12 @@ fn enabled_performance_monitor_collects_runtime_capture_pipeline_events() {
     let state = Arc::new(FakeState::default());
     let host = RuntimeHost::start(
         config(&root).with_performance_monitor(PerformanceMonitorConfig::default()),
-        Arc::new(FakeProvider::one("ak.cn", instance_id(), state)),
+        Arc::new(FakeProvider::one("node.alpha", instance_id(), state)),
     )
     .expect("runtime host");
     let mut client = TestClient::connect(&host);
     let request = client.request(RuntimeOperation::ObserveReadonly {
-        instance_alias: "ak.cn".to_owned(),
+        instance_alias: "node.alpha".to_owned(),
     });
     assert_eq!(
         client.send(&request).state(),
@@ -3364,7 +3364,7 @@ fn enabled_performance_monitor_collects_runtime_capture_pipeline_events() {
     );
     let observed_at_unix_ms = unix_ms_now().expect("wall clock");
     let context = host
-        .performance_context_for_test("ak.cn", observed_at_unix_ms)
+        .performance_context_for_test("node.alpha", observed_at_unix_ms)
         .expect("performance context");
     assert!(context.max_capture_latency_ms.is_some());
     assert!(context.max_recognition_latency_ms.is_some());
@@ -4459,7 +4459,7 @@ fn runtime_rejects_forged_non_lab_resource_authoring_ingress_without_ledger_effe
 #[test]
 fn typed_client_action_is_idempotent_and_public_projection_hides_the_value() {
     let root = TempDir::new().expect("tempdir");
-    let host = host_with_state(&root, "ak.cn", Arc::new(FakeState::default()));
+    let host = host_with_state(&root, "node.alpha", Arc::new(FakeState::default()));
     let mut client = TestClient::connect(&host);
     let secret_hash = format!("sha256:{}", "e".repeat(64));
     let request = client.request(RuntimeOperation::RecordClientAction {
@@ -4467,7 +4467,7 @@ fn typed_client_action_is_idempotent_and_public_projection_hides_the_value() {
             "settings",
             "account_token",
             ClientActionKind::Input,
-            Some("ak.cn".to_owned()),
+            Some("node.alpha".to_owned()),
             Some(ClientActionValue::Redacted {
                 sha256: secret_hash.clone(),
                 byte_count: 24,

@@ -1951,12 +1951,12 @@ mod tests {
             ledger_position: 1,
             context: InstanceFactContext {
                 instance_id: "envinst_a".to_string(),
-                game_id: "arknights".to_string(),
-                server_id: "cn".to_string(),
+                game_id: "fixture-game-a".to_string(),
+                server_id: "region-a".to_string(),
             },
             records: vec![FactRecord {
                 scope: FactScope::Server {
-                    server_id: "cn".to_string(),
+                    server_id: "region-a".to_string(),
                 },
                 key: "env.ui_theme".to_string(),
                 content: FactContent::Inline {

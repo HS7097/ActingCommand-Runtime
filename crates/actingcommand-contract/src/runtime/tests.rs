@@ -1025,7 +1025,7 @@ fn client_action_and_approval_operations_are_closed_typed_contracts() {
         "overview",
         "refresh",
         ClientActionKind::Button,
-        Some("ak.cn".to_owned()),
+        Some("node.alpha".to_owned()),
         None,
     )
     .expect("client action");

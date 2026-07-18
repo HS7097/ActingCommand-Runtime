@@ -414,7 +414,7 @@ fn typed_client_records_client_actions_and_approval_decisions_through_runtime() 
                 "overview",
                 "refresh",
                 ClientActionKind::Button,
-                Some("ak.cn".to_owned()),
+                Some("node.a".to_owned()),
                 None,
             )
             .expect("client action"),
