@@ -32,11 +32,20 @@ Print a pending item-level surface inventory for registry review:
 cargo run -p actingcommand-actinglab-architecture --bin generic-domain-guard -- --snapshot
 ```
 
+Print exact AST and structured fragments that require an identity allowance review:
+
+```text
+cargo run -p actingcommand-actinglab-architecture --bin generic-domain-guard -- --identity-allowance-candidates
+```
+
 The v2 registry lives in `generic-domain-v2.toml`; its content-addressed item manifest lives in
 `generic-domain-surfaces-v2.jsonl`. Rust public and wire items, `closed_code!` variants and wire
 values, CLI/serde attributes, structured schema values, and protected text records receive stable
 surface IDs. Snapshot output is inventory evidence only. It does not approve new concepts or
 surfaces, and refreshing the manifest without a matching approved mapping is not an acceptance path.
+Identity allowances bind one exact file and AST/structured selector to a fragment hash, purpose,
+scope, and content-addressed approval. They cannot authorize another function or field in the same
+file. Raw strings on the nine identity axes are rejected; typed identity comparisons remain valid.
 
 Validate exact files, hashes, provenance, and allowed scopes in the isolated compatibility zone:
 

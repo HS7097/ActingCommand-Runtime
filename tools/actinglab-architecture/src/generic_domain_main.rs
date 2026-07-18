@@ -6,7 +6,7 @@ use std::process::ExitCode;
 
 use actingcommand_actinglab_architecture::generic_domain::{
     GENERIC_DOMAIN_REGISTRY_PATH, load_generic_domain_registry, validate_workspace_genericity,
-    workspace_surface_snapshot,
+    workspace_identity_allowance_candidates, workspace_surface_snapshot,
 };
 
 fn main() -> ExitCode {
@@ -38,7 +38,20 @@ fn run() -> Result<(), String> {
             );
             Ok(())
         }
-        _ => Err("usage: generic-domain-guard <--check|--snapshot>".to_string()),
+        [flag] if flag == "--identity-allowance-candidates" => {
+            let candidates = workspace_identity_allowance_candidates(&root)?;
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&candidates).map_err(|error| format!(
+                    "failed to serialize allowance candidates: {error}"
+                ))?
+            );
+            Ok(())
+        }
+        _ => Err(
+            "usage: generic-domain-guard <--check|--snapshot|--identity-allowance-candidates>"
+                .to_string(),
+        ),
     }
 }
 
