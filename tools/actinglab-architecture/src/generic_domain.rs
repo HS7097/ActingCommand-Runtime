@@ -7,6 +7,7 @@ use std::fs;
 use std::path::{Component, Path, PathBuf};
 use std::process::Command;
 
+use proc_macro2::{TokenStream, TokenTree};
 use quote::ToTokens;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -19,8 +20,8 @@ use syn::{
 
 use crate::external_compat::{EXTERNAL_COMPAT_MANIFEST_PATH, validated_external_compat_paths};
 use crate::{
-    inspect_generic_runtime_identity, inspect_generic_runtime_identity_with_allowances,
-    known_project_identity_tokens,
+    identifier_words, inspect_generic_runtime_identity,
+    inspect_generic_runtime_identity_with_allowances, known_project_identity_tokens,
 };
 
 pub const GENERIC_DOMAIN_SCHEMA_VERSION: &str = "actingcommand.generic-domain.v2";
@@ -2739,28 +2740,32 @@ impl Visit<'_> for IdentityBranchVisitor<'_> {
 
     fn visit_expr_binary(&mut self, node: &ExprBinary) {
         if matches!(node.op, BinOp::Eq(_) | BinOp::Ne(_)) {
-            if let Some(axis) = self.axis(&node.left) {
-                self.record_values(axis, expression_strings(&node.right));
+            for axis in self.comparison_axes(&node.left) {
+                self.record_values(axis, wrapped_literal_strings(&node.right));
             }
-            if let Some(axis) = self.axis(&node.right) {
-                self.record_values(axis, expression_strings(&node.left));
+            for axis in self.comparison_axes(&node.right) {
+                self.record_values(axis, wrapped_literal_strings(&node.left));
             }
         }
         syn::visit::visit_expr_binary(self, node);
     }
 
     fn visit_expr_method_call(&mut self, node: &syn::ExprMethodCall) {
-        if let Some(axis) = self.axis(&node.receiver) {
+        if !node.args.is_empty()
+            && let Some(axis) = self.axis(&node.receiver)
+        {
             self.record_values(
                 axis,
-                node.args.iter().flat_map(expression_strings).collect(),
+                node.args.iter().flat_map(wrapped_literal_strings).collect(),
             );
         }
         let receiver_values = self.collection_values(&node.receiver);
         for argument in &node.args {
-            if let Some(axis) = self.axis(argument) {
-                self.record_values(axis, receiver_values.clone());
-                self.record_values(axis, expression_strings(&node.receiver));
+            if !receiver_values.is_empty() {
+                for axis in self.comparison_axes(argument) {
+                    self.record_values(axis, receiver_values.clone());
+                    self.record_values(axis, wrapped_literal_strings(&node.receiver));
+                }
             }
             if !matches!(argument, Expr::Closure(_)) {
                 continue;
@@ -2950,6 +2955,22 @@ impl IdentityBranchVisitor<'_> {
             "{}: raw identity string {value:?} on axis {axis}",
             self.path
         ));
+    }
+
+    fn comparison_axes(&mut self, expression: &Expr) -> Vec<&'static str> {
+        let mut axes = self.axis(expression).into_iter().collect::<Vec<_>>();
+        for (macro_path, axis) in
+            unsupported_identity_constructs(expression, &self.aliases, &self.non_identity)
+        {
+            self.violations.push(format!(
+                "{}: unsupported identity-axis macro {macro_path} on axis {axis}",
+                self.path
+            ));
+            axes.push(axis);
+        }
+        axes.sort();
+        axes.dedup();
+        axes
     }
 }
 
@@ -3156,6 +3177,186 @@ fn literal_strings_in_expression(expression: &Expr) -> Vec<String> {
     visitor.values.sort();
     visitor.values.dedup();
     visitor.values
+}
+
+fn wrapped_literal_strings(expression: &Expr) -> Vec<String> {
+    match expression {
+        Expr::Lit(literal) => match &literal.lit {
+            Lit::Str(value) => vec![value.value()],
+            _ => Vec::new(),
+        },
+        Expr::Array(array) => array
+            .elems
+            .iter()
+            .flat_map(wrapped_literal_strings)
+            .collect(),
+        Expr::Tuple(tuple) => tuple
+            .elems
+            .iter()
+            .flat_map(wrapped_literal_strings)
+            .collect(),
+        Expr::Paren(expression) => wrapped_literal_strings(&expression.expr),
+        Expr::Group(expression) => wrapped_literal_strings(&expression.expr),
+        Expr::Reference(expression) => wrapped_literal_strings(&expression.expr),
+        Expr::Try(expression) => wrapped_literal_strings(&expression.expr),
+        Expr::Await(expression) => wrapped_literal_strings(&expression.base),
+        Expr::Cast(expression) => wrapped_literal_strings(&expression.expr),
+        Expr::Unary(expression) => wrapped_literal_strings(&expression.expr),
+        Expr::Call(expression) => expression
+            .args
+            .iter()
+            .flat_map(wrapped_literal_strings)
+            .collect(),
+        Expr::MethodCall(expression) => {
+            let mut values = wrapped_literal_strings(&expression.receiver);
+            values.extend(expression.args.iter().flat_map(wrapped_literal_strings));
+            values
+        }
+        Expr::Macro(expression) => macro_string_literals(&expression.mac.tokens),
+        _ => Vec::new(),
+    }
+}
+
+fn unsupported_macro_identity_axes(
+    expression: &syn::Macro,
+    aliases: &[HashMap<String, &'static str>],
+    non_identity: &[HashSet<String>],
+) -> Vec<&'static str> {
+    if expression.path.is_ident("matches") {
+        return Vec::new();
+    }
+    let mut names = Vec::new();
+    macro_identity_names(expression.tokens.clone(), &mut names);
+    let mut axes = names
+        .into_iter()
+        .filter_map(|name| resolve_identity_name(&name, aliases, non_identity))
+        .collect::<Vec<_>>();
+    axes.sort();
+    axes.dedup();
+    axes
+}
+
+fn unsupported_identity_constructs(
+    expression: &Expr,
+    aliases: &[HashMap<String, &'static str>],
+    non_identity: &[HashSet<String>],
+) -> Vec<(String, &'static str)> {
+    match expression {
+        Expr::Macro(expression) => {
+            unsupported_macro_identity_axes(&expression.mac, aliases, non_identity)
+                .into_iter()
+                .map(|axis| (expression.mac.path.to_token_stream().to_string(), axis))
+                .collect()
+        }
+        Expr::Paren(expression) => {
+            unsupported_identity_constructs(&expression.expr, aliases, non_identity)
+        }
+        Expr::Group(expression) => {
+            unsupported_identity_constructs(&expression.expr, aliases, non_identity)
+        }
+        Expr::Reference(expression) => {
+            unsupported_identity_constructs(&expression.expr, aliases, non_identity)
+        }
+        Expr::Try(expression) => {
+            unsupported_identity_constructs(&expression.expr, aliases, non_identity)
+        }
+        Expr::Await(expression) => {
+            unsupported_identity_constructs(&expression.base, aliases, non_identity)
+        }
+        Expr::Cast(expression) => {
+            unsupported_identity_constructs(&expression.expr, aliases, non_identity)
+        }
+        Expr::Unary(expression) => {
+            unsupported_identity_constructs(&expression.expr, aliases, non_identity)
+        }
+        Expr::MethodCall(expression) => {
+            unsupported_identity_constructs(&expression.receiver, aliases, non_identity)
+        }
+        Expr::Call(expression) if expression.args.len() == 1 => {
+            unsupported_identity_constructs(&expression.args[0], aliases, non_identity)
+        }
+        _ => Vec::new(),
+    }
+}
+
+fn macro_identity_names(tokens: TokenStream, names: &mut Vec<String>) {
+    for token in tokens {
+        match token {
+            TokenTree::Group(group) => macro_identity_names(group.stream(), names),
+            TokenTree::Ident(identifier) => names.push(identifier.to_string()),
+            TokenTree::Literal(literal) => {
+                let Ok(Lit::Str(value)) = syn::parse_str::<Lit>(&literal.to_string()) else {
+                    continue;
+                };
+                names.extend(braced_identifiers(&value.value()));
+            }
+            TokenTree::Punct(_) => {}
+        }
+    }
+}
+
+fn macro_string_literals(tokens: &TokenStream) -> Vec<String> {
+    fn collect(tokens: TokenStream, values: &mut Vec<String>) {
+        for token in tokens {
+            match token {
+                TokenTree::Group(group) => collect(group.stream(), values),
+                TokenTree::Literal(literal) => {
+                    if let Ok(Lit::Str(value)) = syn::parse_str::<Lit>(&literal.to_string()) {
+                        values.push(value.value());
+                    }
+                }
+                TokenTree::Ident(_) | TokenTree::Punct(_) => {}
+            }
+        }
+    }
+
+    let mut values = Vec::new();
+    collect(tokens.clone(), &mut values);
+    values
+}
+
+fn braced_identifiers(value: &str) -> Vec<String> {
+    let bytes = value.as_bytes();
+    let mut names = Vec::new();
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index] != b'{' {
+            index += 1;
+            continue;
+        }
+        if bytes.get(index + 1) == Some(&b'{') {
+            index += 2;
+            continue;
+        }
+        let start = index + 1;
+        let Some(relative_end) = bytes[start..].iter().position(|byte| *byte == b'}') else {
+            break;
+        };
+        let field = &value[start..start + relative_end];
+        let binding = field
+            .split([':', '!', '.', '['])
+            .next()
+            .unwrap_or_default()
+            .trim();
+        names.extend(identifier_words(binding));
+        index = start + relative_end + 1;
+    }
+    names
+}
+
+fn resolve_identity_name(
+    name: &str,
+    aliases: &[HashMap<String, &'static str>],
+    non_identity: &[HashSet<String>],
+) -> Option<&'static str> {
+    if non_identity.iter().rev().any(|scope| scope.contains(name)) {
+        return None;
+    }
+    aliases
+        .iter()
+        .rev()
+        .find_map(|scope| scope.get(name).copied())
+        .or_else(|| exact_identity_axis(name))
 }
 
 fn block_tail_strings(block: &syn::Block) -> Vec<String> {
@@ -3498,14 +3699,58 @@ source_pr = 108
     }
 
     #[test]
+    fn identity_branches_fail_closed_for_macro_and_argument_wrappers() {
+        let source = r#"
+            fn inspect(game: &str, server: &str) {
+                let selected = game;
+                let _ = format!("{game}") == "game.formatted";
+                let _ = format!("{selected}") == "game.aliased";
+                let _ = identity_wrapper!(server) == "server.macro";
+                let _ = game.bytes().eq("game.bytes".bytes());
+                let _ = game
+                    .as_bytes()
+                    .iter()
+                    .copied()
+                    .eq("game.deep".bytes().rev());
+            }
+        "#;
+        let violations = inspect_identity_axis_branches("fixture.rs", source).unwrap();
+        for value in [
+            "game.formatted",
+            "game.aliased",
+            "server.macro",
+            "game.bytes",
+            "game.deep",
+        ] {
+            assert!(
+                violations.iter().any(|violation| violation.contains(value)),
+                "missing {value}: {violations:#?}"
+            );
+        }
+        assert!(
+            violations
+                .iter()
+                .any(|violation| violation.contains("unsupported identity-axis macro format")),
+            "format! was not rejected fail-closed: {violations:#?}"
+        );
+        assert!(
+            violations.iter().any(|violation| {
+                violation.contains("unsupported identity-axis macro identity_wrapper")
+            }),
+            "arbitrary identity macro was not rejected fail-closed: {violations:#?}"
+        );
+    }
+
+    #[test]
     fn typed_identity_and_neighboring_names_remain_allowed() {
         let source = r#"
             enum GameIdentity { Alpha, Beta }
             struct Context { game: GameIdentity }
 
-            fn inspect(context: &Context) -> bool {
+            fn inspect(context: &Context, game: GameIdentity) -> bool {
                 let provider_count = "neutral";
-                context.game == GameIdentity::Alpha && provider_count == "neutral"
+                let formatted = format!("{game:?}") == "neutral";
+                context.game == GameIdentity::Alpha && provider_count == "neutral" && !formatted
             }
         "#;
         assert!(

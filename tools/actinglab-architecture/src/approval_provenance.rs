@@ -44,6 +44,12 @@ const R9_SCOPES: &[&str] = &[
     "surface.mapping",
     "workspace.discovery",
 ];
+const R10_SCOPES: &[&str] = &[
+    "approval.provenance",
+    "identity.allowance",
+    "surface.mapping",
+    "workspace.discovery",
+];
 
 static WORKTREE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
@@ -257,6 +263,7 @@ fn trusted_comment_scopes(comment_id: u64) -> Result<&'static [&'static str], St
         5011483079 => Ok(R8D_SCOPES),
         5011549303 => Ok(R8E_SCOPES),
         5011923710 => Ok(R9_SCOPES),
+        5012656084 => Ok(R10_SCOPES),
         _ => Err(format!(
             "approval comment {comment_id} has no trusted scope binding"
         )),
