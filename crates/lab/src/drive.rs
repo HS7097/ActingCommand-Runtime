@@ -238,8 +238,13 @@ impl<P: LabPorts> Lab<P> {
                 start.page, target_page
             ))
         })?;
+        graph
+            .validate_route_effects(&route)
+            .map_err(drive_decision_error)?;
         if !request.allow_destructive {
-            graph.validate_route(&route).map_err(drive_decision_error)?;
+            graph
+                .validate_route_destructive_overlap(&route)
+                .map_err(drive_decision_error)?;
         }
         let action_ids = route
             .iter()

@@ -46,9 +46,18 @@ author = "HS7097"
 content_sha256 = "64722ccf7830616b167005017606145d4f0e848eae8732a65ee681d29c1eae71"
 scope = ["compatibility.alias", "identity.allowance", "safety.effect", "surface.mapping"]
 
+[[approval]]
+id = "approval.issue44_r9"
+repository = "HS7097/ActingCommand-Workflow"
+issue = 54
+comment_id = 5011923710
+author = "HS7097"
+content_sha256 = "09f3759ecb10f2a63c2c33dc109276ce25c9e482a8e6f3e8f3ae3bccd5314b5d"
+scope = ["approval.provenance", "compatibility.alias", "external.compat", "identity.allowance", "safety.effect", "surface.mapping", "workspace.discovery"]
+
 [surface_manifest]
 path = "tools/actinglab-architecture/generic-domain-surfaces-v2.jsonl"
-sha256 = "3e36fbddd4426755fa28f110fb68a6e62dc4e0e6e8395eaac43fa62875567c79"
+sha256 = "c44529cef2d67e1978dfa7658695e340eaa6ef4ab59d862fa7502e7c461c66a6"
 approval_id = "approval.issue44_r8"
 source_issue = 44
 source_pr = 112
@@ -2237,6 +2246,19 @@ purpose = "Allows neutral identity fixture values in this exact test fragment."
 approval_id = "approval.issue44_r8b"
 source_issue = 44
 source_pr = 113
+
+[[identity_allowance]]
+id = "allowance.fragment_11427bd10c0869357d81de4c1d4b5c0e0b47d4f5"
+kind = "test_fixture"
+exact_path = "crates/resource-tooling/src/resource_convert/tests.rs"
+selector = "rust:fn:build_navigation_marks_missing_effect_unclassified"
+scope = ["identity.branch","identity.token"]
+tokens = ["maa"]
+sha256 = "17732c0105d6c686056d2fe585d9f001126c6f76a8e8d8ecc1ae7357640564e9"
+purpose = "Allows neutral identity fixture values in this exact test fragment."
+approval_id = "approval.issue44_r9"
+source_issue = 44
+source_pr = 117
 
 [[identity_allowance]]
 id = "allowance.fragment_14870f25cf3f548bae98c668e41602b749f33758"
@@ -4468,11 +4490,11 @@ exact_path = "apps/actinglab/src/main.rs"
 selector = "rust:fn:resource_upstream_root"
 scope = ["identity.token"]
 tokens = ["alas"]
-sha256 = "8a993fbde1fcea1c81c22e3735303f26c6c31d899c43cfba2399a3e02b892a79"
+sha256 = "b478838315963cc51ff91f29a7d733035603db722f6f7b5b76c67ba5a6d3e5a8"
 purpose = "Allows reviewed upstream interoperability tokens in this exact AST fragment."
-approval_id = "approval.issue44_r8e"
+approval_id = "approval.issue44_r9"
 source_issue = 44
-source_pr = 116
+source_pr = 117
 
 [[identity_allowance]]
 id = "allowance.fragment_a4c1fdee11758887683064fdd93dfb34451aac22"
@@ -4832,11 +4854,11 @@ exact_path = "apps/actinglab/src/main.rs"
 selector = "rust:tests::fn:resource_upstream_commands_preserve_legacy_cli_aliases"
 scope = ["identity.token"]
 tokens = ["alas"]
-sha256 = "2f917fa8f0955aed6529d04eedff9194b01dd038534ec729f0ddd9d8c8425473"
+sha256 = "dde7253198b019c6a28657106815ff792985b61d05d8b4ab81d683d02351ce01"
 purpose = "Allows neutral identity fixture values in this exact test fragment."
-approval_id = "approval.issue44_r8e"
+approval_id = "approval.issue44_r9"
 source_issue = 44
-source_pr = 116
+source_pr = 117
 
 [[identity_allowance]]
 id = "allowance.fragment_c1928f0136fdf9ed63904740cb5b5c7e41cef773"

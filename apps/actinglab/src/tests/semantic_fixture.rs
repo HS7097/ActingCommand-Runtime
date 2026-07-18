@@ -120,6 +120,13 @@ pub(super) fn seal_semantic_fixture(
 }
 
 pub(super) fn semantic_resource_root(include_destructive_overlap: bool) -> SemanticFixture {
+    semantic_resource_root_with_effect(include_destructive_overlap, "navigation_only")
+}
+
+pub(super) fn semantic_resource_root_with_effect(
+    include_destructive_overlap: bool,
+    recovery_effect: &str,
+) -> SemanticFixture {
     let temp = TempDir::new().unwrap();
     let recognition = temp.path().join("recognition");
     let navigation = temp.path().join("navigation");
@@ -166,14 +173,14 @@ pub(super) fn semantic_resource_root(include_destructive_overlap: bool) -> Seman
                     "id":"home_to_target",
                     "from_page":"sample/home",
                     "to_page":"sample/target",
-                    "effect":"navigation_only",
+                    "effect":"{recovery_effect}",
                     "click":{{"kind":"rect","x":10,"y":20,"width":4,"height":6}}
                 }},
                 {{
                     "id":"target_to_home",
                     "from_page":"sample/target",
                     "to_page":"sample/home",
-                    "effect":"navigation_only",
+                    "effect":"{recovery_effect}",
                     "click":{{"kind":"point","point":"2,3"}}
                 }}],
                 "destructive_actions":{destructive}

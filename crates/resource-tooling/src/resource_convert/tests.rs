@@ -304,6 +304,41 @@ fn selected_build_prunes_nonresident_page_rules_and_soft_targets() {
 }
 
 #[test]
+fn build_navigation_marks_missing_effect_unclassified() {
+    let converter = OperationConverter {
+        root: PathBuf::from("."),
+        game: "game_alpha".to_string(),
+        server: "region-a".to_string(),
+        locale: "en".to_string(),
+        coordinate_space: json!({"width":1280,"height":720}),
+        defaults: json!({"template_threshold":0.9}),
+        resource_ids: HashSet::new(),
+        bundles: vec![Bundle {
+            task_id: "open_terminal".to_string(),
+            dir: PathBuf::from("operations/open_terminal"),
+            data: json!({
+                "operations": [{
+                    "id":"home_to_terminal",
+                    "from":"home",
+                    "to":"terminal",
+                    "click":{"kind":"point","x":10,"y":20}
+                }]
+            }),
+        }],
+        existing_navigation: None,
+        maa_task_overlays: HashMap::new(),
+    };
+
+    let navigation = converter.build_navigation().expect("navigation");
+    assert_eq!(
+        navigation
+            .pointer("/navigation/0/effect")
+            .and_then(Value::as_str),
+        Some("unclassified")
+    );
+}
+
+#[test]
 fn color_check_region_is_flattened() {
     let input = json!({
         "region":{"mode":"rect","rect":{"x":1,"y":2,"width":3,"height":4}},
