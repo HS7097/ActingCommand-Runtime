@@ -21,8 +21,8 @@ fn package_family_exposes_typed_requests_and_responses() {
         source: PackageSource::Local(PathBuf::from("resources")),
         temporary_root: PathBuf::from("target/tmp"),
         task_id: "task".to_string(),
-        game: Some("arknights".to_string()),
-        server: Some("cn".to_string()),
+        game: Some("game_alpha".to_string()),
+        server: Some("region-a".to_string()),
         locale: None,
         package_id: None,
         execution_mode: None,
@@ -38,8 +38,8 @@ fn package_family_exposes_typed_requests_and_responses() {
     };
     let _convert = ResourceConvertRequest {
         repo: PathBuf::from("resources"),
-        game: Some("arknights".to_string()),
-        server: Some("cn".to_string()),
+        game: Some("game_alpha".to_string()),
+        server: Some("region-a".to_string()),
         locale: Some("zh-CN".to_string()),
         maa_tasks_root: None,
         dry_run: true,

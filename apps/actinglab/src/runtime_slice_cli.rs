@@ -83,7 +83,7 @@ mod tests {
             "--state-root".to_string(),
             "state".to_string(),
             "--instance".to_string(),
-            "ak.cn".to_string(),
+            "instance.primary".to_string(),
             "--serial".to_string(),
             "127.0.0.1:16416".to_string(),
         ])

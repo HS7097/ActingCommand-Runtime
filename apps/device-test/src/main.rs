@@ -2928,7 +2928,7 @@ mod tests {
         let (_, commands) = parse_args([
             "runner".to_string(),
             "--profile".to_string(),
-            "ba.json".to_string(),
+            "profile-primary.json".to_string(),
             "--run-root".to_string(),
             "runs".to_string(),
             "--capture".to_string(),
@@ -2939,7 +2939,7 @@ mod tests {
             commands,
             vec![DeviceCommand::Runner {
                 options: RunnerOptions {
-                    profile: PathBuf::from("ba.json"),
+                    profile: PathBuf::from("profile-primary.json"),
                     run_root: PathBuf::from("runs"),
                     capture: true,
                 }
