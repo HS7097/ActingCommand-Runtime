@@ -1200,6 +1200,7 @@ fn write_semantic_resources(root: &Path) {
                 "id":"home_to_target",
                 "from_page":"sample/home",
                 "to_page":"sample/target",
+                "effect":"navigation_only",
                 "click":{"kind":"rect","x":10,"y":20,"width":4,"height":6}
             }],
             "destructive_actions":[]

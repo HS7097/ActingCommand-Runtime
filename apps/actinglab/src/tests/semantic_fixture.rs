@@ -166,12 +166,14 @@ pub(super) fn semantic_resource_root(include_destructive_overlap: bool) -> Seman
                     "id":"home_to_target",
                     "from_page":"sample/home",
                     "to_page":"sample/target",
+                    "effect":"navigation_only",
                     "click":{{"kind":"rect","x":10,"y":20,"width":4,"height":6}}
                 }},
                 {{
                     "id":"target_to_home",
                     "from_page":"sample/target",
                     "to_page":"sample/home",
+                    "effect":"navigation_only",
                     "click":{{"kind":"point","point":"2,3"}}
                 }}],
                 "destructive_actions":{destructive}
@@ -274,7 +276,7 @@ pub(super) fn synthetic_game_resource_root() -> SemanticFixture {
             "game":"synthetic",
             "server":"lab",
             "navigation":[
-                {"id":"synthetic_home_to_target","from_page":"synthetic/home","to_page":"synthetic/target","click":{"kind":"rect","x":1,"y":2,"width":3,"height":4}}
+                {"id":"synthetic_home_to_target","from_page":"synthetic/home","to_page":"synthetic/target","effect":"navigation_only","click":{"kind":"rect","x":1,"y":2,"width":3,"height":4}}
             ],
             "destructive_actions":[]
         }"#,

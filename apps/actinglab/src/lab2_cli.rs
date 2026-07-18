@@ -317,7 +317,7 @@ fn run_runtime_ensure(
             })?;
         for edge in &route {
             if !allow_destructive {
-                reject_dangerous_semantic_id("navigation edge", &edge.id)?;
+                edge.recovery_effect.require_navigation_only(&edge.id)?;
                 reject_destructive_overlap(edge, &graph.destructive_clicks)?;
             }
         }
@@ -1051,7 +1051,7 @@ pub(crate) fn run_ensure(global: &GlobalOptions, args: &[String]) -> CliOutcome<
             })?;
         for edge in &route {
             if !allow_destructive {
-                reject_dangerous_semantic_id("navigation edge", &edge.id)?;
+                edge.recovery_effect.require_navigation_only(&edge.id)?;
                 reject_destructive_overlap(edge, &graph.destructive_clicks)?;
             }
         }

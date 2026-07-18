@@ -2028,6 +2028,7 @@
       "data": {
         "actions": [
           {
+            "effect": "navigation_only",
             "from_page": "sample/home",
             "id": "home_to_target",
             "input": {

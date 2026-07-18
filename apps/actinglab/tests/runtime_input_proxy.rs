@@ -1481,6 +1481,7 @@ fn write_navigation_resources(root: &std::path::Path) {
                 "id":"home_to_target",
                 "from_page":"sample/home",
                 "to_page":"sample/target",
+                "effect":"navigation_only",
                 "click":{"kind":"point","x":0,"y":0}
             }],
             "destructive_actions":[]
