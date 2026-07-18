@@ -75,7 +75,7 @@ scope = ["approval.provenance", "compatibility.alias", "external.compat", "ident
 
 [surface_manifest]
 path = "tools/actinglab-architecture/generic-domain-surfaces-v2.jsonl"
-sha256 = "a06a45a581b0c206f12636aab4066b76f57c16c3ea934d4eb7dd7f4f34d64589"
+sha256 = "1951185e84478c776fc9e8790dc4f1603888f183bf2e3bef449fe012f5850519"
 approval_id = "approval.issue44_r8"
 source_issue = 44
 source_pr = 112
