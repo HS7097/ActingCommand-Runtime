@@ -1936,6 +1936,7 @@ sha256 = "23cc30b657b16c17d0097dbd50444e7c4642cabd725cb431a8b9eeadccdfa612"
 purpose = "Registers an exact upstream or MaaTouch interoperability surface."
 approval_comment_id = 5010683904
 source_issue = 44
+source_pr = 111
 
 [[identity_allowance]]
 id = "allowance.apps_actinglab_src_env_detection_rs"
@@ -1946,6 +1947,7 @@ sha256 = "20c65e2035ea80de7dba1f25a64c7cde5190ac0dfb0a6fd4c5f6d4a54a071bee"
 purpose = "Registers an exact upstream or MaaTouch interoperability surface."
 approval_comment_id = 5010683904
 source_issue = 44
+source_pr = 111
 
 [[identity_allowance]]
 id = "allowance.apps_actinglab_src_maa_task_graph_rs"
@@ -1956,6 +1958,7 @@ sha256 = "3cb880835c49d48cb74ec20dfbdd829811d50ea7b50cb67f09fd5bc0c8da0198"
 purpose = "Registers an exact upstream or MaaTouch interoperability surface."
 approval_comment_id = 5010683904
 source_issue = 44
+source_pr = 111
 
 [[identity_allowance]]
 id = "allowance.apps_actinglab_src_main_rs"
@@ -1966,6 +1969,7 @@ sha256 = "b8f0c287c6f23b20e4c1c0276086c9592826ff0a9c91e1462ce5b014483440a8"
 purpose = "Registers an exact upstream or MaaTouch interoperability surface."
 approval_comment_id = 5010683904
 source_issue = 44
+source_pr = 111
 
 [[identity_allowance]]
 id = "allowance.apps_actinglab_src_resource_authoring_rs"
@@ -1976,6 +1980,7 @@ sha256 = "8c6674b8d413273036e0dee7267778355fce675955613be2c3736925cb617fb0"
 purpose = "Registers an exact upstream or MaaTouch interoperability surface."
 approval_comment_id = 5010683904
 source_issue = 44
+source_pr = 111
 
 [[identity_allowance]]
 id = "allowance.apps_actinglab_src_resource_convert_rs"
@@ -1986,6 +1991,7 @@ sha256 = "7fcf5f9a47dec7ab3abac5d674fc05b061c40a590cd4aae99fe705cb639c07f7"
 purpose = "Registers an exact upstream or MaaTouch interoperability surface."
 approval_comment_id = 5010683904
 source_issue = 44
+source_pr = 111
 
 [[identity_allowance]]
 id = "allowance.apps_device_test_src_main_rs"
@@ -1996,6 +2002,7 @@ sha256 = "74855915a9dad9d96323341cf0e1b787891cefffa224bc996d8c71ce818dfe4b"
 purpose = "Registers an exact upstream or MaaTouch interoperability surface."
 approval_comment_id = 5010683904
 source_issue = 44
+source_pr = 111
 
 [[identity_allowance]]
 id = "allowance.apps_device_test_src_probe_run_rs"
@@ -2006,6 +2013,7 @@ sha256 = "ffe57993bfcc065484dfd1fc71edb28f58b98a77caf3e3dd8c869250c2abd1a9"
 purpose = "Registers an exact upstream or MaaTouch interoperability surface."
 approval_comment_id = 5010683904
 source_issue = 44
+source_pr = 111
 
 [[identity_allowance]]
 id = "allowance.apps_vision_provider_check_src_main_rs"
@@ -2016,6 +2024,7 @@ sha256 = "c0707ca2c818be113a655a2086500c14a2e0f6ffb72d41d5cf3044e09430903c"
 purpose = "Registers an exact upstream or MaaTouch interoperability surface."
 approval_comment_id = 5010683904
 source_issue = 44
+source_pr = 111
 
 [[identity_allowance]]
 id = "allowance.crates_device_src_maatouch_rs"
@@ -2026,6 +2035,7 @@ sha256 = "485b250148ffe3f83cf431c5b4544b0fd0f3dd1fb5e6758630cb8715b8a2b14e"
 purpose = "Registers an exact upstream or MaaTouch interoperability surface."
 approval_comment_id = 5010683904
 source_issue = 44
+source_pr = 111
 
 [[identity_allowance]]
 id = "allowance.crates_device_src_touch_rs"
@@ -2036,6 +2046,7 @@ sha256 = "148ec6b196542468424e571c7182f34877bee0fcf4bf388b167de1cfd6cba563"
 purpose = "Registers an exact upstream or MaaTouch interoperability surface."
 approval_comment_id = 5010683904
 source_issue = 44
+source_pr = 111
 
 [[identity_allowance]]
 id = "allowance.crates_execution_kernel_src_recovery_rs"
@@ -2046,6 +2057,7 @@ sha256 = "bf2583b5a78f61fc292134bf51431a6ac8e2cc5c32249b46bc5a1caae550feca"
 purpose = "Registers an exact upstream or MaaTouch interoperability surface."
 approval_comment_id = 5010683904
 source_issue = 44
+source_pr = 111
 
 [[identity_allowance]]
 id = "allowance.crates_lab_src_lab_run_tests_bundle_and_actions_rs"
@@ -2056,6 +2068,7 @@ sha256 = "15e14c6aecd79b494ac194b1665a620f7ded7171595100797160fc280132709d"
 purpose = "Registers an exact upstream or MaaTouch interoperability surface."
 approval_comment_id = 5010683904
 source_issue = 44
+source_pr = 111
 
 [[identity_allowance]]
 id = "allowance.crates_lab_src_lab_run_tests_mod_rs"
@@ -2066,6 +2079,7 @@ sha256 = "99bbdf12e9a7cb8ee33a9cb0aa037f3b73598848409c69d71e6940e66b6b88f9"
 purpose = "Registers an exact upstream or MaaTouch interoperability surface."
 approval_comment_id = 5010683904
 source_issue = 44
+source_pr = 111
 
 [[identity_allowance]]
 id = "allowance.crates_lab_src_lib_rs"
@@ -2076,6 +2090,7 @@ sha256 = "4383cc22a6f867d1df9138ceed7748b2991bbb96f51a6dea8df5ea832df3901b"
 purpose = "Registers an exact upstream or MaaTouch interoperability surface."
 approval_comment_id = 5010683904
 source_issue = 44
+source_pr = 111
 
 [[identity_allowance]]
 id = "allowance.crates_lab_src_maa_task_graph_rs"
@@ -2086,6 +2101,7 @@ sha256 = "b68d24e464061292ed571f3eb5275a569bff65ed5c1b7f902911666496f1c421"
 purpose = "Registers an exact upstream or MaaTouch interoperability surface."
 approval_comment_id = 5010683904
 source_issue = 44
+source_pr = 111
 
 [[identity_allowance]]
 id = "allowance.crates_lab_tests_lab_run_api_rs"
@@ -2096,6 +2112,7 @@ sha256 = "a951bfb1048ba581cf1fc887391aefab5f1d306ee146e3717ff5740a197bb5bc"
 purpose = "Registers an exact upstream or MaaTouch interoperability surface."
 approval_comment_id = 5010683904
 source_issue = 44
+source_pr = 111
 
 [[identity_allowance]]
 id = "allowance.crates_lab_tests_package_api_rs"
@@ -2106,6 +2123,7 @@ sha256 = "3fd574b754ea2c105b1ca6cfbda936ba723ac60407e28bdf527cc3963e06a412"
 purpose = "Registers an exact upstream or MaaTouch interoperability surface."
 approval_comment_id = 5010683904
 source_issue = 44
+source_pr = 111
 
 [[identity_allowance]]
 id = "allowance.crates_resource_tooling_src_api_rs"
@@ -2116,6 +2134,7 @@ sha256 = "38c4fe4952599f2207641b52a50b5f231fcd001856f6b9c8250f83bcc1ff9436"
 purpose = "Registers an exact upstream or MaaTouch interoperability surface."
 approval_comment_id = 5010683904
 source_issue = 44
+source_pr = 111
 
 [[identity_allowance]]
 id = "allowance.crates_resource_tooling_src_lib_rs"
@@ -2126,6 +2145,7 @@ sha256 = "733ca567da67d587f763b9c359f360da12ce1033ce77cf6f58ef2274f7050bfb"
 purpose = "Registers an exact upstream or MaaTouch interoperability surface."
 approval_comment_id = 5010683904
 source_issue = 44
+source_pr = 111
 
 [[identity_allowance]]
 id = "allowance.crates_resource_tooling_src_maa_task_graph_rs"
@@ -2136,6 +2156,7 @@ sha256 = "35a5d8fed7e30f49f5fecaef3352bc1eefbf662d6d89cc81345b495f8831eb0a"
 purpose = "Registers an exact upstream or MaaTouch interoperability surface."
 approval_comment_id = 5010683904
 source_issue = 44
+source_pr = 111
 
 [[identity_allowance]]
 id = "allowance.crates_resource_tooling_src_resource_convert_mod_rs"
@@ -2146,6 +2167,7 @@ sha256 = "b454efd615370723426251f02a946f91902bc955ce08cb7f47fb3f98aecb37c9"
 purpose = "Registers an exact upstream or MaaTouch interoperability surface."
 approval_comment_id = 5010683904
 source_issue = 44
+source_pr = 111
 
 [[identity_allowance]]
 id = "allowance.crates_resource_tooling_src_resource_convert_tests_rs"
@@ -2156,6 +2178,7 @@ sha256 = "8d98d78c14faeb23a415dd5aa341089e0e495429fef982393abf9ee18a0994f1"
 purpose = "Registers an exact upstream or MaaTouch interoperability surface."
 approval_comment_id = 5010683904
 source_issue = 44
+source_pr = 111
 
 [[identity_allowance]]
 id = "allowance.crates_resource_tooling_tests_neutral_game_pipeline_rs"
@@ -2166,6 +2189,7 @@ sha256 = "3094cbc953ca7f9cc216389054e38ab15acd950ca1cabb4f35d98d7534cb8c91"
 purpose = "Registers an exact upstream or MaaTouch interoperability surface."
 approval_comment_id = 5010683904
 source_issue = 44
+source_pr = 111
 
 [[identity_allowance]]
 id = "allowance.crates_vision_ffi_src_artifacts_rs"
@@ -2176,6 +2200,7 @@ sha256 = "82eb2152f21b6b21a035e93c241b9ed1b18f89bd32b852b450ec7f73c2ef0153"
 purpose = "Registers an exact upstream or MaaTouch interoperability surface."
 approval_comment_id = 5010683904
 source_issue = 44
+source_pr = 111
 
 [[identity_allowance]]
 id = "allowance.crates_vision_ffi_src_lib_rs"
@@ -2186,6 +2211,7 @@ sha256 = "f5997497c96637ae3feed2283ab49613a93933855778f2ac5d143ca71570d77a"
 purpose = "Registers an exact upstream or MaaTouch interoperability surface."
 approval_comment_id = 5010683904
 source_issue = 44
+source_pr = 111
 
 [[identity_allowance]]
 id = "allowance.providers_ppocr_onnx_json_src_lib_rs"
@@ -2196,6 +2222,7 @@ sha256 = "4defcbaa49a929b8c57c0e07e37f525ad2b2bbf8faf012bd8b70955ba5f2c45a"
 purpose = "Registers an exact upstream or MaaTouch interoperability surface."
 approval_comment_id = 5010683904
 source_issue = 44
+source_pr = 111
 
 [[identity_allowance]]
 id = "allowance.ratchet_actinglab_commands_json"
@@ -2206,6 +2233,7 @@ sha256 = "21b052cca7e3266af796ce04002eaa90d877b08aa0051c33859d9f5b48aabde0"
 purpose = "Registers an exact upstream or MaaTouch interoperability surface."
 approval_comment_id = 5010683904
 source_issue = 44
+source_pr = 111
 
 [[identity_allowance]]
 id = "allowance.resources_upstream_manifest_toml"
@@ -2216,6 +2244,7 @@ sha256 = "c8e3ba2b5df8049db1e4e22795a56867780f6476cf930eb9769e1b125f4c41f8"
 purpose = "Records exact reviewed upstream repository provenance metadata."
 approval_comment_id = 5010683904
 source_issue = 44
+source_pr = 111
 
 [[identity_allowance]]
 id = "allowance.tools_actinglab_architecture_src_generic_domain_rs"
@@ -2226,6 +2255,7 @@ sha256 = "ab74b108c5687369a4a72e36b233e12c046b99c671a48a1016b94391fd336cb1"
 purpose = "Contains exact detector definitions and adversarial guard fixtures."
 approval_comment_id = 5010683904
 source_issue = 44
+source_pr = 111
 
 [[identity_allowance]]
 id = "allowance.tools_actinglab_architecture_src_lib_rs"
@@ -2236,6 +2266,7 @@ sha256 = "afb759f0e85568eb1cc4eeccf1ac1fb97e1603f46e8c9cbce2ec21a505b43cc1"
 purpose = "Contains exact detector definitions and adversarial guard fixtures."
 approval_comment_id = 5010683904
 source_issue = 44
+source_pr = 111
 
 [[identity_allowance]]
 id = "allowance.tools_actinglab_architecture_tests_workspace_guards_rs"
@@ -2246,6 +2277,7 @@ sha256 = "61a0cd22d10f1d2b871448a70e2ae7f27ed509d8e970b16bc4d732a416ab5fa5"
 purpose = "Contains exact detector definitions and adversarial guard fixtures."
 approval_comment_id = 5010683904
 source_issue = 44
+source_pr = 111
 
 [[surface]]
 surface_id = "protected.benchmarks_workloads"
