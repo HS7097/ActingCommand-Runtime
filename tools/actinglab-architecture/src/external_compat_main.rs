@@ -2,7 +2,7 @@
 
 use std::path::PathBuf;
 
-use actingcommand_actinglab_architecture::external_compat::load_and_validate_external_compat;
+use actingcommand_actinglab_architecture::external_compat::audit_external_compat;
 
 fn main() {
     if let Err(error) = run() {
@@ -21,7 +21,7 @@ fn run() -> Result<(), String> {
         .and_then(|path| path.parent())
         .ok_or_else(|| "architecture tool must live at tools/<name>".to_string())?
         .to_path_buf();
-    load_and_validate_external_compat(&root)?;
+    audit_external_compat(&root)?;
     println!("external-compat manifest matches exact files, provenance, and scopes");
     Ok(())
 }

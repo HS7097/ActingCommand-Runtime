@@ -57,7 +57,7 @@ scope = ["approval.provenance", "compatibility.alias", "external.compat", "ident
 
 [surface_manifest]
 path = "tools/actinglab-architecture/generic-domain-surfaces-v2.jsonl"
-sha256 = "c44529cef2d67e1978dfa7658695e340eaa6ef4ab59d862fa7502e7c461c66a6"
+sha256 = "12c7d61f979122f9cdc4bd05f38472df6f45684d8034d02a68d371164ab6f389"
 approval_id = "approval.issue44_r8"
 source_issue = 44
 source_pr = 112
@@ -2258,7 +2258,7 @@ sha256 = "17732c0105d6c686056d2fe585d9f001126c6f76a8e8d8ecc1ae7357640564e9"
 purpose = "Allows neutral identity fixture values in this exact test fragment."
 approval_id = "approval.issue44_r9"
 source_issue = 44
-source_pr = 117
+source_pr = 118
 
 [[identity_allowance]]
 id = "allowance.fragment_14870f25cf3f548bae98c668e41602b749f33758"
@@ -4494,7 +4494,7 @@ sha256 = "b478838315963cc51ff91f29a7d733035603db722f6f7b5b76c67ba5a6d3e5a8"
 purpose = "Allows reviewed upstream interoperability tokens in this exact AST fragment."
 approval_id = "approval.issue44_r9"
 source_issue = 44
-source_pr = 117
+source_pr = 118
 
 [[identity_allowance]]
 id = "allowance.fragment_a4c1fdee11758887683064fdd93dfb34451aac22"
@@ -4858,7 +4858,7 @@ sha256 = "dde7253198b019c6a28657106815ff792985b61d05d8b4ab81d683d02351ce01"
 purpose = "Allows neutral identity fixture values in this exact test fragment."
 approval_id = "approval.issue44_r9"
 source_issue = 44
-source_pr = 117
+source_pr = 118
 
 [[identity_allowance]]
 id = "allowance.fragment_c1928f0136fdf9ed63904740cb5b5c7e41cef773"

@@ -16,7 +16,7 @@ use syn::{
     Member, Token, Visibility, braced,
 };
 
-use crate::external_compat::{EXTERNAL_COMPAT_MANIFEST_PATH, load_and_validate_external_compat};
+use crate::external_compat::{EXTERNAL_COMPAT_MANIFEST_PATH, validated_external_compat_paths};
 use crate::{
     inspect_generic_runtime_identity, inspect_generic_runtime_identity_with_allowances,
     known_project_identity_tokens,
@@ -783,8 +783,9 @@ pub fn workspace_surface_snapshot(root: &Path) -> Result<Vec<SurfaceSnapshot>, S
 pub fn workspace_identity_allowance_candidates(
     root: &Path,
 ) -> Result<Vec<IdentityAllowanceCandidate>, String> {
-    let external = load_and_validate_external_compat(root)?;
-    let external_paths = external.registered_paths().collect::<HashSet<_>>();
+    let external_paths = validated_external_compat_paths(root)?
+        .into_iter()
+        .collect::<HashSet<_>>();
     let files = protected_files(root)?;
 
     let mut candidates = Vec::new();
@@ -907,8 +908,9 @@ pub fn validate_workspace_genericity(
     registry: &GenericDomainRegistry,
 ) -> Result<(), String> {
     validate_workspace_surface_registry(root, registry)?;
-    let external = load_and_validate_external_compat(root)?;
-    let external_paths = external.registered_paths().collect::<HashSet<_>>();
+    let external_paths = validated_external_compat_paths(root)?
+        .into_iter()
+        .collect::<HashSet<_>>();
     let allowance_by_fragment = validate_identity_allowance_fragments(root, registry)?;
 
     let files = protected_files(root)?;
