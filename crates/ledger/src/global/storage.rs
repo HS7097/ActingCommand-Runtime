@@ -199,6 +199,22 @@ impl SegmentStore {
         self.indexes.query(&self.events, query)
     }
 
+    pub(super) fn query_page(
+        &self,
+        query: &actingcommand_contract::EventQuery,
+        after_sequence: u64,
+        through_sequence: u64,
+        page_events: usize,
+    ) -> Vec<PersistedEvent> {
+        self.indexes.query_page(
+            &self.events,
+            query,
+            after_sequence,
+            through_sequence,
+            page_events,
+        )
+    }
+
     pub(super) fn latest_sequence(&self) -> u64 {
         self.events.last().map_or(0, PersistedEvent::sequence)
     }

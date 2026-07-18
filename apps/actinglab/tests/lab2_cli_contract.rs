@@ -150,7 +150,7 @@ fn offline_scene_do_is_pure_repeatable_and_state_free() {
         "--json",
         "--dry-run",
         "--instance",
-        "ak.cn",
+        "node.a",
         "do",
         "home_button",
         "--scene",

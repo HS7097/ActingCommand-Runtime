@@ -2,11 +2,11 @@
 
 use super::*;
 use crate::{
-    ArtifactIssuePolicy, ArtifactKind, ArtifactLinksDraft, ArtifactProducer,
-    ArtifactRedactionState, ArtifactStoreIssuer, AuditInput, EventDraft, EventLinksDraft,
-    EventOrigin, EventPayloadDraft, EventSeverity, EventType, IdentifierIssuer, LeasePayloadDraft,
-    OriginModule, RetentionClass, RuntimeMonitorState, RuntimePayloadDraft, SanitizationError,
-    SecretField, SecretFingerprinter, Sha256Fingerprint,
+    ApprovalTarget, ArtifactIssuePolicy, ArtifactKind, ArtifactLinksDraft, ArtifactProducer,
+    ArtifactRedactionState, ArtifactStoreIssuer, AuditInput, ClientActionKind, EventDraft,
+    EventLinksDraft, EventOrigin, EventPayloadDraft, EventSeverity, EventType, IdentifierIssuer,
+    LeasePayloadDraft, OriginModule, RetentionClass, RuntimeMonitorState, RuntimePayloadDraft,
+    SanitizationError, SecretField, SecretFingerprinter, Sha256Fingerprint,
 };
 
 struct RejectSecrets;
@@ -39,6 +39,20 @@ fn request(operation: RuntimeOperation) -> RuntimeRequest {
     .expect("runtime request")
 }
 
+fn governance_request(operation: RuntimeOperation) -> RuntimeRequest {
+    let ids = issuer();
+    RuntimeRequest::new(
+        ids.mint_request_id().expect("request id"),
+        ids.mint_correlation_id().expect("correlation id"),
+        None,
+        EventActor::User,
+        EventSource::Ui,
+        1,
+        operation,
+    )
+    .expect("governance runtime request")
+}
+
 fn token() -> LeaseToken {
     let ids = issuer();
     LeaseToken::new(
@@ -64,7 +78,7 @@ fn runtime_request_round_trips_and_builds_verified_event_links() {
         EventActor::Lab,
         EventSource::Lab,
         42,
-        RuntimeOperation::acquire_lease("azur.jp", holder_id),
+        RuntimeOperation::acquire_lease("node.b", holder_id),
     )
     .expect("request");
     let encoded = serde_json::to_string(&request).expect("serialize request");
@@ -506,30 +520,30 @@ fn c3b_queue_policy_and_status_are_closed_bounded_and_strict() {
 fn runtime_status_is_sorted_strict_and_state_aware() {
     let ids = issuer();
     let owner_epoch = *ids.mint_owner_epoch().expect("owner epoch").transport();
-    let ak = RuntimeInstanceStatus::new(
-        "ak.cn",
-        *ids.mint_instance_id().expect("ak instance").transport(),
+    let first = RuntimeInstanceStatus::new(
+        "node.a",
+        *ids.mint_instance_id().expect("first instance").transport(),
         true,
         1,
         false,
         true,
         true,
     )
-    .expect("ak status");
-    let ba = RuntimeInstanceStatus::new(
-        "ba.jp",
-        *ids.mint_instance_id().expect("ba instance").transport(),
+    .expect("first status");
+    let second = RuntimeInstanceStatus::new(
+        "node.c",
+        *ids.mint_instance_id().expect("second instance").transport(),
         false,
         0,
         true,
         false,
         false,
     )
-    .expect("ba status");
-    let status = RuntimeControlPlaneStatus::new(owner_epoch, vec![ba, ak]).expect("status");
+    .expect("second status");
+    let status = RuntimeControlPlaneStatus::new(owner_epoch, vec![second, first]).expect("status");
 
     assert_eq!(status.owner_epoch(), owner_epoch);
-    assert_eq!(status.instances()[0].instance_alias(), "ak.cn");
+    assert_eq!(status.instances()[0].instance_alias(), "node.a");
     assert!(status.instances()[0].lease_active());
     assert_eq!(status.instances()[0].queued_request_count(), 1);
     assert!(status.instances()[0].destructive_step_active());
@@ -558,7 +572,7 @@ fn runtime_status_is_sorted_strict_and_state_aware() {
     assert!(serde_json::from_value::<RuntimeControlPlaneStatus>(unknown).is_err());
     assert_eq!(
         RuntimeInstanceStatus::new(
-            "ak.cn",
+            "node.a",
             status.instances()[0].instance_id(),
             false,
             0,
@@ -578,18 +592,18 @@ fn runtime_monitor_operations_and_receipts_are_strict() {
     let owner_epoch = *ids.mint_owner_epoch().expect("owner epoch").transport();
     let policy = RuntimeMonitorPolicy::new(1_000, "home", true).expect("policy");
     let configure = request(RuntimeOperation::ConfigureMonitor {
-        instance_alias: "ak.cn".to_string(),
+        instance_alias: "node.a".to_string(),
         policy: policy.clone(),
     });
     configure.validate().expect("configure request");
     request(RuntimeOperation::ClearMonitor {
-        instance_alias: "ak.cn".to_string(),
+        instance_alias: "node.a".to_string(),
     })
     .validate()
     .expect("clear request");
 
     let configured = RuntimeMonitorInstanceStatus::configured(
-        "ak.cn",
+        "node.a",
         policy,
         RuntimeMonitorState::scheduled(10).expect("state"),
     )
@@ -691,7 +705,7 @@ fn c3b_queue_operations_and_cancelled_receipt_are_strict_typed_contracts() {
     let queued_request_id = *ids.mint_request_id().expect("queued request").transport();
     let operations = [
         RuntimeOperation::queue_lease(
-            "ak.cn",
+            "node.a",
             ids.mint_holder_id().expect("holder"),
             LeaseQueuePolicy::new(LeasePriority::High, 1_000).expect("policy"),
         ),
@@ -764,7 +778,7 @@ fn readonly_capability_is_issuer_owned_and_binds_observation_context() {
     );
 
     let request = request(RuntimeOperation::ObserveReadonly {
-        instance_alias: "ak.cn".to_string(),
+        instance_alias: "node.a".to_string(),
     });
     let links = issued.event_links(&request.validate().expect("validated request"));
     assert_eq!(links.instance_id(), Some(&instance_id));
@@ -947,7 +961,7 @@ fn capture_sequence_contract_is_bounded_exact_and_strict() {
     );
 
     let operation = RuntimeOperation::CaptureSequence {
-        instance_alias: "ak.cn".to_string(),
+        instance_alias: "node.a".to_string(),
         spec: pair_spec,
     };
     request(operation.clone())
@@ -963,7 +977,7 @@ fn capture_sequence_contract_is_bounded_exact_and_strict() {
 
     RuntimeReceipt::success(
         &request(RuntimeOperation::CaptureSequence {
-            instance_alias: "ak.cn".to_string(),
+            instance_alias: "node.a".to_string(),
             spec: pair_spec,
         }),
         RuntimeReceiptState::Completed,
@@ -980,10 +994,10 @@ fn c4_operations_round_trip_without_generic_payloads() {
     let ids = issuer();
     let operations = [
         RuntimeOperation::ObserveReadonly {
-            instance_alias: "ak.cn".to_string(),
+            instance_alias: "node.a".to_string(),
         },
         RuntimeOperation::SafeReset {
-            instance_alias: "ak.cn".to_string(),
+            instance_alias: "node.a".to_string(),
             holder_id: *ids.mint_holder_id().expect("holder").transport(),
         },
     ];
@@ -999,17 +1013,291 @@ fn c4_operations_round_trip_without_generic_payloads() {
 
     assert!(
         serde_json::from_str::<RuntimeOperation>(
-            r#"{"operation":"begin_readonly_observation","instance_alias":"ak.cn"}"#,
+            r#"{"operation":"begin_readonly_observation","instance_alias":"node.a"}"#,
         )
         .is_err()
     );
 }
 
 #[test]
+fn client_action_and_approval_operations_are_closed_typed_contracts() {
+    let client_action = ClientActionRecord::new(
+        "overview",
+        "refresh",
+        ClientActionKind::Button,
+        Some("node.alpha".to_owned()),
+        None,
+    )
+    .expect("client action");
+    let approval = ApprovalDecisionRecord::new(
+        "approval:fixture-a",
+        ApprovalDisposition::Approved,
+        ApprovalTarget::Catalog {
+            catalog_hash: format!("sha256:{}", "a".repeat(64)),
+            catalog_version: 1,
+        },
+        "user_confirmed",
+    )
+    .expect("approval");
+    for request in [
+        request(RuntimeOperation::RecordClientAction {
+            action: client_action,
+        }),
+        governance_request(RuntimeOperation::RecordApprovalDecision { decision: approval }),
+    ] {
+        let encoded = serde_json::to_value(&request).expect("request JSON");
+        let decoded = serde_json::from_value::<RuntimeRequest>(encoded.clone())
+            .expect("typed interaction request");
+        decoded.validate().expect("valid interaction request");
+        let mut smuggled = encoded;
+        smuggled["operation"]["raw_text"] = serde_json::json!("secret");
+        assert!(serde_json::from_value::<RuntimeRequest>(smuggled).is_err());
+    }
+}
+
+#[test]
+fn governance_operations_require_user_ui_origin_and_redact_capabilities() {
+    let capability = "g".repeat(MIN_GOVERNANCE_CAPABILITY_BYTES);
+    let operation = RuntimeOperation::AuthenticateGovernance {
+        capability: capability.clone(),
+    };
+    let valid = governance_request(operation.clone());
+    valid.validate().expect("valid governance request");
+    assert!(!format!("{operation:?}").contains(&capability));
+
+    let ids = issuer();
+    let rejected = RuntimeRequest::new(
+        ids.mint_request_id().expect("request"),
+        ids.mint_correlation_id().expect("correlation"),
+        None,
+        EventActor::Agent,
+        EventSource::Adapter,
+        1,
+        RuntimeOperation::AuthenticateGovernance { capability },
+    );
+    assert_eq!(
+        rejected.expect_err("agent governance request").code(),
+        "invalid_governance_origin"
+    );
+
+    let approval = ApprovalDecisionRecord::new(
+        "approval:agent-self-approval",
+        ApprovalDisposition::Approved,
+        ApprovalTarget::Catalog {
+            catalog_hash: format!("sha256:{}", "a".repeat(64)),
+            catalog_version: 1,
+        },
+        "agent_claimed_approval",
+    )
+    .expect("approval fixture");
+    let ids = issuer();
+    let rejected = RuntimeRequest::new(
+        ids.mint_request_id().expect("request"),
+        ids.mint_correlation_id().expect("correlation"),
+        None,
+        EventActor::Agent,
+        EventSource::Adapter,
+        1,
+        RuntimeOperation::RecordApprovalDecision { decision: approval },
+    );
+    assert_eq!(
+        rejected.expect_err("agent self-approval").code(),
+        "invalid_governance_origin"
+    );
+}
+
+#[test]
+fn agent_dispatcher_operations_require_agent_adapter_origin() {
+    let ids = issuer();
+    let wake_id = *ids.mint_agent_wake_id().expect("wake id").transport();
+    let operation = RuntimeOperation::StartAgentSession { wake_id };
+    let valid = RuntimeRequest::new(
+        ids.mint_request_id().expect("request"),
+        ids.mint_correlation_id().expect("correlation"),
+        None,
+        EventActor::Agent,
+        EventSource::Adapter,
+        1,
+        operation.clone(),
+    )
+    .expect("agent request");
+    valid.validate().expect("valid agent request");
+
+    let ids = issuer();
+    let error = RuntimeRequest::new(
+        ids.mint_request_id().expect("request"),
+        ids.mint_correlation_id().expect("correlation"),
+        None,
+        EventActor::Cli,
+        EventSource::Cli,
+        1,
+        operation,
+    )
+    .expect_err("CLI cannot claim an agent session");
+    assert_eq!(error.code(), "invalid_agent_dispatcher_origin");
+}
+
+#[test]
+fn planning_document_is_bounded_content_addressed_and_typed() {
+    let document = RuntimePlanningDocument::encode(
+        RuntimePlanningDocumentKind::EvaluationTime,
+        &serde_json::json!({"unix_ms": 10, "monotonic_ms": 20}),
+    )
+    .expect("planning document");
+    let decoded: serde_json::Value = document
+        .decode(RuntimePlanningDocumentKind::EvaluationTime)
+        .expect("typed decode");
+    assert_eq!(decoded["unix_ms"], 10);
+
+    let encoded = serde_json::to_value(&document).expect("document JSON");
+    let mut tampered = encoded.clone();
+    tampered["document"]["unix_ms"] = serde_json::json!(11);
+    let tampered: RuntimePlanningDocument = serde_json::from_value(tampered).expect("wire shape");
+    assert_eq!(
+        tampered.validate().expect_err("hash mismatch").code(),
+        "planning_document_hash_mismatch"
+    );
+
+    let wrong_kind: RuntimePlanningDocument =
+        serde_json::from_value(encoded).expect("planning document");
+    assert_eq!(
+        wrong_kind
+            .decode::<serde_json::Value>(RuntimePlanningDocumentKind::EvaluationFacts)
+            .expect_err("kind mismatch")
+            .code(),
+        "planning_document_kind_mismatch"
+    );
+
+    assert_eq!(
+        RuntimePlanningDocument::encode(
+            RuntimePlanningDocumentKind::EvaluationFacts,
+            &vec![1_u8, 2, 3],
+        )
+        .expect_err("array documents are not allowed")
+        .code(),
+        "planning_document_not_object"
+    );
+    assert_eq!(
+        RuntimePlanningDocument::encode(
+            RuntimePlanningDocumentKind::EvaluationFacts,
+            &serde_json::json!({"padding": "x".repeat(MAX_RUNTIME_PLANNING_DOCUMENT_BYTES)}),
+        )
+        .expect_err("oversized document")
+        .code(),
+        "planning_document_size_invalid"
+    );
+}
+
+#[test]
+fn planning_operations_are_strict_and_require_agent_adapter_origin() {
+    let report = RuntimePlanningDocument::encode(
+        RuntimePlanningDocumentKind::StrategicReport,
+        &serde_json::json!({"report_id": "report:a"}),
+    )
+    .expect("report document");
+    let evidence = observation_artifact();
+    let request = RuntimeStrategicReportRequest::new(report, vec![evidence])
+        .expect("strategic report request");
+    let operation = RuntimeOperation::PrepareStrategicReport {
+        request: Box::new(request),
+    };
+    let ids = issuer();
+    RuntimeRequest::new(
+        ids.mint_request_id().expect("request"),
+        ids.mint_correlation_id().expect("correlation"),
+        None,
+        EventActor::Agent,
+        EventSource::Adapter,
+        1,
+        operation.clone(),
+    )
+    .expect("agent planning request");
+
+    let ids = issuer();
+    assert_eq!(
+        RuntimeRequest::new(
+            ids.mint_request_id().expect("request"),
+            ids.mint_correlation_id().expect("correlation"),
+            None,
+            EventActor::Cli,
+            EventSource::Cli,
+            1,
+            operation,
+        )
+        .expect_err("CLI cannot invoke planning authority")
+        .code(),
+        "invalid_agent_dispatcher_origin"
+    );
+
+    let trend = RuntimePlanningDocument::encode(
+        RuntimePlanningDocumentKind::MaintenanceTrendPolicy,
+        &serde_json::json!({"minimum_duration_samples": 4}),
+    )
+    .expect("trend policy");
+    let query = RuntimeMaintenanceQuery::new(
+        "node.a",
+        "task.a",
+        crate::FactScope::Instance {
+            instance_id: "node.a".to_owned(),
+        },
+        "resource.primary",
+        9,
+        10,
+        trend,
+    )
+    .expect("maintenance query");
+    query.validate().expect("valid maintenance query");
+}
+
+#[test]
 fn query_result_remains_typed_without_generic_value_payload() {
-    let result = RuntimeResult::Events { events: Vec::new() };
+    let result = RuntimeResult::EventPage {
+        page: RuntimeEventQueryPage::new(
+            Vec::new(),
+            0,
+            DEFAULT_RUNTIME_EVENT_QUERY_EVENTS,
+            false,
+            None,
+        )
+        .expect("event page"),
+    };
     let value = serde_json::to_value(result).expect("result json");
-    assert_eq!(value["kind"], "events");
+    assert_eq!(value["kind"], "event_page");
+}
+
+#[test]
+fn runtime_event_query_pages_are_bounded_and_cursor_bound_to_the_query() {
+    assert_eq!(
+        RuntimeEventQueryPageRequest::default().limit(),
+        DEFAULT_RUNTIME_EVENT_QUERY_EVENTS
+    );
+    assert!(RuntimeEventQueryPageRequest::new(0, None).is_err());
+    assert!(RuntimeEventQueryPageRequest::new(MAX_RUNTIME_EVENT_QUERY_EVENTS + 1, None).is_err());
+
+    let query = EventQuery {
+        event_type: Some(EventType::PolicyPlanningSignalObserved),
+        ..EventQuery::default()
+    };
+    let cursor = RuntimeEventQueryCursor::new(50, 17, &query, ProjectionProfile::Forensic)
+        .expect("event cursor");
+    assert!(
+        cursor
+            .matches(&query, ProjectionProfile::Forensic)
+            .expect("matching cursor")
+    );
+    assert!(
+        !cursor
+            .matches(&EventQuery::default(), ProjectionProfile::Forensic)
+            .expect("different query")
+    );
+    assert!(
+        !cursor
+            .matches(&query, ProjectionProfile::Ui)
+            .expect("different projection")
+    );
+    assert!(RuntimeEventQueryCursor::new(0, 0, &query, ProjectionProfile::Forensic).is_err());
+    assert!(RuntimeEventQueryCursor::new(10, 11, &query, ProjectionProfile::Forensic).is_err());
+    assert!(RuntimeEventQueryPage::new(Vec::new(), 50, 8, true, Some(cursor)).is_err());
 }
 
 #[test]

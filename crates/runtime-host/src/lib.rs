@@ -7,17 +7,48 @@
 
 #![forbid(unsafe_code)]
 
+mod agent_dispatcher;
+mod approval;
+mod emulator_control;
 mod error;
 mod events;
+mod fact_store;
 mod host;
 mod ipc;
 mod monitor;
 mod owner;
+mod performance;
+mod performance_control;
+mod planning;
+mod policy_control;
+mod policy_host;
+mod procedure_manifest;
+mod project_interface;
+mod proposal;
 mod provider;
+mod strategy;
 mod time;
 
+pub use strategy::StrategicPlanPreparation;
+pub use time::{RuntimeClock, RuntimeClockSample, SystemRuntimeClock};
+
+pub use agent_dispatcher::AgentDispatcherConfig;
+pub use emulator_control::admit_emulator_capabilities;
 pub use error::*;
 pub use host::*;
+pub use performance::{PerformanceMonitorConfig, PipelinePerformanceSignal};
+pub use performance_control::{
+    PerformanceControlConfig, PerformanceControlDirective, PerformanceControlObservation,
+    PerformanceControlWorkload,
+};
+pub use planning::MaintenanceLedgerQuery;
+pub use policy_control::PolicyExecutionInput;
+pub use policy_host::{
+    CatalogGeneration, PolicyAdmissionContext, PolicyCadence, PolicyCycle, PolicyDispatchAdmission,
+    PolicyEvaluationCost, PolicyEvaluationExecution, PolicyEvaluationMeasurement,
+    PolicyRecomputeDirective, PolicyRecomputeKind, PolicyRecomputeReason, PolicyTrigger,
+};
+pub use procedure_manifest::{ProcedureBinding, ProcedureManifest};
 pub use provider::*;
 
 #[cfg(test)]

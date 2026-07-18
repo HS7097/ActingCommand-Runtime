@@ -268,7 +268,7 @@ mod tests {
 
     #[test]
     fn observe_uses_only_runtime_identity() {
-        let args = ["observe", "--state-root", "state", "--instance", "ak.cn"]
+        let args = ["observe", "--state-root", "state", "--instance", "node.a"]
             .into_iter()
             .map(OsString::from)
             .collect();
@@ -282,7 +282,7 @@ mod tests {
             "--state-root",
             "state",
             "--instance",
-            "ak.cn",
+            "node.a",
             "--serial",
             "127.0.0.1:16416",
         ]
@@ -308,7 +308,7 @@ mod tests {
             "--state-root",
             "state",
             "--instance",
-            "ak.cn",
+            "node.a",
             "--interval-ms",
             "1000",
             "--expect",
@@ -325,7 +325,7 @@ mod tests {
             "--state-root",
             "state",
             "--instance",
-            "ak.cn",
+            "node.a",
             "--max-frames",
             "60",
             "--interval-ms",

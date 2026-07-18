@@ -149,8 +149,13 @@ pub enum Sensitivity {
 pub enum EventFamily {
     Runtime,
     Monitor,
+    Performance,
+    Fact,
+    Approval,
     Command,
     Scheduler,
+    Policy,
+    Catalog,
     Lease,
     Task,
     Application,
@@ -160,6 +165,9 @@ pub enum EventFamily {
     Artifact,
     ResourceAuthoring,
     Client,
+    State,
+    Release,
+    Agent,
     Ledger,
 }
 
@@ -181,6 +189,26 @@ pub enum EventType {
     MonitorRecoveryAdmitted,
     #[serde(rename = "monitor.recovery_deferred")]
     MonitorRecoveryDeferred,
+    #[serde(rename = "perf.pressure_started")]
+    PerformancePressureStarted,
+    #[serde(rename = "perf.pressure_ended")]
+    PerformancePressureEnded,
+    #[serde(rename = "perf.stutter_detected")]
+    PerformanceStutterDetected,
+    #[serde(rename = "perf.summary")]
+    PerformanceSummary,
+    #[serde(rename = "perf.monitor_degraded")]
+    PerformanceMonitorDegraded,
+    #[serde(rename = "perf.monitor_recovered")]
+    PerformanceMonitorRecovered,
+    #[serde(rename = "perf.balance_changed")]
+    PerformanceBalanceChanged,
+    #[serde(rename = "fact.published")]
+    FactPublished,
+    #[serde(rename = "fact.invalidated")]
+    FactInvalidated,
+    #[serde(rename = "approval.decision")]
+    ApprovalDecision,
     #[serde(rename = "command.received")]
     CommandReceived,
     #[serde(rename = "command.validated")]
@@ -195,6 +223,26 @@ pub enum EventType {
     SchedulerDenied,
     #[serde(rename = "scheduler.preempted")]
     SchedulerPreempted,
+    #[serde(rename = "policy.dispatch_intent")]
+    PolicyDispatchIntent,
+    #[serde(rename = "policy.dispatch_admitted")]
+    PolicyDispatchAdmitted,
+    #[serde(rename = "policy.dispatch_rejected")]
+    PolicyDispatchRejected,
+    #[serde(rename = "policy.dispatch_completed")]
+    PolicyDispatchCompleted,
+    #[serde(rename = "policy.execution_recorded")]
+    PolicyExecutionRecorded,
+    #[serde(rename = "policy.planning_signal_observed")]
+    PolicyPlanningSignalObserved,
+    #[serde(rename = "catalog.transition_intent")]
+    CatalogTransitionIntent,
+    #[serde(rename = "catalog.activated")]
+    CatalogActivated,
+    #[serde(rename = "catalog.rolled_back")]
+    CatalogRolledBack,
+    #[serde(rename = "catalog.transition_failed")]
+    CatalogTransitionFailed,
     #[serde(rename = "lease.requested")]
     LeaseRequested,
     #[serde(rename = "lease.granted")]
@@ -299,10 +347,36 @@ pub enum EventType {
     ResourcePromoteFailed,
     #[serde(rename = "ui.action")]
     UiAction,
+    #[serde(rename = "client.action")]
+    ClientAction,
     #[serde(rename = "cli.command")]
     CliCommand,
     #[serde(rename = "lab.request")]
     LabRequest,
+    #[serde(rename = "state.migrated")]
+    StateMigrated,
+    #[serde(rename = "release.staged")]
+    ReleaseStaged,
+    #[serde(rename = "release.transition_intent")]
+    ReleaseTransitionIntent,
+    #[serde(rename = "release.activated")]
+    ReleaseActivated,
+    #[serde(rename = "release.rolled_back")]
+    ReleaseRolledBack,
+    #[serde(rename = "release.transition_failed")]
+    ReleaseTransitionFailed,
+    #[serde(rename = "agent.wake_requested")]
+    AgentWakeRequested,
+    #[serde(rename = "agent.session_started")]
+    AgentSessionStarted,
+    #[serde(rename = "agent.session_resumed")]
+    AgentSessionResumed,
+    #[serde(rename = "agent.response_recorded")]
+    AgentResponseRecorded,
+    #[serde(rename = "agent.session_completed")]
+    AgentSessionCompleted,
+    #[serde(rename = "agent.session_escalated")]
+    AgentSessionEscalated,
     #[serde(rename = "ledger.recovered")]
     LedgerRecovered,
 }
@@ -317,6 +391,15 @@ impl EventType {
             | Self::MonitorProbeFailed
             | Self::MonitorRecoveryAdmitted
             | Self::MonitorRecoveryDeferred => EventFamily::Monitor,
+            Self::PerformancePressureStarted
+            | Self::PerformancePressureEnded
+            | Self::PerformanceStutterDetected
+            | Self::PerformanceSummary
+            | Self::PerformanceMonitorDegraded
+            | Self::PerformanceMonitorRecovered
+            | Self::PerformanceBalanceChanged => EventFamily::Performance,
+            Self::FactPublished | Self::FactInvalidated => EventFamily::Fact,
+            Self::ApprovalDecision => EventFamily::Approval,
             Self::CommandReceived | Self::CommandValidated | Self::CommandRejected => {
                 EventFamily::Command
             }
@@ -324,6 +407,16 @@ impl EventType {
             | Self::SchedulerQueued
             | Self::SchedulerDenied
             | Self::SchedulerPreempted => EventFamily::Scheduler,
+            Self::PolicyDispatchIntent
+            | Self::PolicyDispatchAdmitted
+            | Self::PolicyDispatchRejected
+            | Self::PolicyDispatchCompleted
+            | Self::PolicyExecutionRecorded
+            | Self::PolicyPlanningSignalObserved => EventFamily::Policy,
+            Self::CatalogTransitionIntent
+            | Self::CatalogActivated
+            | Self::CatalogRolledBack
+            | Self::CatalogTransitionFailed => EventFamily::Catalog,
             Self::LeaseRequested
             | Self::LeaseGranted
             | Self::LeaseTransferred
@@ -374,7 +467,21 @@ impl EventType {
             | Self::ResourcePromoteIntent
             | Self::ResourcePromoted
             | Self::ResourcePromoteFailed => EventFamily::ResourceAuthoring,
-            Self::UiAction | Self::CliCommand | Self::LabRequest => EventFamily::Client,
+            Self::UiAction | Self::ClientAction | Self::CliCommand | Self::LabRequest => {
+                EventFamily::Client
+            }
+            Self::StateMigrated => EventFamily::State,
+            Self::ReleaseStaged
+            | Self::ReleaseTransitionIntent
+            | Self::ReleaseActivated
+            | Self::ReleaseRolledBack
+            | Self::ReleaseTransitionFailed => EventFamily::Release,
+            Self::AgentWakeRequested
+            | Self::AgentSessionStarted
+            | Self::AgentSessionResumed
+            | Self::AgentResponseRecorded
+            | Self::AgentSessionCompleted
+            | Self::AgentSessionEscalated => EventFamily::Agent,
             Self::LedgerRecovered => EventFamily::Ledger,
         }
     }

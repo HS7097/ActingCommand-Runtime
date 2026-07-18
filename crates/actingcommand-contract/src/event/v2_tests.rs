@@ -1,7 +1,18 @@
 use super::*;
 use crate::{
-    InputAction, MonitorDecision, MonitorDiagnosis, MonitorDisposition, MonitorObservation,
-    MonitorRecoveryCoordinationReason, MonitorRecoveryKind,
+    AgentCapabilityContract, AgentResponseDisposition, AgentSessionBudget, AgentSessionEventData,
+    AgentSessionResponse, AgentSessionStatus, AgentWakeData, AgentWakeKind, AgentWakeTrigger,
+    ApprovalDecisionRecord, ApprovalDisposition, ApprovalTarget, ClientActionKind,
+    ClientActionRecord, ClientActionValue, FactContent, FactInvalidationEventData, FactRecord,
+    FactScope, FactTtlPolicy, FactTtlSource, FactValue, InputAction, MonitorDecision,
+    MonitorDiagnosis, MonitorDisposition, MonitorObservation, MonitorRecoveryCoordinationReason,
+    MonitorRecoveryKind, PerformanceContext, PerformanceControlEventData, PerformanceControlLevel,
+    PerformanceControlReason, PerformanceDeadlineDisposition, PerformanceMetric,
+    PerformanceMonitorHealth, PerformanceMonitorStateEventData, PerformancePressureEventData,
+    PerformancePressureKind, PerformancePressureRecord, PerformancePressureSeverity,
+    PerformancePressureValue, PerformanceStutterEventData, PerformanceSummaryEventData,
+    ReleaseResourceVersion, ReleaseTransitionData, ReleaseTransitionKind, RuntimeReleaseSet,
+    StateMigrationData, StateRecoveryAction, StateTransitionStatus, StateValidationResult,
 };
 use std::sync::Mutex;
 
@@ -116,6 +127,263 @@ fn all_payload_drafts(mut input: impl FnMut() -> AuditInput) -> Vec<EventPayload
     let monitor_decision =
         MonitorDecision::new(MonitorDiagnosis::Healthy, MonitorDisposition::Healthy, None)
             .expect("monitor decision");
+    let policy_data = PolicyDispatchEventData {
+        decision_id: "decision:fixture-a".to_owned(),
+        task_id: "task:fixture-a".to_owned(),
+        instance_id: "instance:fixture-a".to_owned(),
+        operation_id: "operation:fixture-a".to_owned(),
+        package_digest: format!("sha256:{}", "c".repeat(64)),
+        procedure_binding_digest: format!("sha256:{}", "d".repeat(64)),
+        reason_chain_id: "reason:fixture-a".to_owned(),
+        reasons: vec![PolicyReasonRecord {
+            code: "eligible".to_owned(),
+            detail: "neutral fixture is eligible".to_owned(),
+        }],
+        catalog_hash: format!("sha256:{}", "b".repeat(64)),
+        catalog_version: 1,
+        input_ledger_position: 1,
+        fact_snapshot_id: "snapshot:fixture-a".to_owned(),
+        approval_fact_ids: vec!["approval:fixture-a".to_owned()],
+        urgency_milli: 500,
+    };
+    let policy_admission = PolicyAdmissionRecord {
+        activity: PolicyActivitySample {
+            profile_id: "activity:fixture-a".to_owned(),
+            local_day: 20_000,
+            window_id: "activity:fixture-a:20000:0".to_owned(),
+            admitted_at_unix_ms: 1_752_147_200_000,
+            seed: 7,
+            interval_ms: 60_000,
+            next_eligible_unix_ms: 1_752_147_260_000,
+        },
+        budget: PolicyBudgetReceipt {
+            task_daily_used: 1,
+            task_daily_limit: 24,
+            task_window_used: 1,
+            task_window_limit: 4,
+            task_runtime_reserved_ms: 60_000,
+            task_runtime_limit_ms: 300_000,
+            activity_daily_used: 1,
+            activity_daily_limit: 24,
+            activity_window_used: 1,
+            activity_window_limit: 4,
+            activity_runtime_reserved_ms: 60_000,
+            activity_runtime_limit_ms: 7_200_000,
+        },
+    };
+    let policy_execution = PolicyExecutionEventData {
+        decision_id: "decision:fixture-a".to_owned(),
+        task_id: "task:fixture-a".to_owned(),
+        instance_id: "instance:fixture-a".to_owned(),
+        observed_at_unix_ms: 1_752_147_201_000,
+        outcome: PolicyExecutionOutcome::Succeeded { runtime_ms: 1_000 },
+    };
+    let policy_signal = PolicyPlanningSignalEventData {
+        signal_id: "signal:fixture-a".to_owned(),
+        instance_id: "instance:fixture-a".to_owned(),
+        task_id: Some("task:fixture-a".to_owned()),
+        kind: PolicyPlanningSignalKind::GoalMissed,
+        fact_code: "goal.primary.missed".to_owned(),
+        observed_at_unix_ms: 1_752_147_201_000,
+        detection_budget: None,
+    };
+    let catalog_data = CatalogTransitionEventData {
+        catalog_id: "catalog:fixture-a".to_owned(),
+        catalog_version: 2,
+        catalog_hash: format!("sha256:{}", "c".repeat(64)),
+        previous_catalog_hash: Some(format!("sha256:{}", "b".repeat(64))),
+        promotion: None,
+    };
+    let migration = StateMigrationData::new(
+        format!("migration:{}", "d".repeat(64)),
+        "policy.catalog.active",
+        "pointer.v0",
+        "pointer.v1",
+        format!("sha256:{}", "e".repeat(64)),
+        StateValidationResult::Passed,
+        StateRecoveryAction::ImportedLegacy,
+    )
+    .expect("state migration");
+    let release = RuntimeReleaseSet::new(
+        "1.0.0",
+        format!("sha256:{}", "d".repeat(64)),
+        "1.0.0",
+        format!("sha256:{}", "e".repeat(64)),
+        vec![
+            ReleaseResourceVersion::new(
+                "project-neutral",
+                "1.0.0",
+                format!("sha256:{}", "f".repeat(64)),
+            )
+            .expect("release resource"),
+        ],
+    )
+    .expect("release set");
+    let release_transition = ReleaseTransitionData::new(
+        format!("release-transition:{}", "a".repeat(64)),
+        ReleaseTransitionKind::Activate,
+        None,
+        release.release_id(),
+        1,
+        release.manifest_sha256(),
+        StateTransitionStatus::new(StateValidationResult::Passed, StateRecoveryAction::None),
+    )
+    .expect("release transition");
+    let rollback_transition = ReleaseTransitionData::new(
+        format!("release-transition:{}", "b".repeat(64)),
+        ReleaseTransitionKind::Rollback,
+        Some(format!("release:{}", "c".repeat(64))),
+        release.release_id(),
+        2,
+        release.manifest_sha256(),
+        StateTransitionStatus::new(StateValidationResult::Passed, StateRecoveryAction::None),
+    )
+    .expect("rollback transition");
+    let agent_wake = AgentWakeData::new(
+        *ids.mint_agent_wake_id().expect("agent wake id").transport(),
+        *ids.mint_correlation_id()
+            .expect("agent correlation id")
+            .transport(),
+        AgentWakeTrigger::new(
+            *ids.mint_instance_id()
+                .expect("agent instance id")
+                .transport(),
+            AgentWakeKind::DriftPredicted,
+            *ids.mint_event_id().expect("agent trigger id").transport(),
+            1,
+            1_752_147_201_000,
+        )
+        .expect("agent wake trigger"),
+        AgentSessionBudget::new(2, 60_000).expect("agent budget"),
+        AgentCapabilityContract::read_only(2).expect("agent capabilities"),
+    )
+    .expect("agent wake");
+    let agent_session = AgentSessionStatus::started(
+        *ids.mint_agent_session_id()
+            .expect("agent session id")
+            .transport(),
+        &agent_wake,
+        1_752_147_202_000,
+    )
+    .expect("agent session");
+    let agent_resumed = agent_session
+        .resumed(1_752_147_203_000)
+        .expect("agent resumed");
+    let retry_response = AgentSessionResponse::new(
+        agent_session.session_id(),
+        AgentResponseDisposition::RetryableFailure,
+        "transient_failure",
+        1_752_147_204_000,
+    )
+    .expect("agent retry response");
+    let agent_retry = agent_session
+        .retry_or_escalate(retry_response.observed_at_unix_ms())
+        .expect("agent retry");
+    let completed_response = AgentSessionResponse::new(
+        agent_session.session_id(),
+        AgentResponseDisposition::Completed,
+        "completed",
+        1_752_147_205_000,
+    )
+    .expect("agent completed response");
+    let agent_completed = agent_session
+        .completed(completed_response.observed_at_unix_ms())
+        .expect("agent completed");
+    let human_response = AgentSessionResponse::new(
+        agent_session.session_id(),
+        AgentResponseDisposition::NeedsHuman,
+        "human_required",
+        1_752_147_206_000,
+    )
+    .expect("agent human response");
+    let agent_escalated = agent_session
+        .escalated(human_response.observed_at_unix_ms())
+        .expect("agent escalated");
+    let performance_pressure_started = PerformancePressureEventData {
+        observed_at_unix_ms: 1_752_147_201_000,
+        pressure: PerformancePressureRecord {
+            kind: PerformancePressureKind::Cpu,
+            severity: PerformancePressureSeverity::High,
+            started_at_unix_ms: 1_752_147_201_000,
+            last_observed_at_unix_ms: 1_752_147_201_000,
+            peak: PerformancePressureValue::Utilization {
+                basis_points: 9_500,
+            },
+        },
+    };
+    let performance_pressure_ended = PerformancePressureEventData {
+        observed_at_unix_ms: 1_752_147_201_000,
+        pressure: PerformancePressureRecord {
+            started_at_unix_ms: 1_752_147_200_000,
+            ..performance_pressure_started.pressure.clone()
+        },
+    };
+    let performance_context = PerformanceContext {
+        window_start_unix_ms: 1_752_147_171_000,
+        window_end_unix_ms: 1_752_147_201_000,
+        health: PerformanceMonitorHealth::Healthy,
+        sample_count: 2,
+        unavailable_metrics: Vec::new(),
+        pressures: vec![performance_pressure_ended.pressure.clone()],
+        max_cpu_basis_points: Some(9_500),
+        max_ram_basis_points: Some(4_000),
+        disk_queue_depth_p95_milli: Some(500),
+        disk_latency_p95_micros: Some(1_000),
+        max_gpu_basis_points: Some(3_000),
+        max_frame_gap_ms: Some(1_500),
+        max_capture_latency_ms: Some(120),
+        max_recognition_latency_ms: Some(80),
+        max_action_effect_latency_ms: Some(250),
+        related_event_ids: Vec::new(),
+    };
+    let fact_record = FactRecord {
+        scope: FactScope::Instance {
+            instance_id: "instance:fixture-a".to_owned(),
+        },
+        key: "env.theme".to_owned(),
+        content: FactContent::Inline {
+            value: FactValue::String("Neutral".to_owned()),
+        },
+        observed_at_unix_ms: 1_752_147_201_000,
+        expires_at_unix_ms: Some(1_752_147_261_000),
+        ttl_policy: Some(FactTtlPolicy {
+            minimum_ms: 1_000,
+            maximum_ms: 120_000,
+            source: FactTtlSource::DetectorContract,
+        }),
+        confidence_milli: 900,
+        source_detector: "detector.theme".to_owned(),
+        source_snapshot_id: "snapshot:fixture-a".to_owned(),
+        schema_version: "fact.v1".to_owned(),
+        resource_bundle_hash: "d".repeat(64),
+        invalidate_on: vec![EventType::RuntimeTakeover],
+    };
+    let fact_invalidation = FactInvalidationEventData {
+        scope: fact_record.scope.clone(),
+        key: fact_record.key.clone(),
+        source_snapshot_id: fact_record.source_snapshot_id.clone(),
+        invalidated_at_unix_ms: 1_752_147_202_000,
+        invalidated_by_event_id: *ids.mint_event_id().expect("trigger event").transport(),
+        invalidated_by_event_type: EventType::RuntimeTakeover,
+    };
+    let client_action = ClientActionRecord::new(
+        "settings",
+        "profile_mode",
+        ClientActionKind::Input,
+        Some("instance-a".to_owned()),
+        Some(ClientActionValue::PathSafeString("balanced".to_owned())),
+    )
+    .expect("client action");
+    let approval = ApprovalDecisionRecord::new(
+        "approval:fixture-a",
+        ApprovalDisposition::Approved,
+        ApprovalTarget::Catalog {
+            catalog_hash: format!("sha256:{}", "d".repeat(64)),
+            catalog_version: 1,
+        },
+        "user_confirmed",
+    )
+    .expect("approval");
 
     vec![
         MonitorPayloadDraft::requested(input()).into(),
@@ -130,6 +398,72 @@ fn all_payload_drafts(mut input: impl FnMut() -> AuditInput) -> Vec<EventPayload
             input(),
         )
         .into(),
+        PerformancePayloadDraft::pressure_started(performance_pressure_started, input()).into(),
+        PerformancePayloadDraft::pressure_ended(performance_pressure_ended, input()).into(),
+        PerformancePayloadDraft::stutter_detected(
+            PerformanceStutterEventData {
+                instance_id: "instance:fixture-a".to_owned(),
+                observed_at_unix_ms: 1_752_147_201_000,
+                frame_gap_ms: 1_500,
+                capture_latency_ms: Some(120),
+                recognition_latency_ms: Some(80),
+                action_effect_latency_ms: Some(250),
+            },
+            input(),
+        )
+        .into(),
+        PerformancePayloadDraft::summary(
+            PerformanceSummaryEventData {
+                context: performance_context,
+                foreground: None,
+                owned_processes: Vec::new(),
+                third_party_high_load: Vec::new(),
+            },
+            input(),
+        )
+        .into(),
+        PerformancePayloadDraft::monitor_degraded(
+            PerformanceMonitorStateEventData {
+                observed_at_unix_ms: 1_752_147_201_000,
+                health: PerformanceMonitorHealth::Degraded,
+                failure_code: Some("performance_counter_failed".to_owned()),
+                consecutive_failures: 1,
+                terminal: false,
+                unavailable_metrics: vec![PerformanceMetric::Gpu],
+            },
+            input(),
+        )
+        .into(),
+        PerformancePayloadDraft::monitor_recovered(
+            PerformanceMonitorStateEventData {
+                observed_at_unix_ms: 1_752_147_202_000,
+                health: PerformanceMonitorHealth::Healthy,
+                failure_code: None,
+                consecutive_failures: 0,
+                terminal: false,
+                unavailable_metrics: Vec::new(),
+            },
+            input(),
+        )
+        .into(),
+        PerformancePayloadDraft::balance_changed(
+            PerformanceControlEventData {
+                observed_at_unix_ms: 1_752_147_203_000,
+                instance_id: None,
+                previous_level: PerformanceControlLevel::Normal,
+                level: PerformanceControlLevel::DispatchPaused,
+                reason: PerformanceControlReason::ThirdPartyContention,
+                host_responsiveness_basis_points: Some(9_000),
+                third_party_pressure_basis_points: Some(3_000),
+                recovery: false,
+                deadline_disposition: None,
+            },
+            input(),
+        )
+        .into(),
+        FactPayloadDraft::published(fact_record, input()).into(),
+        FactPayloadDraft::invalidated(fact_invalidation, input()).into(),
+        ApprovalPayloadDraft::decision(approval, input()).into(),
         CommandPayloadDraft::received(action, input()).into(),
         CommandPayloadDraft::validated(action, effect, input()).into(),
         CommandPayloadDraft::rejected(action, diagnostic, effect, input()).into(),
@@ -144,6 +478,77 @@ fn all_payload_drafts(mut input: impl FnMut() -> AuditInput) -> Vec<EventPayload
             queued_request,
             crate::LeasePriority::High,
             true,
+            input(),
+        )
+        .into(),
+        PolicyPayloadDraft::dispatch_intent(policy_data.clone(), input()).into(),
+        PolicyPayloadDraft::dispatch_admitted(
+            policy_data.clone(),
+            policy_admission.clone(),
+            input(),
+        )
+        .into(),
+        PolicyPayloadDraft::dispatch_rejected(
+            policy_data.clone(),
+            EffectDisposition::NotPerformed,
+            input(),
+        )
+        .into(),
+        PolicyPayloadDraft::execution_recorded(policy_execution, input()).into(),
+        PolicyPayloadDraft::planning_signal_observed(policy_signal, input()).into(),
+        PolicyPayloadDraft::dispatch_completed(policy_data, policy_admission, input()).into(),
+        CatalogPayloadDraft::transition_intent(
+            EventAction::CatalogActivate,
+            catalog_data.clone(),
+            input(),
+        )
+        .into(),
+        CatalogPayloadDraft::activated(catalog_data.clone(), input()).into(),
+        CatalogPayloadDraft::transition_failed(
+            EventAction::CatalogActivate,
+            catalog_data.clone(),
+            EffectDisposition::Indeterminate,
+            input(),
+        )
+        .into(),
+        CatalogPayloadDraft::rolled_back(catalog_data, input()).into(),
+        StatePayloadDraft::migrated(migration, input()).into(),
+        ReleasePayloadDraft::staged(release, input()).into(),
+        ReleasePayloadDraft::transition_intent(release_transition.clone(), input()).into(),
+        ReleasePayloadDraft::activated(release_transition.clone(), input()).into(),
+        ReleasePayloadDraft::rolled_back(rollback_transition, input()).into(),
+        ReleasePayloadDraft::transition_failed(
+            release_transition,
+            EffectDisposition::Indeterminate,
+            input(),
+        )
+        .into(),
+        AgentPayloadDraft::wake_requested(agent_wake, input()).into(),
+        AgentPayloadDraft::session_started(
+            AgentSessionEventData::new(agent_session, None).expect("agent start event"),
+            input(),
+        )
+        .into(),
+        AgentPayloadDraft::session_resumed(
+            AgentSessionEventData::new(agent_resumed, None).expect("agent resume event"),
+            input(),
+        )
+        .into(),
+        AgentPayloadDraft::response_recorded(
+            AgentSessionEventData::new(agent_retry, Some(retry_response))
+                .expect("agent retry event"),
+            input(),
+        )
+        .into(),
+        AgentPayloadDraft::session_completed(
+            AgentSessionEventData::new(agent_completed, Some(completed_response))
+                .expect("agent completed event"),
+            input(),
+        )
+        .into(),
+        AgentPayloadDraft::session_escalated(
+            AgentSessionEventData::new(agent_escalated, Some(human_response))
+                .expect("agent escalation event"),
             input(),
         )
         .into(),
@@ -301,6 +706,7 @@ fn all_payload_drafts(mut input: impl FnMut() -> AuditInput) -> Vec<EventPayload
             input(),
         )
         .into(),
+        ClientPayloadDraft::action(client_action, input()).into(),
         ClientPayloadDraft::ui_action(action, input()).into(),
         ClientPayloadDraft::cli_command(action, input()).into(),
         ClientPayloadDraft::lab_request(action, input()).into(),
@@ -395,6 +801,23 @@ fn sanitize_with(
 
 fn sanitize(payload: EventPayloadDraft, index: u64) -> SanitizedEventDraft {
     sanitize_with(payload, index, &SpyFingerprinter::new())
+}
+
+fn sanitize_error(payload: EventPayloadDraft) -> SanitizationError {
+    let issuer = identifier_issuer();
+    match EventDraft::new(
+        issuer.mint_event_id().expect("event id"),
+        1_752_147_200_000,
+        EventSeverity::Info,
+        origin(),
+        links(&issuer),
+        payload,
+    )
+    .sanitize(&SpyFingerprinter::new())
+    {
+        Ok(_) => panic!("event must be rejected"),
+        Err(error) => error,
+    }
 }
 
 #[test]
@@ -679,7 +1102,8 @@ fn tagged_payload_and_projection_layers_reject_unknown_fields() {
         .expect_err("unknown projection payload field");
     assert!(!error.to_string().contains("token-secret"));
 
-    let public_projection = ProjectionPayload::Public(sanitized.payload().public_projection());
+    let public_projection =
+        ProjectionPayload::Public(Box::new(sanitized.payload().public_projection()));
     let mut public_family_layer =
         serde_json::to_value(&public_projection).expect("public projection value");
     public_family_layer["payload"]["smuggled"] = serde_json::json!("token-secret-public-family");
@@ -699,7 +1123,7 @@ fn tagged_payload_and_projection_layers_reject_unknown_fields() {
 #[test]
 fn event_v2_round_trips_every_c1_payload_variant() {
     let payloads = all_payload_drafts(AuditInput::new);
-    assert_eq!(payloads.len(), 59);
+    assert_eq!(payloads.len(), 92);
 
     for (index, payload) in payloads.into_iter().enumerate() {
         let sanitized = sanitize(payload, index as u64 + 1);
@@ -711,6 +1135,289 @@ fn event_v2_round_trips_every_c1_payload_variant() {
             serde_json::from_str(&json).expect("deserialize typed payload");
         assert_eq!(round_trip, *sanitized.payload());
     }
+}
+
+#[test]
+fn fact_public_projection_exposes_identity_without_inline_value() {
+    let event = sanitize(
+        FactPayloadDraft::published(
+            FactRecord {
+                scope: FactScope::Instance {
+                    instance_id: "instance:fixture-a".to_owned(),
+                },
+                key: "env.theme".to_owned(),
+                content: FactContent::Inline {
+                    value: FactValue::String("private-inline-value".to_owned()),
+                },
+                observed_at_unix_ms: 1_752_147_201_000,
+                expires_at_unix_ms: None,
+                ttl_policy: None,
+                confidence_milli: 900,
+                source_detector: "detector.theme".to_owned(),
+                source_snapshot_id: "snapshot:fixture-a".to_owned(),
+                schema_version: "fact.v1".to_owned(),
+                resource_bundle_hash: "d".repeat(64),
+                invalidate_on: Vec::new(),
+            },
+            AuditInput::new(),
+        )
+        .into(),
+        1,
+    );
+    assert_eq!(event.payload().sensitivity(), Sensitivity::Internal);
+    let projection =
+        serde_json::to_value(event.payload().public_projection()).expect("fact public projection");
+    assert_eq!(projection["family"], "fact");
+    assert_eq!(projection["payload"]["fact_key"], "env.theme");
+    assert_eq!(
+        projection["payload"]["fact_source_snapshot_id"],
+        "snapshot:fixture-a"
+    );
+    assert!(!projection.to_string().contains("private-inline-value"));
+}
+
+#[test]
+fn artifact_backed_fact_inherits_redaction_sensitivity() {
+    let artifact = artifact(b"private-fact-evidence").reference().project(true);
+    let object_key = artifact
+        .object_key()
+        .expect("durable artifact object key")
+        .to_owned();
+    let event = sanitize(
+        FactPayloadDraft::published(
+            FactRecord {
+                scope: FactScope::Game {
+                    game_id: "game:fixture-a".to_owned(),
+                },
+                key: "health.evidence".to_owned(),
+                content: FactContent::Artifact { artifact },
+                observed_at_unix_ms: 1_752_147_201_000,
+                expires_at_unix_ms: None,
+                ttl_policy: None,
+                confidence_milli: 1_000,
+                source_detector: "detector.health".to_owned(),
+                source_snapshot_id: "snapshot:health".to_owned(),
+                schema_version: "fact.v1".to_owned(),
+                resource_bundle_hash: "d".repeat(64),
+                invalidate_on: Vec::new(),
+            },
+            AuditInput::new(),
+        )
+        .into(),
+        1,
+    );
+    assert_eq!(event.payload().sensitivity(), Sensitivity::Secret);
+    let projection =
+        serde_json::to_value(event.payload().public_projection()).expect("fact projection");
+    assert!(!projection.to_string().contains(&object_key));
+}
+
+#[test]
+fn client_and_approval_public_projections_keep_values_private() {
+    let secret_hash = format!("sha256:{}", "e".repeat(64));
+    let client = sanitize(
+        ClientPayloadDraft::action(
+            ClientActionRecord::new(
+                "settings",
+                "account_token",
+                ClientActionKind::Input,
+                None,
+                Some(ClientActionValue::Redacted {
+                    sha256: secret_hash.clone(),
+                    byte_count: 24,
+                }),
+            )
+            .expect("client action"),
+            AuditInput::new(),
+        )
+        .into(),
+        1,
+    );
+    let projection =
+        serde_json::to_value(client.payload().public_projection()).expect("client projection");
+    assert_eq!(projection["payload"]["client_surface_id"], "settings");
+    assert_eq!(projection["payload"]["client_action_kind"], "input");
+    assert!(!projection.to_string().contains(&secret_hash));
+
+    let approval = sanitize(
+        ApprovalPayloadDraft::decision(
+            ApprovalDecisionRecord::new(
+                "approval:fixture-a",
+                ApprovalDisposition::Pinned,
+                ApprovalTarget::Decision {
+                    decision_id: "decision:fixture-a".to_owned(),
+                    catalog_hash: format!("sha256:{}", "a".repeat(64)),
+                    catalog_version: 3,
+                },
+                "user_confirmed",
+            )
+            .expect("approval"),
+            AuditInput::new(),
+        )
+        .into(),
+        2,
+    );
+    let projection =
+        serde_json::to_value(approval.payload().public_projection()).expect("approval projection");
+    assert_eq!(projection["family"], "approval");
+    assert_eq!(projection["payload"]["approval_id"], "approval:fixture-a");
+    assert_eq!(projection["payload"]["approval_target_kind"], "decision");
+    assert!(!projection.to_string().contains("user_confirmed"));
+}
+
+#[test]
+fn policy_failure_payload_rejects_impossible_retry_combinations() {
+    let base = PolicyFailureRecord {
+        error_code: "transient.capture".to_owned(),
+        reported_success: false,
+        original_class: PolicyFailureClass::Recoverable,
+        effective_class: PolicyFailureClass::Recoverable,
+        consecutive_same_error: 1,
+        escalation_streak: 1,
+        performance_tax_exempt: false,
+        retry_attempt: 1,
+        disposition: PolicyFailureDisposition::RetryScheduled,
+        retry_at_unix_ms: Some(1_752_147_201_100),
+        runtime_ms: 1_000,
+        sensitive: false,
+        perf_context: Box::new(PerformanceContext::unavailable(1_752_147_201_000)),
+    };
+    let event = |failure| {
+        PolicyPayloadDraft::execution_recorded(
+            PolicyExecutionEventData {
+                decision_id: "decision:fixture-a".to_owned(),
+                task_id: "task:fixture-a".to_owned(),
+                instance_id: "instance:fixture-a".to_owned(),
+                observed_at_unix_ms: 1_752_147_201_000,
+                outcome: PolicyExecutionOutcome::Failed { failure },
+            },
+            AuditInput::new(),
+        )
+        .into()
+    };
+
+    let mut severe_retry = base.clone();
+    severe_retry.effective_class = PolicyFailureClass::Severe;
+    assert_eq!(
+        sanitize_error(event(severe_retry)).code(),
+        "invalid_policy_failure_record"
+    );
+
+    let mut hidden_retry_attempt = base.clone();
+    hidden_retry_attempt.disposition = PolicyFailureDisposition::Continue;
+    hidden_retry_attempt.retry_at_unix_ms = None;
+    assert_eq!(
+        sanitize_error(event(hidden_retry_attempt)).code(),
+        "invalid_policy_failure_record"
+    );
+
+    let mut unsupported_exemption = base.clone();
+    unsupported_exemption.performance_tax_exempt = true;
+    unsupported_exemption.escalation_streak = 0;
+    assert_eq!(
+        sanitize_error(event(unsupported_exemption)).code(),
+        "invalid_policy_failure_record"
+    );
+
+    let mut past_retry = base;
+    past_retry.retry_at_unix_ms = Some(1_752_147_201_000);
+    assert_eq!(
+        sanitize_error(event(past_retry)).code(),
+        "invalid_policy_failure_record"
+    );
+}
+
+#[test]
+fn performance_payload_rejects_fake_health_and_invalid_stutter() {
+    let fake_health: EventPayloadDraft = PerformancePayloadDraft::monitor_degraded(
+        PerformanceMonitorStateEventData {
+            observed_at_unix_ms: 1_752_147_201_000,
+            health: PerformanceMonitorHealth::Degraded,
+            failure_code: None,
+            consecutive_failures: 1,
+            terminal: false,
+            unavailable_metrics: vec![PerformanceMetric::Gpu],
+        },
+        AuditInput::new(),
+    )
+    .into();
+    assert_eq!(
+        sanitize_error(fake_health).code(),
+        "invalid_performance_monitor_state"
+    );
+
+    let invalid_stutter: EventPayloadDraft = PerformancePayloadDraft::stutter_detected(
+        PerformanceStutterEventData {
+            instance_id: "instance:fixture-a".to_owned(),
+            observed_at_unix_ms: 1_752_147_201_000,
+            frame_gap_ms: 0,
+            capture_latency_ms: None,
+            recognition_latency_ms: None,
+            action_effect_latency_ms: None,
+        },
+        AuditInput::new(),
+    )
+    .into();
+    assert_eq!(
+        sanitize_error(invalid_stutter).code(),
+        "invalid_performance_stutter"
+    );
+
+    let invalid_control: EventPayloadDraft = PerformancePayloadDraft::balance_changed(
+        PerformanceControlEventData {
+            observed_at_unix_ms: 1_752_147_201_000,
+            instance_id: Some("instance:fixture-a".to_owned()),
+            previous_level: PerformanceControlLevel::DispatchPaused,
+            level: PerformanceControlLevel::DispatchPaused,
+            reason: PerformanceControlReason::Recovery,
+            host_responsiveness_basis_points: Some(10_000),
+            third_party_pressure_basis_points: Some(0),
+            recovery: true,
+            deadline_disposition: Some(PerformanceDeadlineDisposition::Throttled),
+        },
+        AuditInput::new(),
+    )
+    .into();
+    assert_eq!(
+        sanitize_error(invalid_control).code(),
+        "invalid_performance_control_transition"
+    );
+}
+
+#[test]
+fn legacy_policy_failure_defaults_preserve_streak_and_explicitly_mark_context_unavailable() {
+    let failure = PolicyFailureRecord {
+        error_code: "transient.capture".to_owned(),
+        reported_success: false,
+        original_class: PolicyFailureClass::Recoverable,
+        effective_class: PolicyFailureClass::Recoverable,
+        consecutive_same_error: 3,
+        escalation_streak: 3,
+        performance_tax_exempt: false,
+        retry_attempt: 0,
+        disposition: PolicyFailureDisposition::Continue,
+        retry_at_unix_ms: None,
+        runtime_ms: 1_000,
+        sensitive: false,
+        perf_context: Box::new(PerformanceContext::unavailable(1_752_147_201_000)),
+    };
+    let mut legacy = serde_json::to_value(&failure).expect("failure JSON");
+    let object = legacy.as_object_mut().expect("failure object");
+    object.remove("escalation_streak");
+    object.remove("performance_tax_exempt");
+    object.remove("perf_context");
+    let recovered: PolicyFailureRecord = serde_json::from_value(legacy).expect("legacy failure");
+    assert_eq!(recovered.escalation_streak, 3);
+    assert!(!recovered.performance_tax_exempt);
+    assert_eq!(
+        recovered.perf_context.health,
+        PerformanceMonitorHealth::Unavailable
+    );
+
+    let mut explicit_null = serde_json::to_value(&failure).expect("failure JSON");
+    explicit_null["escalation_streak"] = serde_json::Value::Null;
+    serde_json::from_value::<PolicyFailureRecord>(explicit_null)
+        .expect_err("explicit null streak must not use the legacy default");
 }
 
 #[test]

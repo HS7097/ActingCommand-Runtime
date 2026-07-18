@@ -8,6 +8,7 @@ publish = false
 
 [dependencies]
 actingcommand-contract = { workspace = true }
+actingcommand-policy = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 

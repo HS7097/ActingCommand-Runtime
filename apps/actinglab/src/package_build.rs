@@ -43,16 +43,21 @@ pub(super) fn run_build_pack(global: &GlobalOptions, flags: &FlagArgs) -> CliOut
     let game = flags.optional("--game").or_else(|| global.game.clone());
     let server = flags.optional("--server").or_else(|| global.server.clone());
     let dry_run = global.dry_run || flags.bool("--dry-run");
-    let env = package_env(global, flags, game.clone(), server.clone());
     let catalog = PackageBuildCatalog::open(PackageBuildCatalogRequest {
         source: package_source(flags)?,
         temporary_root: std::env::temp_dir(),
-        game,
-        server,
+        game: game.clone(),
+        server: server.clone(),
         locale: flags.optional("--locale"),
         max_buffered_payload_bytes: parse_max_buffered_payload_bytes(flags)?,
     })?;
     let metadata = catalog.metadata();
+    let env = package_env(
+        global,
+        flags,
+        game.or_else(|| Some(metadata.game.clone())),
+        server.or_else(|| Some(metadata.server.clone())),
+    );
     let resolution = parse_resolution(flags)?;
     let mut lab = super::env_detection::build_readonly_lab()?;
 
@@ -153,9 +158,10 @@ pub(super) fn run_build_pack(global: &GlobalOptions, flags: &FlagArgs) -> CliOut
     let out = flags
         .optional_path("--out")
         .ok_or_else(|| CliError::usage("missing --out <value>"))?;
-    let entry_task_id = flags
-        .optional("--entry-task")
-        .unwrap_or_else(|| catalog.default_entry_task());
+    let entry_task_id = match flags.optional("--entry-task") {
+        Some(entry_task_id) => entry_task_id,
+        None => catalog.default_entry_task()?,
+    };
     let package_id = flags
         .optional("--package-id")
         .unwrap_or_else(|| format!("{}.{}.full", metadata.game, metadata.server));
@@ -582,6 +588,7 @@ mod tests {
                 "task_id": task_id,
                 "game": "arknights",
                 "server_scope": ["cn"],
+                "locale": "zh-CN",
                 "goal": "app command fixture",
                 "coordinate_space": {"width": 1280, "height": 720},
                 "defaults": {"template_threshold": 0.9, "color_max_distance": 20.0},

@@ -12,16 +12,19 @@ members = [
     "crates/artifact-store",
     "crates/device",
     "crates/execution-kernel",
+    "crates/host-metrics",
     "crates/ledger",
     "crates/lab",
     "crates/page-detector",
     "crates/pack-containment",
+    "crates/policy",
     "crates/onnx-provider-support",
     "crates/recognition",
     "crates/recognition-pack",
     "crates/resource-tooling",
     "crates/runtime-client",
     "crates/runtime-host",
+    "crates/runtime-state",
     "crates/scheduler",
     "crates/vision-ffi",
     "providers/onnxruntime-json",
@@ -40,20 +43,34 @@ actingcommand-contract = { path = "crates/actingcommand-contract" }
 actingcommand-artifact-store = { path = "crates/artifact-store" }
 actingcommand-device = { path = "crates/device" }
 actingcommand-execution-kernel = { path = "crates/execution-kernel" }
+actingcommand-host-metrics = { path = "crates/host-metrics" }
 actingcommand-ledger = { path = "crates/ledger" }
 actingcommand-lab = { path = "crates/lab" }
 actingcommand-onnx-provider-support = { path = "crates/onnx-provider-support" }
 actingcommand-page-detector = { path = "crates/page-detector" }
 actingcommand-pack-containment = { path = "crates/pack-containment" }
+actingcommand-policy = { path = "crates/policy" }
 actingcommand-recognition = { path = "crates/recognition" }
 actingcommand-recognition-pack = { path = "crates/recognition-pack" }
 actingcommand-resource-tooling = { path = "crates/resource-tooling" }
 actingcommand-runtime-client = { path = "crates/runtime-client" }
 actingcommand-runtime-host = { path = "crates/runtime-host" }
+actingcommand-runtime-state = { path = "crates/runtime-state" }
 actingcommand-scheduler = { path = "crates/scheduler" }
 actingcommand-vision-ffi = { path = "crates/vision-ffi" }
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order"] }
+rusqlite = { version = "0.40.1", features = ["bundled"] }
 sha2 = "0.10"
 time = { version = "0.3", features = ["formatting", "macros"] }
 zip = { version = "0.6", default-features = false, features = ["deflate"] }
+windows-sys = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_Graphics_Gdi",
+    "Win32_System_Diagnostics_ToolHelp",
+    "Win32_System_Performance",
+    "Win32_System_ProcessStatus",
+    "Win32_System_SystemInformation",
+    "Win32_System_Threading",
+    "Win32_UI_WindowsAndMessaging",
+] }

@@ -27,7 +27,8 @@
     },
     "game": {
       "type": "string",
-      "enum": ["Azur", "Ark", "BA"]
+      "minLength": 1,
+      "maxLength": 128
     },
     "servers": {
       "type": "array",
@@ -87,7 +88,7 @@
     "serverKey": {
       "type": "string",
       "pattern": "^[a-z][a-z0-9]*(?:[._-][a-z0-9]+)*$",
-      "description": "Backend-specific server variant key, for example alas.jp, alas.en, baas.global_en, maa.yostar_jp, or maa.bilibili."
+      "description": "Opaque server or deployment variant key supplied by an external project definition, for example engine-a.region-1."
     },
     "task": {
       "type": "object",

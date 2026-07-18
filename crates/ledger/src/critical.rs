@@ -95,12 +95,27 @@ pub enum TaskTerminalTarget {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CatalogTransitionTarget {
+    Activated,
+    RolledBack,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReleaseTransitionTarget {
+    Activated,
+    RolledBack,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CriticalOperation {
     CommandValidation,
     DeviceWrite,
     ApplicationLifecycle,
     LeaseTransition(LeaseTransitionTarget),
     TaskTerminal(TaskTerminalTarget),
+    PolicyDispatch,
+    CatalogTransition(CatalogTransitionTarget),
+    ReleaseTransition(ReleaseTransitionTarget),
 }
 
 impl CriticalOperation {
@@ -111,6 +126,9 @@ impl CriticalOperation {
             Self::ApplicationLifecycle => EventType::ApplicationIntent,
             Self::LeaseTransition(_) => EventType::LeaseTransitionIntent,
             Self::TaskTerminal(_) => EventType::TaskTerminalIntent,
+            Self::PolicyDispatch => EventType::PolicyDispatchIntent,
+            Self::CatalogTransition(_) => EventType::CatalogTransitionIntent,
+            Self::ReleaseTransition(_) => EventType::ReleaseTransitionIntent,
         }
     }
 
@@ -131,6 +149,15 @@ impl CriticalOperation {
                 TaskTerminalTarget::Failed => EventType::TaskFailed,
                 TaskTerminalTarget::Cancelled => EventType::TaskCancelled,
             },
+            Self::PolicyDispatch => EventType::PolicyDispatchAdmitted,
+            Self::CatalogTransition(target) => match target {
+                CatalogTransitionTarget::Activated => EventType::CatalogActivated,
+                CatalogTransitionTarget::RolledBack => EventType::CatalogRolledBack,
+            },
+            Self::ReleaseTransition(target) => match target {
+                ReleaseTransitionTarget::Activated => EventType::ReleaseActivated,
+                ReleaseTransitionTarget::RolledBack => EventType::ReleaseRolledBack,
+            },
         }
     }
 
@@ -141,6 +168,9 @@ impl CriticalOperation {
             Self::ApplicationLifecycle => EventType::ApplicationFailed,
             Self::LeaseTransition(_) => EventType::LeaseTransitionFailed,
             Self::TaskTerminal(_) => EventType::TaskTerminalCommitFailed,
+            Self::PolicyDispatch => EventType::PolicyDispatchRejected,
+            Self::CatalogTransition(_) => EventType::CatalogTransitionFailed,
+            Self::ReleaseTransition(_) => EventType::ReleaseTransitionFailed,
         }
     }
 }

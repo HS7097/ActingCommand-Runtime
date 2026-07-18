@@ -19,26 +19,6 @@ pub type TaskRunId = String;
 pub type ResourceKey = String;
 pub type ContractResult<T> = Result<T, RuntimeError>;
 
-pub const GAME_AZUR: &str = "Azur";
-pub const GAME_ARK: &str = "Ark";
-pub const GAME_BA: &str = "BA";
-
-pub const SERVER_ALAS_CN: &str = "alas.cn";
-pub const SERVER_ALAS_EN: &str = "alas.en";
-pub const SERVER_ALAS_JP: &str = "alas.jp";
-pub const SERVER_ALAS_TW: &str = "alas.tw";
-pub const SERVER_BAAS_JP: &str = "baas.jp";
-pub const SERVER_BAAS_CN: &str = "baas.cn";
-pub const SERVER_BAAS_GLOBAL_EN: &str = "baas.global_en";
-pub const SERVER_BAAS_KO: &str = "baas.ko";
-pub const SERVER_BAAS_ZH_TW: &str = "baas.zh_tw";
-pub const SERVER_MAA_BILIBILI: &str = "maa.bilibili";
-pub const SERVER_MAA_OFFICIAL: &str = "maa.official";
-pub const SERVER_MAA_TXWY: &str = "maa.txwy";
-pub const SERVER_MAA_YOSTAR_EN: &str = "maa.yostar_en";
-pub const SERVER_MAA_YOSTAR_JP: &str = "maa.yostar_jp";
-pub const SERVER_MAA_YOSTAR_KR: &str = "maa.yostar_kr";
-
 pub const ENGINE_NATIVE: &str = "native";
 pub const ENGINE_DELEGATED: &str = "delegated";
 

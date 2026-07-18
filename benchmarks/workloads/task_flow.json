@@ -1,9 +1,9 @@
 {
   "schemaVersion": "0.1.0-p0a",
-  "id": "azur.daily.claim_rewards",
-  "name": "Azur daily reward claim benchmark flow",
-  "game": "Azur",
-  "servers": ["alas.jp", "alas.en", "alas.tw"],
+  "id": "fixture.daily.claim_rewards",
+  "name": "Neutral daily reward claim benchmark flow",
+  "game": "fixture-game",
+  "servers": ["engine-a.region-1", "engine-a.region-2"],
   "resolutions": [
     {
       "width": 1280,

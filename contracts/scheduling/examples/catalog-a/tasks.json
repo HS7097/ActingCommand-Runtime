@@ -1,0 +1,102 @@
+{
+  "schema_version": "actingcommand.scheduling.v1",
+  "catalog": {
+    "catalog_id": "fixture.catalog-a",
+    "catalog_version": 1,
+    "approval_refs": ["approval:fixture-a"]
+  },
+  "tasks": [
+    {
+      "id": "fixture.observe",
+      "scope": {
+        "kind": "instance",
+        "instance_id": "fixture-instance-a"
+      },
+      "entrypoint": {
+        "operation_id": "operation.observe"
+      },
+      "procedure_ref": "procedure.observe",
+      "priority": 100,
+      "trigger": {
+        "kind": "any",
+        "predicates": [
+          {
+            "kind": "clock",
+            "schedule": {
+              "kind": "interval",
+              "clock_source": { "kind": "local" },
+              "every_ms": 3600000,
+              "anchor_ms": 0
+            }
+          },
+          {
+            "kind": "fact",
+            "scope": {
+              "kind": "instance",
+              "instance_id": "fixture-instance-a"
+            },
+            "fact_key": "resource.primary",
+            "comparison": "less_than",
+            "value": {
+              "type": "integer",
+              "value": 20
+            },
+            "max_age_ms": 900000
+          }
+        ]
+      },
+      "feedback_stop": {
+        "kind": "outcome",
+        "task_id": "fixture.observe",
+        "outcome_key": "completed",
+        "comparison": "eq",
+        "value": {
+          "type": "boolean",
+          "value": true
+        }
+      },
+      "consumes": [],
+      "produces": [
+        {
+          "pool_id": "fixture-pool-a",
+          "direction": "produce",
+          "amount": 1,
+          "observation_source": "scan_verified",
+          "confidence_milli": 1000
+        }
+      ],
+      "on_failure": {
+        "action": "continue",
+        "retry_limit": 2,
+        "retry_backoff_ms": 30000,
+        "escalation_threshold": 3
+      },
+      "sensitive": false,
+      "next_run_clamp_ms": 86400000,
+      "yield_points": ["after_observation"],
+      "expected_duration_ms": 60000,
+      "cooldown_ms": 1000,
+      "load_profile": {
+        "kind": "weighted",
+        "cpu_milli": 200,
+        "gpu_milli": 100,
+        "io_milli": 300
+      },
+      "loop_budget": {
+        "daily_limit": 24,
+        "window_iteration_limit": 4,
+        "max_runtime_ms": 300000
+      },
+      "strategic_weight_milli": 1000,
+      "instance_overrides": [
+        {
+          "instance_id": "fixture-instance-b",
+          "enabled": true,
+          "priority": 120,
+          "strategic_weight_milli": 1100,
+          "load_profile": null
+        }
+      ]
+    }
+  ]
+}

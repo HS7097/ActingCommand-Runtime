@@ -1,0 +1,80 @@
+{
+  "schema_version": "actingcommand.scheduling.v1",
+  "catalog": {
+    "catalog_id": "fixture.catalog-a",
+    "catalog_version": 1,
+    "approval_refs": ["approval:fixture-a"]
+  },
+  "profiles": [
+    {
+      "id": "fixture-activity-a",
+      "scope": {
+        "kind": "instance",
+        "instance_id": "fixture-instance-a"
+      },
+      "windows": [
+        {
+          "weekdays": [1, 2, 3, 4, 5, 6, 7],
+          "utc_offset_minutes": 0,
+          "start_minute_of_day": 480,
+          "end_minute_of_day": 1320
+        }
+      ],
+      "daily_budget": 24,
+      "max_window_iterations": 4,
+      "session_max_ms": 7200000,
+      "detection_budget": {
+        "window_dispatch_limit": 4,
+        "window_runtime_ms": 300000,
+        "expected_duration_ms": 60000
+      },
+      "minimum_interval_ms": 60000,
+      "maximum_interval_ms": 300000,
+      "seed_source": "ledger",
+      "resample_policy": "same_round_stable",
+      "importance_milli": 1000,
+      "goals": [
+        {
+          "id": "fixture-goal-a",
+          "metric": {
+            "kind": "pool",
+            "pool_id": "fixture-pool-a"
+          },
+          "target": 80,
+          "deadline_unix_ms": 4102444800000,
+          "strategic_weight_milli": 1000,
+          "best_effort": true
+        }
+      ]
+    },
+    {
+      "id": "fixture-activity-game",
+      "scope": {
+        "kind": "game",
+        "game_id": "fixture-game-a"
+      },
+      "windows": [
+        {
+          "weekdays": [1, 2, 3, 4, 5, 6, 7],
+          "utc_offset_minutes": 0,
+          "start_minute_of_day": 480,
+          "end_minute_of_day": 1320
+        }
+      ],
+      "daily_budget": 24,
+      "max_window_iterations": 4,
+      "session_max_ms": 7200000,
+      "detection_budget": {
+        "window_dispatch_limit": 4,
+        "window_runtime_ms": 300000,
+        "expected_duration_ms": 60000
+      },
+      "minimum_interval_ms": 60000,
+      "maximum_interval_ms": 300000,
+      "seed_source": "ledger",
+      "resample_policy": "same_round_stable",
+      "importance_milli": 1000,
+      "goals": []
+    }
+  ]
+}
