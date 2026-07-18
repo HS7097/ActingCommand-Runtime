@@ -410,12 +410,17 @@ fn identifier_contains_fused_forbidden_prefix(
         .flat_map(|identifier| identifier.split('_'))
         .filter(|segment| !segment.is_empty())
         .any(|segment| {
-            forbidden_words
-                .iter()
-                .copied()
-                .filter(|candidate| fused_prefix_matches(segment, candidate))
-                .max_by_key(|candidate| candidate.len())
-                .is_some_and(|candidate| candidate == expected)
+            let mut offset = 0;
+            identifier_words(segment).into_iter().any(|word| {
+                let suffix = &segment[offset..];
+                offset += word.len();
+                forbidden_words
+                    .iter()
+                    .copied()
+                    .filter(|candidate| fused_prefix_matches(suffix, candidate))
+                    .max_by_key(|candidate| candidate.len())
+                    .is_some_and(|candidate| candidate == expected)
+            })
         })
 }
 
@@ -2555,6 +2560,9 @@ mod tests {
             ("ALASUI", "alas"),
             ("ARKNIGHTSAPI", "arknights"),
             ("AZURLANEUI", "azurlane"),
+            ("ClientPVPUI", "pvp"),
+            ("PolicyARKNIGHTSAPI", "arknights"),
+            ("RuntimeBAASAPI", "baas"),
         ] {
             let source = format!("struct {identifier};");
             let violations = super::inspect_generic_runtime_identity("fixture.rs", &source);
