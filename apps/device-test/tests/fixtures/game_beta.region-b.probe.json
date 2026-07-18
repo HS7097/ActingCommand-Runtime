@@ -1,10 +1,10 @@
 {
   "schema_version": "0.1",
-  "id": "bluearchive.jp.task-center-probe",
+  "id": "game_beta.region-b.task-center-probe",
   "steps": [
     {
       "id": "home_to_task",
-      "page_id": "bluearchive/home",
+      "page_id": "game_beta/home",
       "action": {
         "type": "click",
         "target_id": "navigation/home_to_task",
@@ -25,7 +25,7 @@
         "effect": "navigation_only"
       },
       "expect_after": {
-        "page_id": "bluearchive/home",
+        "page_id": "game_beta/home",
         "timeout_ms": 3000,
         "interval_ms": 100
       }

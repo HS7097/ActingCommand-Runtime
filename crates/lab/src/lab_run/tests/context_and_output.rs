@@ -87,7 +87,7 @@
                 file_name: "frame1.png".to_string(),
                 label: "initial".to_string(),
                 recognition_state: RecognitionState::from_matched_page(Some(
-                    "arknights/home".to_string(),
+                    "game_alpha/home".to_string(),
                 )),
                 pinned_reason: None,
                 frame,
@@ -194,7 +194,7 @@
                 file_name: "missing.png".to_string(),
                 label: "missing".to_string(),
                 recognition_state: RecognitionState::from_matched_page(Some(
-                    "arknights/home".to_string(),
+                    "game_alpha/home".to_string(),
                 )),
                 pinned_reason: None,
                 frame,
@@ -261,7 +261,7 @@
             r#"{
                 "schema_version":"0.3",
                 "pages":[
-                    {"id":"arknights/home","required":["target/button"],"optional":[],"forbidden":[]}
+                    {"id":"game_alpha/home","required":["target/button"],"optional":[],"forbidden":[]}
                 ]
             }"#,
         )
@@ -274,10 +274,10 @@
                 &evaluator,
                 &detector,
                 "initial",
-                Some(&["arknights/home".to_string()]),
+                Some(&["game_alpha/home".to_string()]),
             )
             .expect("capture scene");
-        assert_eq!(scene.matched_page.as_deref(), Some("arknights/home"));
+        assert_eq!(scene.matched_page.as_deref(), Some("game_alpha/home"));
         let out = temp.path().join("out.zip");
         ctx.finish(&out, true, None, None).expect("finish");
 
@@ -658,7 +658,7 @@
             last_matched_page: None,
         };
 
-        ctx.fill_pause_checkpoint(&mut checkpoint, Some("arknights/home"));
+        ctx.fill_pause_checkpoint(&mut checkpoint, Some("game_alpha/home"));
         let json = checkpoint.to_json();
 
         assert_eq!(json["current_step_index"], 7);
@@ -666,7 +666,7 @@
         assert_eq!(json["current_operation_id"], "open_terminal");
         assert_eq!(json["current_phase"], "page_guard_started");
         assert_eq!(json["expected_page"], "terminal");
-        assert_eq!(json["last_matched_page"], "arknights/home");
+        assert_eq!(json["last_matched_page"], "game_alpha/home");
     }
 
     #[test]

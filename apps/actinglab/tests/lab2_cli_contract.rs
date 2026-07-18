@@ -50,7 +50,7 @@ fn write_fixture() -> Lab2Fixture {
     fs::create_dir_all(&recognition).expect("recognition dir");
     fs::create_dir_all(&navigation).expect("navigation dir");
     fs::write(
-        recognition.join("arknights.cn.pack.json"),
+        recognition.join("sample.local.pack.json"),
         r#"{
             "schema_version":"0.3",
             "coordinate_space":{"width":1,"height":1},
@@ -62,13 +62,13 @@ fn write_fixture() -> Lab2Fixture {
     )
     .expect("recognition pack");
     fs::write(
-        recognition.join("arknights.cn.pages.json"),
-        r#"{"schema_version":"0.3","pages":[{"id":"arknights/home","required":["home_anchor"]}]}"#,
+        recognition.join("sample.local.pages.json"),
+        r#"{"schema_version":"0.3","pages":[{"id":"sample/home","required":["home_anchor"]}]}"#,
     )
     .expect("page set");
     fs::write(
-        navigation.join("arknights.cn.navigation.json"),
-        r#"{"schema_version":"0.3","game":"arknights","server":"cn","navigation":[],"destructive_actions":[]}"#,
+        navigation.join("sample.local.navigation.json"),
+        r#"{"schema_version":"0.3","game":"sample","server":"local","navigation":[],"destructive_actions":[]}"#,
     )
     .expect("navigation graph");
 
@@ -79,7 +79,7 @@ fn write_fixture() -> Lab2Fixture {
     for (name, bytes) in [
         (
             "control.json",
-            br#"{"game":"arknights","server":"cn","entry_task_id":"task"}"#.as_slice(),
+            br#"{"game":"sample","server":"local","entry_task_id":"task"}"#.as_slice(),
         ),
         (
             "resources/manifest.json",
@@ -92,16 +92,16 @@ fn write_fixture() -> Lab2Fixture {
     }
     for (source, destination) in [
         (
-            recognition.join("arknights.cn.pack.json"),
-            "resources/recognition/arknights.cn.pack.json",
+            recognition.join("sample.local.pack.json"),
+            "resources/recognition/sample.local.pack.json",
         ),
         (
-            recognition.join("arknights.cn.pages.json"),
-            "resources/recognition/arknights.cn.pages.json",
+            recognition.join("sample.local.pages.json"),
+            "resources/recognition/sample.local.pages.json",
         ),
         (
-            navigation.join("arknights.cn.navigation.json"),
-            "resources/navigation/arknights.cn.navigation.json",
+            navigation.join("sample.local.navigation.json"),
+            "resources/navigation/sample.local.navigation.json",
         ),
     ] {
         zip.start_file(destination, options)

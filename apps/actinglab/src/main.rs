@@ -1091,15 +1091,15 @@ fn session_capture_policy_payload(
             "must_compare_or_diagnose_before_freeze_conclusion": true,
             "stale_capture_status": "capture_stale_suspected",
             "game_freeze_status": "unverified_without_fresh_backend_evidence",
-            "ak_known_stale_md5": "202752fa3e5cab706774819168639b6c",
-            "finding": "FINDING-AK-game-freeze-2026-06-27"
+            "known_stale_frame_md5": "202752fa3e5cab706774819168639b6c",
+            "finding": "FINDING-capture-staleness-2026-06-27"
         },
         "freeze_classification_gate": {
             "schema_version": "session.capture_freeze_classification_gate.v0.1",
             "status": "blocked_without_fresh_backend_evidence",
             "safe_to_classify_game_frozen": false,
             "must_not_classify_as_game_freeze_from_adb_screencap_alone": true,
-            "finding": "FINDING-AK-game-freeze-2026-06-27",
+            "finding": "FINDING-capture-staleness-2026-06-27",
             "insufficient_evidence": [
                 "adb_screencap_same_md5_alone",
                 "adb_disconnect_reconnect_same_md5_alone",
@@ -1378,7 +1378,7 @@ fn session_self_heal_policy_payload(
             "game_progress_actions_allowed": false,
             "destructive_actions_allowed": false,
             "premium_or_paid_resource_use_allowed": false,
-            "pvp_or_exercise_allowed": false,
+            "competitive_or_exercise_allowed": false,
             "blind_confirmation_allowed": false,
             "navigation_only_default": true
         },
@@ -5262,7 +5262,7 @@ fn rects_intersect(a: PackRect, b: PackRect) -> bool {
 fn reject_dangerous_semantic_id(label: &str, value: &str) -> CliOutcome<()> {
     let lower = value.to_ascii_lowercase();
     let dangerous = [
-        "gacha",
+        "random_draw",
         "shop",
         "purchase",
         "buy",
@@ -5276,7 +5276,7 @@ fn reject_dangerous_semantic_id(label: &str, value: &str) -> CliOutcome<()> {
         "paid",
         "premium",
         "exercise",
-        "pvp",
+        "competitive",
     ];
     if dangerous.iter().any(|word| lower.contains(word)) {
         return Err(CliError::safety_blocked(
@@ -9741,13 +9741,13 @@ fn run_resource(sub: &str, global: &GlobalOptions, args: &[String]) -> CliOutcom
         }
         "convert" => resource_convert::run_resource_convert(global, &flags, &resource_root),
         "compile-maa" => maa_task_graph::run_resource_maa_task_compile(&flags, &resource_root),
-        "import-alas" | "drift-alas" => {
-            let alas_root = flags.required_path("--alas-root")?;
+        "import-upstream" | "drift-upstream" => {
+            let upstream_root = flags.required_path("--upstream-root")?;
             Ok(json!({
                 "repo": repo.display().to_string(),
                 "resource_root": resource_root.root.display().to_string(),
                 "resource_layout": resource_root.layout,
-                "alas_root": alas_root.display().to_string(),
+                "upstream_root": upstream_root.display().to_string(),
                 "status": "reserved",
                 "command": sub
             }))
@@ -11387,8 +11387,8 @@ fn command_capabilities() -> Vec<Value> {
         command_cap("capabilities", ["offline"], "available"),
         command_cap("resource validate", ["offline"], "available"),
         command_cap("resource convert", ["offline"], "available"),
-        command_cap("resource import-alas", ["offline"], "reserved"),
-        command_cap("resource drift-alas", ["offline"], "reserved"),
+        command_cap("resource import-upstream", ["offline"], "reserved"),
+        command_cap("resource drift-upstream", ["offline"], "reserved"),
         command_cap("resource check-release", ["offline"], "available"),
         command_cap("observe", ["offline", "device_optional"], "available"),
         command_cap(
@@ -11947,11 +11947,11 @@ mod tests {
 
     impl ExecutionBackendProvider for AuthoringRuntimeProvider {
         fn instance_aliases(&self) -> Vec<String> {
-            vec!["ak".to_string()]
+            vec!["fixture".to_string()]
         }
 
         fn resolve(&self, instance_alias: &str) -> Option<ResolvedExecutionInstance> {
-            (instance_alias == "ak")
+            (instance_alias == "fixture")
                 .then(|| ResolvedExecutionInstance::new(self.instance_id, "<authoring-test>"))
         }
 
@@ -12006,7 +12006,7 @@ mod tests {
             [
                 "--json",
                 "--instance",
-                "ak",
+                "fixture",
                 "session",
                 "record",
                 "start",
@@ -12021,7 +12021,7 @@ mod tests {
             [
                 "--json",
                 "--instance",
-                "ak",
+                "fixture",
                 "session",
                 "record",
                 "step",
@@ -12044,7 +12044,7 @@ mod tests {
             [
                 "--json",
                 "--instance",
-                "ak",
+                "fixture",
                 "session",
                 "record",
                 "step",
@@ -12067,7 +12067,7 @@ mod tests {
             [
                 "--json",
                 "--instance",
-                "ak",
+                "fixture",
                 "session",
                 "record",
                 "step",
@@ -12187,7 +12187,7 @@ mod tests {
             "schema_version": "session.record.v0.1",
             "record_id": "record-1",
             "task_id": "daily-check",
-            "instance": "ak",
+            "instance": "fixture",
             "status": "recording",
             "started_at_unix_ms": 1,
             "updated_at_unix_ms": 2,
@@ -12786,13 +12786,13 @@ mod tests {
                 "--json",
                 "config",
                 "set",
-                "instance.ba.serial",
+                "instance.c.serial",
                 "127.0.0.1:16448",
             ],
             true,
         );
         assert_eq!(set.exit_code(), 0);
-        let get = run_cli(["--json", "config", "get", "instance.ba.serial"], true);
+        let get = run_cli(["--json", "config", "get", "instance.c.serial"], true);
         set_missing_config_env();
 
         assert_eq!(get.exit_code(), 0);
@@ -12819,13 +12819,13 @@ mod tests {
                 "--json",
                 "config",
                 "set",
-                "instance.ak.package",
-                "com.hypergryph.arknights.bilibili",
+                "instance.a.package",
+                "org.example.client",
             ],
             true,
         );
         assert_eq!(set.exit_code(), 0);
-        let get = run_cli(["--json", "config", "get", "instance.ak.package"], true);
+        let get = run_cli(["--json", "config", "get", "instance.a.package"], true);
         set_missing_config_env();
 
         assert_eq!(get.exit_code(), 0);
@@ -12836,7 +12836,7 @@ mod tests {
                 .unwrap()
                 .get("value")
                 .and_then(Value::as_str),
-            Some("com.hypergryph.arknights.bilibili")
+            Some("org.example.client")
         );
     }
 
@@ -12852,7 +12852,7 @@ mod tests {
                 "--json",
                 "config",
                 "set",
-                "instance.ak-b.adb_path",
+                "instance.b.adb_path",
                 "C:\\Tools\\adb.exe",
             ],
             true,
@@ -12862,14 +12862,14 @@ mod tests {
                 "--json",
                 "config",
                 "set",
-                "instance.ak-b.capture_backend",
+                "instance.b.capture_backend",
                 "nemu_ipc",
             ],
             true,
         );
-        let get_adb = run_cli(["--json", "config", "get", "instance.ak-b.adb_path"], true);
+        let get_adb = run_cli(["--json", "config", "get", "instance.b.adb_path"], true);
         let get_backend = run_cli(
-            ["--json", "config", "get", "instance.ak-b.capture_backend"],
+            ["--json", "config", "get", "instance.b.capture_backend"],
             true,
         );
         set_missing_config_env();
@@ -12910,7 +12910,7 @@ mod tests {
                 "--json",
                 "config",
                 "set",
-                "instance.ak-b.capture_backend",
+                "instance.b.capture_backend",
                 "not-a-backend",
             ],
             true,
@@ -12963,7 +12963,7 @@ mod tests {
             [
                 "--json",
                 "--instance",
-                "ak",
+                "fixture",
                 "session",
                 "record",
                 "start",
@@ -12982,7 +12982,7 @@ mod tests {
             [
                 "--json",
                 "--instance",
-                "ak",
+                "fixture",
                 "session",
                 "record",
                 "status",
@@ -12995,7 +12995,7 @@ mod tests {
             [
                 "--json",
                 "--instance",
-                "ak",
+                "fixture",
                 "session",
                 "record",
                 "stop",
@@ -13026,7 +13026,7 @@ mod tests {
             start_data
                 .pointer("/record/instance")
                 .and_then(Value::as_str),
-            Some("ak")
+            Some("fixture")
         );
         assert_eq!(
             start_data.pointer("/record/holder").and_then(Value::as_str),
@@ -13081,7 +13081,7 @@ mod tests {
             [
                 "--json",
                 "--instance",
-                "ak",
+                "fixture",
                 "record",
                 "start",
                 "--state-dir",
@@ -13095,7 +13095,7 @@ mod tests {
             [
                 "--json",
                 "--instance",
-                "ak",
+                "fixture",
                 "session",
                 "record",
                 "status",
@@ -13108,7 +13108,7 @@ mod tests {
             [
                 "--json",
                 "--instance",
-                "ak",
+                "fixture",
                 "record",
                 "stop",
                 "--state-dir",
@@ -13165,7 +13165,7 @@ mod tests {
             [
                 "--json",
                 "--instance",
-                "ak",
+                "fixture",
                 "record",
                 "build-task",
                 "--state-dir",
@@ -13195,7 +13195,7 @@ mod tests {
             [
                 "--json",
                 "--instance",
-                "ak",
+                "fixture",
                 "stream",
                 "--dry-run",
                 "--max-frames",
@@ -13315,7 +13315,7 @@ mod tests {
             [
                 "--json",
                 "--instance",
-                "ak",
+                "fixture",
                 "session",
                 "record",
                 "start",
@@ -13330,7 +13330,7 @@ mod tests {
             [
                 "--json",
                 "--instance",
-                "ak",
+                "fixture",
                 "session",
                 "record",
                 "start",
@@ -13358,7 +13358,7 @@ mod tests {
             [
                 "--json",
                 "--instance",
-                "ak",
+                "fixture",
                 "session",
                 "record",
                 "build-task",
@@ -13387,7 +13387,7 @@ mod tests {
             [
                 "--json",
                 "--instance",
-                "ak",
+                "fixture",
                 "session",
                 "record",
                 "start",
@@ -13402,7 +13402,7 @@ mod tests {
             [
                 "--json",
                 "--instance",
-                "ak",
+                "fixture",
                 "session",
                 "record",
                 "step",
@@ -13490,7 +13490,7 @@ mod tests {
             [
                 "--json",
                 "--instance",
-                "ak",
+                "fixture",
                 "session",
                 "record",
                 "start",
@@ -13505,7 +13505,7 @@ mod tests {
             [
                 "--json",
                 "--instance",
-                "ak",
+                "fixture",
                 "session",
                 "record",
                 "step",
@@ -13566,7 +13566,7 @@ mod tests {
             [
                 "--json",
                 "--instance",
-                "ak",
+                "fixture",
                 "session",
                 "record",
                 "start",
@@ -13581,7 +13581,7 @@ mod tests {
             [
                 "--json",
                 "--instance",
-                "ak",
+                "fixture",
                 "session",
                 "record",
                 "step",
@@ -13655,7 +13655,7 @@ mod tests {
             [
                 "--json",
                 "--instance",
-                "ak",
+                "fixture",
                 "session",
                 "record",
                 "start",
@@ -13670,7 +13670,7 @@ mod tests {
             [
                 "--json",
                 "--instance",
-                "ak",
+                "fixture",
                 "session",
                 "record",
                 "step",
@@ -13737,7 +13737,7 @@ mod tests {
             [
                 "--json",
                 "--instance",
-                "ak",
+                "fixture",
                 "session",
                 "record",
                 "start",
@@ -13752,7 +13752,7 @@ mod tests {
             [
                 "--json",
                 "--instance",
-                "ak",
+                "fixture",
                 "session",
                 "record",
                 "step",
@@ -13826,7 +13826,7 @@ mod tests {
             [
                 "--json",
                 "--instance",
-                "ak",
+                "fixture",
                 "session",
                 "record",
                 "start",
@@ -13841,7 +13841,7 @@ mod tests {
             [
                 "--json",
                 "--instance",
-                "ak",
+                "fixture",
                 "session",
                 "record",
                 "step",
@@ -13864,7 +13864,7 @@ mod tests {
             [
                 "--json",
                 "--instance",
-                "ak",
+                "fixture",
                 "session",
                 "record",
                 "amend",
@@ -13935,7 +13935,7 @@ mod tests {
             [
                 "--json",
                 "--instance",
-                "ak",
+                "fixture",
                 "session",
                 "record",
                 "start",
@@ -13950,7 +13950,7 @@ mod tests {
             [
                 "--json",
                 "--instance",
-                "ak",
+                "fixture",
                 "session",
                 "record",
                 "step",
@@ -13971,7 +13971,7 @@ mod tests {
             [
                 "--json",
                 "--instance",
-                "ak",
+                "fixture",
                 "session",
                 "record",
                 "amend",
@@ -14020,7 +14020,7 @@ mod tests {
             [
                 "--json",
                 "--instance",
-                "ak",
+                "fixture",
                 "session",
                 "record",
                 "start",
@@ -14035,7 +14035,7 @@ mod tests {
             [
                 "--json",
                 "--instance",
-                "ak",
+                "fixture",
                 "session",
                 "record",
                 "step",
@@ -14058,7 +14058,7 @@ mod tests {
             [
                 "--json",
                 "--instance",
-                "ak",
+                "fixture",
                 "session",
                 "record",
                 "amend",
@@ -14143,7 +14143,7 @@ mod tests {
             [
                 "--json",
                 "--instance",
-                "ak",
+                "fixture",
                 "session",
                 "record",
                 "start",
@@ -14158,7 +14158,7 @@ mod tests {
             [
                 "--json",
                 "--instance",
-                "ak",
+                "fixture",
                 "session",
                 "record",
                 "step",
@@ -14286,7 +14286,7 @@ mod tests {
             [
                 "--json",
                 "--instance",
-                "ak",
+                "fixture",
                 "session",
                 "record",
                 "start",
@@ -14301,7 +14301,7 @@ mod tests {
             [
                 "--json",
                 "--instance",
-                "ak",
+                "fixture",
                 "session",
                 "record",
                 "step",
@@ -14374,7 +14374,7 @@ mod tests {
             schema_version: "session-record-context-v0".to_string(),
             record_id: "record-1".to_string(),
             task_id: "daily-check".to_string(),
-            instance: "ak".to_string(),
+            instance: "fixture".to_string(),
             status: "stopped".to_string(),
             holder: None,
             lease_id: None,
@@ -14435,8 +14435,8 @@ mod tests {
             &record,
             &flags,
             &temp.path().join("out"),
-            "arknights",
-            "cn",
+            "sample",
+            "local",
             "zh-CN",
             &state_dir,
         );
@@ -14535,7 +14535,7 @@ mod tests {
             [
                 "--json",
                 "--instance",
-                "ak",
+                "fixture",
                 "session",
                 "record",
                 "start",
@@ -14550,7 +14550,7 @@ mod tests {
             [
                 "--json",
                 "--instance",
-                "ak",
+                "fixture",
                 "session",
                 "record",
                 "step",
@@ -14602,7 +14602,7 @@ mod tests {
             [
                 "--json",
                 "--instance",
-                "ak",
+                "fixture",
                 "session",
                 "record",
                 "start",
@@ -14617,7 +14617,7 @@ mod tests {
             [
                 "--json",
                 "--instance",
-                "ak",
+                "fixture",
                 "session",
                 "record",
                 "step",
@@ -14691,7 +14691,7 @@ mod tests {
             [
                 "--json",
                 "--instance",
-                "ak",
+                "fixture",
                 "session",
                 "record",
                 "start",
@@ -14706,7 +14706,7 @@ mod tests {
             [
                 "--json",
                 "--instance",
-                "ak",
+                "fixture",
                 "session",
                 "record",
                 "step",
@@ -14774,7 +14774,7 @@ mod tests {
             [
                 "--json",
                 "--instance",
-                "ak",
+                "fixture",
                 "session",
                 "record",
                 "start",
@@ -14789,7 +14789,7 @@ mod tests {
             [
                 "--json",
                 "--instance",
-                "ak",
+                "fixture",
                 "session",
                 "record",
                 "step",
@@ -14868,7 +14868,7 @@ mod tests {
             [
                 "--json",
                 "--instance",
-                "ak",
+                "fixture",
                 "session",
                 "record",
                 "start",
@@ -14883,7 +14883,7 @@ mod tests {
             [
                 "--json",
                 "--instance",
-                "ak",
+                "fixture",
                 "session",
                 "record",
                 "step",
@@ -14986,7 +14986,7 @@ mod tests {
             [
                 "--json",
                 "--instance",
-                "ak",
+                "fixture",
                 "session",
                 "record",
                 "start",
@@ -15001,7 +15001,7 @@ mod tests {
             [
                 "--json",
                 "--instance",
-                "ak",
+                "fixture",
                 "session",
                 "record",
                 "step",
@@ -15026,7 +15026,7 @@ mod tests {
             [
                 "--json",
                 "--instance",
-                "ak",
+                "fixture",
                 "session",
                 "record",
                 "candidates",
@@ -15093,7 +15093,7 @@ mod tests {
             [
                 "--json",
                 "--instance",
-                "ak",
+                "fixture",
                 "session",
                 "record",
                 "start",
@@ -15108,7 +15108,7 @@ mod tests {
             [
                 "--json",
                 "--instance",
-                "ak",
+                "fixture",
                 "session",
                 "record",
                 "step",
@@ -15131,7 +15131,7 @@ mod tests {
             [
                 "--json",
                 "--instance",
-                "ak",
+                "fixture",
                 "session",
                 "record",
                 "candidates",
@@ -15185,7 +15185,7 @@ mod tests {
             [
                 "--json",
                 "--instance",
-                "ak",
+                "fixture",
                 "session",
                 "record",
                 "start",
@@ -15200,7 +15200,7 @@ mod tests {
             [
                 "--json",
                 "--instance",
-                "ak",
+                "fixture",
                 "session",
                 "record",
                 "step",
@@ -15223,7 +15223,7 @@ mod tests {
             [
                 "--json",
                 "--instance",
-                "ak",
+                "fixture",
                 "session",
                 "record",
                 "candidates",
@@ -15265,7 +15265,7 @@ mod tests {
             [
                 "--json",
                 "--instance",
-                "ak",
+                "fixture",
                 "session",
                 "record",
                 "start",
@@ -15280,7 +15280,7 @@ mod tests {
             [
                 "--json",
                 "--instance",
-                "ak",
+                "fixture",
                 "session",
                 "record",
                 "step",
@@ -15331,7 +15331,7 @@ mod tests {
             [
                 "--json",
                 "--instance",
-                "ak",
+                "fixture",
                 "session",
                 "record",
                 "start",
@@ -15346,7 +15346,7 @@ mod tests {
             [
                 "--json",
                 "--instance",
-                "ak",
+                "fixture",
                 "session",
                 "record",
                 "step",
@@ -15393,7 +15393,7 @@ mod tests {
             [
                 "--json",
                 "--instance",
-                "ak",
+                "fixture",
                 "session",
                 "record",
                 "start",
@@ -15408,7 +15408,7 @@ mod tests {
             [
                 "--json",
                 "--instance",
-                "ak",
+                "fixture",
                 "session",
                 "record",
                 "step",
@@ -15472,7 +15472,7 @@ mod tests {
             [
                 "--json",
                 "--instance",
-                "ak",
+                "fixture",
                 "session",
                 "record",
                 "start",
@@ -15487,7 +15487,7 @@ mod tests {
             [
                 "--json",
                 "--instance",
-                "ak",
+                "fixture",
                 "session",
                 "record",
                 "step",
@@ -15511,7 +15511,7 @@ mod tests {
             [
                 "--json",
                 "--instance",
-                "ak",
+                "fixture",
                 "session",
                 "record",
                 "step",
@@ -15534,7 +15534,7 @@ mod tests {
             [
                 "--json",
                 "--instance",
-                "ak",
+                "fixture",
                 "session",
                 "record",
                 "step",
@@ -15557,7 +15557,7 @@ mod tests {
             [
                 "--json",
                 "--instance",
-                "ak",
+                "fixture",
                 "session",
                 "record",
                 "step",
@@ -15580,7 +15580,7 @@ mod tests {
             [
                 "--json",
                 "--instance",
-                "ak",
+                "fixture",
                 "session",
                 "record",
                 "step",
@@ -15603,7 +15603,7 @@ mod tests {
             [
                 "--json",
                 "--instance",
-                "ak",
+                "fixture",
                 "session",
                 "record",
                 "step",
@@ -15628,7 +15628,7 @@ mod tests {
             [
                 "--json",
                 "--instance",
-                "ak",
+                "fixture",
                 "session",
                 "record",
                 "step",
@@ -15651,7 +15651,7 @@ mod tests {
             [
                 "--json",
                 "--instance",
-                "ak",
+                "fixture",
                 "session",
                 "record",
                 "build-task",
@@ -15660,9 +15660,9 @@ mod tests {
                 "--out",
                 out.to_str().unwrap(),
                 "--game",
-                "arknights",
+                "sample",
                 "--server",
-                "cn",
+                "local",
                 "--locale",
                 "zh-CN",
                 "--client-version",
@@ -15734,12 +15734,12 @@ mod tests {
         );
         assert_eq!(
             data.pointer("/bundle/game").and_then(Value::as_str),
-            Some("arknights")
+            Some("sample")
         );
         assert_eq!(
             data.pointer("/bundle/server_scope/0")
                 .and_then(Value::as_str),
-            Some("cn")
+            Some("local")
         );
         assert_eq!(
             data.pointer("/bundle/coordinate_space/width")
@@ -15749,12 +15749,12 @@ mod tests {
         assert_eq!(
             data.pointer("/bundle/provenance/game")
                 .and_then(Value::as_str),
-            Some("arknights")
+            Some("sample")
         );
         assert_eq!(
             data.pointer("/bundle/provenance/server")
                 .and_then(Value::as_str),
-            Some("cn")
+            Some("local")
         );
         assert_eq!(
             data.pointer("/bundle/provenance/resolution/height")
@@ -15988,7 +15988,7 @@ mod tests {
             serde_json::to_string_pretty(&converted.envelope).unwrap()
         );
         let navigation: Value = serde_json::from_str(
-            &fs::read_to_string(out.join("navigation/arknights.cn.navigation.json")).unwrap(),
+            &fs::read_to_string(out.join("navigation/sample.local.navigation.json")).unwrap(),
         )
         .unwrap();
         assert_eq!(
@@ -16020,7 +16020,7 @@ mod tests {
             [
                 "--json",
                 "--instance",
-                "ak",
+                "fixture",
                 "session",
                 "record",
                 "start",
@@ -16035,7 +16035,7 @@ mod tests {
             [
                 "--json",
                 "--instance",
-                "ak",
+                "fixture",
                 "session",
                 "record",
                 "step",
@@ -16058,7 +16058,7 @@ mod tests {
             [
                 "--json",
                 "--instance",
-                "ak",
+                "fixture",
                 "session",
                 "record",
                 "step",
@@ -16081,7 +16081,7 @@ mod tests {
             [
                 "--json",
                 "--instance",
-                "ak",
+                "fixture",
                 "session",
                 "record",
                 "step",
@@ -16102,7 +16102,7 @@ mod tests {
             [
                 "--json",
                 "--instance",
-                "ak",
+                "fixture",
                 "session",
                 "record",
                 "step",
@@ -16125,7 +16125,7 @@ mod tests {
             [
                 "--json",
                 "--instance",
-                "ak",
+                "fixture",
                 "session",
                 "record",
                 "build-task",
@@ -16134,9 +16134,9 @@ mod tests {
                 "--out",
                 out.to_str().unwrap(),
                 "--game",
-                "arknights",
+                "sample",
                 "--server",
-                "cn",
+                "local",
                 "--locale",
                 "zh-CN",
             ],
@@ -16173,7 +16173,7 @@ mod tests {
             [
                 "--json",
                 "--instance",
-                "ak",
+                "fixture",
                 "session",
                 "record",
                 "start",
@@ -16188,7 +16188,7 @@ mod tests {
             [
                 "--json",
                 "--instance",
-                "ak",
+                "fixture",
                 "session",
                 "record",
                 "step",
@@ -16211,7 +16211,7 @@ mod tests {
             [
                 "--json",
                 "--instance",
-                "ak",
+                "fixture",
                 "session",
                 "record",
                 "step",
@@ -16234,7 +16234,7 @@ mod tests {
             [
                 "--json",
                 "--instance",
-                "ak",
+                "fixture",
                 "session",
                 "record",
                 "step",
@@ -16255,7 +16255,7 @@ mod tests {
             [
                 "--json",
                 "--instance",
-                "ak",
+                "fixture",
                 "session",
                 "record",
                 "step",
@@ -16278,7 +16278,7 @@ mod tests {
             [
                 "--json",
                 "--instance",
-                "ak",
+                "fixture",
                 "session",
                 "record",
                 "build-task",
@@ -16287,9 +16287,9 @@ mod tests {
                 "--out",
                 out.to_str().unwrap(),
                 "--game",
-                "arknights",
+                "sample",
                 "--server",
-                "cn",
+                "local",
                 "--locale",
                 "zh-CN",
             ],
@@ -16338,7 +16338,7 @@ mod tests {
             [
                 "--json",
                 "--instance",
-                "ak",
+                "fixture",
                 "session",
                 "record",
                 "start",
@@ -16353,7 +16353,7 @@ mod tests {
             [
                 "--json",
                 "--instance",
-                "ak",
+                "fixture",
                 "session",
                 "record",
                 "step",
@@ -16376,7 +16376,7 @@ mod tests {
             [
                 "--json",
                 "--instance",
-                "ak",
+                "fixture",
                 "session",
                 "record",
                 "step",
@@ -16399,7 +16399,7 @@ mod tests {
             [
                 "--json",
                 "--instance",
-                "ak",
+                "fixture",
                 "session",
                 "record",
                 "step",
@@ -16422,7 +16422,7 @@ mod tests {
             [
                 "--json",
                 "--instance",
-                "ak",
+                "fixture",
                 "session",
                 "record",
                 "promote",
@@ -16431,9 +16431,9 @@ mod tests {
                 "--repo",
                 repo.to_str().unwrap(),
                 "--game",
-                "arknights",
+                "sample",
                 "--server",
-                "cn",
+                "local",
                 "--locale",
                 "zh-CN",
             ],
@@ -16443,7 +16443,7 @@ mod tests {
             [
                 "--json",
                 "--instance",
-                "ak",
+                "fixture",
                 "session",
                 "record",
                 "promote",
@@ -16452,9 +16452,9 @@ mod tests {
                 "--repo",
                 repo.to_str().unwrap(),
                 "--game",
-                "arknights",
+                "sample",
                 "--server",
-                "cn",
+                "local",
                 "--locale",
                 "zh-CN",
             ],
@@ -16469,7 +16469,7 @@ mod tests {
             [
                 "--json",
                 "--instance",
-                "ak",
+                "fixture",
                 "session",
                 "record",
                 "promote",
@@ -16478,9 +16478,9 @@ mod tests {
                 "--repo",
                 repo.to_str().unwrap(),
                 "--game",
-                "arknights",
+                "sample",
                 "--server",
-                "cn",
+                "local",
                 "--locale",
                 "zh-CN",
                 "--force",
@@ -16547,9 +16547,9 @@ mod tests {
                 .is_file()
         );
         for generated in [
-            "recognition/arknights.cn.pack.json",
-            "recognition/arknights.cn.pages.json",
-            "navigation/arknights.cn.navigation.json",
+            "recognition/sample.local.pack.json",
+            "recognition/sample.local.pages.json",
+            "navigation/sample.local.navigation.json",
             "operations/operations.index.json",
             "operations/operations.primitives.json",
         ] {
@@ -16618,7 +16618,7 @@ mod tests {
             [
                 "--json",
                 "--instance",
-                "ak",
+                "fixture",
                 "session",
                 "record",
                 "promote",
@@ -16627,9 +16627,9 @@ mod tests {
                 "--repo",
                 repo.to_str().unwrap(),
                 "--game",
-                "arknights",
+                "sample",
                 "--server",
-                "cn",
+                "local",
                 "--locale",
                 "zh-CN",
             ],
@@ -16644,7 +16644,7 @@ mod tests {
         );
         assert!(!ours.join("operations/daily-check").exists());
         assert!(!ours.join("operations/resources.json").exists());
-        assert!(!ours.join("recognition/arknights.cn.pack.json").exists());
+        assert!(!ours.join("recognition/sample.local.pack.json").exists());
     }
 
     #[test]
@@ -16677,7 +16677,7 @@ mod tests {
             [
                 "--json",
                 "--instance",
-                "ak",
+                "fixture",
                 "session",
                 "record",
                 "promote",
@@ -16686,9 +16686,9 @@ mod tests {
                 "--repo",
                 repo.to_str().unwrap(),
                 "--game",
-                "arknights",
+                "sample",
                 "--server",
-                "cn",
+                "local",
                 "--locale",
                 "zh-CN",
                 "--force",
@@ -16707,7 +16707,7 @@ mod tests {
             fs::read_to_string(broken_task.join("task.json")).unwrap(),
             "{not-json"
         );
-        assert!(!ours.join("recognition/arknights.cn.pack.json").exists());
+        assert!(!ours.join("recognition/sample.local.pack.json").exists());
         host.close().expect("close Runtime host");
     }
 
@@ -16724,7 +16724,7 @@ mod tests {
             [
                 "--json",
                 "--instance",
-                "ak",
+                "fixture",
                 "session",
                 "record",
                 "start",
@@ -16739,7 +16739,7 @@ mod tests {
             [
                 "--json",
                 "--instance",
-                "ak",
+                "fixture",
                 "session",
                 "record",
                 "step",
@@ -16762,7 +16762,7 @@ mod tests {
             [
                 "--json",
                 "--instance",
-                "ak",
+                "fixture",
                 "session",
                 "record",
                 "build-task",
@@ -16771,9 +16771,9 @@ mod tests {
                 "--out",
                 out.to_str().unwrap(),
                 "--game",
-                "arknights",
+                "sample",
                 "--server",
-                "cn",
+                "local",
                 "--locale",
                 "zh-CN",
                 "--resolution",
@@ -16816,7 +16816,7 @@ mod tests {
             [
                 "--json",
                 "--instance",
-                "ak",
+                "fixture",
                 "session",
                 "record",
                 "start",
@@ -16831,7 +16831,7 @@ mod tests {
             [
                 "--json",
                 "--instance",
-                "ak",
+                "fixture",
                 "session",
                 "record",
                 "step",
@@ -16854,7 +16854,7 @@ mod tests {
             [
                 "--json",
                 "--instance",
-                "ak",
+                "fixture",
                 "session",
                 "record",
                 "step",
@@ -16877,7 +16877,7 @@ mod tests {
             [
                 "--json",
                 "--instance",
-                "ak",
+                "fixture",
                 "session",
                 "record",
                 "build-task",
@@ -16886,9 +16886,9 @@ mod tests {
                 "--out",
                 out.to_str().unwrap(),
                 "--game",
-                "arknights",
+                "sample",
                 "--server",
-                "cn",
+                "local",
                 "--locale",
                 "zh-CN",
             ],
@@ -16930,7 +16930,7 @@ mod tests {
             [
                 "--json",
                 "--instance",
-                "ak",
+                "fixture",
                 "session",
                 "record",
                 "start",
@@ -16945,7 +16945,7 @@ mod tests {
             [
                 "--json",
                 "--instance",
-                "ak",
+                "fixture",
                 "session",
                 "record",
                 "step",
@@ -16968,7 +16968,7 @@ mod tests {
             [
                 "--json",
                 "--instance",
-                "ak",
+                "fixture",
                 "session",
                 "record",
                 "step",
@@ -16991,7 +16991,7 @@ mod tests {
             [
                 "--json",
                 "--instance",
-                "ak",
+                "fixture",
                 "session",
                 "record",
                 "build-task",
@@ -17000,9 +17000,9 @@ mod tests {
                 "--out",
                 out.to_str().unwrap(),
                 "--game",
-                "arknights",
+                "sample",
                 "--server",
-                "cn",
+                "local",
                 "--locale",
                 "zh-CN",
             ],
@@ -17043,7 +17043,7 @@ mod tests {
             [
                 "--json",
                 "--instance",
-                "ak",
+                "fixture",
                 "session",
                 "record",
                 "step",
@@ -17079,7 +17079,7 @@ mod tests {
             [
                 "--json",
                 "--instance",
-                "ak",
+                "fixture",
                 "session",
                 "record",
                 "start",
@@ -17094,7 +17094,7 @@ mod tests {
             [
                 "--json",
                 "--instance",
-                "ak",
+                "fixture",
                 "session",
                 "record",
                 "step",
@@ -17115,7 +17115,7 @@ mod tests {
             [
                 "--json",
                 "--instance",
-                "ak",
+                "fixture",
                 "session",
                 "record",
                 "step",
@@ -17157,7 +17157,7 @@ mod tests {
             [
                 "--json",
                 "--instance",
-                "ak",
+                "fixture",
                 "session",
                 "record",
                 "start",
@@ -17172,7 +17172,7 @@ mod tests {
             [
                 "--json",
                 "--instance",
-                "ak",
+                "fixture",
                 "session",
                 "record",
                 "step",
@@ -17196,7 +17196,7 @@ mod tests {
             [
                 "--json",
                 "--instance",
-                "ak",
+                "fixture",
                 "session",
                 "record",
                 "amend",
@@ -17251,7 +17251,7 @@ mod tests {
             [
                 "--json",
                 "--instance",
-                "ak",
+                "fixture",
                 "session",
                 "record",
                 "start",
@@ -17266,7 +17266,7 @@ mod tests {
             [
                 "--json",
                 "--instance",
-                "ak",
+                "fixture",
                 "session",
                 "record",
                 "step",
@@ -17291,7 +17291,7 @@ mod tests {
             [
                 "--json",
                 "--instance",
-                "ak",
+                "fixture",
                 "session",
                 "record",
                 "amend",
@@ -17387,7 +17387,7 @@ mod tests {
             [
                 "--json",
                 "--instance",
-                "ak",
+                "fixture",
                 "session",
                 "record",
                 "start",
@@ -17402,7 +17402,7 @@ mod tests {
             [
                 "--json",
                 "--instance",
-                "ak",
+                "fixture",
                 "session",
                 "record",
                 "step",
@@ -17427,7 +17427,7 @@ mod tests {
             [
                 "--json",
                 "--instance",
-                "ak",
+                "fixture",
                 "session",
                 "record",
                 "amend",
@@ -17521,7 +17521,7 @@ mod tests {
             [
                 "--json",
                 "--instance",
-                "ak",
+                "fixture",
                 "session",
                 "record",
                 "start",
@@ -17536,7 +17536,7 @@ mod tests {
             [
                 "--json",
                 "--instance",
-                "ak",
+                "fixture",
                 "session",
                 "record",
                 "step",
@@ -17559,7 +17559,7 @@ mod tests {
             [
                 "--json",
                 "--instance",
-                "ak",
+                "fixture",
                 "session",
                 "record",
                 "amend",
@@ -17603,7 +17603,7 @@ mod tests {
             [
                 "--json",
                 "--instance",
-                "ak",
+                "fixture",
                 "session",
                 "record",
                 "start",
@@ -17618,7 +17618,7 @@ mod tests {
             [
                 "--json",
                 "--instance",
-                "ak",
+                "fixture",
                 "session",
                 "record",
                 "step",
@@ -17642,7 +17642,7 @@ mod tests {
             [
                 "--json",
                 "--instance",
-                "ak",
+                "fixture",
                 "session",
                 "record",
                 "amend",
@@ -17691,7 +17691,7 @@ mod tests {
             [
                 "--json",
                 "--instance",
-                "ak",
+                "fixture",
                 "session",
                 "record",
                 "start",
@@ -17706,7 +17706,7 @@ mod tests {
             [
                 "--json",
                 "--instance",
-                "ak",
+                "fixture",
                 "session",
                 "record",
                 "step",
@@ -17727,7 +17727,7 @@ mod tests {
             [
                 "--json",
                 "--instance",
-                "ak",
+                "fixture",
                 "session",
                 "record",
                 "amend",
@@ -17787,8 +17787,8 @@ mod tests {
             &pack_path,
             &json!({
                 "schema_version": "0.3",
-                "game": "arknights",
-                "server": "cn",
+                "game": "sample",
+                "server": "local",
                 "locale": "zh-CN",
                 "coordinate_space": {"width": 1, "height": 1},
                 "defaults": {"template_threshold": 0.9, "color_max_distance": 20.0},
@@ -17804,7 +17804,7 @@ mod tests {
         .unwrap();
         write_json_file(&pages_path, &json!({"schema_version":"0.3","pages":[]})).unwrap();
         set_missing_config_env();
-        let temp = seal_semantic_fixture(temp, "arknights", "cn", &pack_path, &pages_path, None);
+        let temp = seal_semantic_fixture(temp, "sample", "local", &pack_path, &pages_path, None);
 
         let result = run_semantic_cli(
             &temp,
@@ -17982,7 +17982,7 @@ mod tests {
             [
                 "--json",
                 "--instance",
-                "ak",
+                "fixture",
                 "session",
                 "record",
                 "start",
@@ -17997,7 +17997,7 @@ mod tests {
             [
                 "--json",
                 "--instance",
-                "ak",
+                "fixture",
                 "session",
                 "record",
                 "step",
@@ -18020,7 +18020,7 @@ mod tests {
             [
                 "--json",
                 "--instance",
-                "ak",
+                "fixture",
                 "session",
                 "record",
                 "step",
@@ -18043,7 +18043,7 @@ mod tests {
             [
                 "--json",
                 "--instance",
-                "ak",
+                "fixture",
                 "session",
                 "record",
                 "amend",
@@ -18058,7 +18058,7 @@ mod tests {
             [
                 "--json",
                 "--instance",
-                "ak",
+                "fixture",
                 "session",
                 "record",
                 "build-task",
@@ -18067,9 +18067,9 @@ mod tests {
                 "--out",
                 out.to_str().unwrap(),
                 "--game",
-                "arknights",
+                "sample",
                 "--server",
-                "cn",
+                "local",
                 "--locale",
                 "zh-CN",
                 "--dry-run",
@@ -18164,7 +18164,7 @@ mod tests {
             [
                 "--json",
                 "--instance",
-                "ak",
+                "fixture",
                 "session",
                 "record",
                 "start",
@@ -18179,7 +18179,7 @@ mod tests {
             [
                 "--json",
                 "--instance",
-                "ak",
+                "fixture",
                 "session",
                 "record",
                 "amend",
@@ -18221,7 +18221,7 @@ mod tests {
             [
                 "--json",
                 "--instance",
-                "ak",
+                "fixture",
                 "session",
                 "record",
                 "start",
@@ -18251,17 +18251,17 @@ mod tests {
                 "--json",
                 "config",
                 "set",
-                "instance.azur.serial",
+                "instance.a.serial",
                 "127.0.0.1:16385",
             ],
             true,
         );
         let _ = run_cli(
-            ["--json", "config", "set", "instance.azur.game", "azurlane"],
+            ["--json", "config", "set", "instance.a.game", "sample-c"],
             true,
         );
         let _ = run_cli(
-            ["--json", "config", "set", "instance.azur.server", "jp"],
+            ["--json", "config", "set", "instance.a.server", "remote"],
             true,
         );
         let _ = run_cli(
@@ -18269,7 +18269,7 @@ mod tests {
                 "--json",
                 "config",
                 "set",
-                "instance.azur.adb_path",
+                "instance.a.adb_path",
                 "C:\\Tools\\adb.exe",
             ],
             true,
@@ -18279,7 +18279,7 @@ mod tests {
                 "--json",
                 "config",
                 "set",
-                "instance.azur.capture_backend",
+                "instance.a.capture_backend",
                 "droidcast_raw",
             ],
             true,
@@ -18297,7 +18297,7 @@ mod tests {
             .and_then(Value::as_array)
             .unwrap();
         assert_eq!(instances.len(), 1);
-        assert_eq!(instances[0].get("id").and_then(Value::as_str), Some("azur"));
+        assert_eq!(instances[0].get("id").and_then(Value::as_str), Some("a"));
         assert_eq!(
             instances[0].get("adb_path").and_then(Value::as_str),
             Some("C:\\Tools\\adb.exe")
@@ -18317,22 +18317,22 @@ mod tests {
 
         let mut config = UserConfig::default();
         config.instances.insert(
-            "ak-b".to_string(),
+            "fixture-b".to_string(),
             InstanceConfig {
                 serial: Some("127.0.0.1:16416".to_string()),
-                game: Some("ark".to_string()),
-                server: Some("cn-bilibili".to_string()),
-                package: Some("com.hypergryph.arknights.bilibili".to_string()),
+                game: Some("sample".to_string()),
+                server: Some("local-provider".to_string()),
+                package: Some("org.example.client".to_string()),
                 adb_path: Some("C:\\Tools\\adb.exe".to_string()),
                 capture_backend: Some("nemu_ipc".to_string()),
                 touch_backend: None,
             },
         );
         config.instances.insert(
-            "ba-jp".to_string(),
+            "fixture-c".to_string(),
             InstanceConfig {
                 serial: Some("127.0.0.1:16384".to_string()),
-                game: Some("ba".to_string()),
+                game: Some("sample-b".to_string()),
                 server: None,
                 package: None,
                 adb_path: None,
@@ -18357,36 +18357,36 @@ mod tests {
             Some("droidcast_raw")
         );
         let instances = data.get("instances").and_then(Value::as_array).unwrap();
-        let ak = instances
+        let x = instances
             .iter()
-            .find(|instance| instance.get("id").and_then(Value::as_str) == Some("ak-b"))
+            .find(|instance| instance.get("id").and_then(Value::as_str) == Some("fixture-b"))
             .unwrap();
         assert_eq!(
-            ak.pointer("/effective/capture_backend")
+            x.pointer("/effective/capture_backend")
                 .and_then(Value::as_str),
             Some("nemu_ipc")
         );
         assert_eq!(
-            ak.pointer("/validation/ready_for_device_control")
+            x.pointer("/validation/ready_for_device_control")
                 .and_then(Value::as_bool),
             Some(true)
         );
-        let ba = instances
+        let y = instances
             .iter()
-            .find(|instance| instance.get("id").and_then(Value::as_str) == Some("ba-jp"))
+            .find(|instance| instance.get("id").and_then(Value::as_str) == Some("fixture-c"))
             .unwrap();
         assert_eq!(
-            ba.pointer("/effective/capture_backend")
+            y.pointer("/effective/capture_backend")
                 .and_then(Value::as_str),
             Some("auto")
         );
         assert_eq!(
-            ba.pointer("/validation/ready_for_device_control")
+            y.pointer("/validation/ready_for_device_control")
                 .and_then(Value::as_bool),
             Some(false)
         );
         assert!(
-            ba.pointer("/validation/missing_required_fields")
+            y.pointer("/validation/missing_required_fields")
                 .and_then(Value::as_array)
                 .unwrap()
                 .iter()
@@ -18403,11 +18403,11 @@ mod tests {
 
         let mut config = UserConfig::default();
         config.instances.insert(
-            "ak-b".to_string(),
+            "fixture-b".to_string(),
             InstanceConfig {
                 serial: Some("127.0.0.1:16416".to_string()),
-                game: Some("ark".to_string()),
-                server: Some("cn-bilibili".to_string()),
+                game: Some("sample".to_string()),
+                server: Some("local-provider".to_string()),
                 package: None,
                 adb_path: None,
                 capture_backend: Some("not-a-backend".to_string()),
@@ -18431,7 +18431,7 @@ mod tests {
                 .as_ref()
                 .unwrap()
                 .message
-                .contains("invalid instance.ak-b.capture_backend")
+                .contains("invalid instance.fixture-b.capture_backend")
         );
     }
 
@@ -20425,12 +20425,12 @@ mod tests {
     #[test]
     fn device_config_uses_instance_capture_backend_default() {
         let global = GlobalOptions {
-            instance: Some("ak-b".to_string()),
+            instance: Some("fixture-b".to_string()),
             ..Default::default()
         };
         let (_adb_dir, mut config) = user_config_with_test_adb();
         config.instances.insert(
-            "ak-b".to_string(),
+            "fixture-b".to_string(),
             InstanceConfig {
                 serial: Some("127.0.0.1:16416".to_string()),
                 capture_backend: Some("nemu_ipc".to_string()),
@@ -20447,13 +20447,13 @@ mod tests {
     #[test]
     fn device_config_cli_capture_backend_overrides_instance_default() {
         let global = GlobalOptions {
-            instance: Some("ak-b".to_string()),
+            instance: Some("fixture-b".to_string()),
             capture_backend: Some(CaptureBackendChoice::Adb),
             ..Default::default()
         };
         let (_adb_dir, mut config) = user_config_with_test_adb();
         config.instances.insert(
-            "ak-b".to_string(),
+            "fixture-b".to_string(),
             InstanceConfig {
                 serial: Some("127.0.0.1:16416".to_string()),
                 capture_backend: Some("nemu_ipc".to_string()),
@@ -20469,13 +20469,13 @@ mod tests {
     #[test]
     fn device_config_cli_touch_backend_overrides_instance_default() {
         let global = GlobalOptions {
-            instance: Some("ak-b".to_string()),
+            instance: Some("fixture-b".to_string()),
             touch_backend: Some(TouchBackendChoice::AdbShellInput),
             ..Default::default()
         };
         let (_adb_dir, mut config) = user_config_with_test_adb();
         config.instances.insert(
-            "ak-b".to_string(),
+            "fixture-b".to_string(),
             InstanceConfig {
                 serial: Some("127.0.0.1:16416".to_string()),
                 touch_backend: Some("maatouch".to_string()),
@@ -20506,7 +20506,7 @@ mod tests {
                 "--resource-root",
                 temp.path().to_str().unwrap(),
                 "--game",
-                "ark",
+                "sample",
                 "current-page",
                 "--scene",
                 scene.to_str().unwrap(),
@@ -20523,7 +20523,7 @@ mod tests {
                 .unwrap()
                 .get("page")
                 .and_then(Value::as_str),
-            Some("arknights/home")
+            Some("sample/home")
         );
     }
 
@@ -20545,7 +20545,7 @@ mod tests {
                 "--resource-root",
                 temp.path().to_str().unwrap(),
                 "--game",
-                "ark",
+                "sample",
                 "tap-target",
                 "home_button",
                 "--scene",
@@ -20575,7 +20575,7 @@ mod tests {
                 "--resource-root",
                 temp.path().to_str().unwrap(),
                 "--game",
-                "ark",
+                "sample",
                 "navigate",
                 "--to",
                 "target",
@@ -20625,7 +20625,7 @@ mod tests {
                 "--resource-root",
                 temp.path().to_str().unwrap(),
                 "--game",
-                "ark",
+                "sample",
                 "navigate",
                 "--to",
                 "target",
@@ -20662,7 +20662,7 @@ mod tests {
                 "--resource-root",
                 temp.path().to_str().unwrap(),
                 "--game",
-                "ark",
+                "sample",
                 "observe",
                 "--scene",
                 scene.to_str().unwrap(),
@@ -20679,7 +20679,7 @@ mod tests {
         assert!(data.get("req_id").and_then(Value::as_str).is_some());
         assert_eq!(
             data.get("page").and_then(Value::as_str),
-            Some("arknights/home")
+            Some("sample/home")
         );
         assert_eq!(
             data.get("backend").and_then(Value::as_str),
@@ -20725,7 +20725,7 @@ mod tests {
                 "--resource-root",
                 temp.path().to_str().unwrap(),
                 "--game",
-                "ark",
+                "sample",
                 "do",
                 "home_button",
                 "--scene",
@@ -20772,7 +20772,7 @@ mod tests {
                 "--resource-root",
                 temp.path().to_str().unwrap(),
                 "--game",
-                "ark",
+                "sample",
                 "do",
                 "home_button",
                 "--scene",
@@ -20817,7 +20817,7 @@ mod tests {
                 "--resource-root",
                 temp.path().to_str().unwrap(),
                 "--game",
-                "ark",
+                "sample",
                 "ensure",
                 "home",
                 "--scene",
@@ -20845,7 +20845,7 @@ mod tests {
                 "--resource-root",
                 temp.path().to_str().unwrap(),
                 "--game",
-                "ark",
+                "sample",
                 "ensure",
                 "target",
                 "--scene",
@@ -20888,10 +20888,10 @@ mod tests {
                 "--resource-root",
                 temp.path().to_str().unwrap(),
                 "--game",
-                "ark",
+                "sample",
                 "wait",
                 "--page",
-                "arknights/home",
+                "sample/home",
                 "--scene",
                 scene.to_str().unwrap(),
                 "--timeout-ms",
@@ -20917,7 +20917,7 @@ mod tests {
                 "--resource-root",
                 temp.path().to_str().unwrap(),
                 "--game",
-                "ark",
+                "sample",
                 "wait",
                 "--stable",
                 "home_anchor",
@@ -20959,11 +20959,11 @@ mod tests {
         set_config_env(temp.path().join("config.json"));
         let mut config = UserConfig::default();
         config.instances.insert(
-            "ak-live".to_string(),
+            "fixture-d".to_string(),
             InstanceConfig {
                 serial: Some("127.0.0.1:16416".to_string()),
-                game: Some("ark".to_string()),
-                server: Some("cn".to_string()),
+                game: Some("sample".to_string()),
+                server: Some("local".to_string()),
                 capture_backend: Some("adb".to_string()),
                 touch_backend: Some("maatouch".to_string()),
                 ..Default::default()
@@ -21001,7 +21001,7 @@ mod tests {
         assert_eq!(
             data.pointer("/lab2_cli/instances/0/id")
                 .and_then(Value::as_str),
-            Some("ak-live")
+            Some("fixture-d")
         );
         assert_eq!(
             data.pointer("/lab2_cli/recovery_transparency/event_type")
@@ -21058,7 +21058,7 @@ mod tests {
                 "--resource-root",
                 temp.path().to_str().unwrap(),
                 "--game",
-                "ark",
+                "sample",
                 "observe",
                 "--scene",
                 home.to_str().unwrap(),
@@ -21090,7 +21090,7 @@ mod tests {
                 "--resource-root",
                 temp.path().to_str().unwrap(),
                 "--game",
-                "ark",
+                "sample",
                 "do",
                 "home_button",
                 "--scene",
@@ -21134,7 +21134,7 @@ mod tests {
                 "--resource-root",
                 temp.path().to_str().unwrap(),
                 "--game",
-                "ark",
+                "sample",
                 "do",
                 "home_button",
                 "--scene",
@@ -21162,7 +21162,7 @@ mod tests {
                 "--resource-root",
                 temp.path().to_str().unwrap(),
                 "--game",
-                "ark",
+                "sample",
                 "do",
                 "home_button",
                 "--scene",
@@ -21244,7 +21244,7 @@ mod tests {
                 "--resource-root",
                 temp.path().to_str().unwrap(),
                 "--game",
-                "ark",
+                "sample",
                 "observe",
                 "--scene",
                 scene.to_str().unwrap(),
@@ -21291,7 +21291,7 @@ mod tests {
                 "--resource-root",
                 temp.path().to_str().unwrap(),
                 "--game",
-                "ark",
+                "sample",
                 "do",
                 "home_button",
                 "--scene",
@@ -21349,7 +21349,7 @@ mod tests {
                 "--resource-root",
                 temp.path().to_str().unwrap(),
                 "--game",
-                "ark",
+                "sample",
                 "do",
                 "home_button",
                 "--scene",
@@ -21506,7 +21506,7 @@ mod tests {
                 "--resource-root",
                 temp.path().to_str().unwrap(),
                 "--game",
-                "ark",
+                "sample",
                 "observe",
                 "--scene",
                 scene.to_str().unwrap(),
@@ -21543,9 +21543,9 @@ mod tests {
                 "--resource-root",
                 temp.path().to_str().unwrap(),
                 "--game",
-                "arknights",
+                "sample",
                 "--server",
-                "cn",
+                "local",
                 "session",
                 "recover",
                 "--scene",
@@ -21586,9 +21586,9 @@ mod tests {
                 "--resource-root",
                 temp.path().to_str().unwrap(),
                 "--game",
-                "arknights",
+                "sample",
                 "--server",
-                "cn",
+                "local",
                 "session",
                 "recover",
                 "--to",
@@ -21626,9 +21626,9 @@ mod tests {
                 "--resource-root",
                 temp.path().to_str().unwrap(),
                 "--game",
-                "arknights",
+                "sample",
                 "--server",
-                "cn",
+                "local",
                 "session",
                 "recover",
                 "--scene",
@@ -21663,9 +21663,9 @@ mod tests {
                 "--resource-root",
                 temp.path().to_str().unwrap(),
                 "--game",
-                "arknights",
+                "sample",
                 "--server",
-                "cn",
+                "local",
                 "session",
                 "recover",
                 "--startup-login",
@@ -21709,9 +21709,9 @@ mod tests {
                 "--resource-root",
                 temp.path().to_str().unwrap(),
                 "--game",
-                "arknights",
+                "sample",
                 "--server",
-                "cn",
+                "local",
                 "session",
                 "recover",
                 "--startup-login",
@@ -21746,9 +21746,9 @@ mod tests {
                 "--resource-root",
                 temp.path().to_str().unwrap(),
                 "--game",
-                "arknights",
+                "sample",
                 "--server",
-                "cn",
+                "local",
                 "session",
                 "recover",
                 "--startup-login",
