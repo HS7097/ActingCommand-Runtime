@@ -4,6 +4,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+use actingcommand_actinglab_architecture::external_compat::load_and_validate_external_compat;
 use actingcommand_actinglab_architecture::generic_domain::{
     load_generic_domain_registry, validate_workspace_surface_registry,
 };
@@ -58,6 +59,12 @@ fn c2_generic_domain_registry_matches_every_workspace_member_and_protected_root(
         .unwrap_or_else(|error| panic!("load {}: {error}", registry_path.display()));
     validate_workspace_surface_registry(&root, &registry)
         .unwrap_or_else(|error| panic!("C2 generic-domain registry violations:\n{error}"));
+}
+
+#[test]
+fn c2_external_compat_files_have_exact_provenance_and_scope() {
+    load_and_validate_external_compat(&workspace_root())
+        .unwrap_or_else(|error| panic!("C2 external-compat violations:\n{error}"));
 }
 
 #[test]
