@@ -77,3 +77,8 @@ The command requires an authenticated `gh` session with read access to
 author or timestamp drift, body-hash drift, and an out-of-scope surface delta all fail the gate.
 The base and head must be full commit SHAs in one ancestry chain; both are inspected through
 temporary detached worktrees so uncommitted candidate state cannot become evidence.
+
+The protected `pull_request_target` workflow builds this verifier only from the PR base and never
+executes candidate code. Configure `ACTINGCOMMAND_WORKFLOW_READ_TOKEN` as a fine-grained read-only
+repository secret for the private Workflow repository; an absent or unusable credential fails the
+job instead of skipping approval verification.
