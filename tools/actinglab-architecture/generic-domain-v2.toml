@@ -12,6 +12,21 @@ created_at = "2026-07-18T19:42:24Z"
 updated_at = "2026-07-18T19:42:24Z"
 content_sha256 = "209acbbcf8adffa469936c34069bc9a69fbda5fb20d8bf7c7bc8d2dba4bc57e7"
 scope = ["approval.provenance", "identity.allowance", "surface.mapping", "workspace.discovery"]
+retired = true
+
+[[approval]]
+id = "approval.issue44_r10b"
+repository = "HS7097/ActingCommand-Workflow"
+issue = 54
+comment_id = 5012828074
+author = "HS7097"
+author_id = 103177863
+created_at = "2026-07-18T20:34:53Z"
+updated_at = "2026-07-18T20:34:53Z"
+content_sha256 = "f3b45fc2c65903365aabf856d9c26cca0f78321bcafa22f8f68dd337fb572267"
+scope = ["approval.provenance", "surface.mapping"]
+retired = false
+change_binding = { target_repository = "HS7097/ActingCommand-Runtime", pull_request = 123, base_sha = "d5e7850d24fb46332eb620e3648f501c23921716", subject_sha = "0f739ab8edf5bc51497e6a43918792b0c5482ba7" }
 
 [[approval]]
 id = "approval.issue44_r8"
@@ -24,6 +39,7 @@ created_at = "2026-07-18T12:33:17Z"
 updated_at = "2026-07-18T12:33:17Z"
 content_sha256 = "4dcab0aaab511a64657b6ae9d7ec35fde78a418db04b3eebf9bc4ca82e956c77"
 scope = ["surface.mapping"]
+retired = true
 
 [[approval]]
 id = "approval.issue44_r8b"
@@ -36,6 +52,7 @@ created_at = "2026-07-18T13:01:42Z"
 updated_at = "2026-07-18T13:01:42Z"
 content_sha256 = "89fe4d69a3e0be4bda12b3731f5911eb065a7ff3f9b66f2bca7a782a7173b8bf"
 scope = ["identity.allowance", "surface.mapping"]
+retired = true
 
 [[approval]]
 id = "approval.issue44_r8c"
@@ -48,6 +65,7 @@ created_at = "2026-07-18T13:26:44Z"
 updated_at = "2026-07-18T13:26:44Z"
 content_sha256 = "df46ce291a20cbeba38cb1eb129a17f3fbfb9253badf24a8102a52cddb31478d"
 scope = ["identity.allowance", "surface.mapping", "workspace.discovery"]
+retired = true
 
 [[approval]]
 id = "approval.issue44_r8d"
@@ -60,6 +78,7 @@ created_at = "2026-07-18T13:44:34Z"
 updated_at = "2026-07-18T13:44:34Z"
 content_sha256 = "16caaae9dc5c45c9fad3d33b4c78c2b2686a5ecc4be70c063ac57b92b49439d5"
 scope = ["external.compat", "identity.allowance", "surface.mapping"]
+retired = true
 
 [[approval]]
 id = "approval.issue44_r8e"
@@ -72,6 +91,7 @@ created_at = "2026-07-18T14:05:51Z"
 updated_at = "2026-07-18T14:05:51Z"
 content_sha256 = "4e3f7dfde3c2b3f1551a9c64e1d5c801d8191a5f09357a1ea93f20dee311d566"
 scope = ["compatibility.alias", "identity.allowance", "safety.effect", "surface.mapping"]
+retired = true
 
 [[approval]]
 id = "approval.issue44_r9"
@@ -84,10 +104,11 @@ created_at = "2026-07-18T16:02:09Z"
 updated_at = "2026-07-18T16:02:09Z"
 content_sha256 = "09f3759ecb10f2a63c2c33dc109276ce25c9e482a8e6f3e8f3ae3bccd5314b5d"
 scope = ["approval.provenance", "compatibility.alias", "external.compat", "identity.allowance", "safety.effect", "surface.mapping", "workspace.discovery"]
+retired = true
 
 [surface_manifest]
 path = "tools/actinglab-architecture/generic-domain-surfaces-v2.jsonl"
-sha256 = "1951185e84478c776fc9e8790dc4f1603888f183bf2e3bef449fe012f5850519"
+sha256 = "18bde778af1398840112cebb9822f316697ac57ac5e39872b05a8b93066f21d5"
 approval_id = "approval.issue44_r8"
 source_issue = 44
 source_pr = 112

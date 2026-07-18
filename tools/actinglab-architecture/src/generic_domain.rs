@@ -134,6 +134,19 @@ pub struct SurfaceApproval {
     pub updated_at: Option<String>,
     pub content_sha256: String,
     pub scope: Vec<String>,
+    #[serde(default)]
+    pub retired: bool,
+    #[serde(default)]
+    pub change_binding: Option<ApprovalChangeBinding>,
+}
+
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct ApprovalChangeBinding {
+    pub target_repository: String,
+    pub pull_request: u64,
+    pub base_sha: String,
+    pub subject_sha: String,
 }
 
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
@@ -383,6 +396,44 @@ pub fn validate_generic_domain_registry(registry: &GenericDomainRegistry) -> Res
                 ));
             }
             previous_scope = Some(scope.as_str());
+        }
+        match (approval.retired, &approval.change_binding) {
+            (_, Some(binding)) => {
+                if binding.target_repository != "HS7097/ActingCommand-Runtime" {
+                    errors.push(format!(
+                        "surface approval {} has unexpected target repository {}",
+                        approval.id, binding.target_repository
+                    ));
+                }
+                if binding.pull_request == 0 {
+                    errors.push(format!(
+                        "surface approval {} has invalid target pull request",
+                        approval.id
+                    ));
+                }
+                for (field, revision) in [
+                    ("base_sha", binding.base_sha.as_str()),
+                    ("subject_sha", binding.subject_sha.as_str()),
+                ] {
+                    if !is_full_commit_sha(revision) {
+                        errors.push(format!(
+                            "surface approval {} {field} must be a lowercase full commit SHA",
+                            approval.id
+                        ));
+                    }
+                }
+                if binding.base_sha == binding.subject_sha {
+                    errors.push(format!(
+                        "surface approval {} must bind a subject after its base",
+                        approval.id
+                    ));
+                }
+            }
+            (false, None) => errors.push(format!(
+                "surface approval {} must be retired or change-bound",
+                approval.id
+            )),
+            (true, None) => {}
         }
     }
     let approval_by_id = registry
@@ -3471,6 +3522,13 @@ fn is_sha256(value: &str) -> bool {
             .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
 }
 
+fn is_full_commit_sha(value: &str) -> bool {
+    value.len() == 40
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -3494,6 +3552,7 @@ comment_id = 5011264343
 author = "HS7097"
 content_sha256 = "{}"
 scope = ["surface.mapping"]
+retired = true
 
 [[approval]]
 id = "approval.issue44_r8b"
@@ -3503,6 +3562,7 @@ comment_id = 5011350539
 author = "HS7097"
 content_sha256 = "{}"
 scope = ["identity.allowance", "surface.mapping"]
+retired = true
 
 [[concept]]
 id = "identity.game"
@@ -4555,6 +4615,8 @@ source_pr = 111
                     updated_at: None,
                     content_sha256: "a".repeat(64),
                     scope: vec!["surface.mapping".to_string()],
+                    retired: true,
+                    change_binding: None,
                 },
                 SurfaceApproval {
                     id: "approval.issue44_r8b".to_string(),
@@ -4570,6 +4632,8 @@ source_pr = 111
                         "identity.allowance".to_string(),
                         "surface.mapping".to_string(),
                     ],
+                    retired: true,
+                    change_binding: None,
                 },
             ],
             concept: vec![GenericConcept {
