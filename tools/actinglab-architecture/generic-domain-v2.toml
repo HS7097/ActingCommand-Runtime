@@ -28,9 +28,18 @@ author = "HS7097"
 content_sha256 = "df46ce291a20cbeba38cb1eb129a17f3fbfb9253badf24a8102a52cddb31478d"
 scope = ["identity.allowance", "surface.mapping", "workspace.discovery"]
 
+[[approval]]
+id = "approval.issue44_r8d"
+repository = "HS7097/ActingCommand-Workflow"
+issue = 54
+comment_id = 5011483079
+author = "HS7097"
+content_sha256 = "16caaae9dc5c45c9fad3d33b4c78c2b2686a5ecc4be70c063ac57b92b49439d5"
+scope = ["external.compat", "identity.allowance", "surface.mapping"]
+
 [surface_manifest]
 path = "tools/actinglab-architecture/generic-domain-surfaces-v2.jsonl"
-sha256 = "53c3f2137d7f00c5d8e856422527c65465258bae9e7c9e07fa879bc90d21fbde"
+sha256 = "5ae0ffc916f231608187d6dacb78aa7f8b33ad9438c4ab57549826e5c62458fe"
 approval_id = "approval.issue44_r8"
 source_issue = 44
 source_pr = 112
