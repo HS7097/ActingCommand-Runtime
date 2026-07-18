@@ -48,7 +48,7 @@ scope = ["compatibility.alias", "identity.allowance", "safety.effect", "surface.
 
 [surface_manifest]
 path = "tools/actinglab-architecture/generic-domain-surfaces-v2.jsonl"
-sha256 = "8e49bf7d56cedb66f3033703d0eb7cdb9807dbb212215e3830deb658b0312916"
+sha256 = "3e36fbddd4426755fa28f110fb68a6e62dc4e0e6e8395eaac43fa62875567c79"
 approval_id = "approval.issue44_r8"
 source_issue = 44
 source_pr = 112
@@ -2119,6 +2119,7 @@ sha256 = "1160b52ba108a911526523e68f120fdc052da400eee636468edcdb2f9562bef4"
 purpose = "Allows reviewed upstream interoperability tokens in this exact AST fragment."
 approval_id = "approval.issue44_r8e"
 source_issue = 44
+source_pr = 116
 
 [[identity_allowance]]
 id = "allowance.fragment_0a501d9d9ace4493e68f338b07ef6070f5486cfa"
@@ -3392,6 +3393,7 @@ sha256 = "f4d61367d1e43fc03348dbcb973144f9fda51bb8d9720189cd28cd88b2efe6d5"
 purpose = "Allows reviewed upstream interoperability tokens in this exact AST fragment."
 approval_id = "approval.issue44_r8e"
 source_issue = 44
+source_pr = 116
 
 [[identity_allowance]]
 id = "allowance.fragment_5c8571a94b04945418cb96f25152b52efc06389f"
@@ -4262,6 +4264,7 @@ sha256 = "18312a6636ac631a48275c2006ec45f6bffa7a82efc7e5c847f771328eb283d8"
 purpose = "Allows reviewed upstream interoperability tokens in this exact AST fragment."
 approval_id = "approval.issue44_r8e"
 source_issue = 44
+source_pr = 116
 
 [[identity_allowance]]
 id = "allowance.fragment_97e807a41e053046da0a6b79bc3b255ddf9aa873"
@@ -4469,6 +4472,7 @@ sha256 = "8a993fbde1fcea1c81c22e3735303f26c6c31d899c43cfba2399a3e02b892a79"
 purpose = "Allows reviewed upstream interoperability tokens in this exact AST fragment."
 approval_id = "approval.issue44_r8e"
 source_issue = 44
+source_pr = 116
 
 [[identity_allowance]]
 id = "allowance.fragment_a4c1fdee11758887683064fdd93dfb34451aac22"
@@ -4832,6 +4836,7 @@ sha256 = "2f917fa8f0955aed6529d04eedff9194b01dd038534ec729f0ddd9d8c8425473"
 purpose = "Allows neutral identity fixture values in this exact test fragment."
 approval_id = "approval.issue44_r8e"
 source_issue = 44
+source_pr = 116
 
 [[identity_allowance]]
 id = "allowance.fragment_c1928f0136fdf9ed63904740cb5b5c7e41cef773"
@@ -5585,6 +5590,7 @@ sha256 = "18fd8d785d950771e4c3613ce568797b728be41af51b831c97a0cf8aab6f2891"
 purpose = "Allows reviewed upstream interoperability tokens in this exact AST fragment."
 approval_id = "approval.issue44_r8e"
 source_issue = 44
+source_pr = 116
 
 [[identity_allowance]]
 id = "allowance.fragment_ed5e69760c95c8cc2118758f6f84154bbc24cde5"
