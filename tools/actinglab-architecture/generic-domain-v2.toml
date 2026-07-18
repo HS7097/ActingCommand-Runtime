@@ -1,0 +1,2295 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+
+schema_version = "actingcommand.generic-domain.v2"
+[[approval]]
+id = "approval.issue44_r8"
+repository = "HS7097/ActingCommand-Workflow"
+issue = 54
+comment_id = 5011264343
+author = "HS7097"
+content_sha256 = "4dcab0aaab511a64657b6ae9d7ec35fde78a418db04b3eebf9bc4ca82e956c77"
+scope = ["surface.mapping"]
+
+[surface_manifest]
+path = "tools/actinglab-architecture/generic-domain-surfaces-v2.jsonl"
+sha256 = "3701e4e672ae40f1fc79f3969f8b873814f514e1fca85bf3ac6b6a1dcace18d2"
+approval_id = "approval.issue44_r8"
+source_issue = 44
+source_pr = 112
+
+[[concept]]
+id = "agent.agent"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "agent.attention"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "agent.capability"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "agent.dispatcher"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "agent.escalation"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "agent.human"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "agent.request"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "agent.response"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "agent.session"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "agent.wake"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "artifact.acquisition"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "artifact.artifact"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "artifact.capture"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "artifact.diagnostic"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "artifact.evidence"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "artifact.image"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "artifact.log"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "artifact.media"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "artifact.metadata"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "artifact.redaction"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "artifact.reference"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "artifact.report"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "artifact.retention"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "artifact.screenshot"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "catalog.activity"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "catalog.bundle"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "catalog.catalog"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "catalog.compile"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "catalog.declaration"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "catalog.diagnostic"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "catalog.hash"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "catalog.package"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "catalog.pool"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "catalog.reference"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "catalog.schema"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "catalog.task"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "catalog.template"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "catalog.timeline"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "catalog.validation"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "catalog.version"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "coordination.atomicity"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "coordination.contention"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "coordination.epoch"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "coordination.fence"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "coordination.generation"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "coordination.heartbeat"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "coordination.liveness"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "coordination.lock"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "coordination.owner"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "coordination.revision"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "coordination.token"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "coordination.transaction"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "decision.admission"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "decision.approval"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "decision.authorization"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "decision.decision"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "decision.disposition"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "decision.intent"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "decision.outcome"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "decision.policy"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "decision.promotion"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "decision.proposal"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "decision.reason"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "device.action"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "device.application"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "device.backend"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "device.capture"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "device.coordinate"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "device.device"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "device.emulator"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "device.frame"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "device.input"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "device.point"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "device.primitive"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "device.provider"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "device.rect"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "device.resolution"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "device.swipe"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "device.tap"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "device.wait"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "execution.arbitration"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "execution.attempt"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "execution.backoff"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "execution.cancel"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "execution.command"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "execution.complete"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "execution.cooldown"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "execution.correlation"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "execution.debounce"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "execution.dispatch"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "execution.effect"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "execution.failure"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "execution.fencing"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "execution.hysteresis"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "execution.idempotency"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "execution.lease"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "execution.maintenance"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "execution.operation"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "execution.pause"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "execution.preemption"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "execution.procedure"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "execution.receipt"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "execution.recovery"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "execution.result"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "execution.resume"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "execution.retry"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "execution.run"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "execution.session"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "execution.severity"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "execution.state"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "execution.status"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "execution.step"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "fact.confidence"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "fact.detection"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "fact.environment"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "fact.fact"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "fact.freshness"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "fact.invalidation"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "fact.measurement"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "fact.observation"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "fact.resolution"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "fact.resource"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "fact.snapshot"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "fact.source"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "fact.ttl"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "fact.unknown"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "identity.account"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "identity.capability"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "identity.game"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "identity.importance"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "identity.instance"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "identity.locale"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "identity.namespace"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "identity.owner"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "identity.principal"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "identity.profile"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "identity.project"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "identity.scope"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "identity.server"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "interface.api"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "interface.cli"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "interface.client"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "interface.compatibility"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "interface.contract"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "interface.domain"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "interface.envelope"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "interface.host"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "interface.ipc"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "interface.lab"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "interface.payload"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "interface.request"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "interface.response"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "interface.runtime"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "interface.transport"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "interface.ui"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "interface.version"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "ledger.actor"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "ledger.audit"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "ledger.clock"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "ledger.cursor"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "ledger.event"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "ledger.history"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "ledger.ledger"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "ledger.position"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "ledger.projection"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "ledger.query"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "ledger.replay"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "ledger.sequence"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "ledger.subscription"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "ledger.timestamp"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "network.address"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "network.authentication"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "network.authorization"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "network.channel"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "network.connection"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "network.endpoint"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "network.loopback"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "network.port"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "network.protocol"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "network.remote"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "network.transport"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "operation.apply"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "operation.build"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "operation.commit"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "operation.connect"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "operation.convert"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "operation.create"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "operation.delete"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "operation.deny"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "operation.emit"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "operation.expire"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "operation.get"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "operation.grant"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "operation.import"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "operation.inspect"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "operation.list"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "operation.query"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "operation.read"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "operation.record"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "operation.refresh"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "operation.reject"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "operation.release"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "operation.renew"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "operation.resolve"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "operation.restart"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "operation.start"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "operation.stop"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "operation.subscribe"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "operation.transfer"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "operation.update"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "operation.validate"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "operation.write"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "performance.balance"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "performance.control"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "performance.cpu"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "performance.disk"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "performance.duration"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "performance.gpu"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "performance.health"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "performance.host"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "performance.io"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "performance.latency"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "performance.load"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "performance.memory"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "performance.monitor"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "performance.pressure"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "performance.probe"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "performance.process"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "performance.qos"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "performance.ram"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "performance.responsiveness"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "performance.sample"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "performance.stutter"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "performance.summary"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "performance.suspend"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "performance.throttle"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "performance.yield"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "recognition.anchor"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "recognition.color"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "recognition.descriptor"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "recognition.match"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "recognition.model"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "recognition.ocr"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "recognition.pack"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "recognition.page"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "recognition.recognition"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "recognition.region"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "recognition.score"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "recognition.text"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "recognition.threshold"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "release.activate"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "release.containment"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "release.export"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "release.generation"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "release.manifest"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "release.migration"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "release.publish"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "release.rollback"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "release.schema"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "release.stage"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "release.state"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "release.store"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "release.transition"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "release.verify"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "schedule.aging"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "schedule.budget"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "schedule.clock"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "schedule.cohort"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "schedule.deadline"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "schedule.dependency"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "schedule.eligibility"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "schedule.goal"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "schedule.loop"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "schedule.metric"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "schedule.placement"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "schedule.plan"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "schedule.predicate"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "schedule.priority"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "schedule.projection"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "schedule.ranking"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "schedule.schedule"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "schedule.seed"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "schedule.strategy"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "schedule.target"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "schedule.trigger"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "schedule.urgency"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "schedule.wake"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "schedule.weight"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "schedule.window"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "state_value.active"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "state_value.admitted"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "state_value.cancelled"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "state_value.completed"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "state_value.degraded"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "state_value.disabled"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "state_value.enabled"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "state_value.error"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "state_value.failed"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "state_value.false"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "state_value.fatal"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "state_value.inactive"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "state_value.inferred"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "state_value.info"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "state_value.invalid"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "state_value.manual"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "state_value.paused"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "state_value.pending"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "state_value.queued"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "state_value.rejected"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "state_value.running"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "state_value.scan_verified"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "state_value.self_reported"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "state_value.succeeded"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "state_value.true"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "state_value.unknown"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "state_value.valid"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "state_value.warning"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "structure.amount"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "structure.capacity"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "structure.code"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "structure.content"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "structure.count"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "structure.description"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "structure.directory"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "structure.enabled"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "structure.encoding"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "structure.file"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "structure.format"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "structure.hash"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "structure.height"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "structure.id"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "structure.index"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "structure.key"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "structure.kind"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "structure.label"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "structure.limit"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "structure.list"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "structure.map"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "structure.media"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "structure.metadata"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "structure.name"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "structure.offset"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "structure.path"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "structure.ref"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "structure.sensitive"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "structure.set"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "structure.size"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "structure.source"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "structure.tag"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "structure.type"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "structure.uri"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "structure.value"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "structure.width"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "time.date"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "time.delay"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "time.duration"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "time.instant"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "time.interval"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "time.monotonic"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "time.offset"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "time.time"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "time.timeout"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "time.timestamp"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "time.timezone"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "time.wall_clock"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "unit_qualifier.actual"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "unit_qualifier.best_effort"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "unit_qualifier.bytes"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "unit_qualifier.count"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "unit_qualifier.current"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "unit_qualifier.daily"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "unit_qualifier.expected"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "unit_qualifier.foreground"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "unit_qualifier.global"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "unit_qualifier.local"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "unit_qualifier.maximum"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "unit_qualifier.milli"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "unit_qualifier.millis"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "unit_qualifier.minimum"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "unit_qualifier.percent"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "unit_qualifier.private"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "unit_qualifier.public"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "unit_qualifier.readonly"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "unit_qualifier.recent"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
+id = "unit_qualifier.total"
+status = "active"
+approval_comment_id = 5010683904
+
+[[identity_allowance]]
+id = "allowance.apps_actingd_src_config_rs"
+kind = "technical_adapter"
+exact_path = "apps/actingd/src/config.rs"
+tokens = ["maa"]
+sha256 = "23cc30b657b16c17d0097dbd50444e7c4642cabd725cb431a8b9eeadccdfa612"
+purpose = "Registers an exact upstream or MaaTouch interoperability surface."
+approval_comment_id = 5010683904
+source_issue = 44
+source_pr = 111
+
+[[identity_allowance]]
+id = "allowance.apps_actinglab_src_env_detection_rs"
+kind = "technical_adapter"
+exact_path = "apps/actinglab/src/env_detection.rs"
+tokens = ["maa"]
+sha256 = "20c65e2035ea80de7dba1f25a64c7cde5190ac0dfb0a6fd4c5f6d4a54a071bee"
+purpose = "Registers an exact upstream or MaaTouch interoperability surface."
+approval_comment_id = 5010683904
+source_issue = 44
+source_pr = 111
+
+[[identity_allowance]]
+id = "allowance.apps_actinglab_src_maa_task_graph_rs"
+kind = "technical_adapter"
+exact_path = "apps/actinglab/src/maa_task_graph.rs"
+tokens = ["maa"]
+sha256 = "3cb880835c49d48cb74ec20dfbdd829811d50ea7b50cb67f09fd5bc0c8da0198"
+purpose = "Registers an exact upstream or MaaTouch interoperability surface."
+approval_comment_id = 5010683904
+source_issue = 44
+source_pr = 111
+
+[[identity_allowance]]
+id = "allowance.apps_actinglab_src_main_rs"
+kind = "technical_adapter"
+exact_path = "apps/actinglab/src/main.rs"
+tokens = ["maa"]
+sha256 = "b8f0c287c6f23b20e4c1c0276086c9592826ff0a9c91e1462ce5b014483440a8"
+purpose = "Registers an exact upstream or MaaTouch interoperability surface."
+approval_comment_id = 5010683904
+source_issue = 44
+source_pr = 111
+
+[[identity_allowance]]
+id = "allowance.apps_actinglab_src_resource_authoring_rs"
+kind = "technical_adapter"
+exact_path = "apps/actinglab/src/resource_authoring.rs"
+tokens = ["maa"]
+sha256 = "8c6674b8d413273036e0dee7267778355fce675955613be2c3736925cb617fb0"
+purpose = "Registers an exact upstream or MaaTouch interoperability surface."
+approval_comment_id = 5010683904
+source_issue = 44
+source_pr = 111
+
+[[identity_allowance]]
+id = "allowance.apps_actinglab_src_resource_convert_rs"
+kind = "technical_adapter"
+exact_path = "apps/actinglab/src/resource_convert.rs"
+tokens = ["maa"]
+sha256 = "7fcf5f9a47dec7ab3abac5d674fc05b061c40a590cd4aae99fe705cb639c07f7"
+purpose = "Registers an exact upstream or MaaTouch interoperability surface."
+approval_comment_id = 5010683904
+source_issue = 44
+source_pr = 111
+
+[[identity_allowance]]
+id = "allowance.apps_device_test_src_main_rs"
+kind = "technical_adapter"
+exact_path = "apps/device-test/src/main.rs"
+tokens = ["maa"]
+sha256 = "74855915a9dad9d96323341cf0e1b787891cefffa224bc996d8c71ce818dfe4b"
+purpose = "Registers an exact upstream or MaaTouch interoperability surface."
+approval_comment_id = 5010683904
+source_issue = 44
+source_pr = 111
+
+[[identity_allowance]]
+id = "allowance.apps_device_test_src_probe_run_rs"
+kind = "technical_adapter"
+exact_path = "apps/device-test/src/probe_run.rs"
+tokens = ["maa"]
+sha256 = "ffe57993bfcc065484dfd1fc71edb28f58b98a77caf3e3dd8c869250c2abd1a9"
+purpose = "Registers an exact upstream or MaaTouch interoperability surface."
+approval_comment_id = 5010683904
+source_issue = 44
+source_pr = 111
+
+[[identity_allowance]]
+id = "allowance.apps_vision_provider_check_src_main_rs"
+kind = "technical_adapter"
+exact_path = "apps/vision-provider-check/src/main.rs"
+tokens = ["maa", "maa."]
+sha256 = "c0707ca2c818be113a655a2086500c14a2e0f6ffb72d41d5cf3044e09430903c"
+purpose = "Registers an exact upstream or MaaTouch interoperability surface."
+approval_comment_id = 5010683904
+source_issue = 44
+source_pr = 111
+
+[[identity_allowance]]
+id = "allowance.crates_device_src_maatouch_rs"
+kind = "technical_adapter"
+exact_path = "crates/device/src/maatouch.rs"
+tokens = ["maa"]
+sha256 = "485b250148ffe3f83cf431c5b4544b0fd0f3dd1fb5e6758630cb8715b8a2b14e"
+purpose = "Registers an exact upstream or MaaTouch interoperability surface."
+approval_comment_id = 5010683904
+source_issue = 44
+source_pr = 111
+
+[[identity_allowance]]
+id = "allowance.crates_device_src_touch_rs"
+kind = "technical_adapter"
+exact_path = "crates/device/src/touch.rs"
+tokens = ["maa"]
+sha256 = "148ec6b196542468424e571c7182f34877bee0fcf4bf388b167de1cfd6cba563"
+purpose = "Registers an exact upstream or MaaTouch interoperability surface."
+approval_comment_id = 5010683904
+source_issue = 44
+source_pr = 111
+
+[[identity_allowance]]
+id = "allowance.crates_execution_kernel_src_recovery_rs"
+kind = "technical_adapter"
+exact_path = "crates/execution-kernel/src/recovery.rs"
+tokens = ["maa"]
+sha256 = "bf2583b5a78f61fc292134bf51431a6ac8e2cc5c32249b46bc5a1caae550feca"
+purpose = "Registers an exact upstream or MaaTouch interoperability surface."
+approval_comment_id = 5010683904
+source_issue = 44
+source_pr = 111
+
+[[identity_allowance]]
+id = "allowance.crates_lab_src_lab_run_tests_bundle_and_actions_rs"
+kind = "technical_adapter"
+exact_path = "crates/lab/src/lab_run/tests/bundle_and_actions.rs"
+tokens = ["maa"]
+sha256 = "15e14c6aecd79b494ac194b1665a620f7ded7171595100797160fc280132709d"
+purpose = "Registers an exact upstream or MaaTouch interoperability surface."
+approval_comment_id = 5010683904
+source_issue = 44
+source_pr = 111
+
+[[identity_allowance]]
+id = "allowance.crates_lab_src_lab_run_tests_mod_rs"
+kind = "technical_adapter"
+exact_path = "crates/lab/src/lab_run/tests/mod.rs"
+tokens = ["maa"]
+sha256 = "99bbdf12e9a7cb8ee33a9cb0aa037f3b73598848409c69d71e6940e66b6b88f9"
+purpose = "Registers an exact upstream or MaaTouch interoperability surface."
+approval_comment_id = 5010683904
+source_issue = 44
+source_pr = 111
+
+[[identity_allowance]]
+id = "allowance.crates_lab_src_lib_rs"
+kind = "technical_adapter"
+exact_path = "crates/lab/src/lib.rs"
+tokens = ["maa"]
+sha256 = "4383cc22a6f867d1df9138ceed7748b2991bbb96f51a6dea8df5ea832df3901b"
+purpose = "Registers an exact upstream or MaaTouch interoperability surface."
+approval_comment_id = 5010683904
+source_issue = 44
+source_pr = 111
+
+[[identity_allowance]]
+id = "allowance.crates_lab_src_maa_task_graph_rs"
+kind = "technical_adapter"
+exact_path = "crates/lab/src/maa_task_graph.rs"
+tokens = ["maa"]
+sha256 = "b68d24e464061292ed571f3eb5275a569bff65ed5c1b7f902911666496f1c421"
+purpose = "Registers an exact upstream or MaaTouch interoperability surface."
+approval_comment_id = 5010683904
+source_issue = 44
+source_pr = 111
+
+[[identity_allowance]]
+id = "allowance.crates_lab_tests_lab_run_api_rs"
+kind = "technical_adapter"
+exact_path = "crates/lab/tests/lab_run_api.rs"
+tokens = ["maa"]
+sha256 = "a951bfb1048ba581cf1fc887391aefab5f1d306ee146e3717ff5740a197bb5bc"
+purpose = "Registers an exact upstream or MaaTouch interoperability surface."
+approval_comment_id = 5010683904
+source_issue = 44
+source_pr = 111
+
+[[identity_allowance]]
+id = "allowance.crates_lab_tests_package_api_rs"
+kind = "technical_adapter"
+exact_path = "crates/lab/tests/package_api.rs"
+tokens = ["maa"]
+sha256 = "3fd574b754ea2c105b1ca6cfbda936ba723ac60407e28bdf527cc3963e06a412"
+purpose = "Registers an exact upstream or MaaTouch interoperability surface."
+approval_comment_id = 5010683904
+source_issue = 44
+source_pr = 111
+
+[[identity_allowance]]
+id = "allowance.crates_resource_tooling_src_api_rs"
+kind = "technical_adapter"
+exact_path = "crates/resource-tooling/src/api.rs"
+tokens = ["maa"]
+sha256 = "38c4fe4952599f2207641b52a50b5f231fcd001856f6b9c8250f83bcc1ff9436"
+purpose = "Registers an exact upstream or MaaTouch interoperability surface."
+approval_comment_id = 5010683904
+source_issue = 44
+source_pr = 111
+
+[[identity_allowance]]
+id = "allowance.crates_resource_tooling_src_lib_rs"
+kind = "technical_adapter"
+exact_path = "crates/resource-tooling/src/lib.rs"
+tokens = ["maa"]
+sha256 = "733ca567da67d587f763b9c359f360da12ce1033ce77cf6f58ef2274f7050bfb"
+purpose = "Registers an exact upstream or MaaTouch interoperability surface."
+approval_comment_id = 5010683904
+source_issue = 44
+source_pr = 111
+
+[[identity_allowance]]
+id = "allowance.crates_resource_tooling_src_maa_task_graph_rs"
+kind = "technical_adapter"
+exact_path = "crates/resource-tooling/src/maa_task_graph.rs"
+tokens = ["maa"]
+sha256 = "35a5d8fed7e30f49f5fecaef3352bc1eefbf662d6d89cc81345b495f8831eb0a"
+purpose = "Registers an exact upstream or MaaTouch interoperability surface."
+approval_comment_id = 5010683904
+source_issue = 44
+source_pr = 111
+
+[[identity_allowance]]
+id = "allowance.crates_resource_tooling_src_resource_convert_mod_rs"
+kind = "technical_adapter"
+exact_path = "crates/resource-tooling/src/resource_convert/mod.rs"
+tokens = ["maa"]
+sha256 = "b454efd615370723426251f02a946f91902bc955ce08cb7f47fb3f98aecb37c9"
+purpose = "Registers an exact upstream or MaaTouch interoperability surface."
+approval_comment_id = 5010683904
+source_issue = 44
+source_pr = 111
+
+[[identity_allowance]]
+id = "allowance.crates_resource_tooling_src_resource_convert_tests_rs"
+kind = "technical_adapter"
+exact_path = "crates/resource-tooling/src/resource_convert/tests.rs"
+tokens = ["maa"]
+sha256 = "8d98d78c14faeb23a415dd5aa341089e0e495429fef982393abf9ee18a0994f1"
+purpose = "Registers an exact upstream or MaaTouch interoperability surface."
+approval_comment_id = 5010683904
+source_issue = 44
+source_pr = 111
+
+[[identity_allowance]]
+id = "allowance.crates_resource_tooling_tests_neutral_game_pipeline_rs"
+kind = "technical_adapter"
+exact_path = "crates/resource-tooling/tests/neutral_game_pipeline.rs"
+tokens = ["maa"]
+sha256 = "3094cbc953ca7f9cc216389054e38ab15acd950ca1cabb4f35d98d7534cb8c91"
+purpose = "Registers an exact upstream or MaaTouch interoperability surface."
+approval_comment_id = 5010683904
+source_issue = 44
+source_pr = 111
+
+[[identity_allowance]]
+id = "allowance.crates_vision_ffi_src_artifacts_rs"
+kind = "technical_adapter"
+exact_path = "crates/vision-ffi/src/artifacts.rs"
+tokens = ["maa", "maa."]
+sha256 = "82eb2152f21b6b21a035e93c241b9ed1b18f89bd32b852b450ec7f73c2ef0153"
+purpose = "Registers an exact upstream or MaaTouch interoperability surface."
+approval_comment_id = 5010683904
+source_issue = 44
+source_pr = 111
+
+[[identity_allowance]]
+id = "allowance.crates_vision_ffi_src_lib_rs"
+kind = "technical_adapter"
+exact_path = "crates/vision-ffi/src/lib.rs"
+tokens = ["maa", "maa."]
+sha256 = "f5997497c96637ae3feed2283ab49613a93933855778f2ac5d143ca71570d77a"
+purpose = "Registers an exact upstream or MaaTouch interoperability surface."
+approval_comment_id = 5010683904
+source_issue = 44
+source_pr = 111
+
+[[identity_allowance]]
+id = "allowance.providers_ppocr_onnx_json_src_lib_rs"
+kind = "technical_adapter"
+exact_path = "providers/ppocr-onnx-json/src/lib.rs"
+tokens = ["maa", "maa."]
+sha256 = "4defcbaa49a929b8c57c0e07e37f525ad2b2bbf8faf012bd8b70955ba5f2c45a"
+purpose = "Registers an exact upstream or MaaTouch interoperability surface."
+approval_comment_id = 5010683904
+source_issue = 44
+source_pr = 111
+
+[[identity_allowance]]
+id = "allowance.ratchet_actinglab_commands_json"
+kind = "technical_adapter"
+exact_path = "ratchet/actinglab_commands.json"
+tokens = ["maa"]
+sha256 = "21b052cca7e3266af796ce04002eaa90d877b08aa0051c33859d9f5b48aabde0"
+purpose = "Registers an exact upstream or MaaTouch interoperability surface."
+approval_comment_id = 5010683904
+source_issue = 44
+source_pr = 111
+
+[[identity_allowance]]
+id = "allowance.resources_upstream_manifest_toml"
+kind = "upstream_metadata"
+exact_path = "resources/upstream-manifest.toml"
+tokens = ["arknights", "azur", "maa", "maa."]
+sha256 = "c8e3ba2b5df8049db1e4e22795a56867780f6476cf930eb9769e1b125f4c41f8"
+purpose = "Records exact reviewed upstream repository provenance metadata."
+approval_comment_id = 5010683904
+source_issue = 44
+source_pr = 111
+
+[[identity_allowance]]
+id = "allowance.tools_actinglab_architecture_src_generic_domain_rs"
+kind = "guard_fixture"
+exact_path = "tools/actinglab-architecture/src/generic_domain.rs"
+tokens = ["ak", "alas", "ark", "arknights", "azur", "azurlane", "ba", "baas", "blue_archive", "bluearchive", "cn", "com.bilibili", "com.hypergryph", "com.yostar", "gacha", "jp", "ko", "maa", "maa.", "originite", "pvp", "pyroxene", "server_cn", "server_jp", "server_ko", "server_maa", "server_tw", "sortie", "tw"]
+sha256 = "1e08502e56da26914abbd0be250e13a59de029ebcc95bf185a3fec78aba69bf4"
+purpose = "Contains exact detector definitions and adversarial guard fixtures."
+approval_comment_id = 5010683904
+source_issue = 44
+source_pr = 111
+
+[[identity_allowance]]
+id = "allowance.tools_actinglab_architecture_src_lib_rs"
+kind = "guard_fixture"
+exact_path = "tools/actinglab-architecture/src/lib.rs"
+tokens = ["ak", "alas", "ark", "arknights", "azur", "azurlane", "ba", "baas", "blue_archive", "bluearchive", "cn", "com.bilibili", "com.hypergryph", "com.yostar", "gacha", "jp", "ko", "maa", "maa.", "originite", "pvp", "pyroxene", "server_cn", "server_jp", "server_ko", "server_maa", "server_tw", "sortie", "tw"]
+sha256 = "afb759f0e85568eb1cc4eeccf1ac1fb97e1603f46e8c9cbce2ec21a505b43cc1"
+purpose = "Contains exact detector definitions and adversarial guard fixtures."
+approval_comment_id = 5010683904
+source_issue = 44
+source_pr = 111
+
+[[identity_allowance]]
+id = "allowance.tools_actinglab_architecture_tests_workspace_guards_rs"
+kind = "guard_fixture"
+exact_path = "tools/actinglab-architecture/tests/workspace_guards.rs"
+tokens = ["ak", "alas", "ark", "arknights", "azur", "azurlane", "ba", "baas", "blue_archive", "bluearchive", "cn", "com.bilibili", "com.hypergryph", "com.yostar", "gacha", "jp", "ko", "maa", "maa.", "originite", "pvp", "pyroxene", "server_cn", "server_jp", "server_ko", "server_maa", "server_tw", "sortie", "tw"]
+sha256 = "629e826475f7072df694d035ceccef16ba70c08c83fb516ef6174d1d21e0fcb1"
+purpose = "Contains exact detector definitions and adversarial guard fixtures."
+approval_comment_id = 5010683904
+source_issue = 44
+source_pr = 111
