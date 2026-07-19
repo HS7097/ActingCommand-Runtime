@@ -864,11 +864,31 @@ fn slow_subscription_receives_bounded_lag_failure() {
     ledger.append(event("evt-lag-one")).expect("first event");
     ledger.append(event("evt-lag-two")).expect("second event");
 
-    let error = subscription
+    let (count_response, count_receiver) = mpsc::sync_channel(1);
+    ledger
+        .sender
+        .as_ref()
+        .expect("writer sender")
+        .send(WriterCommand::TestSubscriberCount {
+            response: count_response,
+        })
+        .expect("request subscriber count after lag");
+    assert_eq!(
+        count_receiver
+            .recv_timeout(Duration::from_secs(1))
+            .expect("subscriber count after lag"),
+        0
+    );
+
+    let first = subscription
         .recv_timeout(Duration::from_secs(1))
         .expect_err("lagged subscriber must receive fatal status");
-    assert_eq!(error.code(), "subscription_lagged");
-    assert!(error.is_fatal());
+    let second = subscription
+        .recv_timeout(Duration::from_secs(1))
+        .expect_err("lag failure must remain terminal");
+    assert_eq!(first.code(), "subscription_lagged");
+    assert!(first.is_fatal());
+    assert_eq!(second, first);
 }
 
 #[test]
