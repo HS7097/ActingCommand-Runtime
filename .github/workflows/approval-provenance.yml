@@ -1,0 +1,101 @@
+name: Approval provenance
+
+on:
+  pull_request_target:
+    types: [opened, synchronize, reopened, ready_for_review]
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Require canonical protected main target
+        env:
+          EVENT_REPOSITORY: ${{ github.repository }}
+          BASE_REPOSITORY: ${{ github.event.pull_request.base.repo.full_name }}
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+          REF_PROTECTED: ${{ github.ref_protected }}
+        run: |
+          if [ "$EVENT_REPOSITORY" != "HS7097/ActingCommand-Runtime" ] || [ "$BASE_REPOSITORY" != "$EVENT_REPOSITORY" ]; then
+            echo "FATAL: trusted provenance only accepts the canonical Runtime repository" >&2
+            exit 1
+          fi
+          if [ "$BASE_REF" != "main" ]; then
+            echo "FATAL: trusted provenance only accepts pull requests targeting main" >&2
+            exit 1
+          fi
+          if [ "$REF_PROTECTED" != "true" ]; then
+            echo "FATAL: trusted provenance requires main to be protected by branch protection or a ruleset" >&2
+            exit 1
+          fi
+      # Credentials and trusted code are established before candidate objects enter the repository.
+      - name: Require Workflow read credential
+        env:
+          GH_TOKEN: ${{ secrets.ACTINGCOMMAND_WORKFLOW_READ_TOKEN }}
+        run: |
+          if [ -z "$GH_TOKEN" ]; then
+            echo "FATAL: ACTINGCOMMAND_WORKFLOW_READ_TOKEN is required" >&2
+            exit 1
+          fi
+
+      - name: Resolve one Workflow issue reference
+        env:
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: |
+          references="$(printf '%s\n' "$PR_BODY" | grep -E '^Workflow-Issue: [1-9][0-9]*$' || true)"
+          if [ "$(printf '%s\n' "$references" | sed '/^$/d' | wc -l)" -ne 1 ]; then
+            echo "FATAL: pull request body must contain exactly one 'Workflow-Issue: <number>' line" >&2
+            exit 1
+          fi
+          workflow_issue="${references#Workflow-Issue: }"
+          echo "WORKFLOW_ISSUE=$workflow_issue" >> "$GITHUB_ENV"
+
+      - name: Check out trusted base
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          fetch-depth: 1
+          persist-credentials: true
+      # The toolchain runs only against the protected base checkout.
+      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
+      # The trusted binary must exist before any candidate object is fetched.
+      - name: Build trusted verifier before fetching candidate objects
+        run: cargo build --locked -p actingcommand-actinglab-architecture --bin trusted-provenance-guard
+
+      - name: Fetch candidate objects without checking out candidate code
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          git fetch --no-tags origin "$BASE_SHA"
+          git fetch --no-tags origin "pull/${PR_NUMBER}/head"
+          actual_head="$(git rev-parse FETCH_HEAD)"
+          if [ "$actual_head" != "$EXPECTED_HEAD" ]; then
+            echo "FATAL: fetched candidate $actual_head does not match $EXPECTED_HEAD" >&2
+            exit 1
+          fi
+          git config --local --unset-all http.https://github.com/.extraheader
+
+      - name: Verify exact external approval binding
+        env:
+          GH_TOKEN: ${{ secrets.ACTINGCOMMAND_WORKFLOW_READ_TOKEN }}
+          EVENT_REPOSITORY: ${{ github.repository }}
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+          REF_PROTECTED: ${{ github.ref_protected }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: >-
+          target/debug/trusted-provenance-guard
+          --repository "$EVENT_REPOSITORY"
+          --base-ref "$BASE_REF"
+          --base-protected "$REF_PROTECTED"
+          --base "$BASE_SHA"
+          --head "$HEAD_SHA"
+          --pull-request "$PR_NUMBER"
+          --trusted-verifier-sha "$BASE_SHA"
+          --workflow-issue "$WORKFLOW_ISSUE"
