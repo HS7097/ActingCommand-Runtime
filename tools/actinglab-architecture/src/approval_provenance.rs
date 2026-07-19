@@ -44,7 +44,11 @@ const R9_SCOPES: &[&str] = &[
     "surface.mapping",
     "workspace.discovery",
 ];
-const ISSUE65_S1_SCOPES: &[&str] = &["identity.allowance", "surface.mapping"];
+const ISSUE65_S1_SCOPES: &[&str] = &[
+    "approval.provenance",
+    "identity.allowance",
+    "surface.mapping",
+];
 
 static WORKTREE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
