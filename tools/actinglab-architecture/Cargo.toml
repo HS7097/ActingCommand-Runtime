@@ -24,6 +24,10 @@ path = "src/external_compat_main.rs"
 name = "approval-provenance-guard"
 path = "src/approval_provenance_main.rs"
 
+[[bin]]
+name = "trusted-provenance-guard"
+path = "src/trusted_provenance_main.rs"
+
 [dependencies]
 proc-macro2 = "1"
 quote = "1"

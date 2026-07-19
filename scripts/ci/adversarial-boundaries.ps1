@@ -71,5 +71,20 @@ Invoke-AdversarialCase 'resource root flag conflicts' @(
     'tests::resource_upstream_commands_preserve_legacy_cli_aliases',
     '--', '--exact'
 )
+Invoke-AdversarialCase 'trusted marker candidate isolation' @(
+    'test', '-p', $architecture, '--lib',
+    'trusted_provenance::tests::unrelated_malformed_history_does_not_block_the_target',
+    '--', '--exact'
+)
+Invoke-AdversarialCase 'trusted tree object type rejection' @(
+    'test', '-p', $architecture, '--lib',
+    'trusted_provenance::tests::added_symlink_executable_and_gitlink_objects_fail_loudly',
+    '--', '--exact'
+)
+Invoke-AdversarialCase 'candidate code non-execution' @(
+    'test', '-p', $architecture, '--lib',
+    'trusted_provenance::tests::candidate_content_is_inspected_as_data_and_never_executed',
+    '--', '--exact'
+)
 
-Write-Host 'all nine adversarial boundary regressions executed and passed'
+Write-Host 'all twelve adversarial boundary regressions executed and passed'

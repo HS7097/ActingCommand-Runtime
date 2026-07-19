@@ -84,7 +84,22 @@ Retirement only revokes authority: retired records cannot authorize later surfac
 changes and cannot be reactivated. The fixed historical comment/scope table is accepted only for
 explicit one-time legacy retirement migration.
 
-The protected `pull_request_target` workflow builds this verifier only from the PR base and never
-executes candidate code. Configure `ACTINGCOMMAND_WORKFLOW_READ_TOKEN` as a fine-grained read-only
-repository secret for the private Workflow repository; an absent or unusable credential fails the
-job instead of skipping approval verification.
+Verify an immutable exact-head marker and every changed Git object with the trusted PR gate:
+
+```text
+cargo run -p actingcommand-actinglab-architecture --bin trusted-provenance-guard -- --repository HS7097/ActingCommand-Runtime --base-ref main --base-protected true --base <full-base-sha> --head <full-head-sha> --pull-request <number> --trusted-verifier-sha <full-trusted-sha> --workflow-issue <number>
+```
+
+The marker binds repository, pull request, protected base, monotonic sequence, and exact final head.
+Only the highest matching sequence is parsed in full. An unrelated malformed historical marker is
+isolated, while a malformed, edited, missing, or conflicting selected marker fails the gate. Every
+changed path must resolve to a `100644` blob in the approved head; deletions, renames, symlinks,
+gitlinks, executable files, and mode/type changes are rejected.
+
+The protected `pull_request_target` workflow builds the trusted verifier before fetching candidate
+objects. It never checks out, builds, or executes candidate code. Configure
+`ACTINGCOMMAND_WORKFLOW_READ_TOKEN` as a fine-grained read-only repository secret for the private
+Workflow repository; an absent or unusable credential fails the job instead of skipping
+verification. The marker proves an action by the configured GitHub account. It does not prove which
+person controlled that account; independent human approval belongs to protected merge or
+environment controls outside this verifier.

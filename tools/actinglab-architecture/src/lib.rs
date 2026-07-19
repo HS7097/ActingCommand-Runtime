@@ -5,6 +5,7 @@
 pub mod approval_provenance;
 pub mod external_compat;
 pub mod generic_domain;
+pub mod trusted_provenance;
 
 use std::collections::{HashMap, HashSet, VecDeque};
 
