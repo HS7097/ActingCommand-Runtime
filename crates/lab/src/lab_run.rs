@@ -2,10 +2,10 @@
 
 use crate::{
     CaptureBackendFactory, CaptureBackendObservation, CaptureBackendRequest, Clock, ConfigSource,
-    InputBackendFactory, InputBackendRequest, Lab, LabError as CliError, LabPorts,
-    LabResult as CliOutcome, LabRunLedgerResponse, LabRunRequest, LabRunResolution, LabRunResponse,
-    LabUnsupportedTargetResponse, LabValidateControlResponse, LabValidateRequest,
-    LabValidateResourcesResponse, LabValidateResponse, LedgerSink,
+    InputBackendFactory, InputBackendRequest, Lab, LabContainedPackageValidationResponse,
+    LabError as CliError, LabPorts, LabResult as CliOutcome, LabRunLedgerResponse, LabRunRequest,
+    LabRunResolution, LabRunResponse, LabUnsupportedTargetResponse, LabValidateControlResponse,
+    LabValidateRequest, LabValidateResourcesResponse, LabValidateResponse, LedgerSink,
 };
 use actingcommand_artifact_store::{
     ArtifactStoreError, FrameStore, FrameStoreConfig, FrameStoreControl, FrameStoreFrameInput,

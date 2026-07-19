@@ -571,7 +571,8 @@ fn write_neutral_contained_task_package(path: &Path) -> String {
                     "id":"open_terminal",
                     "from":"home",
                     "to":"terminal",
-                    "click":{"kind":"point","x":1,"y":0}
+                    "click":{"kind":"point","x":1,"y":0},
+                    "unguarded_trusted_coordinate":true
                 }]
             }"#,
         ),

@@ -17,3 +17,7 @@ actingcommand-recognition = { workspace = true }
 actingcommand-recognition-pack = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+
+[dev-dependencies]
+sha2 = { workspace = true }
+zip = { workspace = true }

@@ -9814,6 +9814,7 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
                 step_index,
                 operation_label,
                 action,
+                guard: _,
             } => {
                 action.validate().map_err(|_| {
                     RequestFailure::poison_without_terminal(RuntimeHostError::fatal(

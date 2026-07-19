@@ -140,6 +140,8 @@ dependencies = [
  "actingcommand-recognition-pack",
  "serde",
  "serde_json",
+ "sha2",
+ "zip",
 ]
 
 [[package]]

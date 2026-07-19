@@ -153,6 +153,74 @@ fn validate_lab_package_zip_with_expected(
     })
 }
 
+/// Deep-validates the exact package bytes that will be passed to the execution kernel.
+pub fn validate_lab_package_bytes(
+    input_label: &str,
+    bytes: &[u8],
+    expected_input_sha256: ExternalExpectedSha256,
+) -> CliOutcome<LabContainedPackageValidationResponse> {
+    let admitted = ExternallyVerifiedBundle::load(input_label, bytes, expected_input_sha256)
+        .map_err(|error| CliError::package_invalid(error.to_string()))?;
+    let sha256 = admitted.loaded_bundle().verified_hash().to_string();
+    let task_count = admitted.loaded_bundle().task_count();
+    let entries = admitted
+        .loaded_bundle()
+        .entry_paths()
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+    let bundle = admitted.into_loaded_bundle();
+    let entry_count = bundle.entry_count();
+    let control = lab_control_from_bundle(&bundle)?;
+    control.validate()?;
+    let resources = load_lab_resources_from_bundle(bundle, &control)?;
+    let validation = LabValidateResponse {
+        zip: input_label.to_string(),
+        status: "valid".to_string(),
+        input_sha256: sha256,
+        hash_source: "externally_supplied".to_string(),
+        externally_verified: true,
+        entry_count,
+        control: LabValidateControlResponse {
+            package_id: control.package_id,
+            execution_mode: control.execution_mode,
+            game: control.game,
+            server: control.server,
+            resolution: LabRunResolution {
+                width: control.resolution.width,
+                height: control.resolution.height,
+            },
+            entry_task_id: control.entry_task_id,
+        },
+        resources: LabValidateResourcesResponse {
+            resource_root: resources.resource_root.display().to_string(),
+            manifest: resources.manifest_path.display().to_string(),
+            operation: resources.operation_path.display().to_string(),
+            operation_count: resources.operation_bundle.operations.len(),
+            pack: resources.pack_path.display().to_string(),
+            recognition_unsupported_target_count: resources.evaluator.unsupported_target_count(),
+            recognition_unsupported_targets: resources
+                .evaluator
+                .unsupported_targets()
+                .iter()
+                .map(|target| LabUnsupportedTargetResponse {
+                    id: target.id.clone(),
+                    reason: target.reason.clone(),
+                })
+                .collect(),
+            pages: resources.pages_path.display().to_string(),
+            navigation: resources
+                .navigation_path
+                .as_ref()
+                .map(|path| path.display().to_string()),
+        },
+    };
+    Ok(LabContainedPackageValidationResponse {
+        validation,
+        task_count,
+        entries,
+    })
+}
+
 #[cfg(test)]
 fn validate_lab_package_zip(zip_path: &Path) -> CliOutcome<LabValidateResponse> {
     validate_lab_package_zip_with_expected(zip_path, None)
