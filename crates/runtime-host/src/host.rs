@@ -1066,6 +1066,13 @@ struct QueuedRequestContext {
 struct QueueTerminalRecord {
     connection_id: ConnectionId,
     terminal: TerminalEvent,
+    outcome: QueueTerminalOutcome,
+}
+
+#[derive(Clone, Copy)]
+enum QueueTerminalOutcome {
+    Expired,
+    Cancelled { instance_id: InstanceId },
 }
 
 #[cfg(test)]
@@ -1116,6 +1123,7 @@ impl MonitorRecoveryAdmission {
     }
 }
 
+/// Bounded process-local replay cache; durable terminal history remains in the ledger.
 #[derive(Default)]
 struct QueueTerminalStore {
     entries: BTreeMap<RequestId, QueueTerminalRecord>,
@@ -5955,12 +5963,12 @@ impl HostShared {
         Ok(())
     }
 
-    fn existing_queue_expiry_failure(
+    fn existing_queue_terminal_result(
         &self,
         queued_request_id: RequestId,
         connection_id: ConnectionId,
         operation: &'static str,
-    ) -> Result<Option<RequestFailure>, RequestFailure> {
+    ) -> Result<Option<OperationSuccess>, RequestFailure> {
         let record = lock(&self.queue_terminals, "read_queue_terminal")?
             .entries
             .get(&queued_request_id)
@@ -5969,7 +5977,7 @@ impl HostShared {
             return Ok(None);
         };
         if record.connection_id != connection_id {
-            return Ok(Some(RequestFailure::request(
+            return Err(RequestFailure::request(
                 RuntimeHostError::request(
                     "lease_queue_connection_mismatch",
                     operation,
@@ -5977,17 +5985,27 @@ impl HostShared {
                 ),
                 RuntimeReceiptState::Denied,
                 None,
-            )));
+            ));
         }
-        Ok(Some(RequestFailure::request(
-            RuntimeHostError::request(
-                "lease_queue_expired",
-                operation,
-                RuntimeErrorCode::QueueExpired,
-            ),
-            RuntimeReceiptState::Denied,
-            Some(record.terminal),
-        )))
+        match record.outcome {
+            QueueTerminalOutcome::Expired => Err(RequestFailure::request(
+                RuntimeHostError::request(
+                    "lease_queue_expired",
+                    operation,
+                    RuntimeErrorCode::QueueExpired,
+                ),
+                RuntimeReceiptState::Denied,
+                Some(record.terminal),
+            )),
+            QueueTerminalOutcome::Cancelled { instance_id } => Ok(Some(OperationSuccess {
+                state: RuntimeReceiptState::Cancelled,
+                terminal: Some(record.terminal),
+                result: RuntimeResult::LeaseQueueCancelled {
+                    request_id: queued_request_id,
+                    instance_id,
+                },
+            })),
+        }
     }
 
     fn poll_queued_lease(
@@ -6002,13 +6020,13 @@ impl HostShared {
         #[cfg(test)]
         self.wait_queue_operation_test_hook(QueueOperationTestKind::Poll, queued_request_id)?;
         if context.is_none()
-            && let Some(failure) = self.existing_queue_expiry_failure(
+            && let Some(success) = self.existing_queue_terminal_result(
                 queued_request_id,
                 connection_id,
                 "poll_queued_lease",
             )?
         {
-            return Err(failure);
+            return Ok(success);
         }
         let instance_guard = context
             .as_ref()
@@ -6061,12 +6079,12 @@ impl HostShared {
                 ))
             }
             Err(SchedulerError::QueueMissing) => {
-                if let Some(failure) = self.existing_queue_expiry_failure(
+                if let Some(success) = self.existing_queue_terminal_result(
                     queued_request_id,
                     connection_id,
                     "poll_queued_lease",
                 )? {
-                    return Err(failure);
+                    return Ok(success);
                 }
                 Err(self.scheduler_denied_error(
                     request,
@@ -6102,13 +6120,13 @@ impl HostShared {
         #[cfg(test)]
         self.wait_queue_operation_test_hook(QueueOperationTestKind::Cancel, queued_request_id)?;
         if context.is_none()
-            && let Some(failure) = self.existing_queue_expiry_failure(
+            && let Some(success) = self.existing_queue_terminal_result(
                 queued_request_id,
                 connection_id,
                 "cancel_queued_lease",
             )?
         {
-            return Err(failure);
+            return Ok(success);
         }
         let instance_guard = context
             .as_ref()
@@ -6123,12 +6141,12 @@ impl HostShared {
         let cancelled = match cancelled {
             Ok(cancelled) => cancelled,
             Err(SchedulerError::QueueMissing) => {
-                if let Some(failure) = self.existing_queue_expiry_failure(
+                if let Some(success) = self.existing_queue_terminal_result(
                     queued_request_id,
                     connection_id,
                     "cancel_queued_lease",
                 )? {
-                    return Err(failure);
+                    return Ok(success);
                 }
                 return Err(self.scheduler_denied_error(
                     request,
@@ -6151,8 +6169,14 @@ impl HostShared {
                 )?);
             }
         };
-        let context = self.take_queued_context(&cancelled)?;
-        let event = self.append_queue_terminal(&context, DiagnosticCode::LeaseQueueCancelled)?;
+        let context = self.read_queued_context_for(cancelled.queued())?;
+        let event = self.finish_queue_terminal(
+            &context,
+            DiagnosticCode::LeaseQueueCancelled,
+            QueueTerminalOutcome::Cancelled {
+                instance_id: cancelled.queued().instance_id(),
+            },
+        )?;
         Ok(OperationSuccess {
             state: RuntimeReceiptState::Cancelled,
             terminal: Some(terminal(&event)),
@@ -6346,28 +6370,43 @@ impl HostShared {
         Ok(())
     }
 
-    /// Publishes the recoverable terminal before context removal, so a context miss cannot race
-    /// ahead of the authoritative expiry record.
     fn finish_queue_expiry(
         &self,
         context: &QueuedRequestContext,
     ) -> Result<PersistedEvent, RequestFailure> {
-        let event = self.append_queue_terminal(context, DiagnosticCode::LeaseQueueExpired)?;
-        self.remember_queue_expiry(context, &event)?;
+        self.finish_queue_terminal(
+            context,
+            DiagnosticCode::LeaseQueueExpired,
+            QueueTerminalOutcome::Expired,
+        )
+    }
+
+    /// Publishes the recoverable terminal before context removal, so a context miss cannot race
+    /// ahead of the authoritative queue result.
+    fn finish_queue_terminal(
+        &self,
+        context: &QueuedRequestContext,
+        diagnostic: DiagnosticCode,
+        outcome: QueueTerminalOutcome,
+    ) -> Result<PersistedEvent, RequestFailure> {
+        let event = self.append_queue_terminal(context, diagnostic)?;
+        self.remember_queue_terminal(context, &event, outcome)?;
         self.remove_queued_context(context.request.request_id(), context.connection_id)?;
         Ok(event)
     }
 
-    fn remember_queue_expiry(
+    fn remember_queue_terminal(
         &self,
         context: &QueuedRequestContext,
         event: &PersistedEvent,
+        outcome: QueueTerminalOutcome,
     ) -> Result<(), RequestFailure> {
         lock(&self.queue_terminals, "record_queue_terminal")?.insert(
             context.request.request_id(),
             QueueTerminalRecord {
                 connection_id: context.connection_id,
                 terminal: terminal(event),
+                outcome,
             },
         );
         Ok(())
