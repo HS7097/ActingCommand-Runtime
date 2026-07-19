@@ -78,6 +78,12 @@ author or timestamp drift, body-hash drift, and an out-of-scope surface delta al
 The base and head must be full commit SHAs in one ancestry chain; both are inspected through
 temporary detached worktrees so uncommitted candidate state cannot become evidence.
 
+Approval lifecycle records are versioned. New approvals carry an immutable repository, pull
+request, base, and subject binding while active and retain that binding after retirement.
+Retirement only revokes authority: retired records cannot authorize later surface or allowance
+changes and cannot be reactivated. The fixed historical comment/scope table is accepted only for
+explicit one-time legacy retirement migration.
+
 The protected `pull_request_target` workflow builds this verifier only from the PR base and never
 executes candidate code. Configure `ACTINGCOMMAND_WORKFLOW_READ_TOKEN` as a fine-grained read-only
 repository secret for the private Workflow repository; an absent or unusable credential fails the

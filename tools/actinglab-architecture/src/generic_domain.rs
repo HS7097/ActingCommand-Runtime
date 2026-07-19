@@ -25,6 +25,7 @@ use crate::{
 };
 
 pub const GENERIC_DOMAIN_SCHEMA_VERSION: &str = "actingcommand.generic-domain.v2";
+pub const APPROVAL_LIFECYCLE_VERSION: u32 = 1;
 pub const GENERIC_DOMAIN_REGISTRY_PATH: &str =
     "tools/actinglab-architecture/generic-domain-v2.toml";
 pub const GENERIC_DOMAIN_SURFACE_SCHEMA_VERSION: &str = "actingcommand.generic-domain-surfaces.v2";
@@ -118,6 +119,34 @@ pub struct SurfaceRecord {
     pub source_pr: Option<u64>,
 }
 
+/// Versioned lifecycle metadata for an externally verified approval.
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct ApprovalLifecycle {
+    pub version: u32,
+    pub state: String,
+    #[serde(default)]
+    pub legacy_migration: bool,
+}
+
+/// Immutable repository and revision coordinates authorized by an approval.
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct ApprovalChangeBinding {
+    pub target_repository: String,
+    pub pull_request: u64,
+    pub base_sha: String,
+    pub subject_sha: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ApprovalLifecycleKind {
+    UnmigratedLegacy,
+    LegacyRetired,
+    Active,
+    Retired,
+}
+
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct SurfaceApproval {
@@ -134,6 +163,10 @@ pub struct SurfaceApproval {
     pub updated_at: Option<String>,
     pub content_sha256: String,
     pub scope: Vec<String>,
+    #[serde(default)]
+    pub lifecycle: Option<ApprovalLifecycle>,
+    #[serde(default)]
+    pub change_binding: Option<ApprovalChangeBinding>,
 }
 
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
@@ -283,6 +316,101 @@ pub fn load_generic_domain_registry(path: &Path) -> Result<GenericDomainRegistry
     Ok(registry)
 }
 
+pub(crate) fn approval_lifecycle_kind(
+    approval: &SurfaceApproval,
+) -> Result<ApprovalLifecycleKind, String> {
+    let Some(lifecycle) = &approval.lifecycle else {
+        return Ok(ApprovalLifecycleKind::UnmigratedLegacy);
+    };
+    match (
+        lifecycle.version,
+        lifecycle.state.as_str(),
+        lifecycle.legacy_migration,
+        approval.change_binding.as_ref(),
+    ) {
+        (0, "retired", true, None) => Ok(ApprovalLifecycleKind::LegacyRetired),
+        (APPROVAL_LIFECYCLE_VERSION, "active", false, Some(binding)) => {
+            validate_approval_change_binding(approval, binding)?;
+            Ok(ApprovalLifecycleKind::Active)
+        }
+        (APPROVAL_LIFECYCLE_VERSION, "retired", false, Some(binding)) => {
+            validate_approval_change_binding(approval, binding)?;
+            Ok(ApprovalLifecycleKind::Retired)
+        }
+        (version, _, _, _) if version != 0 && version != APPROVAL_LIFECYCLE_VERSION => {
+            Err(format!(
+                "approval {} has unsupported lifecycle version {version}",
+                approval.id
+            ))
+        }
+        (_, state, _, _) if !matches!(state, "active" | "retired") => Err(format!(
+            "approval {} has unknown lifecycle state {state}",
+            approval.id
+        )),
+        (0, _, false, _) => Err(format!(
+            "approval {} lifecycle version 0 must be explicitly marked legacy_migration",
+            approval.id
+        )),
+        (0, _, true, Some(_)) => Err(format!(
+            "legacy approval {} cannot declare a change binding",
+            approval.id
+        )),
+        (APPROVAL_LIFECYCLE_VERSION, _, true, _) => Err(format!(
+            "approval {} lifecycle version {APPROVAL_LIFECYCLE_VERSION} cannot be marked legacy_migration",
+            approval.id
+        )),
+        (APPROVAL_LIFECYCLE_VERSION, state, false, None) => Err(format!(
+            "{state} approval {} has no immutable change binding",
+            approval.id
+        )),
+        (0, state, true, None) => Err(format!(
+            "legacy approval {} has invalid lifecycle state {state}; expected retired",
+            approval.id
+        )),
+        _ => Err(format!(
+            "approval {} has an invalid lifecycle configuration",
+            approval.id
+        )),
+    }
+}
+
+fn validate_approval_change_binding(
+    approval: &SurfaceApproval,
+    binding: &ApprovalChangeBinding,
+) -> Result<(), String> {
+    if binding.target_repository != "HS7097/ActingCommand-Runtime" {
+        return Err(format!(
+            "approval {} change binding targets untrusted repository {}",
+            approval.id, binding.target_repository
+        ));
+    }
+    if binding.pull_request == 0 {
+        return Err(format!(
+            "approval {} change binding has no pull request",
+            approval.id
+        ));
+    }
+    for (field, revision) in [
+        ("base_sha", binding.base_sha.as_str()),
+        ("subject_sha", binding.subject_sha.as_str()),
+    ] {
+        if !is_lowercase_commit_sha(revision) {
+            return Err(format!(
+                "approval {} change binding {field} must be a full lowercase commit SHA",
+                approval.id
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn is_lowercase_commit_sha(value: &str) -> bool {
+    value.len() == 40
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+}
+
 pub fn validate_generic_domain_registry(registry: &GenericDomainRegistry) -> Result<(), String> {
     let mut errors = Vec::new();
     if registry.schema_version != GENERIC_DOMAIN_SCHEMA_VERSION {
@@ -383,6 +511,18 @@ pub fn validate_generic_domain_registry(registry: &GenericDomainRegistry) -> Res
                 ));
             }
             previous_scope = Some(scope.as_str());
+        }
+        match approval_lifecycle_kind(approval) {
+            Ok(ApprovalLifecycleKind::UnmigratedLegacy) => errors.push(format!(
+                "surface approval {} has no explicit lifecycle",
+                approval.id
+            )),
+            Ok(
+                ApprovalLifecycleKind::Active
+                | ApprovalLifecycleKind::LegacyRetired
+                | ApprovalLifecycleKind::Retired,
+            ) => {}
+            Err(error) => errors.push(error),
         }
     }
     let approval_by_id = registry
@@ -5046,6 +5186,7 @@ comment_id = 5011264343
 author = "HS7097"
 content_sha256 = "{}"
 scope = ["surface.mapping"]
+lifecycle = {{ version = 0, state = "retired", legacy_migration = true }}
 
 [[approval]]
 id = "approval.issue44_r8b"
@@ -5055,6 +5196,7 @@ comment_id = 5011350539
 author = "HS7097"
 content_sha256 = "{}"
 scope = ["identity.allowance", "surface.mapping"]
+lifecycle = {{ version = 0, state = "retired", legacy_migration = true }}
 
 [[concept]]
 id = "identity.game"
@@ -5087,6 +5229,41 @@ source_pr = 108
     fn registry_accepts_sorted_approved_concepts_and_exact_surface() {
         let registry = parse_generic_domain_registry(&registry_source()).unwrap();
         validate_generic_domain_registry(&registry).unwrap();
+    }
+
+    #[test]
+    fn registry_rejects_missing_unknown_and_unbound_approval_lifecycle() {
+        let mut missing = parse_generic_domain_registry(&registry_source()).unwrap();
+        missing.approval[0].lifecycle = None;
+        let error = validate_generic_domain_registry(&missing).unwrap_err();
+        assert!(error.contains("has no explicit lifecycle"));
+
+        let mut unknown = parse_generic_domain_registry(&registry_source()).unwrap();
+        unknown.approval[0].lifecycle = Some(ApprovalLifecycle {
+            version: APPROVAL_LIFECYCLE_VERSION,
+            state: "paused".to_string(),
+            legacy_migration: false,
+        });
+        let error = validate_generic_domain_registry(&unknown).unwrap_err();
+        assert!(error.contains("unknown lifecycle state paused"));
+
+        let mut unbound = parse_generic_domain_registry(&registry_source()).unwrap();
+        unbound.approval[0].lifecycle = Some(ApprovalLifecycle {
+            version: APPROVAL_LIFECYCLE_VERSION,
+            state: "active".to_string(),
+            legacy_migration: false,
+        });
+        let error = validate_generic_domain_registry(&unbound).unwrap_err();
+        assert!(error.contains("has no immutable change binding"));
+
+        let mut unsupported = parse_generic_domain_registry(&registry_source()).unwrap();
+        unsupported.approval[0].lifecycle = Some(ApprovalLifecycle {
+            version: APPROVAL_LIFECYCLE_VERSION + 1,
+            state: "active".to_string(),
+            legacy_migration: false,
+        });
+        let error = validate_generic_domain_registry(&unsupported).unwrap_err();
+        assert!(error.contains("unsupported lifecycle version"));
     }
 
     #[test]
@@ -6459,6 +6636,12 @@ source_pr = 111
                     updated_at: None,
                     content_sha256: "a".repeat(64),
                     scope: vec!["surface.mapping".to_string()],
+                    lifecycle: Some(ApprovalLifecycle {
+                        version: 0,
+                        state: "retired".to_string(),
+                        legacy_migration: true,
+                    }),
+                    change_binding: None,
                 },
                 SurfaceApproval {
                     id: "approval.issue44_r8b".to_string(),
@@ -6474,6 +6657,12 @@ source_pr = 111
                         "identity.allowance".to_string(),
                         "surface.mapping".to_string(),
                     ],
+                    lifecycle: Some(ApprovalLifecycle {
+                        version: 0,
+                        state: "retired".to_string(),
+                        legacy_migration: true,
+                    }),
+                    change_binding: None,
                 },
             ],
             concept: vec![GenericConcept {
