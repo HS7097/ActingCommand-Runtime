@@ -683,6 +683,11 @@ fn c5_offline_package_simulation_reuses_the_contained_task_kernel_without_device
             && main.contains("\"lab_lease_required\""),
         "package run must remain a blocked compatibility boundary"
     );
+    assert!(
+        main.contains("\"operation run requires Runtime scheduler admission")
+            && main.contains("\"lab_lease_required\""),
+        "operation run must remain behind Runtime scheduler admission"
+    );
 }
 
 #[test]

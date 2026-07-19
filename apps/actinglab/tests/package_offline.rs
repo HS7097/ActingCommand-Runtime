@@ -31,12 +31,16 @@ fn package_dry_run_binds_inputs_and_writes_a_deterministic_offline_bundle() {
         record["simulation"]["package_sha256"],
         fixture.package_sha256
     );
-    assert_eq!(record["simulation"]["entry_count"], 5);
+    assert_eq!(record["simulation"]["entry_count"], 6);
     assert_eq!(record["simulation"]["task_count"], 1);
     assert_eq!(record["simulation"]["capture_count"], 1);
     assert_eq!(record["loaded"]["validation"]["status"], "valid");
     assert_eq!(record["loaded"]["task_count"], 1);
-    assert_eq!(record["loaded"]["entries"].as_array().unwrap().len(), 5);
+    assert_eq!(record["loaded"]["entries"].as_array().unwrap().len(), 6);
+    assert_eq!(
+        record["loaded"]["validation"]["resources"]["navigation"],
+        "resources/navigation/neutral.test.navigation.json"
+    );
     let runtime_head = record["runtime_head"].as_str().unwrap();
     assert_eq!(runtime_head.len(), 40);
     assert!(runtime_head.bytes().all(|byte| byte.is_ascii_hexdigit()));
@@ -165,25 +169,69 @@ fn package_dry_run_rejects_invalid_package_inputs() {
         let fixture = TestFixture::new(options, home_frame(true));
         assert_failure(&fixture.run(&[], &format!("{name}.zip")));
     }
+
+    let unsupported = TestFixture::new(
+        PackageOptions {
+            click_kind: "unsupported",
+            ..PackageOptions::default()
+        },
+        home_frame(true),
+    );
+    assert_error_code(
+        &unsupported.run(&[], "unsupported-primitive.zip"),
+        "package_invalid",
+    );
 }
 
 #[test]
 fn package_dry_run_rejects_missing_inputs_and_device_scope() {
     let temp = TempDir::new().unwrap();
-    let missing = run_actinglab(&temp, ["--json", "package", "dry-run"]);
-    assert_failure(&missing);
+    let missing_zip = run_actinglab(&temp, ["--json", "package", "dry-run"]);
+    assert_failure(&missing_zip);
 
     let fixture = TestFixture::new(PackageOptions::default(), home_frame(true));
+    let missing_hash = run_actinglab(
+        &fixture.temp,
+        [
+            OsString::from("--json"),
+            OsString::from("package"),
+            OsString::from("dry-run"),
+            OsString::from("--zip"),
+            fixture.package_path.as_os_str().to_owned(),
+            OsString::from("--fixture"),
+            fixture.fixture_path.as_os_str().to_owned(),
+            OsString::from("--out"),
+            OsString::from("missing-hash.zip"),
+        ],
+    );
+    assert_failure(&missing_hash);
+
+    let missing_fixture = run_actinglab(
+        &fixture.temp,
+        [
+            OsString::from("--json"),
+            OsString::from("package"),
+            OsString::from("dry-run"),
+            OsString::from("--zip"),
+            fixture.package_path.as_os_str().to_owned(),
+            OsString::from("--expected-sha256"),
+            OsString::from(&fixture.package_sha256),
+            OsString::from("--out"),
+            OsString::from("missing-fixture.zip"),
+        ],
+    );
+    assert_error_code(&missing_fixture, "offline_fixture_missing");
+
     for (name, extra) in [
         ("instance", vec!["--instance", "neutral-instance"]),
         ("capture", vec!["--capture-backend", "adb"]),
         ("input", vec!["--touch-backend", "maatouch"]),
         ("runtime", vec!["--runtime-endpoint", "http://127.0.0.1:9"]),
-        ("unsupported", vec!["--send-input", "true"]),
     ] {
         let output = fixture.run(&extra, &format!("{name}.zip"));
-        assert_failure(&output);
+        assert_error_code(&output, "offline_device_scope_forbidden");
     }
+    assert_failure(&fixture.run(&["--send-input", "true"], "unsupported.zip"));
 
     let alias_dir = fixture.temp.path().join("alias");
     fs::create_dir(&alias_dir).unwrap();
@@ -228,6 +276,9 @@ fn production_entry_boundaries_remain_explicit() {
     );
     assert_error_code(&package_run, "lab_lease_required");
 
+    let operation_run = run_actinglab(&temp, ["--json", "operation", "run"]);
+    assert_error_code(&operation_run, "lab_lease_required");
+
     let capabilities = run_actinglab(&temp, ["--json", "capabilities"]);
     assert!(capabilities.status.success());
     let capability_data = envelope_data(&capabilities);
@@ -240,6 +291,17 @@ fn production_entry_boundaries_remain_explicit() {
     assert_eq!(command["needs"], json!(["offline"]));
     assert_eq!(command["status"], "available");
     assert_eq!(command["executed"], false);
+
+    let lab_run = capability(&capability_data, "lab run");
+    assert_eq!(lab_run["needs"], json!(["device"]));
+    assert_eq!(lab_run["status"], "available");
+
+    let operation_run = capability(&capability_data, "operation run");
+    assert_eq!(
+        operation_run["needs"],
+        json!(["running_runtime", "device", "lab_lease"])
+    );
+    assert_eq!(operation_run["status"], "blocked_until_lab_lease");
 }
 
 struct TestFixture {
@@ -318,6 +380,15 @@ fn envelope_data(output: &Output) -> Value {
     envelope(output)["data"].clone()
 }
 
+fn capability<'a>(data: &'a Value, command: &str) -> &'a Value {
+    data["commands"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|entry| entry["command"] == command)
+        .unwrap()
+}
+
 fn assert_success(output: &Output, decision_status: &str) {
     assert!(
         output.status.success(),
@@ -340,7 +411,14 @@ fn assert_failure(output: &Output) {
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
-    assert_eq!(envelope(output)["ok"], false);
+    let envelope = envelope(output);
+    assert_eq!(envelope["ok"], false);
+    assert!(
+        envelope["error"]["code"]
+            .as_str()
+            .is_some_and(|code| !code.is_empty()),
+        "failure did not expose a stable error code: {envelope}"
+    );
 }
 
 fn assert_error_code(output: &Output, expected: &str) {
@@ -362,6 +440,7 @@ fn read_result_record(path: &Path) -> Value {
 struct PackageOptions {
     control_schema: &'static str,
     execution_mode: &'static str,
+    click_kind: &'static str,
     include_guard: bool,
     conflicting_page: bool,
     dangling_resource: bool,
@@ -374,6 +453,7 @@ impl Default for PackageOptions {
         Self {
             control_schema: "Lab-1y.control.v1",
             execution_mode: "navigable_route",
+            click_kind: "point",
             include_guard: true,
             conflicting_page: false,
             dangling_resource: false,
@@ -402,7 +482,7 @@ fn package(options: PackageOptions) -> Vec<u8> {
         "purpose": "exercise shared planning semantics",
         "from": "home",
         "to": "terminal",
-        "click": {"kind": "point", "x": 1, "y": 0}
+        "click": {"kind": options.click_kind, "x": 1, "y": 0}
     });
     if options.include_guard {
         operation["guard"] = json!({
@@ -463,6 +543,15 @@ fn package(options: PackageOptions) -> Vec<u8> {
         (
             "resources/recognition/neutral.test.pages.json",
             json!({"schema_version":"0.3","pages":pages}),
+        ),
+        (
+            "resources/navigation/neutral.test.navigation.json",
+            json!({
+                "schema_version": "0.3",
+                "game": "neutral",
+                "navigation": [],
+                "destructive_actions": []
+            }),
         ),
     ];
     if options.include_recovery_task {
