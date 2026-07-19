@@ -92,12 +92,26 @@ content_sha256 = "a35a94ad61e33c77bea3049612142411721c403b2f637d0877a68bbf1add52
 scope = ["approval.provenance", "identity.allowance", "surface.mapping"]
 lifecycle = { version = 0, state = "retired", legacy_migration = true }
 
+[[approval]]
+id = "approval.issue65_s2"
+repository = "HS7097/ActingCommand-Workflow"
+issue = 65
+comment_id = 5015577115
+author = "HS7097"
+author_id = 103177863
+created_at = "2026-07-19T11:42:57Z"
+updated_at = "2026-07-19T11:42:57Z"
+content_sha256 = "504ce8efdc72a1ecc0f9d45457c6e7dd5454a7bb4b14b22b490dbdfb0ecb8845"
+scope = ["approval.provenance", "surface.mapping"]
+lifecycle = { version = 1, state = "active", legacy_migration = false }
+change_binding = { target_repository = "HS7097/ActingCommand-Runtime", pull_request = 128, base_sha = "7402e58e9af285579e48ec65c9833a2a9859c1ff", subject_sha = "071d36151df627623bb207c6f74d73d69cc82cd3" }
+
 [surface_manifest]
 path = "tools/actinglab-architecture/generic-domain-surfaces-v2.jsonl"
-sha256 = "e8c4e4c40b91d2444103cd3b84684d7b509223e5914568c3f0835266d7d80a16"
-approval_id = "approval.issue44_r8"
-source_issue = 44
-source_pr = 112
+sha256 = "a6465cc2182ae16dfa78a3e1f615716df7d16dcdaff377fb0199c6dbf19af7ac"
+approval_id = "approval.issue65_s2"
+source_issue = 65
+source_pr = 128
 
 [[concept]]
 id = "agent.agent"
