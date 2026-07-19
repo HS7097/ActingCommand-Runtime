@@ -109,6 +109,8 @@ use std::io::{Read, Write};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, TcpListener, TcpStream};
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::{Path, PathBuf};
+#[cfg(test)]
+use std::sync::Barrier;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::thread::{self, JoinHandle};
@@ -507,6 +509,8 @@ impl RuntimeHost {
             monitor_registry: Mutex::new(monitor_registry),
             queued_requests: Mutex::new(BTreeMap::new()),
             queue_terminals: Mutex::new(QueueTerminalStore::default()),
+            #[cfg(test)]
+            queue_operation_test_hook: Mutex::new(None),
             trusted_policy_dispatches: Mutex::new(TrustedPolicyDispatchStore::default()),
             policy_dispatch_clocks: Mutex::new(policy_dispatch_clocks),
             policy_outcome_gate: Mutex::new(()),
@@ -858,6 +862,44 @@ impl RuntimeHost {
     }
 
     #[cfg(test)]
+    pub(crate) fn pause_queue_operation_after_snapshot_for_test(
+        &self,
+        operation: QueueOperationTestKind,
+        request_id: RequestId,
+    ) -> RuntimeHostResult<QueueOperationTestControl> {
+        let shared = self.shared_ref("install_queue_operation_test_hook")?;
+        let snapshot_reached = Arc::new(Barrier::new(2));
+        let resume = Arc::new(Barrier::new(2));
+        let mut slot = lock(
+            &shared.queue_operation_test_hook,
+            "install_queue_operation_test_hook",
+        )?;
+        if slot.is_some() {
+            return Err(RuntimeHostError::fatal(
+                "queue_operation_test_hook_already_installed",
+                "install_queue_operation_test_hook",
+                RuntimeErrorCode::RuntimeFatal,
+            ));
+        }
+        *slot = Some(QueueOperationTestHook {
+            operation,
+            request_id,
+            snapshot_reached: Arc::clone(&snapshot_reached),
+            resume: Arc::clone(&resume),
+        });
+        Ok(QueueOperationTestControl {
+            snapshot_reached,
+            resume,
+        })
+    }
+
+    #[cfg(test)]
+    pub(crate) fn expire_all_queued_for_test(&self) -> RuntimeHostResult<()> {
+        self.shared_ref("expire_all_queued_for_test")?
+            .expire_all_queued_runtime()
+    }
+
+    #[cfg(test)]
     pub(crate) fn performance_context_for_test(
         &self,
         instance_id: &str,
@@ -1024,6 +1066,45 @@ struct QueuedRequestContext {
 struct QueueTerminalRecord {
     connection_id: ConnectionId,
     terminal: TerminalEvent,
+    outcome: QueueTerminalOutcome,
+}
+
+#[derive(Clone, Copy)]
+enum QueueTerminalOutcome {
+    Expired,
+    Cancelled { instance_id: InstanceId },
+}
+
+#[cfg(test)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum QueueOperationTestKind {
+    Poll,
+    Cancel,
+}
+
+#[cfg(test)]
+struct QueueOperationTestHook {
+    operation: QueueOperationTestKind,
+    request_id: RequestId,
+    snapshot_reached: Arc<Barrier>,
+    resume: Arc<Barrier>,
+}
+
+#[cfg(test)]
+pub(crate) struct QueueOperationTestControl {
+    snapshot_reached: Arc<Barrier>,
+    resume: Arc<Barrier>,
+}
+
+#[cfg(test)]
+impl QueueOperationTestControl {
+    pub(crate) fn wait_until_paused(&self) {
+        self.snapshot_reached.wait();
+    }
+
+    pub(crate) fn resume(self) {
+        self.resume.wait();
+    }
 }
 
 struct MonitorRecoveryAdmission {
@@ -1042,6 +1123,7 @@ impl MonitorRecoveryAdmission {
     }
 }
 
+/// Bounded process-local replay cache; durable terminal history remains in the ledger.
 #[derive(Default)]
 struct QueueTerminalStore {
     entries: BTreeMap<RequestId, QueueTerminalRecord>,
@@ -1541,6 +1623,8 @@ struct HostShared {
     monitor_registry: Mutex<MonitorRegistry>,
     queued_requests: Mutex<BTreeMap<RequestId, QueuedRequestContext>>,
     queue_terminals: Mutex<QueueTerminalStore>,
+    #[cfg(test)]
+    queue_operation_test_hook: Mutex<Option<QueueOperationTestHook>>,
     trusted_policy_dispatches: Mutex<TrustedPolicyDispatchStore>,
     policy_dispatch_clocks: Mutex<BTreeMap<String, PolicyDispatchClock>>,
     // Outcome preparation and completion form one idempotent Runtime-owned transition.
@@ -5856,6 +5940,74 @@ impl HostShared {
         }
     }
 
+    #[cfg(test)]
+    fn wait_queue_operation_test_hook(
+        &self,
+        operation: QueueOperationTestKind,
+        request_id: RequestId,
+    ) -> Result<(), RequestFailure> {
+        let hook = {
+            let mut slot = lock(
+                &self.queue_operation_test_hook,
+                "read_queue_operation_test_hook",
+            )?;
+            slot.as_ref()
+                .is_some_and(|hook| hook.operation == operation && hook.request_id == request_id)
+                .then(|| slot.take())
+                .flatten()
+        };
+        if let Some(hook) = hook {
+            hook.snapshot_reached.wait();
+            hook.resume.wait();
+        }
+        Ok(())
+    }
+
+    fn existing_queue_terminal_result(
+        &self,
+        queued_request_id: RequestId,
+        connection_id: ConnectionId,
+        operation: &'static str,
+    ) -> Result<Option<OperationSuccess>, RequestFailure> {
+        let record = lock(&self.queue_terminals, "read_queue_terminal")?
+            .entries
+            .get(&queued_request_id)
+            .copied();
+        let Some(record) = record else {
+            return Ok(None);
+        };
+        if record.connection_id != connection_id {
+            return Err(RequestFailure::request(
+                RuntimeHostError::request(
+                    "lease_queue_connection_mismatch",
+                    operation,
+                    RuntimeErrorCode::QueueConnectionMismatch,
+                ),
+                RuntimeReceiptState::Denied,
+                None,
+            ));
+        }
+        match record.outcome {
+            QueueTerminalOutcome::Expired => Err(RequestFailure::request(
+                RuntimeHostError::request(
+                    "lease_queue_expired",
+                    operation,
+                    RuntimeErrorCode::QueueExpired,
+                ),
+                RuntimeReceiptState::Denied,
+                Some(record.terminal),
+            )),
+            QueueTerminalOutcome::Cancelled { instance_id } => Ok(Some(OperationSuccess {
+                state: RuntimeReceiptState::Cancelled,
+                terminal: Some(record.terminal),
+                result: RuntimeResult::LeaseQueueCancelled {
+                    request_id: queued_request_id,
+                    instance_id,
+                },
+            })),
+        }
+    }
+
     fn poll_queued_lease(
         &self,
         request: &ValidatedRuntimeRequest<'_>,
@@ -5865,32 +6017,16 @@ impl HostShared {
         let context = lock(&self.queued_requests, "read_queued_request")?
             .get(&queued_request_id)
             .cloned();
+        #[cfg(test)]
+        self.wait_queue_operation_test_hook(QueueOperationTestKind::Poll, queued_request_id)?;
         if context.is_none()
-            && let Some(record) = lock(&self.queue_terminals, "read_queue_terminal")?
-                .entries
-                .get(&queued_request_id)
-                .copied()
+            && let Some(success) = self.existing_queue_terminal_result(
+                queued_request_id,
+                connection_id,
+                "poll_queued_lease",
+            )?
         {
-            if record.connection_id != connection_id {
-                return Err(RequestFailure::request(
-                    RuntimeHostError::request(
-                        "lease_queue_connection_mismatch",
-                        "poll_queued_lease",
-                        RuntimeErrorCode::QueueConnectionMismatch,
-                    ),
-                    RuntimeReceiptState::Denied,
-                    None,
-                ));
-            }
-            return Err(RequestFailure::request(
-                RuntimeHostError::request(
-                    "lease_queue_expired",
-                    "poll_queued_lease",
-                    RuntimeErrorCode::QueueExpired,
-                ),
-                RuntimeReceiptState::Denied,
-                Some(record.terminal),
-            ));
+            return Ok(success);
         }
         let instance_guard = context
             .as_ref()
@@ -5935,15 +6071,30 @@ impl HostShared {
                         RuntimeErrorCode::RuntimeFatal,
                     ))
                 })?;
-                self.remove_queued_context(queued_request_id, connection_id)?;
-                let event =
-                    self.append_queue_terminal(&context, DiagnosticCode::LeaseQueueExpired)?;
-                self.remember_queue_expiry(&context, &event)?;
+                let event = self.finish_queue_expiry(&context)?;
                 Err(RequestFailure::request(
                     RuntimeHostError::scheduler("poll_queued_lease", &SchedulerError::QueueExpired),
                     RuntimeReceiptState::Denied,
                     Some(terminal(&event)),
                 ))
+            }
+            Err(SchedulerError::QueueMissing) => {
+                if let Some(success) = self.existing_queue_terminal_result(
+                    queued_request_id,
+                    connection_id,
+                    "poll_queued_lease",
+                )? {
+                    return Ok(success);
+                }
+                Err(self.scheduler_denied_error(
+                    request,
+                    context.as_ref().map(|value| value.instance.instance_id()),
+                    None,
+                    context
+                        .as_ref()
+                        .map_or("", |value| value.instance.audit_endpoint()),
+                    RuntimeHostError::scheduler("poll_queued_lease", &SchedulerError::QueueMissing),
+                )?)
             }
             Err(error) => Err(self.scheduler_denied_error(
                 request,
@@ -5966,6 +6117,17 @@ impl HostShared {
         let context = lock(&self.queued_requests, "read_queued_request")?
             .get(&queued_request_id)
             .cloned();
+        #[cfg(test)]
+        self.wait_queue_operation_test_hook(QueueOperationTestKind::Cancel, queued_request_id)?;
+        if context.is_none()
+            && let Some(success) = self.existing_queue_terminal_result(
+                queued_request_id,
+                connection_id,
+                "cancel_queued_lease",
+            )?
+        {
+            return Ok(success);
+        }
         let instance_guard = context
             .as_ref()
             .map(|context| self.instance_guard(context.instance.instance_id()))
@@ -5978,6 +6140,25 @@ impl HostShared {
             .cancel_queued(queued_request_id, connection_id);
         let cancelled = match cancelled {
             Ok(cancelled) => cancelled,
+            Err(SchedulerError::QueueMissing) => {
+                if let Some(success) = self.existing_queue_terminal_result(
+                    queued_request_id,
+                    connection_id,
+                    "cancel_queued_lease",
+                )? {
+                    return Ok(success);
+                }
+                return Err(self.scheduler_denied_error(
+                    request,
+                    None,
+                    None,
+                    "",
+                    RuntimeHostError::scheduler(
+                        "cancel_queued_lease",
+                        &SchedulerError::QueueMissing,
+                    ),
+                )?);
+            }
             Err(error) => {
                 return Err(self.scheduler_denied_error(
                     request,
@@ -5988,8 +6169,14 @@ impl HostShared {
                 )?);
             }
         };
-        let context = self.take_queued_context(&cancelled)?;
-        let event = self.append_queue_terminal(&context, DiagnosticCode::LeaseQueueCancelled)?;
+        let context = self.read_queued_context_for(cancelled.queued())?;
+        let event = self.finish_queue_terminal(
+            &context,
+            DiagnosticCode::LeaseQueueCancelled,
+            QueueTerminalOutcome::Cancelled {
+                instance_id: cancelled.queued().instance_id(),
+            },
+        )?;
         Ok(OperationSuccess {
             state: RuntimeReceiptState::Cancelled,
             terminal: Some(terminal(&event)),
@@ -6177,23 +6364,49 @@ impl HostShared {
 
     fn record_expired_queued(&self, expired: Vec<QueuedLease>) -> Result<(), RequestFailure> {
         for queued in expired {
-            let context = self.take_queued_context_for(&queued)?;
-            let event = self.append_queue_terminal(&context, DiagnosticCode::LeaseQueueExpired)?;
-            self.remember_queue_expiry(&context, &event)?;
+            let context = self.read_queued_context_for(&queued)?;
+            self.finish_queue_expiry(&context)?;
         }
         Ok(())
     }
 
-    fn remember_queue_expiry(
+    fn finish_queue_expiry(
+        &self,
+        context: &QueuedRequestContext,
+    ) -> Result<PersistedEvent, RequestFailure> {
+        self.finish_queue_terminal(
+            context,
+            DiagnosticCode::LeaseQueueExpired,
+            QueueTerminalOutcome::Expired,
+        )
+    }
+
+    /// Publishes the recoverable terminal before context removal, so a context miss cannot race
+    /// ahead of the authoritative queue result.
+    fn finish_queue_terminal(
+        &self,
+        context: &QueuedRequestContext,
+        diagnostic: DiagnosticCode,
+        outcome: QueueTerminalOutcome,
+    ) -> Result<PersistedEvent, RequestFailure> {
+        let event = self.append_queue_terminal(context, diagnostic)?;
+        self.remember_queue_terminal(context, &event, outcome)?;
+        self.remove_queued_context(context.request.request_id(), context.connection_id)?;
+        Ok(event)
+    }
+
+    fn remember_queue_terminal(
         &self,
         context: &QueuedRequestContext,
         event: &PersistedEvent,
+        outcome: QueueTerminalOutcome,
     ) -> Result<(), RequestFailure> {
         lock(&self.queue_terminals, "record_queue_terminal")?.insert(
             context.request.request_id(),
             QueueTerminalRecord {
                 connection_id: context.connection_id,
                 terminal: terminal(event),
+                outcome,
             },
         );
         Ok(())
@@ -6224,6 +6437,41 @@ impl HostShared {
         cancelled: &CancelledQueuedLease,
     ) -> Result<QueuedRequestContext, RequestFailure> {
         self.take_queued_context_for(cancelled.queued())
+    }
+
+    fn read_queued_context_for(
+        &self,
+        queued: &QueuedLease,
+    ) -> Result<QueuedRequestContext, RequestFailure> {
+        let context = lock(&self.queued_requests, "read_queued_request")?
+            .get(&queued.request_id())
+            .cloned()
+            .ok_or_else(|| {
+                RequestFailure::poison_without_terminal(RuntimeHostError::fatal(
+                    "queued_request_context_missing",
+                    "read_queued_request",
+                    RuntimeErrorCode::RuntimeFatal,
+                ))
+            })?;
+        if context.connection_id != queued.connection_id() {
+            return Err(RequestFailure::poison_without_terminal(
+                RuntimeHostError::fatal(
+                    "queued_request_connection_mismatch",
+                    "read_queued_request",
+                    RuntimeErrorCode::RuntimeFatal,
+                ),
+            ));
+        }
+        if context.instance.instance_id() != queued.instance_id() {
+            return Err(RequestFailure::poison_without_terminal(
+                RuntimeHostError::fatal(
+                    "queued_request_instance_mismatch",
+                    "read_queued_request",
+                    RuntimeErrorCode::RuntimeFatal,
+                ),
+            ));
+        }
+        Ok(context)
     }
 
     fn take_queued_context_for(
