@@ -3246,6 +3246,133 @@ fn queued_timeout_is_a_visible_terminal_denial() {
     host.close().expect("close host");
 }
 
+#[derive(Clone, Copy)]
+enum QueueExpiryContextCase {
+    StaleSome,
+    Missing,
+}
+
+fn queue_expiry_operation(
+    client: &TestClient,
+    operation: QueueOperationTestKind,
+    queued_request_id: actingcommand_contract::RequestId,
+) -> RuntimeRequest {
+    match operation {
+        QueueOperationTestKind::Poll => {
+            client.request(RuntimeOperation::PollQueuedLease { queued_request_id })
+        }
+        QueueOperationTestKind::Cancel => {
+            client.request(RuntimeOperation::CancelQueuedLease { queued_request_id })
+        }
+    }
+}
+
+fn assert_queue_expired(receipt: &RuntimeReceipt) -> TerminalEvent {
+    assert_eq!(receipt.state(), RuntimeReceiptState::Denied);
+    assert_eq!(
+        receipt.error_projection().expect("queue expiry").code,
+        RuntimeErrorCode::QueueExpired
+    );
+    receipt.terminal().expect("queue expiry terminal")
+}
+
+fn run_queue_expiry_context_case(
+    operation: QueueOperationTestKind,
+    context_case: QueueExpiryContextCase,
+) {
+    let root = TempDir::new().expect("tempdir");
+    let state = Arc::new(FakeState::default());
+    let clock = Arc::new(ManualRuntimeClock::new(1_000, 0));
+    let host = RuntimeHost::start(
+        config(&root).with_runtime_clock(clock.clone()),
+        Arc::new(FakeProvider::one("node.a", instance_id(), state)),
+    )
+    .expect("runtime host");
+    let mut owner = TestClient::connect(&host);
+    let mut waiter = TestClient::connect(&host);
+    let (_, token) = owner.acquire("node.a");
+    let (queued_request, status) = waiter.queue("node.a", LeasePriority::Normal, 50);
+    let queued_request_id = status.request_id();
+
+    let expired = match context_case {
+        QueueExpiryContextCase::StaleSome => {
+            let control = host
+                .pause_queue_operation_after_snapshot_for_test(operation, queued_request_id)
+                .expect("install queue race hook");
+            let operation_thread = thread::spawn(move || {
+                let request = queue_expiry_operation(&waiter, operation, queued_request_id);
+                let receipt = waiter.send(&request);
+                (waiter, receipt)
+            });
+            control.wait_until_paused();
+            clock.advance(100);
+            host.expire_all_queued_for_test()
+                .expect("expire queued request");
+            control.resume();
+            let (returned_waiter, receipt) = operation_thread.join().expect("queue operation");
+            waiter = returned_waiter;
+            receipt
+        }
+        QueueExpiryContextCase::Missing => {
+            clock.advance(100);
+            host.expire_all_queued_for_test()
+                .expect("expire queued request");
+            let request = queue_expiry_operation(&waiter, operation, queued_request_id);
+            waiter.send(&request)
+        }
+    };
+    let terminal = assert_queue_expired(&expired);
+
+    let repeated_poll = waiter.request(RuntimeOperation::PollQueuedLease { queued_request_id });
+    let repeated = waiter.send(&repeated_poll);
+    assert_eq!(assert_queue_expired(&repeated), terminal);
+    assert_eq!(
+        event_types_for_correlation(&mut waiter, queued_request.correlation_id()),
+        vec![
+            EventType::LeaseRequested,
+            EventType::SchedulerQueued,
+            EventType::SchedulerDenied,
+        ]
+    );
+    assert_eq!(
+        projected_events(
+            &mut waiter,
+            EventQuery {
+                event_type: Some(EventType::SchedulerDenied),
+                ..EventQuery::default()
+            }
+        )
+        .len(),
+        1
+    );
+
+    let release = owner.request(RuntimeOperation::ReleaseLease { token });
+    assert_eq!(owner.send(&release).state(), RuntimeReceiptState::Completed);
+    drop(owner);
+    drop(waiter);
+    host.close().expect("close host");
+}
+
+#[test]
+fn poll_vs_expiry_sweep_recovers_one_terminal_for_stale_and_missing_context() {
+    for context_case in [
+        QueueExpiryContextCase::StaleSome,
+        QueueExpiryContextCase::Missing,
+    ] {
+        run_queue_expiry_context_case(QueueOperationTestKind::Poll, context_case);
+    }
+}
+
+#[test]
+fn cancel_vs_expiry_sweep_recovers_one_terminal_for_stale_and_missing_context() {
+    for context_case in [
+        QueueExpiryContextCase::StaleSome,
+        QueueExpiryContextCase::Missing,
+    ] {
+        run_queue_expiry_context_case(QueueOperationTestKind::Cancel, context_case);
+    }
+}
+
 #[test]
 fn different_instances_acquire_and_execute_independently() {
     let root = TempDir::new().expect("tempdir");
