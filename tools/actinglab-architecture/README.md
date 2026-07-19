@@ -85,7 +85,7 @@ changes and cannot be reactivated. The fixed historical comment/scope table is a
 explicit one-time legacy retirement migration.
 
 Verify an immutable exact-head marker and every changed Git object with the trusted PR gate:
-
+Run the verifier from a trusted checkout with the candidate present only as Git objects:
 ```text
 cargo run -p actingcommand-actinglab-architecture --bin trusted-provenance-guard -- --repository HS7097/ActingCommand-Runtime --base-ref main --base-protected true --base <full-base-sha> --head <full-head-sha> --pull-request <number> --trusted-verifier-sha <full-trusted-sha> --workflow-issue <number>
 ```

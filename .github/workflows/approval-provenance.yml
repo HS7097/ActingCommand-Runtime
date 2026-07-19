@@ -31,7 +31,7 @@ jobs:
             echo "FATAL: trusted provenance requires main to be protected by branch protection or a ruleset" >&2
             exit 1
           fi
-
+      # Credentials and trusted code are established before candidate objects enter the repository.
       - name: Require Workflow read credential
         env:
           GH_TOKEN: ${{ secrets.ACTINGCOMMAND_WORKFLOW_READ_TOKEN }}
@@ -47,9 +47,9 @@ jobs:
           ref: ${{ github.event.pull_request.base.sha }}
           fetch-depth: 1
           persist-credentials: true
-
+      # The toolchain runs only against the protected base checkout.
       - uses: dtolnay/rust-toolchain@stable
-
+      # The trusted binary must exist before any candidate object is fetched.
       - name: Build trusted verifier before fetching candidate objects
         run: cargo build --locked -p actingcommand-actinglab-architecture --bin trusted-provenance-guard
 

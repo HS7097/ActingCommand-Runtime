@@ -122,7 +122,7 @@ change_binding = { target_repository = "HS7097/ActingCommand-Runtime", pull_requ
 
 [surface_manifest]
 path = "tools/actinglab-architecture/generic-domain-surfaces-v2.jsonl"
-sha256 = "6d017006ecd3f5980a4227553610da0f19c14c0b1b025e2676d1ee1f2c121666"
+sha256 = "0e99f885a101c7d85ca1acfbde07fbe30d623d34c1a05fbeaf9dee29e6718d30"
 approval_id = "approval.issue65_s3"
 source_issue = 65
 source_pr = 129
