@@ -2137,7 +2137,7 @@ fn validate_converted_guard_references(
     pages: &Value,
     primitives: &Value,
 ) -> CliOutcome<()> {
-    let game = pack.get("game").and_then(Value::as_str).unwrap_or("");
+    let game = required_string(pack, "game")?;
     let targets = array_field(pack, "targets")
         .iter()
         .filter_map(|target| {
@@ -2161,7 +2161,7 @@ fn validate_converted_guard_references(
             continue;
         };
         let page_id = guard.get("page_id").and_then(Value::as_str).unwrap_or("");
-        if !converted_page_id_exists(game, &page_ids, page_id) {
+        if !converted_page_id_exists(&game, &page_ids, page_id) {
             errors.push(format!(
                 "operation '{operation_id}' guard.page_id '{page_id}' does not exist in pages"
             ));

@@ -2,11 +2,12 @@
 
 //! Machine-readable generic-domain concepts and protected Runtime surfaces.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fs;
 use std::path::{Component, Path, PathBuf};
 use std::process::Command;
 
+use proc_macro2::{TokenStream, TokenTree};
 use quote::ToTokens;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -853,6 +854,7 @@ pub fn workspace_identity_allowance_candidates(
         .into_iter()
         .collect::<HashSet<_>>();
     let files = protected_files(root)?;
+    let callables = collect_workspace_callable_semantics(&files)?;
 
     let mut candidates = Vec::new();
     for file in files {
@@ -867,6 +869,11 @@ pub fn workspace_identity_allowance_candidates(
         {
             continue;
         }
+        let file_callables = if file.extension().is_some_and(|extension| extension == "rs") {
+            Some(collect_file_callable_semantics(&file, &callables)?)
+        } else {
+            None
+        };
         for fragment in identity_fragments_for_file(&file, &relative)? {
             let label = format!("{}#{}", relative, fragment.selector);
             let mut detector_tokens = inspect_generic_runtime_identity(&label, &fragment.content)
@@ -878,7 +885,11 @@ pub fn workspace_identity_allowance_candidates(
             detector_tokens.sort();
             detector_tokens.dedup();
             let branch_violations = if file.extension().is_some_and(|extension| extension == "rs") {
-                inspect_identity_axis_branches(&label, &fragment.content)?
+                inspect_identity_axis_branches_with_semantics(
+                    &label,
+                    &fragment.content,
+                    file_callables.as_ref().unwrap_or(&callables),
+                )?
             } else {
                 Vec::new()
             };
@@ -980,6 +991,7 @@ pub fn validate_workspace_genericity(
     let allowance_by_fragment = validate_identity_allowance_fragments(root, registry)?;
 
     let files = protected_files(root)?;
+    let callables = collect_workspace_callable_semantics(&files)?;
 
     let mut errors = Vec::new();
     let mut covered_paths = HashSet::new();
@@ -996,6 +1008,11 @@ pub fn validate_workspace_genericity(
         {
             continue;
         }
+        let file_callables = if file.extension().is_some_and(|extension| extension == "rs") {
+            Some(collect_file_callable_semantics(&file, &callables)?)
+        } else {
+            None
+        };
         for fragment in identity_fragments_for_file(&file, &relative)? {
             let key = (relative.clone(), fragment.selector.clone());
             let allowance = allowance_by_fragment.get(&key).copied();
@@ -1022,7 +1039,11 @@ pub fn validate_workspace_genericity(
                     .any(|scope| scope == "identity.branch")
             });
             if file.extension().is_some_and(|extension| extension == "rs") && !branch_allowed {
-                errors.extend(inspect_identity_axis_branches(&label, &fragment.content)?);
+                errors.extend(inspect_identity_axis_branches_with_semantics(
+                    &label,
+                    &fragment.content,
+                    file_callables.as_ref().unwrap_or(&callables),
+                )?);
             }
         }
     }
@@ -1154,13 +1175,27 @@ fn is_link_or_reparse(metadata: &fs::Metadata) -> bool {
 pub fn inspect_identity_axis_branches(path: &str, source: &str) -> Result<Vec<String>, String> {
     let file =
         syn::parse_file(source).map_err(|error| format!("failed to parse {path}: {error}"))?;
+    let callables = collect_callable_semantics(&file);
+    inspect_identity_axis_branches_with_semantics(path, source, &callables)
+}
+
+fn inspect_identity_axis_branches_with_semantics(
+    path: &str,
+    source: &str,
+    callables: &CallableSemantics,
+) -> Result<Vec<String>, String> {
+    let file =
+        syn::parse_file(source).map_err(|error| format!("failed to parse {path}: {error}"))?;
+    let macro_definitions = collect_macro_definitions(&file);
+    let constants = collect_constant_flows(&file, &macro_definitions, callables);
     let mut visitor = IdentityBranchVisitor {
         path,
         violations: Vec::new(),
         errors: Vec::new(),
-        aliases: vec![HashMap::new()],
-        non_identity: vec![HashSet::new()],
-        collections: vec![HashMap::new()],
+        bindings: vec![HashMap::new()],
+        constants,
+        macro_definitions,
+        callables,
         return_axis: None,
     };
     visitor.visit_file(&file);
@@ -2679,136 +2714,703 @@ fn text_surface_inventory(source: &str) -> Vec<RawSurface> {
         .collect()
 }
 
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+struct IdentityFlow {
+    axes: BTreeSet<&'static str>,
+    strings: BTreeSet<String>,
+    unsupported: BTreeSet<String>,
+    argument_sources: BTreeSet<usize>,
+    named_fields: BTreeMap<String, IdentityFlow>,
+    indexed_fields: Vec<IdentityFlow>,
+    raw_string: bool,
+    callable_sensitive: bool,
+}
+
+impl IdentityFlow {
+    fn for_axis(axis: &'static str) -> Self {
+        Self {
+            axes: BTreeSet::from([axis]),
+            raw_string: true,
+            ..Self::default()
+        }
+    }
+
+    fn merge(&mut self, other: Self) {
+        self.axes.extend(other.axes);
+        self.strings.extend(other.strings);
+        self.unsupported.extend(other.unsupported);
+        self.argument_sources.extend(other.argument_sources);
+        for (name, flow) in other.named_fields {
+            self.named_fields.entry(name).or_default().merge(flow);
+        }
+        for (index, flow) in other.indexed_fields.into_iter().enumerate() {
+            if let Some(current) = self.indexed_fields.get_mut(index) {
+                current.merge(flow);
+            } else {
+                self.indexed_fields.push(flow);
+            }
+        }
+        self.raw_string |= other.raw_string;
+        self.callable_sensitive |= other.callable_sensitive;
+    }
+
+    fn merged(mut self, other: Self) -> Self {
+        self.merge(other);
+        self
+    }
+
+    fn mark_unsupported(&mut self, construct: impl Into<String>) {
+        self.unsupported.insert(construct.into());
+    }
+}
+
+struct IdentityFlowEnvironment<'a> {
+    bindings: &'a [HashMap<String, IdentityFlow>],
+    constants: &'a HashMap<String, IdentityFlow>,
+    macro_definitions: &'a HashMap<String, TokenStream>,
+    callables: &'a CallableSemantics,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum CallableReturnFlow {
+    RawString,
+    Aggregate,
+    NonIdentity,
+    Unknown,
+}
+
+#[derive(Clone, Debug, Default)]
+struct CallableSemantics {
+    functions: HashMap<String, CallableReturnFlow>,
+    methods: HashMap<String, CallableReturnFlow>,
+    structured_functions: HashMap<String, IdentityFlow>,
+    structured_methods: HashMap<String, IdentityFlow>,
+    ambiguous_structured_functions: HashSet<String>,
+    ambiguous_structured_methods: HashSet<String>,
+}
+
+struct StructuredCallableDefinition {
+    names: Vec<String>,
+    method: bool,
+    return_flow: CallableReturnFlow,
+    inputs: syn::punctuated::Punctuated<FnArg, Token![,]>,
+    body: syn::Block,
+}
+
+struct CallableDefinitionGroup {
+    definitions: Vec<StructuredCallableDefinition>,
+    macro_definitions: HashMap<String, TokenStream>,
+}
+
+fn collect_callable_semantics(file: &syn::File) -> CallableSemantics {
+    let (mut semantics, definitions) = collect_callable_inventory(file);
+    derive_callable_summaries(&mut semantics, &[definitions]);
+    semantics
+}
+
+fn collect_callable_inventory(file: &syn::File) -> (CallableSemantics, CallableDefinitionGroup) {
+    #[derive(Default)]
+    struct Collector {
+        semantics: CallableSemantics,
+        definitions: Vec<StructuredCallableDefinition>,
+        owner: Option<String>,
+    }
+
+    impl Visit<'_> for Collector {
+        fn visit_item_fn(&mut self, node: &syn::ItemFn) {
+            let name = node.sig.ident.to_string();
+            let flow = callable_return_flow(&node.sig.output);
+            insert_callable_flow(&mut self.semantics.functions, name.clone(), flow);
+            if matches!(
+                flow,
+                CallableReturnFlow::RawString | CallableReturnFlow::Aggregate
+            ) {
+                self.definitions.push(StructuredCallableDefinition {
+                    names: vec![name],
+                    method: false,
+                    return_flow: flow,
+                    inputs: node.sig.inputs.clone(),
+                    body: (*node.block).clone(),
+                });
+            }
+            syn::visit::visit_item_fn(self, node);
+        }
+
+        fn visit_item_impl(&mut self, node: &syn::ItemImpl) {
+            let previous = self.owner.take();
+            self.owner = type_owner_name(&node.self_ty);
+            syn::visit::visit_item_impl(self, node);
+            self.owner = previous;
+        }
+
+        fn visit_impl_item_fn(&mut self, node: &syn::ImplItemFn) {
+            let name = node.sig.ident.to_string();
+            let flow = callable_return_flow(&node.sig.output);
+            insert_callable_flow(&mut self.semantics.methods, name.clone(), flow);
+            let mut names = vec![name.clone()];
+            if let Some(owner) = &self.owner {
+                let qualified = format!("{owner}::{name}");
+                insert_callable_flow(&mut self.semantics.methods, qualified.clone(), flow);
+                names.push(qualified);
+            }
+            if matches!(
+                flow,
+                CallableReturnFlow::RawString | CallableReturnFlow::Aggregate
+            ) {
+                self.definitions.push(StructuredCallableDefinition {
+                    names,
+                    method: true,
+                    return_flow: flow,
+                    inputs: node.sig.inputs.clone(),
+                    body: node.block.clone(),
+                });
+            }
+            syn::visit::visit_impl_item_fn(self, node);
+        }
+    }
+
+    let mut collector = Collector::default();
+    collector.visit_file(file);
+    (
+        collector.semantics,
+        CallableDefinitionGroup {
+            definitions: collector.definitions,
+            macro_definitions: collect_macro_definitions(file),
+        },
+    )
+}
+
+fn derive_callable_summaries(
+    semantics: &mut CallableSemantics,
+    groups: &[CallableDefinitionGroup],
+) {
+    let definition_count = groups
+        .iter()
+        .map(|group| group.definitions.len())
+        .sum::<usize>();
+    if definition_count == 0 {
+        return;
+    }
+    let local_function_names = groups
+        .iter()
+        .flat_map(|group| &group.definitions)
+        .filter(|definition| !definition.method)
+        .flat_map(|definition| &definition.names)
+        .map(|name| name.to_ascii_lowercase())
+        .collect::<HashSet<_>>();
+    let local_method_names = groups
+        .iter()
+        .flat_map(|group| &group.definitions)
+        .filter(|definition| definition.method)
+        .flat_map(|definition| &definition.names)
+        .map(|name| name.to_ascii_lowercase())
+        .collect::<HashSet<_>>();
+    let base_structured_functions = semantics
+        .structured_functions
+        .iter()
+        .filter(|(name, _)| !local_function_names.contains(*name))
+        .map(|(name, flow)| (name.clone(), flow.clone()))
+        .collect::<HashMap<_, _>>();
+    let base_structured_methods = semantics
+        .structured_methods
+        .iter()
+        .filter(|(name, _)| !local_method_names.contains(*name))
+        .map(|(name, flow)| (name.clone(), flow.clone()))
+        .collect::<HashMap<_, _>>();
+    let base_ambiguous_functions = semantics
+        .ambiguous_structured_functions
+        .iter()
+        .filter(|name| !local_function_names.contains(*name))
+        .cloned()
+        .collect::<HashSet<_>>();
+    let base_ambiguous_methods = semantics
+        .ambiguous_structured_methods
+        .iter()
+        .filter(|name| !local_method_names.contains(*name))
+        .cloned()
+        .collect::<HashSet<_>>();
+    let constants = HashMap::new();
+    let mut converged = false;
+    for _ in 0..=definition_count {
+        let mut structured_functions = base_structured_functions.clone();
+        let mut structured_methods = base_structured_methods.clone();
+        let mut ambiguous_structured_functions = base_ambiguous_functions.clone();
+        let mut ambiguous_structured_methods = base_ambiguous_methods.clone();
+
+        for group in groups {
+            for definition in &group.definitions {
+                let bindings = vec![structured_callable_parameter_bindings(&definition.inputs)];
+                let mut flow = block_flow(
+                    &definition.body,
+                    &IdentityFlowEnvironment {
+                        bindings: &bindings,
+                        constants: &constants,
+                        macro_definitions: &group.macro_definitions,
+                        callables: semantics,
+                    },
+                );
+                if matches!(definition.return_flow, CallableReturnFlow::RawString) {
+                    flow.raw_string = true;
+                    flow.callable_sensitive = false;
+                } else {
+                    flow = aggregate_flow(flow);
+                }
+                let (summaries, ambiguous) = if definition.method {
+                    (&mut structured_methods, &mut ambiguous_structured_methods)
+                } else {
+                    (
+                        &mut structured_functions,
+                        &mut ambiguous_structured_functions,
+                    )
+                };
+                for name in &definition.names {
+                    insert_structured_callable_flow(summaries, ambiguous, name, flow.clone());
+                }
+            }
+        }
+
+        if semantics.structured_functions == structured_functions
+            && semantics.structured_methods == structured_methods
+            && semantics.ambiguous_structured_functions == ambiguous_structured_functions
+            && semantics.ambiguous_structured_methods == ambiguous_structured_methods
+        {
+            converged = true;
+            break;
+        }
+
+        semantics.structured_functions = structured_functions;
+        semantics.structured_methods = structured_methods;
+        semantics.ambiguous_structured_functions = ambiguous_structured_functions;
+        semantics.ambiguous_structured_methods = ambiguous_structured_methods;
+    }
+
+    if !converged {
+        for flow in semantics
+            .structured_functions
+            .values_mut()
+            .chain(semantics.structured_methods.values_mut())
+        {
+            flow.mark_unsupported("callable return summary did not converge");
+        }
+    }
+}
+
+fn structured_callable_parameter_bindings(
+    inputs: &syn::punctuated::Punctuated<FnArg, Token![,]>,
+) -> HashMap<String, IdentityFlow> {
+    let mut bindings = HashMap::new();
+    for (index, input) in inputs.iter().enumerate() {
+        match input {
+            FnArg::Receiver(_) => {
+                bindings.insert(
+                    "self".to_string(),
+                    IdentityFlow {
+                        argument_sources: BTreeSet::from([index]),
+                        ..IdentityFlow::default()
+                    },
+                );
+            }
+            FnArg::Typed(input) => {
+                let Some((name, _)) = local_binding(&input.pat) else {
+                    continue;
+                };
+                let mut flow = if binding_exposes_raw_identity(&name, Some(&input.ty)) {
+                    IdentityFlow::for_axis(exact_identity_axis(&name).expect("identity parameter"))
+                } else if type_is_raw_identity(&input.ty) {
+                    IdentityFlow {
+                        raw_string: true,
+                        ..IdentityFlow::default()
+                    }
+                } else {
+                    IdentityFlow::default()
+                };
+                flow.argument_sources.insert(index);
+                bindings.insert(name, flow);
+            }
+        }
+    }
+    bindings
+}
+
+fn type_owner_name(kind: &Type) -> Option<String> {
+    let Type::Path(path) = kind else {
+        return None;
+    };
+    path.path
+        .segments
+        .last()
+        .map(|segment| segment.ident.to_string())
+}
+
+fn collect_workspace_callable_semantics(files: &[PathBuf]) -> Result<CallableSemantics, String> {
+    let mut semantics = CallableSemantics::default();
+    let mut definitions = Vec::new();
+    for file in files {
+        if file.extension().is_none_or(|extension| extension != "rs") {
+            continue;
+        }
+        let source = fs::read_to_string(file)
+            .map_err(|error| format!("failed to read {}: {error}", file.display()))?;
+        let parsed = syn::parse_file(&source)
+            .map_err(|error| format!("failed to parse {}: {error}", file.display()))?;
+        let (inventory, group) = collect_callable_inventory(&parsed);
+        merge_callable_semantics(&mut semantics, inventory);
+        definitions.push(group);
+    }
+    derive_callable_summaries(&mut semantics, &definitions);
+    Ok(semantics)
+}
+
+fn collect_file_callable_semantics(
+    file: &Path,
+    workspace: &CallableSemantics,
+) -> Result<CallableSemantics, String> {
+    let source = fs::read_to_string(file)
+        .map_err(|error| format!("failed to read {}: {error}", file.display()))?;
+    let parsed = syn::parse_file(&source)
+        .map_err(|error| format!("failed to parse {}: {error}", file.display()))?;
+    Ok(specialize_callable_semantics(&parsed, workspace))
+}
+
+fn specialize_callable_semantics(
+    file: &syn::File,
+    workspace: &CallableSemantics,
+) -> CallableSemantics {
+    let (inventory, definitions) = collect_callable_inventory(file);
+    let mut semantics = workspace.clone();
+    overlay_callable_inventory(&mut semantics, inventory);
+    derive_callable_summaries(&mut semantics, &[definitions]);
+    semantics
+}
+
+fn overlay_callable_inventory(target: &mut CallableSemantics, source: CallableSemantics) {
+    for (name, flow) in source.functions {
+        target.functions.insert(name, flow);
+    }
+    for (name, flow) in source.methods {
+        target.methods.insert(name, flow);
+    }
+}
+
+fn merge_callable_semantics(target: &mut CallableSemantics, source: CallableSemantics) {
+    for (name, flow) in source.functions {
+        insert_callable_flow(&mut target.functions, name, flow);
+    }
+    for (name, flow) in source.methods {
+        insert_callable_flow(&mut target.methods, name, flow);
+    }
+    for name in source.ambiguous_structured_functions {
+        target.structured_functions.remove(&name);
+        target.ambiguous_structured_functions.insert(name);
+    }
+    for name in source.ambiguous_structured_methods {
+        target.structured_methods.remove(&name);
+        target.ambiguous_structured_methods.insert(name);
+    }
+    for (name, flow) in source.structured_functions {
+        insert_structured_callable_flow(
+            &mut target.structured_functions,
+            &mut target.ambiguous_structured_functions,
+            &name,
+            flow,
+        );
+    }
+    for (name, flow) in source.structured_methods {
+        insert_structured_callable_flow(
+            &mut target.structured_methods,
+            &mut target.ambiguous_structured_methods,
+            &name,
+            flow,
+        );
+    }
+}
+
+fn insert_callable_flow(
+    callables: &mut HashMap<String, CallableReturnFlow>,
+    name: String,
+    flow: CallableReturnFlow,
+) {
+    callables
+        .entry(name.to_ascii_lowercase())
+        .and_modify(|current| {
+            if *current != flow {
+                *current = CallableReturnFlow::Unknown;
+            }
+        })
+        .or_insert(flow);
+}
+
+fn insert_structured_callable_flow(
+    callables: &mut HashMap<String, IdentityFlow>,
+    ambiguous: &mut HashSet<String>,
+    name: &str,
+    flow: IdentityFlow,
+) {
+    let name = name.to_ascii_lowercase();
+    if ambiguous.contains(&name) {
+        return;
+    }
+    if callables.get(&name).is_some_and(|current| *current != flow) {
+        callables.remove(&name);
+        ambiguous.insert(name);
+    } else {
+        callables.entry(name).or_insert(flow);
+    }
+}
+
+fn callable_return_flow(output: &syn::ReturnType) -> CallableReturnFlow {
+    match output {
+        syn::ReturnType::Default => CallableReturnFlow::NonIdentity,
+        syn::ReturnType::Type(_, kind) => type_return_flow(kind),
+    }
+}
+
+fn type_return_flow(kind: &Type) -> CallableReturnFlow {
+    match kind {
+        Type::Reference(reference) => type_return_flow(&reference.elem),
+        Type::Paren(paren) => type_return_flow(&paren.elem),
+        Type::Group(group) => type_return_flow(&group.elem),
+        Type::Array(array) => aggregate_return_flow(type_return_flow(&array.elem)),
+        Type::Slice(slice) => aggregate_return_flow(type_return_flow(&slice.elem)),
+        Type::Tuple(tuple) => tuple
+            .elems
+            .iter()
+            .fold(CallableReturnFlow::NonIdentity, |current, element| {
+                merge_return_flow(current, type_return_flow(element))
+            }),
+        Type::Never(_) => CallableReturnFlow::NonIdentity,
+        Type::Path(path) => path_return_flow(path),
+        _ => CallableReturnFlow::Unknown,
+    }
+}
+
+fn path_return_flow(path: &syn::TypePath) -> CallableReturnFlow {
+    let Some(segment) = path.path.segments.last() else {
+        return CallableReturnFlow::Unknown;
+    };
+    let name = segment.ident.to_string();
+    if ["String", "str"].contains(&name.as_str()) {
+        return CallableReturnFlow::RawString;
+    }
+    if [
+        "bool", "char", "f32", "f64", "i8", "i16", "i32", "i64", "i128", "isize", "u8", "u16",
+        "u32", "u64", "u128", "usize",
+    ]
+    .contains(&name.as_str())
+    {
+        return CallableReturnFlow::NonIdentity;
+    }
+    let inner = first_type_argument(&segment.arguments).map(type_return_flow);
+    if ["ArrayVec", "BTreeSet", "HashSet", "Vec", "VecDeque"].contains(&name.as_str()) {
+        return inner.map_or(CallableReturnFlow::Unknown, aggregate_return_flow);
+    }
+    if ["Arc", "Box", "Cow", "Option", "Rc"].contains(&name.as_str()) {
+        return inner.unwrap_or(CallableReturnFlow::Unknown);
+    }
+    if !segment.arguments.is_empty()
+        && (name == "Result" || name.ends_with("Result") || name.ends_with("Outcome"))
+    {
+        return inner.unwrap_or(CallableReturnFlow::Unknown);
+    }
+    if segment.arguments.is_empty() {
+        if name.len() == 1 && name.as_bytes()[0].is_ascii_uppercase() {
+            CallableReturnFlow::Unknown
+        } else {
+            CallableReturnFlow::Aggregate
+        }
+    } else {
+        CallableReturnFlow::Unknown
+    }
+}
+
+fn first_type_argument(arguments: &PathArguments) -> Option<&Type> {
+    let PathArguments::AngleBracketed(arguments) = arguments else {
+        return None;
+    };
+    arguments.args.iter().find_map(|argument| {
+        let GenericArgument::Type(kind) = argument else {
+            return None;
+        };
+        Some(kind)
+    })
+}
+
+fn aggregate_return_flow(flow: CallableReturnFlow) -> CallableReturnFlow {
+    match flow {
+        CallableReturnFlow::RawString | CallableReturnFlow::Aggregate => {
+            CallableReturnFlow::Aggregate
+        }
+        other => other,
+    }
+}
+
+fn merge_return_flow(left: CallableReturnFlow, right: CallableReturnFlow) -> CallableReturnFlow {
+    if left == right {
+        return left;
+    }
+    if matches!(left, CallableReturnFlow::Unknown) || matches!(right, CallableReturnFlow::Unknown) {
+        return CallableReturnFlow::Unknown;
+    }
+    if matches!(
+        left,
+        CallableReturnFlow::RawString | CallableReturnFlow::Aggregate
+    ) || matches!(
+        right,
+        CallableReturnFlow::RawString | CallableReturnFlow::Aggregate
+    ) {
+        CallableReturnFlow::Aggregate
+    } else {
+        CallableReturnFlow::NonIdentity
+    }
+}
+
 struct IdentityBranchVisitor<'a> {
     path: &'a str,
     violations: Vec<String>,
     errors: Vec<String>,
-    aliases: Vec<HashMap<String, &'static str>>,
-    non_identity: Vec<HashSet<String>>,
-    collections: Vec<HashMap<String, Vec<String>>>,
+    bindings: Vec<HashMap<String, IdentityFlow>>,
+    constants: HashMap<String, IdentityFlow>,
+    macro_definitions: HashMap<String, TokenStream>,
+    callables: &'a CallableSemantics,
     return_axis: Option<&'static str>,
 }
 
 impl Visit<'_> for IdentityBranchVisitor<'_> {
     fn visit_block(&mut self, node: &syn::Block) {
-        self.aliases.push(HashMap::new());
-        self.non_identity.push(HashSet::new());
-        self.collections.push(HashMap::new());
+        self.bindings.push(HashMap::new());
         syn::visit::visit_block(self, node);
-        self.aliases.pop();
-        self.non_identity.pop();
-        self.collections.pop();
+        self.bindings.pop();
     }
 
     fn visit_local(&mut self, node: &syn::Local) {
-        if let Some((name, declared_type)) = local_binding(&node.pat)
-            && let Some(initializer) = &node.init
-        {
-            let declared_axis = exact_identity_axis(&name);
-            let initializer_axis = self.axis(&initializer.expr);
-            let axis = match (declared_axis, declared_type) {
-                (Some(axis), Some(kind)) if type_is_raw_identity(kind) => Some(axis),
-                (Some(_), Some(_)) => None,
-                (Some(axis), None) => Some(axis),
-                (None, _) => initializer_axis,
-            };
-            if let Some(axis) = axis {
-                self.aliases
-                    .last_mut()
-                    .expect("identity scope")
-                    .insert(name.clone(), axis);
-            } else if declared_axis.is_some() {
-                self.non_identity
-                    .last_mut()
-                    .expect("identity scope")
-                    .insert(name.clone());
+        if let Some(initializer) = &node.init {
+            let initializer_flow = self.flow(&initializer.expr);
+            if let Some((name, declared_type)) = local_binding(&node.pat)
+                && binding_exposes_raw_identity(&name, declared_type)
+                && (declared_type.is_some() || initializer_flow.raw_string)
+            {
+                self.record_expected(
+                    exact_identity_axis(&name).expect("identity local"),
+                    initializer_flow.clone(),
+                );
             }
-            let values = expression_strings(&initializer.expr);
-            if !values.is_empty() {
-                self.collections
-                    .last_mut()
-                    .expect("collection scope")
-                    .insert(name.clone(), values.clone());
-                if let Some(axis) = axis {
-                    self.record_values(axis, values);
-                }
-            }
+            let pattern_bindings = flows_for_pattern(&node.pat, initializer_flow);
+            syn::visit::visit_local(self, node);
+            self.bindings
+                .last_mut()
+                .expect("identity scope")
+                .extend(pattern_bindings);
+            return;
         }
         syn::visit::visit_local(self, node);
     }
 
+    fn visit_expr_for_loop(&mut self, node: &syn::ExprForLoop) {
+        let iterator_flow = self.flow(&node.expr);
+        self.visit_expr(&node.expr);
+        self.bindings
+            .push(flows_for_pattern(&node.pat, iterator_flow));
+        self.visit_block(&node.body);
+        self.bindings.pop();
+    }
+
     fn visit_expr_binary(&mut self, node: &ExprBinary) {
         if matches!(node.op, BinOp::Eq(_) | BinOp::Ne(_)) {
-            if let Some(axis) = self.axis(&node.left) {
-                self.record_values(axis, expression_strings(&node.right));
-            }
-            if let Some(axis) = self.axis(&node.right) {
-                self.record_values(axis, expression_strings(&node.left));
-            }
+            self.record_comparison(self.flow(&node.left), self.flow(&node.right));
         }
         syn::visit::visit_expr_binary(self, node);
     }
 
     fn visit_expr_method_call(&mut self, node: &syn::ExprMethodCall) {
-        if let Some(axis) = self.axis(&node.receiver) {
-            self.record_values(
-                axis,
-                node.args.iter().flat_map(expression_strings).collect(),
-            );
-        }
-        let receiver_values = self.collection_values(&node.receiver);
-        for argument in &node.args {
-            if let Some(axis) = self.axis(argument) {
-                self.record_values(axis, receiver_values.clone());
-                self.record_values(axis, expression_strings(&node.receiver));
+        let method = node.method.to_string();
+        if is_identity_comparison(&method) {
+            let receiver = self.flow(&node.receiver);
+            for argument in &node.args {
+                self.record_comparison(receiver.clone(), self.flow(argument));
             }
-            if !matches!(argument, Expr::Closure(_)) {
-                continue;
-            }
-            for axis in identity_axes_in_expression(argument, &self.aliases, &self.non_identity) {
-                let mut values = expression_strings(argument);
-                values.extend(receiver_values.iter().cloned());
-                self.record_values(axis, values);
+        } else if is_iterator_predicate(&method) {
+            let receiver = self.flow(&node.receiver);
+            for argument in &node.args {
+                self.record_collection_comparison(receiver.clone(), self.flow(argument));
             }
         }
         syn::visit::visit_expr_method_call(self, node);
     }
 
     fn visit_expr_call(&mut self, node: &syn::ExprCall) {
-        let callable_values = self.collection_values(&node.func);
-        for argument in &node.args {
-            if let Some(axis) = self.axis(argument) {
-                self.record_values(axis, callable_values.clone());
+        let callable = callable_name(&node.func);
+        let callable_flow = self.callable_flow(&node.func);
+        if callable.as_deref().is_some_and(is_identity_comparison) {
+            let mut arguments = node.args.iter();
+            if let Some(first) = arguments.next() {
+                let first = self.flow(first);
+                for argument in arguments {
+                    self.record_comparison(first.clone(), self.flow(argument));
+                }
+            }
+        } else if callable_flow.callable_sensitive {
+            for argument in &node.args {
+                self.record_comparison(callable_flow.clone(), self.flow(argument));
             }
         }
         syn::visit::visit_expr_call(self, node);
     }
 
     fn visit_expr_match(&mut self, node: &ExprMatch) {
-        if let Some(axis) = self.axis(&node.expr) {
-            for arm in &node.arms {
-                let mut strings = PatternStringVisitor::default();
-                strings.visit_pat(&arm.pat);
-                self.record_values(axis, strings.values);
-            }
+        let subject = self.flow(&node.expr);
+        let mut patterns = IdentityFlow::default();
+        for arm in &node.arms {
+            let mut strings = PatternStringVisitor::default();
+            strings.visit_pat(&arm.pat);
+            patterns.strings.extend(strings.values);
+        }
+        if !patterns.strings.is_empty() {
+            patterns.raw_string = true;
+            self.record_comparison(subject, patterns);
         }
         syn::visit::visit_expr_match(self, node);
+    }
+
+    fn visit_expr_let(&mut self, node: &syn::ExprLet) {
+        let mut strings = PatternStringVisitor::default();
+        strings.visit_pat(&node.pat);
+        if !strings.values.is_empty() {
+            self.record_comparison(
+                self.flow(&node.expr),
+                IdentityFlow {
+                    strings: strings.values.into_iter().collect(),
+                    raw_string: true,
+                    ..IdentityFlow::default()
+                },
+            );
+        }
+        syn::visit::visit_expr_let(self, node);
     }
 
     fn visit_expr_macro(&mut self, node: &syn::ExprMacro) {
         if node.mac.path.is_ident("matches") {
             match syn::parse2::<MatchesExpression>(node.mac.tokens.clone()) {
                 Ok(matches) => {
-                    if let Some(axis) = self.axis(&matches.expression) {
-                        let mut strings = PatternStringVisitor::default();
-                        strings.visit_pat(&matches.pattern);
-                        self.record_values(axis, strings.values);
-                    }
+                    let mut strings = PatternStringVisitor::default();
+                    strings.visit_pat(&matches.pattern);
+                    self.record_comparison(
+                        self.flow(&matches.expression),
+                        IdentityFlow {
+                            strings: strings.values.into_iter().collect(),
+                            raw_string: true,
+                            ..IdentityFlow::default()
+                        },
+                    );
                 }
                 Err(error) => self.errors.push(format!(
                     "{}: failed to parse matches! identity expression: {error}",
                     self.path
                 )),
+            }
+        } else {
+            let flow = self.flow(&Expr::Macro(node.clone()));
+            if flow.callable_sensitive {
+                self.record_direct(flow);
             }
         }
         syn::visit::visit_expr_macro(self, node);
@@ -2819,36 +3421,43 @@ impl Visit<'_> for IdentityBranchVisitor<'_> {
             if let Member::Named(identifier) = &field.member
                 && let Some(axis) = exact_identity_axis(&identifier.to_string())
             {
-                self.record_values(axis, expression_strings(&field.expr));
+                self.record_expected(axis, self.flow(&field.expr));
             }
         }
         syn::visit::visit_expr_struct(self, node);
     }
 
     fn visit_expr_assign(&mut self, node: &syn::ExprAssign) {
-        if let Some(axis) = self.axis(&node.left) {
-            self.record_values(axis, expression_strings(&node.right));
+        let right = self.flow(&node.right);
+        for axis in assignment_identity_axes(&node.left, &self.environment()) {
+            self.record_expected(axis, right.clone());
         }
         syn::visit::visit_expr_assign(self, node);
     }
 
     fn visit_expr_return(&mut self, node: &syn::ExprReturn) {
         if let (Some(axis), Some(expression)) = (self.return_axis, &node.expr) {
-            self.record_values(axis, expression_strings(expression));
+            self.record_expected(axis, self.flow(expression));
         }
         syn::visit::visit_expr_return(self, node);
     }
 
     fn visit_item_const(&mut self, node: &syn::ItemConst) {
-        if let Some(axis) = exact_identity_axis(&node.ident.to_string()) {
-            self.record_values(axis, expression_strings(&node.expr));
+        if binding_exposes_raw_identity(&node.ident.to_string(), Some(&node.ty)) {
+            self.record_expected(
+                exact_identity_axis(&node.ident.to_string()).expect("identity const"),
+                self.flow(&node.expr),
+            );
         }
         syn::visit::visit_item_const(self, node);
     }
 
     fn visit_item_static(&mut self, node: &syn::ItemStatic) {
-        if let Some(axis) = exact_identity_axis(&node.ident.to_string()) {
-            self.record_values(axis, expression_strings(&node.expr));
+        if binding_exposes_raw_identity(&node.ident.to_string(), Some(&node.ty)) {
+            self.record_expected(
+                exact_identity_axis(&node.ident.to_string()).expect("identity static"),
+                self.flow(&node.expr),
+            );
         }
         syn::visit::visit_item_static(self, node);
     }
@@ -2858,11 +3467,11 @@ impl Visit<'_> for IdentityBranchVisitor<'_> {
         let previous = self.return_axis;
         self.return_axis = identity_return_axis(&node.sig.ident.to_string());
         if let Some(axis) = self.return_axis {
-            self.record_values(axis, block_tail_strings(&node.block));
+            self.record_expected(axis, self.flow_block(&node.block));
         }
         syn::visit::visit_item_fn(self, node);
         self.return_axis = previous;
-        self.pop_parameter_scope();
+        self.bindings.pop();
     }
 
     fn visit_impl_item_fn(&mut self, node: &syn::ImplItemFn) {
@@ -2870,86 +3479,135 @@ impl Visit<'_> for IdentityBranchVisitor<'_> {
         let previous = self.return_axis;
         self.return_axis = identity_return_axis(&node.sig.ident.to_string());
         if let Some(axis) = self.return_axis {
-            self.record_values(axis, block_tail_strings(&node.block));
+            self.record_expected(axis, self.flow_block(&node.block));
         }
         syn::visit::visit_impl_item_fn(self, node);
         self.return_axis = previous;
-        self.pop_parameter_scope();
+        self.bindings.pop();
     }
 }
 
 impl IdentityBranchVisitor<'_> {
-    fn axis(&self, expression: &Expr) -> Option<&'static str> {
-        identity_axis(expression, &self.aliases, &self.non_identity)
+    fn environment(&self) -> IdentityFlowEnvironment<'_> {
+        IdentityFlowEnvironment {
+            bindings: &self.bindings,
+            constants: &self.constants,
+            macro_definitions: &self.macro_definitions,
+            callables: self.callables,
+        }
+    }
+
+    fn flow(&self, expression: &Expr) -> IdentityFlow {
+        expression_flow(expression, &self.environment())
+    }
+
+    fn flow_block(&self, block: &syn::Block) -> IdentityFlow {
+        block_flow(block, &self.environment())
+    }
+
+    fn callable_flow(&self, expression: &Expr) -> IdentityFlow {
+        let Expr::Path(path) = expression else {
+            return self.flow(expression);
+        };
+        let Some(name) = path.path.get_ident().map(ToString::to_string) else {
+            return IdentityFlow::default();
+        };
+        lookup_binding(&name, &self.bindings).unwrap_or_default()
     }
 
     fn push_parameter_scope(&mut self, inputs: &syn::punctuated::Punctuated<FnArg, Token![,]>) {
-        let mut aliases = HashMap::new();
-        let mut non_identity = HashSet::new();
+        let mut bindings = HashMap::new();
         for input in inputs {
             let FnArg::Typed(input) = input else {
                 continue;
             };
-            let syn::Pat::Ident(pattern) = input.pat.as_ref() else {
-                continue;
-            };
-            let name = pattern.ident.to_string();
-            let Some(axis) = exact_identity_axis(&name) else {
-                continue;
-            };
-            if type_is_raw_identity(&input.ty) {
-                aliases.insert(name, axis);
-            } else {
-                non_identity.insert(name);
+            if let Some((name, _)) = local_binding(&input.pat) {
+                let flow = if binding_exposes_raw_identity(&name, Some(&input.ty)) {
+                    IdentityFlow::for_axis(exact_identity_axis(&name).expect("identity parameter"))
+                } else if type_is_raw_identity(&input.ty) {
+                    IdentityFlow {
+                        raw_string: true,
+                        ..IdentityFlow::default()
+                    }
+                } else {
+                    IdentityFlow::default()
+                };
+                bindings.insert(name, flow);
             }
         }
-        self.aliases.push(aliases);
-        self.non_identity.push(non_identity);
-        self.collections.push(HashMap::new());
+        self.bindings.push(bindings);
     }
 
-    fn pop_parameter_scope(&mut self) {
-        self.aliases.pop();
-        self.non_identity.pop();
-        self.collections.pop();
-    }
-
-    fn collection_values(&self, expression: &Expr) -> Vec<String> {
-        let direct = expression_strings(expression);
-        if !direct.is_empty() {
-            return direct;
+    fn record_comparison(&mut self, left: IdentityFlow, right: IdentityFlow) {
+        for axis in &left.axes {
+            for value in &right.strings {
+                self.violations.push(format!(
+                    "{}: raw identity string {value:?} on axis {axis}",
+                    self.path
+                ));
+            }
         }
-        match expression {
-            Expr::Path(path) => path
-                .path
-                .get_ident()
-                .map(ToString::to_string)
-                .and_then(|name| {
-                    self.collections
-                        .iter()
-                        .rev()
-                        .find_map(|scope| scope.get(&name).cloned())
-                })
-                .unwrap_or_default(),
-            Expr::MethodCall(call) => self.collection_values(&call.receiver),
-            Expr::Reference(reference) => self.collection_values(&reference.expr),
-            Expr::Paren(paren) => self.collection_values(&paren.expr),
-            Expr::Group(group) => self.collection_values(&group.expr),
-            _ => Vec::new(),
+        for axis in &right.axes {
+            for value in &left.strings {
+                self.violations.push(format!(
+                    "{}: raw identity string {value:?} on axis {axis}",
+                    self.path
+                ));
+            }
         }
+        let axes = left.axes.union(&right.axes).copied().collect::<Vec<_>>();
+        let unsupported = left
+            .unsupported
+            .union(&right.unsupported)
+            .cloned()
+            .collect::<Vec<_>>();
+        self.record_unsupported(&axes, &unsupported);
     }
 
-    fn record_values(&mut self, axis: &str, values: Vec<String>) {
-        for value in values {
-            self.record(axis, &value);
+    fn record_collection_comparison(&mut self, left: IdentityFlow, right: IdentityFlow) {
+        if left.strings.is_empty()
+            && right.strings.is_empty()
+            && (left.axes.is_empty() || right.axes.is_empty())
+        {
+            return;
         }
+        self.record_comparison(left, right);
     }
 
-    fn record(&mut self, axis: &str, value: &str) {
-        self.violations.push(format!(
-            "{}: raw identity string {value:?} on axis {axis}",
-            self.path
-        ));
+    fn record_expected(&mut self, axis: &'static str, value: IdentityFlow) {
+        for string in &value.strings {
+            self.violations.push(format!(
+                "{}: raw identity string {string:?} on axis {axis}",
+                self.path
+            ));
+        }
+        self.record_unsupported(&[axis], &value.unsupported.into_iter().collect::<Vec<_>>());
+    }
+
+    fn record_direct(&mut self, flow: IdentityFlow) {
+        for axis in &flow.axes {
+            for value in &flow.strings {
+                self.violations.push(format!(
+                    "{}: raw identity string {value:?} on axis {axis}",
+                    self.path
+                ));
+            }
+        }
+        self.record_unsupported(
+            &flow.axes.iter().copied().collect::<Vec<_>>(),
+            &flow.unsupported.iter().cloned().collect::<Vec<_>>(),
+        );
+    }
+
+    fn record_unsupported(&mut self, axes: &[&str], unsupported: &[String]) {
+        for axis in axes {
+            for construct in unsupported {
+                self.violations.push(format!(
+                    "{}: incomplete identity analysis on axis {axis}: {construct}",
+                    self.path
+                ));
+            }
+        }
     }
 }
 
@@ -2992,71 +3650,1128 @@ impl Parse for MatchesExpression {
     }
 }
 
-fn identity_axis(
-    expression: &Expr,
-    aliases: &[HashMap<String, &'static str>],
-    non_identity: &[HashSet<String>],
-) -> Option<&'static str> {
-    match expression {
-        Expr::Field(field) => match &field.member {
-            Member::Named(identifier) => exact_identity_axis(&identifier.to_string()),
-            Member::Unnamed(_) => None,
-        },
-        Expr::Path(path) => path.path.segments.last().and_then(|segment| {
-            let name = segment.ident.to_string();
-            if non_identity.iter().rev().any(|scope| scope.contains(&name)) {
-                return None;
+fn collect_macro_definitions(file: &syn::File) -> HashMap<String, TokenStream> {
+    #[derive(Default)]
+    struct MacroDefinitionCollector {
+        definitions: HashMap<String, TokenStream>,
+    }
+
+    impl Visit<'_> for MacroDefinitionCollector {
+        fn visit_item_macro(&mut self, node: &syn::ItemMacro) {
+            if let Some(name) = &node.ident {
+                self.definitions
+                    .insert(name.to_string(), node.mac.tokens.clone());
             }
-            aliases
-                .iter()
-                .rev()
-                .find_map(|scope| scope.get(&name).copied())
-                .or_else(|| exact_identity_axis(&name))
-        }),
-        Expr::Paren(paren) => identity_axis(&paren.expr, aliases, non_identity),
-        Expr::Group(group) => identity_axis(&group.expr, aliases, non_identity),
-        Expr::Reference(reference) => identity_axis(&reference.expr, aliases, non_identity),
-        Expr::Try(expression) => identity_axis(&expression.expr, aliases, non_identity),
-        Expr::Await(expression) => identity_axis(&expression.base, aliases, non_identity),
-        Expr::Cast(expression) => identity_axis(&expression.expr, aliases, non_identity),
-        Expr::Unary(expression) => identity_axis(&expression.expr, aliases, non_identity),
-        Expr::MethodCall(call) => identity_axis(&call.receiver, aliases, non_identity),
-        Expr::Call(call) if call.args.len() == 1 => {
-            identity_axis(&call.args[0], aliases, non_identity)
+            syn::visit::visit_item_macro(self, node);
         }
-        _ => None,
+    }
+
+    let mut collector = MacroDefinitionCollector::default();
+    collector.visit_file(file);
+    collector.definitions
+}
+
+fn collect_constant_flows(
+    file: &syn::File,
+    macro_definitions: &HashMap<String, TokenStream>,
+    callables: &CallableSemantics,
+) -> HashMap<String, IdentityFlow> {
+    #[derive(Default)]
+    struct ConstantCollector {
+        expressions: Vec<(String, Type, Expr)>,
+    }
+
+    impl Visit<'_> for ConstantCollector {
+        fn visit_item_const(&mut self, node: &syn::ItemConst) {
+            self.expressions.push((
+                node.ident.to_string(),
+                (*node.ty).clone(),
+                (*node.expr).clone(),
+            ));
+            syn::visit::visit_item_const(self, node);
+        }
+
+        fn visit_item_static(&mut self, node: &syn::ItemStatic) {
+            self.expressions.push((
+                node.ident.to_string(),
+                (*node.ty).clone(),
+                (*node.expr).clone(),
+            ));
+            syn::visit::visit_item_static(self, node);
+        }
+    }
+
+    let mut collector = ConstantCollector::default();
+    collector.visit_file(file);
+    let mut constants = HashMap::new();
+    let bindings = vec![HashMap::new()];
+    for _ in 0..=collector.expressions.len() {
+        let previous = constants.clone();
+        for (name, kind, expression) in &collector.expressions {
+            let environment = IdentityFlowEnvironment {
+                bindings: &bindings,
+                constants: &previous,
+                macro_definitions,
+                callables,
+            };
+            let flow =
+                flow_for_binding(name, Some(kind), expression_flow(expression, &environment));
+            constants.insert(name.clone(), flow);
+        }
+        if constants == previous {
+            break;
+        }
+    }
+    constants
+}
+
+fn expression_flow(expression: &Expr, environment: &IdentityFlowEnvironment<'_>) -> IdentityFlow {
+    match expression {
+        Expr::Lit(literal) => match &literal.lit {
+            Lit::Str(value) => IdentityFlow {
+                strings: BTreeSet::from([value.value()]),
+                raw_string: true,
+                ..IdentityFlow::default()
+            },
+            _ => IdentityFlow::default(),
+        },
+        Expr::Path(path) => path_flow(&path.path, environment),
+        Expr::Field(field) => match &field.member {
+            Member::Named(identifier) => {
+                let name = identifier.to_string();
+                let mut base = expression_flow(&field.base, environment);
+                if let Some(flow) = base.named_fields.remove(&name) {
+                    return flow;
+                }
+                if let Some(axis) = exact_identity_axis(&name) {
+                    base.axes = BTreeSet::from([axis]);
+                    base.strings.clear();
+                    base.argument_sources.clear();
+                    base.raw_string = false;
+                    return base;
+                }
+                if base.unsupported.is_empty() {
+                    IdentityFlow::default()
+                } else {
+                    base.strings.clear();
+                    base.named_fields.clear();
+                    base.indexed_fields.clear();
+                    base
+                }
+            }
+            Member::Unnamed(index) => {
+                let base = expression_flow(&field.base, environment);
+                base.indexed_fields
+                    .get(index.index as usize)
+                    .cloned()
+                    .unwrap_or(base)
+            }
+        },
+        Expr::Array(array) => sequence_flow(array.elems.iter(), environment),
+        Expr::Tuple(tuple) => sequence_flow(tuple.elems.iter(), environment),
+        Expr::Reference(reference) => expression_flow(&reference.expr, environment),
+        Expr::Paren(paren) => expression_flow(&paren.expr, environment),
+        Expr::Group(group) => expression_flow(&group.expr, environment),
+        Expr::Try(expression) => expression_flow(&expression.expr, environment),
+        Expr::Await(expression) => expression_flow(&expression.base, environment),
+        Expr::Cast(expression) => expression_flow(&expression.expr, environment),
+        Expr::Unary(expression) => expression_flow(&expression.expr, environment),
+        Expr::Index(expression) => {
+            let base = expression_flow(&expression.expr, environment);
+            literal_index(&expression.index)
+                .and_then(|index| base.indexed_fields.get(index).cloned())
+                .unwrap_or(base)
+        }
+        Expr::Block(expression) => block_flow(&expression.block, environment),
+        Expr::Const(expression) => block_flow(&expression.block, environment),
+        Expr::TryBlock(expression) => block_flow(&expression.block, environment),
+        Expr::Unsafe(expression) => block_flow(&expression.block, environment),
+        Expr::If(expression) => {
+            let mut flow = block_flow(&expression.then_branch, environment);
+            if let Some((_, otherwise)) = &expression.else_branch {
+                flow.merge(expression_flow(otherwise, environment));
+            }
+            flow
+        }
+        Expr::Match(expression) => merge_expressions(
+            expression.arms.iter().map(|arm| arm.body.as_ref()),
+            environment,
+        ),
+        Expr::Let(_) => IdentityFlow::default(),
+        Expr::Call(call) => call_flow(call, environment),
+        Expr::MethodCall(call) => method_call_flow(call, environment),
+        Expr::Macro(expression) => macro_flow(&expression.mac, environment),
+        Expr::Closure(closure) => closure_flow(closure, environment),
+        Expr::Struct(expression) => {
+            let mut flow = IdentityFlow::default();
+            for field in &expression.fields {
+                let field_flow = expression_flow(&field.expr, environment);
+                flow.merge(flow_summary(&field_flow));
+                flow.named_fields
+                    .entry(field.member.to_token_stream().to_string())
+                    .or_default()
+                    .merge(field_flow);
+            }
+            if let Some(rest) = &expression.rest {
+                flow.merge(expression_flow(rest, environment));
+            }
+            flow.strings.clear();
+            flow.raw_string = false;
+            flow
+        }
+        Expr::Repeat(expression) => expression_flow(&expression.expr, environment),
+        Expr::Range(expression) => {
+            let mut flow = IdentityFlow::default();
+            if let Some(start) = &expression.start {
+                flow.merge(expression_flow(start, environment));
+            }
+            if let Some(end) = &expression.end {
+                flow.merge(expression_flow(end, environment));
+            }
+            flow
+        }
+        Expr::Binary(binary) if matches!(binary.op, BinOp::Eq(_) | BinOp::Ne(_)) => {
+            IdentityFlow::default()
+        }
+        Expr::Binary(binary) => opaque_flow(
+            expression_flow(&binary.left, environment)
+                .merged(expression_flow(&binary.right, environment)),
+            "binary expression",
+        ),
+        Expr::Async(expression) => {
+            opaque_flow(block_flow(&expression.block, environment), "async block")
+        }
+        Expr::Break(expression) => expression
+            .expr
+            .as_deref()
+            .map(|value| expression_flow(value, environment))
+            .unwrap_or_default(),
+        Expr::Return(expression) => expression
+            .expr
+            .as_deref()
+            .map(|value| expression_flow(value, environment))
+            .unwrap_or_default(),
+        Expr::Yield(expression) => expression
+            .expr
+            .as_deref()
+            .map(|value| expression_flow(value, environment))
+            .unwrap_or_default(),
+        _ => opaque_flow(
+            token_stream_flow(expression.to_token_stream(), environment),
+            "unregistered expression construct",
+        ),
     }
 }
 
-fn identity_axes_in_expression(
+fn assignment_identity_axes(
     expression: &Expr,
-    aliases: &[HashMap<String, &'static str>],
-    non_identity: &[HashSet<String>],
-) -> Vec<&'static str> {
-    struct AxisUseVisitor<'a> {
-        aliases: &'a [HashMap<String, &'static str>],
-        non_identity: &'a [HashSet<String>],
-        axes: HashSet<&'static str>,
+    environment: &IdentityFlowEnvironment<'_>,
+) -> BTreeSet<&'static str> {
+    match expression {
+        Expr::Path(_) => expression_flow(expression, environment).axes,
+        Expr::Field(field) => match &field.member {
+            Member::Named(identifier) => exact_identity_axis(&identifier.to_string())
+                .into_iter()
+                .collect(),
+            Member::Unnamed(_) => BTreeSet::new(),
+        },
+        Expr::Reference(reference) => assignment_identity_axes(&reference.expr, environment),
+        Expr::Paren(paren) => assignment_identity_axes(&paren.expr, environment),
+        Expr::Group(group) => assignment_identity_axes(&group.expr, environment),
+        _ => BTreeSet::new(),
+    }
+}
+
+fn call_flow(call: &syn::ExprCall, environment: &IdentityFlowEnvironment<'_>) -> IdentityFlow {
+    let name = callable_name(&call.func);
+    if name.as_deref().is_some_and(is_identity_comparison) {
+        return IdentityFlow::default();
+    }
+    if is_source_independent_string_call(&call.func) {
+        return IdentityFlow {
+            raw_string: true,
+            ..IdentityFlow::default()
+        };
+    }
+    let mut flow = callable_binding_flow(&call.func, environment);
+    flow.merge(merge_expressions(call.args.iter(), environment));
+    if is_intrinsic_transparent_callable_path(&call.func) {
+        return flow;
+    }
+    let semantic_rule = callable_qualified_name(&call.func)
+        .as_deref()
+        .and_then(|name| environment.callables.methods.get(name))
+        .or_else(|| {
+            name.as_deref()
+                .and_then(|name| environment.callables.functions.get(name))
+        });
+    if let Some(rule) = semantic_rule {
+        if matches!(
+            rule,
+            CallableReturnFlow::RawString | CallableReturnFlow::Aggregate
+        ) && let Some(summary) =
+            structured_callable_summary(&call.func, name.as_deref(), environment)
+        {
+            let arguments = call
+                .args
+                .iter()
+                .map(|argument| expression_flow(argument, environment))
+                .collect::<Vec<_>>();
+            return instantiate_structured_callable_flow(summary, &arguments);
+        }
+        return apply_callable_return(flow, *rule);
+    }
+    if is_transparent_function_call(call, name.as_deref()) {
+        return flow;
+    }
+    opaque_flow(
+        flow,
+        format!(
+            "call {}",
+            name.unwrap_or_else(|| "<expression>".to_string())
+        ),
+    )
+}
+
+fn method_call_flow(
+    call: &syn::ExprMethodCall,
+    environment: &IdentityFlowEnvironment<'_>,
+) -> IdentityFlow {
+    let method = call.method.to_string();
+    if is_identity_comparison(&method) || is_iterator_predicate(&method) {
+        return IdentityFlow::default();
+    }
+    let mut receiver = expression_flow(&call.receiver, environment);
+    match method_flow_rule(&method) {
+        MethodFlowRule::Receiver => receiver,
+        MethodFlowRule::ReceiverAndArguments => {
+            receiver.merge(merge_expressions(call.args.iter(), environment));
+            receiver
+        }
+        MethodFlowRule::Aggregate => aggregate_flow(receiver),
+        MethodFlowRule::Transform => transform_method_flow(call, receiver, environment),
+        MethodFlowRule::NonIdentity => IdentityFlow::default(),
+        MethodFlowRule::Opaque => {
+            receiver.merge(merge_expressions(call.args.iter(), environment));
+            if let Some(axis) = identity_accessor_axis(&method) {
+                receiver.axes.insert(axis);
+                return apply_callable_return(receiver, CallableReturnFlow::RawString);
+            }
+            if let Some(rule) = environment.callables.methods.get(&method) {
+                if matches!(
+                    rule,
+                    CallableReturnFlow::RawString | CallableReturnFlow::Aggregate
+                ) && let Some(summary) = environment.callables.structured_methods.get(&method)
+                {
+                    let mut arguments = vec![expression_flow(&call.receiver, environment)];
+                    arguments.extend(
+                        call.args
+                            .iter()
+                            .map(|argument| expression_flow(argument, environment)),
+                    );
+                    return instantiate_structured_callable_flow(summary, &arguments);
+                }
+                return apply_callable_return(receiver, *rule);
+            }
+            opaque_flow(receiver, format!("method {method}"))
+        }
+    }
+}
+
+fn transform_method_flow(
+    call: &syn::ExprMethodCall,
+    receiver: IdentityFlow,
+    environment: &IdentityFlowEnvironment<'_>,
+) -> IdentityFlow {
+    let Some(transform) = call.args.first() else {
+        return opaque_flow(
+            receiver,
+            format!("method {} without transform", call.method),
+        );
+    };
+    if call.args.len() != 1 {
+        return opaque_flow(
+            receiver.merged(merge_expressions(call.args.iter(), environment)),
+            format!("method {} with unsupported transform arity", call.method),
+        );
+    }
+    match transform {
+        Expr::Closure(closure) => {
+            closure_return_flow_with_arguments(closure, environment, &[receiver])
+        }
+        Expr::Path(_) => transform_callable_flow(transform, receiver, environment),
+        _ => opaque_flow(
+            receiver.merged(expression_flow(transform, environment)),
+            format!("method {} with unsupported transform", call.method),
+        ),
+    }
+}
+
+fn transform_callable_flow(
+    callable: &Expr,
+    argument: IdentityFlow,
+    environment: &IdentityFlowEnvironment<'_>,
+) -> IdentityFlow {
+    let name = callable_name(callable);
+    if is_intrinsic_transparent_callable_path(callable) {
+        return argument;
+    }
+    let semantic_rule = callable_qualified_name(callable)
+        .as_deref()
+        .and_then(|name| environment.callables.methods.get(name))
+        .or_else(|| {
+            name.as_deref()
+                .and_then(|name| environment.callables.functions.get(name))
+        });
+    if let Some(rule) = semantic_rule {
+        if matches!(
+            rule,
+            CallableReturnFlow::RawString | CallableReturnFlow::Aggregate
+        ) && let Some(summary) =
+            structured_callable_summary(callable, name.as_deref(), environment)
+        {
+            return instantiate_structured_callable_flow(summary, &[argument]);
+        }
+        return apply_callable_return(argument, *rule);
+    }
+    if is_transparent_callable_path(callable, name.as_deref()) {
+        return argument;
+    }
+    opaque_flow(
+        argument,
+        format!(
+            "transform callable {}",
+            name.unwrap_or_else(|| "<expression>".to_string())
+        ),
+    )
+}
+
+fn structured_callable_summary<'a>(
+    expression: &Expr,
+    name: Option<&str>,
+    environment: &'a IdentityFlowEnvironment<'_>,
+) -> Option<&'a IdentityFlow> {
+    callable_qualified_name(expression)
+        .as_deref()
+        .and_then(|name| environment.callables.structured_methods.get(name))
+        .or_else(|| name.and_then(|name| environment.callables.structured_functions.get(name)))
+}
+
+fn instantiate_structured_callable_flow(
+    summary: &IdentityFlow,
+    arguments: &[IdentityFlow],
+) -> IdentityFlow {
+    let mut flow = summary.clone();
+    let mut direct_unsupported = summary.unsupported.clone();
+    for nested in summary
+        .named_fields
+        .values()
+        .chain(summary.indexed_fields.iter())
+    {
+        direct_unsupported.retain(|construct| !nested.unsupported.contains(construct));
+    }
+    flow.unsupported = direct_unsupported;
+    flow.argument_sources.clear();
+    for source in &summary.argument_sources {
+        if let Some(argument) = arguments.get(*source) {
+            flow.merge(argument.clone());
+        } else {
+            flow.mark_unsupported(format!(
+                "structured callable source {source} has no matching argument"
+            ));
+        }
+    }
+    flow.named_fields.clear();
+    flow.indexed_fields.clear();
+    for (name, field) in &summary.named_fields {
+        let field = instantiate_structured_callable_flow(field, arguments);
+        if !field.axes.is_empty() || !field.argument_sources.is_empty() {
+            flow.unsupported.extend(field.unsupported.iter().cloned());
+        }
+        flow.named_fields.insert(name.clone(), field);
+    }
+    for field in &summary.indexed_fields {
+        let field = instantiate_structured_callable_flow(field, arguments);
+        if !field.axes.is_empty() || !field.argument_sources.is_empty() {
+            flow.unsupported.extend(field.unsupported.iter().cloned());
+        }
+        flow.indexed_fields.push(field);
+    }
+    if flow.axes.is_empty() && flow.argument_sources.is_empty() {
+        flow.unsupported.clear();
+    }
+    flow
+}
+
+fn apply_callable_return(mut flow: IdentityFlow, rule: CallableReturnFlow) -> IdentityFlow {
+    match rule {
+        CallableReturnFlow::RawString => {
+            flow.strings.clear();
+            flow.raw_string = true;
+            flow
+        }
+        CallableReturnFlow::Aggregate => {
+            flow.strings.clear();
+            aggregate_flow(flow)
+        }
+        CallableReturnFlow::NonIdentity => IdentityFlow::default(),
+        CallableReturnFlow::Unknown => opaque_flow(flow, "callable with unresolved return flow"),
+    }
+}
+
+fn callable_qualified_name(expression: &Expr) -> Option<String> {
+    let Expr::Path(path) = expression else {
+        return None;
+    };
+    let mut segments = path.path.segments.iter().rev();
+    let callable = segments.next()?.ident.to_string();
+    let owner = segments.next()?.ident.to_string();
+    Some(format!("{owner}::{callable}").to_ascii_lowercase())
+}
+
+fn opaque_flow(mut flow: IdentityFlow, construct: impl Into<String>) -> IdentityFlow {
+    if flow.axes.is_empty() && flow.argument_sources.is_empty() {
+        return IdentityFlow::default();
+    }
+    flow.strings.clear();
+    flow.named_fields.clear();
+    flow.indexed_fields.clear();
+    flow.mark_unsupported(construct);
+    flow
+}
+
+fn closure_flow(
+    closure: &syn::ExprClosure,
+    environment: &IdentityFlowEnvironment<'_>,
+) -> IdentityFlow {
+    closure_flow_with_arguments(closure, environment, &[])
+}
+
+fn closure_flow_with_arguments(
+    closure: &syn::ExprClosure,
+    environment: &IdentityFlowEnvironment<'_>,
+    arguments: &[IdentityFlow],
+) -> IdentityFlow {
+    closure_flow_with_arguments_mode(closure, environment, arguments, true)
+}
+
+fn closure_return_flow_with_arguments(
+    closure: &syn::ExprClosure,
+    environment: &IdentityFlowEnvironment<'_>,
+    arguments: &[IdentityFlow],
+) -> IdentityFlow {
+    closure_flow_with_arguments_mode(closure, environment, arguments, false)
+}
+
+fn closure_flow_with_arguments_mode(
+    closure: &syn::ExprClosure,
+    environment: &IdentityFlowEnvironment<'_>,
+    arguments: &[IdentityFlow],
+    include_comparison_context: bool,
+) -> IdentityFlow {
+    let mut bindings = environment.bindings.to_vec();
+    let mut parameters = HashMap::new();
+    for (index, pattern) in closure.inputs.iter().enumerate() {
+        if let Some(argument) = arguments.get(index) {
+            parameters.extend(flows_for_pattern(pattern, argument.clone()));
+            continue;
+        }
+        if let Some((name, kind)) = local_binding(pattern) {
+            parameters.insert(
+                name.clone(),
+                if binding_exposes_raw_identity(&name, kind) {
+                    IdentityFlow::for_axis(exact_identity_axis(&name).expect("identity closure"))
+                } else if kind.is_some_and(type_is_raw_identity) {
+                    IdentityFlow {
+                        raw_string: true,
+                        ..IdentityFlow::default()
+                    }
+                } else {
+                    IdentityFlow::default()
+                },
+            );
+        }
+    }
+    bindings.push(parameters);
+    let nested = IdentityFlowEnvironment {
+        bindings: &bindings,
+        constants: environment.constants,
+        macro_definitions: environment.macro_definitions,
+        callables: environment.callables,
+    };
+    let mut flow = expression_flow(&closure.body, &nested);
+    let callable_sensitive =
+        include_comparison_context && contains_identity_comparison(&closure.body);
+    if callable_sensitive {
+        flow.merge(lexical_expression_flow(&closure.body, &nested));
+    }
+    flow.callable_sensitive = callable_sensitive;
+    flow
+}
+
+fn lexical_expression_flow(
+    expression: &Expr,
+    environment: &IdentityFlowEnvironment<'_>,
+) -> IdentityFlow {
+    struct Collector<'a, 'b> {
+        environment: &'a IdentityFlowEnvironment<'b>,
+        flow: IdentityFlow,
     }
 
-    impl Visit<'_> for AxisUseVisitor<'_> {
+    impl Visit<'_> for Collector<'_, '_> {
         fn visit_expr(&mut self, node: &Expr) {
-            if let Some(axis) = identity_axis(node, self.aliases, self.non_identity) {
-                self.axes.insert(axis);
-            }
+            self.flow.merge(expression_flow(node, self.environment));
             syn::visit::visit_expr(self, node);
         }
     }
 
-    let mut visitor = AxisUseVisitor {
-        aliases,
-        non_identity,
-        axes: HashSet::new(),
+    let mut collector = Collector {
+        environment,
+        flow: IdentityFlow::default(),
     };
+    collector.visit_expr(expression);
+    collector.flow
+}
+
+fn block_flow(block: &syn::Block, environment: &IdentityFlowEnvironment<'_>) -> IdentityFlow {
+    let mut bindings = environment.bindings.to_vec();
+    bindings.push(HashMap::new());
+    let mut result = IdentityFlow::default();
+    for statement in &block.stmts {
+        let nested = IdentityFlowEnvironment {
+            bindings: &bindings,
+            constants: environment.constants,
+            macro_definitions: environment.macro_definitions,
+            callables: environment.callables,
+        };
+        match statement {
+            syn::Stmt::Local(local) => {
+                if let Some(initializer) = &local.init {
+                    let flow = expression_flow(&initializer.expr, &nested);
+                    bindings
+                        .last_mut()
+                        .expect("block scope")
+                        .extend(flows_for_pattern(&local.pat, flow));
+                }
+            }
+            syn::Stmt::Item(syn::Item::Const(item)) => {
+                let flow = flow_for_binding(
+                    &item.ident.to_string(),
+                    Some(&item.ty),
+                    expression_flow(&item.expr, &nested),
+                );
+                bindings
+                    .last_mut()
+                    .expect("block scope")
+                    .insert(item.ident.to_string(), flow);
+            }
+            syn::Stmt::Expr(expression, None) => {
+                result = expression_flow(expression, &nested);
+            }
+            syn::Stmt::Expr(_, Some(_)) | syn::Stmt::Item(_) | syn::Stmt::Macro(_) => {}
+        }
+    }
+    result
+}
+
+fn merge_expressions<'a>(
+    expressions: impl IntoIterator<Item = &'a Expr>,
+    environment: &IdentityFlowEnvironment<'_>,
+) -> IdentityFlow {
+    let mut flow = IdentityFlow::default();
+    for expression in expressions {
+        flow.merge(expression_flow(expression, environment));
+    }
+    flow
+}
+
+fn sequence_flow<'a>(
+    expressions: impl IntoIterator<Item = &'a Expr>,
+    environment: &IdentityFlowEnvironment<'_>,
+) -> IdentityFlow {
+    let mut aggregate = IdentityFlow::default();
+    for expression in expressions {
+        let flow = expression_flow(expression, environment);
+        aggregate.merge(flow_summary(&flow));
+        aggregate.indexed_fields.push(flow);
+    }
+    aggregate_flow(aggregate)
+}
+
+fn literal_index(expression: &Expr) -> Option<usize> {
+    let Expr::Lit(literal) = expression else {
+        return None;
+    };
+    let Lit::Int(value) = &literal.lit else {
+        return None;
+    };
+    value.base10_parse().ok()
+}
+
+fn aggregate_flow(mut flow: IdentityFlow) -> IdentityFlow {
+    flow.raw_string = false;
+    flow
+}
+
+fn flow_summary(flow: &IdentityFlow) -> IdentityFlow {
+    let mut summary = flow.clone();
+    summary.named_fields.clear();
+    summary.indexed_fields.clear();
+    summary
+}
+
+fn path_flow(path: &syn::Path, environment: &IdentityFlowEnvironment<'_>) -> IdentityFlow {
+    let Some(segment) = path.segments.last() else {
+        return IdentityFlow::default();
+    };
+    let name = segment.ident.to_string();
+    if path.segments.len() == 1
+        && let Some(flow) = lookup_binding(&name, environment.bindings)
+    {
+        return flow;
+    }
+    if let Some(flow) = environment.constants.get(&name) {
+        return flow.clone();
+    }
+    if path.segments.len() == 1 {
+        exact_identity_axis(&name)
+            .map(IdentityFlow::for_axis)
+            .unwrap_or_default()
+    } else {
+        IdentityFlow::default()
+    }
+}
+
+fn callable_binding_flow(
+    expression: &Expr,
+    environment: &IdentityFlowEnvironment<'_>,
+) -> IdentityFlow {
+    let Expr::Path(path) = expression else {
+        return expression_flow(expression, environment);
+    };
+    let Some(name) = path.path.get_ident().map(ToString::to_string) else {
+        return IdentityFlow::default();
+    };
+    lookup_binding(&name, environment.bindings).unwrap_or_default()
+}
+
+fn lookup_binding(name: &str, bindings: &[HashMap<String, IdentityFlow>]) -> Option<IdentityFlow> {
+    bindings
+        .iter()
+        .rev()
+        .find_map(|scope| scope.get(name).cloned())
+}
+
+fn flow_for_binding(
+    name: &str,
+    declared_type: Option<&Type>,
+    mut initializer: IdentityFlow,
+) -> IdentityFlow {
+    if let Some(axis) = exact_identity_axis(name) {
+        match declared_type {
+            Some(kind) if type_is_raw_identity(kind) => {
+                initializer.axes.insert(axis);
+            }
+            Some(_) => {
+                initializer.axes.clear();
+            }
+            None if initializer.raw_string => {
+                initializer.axes.insert(axis);
+            }
+            None => {}
+        }
+    }
+    initializer
+}
+
+fn binding_exposes_raw_identity(name: &str, declared_type: Option<&Type>) -> bool {
+    exact_identity_axis(name).is_some() && declared_type.is_none_or(type_is_raw_identity)
+}
+
+fn callable_name(expression: &Expr) -> Option<String> {
+    let Expr::Path(path) = expression else {
+        return None;
+    };
+    path.path
+        .segments
+        .last()
+        .map(|segment| segment.ident.to_string().to_ascii_lowercase())
+}
+
+fn is_identity_comparison(name: &str) -> bool {
+    matches!(
+        name.to_ascii_lowercase().as_str(),
+        "cmp"
+            | "contains"
+            | "ends_with"
+            | "eq"
+            | "eq_ignore_ascii_case"
+            | "ne"
+            | "partial_cmp"
+            | "starts_with"
+    )
+}
+
+fn is_iterator_predicate(name: &str) -> bool {
+    matches!(
+        name.to_ascii_lowercase().as_str(),
+        "all" | "any" | "find" | "find_map" | "position" | "rposition"
+    )
+}
+
+enum MethodFlowRule {
+    Receiver,
+    ReceiverAndArguments,
+    Aggregate,
+    Transform,
+    NonIdentity,
+    Opaque,
+}
+
+fn method_flow_rule(name: &str) -> MethodFlowRule {
+    let name = name.to_ascii_lowercase();
+    if [
+        "as_deref",
+        "as_ref",
+        "as_str",
+        "borrow",
+        "clone",
+        "deref",
+        "expect",
+        "filter",
+        "get",
+        "into",
+        "last",
+        "map_err",
+        "max_by",
+        "ok",
+        "ok_or",
+        "ok_or_else",
+        "strip_prefix",
+        "to_ascii_lowercase",
+        "to_lowercase",
+        "to_owned",
+        "to_path_buf",
+        "to_string",
+        "to_uppercase",
+        "to_vec",
+        "transpose",
+        "trim",
+        "unwrap",
+    ]
+    .contains(&name.as_str())
+    {
+        return MethodFlowRule::Receiver;
+    }
+    if [
+        "and_then",
+        "join",
+        "or_else",
+        "replace",
+        "unwrap_or",
+        "unwrap_or_else",
+    ]
+    .contains(&name.as_str())
+    {
+        return MethodFlowRule::ReceiverAndArguments;
+    }
+    if name == "map" {
+        return MethodFlowRule::Transform;
+    }
+    if [
+        "bytes",
+        "chars",
+        "cloned",
+        "collect",
+        "copied",
+        "into_iter",
+        "iter",
+        "iter_mut",
+    ]
+    .contains(&name.as_str())
+    {
+        return MethodFlowRule::Aggregate;
+    }
+    if [
+        "count",
+        "is_empty",
+        "is_err",
+        "is_none",
+        "is_none_or",
+        "is_ok",
+        "is_some",
+        "is_some_and",
+        "len",
+    ]
+    .contains(&name.as_str())
+    {
+        return MethodFlowRule::NonIdentity;
+    }
+    MethodFlowRule::Opaque
+}
+
+fn identity_accessor_axis(name: &str) -> Option<&'static str> {
+    name.to_ascii_lowercase()
+        .strip_suffix("_id")
+        .and_then(exact_identity_axis)
+}
+
+fn is_transparent_function_call(call: &syn::ExprCall, name: Option<&str>) -> bool {
+    is_transparent_callable_path(&call.func, name)
+}
+
+fn is_intrinsic_transparent_callable_path(expression: &Expr) -> bool {
+    let Expr::Path(path) = expression else {
+        return false;
+    };
+    let segments = path
+        .path
+        .segments
+        .iter()
+        .map(|segment| segment.ident.to_string())
+        .collect::<Vec<_>>();
+    matches!(segments.as_slice(), [constructor] if constructor == "Ok" || constructor == "Some")
+        || segments.as_slice() == ["std", "convert", "identity"]
+        || segments.as_slice() == ["core", "convert", "identity"]
+}
+
+fn is_source_independent_string_call(expression: &Expr) -> bool {
+    let Expr::Path(path) = expression else {
+        return false;
+    };
+    let mut segments = path.path.segments.iter().rev();
+    let callable = segments.next().map(|segment| segment.ident.to_string());
+    let owner = segments.next().map(|segment| segment.ident.to_string());
+    callable.as_deref() == Some("read_to_string") && owner.as_deref() == Some("fs")
+}
+
+fn is_transparent_callable_path(expression: &Expr, name: Option<&str>) -> bool {
+    let Some(name) = name else {
+        return false;
+    };
+    let Expr::Path(path) = expression else {
+        return false;
+    };
+    let segments = path
+        .path
+        .segments
+        .iter()
+        .map(|segment| segment.ident.to_string().to_ascii_lowercase())
+        .collect::<Vec<_>>();
+    let owner = segments
+        .len()
+        .checked_sub(2)
+        .and_then(|index| segments.get(index))
+        .map(String::as_str);
+
+    matches!(
+        (owner, name),
+        (Some("asref"), "as_ref")
+            | (Some("borrow"), "borrow")
+            | (Some("clone"), "clone")
+            | (Some("deref"), "deref")
+            | (Some("from"), "from")
+            | (Some("into"), "into")
+            | (Some("str"), "to_owned")
+            | (Some("str"), "to_string")
+            | (Some("toowned"), "to_owned")
+            | (Some("tostring"), "to_string")
+    ) || name == "from" && owner.is_some_and(|owner| ["cow", "string"].contains(&owner))
+        || name == "new" && owner.is_some_and(|owner| ["arc", "box", "rc"].contains(&owner))
+}
+
+fn contains_identity_comparison(expression: &Expr) -> bool {
+    #[derive(Default)]
+    struct ComparisonVisitor {
+        found: bool,
+    }
+
+    impl Visit<'_> for ComparisonVisitor {
+        fn visit_expr_binary(&mut self, node: &ExprBinary) {
+            self.found |= matches!(node.op, BinOp::Eq(_) | BinOp::Ne(_));
+            syn::visit::visit_expr_binary(self, node);
+        }
+
+        fn visit_expr_call(&mut self, node: &syn::ExprCall) {
+            self.found |= callable_name(&node.func)
+                .as_deref()
+                .is_some_and(is_identity_comparison);
+            syn::visit::visit_expr_call(self, node);
+        }
+
+        fn visit_expr_method_call(&mut self, node: &syn::ExprMethodCall) {
+            self.found |= is_identity_comparison(&node.method.to_string());
+            syn::visit::visit_expr_method_call(self, node);
+        }
+
+        fn visit_expr_match(&mut self, node: &ExprMatch) {
+            self.found = true;
+            syn::visit::visit_expr_match(self, node);
+        }
+
+        fn visit_expr_macro(&mut self, node: &syn::ExprMacro) {
+            self.found |= node.mac.path.is_ident("matches");
+            syn::visit::visit_expr_macro(self, node);
+        }
+    }
+
+    let mut visitor = ComparisonVisitor::default();
     visitor.visit_expr(expression);
-    let mut axes = visitor.axes.into_iter().collect::<Vec<_>>();
-    axes.sort();
-    axes
+    visitor.found
+}
+
+fn macro_flow(mac: &syn::Macro, environment: &IdentityFlowEnvironment<'_>) -> IdentityFlow {
+    let name = mac
+        .path
+        .segments
+        .last()
+        .map(|segment| segment.ident.to_string())
+        .unwrap_or_else(|| "<macro>".to_string());
+    if name == "matches" {
+        return IdentityFlow::default();
+    }
+    if matches!(name.as_str(), "format" | "format_args") {
+        return format_macro_flow(mac.tokens.clone(), environment);
+    }
+    if name == "concat" {
+        let mut flow = token_stream_flow(mac.tokens.clone(), environment);
+        flow.raw_string = true;
+        return flow;
+    }
+    if name == "vec" {
+        return aggregate_flow(token_stream_flow(mac.tokens.clone(), environment));
+    }
+
+    let mut flow = token_stream_flow(mac.tokens.clone(), environment);
+    if let Some(definition) = environment.macro_definitions.get(&name) {
+        let definition_flow = token_stream_flow(definition.clone(), environment);
+        flow.callable_sensitive |= token_stream_contains_comparison(definition.clone());
+        flow.merge(definition_flow);
+    }
+    if flow.callable_sensitive {
+        flow.mark_unsupported(format!("macro {name}!"));
+        return flow;
+    }
+    opaque_flow(flow, format!("macro {name}!"))
+}
+
+fn format_macro_flow(
+    tokens: TokenStream,
+    environment: &IdentityFlowEnvironment<'_>,
+) -> IdentityFlow {
+    let trees = tokens.into_iter().collect::<Vec<_>>();
+    let mut flow = IdentityFlow::default();
+    let mut start = 0;
+    if let Some(TokenTree::Literal(literal)) = trees.first()
+        && let Ok(template) = syn::parse_str::<LitStr>(&literal.to_string())
+    {
+        for placeholder in format_placeholders(&template.value()) {
+            if let Some(binding) = lookup_binding(&placeholder, environment.bindings) {
+                flow.merge(binding);
+            } else if let Some(constant) = environment.constants.get(&placeholder) {
+                flow.merge(constant.clone());
+            } else if let Some(axis) = exact_identity_axis(&placeholder) {
+                flow.axes.insert(axis);
+            }
+        }
+        start = 1;
+    }
+    flow.merge(token_stream_flow(
+        trees.into_iter().skip(start).collect(),
+        environment,
+    ));
+    flow.raw_string = true;
+    flow
+}
+
+fn format_placeholders(template: &str) -> Vec<String> {
+    let bytes = template.as_bytes();
+    let mut names = Vec::new();
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index] != b'{' || bytes.get(index + 1) == Some(&b'{') {
+            index += 1;
+            continue;
+        }
+        let Some(end) = bytes[index + 1..].iter().position(|byte| *byte == b'}') else {
+            break;
+        };
+        let value = &template[index + 1..index + 1 + end];
+        let name = value.split(':').next().unwrap_or_default().trim();
+        if !name.is_empty()
+            && name
+                .chars()
+                .all(|character| character == '_' || character.is_ascii_alphanumeric())
+        {
+            names.push(name.to_string());
+        }
+        index += end + 2;
+    }
+    names
+}
+
+fn token_stream_flow(
+    tokens: TokenStream,
+    environment: &IdentityFlowEnvironment<'_>,
+) -> IdentityFlow {
+    let mut flow = IdentityFlow::default();
+    let mut after_dollar = false;
+    for token in tokens {
+        match token {
+            TokenTree::Ident(identifier) => {
+                if !after_dollar {
+                    let name = identifier.to_string();
+                    if let Some(binding) = lookup_binding(&name, environment.bindings) {
+                        flow.merge(binding);
+                    } else if let Some(constant) = environment.constants.get(&name) {
+                        flow.merge(constant.clone());
+                    } else if let Some(axis) = exact_identity_axis(&name) {
+                        flow.axes.insert(axis);
+                    }
+                }
+                after_dollar = false;
+            }
+            TokenTree::Literal(literal) => {
+                if let Ok(value) = syn::parse_str::<LitStr>(&literal.to_string()) {
+                    flow.strings.insert(value.value());
+                    flow.raw_string = true;
+                }
+                after_dollar = false;
+            }
+            TokenTree::Group(group) => {
+                flow.merge(token_stream_flow(group.stream(), environment));
+                after_dollar = false;
+            }
+            TokenTree::Punct(punctuation) => {
+                after_dollar = punctuation.as_char() == '$';
+            }
+        }
+    }
+    flow
+}
+
+fn token_stream_contains_comparison(tokens: TokenStream) -> bool {
+    let trees = tokens.into_iter().collect::<Vec<_>>();
+    for (index, token) in trees.iter().enumerate() {
+        match token {
+            TokenTree::Ident(identifier) if is_identity_comparison(&identifier.to_string()) => {
+                return true;
+            }
+            TokenTree::Group(group) if token_stream_contains_comparison(group.stream()) => {
+                return true;
+            }
+            TokenTree::Punct(punctuation)
+                if matches!(punctuation.as_char(), '=' | '!')
+                    && trees.get(index + 1).is_some_and(
+                        |next| matches!(next, TokenTree::Punct(next) if next.as_char() == '='),
+                    ) =>
+            {
+                return true;
+            }
+            _ => {}
+        }
+    }
+    false
 }
 
 fn local_binding(pattern: &syn::Pat) -> Option<(String, Option<&Type>)> {
@@ -3069,6 +4784,112 @@ fn local_binding(pattern: &syn::Pat) -> Option<(String, Option<&Type>)> {
             Some((identifier.ident.to_string(), Some(&pattern.ty)))
         }
         _ => None,
+    }
+}
+
+fn flows_for_pattern(
+    pattern: &syn::Pat,
+    initializer: IdentityFlow,
+) -> HashMap<String, IdentityFlow> {
+    let mut bindings = HashMap::new();
+    collect_pattern_flows(pattern, None, initializer, &mut bindings);
+    bindings
+}
+
+fn collect_pattern_flows(
+    pattern: &syn::Pat,
+    declared_type: Option<&Type>,
+    initializer: IdentityFlow,
+    bindings: &mut HashMap<String, IdentityFlow>,
+) {
+    match pattern {
+        syn::Pat::Ident(identifier) => {
+            let name = identifier.ident.to_string();
+            bindings.insert(
+                name.clone(),
+                flow_for_binding(&name, declared_type, initializer),
+            );
+        }
+        syn::Pat::Type(pattern) => {
+            collect_pattern_flows(&pattern.pat, Some(&pattern.ty), initializer, bindings);
+        }
+        syn::Pat::Reference(pattern) => {
+            collect_pattern_flows(&pattern.pat, declared_type, initializer, bindings);
+        }
+        syn::Pat::Paren(pattern) => {
+            collect_pattern_flows(&pattern.pat, declared_type, initializer, bindings);
+        }
+        syn::Pat::Struct(pattern) => {
+            for field in &pattern.fields {
+                let flow = match &field.member {
+                    Member::Named(identifier) => initializer
+                        .named_fields
+                        .get(&identifier.to_string())
+                        .cloned()
+                        .or_else(|| {
+                            exact_identity_axis(&identifier.to_string()).map(identity_field_flow)
+                        })
+                        .unwrap_or_else(|| projection_fallback(&initializer)),
+                    Member::Unnamed(index) => initializer
+                        .indexed_fields
+                        .get(index.index as usize)
+                        .cloned()
+                        .unwrap_or_else(|| projection_fallback(&initializer)),
+                };
+                collect_pattern_flows(&field.pat, None, flow, bindings);
+            }
+        }
+        syn::Pat::Tuple(pattern) => {
+            for (index, element) in pattern.elems.iter().enumerate() {
+                let flow = initializer
+                    .indexed_fields
+                    .get(index)
+                    .cloned()
+                    .unwrap_or_else(|| projection_fallback(&initializer));
+                collect_pattern_flows(element, None, flow, bindings);
+            }
+        }
+        syn::Pat::TupleStruct(pattern) => {
+            for (index, element) in pattern.elems.iter().enumerate() {
+                let flow = initializer
+                    .indexed_fields
+                    .get(index)
+                    .cloned()
+                    .unwrap_or_else(|| projection_fallback(&initializer));
+                collect_pattern_flows(element, None, flow, bindings);
+            }
+        }
+        syn::Pat::Slice(pattern) => {
+            for (index, element) in pattern.elems.iter().enumerate() {
+                let flow = initializer
+                    .indexed_fields
+                    .get(index)
+                    .cloned()
+                    .unwrap_or_else(|| projection_fallback(&initializer));
+                collect_pattern_flows(element, None, flow, bindings);
+            }
+        }
+        syn::Pat::Or(pattern) => {
+            for case in &pattern.cases {
+                collect_pattern_flows(case, declared_type, initializer.clone(), bindings);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn projection_fallback(initializer: &IdentityFlow) -> IdentityFlow {
+    let mut flow = flow_summary(initializer);
+    if !flow.axes.is_empty() || !flow.argument_sources.is_empty() {
+        flow.mark_unsupported("projection without resolved member flow");
+    }
+    flow
+}
+
+fn identity_field_flow(axis: &'static str) -> IdentityFlow {
+    IdentityFlow {
+        axes: BTreeSet::from([axis]),
+        ..IdentityFlow::default()
     }
 }
 
@@ -3099,74 +4920,6 @@ fn type_is_raw_identity(kind: &Type) -> bool {
         }
         _ => false,
     }
-}
-
-fn expression_strings(expression: &Expr) -> Vec<String> {
-    match expression {
-        Expr::Lit(literal) => match &literal.lit {
-            Lit::Str(value) => vec![value.value()],
-            _ => Vec::new(),
-        },
-        Expr::Array(array) => array.elems.iter().flat_map(expression_strings).collect(),
-        Expr::Tuple(tuple) => tuple.elems.iter().flat_map(expression_strings).collect(),
-        Expr::Paren(paren) => expression_strings(&paren.expr),
-        Expr::Group(group) => expression_strings(&group.expr),
-        Expr::Reference(reference) => expression_strings(&reference.expr),
-        Expr::Call(call) => call.args.iter().flat_map(expression_strings).collect(),
-        Expr::MethodCall(call)
-            if matches!(
-                call.method.to_string().as_str(),
-                "into" | "to_owned" | "to_string"
-            ) =>
-        {
-            expression_strings(&call.receiver)
-        }
-        Expr::Closure(closure) => literal_strings_in_expression(&closure.body),
-        Expr::Block(block) => block_tail_strings(&block.block),
-        Expr::If(expression) => {
-            let mut values = block_tail_strings(&expression.then_branch);
-            if let Some((_, otherwise)) = &expression.else_branch {
-                values.extend(expression_strings(otherwise));
-            }
-            values
-        }
-        Expr::Match(expression) => expression
-            .arms
-            .iter()
-            .flat_map(|arm| expression_strings(&arm.body))
-            .collect(),
-        _ => Vec::new(),
-    }
-}
-
-fn literal_strings_in_expression(expression: &Expr) -> Vec<String> {
-    #[derive(Default)]
-    struct LiteralStringVisitor {
-        values: Vec<String>,
-    }
-
-    impl Visit<'_> for LiteralStringVisitor {
-        fn visit_lit_str(&mut self, node: &LitStr) {
-            self.values.push(node.value());
-        }
-    }
-
-    let mut visitor = LiteralStringVisitor::default();
-    visitor.visit_expr(expression);
-    visitor.values.sort();
-    visitor.values.dedup();
-    visitor.values
-}
-
-fn block_tail_strings(block: &syn::Block) -> Vec<String> {
-    block
-        .stmts
-        .last()
-        .and_then(|statement| match statement {
-            syn::Stmt::Expr(expression, None) => Some(expression_strings(expression)),
-            _ => None,
-        })
-        .unwrap_or_default()
 }
 
 fn identity_return_axis(name: &str) -> Option<&'static str> {
@@ -3493,6 +5246,402 @@ source_pr = 108
             assert!(
                 violations.iter().any(|violation| violation.contains(value)),
                 "missing {value}: {violations:#?}"
+            );
+        }
+    }
+
+    #[test]
+    fn identity_branches_share_one_fail_closed_flow_kernel() {
+        let source = r#"
+            const EXAMPLIA_CONST: &str = "game.const";
+            static EXAMPLIA_STATIC: &str = "game.static";
+
+            fn pass<T, U>(_: T, value: U) -> U { value }
+            fn first<T, U>(value: T, _: U) -> T { value }
+            struct Holder<'a> { value: &'a str }
+
+            fn inspect(game: &str, candidate: &str) {
+                macro_rules! hidden_branch {
+                    () => { game == "game.macro" };
+                }
+
+                let pair = (game, "game.tuple");
+                let values = ["game.index"];
+                let needle = "game.let";
+                let holder = Holder { value: game };
+                let wrapped = mystery_wrap(game);
+                let _ = str::eq(game, "game.free");
+                let _ = <str as PartialEq>::eq(game, "game.ufcs");
+                let _ = PartialEq::eq(&game, &EXAMPLIA_CONST);
+                let _ = pass(true, game) == "game.multi_argument";
+                let _ = first(game.bytes(), true).eq("game.bytes_multi".bytes());
+                let _ = { game } == "game.block";
+                let _ = pair.0 == "game.tuple_projection";
+                let _ = holder.value == "game.field_projection";
+                let _ = game == values[0];
+                let _ = game == EXAMPLIA_STATIC;
+                let _ = game == needle;
+                let _ = hidden_branch!();
+                let _ = match format!("{game}").as_str() {
+                    "game.match" => true,
+                    _ => false,
+                };
+                let _ = matches!(game, "game.matches");
+                if let "game.if_let" = game {}
+                let _ = mystery_wrap(game) == candidate;
+                let _ = wrapped.value == candidate;
+            }
+        "#;
+        let violations = inspect_identity_axis_branches("fixture.rs", source).unwrap();
+        for value in [
+            "game.free",
+            "game.ufcs",
+            "game.const",
+            "game.multi_argument",
+            "game.bytes_multi",
+            "game.block",
+            "game.tuple_projection",
+            "game.field_projection",
+            "game.index",
+            "game.static",
+            "game.let",
+            "game.macro",
+            "game.match",
+            "game.matches",
+            "game.if_let",
+        ] {
+            assert!(
+                violations.iter().any(|violation| violation.contains(value)),
+                "missing {value}: {violations:#?}"
+            );
+        }
+        assert!(violations.iter().any(|violation| {
+            violation.contains("incomplete identity analysis on axis game")
+                && violation.contains("call mystery_wrap")
+        }));
+    }
+
+    #[test]
+    fn identity_branches_allow_proven_nonidentity_through_same_syntax() {
+        let source = r#"
+            const LABEL: &str = "neutral.const";
+
+            fn mystery_wrap<T>(value: T) -> T { value }
+            struct Holder<'a> { value: &'a str }
+
+            fn inspect(mode: &str) -> bool {
+                let values = ["neutral.index"];
+                let pair = (mode, "neutral.tuple");
+                let holder = Holder { value: mode };
+                let _ = mystery_wrap(mode) == "neutral.call";
+                let _ = pair.0 == values[0];
+                let _ = holder.value == "neutral.field";
+                let _ = match format!("{mode}").as_str() {
+                    LABEL => true,
+                    _ => false,
+                };
+                if let "neutral.if_let" = mode {}
+                matches!(mode, "neutral.matches")
+            }
+        "#;
+        assert!(
+            inspect_identity_axis_branches("fixture.rs", source)
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn inferred_identity_bindings_require_raw_string_flow() {
+        let source = r#"
+            struct TaskValue { game: String }
+
+            fn build_task(game: &str) -> TaskValue {
+                TaskValue { game: game.to_owned() }
+            }
+
+            fn inspect(game: &str) {
+                let task = build_task(game);
+                let _ = task.game == "game.aggregate_field";
+                let task = "task.raw_string";
+                let _ = task;
+            }
+        "#;
+        let violations = inspect_identity_axis_branches("fixture.rs", source).unwrap();
+        assert!(
+            violations
+                .iter()
+                .any(|violation| violation.contains("game.aggregate_field"))
+        );
+        assert!(
+            violations
+                .iter()
+                .any(|violation| violation.contains("task.raw_string"))
+        );
+        assert!(violations.iter().all(|violation| {
+            !(violation.contains("axis task") && violation.contains("build_task"))
+        }));
+    }
+
+    #[test]
+    fn transparent_rules_propagate_identity_but_unknown_wrappers_fail_closed() {
+        let source = r#"
+            fn to_string(_value: &str) -> String {
+                "neutral.local_to_string".to_owned()
+            }
+
+            fn inspect(game: &str, mode: &str, candidate: &str) {
+                let identity_values = [game];
+                let neutral_values = [mode];
+                let mapped_identity_values = identity_values
+                    .iter()
+                    .map(|value| *value)
+                    .collect::<Vec<_>>()
+                    .to_vec();
+                let mapped_neutral_values = neutral_values
+                    .iter()
+                    .map(|value| *value)
+                    .collect::<Vec<_>>()
+                    .to_vec();
+                let mapped_identity_with_internal_comparison = identity_values
+                    .iter()
+                    .map(|value| {
+                        let _ = mode == "neutral.map_internal";
+                        *value
+                    })
+                    .collect::<Vec<_>>();
+                let _ = game.as_ref().eq("game.transparent");
+                let _ = game.trim().to_ascii_lowercase().eq("game.normalized");
+                let _ = Some(game)
+                    .filter(|value| !value.is_empty())
+                    .unwrap()
+                    .eq("game.filtered");
+                let _ = identity_values.get(0).unwrap().eq(&"game.collection_get");
+                let _ = identity_values.iter().last().unwrap().eq(&"game.collection_last");
+                let _ = mapped_identity_values[0].eq("game.collection_map");
+                let _ = mapped_identity_with_internal_comparison[0]
+                    .eq("game.collection_map_internal");
+                let _ = game.join("segment").eq("game.joined");
+                let _ = Some(game)
+                    .and_then(Some)
+                    .ok_or_else(|| "diagnostic")
+                    .unwrap()
+                    .eq("game.option_transparent");
+                let _ = mode.as_ref().eq("neutral.transparent");
+                let _ = mode.trim().to_ascii_lowercase().eq("neutral.normalized");
+                let _ = neutral_values.get(0).unwrap().eq(&"neutral.collection_get");
+                let _ = neutral_values.iter().last().unwrap().eq(&"neutral.collection_last");
+                let _ = mapped_neutral_values[0].eq("neutral.collection_map");
+                let _ = Some(mode)
+                    .and_then(Some)
+                    .ok_or_else(|| "diagnostic")
+                    .unwrap()
+                    .eq("neutral.option_transparent");
+                let _ = to_string(game).eq("neutral.local_to_string_call");
+                let _ = game.scramble() == candidate;
+            }
+        "#;
+        let violations = inspect_identity_axis_branches("fixture.rs", source).unwrap();
+        assert!(
+            violations
+                .iter()
+                .any(|violation| violation.contains("game.transparent"))
+        );
+        assert!(
+            violations
+                .iter()
+                .any(|violation| violation.contains("game.option_transparent"))
+        );
+        for value in [
+            "game.normalized",
+            "game.filtered",
+            "game.collection_get",
+            "game.collection_last",
+            "game.collection_map",
+            "game.collection_map_internal",
+            "game.joined",
+        ] {
+            assert!(
+                violations.iter().any(|violation| violation.contains(value)),
+                "missing {value}: {violations:#?}"
+            );
+        }
+        assert!(violations.iter().all(|violation| {
+            !violation.contains("neutral.transparent")
+                && !violation.contains("neutral.option_transparent")
+                && !violation.contains("neutral.normalized")
+                && !violation.contains("neutral.collection_get")
+                && !violation.contains("neutral.collection_last")
+                && !violation.contains("neutral.collection_map")
+                && !violation.contains("neutral.map_internal")
+                && !violation.contains("neutral.local_to_string_call")
+                && !violation.contains("neutral.if_let")
+        }));
+        assert!(violations.iter().any(|violation| {
+            violation.contains("incomplete identity analysis on axis game")
+                && violation.contains("method scramble")
+        }));
+    }
+
+    #[test]
+    fn callable_return_semantics_preserve_identity_or_prove_nonidentity() {
+        let source = r#"
+            struct Wrapped { value: String }
+
+            fn has_value(game: &str) -> bool { !game.is_empty() }
+            fn expose(game: &str) -> String { game.to_owned() }
+            fn fixed() -> String { "game.fixed_return".to_owned() }
+            fn wrap(value: &str) -> Wrapped {
+                Wrapped { value: value.to_owned() }
+            }
+
+            fn inspect(game: &str) {
+                let _ = has_value(game) == true;
+                let _ = expose(game) == "game.string_return";
+                let _ = game == fixed();
+                let _ = wrap(game).value == "game.structured_return";
+            }
+        "#;
+        let violations = inspect_identity_axis_branches("fixture.rs", source).unwrap();
+        assert!(
+            violations
+                .iter()
+                .any(|violation| violation.contains("game.string_return"))
+        );
+        assert!(
+            violations
+                .iter()
+                .any(|violation| violation.contains("game.structured_return"))
+        );
+        assert!(
+            violations
+                .iter()
+                .any(|violation| violation.contains("game.fixed_return"))
+        );
+        assert!(
+            violations
+                .iter()
+                .all(|violation| !violation.contains("has_value"))
+        );
+    }
+
+    #[test]
+    fn file_local_callable_semantics_override_workspace_short_name_collisions() {
+        let local_source = r#"
+            fn detect_current_page(game: &str) -> String {
+                game.to_owned()
+            }
+
+            fn inspect(game: &str) {
+                let _ = detect_current_page(game) == "game.local_page";
+            }
+        "#;
+        let local_file = syn::parse_file(local_source).unwrap();
+        let other_file = syn::parse_file(
+            r#"
+                fn detect_current_page() -> bool { true }
+            "#,
+        )
+        .unwrap();
+        let (mut workspace, local_definitions) = collect_callable_inventory(&local_file);
+        let (other_inventory, other_definitions) = collect_callable_inventory(&other_file);
+        merge_callable_semantics(&mut workspace, other_inventory);
+        derive_callable_summaries(&mut workspace, &[local_definitions, other_definitions]);
+        assert_eq!(
+            workspace.functions.get("detect_current_page"),
+            Some(&CallableReturnFlow::Unknown)
+        );
+
+        let specialized = specialize_callable_semantics(&local_file, &workspace);
+        assert_eq!(
+            specialized.functions.get("detect_current_page"),
+            Some(&CallableReturnFlow::RawString)
+        );
+        let violations =
+            inspect_identity_axis_branches_with_semantics("fixture.rs", local_source, &specialized)
+                .unwrap();
+        assert!(
+            violations
+                .iter()
+                .any(|violation| violation.contains("game.local_page"))
+        );
+        assert!(
+            violations
+                .iter()
+                .all(|violation| !violation.contains("incomplete identity analysis"))
+        );
+    }
+
+    #[test]
+    fn concrete_outcome_types_and_source_independent_reads_remain_precise() {
+        let concrete: Type = syn::parse_str("PageDetectionOutcome").unwrap();
+        let wrapped: Type = syn::parse_str("CliOutcome<PageDetectionOutcome>").unwrap();
+        assert_eq!(type_return_flow(&concrete), CallableReturnFlow::Aggregate);
+        assert_eq!(type_return_flow(&wrapped), CallableReturnFlow::Aggregate);
+
+        let source = r#"
+            struct Payload;
+            struct Wrapped { task: String, neutral: String }
+
+            fn mystery<T>(value: T) -> T { value }
+            fn build(payload: &Payload) -> Wrapped {
+                Wrapped {
+                    task: payload.task_id().to_owned(),
+                    neutral: mystery(payload.mode()),
+                }
+            }
+
+            fn inspect(game: &str, payload: &Payload) {
+                let text = std::fs::read_to_string(game).unwrap();
+                let _ = text == "neutral.file_contents";
+                let _ = build(payload) == build(payload);
+            }
+        "#;
+        let violations = inspect_identity_axis_branches("fixture.rs", source).unwrap();
+        assert!(violations.iter().all(|violation| {
+            !violation.contains("neutral.file_contents")
+                && !violation.contains("incomplete identity analysis on axis task")
+        }));
+    }
+
+    #[test]
+    fn projections_are_precise_and_qualified_variants_are_not_identity_axes() {
+        let source = r#"
+            struct Holder<'a> { value: &'a str }
+            struct Entry { label: String }
+            enum EventPayload { Task }
+
+            fn inspect(game: &str, mode: &str, entries: &[Entry]) {
+                let pair = (game, mode);
+                let (selected, neutral) = pair;
+                let Holder { value } = Holder { value: game };
+                let _ = selected == "game.tuple_destructure";
+                let _ = neutral == "neutral.tuple_destructure";
+                let _ = value == "game.struct_destructure";
+                let event = EventPayload::Task;
+                let _ = event == "neutral.qualified_variant";
+                for package in entries {
+                    let _ = package.label == "neutral.loop_binding";
+                }
+            }
+        "#;
+        let violations = inspect_identity_axis_branches("fixture.rs", source).unwrap();
+        for value in ["game.tuple_destructure", "game.struct_destructure"] {
+            assert!(
+                violations.iter().any(|violation| violation.contains(value)),
+                "missing {value}: {violations:#?}"
+            );
+        }
+        for value in [
+            "neutral.tuple_destructure",
+            "neutral.qualified_variant",
+            "neutral.loop_binding",
+        ] {
+            assert!(
+                violations
+                    .iter()
+                    .all(|violation| !violation.contains(value)),
+                "unexpected {value}: {violations:#?}"
             );
         }
     }
