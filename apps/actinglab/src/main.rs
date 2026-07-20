@@ -5704,6 +5704,7 @@ fn run_package(sub: &str, global: &GlobalOptions, args: &[String]) -> CliOutcome
     let flags = FlagArgs::parse(args)?;
     match sub {
         "validate" => package_cli::run_validate(global, &flags),
+        "dry-run" => package_cli::run_offline(global, &flags),
         "inspect" => {
             let zip = flags.required_path("--zip")?;
             let validation = package_cli::validate_package(&zip, true)?;
@@ -11404,6 +11405,7 @@ fn command_capabilities() -> Vec<Value> {
         command_cap("wait", ["offline", "device_optional"], "available"),
         command_cap("package validate", ["offline"], "available"),
         command_cap("package inspect", ["offline"], "available"),
+        package_cli::offline_capability(),
         command_cap("package build-task", ["offline"], "available"),
         command_cap("package build-pack", ["offline"], "available"),
         command_cap("ledger show", ["offline", "read_only"], "available"),

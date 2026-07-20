@@ -14,6 +14,13 @@ pub struct LabValidateRequest {
 }
 
 #[derive(Debug, Clone, Serialize)]
+pub struct LabContainedPackageValidationResponse {
+    pub validation: LabValidateResponse,
+    pub task_count: usize,
+    pub entries: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
 pub struct LabValidateResponse {
     pub zip: String,
     pub status: String,

@@ -580,6 +580,117 @@ fn c5_production_run_ingress_requires_external_loaded_bundle() {
 }
 
 #[test]
+fn c5_offline_package_simulation_reuses_the_contained_task_kernel_without_device_authority() {
+    let root = workspace_root();
+    let main = fs::read_to_string(root.join("apps/actinglab/src/main.rs"))
+        .expect("read ActingLab CLI source");
+    let package_cli = fs::read_to_string(root.join("apps/actinglab/src/package_cli.rs"))
+        .expect("read package CLI router source");
+    let offline_cli = fs::read_to_string(root.join("apps/actinglab/src/package_offline.rs"))
+        .expect("read package offline CLI source");
+    let offline_kernel = fs::read_to_string(root.join("crates/execution-kernel/src/offline.rs"))
+        .expect("read offline execution adapter source");
+    let offline_kernel_production = offline_kernel
+        .split("#[cfg(test)]")
+        .next()
+        .expect("offline execution adapter production source");
+    let lab_run = fs::read_to_string(root.join("apps/actinglab/src/lab_run.rs"))
+        .expect("read production Lab run CLI source");
+
+    for required in [
+        "\"dry-run\" => package_cli::run_offline(global, &flags)",
+        "package_cli::offline_capability()",
+    ] {
+        assert!(
+            main.contains(required),
+            "ActingLab lost offline package route or capability {required}"
+        );
+    }
+    for required in [
+        "#[path = \"package_offline.rs\"]",
+        "offline::run_dry_run(global, flags)",
+        "offline::capability()",
+    ] {
+        assert!(
+            package_cli.contains(required),
+            "package CLI router lost offline route {required}"
+        );
+    }
+    for required in [
+        "validate_lab_package_bytes",
+        "PreparedContainedTask::load",
+        "simulate_contained_task",
+        "mode: \"offline_simulation\"",
+        "executed: false",
+        "production_global_ledger_written: false",
+    ] {
+        assert!(
+            offline_cli.contains(required),
+            "offline package entry lost required binding {required}"
+        );
+    }
+    for required in [
+        "task.run(&mut runtime)",
+        "OfflineBoundary::EffectIntercepted",
+        "executed: false",
+    ] {
+        assert!(
+            offline_kernel_production.contains(required),
+            "offline adapter stopped delegating to the production contained-task kernel via {required}"
+        );
+    }
+    for forbidden in [
+        "RuntimeClient",
+        "run_contained_task",
+        "InputBackend",
+        "DeviceTarget",
+        "ScreencapBackend",
+        "MaaTouchBackend",
+        "MinitouchBackend",
+        "NemuIpc",
+        "Droidcast",
+        "GlobalLedger",
+        "LabLease",
+        "actingcommand_scheduler",
+    ] {
+        assert!(
+            !offline_cli.contains(forbidden),
+            "offline package entry gained production authority via {forbidden}"
+        );
+    }
+    for forbidden in [
+        "actingcommand_runtime_client",
+        "actingcommand_runtime_host",
+        "actingcommand_scheduler",
+        "actingcommand_ledger",
+        "InputBackend",
+        "CaptureBackend",
+        "DeviceTarget",
+    ] {
+        assert!(
+            !offline_kernel_production.contains(forbidden),
+            "offline execution adapter gained external authority via {forbidden}"
+        );
+    }
+    assert!(
+        lab_run.contains("if global.dry_run")
+            && lab_run.contains("explicit_offline_entry_required")
+            && lab_run.contains("use package dry-run"),
+        "production lab run must fail loud when the global dry-run flag is present"
+    );
+    assert!(
+        main.contains("\"package run requires an exclusive_drain LabLease")
+            && main.contains("\"lab_lease_required\""),
+        "package run must remain a blocked compatibility boundary"
+    );
+    assert!(
+        main.contains("\"operation run requires Runtime scheduler admission")
+            && main.contains("\"lab_lease_required\""),
+        "operation run must remain behind Runtime scheduler admission"
+    );
+}
+
+#[test]
 fn c5_recovery_state_machine_is_execution_owned() {
     let root = workspace_root();
     let recovery = fs::read_to_string(root.join("crates/execution-kernel/src/recovery.rs"))

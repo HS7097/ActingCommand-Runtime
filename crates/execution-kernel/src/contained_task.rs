@@ -8,10 +8,13 @@ use crate::{
 };
 use actingcommand_contract::{InputAction, TaskOutcome};
 use actingcommand_device::{Frame, PixelFormat};
+use actingcommand_pack_containment::LoadedBundle;
 use actingcommand_page_detector::PageDetector;
 use actingcommand_recognition::{Scene, ScenePixelFormat};
-use actingcommand_recognition_pack::RecognitionEvaluator;
+use actingcommand_recognition_pack::{RecognitionEvaluator, TargetEvaluation, TargetKind};
 use serde::Deserialize;
+use serde::Serialize;
+use std::collections::BTreeSet;
 use std::error::Error;
 use std::fmt;
 use std::thread;
@@ -110,6 +113,7 @@ pub enum ContainedTaskTrace {
         step_index: u32,
         operation_label: String,
         action: InputAction,
+        guard: ContainedTaskGuardOutcome,
     },
     EffectCompleted {
         step_index: u32,
@@ -122,6 +126,17 @@ pub enum ContainedTaskTrace {
     },
     Finalizing {
         outcome: TaskOutcome,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(tag = "status", rename_all = "snake_case")]
+pub enum ContainedTaskGuardOutcome {
+    TrustedCoordinate,
+    Passed {
+        page_label: String,
+        target_id: String,
+        target_kind: String,
     },
 }
 
@@ -149,6 +164,8 @@ pub struct PreparedContainedTask {
     evaluator: RecognitionEvaluator,
     detector: PageDetector,
     package_sha256: String,
+    entry_count: usize,
+    task_count: usize,
 }
 
 impl PreparedContainedTask {
@@ -160,6 +177,8 @@ impl PreparedContainedTask {
         let bundle = ExternallyVerifiedBundle::load(instance_label, zip_bytes, expected)
             .map_err(|_| ContainedTaskError::new("contained_task_admission_failed"))?;
         let package_sha256 = bundle.loaded_bundle().verified_hash().to_string();
+        let entry_count = bundle.loaded_bundle().entry_count();
+        let task_count = bundle.loaded_bundle().task_count();
         let bundle = bundle.into_loaded_bundle();
         let control = bundle
             .control()
@@ -170,7 +189,7 @@ impl PreparedContainedTask {
         control.validate()?;
         let program: TaskProgram = serde_json::from_value(bundle.operation().clone())
             .map_err(|_| ContainedTaskError::new("contained_task_program_invalid"))?;
-        program.validate(&control)?;
+        program.validate(&control, &bundle)?;
         let evaluator = bundle
             .evaluator()
             .cloned()
@@ -188,6 +207,8 @@ impl PreparedContainedTask {
             evaluator,
             detector,
             package_sha256,
+            entry_count,
+            task_count,
         })
     }
 
@@ -197,6 +218,22 @@ impl PreparedContainedTask {
 
     pub fn package_label(&self) -> &str {
         &self.control.package_id
+    }
+
+    pub fn package_sha256(&self) -> &str {
+        &self.package_sha256
+    }
+
+    pub fn execution_mode(&self) -> &str {
+        &self.control.execution_mode
+    }
+
+    pub const fn entry_count(&self) -> usize {
+        self.entry_count
+    }
+
+    pub const fn task_count(&self) -> usize {
+        self.task_count
     }
 
     pub fn run<R: ContainedTaskRuntime>(
@@ -227,7 +264,7 @@ impl PreparedContainedTask {
         let task_timeout =
             Duration::from_millis(self.control.timeout_ms.unwrap_or(DEFAULT_TASK_TIMEOUT_MS));
         let started = Instant::now();
-        let mut current_page = self.capture_until_page(runtime, step_timeout, capture_interval)?;
+        let mut observation = self.capture_until_page(runtime, step_timeout, capture_interval)?;
         if self.control.execution_mode == "recognize_only" {
             runtime
                 .record(ContainedTaskTrace::Finalizing {
@@ -236,7 +273,7 @@ impl PreparedContainedTask {
                 .map_err(ContainedTaskRunError::Boundary)?;
             return Ok(ContainedTaskOutcome {
                 outcome: TaskOutcome::Success,
-                final_page: current_page,
+                final_page: Some(observation.page_label),
                 executed_steps: 0,
             });
         }
@@ -259,7 +296,7 @@ impl PreparedContainedTask {
         let mut machine = RunStateMachine::new(config, 0)
             .map_err(|_| ContainedTaskError::new("contained_task_state_invalid"))?;
         machine
-            .observe_page(current_page.clone())
+            .observe_page(Some(observation.page_label.clone()))
             .map_err(|_| ContainedTaskError::new("contained_task_state_invalid"))?;
 
         loop {
@@ -271,10 +308,10 @@ impl PreparedContainedTask {
                 .map_err(|_| ContainedTaskError::new("contained_task_state_invalid"))?
             {
                 RunDirective::AwaitPage => {
-                    current_page =
+                    observation =
                         self.capture_until_page(runtime, step_timeout, capture_interval)?;
                     machine
-                        .observe_page(current_page.clone())
+                        .observe_page(Some(observation.page_label.clone()))
                         .map_err(|_| ContainedTaskError::new("contained_task_state_invalid"))?;
                 }
                 RunDirective::ExecuteOperation {
@@ -297,12 +334,17 @@ impl PreparedContainedTask {
                             from_page,
                         })
                         .map_err(ContainedTaskRunError::Boundary)?;
-                    let action = operation.click.input_action(&self.control.resolution)?;
+                    let (guard, target) =
+                        operation.guard_outcome(&self.control, &observation, &self.evaluator)?;
+                    let action = operation
+                        .click
+                        .input_action(&self.control.resolution, target.as_ref())?;
                     runtime
                         .record(ContainedTaskTrace::EffectIntent {
                             step_index,
                             operation_label: operation_id.clone(),
                             action: action.clone(),
+                            guard,
                         })
                         .map_err(ContainedTaskRunError::Boundary)?;
                     runtime
@@ -314,11 +356,9 @@ impl PreparedContainedTask {
                             operation_label: operation_id.clone(),
                         })
                         .map_err(ContainedTaskRunError::Boundary)?;
-                    current_page =
+                    observation =
                         self.capture_until_page(runtime, step_timeout, capture_interval)?;
-                    let observed_page = current_page
-                        .clone()
-                        .ok_or_else(|| ContainedTaskError::new("contained_task_page_unmatched"))?;
+                    let observed_page = observation.page_label.clone();
                     runtime
                         .record(ContainedTaskTrace::StepFinished {
                             step_index,
@@ -327,7 +367,7 @@ impl PreparedContainedTask {
                         })
                         .map_err(ContainedTaskRunError::Boundary)?;
                     machine
-                        .operation_succeeded(&operation_id, current_page.clone())
+                        .operation_succeeded(&operation_id, Some(observation.page_label.clone()))
                         .map_err(|_| ContainedTaskError::new("contained_task_state_invalid"))?;
                 }
                 RunDirective::Continue { .. } => {
@@ -359,7 +399,7 @@ impl PreparedContainedTask {
         runtime: &mut R,
         timeout: Duration,
         interval: Duration,
-    ) -> Result<Option<String>, ContainedTaskRunError<R::Error>> {
+    ) -> Result<PageObservation, ContainedTaskRunError<R::Error>> {
         let started = Instant::now();
         loop {
             let frame = runtime.capture().map_err(ContainedTaskRunError::Boundary)?;
@@ -383,7 +423,7 @@ impl PreparedContainedTask {
                     height: frame.height,
                 })
                 .map_err(ContainedTaskRunError::Boundary)?;
-            let page = self
+            let matched_pages = self
                 .detector
                 .evaluate_all(&self.evaluator, &scene)
                 .map_err(|error| {
@@ -393,8 +433,17 @@ impl PreparedContainedTask {
                     )
                 })?
                 .into_iter()
-                .find(|evaluation| evaluation.matched)
-                .map(|evaluation| evaluation.page_id);
+                .filter(|evaluation| evaluation.matched)
+                .map(|evaluation| evaluation.page_id)
+                .collect::<Vec<_>>();
+            if matched_pages.len() > 1 {
+                return Err(ContainedTaskError::with_detail(
+                    "contained_task_recognition_conflict",
+                    matched_pages.join(","),
+                )
+                .into());
+            }
+            let page = matched_pages.into_iter().next();
             runtime
                 .record(ContainedTaskTrace::RecognitionCompleted {
                     candidate_pages,
@@ -403,12 +452,20 @@ impl PreparedContainedTask {
                     height: frame.height,
                 })
                 .map_err(ContainedTaskRunError::Boundary)?;
-            if page.is_some() || started.elapsed() >= timeout {
-                return Ok(page);
+            if let Some(page_label) = page {
+                return Ok(PageObservation { page_label, scene });
+            }
+            if started.elapsed() >= timeout {
+                return Err(ContainedTaskError::new("contained_task_page_unknown").into());
             }
             thread::sleep(interval);
         }
     }
+}
+
+struct PageObservation {
+    page_label: String,
+    scene: Scene,
 }
 
 #[derive(Debug, Deserialize)]
@@ -514,11 +571,17 @@ struct TaskProgram {
     coordinate_space: Resolution,
     #[serde(default)]
     target_page: Option<String>,
+    #[serde(default)]
+    recovery: Option<TaskRecovery>,
     operations: Vec<TaskOperation>,
 }
 
 impl TaskProgram {
-    fn validate(&self, control: &TaskControl) -> Result<(), ContainedTaskError> {
+    fn validate(
+        &self,
+        control: &TaskControl,
+        bundle: &LoadedBundle,
+    ) -> Result<(), ContainedTaskError> {
         if !matches!(self.schema_version.as_str(), "0.3" | "0.4" | "0.5" | "0.6")
             || self.task_id != control.entry_task_id
             || self.game != control.game
@@ -537,10 +600,86 @@ impl TaskProgram {
         {
             return Err(ContainedTaskError::new("contained_task_program_invalid"));
         }
+        let mut operation_ids = BTreeSet::new();
         for operation in &self.operations {
-            operation.validate(&control.resolution)?;
+            operation.validate(control)?;
+            if !operation_ids.insert(&operation.id) {
+                return Err(ContainedTaskError::new("contained_task_program_invalid"));
+            }
+        }
+        self.validate_recovery(bundle)?;
+        Ok(())
+    }
+
+    fn validate_recovery(&self, bundle: &LoadedBundle) -> Result<(), ContainedTaskError> {
+        let mut recovery_tasks = BTreeSet::new();
+        if let Some(recovery) = &self.recovery {
+            recovery.validate()?;
+            recovery_tasks.insert(recovery.task_id());
+        }
+        if self
+            .operations
+            .iter()
+            .any(|operation| operation.on_error.is_some())
+        {
+            recovery_tasks.insert("return_home");
+        }
+        for task_id in recovery_tasks {
+            let relative_path = format!("operations/{task_id}/task.json");
+            let bytes = bundle.resource_entry(&relative_path).map_err(|_| {
+                ContainedTaskError::with_detail(
+                    "contained_task_recovery_missing",
+                    relative_path.clone(),
+                )
+            })?;
+            let recovery: TaskProgram = serde_json::from_slice(bytes).map_err(|_| {
+                ContainedTaskError::with_detail(
+                    "contained_task_recovery_invalid",
+                    relative_path.clone(),
+                )
+            })?;
+            if recovery.task_id != task_id || recovery.game != self.game {
+                return Err(ContainedTaskError::with_detail(
+                    "contained_task_recovery_invalid",
+                    relative_path,
+                ));
+            }
         }
         Ok(())
+    }
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+enum TaskRecovery {
+    Kind(String),
+    Config {
+        kind: String,
+        #[serde(default)]
+        task_id: Option<String>,
+    },
+}
+
+impl TaskRecovery {
+    fn validate(&self) -> Result<(), ContainedTaskError> {
+        if self.kind() != "return_home" || self.task_id().trim().is_empty() {
+            Err(ContainedTaskError::new("contained_task_recovery_invalid"))
+        } else {
+            Ok(())
+        }
+    }
+
+    fn kind(&self) -> &str {
+        match self {
+            Self::Kind(kind) | Self::Config { kind, .. } => kind,
+        }
+    }
+
+    fn task_id(&self) -> &str {
+        match self {
+            Self::Kind(_) => "return_home",
+            Self::Config { task_id, .. } => task_id.as_deref().unwrap_or("return_home"),
+        }
     }
 }
 
@@ -551,10 +690,16 @@ struct TaskOperation {
     #[serde(default)]
     to: Option<String>,
     click: TaskClick,
+    #[serde(default)]
+    on_error: Option<String>,
+    #[serde(default)]
+    guard: Option<OperationGuard>,
+    #[serde(default)]
+    unguarded_trusted_coordinate: bool,
 }
 
 impl TaskOperation {
-    fn validate(&self, resolution: &Resolution) -> Result<(), ContainedTaskError> {
+    fn validate(&self, control: &TaskControl) -> Result<(), ContainedTaskError> {
         if self.id.trim().is_empty()
             || self.from.trim().is_empty()
             || self
@@ -564,7 +709,95 @@ impl TaskOperation {
         {
             return Err(ContainedTaskError::new("contained_task_operation_invalid"));
         }
-        self.click.input_action(resolution).map(|_| ())
+        if self
+            .on_error
+            .as_deref()
+            .is_some_and(|value| value != "return_home")
+        {
+            return Err(ContainedTaskError::new("contained_task_operation_invalid"));
+        }
+        match (&self.guard, self.unguarded_trusted_coordinate) {
+            (Some(_), true) | (None, false) => {
+                return Err(ContainedTaskError::new("contained_task_guard_missing"));
+            }
+            (Some(guard), false) => guard.validate(self, control)?,
+            (None, true) => {}
+        }
+        self.click
+            .validate(&control.resolution, self.guard.as_ref())
+    }
+
+    fn guard_outcome(
+        &self,
+        control: &TaskControl,
+        observation: &PageObservation,
+        evaluator: &RecognitionEvaluator,
+    ) -> Result<(ContainedTaskGuardOutcome, Option<TargetEvaluation>), ContainedTaskError> {
+        if self.unguarded_trusted_coordinate {
+            return Ok((ContainedTaskGuardOutcome::TrustedCoordinate, None));
+        }
+        let guard = self
+            .guard
+            .as_ref()
+            .ok_or_else(|| ContainedTaskError::new("contained_task_guard_missing"))?;
+        if !crate::page_anchor_matches(&control.game, &observation.page_label, &guard.page_id) {
+            return Err(ContainedTaskError::with_detail(
+                "contained_task_guard_refused",
+                format!(
+                    "operation={} expected_page={} observed_page={}",
+                    self.id, guard.page_id, observation.page_label
+                ),
+            ));
+        }
+        let target = evaluator
+            .evaluate_target(&observation.scene, &guard.target_id)
+            .map_err(|error| {
+                ContainedTaskError::with_detail(
+                    "contained_task_guard_evaluation_failed",
+                    error.to_string(),
+                )
+            })?;
+        if !target.passed {
+            return Err(ContainedTaskError::with_detail(
+                "contained_task_guard_refused",
+                format!("operation={} target={}", self.id, guard.target_id),
+            ));
+        }
+        let outcome = ContainedTaskGuardOutcome::Passed {
+            page_label: observation.page_label.clone(),
+            target_id: target.id.clone(),
+            target_kind: target_kind_name(target.kind).to_string(),
+        };
+        Ok((outcome, Some(target)))
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct OperationGuard {
+    page_id: String,
+    target_id: String,
+    expected_rect: ClickRect,
+    #[serde(default)]
+    verify_template: Option<String>,
+    #[serde(default)]
+    color_probe: Option<String>,
+}
+
+impl OperationGuard {
+    fn validate(
+        &self,
+        operation: &TaskOperation,
+        control: &TaskControl,
+    ) -> Result<(), ContainedTaskError> {
+        if self.page_id.trim().is_empty()
+            || self.target_id.trim().is_empty()
+            || !crate::page_anchor_matches(&control.game, &self.page_id, &operation.from)
+            || (self.verify_template.is_none() && self.color_probe.is_none())
+        {
+            return Err(ContainedTaskError::new("contained_task_guard_invalid"));
+        }
+        self.expected_rect.validate(&control.resolution)?;
+        Ok(())
     }
 }
 
@@ -582,13 +815,82 @@ struct TaskClick {
     #[serde(default)]
     duration_ms: Option<u64>,
     #[serde(default)]
+    target_id: Option<String>,
+    #[serde(default)]
+    offset: Option<ClickRect>,
+    #[serde(default)]
     from_rect: Option<ClickRect>,
     #[serde(default)]
     to_rect: Option<ClickRect>,
 }
 
 impl TaskClick {
-    fn input_action(&self, resolution: &Resolution) -> Result<InputAction, ContainedTaskError> {
+    fn validate(
+        &self,
+        resolution: &Resolution,
+        guard: Option<&OperationGuard>,
+    ) -> Result<(), ContainedTaskError> {
+        match self.kind.as_str() {
+            "point" => {
+                resolution.validate_point(required(self.x)?, required(self.y)?)?;
+            }
+            "rect" | "specific_rect" => ClickRect {
+                x: required(self.x)?,
+                y: required(self.y)?,
+                width: required(self.width)?,
+                height: required(self.height)?,
+            }
+            .validate(resolution)?,
+            "long_press" | "long_tap" => {
+                resolution.validate_point(required(self.x)?, required(self.y)?)?;
+                if self.duration_ms == Some(0) || self.duration_ms.is_none() {
+                    return Err(ContainedTaskError::new("contained_task_operation_invalid"));
+                }
+            }
+            "drag" => {
+                self.from_rect
+                    .ok_or_else(|| ContainedTaskError::new("contained_task_operation_invalid"))?
+                    .validate(resolution)?;
+                self.to_rect
+                    .ok_or_else(|| ContainedTaskError::new("contained_task_operation_invalid"))?
+                    .validate(resolution)?;
+                if self.duration_ms == Some(0) || self.duration_ms.is_none() {
+                    return Err(ContainedTaskError::new("contained_task_operation_invalid"));
+                }
+            }
+            "target" | "target_center" | "offset" => {
+                let guard =
+                    guard.ok_or_else(|| ContainedTaskError::new("contained_task_guard_missing"))?;
+                if guard.verify_template.is_none()
+                    || self
+                        .target_id
+                        .as_deref()
+                        .is_some_and(|target_id| target_id != guard.target_id)
+                {
+                    return Err(ContainedTaskError::new("contained_task_operation_invalid"));
+                }
+                if self.kind == "offset" {
+                    self.offset
+                        .ok_or_else(|| ContainedTaskError::new("contained_task_operation_invalid"))?
+                        .validate_shape()?;
+                } else if let Some(offset) = self.offset {
+                    offset.validate_shape()?;
+                }
+            }
+            _ => {
+                return Err(ContainedTaskError::new(
+                    "contained_task_primitive_unsupported",
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    fn input_action(
+        &self,
+        resolution: &Resolution,
+        target: Option<&TargetEvaluation>,
+    ) -> Result<InputAction, ContainedTaskError> {
         let action = match self.kind.as_str() {
             "point" => InputAction::Tap {
                 x: required(self.x)?,
@@ -633,6 +935,43 @@ impl TaskClick {
                     })?,
                 }
             }
+            "target" | "target_center" | "offset" => {
+                let target = target.ok_or_else(|| {
+                    ContainedTaskError::new("contained_task_guard_target_missing")
+                })?;
+                let template = target.template.ok_or_else(|| {
+                    ContainedTaskError::new("contained_task_guard_target_invalid")
+                })?;
+                let mut rect = ClickRect {
+                    x: template.x,
+                    y: template.y,
+                    width: template.width,
+                    height: template.height,
+                };
+                if self.kind == "offset" {
+                    let offset = self.offset.ok_or_else(|| {
+                        ContainedTaskError::new("contained_task_operation_invalid")
+                    })?;
+                    rect = ClickRect {
+                        x: rect.x + offset.x,
+                        y: rect.y + offset.y,
+                        width: offset.width,
+                        height: offset.height,
+                    };
+                } else if let Some(offset) = self.offset {
+                    rect = ClickRect {
+                        x: rect.x + offset.x,
+                        y: rect.y + offset.y,
+                        width: offset.width,
+                        height: offset.height,
+                    };
+                }
+                rect.validate(resolution)?;
+                InputAction::Tap {
+                    x: rect.x + rect.width / 2,
+                    y: rect.y + rect.height / 2,
+                }
+            }
             _ => {
                 return Err(ContainedTaskError::new(
                     "contained_task_primitive_unsupported",
@@ -660,6 +999,14 @@ impl TaskClick {
     }
 }
 
+fn target_kind_name(kind: TargetKind) -> &'static str {
+    match kind {
+        TargetKind::Template => "template",
+        TargetKind::Color => "color",
+        TargetKind::ClickOnly => "click_only",
+    }
+}
+
 fn required<T: Copy>(value: Option<T>) -> Result<T, ContainedTaskError> {
     value.ok_or_else(|| ContainedTaskError::new("contained_task_operation_invalid"))
 }
@@ -673,10 +1020,16 @@ struct ClickRect {
 }
 
 impl ClickRect {
-    fn validate(&self, resolution: &Resolution) -> Result<(), ContainedTaskError> {
+    fn validate_shape(&self) -> Result<(), ContainedTaskError> {
         if self.width <= 0 || self.height <= 0 {
-            return Err(ContainedTaskError::new("contained_task_operation_invalid"));
+            Err(ContainedTaskError::new("contained_task_operation_invalid"))
+        } else {
+            Ok(())
         }
+    }
+
+    fn validate(&self, resolution: &Resolution) -> Result<(), ContainedTaskError> {
+        self.validate_shape()?;
         resolution.validate_point(self.x, self.y)?;
         resolution.validate_point(self.x + self.width - 1, self.y + self.height - 1)
     }

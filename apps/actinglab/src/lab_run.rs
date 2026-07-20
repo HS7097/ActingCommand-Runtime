@@ -18,6 +18,13 @@ use std::path::Path;
 use zip::{ZipWriter, write::FileOptions};
 
 pub(super) fn run_lab_run(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
+    if global.dry_run {
+        return Err(CliError::safety_blocked(
+            "explicit_offline_entry_required",
+            "lab run is the Runtime-owned production execution path; use package dry-run for zero-device simulation",
+            &["package_dry_run"],
+        ));
+    }
     let flags = FlagArgs::parse(args)?;
     flags.expect_positionals("lab run", 0)?;
     reject_client_execution_overrides(global, &flags)?;
