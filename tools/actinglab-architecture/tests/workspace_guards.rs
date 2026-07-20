@@ -431,14 +431,27 @@ fn c6_actinglab_does_not_construct_live_device_backends() {
 #[test]
 fn c5_drive_decisions_are_owned_by_execution_kernel() {
     let root = workspace_root();
+    let contract = fs::read_to_string(root.join("crates/pack-containment/src/navigation.rs"))
+        .expect("read canonical navigation contract source");
     let kernel = fs::read_to_string(root.join("crates/execution-kernel/src/drive.rs"))
         .expect("read execution-kernel drive source");
     let lab = fs::read_to_string(root.join("crates/lab/src/drive.rs"))
         .expect("read Lab drive adapter source");
 
     for required in [
+        "pub struct NavigationContract",
+        "pub enum NavigationInput",
+        "pub fn parse_value",
+    ] {
+        assert!(
+            contract.contains(required),
+            "pack-containment lost canonical navigation contract {required}"
+        );
+    }
+    for required in [
         "pub struct DriveNavigationGraph",
         "pub enum DriveSemanticInput",
+        "pub fn from_contract",
         "pub fn find_route",
         "pub fn validate_route",
         "pub fn validate_resolved_input",
@@ -446,6 +459,17 @@ fn c5_drive_decisions_are_owned_by_execution_kernel() {
         assert!(
             kernel.contains(required),
             "execution-kernel lost drive decision owner {required}"
+        );
+    }
+    for retired in [
+        "fn parse_navigation_edge",
+        "fn parse_navigation_input",
+        "fn parse_destructive_region",
+        "fn parse_control_point",
+    ] {
+        assert!(
+            !kernel.contains(retired),
+            "execution-kernel reintroduced a second navigation parser {retired}"
         );
     }
     for forbidden in [
@@ -473,8 +497,10 @@ fn c5_drive_decisions_are_owned_by_execution_kernel() {
         );
     }
     assert!(
-        lab.contains("DriveNavigationGraph as NavigationGraph"),
-        "Lab adapter no longer consumes execution-kernel drive decisions"
+        lab.contains("DriveNavigationGraph as NavigationGraph")
+            && lab.contains("bundle.navigation_contract()")
+            && lab.contains("NavigationGraph::from_contract(navigation)"),
+        "Lab adapter must consume the admitted typed navigation contract through execution-kernel"
     );
 }
 

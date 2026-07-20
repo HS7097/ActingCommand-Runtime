@@ -219,6 +219,41 @@ fn package_dry_run_rejects_invalid_package_inputs() {
 }
 
 #[test]
+fn package_dry_run_rejects_navigation_values_rejected_by_the_execution_kernel() {
+    for (name, mutation) in [
+        (
+            "unsupported-route-click",
+            NavigationMutation::UnsupportedRouteClick,
+        ),
+        (
+            "empty-destructive-action",
+            NavigationMutation::EmptyDestructiveAction,
+        ),
+        ("empty-control-point", NavigationMutation::EmptyControlPoint),
+    ] {
+        let fixture = TestFixture::from_bytes(
+            package_with_navigation(PackageOptions::default(), Some(mutation)),
+            home_frame(true),
+        );
+
+        assert_error_code(&fixture.run(&[], &format!("{name}.zip")), "package_invalid");
+    }
+}
+
+#[test]
+fn package_dry_run_accepts_valid_route_destructive_action_and_control_point() {
+    let fixture = TestFixture::from_bytes(
+        package_with_navigation(
+            PackageOptions::default(),
+            Some(NavigationMutation::ValidSafetyEntries),
+        ),
+        home_frame(true),
+    );
+
+    assert_success(&fixture.run(&[], "valid-navigation.zip"), "would_click");
+}
+
+#[test]
 fn package_dry_run_rejects_missing_inputs_and_device_scope() {
     let temp = TempDir::new().unwrap();
     let missing_zip = run_actinglab(&temp, ["--json", "package", "dry-run"]);
@@ -521,6 +556,14 @@ struct PackageOptions {
     include_recovery_task: bool,
 }
 
+#[derive(Clone, Copy)]
+enum NavigationMutation {
+    UnsupportedRouteClick,
+    EmptyDestructiveAction,
+    EmptyControlPoint,
+    ValidSafetyEntries,
+}
+
 impl Default for PackageOptions {
     fn default() -> Self {
         Self {
@@ -542,6 +585,13 @@ impl Default for PackageOptions {
 }
 
 fn package(options: PackageOptions) -> Vec<u8> {
+    package_with_navigation(options, None)
+}
+
+fn package_with_navigation(
+    options: PackageOptions,
+    navigation_mutation: Option<NavigationMutation>,
+) -> Vec<u8> {
     let control = json!({
         "schema_version": options.control_schema,
         "package_id": "neutral.semantic.task",
@@ -596,6 +646,41 @@ fn package(options: PackageOptions) -> Vec<u8> {
             json!({"id":"neutral/duplicate","required":["page/home"],"optional":[],"forbidden":[]}),
         );
     }
+    let mut navigation = json!({
+        "schema_version": options.navigation_schema,
+        "game": "neutral",
+        "server": options.navigation_server,
+        "navigation": [{
+            "id": options.navigation_action_id,
+            "from_page": "neutral/home",
+            "to_page": options.navigation_to_page,
+            "click": {"kind": "point", "x": 1, "y": 0}
+        }],
+        "page_operations": [],
+        "destructive_actions": []
+    });
+    match navigation_mutation {
+        Some(NavigationMutation::UnsupportedRouteClick) => {
+            navigation["navigation"][0]["click"]["kind"] = json!("unsupported");
+        }
+        Some(NavigationMutation::EmptyDestructiveAction) => {
+            navigation["destructive_actions"] = json!([{}]);
+        }
+        Some(NavigationMutation::EmptyControlPoint) => {
+            navigation["control_points"] = json!([{}]);
+        }
+        Some(NavigationMutation::ValidSafetyEntries) => {
+            navigation["destructive_actions"] = json!([{
+                "page": "neutral/home",
+                "click": {"kind": "rect", "x": 0, "y": 0, "width": 1, "height": 1}
+            }]);
+            navigation["control_points"] = json!([{
+                "name": "home",
+                "point": [0, 0]
+            }]);
+        }
+        None => {}
+    }
     let mut entries = vec![
         ("control.json", control),
         (
@@ -624,19 +709,7 @@ fn package(options: PackageOptions) -> Vec<u8> {
         ),
         (
             "resources/navigation/neutral.test.navigation.json",
-            json!({
-                "schema_version": options.navigation_schema,
-                "game": "neutral",
-                "server": options.navigation_server,
-                "navigation": [{
-                    "id": options.navigation_action_id,
-                    "from_page": "neutral/home",
-                    "to_page": options.navigation_to_page,
-                    "click": {"kind": "point", "x": 1, "y": 0}
-                }],
-                "page_operations": [],
-                "destructive_actions": []
-            }),
+            navigation,
         ),
     ];
     if options.include_recovery_task {

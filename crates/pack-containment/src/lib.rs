@@ -1,5 +1,13 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
+mod navigation;
+
+pub use navigation::{
+    NavigationContract, NavigationContractError, NavigationControlPoint,
+    NavigationDestructiveAction, NavigationInput, NavigationPageAction, NavigationRect,
+    NavigationRoute,
+};
+
 use actingcommand_page_detector::{PageDetector, load_page_set_from_json_str};
 use actingcommand_recognition_pack::{
     AssetResolver, RecognitionEvaluator, UnsupportedRecognitionTarget, load_pack_from_json_str,
@@ -276,6 +284,7 @@ pub struct LoadedBundle {
     pages_path: Option<String>,
     navigation_path: Option<String>,
     navigation: Option<Value>,
+    navigation_contract: Option<NavigationContract>,
     evaluator: Option<RecognitionEvaluator>,
     detector: Option<PageDetector>,
     recognition_pack_diagnostics: Vec<RecognitionPackDiagnostics>,
@@ -291,7 +300,8 @@ impl LoadedBundle {
         validate_manifest_hashes(&metadata.manifest, &entries, &metadata.resource_root)?;
         let recognition_pack_diagnostics = collect_recognition_pack_diagnostics(&entries)?;
         let (evaluator, detector) = load_recognition_pipeline(&entries, &metadata)?;
-        validate_lab_package_contract(&entries, &metadata, detector.as_ref())?;
+        let navigation_contract =
+            validate_lab_package_contract(&entries, &metadata, detector.as_ref())?;
 
         Ok(Self {
             task_id: metadata.task_id,
@@ -310,6 +320,7 @@ impl LoadedBundle {
             pages_path: metadata.pages_path,
             navigation_path: metadata.navigation_path,
             navigation: metadata.navigation,
+            navigation_contract,
             evaluator,
             detector,
             recognition_pack_diagnostics,
@@ -374,6 +385,10 @@ impl LoadedBundle {
 
     pub fn navigation(&self) -> Option<&Value> {
         self.navigation.as_ref()
+    }
+
+    pub fn navigation_contract(&self) -> Option<&NavigationContract> {
+        self.navigation_contract.as_ref()
     }
 
     pub fn evaluator(&self) -> Option<&RecognitionEvaluator> {
@@ -656,40 +671,19 @@ struct LabManifestContract {
     entry_task_id: String,
 }
 
-#[derive(Debug, Deserialize)]
-struct LabNavigationContract {
-    schema_version: String,
-    game: String,
-    server: String,
-    navigation: Vec<LabNavigationRoute>,
-    #[serde(default)]
-    page_operations: Vec<LabNavigationPageAction>,
-    #[serde(default)]
-    destructive_actions: Vec<Value>,
-}
-
-#[derive(Debug, Deserialize)]
-struct LabNavigationRoute {
-    id: String,
-    from_page: String,
-    to_page: String,
-    #[serde(rename = "click")]
-    _click: Value,
-}
-
-#[derive(Debug, Deserialize)]
-struct LabNavigationPageAction {
-    task_id: String,
-    id: String,
-    page: String,
-}
-
 #[derive(Debug)]
 struct OperationReference {
     task_id: String,
     id: String,
     from_page: String,
     to_page: Option<String>,
+}
+
+struct NavigationReferenceContext<'a> {
+    operations: &'a [OperationReference],
+    detector: Option<&'a PageDetector>,
+    game: &'a str,
+    path: &'a str,
 }
 
 #[derive(Debug)]
@@ -907,9 +901,9 @@ fn validate_lab_package_contract(
     entries: &BTreeMap<String, Vec<u8>>,
     metadata: &PackageMetadata,
     detector: Option<&PageDetector>,
-) -> ContainmentResult<()> {
+) -> ContainmentResult<Option<NavigationContract>> {
     if metadata.layout != PackageLayout::Lab {
-        return Ok(());
+        return Ok(None);
     }
     let control_value = metadata.control.clone().ok_or_else(|| {
         package_contract_error("control.json", "Lab package is missing its parsed control")
@@ -962,107 +956,77 @@ fn validate_lab_package_contract(
     let (Some(navigation_path), Some(navigation_value)) =
         (&metadata.navigation_path, &metadata.navigation)
     else {
-        return Ok(());
+        return Ok(None);
     };
-    let navigation: LabNavigationContract = serde_json::from_value(navigation_value.clone())
-        .map_err(|error| ContainmentError::JsonParse {
-            path: navigation_path.clone(),
-            message: error.to_string(),
-        })?;
-    if !matches!(navigation.schema_version.as_str(), "0.3" | "0.4" | "0.5") {
-        return Err(package_contract_error(
-            navigation_path,
-            format!(
-                "unsupported navigation schema_version '{}'; expected 0.3, 0.4, or 0.5",
-                navigation.schema_version
-            ),
-        ));
-    }
-    if navigation.game != control.game || navigation.server != control.server {
+    let navigation = NavigationContract::parse_value(navigation_value)
+        .map_err(|error| package_contract_error(navigation_path, error.to_string()))?;
+    if navigation.game() != control.game || navigation.server() != control.server {
         return Err(package_contract_error(
             navigation_path,
             format!(
                 "navigation game/server '{}.{}' does not match control '{}.{}'",
-                navigation.game, navigation.server, control.game, control.server
+                navigation.game(),
+                navigation.server(),
+                control.game,
+                control.server
             ),
         ));
     }
+    let reference_context = NavigationReferenceContext {
+        operations: &operations,
+        detector,
+        game: &control.game,
+        path: navigation_path,
+    };
 
-    let mut route_ids = BTreeSet::new();
-    for route in &navigation.navigation {
-        if route.id.trim().is_empty() {
-            return Err(package_contract_error(
-                navigation_path,
-                "navigation route id must not be empty",
-            ));
-        }
-        if !route_ids.insert(route.id.clone()) {
-            return Err(package_contract_error(
-                navigation_path,
-                format!("navigation route id '{}' is duplicated", route.id),
-            ));
-        }
+    for route in navigation.routes() {
         validate_page_reference(
             detector,
             &control.game,
-            &route.from_page,
+            route.from_page(),
             navigation_path,
-            &format!("navigation route '{}' from_page", route.id),
+            &format!("navigation route '{}' from_page", route.id()),
         )?;
         validate_page_reference(
             detector,
             &control.game,
-            &route.to_page,
+            route.to_page(),
             navigation_path,
-            &format!("navigation route '{}' to_page", route.id),
+            &format!("navigation route '{}' to_page", route.id()),
         )?;
-        validate_route_operation_reference(route, &operations, &control.game, navigation_path)?;
+        validate_route_operation_reference(route, &reference_context)?;
     }
-    for action in &navigation.page_operations {
+    for action in navigation.page_operations() {
         validate_page_action_reference(
-            action,
-            &operations,
-            detector,
-            &control.game,
-            navigation_path,
+            action.task_id(),
+            action.id(),
+            action.page(),
+            &reference_context,
             "page_operations",
         )?;
     }
-    for action in &navigation.destructive_actions {
-        let Some(object) = action.as_object() else {
-            return Err(package_contract_error(
-                navigation_path,
-                "destructive_actions entries must be objects",
-            ));
-        };
-        if object.contains_key("task_id") {
-            let action: LabNavigationPageAction =
-                serde_json::from_value(action.clone()).map_err(|error| {
-                    ContainmentError::JsonParse {
-                        path: navigation_path.clone(),
-                        message: error.to_string(),
-                    }
-                })?;
+    for action in navigation.destructive_actions() {
+        if let (Some(task_id), Some(id), Some(page)) =
+            (action.task_id(), action.id(), action.page())
+        {
             validate_page_action_reference(
-                &action,
-                &operations,
-                detector,
-                &control.game,
-                navigation_path,
+                task_id,
+                id,
+                page,
+                &reference_context,
                 "destructive_actions",
             )?;
-        } else if object.contains_key("page") {
-            let page = required_contract_string(action, "page", navigation_path)?;
+        } else if let Some(page) = action.page() {
             validate_page_reference(
                 detector,
                 &control.game,
-                &page,
+                page,
                 navigation_path,
                 "destructive action page",
             )?;
         }
     }
-    Ok(())
+    Ok(Some(navigation))
 }
 
 fn collect_operation_references(
@@ -1176,40 +1140,39 @@ fn collect_operation_references(
 }
 
 fn validate_route_operation_reference(
-    route: &LabNavigationRoute,
-    operations: &[OperationReference],
-    game: &str,
-    path: &str,
+    route: &NavigationRoute,
+    context: &NavigationReferenceContext<'_>,
 ) -> ContainmentResult<()> {
-    let same_id = operations
+    let same_id = context
+        .operations
         .iter()
-        .filter(|operation| operation.id == route.id)
+        .filter(|operation| operation.id == route.id())
         .collect::<Vec<_>>();
     if same_id.is_empty() {
         return Err(package_contract_error(
-            path,
+            context.path,
             format!(
                 "navigation route '{}' does not reference a packaged operation",
-                route.id
+                route.id()
             ),
         ));
     }
     let matching = same_id
         .iter()
         .filter(|operation| {
-            pages_equivalent(game, &operation.from_page, &route.from_page)
+            pages_equivalent(context.game, &operation.from_page, route.from_page())
                 && operation
                     .to_page
                     .as_deref()
-                    .is_some_and(|to_page| pages_equivalent(game, to_page, &route.to_page))
+                    .is_some_and(|to_page| pages_equivalent(context.game, to_page, route.to_page()))
         })
         .count();
     if matching != 1 {
         return Err(package_contract_error(
-            path,
+            context.path,
             format!(
                 "navigation route '{}' must resolve to exactly one packaged operation with the same page transition; resolved {matching}",
-                route.id
+                route.id()
             ),
         ));
     }
@@ -1217,41 +1180,35 @@ fn validate_route_operation_reference(
 }
 
 fn validate_page_action_reference(
-    action: &LabNavigationPageAction,
-    operations: &[OperationReference],
-    detector: Option<&PageDetector>,
-    game: &str,
-    path: &str,
+    task_id: &str,
+    id: &str,
+    page: &str,
+    context: &NavigationReferenceContext<'_>,
     collection: &str,
 ) -> ContainmentResult<()> {
-    if action.task_id.trim().is_empty() || action.id.trim().is_empty() {
-        return Err(package_contract_error(
-            path,
-            format!("{collection} task_id and id must not be empty"),
-        ));
-    }
     validate_page_reference(
-        detector,
-        game,
-        &action.page,
-        path,
-        &format!("{collection} action '{}' page", action.id),
+        context.detector,
+        context.game,
+        page,
+        context.path,
+        &format!("{collection} action '{id}' page"),
     )?;
-    let matching = operations
+    let matching = context
+        .operations
         .iter()
         .filter(|operation| {
-            operation.task_id == action.task_id
-                && operation.id == action.id
+            operation.task_id == task_id
+                && operation.id == id
                 && operation.to_page.is_none()
-                && pages_equivalent(game, &operation.from_page, &action.page)
+                && pages_equivalent(context.game, &operation.from_page, page)
         })
         .count();
     if matching != 1 {
         return Err(package_contract_error(
-            path,
+            context.path,
             format!(
                 "{collection} action '{}.{}' must resolve to exactly one packaged page operation; resolved {matching}",
-                action.task_id, action.id
+                task_id, id
             ),
         ));
     }

@@ -3,9 +3,9 @@
 //! Pure semantic-drive planning owned by the execution kernel.
 
 use actingcommand_contract::InputAction;
+use actingcommand_pack_containment::{NavigationContract, NavigationInput, NavigationRect};
 use actingcommand_recognition_pack::PackRect;
 use serde::Serialize;
-use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::error::Error;
 use std::fmt;
@@ -189,36 +189,40 @@ pub struct DriveNavigationGraph {
 
 impl DriveNavigationGraph {
     pub fn parse_json(source: &str) -> Result<Self, DriveDecisionError> {
-        let value: Value = serde_json::from_str(source).map_err(|error| {
-            DriveDecisionError::invalid(format!("failed to parse navigation JSON: {error}"))
-        })?;
-        let game = value
-            .get("game")
-            .and_then(Value::as_str)
-            .map(str::to_string);
-        let edges = value
-            .get("navigation")
-            .and_then(Value::as_array)
-            .ok_or_else(|| DriveDecisionError::invalid("navigation file is missing navigation[]"))?
+        let contract = NavigationContract::parse_json(source)
+            .map_err(|error| DriveDecisionError::invalid(error.to_string()))?;
+        Self::from_contract(&contract)
+    }
+
+    pub fn from_contract(contract: &NavigationContract) -> Result<Self, DriveDecisionError> {
+        let edges = contract
+            .routes()
             .iter()
-            .map(parse_navigation_edge)
-            .collect::<Result<Vec<_>, _>>()?;
-        let destructive_regions = value
-            .get("destructive_actions")
-            .and_then(Value::as_array)
-            .into_iter()
-            .flatten()
-            .map(parse_destructive_region)
-            .collect::<Result<Vec<_>, _>>()?;
-        let control_points = value
-            .get("control_points")
-            .and_then(Value::as_array)
-            .into_iter()
-            .flatten()
-            .map(parse_control_point)
-            .collect::<Result<Vec<_>, _>>()?;
+            .map(|route| {
+                Ok(DriveNavigationEdge {
+                    id: route.id().to_string(),
+                    from_page: route.from_page().to_string(),
+                    to_page: route.to_page().to_string(),
+                    input: drive_semantic_input(route.input())?,
+                    source: route.source().map(str::to_string),
+                })
+            })
+            .collect::<Result<Vec<_>, DriveDecisionError>>()?;
+        let destructive_regions = contract
+            .destructive_actions()
+            .iter()
+            .map(|action| DestructiveRegion {
+                page: action.page().map(str::to_string),
+                rect: pack_rect(action.rect()),
+            })
+            .collect();
+        let control_points = contract
+            .control_points()
+            .iter()
+            .map(|point| point.name().to_string())
+            .collect();
         Ok(Self {
-            game,
+            game: Some(contract.game().to_string()),
             edges,
             destructive_regions,
             control_points,
@@ -371,198 +375,43 @@ pub fn derive_absolute_coordinate_rect_from_match(
     })
 }
 
-fn parse_control_point(value: &Value) -> Result<String, DriveDecisionError> {
-    let name = required_string_field(value, "name")?.to_string();
-    if let Some(click) = value.get("click") {
-        parse_navigation_input(click)?;
-    } else {
-        let rect = parse_control_point_rect(value)?;
-        drive_rect_center(rect)?;
-    }
-    if value.get("note").is_some_and(|note| !note.is_string()) {
-        return Err(DriveDecisionError::invalid("field 'note' must be a string"));
-    }
-    Ok(name)
-}
-
-fn parse_control_point_rect(value: &Value) -> Result<PackRect, DriveDecisionError> {
-    if let Some(point) = value.get("point") {
-        let (x, y) = parse_point_value(point)?;
-        return Ok(PackRect {
-            x,
-            y,
-            width: 1,
-            height: 1,
-        });
-    }
-    Ok(PackRect {
-        x: required_i32_value(value, "x")?,
-        y: required_i32_value(value, "y")?,
-        width: 1,
-        height: 1,
-    })
-}
-
-fn parse_destructive_region(value: &Value) -> Result<DestructiveRegion, DriveDecisionError> {
-    let click = value
-        .get("click")
-        .ok_or_else(|| DriveDecisionError::invalid("destructive action is missing click"))?;
-    Ok(DestructiveRegion {
-        page: value
-            .get("page")
-            .and_then(Value::as_str)
-            .map(str::to_string),
-        rect: parse_navigation_tap_rect(click)?,
-    })
-}
-
-fn parse_navigation_edge(value: &Value) -> Result<DriveNavigationEdge, DriveDecisionError> {
-    Ok(DriveNavigationEdge {
-        id: required_string_field(value, "id")?.to_string(),
-        from_page: required_string_field(value, "from_page")?.to_string(),
-        to_page: required_string_field(value, "to_page")?.to_string(),
-        input: parse_navigation_input(required_value_field(value, "click")?)?,
-        source: value
-            .get("source")
-            .and_then(Value::as_str)
-            .map(str::to_string),
-    })
-}
-
-fn parse_navigation_input(value: &Value) -> Result<DriveSemanticInput, DriveDecisionError> {
-    match value.get("kind").and_then(Value::as_str) {
-        Some("point") | Some("rect") => {
-            let rect = parse_navigation_tap_rect(value)?;
+fn drive_semantic_input(input: &NavigationInput) -> Result<DriveSemanticInput, DriveDecisionError> {
+    match input {
+        NavigationInput::Tap { rect } => {
+            let rect = pack_rect(*rect);
             Ok(DriveSemanticInput::Tap {
                 rect,
                 point: drive_rect_center(rect)?,
             })
         }
-        Some("target") | Some("target_center") => Ok(DriveSemanticInput::TargetCenter {
-            target_id: required_string_field(value, "target_id")?.to_string(),
+        NavigationInput::TargetCenter { target_id } => Ok(DriveSemanticInput::TargetCenter {
+            target_id: target_id.clone(),
         }),
-        Some("drag") => {
-            let from_rect = parse_navigation_tap_rect(required_value_field(value, "from")?)?;
-            let to_rect = parse_navigation_tap_rect(required_value_field(value, "to")?)?;
-            let duration_ms = value
-                .get("duration_ms")
-                .and_then(Value::as_u64)
-                .unwrap_or(500);
+        NavigationInput::Drag {
+            from_rect,
+            to_rect,
+            duration_ms,
+        } => {
+            let from_rect = pack_rect(*from_rect);
+            let to_rect = pack_rect(*to_rect);
             Ok(DriveSemanticInput::Drag {
                 from_rect,
                 to_rect,
                 from: drive_rect_center(from_rect)?,
                 to: drive_rect_center(to_rect)?,
-                duration_ms,
+                duration_ms: *duration_ms,
             })
         }
-        other => Err(DriveDecisionError::invalid(format!(
-            "unsupported navigation click kind: {other:?}"
-        ))),
     }
 }
 
-fn parse_navigation_tap_rect(value: &Value) -> Result<PackRect, DriveDecisionError> {
-    match value.get("kind").and_then(Value::as_str) {
-        Some("point") => parse_navigation_point(value),
-        Some("rect") | None => parse_navigation_rect(value),
-        Some("drag") => Err(DriveDecisionError::invalid(
-            "drag click cannot be used as a tap rectangle",
-        )),
-        other => Err(DriveDecisionError::invalid(format!(
-            "unsupported navigation click kind for tap rect: {other:?}"
-        ))),
+fn pack_rect(rect: NavigationRect) -> PackRect {
+    PackRect {
+        x: rect.x,
+        y: rect.y,
+        width: rect.width,
+        height: rect.height,
     }
-}
-
-fn parse_navigation_point(value: &Value) -> Result<PackRect, DriveDecisionError> {
-    if let Some(point) = value.get("point") {
-        let (x, y) = parse_point_value(point)?;
-        return Ok(PackRect {
-            x,
-            y,
-            width: 1,
-            height: 1,
-        });
-    }
-    Ok(PackRect {
-        x: required_i32_value(value, "x")?,
-        y: required_i32_value(value, "y")?,
-        width: 1,
-        height: 1,
-    })
-}
-
-fn parse_navigation_rect(value: &Value) -> Result<PackRect, DriveDecisionError> {
-    Ok(PackRect {
-        x: required_i32_value(value, "x")?,
-        y: required_i32_value(value, "y")?,
-        width: required_i32_value(value, "width")?,
-        height: required_i32_value(value, "height")?,
-    })
-}
-
-fn parse_point_value(value: &Value) -> Result<(i32, i32), DriveDecisionError> {
-    if let Some(point) = value.as_str() {
-        return parse_point_pair(point);
-    }
-    if let Some(items) = value.as_array() {
-        if items.len() != 2 {
-            return Err(DriveDecisionError::invalid(
-                "point array must have exactly two items",
-            ));
-        }
-        return Ok((
-            parse_i32_json_value(&items[0], "point[0]")?,
-            parse_i32_json_value(&items[1], "point[1]")?,
-        ));
-    }
-    Err(DriveDecisionError::invalid(
-        "point must be a string x,y or [x,y] array",
-    ))
-}
-
-fn parse_point_pair(value: &str) -> Result<(i32, i32), DriveDecisionError> {
-    let parts = value.split(',').map(str::trim).collect::<Vec<_>>();
-    if parts.len() != 2 {
-        return Err(DriveDecisionError::invalid(format!(
-            "point must be formatted as x,y: {value}"
-        )));
-    }
-    let x = parts[0].parse::<i32>().map_err(|error| {
-        DriveDecisionError::invalid(format!("failed to parse point x '{}': {error}", parts[0]))
-    })?;
-    let y = parts[1].parse::<i32>().map_err(|error| {
-        DriveDecisionError::invalid(format!("failed to parse point y '{}': {error}", parts[1]))
-    })?;
-    Ok((x, y))
-}
-
-fn required_value_field<'a>(value: &'a Value, name: &str) -> Result<&'a Value, DriveDecisionError> {
-    value
-        .get(name)
-        .ok_or_else(|| DriveDecisionError::invalid(format!("missing field '{name}'")))
-}
-
-fn required_string_field<'a>(value: &'a Value, name: &str) -> Result<&'a str, DriveDecisionError> {
-    value
-        .get(name)
-        .and_then(Value::as_str)
-        .ok_or_else(|| DriveDecisionError::invalid(format!("field '{name}' must be a string")))
-}
-
-fn required_i32_value(value: &Value, name: &str) -> Result<i32, DriveDecisionError> {
-    parse_i32_json_value(required_value_field(value, name)?, name)
-}
-
-fn parse_i32_json_value(value: &Value, name: &str) -> Result<i32, DriveDecisionError> {
-    if let Some(value) = value.as_i64() {
-        return i32::try_from(value)
-            .map_err(|_| DriveDecisionError::invalid(format!("field '{name}' exceeds i32 range")));
-    }
-    Err(DriveDecisionError::invalid(format!(
-        "field '{name}' must be an integer"
-    )))
 }
 
 fn semantic_input_rects(input: &DriveSemanticInput) -> Vec<PackRect> {
@@ -588,7 +437,9 @@ mod tests {
     use super::*;
 
     const NAVIGATION: &str = r#"{
+        "schema_version":"0.3",
         "game":"fixture01",
+        "server":"test",
         "navigation":[
             {"id":"home_to_terminal","from_page":"fixture01/home","to_page":"fixture01/terminal","click":{"kind":"rect","x":10,"y":20,"width":20,"height":10}},
             {"id":"terminal_to_stage","from_page":"fixture01/terminal","to_page":"fixture01/stage","click":{"kind":"target_center","target_id":"stage_entry"}}

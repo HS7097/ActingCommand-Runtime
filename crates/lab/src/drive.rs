@@ -310,15 +310,10 @@ impl<P: LabPorts> Lab<P> {
 fn load_navigation_graph(
     bundle: &actingcommand_pack_containment::LoadedBundle,
 ) -> LabResult<NavigationGraph> {
-    let navigation = bundle.navigation().ok_or_else(|| {
+    let navigation = bundle.navigation_contract().ok_or_else(|| {
         LabError::package_invalid("externally verified resource bundle has no navigation graph")
     })?;
-    let text = serde_json::to_string(navigation).map_err(|error| {
-        LabError::package_invalid(format!(
-            "failed to serialize contained navigation graph: {error}"
-        ))
-    })?;
-    NavigationGraph::parse_json(&text).map_err(drive_decision_error)
+    NavigationGraph::from_contract(navigation).map_err(drive_decision_error)
 }
 
 fn navigation_edge_response(
