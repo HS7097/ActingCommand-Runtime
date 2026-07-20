@@ -1495,6 +1495,10 @@ fn write_semantic_package(path: &Path, root: &Path) {
     let navigation =
         fs::read(root.join("navigation/arknights.cn.navigation.json")).expect("navigation");
     let navigation_value: Value = serde_json::from_slice(&navigation).expect("navigation JSON");
+    let game = navigation_value["game"].as_str().expect("navigation game");
+    let server = navigation_value["server"]
+        .as_str()
+        .expect("navigation server");
     let operations = navigation_value["navigation"]
         .as_array()
         .expect("navigation routes")
@@ -1513,8 +1517,8 @@ fn write_semantic_package(path: &Path, root: &Path) {
     let operation = serde_json::to_vec(&json!({
         "schema_version": "0.6",
         "task_id": "task",
-        "game": "arknights",
-        "server_scope": ["cn"],
+        "game": game,
+        "server_scope": [server],
         "goal": "runtime semantic closure",
         "coordinate_space": {"width": 1, "height": 1},
         "operations": operations

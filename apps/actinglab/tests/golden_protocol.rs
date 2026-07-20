@@ -1235,6 +1235,39 @@ fn write_semantic_package(path: &Path, root: &Path) {
     let pages = fs::read(root.join("recognition/arknights.cn.pages.json")).expect("semantic pages");
     let navigation = fs::read(root.join("navigation/arknights.cn.navigation.json"))
         .expect("semantic navigation");
+    let navigation_value: Value =
+        serde_json::from_slice(&navigation).expect("semantic navigation JSON");
+    let game = navigation_value["game"]
+        .as_str()
+        .expect("semantic navigation game");
+    let server = navigation_value["server"]
+        .as_str()
+        .expect("semantic navigation server");
+    let operations = navigation_value["navigation"]
+        .as_array()
+        .expect("semantic navigation routes")
+        .iter()
+        .map(|route| {
+            json!({
+                "id": route["id"],
+                "purpose": "golden semantic closure",
+                "from": route["from_page"],
+                "to": route["to_page"],
+                "click": route["click"],
+                "unguarded_trusted_coordinate": true
+            })
+        })
+        .collect::<Vec<_>>();
+    let operation = serde_json::to_vec(&json!({
+        "schema_version": "0.6",
+        "task_id": "task",
+        "game": game,
+        "server_scope": [server],
+        "goal": "golden semantic closure",
+        "coordinate_space": {"width": 1, "height": 1},
+        "operations": operations
+    }))
+    .expect("semantic operation JSON");
     write_zip(
         path,
         &[
@@ -1246,10 +1279,7 @@ fn write_semantic_package(path: &Path, root: &Path) {
                 "resources/manifest.json",
                 br#"{"schema_version":"0.3","entry_task_id":"task"}"#,
             ),
-            (
-                "resources/operations/task/task.json",
-                br#"{"schema_version":"0.6","task_id":"task","game":"arknights","server_scope":["cn"],"goal":"golden semantic closure","coordinate_space":{"width":1,"height":1},"operations":[{"id":"home_to_target","purpose":"golden semantic closure","from":"arknights/home","to":"arknights/target","click":{"kind":"point","x":0,"y":0},"unguarded_trusted_coordinate":true}]}"#,
-            ),
+            ("resources/operations/task/task.json", &operation),
             ("resources/recognition/arknights.cn.pack.json", &pack),
             ("resources/recognition/arknights.cn.pages.json", &pages),
             (
