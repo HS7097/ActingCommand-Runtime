@@ -33,6 +33,21 @@ Invoke-AdversarialCase 'false approval' @(
     'approval_provenance::tests::fake_comment_id_and_api_failure_are_fatal',
     '--', '--exact'
 )
+Invoke-AdversarialCase 'retired approval reuse' @(
+    'test', '-p', $architecture, '--lib',
+    'approval_provenance::tests::new_style_approval_can_activate_then_retire_without_legacy_scope_table',
+    '--', '--exact'
+)
+Invoke-AdversarialCase 'approval binding range narrowing' @(
+    'test', '-p', $architecture, '--lib',
+    'approval_provenance::tests::active_binding_covers_exact_base_subject_head_range',
+    '--', '--exact'
+)
+Invoke-AdversarialCase 'zero-surface approval range' @(
+    'test', '-p', $architecture, '--lib',
+    'approval_provenance::tests::zero_surface_range_cannot_report_verified',
+    '--', '--exact'
+)
 Invoke-AdversarialCase 'raw identity wrappers and closures' @(
     'test', '-p', $architecture, '--lib',
     'generic_domain::tests::identity_branches_reject_unlisted_methods_wrappers_and_closures',
@@ -67,4 +82,4 @@ Invoke-AdversarialCase 'resource root flag conflicts' @(
     '--', '--exact'
 )
 
-Write-Host 'all eight adversarial boundary regressions executed and passed'
+Write-Host 'all eleven adversarial boundary regressions executed and passed'
