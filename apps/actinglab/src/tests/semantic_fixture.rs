@@ -39,6 +39,7 @@ where
             | "do"
             | "ensure"
             | "wait"
+            | "session recover"
     ) {
         args.extend([
             "--zip".to_string(),
@@ -67,10 +68,35 @@ pub(super) fn seal_semantic_fixture(
     let file = File::create(&zip_path).unwrap();
     let mut zip = ZipWriter::new(file);
     let options = FileOptions::default().compression_method(zip::CompressionMethod::Stored);
-    let control = format!(r#"{{"game":"{game}","server":"{server}","entry_task_id":"task"}}"#);
-    let operation = semantic_operation_document(game, server, navigation_source);
+    let pack: Value = serde_json::from_slice(&fs::read(pack_source).unwrap()).unwrap();
+    let width = pack
+        .pointer("/coordinate_space/width")
+        .and_then(Value::as_u64)
+        .unwrap();
+    let height = pack
+        .pointer("/coordinate_space/height")
+        .and_then(Value::as_u64)
+        .unwrap();
+    let navigation = navigation_source
+        .map(|source| serde_json::from_slice::<Value>(&fs::read(source).unwrap()).unwrap());
+    let navigable = navigation
+        .as_ref()
+        .and_then(|value| value.get("navigation"))
+        .and_then(Value::as_array)
+        .is_some_and(|routes| !routes.is_empty());
+    let control = serde_json::to_vec(&json!({
+        "schema_version": "Lab-1y.control.v1",
+        "package_id": format!("{game}.{server}.semantic-fixture"),
+        "execution_mode": if navigable { "navigable_route" } else { "recognize_only" },
+        "game": game,
+        "server": server,
+        "resolution": {"width": width, "height": height},
+        "entry_task_id": "task"
+    }))
+    .unwrap();
+    let operation = semantic_operation_document(game, server, navigation.as_ref(), width, height);
     for (name, bytes) in [
-        ("control.json", control.as_bytes()),
+        ("control.json", control.as_slice()),
         (
             "resources/manifest.json",
             br#"{"schema_version":"0.3","entry_task_id":"task"}"#.as_slice(),
@@ -123,10 +149,12 @@ pub(super) fn seal_semantic_fixture(
 fn semantic_operation_document(
     game: &str,
     server: &str,
-    navigation_source: Option<&Path>,
+    navigation: Option<&Value>,
+    width: u64,
+    height: u64,
 ) -> Vec<u8> {
-    let operations = navigation_source
-        .map(|source| serde_json::from_slice::<Value>(&fs::read(source).unwrap()).unwrap())
+    let operations = navigation
+        .cloned()
         .and_then(|navigation| {
             navigation
                 .get("navigation")
@@ -136,12 +164,28 @@ fn semantic_operation_document(
         .unwrap_or_default()
         .into_iter()
         .map(|route| {
+            let click = if route["click"]["kind"] == "point"
+                && route["click"]
+                    .get("point")
+                    .and_then(Value::as_str)
+                    .is_some()
+            {
+                let point = route["click"]["point"].as_str().unwrap();
+                let (x, y) = point.split_once(',').unwrap();
+                json!({
+                    "kind": "point",
+                    "x": x.trim().parse::<i32>().unwrap(),
+                    "y": y.trim().parse::<i32>().unwrap()
+                })
+            } else {
+                route["click"].clone()
+            };
             json!({
                 "id": route["id"],
                 "purpose": "semantic fixture navigation closure",
                 "from": route["from_page"],
                 "to": route["to_page"],
-                "click": route["click"],
+                "click": click,
                 "unguarded_trusted_coordinate": true
             })
         })
@@ -152,7 +196,7 @@ fn semantic_operation_document(
         "game": game,
         "server_scope": [server],
         "goal": "semantic fixture navigation closure",
-        "coordinate_space": {"width": 1, "height": 1},
+        "coordinate_space": {"width": width, "height": height},
         "operations": operations
     }))
     .unwrap()
@@ -168,7 +212,7 @@ pub(super) fn semantic_resource_root(include_destructive_overlap: bool) -> Seman
         recognition.join("arknights.cn.pack.json"),
         r#"{
             "schema_version":"0.3",
-            "coordinate_space":{"width":1,"height":1},
+            "coordinate_space":{"width":100,"height":100},
             "targets":[
                 {"type":"color","id":"home_anchor","region":{"x":0,"y":0,"width":1,"height":1},"expected":[255,0,0]},
                 {"type":"color","id":"target_anchor","region":{"x":0,"y":0,"width":1,"height":1},"expected":[0,0,255]},
@@ -189,7 +233,7 @@ pub(super) fn semantic_resource_root(include_destructive_overlap: bool) -> Seman
     )
     .unwrap();
     let destructive = if include_destructive_overlap {
-        r#"[{"id":"delete","click":{"kind":"rect","x":10,"y":20,"width":4,"height":6}}]"#
+        r#"[{"page":"arknights/home","click":{"kind":"rect","x":10,"y":20,"width":4,"height":6}}]"#
     } else {
         "[]"
     };
@@ -286,7 +330,7 @@ pub(super) fn synthetic_game_resource_root() -> SemanticFixture {
         temp.path().join("synthetic.pack.json"),
         r#"{
             "schema_version":"0.3",
-            "coordinate_space":{"width":1,"height":1},
+            "coordinate_space":{"width":100,"height":100},
             "targets":[
                 {"type":"color","id":"synthetic_home_anchor","region":{"x":0,"y":0,"width":1,"height":1},"expected":[10,20,30]},
                 {"type":"color","id":"synthetic_target_anchor","region":{"x":0,"y":0,"width":1,"height":1},"expected":[30,20,10]},

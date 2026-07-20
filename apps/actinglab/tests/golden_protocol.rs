@@ -753,8 +753,8 @@ impl Fixture {
 
         fs::create_dir_all(&state_root).expect("state root");
         fs::create_dir_all(&run_root).expect("run root");
-        fs::write(&red_scene, encode_png(1, 1, [255, 0, 0])).expect("red scene");
-        fs::write(&blue_scene, encode_png(1, 1, [0, 0, 255])).expect("blue scene");
+        fs::write(&red_scene, encode_png(100, 100, [255, 0, 0])).expect("red scene");
+        fs::write(&blue_scene, encode_png(100, 100, [0, 0, 255])).expect("blue scene");
         fs::write(&lab_scene, encode_png(2, 2, [255, 0, 0])).expect("lab scene");
         fs::write(&invalid_pages, b"not-json").expect("invalid pages");
         write_semantic_resources(&resource_root);
@@ -1170,7 +1170,7 @@ fn write_semantic_resources(root: &Path) {
         recognition.join("arknights.cn.pack.json"),
         r#"{
             "schema_version":"0.3",
-            "coordinate_space":{"width":1,"height":1},
+            "coordinate_space":{"width":100,"height":100},
             "targets":[
                 {"type":"color","id":"home_anchor","region":{"x":0,"y":0,"width":1,"height":1},"expected":[255,0,0]},
                 {"type":"color","id":"target_anchor","region":{"x":0,"y":0,"width":1,"height":1},"expected":[0,0,255]},
@@ -1221,8 +1221,8 @@ fn write_semantic_resources(root: &Path) {
                     "min_confidence":1.0,
                     "stale_below_confidence":1.0,
                     "ttl_ms":null,
-                    "allowed_values":["1x1"],
-                    "candidates":[{"value":"1x1","width":1,"height":1,"source":"golden-scene"}]
+                    "allowed_values":["100x100"],
+                    "candidates":[{"value":"100x100","width":100,"height":100,"source":"golden-scene"}]
                 }]
             }]
         }"#,
@@ -1264,7 +1264,7 @@ fn write_semantic_package(path: &Path, root: &Path) {
         "game": game,
         "server_scope": [server],
         "goal": "golden semantic closure",
-        "coordinate_space": {"width": 1, "height": 1},
+        "coordinate_space": {"width": 100, "height": 100},
         "operations": operations
     }))
     .expect("semantic operation JSON");
@@ -1273,7 +1273,7 @@ fn write_semantic_package(path: &Path, root: &Path) {
         &[
             (
                 "control.json",
-                br#"{"game":"arknights","server":"cn","entry_task_id":"task"}"#,
+                br#"{"schema_version":"Lab-1y.control.v1","package_id":"golden.semantic","execution_mode":"navigable_route","game":"arknights","server":"cn","resolution":{"width":100,"height":100},"entry_task_id":"task"}"#,
             ),
             (
                 "resources/manifest.json",

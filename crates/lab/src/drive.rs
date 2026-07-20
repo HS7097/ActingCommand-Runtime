@@ -177,7 +177,7 @@ impl<P: LabPorts> Lab<P> {
             .validate(&evaluator)
             .map_err(|error| LabError::usage(error.to_string()))?;
         record_env_resolved(ledger, "navigate", &env_resolved)?;
-        let graph = load_navigation_graph(request.input.resources.loaded_bundle())?;
+        let graph = load_navigation_graph(request.input.resources.admitted_package())?;
         let scene = recognition_scene(self, &mut request.input)?;
         let start = detect_current_page(
             &evaluator,
@@ -308,12 +308,9 @@ impl<P: LabPorts> Lab<P> {
 }
 
 fn load_navigation_graph(
-    bundle: &actingcommand_pack_containment::LoadedBundle,
+    package: &actingcommand_pack_containment::AdmittedPackage,
 ) -> LabResult<NavigationGraph> {
-    let navigation = bundle.navigation_contract().ok_or_else(|| {
-        LabError::package_invalid("externally verified resource bundle has no navigation graph")
-    })?;
-    NavigationGraph::from_contract(navigation).map_err(drive_decision_error)
+    NavigationGraph::from_admitted(package).map_err(drive_decision_error)
 }
 
 fn navigation_edge_response(
@@ -432,7 +429,7 @@ fn execute_navigation_route<P: LabPorts>(
     let mut executed = Vec::new();
     let mut current_page = start_page;
     for (edge, action_id) in route.into_iter().zip(action_ids) {
-        if current_page != edge.from_page() {
+        if edge.from_page() != "any" && current_page != edge.from_page() {
             return Err(LabError::safety_blocked(
                 "navigation_page_drift",
                 format!(

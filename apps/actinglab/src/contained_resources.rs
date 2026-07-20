@@ -2,7 +2,7 @@
 
 //! Production semantic commands admit resources only through an externally hashed in-memory bundle.
 
-use super::{CliError, CliOutcome, FlagArgs, NavigationGraph, parse_navigation_graph_value};
+use super::{CliError, CliOutcome, FlagArgs, NavigationGraph, navigation_graph_from_admitted};
 use actingcommand_lab::{ExternalExpectedSha256, ExternallyVerifiedBundle};
 use actingcommand_pack_containment::ContainmentLimits;
 use actingcommand_page_detector::PageDetector;
@@ -34,13 +34,9 @@ pub(super) fn load(flags: &FlagArgs, command: &str) -> CliOutcome<Arc<Externally
 pub(super) fn recognition_pipeline(
     resources: &ExternallyVerifiedBundle,
 ) -> CliOutcome<(RecognitionEvaluator, PageDetector)> {
-    let bundle = resources.loaded_bundle();
-    let evaluator = bundle.evaluator().cloned().ok_or_else(|| {
-        CliError::package_invalid("externally verified resource bundle has no recognition pack")
-    })?;
-    let detector = bundle.detector().cloned().ok_or_else(|| {
-        CliError::package_invalid("externally verified resource bundle has no page definitions")
-    })?;
+    let package = resources.admitted_package();
+    let evaluator = package.evaluator().clone();
+    let detector = package.detector().clone();
     detector
         .validate(&evaluator)
         .map_err(|error| CliError::package_invalid(error.to_string()))?;
@@ -50,10 +46,7 @@ pub(super) fn recognition_pipeline(
 pub(super) fn navigation_graph(
     resources: &ExternallyVerifiedBundle,
 ) -> CliOutcome<NavigationGraph> {
-    let navigation = resources.loaded_bundle().navigation().ok_or_else(|| {
-        CliError::package_invalid("externally verified resource bundle has no navigation graph")
-    })?;
-    parse_navigation_graph_value(navigation)
+    navigation_graph_from_admitted(resources.admitted_package())
 }
 
 fn explicit_path(flags: &FlagArgs, name: &str) -> CliOutcome<PathBuf> {

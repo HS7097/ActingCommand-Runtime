@@ -27,6 +27,13 @@ fn package_dry_run_binds_inputs_and_writes_a_deterministic_offline_bundle() {
     assert_eq!(record["executed"], false);
     assert_eq!(record["production_global_ledger_written"], false);
     assert_eq!(record["package_sha256"], fixture.package_sha256);
+    for field in ["semantic_fingerprint", "decision_fingerprint"] {
+        let value = record[field].as_str().unwrap();
+        assert_eq!(value.len(), 64);
+        assert!(value.bytes().all(|byte| byte.is_ascii_hexdigit()));
+        assert_eq!(record["simulation"][field], value);
+        assert_eq!(envelope_data(&first)[field], value);
+    }
     assert_eq!(
         record["simulation"]["package_sha256"],
         fixture.package_sha256
@@ -62,6 +69,14 @@ fn package_dry_run_binds_inputs_and_writes_a_deterministic_offline_bundle() {
     assert_success(&decorated, "would_click");
     let decorated_record = read_result_record(&fixture.temp.path().join("decorated.result.zip"));
     assert_eq!(decorated_record["package_sha256"], fixture.package_sha256);
+    assert_eq!(
+        decorated_record["semantic_fingerprint"],
+        record["semantic_fingerprint"]
+    );
+    assert_eq!(
+        decorated_record["decision_fingerprint"],
+        record["decision_fingerprint"]
+    );
     assert_eq!(
         fs::read(fixture.temp.path().join("first.result.zip")).unwrap(),
         fs::read(fixture.temp.path().join("decorated.result.zip")).unwrap()
@@ -323,6 +338,61 @@ fn package_dry_run_rejects_missing_inputs_and_device_scope() {
         ],
     );
     assert_error_code(&output, "offline_output_conflicts_with_input");
+}
+
+#[test]
+fn package_dry_run_rejects_presence_smuggling_empty_values_and_duplicate_singletons() {
+    let fixture = TestFixture::new(PackageOptions::default(), home_frame(true));
+    for (name, extra) in [
+        ("empty-instances", vec!["--instances", ""]),
+        ("empty-instance", vec!["--instance", ""]),
+        ("empty-profile", vec!["--profile", ""]),
+        ("empty-runtime", vec!["--runtime-endpoint", ""]),
+    ] {
+        assert_error_code(
+            &fixture.run(&extra, &format!("{name}.zip")),
+            "offline_device_scope_forbidden",
+        );
+    }
+
+    let out = fixture.temp.path().join("duplicate.zip");
+    let duplicate = run_actinglab(
+        &fixture.temp,
+        [
+            OsString::from("--json"),
+            OsString::from("package"),
+            OsString::from("dry-run"),
+            OsString::from("--zip"),
+            fixture.package_path.as_os_str().to_owned(),
+            OsString::from("--zip"),
+            fixture.package_path.as_os_str().to_owned(),
+            OsString::from("--expected-sha256"),
+            OsString::from(&fixture.package_sha256),
+            OsString::from("--fixture"),
+            fixture.fixture_path.as_os_str().to_owned(),
+            OsString::from("--out"),
+            out.into_os_string(),
+        ],
+    );
+    assert_error_code(&duplicate, "offline_argument_invalid");
+
+    let empty_out = run_actinglab(
+        &fixture.temp,
+        [
+            OsString::from("--json"),
+            OsString::from("package"),
+            OsString::from("dry-run"),
+            OsString::from("--zip"),
+            fixture.package_path.as_os_str().to_owned(),
+            OsString::from("--expected-sha256"),
+            OsString::from(&fixture.package_sha256),
+            OsString::from("--fixture"),
+            fixture.fixture_path.as_os_str().to_owned(),
+            OsString::from("--out"),
+            OsString::new(),
+        ],
+    );
+    assert_error_code(&empty_out, "offline_argument_invalid");
 }
 
 #[test]
@@ -592,7 +662,7 @@ fn package_with_navigation(
     options: PackageOptions,
     navigation_mutation: Option<NavigationMutation>,
 ) -> Vec<u8> {
-    let control = json!({
+    let mut control = json!({
         "schema_version": options.control_schema,
         "package_id": "neutral.semantic.task",
         "execution_mode": options.execution_mode,
@@ -670,6 +740,7 @@ fn package_with_navigation(
             navigation["control_points"] = json!([{}]);
         }
         Some(NavigationMutation::ValidSafetyEntries) => {
+            control["allow_placeholder_coords"] = json!(true);
             navigation["destructive_actions"] = json!([{
                 "page": "neutral/home",
                 "click": {"kind": "rect", "x": 0, "y": 0, "width": 1, "height": 1}

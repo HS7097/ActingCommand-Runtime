@@ -2,7 +2,6 @@
 
     fn test_control() -> LabControl {
         LabControl {
-            schema_version: CONTROL_SCHEMA.to_string(),
             package_id: "pkg".to_string(),
             execution_mode: "navigable_route".to_string(),
             game: "arknights".to_string(),
@@ -18,7 +17,6 @@
             max_steps: None,
             stop_on_error: None,
             stop_on_confirmation: None,
-            allow_placeholder_coords: None,
             output: None,
             capture_backend: None,
             frame_store: FrameStoreControl::default(),
@@ -43,7 +41,6 @@
                 to_rect: None,
                 duration_ms: None,
                 offset: None,
-                target_id: None,
             },
             verify_template: verify_template.map(str::to_string),
             expect_after: None,
@@ -68,23 +65,14 @@
 
     fn test_operation_bundle(operation: Operation) -> OperationBundle {
         OperationBundle {
-            schema_version: "0.3".to_string(),
             task_id: "task".to_string(),
-            game: "arknights".to_string(),
-            server_scope: vec!["cn".to_string()],
             goal: "test".to_string(),
-            coordinate_space: Resolution {
-                width: 1280,
-                height: 720,
-            },
             defaults: OperationDefaults::default(),
-            anchors: Vec::new(),
             entry_page: Some("home".to_string()),
             target_page: Some("terminal".to_string()),
             error_pages: Vec::new(),
             recovery: None,
             max_task_retries: None,
-            on_exhausted: None,
             page_rules: BTreeMap::new(),
             operations: vec![operation],
         }
@@ -418,6 +406,21 @@
                             {"id":"arknights/home","required":["page/home"],"optional":[],"forbidden":[]},
                             {"id":"arknights/terminal","required":["page/terminal"],"optional":[],"forbidden":[]}
                         ]
+                    }"#,
+                ),
+                (
+                    "resources/navigation/arknights.cn.navigation.json",
+                    br#"{
+                        "schema_version":"0.3",
+                        "game":"arknights",
+                        "server":"cn",
+                        "navigation":[{
+                            "id":"open_terminal",
+                            "from_page":"arknights/home",
+                            "to_page":"arknights/terminal",
+                            "click":{"kind":"point","x":1,"y":1}
+                        }],
+                        "destructive_actions":[]
                     }"#,
                 ),
             ],

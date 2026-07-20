@@ -91,16 +91,7 @@ pub(crate) fn load_evaluator<P: LabPorts>(
     _lab: &mut Lab<P>,
     input: &mut crate::ReadonlyRecognitionInput,
 ) -> LabResult<(RecognitionEvaluator, Vec<EnvResolved>)> {
-    let evaluator = input
-        .resources
-        .loaded_bundle()
-        .evaluator()
-        .cloned()
-        .ok_or_else(|| {
-            LabError::package_invalid(
-                "externally verified resource bundle has no recognition evaluator",
-            )
-        })?;
+    let evaluator = input.resources.admitted_package().evaluator().clone();
     Ok((evaluator, Vec::new()))
 }
 
@@ -108,12 +99,8 @@ pub(crate) fn load_page_detector(
     input: &crate::ReadonlyRecognitionInput,
     missing_message: &str,
 ) -> LabResult<PageDetector> {
-    input
-        .resources
-        .loaded_bundle()
-        .detector()
-        .cloned()
-        .ok_or_else(|| LabError::package_invalid(missing_message))
+    let _ = missing_message;
+    Ok(input.resources.admitted_package().detector().clone())
 }
 
 pub(crate) fn recognition_scene<P: LabPorts>(

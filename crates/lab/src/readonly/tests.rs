@@ -197,18 +197,21 @@ impl Fixture {
         let files = [
             (
                 "control.json",
-                br#"{"game":"fixture","server":"test","entry_task_id":"task"}"#.as_slice(),
+                br#"{"schema_version":"Lab-1y.control.v1","package_id":"fixture.readonly","execution_mode":"recognize_only","game":"fixture","server":"test","resolution":{"width":100,"height":100},"entry_task_id":"task"}"#.as_slice(),
             ),
             (
                 "resources/manifest.json",
                 br#"{"schema_version":"0.3","entry_task_id":"task"}"#.as_slice(),
             ),
-            ("resources/operations/task/task.json", br#"{}"#.as_slice()),
+            (
+                "resources/operations/task/task.json",
+                br#"{"schema_version":"0.6","task_id":"task","game":"fixture","server_scope":["test"],"goal":"readonly fixture closure","coordinate_space":{"width":100,"height":100},"entry_page":"fixture/home","target_page":"fixture/home","operations":[{"id":"noop","purpose":"readonly fixture closure","from":"fixture/home","click":{"kind":"point","x":1,"y":1},"unguarded_trusted_coordinate":true}]}"#.as_slice(),
+            ),
             (
                 "resources/recognition/fixture.test.pack.json",
             r#"{
                 "schema_version":"0.3",
-                "coordinate_space":{"width":1,"height":1},
+                "coordinate_space":{"width":100,"height":100},
                 "targets":[
                     {"type":"color","id":"home_anchor","region":{"x":0,"y":0,"width":1,"height":1},"expected":[255,0,0]},
                     {"type":"click_only","id":"home_button","click":{"x":10,"y":20,"width":4,"height":6}}
@@ -283,5 +286,6 @@ fn blue_scene() -> Option<Scene> {
 }
 
 fn scene(pixel: [u8; 3]) -> Scene {
-    Scene::from_pixels(1, 1, &pixel, ScenePixelFormat::Rgb8).expect("scene")
+    let pixels = pixel.repeat(100 * 100);
+    Scene::from_pixels(100, 100, &pixels, ScenePixelFormat::Rgb8).expect("scene")
 }

@@ -105,12 +105,8 @@
                 to_rect: None,
                 duration_ms: Some(800),
                 offset: None,
-                target_id: None,
             };
 
-            operation
-                .validate(&control)
-                .expect("trusted unguarded coordinate valid");
             let action = operation
                 .input_action(&control.resolution, 0, None)
                 .expect("input action");

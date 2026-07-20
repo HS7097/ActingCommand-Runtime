@@ -79,13 +79,16 @@ fn write_fixture() -> Lab2Fixture {
     for (name, bytes) in [
         (
             "control.json",
-            br#"{"game":"arknights","server":"cn","entry_task_id":"task"}"#.as_slice(),
+            br#"{"schema_version":"Lab-1y.control.v1","package_id":"lab2.cli.contract","execution_mode":"recognize_only","game":"arknights","server":"cn","resolution":{"width":1,"height":1},"entry_task_id":"task"}"#.as_slice(),
         ),
         (
             "resources/manifest.json",
             br#"{"schema_version":"0.3","entry_task_id":"task"}"#.as_slice(),
         ),
-        ("resources/operations/task/task.json", br#"{}"#.as_slice()),
+        (
+            "resources/operations/task/task.json",
+            br#"{"schema_version":"0.6","task_id":"task","game":"arknights","server_scope":["cn"],"goal":"Lab2 CLI contract fixture","coordinate_space":{"width":1,"height":1},"operations":[]}"#.as_slice(),
+        ),
     ] {
         zip.start_file(name, options).expect("package entry");
         zip.write_all(bytes).expect("package bytes");

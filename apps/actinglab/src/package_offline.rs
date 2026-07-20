@@ -30,26 +30,21 @@ pub(super) fn capability() -> Value {
 }
 
 pub(super) fn run_dry_run(global: &GlobalOptions, flags: &FlagArgs) -> CliOutcome<Value> {
-    flags.expect_positionals("package dry-run", 0)?;
-    reject_device_scope(global, flags)?;
-    let zip_path = flags.required_path("--zip")?;
-    let out_path = flags.required_path("--out")?;
-    let expected_text = flags.required("--expected-sha256")?;
-    let expected = ExternalExpectedSha256::parse_hex(&expected_text)
+    let args = PackageDryRunArgs::parse(global, flags)?;
+    let expected = ExternalExpectedSha256::parse_hex(&args.expected_sha256)
         .map_err(|error| CliError::package_invalid(error.to_string()))?;
-    let fixture_paths = fixture_paths(flags)?;
-    reject_output_collision(&out_path, &zip_path, &fixture_paths)?;
+    reject_output_collision(&args.out, &args.zip, &args.fixtures)?;
 
-    let package_bytes = fs::read(&zip_path).map_err(|error| {
+    let package_bytes = fs::read(&args.zip).map_err(|error| {
         offline_error(
             "offline_package_read_failed",
-            format!("failed to read package {}: {error}", zip_path.display()),
+            format!("failed to read package {}: {error}", args.zip.display()),
         )
     })?;
     let (prepared, loaded) =
         prepare_lab_package_bytes("contained-package.zip", &package_bytes, expected)?;
     let package_sha256 = prepared.package_sha256().to_string();
-    let fixture = load_fixture_sequence(&fixture_paths)?;
+    let fixture = load_fixture_sequence(&args.fixtures)?;
     let simulation =
         simulate_contained_task(&prepared, fixture.frames).map_err(map_simulation_error)?;
     let record = OfflineResultRecord {
@@ -58,6 +53,8 @@ pub(super) fn run_dry_run(global: &GlobalOptions, flags: &FlagArgs) -> CliOutcom
         executed: false,
         runtime_head: env!("ACTINGCOMMAND_RUNTIME_HEAD"),
         package_sha256: package_sha256.clone(),
+        semantic_fingerprint: simulation.semantic_fingerprint.clone(),
+        decision_fingerprint: simulation.decision_fingerprint.clone(),
         fixture_sequence_sha256: fixture.sequence_sha256.clone(),
         fixtures: fixture.bindings,
         loaded,
@@ -66,15 +63,17 @@ pub(super) fn run_dry_run(global: &GlobalOptions, flags: &FlagArgs) -> CliOutcom
     };
     let bundle = result_bundle(&record)?;
     let bundle_sha256 = sha256_hex(&bundle);
-    write_result_bundle(&out_path, &bundle, &bundle_sha256)?;
+    write_result_bundle(&args.out, &bundle, &bundle_sha256)?;
 
     Ok(json!({
         "status": "offline_simulation",
         "executed": false,
         "runtime_head": env!("ACTINGCOMMAND_RUNTIME_HEAD"),
         "package_sha256": package_sha256,
+        "semantic_fingerprint": record.semantic_fingerprint.as_str(),
+        "decision_fingerprint": record.decision_fingerprint.as_str(),
         "fixture_sequence_sha256": fixture.sequence_sha256,
-        "result_zip": out_path.display().to_string(),
+        "result_zip": args.out.display().to_string(),
         "result_zip_sha256": bundle_sha256,
         "decision": record.simulation.decision,
         "recognition": record.simulation.recognition,
@@ -82,57 +81,109 @@ pub(super) fn run_dry_run(global: &GlobalOptions, flags: &FlagArgs) -> CliOutcom
     }))
 }
 
-fn reject_device_scope(global: &GlobalOptions, flags: &FlagArgs) -> CliOutcome<()> {
-    let unexpected_flags = flags
-        .flags
-        .keys()
-        .filter(|name| {
-            !matches!(
-                name.as_str(),
-                "--zip" | "--out" | "--expected-sha256" | "--fixture"
-            )
-        })
-        .cloned()
-        .collect::<Vec<_>>();
-    if !unexpected_flags.is_empty() {
-        return Err(CliError::usage(format!(
-            "package dry-run received unsupported flags: {}",
-            unexpected_flags.join(", ")
-        )));
-    }
-    if global.instance.is_some()
-        || !global.instances.is_empty()
-        || global.profile.is_some()
-        || global.game.is_some()
-        || global.server.is_some()
-        || global.runtime_endpoint.is_some()
-        || global.capture_backend.is_some()
-        || global.touch_backend.is_some()
-        || global.run_root.is_some()
-        || global.resource_root.is_some()
-    {
-        return Err(offline_error(
-            "offline_device_scope_forbidden",
-            "package dry-run accepts package and recorded fixtures only; device, Runtime, instance, profile, game, server, and backend selectors are forbidden",
-        ));
-    }
-    Ok(())
+struct PackageDryRunArgs {
+    zip: PathBuf,
+    expected_sha256: String,
+    fixtures: Vec<PathBuf>,
+    out: PathBuf,
 }
 
-fn fixture_paths(flags: &FlagArgs) -> CliOutcome<Vec<PathBuf>> {
-    let paths = flags
-        .values("--fixture")
-        .into_iter()
-        .filter(|value| value != "true")
-        .map(PathBuf::from)
-        .collect::<Vec<_>>();
-    if paths.is_empty() || paths.len() != flags.values("--fixture").len() {
+impl PackageDryRunArgs {
+    fn parse(global: &GlobalOptions, flags: &FlagArgs) -> CliOutcome<Self> {
+        flags.expect_positionals("package dry-run", 0)?;
+        let forbidden_global = global
+            .present_flags
+            .keys()
+            .filter(|name| name.as_str() != "--json")
+            .cloned()
+            .collect::<Vec<_>>();
+        if !forbidden_global.is_empty() {
+            return Err(offline_error(
+                "offline_device_scope_forbidden",
+                format!(
+                    "package dry-run accepts no global Runtime, device, selector, backend, resource, or execution flags; received {}",
+                    forbidden_global.join(", ")
+                ),
+            ));
+        }
+
+        let unexpected = flags
+            .flags
+            .keys()
+            .filter(|name| {
+                !matches!(
+                    name.as_str(),
+                    "--zip" | "--out" | "--expected-sha256" | "--fixture"
+                )
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        if !unexpected.is_empty() {
+            let device_attempt = unexpected.iter().any(|name| {
+                matches!(
+                    name.as_str(),
+                    "--send-input" | "--device" | "--adb" | "--lease" | "--ledger" | "--scheduler"
+                )
+            });
+            return if device_attempt {
+                Err(offline_error(
+                    "offline_device_scope_forbidden",
+                    format!(
+                        "package dry-run cannot accept device, Runtime, scheduler, lease, or ledger capabilities: {}",
+                        unexpected.join(", ")
+                    ),
+                ))
+            } else {
+                Err(CliError::usage(format!(
+                    "package dry-run received unsupported flags: {}",
+                    unexpected.join(", ")
+                )))
+            };
+        }
+
+        let zip = singleton_path(flags, "--zip")?;
+        let out = singleton_path(flags, "--out")?;
+        let expected_sha256 = singleton_value(flags, "--expected-sha256")?;
+        let fixture_values = flags.values("--fixture");
+        if fixture_values.is_empty()
+            || fixture_values
+                .iter()
+                .any(|value| value == "true" || value.trim().is_empty())
+        {
+            return Err(offline_error(
+                "offline_fixture_missing",
+                "package dry-run requires one or more non-empty --fixture <recorded.png> values",
+            ));
+        }
+        let fixtures = fixture_values.into_iter().map(PathBuf::from).collect();
+        Ok(Self {
+            zip,
+            expected_sha256,
+            fixtures,
+            out,
+        })
+    }
+}
+
+fn singleton_path(flags: &FlagArgs, name: &str) -> CliOutcome<PathBuf> {
+    singleton_value(flags, name).map(PathBuf::from)
+}
+
+fn singleton_value(flags: &FlagArgs, name: &str) -> CliOutcome<String> {
+    let values = flags.values(name);
+    let [value] = values.as_slice() else {
         return Err(offline_error(
-            "offline_fixture_missing",
-            "package dry-run requires one or more --fixture <recorded.png> values",
+            "offline_argument_invalid",
+            format!("package dry-run requires exactly one non-empty {name} <value>"),
+        ));
+    };
+    if value == "true" || value.trim().is_empty() {
+        return Err(offline_error(
+            "offline_argument_invalid",
+            format!("package dry-run requires exactly one non-empty {name} <value>"),
         ));
     }
-    Ok(paths)
+    Ok(value.clone())
 }
 
 fn reject_output_collision(out: &Path, zip: &Path, fixtures: &[PathBuf]) -> CliOutcome<()> {
@@ -260,6 +311,8 @@ struct OfflineResultRecord {
     executed: bool,
     runtime_head: &'static str,
     package_sha256: String,
+    semantic_fingerprint: String,
+    decision_fingerprint: String,
     fixture_sequence_sha256: String,
     fixtures: Vec<FixtureBinding>,
     loaded: actingcommand_lab::LabContainedPackageValidationResponse,

@@ -1295,7 +1295,7 @@ impl<'a, L: LedgerSink> LabRunContext<'a, L> {
                 "recognition_unsupported_targets": unsupported_targets_json(state.resources.evaluator.unsupported_targets()),
                 "pages": state.resources.pages_path,
                 "navigation": state.resources.navigation_path,
-                "navigation_loaded": state.resources.navigation.is_some(),
+                "navigation_loaded": state.resources.navigation_loaded,
                 "operation_goal": state.resources.operation_bundle.goal,
                 "entry_page": state.resources.operation_bundle.entry_page,
                 "target_page": state.resources.operation_bundle.target_page,

@@ -8,6 +8,7 @@ use crate::{
 };
 use actingcommand_contract::InputAction;
 use actingcommand_device::Frame;
+use actingcommand_pack_containment::Sha256Hash;
 use serde::Serialize;
 use std::collections::VecDeque;
 use std::error::Error;
@@ -43,6 +44,8 @@ pub struct OfflineSimulationResult {
     pub executed: bool,
     pub package_id: String,
     pub package_sha256: String,
+    pub semantic_fingerprint: String,
+    pub decision_fingerprint: String,
     pub task_id: String,
     pub entry_count: usize,
     pub task_count: usize,
@@ -149,11 +152,16 @@ pub fn simulate_contained_task(
         }
     };
 
+    let semantic_fingerprint = task.semantic_fingerprint().to_string();
+    let decision_fingerprint =
+        fingerprint_decision(&semantic_fingerprint, &runtime.recognition, &decision)?;
     Ok(OfflineSimulationResult {
         mode: "offline_simulation",
         executed: false,
         package_id: task.package_label().to_string(),
         package_sha256: task.package_sha256().to_string(),
+        semantic_fingerprint,
+        decision_fingerprint,
         task_id: task.task_label().to_string(),
         entry_count: task.entry_count(),
         task_count: task.task_count(),
@@ -161,6 +169,39 @@ pub fn simulate_contained_task(
         recognition: runtime.recognition,
         decision,
     })
+}
+
+#[derive(Serialize)]
+struct DecisionFingerprintProjection<'a> {
+    schema_version: &'static str,
+    semantic_fingerprint: &'a str,
+    recognition: &'a [OfflineRecognitionResult],
+    decision: &'a OfflineDecision,
+}
+
+fn fingerprint_decision(
+    semantic_fingerprint: &str,
+    recognition: &[OfflineRecognitionResult],
+    decision: &OfflineDecision,
+) -> Result<String, OfflineSimulationError> {
+    const DOMAIN: &[u8] = b"ActingCommand first decision v1\0";
+    let encoded = serde_json::to_vec(&DecisionFingerprintProjection {
+        schema_version: "actingcommand.first-decision.v1",
+        semantic_fingerprint,
+        recognition,
+        decision,
+    })
+    .map_err(|error| {
+        OfflineSimulationError::with_detail(
+            "offline_decision_fingerprint_failed",
+            error.to_string(),
+        )
+    })?;
+    let mut material = Vec::with_capacity(DOMAIN.len() + 8 + encoded.len());
+    material.extend_from_slice(DOMAIN);
+    material.extend_from_slice(&(encoded.len() as u64).to_be_bytes());
+    material.extend_from_slice(&encoded);
+    Ok(Sha256Hash::digest(&material).to_string())
 }
 
 struct PlannedEffect {
@@ -271,8 +312,8 @@ mod tests {
         let task = prepare(&package_bytes);
         let offline =
             simulate_contained_task(&task, vec![home_frame(true)]).expect("offline simulation");
-        let offline_action = match offline.decision {
-            OfflineDecision::WouldClick { action, .. } => action,
+        let offline_action = match &offline.decision {
+            OfflineDecision::WouldClick { action, .. } => action.clone(),
             other => panic!("expected would-click, got {other:?}"),
         };
         let mut effecting = EffectingRuntime::new(vec![home_frame(true), terminal_frame()]);
@@ -281,6 +322,34 @@ mod tests {
 
         assert_eq!(outcome.executed_steps, 1);
         assert_eq!(effecting.actions, vec![offline_action]);
+        let (recognition, decision) = effecting
+            .first_decision
+            .expect("effecting first-decision trace");
+        assert_eq!(
+            fingerprint_decision(task.semantic_fingerprint(), &recognition, &decision)
+                .expect("effecting decision fingerprint"),
+            offline.decision_fingerprint
+        );
+    }
+
+    #[test]
+    fn equivalent_page_spelling_and_json_array_order_keep_decision_identity() {
+        let canonical = package(PackageOptions::default());
+        let variant = package(PackageOptions {
+            unqualified_page_ids: true,
+            reverse_page_order: true,
+            ..PackageOptions::default()
+        });
+
+        let canonical = simulate_contained_task(&prepare(&canonical), vec![home_frame(true)])
+            .expect("canonical decision");
+        let variant = simulate_contained_task(&prepare(&variant), vec![home_frame(true)])
+            .expect("equivalent decision");
+
+        assert_eq!(canonical.semantic_fingerprint, variant.semantic_fingerprint);
+        assert_eq!(canonical.decision_fingerprint, variant.decision_fingerprint);
+        assert_eq!(canonical.decision, variant.decision);
+        assert_eq!(canonical.recognition, variant.recognition);
     }
 
     #[test]
@@ -366,12 +435,46 @@ mod tests {
         );
     }
 
+    #[test]
+    fn bounded_admitted_observation_fuzz_is_panic_free_and_deterministic() {
+        const CASES: usize = 256;
+        let package_bytes = package(PackageOptions::default());
+        let task = prepare(&package_bytes);
+        let mut state = 0x68_0ff1_1e55_cafe_u64;
+
+        for case in 0..CASES {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            let pixels = state.to_le_bytes()[..6].to_vec();
+            let frame = Frame::from_pixels(
+                2,
+                1,
+                pixels,
+                PixelFormat::Rgb8,
+                CaptureBackendName::AdbScreencap,
+            )
+            .expect("bounded fuzz frame");
+            let evaluate = || match simulate_contained_task(&task, vec![frame.clone()]) {
+                Ok(result) => format!("decision:{}", result.decision_fingerprint),
+                Err(error) => format!("error:{}:{:?}", error.code(), error.detail()),
+            };
+            let first = std::panic::catch_unwind(std::panic::AssertUnwindSafe(evaluate))
+                .unwrap_or_else(|_| panic!("admitted observation case {case} panicked"));
+            let second = std::panic::catch_unwind(std::panic::AssertUnwindSafe(evaluate))
+                .unwrap_or_else(|_| panic!("admitted observation replay case {case} panicked"));
+            assert_eq!(first, second, "admitted observation case {case} drifted");
+        }
+    }
+
     #[derive(Clone, Copy)]
     struct PackageOptions {
         execution_mode: &'static str,
         include_guard: bool,
         conflicting_page: bool,
         recovery: bool,
+        unqualified_page_ids: bool,
+        reverse_page_order: bool,
     }
 
     impl Default for PackageOptions {
@@ -381,6 +484,8 @@ mod tests {
                 include_guard: true,
                 conflicting_page: false,
                 recovery: false,
+                unqualified_page_ids: false,
+                reverse_page_order: false,
             }
         }
     }
@@ -427,11 +532,14 @@ mod tests {
             task["recovery"] = json!({"kind": "return_home", "task_id": "return_home"});
         }
         let mut pages = vec![
-            json!({"id":"neutral/home","required":["page/home"],"optional":[],"forbidden":[]}),
-            json!({"id":"neutral/terminal","required":["page/terminal"],"optional":[],"forbidden":[]}),
+            json!({"id":if options.unqualified_page_ids { "home" } else { "neutral/home" },"required":["page/home"],"optional":[],"forbidden":[]}),
+            json!({"id":if options.unqualified_page_ids { "terminal" } else { "neutral/terminal" },"required":["page/terminal"],"optional":[],"forbidden":[]}),
         ];
         if options.conflicting_page {
-            pages.push(json!({"id":"neutral/duplicate","required":["page/home"],"optional":[],"forbidden":[]}));
+            pages.push(json!({"id":if options.unqualified_page_ids { "duplicate" } else { "neutral/duplicate" },"required":["page/home"],"optional":[],"forbidden":[]}));
+        }
+        if options.reverse_page_order {
+            pages.reverse();
         }
         zip_entries(&[
             ("control.json", control),
@@ -458,6 +566,21 @@ mod tests {
             (
                 "resources/recognition/neutral.test.pages.json",
                 json!({"schema_version":"0.3","pages":pages}),
+            ),
+            (
+                "resources/navigation/neutral.test.navigation.json",
+                json!({
+                    "schema_version":"0.3",
+                    "game":"neutral",
+                    "server":"test",
+                    "navigation":[{
+                        "id":"open_terminal",
+                        "from_page":"home",
+                        "to_page":"terminal",
+                        "click":{"kind":"point","x":1,"y":0}
+                    }],
+                    "destructive_actions":[]
+                }),
             ),
         ])
     }
@@ -519,6 +642,8 @@ mod tests {
     struct EffectingRuntime {
         frames: VecDeque<Frame>,
         actions: Vec<InputAction>,
+        recognition: Vec<OfflineRecognitionResult>,
+        first_decision: Option<(Vec<OfflineRecognitionResult>, OfflineDecision)>,
     }
 
     impl EffectingRuntime {
@@ -526,6 +651,8 @@ mod tests {
             Self {
                 frames: frames.into(),
                 actions: Vec::new(),
+                recognition: Vec::new(),
+                first_decision: None,
             }
         }
     }
@@ -542,7 +669,36 @@ mod tests {
             Ok(())
         }
 
-        fn record(&mut self, _trace: ContainedTaskTrace) -> Result<(), Self::Error> {
+        fn record(&mut self, trace: ContainedTaskTrace) -> Result<(), Self::Error> {
+            match trace {
+                ContainedTaskTrace::RecognitionCompleted {
+                    candidate_pages,
+                    page_label,
+                    width,
+                    height,
+                } => self.recognition.push(OfflineRecognitionResult {
+                    candidate_pages,
+                    matched_page: page_label,
+                    width,
+                    height,
+                }),
+                ContainedTaskTrace::EffectIntent {
+                    operation_label,
+                    action,
+                    guard,
+                    ..
+                } if self.first_decision.is_none() => {
+                    self.first_decision = Some((
+                        self.recognition.clone(),
+                        OfflineDecision::WouldClick {
+                            operation_label,
+                            action,
+                            guard,
+                        },
+                    ));
+                }
+                _ => {}
+            }
             Ok(())
         }
     }

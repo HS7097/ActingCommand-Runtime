@@ -7,6 +7,7 @@ use actingcommand_contract::{
 use actingcommand_device::{
     CaptureBackend, CaptureBackendName, DeviceError, DeviceResult, Frame, InputBackend, PixelFormat,
 };
+use actingcommand_pack_containment::{Containment, InstanceId as PackageInstanceId, Sha256Hash};
 use actingcommand_resource_tooling::open_published_package;
 use actingcommand_runtime_client::{RuntimeClient, RuntimeClientConfig};
 use actingcommand_runtime_host::{
@@ -314,6 +315,14 @@ fn recorded_resource_is_deterministically_packaged_and_runs_from_containment() {
     build_package(&config, &runtime_root, &repo, &package_two);
     let package_hash = sha256_file(&package_one);
     assert_eq!(read_published(&package_one), read_published(&package_two));
+    let mut containment = Containment::new();
+    containment
+        .load(
+            &PackageInstanceId::new("ak").expect("package instance"),
+            &read_published(&package_one),
+            &Sha256Hash::parse_hex(&package_hash).expect("package hash"),
+        )
+        .expect("authored package must pass executable admission");
     assert_eq!(
         promoted
             .pointer("/data/authoring/receipt/validation/package_sha256")

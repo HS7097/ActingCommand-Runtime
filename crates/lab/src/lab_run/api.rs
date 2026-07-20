@@ -106,10 +106,9 @@ fn validate_lab_package_zip_with_expected(
     let input_sha256 = contained.sha256.clone();
     let hash_source = contained.hash_source.to_string();
     let externally_verified = contained.externally_verified;
-    let entry_count = contained.bundle.entry_count();
-    let control = lab_control_from_bundle(&contained.bundle)?;
-    control.validate()?;
-    let resources = load_lab_resources_from_bundle(contained.bundle, &control)?;
+    let entry_count = contained.entry_count;
+    let control = lab_control_from_admitted(&contained.package)?;
+    let resources = load_lab_resources_from_admitted(contained.package, &control)?;
     Ok(LabValidateResponse {
         zip: zip_path.display().to_string(),
         status: "valid".to_string(),
@@ -166,18 +165,12 @@ pub fn prepare_lab_package_bytes(
         .map_err(|error| CliError::package_invalid(error.to_string()))?;
     let prepared = PreparedContainedTask::from_verified_bundle(&admitted)
         .map_err(|error| CliError::package_invalid(error.to_string()))?;
-    let sha256 = admitted.loaded_bundle().verified_hash().to_string();
-    let task_count = admitted.loaded_bundle().task_count();
-    let entries = admitted
-        .loaded_bundle()
-        .entry_paths()
-        .map(str::to_string)
-        .collect::<Vec<_>>();
-    let bundle = admitted.into_loaded_bundle();
-    let entry_count = bundle.entry_count();
-    let control = lab_control_from_bundle(&bundle)?;
-    control.validate()?;
-    let resources = load_lab_resources_from_bundle(bundle, &control)?;
+    let sha256 = admitted.package_sha256().to_string();
+    let task_count = admitted.task_count();
+    let entries = admitted_entry_paths(admitted.admitted_package());
+    let entry_count = admitted.entry_count();
+    let control = lab_control_from_admitted(admitted.admitted_package())?;
+    let resources = load_lab_resources_from_admitted(admitted.into_admitted_package(), &control)?;
     let validation = LabValidateResponse {
         zip: input_label.to_string(),
         status: "valid".to_string(),
@@ -256,15 +249,14 @@ fn execute_lab_run<P: LabPorts>(
         request.expected_input_sha256,
     )?;
     ctx.input_zip_sha256 = Some(contained.sha256.clone());
-    ctx.input_entries = contained.bundle.entry_paths().map(str::to_string).collect();
+    ctx.input_entries = contained.entries;
     ctx.event(
         "input_unpacked",
         json!({"entry_count": ctx.input_entries.len(), "containment": "memory", "input_sha256": contained.sha256}),
     )?;
 
     ctx.set_phase("control_loaded");
-    let control = lab_control_from_bundle(&contained.bundle)?;
-    control.validate()?;
+    let control = lab_control_from_admitted(&contained.package)?;
     ctx.control = Some(control.clone());
     let mut frame_store_config =
         FrameStoreConfig::default().with_memory_source(request.process.memory_source);
@@ -301,7 +293,7 @@ fn execute_lab_run<P: LabPorts>(
     let max_steps = control.max_steps.unwrap_or(DEFAULT_MAX_STEPS);
 
     ctx.set_phase("resources_loaded");
-    let resources = load_lab_resources_from_bundle(contained.bundle, &control)?;
+    let resources = load_lab_resources_from_admitted(contained.package, &control)?;
     ctx.event(
         "resources_loaded",
         json!({
@@ -593,7 +585,9 @@ struct ContainedLabInput {
     sha256: String,
     hash_source: &'static str,
     externally_verified: bool,
-    bundle: LoadedBundle,
+    entry_count: usize,
+    entries: Vec<String>,
+    package: AdmittedPackage,
 }
 
 fn load_lab_package_for_validation(
@@ -604,23 +598,22 @@ fn load_lab_package_for_validation(
     let bytes = open_published_package(zip_path)?.read_all()?;
     let externally_verified = expected_input_sha256.is_some();
     let expected = expected_input_sha256.unwrap_or_else(|| Sha256Hash::digest(&bytes));
-    let instance = InstanceId::new(instance_label).map_err(containment_error)?;
-    let mut containment = Containment::new();
-    containment
-        .load(&instance, &bytes, &expected)
-        .map_err(containment_error)?;
-    let bundle = containment
-        .take_loaded(&instance)
-        .ok_or_else(|| CliError::package_invalid("containment did not retain loaded Lab bundle"))?;
+    let expected = ExternalExpectedSha256::parse_hex(&expected.to_string())
+        .map_err(|error| CliError::package_invalid(error.to_string()))?;
+    let admitted = ExternallyVerifiedBundle::load(instance_label, &bytes, expected)
+        .map_err(|error| CliError::package_invalid(error.to_string()))?;
+    let entries = admitted_entry_paths(admitted.admitted_package());
     Ok(ContainedLabInput {
-        sha256: expected.to_string(),
+        sha256: admitted.package_sha256().to_string(),
         hash_source: if externally_verified {
             "externally_supplied"
         } else {
             "self_computed_provenance_only"
         },
         externally_verified,
-        bundle,
+        entry_count: admitted.entry_count(),
+        entries,
+        package: admitted.into_admitted_package(),
     })
 }
 
@@ -632,15 +625,40 @@ fn load_lab_package_for_run(
     let bytes = open_published_package(zip_path)?.read_all()?;
     let admitted = ExternallyVerifiedBundle::load(instance_label, &bytes, expected_input_sha256)
         .map_err(|error| CliError::package_invalid(error.to_string()))?;
-    let sha256 = admitted.loaded_bundle().verified_hash().to_string();
+    let entries = admitted_entry_paths(admitted.admitted_package());
     Ok(ContainedLabInput {
-        sha256,
+        sha256: admitted.package_sha256().to_string(),
         hash_source: "externally_supplied",
         externally_verified: true,
-        bundle: admitted.into_loaded_bundle(),
+        entry_count: admitted.entry_count(),
+        entries,
+        package: admitted.into_admitted_package(),
     })
 }
 
-fn containment_error(err: ContainmentError) -> CliError {
-    CliError::package_invalid(err.to_string())
+fn admitted_entry_paths(package: &AdmittedPackage) -> Vec<String> {
+    let control = package.control();
+    let stem = format!("{}.{}", control.game(), control.server());
+    let mut entries = vec![
+        "control.json".to_string(),
+        "resources/manifest.json".to_string(),
+        format!("resources/recognition/{stem}.pack.json"),
+        format!("resources/recognition/{stem}.pages.json"),
+    ];
+    entries.extend(
+        package
+            .tasks()
+            .map(|task| format!("resources/operations/{}/task.json", task.key().as_str())),
+    );
+    entries.extend(
+        package
+            .assets()
+            .map(|(asset, _)| format!("resources/{}", asset.as_str())),
+    );
+    if package.navigation().is_some() {
+        entries.push(format!("resources/navigation/{stem}.navigation.json"));
+    }
+    entries.sort();
+    entries.dedup();
+    entries
 }

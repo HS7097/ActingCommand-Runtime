@@ -1426,14 +1426,17 @@ fn write_semantic_resources(root: &std::path::Path) {
             "schema_version":"0.3",
             "coordinate_space":{"width":1,"height":1},
             "targets":[
-                {"type":"color","id":"home_button","region":{"x":0,"y":0,"width":1,"height":1},"expected":[255,0,0],"click":{"x":10,"y":20,"width":4,"height":6}}
+                {"type":"color","id":"home_button","region":{"x":0,"y":0,"width":1,"height":1},"expected":[255,0,0],"click":{"x":0,"y":0,"width":1,"height":1}}
             ]
         }"#,
     )
     .expect("recognition pack");
     fs::write(
         recognition.join("arknights.cn.pages.json"),
-        r#"{"schema_version":"0.3","pages":[]}"#,
+        r#"{
+            "schema_version":"0.3",
+            "pages":[{"id":"arknights/home","required":["home_button"]}]
+        }"#,
     )
     .expect("page set");
     fs::write(
@@ -1495,6 +1498,7 @@ fn write_semantic_package(path: &Path, root: &Path) {
     let navigation =
         fs::read(root.join("navigation/arknights.cn.navigation.json")).expect("navigation");
     let navigation_value: Value = serde_json::from_slice(&navigation).expect("navigation JSON");
+    let pack_value: Value = serde_json::from_slice(&pack).expect("pack JSON");
     let game = navigation_value["game"].as_str().expect("navigation game");
     let server = navigation_value["server"]
         .as_str()
@@ -1514,23 +1518,38 @@ fn write_semantic_package(path: &Path, root: &Path) {
             })
         })
         .collect::<Vec<_>>();
+    let width = pack_value["coordinate_space"]["width"]
+        .as_u64()
+        .expect("pack width");
+    let height = pack_value["coordinate_space"]["height"]
+        .as_u64()
+        .expect("pack height");
+    let navigable = !operations.is_empty();
+    let control = serde_json::to_vec(&json!({
+        "schema_version": "Lab-1y.control.v1",
+        "package_id": "runtime.semantic.fixture",
+        "execution_mode": if navigable { "navigable_route" } else { "recognize_only" },
+        "game": game,
+        "server": server,
+        "resolution": {"width": width, "height": height},
+        "entry_task_id": "task",
+        "allow_placeholder_coords": true
+    }))
+    .expect("control JSON");
     let operation = serde_json::to_vec(&json!({
         "schema_version": "0.6",
         "task_id": "task",
         "game": game,
         "server_scope": [server],
         "goal": "runtime semantic closure",
-        "coordinate_space": {"width": 1, "height": 1},
+        "coordinate_space": {"width": width, "height": height},
         "operations": operations
     }))
     .expect("operation JSON");
     write_zip(
         path,
         &[
-            (
-                "control.json",
-                br#"{"game":"arknights","server":"cn","entry_task_id":"task"}"#,
-            ),
+            ("control.json", &control),
             (
                 "resources/manifest.json",
                 br#"{"schema_version":"0.3","entry_task_id":"task"}"#,
@@ -2040,6 +2059,21 @@ fn write_runtime_owned_lab_package(path: &Path) {
                         {"id":"neutral/home","required":["page/home"],"optional":[],"forbidden":[]},
                         {"id":"neutral/terminal","required":["page/terminal"],"optional":[],"forbidden":[]}
                     ]
+                }"#,
+            ),
+            (
+                "resources/navigation/neutral.test.navigation.json",
+                br#"{
+                    "schema_version":"0.3",
+                    "game":"neutral",
+                    "server":"test",
+                    "navigation":[{
+                        "id":"open_terminal",
+                        "from_page":"neutral/home",
+                        "to_page":"neutral/terminal",
+                        "click":{"kind":"point","x":1,"y":1}
+                    }],
+                    "destructive_actions":[]
                 }"#,
             ),
         ],

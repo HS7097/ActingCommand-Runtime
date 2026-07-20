@@ -3,7 +3,7 @@
 //! Pure semantic-drive planning owned by the execution kernel.
 
 use actingcommand_contract::InputAction;
-use actingcommand_pack_containment::{NavigationContract, NavigationInput, NavigationRect};
+use actingcommand_pack_containment::{AdmittedAction, AdmittedPackage, BoundedRect, PageSelector};
 use actingcommand_recognition_pack::PackRect;
 use serde::Serialize;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
@@ -175,54 +175,63 @@ impl DriveNavigationEdge {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct DestructiveRegion {
-    page: Option<String>,
+    page: PageSelector,
     rect: PackRect,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DriveNavigationGraph {
-    game: Option<String>,
+    game: String,
     edges: Vec<DriveNavigationEdge>,
     destructive_regions: Vec<DestructiveRegion>,
     control_points: Vec<String>,
 }
 
 impl DriveNavigationGraph {
-    pub fn parse_json(source: &str) -> Result<Self, DriveDecisionError> {
-        let contract = NavigationContract::parse_json(source)
-            .map_err(|error| DriveDecisionError::invalid(error.to_string()))?;
-        Self::from_contract(&contract)
-    }
-
-    pub fn from_contract(contract: &NavigationContract) -> Result<Self, DriveDecisionError> {
-        let edges = contract
+    pub fn from_admitted(package: &AdmittedPackage) -> Result<Self, DriveDecisionError> {
+        let navigation = package
+            .navigation()
+            .ok_or_else(|| DriveDecisionError::package("admitted package has no navigation"))?;
+        let edges = navigation
             .routes()
             .iter()
             .map(|route| {
+                let operation = package.operation(route.operation()).ok_or_else(|| {
+                    DriveDecisionError::package(format!(
+                        "admitted route references missing operation '{}'",
+                        route.operation()
+                    ))
+                })?;
+                let to_page = operation.to().ok_or_else(|| {
+                    DriveDecisionError::package(format!(
+                        "admitted route operation '{}' has no target page",
+                        operation.key()
+                    ))
+                })?;
                 Ok(DriveNavigationEdge {
-                    id: route.id().to_string(),
-                    from_page: route.from_page().to_string(),
-                    to_page: route.to_page().to_string(),
-                    input: drive_semantic_input(route.input())?,
+                    id: operation.key().operation().to_string(),
+                    from_page: page_selector_text(operation.from()),
+                    to_page: to_page.to_string(),
+                    input: drive_semantic_input(operation.action())?,
                     source: route.source().map(str::to_string),
                 })
             })
             .collect::<Result<Vec<_>, DriveDecisionError>>()?;
-        let destructive_regions = contract
-            .destructive_actions()
+        let destructive_regions = navigation
+            .destructive_regions()
             .iter()
             .map(|action| DestructiveRegion {
-                page: action.page().map(str::to_string),
+                page: action.page().clone(),
                 rect: pack_rect(action.rect()),
             })
             .collect();
-        let control_points = contract
+        let control_points = navigation
             .control_points()
             .iter()
             .map(|point| point.name().to_string())
             .collect();
         Ok(Self {
-            game: Some(contract.game().to_string()),
+            game: package.control().game().to_string(),
             edges,
             destructive_regions,
             control_points,
@@ -233,10 +242,7 @@ impl DriveNavigationGraph {
         if page.contains('/') {
             return page.to_string();
         }
-        self.game
-            .as_ref()
-            .map(|game| format!("{game}/{page}"))
-            .unwrap_or_else(|| page.to_string())
+        format!("{}/{page}", self.game)
     }
 
     pub fn find_route(&self, from_page: &str, to_page: &str) -> Option<Vec<DriveNavigationEdge>> {
@@ -248,7 +254,9 @@ impl DriveNavigationGraph {
                 break;
             }
             for (index, edge) in self.edges.iter().enumerate() {
-                if edge.from_page != page || seen.contains(&edge.to_page) {
+                if (edge.from_page != page && edge.from_page != "any")
+                    || seen.contains(&edge.to_page)
+                {
                     continue;
                 }
                 seen.insert(edge.to_page.clone());
@@ -285,10 +293,7 @@ impl DriveNavigationGraph {
     ) -> Result<(), DriveDecisionError> {
         for rect in semantic_input_rects(input) {
             if self.destructive_regions.iter().any(|other| {
-                other
-                    .page
-                    .as_deref()
-                    .is_none_or(|page| page == "any" || page == edge.from_page)
+                destructive_page_matches(&other.page, &edge.from_page)
                     && rects_intersect(rect, other.rect)
             }) {
                 return Err(DriveDecisionError::safety(
@@ -375,42 +380,70 @@ pub fn derive_absolute_coordinate_rect_from_match(
     })
 }
 
-fn drive_semantic_input(input: &NavigationInput) -> Result<DriveSemanticInput, DriveDecisionError> {
+fn drive_semantic_input(input: &AdmittedAction) -> Result<DriveSemanticInput, DriveDecisionError> {
     match input {
-        NavigationInput::Tap { rect } => {
+        AdmittedAction::Tap { rect, point } => {
             let rect = pack_rect(*rect);
             Ok(DriveSemanticInput::Tap {
                 rect,
-                point: drive_rect_center(rect)?,
+                point: DrivePoint {
+                    x: point.x(),
+                    y: point.y(),
+                },
             })
         }
-        NavigationInput::TargetCenter { target_id } => Ok(DriveSemanticInput::TargetCenter {
-            target_id: target_id.clone(),
+        AdmittedAction::TargetTap { target, .. } => Ok(DriveSemanticInput::TargetCenter {
+            target_id: target.to_string(),
         }),
-        NavigationInput::Drag {
+        AdmittedAction::Drag {
             from_rect,
             to_rect,
-            duration_ms,
+            from,
+            to,
+            duration,
         } => {
             let from_rect = pack_rect(*from_rect);
             let to_rect = pack_rect(*to_rect);
             Ok(DriveSemanticInput::Drag {
                 from_rect,
                 to_rect,
-                from: drive_rect_center(from_rect)?,
-                to: drive_rect_center(to_rect)?,
-                duration_ms: *duration_ms,
+                from: DrivePoint {
+                    x: from.x(),
+                    y: from.y(),
+                },
+                to: DrivePoint {
+                    x: to.x(),
+                    y: to.y(),
+                },
+                duration_ms: duration.milliseconds(),
             })
         }
+        AdmittedAction::LongTap { .. } => Err(DriveDecisionError::package(
+            "admitted navigation route cannot use a long-tap action",
+        )),
     }
 }
 
-fn pack_rect(rect: NavigationRect) -> PackRect {
+fn pack_rect(rect: BoundedRect) -> PackRect {
     PackRect {
-        x: rect.x,
-        y: rect.y,
-        width: rect.width,
-        height: rect.height,
+        x: rect.x(),
+        y: rect.y(),
+        width: rect.width(),
+        height: rect.height(),
+    }
+}
+
+fn page_selector_text(selector: &PageSelector) -> String {
+    match selector {
+        PageSelector::Any => "any".to_string(),
+        PageSelector::Exact(page) => page.to_string(),
+    }
+}
+
+fn destructive_page_matches(selector: &PageSelector, page: &str) -> bool {
+    match selector {
+        PageSelector::Any => true,
+        PageSelector::Exact(expected) => page == "any" || expected.to_string() == page,
     }
 }
 
@@ -435,24 +468,15 @@ fn rects_intersect(a: PackRect, b: PackRect) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    const NAVIGATION: &str = r#"{
-        "schema_version":"0.3",
-        "game":"fixture01",
-        "server":"test",
-        "navigation":[
-            {"id":"home_to_terminal","from_page":"fixture01/home","to_page":"fixture01/terminal","click":{"kind":"rect","x":10,"y":20,"width":20,"height":10}},
-            {"id":"terminal_to_stage","from_page":"fixture01/terminal","to_page":"fixture01/stage","click":{"kind":"target_center","target_id":"stage_entry"}}
-        ],
-        "destructive_actions":[
-            {"page":"fixture01/home","click":{"kind":"rect","x":100,"y":100,"width":20,"height":20}}
-        ],
-        "control_points":[{"name":"safe","point":[1,2]}]
-    }"#;
+    use crate::{ExternalExpectedSha256, ExternallyVerifiedBundle};
+    use actingcommand_pack_containment::Sha256Hash;
+    use serde_json::{Value, json};
+    use std::io::{Cursor, Write};
+    use zip::{ZipWriter, write::FileOptions};
 
     #[test]
     fn graph_parses_and_returns_shortest_canonical_route() {
-        let graph = DriveNavigationGraph::parse_json(NAVIGATION).expect("graph");
+        let graph = admitted_graph();
         let route = graph
             .find_route("fixture01/home", &graph.canonical_page("stage"))
             .expect("route");
@@ -465,8 +489,21 @@ mod tests {
     }
 
     #[test]
+    fn any_source_route_survives_admission_and_is_a_runtime_fallback() {
+        let graph = admitted_graph_with_source("any", "any");
+        let route = graph
+            .find_route("fixture01/home", &graph.canonical_page("terminal"))
+            .expect("any-source route");
+
+        assert_eq!(route.len(), 1);
+        assert_eq!(route[0].from_page(), "any");
+        assert_eq!(route[0].to_page(), "fixture01/terminal");
+        graph.validate_route(&route).expect("safe any-source route");
+    }
+
+    #[test]
     fn destructive_overlap_and_dangerous_ids_are_safety_blocked() {
-        let graph = DriveNavigationGraph::parse_json(NAVIGATION).expect("graph");
+        let graph = admitted_graph();
         let edge = DriveNavigationEdge {
             id: "open_shop".to_string(),
             from_page: "fixture01/home".to_string(),
@@ -585,5 +622,101 @@ mod tests {
                 .kind(),
             DriveDecisionErrorKind::InvalidInput
         );
+    }
+
+    fn admitted_graph() -> DriveNavigationGraph {
+        admitted_graph_with_source("home", "fixture01/home")
+    }
+
+    fn admitted_graph_with_source(
+        operation_from_page: &str,
+        navigation_from_page: &str,
+    ) -> DriveNavigationGraph {
+        let bytes = package_zip(&[
+            (
+                "control.json",
+                json!({
+                    "schema_version":"Lab-1y.control.v1",
+                    "package_id":"fixture01.task",
+                    "execution_mode":"navigable_route",
+                    "game":"fixture01",
+                    "server":"test",
+                    "resolution":{"width":200,"height":200},
+                    "entry_task_id":"task"
+                }),
+            ),
+            (
+                "resources/manifest.json",
+                json!({"schema_version":"0.3","entry_task_id":"task"}),
+            ),
+            (
+                "resources/operations/task/task.json",
+                json!({
+                    "schema_version":"0.6",
+                    "task_id":"task",
+                    "game":"fixture01",
+                    "server_scope":["test"],
+                    "coordinate_space":{"width":200,"height":200},
+                    "operations":[
+                        {"id":"home_to_terminal","from":operation_from_page,"to":"terminal","click":{"kind":"rect","x":10,"y":20,"width":20,"height":10},"unguarded_trusted_coordinate":true},
+                        {"id":"terminal_to_stage","from":"terminal","to":"stage","click":{"kind":"point","x":30,"y":40},"unguarded_trusted_coordinate":true}
+                    ]
+                }),
+            ),
+            (
+                "resources/recognition/fixture01.test.pack.json",
+                json!({
+                    "schema_version":"0.5",
+                    "game":"fixture01",
+                    "server":"test",
+                    "coordinate_space":{"width":200,"height":200},
+                    "targets":[
+                        {"type":"color","id":"page/home","region":{"x":0,"y":0,"width":1,"height":1},"expected":[255,0,0]},
+                        {"type":"color","id":"page/terminal","region":{"x":1,"y":0,"width":1,"height":1},"expected":[0,255,0]},
+                        {"type":"color","id":"page/stage","region":{"x":2,"y":0,"width":1,"height":1},"expected":[0,0,255]}
+                    ]
+                }),
+            ),
+            (
+                "resources/recognition/fixture01.test.pages.json",
+                json!({"schema_version":"0.5","pages":[
+                    {"id":"fixture01/home","required":["page/home"]},
+                    {"id":"fixture01/terminal","required":["page/terminal"]},
+                    {"id":"fixture01/stage","required":["page/stage"]}
+                ]}),
+            ),
+            (
+                "resources/navigation/fixture01.test.navigation.json",
+                json!({
+                    "schema_version":"0.5",
+                    "game":"fixture01",
+                    "server":"test",
+                    "navigation":[
+                        {"id":"home_to_terminal","from_page":navigation_from_page,"to_page":"fixture01/terminal","click":{"kind":"rect","x":10,"y":20,"width":20,"height":10}},
+                        {"id":"terminal_to_stage","from_page":"fixture01/terminal","to_page":"fixture01/stage","click":{"kind":"point","x":30,"y":40}}
+                    ],
+                    "destructive_actions":[
+                        {"page":"fixture01/home","click":{"kind":"rect","x":100,"y":100,"width":20,"height":20}}
+                    ],
+                    "control_points":[{"name":"safe","point":[1,2]}]
+                }),
+            ),
+        ]);
+        let expected = ExternalExpectedSha256::parse_hex(&Sha256Hash::digest(&bytes).to_string())
+            .expect("expected hash");
+        let bundle = ExternallyVerifiedBundle::load("drive_fixture", &bytes, expected)
+            .expect("admitted package");
+        DriveNavigationGraph::from_admitted(bundle.admitted_package()).expect("graph")
+    }
+
+    fn package_zip(entries: &[(&str, Value)]) -> Vec<u8> {
+        let mut zip = ZipWriter::new(Cursor::new(Vec::new()));
+        let options = FileOptions::default().compression_method(zip::CompressionMethod::Stored);
+        for (path, value) in entries {
+            zip.start_file(*path, options).expect("zip entry");
+            serde_json::to_writer(&mut zip, value).expect("zip JSON");
+            zip.write_all(b"\n").expect("zip newline");
+        }
+        zip.finish().expect("finish zip").into_inner()
     }
 }

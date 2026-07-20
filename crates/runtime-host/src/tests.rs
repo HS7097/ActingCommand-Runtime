@@ -2086,6 +2086,21 @@ fn neutral_contained_task_package() -> Vec<u8> {
                 ]
             }"#,
         ),
+        (
+            "resources/navigation/neutral.test.navigation.json",
+            br#"{
+                "schema_version":"0.3",
+                "game":"neutral",
+                "server":"test",
+                "navigation":[{
+                    "id":"open_terminal",
+                    "from_page":"neutral/home",
+                    "to_page":"neutral/terminal",
+                    "click":{"kind":"point","x":1,"y":0}
+                }],
+                "destructive_actions":[]
+            }"#,
+        ),
     ];
     for (path, contents) in files {
         zip.start_file(*path, options).expect("zip entry");

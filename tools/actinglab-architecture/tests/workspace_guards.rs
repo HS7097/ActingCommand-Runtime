@@ -431,17 +431,18 @@ fn c6_actinglab_does_not_construct_live_device_backends() {
 #[test]
 fn c5_drive_decisions_are_owned_by_execution_kernel() {
     let root = workspace_root();
-    let contract = fs::read_to_string(root.join("crates/pack-containment/src/navigation.rs"))
-        .expect("read canonical navigation contract source");
+    let contract = fs::read_to_string(root.join("crates/pack-containment/src/admission.rs"))
+        .expect("read admitted package contract source");
     let kernel = fs::read_to_string(root.join("crates/execution-kernel/src/drive.rs"))
         .expect("read execution-kernel drive source");
     let lab = fs::read_to_string(root.join("crates/lab/src/drive.rs"))
         .expect("read Lab drive adapter source");
 
     for required in [
-        "pub struct NavigationContract",
-        "pub enum NavigationInput",
-        "pub fn parse_value",
+        "pub struct AdmittedPackage",
+        "pub struct AdmittedNavigation",
+        "pub struct AdmittedRoute",
+        "pub enum AdmittedAction",
     ] {
         assert!(
             contract.contains(required),
@@ -451,7 +452,7 @@ fn c5_drive_decisions_are_owned_by_execution_kernel() {
     for required in [
         "pub struct DriveNavigationGraph",
         "pub enum DriveSemanticInput",
-        "pub fn from_contract",
+        "pub fn from_admitted",
         "pub fn find_route",
         "pub fn validate_route",
         "pub fn validate_resolved_input",
@@ -498,9 +499,9 @@ fn c5_drive_decisions_are_owned_by_execution_kernel() {
     }
     assert!(
         lab.contains("DriveNavigationGraph as NavigationGraph")
-            && lab.contains("bundle.navigation_contract()")
-            && lab.contains("NavigationGraph::from_contract(navigation)"),
-        "Lab adapter must consume the admitted typed navigation contract through execution-kernel"
+            && lab.contains("request.input.resources.admitted_package()")
+            && lab.contains("NavigationGraph::from_admitted(package)"),
+        "Lab adapter must consume the opaque admitted package through execution-kernel"
     );
 }
 

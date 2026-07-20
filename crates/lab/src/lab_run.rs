@@ -31,7 +31,8 @@ use actingcommand_ledger::{
 #[cfg(test)]
 use actingcommand_ledger::{LabLedger, LabLogError};
 use actingcommand_pack_containment::{
-    Containment, ContainmentError, InstanceId, LoadedBundle, Sha256Hash,
+    AdmittedAction, AdmittedGuard, AdmittedOperation, AdmittedPackage, AdmittedTask, BoundedRect,
+    GuardVerification, OpaqueMetadata, PageKey, PageSelector, Sha256Hash, TargetTapMode,
 };
 use actingcommand_page_detector::{PageDetector, PageEvaluation, PageTargetRole};
 use actingcommand_recognition::{Scene, ScenePixelFormat};
@@ -39,7 +40,6 @@ use actingcommand_recognition_pack::{
     PackRect, RecognitionEvaluator, TargetEvaluation, TargetKind, UnsupportedRecognitionTarget,
 };
 use actingcommand_resource_tooling::open_published_package;
-use serde::Deserialize;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
@@ -52,7 +52,6 @@ use zip::ZipWriter;
 #[cfg(test)]
 use zip::write::FileOptions;
 
-const CONTROL_SCHEMA: &str = "Lab-1y.control.v1";
 const SUMMARY_SCHEMA: &str = "Lab-1y.summary.v1";
 const DEFAULT_CAPTURE_INTERVAL_MS: u64 = 300;
 const DEFAULT_TIMEOUT_MS: u64 = 120_000;
