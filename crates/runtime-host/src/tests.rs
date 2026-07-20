@@ -2053,12 +2053,13 @@ fn neutral_contained_task_package() -> Vec<u8> {
                 "coordinate_space":{"width":2,"height":1},
                 "entry_page":"home",
                 "target_page":"terminal",
-                "operations":[{
-                    "id":"open_terminal",
-                    "from":"home",
-                    "to":"terminal",
-                    "click":{"kind":"point","x":1,"y":0}
-                }]
+                 "operations":[{
+                     "id":"open_terminal",
+                     "from":"home",
+                     "to":"terminal",
+                     "click":{"kind":"point","x":1,"y":0},
+                     "unguarded_trusted_coordinate":true
+                 }]
             }"#,
         ),
         (

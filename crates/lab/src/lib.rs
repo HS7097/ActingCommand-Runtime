@@ -33,7 +33,7 @@ pub use drive::*;
 pub use drive_api::*;
 pub use env_api::*;
 pub use env_detection::*;
-pub use lab_run::target_evaluations_stable_for_wait;
+pub use lab_run::{target_evaluations_stable_for_wait, validate_lab_package_bytes};
 pub use lab_run_api::*;
 pub use ledger_port::*;
 pub use maa_task_graph::{MaaTaskGraph, MaaTaskGraphStats, compile_maa_task_graph};
@@ -47,9 +47,10 @@ pub use state::*;
 pub use actingcommand_artifact_store::{FrameStoreControl, MemorySample, MemorySampleSource};
 pub use actingcommand_contract::{LabError, LabResult};
 pub use actingcommand_execution_kernel::{
-    DetectKind, RecoveryAction, RecoveryExecError, RecoveryExecutionReport, RecoveryGraph,
-    RecoveryNode, RecoveryResult, RecoveryRuntime, RecoverySignal, RecoveryStatus,
-    execute_recovery_graph,
+    DetectKind, OfflineSimulationError, OfflineSimulationResult, PreparedContainedTask,
+    RecoveryAction, RecoveryExecError, RecoveryExecutionReport, RecoveryGraph, RecoveryNode,
+    RecoveryResult, RecoveryRuntime, RecoverySignal, RecoveryStatus, execute_recovery_graph,
+    simulate_contained_task,
 };
 
 pub struct Lab<P: LabPorts> {

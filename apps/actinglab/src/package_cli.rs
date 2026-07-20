@@ -7,6 +7,17 @@ use serde::Serialize;
 use serde_json::Value;
 use std::path::Path;
 
+#[path = "package_offline.rs"]
+mod offline;
+
+pub(super) fn run_offline(global: &GlobalOptions, flags: &FlagArgs) -> CliOutcome<Value> {
+    offline::run_dry_run(global, flags)
+}
+
+pub(super) fn offline_capability() -> Value {
+    offline::capability()
+}
+
 pub(super) fn run_validate(global: &GlobalOptions, flags: &FlagArgs) -> CliOutcome<Value> {
     let zip = flags.required_path("--zip")?;
     let expected_input_sha256 = optional_expected_sha256(flags)?;
