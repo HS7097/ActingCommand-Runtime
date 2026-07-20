@@ -6,15 +6,15 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use actingcommand_actinglab_architecture::trusted_provenance::{
-    DEFAULT_WORKFLOW_ISSUE, GhApprovalCommentSource, TrustedProvenanceRequest,
-    verify_trusted_provenance,
+    DEFAULT_WORKFLOW_ISSUE, GhApprovalCommentSource, TrustedProvenanceReport,
+    TrustedProvenanceRequest, verify_trusted_provenance,
 };
 
 fn main() -> ExitCode {
     match run() {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
-            eprintln!("FATAL: {error}");
+            eprintln!("FATAL: {}", public_failure_message(&error));
             ExitCode::FAILURE
         }
     }
@@ -23,15 +23,38 @@ fn main() -> ExitCode {
 fn run() -> Result<(), String> {
     let request = parse_args(env::args().skip(1))?;
     let report = verify_trusted_provenance(&workspace_root()?, &request, &GhApprovalCommentSource)?;
-    println!(
-        "trusted provenance verified: comment={}, sequence={}, head={}, scopes={}, changed_paths={}",
-        report.approval_comment_id,
-        report.sequence,
-        report.head_sha,
-        report.scopes.join(","),
-        report.changed_paths.len()
-    );
+    println!("{}", success_message(&report));
     Ok(())
+}
+
+fn success_message(report: &TrustedProvenanceReport) -> String {
+    format!(
+        "trusted provenance verified: head={}, changed_paths={}",
+        report.head_sha,
+        report.changed_paths.len()
+    )
+}
+
+fn public_failure_message(error: &str) -> &'static str {
+    let code = error.split_once(':').map_or(error, |(code, _)| code);
+    match code {
+        "TP_API_FAILED" => "TP_API_FAILED: Workflow comment verification failed",
+        "TP_MARKER_HEADER_INVALID" => "TP_MARKER_HEADER_INVALID: trusted marker header is invalid",
+        "TP_MARKER_BASE_MISMATCH" => {
+            "TP_MARKER_BASE_MISMATCH: trusted marker base_sha does not bind the requested base"
+        }
+        "TP_MARKER_NOT_FOUND" => {
+            "TP_MARKER_NOT_FOUND: no trusted marker matches the current request"
+        }
+        "TP_MARKER_CONFLICT" => "TP_MARKER_CONFLICT: trusted marker candidates conflict",
+        "TP_MARKER_EDITED" => "TP_MARKER_EDITED: trusted marker must be immutable",
+        "TP_MARKER_BODY_INVALID" => "TP_MARKER_BODY_INVALID: trusted marker body is invalid",
+        "TP_MARKER_HEAD_MISMATCH" => {
+            "TP_MARKER_HEAD_MISMATCH: trusted marker does not bind the requested head"
+        }
+        "TP_MARKER_SOURCE_INVALID" => "TP_MARKER_SOURCE_INVALID: trusted marker source is invalid",
+        _ => "TP_VERIFY_FAILED: trusted provenance verification failed",
+    }
 }
 
 fn parse_args(
@@ -144,5 +167,34 @@ mod tests {
         )
         .unwrap_err();
         assert!(error.contains("duplicate"));
+    }
+
+    #[test]
+    fn public_messages_never_include_private_marker_metadata() {
+        const PRIVATE_SENTINEL: &str = "PRIVATE_MARKER_SENTINEL_DO_NOT_LOG";
+        let report = TrustedProvenanceReport {
+            approval_comment_id: 987_654_321,
+            sequence: 42,
+            head_sha: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".to_string(),
+            scopes: vec![PRIVATE_SENTINEL.to_string()],
+            changed_paths: vec!["src/lib.rs".to_string()],
+        };
+
+        let success = success_message(&report);
+        assert!(success.contains(&report.head_sha));
+        assert!(success.contains("changed_paths=1"));
+        assert!(!success.contains(PRIVATE_SENTINEL));
+        assert!(!success.contains("987654321"));
+        assert!(!success.contains("sequence"));
+        assert!(!success.contains("scopes"));
+
+        for error in [
+            format!("TP_MARKER_BODY_INVALID: {PRIVATE_SENTINEL}"),
+            format!("TP_MARKER_HEADER_INVALID: {PRIVATE_SENTINEL}"),
+            PRIVATE_SENTINEL.to_string(),
+        ] {
+            let public = public_failure_message(&error);
+            assert!(!public.contains(PRIVATE_SENTINEL));
+        }
     }
 }

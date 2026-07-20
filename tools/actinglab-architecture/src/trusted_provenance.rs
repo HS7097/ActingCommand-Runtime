@@ -86,15 +86,14 @@ impl ApprovalCommentSource for GhApprovalCommentSource {
                 &endpoint,
             ])
             .output()
-            .map_err(|error| format!("trusted provenance API client failed to start: {error}"))?;
+            .map_err(|_| {
+                "TP_API_FAILED: Workflow comment client could not be started".to_string()
+            })?;
         if !output.status.success() {
-            return Err(format!(
-                "trusted provenance API request failed: {}",
-                String::from_utf8_lossy(&output.stderr).trim()
-            ));
+            return Err("TP_API_FAILED: Workflow comment request failed".to_string());
         }
         let pages = serde_json::from_slice::<Vec<Vec<GitHubIssueComment>>>(&output.stdout)
-            .map_err(|error| format!("trusted provenance API returned invalid JSON: {error}"))?;
+            .map_err(|_| "TP_API_FAILED: Workflow comment response was invalid".to_string())?;
         Ok(pages.into_iter().flatten().collect())
     }
 }
@@ -112,6 +111,12 @@ enum HeaderIdentityMatch {
     Indeterminate,
     Matches,
     Other,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum MalformedTargetKind {
+    Header,
+    BaseMismatch,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -159,10 +164,9 @@ pub fn verify_trusted_provenance(
     let comments = source.fetch_comments(WORKFLOW_REPOSITORY, request.workflow_issue)?;
     let (comment_id, binding) = select_target_binding(&comments, request, &base)?;
     if binding.head_sha != head {
-        return Err(format!(
-            "trusted provenance marker binds head {}, expected {head}",
-            binding.head_sha
-        ));
+        return Err(
+            "TP_MARKER_HEAD_MISMATCH: trusted marker does not bind the requested head".to_string(),
+        );
     }
     let changed_paths = validate_changed_objects(&root, &base, &head)?;
 
@@ -225,8 +229,12 @@ fn select_target_binding(
             let targets_request = header_targets_request(line, request, base);
             let header = match parse_marker_header(line) {
                 Ok(header) => header,
-                Err(error) if targets_request => {
-                    malformed_targets.push((marker_sequence_hint(line), comment.id, error));
+                Err(_) if targets_request => {
+                    malformed_targets.push((
+                        marker_sequence_hint(line),
+                        comment.id,
+                        MalformedTargetKind::Header,
+                    ));
                     continue;
                 }
                 Err(_) => continue,
@@ -236,20 +244,23 @@ fn select_target_binding(
                 || header.base_sha != base
             {
                 if targets_request {
-                    malformed_targets.push((
-                        Some(header.sequence),
-                        comment.id,
-                        "header identifies the current request with non-canonical identity values"
-                            .to_string(),
-                    ));
+                    let kind = if header.target_repository == request.repository
+                        && header.pull_request == request.pull_request
+                        && header.base_sha != base
+                    {
+                        MalformedTargetKind::BaseMismatch
+                    } else {
+                        MalformedTargetKind::Header
+                    };
+                    malformed_targets.push((Some(header.sequence), comment.id, kind));
                 }
                 continue;
             }
             if comment.issue_url != expected_issue_url {
-                return Err(format!(
-                    "trusted provenance comment {} belongs to {}, expected {expected_issue_url}",
-                    comment.id, comment.issue_url
-                ));
+                return Err(
+                    "TP_MARKER_SOURCE_INVALID: trusted marker came from an unexpected issue"
+                        .to_string(),
+                );
             }
             candidates.push((header.sequence, comment.id, comment, header));
         }
@@ -257,54 +268,59 @@ fn select_target_binding(
 
     let Some(highest_sequence) = candidates.iter().map(|(sequence, _, _, _)| *sequence).max()
     else {
-        if let Some((_, comment_id, error)) = malformed_targets
+        if let Some((_, _, kind)) = malformed_targets
             .iter()
             .max_by_key(|(sequence, id, _)| (sequence.unwrap_or(0), *id))
         {
-            return Err(format!(
-                "trusted provenance comment {comment_id} has malformed target header: {error}"
-            ));
+            return Err(malformed_target_message(*kind, false));
         }
-        return Err(format!(
-            "no trusted provenance marker matches repository {}, pull request {}, and base {base}",
-            request.repository, request.pull_request
-        ));
+        return Err(
+            "TP_MARKER_NOT_FOUND: no trusted provenance marker matches the current request"
+                .to_string(),
+        );
     };
     let mut selected = candidates
         .into_iter()
         .filter(|(sequence, _, _, _)| *sequence == highest_sequence)
         .collect::<Vec<_>>();
     if selected.len() != 1 {
-        let ids = selected
-            .iter()
-            .map(|(_, id, _, _)| id.to_string())
-            .collect::<Vec<_>>()
-            .join(",");
-        return Err(format!(
-            "trusted provenance sequence {highest_sequence} has conflicting target candidates: {ids}"
-        ));
+        return Err(
+            "TP_MARKER_CONFLICT: trusted provenance has conflicting target candidates".to_string(),
+        );
     }
 
     let (_, comment_id, comment, expected_header) = selected.pop().expect("length checked");
-    if let Some((_, malformed_id, error)) = malformed_targets
+    if let Some((_, _, kind)) = malformed_targets
         .iter()
         .filter(|(sequence, id, _)| {
             sequence.is_some_and(|sequence| sequence >= highest_sequence) || *id > comment_id
         })
         .max_by_key(|(sequence, id, _)| (sequence.unwrap_or(0), *id))
     {
-        return Err(format!(
-            "trusted provenance comment {malformed_id} has a newer malformed target header: {error}"
-        ));
+        return Err(malformed_target_message(*kind, true));
     }
     if comment.created_at != comment.updated_at {
-        return Err(format!(
-            "trusted provenance comment {comment_id} was edited; publish a higher immutable sequence"
-        ));
+        return Err(
+            "TP_MARKER_EDITED: trusted provenance marker was edited; publish a higher immutable sequence"
+                .to_string(),
+        );
     }
-    let binding = parse_exact_head_binding(&comment.body, &expected_header)
-        .map_err(|error| format!("trusted provenance comment {comment_id}: {error}"))?;
+    let binding = parse_exact_head_binding(&comment.body, &expected_header)?;
     Ok((comment_id, binding))
+}
+
+fn malformed_target_message(kind: MalformedTargetKind, newer: bool) -> String {
+    match (kind, newer) {
+        (MalformedTargetKind::Header, false) =>
+            "TP_MARKER_HEADER_INVALID: trusted provenance has a malformed target header",
+        (MalformedTargetKind::Header, true) =>
+            "TP_MARKER_HEADER_INVALID: trusted provenance has a newer malformed target header",
+        (MalformedTargetKind::BaseMismatch, false) =>
+            "TP_MARKER_BASE_MISMATCH: trusted marker base_sha does not bind the requested base",
+        (MalformedTargetKind::BaseMismatch, true) =>
+            "TP_MARKER_BASE_MISMATCH: a newer trusted marker base_sha does not bind the requested base",
+    }
+    .to_string()
 }
 
 fn header_targets_request(line: &str, request: &TrustedProvenanceRequest, base: &str) -> bool {
@@ -315,42 +331,49 @@ fn header_targets_request(line: &str, request: &TrustedProvenanceRequest, base: 
         return false;
     }
 
-    let identities = [
-        classify_header_identity(&tokens, "target_repository", |value| {
-            if value.is_empty() {
-                HeaderIdentityMatch::Indeterminate
-            } else if value.eq_ignore_ascii_case(&request.repository) {
-                HeaderIdentityMatch::Matches
-            } else {
-                HeaderIdentityMatch::Other
-            }
-        }),
-        classify_header_identity(&tokens, "pull_request", |value| {
-            match value.parse::<u64>() {
-                Ok(value) if value == request.pull_request => HeaderIdentityMatch::Matches,
-                Ok(value) if value != 0 => HeaderIdentityMatch::Other,
-                Ok(_) | Err(_) => HeaderIdentityMatch::Indeterminate,
-            }
-        }),
-        classify_header_identity(&tokens, "base_sha", |value| {
-            if value.eq_ignore_ascii_case(base) {
-                HeaderIdentityMatch::Matches
-            } else if is_full_sha(value) {
-                HeaderIdentityMatch::Other
-            } else {
-                HeaderIdentityMatch::Indeterminate
-            }
-        }),
-    ];
+    let repository = classify_header_identity(&tokens, "target_repository", |value| {
+        if value.is_empty() {
+            HeaderIdentityMatch::Indeterminate
+        } else if value.eq_ignore_ascii_case(&request.repository) {
+            HeaderIdentityMatch::Matches
+        } else {
+            HeaderIdentityMatch::Other
+        }
+    });
+    let pull_request = classify_header_identity(&tokens, "pull_request", |value| {
+        match value.parse::<u64>() {
+            Ok(value) if value == request.pull_request => HeaderIdentityMatch::Matches,
+            Ok(value) if value != 0 => HeaderIdentityMatch::Other,
+            Ok(_) | Err(_) => HeaderIdentityMatch::Indeterminate,
+        }
+    });
+    let base = classify_header_identity(&tokens, "base_sha", |value| {
+        if value.eq_ignore_ascii_case(base) {
+            HeaderIdentityMatch::Matches
+        } else if is_full_sha(value) {
+            HeaderIdentityMatch::Other
+        } else {
+            HeaderIdentityMatch::Indeterminate
+        }
+    });
 
-    // Two matching axes identify a target even when one required identity field is malformed or
-    // missing; an explicit valid mismatch keeps markers for other requests isolated.
-    !identities.contains(&HeaderIdentityMatch::Other)
-        && identities
-            .iter()
-            .filter(|identity| **identity == HeaderIdentityMatch::Matches)
-            .count()
-            >= 2
+    // Repository and pull request own a candidate marker. The base is a strict binding, not an
+    // isolation axis, so a wrong-base marker for the same PR must fail instead of falling back.
+    if repository == HeaderIdentityMatch::Other || pull_request == HeaderIdentityMatch::Other {
+        return false;
+    }
+    if repository == HeaderIdentityMatch::Matches && pull_request == HeaderIdentityMatch::Matches {
+        return true;
+    }
+
+    // Preserve fail-closed attribution when one ownership field is malformed or missing but the
+    // other ownership field and base match. Explicitly different repositories or PRs were rejected
+    // above and remain isolated.
+    [repository, pull_request, base]
+        .iter()
+        .filter(|identity| **identity == HeaderIdentityMatch::Matches)
+        .count()
+        >= 2
 }
 
 fn classify_header_identity(
@@ -402,33 +425,43 @@ fn parse_marker_header(line: &str) -> Result<MarkerHeader, String> {
         || tokens[0] != "<!--"
         || tokens[1] != "actingcommand-trusted-provenance-v2"
     {
-        return Err("header must contain the normalized v2 marker and four fields".to_string());
+        return Err(
+            "TP_MARKER_HEADER_INVALID: marker header does not match the required schema"
+                .to_string(),
+        );
     }
 
     let mut fields = BTreeMap::new();
     for token in &tokens[2..] {
-        let (key, value) = token
-            .split_once('=')
-            .ok_or_else(|| format!("header token is not key=value: {token}"))?;
+        let (key, value) = token.split_once('=').ok_or_else(|| {
+            "TP_MARKER_HEADER_INVALID: marker header field is not key=value".to_string()
+        })?;
         if key.is_empty() || value.is_empty() {
-            return Err(format!("header token has an empty key or value: {token}"));
+            return Err(
+                "TP_MARKER_HEADER_INVALID: marker header field has an empty key or value"
+                    .to_string(),
+            );
         }
         if fields.insert(key, value).is_some() {
-            return Err(format!("header repeats field {key}"));
+            return Err("TP_MARKER_HEADER_INVALID: marker header repeats a field".to_string());
         }
     }
     let expected = BTreeSet::from(["base_sha", "pull_request", "sequence", "target_repository"]);
     let actual = fields.keys().copied().collect::<BTreeSet<_>>();
     if actual != expected {
-        return Err(format!(
-            "header fields are {actual:?}, expected {expected:?}"
-        ));
+        return Err(
+            "TP_MARKER_HEADER_INVALID: marker header fields do not match the required schema"
+                .to_string(),
+        );
     }
 
     let pull_request = parse_nonzero_u64(fields["pull_request"], "pull_request")?;
     let sequence = parse_nonzero_u64(fields["sequence"], "sequence")?;
     if !is_full_sha(fields["base_sha"]) {
-        return Err("header base_sha must be a lowercase full commit SHA".to_string());
+        return Err(
+            "TP_MARKER_HEADER_INVALID: marker base_sha must be a lowercase full commit SHA"
+                .to_string(),
+        );
     }
     let header = MarkerHeader {
         target_repository: fields["target_repository"].to_string(),
@@ -438,7 +471,7 @@ fn parse_marker_header(line: &str) -> Result<MarkerHeader, String> {
     };
     let normalized = format_marker_header(&header);
     if line != normalized {
-        return Err(format!("header is not normalized; expected {normalized}"));
+        return Err("TP_MARKER_HEADER_INVALID: marker header is not normalized".to_string());
     }
     Ok(header)
 }
@@ -453,9 +486,11 @@ fn format_marker_header(header: &MarkerHeader) -> String {
 fn parse_nonzero_u64(value: &str, field: &str) -> Result<u64, String> {
     let value = value
         .parse::<u64>()
-        .map_err(|error| format!("header {field} is invalid: {error}"))?;
+        .map_err(|_| format!("TP_MARKER_HEADER_INVALID: marker {field} must be an integer"))?;
     if value == 0 {
-        return Err(format!("header {field} must be non-zero"));
+        return Err(format!(
+            "TP_MARKER_HEADER_INVALID: marker {field} must be non-zero"
+        ));
     }
     Ok(value)
 }
@@ -472,46 +507,53 @@ fn parse_exact_head_binding(
         .collect::<Vec<_>>();
     if starts.len() != 1 {
         return Err(format!(
-            "expected exactly one target marker block, found {}",
+            "TP_MARKER_BODY_INVALID: expected exactly one target marker block, found {}",
             starts.len()
         ));
     }
     let start = starts[0];
     let header = parse_marker_header(lines[start])?;
     if &header != expected_header {
-        return Err("selected marker header changed during parsing".to_string());
+        return Err(
+            "TP_MARKER_HEADER_INVALID: selected marker header changed during parsing".to_string(),
+        );
     }
     let end = lines
         .iter()
         .enumerate()
         .skip(start + 1)
         .find_map(|(index, line)| (*line == MARKER_END).then_some(index))
-        .ok_or_else(|| "marker has no closing -->".to_string())?;
+        .ok_or_else(|| "TP_MARKER_BODY_INVALID: marker has no closing delimiter".to_string())?;
 
     let mut fields = BTreeMap::new();
     for line in &lines[start + 1..end] {
         if line.is_empty() {
-            return Err("marker contains an empty field line".to_string());
+            return Err("TP_MARKER_BODY_INVALID: marker contains an empty field line".to_string());
         }
         let (key, value) = line
             .split_once('=')
-            .ok_or_else(|| format!("marker line is not key=value: {line}"))?;
+            .ok_or_else(|| "TP_MARKER_BODY_INVALID: marker field is not key=value".to_string())?;
         if key.is_empty() || value.is_empty() {
-            return Err(format!("marker line has an empty key or value: {line}"));
+            return Err(
+                "TP_MARKER_BODY_INVALID: marker field has an empty key or value".to_string(),
+            );
         }
         if fields.insert(key, value).is_some() {
-            return Err(format!("marker repeats field {key}"));
+            return Err("TP_MARKER_BODY_INVALID: marker repeats a field".to_string());
         }
     }
     let expected = BTreeSet::from(["head_sha", "scopes"]);
     let actual = fields.keys().copied().collect::<BTreeSet<_>>();
     if actual != expected {
-        return Err(format!(
-            "marker fields are {actual:?}, expected {expected:?}"
-        ));
+        return Err(
+            "TP_MARKER_BODY_INVALID: marker fields do not match the required schema".to_string(),
+        );
     }
     if !is_full_sha(fields["head_sha"]) {
-        return Err("marker head_sha must be a lowercase full commit SHA".to_string());
+        return Err(
+            "TP_MARKER_BODY_INVALID: marker head_sha must be a lowercase full commit SHA"
+                .to_string(),
+        );
     }
     let scopes = parse_scopes(fields["scopes"])?;
 
@@ -534,7 +576,10 @@ fn parse_scopes(value: &str) -> Result<Vec<String>, String> {
             .windows(2)
             .any(|pair| pair[0].as_str() >= pair[1].as_str())
     {
-        return Err("marker scopes must be non-empty, unique, and sorted".to_string());
+        return Err(
+            "TP_MARKER_BODY_INVALID: marker scopes must be non-empty, unique, and sorted"
+                .to_string(),
+        );
     }
     Ok(scopes)
 }
@@ -901,7 +946,7 @@ mod tests {
             },
         )
         .unwrap_err();
-        assert!(error.contains("binds head"));
+        assert!(error.starts_with("TP_MARKER_HEAD_MISMATCH:"));
 
         let mut wrong_pr = fixture.comment(12, 3);
         wrong_pr.body = wrong_pr
@@ -927,7 +972,92 @@ mod tests {
             },
         )
         .unwrap_err();
-        assert!(error.contains("no trusted provenance marker"));
+        assert!(error.contains("base_sha does not bind"));
+    }
+
+    #[test]
+    fn base_mismatch_is_bound_to_repository_and_pull_request_ownership() {
+        let fixture = GitFixture::regular();
+
+        let wrong_base = comment(11, 2, &fixture.trusted, &fixture.head);
+        let error = verify_trusted_provenance(
+            &fixture.root,
+            &fixture.request(),
+            &FakeCommentSource {
+                comments: vec![fixture.comment(10, 1), wrong_base],
+            },
+        )
+        .unwrap_err();
+        assert!(error.starts_with("TP_MARKER_BASE_MISMATCH:"));
+
+        let recovered = verify_trusted_provenance(
+            &fixture.root,
+            &fixture.request(),
+            &FakeCommentSource {
+                comments: vec![
+                    comment(10, 1, &fixture.trusted, &fixture.head),
+                    fixture.comment(11, 2),
+                ],
+            },
+        )
+        .unwrap();
+        assert_eq!(recovered.approval_comment_id, 11);
+        assert_eq!(recovered.sequence, 2);
+
+        let mut other_repository = fixture.comment(12, 3);
+        other_repository.body = other_repository
+            .body
+            .replace(TARGET_REPOSITORY, "other/repository");
+        let mut other_pull_request = fixture.comment(13, 4);
+        other_pull_request.body = other_pull_request
+            .body
+            .replace("pull_request=123", "pull_request=124");
+        let isolated = verify_trusted_provenance(
+            &fixture.root,
+            &fixture.request(),
+            &FakeCommentSource {
+                comments: vec![fixture.comment(10, 1), other_repository, other_pull_request],
+            },
+        )
+        .unwrap();
+        assert_eq!(isolated.approval_comment_id, 10);
+    }
+
+    #[test]
+    fn malformed_marker_errors_never_echo_private_content() {
+        const PRIVATE_SENTINEL: &str = "PRIVATE_MARKER_SENTINEL_DO_NOT_LOG";
+        let fixture = GitFixture::regular();
+
+        let mut malformed_header = fixture.comment(10, 1);
+        malformed_header.body = malformed_header
+            .body
+            .replace("sequence=1", &format!("sequence=1 {PRIVATE_SENTINEL}"));
+        let header_error = verify_trusted_provenance(
+            &fixture.root,
+            &fixture.request(),
+            &FakeCommentSource {
+                comments: vec![malformed_header],
+            },
+        )
+        .unwrap_err();
+        assert!(header_error.starts_with("TP_MARKER_HEADER_INVALID:"));
+        assert!(!header_error.contains(PRIVATE_SENTINEL));
+
+        let mut malformed_body = fixture.comment(11, 2);
+        malformed_body.body = malformed_body.body.replace(
+            "scopes=approval.provenance,surface.mapping",
+            PRIVATE_SENTINEL,
+        );
+        let body_error = verify_trusted_provenance(
+            &fixture.root,
+            &fixture.request(),
+            &FakeCommentSource {
+                comments: vec![malformed_body],
+            },
+        )
+        .unwrap_err();
+        assert!(body_error.starts_with("TP_MARKER_BODY_INVALID:"));
+        assert!(!body_error.contains(PRIVATE_SENTINEL));
     }
 
     #[test]

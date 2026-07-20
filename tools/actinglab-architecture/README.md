@@ -29,11 +29,12 @@ cargo run -p actingcommand-actinglab-architecture --bin trusted-provenance-guard
 ```
 
 The marker binds the repository, pull request, protected base, monotonic sequence, and exact final
-head. Trusted marker headers are first isolated by their repository, pull request, and base identity;
-any header attributable to the current request is then parsed strictly. A missing, duplicate,
-conflicting, or malformed required field fails the gate and cannot fall back to an older sequence.
-Unrelated malformed historical markers remain isolated, while the highest valid target sequence is
-parsed in full.
+head. Repository and pull request attribute a marker to a candidate; the protected base is then a
+strict binding, never an isolation axis that permits fallback to an older sequence. A missing,
+duplicate, conflicting, or malformed required field fails the gate. Markers for unrelated
+repositories or pull requests remain isolated, while the highest valid target sequence is parsed in
+full. Public verifier output contains only fixed error codes, the public candidate head, and changed
+path counts; private marker identifiers, sequences, scopes, and raw content are never logged.
 Every changed path must resolve to a `100644` blob; deletions, renames, symlinks, gitlinks,
 executable files, and mode/type changes are rejected.
 
