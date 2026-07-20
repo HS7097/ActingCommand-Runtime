@@ -291,6 +291,7 @@ impl LoadedBundle {
         validate_manifest_hashes(&metadata.manifest, &entries, &metadata.resource_root)?;
         let recognition_pack_diagnostics = collect_recognition_pack_diagnostics(&entries)?;
         let (evaluator, detector) = load_recognition_pipeline(&entries, &metadata)?;
+        validate_lab_package_contract(&entries, &metadata, detector.as_ref())?;
 
         Ok(Self {
             task_id: metadata.task_id,
@@ -649,6 +650,48 @@ struct ManifestHashes {
     files: Vec<ManifestFile>,
 }
 
+#[derive(Debug, Deserialize)]
+struct LabManifestContract {
+    schema_version: String,
+    entry_task_id: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct LabNavigationContract {
+    schema_version: String,
+    game: String,
+    server: String,
+    navigation: Vec<LabNavigationRoute>,
+    #[serde(default)]
+    page_operations: Vec<LabNavigationPageAction>,
+    #[serde(default)]
+    destructive_actions: Vec<Value>,
+}
+
+#[derive(Debug, Deserialize)]
+struct LabNavigationRoute {
+    id: String,
+    from_page: String,
+    to_page: String,
+    #[serde(rename = "click")]
+    _click: Value,
+}
+
+#[derive(Debug, Deserialize)]
+struct LabNavigationPageAction {
+    task_id: String,
+    id: String,
+    page: String,
+}
+
+#[derive(Debug)]
+struct OperationReference {
+    task_id: String,
+    id: String,
+    from_page: String,
+    to_page: Option<String>,
+}
+
 #[derive(Debug)]
 struct MemoryAssetResolver {
     entries: Arc<BTreeMap<String, Vec<u8>>>,
@@ -740,6 +783,10 @@ pub enum ContainmentError {
         manifest_path: String,
         manifest_task_id: String,
         control_task_id: String,
+    },
+    PackageContract {
+        path: String,
+        message: String,
     },
     PackParse {
         path: String,
@@ -840,6 +887,10 @@ impl fmt::Display for ContainmentError {
                 f,
                 "fatal containment error: {manifest_path} entry_task_id '{manifest_task_id}' conflicts with control entry_task_id '{control_task_id}'"
             ),
+            Self::PackageContract { path, message } => write!(
+                f,
+                "fatal containment error: invalid package contract in {path}: {message}"
+            ),
             Self::PackParse { path, message } => {
                 write!(
                     f,
@@ -851,6 +902,433 @@ impl fmt::Display for ContainmentError {
 }
 
 impl Error for ContainmentError {}
+
+fn validate_lab_package_contract(
+    entries: &BTreeMap<String, Vec<u8>>,
+    metadata: &PackageMetadata,
+    detector: Option<&PageDetector>,
+) -> ContainmentResult<()> {
+    if metadata.layout != PackageLayout::Lab {
+        return Ok(());
+    }
+    let control_value = metadata.control.clone().ok_or_else(|| {
+        package_contract_error("control.json", "Lab package is missing its parsed control")
+    })?;
+    let control: LabControl =
+        serde_json::from_value(control_value).map_err(|error| ContainmentError::JsonParse {
+            path: "control.json".to_string(),
+            message: error.to_string(),
+        })?;
+    if control.game.trim().is_empty() || control.server.trim().is_empty() {
+        return Err(package_contract_error(
+            "control.json",
+            "game and server must be non-empty strings",
+        ));
+    }
+
+    let manifest: LabManifestContract =
+        serde_json::from_value(metadata.manifest.clone()).map_err(|error| {
+            ContainmentError::JsonParse {
+                path: metadata.manifest_path.clone(),
+                message: error.to_string(),
+            }
+        })?;
+    if manifest.schema_version != "0.3" {
+        return Err(package_contract_error(
+            &metadata.manifest_path,
+            format!(
+                "unsupported manifest schema_version '{}'; expected 0.3",
+                manifest.schema_version
+            ),
+        ));
+    }
+    if manifest.entry_task_id != control.entry_task_id {
+        return Err(package_contract_error(
+            &metadata.manifest_path,
+            format!(
+                "entry_task_id '{}' does not match control entry_task_id '{}'",
+                manifest.entry_task_id, control.entry_task_id
+            ),
+        ));
+    }
+
+    let operations = collect_operation_references(
+        entries,
+        &metadata.resource_root,
+        &control.game,
+        &control.server,
+        detector,
+    )?;
+    let (Some(navigation_path), Some(navigation_value)) =
+        (&metadata.navigation_path, &metadata.navigation)
+    else {
+        return Ok(());
+    };
+    let navigation: LabNavigationContract = serde_json::from_value(navigation_value.clone())
+        .map_err(|error| ContainmentError::JsonParse {
+            path: navigation_path.clone(),
+            message: error.to_string(),
+        })?;
+    if !matches!(navigation.schema_version.as_str(), "0.3" | "0.4" | "0.5") {
+        return Err(package_contract_error(
+            navigation_path,
+            format!(
+                "unsupported navigation schema_version '{}'; expected 0.3, 0.4, or 0.5",
+                navigation.schema_version
+            ),
+        ));
+    }
+    if navigation.game != control.game || navigation.server != control.server {
+        return Err(package_contract_error(
+            navigation_path,
+            format!(
+                "navigation game/server '{}.{}' does not match control '{}.{}'",
+                navigation.game, navigation.server, control.game, control.server
+            ),
+        ));
+    }
+
+    let mut route_ids = BTreeSet::new();
+    for route in &navigation.navigation {
+        if route.id.trim().is_empty() {
+            return Err(package_contract_error(
+                navigation_path,
+                "navigation route id must not be empty",
+            ));
+        }
+        if !route_ids.insert(route.id.clone()) {
+            return Err(package_contract_error(
+                navigation_path,
+                format!("navigation route id '{}' is duplicated", route.id),
+            ));
+        }
+        validate_page_reference(
+            detector,
+            &control.game,
+            &route.from_page,
+            navigation_path,
+            &format!("navigation route '{}' from_page", route.id),
+        )?;
+        validate_page_reference(
+            detector,
+            &control.game,
+            &route.to_page,
+            navigation_path,
+            &format!("navigation route '{}' to_page", route.id),
+        )?;
+        validate_route_operation_reference(route, &operations, &control.game, navigation_path)?;
+    }
+    for action in &navigation.page_operations {
+        validate_page_action_reference(
+            action,
+            &operations,
+            detector,
+            &control.game,
+            navigation_path,
+            "page_operations",
+        )?;
+    }
+    for action in &navigation.destructive_actions {
+        let Some(object) = action.as_object() else {
+            return Err(package_contract_error(
+                navigation_path,
+                "destructive_actions entries must be objects",
+            ));
+        };
+        if object.contains_key("task_id") {
+            let action: LabNavigationPageAction =
+                serde_json::from_value(action.clone()).map_err(|error| {
+                    ContainmentError::JsonParse {
+                        path: navigation_path.clone(),
+                        message: error.to_string(),
+                    }
+                })?;
+            validate_page_action_reference(
+                &action,
+                &operations,
+                detector,
+                &control.game,
+                navigation_path,
+                "destructive_actions",
+            )?;
+        } else if object.contains_key("page") {
+            let page = required_contract_string(action, "page", navigation_path)?;
+            validate_page_reference(
+                detector,
+                &control.game,
+                &page,
+                navigation_path,
+                "destructive action page",
+            )?;
+        }
+    }
+    Ok(())
+}
+
+fn collect_operation_references(
+    entries: &BTreeMap<String, Vec<u8>>,
+    resource_root: &str,
+    game: &str,
+    server: &str,
+    detector: Option<&PageDetector>,
+) -> ContainmentResult<Vec<OperationReference>> {
+    let prefix = prefixed_path(resource_root, "operations/");
+    let suffix = "/task.json";
+    let mut references = Vec::new();
+    let mut identities = BTreeSet::new();
+    for path in entries
+        .keys()
+        .filter(|path| path.starts_with(&prefix) && path.ends_with(suffix))
+    {
+        let task_id = &path[prefix.len()..path.len() - suffix.len()];
+        if task_id.is_empty() || task_id.contains('/') {
+            return Err(package_contract_error(
+                path,
+                "operation task path must contain exactly one non-empty task id",
+            ));
+        }
+        let document = read_json_value_entry(entries, path)?;
+        if let Some(declared_task_id) = optional_contract_string(&document, "task_id", path)?
+            && declared_task_id != task_id
+        {
+            return Err(package_contract_error(
+                path,
+                format!(
+                    "task_id '{declared_task_id}' does not match operation path task id '{task_id}'"
+                ),
+            ));
+        }
+        if let Some(document_game) = optional_contract_string(&document, "game", path)?
+            && document_game != game
+        {
+            return Err(package_contract_error(
+                path,
+                format!("operation game '{document_game}' does not match control game '{game}'"),
+            ));
+        }
+        if let Some(scope) = document.get("server_scope") {
+            let servers = scope.as_array().ok_or_else(|| {
+                package_contract_error(path, "server_scope must be an array of strings")
+            })?;
+            let includes_server = servers
+                .iter()
+                .map(|value| {
+                    value.as_str().ok_or_else(|| {
+                        package_contract_error(path, "server_scope must contain only strings")
+                    })
+                })
+                .collect::<ContainmentResult<Vec<_>>>()?
+                .into_iter()
+                .any(|candidate| candidate == server);
+            if !includes_server {
+                return Err(package_contract_error(
+                    path,
+                    format!("server_scope does not include control server '{server}'"),
+                ));
+            }
+        }
+        for field in ["entry_page", "target_page"] {
+            if let Some(page) = optional_contract_string(&document, field, path)? {
+                validate_page_reference(detector, game, &page, path, field)?;
+            }
+        }
+        let Some(operation_values) = document.get("operations") else {
+            continue;
+        };
+        let operation_values = operation_values.as_array().ok_or_else(|| {
+            package_contract_error(path, "operations must be an array when present")
+        })?;
+        for (index, operation) in operation_values.iter().enumerate() {
+            let id = required_contract_string(operation, "id", path)?;
+            let from_page = required_contract_string(operation, "from", path)?;
+            let to_page = optional_contract_string(operation, "to", path)?;
+            validate_page_reference(
+                detector,
+                game,
+                &from_page,
+                path,
+                &format!("operation[{index}] from"),
+            )?;
+            if let Some(to_page) = &to_page {
+                validate_page_reference(
+                    detector,
+                    game,
+                    to_page,
+                    path,
+                    &format!("operation[{index}] to"),
+                )?;
+            }
+            if !identities.insert((task_id.to_string(), id.clone())) {
+                return Err(package_contract_error(
+                    path,
+                    format!("operation id '{id}' is duplicated in task '{task_id}'"),
+                ));
+            }
+            references.push(OperationReference {
+                task_id: task_id.to_string(),
+                id,
+                from_page,
+                to_page,
+            });
+        }
+    }
+    Ok(references)
+}
+
+fn validate_route_operation_reference(
+    route: &LabNavigationRoute,
+    operations: &[OperationReference],
+    game: &str,
+    path: &str,
+) -> ContainmentResult<()> {
+    let same_id = operations
+        .iter()
+        .filter(|operation| operation.id == route.id)
+        .collect::<Vec<_>>();
+    if same_id.is_empty() {
+        return Err(package_contract_error(
+            path,
+            format!(
+                "navigation route '{}' does not reference a packaged operation",
+                route.id
+            ),
+        ));
+    }
+    let matching = same_id
+        .iter()
+        .filter(|operation| {
+            pages_equivalent(game, &operation.from_page, &route.from_page)
+                && operation
+                    .to_page
+                    .as_deref()
+                    .is_some_and(|to_page| pages_equivalent(game, to_page, &route.to_page))
+        })
+        .count();
+    if matching != 1 {
+        return Err(package_contract_error(
+            path,
+            format!(
+                "navigation route '{}' must resolve to exactly one packaged operation with the same page transition; resolved {matching}",
+                route.id
+            ),
+        ));
+    }
+    Ok(())
+}
+
+fn validate_page_action_reference(
+    action: &LabNavigationPageAction,
+    operations: &[OperationReference],
+    detector: Option<&PageDetector>,
+    game: &str,
+    path: &str,
+    collection: &str,
+) -> ContainmentResult<()> {
+    if action.task_id.trim().is_empty() || action.id.trim().is_empty() {
+        return Err(package_contract_error(
+            path,
+            format!("{collection} task_id and id must not be empty"),
+        ));
+    }
+    validate_page_reference(
+        detector,
+        game,
+        &action.page,
+        path,
+        &format!("{collection} action '{}' page", action.id),
+    )?;
+    let matching = operations
+        .iter()
+        .filter(|operation| {
+            operation.task_id == action.task_id
+                && operation.id == action.id
+                && operation.to_page.is_none()
+                && pages_equivalent(game, &operation.from_page, &action.page)
+        })
+        .count();
+    if matching != 1 {
+        return Err(package_contract_error(
+            path,
+            format!(
+                "{collection} action '{}.{}' must resolve to exactly one packaged page operation; resolved {matching}",
+                action.task_id, action.id
+            ),
+        ));
+    }
+    Ok(())
+}
+
+fn validate_page_reference(
+    detector: Option<&PageDetector>,
+    game: &str,
+    page: &str,
+    path: &str,
+    label: &str,
+) -> ContainmentResult<()> {
+    if page.trim().is_empty() {
+        return Err(package_contract_error(
+            path,
+            format!("{label} must not be empty"),
+        ));
+    }
+    if page == "any" {
+        return Ok(());
+    }
+    let detector = detector.ok_or_else(|| {
+        package_contract_error(
+            path,
+            format!("{label} references page '{page}' but no page set is packaged"),
+        )
+    })?;
+    let canonical = canonical_contract_page(game, page);
+    if detector.contains_page(page)
+        || detector.contains_page(&canonical)
+        || detector.contains_page(&format!("{game}/{canonical}"))
+    {
+        return Ok(());
+    }
+    Err(package_contract_error(
+        path,
+        format!("{label} references unknown page '{page}'"),
+    ))
+}
+
+fn pages_equivalent(game: &str, left: &str, right: &str) -> bool {
+    canonical_contract_page(game, left) == canonical_contract_page(game, right)
+}
+
+fn canonical_contract_page(game: &str, page: &str) -> String {
+    let prefix = format!("{game}/");
+    page.strip_prefix(&prefix).unwrap_or(page).to_string()
+}
+
+fn required_contract_string(value: &Value, field: &str, path: &str) -> ContainmentResult<String> {
+    optional_contract_string(value, field, path)?.ok_or_else(|| {
+        package_contract_error(path, format!("field '{field}' must be a non-empty string"))
+    })
+}
+
+fn optional_contract_string(
+    value: &Value,
+    field: &str,
+    path: &str,
+) -> ContainmentResult<Option<String>> {
+    match value.get(field) {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::String(value)) if !value.trim().is_empty() => Ok(Some(value.clone())),
+        Some(_) => Err(package_contract_error(
+            path,
+            format!("field '{field}' must be a non-empty string when present"),
+        )),
+    }
+}
+
+fn package_contract_error(path: impl Into<String>, message: impl Into<String>) -> ContainmentError {
+    ContainmentError::PackageContract {
+        path: path.into(),
+        message: message.into(),
+    }
+}
 
 fn load_recognition_pipeline(
     entries: &Arc<BTreeMap<String, Vec<u8>>>,
@@ -1509,7 +1987,7 @@ mod tests {
         );
         entries.insert(
             "resources/navigation/neutral.test.navigation.json".to_string(),
-            br#"{}"#.to_vec(),
+            br#"{"schema_version":"0.3","game":"neutral","server":"test","navigation":[],"destructive_actions":[]}"#.to_vec(),
         );
         let zip = zip_from_map(entries);
         let expected = Sha256Hash::digest(&zip);
@@ -1538,6 +2016,53 @@ mod tests {
             bundle.navigation_path(),
             Some("resources/navigation/neutral.test.navigation.json")
         );
+    }
+
+    #[test]
+    fn lab_contract_rejects_old_manifest_and_navigation_schemas() {
+        for (path, replacement) in [
+            (
+                "resources/manifest.json",
+                br#"{"schema_version":"0.2","entry_task_id":"task_a"}"#.as_slice(),
+            ),
+            (
+                "resources/navigation/neutral.test.navigation.json",
+                br#"{"schema_version":"0.2","game":"neutral","server":"test","navigation":[],"destructive_actions":[]}"#.as_slice(),
+            ),
+        ] {
+            let mut entries = lab_package_entries("task_a", [255, 0, 0]);
+            entries.insert(path.to_string(), replacement.to_vec());
+            let zip = zip_from_map(entries);
+            let expected = Sha256Hash::digest(&zip);
+            let instance = InstanceId::new("schema-instance").expect("instance");
+            let mut containment = Containment::new();
+
+            let error = containment
+                .load(&instance, &zip, &expected)
+                .expect_err("old schema must fail");
+
+            assert!(matches!(error, ContainmentError::PackageContract { .. }));
+        }
+    }
+
+    #[test]
+    fn lab_contract_rejects_navigation_route_without_packaged_operation() {
+        let mut entries = lab_package_entries("task_a", [255, 0, 0]);
+        entries.insert(
+            "resources/navigation/neutral.test.navigation.json".to_string(),
+            br#"{"schema_version":"0.3","game":"neutral","server":"test","navigation":[{"id":"ghost_route","from_page":"neutral/home","to_page":"neutral/home","click":{"kind":"point","x":0,"y":0}}],"destructive_actions":[]}"#.to_vec(),
+        );
+        let zip = zip_from_map(entries);
+        let expected = Sha256Hash::digest(&zip);
+        let instance = InstanceId::new("closure-instance").expect("instance");
+        let mut containment = Containment::new();
+
+        let error = containment
+            .load(&instance, &zip, &expected)
+            .expect_err("dangling navigation route must fail");
+
+        assert!(matches!(error, ContainmentError::PackageContract { .. }));
+        assert!(error.to_string().contains("ghost_route"));
     }
 
     fn lab_package_zip(task_id: &str, expected: [u8; 3]) -> Vec<u8> {

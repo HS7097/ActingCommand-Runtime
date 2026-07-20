@@ -68,13 +68,14 @@ pub(super) fn seal_semantic_fixture(
     let mut zip = ZipWriter::new(file);
     let options = FileOptions::default().compression_method(zip::CompressionMethod::Stored);
     let control = format!(r#"{{"game":"{game}","server":"{server}","entry_task_id":"task"}}"#);
+    let operation = semantic_operation_document(game, server, navigation_source);
     for (name, bytes) in [
         ("control.json", control.as_bytes()),
         (
             "resources/manifest.json",
             br#"{"schema_version":"0.3","entry_task_id":"task"}"#.as_slice(),
         ),
-        ("resources/operations/task/task.json", br#"{}"#.as_slice()),
+        ("resources/operations/task/task.json", operation.as_slice()),
     ] {
         zip.start_file(name, options).unwrap();
         zip.write_all(bytes).unwrap();
@@ -117,6 +118,44 @@ pub(super) fn seal_semantic_fixture(
         zip: zip_path,
         expected_sha256,
     }
+}
+
+fn semantic_operation_document(
+    game: &str,
+    server: &str,
+    navigation_source: Option<&Path>,
+) -> Vec<u8> {
+    let operations = navigation_source
+        .map(|source| serde_json::from_slice::<Value>(&fs::read(source).unwrap()).unwrap())
+        .and_then(|navigation| {
+            navigation
+                .get("navigation")
+                .and_then(Value::as_array)
+                .cloned()
+        })
+        .unwrap_or_default()
+        .into_iter()
+        .map(|route| {
+            json!({
+                "id": route["id"],
+                "purpose": "semantic fixture navigation closure",
+                "from": route["from_page"],
+                "to": route["to_page"],
+                "click": route["click"],
+                "unguarded_trusted_coordinate": true
+            })
+        })
+        .collect::<Vec<_>>();
+    serde_json::to_vec(&json!({
+        "schema_version": "0.6",
+        "task_id": "task",
+        "game": game,
+        "server_scope": [server],
+        "goal": "semantic fixture navigation closure",
+        "coordinate_space": {"width": 1, "height": 1},
+        "operations": operations
+    }))
+    .unwrap()
 }
 
 pub(super) fn semantic_resource_root(include_destructive_overlap: bool) -> SemanticFixture {

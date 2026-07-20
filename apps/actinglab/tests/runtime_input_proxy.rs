@@ -13,7 +13,7 @@ use actingcommand_runtime_client::{RuntimeClient, RuntimeClientConfig};
 use actingcommand_runtime_host::{
     ExecutionBackendProvider, ResolvedExecutionInstance, RuntimeHost, RuntimeHostConfig,
 };
-use serde_json::Value;
+use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::fs::{self, File};
 use std::io::Write;
@@ -1494,6 +1494,32 @@ fn write_semantic_package(path: &Path, root: &Path) {
     let pages = fs::read(root.join("recognition/arknights.cn.pages.json")).expect("pages");
     let navigation =
         fs::read(root.join("navigation/arknights.cn.navigation.json")).expect("navigation");
+    let navigation_value: Value = serde_json::from_slice(&navigation).expect("navigation JSON");
+    let operations = navigation_value["navigation"]
+        .as_array()
+        .expect("navigation routes")
+        .iter()
+        .map(|route| {
+            json!({
+                "id": route["id"],
+                "purpose": "runtime semantic closure",
+                "from": route["from_page"],
+                "to": route["to_page"],
+                "click": route["click"],
+                "unguarded_trusted_coordinate": true
+            })
+        })
+        .collect::<Vec<_>>();
+    let operation = serde_json::to_vec(&json!({
+        "schema_version": "0.6",
+        "task_id": "task",
+        "game": "arknights",
+        "server_scope": ["cn"],
+        "goal": "runtime semantic closure",
+        "coordinate_space": {"width": 1, "height": 1},
+        "operations": operations
+    }))
+    .expect("operation JSON");
     write_zip(
         path,
         &[
@@ -1505,7 +1531,7 @@ fn write_semantic_package(path: &Path, root: &Path) {
                 "resources/manifest.json",
                 br#"{"schema_version":"0.3","entry_task_id":"task"}"#,
             ),
-            ("resources/operations/task/task.json", br#"{}"#),
+            ("resources/operations/task/task.json", &operation),
             ("resources/recognition/arknights.cn.pack.json", &pack),
             ("resources/recognition/arknights.cn.pages.json", &pages),
             (

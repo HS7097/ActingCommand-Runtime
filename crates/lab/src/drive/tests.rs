@@ -140,7 +140,10 @@ impl Fixture {
                 "resources/manifest.json",
                 br#"{"schema_version":"0.3","entry_task_id":"task"}"#.as_slice(),
             ),
-            ("resources/operations/task/task.json", br#"{}"#.as_slice()),
+            (
+                "resources/operations/task/task.json",
+                br#"{"schema_version":"0.6","task_id":"task","game":"fixture","server_scope":["test"],"goal":"drive fixture closure","coordinate_space":{"width":1,"height":1},"operations":[{"id":"home_to_target","purpose":"drive fixture closure","from":"fixture/home","to":"fixture/target","click":{"kind":"point","x":0,"y":0},"unguarded_trusted_coordinate":true}]}"#.as_slice(),
+            ),
             (
                 "resources/recognition/fixture.test.pack.json",
             r#"{
@@ -169,6 +172,7 @@ impl Fixture {
             r#"{
                 "schema_version":"0.3",
                 "game":"fixture",
+                "server":"test",
                 "navigation":[{
                     "id":"home_to_target",
                     "from_page":"fixture/home",

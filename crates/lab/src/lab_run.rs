@@ -18,10 +18,11 @@ use actingcommand_device::{
     InputBackend, PixelFormat, TouchBackendConfig, combine_operation_and_close,
 };
 use actingcommand_execution_kernel::{
-    ExternalExpectedSha256, ExternallyVerifiedBundle, RunDecisionError, RunDirective,
-    RunFailureObservation, RunFailureStage, RunOperationCandidate, RunOperationFailureDecision,
-    RunOperationPolicy, RunRecoveryTrigger, RunStateConfig, RunStateMachine, RunTerminal,
-    canonical_page_anchor, decide_run_operation_failure, page_anchor_matches,
+    ExternalExpectedSha256, ExternallyVerifiedBundle, PreparedContainedTask, RunDecisionError,
+    RunDirective, RunFailureObservation, RunFailureStage, RunOperationCandidate,
+    RunOperationFailureDecision, RunOperationPolicy, RunRecoveryTrigger, RunStateConfig,
+    RunStateMachine, RunTerminal, canonical_page_anchor, decide_run_operation_failure,
+    page_anchor_matches,
 };
 use actingcommand_ledger::{
     CommitProof, EvidenceStore, IdIssuer, IdKind, LastResortError, LedgerRecord, LedgerRecordKind,

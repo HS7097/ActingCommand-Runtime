@@ -1246,7 +1246,10 @@ fn write_semantic_package(path: &Path, root: &Path) {
                 "resources/manifest.json",
                 br#"{"schema_version":"0.3","entry_task_id":"task"}"#,
             ),
-            ("resources/operations/task/task.json", br#"{}"#),
+            (
+                "resources/operations/task/task.json",
+                br#"{"schema_version":"0.6","task_id":"task","game":"arknights","server_scope":["cn"],"goal":"golden semantic closure","coordinate_space":{"width":1,"height":1},"operations":[{"id":"home_to_target","purpose":"golden semantic closure","from":"arknights/home","to":"arknights/target","click":{"kind":"point","x":0,"y":0},"unguarded_trusted_coordinate":true}]}"#,
+            ),
             ("resources/recognition/arknights.cn.pack.json", &pack),
             ("resources/recognition/arknights.cn.pages.json", &pages),
             (

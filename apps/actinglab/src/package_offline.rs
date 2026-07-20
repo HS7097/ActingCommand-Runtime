@@ -3,19 +3,22 @@
 use crate::{CliError, CliOutcome, ErrorKind, FlagArgs, GlobalOptions};
 use actingcommand_device::{CaptureBackendName, Frame};
 use actingcommand_lab::{
-    ExternalExpectedSha256, OfflineSimulationError, OfflineSimulationResult, PreparedContainedTask,
-    simulate_contained_task, validate_lab_package_bytes,
+    ExternalExpectedSha256, OfflineSimulationError, OfflineSimulationResult,
+    prepare_lab_package_bytes, simulate_contained_task,
 };
 use serde::Serialize;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
-use std::fs;
-use std::io::{Cursor, Write};
+use std::fs::{self, OpenOptions};
+use std::io::{Cursor, ErrorKind as IoErrorKind, Write};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use zip::{ZipWriter, write::FileOptions};
 
 const RESULT_SCHEMA: &str = "actingcommand.offline-simulation.v1";
 const FIXTURE_HASH_DOMAIN: &[u8] = b"ActingCommand recorded fixture sequence v1\0";
+const RESULT_TEMP_ATTEMPTS: usize = 32;
+static RESULT_TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 pub(super) fn capability() -> Value {
     json!({
@@ -43,17 +46,8 @@ pub(super) fn run_dry_run(global: &GlobalOptions, flags: &FlagArgs) -> CliOutcom
             format!("failed to read package {}: {error}", zip_path.display()),
         )
     })?;
-    let loaded = validate_lab_package_bytes("contained-package.zip", &package_bytes, expected)?;
-    let prepared = PreparedContainedTask::load("offline.simulation", &package_bytes, expected)
-        .map_err(|error| {
-            offline_error(
-                error.code(),
-                error
-                    .detail()
-                    .map(str::to_string)
-                    .unwrap_or_else(|| error.to_string()),
-            )
-        })?;
+    let (prepared, loaded) =
+        prepare_lab_package_bytes("contained-package.zip", &package_bytes, expected)?;
     let package_sha256 = prepared.package_sha256().to_string();
     let fixture = load_fixture_sequence(&fixture_paths)?;
     let simulation =
@@ -152,6 +146,24 @@ fn reject_output_collision(out: &Path, zip: &Path, fixtures: &[PathBuf]) -> CliO
             "offline_output_conflicts_with_input",
             "result --out must not overwrite the package or a recorded fixture",
         ));
+    }
+    match fs::symlink_metadata(&out) {
+        Ok(_) => {
+            return Err(offline_error(
+                "offline_output_already_exists",
+                format!(
+                    "result --out already exists and will not be overwritten: {}",
+                    out.display()
+                ),
+            ));
+        }
+        Err(error) if error.kind() == IoErrorKind::NotFound => {}
+        Err(error) => {
+            return Err(offline_error(
+                "offline_path_resolution_failed",
+                format!("failed to inspect result --out {}: {error}", out.display()),
+            ));
+        }
     }
     Ok(())
 }
@@ -289,35 +301,149 @@ fn result_bundle(record: &OfflineResultRecord) -> CliOutcome<Vec<u8>> {
 }
 
 fn write_result_bundle(path: &Path, bytes: &[u8], expected_sha256: &str) -> CliOutcome<()> {
-    if let Some(parent) = path.parent()
-        && !parent.as_os_str().is_empty()
-    {
-        fs::create_dir_all(parent).map_err(|error| {
-            offline_error(
-                "offline_result_write_failed",
-                format!("failed to create {}: {error}", parent.display()),
-            )
-        })?;
-    }
-    fs::write(path, bytes).map_err(|error| {
+    let parent = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    fs::create_dir_all(parent).map_err(|error| {
         offline_error(
             "offline_result_write_failed",
-            format!("failed to write {}: {error}", path.display()),
+            format!("failed to create {}: {error}", parent.display()),
         )
     })?;
-    let persisted = fs::read(path).map_err(|error| {
-        offline_error(
+    let (temporary_path, mut temporary_file) = create_result_temp(parent)?;
+    if let Err(error) = temporary_file
+        .write_all(bytes)
+        .and_then(|()| temporary_file.flush())
+        .and_then(|()| temporary_file.sync_all())
+    {
+        drop(temporary_file);
+        return Err(remove_failed_temp(
+            &temporary_path,
+            "offline_result_write_failed",
+            format!(
+                "failed to write temporary result {}: {error}",
+                temporary_path.display()
+            ),
+        ));
+    }
+    drop(temporary_file);
+    let persisted = fs::read(&temporary_path).map_err(|error| {
+        remove_failed_temp(
+            &temporary_path,
             "offline_result_verify_failed",
-            format!("failed to verify {}: {error}", path.display()),
+            format!(
+                "failed to verify temporary result {}: {error}",
+                temporary_path.display()
+            ),
         )
     })?;
     if sha256_hex(&persisted) != expected_sha256 {
+        return Err(remove_failed_temp(
+            &temporary_path,
+            "offline_result_verify_failed",
+            format!(
+                "temporary result hash mismatch for {}",
+                temporary_path.display()
+            ),
+        ));
+    }
+    if let Err(error) = fs::hard_link(&temporary_path, path) {
+        let (code, message) = if error.kind() == IoErrorKind::AlreadyExists {
+            (
+                "offline_output_already_exists",
+                format!(
+                    "result --out appeared during publication and will not be overwritten: {}",
+                    path.display()
+                ),
+            )
+        } else {
+            (
+                "offline_result_write_failed",
+                format!(
+                    "failed to publish result {} from {}: {error}",
+                    path.display(),
+                    temporary_path.display()
+                ),
+            )
+        };
+        return Err(remove_failed_temp(&temporary_path, code, message));
+    }
+    fs::remove_file(&temporary_path).map_err(|error| {
+        offline_error(
+            "offline_result_write_failed",
+            format!(
+                "result {} was published but temporary link {} could not be removed: {error}",
+                path.display(),
+                temporary_path.display()
+            ),
+        )
+    })?;
+    let published = fs::read(path).map_err(|error| {
+        offline_error(
+            "offline_result_verify_failed",
+            format!(
+                "failed to verify published result {}: {error}",
+                path.display()
+            ),
+        )
+    })?;
+    if sha256_hex(&published) != expected_sha256 {
         return Err(offline_error(
             "offline_result_verify_failed",
-            format!("persisted result hash mismatch for {}", path.display()),
+            format!("published result hash mismatch for {}", path.display()),
         ));
     }
     Ok(())
+}
+
+fn create_result_temp(parent: &Path) -> CliOutcome<(PathBuf, fs::File)> {
+    for _ in 0..RESULT_TEMP_ATTEMPTS {
+        let sequence = RESULT_TEMP_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+        let candidate = parent.join(format!(
+            ".actingcommand-offline-result.{}.{}.tmp",
+            std::process::id(),
+            sequence
+        ));
+        match OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&candidate)
+        {
+            Ok(file) => return Ok((candidate, file)),
+            Err(error) if error.kind() == IoErrorKind::AlreadyExists => continue,
+            Err(error) => {
+                return Err(offline_error(
+                    "offline_result_write_failed",
+                    format!(
+                        "failed to create temporary result {}: {error}",
+                        candidate.display()
+                    ),
+                ));
+            }
+        }
+    }
+    Err(offline_error(
+        "offline_result_write_failed",
+        format!(
+            "failed to allocate a unique temporary result in {} after {RESULT_TEMP_ATTEMPTS} attempts",
+            parent.display()
+        ),
+    ))
+}
+
+fn remove_failed_temp(path: &Path, code: &str, message: String) -> CliError {
+    match fs::remove_file(path) {
+        Ok(()) => offline_error(code, message),
+        Err(error) if error.kind() == IoErrorKind::NotFound => offline_error(code, message),
+        Err(error) => offline_error(
+            code,
+            format!(
+                "{message}; additionally failed to remove temporary result {}: {error}",
+                path.display()
+            ),
+        ),
+    }
 }
 
 fn sha256_hex(bytes: &[u8]) -> String {

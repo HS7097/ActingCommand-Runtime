@@ -153,13 +153,18 @@ fn validate_lab_package_zip_with_expected(
     })
 }
 
-/// Deep-validates the exact package bytes that will be passed to the execution kernel.
-pub fn validate_lab_package_bytes(
+/// Admits and prepares the exact package bytes for both validation reporting and execution.
+pub fn prepare_lab_package_bytes(
     input_label: &str,
     bytes: &[u8],
     expected_input_sha256: ExternalExpectedSha256,
-) -> CliOutcome<LabContainedPackageValidationResponse> {
+) -> CliOutcome<(
+    PreparedContainedTask,
+    LabContainedPackageValidationResponse,
+)> {
     let admitted = ExternallyVerifiedBundle::load(input_label, bytes, expected_input_sha256)
+        .map_err(|error| CliError::package_invalid(error.to_string()))?;
+    let prepared = PreparedContainedTask::from_verified_bundle(&admitted)
         .map_err(|error| CliError::package_invalid(error.to_string()))?;
     let sha256 = admitted.loaded_bundle().verified_hash().to_string();
     let task_count = admitted.loaded_bundle().task_count();
@@ -214,11 +219,24 @@ pub fn validate_lab_package_bytes(
                 .map(|path| path.display().to_string()),
         },
     };
-    Ok(LabContainedPackageValidationResponse {
-        validation,
-        task_count,
-        entries,
-    })
+    Ok((
+        prepared,
+        LabContainedPackageValidationResponse {
+            validation,
+            task_count,
+            entries,
+        },
+    ))
+}
+
+/// Deep-validates package bytes through the same preparation path used for execution.
+pub fn validate_lab_package_bytes(
+    input_label: &str,
+    bytes: &[u8],
+    expected_input_sha256: ExternalExpectedSha256,
+) -> CliOutcome<LabContainedPackageValidationResponse> {
+    prepare_lab_package_bytes(input_label, bytes, expected_input_sha256)
+        .map(|(_prepared, validation)| validation)
 }
 
 #[cfg(test)]

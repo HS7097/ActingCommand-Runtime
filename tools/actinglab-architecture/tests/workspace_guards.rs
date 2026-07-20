@@ -617,8 +617,7 @@ fn c5_offline_package_simulation_reuses_the_contained_task_kernel_without_device
         );
     }
     for required in [
-        "validate_lab_package_bytes",
-        "PreparedContainedTask::load",
+        "prepare_lab_package_bytes",
         "simulate_contained_task",
         "mode: \"offline_simulation\"",
         "executed: false",
@@ -629,6 +628,10 @@ fn c5_offline_package_simulation_reuses_the_contained_task_kernel_without_device
             "offline package entry lost required binding {required}"
         );
     }
+    assert!(
+        !offline_cli.contains("PreparedContainedTask::load"),
+        "offline package entry must not parse and prepare an admitted ZIP a second time"
+    );
     for required in [
         "task.run(&mut runtime)",
         "OfflineBoundary::EffectIntercepted",

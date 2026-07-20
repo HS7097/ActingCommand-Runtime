@@ -145,6 +145,41 @@ fn package_dry_run_rejects_invalid_package_inputs() {
             },
         ),
         (
+            "old-manifest-schema",
+            PackageOptions {
+                manifest_schema: "0.2",
+                ..PackageOptions::default()
+            },
+        ),
+        (
+            "old-navigation-schema",
+            PackageOptions {
+                navigation_schema: "0.2",
+                ..PackageOptions::default()
+            },
+        ),
+        (
+            "navigation-server-mismatch",
+            PackageOptions {
+                navigation_server: "other",
+                ..PackageOptions::default()
+            },
+        ),
+        (
+            "dangling-navigation-action",
+            PackageOptions {
+                navigation_action_id: "ghost_route",
+                ..PackageOptions::default()
+            },
+        ),
+        (
+            "dangling-navigation-page",
+            PackageOptions {
+                navigation_to_page: "neutral/ghost",
+                ..PackageOptions::default()
+            },
+        ),
+        (
             "dangling-resource",
             PackageOptions {
                 dangling_resource: true,
@@ -256,10 +291,43 @@ fn package_dry_run_rejects_missing_inputs_and_device_scope() {
 }
 
 #[test]
+fn package_dry_run_never_overwrites_existing_or_hard_linked_inputs() {
+    let fixture = TestFixture::new(PackageOptions::default(), home_frame(true));
+    let package_before = fs::read(&fixture.package_path).unwrap();
+    let fixture_before = fs::read(&fixture.fixture_path).unwrap();
+
+    for (name, input) in [
+        ("package-alias.zip", &fixture.package_path),
+        ("fixture-alias.png", &fixture.fixture_path),
+    ] {
+        let alias = fixture.temp.path().join(name);
+        fs::hard_link(input, &alias).unwrap();
+        let output = fixture.run(&[], name);
+        assert_error_code(&output, "offline_output_already_exists");
+    }
+    assert_eq!(fs::read(&fixture.package_path).unwrap(), package_before);
+    assert_eq!(fs::read(&fixture.fixture_path).unwrap(), fixture_before);
+
+    let first = fixture.run(&[], "existing-result.zip");
+    assert_success(&first, "would_click");
+    let existing_before = fs::read(fixture.temp.path().join("existing-result.zip")).unwrap();
+    let second = fixture.run(&[], "existing-result.zip");
+    assert_error_code(&second, "offline_output_already_exists");
+    assert_eq!(
+        fs::read(fixture.temp.path().join("existing-result.zip")).unwrap(),
+        existing_before
+    );
+}
+
+#[test]
 fn production_entry_boundaries_remain_explicit() {
     let temp = TempDir::new().unwrap();
     let lab = run_actinglab(&temp, ["--json", "--dry-run", "lab", "run"]);
     assert_error_code(&lab, "explicit_offline_entry_required");
+    let equals = run_actinglab(&temp, ["--json", "lab", "run", "--dry-run=true"]);
+    assert_error_code(&equals, "explicit_offline_entry_required");
+    let typo = run_actinglab(&temp, ["--json", "lab", "run", "--dry-rnu"]);
+    assert_error_code(&typo, "validation_failed");
 
     let fixture = TestFixture::new(PackageOptions::default(), home_frame(true));
     let package_run = run_actinglab(
@@ -439,6 +507,11 @@ fn read_result_record(path: &Path) -> Value {
 #[derive(Clone, Copy)]
 struct PackageOptions {
     control_schema: &'static str,
+    manifest_schema: &'static str,
+    navigation_schema: &'static str,
+    navigation_server: &'static str,
+    navigation_action_id: &'static str,
+    navigation_to_page: &'static str,
     execution_mode: &'static str,
     click_kind: &'static str,
     include_guard: bool,
@@ -452,6 +525,11 @@ impl Default for PackageOptions {
     fn default() -> Self {
         Self {
             control_schema: "Lab-1y.control.v1",
+            manifest_schema: "0.3",
+            navigation_schema: "0.3",
+            navigation_server: "test",
+            navigation_action_id: "open_terminal",
+            navigation_to_page: "neutral/terminal",
             execution_mode: "navigable_route",
             click_kind: "point",
             include_guard: true,
@@ -522,7 +600,7 @@ fn package(options: PackageOptions) -> Vec<u8> {
         ("control.json", control),
         (
             "resources/manifest.json",
-            json!({"schema_version":"0.3","entry_task_id":"task"}),
+            json!({"schema_version":options.manifest_schema,"entry_task_id":"task"}),
         ),
         ("resources/operations/task/task.json", task),
         (
@@ -547,9 +625,16 @@ fn package(options: PackageOptions) -> Vec<u8> {
         (
             "resources/navigation/neutral.test.navigation.json",
             json!({
-                "schema_version": "0.3",
+                "schema_version": options.navigation_schema,
                 "game": "neutral",
-                "navigation": [],
+                "server": options.navigation_server,
+                "navigation": [{
+                    "id": options.navigation_action_id,
+                    "from_page": "neutral/home",
+                    "to_page": options.navigation_to_page,
+                    "click": {"kind": "point", "x": 1, "y": 0}
+                }],
+                "page_operations": [],
                 "destructive_actions": []
             }),
         ),

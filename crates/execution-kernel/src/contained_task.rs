@@ -176,10 +176,17 @@ impl PreparedContainedTask {
     ) -> Result<Self, ContainedTaskError> {
         let bundle = ExternallyVerifiedBundle::load(instance_label, zip_bytes, expected)
             .map_err(|_| ContainedTaskError::new("contained_task_admission_failed"))?;
-        let package_sha256 = bundle.loaded_bundle().verified_hash().to_string();
-        let entry_count = bundle.loaded_bundle().entry_count();
-        let task_count = bundle.loaded_bundle().task_count();
-        let bundle = bundle.into_loaded_bundle();
+        Self::from_verified_bundle(&bundle)
+    }
+
+    /// Prepares an already admitted package without parsing or trusting the ZIP a second time.
+    pub fn from_verified_bundle(
+        admitted: &ExternallyVerifiedBundle,
+    ) -> Result<Self, ContainedTaskError> {
+        let bundle = admitted.loaded_bundle();
+        let package_sha256 = bundle.verified_hash().to_string();
+        let entry_count = bundle.entry_count();
+        let task_count = bundle.task_count();
         let control = bundle
             .control()
             .cloned()
@@ -189,7 +196,7 @@ impl PreparedContainedTask {
         control.validate()?;
         let program: TaskProgram = serde_json::from_value(bundle.operation().clone())
             .map_err(|_| ContainedTaskError::new("contained_task_program_invalid"))?;
-        program.validate(&control, &bundle)?;
+        program.validate(&control, bundle)?;
         let evaluator = bundle
             .evaluator()
             .cloned()
