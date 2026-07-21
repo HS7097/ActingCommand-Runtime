@@ -1237,13 +1237,15 @@ fn write_semantic_package(path: &Path, root: &Path) {
         .expect("semantic navigation");
     let navigation_value: Value =
         serde_json::from_slice(&navigation).expect("semantic navigation JSON");
+    let pack_value: Value = serde_json::from_slice(&pack).expect("semantic pack JSON");
+    let pages_value: Value = serde_json::from_slice(&pages).expect("semantic pages JSON");
     let game = navigation_value["game"]
         .as_str()
         .expect("semantic navigation game");
     let server = navigation_value["server"]
         .as_str()
         .expect("semantic navigation server");
-    let operations = navigation_value["navigation"]
+    let mut operations = navigation_value["navigation"]
         .as_array()
         .expect("semantic navigation routes")
         .iter()
@@ -1258,6 +1260,36 @@ fn write_semantic_package(path: &Path, root: &Path) {
             })
         })
         .collect::<Vec<_>>();
+    let target = pack_value["targets"]
+        .as_array()
+        .expect("semantic targets")
+        .iter()
+        .find(|target| target["id"] == "home_button")
+        .expect("home button target");
+    let page = pages_value["pages"]
+        .as_array()
+        .expect("semantic pages")
+        .first()
+        .expect("semantic page");
+    operations.push(json!({
+        "id": "direct_home_button",
+        "purpose": "golden typed target closure",
+        "from": page["id"],
+        "to": Value::Null,
+        "click": {
+            "kind": "rect",
+            "x": target["click"]["x"],
+            "y": target["click"]["y"],
+            "width": target["click"]["width"],
+            "height": target["click"]["height"]
+        },
+        "guard": {
+            "page_id": page["id"],
+            "target_id": target["id"],
+            "expected_rect": target["region"],
+            "color_probe": target["id"]
+        }
+    }));
     let operation = serde_json::to_vec(&json!({
         "schema_version": "0.6",
         "task_id": "task",
@@ -1268,13 +1300,20 @@ fn write_semantic_package(path: &Path, root: &Path) {
         "operations": operations
     }))
     .expect("semantic operation JSON");
+    let control = serde_json::to_vec(&json!({
+        "schema_version": "Lab-1y.control.v1",
+        "package_id": "golden.semantic",
+        "execution_mode": "navigable_route",
+        "game": game,
+        "server": server,
+        "resolution": {"width": 100, "height": 100},
+        "entry_task_id": "task"
+    }))
+    .expect("semantic control JSON");
     write_zip(
         path,
         &[
-            (
-                "control.json",
-                br#"{"schema_version":"Lab-1y.control.v1","package_id":"golden.semantic","execution_mode":"navigable_route","game":"arknights","server":"cn","resolution":{"width":100,"height":100},"entry_task_id":"task"}"#,
-            ),
+            ("control.json", &control),
             (
                 "resources/manifest.json",
                 br#"{"schema_version":"0.3","entry_task_id":"task"}"#,

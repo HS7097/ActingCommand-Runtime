@@ -14,15 +14,17 @@ use actingcommand_device::{
     vendor_stdio_session_diagnostic,
 };
 use actingcommand_lab::{
-    InstanceConfig, PackageValidationResponse, SemanticLedgerContext, SemanticRequestContext,
-    UserConfig, derive_absolute_coordinate_rect_from_match, project_semantic_payload,
+    AdmittedAction, AdmittedPackage, CanonicalEffectPoint, DriveDecisionError,
+    DriveDecisionErrorKind, DriveNavigationEdge, DriveNavigationGraph, DrivePoint,
+    DriveSemanticInput, InstanceConfig, PackageValidationResponse, SemanticLedgerContext,
+    SemanticRequestContext, UserConfig, drive_semantic_input_from_admitted,
+    project_semantic_payload,
 };
 #[cfg(test)]
 use actingcommand_ledger::{
     EvidenceStore, LabLedger, LedgerRead, LedgerRecord, LedgerRecordKind, LightEvent, SessionHeader,
 };
 use actingcommand_ledger::{IdIssuer, IdKind};
-use actingcommand_pack_containment::{AdmittedAction, AdmittedPackage, BoundedRect, PageSelector};
 use actingcommand_page_detector::{PageDetector, PageEvaluation, load_page_set_from_json_str};
 use actingcommand_recognition::{MatchMetric, Rect as RecognitionRect, Scene, ScenePixelFormat};
 use actingcommand_recognition_pack::{
@@ -33,7 +35,7 @@ use actingcommand_runtime_client::{RuntimeClient, RuntimeClientConfig};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
-use std::collections::{BTreeMap, BTreeSet, VecDeque};
+use std::collections::{BTreeMap, BTreeSet};
 use std::env;
 use std::ffi::OsString;
 use std::fs::{self, File};
@@ -585,6 +587,28 @@ where
             other => rest.push(other.to_string()),
         }
         index += 1;
+    }
+
+    if global.version {
+        let version_count = global.present_flags.get("--version").copied().unwrap_or(0);
+        let incompatible_global = global
+            .present_flags
+            .keys()
+            .any(|flag| flag != "--version" && flag != "--json");
+        if version_count != 1 || !rest.is_empty() || incompatible_global {
+            let command = if rest.is_empty() {
+                "unknown".to_string()
+            } else {
+                command_path_and_args(rest.clone()).0.join(" ")
+            };
+            return Err((
+                command,
+                global.json,
+                CliError::usage(
+                    "--version is an independent invocation and cannot be combined with a command or action option",
+                ),
+            ));
+        }
     }
 
     let (command, args) = if global.version {
@@ -4159,6 +4183,7 @@ fn run_session_recover(global: &GlobalOptions, args: &[String]) -> CliOutcome<Va
                 &["control_point"],
             )
         })?;
+        validate_control_point_safety(&graph, wake)?;
         if max_actions == 0 {
             return Err(CliError::safety_blocked(
                 "recovery_action_limit_exceeded",
@@ -4218,7 +4243,8 @@ fn run_session_recover(global: &GlobalOptions, args: &[String]) -> CliOutcome<Va
             config: &config,
             evaluator: &evaluator,
             detector: &detector,
-            destructive_clicks: &graph.destructive_clicks,
+            graph: &graph,
+            allow_destructive: false,
             step_timeout,
             poll,
         };
@@ -4255,7 +4281,8 @@ fn run_session_recover(global: &GlobalOptions, args: &[String]) -> CliOutcome<Va
         config: &config,
         evaluator: &evaluator,
         detector: &detector,
-        destructive_clicks: &graph.destructive_clicks,
+        graph: &graph,
+        allow_destructive: false,
         step_timeout,
         poll,
     };
@@ -4398,51 +4425,15 @@ struct PageDetectionOutcome {
     evaluations: Vec<PageEvaluation>,
 }
 
-#[derive(Debug, Clone, Copy)]
-struct SemanticPoint {
-    x: i32,
-    y: i32,
-}
-
-#[derive(Debug, Clone)]
-enum SemanticInput {
-    Tap {
-        rect: PackRect,
-        point: SemanticPoint,
-    },
-    TargetCenter {
-        target_id: String,
-    },
-    Drag {
-        from_rect: PackRect,
-        to_rect: PackRect,
-        from: SemanticPoint,
-        to: SemanticPoint,
-        duration_ms: u64,
-    },
-}
+type SemanticPoint = DrivePoint;
+type SemanticInput = DriveSemanticInput;
+type NavigationEdge = DriveNavigationEdge;
 
 #[derive(Debug)]
 struct NavigationGraph {
-    game: Option<String>,
-    edges: Vec<NavigationEdge>,
-    destructive_clicks: Vec<DestructiveClick>,
+    package: AdmittedPackage,
+    drive: DriveNavigationGraph,
     control_points: BTreeMap<String, ControlPoint>,
-}
-
-#[derive(Debug, Clone)]
-struct NavigationEdge {
-    id: String,
-    from_page: String,
-    to_page: String,
-    input: SemanticInput,
-    source: Option<String>,
-}
-
-#[derive(Debug, Clone)]
-struct DestructiveClick {
-    page: Option<String>,
-    rect: PackRect,
 }
 
 #[derive(Debug, Clone)]
@@ -4600,45 +4591,7 @@ fn navigation_graph_from_admitted(package: &AdmittedPackage) -> CliOutcome<Navig
     let navigation = package.navigation().ok_or_else(|| {
         CliError::package_invalid("externally verified resource bundle has no navigation graph")
     })?;
-    let edges = navigation
-        .routes()
-        .iter()
-        .map(|route| {
-            let operation = package.operation(route.operation()).ok_or_else(|| {
-                CliError::package_invalid(format!(
-                    "admitted navigation route references missing operation '{}'",
-                    route.operation()
-                ))
-            })?;
-            let to_page = operation.to().ok_or_else(|| {
-                CliError::package_invalid(format!(
-                    "admitted navigation route '{}' has no target page",
-                    route.operation()
-                ))
-            })?;
-            Ok(NavigationEdge {
-                id: operation.key().operation().to_string(),
-                from_page: match operation.from() {
-                    PageSelector::Any => "any".to_string(),
-                    PageSelector::Exact(page) => page.to_string(),
-                },
-                to_page: to_page.to_string(),
-                input: semantic_input_from_admitted(operation.action())?,
-                source: route.source().map(str::to_string),
-            })
-        })
-        .collect::<CliOutcome<Vec<_>>>()?;
-    let destructive_clicks = navigation
-        .destructive_regions()
-        .iter()
-        .map(|region| DestructiveClick {
-            page: match region.page() {
-                PageSelector::Any => None,
-                PageSelector::Exact(page) => Some(page.to_string()),
-            },
-            rect: pack_rect_from_admitted(region.rect()),
-        })
-        .collect();
+    let drive = DriveNavigationGraph::from_admitted(package).map_err(drive_cli_error)?;
     let control_points = navigation
         .control_points()
         .iter()
@@ -4654,57 +4607,14 @@ fn navigation_graph_from_admitted(package: &AdmittedPackage) -> CliOutcome<Navig
         })
         .collect::<CliOutcome<BTreeMap<_, _>>>()?;
     Ok(NavigationGraph {
-        game: Some(package.control().game().to_string()),
-        edges,
-        destructive_clicks,
+        package: package.clone(),
+        drive,
         control_points,
     })
 }
 
 fn semantic_input_from_admitted(action: &AdmittedAction) -> CliOutcome<SemanticInput> {
-    match action {
-        AdmittedAction::Tap { rect, point } => Ok(SemanticInput::Tap {
-            rect: pack_rect_from_admitted(*rect),
-            point: SemanticPoint {
-                x: point.x(),
-                y: point.y(),
-            },
-        }),
-        AdmittedAction::TargetTap { target, .. } => Ok(SemanticInput::TargetCenter {
-            target_id: target.to_string(),
-        }),
-        AdmittedAction::Drag {
-            from_rect,
-            to_rect,
-            from,
-            to,
-            duration,
-        } => Ok(SemanticInput::Drag {
-            from_rect: pack_rect_from_admitted(*from_rect),
-            to_rect: pack_rect_from_admitted(*to_rect),
-            from: SemanticPoint {
-                x: from.x(),
-                y: from.y(),
-            },
-            to: SemanticPoint {
-                x: to.x(),
-                y: to.y(),
-            },
-            duration_ms: duration.milliseconds(),
-        }),
-        AdmittedAction::LongTap { .. } => Err(CliError::package_invalid(
-            "admitted navigation cannot contain a long-tap action",
-        )),
-    }
-}
-
-fn pack_rect_from_admitted(rect: BoundedRect) -> PackRect {
-    PackRect {
-        x: rect.x(),
-        y: rect.y(),
-        width: rect.width(),
-        height: rect.height(),
-    }
+    drive_semantic_input_from_admitted(action).map_err(drive_cli_error)
 }
 
 fn parse_point_pair(value: &str) -> CliOutcome<(i32, i32)> {
@@ -4724,59 +4634,16 @@ fn parse_point_pair(value: &str) -> CliOutcome<(i32, i32)> {
 }
 
 fn canonical_navigation_page(graph: &NavigationGraph, page: &str) -> String {
-    if page.contains('/') {
-        return page.to_string();
-    }
-    graph
-        .game
-        .as_ref()
-        .map(|game| format!("{game}/{page}"))
-        .unwrap_or_else(|| page.to_string())
-}
-
-fn find_navigation_route(
-    edges: &[NavigationEdge],
-    from_page: &str,
-    to_page: &str,
-) -> Option<Vec<NavigationEdge>> {
-    let mut queue = VecDeque::from([from_page.to_string()]);
-    let mut previous = BTreeMap::<String, (String, usize)>::new();
-    let mut seen = BTreeSet::from([from_page.to_string()]);
-
-    while let Some(page) = queue.pop_front() {
-        if page == to_page {
-            break;
-        }
-        for (index, edge) in edges.iter().enumerate() {
-            if (edge.from_page != page && edge.from_page != "any") || seen.contains(&edge.to_page) {
-                continue;
-            }
-            seen.insert(edge.to_page.clone());
-            previous.insert(edge.to_page.clone(), (page.clone(), index));
-            queue.push_back(edge.to_page.clone());
-        }
-    }
-    if from_page != to_page && !previous.contains_key(to_page) {
-        return None;
-    }
-    let mut route = Vec::new();
-    let mut cursor = to_page.to_string();
-    while cursor != from_page {
-        let (prev, index) = previous.get(&cursor)?.clone();
-        route.push(edges[index].clone());
-        cursor = prev;
-    }
-    route.reverse();
-    Some(route)
+    graph.drive.canonical_page(page)
 }
 
 fn navigation_edge_json(edge: &NavigationEdge) -> Value {
     json!({
-        "id": edge.id,
-        "from_page": edge.from_page,
-        "to_page": edge.to_page,
-        "input": semantic_input_json(&edge.input),
-        "source": edge.source
+        "id": edge.id(),
+        "from_page": edge.from_page(),
+        "to_page": edge.to_page(),
+        "input": semantic_input_json(edge.input()),
+        "source": edge.source()
     })
 }
 
@@ -4795,9 +4662,15 @@ fn semantic_input_json(input: &SemanticInput) -> Value {
             "rect": rect_json(*rect),
             "point": point_json(*point)
         }),
-        SemanticInput::TargetCenter { target_id } => json!({
-            "type": "target_center",
-            "target_id": target_id
+        SemanticInput::TargetTap {
+            target_id,
+            mode,
+            offset,
+        } => json!({
+            "type": "target",
+            "target_id": target_id,
+            "mode": mode,
+            "offset": offset
         }),
         SemanticInput::Drag {
             from_rect,
@@ -4816,36 +4689,33 @@ fn semantic_input_json(input: &SemanticInput) -> Value {
     }
 }
 
-fn reject_destructive_overlap(
-    edge: &NavigationEdge,
-    destructive: &[DestructiveClick],
-) -> CliOutcome<()> {
-    reject_destructive_overlap_input(edge, &edge.input, destructive)
-}
-
-fn reject_destructive_overlap_input(
+fn validate_navigation_edge_safety(
+    graph: &NavigationGraph,
     edge: &NavigationEdge,
     input: &SemanticInput,
-    destructive: &[DestructiveClick],
+    allow_destructive: bool,
 ) -> CliOutcome<()> {
-    let rects = semantic_input_rects(input);
-    for rect in rects {
-        if destructive.iter().any(|other| {
-            other.page.as_deref().is_none_or(|page| {
-                page == "any" || edge.from_page == "any" || page == edge.from_page
-            }) && rects_intersect(rect, other.rect)
-        }) {
-            return Err(CliError::safety_blocked(
-                "navigation_destructive_overlap",
-                format!(
-                    "navigation edge '{}' overlaps a destructive action region",
-                    edge.id
-                ),
-                &["navigation_only"],
-            ));
+    graph
+        .drive
+        .validate_resolved_input(edge, input, allow_destructive)
+        .map_err(drive_cli_error)
+}
+
+fn validate_control_point_safety(graph: &NavigationGraph, point: &ControlPoint) -> CliOutcome<()> {
+    graph
+        .drive
+        .validate_control_point_input(&point.name, &point.input)
+        .map_err(drive_cli_error)
+}
+
+fn drive_cli_error(error: DriveDecisionError) -> CliError {
+    match error.kind() {
+        DriveDecisionErrorKind::InvalidInput => CliError::usage(error.message()),
+        DriveDecisionErrorKind::SafetyBlocked => {
+            CliError::safety_blocked(error.code(), error.message(), error.required_conditions())
         }
+        DriveDecisionErrorKind::PackageInvalid => CliError::package_invalid(error.message()),
     }
-    Ok(())
 }
 
 fn safe_recovery_route(
@@ -4853,17 +4723,17 @@ fn safe_recovery_route(
     from_page: &str,
     to_page: &str,
 ) -> CliOutcome<Vec<NavigationEdge>> {
-    let route = find_navigation_route(&graph.edges, from_page, to_page).ok_or_else(|| {
+    let route = graph.drive.find_route(from_page, to_page).ok_or_else(|| {
         CliError::safety_blocked(
             "recovery_route_missing",
             format!("no maintenance recovery route from '{from_page}' to '{to_page}'"),
             &["maintenance_recovery"],
         )
     })?;
-    for edge in &route {
-        reject_dangerous_semantic_id("recovery navigation edge", &edge.id)?;
-        reject_destructive_overlap(edge, &graph.destructive_clicks)?;
-    }
+    graph
+        .drive
+        .validate_route(&route, false)
+        .map_err(drive_cli_error)?;
     Ok(route)
 }
 
@@ -5142,66 +5012,6 @@ fn ensure_recovery_action_limit(actions: usize, max_actions: usize) -> CliOutcom
     Ok(())
 }
 
-fn semantic_input_rects(input: &SemanticInput) -> Vec<PackRect> {
-    match input {
-        SemanticInput::Tap { rect, .. } => vec![*rect],
-        SemanticInput::TargetCenter { .. } => Vec::new(),
-        SemanticInput::Drag {
-            from_rect, to_rect, ..
-        } => vec![*from_rect, *to_rect],
-    }
-}
-
-fn rects_intersect(a: PackRect, b: PackRect) -> bool {
-    let ax2 = a.x.saturating_add(a.width);
-    let ay2 = a.y.saturating_add(a.height);
-    let bx2 = b.x.saturating_add(b.width);
-    let by2 = b.y.saturating_add(b.height);
-    a.x < bx2 && ax2 > b.x && a.y < by2 && ay2 > b.y
-}
-
-fn reject_dangerous_semantic_id(label: &str, value: &str) -> CliOutcome<()> {
-    let lower = value.to_ascii_lowercase();
-    let dangerous = [
-        "gacha",
-        "shop",
-        "purchase",
-        "buy",
-        "recruit",
-        "construct",
-        "retire",
-        "delete",
-        "decompose",
-        "enhance",
-        "refill",
-        "paid",
-        "premium",
-        "exercise",
-        "pvp",
-    ];
-    if dangerous.iter().any(|word| lower.contains(word)) {
-        return Err(CliError::safety_blocked(
-            "semantic_action_requires_destructive_opt_in",
-            format!("{label} '{value}' looks destructive and requires --allow-destructive"),
-            &["navigation_only"],
-        ));
-    }
-    Ok(())
-}
-
-fn rect_center(rect: PackRect) -> CliOutcome<SemanticPoint> {
-    if rect.width <= 0 || rect.height <= 0 {
-        return Err(CliError::usage(format!(
-            "click rectangle must have positive dimensions: {}x{}",
-            rect.width, rect.height
-        )));
-    }
-    Ok(SemanticPoint {
-        x: rect.x + rect.width / 2,
-        y: rect.y + rect.height / 2,
-    })
-}
-
 fn point_json(point: SemanticPoint) -> Value {
     json!({
         "x": point.x,
@@ -5222,9 +5032,9 @@ fn send_semantic_input(
     let (mut backend, instance_alias) = open_cli_runtime_input_proxy(global, config)?;
     let operation = match input {
         SemanticInput::Tap { point, .. } => backend.tap(point.x, point.y),
-        SemanticInput::TargetCenter { .. } => {
+        SemanticInput::TargetTap { .. } => {
             return Err(CliError::usage(
-                "target_center semantic input must be resolved before device execution",
+                "target semantic input must be resolved before device execution",
             ));
         }
         SemanticInput::Drag {
@@ -5295,7 +5105,8 @@ struct NavigationExecutionContext<'a> {
     config: &'a UserConfig,
     evaluator: &'a RecognitionEvaluator,
     detector: &'a PageDetector,
-    destructive_clicks: &'a [DestructiveClick],
+    graph: &'a NavigationGraph,
+    allow_destructive: bool,
     step_timeout: Duration,
     poll: Duration,
 }
@@ -5308,25 +5119,26 @@ fn execute_navigation_route(
     let mut executed = Vec::new();
     let mut current_page = start_page;
     for edge in route {
-        if current_page != edge.from_page {
+        if current_page != edge.from_page() {
             return Err(CliError::safety_blocked(
                 "navigation_page_drift",
                 format!(
                     "navigation expected current page '{}' but last page was '{}'",
-                    edge.from_page, current_page
+                    edge.from_page(),
+                    current_page
                 ),
                 &["page_guard"],
             ));
         }
         let (input, recognition) = resolve_navigation_edge_input(ctx, &edge)?;
-        reject_destructive_overlap_input(&edge, &input, ctx.destructive_clicks)?;
+        validate_navigation_edge_safety(ctx.graph, &edge, &input, ctx.allow_destructive)?;
         let device = send_semantic_input(ctx.global, ctx.config, &input)?;
         let arrived = poll_for_page(
             ctx.global,
             ctx.flags,
             ctx.evaluator,
             ctx.detector,
-            &edge.to_page,
+            edge.to_page(),
             ctx.step_timeout,
             ctx.poll,
         )?;
@@ -5335,7 +5147,9 @@ fn execute_navigation_route(
                 "navigation_arrival_failed",
                 format!(
                     "navigation edge '{}' did not arrive at '{}'; last page '{}'",
-                    edge.id, edge.to_page, arrived.page
+                    edge.id(),
+                    edge.to_page(),
+                    arrived.page
                 ),
                 &["arrival_page"],
             ));
@@ -5356,8 +5170,8 @@ fn resolve_navigation_edge_input(
     ctx: &NavigationExecutionContext<'_>,
     edge: &NavigationEdge,
 ) -> CliOutcome<(SemanticInput, Value)> {
-    let SemanticInput::TargetCenter { target_id } = &edge.input else {
-        return Ok((edge.input.clone(), Value::Null));
+    let SemanticInput::TargetTap { target_id, .. } = edge.input() else {
+        return Ok((edge.input().clone(), Value::Null));
     };
     let scene = load_scene_from_flags(ctx.global, ctx.flags)?;
     let evaluation = ctx
@@ -5370,16 +5184,14 @@ fn resolve_navigation_edge_input(
             "navigation_target_not_visible",
             format!(
                 "navigation edge '{}' target '{}' did not pass recognition: {}",
-                edge.id, target_id, evaluation.message
+                edge.id(),
+                target_id,
+                evaluation.message
             ),
             &["visible_target", "navigation"],
         ));
     }
-    let rect = target_evaluation_rect(&evaluation)?;
-    let input = SemanticInput::Tap {
-        rect,
-        point: rect_center(rect)?,
-    };
+    let input = resolve_navigation_target_input(ctx.graph, edge, &evaluation)?;
     Ok((
         input,
         json!({
@@ -5389,19 +5201,13 @@ fn resolve_navigation_edge_input(
     ))
 }
 
-fn target_evaluation_rect(evaluation: &TargetEvaluation) -> CliOutcome<PackRect> {
-    let template = evaluation.template.as_ref().ok_or_else(|| {
-        CliError::usage(format!(
-            "target '{}' has no matched template rect",
-            evaluation.id
-        ))
-    })?;
-    Ok(PackRect {
-        x: template.x,
-        y: template.y,
-        width: template.width,
-        height: template.height,
-    })
+fn resolve_navigation_target_input(
+    graph: &NavigationGraph,
+    edge: &NavigationEdge,
+    evaluation: &TargetEvaluation,
+) -> CliOutcome<SemanticInput> {
+    actingcommand_lab::resolve_drive_target_input(&graph.package, edge, evaluation)
+        .map_err(drive_cli_error)
 }
 
 fn poll_for_page(
@@ -12180,6 +11986,29 @@ mod tests {
     }
 
     #[test]
+    fn version_cannot_replace_an_action_invocation() {
+        for args in [
+            vec!["--json", "package", "dry-run", "--version"],
+            vec!["--json", "lab", "run", "--version"],
+            vec!["--json", "operation", "run", "--version"],
+            vec!["--json", "--dry-run", "--version"],
+        ] {
+            let result = run_cli(args, true);
+            assert_eq!(result.exit_code(), 2, "{}", result.envelope_json());
+            assert!(!result.envelope.ok);
+            assert_ne!(result.envelope.command, "version");
+            assert_eq!(
+                result
+                    .envelope
+                    .error
+                    .as_ref()
+                    .map(|error| error.code.as_str()),
+                Some("validation_failed")
+            );
+        }
+    }
+
+    #[test]
     fn status_without_runtime_is_exit_five() {
         let _guard = env_lock();
         let temp = TempDir::new().unwrap();
@@ -12279,7 +12108,7 @@ mod tests {
         let _trusted_remote_env = TrustedRemoteEnvGuard::clear();
         let result = run_cli(["--json", "session", "transport", "plan"], true);
 
-        assert_eq!(result.exit_code(), 0);
+        assert_eq!(result.exit_code(), 0, "{}", result.envelope_json());
         let data = result.envelope.data.as_ref().unwrap();
         assert_eq!(
             data.get("schema_version").and_then(Value::as_str),
@@ -17709,7 +17538,7 @@ mod tests {
             &pages_path,
             &json!({
                 "schema_version":"0.3",
-                "pages":[{"id":"arknights/home","required":["page/home"]}]
+                "pages":[{"id":"home","required":["page/home"]}]
             }),
         )
         .unwrap();
@@ -20465,7 +20294,7 @@ mod tests {
             true,
         );
 
-        assert_eq!(result.exit_code(), 0);
+        assert_eq!(result.exit_code(), 0, "{}", result.envelope_json());
         let point = result.envelope.data.as_ref().unwrap().get("point").unwrap();
         assert_eq!(point.get("x").and_then(Value::as_i64), Some(12));
         assert_eq!(point.get("y").and_then(Value::as_i64), Some(23));
@@ -20509,31 +20338,6 @@ mod tests {
             route[0].get("id").and_then(Value::as_str),
             Some("home_to_target")
         );
-    }
-
-    #[test]
-    fn navigation_any_source_is_a_consistent_fallback() {
-        let edges = vec![NavigationEdge {
-            id: "fallback".to_string(),
-            from_page: "any".to_string(),
-            to_page: "neutral/target".to_string(),
-            input: SemanticInput::Tap {
-                rect: PackRect {
-                    x: 1,
-                    y: 1,
-                    width: 1,
-                    height: 1,
-                },
-                point: SemanticPoint { x: 1, y: 1 },
-            },
-            source: None,
-        }];
-
-        let route = find_navigation_route(&edges, "neutral/home", "neutral/target")
-            .expect("any-source fallback route");
-
-        assert_eq!(route.len(), 1);
-        assert_eq!(route[0].from_page, "any");
     }
 
     #[test]

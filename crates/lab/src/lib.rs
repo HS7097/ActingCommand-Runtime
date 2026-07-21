@@ -49,10 +49,16 @@ pub use state::*;
 pub use actingcommand_artifact_store::{FrameStoreControl, MemorySample, MemorySampleSource};
 pub use actingcommand_contract::{LabError, LabResult};
 pub use actingcommand_execution_kernel::{
-    DetectKind, OfflineSimulationError, OfflineSimulationResult, PreparedContainedTask,
-    RecoveryAction, RecoveryExecError, RecoveryExecutionReport, RecoveryGraph, RecoveryNode,
-    RecoveryResult, RecoveryRuntime, RecoverySignal, RecoveryStatus, execute_recovery_graph,
-    simulate_contained_task,
+    AdmittedAction, AdmittedEffectCapability, AdmittedGuard, AdmittedOperation, AdmittedPackage,
+    AdmittedTask, BoundedRect, CanonicalEffectIntent, CanonicalEffectPoint, CanonicalEffectRect,
+    ContainmentError, ContainmentLimits, DetectKind, DriveDecisionError, DriveDecisionErrorKind,
+    DriveNavigationEdge, DriveNavigationGraph, DrivePoint, DriveSemanticInput, EffectDecisionError,
+    GuardVerification, OfflineDecision, OfflineSimulationError, OfflineSimulationResult,
+    OpaqueMetadata, PageKey, PageSelector, PreparedContainedTask, RecoveryAction,
+    RecoveryExecError, RecoveryExecutionReport, RecoveryGraph, RecoveryNode, RecoveryResult,
+    RecoveryRuntime, RecoverySignal, RecoveryStatus, Sha256Hash, TargetTapMode,
+    drive_semantic_input_from_admitted, execute_recovery_graph, resolve_admitted_effect_intent,
+    resolve_drive_target_input, simulate_contained_task,
 };
 
 pub struct Lab<P: LabPorts> {

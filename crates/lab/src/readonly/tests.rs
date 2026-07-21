@@ -3,7 +3,7 @@
 use super::*;
 use crate::ports::{DisabledLedger, DisabledSemanticInput};
 use crate::{CaptureBackendFactory, Clock, ConfigSource, InputBackendFactory, LabPorts};
-use actingcommand_pack_containment::Sha256Hash;
+use actingcommand_execution_kernel::Sha256Hash;
 use actingcommand_recognition::ScenePixelFormat;
 use std::fs::File;
 use std::io::Write;

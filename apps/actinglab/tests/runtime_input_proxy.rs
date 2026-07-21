@@ -1418,15 +1418,18 @@ fn online_lab2_ensure_and_wait_use_runtime_authority_without_local_state() {
 fn write_semantic_resources(root: &std::path::Path) {
     let recognition = root.join("recognition");
     let navigation = root.join("navigation");
+    let operation_assets = root.join("operations/task/assets");
     fs::create_dir_all(&recognition).expect("recognition dir");
     fs::create_dir_all(&navigation).expect("navigation dir");
+    fs::create_dir_all(&operation_assets).expect("operation asset dir");
+    fs::write(operation_assets.join("home_button.png"), RED_1X1_PNG).expect("template asset");
     fs::write(
         recognition.join("arknights.cn.pack.json"),
         r#"{
             "schema_version":"0.3",
             "coordinate_space":{"width":1,"height":1},
             "targets":[
-                {"type":"color","id":"home_button","region":{"x":0,"y":0,"width":1,"height":1},"expected":[255,0,0],"click":{"x":0,"y":0,"width":1,"height":1}}
+                {"type":"template","id":"home_button","template_path":"operations/task/assets/home_button.png","region":{"x":0,"y":0,"width":1,"height":1},"threshold":0.99,"color_check":{"region":{"x":0,"y":0,"width":1,"height":1},"expected":[255,0,0]},"click":{"x":0,"y":0,"width":1,"height":1}}
             ]
         }"#,
     )
@@ -1435,7 +1438,7 @@ fn write_semantic_resources(root: &std::path::Path) {
         recognition.join("arknights.cn.pages.json"),
         r#"{
             "schema_version":"0.3",
-            "pages":[{"id":"arknights/home","required":["home_button"]}]
+            "pages":[{"id":"home","required":["home_button"]}]
         }"#,
     )
     .expect("page set");
@@ -1499,11 +1502,12 @@ fn write_semantic_package(path: &Path, root: &Path) {
         fs::read(root.join("navigation/arknights.cn.navigation.json")).expect("navigation");
     let navigation_value: Value = serde_json::from_slice(&navigation).expect("navigation JSON");
     let pack_value: Value = serde_json::from_slice(&pack).expect("pack JSON");
+    let pages_value: Value = serde_json::from_slice(&pages).expect("pages JSON");
     let game = navigation_value["game"].as_str().expect("navigation game");
     let server = navigation_value["server"]
         .as_str()
         .expect("navigation server");
-    let operations = navigation_value["navigation"]
+    let mut operations = navigation_value["navigation"]
         .as_array()
         .expect("navigation routes")
         .iter()
@@ -1518,13 +1522,47 @@ fn write_semantic_package(path: &Path, root: &Path) {
             })
         })
         .collect::<Vec<_>>();
+    let navigable = !operations.is_empty();
+    for target in pack_value["targets"].as_array().into_iter().flatten() {
+        if target["type"] != "template" || !target["click"].is_object() {
+            continue;
+        }
+        let target_id = target["id"].as_str().expect("template target id");
+        let page = pages_value["pages"]
+            .as_array()
+            .expect("pages")
+            .iter()
+            .find(|page| {
+                page["required"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .any(|required| required.as_str() == Some(target_id))
+            })
+            .expect("template target page");
+        operations.push(json!({
+            "id": format!("direct_{}", target_id.replace('/', "_")),
+            "purpose": "runtime typed target closure",
+            "from": page["id"],
+            "to": Value::Null,
+            "click": {
+                "kind": "target_center",
+                "target_id": target_id
+            },
+            "guard": {
+                "page_id": page["id"],
+                "target_id": target_id,
+                "expected_rect": target["region"],
+                "verify_template": "assets/home_button.png"
+            }
+        }));
+    }
     let width = pack_value["coordinate_space"]["width"]
         .as_u64()
         .expect("pack width");
     let height = pack_value["coordinate_space"]["height"]
         .as_u64()
         .expect("pack height");
-    let navigable = !operations.is_empty();
     let control = serde_json::to_vec(&json!({
         "schema_version": "Lab-1y.control.v1",
         "package_id": "runtime.semantic.fixture",
@@ -1546,24 +1584,37 @@ fn write_semantic_package(path: &Path, root: &Path) {
         "operations": operations
     }))
     .expect("operation JSON");
-    write_zip(
-        path,
-        &[
-            ("control.json", &control),
-            (
-                "resources/manifest.json",
-                br#"{"schema_version":"0.3","entry_task_id":"task"}"#,
-            ),
-            ("resources/operations/task/task.json", &operation),
-            ("resources/recognition/arknights.cn.pack.json", &pack),
-            ("resources/recognition/arknights.cn.pages.json", &pages),
-            (
-                "resources/navigation/arknights.cn.navigation.json",
-                &navigation,
-            ),
-        ],
-    );
+    let mut entries: Vec<(&str, &[u8])> = vec![
+        ("control.json", &control),
+        (
+            "resources/manifest.json",
+            br#"{"schema_version":"0.3","entry_task_id":"task"}"#,
+        ),
+        ("resources/operations/task/task.json", &operation),
+        ("resources/recognition/arknights.cn.pack.json", &pack),
+        ("resources/recognition/arknights.cn.pages.json", &pages),
+        (
+            "resources/navigation/arknights.cn.navigation.json",
+            &navigation,
+        ),
+    ];
+    let target_asset = fs::read(root.join("operations/task/assets/home_button.png")).ok();
+    if let Some(target_asset) = target_asset.as_deref() {
+        entries.push((
+            "resources/operations/task/assets/home_button.png",
+            target_asset,
+        ));
+    }
+    write_zip(path, &entries);
 }
+
+const RED_1X1_PNG: &[u8] = &[
+    0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52,
+    0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x02, 0x00, 0x00, 0x00, 0x90, 0x77, 0x53,
+    0xde, 0x00, 0x00, 0x00, 0x0c, 0x49, 0x44, 0x41, 0x54, 0x78, 0x9c, 0x63, 0xf8, 0xcf, 0xc0, 0x00,
+    0x00, 0x03, 0x01, 0x01, 0x00, 0xc9, 0xfe, 0x92, 0xef, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4e,
+    0x44, 0xae, 0x42, 0x60, 0x82,
+];
 
 #[test]
 fn production_tap_uses_runtime_proxy_without_local_adb_configuration() {

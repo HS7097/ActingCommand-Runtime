@@ -36,6 +36,10 @@ pub enum OfflineDecision {
     NoOp {
         final_page: Option<String>,
     },
+    Refused {
+        code: String,
+        detail: Option<String>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -102,53 +106,62 @@ pub fn simulate_contained_task(
     task: &PreparedContainedTask,
     frames: Vec<Frame>,
 ) -> Result<OfflineSimulationResult, OfflineSimulationError> {
-    if frames.is_empty() {
-        return Err(OfflineSimulationError::new("offline_fixture_missing"));
-    }
     let mut runtime = OfflineRuntime::new(frames);
-    let decision = match task.run(&mut runtime) {
-        Ok(outcome) if outcome.executed_steps == 0 && task.execution_mode() == "recognize_only" => {
-            OfflineDecision::NoOp {
-                final_page: outcome.final_page,
-            }
+    let decision = if runtime.frames.is_empty() {
+        OfflineDecision::Refused {
+            code: "offline_fixture_missing".to_string(),
+            detail: None,
         }
-        Ok(outcome) if outcome.executed_steps == 0 => OfflineDecision::WouldComplete {
-            final_page: outcome.final_page,
-        },
-        Ok(_) => {
-            return Err(OfflineSimulationError::new(
-                "offline_simulation_executed_step_invariant",
-            ));
-        }
-        Err(ContainedTaskRunError::Boundary(OfflineBoundary::EffectIntercepted)) => runtime
-            .planned
-            .take()
-            .map(|planned| OfflineDecision::WouldClick {
-                operation_label: planned.operation_label,
-                action: planned.action,
-                guard: planned.guard,
-            })
-            .ok_or_else(|| {
-                OfflineSimulationError::new("offline_simulation_effect_intent_missing")
-            })?,
-        Err(ContainedTaskRunError::Boundary(OfflineBoundary::FixtureExhausted)) => {
-            if runtime
-                .recognition
-                .last()
-                .is_some_and(|result| result.matched_page.is_none())
+    } else {
+        match task.run(&mut runtime) {
+            Ok(outcome)
+                if outcome.executed_steps == 0 && task.execution_mode() == "recognize_only" =>
             {
-                return Err(OfflineSimulationError::new("contained_task_page_unknown"));
+                OfflineDecision::NoOp {
+                    final_page: outcome.final_page,
+                }
             }
-            return Err(OfflineSimulationError::new("offline_fixture_exhausted"));
-        }
-        Err(ContainedTaskRunError::Boundary(OfflineBoundary::Invariant(code))) => {
-            return Err(OfflineSimulationError::new(code));
-        }
-        Err(ContainedTaskRunError::Task(error)) => {
-            return Err(match error.detail() {
-                Some(detail) => OfflineSimulationError::with_detail(error.code(), detail),
-                None => OfflineSimulationError::new(error.code()),
-            });
+            Ok(outcome) if outcome.executed_steps == 0 => OfflineDecision::WouldComplete {
+                final_page: outcome.final_page,
+            },
+            Ok(_) => {
+                return Err(OfflineSimulationError::new(
+                    "offline_simulation_executed_step_invariant",
+                ));
+            }
+            Err(ContainedTaskRunError::Boundary(OfflineBoundary::EffectIntercepted)) => runtime
+                .planned
+                .take()
+                .map(|planned| OfflineDecision::WouldClick {
+                    operation_label: planned.operation_label,
+                    action: planned.action,
+                    guard: planned.guard,
+                })
+                .ok_or_else(|| {
+                    OfflineSimulationError::new("offline_simulation_effect_intent_missing")
+                })?,
+            Err(ContainedTaskRunError::Boundary(OfflineBoundary::FixtureExhausted)) => {
+                let code = if runtime
+                    .recognition
+                    .last()
+                    .is_some_and(|result| result.matched_page.is_none())
+                {
+                    "contained_task_page_unknown"
+                } else {
+                    "offline_fixture_exhausted"
+                };
+                OfflineDecision::Refused {
+                    code: code.to_string(),
+                    detail: None,
+                }
+            }
+            Err(ContainedTaskRunError::Boundary(OfflineBoundary::Invariant(code))) => {
+                return Err(OfflineSimulationError::new(code));
+            }
+            Err(ContainedTaskRunError::Task(error)) => OfflineDecision::Refused {
+                code: error.code().to_string(),
+                detail: error.detail().map(str::to_string),
+            },
         }
     };
 
@@ -372,20 +385,21 @@ mod tests {
     }
 
     #[test]
-    fn simulation_fails_loud_for_unknown_conflict_guard_and_resolution() {
+    fn simulation_receipts_bind_typed_refusals_to_decision_fingerprints() {
         let package_bytes = package(PackageOptions::default());
         let task = prepare(&package_bytes);
-        assert_eq!(
+        let unknown_refusal =
             simulate_contained_task(&task, vec![solid_frame([0, 0, 0], [0, 0, 0])])
-                .expect_err("unknown page")
-                .code(),
-            "contained_task_page_unknown"
-        );
+                .expect("unknown-page refusal receipt");
+        assert_refusal(&unknown_refusal, "contained_task_page_unknown");
+        let guard_refusal =
+            simulate_contained_task(&task, vec![home_frame(false)]).expect("guard refusal receipt");
+        assert_refusal(&guard_refusal, "contained_task_guard_refused");
+        let guard_replay = simulate_contained_task(&task, vec![home_frame(false)])
+            .expect("guard refusal replay receipt");
         assert_eq!(
-            simulate_contained_task(&task, vec![home_frame(false)])
-                .expect_err("guard refusal")
-                .code(),
-            "contained_task_guard_refused"
+            guard_refusal.decision_fingerprint,
+            guard_replay.decision_fingerprint
         );
         let wrong_size = Frame::from_pixels(
             1,
@@ -395,22 +409,46 @@ mod tests {
             CaptureBackendName::AdbScreencap,
         )
         .expect("frame");
-        assert_eq!(
-            simulate_contained_task(&task, vec![wrong_size])
-                .expect_err("resolution mismatch")
-                .code(),
-            "contained_task_frame_resolution_mismatch"
+        let resolution_refusal =
+            simulate_contained_task(&task, vec![wrong_size]).expect("resolution refusal receipt");
+        assert_refusal(
+            &resolution_refusal,
+            "contained_task_frame_resolution_mismatch",
         );
 
         let conflict = package(PackageOptions {
             conflicting_page: true,
             ..PackageOptions::default()
         });
+        let conflict_refusal = simulate_contained_task(&prepare(&conflict), vec![home_frame(true)])
+            .expect("conflict refusal receipt");
+        assert_refusal(&conflict_refusal, "contained_task_recognition_conflict");
+        let distinct_refusal_fingerprints = [
+            &unknown_refusal.decision_fingerprint,
+            &guard_refusal.decision_fingerprint,
+            &resolution_refusal.decision_fingerprint,
+            &conflict_refusal.decision_fingerprint,
+        ]
+        .into_iter()
+        .collect::<std::collections::BTreeSet<_>>();
         assert_eq!(
-            simulate_contained_task(&prepare(&conflict), vec![home_frame(true)])
-                .expect_err("conflicting pages")
-                .code(),
-            "contained_task_recognition_conflict"
+            distinct_refusal_fingerprints.len(),
+            4,
+            "semantically distinct refusals must not share a decision fingerprint"
+        );
+    }
+
+    fn assert_refusal(result: &OfflineSimulationResult, expected: &str) {
+        assert!(matches!(
+            &result.decision,
+            OfflineDecision::Refused { code, .. } if code == expected
+        ));
+        assert_eq!(result.decision_fingerprint.len(), 64);
+        assert!(
+            result
+                .decision_fingerprint
+                .bytes()
+                .all(|byte| byte.is_ascii_hexdigit())
         );
     }
 
@@ -441,7 +479,57 @@ mod tests {
         let package_bytes = package(PackageOptions::default());
         let task = prepare(&package_bytes);
         let mut state = 0x68_0ff1_1e55_cafe_u64;
+        let wrong_size = Frame::from_pixels(
+            1,
+            1,
+            vec![255, 0, 0],
+            PixelFormat::Rgb8,
+            CaptureBackendName::AdbScreencap,
+        )
+        .expect("retained wrong-size frame");
+        let retained_corpus = [
+            ("would-click", home_frame(true)),
+            ("guard-refusal", home_frame(false)),
+            ("would-complete", terminal_frame()),
+            ("unknown-page", solid_frame([0, 0, 0], [0, 0, 0])),
+            ("wrong-resolution", wrong_size),
+        ];
+        for (label, frame) in retained_corpus {
+            let first = simulate_contained_task(&task, vec![frame.clone()])
+                .unwrap_or_else(|error| panic!("retained observation {label}: {error}"));
+            let second = simulate_contained_task(&task, vec![frame])
+                .unwrap_or_else(|error| panic!("retained observation replay {label}: {error}"));
+            assert_eq!(first, second, "retained observation {label} drifted");
+            match label {
+                "would-click" => {
+                    assert!(matches!(first.decision, OfflineDecision::WouldClick { .. }))
+                }
+                "guard-refusal" => assert!(matches!(
+                    first.decision,
+                    OfflineDecision::Refused { ref code, .. }
+                        if code == "contained_task_guard_refused"
+                )),
+                "would-complete" => {
+                    assert!(matches!(
+                        first.decision,
+                        OfflineDecision::WouldComplete { .. }
+                    ))
+                }
+                "unknown-page" => assert!(matches!(
+                    first.decision,
+                    OfflineDecision::Refused { ref code, .. }
+                        if code == "contained_task_page_unknown"
+                )),
+                "wrong-resolution" => assert!(matches!(
+                    first.decision,
+                    OfflineDecision::Refused { ref code, .. }
+                        if code == "contained_task_frame_resolution_mismatch"
+                )),
+                _ => unreachable!("retained observation label"),
+            }
+        }
 
+        let started = std::time::Instant::now();
         for case in 0..CASES {
             state ^= state << 13;
             state ^= state >> 7;
@@ -465,6 +553,10 @@ mod tests {
                 .unwrap_or_else(|_| panic!("admitted observation replay case {case} panicked"));
             assert_eq!(first, second, "admitted observation case {case} drifted");
         }
+        assert!(
+            started.elapsed() <= std::time::Duration::from_secs(10),
+            "bounded admitted-observation fuzz exceeded its 10 second budget"
+        );
     }
 
     #[derive(Clone, Copy)]

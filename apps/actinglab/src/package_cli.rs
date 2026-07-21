@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 use super::{CliError, CliOutcome, FlagArgs, GlobalOptions, attach_package_event};
+use actingcommand_lab::Sha256Hash;
 use actingcommand_lab::{PackageValidateRequest, PackageValidationResponse};
-use actingcommand_pack_containment::Sha256Hash;
 use serde::Serialize;
 use serde_json::Value;
 use std::path::Path;

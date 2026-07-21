@@ -2132,7 +2132,10 @@
         "action_id": "<ACTION_ID>",
         "actual_click": {
           "coordinate_derivation": {
-            "mode": "declared_rect"
+            "algorithm": "explicit_point_v1",
+            "matched_rect": null,
+            "mode": "canonical_effect_decision",
+            "seed": 0
           },
           "declared_rect": {
             "height": 6,
@@ -2140,7 +2143,7 @@
             "x": 10,
             "y": 20
           },
-          "kind": "target_rect_center",
+          "kind": "target_declared_point",
           "point": {
             "x": 12,
             "y": 23

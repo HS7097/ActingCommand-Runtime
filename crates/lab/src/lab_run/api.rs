@@ -167,7 +167,7 @@ pub fn prepare_lab_package_bytes(
         .map_err(|error| CliError::package_invalid(error.to_string()))?;
     let sha256 = admitted.package_sha256().to_string();
     let task_count = admitted.task_count();
-    let entries = admitted_entry_paths(admitted.admitted_package());
+    let entries = admitted.entry_paths().to_vec();
     let entry_count = admitted.entry_count();
     let control = lab_control_from_admitted(admitted.admitted_package())?;
     let resources = load_lab_resources_from_admitted(admitted.into_admitted_package(), &control)?;
@@ -602,7 +602,7 @@ fn load_lab_package_for_validation(
         .map_err(|error| CliError::package_invalid(error.to_string()))?;
     let admitted = ExternallyVerifiedBundle::load(instance_label, &bytes, expected)
         .map_err(|error| CliError::package_invalid(error.to_string()))?;
-    let entries = admitted_entry_paths(admitted.admitted_package());
+    let entries = admitted.entry_paths().to_vec();
     Ok(ContainedLabInput {
         sha256: admitted.package_sha256().to_string(),
         hash_source: if externally_verified {
@@ -625,7 +625,7 @@ fn load_lab_package_for_run(
     let bytes = open_published_package(zip_path)?.read_all()?;
     let admitted = ExternallyVerifiedBundle::load(instance_label, &bytes, expected_input_sha256)
         .map_err(|error| CliError::package_invalid(error.to_string()))?;
-    let entries = admitted_entry_paths(admitted.admitted_package());
+    let entries = admitted.entry_paths().to_vec();
     Ok(ContainedLabInput {
         sha256: admitted.package_sha256().to_string(),
         hash_source: "externally_supplied",
@@ -634,31 +634,4 @@ fn load_lab_package_for_run(
         entries,
         package: admitted.into_admitted_package(),
     })
-}
-
-fn admitted_entry_paths(package: &AdmittedPackage) -> Vec<String> {
-    let control = package.control();
-    let stem = format!("{}.{}", control.game(), control.server());
-    let mut entries = vec![
-        "control.json".to_string(),
-        "resources/manifest.json".to_string(),
-        format!("resources/recognition/{stem}.pack.json"),
-        format!("resources/recognition/{stem}.pages.json"),
-    ];
-    entries.extend(
-        package
-            .tasks()
-            .map(|task| format!("resources/operations/{}/task.json", task.key().as_str())),
-    );
-    entries.extend(
-        package
-            .assets()
-            .map(|(asset, _)| format!("resources/{}", asset.as_str())),
-    );
-    if package.navigation().is_some() {
-        entries.push(format!("resources/navigation/{stem}.navigation.json"));
-    }
-    entries.sort();
-    entries.dedup();
-    entries
 }

@@ -125,6 +125,7 @@ fn operation_from_admitted(operation: &AdmittedOperation) -> CliOutcome<Operatio
         purpose: operation.purpose().to_string(),
         from: page_selector_text(operation.from()),
         to: operation.to().map(PageKey::qualified),
+        #[cfg(test)]
         click: operation_click_from_admitted(operation.action()),
         verify_template: operation
             .verify_template()
@@ -179,6 +180,7 @@ fn operation_guard_from_admitted(guard: &AdmittedGuard) -> OperationGuard {
     }
 }
 
+#[cfg(test)]
 fn operation_click_from_admitted(action: &AdmittedAction) -> OperationClick {
     match action {
         AdmittedAction::Tap { point, .. } => OperationClick {
@@ -427,6 +429,7 @@ struct Operation {
     purpose: String,
     from: String,
     to: Option<String>,
+    #[cfg(test)]
     click: OperationClick,
     verify_template: Option<String>,
     expect_after: Option<OperationExpectation>,
@@ -449,6 +452,28 @@ struct Operation {
 }
 
 impl Operation {
+    fn admitted_input_action(
+        &self,
+        package: &AdmittedPackage,
+        target: Option<&TargetEvaluation>,
+    ) -> CliOutcome<LabInputAction> {
+        let operation = package
+            .entry_task()
+            .operations()
+            .iter()
+            .find(|operation| operation.key().operation() == self.id)
+            .ok_or_else(|| {
+                CliError::package_invalid(format!(
+                    "admitted operation '{}' is missing from the entry task",
+                    self.id
+                ))
+            })?;
+        let intent = resolve_admitted_effect_intent(package, operation, target)
+            .map_err(|error| CliError::package_invalid(error.to_string()))?;
+        Ok(lab_input_action_from_canonical(intent))
+    }
+
+    #[cfg(test)]
     fn input_action(
         &self,
         resolution: &Resolution,
@@ -585,6 +610,7 @@ impl OperationGuard {
     }
 }
 
+#[cfg(test)]
 #[derive(Debug, Clone)]
 struct OperationClick {
     kind: String,
@@ -598,6 +624,7 @@ struct OperationClick {
     offset: Option<PackRect>,
 }
 
+#[cfg(test)]
 impl OperationClick {
     fn input_action(
         &self,
@@ -742,6 +769,7 @@ impl OperationClick {
     }
 }
 
+#[cfg(test)]
 fn translated_target_rect(matched: PackRect, offset: PackRect) -> CliOutcome<PackRect> {
     Ok(PackRect {
         x: matched.x.checked_add(offset.x).ok_or_else(|| {
@@ -755,6 +783,26 @@ fn translated_target_rect(matched: PackRect, offset: PackRect) -> CliOutcome<Pac
     })
 }
 
+fn lab_input_action_from_canonical(intent: CanonicalEffectIntent) -> LabInputAction {
+    match intent {
+        CanonicalEffectIntent::Tap { point } => LabInputAction::Tap(point.into()),
+        CanonicalEffectIntent::LongTap { point, duration_ms } => LabInputAction::LongTap {
+            point: point.into(),
+            duration_ms,
+        },
+        CanonicalEffectIntent::Swipe {
+            from,
+            to,
+            duration_ms,
+        } => LabInputAction::Drag {
+            from: from.into(),
+            to: to.into(),
+            duration_ms,
+        },
+    }
+}
+
+#[cfg(test)]
 fn matched_template_rect(target: &TargetEvaluation) -> CliOutcome<PackRect> {
     if target.kind != TargetKind::Template {
         return Err(CliError::package_invalid(format!(
@@ -786,6 +834,7 @@ fn matched_template_rect(target: &TargetEvaluation) -> CliOutcome<PackRect> {
     Ok(rect)
 }
 
+#[cfg(test)]
 fn derive_absolute_coordinate_rect(
     kind: &str,
     declared: PackRect,
@@ -849,6 +898,23 @@ struct ActualClickPoint {
     y: i32,
 }
 
+impl From<CanonicalEffectPoint> for ActualClickPoint {
+    fn from(point: CanonicalEffectPoint) -> Self {
+        Self {
+            seed: point.seed,
+            algorithm: point.algorithm,
+            rect: PackRect {
+                x: point.rect.x,
+                y: point.rect.y,
+                width: point.rect.width,
+                height: point.rect.height,
+            },
+            x: point.x,
+            y: point.y,
+        }
+    }
+}
+
 impl ActualClickPoint {
     fn to_json(self) -> Value {
         json!({
@@ -860,6 +926,7 @@ impl ActualClickPoint {
     }
 }
 
+#[cfg(test)]
 fn actual_click_point(rect: PackRect, seed: u64) -> ActualClickPoint {
     let mut state = if seed == 0 {
         0x9e37_79b9_7f4a_7c15
@@ -877,6 +944,7 @@ fn actual_click_point(rect: PackRect, seed: u64) -> ActualClickPoint {
     }
 }
 
+#[cfg(test)]
 fn actual_explicit_point(rect: PackRect, seed: u64) -> ActualClickPoint {
     ActualClickPoint {
         seed,
@@ -887,6 +955,7 @@ fn actual_explicit_point(rect: PackRect, seed: u64) -> ActualClickPoint {
     }
 }
 
+#[cfg(test)]
 fn actual_center_point(rect: PackRect, seed: u64) -> ActualClickPoint {
     ActualClickPoint {
         seed,
@@ -897,6 +966,7 @@ fn actual_center_point(rect: PackRect, seed: u64) -> ActualClickPoint {
     }
 }
 
+#[cfg(test)]
 fn next_u64(state: &mut u64) -> u64 {
     let mut x = *state;
     x ^= x << 13;
@@ -906,6 +976,7 @@ fn next_u64(state: &mut u64) -> u64 {
     x
 }
 
+#[cfg(test)]
 fn validate_click_rect(
     rect: PackRect,
     resolution: &Resolution,
@@ -945,6 +1016,7 @@ fn validate_click_rect(
     Ok(())
 }
 
+#[cfg(test)]
 fn validate_click_point(
     x: i32,
     y: i32,

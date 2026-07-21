@@ -1,0 +1,11 @@
+error[E0599]: no method named `entry` found for reference `&LoadedBundle` in the current scope
+ --> tests/ui/loaded_bundle_entry_bytes.rs:4:20
+  |
+4 |     let _ = bundle.entry("control.json");
+  |                    ^^^^^ method not found in `&LoadedBundle`
+
+error[E0599]: no method named `resource_entry` found for reference `&LoadedBundle` in the current scope
+ --> tests/ui/loaded_bundle_entry_bytes.rs:5:20
+  |
+5 |     let _ = bundle.resource_entry("manifest.json");
+  |                    ^^^^^^^^^^^^^^ method not found in `&LoadedBundle`

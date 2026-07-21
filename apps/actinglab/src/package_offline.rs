@@ -3,7 +3,7 @@
 use crate::{CliError, CliOutcome, ErrorKind, FlagArgs, GlobalOptions};
 use actingcommand_device::{CaptureBackendName, Frame};
 use actingcommand_lab::{
-    ExternalExpectedSha256, OfflineSimulationError, OfflineSimulationResult,
+    ExternalExpectedSha256, OfflineDecision, OfflineSimulationError, OfflineSimulationResult,
     prepare_lab_package_bytes, simulate_contained_task,
 };
 use serde::Serialize;
@@ -47,6 +47,10 @@ pub(super) fn run_dry_run(global: &GlobalOptions, flags: &FlagArgs) -> CliOutcom
     let fixture = load_fixture_sequence(&args.fixtures)?;
     let simulation =
         simulate_contained_task(&prepared, fixture.frames).map_err(map_simulation_error)?;
+    let refusal = match &simulation.decision {
+        OfflineDecision::Refused { code, detail } => Some((code.clone(), detail.clone())),
+        _ => None,
+    };
     let record = OfflineResultRecord {
         schema_version: RESULT_SCHEMA,
         mode: "offline_simulation",
@@ -64,6 +68,24 @@ pub(super) fn run_dry_run(global: &GlobalOptions, flags: &FlagArgs) -> CliOutcom
     let bundle = result_bundle(&record)?;
     let bundle_sha256 = sha256_hex(&bundle);
     write_result_bundle(&args.out, &bundle, &bundle_sha256)?;
+
+    if let Some((code, detail)) = refusal {
+        return Err(offline_error(
+            &code,
+            detail.unwrap_or_else(|| format!("offline decision refused with {code}")),
+        )
+        .with_details(json!({
+            "status": "refused",
+            "executed": false,
+            "semantic_fingerprint": record.semantic_fingerprint,
+            "decision_fingerprint": record.decision_fingerprint,
+            "fixture_sequence_sha256": record.fixture_sequence_sha256,
+            "result_zip": args.out.display().to_string(),
+            "result_zip_sha256": bundle_sha256,
+            "decision": record.simulation.decision,
+            "production_global_ledger_written": false
+        })));
+    }
 
     Ok(json!({
         "status": "offline_simulation",

@@ -324,8 +324,8 @@
                         "schema_version":"Lab-1y.control.v1",
                         "package_id":"fixture.recovery",
                         "execution_mode":"navigable_route",
-                        "game":"arknights",
-                        "server":"cn",
+                        "game":"neutral",
+                        "server":"test",
                         "resolution":{"width":1280,"height":720},
                         "entry_task_id":"task",
                         "capture_interval_ms":1,
@@ -342,8 +342,8 @@
                     br#"{
                         "schema_version":"0.6",
                         "task_id":"task",
-                        "game":"arknights",
-                        "server_scope":["cn"],
+                        "game":"neutral",
+                        "server_scope":["test"],
                         "coordinate_space":{"width":1280,"height":720},
                         "defaults":{"timeout_ms":1,"max_attempts":1,"retry_interval_ms":1,"post_wait_freezes_ms":0},
                         "entry_page":"home",
@@ -368,8 +368,8 @@
                     br#"{
                         "schema_version":"0.6",
                         "task_id":"return_home",
-                        "game":"arknights",
-                        "server_scope":["cn"],
+                        "game":"neutral",
+                        "server_scope":["test"],
                         "coordinate_space":{"width":1280,"height":720},
                         "target_page":"home",
                         "operations":[{
@@ -384,12 +384,12 @@
                     }"#,
                 ),
                 (
-                    "resources/recognition/arknights.cn.pack.json",
+                    "resources/recognition/neutral.test.pack.json",
                     br#"{
                         "schema_version":"0.3",
-                        "game":"arknights",
-                        "server":"cn",
-                        "locale":"zh-CN",
+                        "game":"neutral",
+                        "server":"test",
+                        "locale":"en-US",
                         "coordinate_space":{"width":1280,"height":720},
                         "defaults":{"color_max_distance":0.0},
                         "targets":[
@@ -399,25 +399,25 @@
                     }"#,
                 ),
                 (
-                    "resources/recognition/arknights.cn.pages.json",
+                    "resources/recognition/neutral.test.pages.json",
                     br#"{
                         "schema_version":"0.3",
                         "pages":[
-                            {"id":"arknights/home","required":["page/home"],"optional":[],"forbidden":[]},
-                            {"id":"arknights/terminal","required":["page/terminal"],"optional":[],"forbidden":[]}
+                            {"id":"neutral/home","required":["page/home"],"optional":[],"forbidden":[]},
+                            {"id":"neutral/terminal","required":["page/terminal"],"optional":[],"forbidden":[]}
                         ]
                     }"#,
                 ),
                 (
-                    "resources/navigation/arknights.cn.navigation.json",
+                    "resources/navigation/neutral.test.navigation.json",
                     br#"{
                         "schema_version":"0.3",
-                        "game":"arknights",
-                        "server":"cn",
+                        "game":"neutral",
+                        "server":"test",
                         "navigation":[{
                             "id":"open_terminal",
-                            "from_page":"arknights/home",
-                            "to_page":"arknights/terminal",
+                            "from_page":"neutral/home",
+                            "to_page":"neutral/terminal",
                             "click":{"kind":"point","x":1,"y":1}
                         }],
                         "destructive_actions":[]

@@ -6,8 +6,7 @@ use super::{
     runtime_slice_cli, runtime_state_root,
 };
 use actingcommand_contract::{ContainedTaskRequest, EventActor, EventSource};
-use actingcommand_lab::LabValidateRequest;
-use actingcommand_pack_containment::{ContainmentError, Sha256Hash};
+use actingcommand_lab::{ContainmentError, LabValidateRequest, Sha256Hash};
 use actingcommand_resource_tooling::open_published_package;
 use actingcommand_runtime_client::{RuntimeClient, RuntimeClientConfig};
 use serde::Serialize;

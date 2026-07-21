@@ -3,8 +3,8 @@
 //! Production semantic commands admit resources only through an externally hashed in-memory bundle.
 
 use super::{CliError, CliOutcome, FlagArgs, NavigationGraph, navigation_graph_from_admitted};
+use actingcommand_lab::ContainmentLimits;
 use actingcommand_lab::{ExternalExpectedSha256, ExternallyVerifiedBundle};
-use actingcommand_pack_containment::ContainmentLimits;
 use actingcommand_page_detector::PageDetector;
 use actingcommand_recognition_pack::RecognitionEvaluator;
 use actingcommand_resource_tooling::open_published_package;

@@ -150,7 +150,7 @@ fn detect_page_ignores_reorganized_loose_root_after_bundle_admission() {
             .unwrap()
             .get("page")
             .and_then(Value::as_str),
-        Some("home")
+        Some("arknights/home")
     );
 }
 

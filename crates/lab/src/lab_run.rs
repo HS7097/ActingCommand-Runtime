@@ -17,12 +17,16 @@ use actingcommand_device::{
     CaptureBackend, CaptureBackendAttempt, CaptureBackendChoice, CaptureBackendName, Frame,
     InputBackend, PixelFormat, TouchBackendConfig, combine_operation_and_close,
 };
+#[cfg(test)]
+use actingcommand_execution_kernel::{AdmittedAction, TargetTapMode};
 use actingcommand_execution_kernel::{
-    ExternalExpectedSha256, ExternallyVerifiedBundle, PreparedContainedTask, RunDecisionError,
-    RunDirective, RunFailureObservation, RunFailureStage, RunOperationCandidate,
+    AdmittedGuard, AdmittedOperation, AdmittedPackage, AdmittedTask, BoundedRect,
+    CanonicalEffectIntent, CanonicalEffectPoint, ExternalExpectedSha256, ExternallyVerifiedBundle,
+    GuardVerification, OpaqueMetadata, PageKey, PageSelector, PreparedContainedTask,
+    RunDecisionError, RunDirective, RunFailureObservation, RunFailureStage, RunOperationCandidate,
     RunOperationFailureDecision, RunOperationPolicy, RunRecoveryTrigger, RunStateConfig,
-    RunStateMachine, RunTerminal, canonical_page_anchor, decide_run_operation_failure,
-    page_anchor_matches,
+    RunStateMachine, RunTerminal, Sha256Hash, canonical_page_anchor, decide_run_operation_failure,
+    page_anchor_matches, resolve_admitted_effect_intent,
 };
 use actingcommand_ledger::{
     CommitProof, EvidenceStore, IdIssuer, IdKind, LastResortError, LedgerRecord, LedgerRecordKind,
@@ -30,14 +34,12 @@ use actingcommand_ledger::{
 };
 #[cfg(test)]
 use actingcommand_ledger::{LabLedger, LabLogError};
-use actingcommand_pack_containment::{
-    AdmittedAction, AdmittedGuard, AdmittedOperation, AdmittedPackage, AdmittedTask, BoundedRect,
-    GuardVerification, OpaqueMetadata, PageKey, PageSelector, Sha256Hash, TargetTapMode,
-};
 use actingcommand_page_detector::{PageDetector, PageEvaluation, PageTargetRole};
 use actingcommand_recognition::{Scene, ScenePixelFormat};
+#[cfg(test)]
+use actingcommand_recognition_pack::TargetKind;
 use actingcommand_recognition_pack::{
-    PackRect, RecognitionEvaluator, TargetEvaluation, TargetKind, UnsupportedRecognitionTarget,
+    PackRect, RecognitionEvaluator, TargetEvaluation, UnsupportedRecognitionTarget,
 };
 use actingcommand_resource_tooling::open_published_package;
 use serde_json::{Value, json};

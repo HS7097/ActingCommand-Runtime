@@ -62,6 +62,7 @@ impl From<ContainmentError> for ExecutionBundleError {
 pub struct ExternallyVerifiedBundle {
     admitted: AdmittedPackage,
     package_sha256: String,
+    entry_paths: Vec<String>,
     entry_count: usize,
     task_count: usize,
 }
@@ -82,9 +83,11 @@ impl ExternallyVerifiedBundle {
             .admitted_package()
             .cloned()
             .ok_or(ExecutionBundleError::MissingAdmittedPackage)?;
+        let entry_paths = bundle.entry_paths().map(str::to_string).collect();
         Ok(Self {
             admitted,
             package_sha256: bundle.verified_hash().to_string(),
+            entry_paths,
             entry_count: bundle.entry_count(),
             task_count: bundle.task_count(),
         })
@@ -100,6 +103,10 @@ impl ExternallyVerifiedBundle {
 
     pub fn package_sha256(&self) -> &str {
         &self.package_sha256
+    }
+
+    pub fn entry_paths(&self) -> &[String] {
+        &self.entry_paths
     }
 
     pub const fn entry_count(&self) -> usize {

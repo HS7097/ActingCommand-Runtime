@@ -9,8 +9,13 @@ use super::{
     ContainmentError, ContainmentResult, PackageLayout, PackageMetadata, Sha256Hash,
     package_contract_error, prefixed_path, read_json_entry, validate_relative_ref,
 };
-use actingcommand_page_detector::PageDetector;
-use actingcommand_recognition_pack::{RecognitionEvaluator, TargetKind};
+use actingcommand_page_detector::{PageDefinition, PageDetector, PageSet};
+use actingcommand_recognition_pack::{
+    AssetResolver, ClickOnlyTarget, ColorCheck, ColorTarget, PackCoordinateSpace, PackRect,
+    PackRegion, RecognitionDefaults, RecognitionEvaluator, RecognitionMask, RecognitionMatchMetric,
+    RecognitionMethod, RecognitionPack, RecognitionPackError, RecognitionTarget, TargetKind,
+    TemplateTarget,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
@@ -343,19 +348,13 @@ pub struct TargetOffset {
 }
 
 impl TargetOffset {
-    fn new(rect: RawRect) -> AdmissionResult<Self> {
-        if rect.x < 0 || rect.y < 0 || rect.width <= 0 || rect.height <= 0 {
-            return Err(AdmissionError::new("admission_input_bounds_invalid"));
-        }
-        rect.x
-            .checked_add(rect.width - 1)
-            .and_then(|_| rect.y.checked_add(rect.height - 1))
-            .ok_or_else(|| AdmissionError::new("admission_input_bounds_invalid"))?;
+    fn new(rect: RawRect, resolution: PackageResolution) -> AdmissionResult<Self> {
+        let rect = BoundedRect::from_raw(rect, resolution)?;
         Ok(Self {
-            x: rect.x,
-            y: rect.y,
-            width: rect.width,
-            height: rect.height,
+            x: rect.x(),
+            y: rect.y(),
+            width: rect.width(),
+            height: rect.height(),
         })
     }
 
@@ -381,6 +380,19 @@ impl TargetOffset {
 pub enum TargetTapMode {
     Deterministic,
     Center,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AdmittedEffectCapability {
+    NavigationOnly,
+    Destructive,
+}
+
+impl AdmittedEffectCapability {
+    pub const fn requires_explicit_opt_in(self) -> bool {
+        matches!(self, Self::Destructive)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -700,7 +712,7 @@ pub struct AdmittedOperation {
     post_wait_freezes_ms: Option<u64>,
     retryable: Option<bool>,
     navigation_only: bool,
-    destructive: bool,
+    effect_capability: AdmittedEffectCapability,
     on_error: Option<TaskKey>,
     guard: Option<AdmittedGuard>,
     unguarded_trusted_coordinate: bool,
@@ -759,8 +771,11 @@ impl AdmittedOperation {
     pub const fn navigation_only(&self) -> bool {
         self.navigation_only
     }
+    pub const fn effect_capability(&self) -> AdmittedEffectCapability {
+        self.effect_capability
+    }
     pub const fn destructive(&self) -> bool {
-        self.destructive
+        self.effect_capability.requires_explicit_opt_in()
     }
     pub fn on_error(&self) -> Option<&TaskKey> {
         self.on_error.as_ref()
@@ -883,6 +898,7 @@ impl AdmittedDestructiveRegion {
 pub struct AdmittedControlPoint {
     name: String,
     action: AdmittedAction,
+    effect_capability: AdmittedEffectCapability,
 }
 
 impl AdmittedControlPoint {
@@ -891,6 +907,9 @@ impl AdmittedControlPoint {
     }
     pub fn action(&self) -> &AdmittedAction {
         &self.action
+    }
+    pub const fn effect_capability(&self) -> AdmittedEffectCapability {
+        self.effect_capability
     }
 }
 
@@ -992,7 +1011,6 @@ impl AdmittedTarget {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 struct AdmittedPage {
-    #[serde(skip)]
     detector_id: String,
     required: Vec<TargetKey>,
     any_of: Vec<Vec<TargetKey>>,
@@ -1079,6 +1097,14 @@ impl AdmittedPackage {
     pub fn target_kind(&self, key: &TargetKey) -> Option<AdmittedTargetKind> {
         self.targets.get(key).map(AdmittedTarget::kind)
     }
+    pub fn target_operation(&self, target_id: &str) -> Option<&AdmittedOperation> {
+        let mut operations = self
+            .tasks()
+            .flat_map(AdmittedTask::operations)
+            .filter(|operation| operation_is_target_tap_authority(operation, target_id));
+        let first = operations.next()?;
+        operations.next().is_none().then_some(first)
+    }
     pub fn assets(&self) -> impl Iterator<Item = (&AssetKey, &str)> {
         self.assets.iter().map(|(key, hash)| (key, hash.as_str()))
     }
@@ -1093,6 +1119,16 @@ impl AdmittedPackage {
     }
     pub fn detector(&self) -> &PageDetector {
         &self.detector
+    }
+}
+
+fn operation_is_target_tap_authority(operation: &AdmittedOperation, target_id: &str) -> bool {
+    match operation.action() {
+        AdmittedAction::TargetTap { target, .. } => target.as_str() == target_id,
+        AdmittedAction::Tap { .. } => operation
+            .guard()
+            .is_some_and(|guard| guard.target().as_str() == target_id),
+        AdmittedAction::LongTap { .. } | AdmittedAction::Drag { .. } => false,
     }
 }
 
@@ -1250,12 +1286,9 @@ pub(super) fn close_package(
     })
 }
 
-pub(super) fn admit_package(
-    closed: ClosedPackage,
-    evaluator: RecognitionEvaluator,
-    detector: PageDetector,
-) -> AdmissionResult<AdmittedPackage> {
+pub(super) fn admit_package(closed: ClosedPackage) -> AdmissionResult<AdmittedPackage> {
     let semantic_fingerprint = canonical_semantic_fingerprint(&closed)?;
+    let (evaluator, detector) = canonical_recognition_pipeline(&closed)?;
     Ok(AdmittedPackage {
         control: closed.control,
         entry_task: closed.entry_task,
@@ -1271,6 +1304,162 @@ pub(super) fn admit_package(
     })
 }
 
+#[derive(Debug)]
+struct CanonicalAssetResolver {
+    assets: BTreeMap<String, Arc<[u8]>>,
+}
+
+impl AssetResolver for CanonicalAssetResolver {
+    fn read_asset(&self, path: &str) -> Result<Vec<u8>, RecognitionPackError> {
+        self.assets
+            .get(path)
+            .map(|bytes| bytes.to_vec())
+            .ok_or_else(|| {
+                RecognitionPackError::fatal(format!("canonical asset '{path}' is missing"))
+            })
+    }
+
+    fn contains_asset(&self, path: &str) -> bool {
+        self.assets.contains_key(path)
+    }
+}
+
+fn canonical_recognition_pipeline(
+    closed: &ClosedPackage,
+) -> AdmissionResult<(RecognitionEvaluator, PageDetector)> {
+    let recognition = &closed.recognition;
+    let pack = RecognitionPack {
+        schema_version: recognition.schema_version.clone(),
+        game: Some(closed.control.game().to_string()),
+        server: Some(closed.control.server().to_string()),
+        locale: recognition.locale.clone(),
+        coordinate_space: Some(PackCoordinateSpace {
+            width: closed.control.resolution().width(),
+            height: closed.control.resolution().height(),
+        }),
+        defaults: RecognitionDefaults {
+            template_threshold: recognition.template_threshold,
+            color_max_distance: recognition.color_max_distance,
+            match_metric: match recognition.match_metric {
+                AdmittedMatchMetric::CcorrNormed => RecognitionMatchMetric::CcorrNormed,
+                AdmittedMatchMetric::CcoeffNormed => RecognitionMatchMetric::CcoeffNormed,
+            },
+        },
+        targets: closed
+            .targets
+            .iter()
+            .map(|(key, target)| canonical_recognition_target(key, target))
+            .collect(),
+    };
+    let resolver = Arc::new(CanonicalAssetResolver {
+        assets: closed
+            .asset_bytes
+            .iter()
+            .map(|(key, bytes)| (key.as_str().to_string(), Arc::clone(bytes)))
+            .collect(),
+    });
+    let evaluator = RecognitionEvaluator::with_asset_resolver(pack, resolver).map_err(|error| {
+        AdmissionError::with_detail("admission_recognition_invalid", error.to_string())
+    })?;
+    let page_set = PageSet {
+        schema_version: recognition.page_schema_version.clone(),
+        pages: closed
+            .pages
+            .values()
+            .map(|page| PageDefinition {
+                id: page.detector_id.clone(),
+                required: page.required.iter().map(ToString::to_string).collect(),
+                any_of: page
+                    .any_of
+                    .iter()
+                    .map(|group| group.iter().map(ToString::to_string).collect())
+                    .collect(),
+                optional: page.optional.iter().map(ToString::to_string).collect(),
+                forbidden: page.forbidden.iter().map(ToString::to_string).collect(),
+            })
+            .collect(),
+    };
+    let detector = PageDetector::new(page_set).map_err(|error| {
+        AdmissionError::with_detail("admission_recognition_invalid", error.to_string())
+    })?;
+    detector.validate(&evaluator).map_err(|error| {
+        AdmissionError::with_detail("admission_recognition_invalid", error.to_string())
+    })?;
+    Ok((evaluator, detector))
+}
+
+fn canonical_recognition_target(key: &TargetKey, target: &AdmittedTarget) -> RecognitionTarget {
+    match target {
+        AdmittedTarget::Template {
+            asset,
+            region,
+            threshold,
+            method,
+            mask,
+            rect_move,
+            color_check,
+            click,
+        } => RecognitionTarget::Template(TemplateTarget {
+            id: key.as_str().to_string(),
+            template_path: asset.as_str().to_string(),
+            region: match region {
+                Some(rect) => PackRegion::Rect(pack_rect(*rect)),
+                None => PackRegion::Keyword("full_frame".to_string()),
+            },
+            threshold: *threshold,
+            method: match method {
+                AdmittedRecognitionMethod::Ncc => RecognitionMethod::Ncc,
+                AdmittedRecognitionMethod::RgbCount => RecognitionMethod::RgbCount,
+                AdmittedRecognitionMethod::HsvCount => RecognitionMethod::HsvCount,
+            },
+            mask: mask.as_ref().map(|mask| match mask {
+                AdmittedRecognitionMask::Range { lower, upper } => RecognitionMask::Range {
+                    lower: *lower,
+                    upper: *upper,
+                },
+                AdmittedRecognitionMask::Bitmap { asset } => RecognitionMask::Bitmap {
+                    path: asset.as_str().to_string(),
+                },
+            }),
+            rect_move: rect_move.map(pack_rect),
+            color_check: color_check.as_ref().map(|check| ColorCheck {
+                region: pack_rect(check.region),
+                expected: check.expected,
+            }),
+            click: click.map(pack_rect),
+        }),
+        AdmittedTarget::Color {
+            region,
+            expected,
+            click,
+        } => RecognitionTarget::Color(ColorTarget {
+            id: key.as_str().to_string(),
+            region: pack_rect(*region),
+            expected: *expected,
+            click: click.map(pack_rect),
+        }),
+        AdmittedTarget::ClickOnly { click } => RecognitionTarget::ClickOnly(ClickOnlyTarget {
+            id: key.as_str().to_string(),
+            click: pack_rect(*click),
+        }),
+    }
+}
+
+fn pack_rect(rect: BoundedRect) -> PackRect {
+    PackRect {
+        x: rect.x(),
+        y: rect.y(),
+        width: rect.width(),
+        height: rect.height(),
+    }
+}
+
+#[derive(Serialize)]
+struct CanonicalAssetProjection<'a> {
+    key: &'a AssetKey,
+    sha256: String,
+}
+
 #[derive(Serialize)]
 struct CanonicalSemanticProjection<'a> {
     schema_version: &'static str,
@@ -1281,11 +1470,32 @@ struct CanonicalSemanticProjection<'a> {
     recognition: &'a AdmittedRecognitionMetadata,
     pages: Vec<(&'a PageKey, &'a AdmittedPage)>,
     targets: Vec<(&'a TargetKey, &'a AdmittedTarget)>,
-    assets: Vec<(&'a AssetKey, &'a String)>,
+    assets: Vec<CanonicalAssetProjection<'a>>,
 }
 
 fn canonical_semantic_fingerprint(closed: &ClosedPackage) -> AdmissionResult<String> {
     const DOMAIN: &[u8] = b"ActingCommand canonical executable package v1\0";
+    if closed.assets.len() != closed.asset_bytes.len() {
+        return Err(AdmissionError::new("admission_asset_closure"));
+    }
+    let assets = closed
+        .assets
+        .iter()
+        .map(|(key, expected_hash)| {
+            let bytes = closed
+                .asset_bytes
+                .get(key)
+                .ok_or_else(|| AdmissionError::new("admission_asset_closure"))?;
+            let sha256 = Sha256Hash::digest(bytes).to_string();
+            if &sha256 != expected_hash {
+                return Err(AdmissionError::with_detail(
+                    "admission_asset_closure",
+                    format!("canonical asset '{key}' bytes do not match the closed digest"),
+                ));
+            }
+            Ok(CanonicalAssetProjection { key, sha256 })
+        })
+        .collect::<AdmissionResult<Vec<_>>>()?;
     let projection = CanonicalSemanticProjection {
         schema_version: "actingcommand.canonical-executable-package.v1",
         control: &closed.control,
@@ -1295,7 +1505,7 @@ fn canonical_semantic_fingerprint(closed: &ClosedPackage) -> AdmissionResult<Str
         recognition: &closed.recognition,
         pages: closed.pages.iter().collect(),
         targets: closed.targets.iter().collect(),
-        assets: closed.assets.iter().collect(),
+        assets,
     };
     let encoded = serde_json::to_vec(&projection).map_err(|error| {
         AdmissionError::with_detail(
@@ -1651,7 +1861,7 @@ fn close_pages(
             return Err(AdmissionError::new("admission_page_closure"));
         }
         let admitted = AdmittedPage {
-            detector_id: page.id.clone(),
+            detector_id: key.qualified(),
             required,
             any_of,
             optional,
@@ -2162,7 +2372,11 @@ fn close_operation(
         post_wait_freezes_ms: raw.post_wait_freezes_ms,
         retryable: raw.retryable,
         navigation_only,
-        destructive: raw.destructive,
+        effect_capability: if raw.destructive {
+            AdmittedEffectCapability::Destructive
+        } else {
+            AdmittedEffectCapability::NavigationOnly
+        },
         on_error,
         guard,
         unguarded_trusted_coordinate: raw.unguarded_trusted_coordinate,
@@ -2294,6 +2508,7 @@ fn close_operation_action(
             target_id.as_deref(),
             offset.as_ref(),
             TargetTapMode::Deterministic,
+            control.resolution(),
             guard,
             targets,
         ),
@@ -2301,6 +2516,7 @@ fn close_operation_action(
             target_id.as_deref(),
             offset.as_ref(),
             TargetTapMode::Center,
+            control.resolution(),
             guard,
             targets,
         ),
@@ -2308,6 +2524,7 @@ fn close_operation_action(
             target_id.as_deref(),
             Some(offset),
             TargetTapMode::Deterministic,
+            control.resolution(),
             guard,
             targets,
         ),
@@ -2318,6 +2535,7 @@ fn close_target_action(
     raw_target: Option<&str>,
     raw_offset: Option<&RawRect>,
     mode: TargetTapMode,
+    resolution: PackageResolution,
     guard: Option<&AdmittedGuard>,
     targets: &BTreeMap<TargetKey, AdmittedTarget>,
 ) -> AdmissionResult<AdmittedAction> {
@@ -2337,7 +2555,10 @@ fn close_target_action(
     Ok(AdmittedAction::TargetTap {
         target,
         mode,
-        offset: raw_offset.copied().map(TargetOffset::new).transpose()?,
+        offset: raw_offset
+            .copied()
+            .map(|offset| TargetOffset::new(offset, resolution))
+            .transpose()?,
     })
 }
 
@@ -2702,6 +2923,12 @@ fn close_navigation(
                 {
                     return Err(AdmissionError::new("admission_navigation_action_mismatch"));
                 }
+                if !declared.destructive() {
+                    return Err(AdmissionError::with_detail(
+                        "admission_destructive_capability_invalid",
+                        format!("destructive region operation '{key}' is not typed destructive"),
+                    ));
+                }
                 Some(key)
             }
             (None, None) => None,
@@ -2763,26 +2990,43 @@ fn close_navigation(
                 return Err(AdmissionError::new("admission_operation_invalid"));
             }
         };
-        control_points.push(AdmittedControlPoint { name, action });
+        if action.static_rects().is_empty() {
+            return Err(AdmissionError::with_detail(
+                "admission_control_point_capability_unknown",
+                format!("control point '{name}' must have statically bounded effect coordinates"),
+            ));
+        }
+        control_points.push(AdmittedControlPoint {
+            name,
+            action,
+            effect_capability: AdmittedEffectCapability::NavigationOnly,
+        });
     }
     control_points.sort_by(|left, right| left.name.cmp(&right.name));
 
-    for route in &routes {
-        let operation = find_operation(tasks, route.operation())?;
-        for rect in operation.action().static_rects() {
-            if destructive_regions.iter().any(|destructive| {
-                selectors_overlap(operation.from(), destructive.page())
-                    && rect.intersects(destructive.rect())
-            }) {
-                return Err(AdmissionError::with_detail(
-                    "admission_destructive_overlap",
-                    format!(
-                        "route operation '{}' overlaps a destructive region",
-                        route.operation()
-                    ),
-                ));
-            }
-        }
+    let effect_operations = routes
+        .iter()
+        .map(|route| route.operation().clone())
+        .chain(page_operations.iter().cloned())
+        .collect::<BTreeSet<_>>();
+    for key in effect_operations {
+        let operation = find_operation(tasks, &key)?;
+        validate_non_destructive_effect(
+            &format!("operation '{key}'"),
+            operation.from(),
+            operation.action(),
+            operation.effect_capability(),
+            &destructive_regions,
+        )?;
+    }
+    for point in &control_points {
+        validate_non_destructive_effect(
+            &format!("control point '{}'", point.name()),
+            &PageSelector::Any,
+            point.action(),
+            point.effect_capability(),
+            &destructive_regions,
+        )?;
     }
 
     Ok(Some(AdmittedNavigation {
@@ -2792,6 +3036,29 @@ fn close_navigation(
         destructive_regions,
         control_points,
     }))
+}
+
+fn validate_non_destructive_effect(
+    label: &str,
+    page: &PageSelector,
+    action: &AdmittedAction,
+    capability: AdmittedEffectCapability,
+    destructive_regions: &[AdmittedDestructiveRegion],
+) -> AdmissionResult<()> {
+    if capability.requires_explicit_opt_in() {
+        return Ok(());
+    }
+    for rect in action.static_rects() {
+        if destructive_regions.iter().any(|destructive| {
+            selectors_overlap(page, destructive.page()) && rect.intersects(destructive.rect())
+        }) {
+            return Err(AdmissionError::with_detail(
+                "admission_destructive_overlap",
+                format!("{label} overlaps a destructive region"),
+            ));
+        }
+    }
+    Ok(())
 }
 
 fn all_operations(
@@ -4242,6 +4509,165 @@ mod tests {
     }
 
     #[test]
+    fn control_points_share_the_canonical_destructive_overlap_gate() {
+        let (mut entries, metadata) = parsed_package_fixture();
+        mutate_json(
+            &mut entries,
+            "resources/navigation/neutral.test.navigation.json",
+            |navigation| {
+                navigation["destructive_actions"] = serde_json::json!([{
+                    "page":"any",
+                    "click":{"kind":"point","x":1,"y":0}
+                }]);
+                navigation["control_points"] = serde_json::json!([{
+                    "name":"wake",
+                    "point":[1,0]
+                }]);
+            },
+        );
+
+        assert_close_code(&entries, &metadata, "admission_destructive_overlap");
+    }
+
+    #[test]
+    fn destructive_navigation_requires_typed_operation_capability() {
+        let (mut entries, metadata) = parsed_package_fixture();
+        mutate_json(
+            &mut entries,
+            "resources/navigation/neutral.test.navigation.json",
+            |navigation| {
+                navigation["page_operations"] = serde_json::json!([{
+                    "task_id":"task",
+                    "id":"tap",
+                    "page":"home",
+                    "click":{"kind":"point","x":1,"y":0}
+                }]);
+                navigation["destructive_actions"] = serde_json::json!([{
+                    "task_id":"task",
+                    "id":"tap",
+                    "page":"home",
+                    "click":{"kind":"point","x":1,"y":0}
+                }]);
+            },
+        );
+
+        assert_close_code(
+            &entries,
+            &metadata,
+            "admission_destructive_capability_invalid",
+        );
+
+        mutate_json(
+            &mut entries,
+            "resources/operations/task/task.json",
+            |task| task["operations"][0]["destructive"] = Value::Bool(true),
+        );
+        let closed = close_fixture(&entries, &metadata).expect("typed destructive operation");
+        assert_eq!(
+            closed.entry_task.operations()[0].effect_capability(),
+            AdmittedEffectCapability::Destructive
+        );
+    }
+
+    #[test]
+    fn guarded_static_tap_is_a_typed_color_target_authority() {
+        let (mut entries, metadata) = parsed_package_fixture();
+        mutate_json(
+            &mut entries,
+            "resources/operations/task/task.json",
+            |task| {
+                task["operations"][0]["guard"] = serde_json::json!({
+                    "page_id":"neutral/home",
+                    "target_id":"page/home",
+                    "expected_rect":{"x":0,"y":0,"width":1,"height":1},
+                    "color_probe":"page/home"
+                });
+                task["operations"][0]["unguarded_trusted_coordinate"] = Value::Bool(false);
+            },
+        );
+        let admitted = admit_package(close_fixture(&entries, &metadata).expect("closed package"))
+            .expect("admitted package");
+
+        let operation = admitted
+            .target_operation("page/home")
+            .expect("typed color target authority");
+        assert_eq!(operation.key().operation(), "tap");
+        assert_eq!(
+            operation.effect_capability(),
+            AdmittedEffectCapability::NavigationOnly
+        );
+    }
+
+    #[test]
+    fn target_offset_requires_a_possible_domain_within_resolution() {
+        let resolution = PackageResolution::new(10, 10).expect("resolution");
+
+        assert_eq!(
+            TargetOffset::new(
+                RawRect {
+                    x: 0,
+                    y: 0,
+                    width: 11,
+                    height: 1,
+                },
+                resolution,
+            )
+            .expect_err("impossible target offset")
+            .code(),
+            "admission_input_bounds_invalid"
+        );
+        assert!(
+            TargetOffset::new(
+                RawRect {
+                    x: 1,
+                    y: 2,
+                    width: 3,
+                    height: 4,
+                },
+                resolution,
+            )
+            .is_ok()
+        );
+    }
+
+    #[test]
+    fn admitted_target_offsets_have_a_total_static_projection_domain() {
+        let resolution = PackageResolution::new(10, 10).expect("resolution");
+
+        for x in -1..=10 {
+            for y in -1..=10 {
+                for width in -1..=11 {
+                    for height in -1..=11 {
+                        let result = TargetOffset::new(
+                            RawRect {
+                                x,
+                                y,
+                                width,
+                                height,
+                            },
+                            resolution,
+                        );
+                        if let Ok(offset) = result {
+                            let right = offset
+                                .x()
+                                .checked_add(offset.width() - 1)
+                                .expect("admitted offset right edge");
+                            let bottom = offset
+                                .y()
+                                .checked_add(offset.height() - 1)
+                                .expect("admitted offset bottom edge");
+                            assert!(offset.x() >= 0 && offset.y() >= 0);
+                            assert!(offset.width() > 0 && offset.height() > 0);
+                            assert!(right < resolution.width() as i32);
+                            assert!(bottom < resolution.height() as i32);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
     fn any_is_a_typed_selector_and_dangling_navigation_target_is_rejected() {
         let (mut entries, metadata) = parsed_package_fixture();
         mutate_json(&mut entries, "control.json", |control| {
@@ -4455,10 +4881,121 @@ mod tests {
     }
 
     #[test]
+    fn non_equivalent_canonical_operation_changes_the_semantic_fingerprint() {
+        let (baseline, metadata) = parsed_package_fixture();
+        let baseline = admission_outcome(&baseline, &metadata);
+        let mut changed = parsed_package_fixture().0;
+        mutate_json(
+            &mut changed,
+            "resources/operations/task/task.json",
+            |task| task["operations"][0]["destructive"] = Value::Bool(true),
+        );
+        let changed = admission_outcome(&changed, &metadata);
+
+        assert!(baseline.starts_with("admitted:"), "{baseline}");
+        assert!(changed.starts_with("admitted:"), "{changed}");
+        assert_ne!(baseline, changed);
+    }
+
+    #[test]
+    fn canonical_asset_bytes_change_the_semantic_fingerprint() {
+        let (entries, metadata) = parsed_package_fixture();
+        let mut closed = close_fixture(&entries, &metadata).expect("closed package");
+        let asset = AssetKey::parse(
+            "operations/task/assets/target.png".to_string(),
+            "admission_asset_closure",
+        )
+        .expect("asset key");
+        let baseline_bytes = Arc::<[u8]>::from([1_u8, 2, 3].as_slice());
+        closed.assets.insert(
+            asset.clone(),
+            Sha256Hash::digest(&baseline_bytes).to_string(),
+        );
+        closed.asset_bytes.insert(asset.clone(), baseline_bytes);
+        let baseline = canonical_semantic_fingerprint(&closed).expect("baseline fingerprint");
+
+        let changed_bytes = Arc::from([1_u8, 2, 4].as_slice());
+        closed.assets.insert(
+            asset.clone(),
+            Sha256Hash::digest(&changed_bytes).to_string(),
+        );
+        closed.asset_bytes.insert(asset, changed_bytes);
+        let changed = canonical_semantic_fingerprint(&closed).expect("changed fingerprint");
+
+        assert_ne!(baseline, changed);
+    }
+
+    #[test]
+    fn retained_single_variable_mutation_corpus_has_explicit_oracles() {
+        let (baseline_entries, metadata) = parsed_package_fixture();
+        let baseline = admission_outcome(&baseline_entries, &metadata);
+        assert!(baseline.starts_with("admitted:"), "{baseline}");
+
+        let mut max_steps = baseline_entries.clone();
+        mutate_json(&mut max_steps, "control.json", |control| {
+            control["max_steps"] = Value::from(MAX_STEPS + 1);
+        });
+        assert_eq!(
+            admission_outcome(&max_steps, &metadata),
+            "close:admission_control_invalid"
+        );
+
+        let mut out_of_bounds = baseline_entries.clone();
+        mutate_json(
+            &mut out_of_bounds,
+            "resources/operations/task/task.json",
+            |task| task["operations"][0]["click"]["x"] = Value::from(2),
+        );
+        assert_eq!(
+            admission_outcome(&out_of_bounds, &metadata),
+            "close:admission_input_bounds_invalid"
+        );
+
+        let mut missing_target = baseline_entries.clone();
+        mutate_json(
+            &mut missing_target,
+            "resources/recognition/neutral.test.pages.json",
+            |pages| {
+                pages["pages"][0]["required"][0] = Value::String("page/missing".to_string());
+            },
+        );
+        assert_eq!(
+            admission_outcome(&missing_target, &metadata),
+            "close:admission_missing_reference"
+        );
+
+        let mut unknown_safety_field = baseline_entries.clone();
+        mutate_json(&mut unknown_safety_field, "control.json", |control| {
+            control
+                .as_object_mut()
+                .expect("control object")
+                .insert("unsafe_future_field".to_string(), Value::Bool(true));
+        });
+        assert!(
+            admission_outcome(&unknown_safety_field, &metadata).starts_with("parse:"),
+            "unknown safety field was not rejected at the wire boundary"
+        );
+
+        let mut typed_destructive = baseline_entries;
+        mutate_json(
+            &mut typed_destructive,
+            "resources/operations/task/task.json",
+            |task| task["operations"][0]["destructive"] = Value::Bool(true),
+        );
+        let typed_destructive = admission_outcome(&typed_destructive, &metadata);
+        assert!(
+            typed_destructive.starts_with("admitted:"),
+            "{typed_destructive}"
+        );
+        assert_ne!(typed_destructive, baseline);
+    }
+
+    #[test]
     fn bounded_structured_mutation_is_deterministic_and_panic_free() {
         const CASES: usize = 256;
         let (baseline, metadata) = parsed_package_fixture();
         let mut state = 0x68_cafe_f00d_dead_u64;
+        let started = std::time::Instant::now();
 
         for case in 0..CASES {
             let mut entries = baseline.clone();
@@ -4540,5 +5077,9 @@ mod tests {
             .unwrap_or_else(|_| panic!("structured mutation replay case {case} panicked"));
             assert_eq!(first, second, "structured mutation case {case} drifted");
         }
+        assert!(
+            started.elapsed() <= std::time::Duration::from_secs(10),
+            "bounded structured mutation exceeded its 10 second budget"
+        );
     }
 }

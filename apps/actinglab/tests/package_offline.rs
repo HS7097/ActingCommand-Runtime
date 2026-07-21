@@ -115,8 +115,9 @@ fn package_dry_run_reports_complete_no_op_and_recovery_closure() {
 #[test]
 fn package_dry_run_fails_loud_for_recognition_and_guard_failures() {
     let unknown = TestFixture::new(PackageOptions::default(), solid_frame([0, 0, 0], [0, 0, 0]));
-    assert_error_code(
+    assert_refusal_receipt(
         &unknown.run(&[], "unknown.zip"),
+        &unknown.temp.path().join("unknown.zip"),
         "contained_task_page_unknown",
     );
 
@@ -127,17 +128,23 @@ fn package_dry_run_fails_loud_for_recognition_and_guard_failures() {
         },
         home_frame(true),
     );
-    assert_error_code(
+    assert_refusal_receipt(
         &conflict.run(&[], "conflict.zip"),
+        &conflict.temp.path().join("conflict.zip"),
         "contained_task_recognition_conflict",
     );
 
     let guard = TestFixture::new(PackageOptions::default(), home_frame(false));
-    assert_error_code(&guard.run(&[], "guard.zip"), "contained_task_guard_refused");
+    assert_refusal_receipt(
+        &guard.run(&[], "guard.zip"),
+        &guard.temp.path().join("guard.zip"),
+        "contained_task_guard_refused",
+    );
 
     let mismatch = TestFixture::new(PackageOptions::default(), solid_frame_1x1([255, 0, 0]));
-    assert_error_code(
+    assert_refusal_receipt(
         &mismatch.run(&[], "mismatch.zip"),
+        &mismatch.temp.path().join("mismatch.zip"),
         "contained_task_frame_resolution_mismatch",
     );
 }
@@ -245,13 +252,22 @@ fn package_dry_run_rejects_navigation_values_rejected_by_the_execution_kernel() 
             NavigationMutation::EmptyDestructiveAction,
         ),
         ("empty-control-point", NavigationMutation::EmptyControlPoint),
+        (
+            "control-point-destructive-overlap",
+            NavigationMutation::ControlPointDestructiveOverlap,
+        ),
     ] {
         let fixture = TestFixture::from_bytes(
             package_with_navigation(PackageOptions::default(), Some(mutation)),
             home_frame(true),
         );
 
-        assert_error_code(&fixture.run(&[], &format!("{name}.zip")), "package_invalid");
+        let out_name = format!("{name}.zip");
+        assert_error_code(&fixture.run(&[], &out_name), "package_invalid");
+        assert!(
+            !fixture.temp.path().join(out_name).exists(),
+            "invalid package must not produce an offline result bundle"
+        );
     }
 }
 
@@ -338,6 +354,35 @@ fn package_dry_run_rejects_missing_inputs_and_device_scope() {
         ],
     );
     assert_error_code(&output, "offline_output_conflicts_with_input");
+}
+
+#[test]
+fn version_cannot_false_green_package_or_execution_commands() {
+    let temp = TempDir::new().unwrap();
+    for (command, out_name) in [
+        (["package", "dry-run"], "package-result.zip"),
+        (["lab", "run"], "lab-result.zip"),
+        (["operation", "run"], "operation-result.zip"),
+    ] {
+        let out = temp.path().join(out_name);
+        let output = run_actinglab(
+            &temp,
+            [
+                OsString::from("--json"),
+                OsString::from(command[0]),
+                OsString::from(command[1]),
+                OsString::from("--out"),
+                out.as_os_str().to_owned(),
+                OsString::from("--version"),
+            ],
+        );
+        assert!(!output.status.success());
+        let result = envelope(&output);
+        assert_eq!(result["ok"], false);
+        assert_ne!(result["command"], "version");
+        assert_eq!(result["error"]["code"], "validation_failed");
+        assert!(!out.exists(), "{} unexpectedly created", out.display());
+    }
 }
 
 #[test]
@@ -599,6 +644,27 @@ fn assert_error_code(output: &Output, expected: &str) {
     assert_eq!(envelope(output)["error"]["code"], expected);
 }
 
+fn assert_refusal_receipt(output: &Output, path: &Path, expected: &str) {
+    assert_error_code(output, expected);
+    let response = envelope(output);
+    assert_eq!(response["error"]["details"]["status"], "refused");
+    assert_eq!(
+        response["error"]["details"]["decision"]["status"],
+        "refused"
+    );
+    assert_eq!(response["error"]["details"]["decision"]["code"], expected);
+    let fingerprint = response["error"]["details"]["decision_fingerprint"]
+        .as_str()
+        .expect("refusal decision fingerprint");
+    assert_eq!(fingerprint.len(), 64);
+    let record = read_result_record(path);
+    assert_eq!(record["decision_fingerprint"], fingerprint);
+    assert_eq!(record["simulation"]["decision"]["status"], "refused");
+    assert_eq!(record["simulation"]["decision"]["code"], expected);
+    assert_eq!(record["executed"], false);
+    assert_eq!(record["production_global_ledger_written"], false);
+}
+
 fn read_result_record(path: &Path) -> Value {
     let bytes = fs::read(path).unwrap();
     let mut archive = ZipArchive::new(Cursor::new(bytes)).unwrap();
@@ -631,6 +697,7 @@ enum NavigationMutation {
     UnsupportedRouteClick,
     EmptyDestructiveAction,
     EmptyControlPoint,
+    ControlPointDestructiveOverlap,
     ValidSafetyEntries,
 }
 
@@ -739,6 +806,17 @@ fn package_with_navigation(
         Some(NavigationMutation::EmptyControlPoint) => {
             navigation["control_points"] = json!([{}]);
         }
+        Some(NavigationMutation::ControlPointDestructiveOverlap) => {
+            control["allow_placeholder_coords"] = json!(true);
+            navigation["destructive_actions"] = json!([{
+                "page": "any",
+                "click": {"kind": "rect", "x": 0, "y": 0, "width": 1, "height": 1}
+            }]);
+            navigation["control_points"] = json!([{
+                "name": "wake",
+                "point": [0, 0]
+            }]);
+        }
         Some(NavigationMutation::ValidSafetyEntries) => {
             control["allow_placeholder_coords"] = json!(true);
             navigation["destructive_actions"] = json!([{
@@ -747,7 +825,7 @@ fn package_with_navigation(
             }]);
             navigation["control_points"] = json!([{
                 "name": "home",
-                "point": [0, 0]
+                "point": [1, 0]
             }]);
         }
         None => {}

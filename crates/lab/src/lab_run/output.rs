@@ -180,6 +180,7 @@ fn hex_sha256(bytes: &[u8]) -> String {
     digest.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
+#[cfg(test)]
 fn hash_text(text: &str) -> u64 {
     let digest = Sha256::digest(text.as_bytes());
     u64::from_be_bytes([

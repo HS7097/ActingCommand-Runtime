@@ -1,0 +1,11 @@
+error[E0603]: module `admission` is private
+ --> tests/ui/raw_admission_document.rs:1:37
+  |
+1 | use actingcommand_pack_containment::admission::RawRecognitionDocument;
+  |                                     ^^^^^^^^^ private module
+  |
+note: the module `admission` is defined here
+ --> src/lib.rs
+  |
+  | mod admission;
+  | ^^^^^^^^^^^^^

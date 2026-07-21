@@ -1088,8 +1088,7 @@ fn execute_operation_with_retries<L: LedgerSink>(
             }
         }
 
-        let action =
-            operation.input_action(&control.resolution, ctx.run_seed, action_target.as_ref())?;
+        let action = operation.admitted_input_action(&resources.package, action_target.as_ref())?;
         let action_id = ctx.id_issuer.issue(IdKind::Action).value;
         let backend = ensure_touch_backend(
             input,

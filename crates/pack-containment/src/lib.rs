@@ -9,12 +9,12 @@ use actingcommand_recognition_pack::{
 };
 pub use admission::{
     AdmissionError, AdmissionResult, AdmittedAction, AdmittedAnchor, AdmittedControl,
-    AdmittedControlPoint, AdmittedDestructiveRegion, AdmittedExpectation, AdmittedGuard,
-    AdmittedNavigation, AdmittedOperation, AdmittedOperationDefaults, AdmittedPackage,
-    AdmittedRoute, AdmittedTargetKind, AdmittedTask, AssetKey, BoundedPoint, BoundedRect,
-    ExecutionMode, FrameStoreSettings, GuardVerification, InputDuration, OpaqueMetadata,
-    OperationKey, PackageResolution, PageKey, PageSelector, TargetKey, TargetOffset, TargetTapMode,
-    TaskKey,
+    AdmittedControlPoint, AdmittedDestructiveRegion, AdmittedEffectCapability, AdmittedExpectation,
+    AdmittedGuard, AdmittedNavigation, AdmittedOperation, AdmittedOperationDefaults,
+    AdmittedPackage, AdmittedRoute, AdmittedTargetKind, AdmittedTask, AssetKey, BoundedPoint,
+    BoundedRect, ExecutionMode, FrameStoreSettings, GuardVerification, InputDuration,
+    OpaqueMetadata, OperationKey, PackageResolution, PageKey, PageSelector, TargetKey,
+    TargetOffset, TargetTapMode, TaskKey,
 };
 use serde::Deserialize;
 use serde_json::Value;
@@ -296,28 +296,18 @@ impl LoadedBundle {
             .map(|parsed| admission::close_package(parsed, &entries, &metadata.resource_root))
             .transpose()
             .map_err(ContainmentError::Admission)?;
-        let recognition_pack_diagnostics = collect_recognition_pack_diagnostics(&entries)?;
-        let (evaluator, detector) = load_recognition_pipeline(&entries, &metadata)?;
         let admitted = match closed {
             Some(closed) => {
-                let evaluator = evaluator.clone().ok_or_else(|| {
-                    package_contract_error(
-                        "admission",
-                        "closed executable package is missing its recognition evaluator",
-                    )
-                })?;
-                let detector = detector.clone().ok_or_else(|| {
-                    package_contract_error(
-                        "admission",
-                        "closed executable package is missing its page detector",
-                    )
-                })?;
-                Some(
-                    admission::admit_package(closed, evaluator, detector)
-                        .map_err(ContainmentError::Admission)?,
-                )
+                Some(admission::admit_package(closed).map_err(ContainmentError::Admission)?)
             }
             None => None,
+        };
+        let recognition_pack_diagnostics = match (&admitted, &metadata.recognition_pack_path) {
+            (Some(admitted), Some(path)) => vec![RecognitionPackDiagnostics {
+                path: path.clone(),
+                unsupported_targets: admitted.evaluator().unsupported_targets().to_vec(),
+            }],
+            _ => collect_recognition_pack_diagnostics(&entries)?,
         };
         Ok(Self {
             task_id: metadata.task_id,
@@ -394,10 +384,6 @@ impl LoadedBundle {
         &self.recognition_pack_diagnostics
     }
 
-    pub fn entry(&self, path: &str) -> Option<&[u8]> {
-        self.entries.get(path).map(Vec::as_slice)
-    }
-
     pub fn entry_paths(&self) -> impl Iterator<Item = &str> {
         self.entries.keys().map(String::as_str)
     }
@@ -408,13 +394,6 @@ impl LoadedBundle {
             .keys()
             .filter(|path| path.starts_with(&prefix) && path.ends_with("/task.json"))
             .count()
-    }
-
-    pub fn resource_entry(&self, relative_path: &str) -> ContainmentResult<&[u8]> {
-        validate_relative_ref(relative_path)?;
-        let path = prefixed_path(&self.resource_root, relative_path);
-        self.entry(&path)
-            .ok_or(ContainmentError::MissingEntry { path })
     }
 }
 
@@ -642,12 +621,14 @@ struct ManifestHashes {
     files: Vec<ManifestFile>,
 }
 
+#[cfg(test)]
 #[derive(Debug)]
 struct MemoryAssetResolver {
     entries: Arc<BTreeMap<String, Vec<u8>>>,
     resource_root: String,
 }
 
+#[cfg(test)]
 impl AssetResolver for MemoryAssetResolver {
     fn read_asset(
         &self,
@@ -867,41 +848,6 @@ fn package_contract_error(path: impl Into<String>, message: impl Into<String>) -
     }
 }
 
-fn load_recognition_pipeline(
-    entries: &Arc<BTreeMap<String, Vec<u8>>>,
-    metadata: &PackageMetadata,
-) -> ContainmentResult<(Option<RecognitionEvaluator>, Option<PageDetector>)> {
-    let Some(pack_path) = &metadata.recognition_pack_path else {
-        return Ok((None, None));
-    };
-    let pack_json = decode_utf8_entry(entries, pack_path)?;
-    let resolver = Arc::new(MemoryAssetResolver {
-        entries: Arc::clone(entries),
-        resource_root: metadata.resource_root.clone(),
-    });
-    let Some(pages_path) = &metadata.pages_path else {
-        let pack =
-            load_pack_from_json_str(pack_json.trim_start_matches('\u{feff}')).map_err(|err| {
-                ContainmentError::PackParse {
-                    path: pack_path.clone(),
-                    message: err.to_string(),
-                }
-            })?;
-        let evaluator =
-            RecognitionEvaluator::with_asset_resolver(pack, resolver).map_err(|err| {
-                ContainmentError::PackParse {
-                    path: pack_path.clone(),
-                    message: err.to_string(),
-                }
-            })?;
-        return Ok((Some(evaluator), None));
-    };
-    let pages_json = decode_utf8_entry(entries, pages_path)?;
-    let (evaluator, detector) =
-        build_recognition_pipeline(pack_path, pack_json, pages_path, pages_json, resolver)?;
-    Ok((Some(evaluator), Some(detector)))
-}
-
 fn build_recognition_pipeline(
     pack_path: &str,
     pack_json: &str,
@@ -1104,21 +1050,6 @@ fn read_json_entry<T: for<'de> Deserialize<'de>>(
     })
 }
 
-fn decode_utf8_entry<'a>(
-    entries: &'a BTreeMap<String, Vec<u8>>,
-    path: &str,
-) -> ContainmentResult<&'a str> {
-    let bytes = entries
-        .get(path)
-        .ok_or_else(|| ContainmentError::MissingEntry {
-            path: path.to_string(),
-        })?;
-    std::str::from_utf8(bytes).map_err(|err| ContainmentError::JsonParse {
-        path: path.to_string(),
-        message: err.to_string(),
-    })
-}
-
 fn read_entry_limited<R: Read>(
     reader: &mut R,
     instance: &InstanceId,
@@ -1211,32 +1142,82 @@ mod tests {
         *state
     }
 
+    fn containment_outcome(label: &str, bytes: &[u8]) -> String {
+        let expected = Sha256Hash::digest(bytes);
+        let instance = InstanceId::new(label).expect("bounded fuzz instance id");
+        let mut containment = Containment::new();
+        match containment.load(&instance, bytes, &expected) {
+            Ok(_) => "ok".to_string(),
+            Err(error) => format!("error:{error}"),
+        }
+    }
+
     #[test]
-    fn bounded_arbitrary_zip_bytes_are_panic_free_and_deterministic() {
+    fn bounded_raw_zip_fuzz_reaches_real_archives_and_admission_deterministically() {
         const CASES: usize = 256;
         let mut state = 0x68_5eed_fade_cafe_u64;
+        let retained_valid_zip = lab_package_zip("fuzz_task", [255, 0, 0]);
+        let retained_corpus = [
+            ("retained-valid", retained_valid_zip.clone(), true),
+            (
+                "retained-truncated-eocd",
+                retained_valid_zip[..retained_valid_zip.len() - 22].to_vec(),
+                false,
+            ),
+            (
+                "retained-local-header-only",
+                b"PK\x03\x04\0\0\0\0".to_vec(),
+                false,
+            ),
+        ];
+        for (label, bytes, should_admit) in &retained_corpus {
+            let first = containment_outcome(label, bytes);
+            let second = containment_outcome(label, bytes);
+            assert_eq!(first, second, "retained raw corpus {label} drifted");
+            assert_eq!(first == "ok", *should_admit, "retained raw corpus {label}");
+        }
+
+        let mut zip_header_samples = 0usize;
+        let mut parsed_archive_samples = 0usize;
+        let mut admitted_samples = 0usize;
+        let started = std::time::Instant::now();
         for case in 0..CASES {
-            let length = (next_fuzz_word(&mut state) % 513) as usize;
-            let mut bytes = vec![0_u8; length];
-            for byte in &mut bytes {
-                *byte = next_fuzz_word(&mut state) as u8;
-            }
-            let expected = Sha256Hash::digest(&bytes);
-            let evaluate = || {
-                let instance =
-                    InstanceId::new(format!("fuzz-{case}")).expect("bounded fuzz instance id");
-                let mut containment = Containment::new();
-                match containment.load(&instance, &bytes, &expected) {
-                    Ok(_) => "ok".to_string(),
-                    Err(error) => format!("error:{error}"),
+            let bytes = if case % 2 == 0 {
+                let mut bytes = retained_valid_zip.clone();
+                if case % 8 != 0 {
+                    let index = 4 + next_fuzz_word(&mut state) as usize % (bytes.len() - 4);
+                    bytes[index] ^= (next_fuzz_word(&mut state) as u8).max(1);
                 }
+                bytes
+            } else {
+                let length = (next_fuzz_word(&mut state) % 513) as usize;
+                let mut bytes = vec![0_u8; length];
+                for byte in &mut bytes {
+                    *byte = next_fuzz_word(&mut state) as u8;
+                }
+                bytes
             };
+            if bytes.starts_with(b"PK\x03\x04") {
+                zip_header_samples += 1;
+            }
+            if ZipArchive::new(Cursor::new(bytes.as_slice())).is_ok() {
+                parsed_archive_samples += 1;
+            }
+            let evaluate = || containment_outcome(&format!("fuzz-{case}"), &bytes);
             let first = std::panic::catch_unwind(std::panic::AssertUnwindSafe(evaluate))
                 .unwrap_or_else(|_| panic!("arbitrary ZIP case {case} panicked"));
             let second = std::panic::catch_unwind(std::panic::AssertUnwindSafe(evaluate))
                 .unwrap_or_else(|_| panic!("arbitrary ZIP replay case {case} panicked"));
             assert_eq!(first, second, "arbitrary ZIP case {case} drifted");
+            admitted_samples += usize::from(first == "ok");
         }
+        assert_eq!(zip_header_samples, CASES / 2);
+        assert!(parsed_archive_samples >= CASES / 8);
+        assert!(admitted_samples >= CASES / 8);
+        assert!(
+            started.elapsed() <= std::time::Duration::from_secs(15),
+            "bounded raw ZIP fuzz exceeded its 15 second budget"
+        );
     }
 
     #[test]

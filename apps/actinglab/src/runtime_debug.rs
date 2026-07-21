@@ -8,7 +8,7 @@ use actingcommand_contract::{
     RuntimeEvidenceExportRequest, RuntimeResult, RuntimeSubscriptionRequest, SubscriptionCursor,
     TaskOutcome,
 };
-use actingcommand_pack_containment::Sha256Hash;
+use actingcommand_lab::Sha256Hash;
 use actingcommand_resource_tooling::{PublishedPackageReader, open_published_package};
 use actingcommand_runtime_client::{RuntimeClient, RuntimeClientConfig};
 use serde_json::{Value, json};

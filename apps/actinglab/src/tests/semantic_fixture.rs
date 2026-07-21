@@ -69,6 +69,7 @@ pub(super) fn seal_semantic_fixture(
     let mut zip = ZipWriter::new(file);
     let options = FileOptions::default().compression_method(zip::CompressionMethod::Stored);
     let pack: Value = serde_json::from_slice(&fs::read(pack_source).unwrap()).unwrap();
+    let pages: Value = serde_json::from_slice(&fs::read(pages_source).unwrap()).unwrap();
     let width = pack
         .pointer("/coordinate_space/width")
         .and_then(Value::as_u64)
@@ -94,7 +95,15 @@ pub(super) fn seal_semantic_fixture(
         "entry_task_id": "task"
     }))
     .unwrap();
-    let operation = semantic_operation_document(game, server, navigation.as_ref(), width, height);
+    let operation = semantic_operation_document(
+        game,
+        server,
+        &pack,
+        &pages,
+        navigation.as_ref(),
+        width,
+        height,
+    );
     for (name, bytes) in [
         ("control.json", control.as_slice()),
         (
@@ -149,11 +158,13 @@ pub(super) fn seal_semantic_fixture(
 fn semantic_operation_document(
     game: &str,
     server: &str,
+    pack: &Value,
+    pages: &Value,
     navigation: Option<&Value>,
     width: u64,
     height: u64,
 ) -> Vec<u8> {
-    let operations = navigation
+    let mut operations = navigation
         .cloned()
         .and_then(|navigation| {
             navigation
@@ -190,6 +201,75 @@ fn semantic_operation_document(
             })
         })
         .collect::<Vec<_>>();
+    for target in pack["targets"].as_array().into_iter().flatten() {
+        if !target["click"].is_object() {
+            continue;
+        }
+        let target_id = target["id"].as_str().unwrap();
+        let page_entries = pages["pages"].as_array().unwrap();
+        let Some(page) = page_entries
+            .iter()
+            .find(|page| {
+                page["required"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .any(|required| required.as_str() == Some(target_id))
+            })
+            .or_else(|| page_entries.first())
+        else {
+            continue;
+        };
+        let region = &target["region"];
+        let click = &target["click"];
+        let (action, guard) = match target["type"].as_str() {
+            Some("template") => {
+                let offset = json!({
+                    "x": click["x"].as_i64().unwrap() - region["x"].as_i64().unwrap(),
+                    "y": click["y"].as_i64().unwrap() - region["y"].as_i64().unwrap(),
+                    "width": click["width"],
+                    "height": click["height"]
+                });
+                (
+                    json!({
+                        "kind": "target_center",
+                        "target_id": target_id,
+                        "offset": offset
+                    }),
+                    json!({
+                        "page_id": page["id"],
+                        "target_id": target_id,
+                        "expected_rect": region,
+                        "verify_template": target["template_path"]
+                    }),
+                )
+            }
+            Some("color") => (
+                json!({
+                    "kind": "rect",
+                    "x": click["x"],
+                    "y": click["y"],
+                    "width": click["width"],
+                    "height": click["height"]
+                }),
+                json!({
+                    "page_id": page["id"],
+                    "target_id": target_id,
+                    "expected_rect": region,
+                    "color_probe": target_id
+                }),
+            ),
+            _ => continue,
+        };
+        operations.push(json!({
+            "id": format!("direct_{}", target_id.replace('/', "_")),
+            "purpose": "typed semantic fixture target closure",
+            "from": page["id"],
+            "to": Value::Null,
+            "click": action,
+            "guard": guard
+        }));
+    }
     serde_json::to_vec(&json!({
         "schema_version": "0.6",
         "task_id": "task",
@@ -209,6 +289,11 @@ pub(super) fn semantic_resource_root(include_destructive_overlap: bool) -> Seman
     fs::create_dir(&recognition).unwrap();
     fs::create_dir(&navigation).unwrap();
     fs::write(
+        recognition.join("home-button.png"),
+        encode_png(1, 1, [255, 0, 0]),
+    )
+    .unwrap();
+    fs::write(
         recognition.join("arknights.cn.pack.json"),
         r#"{
             "schema_version":"0.3",
@@ -216,7 +301,7 @@ pub(super) fn semantic_resource_root(include_destructive_overlap: bool) -> Seman
             "targets":[
                 {"type":"color","id":"home_anchor","region":{"x":0,"y":0,"width":1,"height":1},"expected":[255,0,0]},
                 {"type":"color","id":"target_anchor","region":{"x":0,"y":0,"width":1,"height":1},"expected":[0,0,255]},
-                {"type":"color","id":"home_button","region":{"x":0,"y":0,"width":1,"height":1},"expected":[255,0,0],"click":{"x":10,"y":20,"width":4,"height":6}}
+                {"type":"template","id":"home_button","template_path":"recognition/home-button.png","region":{"x":0,"y":0,"width":1,"height":1},"threshold":0.9,"color_check":{"region":{"x":0,"y":0,"width":1,"height":1},"expected":[255,0,0]},"click":{"x":10,"y":20,"width":4,"height":6}}
             ]
         }"#,
     )
@@ -233,7 +318,7 @@ pub(super) fn semantic_resource_root(include_destructive_overlap: bool) -> Seman
     )
     .unwrap();
     let destructive = if include_destructive_overlap {
-        r#"[{"page":"arknights/home","click":{"kind":"rect","x":10,"y":20,"width":4,"height":6}}]"#
+        r#"[{"page":"home","click":{"kind":"rect","x":10,"y":20,"width":4,"height":6}}]"#
     } else {
         "[]"
     };

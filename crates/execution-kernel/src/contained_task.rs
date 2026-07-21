@@ -5,12 +5,13 @@
 use crate::{
     ExecutionBundleError, ExternalExpectedSha256, ExternallyVerifiedBundle, RunDirective,
     RunOperationCandidate, RunStateConfig, RunStateMachine, RunTerminal,
+    resolve_admitted_effect_intent,
 };
 use actingcommand_contract::{InputAction, TaskOutcome};
 use actingcommand_device::{Frame, PixelFormat};
 use actingcommand_pack_containment::{
-    AdmittedAction, AdmittedOperation, AdmittedPackage, ContainmentError, ExecutionMode,
-    PackageResolution, PageSelector,
+    AdmittedOperation, AdmittedPackage, ContainmentError, ExecutionMode, PackageResolution,
+    PageSelector,
 };
 use actingcommand_recognition::{Scene, ScenePixelFormat};
 use actingcommand_recognition_pack::{TargetEvaluation, TargetKind};
@@ -310,11 +311,13 @@ impl PreparedContainedTask {
                         &observation,
                         self.package.evaluator(),
                     )?;
-                    let action = input_action_from_admitted(
-                        operation.action(),
-                        control.resolution(),
-                        target.as_ref(),
-                    )?;
+                    let intent =
+                        resolve_admitted_effect_intent(&self.package, operation, target.as_ref())
+                            .map_err(|error| ContainedTaskError {
+                            code: error.code(),
+                            detail: error.detail().map(str::to_string),
+                        })?;
+                    let action = intent.input_action();
                     runtime
                         .record(ContainedTaskTrace::EffectIntent {
                             step_index,
@@ -459,63 +462,6 @@ struct PageObservation {
     scene: Scene,
 }
 
-fn input_action_from_admitted(
-    admitted: &AdmittedAction,
-    resolution: PackageResolution,
-    target: Option<&TargetEvaluation>,
-) -> Result<InputAction, ContainedTaskError> {
-    let action = match admitted {
-        AdmittedAction::Tap { point, .. } => InputAction::Tap {
-            x: point.x(),
-            y: point.y(),
-        },
-        AdmittedAction::LongTap { point, duration } => InputAction::LongTap {
-            x: point.x(),
-            y: point.y(),
-            duration_ms: duration.milliseconds(),
-        },
-        AdmittedAction::Drag {
-            from, to, duration, ..
-        } => InputAction::Swipe {
-            x1: from.x(),
-            y1: from.y(),
-            x2: to.x(),
-            y2: to.y(),
-            duration_ms: duration.milliseconds(),
-        },
-        AdmittedAction::TargetTap { offset, .. } => {
-            let target = target
-                .ok_or_else(|| ContainedTaskError::new("contained_task_guard_target_missing"))?;
-            let template = target
-                .template
-                .ok_or_else(|| ContainedTaskError::new("contained_task_guard_target_invalid"))?;
-            let (x, y, width, height) = match offset {
-                Some(offset) => (
-                    template.x.checked_add(offset.x()).ok_or_else(|| {
-                        ContainedTaskError::new("contained_task_input_out_of_bounds")
-                    })?,
-                    template.y.checked_add(offset.y()).ok_or_else(|| {
-                        ContainedTaskError::new("contained_task_input_out_of_bounds")
-                    })?,
-                    offset.width(),
-                    offset.height(),
-                ),
-                None => (template.x, template.y, template.width, template.height),
-            };
-            validate_dynamic_rect(resolution, x, y, width, height)?;
-            InputAction::Tap {
-                x: (i64::from(x) + i64::from(width / 2)) as i32,
-                y: (i64::from(y) + i64::from(height / 2)) as i32,
-            }
-        }
-    };
-    action
-        .validate()
-        .map_err(|_| ContainedTaskError::new("contained_task_operation_invalid"))?;
-    validate_input_action(resolution, &action)?;
-    Ok(action)
-}
-
 fn target_kind_name(kind: TargetKind) -> &'static str {
     match kind {
         TargetKind::Template => "template",
@@ -590,60 +536,6 @@ fn validate_frame_resolution(
         Err(ContainedTaskError::new(
             "contained_task_frame_resolution_mismatch",
         ))
-    }
-}
-
-fn validate_dynamic_point(
-    resolution: PackageResolution,
-    x: i32,
-    y: i32,
-) -> Result<(), ContainedTaskError> {
-    if x < 0 || y < 0 || x as u32 >= resolution.width() || y as u32 >= resolution.height() {
-        Err(ContainedTaskError::new(
-            "contained_task_input_out_of_bounds",
-        ))
-    } else {
-        Ok(())
-    }
-}
-
-fn validate_dynamic_rect(
-    resolution: PackageResolution,
-    x: i32,
-    y: i32,
-    width: i32,
-    height: i32,
-) -> Result<(), ContainedTaskError> {
-    if width <= 0 || height <= 0 {
-        return Err(ContainedTaskError::new(
-            "contained_task_input_out_of_bounds",
-        ));
-    }
-    let right = x
-        .checked_add(width - 1)
-        .ok_or_else(|| ContainedTaskError::new("contained_task_input_out_of_bounds"))?;
-    let bottom = y
-        .checked_add(height - 1)
-        .ok_or_else(|| ContainedTaskError::new("contained_task_input_out_of_bounds"))?;
-    validate_dynamic_point(resolution, x, y)?;
-    validate_dynamic_point(resolution, right, bottom)
-}
-
-fn validate_input_action(
-    resolution: PackageResolution,
-    action: &InputAction,
-) -> Result<(), ContainedTaskError> {
-    match action {
-        InputAction::Tap { x, y } | InputAction::LongTap { x, y, .. } => {
-            validate_dynamic_point(resolution, *x, *y)
-        }
-        InputAction::Swipe { x1, y1, x2, y2, .. } => {
-            validate_dynamic_point(resolution, *x1, *y1)?;
-            validate_dynamic_point(resolution, *x2, *y2)
-        }
-        _ => Err(ContainedTaskError::new(
-            "contained_task_primitive_unsupported",
-        )),
     }
 }
 
