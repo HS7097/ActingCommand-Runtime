@@ -5,7 +5,6 @@ struct LabRunContext<'a, L: LedgerSink> {
     process: crate::LabRunProcessContext,
     id_issuer: IdIssuer,
     run_id: String,
-    run_seed: u64,
     started_at: SystemTime,
     started_instant: Instant,
     run_root: PathBuf,
@@ -51,7 +50,7 @@ struct LabRunContext<'a, L: LedgerSink> {
 impl<'a, L: LedgerSink> LabRunContext<'a, L> {
     fn create_with_context(
         run_root: &Path,
-        input_zip: &Path,
+        _input_zip: &Path,
         process: crate::LabRunProcessContext,
         clock: &'a dyn Clock,
         ledger_session: L::RunSession,
@@ -84,7 +83,6 @@ impl<'a, L: LedgerSink> LabRunContext<'a, L> {
             process,
             id_issuer: issuer,
             run_id,
-            run_seed: hash_text(&input_zip.display().to_string()),
             started_at: now,
             started_instant: Instant::now(),
             run_root: run_root.to_path_buf(),
@@ -1295,7 +1293,7 @@ impl<'a, L: LedgerSink> LabRunContext<'a, L> {
                 "recognition_unsupported_targets": unsupported_targets_json(state.resources.evaluator.unsupported_targets()),
                 "pages": state.resources.pages_path,
                 "navigation": state.resources.navigation_path,
-                "navigation_loaded": state.resources.navigation.is_some(),
+                "navigation_loaded": state.resources.navigation_loaded,
                 "operation_goal": state.resources.operation_bundle.goal,
                 "entry_page": state.resources.operation_bundle.entry_page,
                 "target_page": state.resources.operation_bundle.target_page,

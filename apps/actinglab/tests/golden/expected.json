@@ -711,7 +711,7 @@
       "error": {
         "blocked_by": [],
         "code": "package_invalid",
-        "message": "Lab package must include control.json"
+        "message": "fatal execution bundle error: containment did not admit an executable package"
       },
       "ok": false,
       "runtime_version": "runtime-embedded-p1g",
@@ -1748,7 +1748,7 @@
               "detected_at_unix_ms": "<TIME>",
               "detector_id": "detect_resolution",
               "source": "golden-scene",
-              "value": "1x1"
+              "value": "100x100"
             }
           },
           "detector_id": "detect_resolution",
@@ -1756,7 +1756,7 @@
           "game_id": "arknights",
           "generated_at_unix_ms": "<TIME>",
           "instance_id": "<IID>",
-          "resource_pack_hash": "4e9584a6e1ab4dd67016bc92ae1bcfcd845a695db09009732704dd738c257c84",
+          "resource_pack_hash": "c24108ecd7d4b421875208de412eafc6edd7a76618e6febddd5e7db5c62a4cbe",
           "resource_pack_id": "golden-pack",
           "schema_version": "env-detect-result.v1",
           "server_id": "cn"
@@ -1834,7 +1834,7 @@
             "key": "resolution",
             "source": "golden-scene",
             "source_result": "detect_resolution@<TIME>",
-            "value": "1x1"
+            "value": "100x100"
           }
         ],
         "ledger": {
@@ -1848,7 +1848,7 @@
           "req_id": "<REQ_ID>"
         },
         "req_id": "<REQ_ID>",
-        "resolved": "1x1",
+        "resolved": "100x100",
         "schema_version": "env-resolve-command.v1",
         "source_result": "<PATH>",
         "status": "resolved",
@@ -1929,7 +1929,7 @@
               "detected_at_unix_ms": "<TIME>",
               "detector_id": "detect_resolution",
               "source": "golden-scene",
-              "value": "1x1"
+              "value": "100x100"
             }
           },
           "detector_id": "detect_resolution",
@@ -1937,7 +1937,7 @@
           "game_id": "arknights",
           "generated_at_unix_ms": "<TIME>",
           "instance_id": "<IID>",
-          "resource_pack_hash": "4e9584a6e1ab4dd67016bc92ae1bcfcd845a695db09009732704dd738c257c84",
+          "resource_pack_hash": "c24108ecd7d4b421875208de412eafc6edd7a76618e6febddd5e7db5c62a4cbe",
           "resource_pack_id": "golden-pack",
           "schema_version": "env-detect-result.v1",
           "server_id": "cn"
@@ -1969,7 +1969,7 @@
               "key": "resolution",
               "source": "golden-scene",
               "source_result": "detect_resolution@<TIME>",
-              "value": "1x1"
+              "value": "100x100"
             }
           ],
           "detector_id": "detect_resolution",
@@ -1981,7 +1981,7 @@
           "recommended_action": "run_detect",
           "result_generated_at_unix_ms": "<TIME>",
           "result_path": "<PATH>",
-          "result_resource_pack_hash": "4e9584a6e1ab4dd67016bc92ae1bcfcd845a695db09009732704dd738c257c84",
+          "result_resource_pack_hash": "c24108ecd7d4b421875208de412eafc6edd7a76618e6febddd5e7db5c62a4cbe",
           "server_id": "cn",
           "source_result": "detect_resolution@<TIME>",
           "status": "needs_detection",
@@ -1995,7 +1995,7 @@
               "detected_at_unix_ms": "<TIME>",
               "detector_id": "detect_resolution",
               "source": "golden-scene",
-              "value": "1x1"
+              "value": "100x100"
             }
           },
           "detector_id": "detect_resolution",
@@ -2003,7 +2003,7 @@
           "game_id": "arknights",
           "generated_at_unix_ms": "<TIME>",
           "instance_id": "<IID>",
-          "resource_pack_hash": "4e9584a6e1ab4dd67016bc92ae1bcfcd845a695db09009732704dd738c257c84",
+          "resource_pack_hash": "c24108ecd7d4b421875208de412eafc6edd7a76618e6febddd5e7db5c62a4cbe",
           "resource_pack_id": "golden-pack",
           "schema_version": "env-detect-result.v1",
           "server_id": "cn"
@@ -2132,7 +2132,10 @@
         "action_id": "<ACTION_ID>",
         "actual_click": {
           "coordinate_derivation": {
-            "mode": "declared_rect"
+            "algorithm": "explicit_point_v1",
+            "matched_rect": null,
+            "mode": "canonical_effect_decision",
+            "seed": 0
           },
           "declared_rect": {
             "height": 6,
@@ -2140,7 +2143,7 @@
             "x": 10,
             "y": 20
           },
-          "kind": "target_rect_center",
+          "kind": "target_declared_point",
           "point": {
             "x": 12,
             "y": 23

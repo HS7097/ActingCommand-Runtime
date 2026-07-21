@@ -6,8 +6,7 @@ use super::{
     runtime_slice_cli, runtime_state_root,
 };
 use actingcommand_contract::{ContainedTaskRequest, EventActor, EventSource};
-use actingcommand_lab::LabValidateRequest;
-use actingcommand_pack_containment::{ContainmentError, Sha256Hash};
+use actingcommand_lab::{ContainmentError, LabValidateRequest, Sha256Hash};
 use actingcommand_resource_tooling::open_published_package;
 use actingcommand_runtime_client::{RuntimeClient, RuntimeClientConfig};
 use serde::Serialize;
@@ -27,7 +26,9 @@ pub(super) fn run_lab_run(global: &GlobalOptions, args: &[String]) -> CliOutcome
     }
     let flags = FlagArgs::parse(args)?;
     flags.expect_positionals("lab run", 0)?;
+    reject_non_exact_dry_run(&flags)?;
     reject_client_execution_overrides(global, &flags)?;
+    reject_unknown_run_flags(&flags)?;
     let package = flags
         .optional_path("--zip")
         .or_else(|| flags.optional_path("--package"))
@@ -63,6 +64,42 @@ pub(super) fn run_lab_run(global: &GlobalOptions, args: &[String]) -> CliOutcome
         "out": output_path,
         "runtime_flow": projection
     }))
+}
+
+fn reject_non_exact_dry_run(flags: &FlagArgs) -> CliOutcome<()> {
+    if flags
+        .flags
+        .keys()
+        .any(|name| name.starts_with("--dry-run="))
+    {
+        return Err(CliError::safety_blocked(
+            "explicit_offline_entry_required",
+            "lab run is the Runtime-owned production execution path; use package dry-run for zero-device simulation",
+            &["package_dry_run"],
+        ));
+    }
+    Ok(())
+}
+
+fn reject_unknown_run_flags(flags: &FlagArgs) -> CliOutcome<()> {
+    let unsupported = flags
+        .flags
+        .keys()
+        .filter(|name| {
+            !matches!(
+                name.as_str(),
+                "--zip" | "--package" | "--expected-sha256" | "--out"
+            )
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    if unsupported.is_empty() {
+        return Ok(());
+    }
+    Err(CliError::usage(format!(
+        "lab run received unsupported flags: {}",
+        unsupported.join(", ")
+    )))
 }
 
 fn reject_client_execution_overrides(global: &GlobalOptions, flags: &FlagArgs) -> CliOutcome<()> {
@@ -213,5 +250,17 @@ mod tests {
             .expect_err("client execution policy must be retired");
 
         assert_eq!(error.code, "actinglab_run_authority_retired");
+    }
+
+    #[test]
+    fn production_run_rejects_non_exact_dry_run_and_unknown_flags_before_io() {
+        let equals = FlagArgs::parse(&["--dry-run=true".to_string()]).expect("flags");
+        let error = reject_non_exact_dry_run(&equals).expect_err("non-exact dry-run must fail");
+        assert_eq!(error.code, "explicit_offline_entry_required");
+
+        let typo = FlagArgs::parse(&["--dry-rnu".to_string()]).expect("flags");
+        let error = reject_unknown_run_flags(&typo).expect_err("unknown flag must fail");
+        assert_eq!(error.code, "validation_failed");
+        assert!(error.message.contains("--dry-rnu"));
     }
 }

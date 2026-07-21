@@ -14,8 +14,11 @@ use actingcommand_device::{
     vendor_stdio_session_diagnostic,
 };
 use actingcommand_lab::{
-    InstanceConfig, PackageValidationResponse, SemanticLedgerContext, SemanticRequestContext,
-    UserConfig, derive_absolute_coordinate_rect_from_match, project_semantic_payload,
+    AdmittedAction, AdmittedPackage, CanonicalEffectPoint, DriveDecisionError,
+    DriveDecisionErrorKind, DriveNavigationEdge, DriveNavigationGraph, DrivePoint,
+    DriveSemanticInput, InstanceConfig, PackageValidationResponse, SemanticLedgerContext,
+    SemanticRequestContext, UserConfig, drive_semantic_input_from_admitted,
+    project_semantic_payload,
 };
 #[cfg(test)]
 use actingcommand_ledger::{
@@ -32,7 +35,7 @@ use actingcommand_runtime_client::{RuntimeClient, RuntimeClientConfig};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
-use std::collections::{BTreeMap, BTreeSet, VecDeque};
+use std::collections::{BTreeMap, BTreeSet};
 use std::env;
 use std::ffi::OsString;
 use std::fs::{self, File};
@@ -166,6 +169,7 @@ type CliOutcome<T> = Result<T, CliError>;
 
 #[derive(Debug, Clone, Default)]
 struct GlobalOptions {
+    present_flags: BTreeMap<String, usize>,
     json: bool,
     run_root: Option<PathBuf>,
     instance: Option<String>,
@@ -506,6 +510,9 @@ where
     let mut index = 0usize;
 
     while index < raw.len() {
+        if is_global_option(&raw[index]) {
+            *global.present_flags.entry(raw[index].clone()).or_default() += 1;
+        }
         match raw[index].as_str() {
             "--json" => global.json = true,
             "--run-root" => {
@@ -582,6 +589,28 @@ where
         index += 1;
     }
 
+    if global.version {
+        let version_count = global.present_flags.get("--version").copied().unwrap_or(0);
+        let incompatible_global = global
+            .present_flags
+            .keys()
+            .any(|flag| flag != "--version" && flag != "--json");
+        if version_count != 1 || !rest.is_empty() || incompatible_global {
+            let command = if rest.is_empty() {
+                "unknown".to_string()
+            } else {
+                command_path_and_args(rest.clone()).0.join(" ")
+            };
+            return Err((
+                command,
+                global.json,
+                CliError::usage(
+                    "--version is an independent invocation and cannot be combined with a command or action option",
+                ),
+            ));
+        }
+    }
+
     let (command, args) = if global.version {
         (vec!["version".to_string()], rest)
     } else if rest.is_empty() {
@@ -596,6 +625,29 @@ where
         args,
         command_name,
     })
+}
+
+fn is_global_option(value: &str) -> bool {
+    matches!(
+        value,
+        "--json"
+            | "--run-root"
+            | "--instance"
+            | "--instances"
+            | "--profile"
+            | "--resource-root"
+            | "--dry-run"
+            | "--verbose"
+            | "--quiet"
+            | "--game"
+            | "--server"
+            | "--runtime-endpoint"
+            | "--capture-backend"
+            | "--backend"
+            | "--touch-backend"
+            | "--require-session"
+            | "--version"
+    )
 }
 
 fn require_raw(
@@ -4131,6 +4183,7 @@ fn run_session_recover(global: &GlobalOptions, args: &[String]) -> CliOutcome<Va
                 &["control_point"],
             )
         })?;
+        validate_control_point_safety(&graph, wake)?;
         if max_actions == 0 {
             return Err(CliError::safety_blocked(
                 "recovery_action_limit_exceeded",
@@ -4190,7 +4243,8 @@ fn run_session_recover(global: &GlobalOptions, args: &[String]) -> CliOutcome<Va
             config: &config,
             evaluator: &evaluator,
             detector: &detector,
-            destructive_clicks: &graph.destructive_clicks,
+            graph: &graph,
+            allow_destructive: false,
             step_timeout,
             poll,
         };
@@ -4227,7 +4281,8 @@ fn run_session_recover(global: &GlobalOptions, args: &[String]) -> CliOutcome<Va
         config: &config,
         evaluator: &evaluator,
         detector: &detector,
-        destructive_clicks: &graph.destructive_clicks,
+        graph: &graph,
+        allow_destructive: false,
         step_timeout,
         poll,
     };
@@ -4370,51 +4425,15 @@ struct PageDetectionOutcome {
     evaluations: Vec<PageEvaluation>,
 }
 
-#[derive(Debug, Clone, Copy)]
-struct SemanticPoint {
-    x: i32,
-    y: i32,
-}
-
-#[derive(Debug, Clone)]
-enum SemanticInput {
-    Tap {
-        rect: PackRect,
-        point: SemanticPoint,
-    },
-    TargetCenter {
-        target_id: String,
-    },
-    Drag {
-        from_rect: PackRect,
-        to_rect: PackRect,
-        from: SemanticPoint,
-        to: SemanticPoint,
-        duration_ms: u64,
-    },
-}
+type SemanticPoint = DrivePoint;
+type SemanticInput = DriveSemanticInput;
+type NavigationEdge = DriveNavigationEdge;
 
 #[derive(Debug)]
 struct NavigationGraph {
-    game: Option<String>,
-    edges: Vec<NavigationEdge>,
-    destructive_clicks: Vec<DestructiveClick>,
+    package: AdmittedPackage,
+    drive: DriveNavigationGraph,
     control_points: BTreeMap<String, ControlPoint>,
-}
-
-#[derive(Debug, Clone)]
-struct NavigationEdge {
-    id: String,
-    from_page: String,
-    to_page: String,
-    input: SemanticInput,
-    source: Option<String>,
-}
-
-#[derive(Debug, Clone)]
-struct DestructiveClick {
-    page: Option<String>,
-    rect: PackRect,
 }
 
 #[derive(Debug, Clone)]
@@ -4560,222 +4579,42 @@ fn parse_match_metric_flag(flags: &FlagArgs) -> CliOutcome<MatchMetric> {
 }
 
 fn load_navigation_graph(
-    global: &GlobalOptions,
-    config: &UserConfig,
+    _global: &GlobalOptions,
+    _config: &UserConfig,
     flags: &FlagArgs,
 ) -> CliOutcome<NavigationGraph> {
-    let path = navigation_path(global, config, flags)?;
-    let text = fs::read_to_string(&path)
-        .map_err(|err| CliError::usage(format!("failed to read {}: {err}", path.display())))?;
-    let value: Value = serde_json::from_str(&text)
-        .map_err(|err| CliError::usage(format!("failed to parse {}: {err}", path.display())))?;
-    parse_navigation_graph_value(&value)
+    let resources = contained_resources::load(flags, "navigate")?;
+    navigation_graph_from_admitted(resources.admitted_package())
 }
 
-fn parse_navigation_graph_value(value: &Value) -> CliOutcome<NavigationGraph> {
-    let game = value
-        .get("game")
-        .and_then(Value::as_str)
-        .map(str::to_string);
-    let edges = value
-        .get("navigation")
-        .and_then(Value::as_array)
-        .ok_or_else(|| CliError::usage("navigation file is missing navigation[]"))?
+fn navigation_graph_from_admitted(package: &AdmittedPackage) -> CliOutcome<NavigationGraph> {
+    let navigation = package.navigation().ok_or_else(|| {
+        CliError::package_invalid("externally verified resource bundle has no navigation graph")
+    })?;
+    let drive = DriveNavigationGraph::from_admitted(package).map_err(drive_cli_error)?;
+    let control_points = navigation
+        .control_points()
         .iter()
-        .map(parse_navigation_edge)
-        .collect::<CliOutcome<Vec<_>>>()?;
-    let destructive_clicks = value
-        .get("destructive_actions")
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-        .map(parse_destructive_click)
-        .collect::<CliOutcome<Vec<_>>>()?;
-    let control_points = value
-        .get("control_points")
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-        .map(parse_control_point)
-        .map(|result| result.map(|point| (point.name.clone(), point)))
+        .map(|point| {
+            Ok((
+                point.name().to_string(),
+                ControlPoint {
+                    name: point.name().to_string(),
+                    input: semantic_input_from_admitted(point.action())?,
+                    note: None,
+                },
+            ))
+        })
         .collect::<CliOutcome<BTreeMap<_, _>>>()?;
     Ok(NavigationGraph {
-        game,
-        edges,
-        destructive_clicks,
+        package: package.clone(),
+        drive,
         control_points,
     })
 }
 
-fn parse_control_point(value: &Value) -> CliOutcome<ControlPoint> {
-    let name = required_string_field(value, "name")?.to_string();
-    let input = if let Some(click) = value.get("click") {
-        parse_navigation_input(click)?
-    } else {
-        let rect = parse_control_point_rect(value)?;
-        SemanticInput::Tap {
-            rect,
-            point: rect_center(rect)?,
-        }
-    };
-    Ok(ControlPoint {
-        name,
-        input,
-        note: value
-            .get("note")
-            .and_then(Value::as_str)
-            .map(str::to_string),
-    })
-}
-
-fn parse_control_point_rect(value: &Value) -> CliOutcome<PackRect> {
-    if let Some(point) = value.get("point") {
-        let (x, y) = parse_point_value(point)?;
-        return Ok(PackRect {
-            x,
-            y,
-            width: 1,
-            height: 1,
-        });
-    }
-    Ok(PackRect {
-        x: required_i32_value(value, "x")?,
-        y: required_i32_value(value, "y")?,
-        width: 1,
-        height: 1,
-    })
-}
-
-fn parse_destructive_click(value: &Value) -> CliOutcome<DestructiveClick> {
-    let click = value
-        .get("click")
-        .ok_or_else(|| CliError::usage("destructive action is missing click"))?;
-    Ok(DestructiveClick {
-        page: value
-            .get("page")
-            .and_then(Value::as_str)
-            .map(str::to_string),
-        rect: parse_navigation_tap_rect(click)?,
-    })
-}
-
-fn navigation_path(
-    global: &GlobalOptions,
-    config: &UserConfig,
-    flags: &FlagArgs,
-) -> CliOutcome<PathBuf> {
-    if let Some(path) = flags.optional_path("--navigation") {
-        return Ok(path);
-    }
-    let root = effective_resource_root(global, config).ok_or_else(|| {
-        CliError::usage("navigate requires --navigation or --resource-root with --game")
-    })?;
-    let (game, server) = recognition_selector(global)?;
-    Ok(root
-        .join("navigation")
-        .join(format!("{game}.{server}.navigation.json")))
-}
-
-fn parse_navigation_edge(value: &Value) -> CliOutcome<NavigationEdge> {
-    Ok(NavigationEdge {
-        id: required_string_field(value, "id")?.to_string(),
-        from_page: required_string_field(value, "from_page")?.to_string(),
-        to_page: required_string_field(value, "to_page")?.to_string(),
-        input: parse_navigation_input(required_value_field(value, "click")?)?,
-        source: value
-            .get("source")
-            .and_then(Value::as_str)
-            .map(str::to_string),
-    })
-}
-
-fn parse_navigation_input(value: &Value) -> CliOutcome<SemanticInput> {
-    match value.get("kind").and_then(Value::as_str) {
-        Some("point") | Some("rect") => {
-            let rect = parse_navigation_tap_rect(value)?;
-            Ok(SemanticInput::Tap {
-                rect,
-                point: rect_center(rect)?,
-            })
-        }
-        Some("target") | Some("target_center") => Ok(SemanticInput::TargetCenter {
-            target_id: required_string_field(value, "target_id")?.to_string(),
-        }),
-        Some("drag") => {
-            let from_rect = parse_navigation_tap_rect(required_value_field(value, "from")?)?;
-            let to_rect = parse_navigation_tap_rect(required_value_field(value, "to")?)?;
-            let duration_ms = value
-                .get("duration_ms")
-                .and_then(Value::as_u64)
-                .unwrap_or(500);
-            Ok(SemanticInput::Drag {
-                from_rect,
-                to_rect,
-                from: rect_center(from_rect)?,
-                to: rect_center(to_rect)?,
-                duration_ms,
-            })
-        }
-        other => Err(CliError::usage(format!(
-            "unsupported navigation click kind: {other:?}"
-        ))),
-    }
-}
-
-fn parse_navigation_tap_rect(value: &Value) -> CliOutcome<PackRect> {
-    match value.get("kind").and_then(Value::as_str) {
-        Some("point") => parse_navigation_point(value),
-        Some("rect") | None => parse_navigation_rect(value),
-        Some("drag") => Err(CliError::usage(
-            "drag click cannot be used as a tap rectangle",
-        )),
-        other => Err(CliError::usage(format!(
-            "unsupported navigation click kind for tap rect: {other:?}"
-        ))),
-    }
-}
-
-fn parse_navigation_point(value: &Value) -> CliOutcome<PackRect> {
-    if let Some(point) = value.get("point") {
-        let (x, y) = parse_point_value(point)?;
-        return Ok(PackRect {
-            x,
-            y,
-            width: 1,
-            height: 1,
-        });
-    }
-    Ok(PackRect {
-        x: required_i32_value(value, "x")?,
-        y: required_i32_value(value, "y")?,
-        width: 1,
-        height: 1,
-    })
-}
-
-fn parse_navigation_rect(value: &Value) -> CliOutcome<PackRect> {
-    Ok(PackRect {
-        x: required_i32_value(value, "x")?,
-        y: required_i32_value(value, "y")?,
-        width: required_i32_value(value, "width")?,
-        height: required_i32_value(value, "height")?,
-    })
-}
-
-fn parse_point_value(value: &Value) -> CliOutcome<(i32, i32)> {
-    if let Some(point) = value.as_str() {
-        return parse_point_pair(point);
-    }
-    if let Some(items) = value.as_array() {
-        if items.len() != 2 {
-            return Err(CliError::usage("point array must have exactly two items"));
-        }
-        return Ok((
-            parse_i32_json_value(&items[0], "point[0]")?,
-            parse_i32_json_value(&items[1], "point[1]")?,
-        ));
-    }
-    Err(CliError::usage("point must be a string x,y or [x,y] array"))
+fn semantic_input_from_admitted(action: &AdmittedAction) -> CliOutcome<SemanticInput> {
+    drive_semantic_input_from_admitted(action).map_err(drive_cli_error)
 }
 
 fn parse_point_pair(value: &str) -> CliOutcome<(i32, i32)> {
@@ -4794,86 +4633,17 @@ fn parse_point_pair(value: &str) -> CliOutcome<(i32, i32)> {
     Ok((x, y))
 }
 
-fn required_value_field<'a>(value: &'a Value, name: &str) -> CliOutcome<&'a Value> {
-    value
-        .get(name)
-        .ok_or_else(|| CliError::usage(format!("missing field '{name}'")))
-}
-
-fn required_string_field<'a>(value: &'a Value, name: &str) -> CliOutcome<&'a str> {
-    required_value_field(value, name)?
-        .as_str()
-        .ok_or_else(|| CliError::usage(format!("field '{name}' must be a string")))
-}
-
-fn required_i32_value(value: &Value, name: &str) -> CliOutcome<i32> {
-    parse_i32_json_value(required_value_field(value, name)?, name)
-}
-
-fn parse_i32_json_value(value: &Value, name: &str) -> CliOutcome<i32> {
-    if let Some(value) = value.as_i64() {
-        return i32::try_from(value)
-            .map_err(|_| CliError::usage(format!("field '{name}' exceeds i32 range")));
-    }
-    Err(CliError::usage(format!(
-        "field '{name}' must be an integer"
-    )))
-}
-
 fn canonical_navigation_page(graph: &NavigationGraph, page: &str) -> String {
-    if page.contains('/') {
-        return page.to_string();
-    }
-    graph
-        .game
-        .as_ref()
-        .map(|game| format!("{game}/{page}"))
-        .unwrap_or_else(|| page.to_string())
-}
-
-fn find_navigation_route(
-    edges: &[NavigationEdge],
-    from_page: &str,
-    to_page: &str,
-) -> Option<Vec<NavigationEdge>> {
-    let mut queue = VecDeque::from([from_page.to_string()]);
-    let mut previous = BTreeMap::<String, (String, usize)>::new();
-    let mut seen = BTreeSet::from([from_page.to_string()]);
-
-    while let Some(page) = queue.pop_front() {
-        if page == to_page {
-            break;
-        }
-        for (index, edge) in edges.iter().enumerate() {
-            if edge.from_page != page || seen.contains(&edge.to_page) {
-                continue;
-            }
-            seen.insert(edge.to_page.clone());
-            previous.insert(edge.to_page.clone(), (page.clone(), index));
-            queue.push_back(edge.to_page.clone());
-        }
-    }
-    if from_page != to_page && !previous.contains_key(to_page) {
-        return None;
-    }
-    let mut route = Vec::new();
-    let mut cursor = to_page.to_string();
-    while cursor != from_page {
-        let (prev, index) = previous.get(&cursor)?.clone();
-        route.push(edges[index].clone());
-        cursor = prev;
-    }
-    route.reverse();
-    Some(route)
+    graph.drive.canonical_page(page)
 }
 
 fn navigation_edge_json(edge: &NavigationEdge) -> Value {
     json!({
-        "id": edge.id,
-        "from_page": edge.from_page,
-        "to_page": edge.to_page,
-        "input": semantic_input_json(&edge.input),
-        "source": edge.source
+        "id": edge.id(),
+        "from_page": edge.from_page(),
+        "to_page": edge.to_page(),
+        "input": semantic_input_json(edge.input()),
+        "source": edge.source()
     })
 }
 
@@ -4892,9 +4662,15 @@ fn semantic_input_json(input: &SemanticInput) -> Value {
             "rect": rect_json(*rect),
             "point": point_json(*point)
         }),
-        SemanticInput::TargetCenter { target_id } => json!({
-            "type": "target_center",
-            "target_id": target_id
+        SemanticInput::TargetTap {
+            target_id,
+            mode,
+            offset,
+        } => json!({
+            "type": "target",
+            "target_id": target_id,
+            "mode": mode,
+            "offset": offset
         }),
         SemanticInput::Drag {
             from_rect,
@@ -4913,38 +4689,33 @@ fn semantic_input_json(input: &SemanticInput) -> Value {
     }
 }
 
-fn reject_destructive_overlap(
-    edge: &NavigationEdge,
-    destructive: &[DestructiveClick],
-) -> CliOutcome<()> {
-    reject_destructive_overlap_input(edge, &edge.input, destructive)
-}
-
-fn reject_destructive_overlap_input(
+fn validate_navigation_edge_safety(
+    graph: &NavigationGraph,
     edge: &NavigationEdge,
     input: &SemanticInput,
-    destructive: &[DestructiveClick],
+    allow_destructive: bool,
 ) -> CliOutcome<()> {
-    let rects = semantic_input_rects(input);
-    for rect in rects {
-        if destructive.iter().any(|other| {
-            other
-                .page
-                .as_deref()
-                .is_none_or(|page| page == "any" || page == edge.from_page)
-                && rects_intersect(rect, other.rect)
-        }) {
-            return Err(CliError::safety_blocked(
-                "navigation_destructive_overlap",
-                format!(
-                    "navigation edge '{}' overlaps a destructive action region",
-                    edge.id
-                ),
-                &["navigation_only"],
-            ));
+    graph
+        .drive
+        .validate_resolved_input(edge, input, allow_destructive)
+        .map_err(drive_cli_error)
+}
+
+fn validate_control_point_safety(graph: &NavigationGraph, point: &ControlPoint) -> CliOutcome<()> {
+    graph
+        .drive
+        .validate_control_point_input(&point.name, &point.input)
+        .map_err(drive_cli_error)
+}
+
+fn drive_cli_error(error: DriveDecisionError) -> CliError {
+    match error.kind() {
+        DriveDecisionErrorKind::InvalidInput => CliError::usage(error.message()),
+        DriveDecisionErrorKind::SafetyBlocked => {
+            CliError::safety_blocked(error.code(), error.message(), error.required_conditions())
         }
+        DriveDecisionErrorKind::PackageInvalid => CliError::package_invalid(error.message()),
     }
-    Ok(())
 }
 
 fn safe_recovery_route(
@@ -4952,17 +4723,17 @@ fn safe_recovery_route(
     from_page: &str,
     to_page: &str,
 ) -> CliOutcome<Vec<NavigationEdge>> {
-    let route = find_navigation_route(&graph.edges, from_page, to_page).ok_or_else(|| {
+    let route = graph.drive.find_route(from_page, to_page).ok_or_else(|| {
         CliError::safety_blocked(
             "recovery_route_missing",
             format!("no maintenance recovery route from '{from_page}' to '{to_page}'"),
             &["maintenance_recovery"],
         )
     })?;
-    for edge in &route {
-        reject_dangerous_semantic_id("recovery navigation edge", &edge.id)?;
-        reject_destructive_overlap(edge, &graph.destructive_clicks)?;
-    }
+    graph
+        .drive
+        .validate_route(&route, false)
+        .map_err(drive_cli_error)?;
     Ok(route)
 }
 
@@ -5241,66 +5012,6 @@ fn ensure_recovery_action_limit(actions: usize, max_actions: usize) -> CliOutcom
     Ok(())
 }
 
-fn semantic_input_rects(input: &SemanticInput) -> Vec<PackRect> {
-    match input {
-        SemanticInput::Tap { rect, .. } => vec![*rect],
-        SemanticInput::TargetCenter { .. } => Vec::new(),
-        SemanticInput::Drag {
-            from_rect, to_rect, ..
-        } => vec![*from_rect, *to_rect],
-    }
-}
-
-fn rects_intersect(a: PackRect, b: PackRect) -> bool {
-    let ax2 = a.x.saturating_add(a.width);
-    let ay2 = a.y.saturating_add(a.height);
-    let bx2 = b.x.saturating_add(b.width);
-    let by2 = b.y.saturating_add(b.height);
-    a.x < bx2 && ax2 > b.x && a.y < by2 && ay2 > b.y
-}
-
-fn reject_dangerous_semantic_id(label: &str, value: &str) -> CliOutcome<()> {
-    let lower = value.to_ascii_lowercase();
-    let dangerous = [
-        "gacha",
-        "shop",
-        "purchase",
-        "buy",
-        "recruit",
-        "construct",
-        "retire",
-        "delete",
-        "decompose",
-        "enhance",
-        "refill",
-        "paid",
-        "premium",
-        "exercise",
-        "pvp",
-    ];
-    if dangerous.iter().any(|word| lower.contains(word)) {
-        return Err(CliError::safety_blocked(
-            "semantic_action_requires_destructive_opt_in",
-            format!("{label} '{value}' looks destructive and requires --allow-destructive"),
-            &["navigation_only"],
-        ));
-    }
-    Ok(())
-}
-
-fn rect_center(rect: PackRect) -> CliOutcome<SemanticPoint> {
-    if rect.width <= 0 || rect.height <= 0 {
-        return Err(CliError::usage(format!(
-            "click rectangle must have positive dimensions: {}x{}",
-            rect.width, rect.height
-        )));
-    }
-    Ok(SemanticPoint {
-        x: rect.x + rect.width / 2,
-        y: rect.y + rect.height / 2,
-    })
-}
-
 fn point_json(point: SemanticPoint) -> Value {
     json!({
         "x": point.x,
@@ -5321,9 +5032,9 @@ fn send_semantic_input(
     let (mut backend, instance_alias) = open_cli_runtime_input_proxy(global, config)?;
     let operation = match input {
         SemanticInput::Tap { point, .. } => backend.tap(point.x, point.y),
-        SemanticInput::TargetCenter { .. } => {
+        SemanticInput::TargetTap { .. } => {
             return Err(CliError::usage(
-                "target_center semantic input must be resolved before device execution",
+                "target semantic input must be resolved before device execution",
             ));
         }
         SemanticInput::Drag {
@@ -5394,7 +5105,8 @@ struct NavigationExecutionContext<'a> {
     config: &'a UserConfig,
     evaluator: &'a RecognitionEvaluator,
     detector: &'a PageDetector,
-    destructive_clicks: &'a [DestructiveClick],
+    graph: &'a NavigationGraph,
+    allow_destructive: bool,
     step_timeout: Duration,
     poll: Duration,
 }
@@ -5407,25 +5119,26 @@ fn execute_navigation_route(
     let mut executed = Vec::new();
     let mut current_page = start_page;
     for edge in route {
-        if current_page != edge.from_page {
+        if current_page != edge.from_page() {
             return Err(CliError::safety_blocked(
                 "navigation_page_drift",
                 format!(
                     "navigation expected current page '{}' but last page was '{}'",
-                    edge.from_page, current_page
+                    edge.from_page(),
+                    current_page
                 ),
                 &["page_guard"],
             ));
         }
         let (input, recognition) = resolve_navigation_edge_input(ctx, &edge)?;
-        reject_destructive_overlap_input(&edge, &input, ctx.destructive_clicks)?;
+        validate_navigation_edge_safety(ctx.graph, &edge, &input, ctx.allow_destructive)?;
         let device = send_semantic_input(ctx.global, ctx.config, &input)?;
         let arrived = poll_for_page(
             ctx.global,
             ctx.flags,
             ctx.evaluator,
             ctx.detector,
-            &edge.to_page,
+            edge.to_page(),
             ctx.step_timeout,
             ctx.poll,
         )?;
@@ -5434,7 +5147,9 @@ fn execute_navigation_route(
                 "navigation_arrival_failed",
                 format!(
                     "navigation edge '{}' did not arrive at '{}'; last page '{}'",
-                    edge.id, edge.to_page, arrived.page
+                    edge.id(),
+                    edge.to_page(),
+                    arrived.page
                 ),
                 &["arrival_page"],
             ));
@@ -5455,8 +5170,8 @@ fn resolve_navigation_edge_input(
     ctx: &NavigationExecutionContext<'_>,
     edge: &NavigationEdge,
 ) -> CliOutcome<(SemanticInput, Value)> {
-    let SemanticInput::TargetCenter { target_id } = &edge.input else {
-        return Ok((edge.input.clone(), Value::Null));
+    let SemanticInput::TargetTap { target_id, .. } = edge.input() else {
+        return Ok((edge.input().clone(), Value::Null));
     };
     let scene = load_scene_from_flags(ctx.global, ctx.flags)?;
     let evaluation = ctx
@@ -5469,16 +5184,14 @@ fn resolve_navigation_edge_input(
             "navigation_target_not_visible",
             format!(
                 "navigation edge '{}' target '{}' did not pass recognition: {}",
-                edge.id, target_id, evaluation.message
+                edge.id(),
+                target_id,
+                evaluation.message
             ),
             &["visible_target", "navigation"],
         ));
     }
-    let rect = target_evaluation_rect(&evaluation)?;
-    let input = SemanticInput::Tap {
-        rect,
-        point: rect_center(rect)?,
-    };
+    let input = resolve_navigation_target_input(ctx.graph, edge, &evaluation)?;
     Ok((
         input,
         json!({
@@ -5488,19 +5201,13 @@ fn resolve_navigation_edge_input(
     ))
 }
 
-fn target_evaluation_rect(evaluation: &TargetEvaluation) -> CliOutcome<PackRect> {
-    let template = evaluation.template.as_ref().ok_or_else(|| {
-        CliError::usage(format!(
-            "target '{}' has no matched template rect",
-            evaluation.id
-        ))
-    })?;
-    Ok(PackRect {
-        x: template.x,
-        y: template.y,
-        width: template.width,
-        height: template.height,
-    })
+fn resolve_navigation_target_input(
+    graph: &NavigationGraph,
+    edge: &NavigationEdge,
+    evaluation: &TargetEvaluation,
+) -> CliOutcome<SemanticInput> {
+    actingcommand_lab::resolve_drive_target_input(&graph.package, edge, evaluation)
+        .map_err(drive_cli_error)
 }
 
 fn poll_for_page(
@@ -12279,6 +11986,29 @@ mod tests {
     }
 
     #[test]
+    fn version_cannot_replace_an_action_invocation() {
+        for args in [
+            vec!["--json", "package", "dry-run", "--version"],
+            vec!["--json", "lab", "run", "--version"],
+            vec!["--json", "operation", "run", "--version"],
+            vec!["--json", "--dry-run", "--version"],
+        ] {
+            let result = run_cli(args, true);
+            assert_eq!(result.exit_code(), 2, "{}", result.envelope_json());
+            assert!(!result.envelope.ok);
+            assert_ne!(result.envelope.command, "version");
+            assert_eq!(
+                result
+                    .envelope
+                    .error
+                    .as_ref()
+                    .map(|error| error.code.as_str()),
+                Some("validation_failed")
+            );
+        }
+    }
+
+    #[test]
     fn status_without_runtime_is_exit_five() {
         let _guard = env_lock();
         let temp = TempDir::new().unwrap();
@@ -12378,7 +12108,7 @@ mod tests {
         let _trusted_remote_env = TrustedRemoteEnvGuard::clear();
         let result = run_cli(["--json", "session", "transport", "plan"], true);
 
-        assert_eq!(result.exit_code(), 0);
+        assert_eq!(result.exit_code(), 0, "{}", result.envelope_json());
         let data = result.envelope.data.as_ref().unwrap();
         assert_eq!(
             data.get("schema_version").and_then(Value::as_str),
@@ -17804,7 +17534,14 @@ mod tests {
             }),
         )
         .unwrap();
-        write_json_file(&pages_path, &json!({"schema_version":"0.3","pages":[]})).unwrap();
+        write_json_file(
+            &pages_path,
+            &json!({
+                "schema_version":"0.3",
+                "pages":[{"id":"home","required":["page/home"]}]
+            }),
+        )
+        .unwrap();
         set_missing_config_env();
         let temp = seal_semantic_fixture(temp, "arknights", "cn", &pack_path, &pages_path, None);
 
@@ -20499,7 +20236,7 @@ mod tests {
         }
         let temp = semantic_resource_root(false);
         let scene = temp.path().join("home.png");
-        fs::write(&scene, encode_png(1, 1, [255, 0, 0])).unwrap();
+        fs::write(&scene, encode_png(100, 100, [255, 0, 0])).unwrap();
 
         let result = run_semantic_cli(
             &temp,
@@ -20538,7 +20275,7 @@ mod tests {
         }
         let temp = semantic_resource_root(false);
         let scene = temp.path().join("home.png");
-        fs::write(&scene, encode_png(1, 1, [255, 0, 0])).unwrap();
+        fs::write(&scene, encode_png(100, 100, [255, 0, 0])).unwrap();
 
         let result = run_semantic_cli(
             &temp,
@@ -20557,7 +20294,7 @@ mod tests {
             true,
         );
 
-        assert_eq!(result.exit_code(), 0);
+        assert_eq!(result.exit_code(), 0, "{}", result.envelope_json());
         let point = result.envelope.data.as_ref().unwrap().get("point").unwrap();
         assert_eq!(point.get("x").and_then(Value::as_i64), Some(12));
         assert_eq!(point.get("y").and_then(Value::as_i64), Some(23));
@@ -20567,7 +20304,7 @@ mod tests {
     fn navigate_dry_run_uses_navigation_graph() {
         let temp = semantic_resource_root(false);
         let scene = temp.path().join("home.png");
-        fs::write(&scene, encode_png(1, 1, [255, 0, 0])).unwrap();
+        fs::write(&scene, encode_png(100, 100, [255, 0, 0])).unwrap();
 
         let result = run_semantic_cli(
             &temp,
@@ -20617,7 +20354,7 @@ mod tests {
     fn navigate_blocks_destructive_overlap_by_default() {
         let temp = semantic_resource_root(true);
         let scene = temp.path().join("home.png");
-        fs::write(&scene, encode_png(1, 1, [255, 0, 0])).unwrap();
+        fs::write(&scene, encode_png(100, 100, [255, 0, 0])).unwrap();
 
         let result = run_semantic_cli(
             &temp,
@@ -20637,10 +20374,19 @@ mod tests {
             true,
         );
 
-        assert_eq!(result.exit_code(), 3);
+        assert_eq!(result.exit_code(), 2);
         assert_eq!(
             result.envelope.error.as_ref().unwrap().code,
-            "navigation_destructive_overlap"
+            "package_invalid"
+        );
+        assert!(
+            result
+                .envelope
+                .error
+                .as_ref()
+                .unwrap()
+                .message
+                .contains("admission_destructive_overlap")
         );
     }
 
@@ -20655,7 +20401,7 @@ mod tests {
         let temp = semantic_resource_root(false);
         let scene = temp.path().join("home.png");
         let frame_out = temp.path().join("observe-frame.png");
-        fs::write(&scene, encode_png(1, 1, [255, 0, 0])).unwrap();
+        fs::write(&scene, encode_png(100, 100, [255, 0, 0])).unwrap();
 
         let result = run_semantic_cli(
             &temp,
@@ -20717,7 +20463,7 @@ mod tests {
         }
         let temp = semantic_resource_root(false);
         let scene = temp.path().join("home.png");
-        fs::write(&scene, encode_png(1, 1, [255, 0, 0])).unwrap();
+        fs::write(&scene, encode_png(100, 100, [255, 0, 0])).unwrap();
 
         let result = run_semantic_cli(
             &temp,
@@ -20764,7 +20510,7 @@ mod tests {
         }
         let temp = semantic_resource_root(false);
         let scene = temp.path().join("target.png");
-        fs::write(&scene, encode_png(1, 1, [0, 0, 255])).unwrap();
+        fs::write(&scene, encode_png(100, 100, [0, 0, 255])).unwrap();
 
         let result = run_semantic_cli(
             &temp,
@@ -20809,7 +20555,7 @@ mod tests {
         }
         let temp = semantic_resource_root(false);
         let home = temp.path().join("home.png");
-        fs::write(&home, encode_png(1, 1, [255, 0, 0])).unwrap();
+        fs::write(&home, encode_png(100, 100, [255, 0, 0])).unwrap();
 
         let idempotent = run_semantic_cli(
             &temp,
@@ -20881,7 +20627,7 @@ mod tests {
         }
         let temp = semantic_resource_root(false);
         let scene = temp.path().join("home.png");
-        fs::write(&scene, encode_png(1, 1, [255, 0, 0])).unwrap();
+        fs::write(&scene, encode_png(100, 100, [255, 0, 0])).unwrap();
 
         let page = run_semantic_cli(
             &temp,
@@ -21049,8 +20795,8 @@ mod tests {
         let temp = semantic_resource_root(false);
         let home = temp.path().join("home.png");
         let target = temp.path().join("target.png");
-        fs::write(&home, encode_png(1, 1, [255, 0, 0])).unwrap();
-        fs::write(&target, encode_png(1, 1, [0, 0, 255])).unwrap();
+        fs::write(&home, encode_png(100, 100, [255, 0, 0])).unwrap();
+        fs::write(&target, encode_png(100, 100, [0, 0, 255])).unwrap();
 
         let observe_started = Instant::now();
         let observe = run_semantic_cli(
@@ -21117,7 +20863,7 @@ mod tests {
     }
 
     #[test]
-    fn lab2_do_destructive_overlap_requires_opt_in_and_allows_explicit_opt_in() {
+    fn lab2_do_requires_opt_in_then_rejects_admission_destructive_overlap() {
         let _guard = env_lock();
         let _app_env = set_isolated_app_env();
         unsafe {
@@ -21126,7 +20872,7 @@ mod tests {
         }
         let temp = semantic_resource_root(true);
         let scene = temp.path().join("home.png");
-        fs::write(&scene, encode_png(1, 1, [255, 0, 0])).unwrap();
+        fs::write(&scene, encode_png(100, 100, [255, 0, 0])).unwrap();
 
         let destructive_without_allow = run_semantic_cli(
             &temp,
@@ -21175,16 +20921,19 @@ mod tests {
             true,
         );
 
-        assert_eq!(allowed.exit_code(), 0, "{}", allowed.envelope_json());
+        assert_eq!(allowed.exit_code(), 2, "{}", allowed.envelope_json());
         assert_eq!(
+            allowed.envelope.error.as_ref().unwrap().code,
+            "package_invalid"
+        );
+        assert!(
             allowed
                 .envelope
-                .data
+                .error
                 .as_ref()
                 .unwrap()
-                .get("executed")
-                .and_then(Value::as_bool),
-            Some(false)
+                .message
+                .contains("admission_destructive_overlap")
         );
     }
 
@@ -21237,7 +20986,7 @@ mod tests {
         }
         let temp = semantic_resource_root(false);
         let scene = temp.path().join("unknown.png");
-        fs::write(&scene, encode_png(1, 1, [12, 34, 56])).unwrap();
+        fs::write(&scene, encode_png(100, 100, [12, 34, 56])).unwrap();
 
         let result = run_semantic_cli(
             &temp,
@@ -21337,7 +21086,7 @@ mod tests {
         let temp = semantic_resource_root(false);
         let scene = temp.path().join("target-drift.png");
         let touch_log = temp.path().join("fake-touch.json");
-        fs::write(&scene, encode_png(1, 1, [0, 0, 255])).unwrap();
+        fs::write(&scene, encode_png(100, 100, [0, 0, 255])).unwrap();
         unsafe {
             env::set_var("ACTINGCOMMAND_TEST_FAKE_TOUCH_LOG", &touch_log);
         }
@@ -21384,7 +21133,7 @@ mod tests {
         }
         let temp = synthetic_game_resource_root();
         let scene = temp.path().join("synthetic-home.png");
-        fs::write(&scene, encode_png(1, 1, [10, 20, 30])).unwrap();
+        fs::write(&scene, encode_png(100, 100, [10, 20, 30])).unwrap();
         let pack = temp.path().join("synthetic.pack.json");
         let pages = temp.path().join("synthetic.pages.json");
         let navigation = temp.path().join("synthetic.navigation.json");
@@ -21499,7 +21248,7 @@ mod tests {
         }
         let temp = semantic_resource_root(false);
         let scene = temp.path().join("home.png");
-        fs::write(&scene, encode_png(1, 1, [255, 0, 0])).unwrap();
+        fs::write(&scene, encode_png(100, 100, [255, 0, 0])).unwrap();
         let started = Instant::now();
         let result = run_semantic_cli(
             &temp,
@@ -21536,9 +21285,10 @@ mod tests {
     fn session_recover_standby_dry_run_uses_wake_control_point() {
         let temp = semantic_resource_root(false);
         let scene = temp.path().join("standby.png");
-        fs::write(&scene, encode_png(1, 1, [1, 1, 1])).unwrap();
+        fs::write(&scene, encode_png(100, 100, [1, 1, 1])).unwrap();
 
-        let result = run_cli(
+        let result = run_semantic_cli(
+            &temp,
             [
                 "--json",
                 "--dry-run",
@@ -21579,9 +21329,10 @@ mod tests {
     fn session_recover_dry_run_plans_route_to_home() {
         let temp = semantic_resource_root(false);
         let scene = temp.path().join("target.png");
-        fs::write(&scene, encode_png(1, 1, [0, 0, 255])).unwrap();
+        fs::write(&scene, encode_png(100, 100, [0, 0, 255])).unwrap();
 
-        let result = run_cli(
+        let result = run_semantic_cli(
+            &temp,
             [
                 "--json",
                 "--dry-run",
@@ -21620,9 +21371,10 @@ mod tests {
     fn session_recover_real_execution_requires_capture() {
         let temp = semantic_resource_root(false);
         let scene = temp.path().join("target.png");
-        fs::write(&scene, encode_png(1, 1, [0, 0, 255])).unwrap();
+        fs::write(&scene, encode_png(100, 100, [0, 0, 255])).unwrap();
 
-        let result = run_cli(
+        let result = run_semantic_cli(
+            &temp,
             [
                 "--json",
                 "--resource-root",
@@ -21656,9 +21408,10 @@ mod tests {
         let temp = semantic_resource_root(false);
         write_startup_login_resource(temp.path());
         let scene = temp.path().join("standby.png");
-        fs::write(&scene, encode_png(1, 1, [1, 1, 1])).unwrap();
+        fs::write(&scene, encode_png(100, 100, [1, 1, 1])).unwrap();
 
-        let result = run_cli(
+        let result = run_semantic_cli(
+            &temp,
             [
                 "--json",
                 "--dry-run",
@@ -21702,9 +21455,10 @@ mod tests {
     fn session_recover_startup_login_missing_resource_is_fatal() {
         let temp = semantic_resource_root(false);
         let scene = temp.path().join("standby.png");
-        fs::write(&scene, encode_png(1, 1, [1, 1, 1])).unwrap();
+        fs::write(&scene, encode_png(100, 100, [1, 1, 1])).unwrap();
 
-        let result = run_cli(
+        let result = run_semantic_cli(
+            &temp,
             [
                 "--json",
                 "--dry-run",
@@ -21739,9 +21493,10 @@ mod tests {
         )
         .unwrap();
         let scene = temp.path().join("standby.png");
-        fs::write(&scene, encode_png(1, 1, [1, 1, 1])).unwrap();
+        fs::write(&scene, encode_png(100, 100, [1, 1, 1])).unwrap();
 
-        let result = run_cli(
+        let result = run_semantic_cli(
+            &temp,
             [
                 "--json",
                 "--dry-run",

@@ -8,7 +8,7 @@ use crate::{
 };
 use actingcommand_contract::InputAction;
 use actingcommand_device::InputBackend;
-use actingcommand_pack_containment::Sha256Hash;
+use actingcommand_execution_kernel::Sha256Hash;
 use actingcommand_recognition::{Scene, ScenePixelFormat};
 use std::fs::File;
 use std::io::Write;
@@ -134,21 +134,28 @@ impl Fixture {
         let files = [
             (
                 "control.json",
-                br#"{"game":"fixture","server":"test","entry_task_id":"task"}"#.as_slice(),
+                br#"{"schema_version":"Lab-1y.control.v1","package_id":"fixture.drive","execution_mode":"navigable_route","game":"fixture","server":"test","resolution":{"width":100,"height":100},"entry_task_id":"task"}"#.as_slice(),
             ),
             (
                 "resources/manifest.json",
                 br#"{"schema_version":"0.3","entry_task_id":"task"}"#.as_slice(),
             ),
-            ("resources/operations/task/task.json", br#"{}"#.as_slice()),
+            (
+                "resources/operations/task/task.json",
+                br#"{"schema_version":"0.6","task_id":"task","game":"fixture","server_scope":["test"],"goal":"drive fixture closure","coordinate_space":{"width":100,"height":100},"operations":[{"id":"home_to_target","purpose":"drive fixture closure","from":"fixture/home","to":"fixture/target","click":{"kind":"rect","x":10,"y":20,"width":4,"height":6},"unguarded_trusted_coordinate":true},{"id":"tap_home_button","purpose":"typed target fixture","from":"fixture/home","to":null,"click":{"kind":"target_center","target_id":"home_button"},"guard":{"page_id":"fixture/home","target_id":"home_button","expected_rect":{"x":10,"y":20,"width":4,"height":6},"verify_template":"assets/home_button.png"}}]}"#.as_slice(),
+            ),
+            (
+                "resources/operations/task/assets/home_button.png",
+                RED_4X6_PNG,
+            ),
             (
                 "resources/recognition/fixture.test.pack.json",
             r#"{
                 "schema_version":"0.3",
-                "coordinate_space":{"width":1,"height":1},
+                "coordinate_space":{"width":100,"height":100},
                 "targets":[
                     {"type":"color","id":"home_anchor","region":{"x":0,"y":0,"width":1,"height":1},"expected":[255,0,0]},
-                    {"type":"color","id":"home_button","region":{"x":0,"y":0,"width":1,"height":1},"expected":[255,0,0],"click":{"x":10,"y":20,"width":4,"height":6}}
+                    {"type":"template","id":"home_button","template_path":"operations/task/assets/home_button.png","region":{"x":10,"y":20,"width":4,"height":6},"threshold":0.99,"color_check":{"region":{"x":10,"y":20,"width":4,"height":6},"expected":[255,0,0]},"click":{"x":10,"y":20,"width":4,"height":6}}
                 ]
             }"#
                 .as_bytes(),
@@ -169,6 +176,7 @@ impl Fixture {
             r#"{
                 "schema_version":"0.3",
                 "game":"fixture",
+                "server":"test",
                 "navigation":[{
                     "id":"home_to_target",
                     "from_page":"fixture/home",
@@ -245,6 +253,14 @@ impl Fixture {
         }
     }
 }
+
+const RED_4X6_PNG: &[u8] = &[
+    0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52,
+    0x00, 0x00, 0x00, 0x04, 0x00, 0x00, 0x00, 0x06, 0x08, 0x02, 0x00, 0x00, 0x00, 0x6b, 0x5b, 0xa8,
+    0x22, 0x00, 0x00, 0x00, 0x10, 0x49, 0x44, 0x41, 0x54, 0x78, 0x9c, 0x63, 0xf8, 0xcf, 0xc0, 0x00,
+    0x47, 0x0c, 0x94, 0x72, 0x00, 0xbc, 0xbb, 0x17, 0xe9, 0x28, 0x27, 0x30, 0xc4, 0x00, 0x00, 0x00,
+    0x00, 0x49, 0x45, 0x4e, 0x44, 0xae, 0x42, 0x60, 0x82,
+];
 
 fn write_zip(path: &std::path::Path, files: &[(&str, &[u8])]) {
     let file = File::create(path).expect("create bundle");
@@ -401,5 +417,6 @@ fn blue_scene() -> Scene {
 }
 
 fn scene(pixel: [u8; 3]) -> Scene {
-    Scene::from_pixels(1, 1, &pixel, ScenePixelFormat::Rgb8).expect("scene")
+    let pixels = pixel.repeat(100 * 100);
+    Scene::from_pixels(100, 100, &pixels, ScenePixelFormat::Rgb8).expect("scene")
 }

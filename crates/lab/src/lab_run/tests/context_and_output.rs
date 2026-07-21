@@ -1,15 +1,10 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
     #[test]
-    fn manifest_entry_task_id_conflict_is_fatal() {
+    fn admitted_control_is_the_entry_task_authority() {
         let control = test_control();
-        let manifest = json!({"entry_task_id": "other_task"});
 
-        let err = validate_manifest_entry_task_id(Path::new("manifest.json"), &manifest, &control)
-            .expect_err("conflict is fatal");
-
-        assert_eq!(err.code, "package_invalid");
-        assert!(err.message.contains("conflicts with control entry_task_id"));
+        assert_eq!(control.entry_task_id, "task");
     }
 
     #[test]

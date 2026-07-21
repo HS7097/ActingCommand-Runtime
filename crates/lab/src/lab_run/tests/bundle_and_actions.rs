@@ -51,7 +51,7 @@
 
         let error = lab.lab_run(request).expect_err("successor suggestion");
 
-        assert_eq!(error.code, "successor_suggested");
+        assert_eq!(error.code, "successor_suggested", "{error:?}");
         assert_eq!(
             error
                 .details
@@ -394,17 +394,13 @@
             load_lab_package_for_run(&zip, "fixture", expected).expect("admitted bundle");
 
         assert_eq!(
-            contained
-                .bundle
-                .operation()
-                .get("task_id")
-                .and_then(Value::as_str),
-            Some("task")
+            contained.package.entry_task().key().as_str(),
+            "task"
         );
     }
 
     #[test]
-    fn configured_recovery_task_must_exist_inside_admitted_bundle() {
+    fn admitted_package_is_the_recovery_task_authority() {
         let temp = TempDir::new().expect("temp");
         let zip = temp.path().join("input.zip");
         write_minimal_lab_package(&zip);
@@ -414,18 +410,13 @@
         .expect("external hash");
         let contained =
             load_lab_package_for_run(&zip, "fixture", expected).expect("admitted bundle");
-        let mut operation_bundle = test_operation_bundle(test_operation(Some("terminal"), None));
-        operation_bundle.recovery = Some(TaskRecovery::Kind("return_home".to_string()));
+        let control = lab_control_from_admitted(&contained.package).expect("admitted control");
+        let resources = load_lab_resources_from_admitted(contained.package, &control)
+            .expect("admitted resources");
 
-        let error = validate_recovery_task_entries(
-            &contained.bundle,
-            &test_control(),
-            &operation_bundle,
-        )
-            .expect_err("missing recovery task");
-
-        assert_eq!(error.code, "package_invalid");
-        assert!(error.message.contains("return_home"));
+        assert!(!resources
+            .has_operation_bundle(DEFAULT_RECOVERY_TASK_ID)
+            .expect("typed task lookup"));
     }
 
     #[test]
@@ -456,30 +447,7 @@
 
     #[test]
     fn rejects_fullscreen_rect_unless_explicitly_allowed() {
-        let control = LabControl {
-            schema_version: CONTROL_SCHEMA.to_string(),
-            package_id: "pkg".to_string(),
-            execution_mode: "navigable_route".to_string(),
-            game: "arknights".to_string(),
-            server: "cn".to_string(),
-            resolution: Resolution {
-                width: 1280,
-                height: 720,
-            },
-            entry_task_id: "task".to_string(),
-            capture_interval_ms: None,
-            timeout_ms: None,
-            step_timeout_ms: None,
-            max_steps: None,
-            stop_on_error: None,
-            stop_on_confirmation: None,
-            allow_placeholder_coords: None,
-            output: None,
-            capture_backend: None,
-            frame_store: FrameStoreControl::default(),
-            producer: None,
-            trusted_execution: None,
-        };
+        let control = test_control();
         let click = OperationClick {
             kind: "rect".to_string(),
             x: Some(0),
@@ -490,35 +458,12 @@
             to_rect: None,
             duration_ms: None,
             offset: None,
-            target_id: None,
         };
 
-        let err = click.validate(&control).expect_err("fullscreen rejected");
+        let err = click
+            .input_action(&control.resolution, 0, None, None)
+            .expect_err("fullscreen rejected");
         assert_eq!(err.code, "package_invalid");
-    }
-
-    #[test]
-    fn operation_validate_rejects_missing_coordinate_guard() {
-        let control = test_control();
-        let mut operation = test_operation(None, None);
-        operation.unguarded_trusted_coordinate = false;
-
-        let err = operation
-            .validate(&control)
-            .expect_err("missing guard must fail");
-
-        assert_eq!(err.code, "package_invalid");
-        assert!(err.message.contains("missing guard metadata"));
-    }
-
-    #[test]
-    fn operation_validate_allows_explicit_trusted_unguarded_coordinate() {
-        let control = test_control();
-        let operation = test_operation(None, None);
-
-        operation
-            .validate(&control)
-            .expect("explicit trusted unguarded coordinate allowed");
     }
 
     #[test]
@@ -553,13 +498,20 @@
                 width: 5,
                 height: 6,
             }),
-            target_id: Some("target/button".to_string()),
         };
 
         let err = operation
-            .validate(&control)
+            .input_action(
+                &control.resolution,
+                0,
+                Some(&color_target_evaluation(
+                    "target/button",
+                    [1, 2, 3],
+                    true,
+                )),
+            )
             .expect_err("color guard cannot drive offset");
-        assert!(err.message.contains("color-probe guards cannot produce"));
+        assert!(err.message.contains("template-target matched_rect required"));
     }
 
     #[test]
@@ -594,10 +546,8 @@
                 width: 5,
                 height: 6,
             }),
-            target_id: Some("target/button".to_string()),
         };
 
-        operation.validate(&control).expect("offset valid");
         let action = operation
             .input_action(
                 &control.resolution,
@@ -657,10 +607,8 @@
                 width: 5,
                 height: 6,
             }),
-            target_id: Some("target/button".to_string()),
         };
 
-        operation.validate(&control).expect("offset valid");
         let err = operation
             .input_action(
                 &control.resolution,
@@ -712,10 +660,8 @@
                 width: 10,
                 height: 8,
             }),
-            target_id: Some("target/button".to_string()),
         };
 
-        operation.validate(&control).expect("target click valid");
         let action = operation
             .input_action(
                 &control.resolution,
@@ -776,10 +722,8 @@
                 width: 10,
                 height: 8,
             }),
-            target_id: Some("target/button".to_string()),
         };
 
-        operation.validate(&control).expect("target center valid");
         let action = operation
             .input_action(
                 &control.resolution,
@@ -826,14 +770,21 @@
             to_rect: None,
             duration_ms: None,
             offset: None,
-            target_id: Some("target/button".to_string()),
         };
 
         let err = operation
-            .validate(&control)
+            .input_action(
+                &control.resolution,
+                0,
+                Some(&color_target_evaluation(
+                    "target/button",
+                    [1, 2, 3],
+                    true,
+                )),
+            )
             .expect_err("target click requires template guard");
 
-        assert!(err.message.contains("requires template guard metadata"));
+        assert!(err.message.contains("template-target matched_rect required"));
     }
 
     #[test]
@@ -873,10 +824,8 @@
             }),
             duration_ms: Some(500),
             offset: None,
-            target_id: None,
         };
 
-        operation.validate(&control).expect("guarded drag valid");
         let action = operation
             .input_action(
                 &control.resolution,
@@ -952,10 +901,8 @@
             }),
             duration_ms: Some(500),
             offset: None,
-            target_id: None,
         };
 
-        operation.validate(&control).expect("guarded drag valid");
         let err = operation
             .input_action(
                 &control.resolution,
@@ -999,12 +946,8 @@
             }),
             duration_ms: Some(500),
             offset: None,
-            target_id: None,
         };
 
-        operation
-            .validate(&control)
-            .expect("trusted unguarded drag valid");
         let action = operation
             .input_action(&control.resolution, 0, None)
             .expect("drag input action");
@@ -1047,10 +990,8 @@
             to_rect: None,
             duration_ms: None,
             offset: None,
-            target_id: None,
         };
 
-        operation.validate(&control).expect("guarded rect valid");
         let action = operation
             .input_action(
                 &control.resolution,
@@ -1116,7 +1057,6 @@
                     to_rect: None,
                     duration_ms: None,
                     offset: None,
-                    target_id: None,
                 },
                 "point" => OperationClick {
                     kind: kind.to_string(),
@@ -1128,7 +1068,6 @@
                     to_rect: None,
                     duration_ms: None,
                     offset: None,
-                    target_id: None,
                 },
                 "long_press" => OperationClick {
                     kind: kind.to_string(),
@@ -1140,14 +1079,10 @@
                     to_rect: None,
                     duration_ms: Some(900),
                     offset: None,
-                    target_id: None,
                 },
                 _ => unreachable!(),
             };
 
-            operation
-                .validate(&control)
-                .expect("guarded coordinate valid");
             let action = operation
                 .input_action(
                     &control.resolution,
@@ -1211,7 +1146,6 @@
             color_probe: None,
         });
 
-        operation.validate(&control).expect("guarded point valid");
         let err = operation
             .input_action(
                 &control.resolution,
@@ -1232,14 +1166,22 @@
     }
 
     #[test]
-    fn operation_validate_allows_color_guard_for_absolute_coordinate() {
+    fn absolute_coordinate_accepts_matching_color_guard_evidence() {
         let control = test_control();
         let mut operation = test_operation(Some("terminal"), None);
         operation.unguarded_trusted_coordinate = false;
         operation.guard = Some(test_color_guard());
 
         operation
-            .validate(&control)
+            .input_action(
+                &control.resolution,
+                0,
+                Some(&color_target_evaluation(
+                    "target/button",
+                    [1, 2, 3],
+                    true,
+                )),
+            )
             .expect("color guard can protect absolute coordinates");
     }
 
@@ -1316,7 +1258,7 @@
             Some(DEFAULT_RECOVERY_TASK_ID)
         );
 
-        bundle.recovery = Some(TaskRecovery::Kind(DEFAULT_RECOVERY_TASK_ID.to_string()));
+        bundle.recovery = Some(TaskRecovery(DEFAULT_RECOVERY_TASK_ID.to_string()));
         assert_eq!(
             operation_recovery_task_id(&bundle, &operation, false).as_deref(),
             Some(DEFAULT_RECOVERY_TASK_ID)
@@ -1333,46 +1275,23 @@
 
     #[test]
     fn operation_bundle_accepts_schema_0_6_retry_recovery_fields() {
-        let control = test_control();
-        let bundle: OperationBundle = serde_json::from_value(json!({
-            "schema_version": "0.6",
-            "task_id": "task",
-            "game": "arknights",
-            "server_scope": ["cn"],
-            "goal": "navigation",
-            "coordinate_space": {"width": 1280, "height": 720},
-            "defaults": {
-                "max_attempts": 2,
-                "retry_interval_ms": 100,
-                "post_wait_freezes_ms": 0
-            },
-            "entry_page": "home",
-            "target_page": "terminal",
-            "error_pages": ["negative_popup"],
-            "recovery": {"kind": "return_home", "task_id": "return_home"},
-            "max_task_retries": 1,
-            "on_exhausted": "pause",
-            "operations": [{
-                "id": "open_terminal",
-                "purpose": "navigation",
-                "from": "home",
-                "to": "terminal",
-                "effect": "navigation_only",
-                "retryable": true,
-                "click": {"kind": "point", "x": 100, "y": 100},
-                "unguarded_trusted_coordinate": true
-            }]
-        }))
-        .expect("operation bundle");
+        let temp = TempDir::new().expect("temp");
+        let zip = temp.path().join("input.zip");
+        write_recovery_suggestion_lab_package(&zip);
+        let expected = ExternalExpectedSha256::parse_hex(
+            &Sha256Hash::digest(&fs::read(&zip).expect("read bundle")).to_string(),
+        )
+        .expect("external hash");
+        let contained =
+            load_lab_package_for_run(&zip, "fixture", expected).expect("admitted bundle");
+        let bundle = operation_bundle_from_admitted(contained.package.entry_task())
+            .expect("typed execution projection");
 
-        bundle
-            .validate(&control, |_relative| Ok(true))
-            .expect("schema 0.6 flow fields valid");
         assert_eq!(bundle.recovery.as_ref().unwrap().task_id(), "return_home");
         assert_eq!(
             bundle.operations[0]
                 .flow_policy(bundle.defaults)
                 .max_attempts,
-            2
+            1
         );
     }

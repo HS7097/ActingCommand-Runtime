@@ -1,0 +1,18 @@
+error: cannot construct `AdmittedPackage` with struct literal syntax due to private fields
+ --> tests/ui/admitted_package_construct.rs:6:20
+  |
+6 |     let _package = AdmittedPackage { control: panic!() };
+  |                    ^^^^^^^^^^^^^^^   ----------------- private field
+  |
+  = note: ...and other private fields that were not provided
+
+warning: unreachable expression
+ --> tests/ui/admitted_package_construct.rs:6:20
+  |
+6 |     let _package = AdmittedPackage { control: panic!() };
+  |                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^--------^^
+  |                    |                          |
+  |                    |                          any code following this expression is unreachable
+  |                    unreachable expression
+  |
+  = note: `#[warn(unreachable_code)]` (part of `#[warn(unused)]`) on by default

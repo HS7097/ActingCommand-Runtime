@@ -3,7 +3,7 @@
 //! Production package ingress over the pack-containment capability.
 
 use actingcommand_pack_containment::{
-    Containment, ContainmentError, InstanceId, LoadedBundle, Sha256Hash,
+    AdmittedPackage, Containment, ContainmentError, InstanceId, Sha256Hash,
 };
 use std::error::Error;
 use std::fmt;
@@ -25,6 +25,7 @@ impl ExternalExpectedSha256 {
 pub enum ExecutionBundleError {
     Containment(ContainmentError),
     MissingLoadedBundle,
+    MissingAdmittedPackage,
 }
 
 impl fmt::Display for ExecutionBundleError {
@@ -34,6 +35,9 @@ impl fmt::Display for ExecutionBundleError {
             Self::MissingLoadedBundle => formatter.write_str(
                 "fatal execution bundle error: containment did not retain the loaded bundle",
             ),
+            Self::MissingAdmittedPackage => formatter.write_str(
+                "fatal execution bundle error: containment did not admit an executable package",
+            ),
         }
     }
 }
@@ -42,7 +46,7 @@ impl Error for ExecutionBundleError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
             Self::Containment(error) => Some(error),
-            Self::MissingLoadedBundle => None,
+            Self::MissingLoadedBundle | Self::MissingAdmittedPackage => None,
         }
     }
 }
@@ -56,7 +60,11 @@ impl From<ContainmentError> for ExecutionBundleError {
 /// Immutable production resource capability admitted with an externally supplied expected hash.
 #[derive(Debug)]
 pub struct ExternallyVerifiedBundle {
-    bundle: LoadedBundle,
+    admitted: AdmittedPackage,
+    package_sha256: String,
+    entry_paths: Vec<String>,
+    entry_count: usize,
+    task_count: usize,
 }
 
 impl ExternallyVerifiedBundle {
@@ -71,15 +79,42 @@ impl ExternallyVerifiedBundle {
         let bundle = containment
             .take_loaded(&instance)
             .ok_or(ExecutionBundleError::MissingLoadedBundle)?;
-        Ok(Self { bundle })
+        let admitted = bundle
+            .admitted_package()
+            .cloned()
+            .ok_or(ExecutionBundleError::MissingAdmittedPackage)?;
+        let entry_paths = bundle.entry_paths().map(str::to_string).collect();
+        Ok(Self {
+            admitted,
+            package_sha256: bundle.verified_hash().to_string(),
+            entry_paths,
+            entry_count: bundle.entry_count(),
+            task_count: bundle.task_count(),
+        })
     }
 
-    pub fn loaded_bundle(&self) -> &LoadedBundle {
-        &self.bundle
+    pub fn admitted_package(&self) -> &AdmittedPackage {
+        &self.admitted
     }
 
-    pub fn into_loaded_bundle(self) -> LoadedBundle {
-        self.bundle
+    pub fn into_admitted_package(self) -> AdmittedPackage {
+        self.admitted
+    }
+
+    pub fn package_sha256(&self) -> &str {
+        &self.package_sha256
+    }
+
+    pub fn entry_paths(&self) -> &[String] {
+        &self.entry_paths
+    }
+
+    pub const fn entry_count(&self) -> usize {
+        self.entry_count
+    }
+
+    pub const fn task_count(&self) -> usize {
+        self.task_count
     }
 }
 

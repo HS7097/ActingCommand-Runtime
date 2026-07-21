@@ -102,8 +102,13 @@ pub enum SemanticInputResponse {
         rect: crate::RectResponse,
         point: crate::PointResponse,
     },
-    #[serde(rename = "target_center")]
-    TargetCenter { target_id: String },
+    #[serde(rename = "target")]
+    TargetTap {
+        target_id: String,
+        mode: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        offset: Option<crate::RectResponse>,
+    },
     #[serde(rename = "drag")]
     Drag {
         from_rect: crate::RectResponse,

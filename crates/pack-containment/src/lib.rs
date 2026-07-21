@@ -1,9 +1,20 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
+mod admission;
+
 use actingcommand_page_detector::{PageDetector, load_page_set_from_json_str};
 use actingcommand_recognition_pack::{
     AssetResolver, RecognitionEvaluator, UnsupportedRecognitionTarget, load_pack_from_json_str,
     unsupported_recognition_targets,
+};
+pub use admission::{
+    AdmissionError, AdmissionResult, AdmittedAction, AdmittedAnchor, AdmittedControl,
+    AdmittedControlPoint, AdmittedDestructiveRegion, AdmittedEffectCapability, AdmittedExpectation,
+    AdmittedGuard, AdmittedNavigation, AdmittedOperation, AdmittedOperationDefaults,
+    AdmittedPackage, AdmittedRoute, AdmittedTargetKind, AdmittedTask, AssetKey, BoundedPoint,
+    BoundedRect, ExecutionMode, FrameStoreSettings, GuardVerification, InputDuration,
+    OpaqueMetadata, OperationKey, PackageResolution, PageKey, PageSelector, TargetKey,
+    TargetOffset, TargetTapMode, TaskKey,
 };
 use serde::Deserialize;
 use serde_json::Value;
@@ -197,11 +208,7 @@ impl Containment {
             .benches
             .entry(instance.clone())
             .or_insert_with(|| Bench::new(instance.clone()));
-        bench.loaded = Some(bundle);
-        Ok(bench
-            .loaded
-            .as_ref()
-            .expect("loaded bundle was inserted before returning"))
+        Ok(bench.loaded.insert(bundle))
     }
 
     pub fn get(&self, instance: &InstanceId) -> Option<&LoadedBundle> {
@@ -270,14 +277,10 @@ pub struct LoadedBundle {
     manifest_path: String,
     manifest: Value,
     operation_path: String,
-    operation: Value,
-    control: Option<Value>,
     recognition_pack_path: Option<String>,
     pages_path: Option<String>,
     navigation_path: Option<String>,
-    navigation: Option<Value>,
-    evaluator: Option<RecognitionEvaluator>,
-    detector: Option<PageDetector>,
+    admitted: Option<AdmittedPackage>,
     recognition_pack_diagnostics: Vec<RecognitionPackDiagnostics>,
 }
 
@@ -289,9 +292,23 @@ impl LoadedBundle {
         let entries = Arc::new(package.entries);
         let metadata = PackageMetadata::from_entries(&entries)?;
         validate_manifest_hashes(&metadata.manifest, &entries, &metadata.resource_root)?;
-        let recognition_pack_diagnostics = collect_recognition_pack_diagnostics(&entries)?;
-        let (evaluator, detector) = load_recognition_pipeline(&entries, &metadata)?;
-
+        let closed = admission::parse_package(&entries, &metadata)?
+            .map(|parsed| admission::close_package(parsed, &entries, &metadata.resource_root))
+            .transpose()
+            .map_err(ContainmentError::Admission)?;
+        let admitted = match closed {
+            Some(closed) => {
+                Some(admission::admit_package(closed).map_err(ContainmentError::Admission)?)
+            }
+            None => None,
+        };
+        let recognition_pack_diagnostics = match (&admitted, &metadata.recognition_pack_path) {
+            (Some(admitted), Some(path)) => vec![RecognitionPackDiagnostics {
+                path: path.clone(),
+                unsupported_targets: admitted.evaluator().unsupported_targets().to_vec(),
+            }],
+            _ => collect_recognition_pack_diagnostics(&entries)?,
+        };
         Ok(Self {
             task_id: metadata.task_id,
             verified,
@@ -303,14 +320,10 @@ impl LoadedBundle {
             manifest_path: metadata.manifest_path,
             manifest: metadata.manifest,
             operation_path: metadata.operation_path,
-            operation: metadata.operation,
-            control: metadata.control,
             recognition_pack_path: metadata.recognition_pack_path,
             pages_path: metadata.pages_path,
             navigation_path: metadata.navigation_path,
-            navigation: metadata.navigation,
-            evaluator,
-            detector,
+            admitted,
             recognition_pack_diagnostics,
         })
     }
@@ -351,14 +364,6 @@ impl LoadedBundle {
         &self.operation_path
     }
 
-    pub fn operation(&self) -> &Value {
-        &self.operation
-    }
-
-    pub fn control(&self) -> Option<&Value> {
-        self.control.as_ref()
-    }
-
     pub fn recognition_pack_path(&self) -> Option<&str> {
         self.recognition_pack_path.as_deref()
     }
@@ -371,24 +376,12 @@ impl LoadedBundle {
         self.navigation_path.as_deref()
     }
 
-    pub fn navigation(&self) -> Option<&Value> {
-        self.navigation.as_ref()
-    }
-
-    pub fn evaluator(&self) -> Option<&RecognitionEvaluator> {
-        self.evaluator.as_ref()
-    }
-
-    pub fn detector(&self) -> Option<&PageDetector> {
-        self.detector.as_ref()
+    pub fn admitted_package(&self) -> Option<&AdmittedPackage> {
+        self.admitted.as_ref()
     }
 
     pub fn recognition_pack_diagnostics(&self) -> &[RecognitionPackDiagnostics] {
         &self.recognition_pack_diagnostics
-    }
-
-    pub fn entry(&self, path: &str) -> Option<&[u8]> {
-        self.entries.get(path).map(Vec::as_slice)
     }
 
     pub fn entry_paths(&self) -> impl Iterator<Item = &str> {
@@ -401,13 +394,6 @@ impl LoadedBundle {
             .keys()
             .filter(|path| path.starts_with(&prefix) && path.ends_with("/task.json"))
             .count()
-    }
-
-    pub fn resource_entry(&self, relative_path: &str) -> ContainmentResult<&[u8]> {
-        validate_relative_ref(relative_path)?;
-        let path = prefixed_path(&self.resource_root, relative_path);
-        self.entry(&path)
-            .ok_or(ContainmentError::MissingEntry { path })
     }
 }
 
@@ -524,12 +510,9 @@ struct PackageMetadata {
     manifest_path: String,
     manifest: Value,
     operation_path: String,
-    operation: Value,
-    control: Option<Value>,
     recognition_pack_path: Option<String>,
     pages_path: Option<String>,
     navigation_path: Option<String>,
-    navigation: Option<Value>,
 }
 
 impl PackageMetadata {
@@ -542,7 +525,6 @@ impl PackageMetadata {
 
     fn from_lab_entries(entries: &BTreeMap<String, Vec<u8>>) -> ContainmentResult<Self> {
         let control: LabControl = read_json_entry(entries, "control.json")?;
-        let control_value = read_json_value_entry(entries, "control.json")?;
         let resource_root = match control.resource_root {
             None => LAB_RESOURCE_ROOT.to_string(),
             Some(resource_root) if resource_root == LAB_RESOURCE_ROOT => resource_root,
@@ -566,7 +548,7 @@ impl PackageMetadata {
         let task_id = TaskId::new(control.entry_task_id)?;
         let operation_path =
             prefixed_path(&resource_root, &format!("operations/{task_id}/task.json"));
-        let operation = read_json_value_entry(entries, &operation_path)?;
+        let _: Value = read_json_value_entry(entries, &operation_path)?;
         let stem = format!("{}.{}", control.game, control.server);
         let recognition_pack_path =
             prefixed_path(&resource_root, &format!("recognition/{stem}.pack.json"));
@@ -575,10 +557,6 @@ impl PackageMetadata {
             &resource_root,
             &format!("navigation/{stem}.navigation.json"),
         );
-        let navigation = entries
-            .contains_key(&navigation_path)
-            .then(|| read_json_value_entry(entries, &navigation_path))
-            .transpose()?;
         Ok(Self {
             layout: PackageLayout::Lab,
             task_id,
@@ -586,8 +564,6 @@ impl PackageMetadata {
             manifest_path,
             manifest,
             operation_path,
-            operation,
-            control: Some(control_value),
             recognition_pack_path: entries
                 .contains_key(&recognition_pack_path)
                 .then_some(recognition_pack_path),
@@ -595,7 +571,6 @@ impl PackageMetadata {
             navigation_path: entries
                 .contains_key(&navigation_path)
                 .then_some(navigation_path),
-            navigation,
         })
     }
 
@@ -605,7 +580,7 @@ impl PackageMetadata {
         let manifest = read_json_value_entry(entries, &manifest_path)?;
         let task_id = task_id_from_manifest_or_operations(&manifest, entries, &module)?;
         let operation_path = prefixed_path(&module, &format!("operations/{task_id}/task.json"));
-        let operation = read_json_value_entry(entries, &operation_path)?;
+        let _: Value = read_json_value_entry(entries, &operation_path)?;
         Ok(Self {
             layout: PackageLayout::Module,
             task_id,
@@ -613,12 +588,9 @@ impl PackageMetadata {
             manifest_path,
             manifest,
             operation_path,
-            operation,
-            control: None,
             recognition_pack_path: None,
             pages_path: None,
             navigation_path: None,
-            navigation: None,
         })
     }
 }
@@ -649,12 +621,14 @@ struct ManifestHashes {
     files: Vec<ManifestFile>,
 }
 
+#[cfg(test)]
 #[derive(Debug)]
 struct MemoryAssetResolver {
     entries: Arc<BTreeMap<String, Vec<u8>>>,
     resource_root: String,
 }
 
+#[cfg(test)]
 impl AssetResolver for MemoryAssetResolver {
     fn read_asset(
         &self,
@@ -741,10 +715,15 @@ pub enum ContainmentError {
         manifest_task_id: String,
         control_task_id: String,
     },
+    PackageContract {
+        path: String,
+        message: String,
+    },
     PackParse {
         path: String,
         message: String,
     },
+    Admission(AdmissionError),
 }
 
 impl fmt::Display for ContainmentError {
@@ -840,10 +819,20 @@ impl fmt::Display for ContainmentError {
                 f,
                 "fatal containment error: {manifest_path} entry_task_id '{manifest_task_id}' conflicts with control entry_task_id '{control_task_id}'"
             ),
+            Self::PackageContract { path, message } => write!(
+                f,
+                "fatal containment error: invalid package contract in {path}: {message}"
+            ),
             Self::PackParse { path, message } => {
                 write!(
                     f,
                     "fatal containment error: failed to parse {path}: {message}"
+                )
+            }
+            Self::Admission(error) => {
+                write!(
+                    f,
+                    "fatal containment error: executable package admission failed: {error}"
                 )
             }
         }
@@ -852,39 +841,11 @@ impl fmt::Display for ContainmentError {
 
 impl Error for ContainmentError {}
 
-fn load_recognition_pipeline(
-    entries: &Arc<BTreeMap<String, Vec<u8>>>,
-    metadata: &PackageMetadata,
-) -> ContainmentResult<(Option<RecognitionEvaluator>, Option<PageDetector>)> {
-    let Some(pack_path) = &metadata.recognition_pack_path else {
-        return Ok((None, None));
-    };
-    let pack_json = decode_utf8_entry(entries, pack_path)?;
-    let resolver = Arc::new(MemoryAssetResolver {
-        entries: Arc::clone(entries),
-        resource_root: metadata.resource_root.clone(),
-    });
-    let Some(pages_path) = &metadata.pages_path else {
-        let pack =
-            load_pack_from_json_str(pack_json.trim_start_matches('\u{feff}')).map_err(|err| {
-                ContainmentError::PackParse {
-                    path: pack_path.clone(),
-                    message: err.to_string(),
-                }
-            })?;
-        let evaluator =
-            RecognitionEvaluator::with_asset_resolver(pack, resolver).map_err(|err| {
-                ContainmentError::PackParse {
-                    path: pack_path.clone(),
-                    message: err.to_string(),
-                }
-            })?;
-        return Ok((Some(evaluator), None));
-    };
-    let pages_json = decode_utf8_entry(entries, pages_path)?;
-    let (evaluator, detector) =
-        build_recognition_pipeline(pack_path, pack_json, pages_path, pages_json, resolver)?;
-    Ok((Some(evaluator), Some(detector)))
+fn package_contract_error(path: impl Into<String>, message: impl Into<String>) -> ContainmentError {
+    ContainmentError::PackageContract {
+        path: path.into(),
+        message: message.into(),
+    }
 }
 
 fn build_recognition_pipeline(
@@ -1050,7 +1011,13 @@ fn single_top_level_module(entries: &BTreeMap<String, Vec<u8>>) -> ContainmentRe
             message: "package must contain exactly one top-level module directory".to_string(),
         });
     }
-    Ok(roots.into_iter().next().expect("single root").to_string())
+    roots
+        .into_iter()
+        .next()
+        .map(str::to_string)
+        .ok_or_else(|| ContainmentError::MalformedZip {
+            message: "package must contain exactly one top-level module directory".to_string(),
+        })
 }
 
 fn read_json_value_entry(
@@ -1078,21 +1045,6 @@ fn read_json_entry<T: for<'de> Deserialize<'de>>(
             path: path.to_string(),
         })?;
     serde_json::from_slice(bytes).map_err(|err| ContainmentError::JsonParse {
-        path: path.to_string(),
-        message: err.to_string(),
-    })
-}
-
-fn decode_utf8_entry<'a>(
-    entries: &'a BTreeMap<String, Vec<u8>>,
-    path: &str,
-) -> ContainmentResult<&'a str> {
-    let bytes = entries
-        .get(path)
-        .ok_or_else(|| ContainmentError::MissingEntry {
-            path: path.to_string(),
-        })?;
-    std::str::from_utf8(bytes).map_err(|err| ContainmentError::JsonParse {
         path: path.to_string(),
         message: err.to_string(),
     })
@@ -1183,6 +1135,91 @@ mod tests {
     use std::io::{self, Write};
     use zip::write::FileOptions;
 
+    fn next_fuzz_word(state: &mut u64) -> u64 {
+        *state ^= *state << 13;
+        *state ^= *state >> 7;
+        *state ^= *state << 17;
+        *state
+    }
+
+    fn containment_outcome(label: &str, bytes: &[u8]) -> String {
+        let expected = Sha256Hash::digest(bytes);
+        let instance = InstanceId::new(label).expect("bounded fuzz instance id");
+        let mut containment = Containment::new();
+        match containment.load(&instance, bytes, &expected) {
+            Ok(_) => "ok".to_string(),
+            Err(error) => format!("error:{error}"),
+        }
+    }
+
+    #[test]
+    fn bounded_raw_zip_fuzz_reaches_real_archives_and_admission_deterministically() {
+        const CASES: usize = 256;
+        let mut state = 0x68_5eed_fade_cafe_u64;
+        let retained_valid_zip = lab_package_zip("fuzz_task", [255, 0, 0]);
+        let retained_corpus = [
+            ("retained-valid", retained_valid_zip.clone(), true),
+            (
+                "retained-truncated-eocd",
+                retained_valid_zip[..retained_valid_zip.len() - 22].to_vec(),
+                false,
+            ),
+            (
+                "retained-local-header-only",
+                b"PK\x03\x04\0\0\0\0".to_vec(),
+                false,
+            ),
+        ];
+        for (label, bytes, should_admit) in &retained_corpus {
+            let first = containment_outcome(label, bytes);
+            let second = containment_outcome(label, bytes);
+            assert_eq!(first, second, "retained raw corpus {label} drifted");
+            assert_eq!(first == "ok", *should_admit, "retained raw corpus {label}");
+        }
+
+        let mut zip_header_samples = 0usize;
+        let mut parsed_archive_samples = 0usize;
+        let mut admitted_samples = 0usize;
+        let started = std::time::Instant::now();
+        for case in 0..CASES {
+            let bytes = if case % 2 == 0 {
+                let mut bytes = retained_valid_zip.clone();
+                if case % 8 != 0 {
+                    let index = 4 + next_fuzz_word(&mut state) as usize % (bytes.len() - 4);
+                    bytes[index] ^= (next_fuzz_word(&mut state) as u8).max(1);
+                }
+                bytes
+            } else {
+                let length = (next_fuzz_word(&mut state) % 513) as usize;
+                let mut bytes = vec![0_u8; length];
+                for byte in &mut bytes {
+                    *byte = next_fuzz_word(&mut state) as u8;
+                }
+                bytes
+            };
+            if bytes.starts_with(b"PK\x03\x04") {
+                zip_header_samples += 1;
+            }
+            if ZipArchive::new(Cursor::new(bytes.as_slice())).is_ok() {
+                parsed_archive_samples += 1;
+            }
+            let evaluate = || containment_outcome(&format!("fuzz-{case}"), &bytes);
+            let first = std::panic::catch_unwind(std::panic::AssertUnwindSafe(evaluate))
+                .unwrap_or_else(|_| panic!("arbitrary ZIP case {case} panicked"));
+            let second = std::panic::catch_unwind(std::panic::AssertUnwindSafe(evaluate))
+                .unwrap_or_else(|_| panic!("arbitrary ZIP replay case {case} panicked"));
+            assert_eq!(first, second, "arbitrary ZIP case {case} drifted");
+            admitted_samples += usize::from(first == "ok");
+        }
+        assert_eq!(zip_header_samples, CASES / 2);
+        assert!(parsed_archive_samples >= CASES / 8);
+        assert!(admitted_samples >= CASES / 8);
+        assert!(
+            started.elapsed() <= std::time::Duration::from_secs(15),
+            "bounded raw ZIP fuzz exceeded its 15 second budget"
+        );
+    }
+
     #[test]
     fn load_single_lab_package_and_evaluate_from_capability() {
         let zip = lab_package_zip("task_a", [255, 0, 0]);
@@ -1196,7 +1233,10 @@ mod tests {
 
         assert_eq!(bundle.task_id().as_str(), "task_a");
         assert_eq!(bundle.verified_hash(), expected);
-        let evaluator = bundle.evaluator().expect("evaluator");
+        let evaluator = bundle
+            .admitted_package()
+            .expect("admitted package")
+            .evaluator();
         let scene = Scene::from_pixels(1, 1, &[255, 0, 0], ScenePixelFormat::Rgb8).expect("scene");
         let result = evaluator
             .evaluate_target(&scene, "home_color")
@@ -1505,11 +1545,11 @@ mod tests {
         let mut entries = lab_package_entries("task_a", [255, 0, 0]);
         entries.insert(
             "control.json".to_string(),
-            br#"{"game":"neutral","server":"test","entry_task_id":"task_a","resource_root":"resources"}"#.to_vec(),
+            br#"{"schema_version":"Lab-1y.control.v1","package_id":"neutral.task_a","execution_mode":"recognize_only","game":"neutral","server":"test","resolution":{"width":1,"height":1},"entry_task_id":"task_a","resource_root":"resources"}"#.to_vec(),
         );
         entries.insert(
             "resources/navigation/neutral.test.navigation.json".to_string(),
-            br#"{}"#.to_vec(),
+            br#"{"schema_version":"0.3","game":"neutral","server":"test","navigation":[],"destructive_actions":[]}"#.to_vec(),
         );
         let zip = zip_from_map(entries);
         let expected = Sha256Hash::digest(&zip);
@@ -1540,6 +1580,85 @@ mod tests {
         );
     }
 
+    #[test]
+    fn zip_entry_order_does_not_change_canonical_semantics() {
+        let entries = lab_package_entries("task_a", [255, 0, 0]);
+        let forward = entries
+            .iter()
+            .map(|(path, bytes)| (path.clone(), bytes.clone()))
+            .collect::<Vec<_>>();
+        let reverse = forward.iter().cloned().rev().collect::<Vec<_>>();
+        let forward_zip = zip_from_ordered_entries(forward);
+        let reverse_zip = zip_from_ordered_entries(reverse);
+
+        let fingerprint = |label: &str, bytes: &[u8]| {
+            let instance = InstanceId::new(label).expect("instance");
+            let mut containment = Containment::new();
+            containment
+                .load(&instance, bytes, &Sha256Hash::digest(bytes))
+                .expect("admitted package")
+                .admitted_package()
+                .expect("canonical executable package")
+                .semantic_fingerprint()
+                .to_string()
+        };
+        assert_eq!(
+            fingerprint("forward", &forward_zip),
+            fingerprint("reverse", &reverse_zip)
+        );
+        assert_ne!(
+            Sha256Hash::digest(&forward_zip),
+            Sha256Hash::digest(&reverse_zip)
+        );
+    }
+
+    #[test]
+    fn lab_contract_rejects_old_manifest_and_navigation_schemas() {
+        for (path, replacement) in [
+            (
+                "resources/manifest.json",
+                br#"{"schema_version":"0.2","entry_task_id":"task_a"}"#.as_slice(),
+            ),
+            (
+                "resources/navigation/neutral.test.navigation.json",
+                br#"{"schema_version":"0.2","game":"neutral","server":"test","navigation":[],"destructive_actions":[]}"#.as_slice(),
+            ),
+        ] {
+            let mut entries = lab_package_entries("task_a", [255, 0, 0]);
+            entries.insert(path.to_string(), replacement.to_vec());
+            let zip = zip_from_map(entries);
+            let expected = Sha256Hash::digest(&zip);
+            let instance = InstanceId::new("schema-instance").expect("instance");
+            let mut containment = Containment::new();
+
+            let error = containment
+                .load(&instance, &zip, &expected)
+                .expect_err("old schema must fail");
+
+            assert!(matches!(error, ContainmentError::PackageContract { .. }));
+        }
+    }
+
+    #[test]
+    fn lab_contract_rejects_navigation_route_without_packaged_operation() {
+        let mut entries = lab_package_entries("task_a", [255, 0, 0]);
+        entries.insert(
+            "resources/navigation/neutral.test.navigation.json".to_string(),
+            br#"{"schema_version":"0.3","game":"neutral","server":"test","navigation":[{"id":"ghost_route","from_page":"neutral/home","to_page":"neutral/home","click":{"kind":"point","x":0,"y":0}}],"destructive_actions":[]}"#.to_vec(),
+        );
+        let zip = zip_from_map(entries);
+        let expected = Sha256Hash::digest(&zip);
+        let instance = InstanceId::new("closure-instance").expect("instance");
+        let mut containment = Containment::new();
+
+        let error = containment
+            .load(&instance, &zip, &expected)
+            .expect_err("dangling navigation route must fail");
+
+        assert!(matches!(error, ContainmentError::Admission(_)));
+        assert!(error.to_string().contains("ghost_route"));
+    }
+
     fn lab_package_zip(task_id: &str, expected: [u8; 3]) -> Vec<u8> {
         zip_from_map(lab_package_entries(task_id, expected))
     }
@@ -1566,8 +1685,10 @@ mod tests {
         BTreeMap::from([
             (
                 "control.json".to_string(),
-                format!(r#"{{"game":"neutral","server":"test","entry_task_id":"{task_id}"}}"#)
-                    .into_bytes(),
+                format!(
+                    r#"{{"schema_version":"Lab-1y.control.v1","package_id":"neutral.{task_id}","execution_mode":"recognize_only","game":"neutral","server":"test","resolution":{{"width":1,"height":1}},"entry_task_id":"{task_id}","allow_placeholder_coords":true}}"#
+                )
+                .into_bytes(),
             ),
             ("resources/manifest.json".to_string(), manifest),
             (
@@ -1595,6 +1716,10 @@ mod tests {
     }
 
     fn zip_from_map(entries: BTreeMap<String, Vec<u8>>) -> Vec<u8> {
+        zip_from_ordered_entries(entries.into_iter().collect())
+    }
+
+    fn zip_from_ordered_entries(entries: Vec<(String, Vec<u8>)>) -> Vec<u8> {
         let cursor = Cursor::new(Vec::new());
         let mut writer = zip::ZipWriter::new(cursor);
         let options = FileOptions::default().compression_method(zip::CompressionMethod::Deflated);

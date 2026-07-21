@@ -600,6 +600,21 @@ fn write_neutral_contained_task_package(path: &Path) -> String {
                 ]
             }"#,
         ),
+        (
+            "resources/navigation/neutral.test.navigation.json",
+            br#"{
+                "schema_version":"0.3",
+                "game":"neutral",
+                "server":"test",
+                "navigation":[{
+                    "id":"open_terminal",
+                    "from_page":"neutral/home",
+                    "to_page":"neutral/terminal",
+                    "click":{"kind":"point","x":1,"y":0}
+                }],
+                "destructive_actions":[]
+            }"#,
+        ),
     ];
     for (entry, contents) in files {
         zip.start_file(*entry, options).expect("zip entry");

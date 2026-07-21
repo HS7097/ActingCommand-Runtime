@@ -753,8 +753,8 @@ impl Fixture {
 
         fs::create_dir_all(&state_root).expect("state root");
         fs::create_dir_all(&run_root).expect("run root");
-        fs::write(&red_scene, encode_png(1, 1, [255, 0, 0])).expect("red scene");
-        fs::write(&blue_scene, encode_png(1, 1, [0, 0, 255])).expect("blue scene");
+        fs::write(&red_scene, encode_png(100, 100, [255, 0, 0])).expect("red scene");
+        fs::write(&blue_scene, encode_png(100, 100, [0, 0, 255])).expect("blue scene");
         fs::write(&lab_scene, encode_png(2, 2, [255, 0, 0])).expect("lab scene");
         fs::write(&invalid_pages, b"not-json").expect("invalid pages");
         write_semantic_resources(&resource_root);
@@ -1170,7 +1170,7 @@ fn write_semantic_resources(root: &Path) {
         recognition.join("arknights.cn.pack.json"),
         r#"{
             "schema_version":"0.3",
-            "coordinate_space":{"width":1,"height":1},
+            "coordinate_space":{"width":100,"height":100},
             "targets":[
                 {"type":"color","id":"home_anchor","region":{"x":0,"y":0,"width":1,"height":1},"expected":[255,0,0]},
                 {"type":"color","id":"target_anchor","region":{"x":0,"y":0,"width":1,"height":1},"expected":[0,0,255]},
@@ -1221,8 +1221,8 @@ fn write_semantic_resources(root: &Path) {
                     "min_confidence":1.0,
                     "stale_below_confidence":1.0,
                     "ttl_ms":null,
-                    "allowed_values":["1x1"],
-                    "candidates":[{"value":"1x1","width":1,"height":1,"source":"golden-scene"}]
+                    "allowed_values":["100x100"],
+                    "candidates":[{"value":"100x100","width":100,"height":100,"source":"golden-scene"}]
                 }]
             }]
         }"#,
@@ -1235,18 +1235,90 @@ fn write_semantic_package(path: &Path, root: &Path) {
     let pages = fs::read(root.join("recognition/arknights.cn.pages.json")).expect("semantic pages");
     let navigation = fs::read(root.join("navigation/arknights.cn.navigation.json"))
         .expect("semantic navigation");
+    let navigation_value: Value =
+        serde_json::from_slice(&navigation).expect("semantic navigation JSON");
+    let pack_value: Value = serde_json::from_slice(&pack).expect("semantic pack JSON");
+    let pages_value: Value = serde_json::from_slice(&pages).expect("semantic pages JSON");
+    let game = navigation_value["game"]
+        .as_str()
+        .expect("semantic navigation game");
+    let server = navigation_value["server"]
+        .as_str()
+        .expect("semantic navigation server");
+    let mut operations = navigation_value["navigation"]
+        .as_array()
+        .expect("semantic navigation routes")
+        .iter()
+        .map(|route| {
+            json!({
+                "id": route["id"],
+                "purpose": "golden semantic closure",
+                "from": route["from_page"],
+                "to": route["to_page"],
+                "click": route["click"],
+                "unguarded_trusted_coordinate": true
+            })
+        })
+        .collect::<Vec<_>>();
+    let target = pack_value["targets"]
+        .as_array()
+        .expect("semantic targets")
+        .iter()
+        .find(|target| target["id"] == "home_button")
+        .expect("home button target");
+    let page = pages_value["pages"]
+        .as_array()
+        .expect("semantic pages")
+        .first()
+        .expect("semantic page");
+    operations.push(json!({
+        "id": "direct_home_button",
+        "purpose": "golden typed target closure",
+        "from": page["id"],
+        "to": Value::Null,
+        "click": {
+            "kind": "rect",
+            "x": target["click"]["x"],
+            "y": target["click"]["y"],
+            "width": target["click"]["width"],
+            "height": target["click"]["height"]
+        },
+        "guard": {
+            "page_id": page["id"],
+            "target_id": target["id"],
+            "expected_rect": target["region"],
+            "color_probe": target["id"]
+        }
+    }));
+    let operation = serde_json::to_vec(&json!({
+        "schema_version": "0.6",
+        "task_id": "task",
+        "game": game,
+        "server_scope": [server],
+        "goal": "golden semantic closure",
+        "coordinate_space": {"width": 100, "height": 100},
+        "operations": operations
+    }))
+    .expect("semantic operation JSON");
+    let control = serde_json::to_vec(&json!({
+        "schema_version": "Lab-1y.control.v1",
+        "package_id": "golden.semantic",
+        "execution_mode": "navigable_route",
+        "game": game,
+        "server": server,
+        "resolution": {"width": 100, "height": 100},
+        "entry_task_id": "task"
+    }))
+    .expect("semantic control JSON");
     write_zip(
         path,
         &[
-            (
-                "control.json",
-                br#"{"game":"arknights","server":"cn","entry_task_id":"task"}"#,
-            ),
+            ("control.json", &control),
             (
                 "resources/manifest.json",
                 br#"{"schema_version":"0.3","entry_task_id":"task"}"#,
             ),
-            ("resources/operations/task/task.json", br#"{}"#),
+            ("resources/operations/task/task.json", &operation),
             ("resources/recognition/arknights.cn.pack.json", &pack),
             ("resources/recognition/arknights.cn.pages.json", &pages),
             (

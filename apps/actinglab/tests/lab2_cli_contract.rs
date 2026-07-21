@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
-use serde_json::Value;
+use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::fs::{self, File};
 use std::io::Write;
@@ -71,21 +71,62 @@ fn write_fixture() -> Lab2Fixture {
         r#"{"schema_version":"0.3","game":"arknights","server":"cn","navigation":[],"destructive_actions":[]}"#,
     )
     .expect("navigation graph");
+    let navigation_path = fs::read_dir(&navigation)
+        .expect("navigation directory")
+        .next()
+        .expect("navigation entry")
+        .expect("navigation directory entry")
+        .path();
+    let navigation_value: Value =
+        serde_json::from_slice(&fs::read(navigation_path).expect("navigation resource"))
+            .expect("navigation JSON");
+    let game = navigation_value["game"].as_str().expect("game");
+    let server = navigation_value["server"].as_str().expect("server");
+    let control = serde_json::to_vec(&json!({
+        "schema_version": "Lab-1y.control.v1",
+        "package_id": "lab2.cli.contract",
+        "execution_mode": "recognize_only",
+        "game": game,
+        "server": server,
+        "resolution": {"width": 1, "height": 1},
+        "entry_task_id": "task",
+        "allow_placeholder_coords": true
+    }))
+    .expect("control JSON");
+    let operation = serde_json::to_vec(&json!({
+        "schema_version": "0.6",
+        "task_id": "task",
+        "game": game,
+        "server_scope": [server],
+        "goal": "Lab2 CLI contract fixture",
+        "coordinate_space": {"width": 1, "height": 1},
+        "operations": [{
+            "id": "direct_home_button",
+            "purpose": "Lab2 typed target closure",
+            "from": format!("{game}/home"),
+            "to": Value::Null,
+            "click": {"kind":"rect","x":0,"y":0,"width":1,"height":1},
+            "guard": {
+                "page_id": format!("{game}/home"),
+                "target_id": "home_button",
+                "expected_rect": {"x":0,"y":0,"width":1,"height":1},
+                "color_probe": "home_button"
+            }
+        }]
+    }))
+    .expect("operation JSON");
 
     let package = temp.path().join("semantic.zip");
     let file = File::create(&package).expect("package file");
     let mut zip = ZipWriter::new(file);
     let options = FileOptions::default().compression_method(zip::CompressionMethod::Stored);
     for (name, bytes) in [
-        (
-            "control.json",
-            br#"{"game":"arknights","server":"cn","entry_task_id":"task"}"#.as_slice(),
-        ),
+        ("control.json", control.as_slice()),
         (
             "resources/manifest.json",
             br#"{"schema_version":"0.3","entry_task_id":"task"}"#.as_slice(),
         ),
-        ("resources/operations/task/task.json", br#"{}"#.as_slice()),
+        ("resources/operations/task/task.json", operation.as_slice()),
     ] {
         zip.start_file(name, options).expect("package entry");
         zip.write_all(bytes).expect("package bytes");

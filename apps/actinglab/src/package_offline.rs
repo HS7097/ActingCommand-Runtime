@@ -3,19 +3,22 @@
 use crate::{CliError, CliOutcome, ErrorKind, FlagArgs, GlobalOptions};
 use actingcommand_device::{CaptureBackendName, Frame};
 use actingcommand_lab::{
-    ExternalExpectedSha256, OfflineSimulationError, OfflineSimulationResult, PreparedContainedTask,
-    simulate_contained_task, validate_lab_package_bytes,
+    ExternalExpectedSha256, OfflineDecision, OfflineSimulationError, OfflineSimulationResult,
+    prepare_lab_package_bytes, simulate_contained_task,
 };
 use serde::Serialize;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
-use std::fs;
-use std::io::{Cursor, Write};
+use std::fs::{self, OpenOptions};
+use std::io::{Cursor, ErrorKind as IoErrorKind, Write};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use zip::{ZipWriter, write::FileOptions};
 
 const RESULT_SCHEMA: &str = "actingcommand.offline-simulation.v1";
 const FIXTURE_HASH_DOMAIN: &[u8] = b"ActingCommand recorded fixture sequence v1\0";
+const RESULT_TEMP_ATTEMPTS: usize = 32;
+static RESULT_TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 pub(super) fn capability() -> Value {
     json!({
@@ -27,43 +30,35 @@ pub(super) fn capability() -> Value {
 }
 
 pub(super) fn run_dry_run(global: &GlobalOptions, flags: &FlagArgs) -> CliOutcome<Value> {
-    flags.expect_positionals("package dry-run", 0)?;
-    reject_device_scope(global, flags)?;
-    let zip_path = flags.required_path("--zip")?;
-    let out_path = flags.required_path("--out")?;
-    let expected_text = flags.required("--expected-sha256")?;
-    let expected = ExternalExpectedSha256::parse_hex(&expected_text)
+    let args = PackageDryRunArgs::parse(global, flags)?;
+    let expected = ExternalExpectedSha256::parse_hex(&args.expected_sha256)
         .map_err(|error| CliError::package_invalid(error.to_string()))?;
-    let fixture_paths = fixture_paths(flags)?;
-    reject_output_collision(&out_path, &zip_path, &fixture_paths)?;
+    reject_output_collision(&args.out, &args.zip, &args.fixtures)?;
 
-    let package_bytes = fs::read(&zip_path).map_err(|error| {
+    let package_bytes = fs::read(&args.zip).map_err(|error| {
         offline_error(
             "offline_package_read_failed",
-            format!("failed to read package {}: {error}", zip_path.display()),
+            format!("failed to read package {}: {error}", args.zip.display()),
         )
     })?;
-    let loaded = validate_lab_package_bytes("contained-package.zip", &package_bytes, expected)?;
-    let prepared = PreparedContainedTask::load("offline.simulation", &package_bytes, expected)
-        .map_err(|error| {
-            offline_error(
-                error.code(),
-                error
-                    .detail()
-                    .map(str::to_string)
-                    .unwrap_or_else(|| error.to_string()),
-            )
-        })?;
+    let (prepared, loaded) =
+        prepare_lab_package_bytes("contained-package.zip", &package_bytes, expected)?;
     let package_sha256 = prepared.package_sha256().to_string();
-    let fixture = load_fixture_sequence(&fixture_paths)?;
+    let fixture = load_fixture_sequence(&args.fixtures)?;
     let simulation =
         simulate_contained_task(&prepared, fixture.frames).map_err(map_simulation_error)?;
+    let refusal = match &simulation.decision {
+        OfflineDecision::Refused { code, detail } => Some((code.clone(), detail.clone())),
+        _ => None,
+    };
     let record = OfflineResultRecord {
         schema_version: RESULT_SCHEMA,
         mode: "offline_simulation",
         executed: false,
         runtime_head: env!("ACTINGCOMMAND_RUNTIME_HEAD"),
         package_sha256: package_sha256.clone(),
+        semantic_fingerprint: simulation.semantic_fingerprint.clone(),
+        decision_fingerprint: simulation.decision_fingerprint.clone(),
         fixture_sequence_sha256: fixture.sequence_sha256.clone(),
         fixtures: fixture.bindings,
         loaded,
@@ -72,15 +67,35 @@ pub(super) fn run_dry_run(global: &GlobalOptions, flags: &FlagArgs) -> CliOutcom
     };
     let bundle = result_bundle(&record)?;
     let bundle_sha256 = sha256_hex(&bundle);
-    write_result_bundle(&out_path, &bundle, &bundle_sha256)?;
+    write_result_bundle(&args.out, &bundle, &bundle_sha256)?;
+
+    if let Some((code, detail)) = refusal {
+        return Err(offline_error(
+            &code,
+            detail.unwrap_or_else(|| format!("offline decision refused with {code}")),
+        )
+        .with_details(json!({
+            "status": "refused",
+            "executed": false,
+            "semantic_fingerprint": record.semantic_fingerprint,
+            "decision_fingerprint": record.decision_fingerprint,
+            "fixture_sequence_sha256": record.fixture_sequence_sha256,
+            "result_zip": args.out.display().to_string(),
+            "result_zip_sha256": bundle_sha256,
+            "decision": record.simulation.decision,
+            "production_global_ledger_written": false
+        })));
+    }
 
     Ok(json!({
         "status": "offline_simulation",
         "executed": false,
         "runtime_head": env!("ACTINGCOMMAND_RUNTIME_HEAD"),
         "package_sha256": package_sha256,
+        "semantic_fingerprint": record.semantic_fingerprint.as_str(),
+        "decision_fingerprint": record.decision_fingerprint.as_str(),
         "fixture_sequence_sha256": fixture.sequence_sha256,
-        "result_zip": out_path.display().to_string(),
+        "result_zip": args.out.display().to_string(),
         "result_zip_sha256": bundle_sha256,
         "decision": record.simulation.decision,
         "recognition": record.simulation.recognition,
@@ -88,57 +103,109 @@ pub(super) fn run_dry_run(global: &GlobalOptions, flags: &FlagArgs) -> CliOutcom
     }))
 }
 
-fn reject_device_scope(global: &GlobalOptions, flags: &FlagArgs) -> CliOutcome<()> {
-    let unexpected_flags = flags
-        .flags
-        .keys()
-        .filter(|name| {
-            !matches!(
-                name.as_str(),
-                "--zip" | "--out" | "--expected-sha256" | "--fixture"
-            )
-        })
-        .cloned()
-        .collect::<Vec<_>>();
-    if !unexpected_flags.is_empty() {
-        return Err(CliError::usage(format!(
-            "package dry-run received unsupported flags: {}",
-            unexpected_flags.join(", ")
-        )));
-    }
-    if global.instance.is_some()
-        || !global.instances.is_empty()
-        || global.profile.is_some()
-        || global.game.is_some()
-        || global.server.is_some()
-        || global.runtime_endpoint.is_some()
-        || global.capture_backend.is_some()
-        || global.touch_backend.is_some()
-        || global.run_root.is_some()
-        || global.resource_root.is_some()
-    {
-        return Err(offline_error(
-            "offline_device_scope_forbidden",
-            "package dry-run accepts package and recorded fixtures only; device, Runtime, instance, profile, game, server, and backend selectors are forbidden",
-        ));
-    }
-    Ok(())
+struct PackageDryRunArgs {
+    zip: PathBuf,
+    expected_sha256: String,
+    fixtures: Vec<PathBuf>,
+    out: PathBuf,
 }
 
-fn fixture_paths(flags: &FlagArgs) -> CliOutcome<Vec<PathBuf>> {
-    let paths = flags
-        .values("--fixture")
-        .into_iter()
-        .filter(|value| value != "true")
-        .map(PathBuf::from)
-        .collect::<Vec<_>>();
-    if paths.is_empty() || paths.len() != flags.values("--fixture").len() {
+impl PackageDryRunArgs {
+    fn parse(global: &GlobalOptions, flags: &FlagArgs) -> CliOutcome<Self> {
+        flags.expect_positionals("package dry-run", 0)?;
+        let forbidden_global = global
+            .present_flags
+            .keys()
+            .filter(|name| name.as_str() != "--json")
+            .cloned()
+            .collect::<Vec<_>>();
+        if !forbidden_global.is_empty() {
+            return Err(offline_error(
+                "offline_device_scope_forbidden",
+                format!(
+                    "package dry-run accepts no global Runtime, device, selector, backend, resource, or execution flags; received {}",
+                    forbidden_global.join(", ")
+                ),
+            ));
+        }
+
+        let unexpected = flags
+            .flags
+            .keys()
+            .filter(|name| {
+                !matches!(
+                    name.as_str(),
+                    "--zip" | "--out" | "--expected-sha256" | "--fixture"
+                )
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        if !unexpected.is_empty() {
+            let device_attempt = unexpected.iter().any(|name| {
+                matches!(
+                    name.as_str(),
+                    "--send-input" | "--device" | "--adb" | "--lease" | "--ledger" | "--scheduler"
+                )
+            });
+            return if device_attempt {
+                Err(offline_error(
+                    "offline_device_scope_forbidden",
+                    format!(
+                        "package dry-run cannot accept device, Runtime, scheduler, lease, or ledger capabilities: {}",
+                        unexpected.join(", ")
+                    ),
+                ))
+            } else {
+                Err(CliError::usage(format!(
+                    "package dry-run received unsupported flags: {}",
+                    unexpected.join(", ")
+                )))
+            };
+        }
+
+        let zip = singleton_path(flags, "--zip")?;
+        let out = singleton_path(flags, "--out")?;
+        let expected_sha256 = singleton_value(flags, "--expected-sha256")?;
+        let fixture_values = flags.values("--fixture");
+        if fixture_values.is_empty()
+            || fixture_values
+                .iter()
+                .any(|value| value == "true" || value.trim().is_empty())
+        {
+            return Err(offline_error(
+                "offline_fixture_missing",
+                "package dry-run requires one or more non-empty --fixture <recorded.png> values",
+            ));
+        }
+        let fixtures = fixture_values.into_iter().map(PathBuf::from).collect();
+        Ok(Self {
+            zip,
+            expected_sha256,
+            fixtures,
+            out,
+        })
+    }
+}
+
+fn singleton_path(flags: &FlagArgs, name: &str) -> CliOutcome<PathBuf> {
+    singleton_value(flags, name).map(PathBuf::from)
+}
+
+fn singleton_value(flags: &FlagArgs, name: &str) -> CliOutcome<String> {
+    let values = flags.values(name);
+    let [value] = values.as_slice() else {
         return Err(offline_error(
-            "offline_fixture_missing",
-            "package dry-run requires one or more --fixture <recorded.png> values",
+            "offline_argument_invalid",
+            format!("package dry-run requires exactly one non-empty {name} <value>"),
+        ));
+    };
+    if value == "true" || value.trim().is_empty() {
+        return Err(offline_error(
+            "offline_argument_invalid",
+            format!("package dry-run requires exactly one non-empty {name} <value>"),
         ));
     }
-    Ok(paths)
+    Ok(value.clone())
 }
 
 fn reject_output_collision(out: &Path, zip: &Path, fixtures: &[PathBuf]) -> CliOutcome<()> {
@@ -152,6 +219,24 @@ fn reject_output_collision(out: &Path, zip: &Path, fixtures: &[PathBuf]) -> CliO
             "offline_output_conflicts_with_input",
             "result --out must not overwrite the package or a recorded fixture",
         ));
+    }
+    match fs::symlink_metadata(&out) {
+        Ok(_) => {
+            return Err(offline_error(
+                "offline_output_already_exists",
+                format!(
+                    "result --out already exists and will not be overwritten: {}",
+                    out.display()
+                ),
+            ));
+        }
+        Err(error) if error.kind() == IoErrorKind::NotFound => {}
+        Err(error) => {
+            return Err(offline_error(
+                "offline_path_resolution_failed",
+                format!("failed to inspect result --out {}: {error}", out.display()),
+            ));
+        }
     }
     Ok(())
 }
@@ -248,6 +333,8 @@ struct OfflineResultRecord {
     executed: bool,
     runtime_head: &'static str,
     package_sha256: String,
+    semantic_fingerprint: String,
+    decision_fingerprint: String,
     fixture_sequence_sha256: String,
     fixtures: Vec<FixtureBinding>,
     loaded: actingcommand_lab::LabContainedPackageValidationResponse,
@@ -289,35 +376,149 @@ fn result_bundle(record: &OfflineResultRecord) -> CliOutcome<Vec<u8>> {
 }
 
 fn write_result_bundle(path: &Path, bytes: &[u8], expected_sha256: &str) -> CliOutcome<()> {
-    if let Some(parent) = path.parent()
-        && !parent.as_os_str().is_empty()
-    {
-        fs::create_dir_all(parent).map_err(|error| {
-            offline_error(
-                "offline_result_write_failed",
-                format!("failed to create {}: {error}", parent.display()),
-            )
-        })?;
-    }
-    fs::write(path, bytes).map_err(|error| {
+    let parent = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    fs::create_dir_all(parent).map_err(|error| {
         offline_error(
             "offline_result_write_failed",
-            format!("failed to write {}: {error}", path.display()),
+            format!("failed to create {}: {error}", parent.display()),
         )
     })?;
-    let persisted = fs::read(path).map_err(|error| {
-        offline_error(
+    let (temporary_path, mut temporary_file) = create_result_temp(parent)?;
+    if let Err(error) = temporary_file
+        .write_all(bytes)
+        .and_then(|()| temporary_file.flush())
+        .and_then(|()| temporary_file.sync_all())
+    {
+        drop(temporary_file);
+        return Err(remove_failed_temp(
+            &temporary_path,
+            "offline_result_write_failed",
+            format!(
+                "failed to write temporary result {}: {error}",
+                temporary_path.display()
+            ),
+        ));
+    }
+    drop(temporary_file);
+    let persisted = fs::read(&temporary_path).map_err(|error| {
+        remove_failed_temp(
+            &temporary_path,
             "offline_result_verify_failed",
-            format!("failed to verify {}: {error}", path.display()),
+            format!(
+                "failed to verify temporary result {}: {error}",
+                temporary_path.display()
+            ),
         )
     })?;
     if sha256_hex(&persisted) != expected_sha256 {
+        return Err(remove_failed_temp(
+            &temporary_path,
+            "offline_result_verify_failed",
+            format!(
+                "temporary result hash mismatch for {}",
+                temporary_path.display()
+            ),
+        ));
+    }
+    if let Err(error) = fs::hard_link(&temporary_path, path) {
+        let (code, message) = if error.kind() == IoErrorKind::AlreadyExists {
+            (
+                "offline_output_already_exists",
+                format!(
+                    "result --out appeared during publication and will not be overwritten: {}",
+                    path.display()
+                ),
+            )
+        } else {
+            (
+                "offline_result_write_failed",
+                format!(
+                    "failed to publish result {} from {}: {error}",
+                    path.display(),
+                    temporary_path.display()
+                ),
+            )
+        };
+        return Err(remove_failed_temp(&temporary_path, code, message));
+    }
+    fs::remove_file(&temporary_path).map_err(|error| {
+        offline_error(
+            "offline_result_write_failed",
+            format!(
+                "result {} was published but temporary link {} could not be removed: {error}",
+                path.display(),
+                temporary_path.display()
+            ),
+        )
+    })?;
+    let published = fs::read(path).map_err(|error| {
+        offline_error(
+            "offline_result_verify_failed",
+            format!(
+                "failed to verify published result {}: {error}",
+                path.display()
+            ),
+        )
+    })?;
+    if sha256_hex(&published) != expected_sha256 {
         return Err(offline_error(
             "offline_result_verify_failed",
-            format!("persisted result hash mismatch for {}", path.display()),
+            format!("published result hash mismatch for {}", path.display()),
         ));
     }
     Ok(())
+}
+
+fn create_result_temp(parent: &Path) -> CliOutcome<(PathBuf, fs::File)> {
+    for _ in 0..RESULT_TEMP_ATTEMPTS {
+        let sequence = RESULT_TEMP_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+        let candidate = parent.join(format!(
+            ".actingcommand-offline-result.{}.{}.tmp",
+            std::process::id(),
+            sequence
+        ));
+        match OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&candidate)
+        {
+            Ok(file) => return Ok((candidate, file)),
+            Err(error) if error.kind() == IoErrorKind::AlreadyExists => continue,
+            Err(error) => {
+                return Err(offline_error(
+                    "offline_result_write_failed",
+                    format!(
+                        "failed to create temporary result {}: {error}",
+                        candidate.display()
+                    ),
+                ));
+            }
+        }
+    }
+    Err(offline_error(
+        "offline_result_write_failed",
+        format!(
+            "failed to allocate a unique temporary result in {} after {RESULT_TEMP_ATTEMPTS} attempts",
+            parent.display()
+        ),
+    ))
+}
+
+fn remove_failed_temp(path: &Path, code: &str, message: String) -> CliError {
+    match fs::remove_file(path) {
+        Ok(()) => offline_error(code, message),
+        Err(error) if error.kind() == IoErrorKind::NotFound => offline_error(code, message),
+        Err(error) => offline_error(
+            code,
+            format!(
+                "{message}; additionally failed to remove temporary result {}: {error}",
+                path.display()
+            ),
+        ),
+    }
 }
 
 fn sha256_hex(bytes: &[u8]) -> String {

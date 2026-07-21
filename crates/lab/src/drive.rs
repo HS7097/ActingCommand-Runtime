@@ -9,14 +9,12 @@ use actingcommand_contract::{EnvResolved, LabError, LabResult};
 use actingcommand_execution_kernel::{
     DriveDecisionError, DriveDecisionErrorKind, DriveNavigationEdge as NavigationEdge,
     DriveNavigationGraph as NavigationGraph, DrivePoint, DriveSemanticInput as SemanticInput,
-    derive_absolute_coordinate_rect_from_match as derive_kernel_coordinate_rect, drive_rect_center,
-    reject_dangerous_semantic_id as reject_kernel_dangerous_semantic_id,
+    derive_absolute_coordinate_rect_from_match as derive_kernel_coordinate_rect,
+    resolve_drive_target_input,
 };
 use actingcommand_ledger::IdKind;
 use actingcommand_page_detector::PageDetector;
-use actingcommand_recognition_pack::{
-    PackRect, RecognitionEvaluator, TargetEvaluation, TargetKind,
-};
+use actingcommand_recognition_pack::{PackRect, RecognitionEvaluator, TargetKind};
 use serde_json::{Value, json};
 use std::time::{Duration, Instant};
 
@@ -26,9 +24,6 @@ impl<P: LabPorts> Lab<P> {
         mut request: crate::TapTargetRequest,
         ledger: &mut SemanticLedgerContext,
     ) -> LabResult<crate::TapTargetResponse> {
-        if !request.allow_destructive {
-            reject_dangerous_semantic_id("target", &request.target)?;
-        }
         if !request.dry_run && !request.capture_requested {
             return Err(LabError::usage(
                 "tap-target real execution requires --capture; use --dry-run with --scene for offline planning",
@@ -91,10 +86,34 @@ impl<P: LabPorts> Lab<P> {
             .with_details(details));
         }
 
-        let click = evaluator
-            .get_click_target(&request.target)
-            .map_err(|error| LabError::usage(error.to_string()))?;
-        let point = rect_center(click)?;
+        let package = request.input.resources.admitted_package();
+        let graph = load_navigation_graph(package)?;
+        let intent_point = graph
+            .resolve_direct_target(
+                package,
+                &request.target,
+                &evaluation,
+                None,
+                request.allow_destructive,
+            )
+            .map_err(drive_decision_error)?;
+        let click = PackRect {
+            x: intent_point.rect.x,
+            y: intent_point.rect.y,
+            width: intent_point.rect.width,
+            height: intent_point.rect.height,
+        };
+        let point = crate::PointResponse {
+            x: intent_point.x,
+            y: intent_point.y,
+        };
+        let input = SemanticInput::Tap {
+            rect: click,
+            point: DrivePoint {
+                x: intent_point.x,
+                y: intent_point.y,
+            },
+        };
         let action_id = ledger.issue(IdKind::Action);
         let response = if request.dry_run {
             ledger.record_drive(json!({
@@ -121,13 +140,6 @@ impl<P: LabPorts> Lab<P> {
                 env_resolved,
             }
         } else {
-            let input = SemanticInput::Tap {
-                rect: click,
-                point: DrivePoint {
-                    x: point.x,
-                    y: point.y,
-                },
-            };
             let device = send_semantic_input(self, &input)?;
             ledger.record_drive(json!({
                 "stage": "action",
@@ -177,7 +189,7 @@ impl<P: LabPorts> Lab<P> {
             .validate(&evaluator)
             .map_err(|error| LabError::usage(error.to_string()))?;
         record_env_resolved(ledger, "navigate", &env_resolved)?;
-        let graph = load_navigation_graph(request.input.resources.loaded_bundle())?;
+        let graph = load_navigation_graph(request.input.resources.admitted_package())?;
         let scene = recognition_scene(self, &mut request.input)?;
         let start = detect_current_page(
             &evaluator,
@@ -238,9 +250,9 @@ impl<P: LabPorts> Lab<P> {
                 start.page, target_page
             ))
         })?;
-        if !request.allow_destructive {
-            graph.validate_route(&route).map_err(drive_decision_error)?;
-        }
+        graph
+            .validate_route(&route, request.allow_destructive)
+            .map_err(drive_decision_error)?;
         let action_ids = route
             .iter()
             .map(|_| ledger.issue(IdKind::Action))
@@ -280,6 +292,7 @@ impl<P: LabPorts> Lab<P> {
             evaluator: &evaluator,
             detector: &detector,
             graph: &graph,
+            allow_destructive: request.allow_destructive,
             step_timeout,
             poll,
         };
@@ -308,17 +321,9 @@ impl<P: LabPorts> Lab<P> {
 }
 
 fn load_navigation_graph(
-    bundle: &actingcommand_pack_containment::LoadedBundle,
+    package: &actingcommand_execution_kernel::AdmittedPackage,
 ) -> LabResult<NavigationGraph> {
-    let navigation = bundle.navigation().ok_or_else(|| {
-        LabError::package_invalid("externally verified resource bundle has no navigation graph")
-    })?;
-    let text = serde_json::to_string(navigation).map_err(|error| {
-        LabError::package_invalid(format!(
-            "failed to serialize contained navigation graph: {error}"
-        ))
-    })?;
-    NavigationGraph::parse_json(&text).map_err(drive_decision_error)
+    NavigationGraph::from_admitted(package).map_err(drive_decision_error)
 }
 
 fn navigation_edge_response(
@@ -341,8 +346,23 @@ fn semantic_input_response(input: &SemanticInput) -> crate::SemanticInputRespons
             rect: rect_response(*rect),
             point: point_response(*point),
         },
-        SemanticInput::TargetCenter { target_id } => crate::SemanticInputResponse::TargetCenter {
+        SemanticInput::TargetTap {
+            target_id,
+            mode,
+            offset,
+        } => crate::SemanticInputResponse::TargetTap {
             target_id: target_id.clone(),
+            mode: match mode {
+                actingcommand_execution_kernel::TargetTapMode::Deterministic => "deterministic",
+                actingcommand_execution_kernel::TargetTapMode::Center => "center",
+            }
+            .to_string(),
+            offset: offset.map(|offset| crate::RectResponse {
+                x: offset.x(),
+                y: offset.y(),
+                width: offset.width(),
+                height: offset.height(),
+            }),
         },
         SemanticInput::Drag {
             from_rect,
@@ -358,16 +378,6 @@ fn semantic_input_response(input: &SemanticInput) -> crate::SemanticInputRespons
             duration_ms: *duration_ms,
         },
     }
-}
-
-fn reject_dangerous_semantic_id(label: &str, value: &str) -> LabResult<()> {
-    reject_kernel_dangerous_semantic_id(label, value).map_err(drive_decision_error)
-}
-
-fn rect_center(rect: PackRect) -> LabResult<crate::PointResponse> {
-    drive_rect_center(rect)
-        .map(point_response)
-        .map_err(drive_decision_error)
 }
 
 pub fn derive_absolute_coordinate_rect_from_match(
@@ -424,6 +434,7 @@ struct NavigationExecutionContext<'a, P: LabPorts> {
     evaluator: &'a RecognitionEvaluator,
     detector: &'a PageDetector,
     graph: &'a NavigationGraph,
+    allow_destructive: bool,
     step_timeout: Duration,
     poll: Duration,
 }
@@ -437,7 +448,7 @@ fn execute_navigation_route<P: LabPorts>(
     let mut executed = Vec::new();
     let mut current_page = start_page;
     for (edge, action_id) in route.into_iter().zip(action_ids) {
-        if current_page != edge.from_page() {
+        if edge.from_page() != "any" && current_page != edge.from_page() {
             return Err(LabError::safety_blocked(
                 "navigation_page_drift",
                 format!(
@@ -451,7 +462,7 @@ fn execute_navigation_route<P: LabPorts>(
         let (input, recognition) = resolve_navigation_edge_input(context, &edge)?;
         context
             .graph
-            .validate_resolved_input(&edge, &input)
+            .validate_resolved_input(&edge, &input, context.allow_destructive)
             .map_err(drive_decision_error)?;
         let device = send_semantic_input(context.lab, &input)?;
         let arrived = poll_for_page(context, edge.to_page())?;
@@ -487,7 +498,7 @@ fn resolve_navigation_edge_input<P: LabPorts>(
     SemanticInput,
     Option<crate::NavigationTargetRecognitionResponse>,
 )> {
-    let SemanticInput::TargetCenter { target_id } = edge.input() else {
+    let SemanticInput::TargetTap { target_id, .. } = edge.input() else {
         return Ok((edge.input().clone(), None));
     };
     let scene = recognition_scene(context.lab, context.input)?;
@@ -508,32 +519,19 @@ fn resolve_navigation_edge_input<P: LabPorts>(
             &["visible_target", "navigation"],
         ));
     }
-    let rect = target_evaluation_rect(&evaluation)?;
+    let input = resolve_drive_target_input(
+        context.input.resources.admitted_package(),
+        edge,
+        &evaluation,
+    )
+    .map_err(drive_decision_error)?;
     Ok((
-        SemanticInput::Tap {
-            rect,
-            point: drive_rect_center(rect).map_err(drive_decision_error)?,
-        },
+        input,
         Some(crate::NavigationTargetRecognitionResponse {
             target_id: target_id.clone(),
             evaluation: evaluation_response,
         }),
     ))
-}
-
-fn target_evaluation_rect(evaluation: &TargetEvaluation) -> LabResult<PackRect> {
-    let template = evaluation.template.as_ref().ok_or_else(|| {
-        LabError::usage(format!(
-            "target '{}' has no matched template rect",
-            evaluation.id
-        ))
-    })?;
-    Ok(PackRect {
-        x: template.x,
-        y: template.y,
-        width: template.width,
-        height: template.height,
-    })
 }
 
 fn poll_for_page<P: LabPorts>(

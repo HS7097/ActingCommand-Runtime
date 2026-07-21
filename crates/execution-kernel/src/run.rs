@@ -598,9 +598,8 @@ pub fn canonical_page_anchor(game: &str, page_id: &str) -> String {
 
 pub fn page_anchor_matches(game: &str, observed_or_anchor: &str, expected_anchor: &str) -> bool {
     expected_anchor == "any"
-        || observed_or_anchor == expected_anchor
-        || canonical_page_anchor(game, observed_or_anchor) == expected_anchor
-        || observed_or_anchor == format!("{game}/{expected_anchor}")
+        || canonical_page_anchor(game, observed_or_anchor)
+            == canonical_page_anchor(game, expected_anchor)
 }
 
 #[cfg(test)]
@@ -615,6 +614,22 @@ mod tests {
             select_run_operation("fixture01", "fixture01/home", &operations).expect("operation");
 
         assert_eq!(selected.id(), "specific");
+    }
+
+    #[test]
+    fn qualified_and_unqualified_page_anchors_match_symmetrically() {
+        assert!(page_anchor_matches("fixture01", "fixture01/home", "home"));
+        assert!(page_anchor_matches("fixture01", "home", "fixture01/home"));
+        assert!(page_anchor_matches(
+            "fixture01",
+            "fixture01/home",
+            "fixture01/home"
+        ));
+        assert!(!page_anchor_matches(
+            "fixture01",
+            "fixture01/home",
+            "fixture01/other"
+        ));
     }
 
     #[test]

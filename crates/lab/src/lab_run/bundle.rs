@@ -1,234 +1,291 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
-fn lab_control_from_bundle(bundle: &LoadedBundle) -> CliOutcome<LabControl> {
-    let Some(control) = bundle.control() else {
-        return Err(CliError::package_invalid(
-            "Lab package must include control.json",
-        ));
-    };
-    serde_json::from_value(control.clone())
-        .map_err(|err| CliError::package_invalid(format!("failed to parse control.json: {err}")))
-}
-fn load_lab_resources_from_bundle(
-    bundle: LoadedBundle,
-    control: &LabControl,
-) -> CliOutcome<LabResources> {
-    let resource_root = PathBuf::from(bundle.resource_root());
-    let manifest_path = PathBuf::from(bundle.manifest_path());
-    let manifest = bundle.manifest().clone();
-    validate_manifest_entry_task_id(&manifest_path, &manifest, control)?;
-    let operation_path = PathBuf::from(bundle.operation_path());
-    let operation_bundle: OperationBundle = serde_json::from_value(bundle.operation().clone())
-        .map_err(|err| {
-            CliError::package_invalid(format!(
-                "failed to parse {}: {err}",
-                bundle.operation_path()
-            ))
-        })?;
-    operation_bundle.validate(control, |relative| {
-        bundle
-            .resource_entry(&format!(
-                "operations/{}/{}",
-                control.entry_task_id, relative
-            ))
-            .map(|_| true)
-            .or_else(|err| match err {
-                ContainmentError::MissingEntry { .. } => Ok(false),
-                other => Err(containment_error(other)),
-            })
-    })?;
-    validate_recovery_task_entries(&bundle, control, &operation_bundle)?;
-    let pack_path = bundle
-        .recognition_pack_path()
-        .map(PathBuf::from)
-        .ok_or_else(|| CliError::package_invalid("missing recognition pack for Lab package"))?;
-    let pages_path = bundle
-        .pages_path()
-        .map(PathBuf::from)
-        .ok_or_else(|| CliError::package_invalid("missing page set for Lab package"))?;
-    let evaluator = bundle.evaluator().cloned().ok_or_else(|| {
-        CliError::package_invalid("missing recognition evaluator for Lab package")
-    })?;
-    let detector = bundle
-        .detector()
-        .cloned()
-        .ok_or_else(|| CliError::package_invalid("missing page detector for Lab package"))?;
-    let navigation_path = bundle.navigation_path().map(PathBuf::from);
-    let navigation = bundle.navigation().cloned();
-
-    Ok(LabResources {
-        bundle,
-        resource_root,
-        manifest_path,
-        manifest,
-        operation_path,
-        operation_bundle,
-        pack_path,
-        pages_path,
-        evaluator,
-        detector,
-        navigation_path,
-        navigation,
+fn lab_control_from_admitted(package: &AdmittedPackage) -> CliOutcome<LabControl> {
+    let control = package.control();
+    let resolution = control.resolution();
+    let frame_store = control.frame_store();
+    Ok(LabControl {
+        package_id: control.package_id().to_string(),
+        execution_mode: control.execution_mode().as_str().to_string(),
+        game: control.game().to_string(),
+        server: control.server().to_string(),
+        resolution: Resolution {
+            width: resolution.width(),
+            height: resolution.height(),
+        },
+        entry_task_id: control.entry_task().as_str().to_string(),
+        capture_interval_ms: Some(control.capture_interval_ms()),
+        timeout_ms: Some(control.timeout_ms()),
+        step_timeout_ms: Some(control.step_timeout_ms()),
+        max_steps: Some(control.max_steps() as usize),
+        stop_on_error: control.stop_on_error(),
+        stop_on_confirmation: Some(control.stop_on_confirmation()),
+        output: control
+            .output()
+            .map(opaque_metadata_value)
+            .transpose()?,
+        capture_backend: control.capture_backend().map(str::to_string),
+        frame_store: FrameStoreControl {
+            similarity_threshold: frame_store.similarity_threshold(),
+            tier1_ratio: frame_store.tier1_ratio(),
+            tier2_ratio: frame_store.tier2_ratio(),
+            tier3_ratio: frame_store.tier3_ratio(),
+            hysteresis_ratio: frame_store.hysteresis_ratio(),
+            max_mem_bytes: frame_store.max_mem_bytes(),
+            os_reserve_bytes: frame_store.os_reserve_bytes(),
+            flush_workspace_reserve_bytes: frame_store.flush_workspace_reserve_bytes(),
+        },
+        producer: control.producer_present().then(|| json!({"present": true})),
+        trusted_execution: control
+            .trusted_execution_present()
+            .then(|| json!({"present": true})),
     })
 }
-fn validate_manifest_entry_task_id(
-    manifest_path: &Path,
-    manifest: &Value,
+
+fn opaque_metadata_value(metadata: &OpaqueMetadata) -> CliOutcome<Value> {
+    serde_json::to_value(metadata).map_err(|error| {
+        CliError::package_invalid(format!(
+            "failed to project admitted package metadata: {error}"
+        ))
+    })
+}
+
+fn load_lab_resources_from_admitted(
+    package: AdmittedPackage,
     control: &LabControl,
-) -> CliOutcome<()> {
-    let Some(value) = manifest.get("entry_task_id") else {
-        return Ok(());
-    };
-    let Some(manifest_entry_task_id) = value.as_str() else {
-        return Err(CliError::package_invalid(format!(
-            "{} entry_task_id must be a string when present",
-            manifest_path.display()
-        )));
-    };
-    if manifest_entry_task_id != control.entry_task_id {
-        return Err(CliError::package_invalid(format!(
-            "{} entry_task_id '{}' conflicts with control entry_task_id '{}'",
-            manifest_path.display(),
-            manifest_entry_task_id,
+) -> CliOutcome<LabResources> {
+    let operation_bundle = operation_bundle_from_admitted(package.entry_task())?;
+    let stem = format!("{}.{}", control.game, control.server);
+    let navigation_loaded = package.navigation().is_some();
+    let manifest = json!({
+        "entry_task_id": control.entry_task_id,
+        "package_id": control.package_id,
+        "admission": "closed"
+    });
+    let evaluator = package.evaluator().clone();
+    let detector = package.detector().clone();
+
+    Ok(LabResources {
+        package,
+        resource_root: PathBuf::from("resources"),
+        manifest_path: PathBuf::from("resources/manifest.json"),
+        manifest,
+        operation_path: PathBuf::from(format!(
+            "resources/operations/{}/task.json",
             control.entry_task_id
-        )));
-    }
-    Ok(())
+        )),
+        operation_bundle,
+        pack_path: PathBuf::from(format!("resources/recognition/{stem}.pack.json")),
+        pages_path: PathBuf::from(format!("resources/recognition/{stem}.pages.json")),
+        evaluator,
+        detector,
+        navigation_path: navigation_loaded.then(|| {
+            PathBuf::from(format!("resources/navigation/{stem}.navigation.json"))
+        }),
+        navigation_loaded,
+    })
 }
 
-fn validate_recovery_task_entries(
-    bundle: &LoadedBundle,
-    control: &LabControl,
-    operation_bundle: &OperationBundle,
-) -> CliOutcome<()> {
-    let mut task_ids = BTreeSet::new();
-    if let Some(recovery) = &operation_bundle.recovery {
-        task_ids.insert(recovery.task_id());
-    }
-    if operation_bundle
-        .operations
+fn operation_bundle_from_admitted(task: &AdmittedTask) -> CliOutcome<OperationBundle> {
+    let defaults = task.defaults();
+    let operations = task
+        .operations()
         .iter()
-        .any(|operation| operation.on_error.is_some())
-    {
-        task_ids.insert(DEFAULT_RECOVERY_TASK_ID);
-    }
-    for task_id in task_ids {
-        let path = format!("operations/{task_id}/task.json");
-        let bytes = match bundle.resource_entry(&path) {
-            Ok(bytes) => bytes,
-            Err(ContainmentError::MissingEntry { .. }) => {
-                return Err(CliError::package_invalid(format!(
-                    "configured recovery task '{task_id}' is missing {path}"
-                )));
-            }
-            Err(error) => return Err(containment_error(error)),
-        };
-        let recovery_bundle: OperationBundle = serde_json::from_slice(bytes).map_err(|error| {
-            CliError::package_invalid(format!(
-                "failed to parse configured recovery task {path}: {error}"
-            ))
-        })?;
-        recovery_bundle.validate(control, |relative| {
-            bundle
-                .resource_entry(&format!("operations/{task_id}/{relative}"))
-                .or_else(|error| match error {
-                    ContainmentError::MissingEntry { .. } => bundle.resource_entry(relative),
-                    other => Err(other),
-                })
-                .map(|_| true)
-                .or_else(|error| match error {
-                    ContainmentError::MissingEntry { .. } => Ok(false),
-                    other => Err(containment_error(other)),
-                })
-        })?;
-    }
-    Ok(())
+        .map(operation_from_admitted)
+        .collect::<CliOutcome<Vec<_>>>()?;
+    Ok(OperationBundle {
+        task_id: task.key().as_str().to_string(),
+        goal: task.goal().to_string(),
+        defaults: OperationDefaults {
+            template_threshold: defaults.template_threshold(),
+            color_max_distance: defaults.color_max_distance(),
+            timeout_ms: defaults.timeout_ms(),
+            max_attempts: defaults.max_attempts(),
+            retry_interval_ms: defaults.retry_interval_ms(),
+            pre_delay_ms: defaults.pre_delay_ms(),
+            post_delay_ms: defaults.post_delay_ms(),
+            pre_wait_freezes_ms: defaults.pre_wait_freezes_ms(),
+            post_wait_freezes_ms: defaults.post_wait_freezes_ms(),
+        },
+        entry_page: task.entry_page().map(PageKey::qualified),
+        target_page: task.target_page().map(PageKey::qualified),
+        error_pages: task.error_pages().iter().map(PageKey::qualified).collect(),
+        recovery: task
+            .recovery()
+            .map(|task| TaskRecovery(task.as_str().to_string())),
+        max_task_retries: task.max_task_retries(),
+        page_rules: BTreeMap::new(),
+        operations,
+    })
 }
 
-#[derive(Debug, Clone, Deserialize)]
+fn operation_from_admitted(operation: &AdmittedOperation) -> CliOutcome<Operation> {
+    Ok(Operation {
+        id: operation.key().operation().to_string(),
+        purpose: operation.purpose().to_string(),
+        from: page_selector_text(operation.from()),
+        to: operation.to().map(PageKey::qualified),
+        #[cfg(test)]
+        click: operation_click_from_admitted(operation.action()),
+        verify_template: operation
+            .verify_template()
+            .map(|asset| asset.as_str().to_string()),
+        expect_after: operation.expect_after().map(|expectation| OperationExpectation {
+            page_id: expectation.page().qualified(),
+            timeout_ms: expectation.timeout_ms(),
+            interval_ms: expectation.interval_ms(),
+        }),
+        timeout_ms: operation.timeout_ms(),
+        max_attempts: operation.max_attempts(),
+        retry_interval_ms: operation.retry_interval_ms(),
+        pre_delay_ms: operation.pre_delay_ms(),
+        post_delay_ms: operation.post_delay_ms(),
+        pre_wait_freezes_ms: operation.pre_wait_freezes_ms(),
+        post_wait_freezes_ms: operation.post_wait_freezes_ms(),
+        retryable: operation.retryable(),
+        effect: operation.navigation_only().then(|| "navigation_only".to_string()),
+        on_error: operation
+            .on_error()
+            .map(|task| task.as_str().to_string()),
+        guard: operation.guard().map(operation_guard_from_admitted),
+        unguarded_trusted_coordinate: operation.unguarded_trusted_coordinate(),
+        consumes: operation.consumes().to_vec(),
+        produces: operation.produces().to_vec(),
+        verified_live: operation.verified_live(),
+        provenance: operation
+            .provenance()
+            .map(opaque_metadata_value)
+            .transpose()?,
+    })
+}
+
+fn page_selector_text(selector: &PageSelector) -> String {
+    match selector {
+        PageSelector::Any => "any".to_string(),
+        PageSelector::Exact(page) => page.qualified(),
+    }
+}
+
+fn operation_guard_from_admitted(guard: &AdmittedGuard) -> OperationGuard {
+    let (verify_template, color_probe) = match guard.verification() {
+        GuardVerification::Template { asset } => (Some(asset.as_str().to_string()), None),
+        GuardVerification::Color { probe } => (None, Some(probe.as_str().to_string())),
+    };
+    OperationGuard {
+        page_id: guard.page().qualified(),
+        target_id: guard.target().as_str().to_string(),
+        expected_rect: pack_rect(guard.expected_rect()),
+        verify_template,
+        color_probe,
+    }
+}
+
+#[cfg(test)]
+fn operation_click_from_admitted(action: &AdmittedAction) -> OperationClick {
+    match action {
+        AdmittedAction::Tap { point, .. } => OperationClick {
+            kind: "point".to_string(),
+            x: Some(point.x()),
+            y: Some(point.y()),
+            width: None,
+            height: None,
+            from_rect: None,
+            to_rect: None,
+            duration_ms: None,
+            offset: None,
+        },
+        AdmittedAction::LongTap { point, duration } => OperationClick {
+            kind: "long_tap".to_string(),
+            x: Some(point.x()),
+            y: Some(point.y()),
+            width: None,
+            height: None,
+            from_rect: None,
+            to_rect: None,
+            duration_ms: Some(duration.milliseconds()),
+            offset: None,
+        },
+        AdmittedAction::Drag {
+            from, to, duration, ..
+        } => OperationClick {
+            kind: "drag".to_string(),
+            x: None,
+            y: None,
+            width: None,
+            height: None,
+            from_rect: Some(PackRect {
+                x: from.x(),
+                y: from.y(),
+                width: 1,
+                height: 1,
+            }),
+            to_rect: Some(PackRect {
+                x: to.x(),
+                y: to.y(),
+                width: 1,
+                height: 1,
+            }),
+            duration_ms: Some(duration.milliseconds()),
+            offset: None,
+        },
+        AdmittedAction::TargetTap {
+            target: _,
+            mode,
+            offset,
+        } => OperationClick {
+            kind: match mode {
+                TargetTapMode::Deterministic => "target",
+                TargetTapMode::Center => "target_center",
+            }
+            .to_string(),
+            x: None,
+            y: None,
+            width: None,
+            height: None,
+            from_rect: None,
+            to_rect: None,
+            duration_ms: None,
+            offset: offset.map(|offset| PackRect {
+                x: offset.x(),
+                y: offset.y(),
+                width: offset.width(),
+                height: offset.height(),
+            }),
+        },
+    }
+}
+
+fn pack_rect(rect: BoundedRect) -> PackRect {
+    PackRect {
+        x: rect.x(),
+        y: rect.y(),
+        width: rect.width(),
+        height: rect.height(),
+    }
+}
+
+#[derive(Debug, Clone)]
 struct LabControl {
-    schema_version: String,
     package_id: String,
     execution_mode: String,
     game: String,
     server: String,
     resolution: Resolution,
     entry_task_id: String,
-    #[serde(default)]
     capture_interval_ms: Option<u64>,
-    #[serde(default)]
     timeout_ms: Option<u64>,
-    #[serde(default)]
     step_timeout_ms: Option<u64>,
-    #[serde(default)]
     max_steps: Option<usize>,
-    #[serde(default)]
     stop_on_error: Option<bool>,
-    #[serde(default)]
     stop_on_confirmation: Option<bool>,
-    #[serde(default)]
-    allow_placeholder_coords: Option<bool>,
-    #[serde(default)]
     output: Option<Value>,
-    #[serde(default)]
     capture_backend: Option<String>,
-    #[serde(default)]
     frame_store: FrameStoreControl,
-    #[serde(default)]
     producer: Option<Value>,
-    #[serde(default)]
     trusted_execution: Option<Value>,
 }
 
 impl LabControl {
-    fn validate(&self) -> CliOutcome<()> {
-        if self.schema_version != CONTROL_SCHEMA {
-            return Err(CliError::package_invalid(format!(
-                "unsupported control schema_version '{}', expected {CONTROL_SCHEMA}",
-                self.schema_version
-            )));
-        }
-        if !matches!(
-            self.execution_mode.as_str(),
-            "navigable_route" | "recognize_only" | "in_page_guard"
-        ) {
-            return Err(CliError::package_invalid(format!(
-                "unsupported execution_mode '{}', expected navigable_route, recognize_only, or in_page_guard",
-                self.execution_mode
-            )));
-        }
-        for (name, value) in [
-            ("package_id", &self.package_id),
-            ("game", &self.game),
-            ("server", &self.server),
-            ("entry_task_id", &self.entry_task_id),
-        ] {
-            if value.trim().is_empty() {
-                return Err(CliError::package_invalid(format!(
-                    "control {name} is empty"
-                )));
-            }
-        }
-        if self.resolution.width == 0 || self.resolution.height == 0 {
-            return Err(CliError::package_invalid(
-                "control resolution width and height must be non-zero",
-            ));
-        }
-        if self.capture_interval_ms == Some(0) {
-            return Err(CliError::package_invalid(
-                "capture_interval_ms must be positive when provided",
-            ));
-        }
-        if let Some(capture_backend) = &self.capture_backend {
-            CaptureBackendChoice::parse(capture_backend)
-                .map_err(|err| CliError::package_invalid(err.to_string()))?;
-        }
-        self.frame_store
-            .validate()
-            .map_err(CliError::package_invalid)?;
-        Ok(())
-    }
-
     fn capture_backend_choice(&self) -> CliOutcome<Option<CaptureBackendChoice>> {
         self.capture_backend
             .as_deref()
@@ -238,7 +295,7 @@ impl LabControl {
     }
 }
 
-#[derive(Debug, Clone, Copy, Deserialize)]
+#[derive(Debug, Clone, Copy)]
 struct Resolution {
     width: u32,
     height: u32,
@@ -246,7 +303,7 @@ struct Resolution {
 
 #[derive(Debug)]
 struct LabResources {
-    bundle: LoadedBundle,
+    package: AdmittedPackage,
     resource_root: PathBuf,
     manifest_path: PathBuf,
     manifest: Value,
@@ -257,27 +314,35 @@ struct LabResources {
     evaluator: RecognitionEvaluator,
     detector: PageDetector,
     navigation_path: Option<PathBuf>,
-    navigation: Option<Value>,
+    navigation_loaded: bool,
 }
 
 impl LabResources {
     fn has_operation_bundle(&self, task_id: &str) -> CliOutcome<bool> {
-        let path = format!("operations/{task_id}/task.json");
-        match self.bundle.resource_entry(&path) {
-            Ok(_) => Ok(true),
-            Err(ContainmentError::MissingEntry { .. }) => Ok(false),
-            Err(err) => Err(containment_error(err)),
-        }
+        Ok(self
+            .package
+            .tasks()
+            .any(|task| task.key().as_str() == task_id))
     }
 
     fn operation_asset_for_task(&self, task_id: &str, relative: &str) -> CliOutcome<&[u8]> {
-        self.bundle
-            .resource_entry(&format!("operations/{}/{}", task_id, relative))
-            .or_else(|err| match err {
-                ContainmentError::MissingEntry { .. } => self.bundle.resource_entry(relative),
-                other => Err(other),
-            })
-            .map_err(containment_error)
+        let local = format!("operations/{task_id}/{relative}");
+        let key = self
+            .package
+            .assets()
+            .map(|(key, _)| key)
+            .find(|key| key.as_str() == relative || key.as_str() == local)
+            .ok_or_else(|| {
+                CliError::package_invalid(format!(
+                    "admitted operation asset '{relative}' for task '{task_id}' is unavailable"
+                ))
+            })?;
+        self.package.asset_bytes(key).ok_or_else(|| {
+            CliError::package_invalid(format!(
+                "admitted operation asset bytes for '{}' are unavailable",
+                key.as_str()
+            ))
+        })
     }
 
 }
@@ -290,221 +355,39 @@ struct RunState {
     failed_step_id: Option<String>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone)]
 struct OperationBundle {
-    schema_version: String,
     task_id: String,
-    game: String,
-    #[serde(default)]
-    server_scope: Vec<String>,
-    #[serde(default)]
     goal: String,
-    coordinate_space: Resolution,
-    #[serde(default)]
     defaults: OperationDefaults,
-    #[serde(default)]
-    anchors: Vec<OperationAnchor>,
-    #[serde(default)]
     entry_page: Option<String>,
-    #[serde(default)]
     target_page: Option<String>,
-    #[serde(default)]
     error_pages: Vec<String>,
-    #[serde(default)]
     recovery: Option<TaskRecovery>,
-    #[serde(default)]
     max_task_retries: Option<u32>,
-    #[serde(default)]
-    on_exhausted: Option<String>,
-    #[serde(default)]
     page_rules: BTreeMap<String, Value>,
     operations: Vec<Operation>,
 }
 
-impl OperationBundle {
-    fn validate(
-        &self,
-        control: &LabControl,
-        mut operation_asset_exists: impl FnMut(&str) -> CliOutcome<bool>,
-    ) -> CliOutcome<()> {
-        if !matches!(self.schema_version.as_str(), "0.3" | "0.4" | "0.5" | "0.6") {
-            return Err(CliError::package_invalid(format!(
-                "unsupported operation schema_version '{}', expected one of 0.3, 0.4, 0.5, 0.6",
-                self.schema_version
-            )));
-        }
-        if self.task_id != control.entry_task_id && self.task_id != "return_home" {
-            return Err(CliError::package_invalid(format!(
-                "operation task_id '{}' does not match control entry_task_id '{}'",
-                self.task_id, control.entry_task_id
-            )));
-        }
-        if self.game != control.game {
-            return Err(CliError::package_invalid(format!(
-                "operation game '{}' does not match control game '{}'",
-                self.game, control.game
-            )));
-        }
-        if !self.server_scope.is_empty()
-            && !self
-                .server_scope
-                .iter()
-                .any(|server| server == &control.server)
-        {
-            return Err(CliError::package_invalid(format!(
-                "operation server_scope does not include '{}'",
-                control.server
-            )));
-        }
-        if self.coordinate_space.width != control.resolution.width
-            || self.coordinate_space.height != control.resolution.height
-        {
-            return Err(CliError::package_invalid(format!(
-                "operation coordinate_space {}x{} does not match control resolution {}x{}",
-                self.coordinate_space.width,
-                self.coordinate_space.height,
-                control.resolution.width,
-                control.resolution.height
-            )));
-        }
-        if self.operations.is_empty() {
-            return Err(CliError::package_invalid(
-                "operation bundle has no operations",
-            ));
-        }
-        self.defaults.validate()?;
-        for anchor in &self.anchors {
-            if anchor.id.trim().is_empty() {
-                return Err(CliError::package_invalid(
-                    "operation anchor id must not be empty",
-                ));
-            }
-            if !operation_asset_exists(&anchor.template)? {
-                return Err(CliError::package_invalid(format!(
-                    "operation anchor '{}' references missing template {}",
-                    anchor.id, anchor.template
-                )));
-            }
-        }
-        let mut ids = BTreeSet::new();
-        for operation in &self.operations {
-            operation.validate(control)?;
-            if !ids.insert(operation.id.clone()) {
-                return Err(CliError::package_invalid(format!(
-                    "duplicate operation id '{}'",
-                    operation.id
-                )));
-            }
-            if let Some(template) = &operation.verify_template
-                && !operation_asset_exists(template)?
-            {
-                return Err(CliError::package_invalid(format!(
-                    "operation '{}' references missing verify_template {}",
-                    operation.id, template
-                )));
-            }
-            if let Some(guard_template) = operation
-                .guard
-                .as_ref()
-                .and_then(|guard| guard.verify_template.as_ref())
-                && !matches!(
-                    operation.click.kind.as_str(),
-                    "offset" | "target" | "target_center"
-                )
-                && !operation_asset_exists(guard_template)?
-            {
-                return Err(CliError::package_invalid(format!(
-                    "operation '{}' guard references missing verify_template {}",
-                    operation.id, guard_template
-                )));
-            }
-        }
-        self.validate_recovery()?;
-        Ok(())
-    }
-
-    fn validate_recovery(&self) -> CliOutcome<()> {
-        if self.max_task_retries == Some(0) {
-            return Err(CliError::package_invalid(
-                "operation bundle max_task_retries must be positive when provided",
-            ));
-        }
-        if let Some(recovery) = &self.recovery {
-            recovery.validate()?;
-        }
-        if let Some(on_exhausted) = &self.on_exhausted
-            && on_exhausted != "pause"
-        {
-            return Err(CliError::package_invalid(format!(
-                "operation bundle on_exhausted '{on_exhausted}' is unsupported; expected pause"
-            )));
-        }
-        Ok(())
-    }
-}
-
-#[derive(Debug, Clone, Deserialize)]
-#[serde(untagged)]
-enum TaskRecovery {
-    Kind(String),
-    Config {
-        kind: String,
-        #[serde(default)]
-        task_id: Option<String>,
-    },
-}
+#[derive(Debug, Clone)]
+struct TaskRecovery(String);
 
 impl TaskRecovery {
-    fn validate(&self) -> CliOutcome<()> {
-        if self.kind() != "return_home" {
-            return Err(CliError::package_invalid(format!(
-                "operation bundle recovery kind '{}' is unsupported; expected return_home",
-                self.kind()
-            )));
-        }
-        if self.task_id().trim().is_empty() {
-            return Err(CliError::package_invalid(
-                "operation bundle recovery task_id must not be empty",
-            ));
-        }
-        Ok(())
-    }
-
-    fn kind(&self) -> &str {
-        match self {
-            TaskRecovery::Kind(kind) | TaskRecovery::Config { kind, .. } => kind,
-        }
-    }
-
     fn task_id(&self) -> &str {
-        match self {
-            TaskRecovery::Kind(_) => DEFAULT_RECOVERY_TASK_ID,
-            TaskRecovery::Config { task_id, .. } => {
-                task_id.as_deref().unwrap_or(DEFAULT_RECOVERY_TASK_ID)
-            }
-        }
+        &self.0
     }
 }
 
-#[derive(Debug, Clone, Copy, Deserialize)]
+#[derive(Debug, Clone, Copy)]
 struct OperationDefaults {
-    #[serde(default = "default_template_threshold")]
     template_threshold: f32,
-    #[serde(default)]
     color_max_distance: Option<f32>,
-    #[serde(default)]
     timeout_ms: Option<u64>,
-    #[serde(default)]
     max_attempts: Option<u32>,
-    #[serde(default)]
     retry_interval_ms: Option<u64>,
-    #[serde(default)]
     pre_delay_ms: Option<u64>,
-    #[serde(default)]
     post_delay_ms: Option<u64>,
-    #[serde(default)]
     pre_wait_freezes_ms: Option<u64>,
-    #[serde(default)]
     post_wait_freezes_ms: Option<u64>,
 }
 
@@ -525,21 +408,6 @@ impl Default for OperationDefaults {
 }
 
 impl OperationDefaults {
-    fn validate(self) -> CliOutcome<()> {
-        for (name, value) in [
-            ("timeout_ms", self.timeout_ms),
-            ("max_attempts", self.max_attempts.map(u64::from)),
-            ("retry_interval_ms", self.retry_interval_ms),
-        ] {
-            if value == Some(0) {
-                return Err(CliError::package_invalid(format!(
-                    "operation defaults {name} must be positive when provided"
-                )));
-            }
-        }
-        Ok(())
-    }
-
     fn to_json(self) -> Value {
         json!({
             "template_threshold": self.template_threshold,
@@ -555,142 +423,57 @@ impl OperationDefaults {
     }
 }
 
-fn default_template_threshold() -> f32 {
-    DEFAULT_TEMPLATE_THRESHOLD
-}
-
-#[derive(Debug, Clone, Deserialize)]
-struct OperationAnchor {
-    id: String,
-    template: String,
-}
-
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone)]
 struct Operation {
     id: String,
     purpose: String,
     from: String,
-    #[serde(default)]
     to: Option<String>,
+    #[cfg(test)]
     click: OperationClick,
-    #[serde(default)]
     verify_template: Option<String>,
-    #[serde(default)]
     expect_after: Option<OperationExpectation>,
-    #[serde(default)]
     timeout_ms: Option<u64>,
-    #[serde(default)]
     max_attempts: Option<u32>,
-    #[serde(default)]
     retry_interval_ms: Option<u64>,
-    #[serde(default)]
     pre_delay_ms: Option<u64>,
-    #[serde(default)]
     post_delay_ms: Option<u64>,
-    #[serde(default)]
     pre_wait_freezes_ms: Option<u64>,
-    #[serde(default)]
     post_wait_freezes_ms: Option<u64>,
-    #[serde(default)]
     retryable: Option<bool>,
-    #[serde(default)]
     effect: Option<String>,
-    #[serde(default)]
     on_error: Option<String>,
-    #[serde(default)]
     guard: Option<OperationGuard>,
-    #[serde(default)]
     unguarded_trusted_coordinate: bool,
-    #[serde(default)]
     consumes: Vec<String>,
-    #[serde(default)]
     produces: Vec<String>,
-    #[serde(default)]
     verified_live: Option<bool>,
-    #[serde(default)]
     provenance: Option<Value>,
 }
 
 impl Operation {
-    fn validate(&self, control: &LabControl) -> CliOutcome<()> {
-        for (name, value) in [("id", &self.id), ("from", &self.from)] {
-            if value.trim().is_empty() {
-                return Err(CliError::package_invalid(format!(
-                    "operation {name} must not be empty"
-                )));
-            }
-        }
-        self.click.validate(control)?;
-        if matches!(
-            self.click.kind.as_str(),
-            "offset" | "target" | "target_center"
-        ) {
-            let guard = self.guard.as_ref().ok_or_else(|| {
+    fn admitted_input_action(
+        &self,
+        package: &AdmittedPackage,
+        target: Option<&TargetEvaluation>,
+    ) -> CliOutcome<LabInputAction> {
+        let operation = package
+            .entry_task()
+            .operations()
+            .iter()
+            .find(|operation| operation.key().operation() == self.id)
+            .ok_or_else(|| {
                 CliError::package_invalid(format!(
-                    "operation '{}' {} click requires guard metadata",
-                    self.id, self.click.kind
+                    "admitted operation '{}' is missing from the entry task",
+                    self.id
                 ))
             })?;
-            if let Some(target_id) = self.click.target_id.as_deref()
-                && target_id != guard.target_id
-            {
-                return Err(CliError::package_invalid(format!(
-                    "operation '{}' {} click target_id '{}' does not match guard target_id '{}'",
-                    self.id, self.click.kind, target_id, guard.target_id
-                )));
-            }
-            if guard.verify_template.is_none() {
-                return Err(CliError::package_invalid(format!(
-                    "operation '{}' {} click requires template guard metadata; color-probe guards cannot produce a matched_rect",
-                    self.id, self.click.kind
-                )));
-            }
-        }
-        if let Some(expect_after) = &self.expect_after {
-            expect_after.validate(&self.id)?;
-        }
-        self.validate_flow()?;
-        self.validate_guard(control)
+        let intent = resolve_admitted_effect_intent(package, operation, target)
+            .map_err(|error| CliError::package_invalid(error.to_string()))?;
+        Ok(lab_input_action_from_canonical(intent))
     }
 
-    fn validate_flow(&self) -> CliOutcome<()> {
-        if self.timeout_ms == Some(0) {
-            return Err(CliError::package_invalid(format!(
-                "operation '{}' timeout_ms must be positive when provided",
-                self.id
-            )));
-        }
-        if self.max_attempts == Some(0) {
-            return Err(CliError::package_invalid(format!(
-                "operation '{}' max_attempts must be positive when provided",
-                self.id
-            )));
-        }
-        if self.retry_interval_ms == Some(0) {
-            return Err(CliError::package_invalid(format!(
-                "operation '{}' retry_interval_ms must be positive when provided",
-                self.id
-            )));
-        }
-        if let Some(effect) = &self.effect
-            && effect != "navigation_only"
-        {
-            return Err(CliError::package_invalid(format!(
-                "operation '{}' effect '{effect}' is unsupported; expected navigation_only",
-                self.id
-            )));
-        }
-        if let Some(on_error) = &self.on_error
-            && on_error != "return_home"
-        {
-            return Err(CliError::package_invalid(format!(
-                "operation '{}' on_error '{on_error}' is unsupported; expected return_home",
-                self.id
-            )));
-        }
-        Ok(())
-    }
-
+    #[cfg(test)]
     fn input_action(
         &self,
         resolution: &Resolution,
@@ -703,21 +486,6 @@ impl Operation {
             self.guard.as_ref(),
             target,
         )
-    }
-
-    fn validate_guard(&self, control: &LabControl) -> CliOutcome<()> {
-        match (&self.guard, self.unguarded_trusted_coordinate) {
-            (Some(_), true) => Err(CliError::package_invalid(format!(
-                "operation '{}' cannot set both guard and unguarded_trusted_coordinate",
-                self.id
-            ))),
-            (None, true) => Ok(()),
-            (None, false) => Err(CliError::package_invalid(format!(
-                "operation '{}' coordinate action missing guard metadata; add guard or set unguarded_trusted_coordinate for reviewed trusted coordinates",
-                self.id
-            ))),
-            (Some(guard), false) => guard.validate(&self.id, &self.from, control),
-        }
     }
 
     fn expected_after_page(&self) -> Option<&str> {
@@ -804,35 +572,14 @@ impl OperationFlowPolicy {
     }
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone)]
 struct OperationExpectation {
     page_id: String,
-    #[serde(default)]
     timeout_ms: Option<u64>,
-    #[serde(default)]
     interval_ms: Option<u64>,
 }
 
 impl OperationExpectation {
-    fn validate(&self, operation_id: &str) -> CliOutcome<()> {
-        if self.page_id.trim().is_empty() {
-            return Err(CliError::package_invalid(format!(
-                "operation '{operation_id}' expect_after.page_id must not be empty"
-            )));
-        }
-        if self.timeout_ms == Some(0) {
-            return Err(CliError::package_invalid(format!(
-                "operation '{operation_id}' expect_after.timeout_ms must be positive when provided"
-            )));
-        }
-        if self.interval_ms == Some(0) {
-            return Err(CliError::package_invalid(format!(
-                "operation '{operation_id}' expect_after.interval_ms must be positive when provided"
-            )));
-        }
-        Ok(())
-    }
-
     fn to_json(&self) -> Value {
         json!({
             "page_id": self.page_id.as_str(),
@@ -842,50 +589,16 @@ impl OperationExpectation {
     }
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone)]
 struct OperationGuard {
     page_id: String,
     target_id: String,
     expected_rect: PackRect,
-    #[serde(default)]
     verify_template: Option<String>,
-    #[serde(default)]
     color_probe: Option<String>,
 }
 
 impl OperationGuard {
-    fn validate(
-        &self,
-        operation_id: &str,
-        operation_from: &str,
-        control: &LabControl,
-    ) -> CliOutcome<()> {
-        if self.page_id.trim().is_empty() {
-            return Err(CliError::package_invalid(format!(
-                "operation '{operation_id}' guard.page_id must not be empty"
-            )));
-        }
-        if self.target_id.trim().is_empty() {
-            return Err(CliError::package_invalid(format!(
-                "operation '{operation_id}' guard.target_id must not be empty"
-            )));
-        }
-        if !page_anchor_matches(&control.game, &self.page_id, operation_from) {
-            return Err(CliError::package_invalid(format!(
-                "operation '{operation_id}' guard.page_id '{}' does not match operation from '{}'",
-                self.page_id, operation_from
-            )));
-        }
-        validate_guard_rect(self.expected_rect, &control.resolution)?;
-        let has_verify_target = self.verify_template.is_some() || self.color_probe.is_some();
-        if !has_verify_target {
-            return Err(CliError::package_invalid(format!(
-                "operation '{operation_id}' guard requires verify_template or color_probe"
-            )));
-        }
-        Ok(())
-    }
-
     fn to_json(&self) -> Value {
         json!({
             "page_id": self.page_id.as_str(),
@@ -897,127 +610,22 @@ impl OperationGuard {
     }
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[cfg(test)]
+#[derive(Debug, Clone)]
 struct OperationClick {
     kind: String,
-    #[serde(default)]
     x: Option<i32>,
-    #[serde(default)]
     y: Option<i32>,
-    #[serde(default)]
     width: Option<i32>,
-    #[serde(default)]
     height: Option<i32>,
-    #[serde(default, rename = "from")]
     from_rect: Option<PackRect>,
-    #[serde(default, rename = "to")]
     to_rect: Option<PackRect>,
-    #[serde(default)]
     duration_ms: Option<u64>,
-    #[serde(default)]
     offset: Option<PackRect>,
-    #[serde(default)]
-    target_id: Option<String>,
 }
 
+#[cfg(test)]
 impl OperationClick {
-    fn validate(&self, control: &LabControl) -> CliOutcome<()> {
-        match self.kind.as_str() {
-            "rect" | "specific_rect" => {
-                let rect = self.required_rect()?;
-                validate_click_rect(
-                    rect,
-                    &control.resolution,
-                    control.allow_placeholder_coords.unwrap_or(false),
-                )
-            }
-            "point" => {
-                let x = self
-                    .x
-                    .ok_or_else(|| CliError::package_invalid("point click missing x"))?;
-                let y = self
-                    .y
-                    .ok_or_else(|| CliError::package_invalid("point click missing y"))?;
-                validate_click_point(
-                    x,
-                    y,
-                    &control.resolution,
-                    control.allow_placeholder_coords.unwrap_or(false),
-                )
-            }
-            "long_press" | "long_tap" => {
-                let x = self
-                    .x
-                    .ok_or_else(|| CliError::package_invalid("long_press click missing x"))?;
-                let y = self
-                    .y
-                    .ok_or_else(|| CliError::package_invalid("long_press click missing y"))?;
-                validate_click_point(
-                    x,
-                    y,
-                    &control.resolution,
-                    control.allow_placeholder_coords.unwrap_or(false),
-                )?;
-                if self.duration_ms.unwrap_or(0) == 0 {
-                    return Err(CliError::package_invalid(
-                        "long_press duration_ms must be positive",
-                    ));
-                }
-                Ok(())
-            }
-            "offset" => {
-                let offset = self
-                    .offset
-                    .ok_or_else(|| CliError::package_invalid("offset click missing offset rect"))?;
-                if offset.width <= 0 || offset.height <= 0 {
-                    return Err(CliError::package_invalid(format!(
-                        "offset click dimensions must be positive: {}x{}",
-                        offset.width, offset.height
-                    )));
-                }
-                Ok(())
-            }
-            "target" | "target_center" => {
-                if let Some(offset) = self.offset
-                    && (offset.width <= 0 || offset.height <= 0)
-                {
-                    return Err(CliError::package_invalid(format!(
-                        "target click offset dimensions must be positive: {}x{}",
-                        offset.width, offset.height
-                    )));
-                }
-                Ok(())
-            }
-            "drag" => {
-                let from = self
-                    .from_rect
-                    .ok_or_else(|| CliError::package_invalid("drag click missing from rect"))?;
-                let to = self
-                    .to_rect
-                    .ok_or_else(|| CliError::package_invalid("drag click missing to rect"))?;
-                validate_click_rect(
-                    from,
-                    &control.resolution,
-                    control.allow_placeholder_coords.unwrap_or(false),
-                )?;
-                validate_click_rect(
-                    to,
-                    &control.resolution,
-                    control.allow_placeholder_coords.unwrap_or(false),
-                )?;
-                if self.duration_ms.unwrap_or(0) == 0 {
-                    return Err(CliError::package_invalid(
-                        "drag duration_ms must be positive",
-                    ));
-                }
-                Ok(())
-            }
-            other => Err(CliError::package_invalid(format!(
-                "unknown operation click kind '{other}'"
-            ))),
-        }
-    }
-
     fn input_action(
         &self,
         resolution: &Resolution,
@@ -1076,12 +684,7 @@ impl OperationClick {
                 let offset = self
                     .offset
                     .ok_or_else(|| CliError::package_invalid("offset click missing offset rect"))?;
-                let rect = PackRect {
-                    x: matched_rect.x + offset.x,
-                    y: matched_rect.y + offset.y,
-                    width: offset.width,
-                    height: offset.height,
-                };
+                let rect = translated_target_rect(matched_rect, offset)?;
                 validate_click_rect(rect, resolution, false)?;
                 Ok(LabInputAction::Tap(actual_click_point(rect, seed)))
             }
@@ -1100,12 +703,7 @@ impl OperationClick {
                 }
                 let matched_rect = matched_template_rect(target)?;
                 let rect = if let Some(offset) = self.offset {
-                    PackRect {
-                        x: matched_rect.x + offset.x,
-                        y: matched_rect.y + offset.y,
-                        width: offset.width,
-                        height: offset.height,
-                    }
+                    translated_target_rect(matched_rect, offset)?
                 } else {
                     matched_rect
                 };
@@ -1171,6 +769,40 @@ impl OperationClick {
     }
 }
 
+#[cfg(test)]
+fn translated_target_rect(matched: PackRect, offset: PackRect) -> CliOutcome<PackRect> {
+    Ok(PackRect {
+        x: matched.x.checked_add(offset.x).ok_or_else(|| {
+            CliError::package_invalid("target click translated x coordinate overflow")
+        })?,
+        y: matched.y.checked_add(offset.y).ok_or_else(|| {
+            CliError::package_invalid("target click translated y coordinate overflow")
+        })?,
+        width: offset.width,
+        height: offset.height,
+    })
+}
+
+fn lab_input_action_from_canonical(intent: CanonicalEffectIntent) -> LabInputAction {
+    match intent {
+        CanonicalEffectIntent::Tap { point } => LabInputAction::Tap(point.into()),
+        CanonicalEffectIntent::LongTap { point, duration_ms } => LabInputAction::LongTap {
+            point: point.into(),
+            duration_ms,
+        },
+        CanonicalEffectIntent::Swipe {
+            from,
+            to,
+            duration_ms,
+        } => LabInputAction::Drag {
+            from: from.into(),
+            to: to.into(),
+            duration_ms,
+        },
+    }
+}
+
+#[cfg(test)]
 fn matched_template_rect(target: &TargetEvaluation) -> CliOutcome<PackRect> {
     if target.kind != TargetKind::Template {
         return Err(CliError::package_invalid(format!(
@@ -1202,6 +834,7 @@ fn matched_template_rect(target: &TargetEvaluation) -> CliOutcome<PackRect> {
     Ok(rect)
 }
 
+#[cfg(test)]
 fn derive_absolute_coordinate_rect(
     kind: &str,
     declared: PackRect,
@@ -1265,6 +898,23 @@ struct ActualClickPoint {
     y: i32,
 }
 
+impl From<CanonicalEffectPoint> for ActualClickPoint {
+    fn from(point: CanonicalEffectPoint) -> Self {
+        Self {
+            seed: point.seed,
+            algorithm: point.algorithm,
+            rect: PackRect {
+                x: point.rect.x,
+                y: point.rect.y,
+                width: point.rect.width,
+                height: point.rect.height,
+            },
+            x: point.x,
+            y: point.y,
+        }
+    }
+}
+
 impl ActualClickPoint {
     fn to_json(self) -> Value {
         json!({
@@ -1276,6 +926,7 @@ impl ActualClickPoint {
     }
 }
 
+#[cfg(test)]
 fn actual_click_point(rect: PackRect, seed: u64) -> ActualClickPoint {
     let mut state = if seed == 0 {
         0x9e37_79b9_7f4a_7c15
@@ -1293,6 +944,7 @@ fn actual_click_point(rect: PackRect, seed: u64) -> ActualClickPoint {
     }
 }
 
+#[cfg(test)]
 fn actual_explicit_point(rect: PackRect, seed: u64) -> ActualClickPoint {
     ActualClickPoint {
         seed,
@@ -1303,6 +955,7 @@ fn actual_explicit_point(rect: PackRect, seed: u64) -> ActualClickPoint {
     }
 }
 
+#[cfg(test)]
 fn actual_center_point(rect: PackRect, seed: u64) -> ActualClickPoint {
     ActualClickPoint {
         seed,
@@ -1313,6 +966,7 @@ fn actual_center_point(rect: PackRect, seed: u64) -> ActualClickPoint {
     }
 }
 
+#[cfg(test)]
 fn next_u64(state: &mut u64) -> u64 {
     let mut x = *state;
     x ^= x << 13;
@@ -1322,6 +976,7 @@ fn next_u64(state: &mut u64) -> u64 {
     x
 }
 
+#[cfg(test)]
 fn validate_click_rect(
     rect: PackRect,
     resolution: &Resolution,
@@ -1333,10 +988,18 @@ fn validate_click_rect(
             rect.width, rect.height
         )));
     }
+    let right = rect
+        .x
+        .checked_add(rect.width - 1)
+        .ok_or_else(|| CliError::package_invalid("click rect x coordinate overflow"))?;
+    let bottom = rect
+        .y
+        .checked_add(rect.height - 1)
+        .ok_or_else(|| CliError::package_invalid("click rect y coordinate overflow"))?;
     validate_click_point(rect.x, rect.y, resolution, allow_placeholder)?;
     validate_click_point(
-        rect.x + rect.width - 1,
-        rect.y + rect.height - 1,
+        right,
+        bottom,
         resolution,
         allow_placeholder,
     )?;
@@ -1352,32 +1015,8 @@ fn validate_click_rect(
     }
     Ok(())
 }
-fn validate_guard_rect(rect: PackRect, resolution: &Resolution) -> CliOutcome<()> {
-    if rect.width <= 0 || rect.height <= 0 {
-        return Err(CliError::package_invalid(format!(
-            "guard expected_rect dimensions must be positive: {}x{}",
-            rect.width, rect.height
-        )));
-    }
-    validate_rect_point(rect.x, rect.y, resolution, "guard expected_rect")?;
-    validate_rect_point(
-        rect.x + rect.width - 1,
-        rect.y + rect.height - 1,
-        resolution,
-        "guard expected_rect",
-    )
-}
 
-fn validate_rect_point(x: i32, y: i32, resolution: &Resolution, label: &str) -> CliOutcome<()> {
-    if x < 0 || y < 0 || x >= resolution.width as i32 || y >= resolution.height as i32 {
-        return Err(CliError::package_invalid(format!(
-            "{label} point {x},{y} is outside {}x{}",
-            resolution.width, resolution.height
-        )));
-    }
-    Ok(())
-}
-
+#[cfg(test)]
 fn validate_click_point(
     x: i32,
     y: i32,

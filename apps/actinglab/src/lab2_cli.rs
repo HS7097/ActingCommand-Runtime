@@ -57,6 +57,7 @@ struct WaitTiming {
 struct Lab2ClickRect {
     kind: &'static str,
     rect: PackRect,
+    point: SemanticPoint,
     derivation: Value,
 }
 
@@ -164,6 +165,7 @@ fn run_runtime_do(
     reject_mixed_online_and_offline_scene(flags, "do")?;
     let resources = super::contained_resources::load(flags, "do")?;
     let (evaluator, detector) = super::contained_resources::recognition_pipeline(&resources)?;
+    let graph = super::contained_resources::navigation_graph(&resources)?;
     guard_evaluable_target(&evaluator, target, "do")?;
     let session = begin_runtime_debug_session()?;
     start_runtime_debug_operation(&session, RuntimeDebugOperation::Do)?;
@@ -197,12 +199,20 @@ fn run_runtime_do(
         let click = evaluator
             .get_click_target(target)
             .map_err(|err| CliError::usage(err.to_string()))?;
-        let actual_click = derive_lab2_click_rect(&evaluator, target, click, &evaluation)?;
-        if !allow_destructive {
-            let graph = super::contained_resources::navigation_graph(&resources)?;
-            reject_lab2_destructive_click_overlap(target, &before.page, actual_click.rect, &graph)?;
-        }
-        let point = rect_center(actual_click.rect)?;
+        let actual_click = canonical_lab2_click(
+            graph
+                .drive
+                .resolve_direct_target(
+                    resources.admitted_package(),
+                    target,
+                    &evaluation,
+                    Some(&before.page),
+                    allow_destructive,
+                )
+                .map_err(drive_cli_error)?,
+            &evaluation,
+        );
+        let point = actual_click.point;
         let (action_id, device) = if dry_run {
             (Value::Null, json!({"executed": false, "mode": "dry_run"}))
         } else {
@@ -308,18 +318,17 @@ fn run_runtime_ensure(
                 "hint": "observe-current-page-or-route-home-before-ensure"
             })));
         }
-        let route =
-            find_navigation_route(&graph.edges, &start.page, &target_page).ok_or_else(|| {
+        let route = graph
+            .drive
+            .find_route(&start.page, &target_page)
+            .ok_or_else(|| {
                 CliError::usage(format!(
                     "no navigation route from '{}' to '{}'",
                     start.page, target_page
                 ))
             })?;
         for edge in &route {
-            if !allow_destructive {
-                reject_dangerous_semantic_id("navigation edge", &edge.id)?;
-                reject_destructive_overlap(edge, &graph.destructive_clicks)?;
-            }
+            validate_navigation_edge_safety(&graph, edge, edge.input(), allow_destructive)?;
         }
         let route_json = route.iter().map(navigation_edge_json).collect::<Vec<_>>();
         if dry_run {
@@ -344,7 +353,7 @@ fn run_runtime_ensure(
             instance,
             evaluator: &evaluator,
             detector: &detector,
-            destructive_clicks: &graph.destructive_clicks,
+            graph: &graph,
             allow_destructive,
             step_timeout,
             poll,
@@ -404,7 +413,7 @@ struct RuntimeNavigationContext<'a> {
     instance: &'a str,
     evaluator: &'a RecognitionEvaluator,
     detector: &'a PageDetector,
-    destructive_clicks: &'a [DestructiveClick],
+    graph: &'a NavigationGraph,
     allow_destructive: bool,
     step_timeout: Duration,
     poll: Duration,
@@ -418,33 +427,38 @@ fn execute_runtime_navigation_route(
     let mut executed = Vec::new();
     let mut current_page = start_page;
     for edge in route {
-        if current_page != edge.from_page {
+        if current_page != edge.from_page() {
             return Err(CliError::safety_blocked(
                 "navigation_page_drift",
                 format!(
                     "navigation expected current page '{}' but last page was '{}'",
-                    edge.from_page, current_page
+                    edge.from_page(),
+                    current_page
                 ),
                 &["page_guard"],
             ));
         }
         let guard_scene = load_runtime_lab2_scene(ctx.session, ctx.instance)?;
         let guard_page = detect_current_page(ctx.evaluator, ctx.detector, &guard_scene.scene)?;
-        if !guard_page.matched || guard_page.page != edge.from_page {
+        if !guard_page.matched || guard_page.page != edge.from_page() {
             return Err(CliError::safety_blocked(
                 "navigation_page_drift",
                 format!(
                     "navigation edge '{}' expected '{}' but Runtime observed '{}'",
-                    edge.id, edge.from_page, guard_page.page
+                    edge.id(),
+                    edge.from_page(),
+                    guard_page.page
                 ),
                 &["page_guard"],
             ));
         }
-        let (input, recognition) =
-            resolve_runtime_navigation_edge_input(ctx.evaluator, &guard_scene.scene, &edge)?;
-        if !ctx.allow_destructive {
-            reject_destructive_overlap_input(&edge, &input, ctx.destructive_clicks)?;
-        }
+        let (input, recognition) = resolve_runtime_navigation_edge_input(
+            ctx.graph,
+            ctx.evaluator,
+            &guard_scene.scene,
+            &edge,
+        )?;
+        validate_navigation_edge_safety(ctx.graph, &edge, &input, ctx.allow_destructive)?;
         let runtime_action = runtime_input_action(&input)?;
         let action_id = execute_runtime_debug_input(ctx.session, ctx.instance, runtime_action)?;
         let arrived = poll_for_runtime_page(
@@ -452,7 +466,7 @@ fn execute_runtime_navigation_route(
             ctx.instance,
             ctx.evaluator,
             ctx.detector,
-            &edge.to_page,
+            edge.to_page(),
             ctx.step_timeout,
             ctx.poll,
         )?;
@@ -461,7 +475,9 @@ fn execute_runtime_navigation_route(
                 "navigation_arrival_failed",
                 format!(
                     "navigation edge '{}' did not arrive at '{}'; last page '{}'",
-                    edge.id, edge.to_page, arrived.page
+                    edge.id(),
+                    edge.to_page(),
+                    arrived.page
                 ),
                 &["arrival_page"],
             )
@@ -489,12 +505,13 @@ fn execute_runtime_navigation_route(
 }
 
 fn resolve_runtime_navigation_edge_input(
+    graph: &NavigationGraph,
     evaluator: &RecognitionEvaluator,
     scene: &Scene,
     edge: &NavigationEdge,
 ) -> CliOutcome<(SemanticInput, Value)> {
-    let SemanticInput::TargetCenter { target_id } = &edge.input else {
-        return Ok((edge.input.clone(), Value::Null));
+    let SemanticInput::TargetTap { target_id, .. } = edge.input() else {
+        return Ok((edge.input().clone(), Value::Null));
     };
     let evaluation = evaluator
         .evaluate_target(scene, target_id)
@@ -504,17 +521,16 @@ fn resolve_runtime_navigation_edge_input(
             "navigation_target_not_visible",
             format!(
                 "navigation edge '{}' target '{}' did not pass recognition: {}",
-                edge.id, target_id, evaluation.message
+                edge.id(),
+                target_id,
+                evaluation.message
             ),
             &["visible_target", "navigation"],
         ));
     }
-    let rect = target_evaluation_rect(&evaluation)?;
+    let input = resolve_navigation_target_input(graph, edge, &evaluation)?;
     Ok((
-        SemanticInput::Tap {
-            rect,
-            point: rect_center(rect)?,
-        },
+        input,
         json!({
             "target_id": target_id,
             "evaluation": target_eval_json(&evaluation)
@@ -540,7 +556,7 @@ fn runtime_input_action(input: &SemanticInput) -> CliOutcome<InputAction> {
             y2: to.y,
             duration_ms: *duration_ms,
         }),
-        SemanticInput::TargetCenter { .. } => Err(CliError::device(
+        SemanticInput::TargetTap { .. } => Err(CliError::device(
             "Runtime navigation target was not resolved before input",
         )),
     }
@@ -888,9 +904,6 @@ pub(crate) fn run_do(global: &GlobalOptions, args: &[String]) -> CliOutcome<Valu
         )
         .with_details(details));
     }
-    if !allow_destructive {
-        reject_dangerous_semantic_id("target", &target)?;
-    }
     if !dry_run && !flags.bool("--capture") {
         return Err(CliError::usage(
             "do real execution requires --capture; use --dry-run with --scene for offline planning",
@@ -902,6 +915,7 @@ pub(crate) fn run_do(global: &GlobalOptions, args: &[String]) -> CliOutcome<Valu
     let result = (|| -> CliOutcome<Value> {
         let resources = super::contained_resources::load(&flags, "do")?;
         let (evaluator, detector) = super::contained_resources::recognition_pipeline(&resources)?;
+        let graph = super::contained_resources::navigation_graph(&resources)?;
         let env_resolved = Vec::<env_detection::ResolvedEnvValue>::new();
         guard_evaluable_target(&evaluator, &target, "do")?;
         let loaded_scene = load_lab2_scene(global, &flags)?;
@@ -931,15 +945,19 @@ pub(crate) fn run_do(global: &GlobalOptions, args: &[String]) -> CliOutcome<Valu
         let click = evaluator
             .get_click_target(&target)
             .map_err(|err| CliError::usage(err.to_string()))?;
-        let actual_click = derive_lab2_click_rect(&evaluator, &target, click, &evaluation)?;
-        if !allow_destructive {
-            let graph = super::contained_resources::navigation_graph(&resources)?;
-            if let Err(error) = reject_lab2_destructive_click_overlap(
+        let canonical_point = match graph
+            .drive
+            .resolve_direct_target(
+                resources.admitted_package(),
                 &target,
-                &before.page,
-                actual_click.rect,
-                &graph,
-            ) {
+                &evaluation,
+                Some(&before.page),
+                allow_destructive,
+            )
+            .map_err(drive_cli_error)
+        {
+            Ok(point) => point,
+            Err(error) => {
                 let details = isolated_offline_error_details(
                     &ids.req_id,
                     "resource_drift",
@@ -949,8 +967,9 @@ pub(crate) fn run_do(global: &GlobalOptions, args: &[String]) -> CliOutcome<Valu
                 )?;
                 return Err(error.with_details(details));
             }
-        }
-        let point = rect_center(actual_click.rect)?;
+        };
+        let actual_click = canonical_lab2_click(canonical_point, &evaluation);
+        let point = actual_click.point;
         let action_id = ids.issue(IdKind::Action);
         let device = json!({"executed": false, "mode": "isolated_offline"});
         let after = before;
@@ -1042,18 +1061,17 @@ pub(crate) fn run_ensure(global: &GlobalOptions, args: &[String]) -> CliOutcome<
             )
             .with_details(details));
         }
-        let route =
-            find_navigation_route(&graph.edges, &start.page, &target_page).ok_or_else(|| {
+        let route = graph
+            .drive
+            .find_route(&start.page, &target_page)
+            .ok_or_else(|| {
                 CliError::usage(format!(
                     "no navigation route from '{}' to '{}'",
                     start.page, target_page
                 ))
             })?;
         for edge in &route {
-            if !allow_destructive {
-                reject_dangerous_semantic_id("navigation edge", &edge.id)?;
-                reject_destructive_overlap(edge, &graph.destructive_clicks)?;
-            }
+            validate_navigation_edge_safety(&graph, edge, edge.input(), allow_destructive)?;
         }
         let route_json = route.iter().map(navigation_edge_json).collect::<Vec<_>>();
         let mut payload = json!({
@@ -1608,9 +1626,10 @@ fn observe_targets(
 
 fn observe_actions(graph: &NavigationGraph, outcome: &PageDetectionOutcome) -> Vec<Value> {
     graph
-        .edges
+        .drive
+        .edges()
         .iter()
-        .filter(|edge| outcome.matched && edge.from_page == outcome.page)
+        .filter(|edge| outcome.matched && edge.from_page() == outcome.page)
         .map(navigation_edge_json)
         .collect::<Vec<_>>()
 }
@@ -1788,69 +1807,44 @@ fn wait_for_stable_target(
     }
 }
 
-fn derive_lab2_click_rect(
-    evaluator: &RecognitionEvaluator,
-    target: &str,
-    declared: PackRect,
+fn canonical_lab2_click(
+    point: CanonicalEffectPoint,
     evaluation: &TargetEvaluation,
-) -> CliOutcome<Lab2ClickRect> {
-    let Some(anchor) = evaluator
-        .get_template_anchor_rect(target)
-        .map_err(|err| CliError::usage(err.to_string()))?
-    else {
-        return Ok(Lab2ClickRect {
-            kind: "target_rect_center",
-            rect: declared,
-            derivation: json!({"mode": "declared_rect"}),
-        });
+) -> Lab2ClickRect {
+    let rect = PackRect {
+        x: point.rect.x,
+        y: point.rect.y,
+        width: point.rect.width,
+        height: point.rect.height,
     };
-    let Some(template) = evaluation.template else {
-        return Ok(Lab2ClickRect {
-            kind: "target_rect_center",
-            rect: declared,
-            derivation: json!({"mode": "declared_rect", "reason": "non_template_evaluation"}),
-        });
+    let live_match = evaluation.template.is_some();
+    let kind = match (point.algorithm, live_match) {
+        ("explicit_point_v1", _) => "target_declared_point",
+        ("center_point_v1", true) => "target_rect_center_live_match",
+        ("center_point_v1", false) => "target_rect_center",
+        ("xorshift64_uniform_rect_v1", true) => "target_rect_deterministic_live_match",
+        ("xorshift64_uniform_rect_v1", false) => "target_rect_deterministic",
+        _ => "target_rect_canonical",
     };
-    let matched = PackRect {
-        x: template.x,
-        y: template.y,
-        width: template.width,
-        height: template.height,
-    };
-    let rect = derive_absolute_coordinate_rect_from_match("lab2_do", declared, anchor, matched)?;
-    Ok(Lab2ClickRect {
-        kind: "target_rect_center_live_match",
+    Lab2ClickRect {
+        kind,
         rect,
+        point: SemanticPoint {
+            x: point.x,
+            y: point.y,
+        },
         derivation: json!({
-            "mode": "matched_template_delta",
-            "expected_rect": rect_json(anchor),
-            "matched_rect": rect_json(matched)
+            "mode": "canonical_effect_decision",
+            "algorithm": point.algorithm,
+            "seed": point.seed,
+            "matched_rect": evaluation.template.map(|template| PackRect {
+                x: template.x,
+                y: template.y,
+                width: template.width,
+                height: template.height
+            }).map(rect_json)
         }),
-    })
-}
-
-fn reject_lab2_destructive_click_overlap(
-    target: &str,
-    page: &str,
-    click: PackRect,
-    graph: &NavigationGraph,
-) -> CliOutcome<()> {
-    if graph.destructive_clicks.iter().any(|destructive| {
-        destructive
-            .page
-            .as_deref()
-            .is_none_or(|expected| expected == page)
-            && rects_intersect(click, destructive.rect)
-    }) {
-        return Err(CliError::safety_blocked(
-            "semantic_action_requires_destructive_opt_in",
-            format!(
-                "target '{target}' click rect overlaps a destructive_actions region and requires --allow-destructive"
-            ),
-            &["destructive_actions", "allow_destructive"],
-        ));
     }
-    Ok(())
 }
 
 fn target_list(flags: &FlagArgs) -> Vec<String> {

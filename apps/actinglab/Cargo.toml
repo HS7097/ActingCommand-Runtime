@@ -19,7 +19,6 @@ actingcommand-device = { workspace = true }
 actingcommand-lab = { workspace = true }
 actingcommand-ledger = { workspace = true }
 actingcommand-page-detector = { workspace = true }
-actingcommand-pack-containment = { workspace = true }
 actingcommand-recognition = { workspace = true }
 actingcommand-recognition-pack = { workspace = true }
 actingcommand-resource-tooling = { workspace = true }
@@ -30,6 +29,7 @@ sha2 = { workspace = true }
 zip = { workspace = true }
 
 [dev-dependencies]
+actingcommand-pack-containment = { workspace = true }
 actingcommand-runtime-host = { workspace = true }
 actingcommand-scheduler = { workspace = true }
 tempfile = "3"
