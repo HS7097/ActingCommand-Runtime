@@ -27,6 +27,21 @@ fn package_dry_run_binds_inputs_and_writes_a_deterministic_offline_bundle() {
     assert_eq!(record["executed"], false);
     assert_eq!(record["production_global_ledger_written"], false);
     assert_eq!(record["package_sha256"], fixture.package_sha256);
+    let decision_fingerprint = record["decision_fingerprint"].as_str().unwrap();
+    assert_eq!(decision_fingerprint.len(), 64);
+    assert!(
+        decision_fingerprint
+            .bytes()
+            .all(|byte| byte.is_ascii_hexdigit())
+    );
+    assert_eq!(
+        record["simulation"]["decision_fingerprint"],
+        decision_fingerprint
+    );
+    assert_eq!(
+        envelope_data(&first)["decision_fingerprint"],
+        decision_fingerprint
+    );
     assert_eq!(
         record["simulation"]["package_sha256"],
         fixture.package_sha256
@@ -62,6 +77,10 @@ fn package_dry_run_binds_inputs_and_writes_a_deterministic_offline_bundle() {
     assert_success(&decorated, "would_click");
     let decorated_record = read_result_record(&fixture.temp.path().join("decorated.result.zip"));
     assert_eq!(decorated_record["package_sha256"], fixture.package_sha256);
+    assert_eq!(
+        decorated_record["decision_fingerprint"],
+        record["decision_fingerprint"]
+    );
     assert_eq!(
         fs::read(fixture.temp.path().join("first.result.zip")).unwrap(),
         fs::read(fixture.temp.path().join("decorated.result.zip")).unwrap()
@@ -100,8 +119,9 @@ fn package_dry_run_reports_complete_no_op_and_recovery_closure() {
 #[test]
 fn package_dry_run_fails_loud_for_recognition_and_guard_failures() {
     let unknown = TestFixture::new(PackageOptions::default(), solid_frame([0, 0, 0], [0, 0, 0]));
-    assert_error_code(
+    assert_refusal_receipt(
         &unknown.run(&[], "unknown.zip"),
+        &unknown.temp.path().join("unknown.zip"),
         "contained_task_page_unknown",
     );
 
@@ -112,17 +132,23 @@ fn package_dry_run_fails_loud_for_recognition_and_guard_failures() {
         },
         home_frame(true),
     );
-    assert_error_code(
+    assert_refusal_receipt(
         &conflict.run(&[], "conflict.zip"),
+        &conflict.temp.path().join("conflict.zip"),
         "contained_task_recognition_conflict",
     );
 
     let guard = TestFixture::new(PackageOptions::default(), home_frame(false));
-    assert_error_code(&guard.run(&[], "guard.zip"), "contained_task_guard_refused");
+    assert_refusal_receipt(
+        &guard.run(&[], "guard.zip"),
+        &guard.temp.path().join("guard.zip"),
+        "contained_task_guard_refused",
+    );
 
     let mismatch = TestFixture::new(PackageOptions::default(), solid_frame_1x1([255, 0, 0]));
-    assert_error_code(
+    assert_refusal_receipt(
         &mismatch.run(&[], "mismatch.zip"),
+        &mismatch.temp.path().join("mismatch.zip"),
         "contained_task_frame_resolution_mismatch",
     );
 }
@@ -224,14 +250,21 @@ fn package_dry_run_rejects_missing_inputs_and_device_scope() {
 
     for (name, extra) in [
         ("instance", vec!["--instance", "neutral-instance"]),
+        ("instances-empty", vec!["--instances", ""]),
         ("capture", vec!["--capture-backend", "adb"]),
         ("input", vec!["--touch-backend", "maatouch"]),
         ("runtime", vec!["--runtime-endpoint", "http://127.0.0.1:9"]),
+        ("global-dry-run", vec!["--dry-run"]),
     ] {
         let output = fixture.run(&extra, &format!("{name}.zip"));
         assert_error_code(&output, "offline_device_scope_forbidden");
     }
-    assert_failure(&fixture.run(&["--send-input", "true"], "unsupported.zip"));
+    let mut capability_attempt = fixture.args_with_hash(&fixture.package_sha256, "unsupported.zip");
+    capability_attempt.extend([OsString::from("--send-input"), OsString::from("true")]);
+    assert_error_code(
+        &run_actinglab(&fixture.temp, capability_attempt),
+        "offline_device_scope_forbidden",
+    );
 
     let alias_dir = fixture.temp.path().join("alias");
     fs::create_dir(&alias_dir).unwrap();
@@ -253,6 +286,80 @@ fn package_dry_run_rejects_missing_inputs_and_device_scope() {
         ],
     );
     assert_error_code(&output, "offline_output_conflicts_with_input");
+}
+
+#[test]
+fn package_dry_run_cannot_be_false_greened_by_version() {
+    let fixture = TestFixture::new(PackageOptions::default(), home_frame(true));
+    for (name, version_index) in [("before", 1usize), ("between", 2), ("after", 3)] {
+        let out_name = format!("version-{name}.zip");
+        let out = fixture.temp.path().join(&out_name);
+        let mut args = fixture.args_with_hash(&fixture.package_sha256, &out_name);
+        args.insert(version_index, OsString::from("--version"));
+        let output = run_actinglab(&fixture.temp, args);
+        assert!(!output.status.success());
+        let result = envelope(&output);
+        assert_eq!(result["ok"], false);
+        assert_eq!(result["command"], "package dry-run");
+        assert_eq!(result["error"]["code"], "validation_failed");
+        assert!(!out.exists(), "{} unexpectedly created", out.display());
+    }
+}
+
+#[test]
+fn package_dry_run_rejects_empty_values_and_duplicate_singletons() {
+    let fixture = TestFixture::new(PackageOptions::default(), home_frame(true));
+
+    for (name, flag, value) in [
+        ("duplicate-zip", "--zip", fixture.package_path.as_os_str()),
+        (
+            "duplicate-expected",
+            "--expected-sha256",
+            OsStr::new(&fixture.package_sha256),
+        ),
+        ("duplicate-out", "--out", OsStr::new("duplicate-out.zip")),
+    ] {
+        let mut args = fixture.args_with_hash(&fixture.package_sha256, &format!("{name}.zip"));
+        args.extend([OsString::from(flag), value.to_owned()]);
+        assert_error_code(
+            &run_actinglab(&fixture.temp, args),
+            "offline_argument_invalid",
+        );
+    }
+
+    let mut empty_out = fixture.args_with_hash(&fixture.package_sha256, "empty-out.zip");
+    *empty_out.last_mut().unwrap() = OsString::new();
+    assert_error_code(
+        &run_actinglab(&fixture.temp, empty_out),
+        "offline_argument_invalid",
+    );
+}
+
+#[test]
+fn package_dry_run_never_overwrites_existing_or_hard_linked_inputs() {
+    let fixture = TestFixture::new(PackageOptions::default(), home_frame(true));
+    let package_before = fs::read(&fixture.package_path).unwrap();
+    let fixture_before = fs::read(&fixture.fixture_path).unwrap();
+
+    for (name, input) in [
+        ("package-alias.zip", &fixture.package_path),
+        ("fixture-alias.png", &fixture.fixture_path),
+    ] {
+        let alias = fixture.temp.path().join(name);
+        fs::hard_link(input, &alias).unwrap();
+        let output = fixture.run(&[], name);
+        assert_error_code(&output, "offline_output_already_exists");
+    }
+    assert_eq!(fs::read(&fixture.package_path).unwrap(), package_before);
+    assert_eq!(fs::read(&fixture.fixture_path).unwrap(), fixture_before);
+
+    let first = fixture.run(&[], "existing-result.zip");
+    assert_success(&first, "would_click");
+    let existing = fixture.temp.path().join("existing-result.zip");
+    let existing_before = fs::read(&existing).unwrap();
+    let second = fixture.run(&[], "existing-result.zip");
+    assert_error_code(&second, "offline_output_already_exists");
+    assert_eq!(fs::read(existing).unwrap(), existing_before);
 }
 
 #[test]
@@ -335,9 +442,14 @@ impl TestFixture {
     }
 
     fn run_with_hash(&self, expected: &str, extra: &[&str], out_name: &str) -> Output {
-        let out = self.temp.path().join(out_name);
         let mut args = extra.iter().map(OsString::from).collect::<Vec<_>>();
-        args.extend([
+        args.extend(self.args_with_hash(expected, out_name));
+        run_actinglab(&self.temp, args)
+    }
+
+    fn args_with_hash(&self, expected: &str, out_name: &str) -> Vec<OsString> {
+        let out = self.temp.path().join(out_name);
+        vec![
             OsString::from("--json"),
             OsString::from("package"),
             OsString::from("dry-run"),
@@ -349,8 +461,7 @@ impl TestFixture {
             self.fixture_path.as_os_str().to_owned(),
             OsString::from("--out"),
             out.as_os_str().to_owned(),
-        ]);
-        run_actinglab(&self.temp, args)
+        ]
     }
 }
 
@@ -424,6 +535,30 @@ fn assert_failure(output: &Output) {
 fn assert_error_code(output: &Output, expected: &str) {
     assert_failure(output);
     assert_eq!(envelope(output)["error"]["code"], expected);
+}
+
+fn assert_refusal_receipt(output: &Output, path: &Path, expected: &str) {
+    assert_error_code(output, expected);
+    let response = envelope(output);
+    let details = &response["error"]["details"];
+    assert_eq!(details["status"], "refused");
+    assert_eq!(details["decision"]["status"], "refused");
+    assert_eq!(details["decision"]["code"], expected);
+    assert_eq!(details["executed"], false);
+    assert_eq!(details["production_global_ledger_written"], false);
+    let fingerprint = details["decision_fingerprint"]
+        .as_str()
+        .expect("refusal decision fingerprint");
+    assert_eq!(fingerprint.len(), 64);
+    assert!(fingerprint.bytes().all(|byte| byte.is_ascii_hexdigit()));
+
+    let record = read_result_record(path);
+    assert_eq!(record["decision_fingerprint"], fingerprint);
+    assert_eq!(record["simulation"]["decision_fingerprint"], fingerprint);
+    assert_eq!(record["simulation"]["decision"]["status"], "refused");
+    assert_eq!(record["simulation"]["decision"]["code"], expected);
+    assert_eq!(record["executed"], false);
+    assert_eq!(record["production_global_ledger_written"], false);
 }
 
 fn read_result_record(path: &Path) -> Value {
