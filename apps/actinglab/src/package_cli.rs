@@ -10,6 +10,10 @@ use std::path::Path;
 #[path = "package_offline.rs"]
 mod offline;
 
+pub(super) fn is_offline_command(args: &[String]) -> bool {
+    matches!(args, [group, command, ..] if group == "package" && command == "dry-run")
+}
+
 pub(super) fn run_offline(global: &GlobalOptions, flags: &FlagArgs) -> CliOutcome<Value> {
     offline::run_dry_run(global, flags)
 }

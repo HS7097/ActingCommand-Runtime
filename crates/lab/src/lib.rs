@@ -47,10 +47,10 @@ pub use state::*;
 pub use actingcommand_artifact_store::{FrameStoreControl, MemorySample, MemorySampleSource};
 pub use actingcommand_contract::{LabError, LabResult};
 pub use actingcommand_execution_kernel::{
-    DetectKind, OfflineSimulationError, OfflineSimulationResult, PreparedContainedTask,
-    RecoveryAction, RecoveryExecError, RecoveryExecutionReport, RecoveryGraph, RecoveryNode,
-    RecoveryResult, RecoveryRuntime, RecoverySignal, RecoveryStatus, execute_recovery_graph,
-    simulate_contained_task,
+    DetectKind, OfflineDecision, OfflineSimulationError, OfflineSimulationResult,
+    PreparedContainedTask, RecoveryAction, RecoveryExecError, RecoveryExecutionReport,
+    RecoveryGraph, RecoveryNode, RecoveryResult, RecoveryRuntime, RecoverySignal, RecoveryStatus,
+    execute_recovery_graph, simulate_contained_task,
 };
 
 pub struct Lab<P: LabPorts> {

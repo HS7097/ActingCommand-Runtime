@@ -8,10 +8,13 @@ use crate::{
 };
 use actingcommand_contract::InputAction;
 use actingcommand_device::Frame;
+use actingcommand_pack_containment::Sha256Hash;
 use serde::Serialize;
 use std::collections::VecDeque;
 use std::error::Error;
 use std::fmt;
+
+const FIXTURE_EXHAUSTED_CODE: &str = "offline_fixture_exhausted";
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct OfflineRecognitionResult {
@@ -35,6 +38,10 @@ pub enum OfflineDecision {
     NoOp {
         final_page: Option<String>,
     },
+    Refused {
+        code: String,
+        detail: Option<String>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -43,6 +50,7 @@ pub struct OfflineSimulationResult {
     pub executed: bool,
     pub package_id: String,
     pub package_sha256: String,
+    pub decision_fingerprint: String,
     pub task_id: String,
     pub entry_count: usize,
     pub task_count: usize,
@@ -99,68 +107,118 @@ pub fn simulate_contained_task(
     task: &PreparedContainedTask,
     frames: Vec<Frame>,
 ) -> Result<OfflineSimulationResult, OfflineSimulationError> {
-    if frames.is_empty() {
-        return Err(OfflineSimulationError::new("offline_fixture_missing"));
-    }
     let mut runtime = OfflineRuntime::new(frames);
-    let decision = match task.run(&mut runtime) {
-        Ok(outcome) if outcome.executed_steps == 0 && task.execution_mode() == "recognize_only" => {
-            OfflineDecision::NoOp {
-                final_page: outcome.final_page,
-            }
+    let decision = if runtime.frames.is_empty() {
+        OfflineDecision::Refused {
+            code: "offline_fixture_missing".to_string(),
+            detail: None,
         }
-        Ok(outcome) if outcome.executed_steps == 0 => OfflineDecision::WouldComplete {
-            final_page: outcome.final_page,
-        },
-        Ok(_) => {
-            return Err(OfflineSimulationError::new(
-                "offline_simulation_executed_step_invariant",
-            ));
-        }
-        Err(ContainedTaskRunError::Boundary(OfflineBoundary::EffectIntercepted)) => runtime
-            .planned
-            .take()
-            .map(|planned| OfflineDecision::WouldClick {
-                operation_label: planned.operation_label,
-                action: planned.action,
-                guard: planned.guard,
-            })
-            .ok_or_else(|| {
-                OfflineSimulationError::new("offline_simulation_effect_intent_missing")
-            })?,
-        Err(ContainedTaskRunError::Boundary(OfflineBoundary::FixtureExhausted)) => {
-            if runtime
-                .recognition
-                .last()
-                .is_some_and(|result| result.matched_page.is_none())
+    } else {
+        match task.run(&mut runtime) {
+            Ok(outcome)
+                if outcome.executed_steps == 0 && task.execution_mode() == "recognize_only" =>
             {
-                return Err(OfflineSimulationError::new("contained_task_page_unknown"));
+                OfflineDecision::NoOp {
+                    final_page: outcome.final_page,
+                }
             }
-            return Err(OfflineSimulationError::new("offline_fixture_exhausted"));
-        }
-        Err(ContainedTaskRunError::Boundary(OfflineBoundary::Invariant(code))) => {
-            return Err(OfflineSimulationError::new(code));
-        }
-        Err(ContainedTaskRunError::Task(error)) => {
-            return Err(match error.detail() {
-                Some(detail) => OfflineSimulationError::with_detail(error.code(), detail),
-                None => OfflineSimulationError::new(error.code()),
-            });
+            Ok(outcome) if outcome.executed_steps == 0 => OfflineDecision::WouldComplete {
+                final_page: outcome.final_page,
+            },
+            Ok(_) => {
+                return Err(OfflineSimulationError::new(
+                    "offline_simulation_executed_step_invariant",
+                ));
+            }
+            Err(ContainedTaskRunError::Boundary(OfflineBoundary::EffectIntercepted)) => runtime
+                .planned
+                .take()
+                .map(|planned| OfflineDecision::WouldClick {
+                    operation_label: planned.operation_label,
+                    action: planned.action,
+                    guard: planned.guard,
+                })
+                .ok_or_else(|| {
+                    OfflineSimulationError::new("offline_simulation_effect_intent_missing")
+                })?,
+            Err(ContainedTaskRunError::Boundary(OfflineBoundary::FixtureExhausted)) => {
+                OfflineDecision::Refused {
+                    code: FIXTURE_EXHAUSTED_CODE.to_string(),
+                    detail: None,
+                }
+            }
+            Err(ContainedTaskRunError::Boundary(OfflineBoundary::Invariant(code))) => {
+                return Err(OfflineSimulationError::new(code));
+            }
+            Err(ContainedTaskRunError::Task(error)) => OfflineDecision::Refused {
+                code: error.code().to_string(),
+                detail: error.detail().map(str::to_string),
+            },
         }
     };
 
+    let package_id = task.package_label().to_string();
+    let package_sha256 = task.package_sha256().to_string();
+    let task_id = task.task_label().to_string();
+    let decision_fingerprint = fingerprint_decision(
+        &package_id,
+        &package_sha256,
+        &task_id,
+        &runtime.recognition,
+        &decision,
+    )?;
     Ok(OfflineSimulationResult {
         mode: "offline_simulation",
         executed: false,
-        package_id: task.package_label().to_string(),
-        package_sha256: task.package_sha256().to_string(),
-        task_id: task.task_label().to_string(),
+        package_id,
+        package_sha256,
+        decision_fingerprint,
+        task_id,
         entry_count: task.entry_count(),
         task_count: task.task_count(),
         capture_count: runtime.capture_count,
         recognition: runtime.recognition,
         decision,
     })
+}
+
+#[derive(Serialize)]
+struct DecisionFingerprintProjection<'a> {
+    schema_version: &'static str,
+    package_id: &'a str,
+    package_sha256: &'a str,
+    task_id: &'a str,
+    recognition: &'a [OfflineRecognitionResult],
+    decision: &'a OfflineDecision,
+}
+
+fn fingerprint_decision(
+    package_id: &str,
+    package_sha256: &str,
+    task_id: &str,
+    recognition: &[OfflineRecognitionResult],
+    decision: &OfflineDecision,
+) -> Result<String, OfflineSimulationError> {
+    const DOMAIN: &[u8] = b"ActingCommand package offline first decision v1\0";
+    let encoded = serde_json::to_vec(&DecisionFingerprintProjection {
+        schema_version: "actingcommand.package-offline-decision.v1",
+        package_id,
+        package_sha256,
+        task_id,
+        recognition,
+        decision,
+    })
+    .map_err(|error| {
+        OfflineSimulationError::with_detail(
+            "offline_decision_fingerprint_failed",
+            error.to_string(),
+        )
+    })?;
+    let mut framed = Vec::with_capacity(DOMAIN.len() + size_of::<u64>() + encoded.len());
+    framed.extend_from_slice(DOMAIN);
+    framed.extend_from_slice(&(encoded.len() as u64).to_be_bytes());
+    framed.extend_from_slice(&encoded);
+    Ok(Sha256Hash::digest(&framed).to_string())
 }
 
 struct PlannedEffect {
@@ -260,7 +318,6 @@ mod tests {
     use super::*;
     use crate::{ExternalExpectedSha256, PreparedContainedTask};
     use actingcommand_device::{CaptureBackendName, PixelFormat};
-    use actingcommand_pack_containment::Sha256Hash;
     use serde_json::{Value, json};
     use std::io::{Cursor, Write};
     use zip::{ZipWriter, write::FileOptions};
@@ -269,18 +326,117 @@ mod tests {
     fn offline_and_effecting_runtime_share_the_first_decision() {
         let package_bytes = package(PackageOptions::default());
         let task = prepare(&package_bytes);
-        let offline =
-            simulate_contained_task(&task, vec![home_frame(true)]).expect("offline simulation");
-        let offline_action = match offline.decision {
-            OfflineDecision::WouldClick { action, .. } => action,
+        let frames = vec![home_frame(true)];
+        let offline = simulate_contained_task(&task, frames.clone()).expect("offline simulation");
+        let offline_action = match &offline.decision {
+            OfflineDecision::WouldClick { action, .. } => action.clone(),
             other => panic!("expected would-click, got {other:?}"),
         };
-        let mut effecting = EffectingRuntime::new(vec![home_frame(true), terminal_frame()]);
+        let effecting = effecting_decision(&task, frames);
 
-        let outcome = task.run(&mut effecting).expect("effecting execution");
-
-        assert_eq!(outcome.executed_steps, 1);
+        assert_eq!(effecting.decision, offline.decision);
+        assert_eq!(effecting.decision_fingerprint, offline.decision_fingerprint);
         assert_eq!(effecting.actions, vec![offline_action]);
+    }
+
+    #[test]
+    fn effecting_runtime_stops_at_the_typed_first_effect_boundary() {
+        let package_bytes = package(PackageOptions::default());
+        let task = prepare(&package_bytes);
+        let mut runtime = EffectingRuntime::new(vec![home_frame(true)]);
+
+        let outcome = task.run(&mut runtime);
+
+        assert!(matches!(
+            outcome,
+            Err(ContainedTaskRunError::Boundary(
+                EffectingBoundary::FirstEffectIntercepted
+            ))
+        ));
+        assert!(runtime.frames.is_empty());
+        assert_eq!(runtime.actions.len(), 1);
+        assert!(runtime.first_effect.is_some());
+        assert!(runtime.recognition_at_first_effect.is_some());
+    }
+
+    #[test]
+    fn offline_and_effecting_runtime_share_completion_and_no_op() {
+        let navigable = package(PackageOptions::default());
+        let navigable = prepare(&navigable);
+        let frames = vec![terminal_frame()];
+        let offline =
+            simulate_contained_task(&navigable, frames.clone()).expect("offline completion");
+        let effecting = effecting_decision(&navigable, frames);
+        assert_eq!(effecting.decision, offline.decision);
+        assert_eq!(effecting.decision_fingerprint, offline.decision_fingerprint);
+        assert!(effecting.actions.is_empty());
+
+        let recognize_only = package(PackageOptions {
+            execution_mode: "recognize_only",
+            ..PackageOptions::default()
+        });
+        let recognize_only = prepare(&recognize_only);
+        let offline = simulate_contained_task(&recognize_only, vec![home_frame(true)])
+            .expect("offline no-op");
+        let effecting = effecting_decision(&recognize_only, vec![home_frame(true)]);
+        assert_eq!(effecting.decision, offline.decision);
+        assert_eq!(effecting.decision_fingerprint, offline.decision_fingerprint);
+        assert!(effecting.actions.is_empty());
+    }
+
+    #[test]
+    fn offline_and_effecting_runtime_share_all_typed_refusals() {
+        let navigable = prepare(&package(PackageOptions::default()));
+        assert_same_refusal(
+            &navigable,
+            vec![home_frame(false)],
+            "contained_task_guard_refused",
+        );
+
+        let unknown = prepare(&package(PackageOptions {
+            step_timeout_ms: 1,
+            ..PackageOptions::default()
+        }));
+        let unknown_frame = solid_frame([0, 0, 0], [0, 0, 0]);
+        assert_same_refusal(
+            &unknown,
+            vec![unknown_frame; 16],
+            "contained_task_page_unknown",
+        );
+
+        let conflict = prepare(&package(PackageOptions {
+            conflicting_page: true,
+            ..PackageOptions::default()
+        }));
+        assert_same_refusal(
+            &conflict,
+            vec![home_frame(true)],
+            "contained_task_recognition_conflict",
+        );
+
+        let wrong_size = Frame::from_pixels(
+            1,
+            1,
+            vec![255, 0, 0],
+            PixelFormat::Rgb8,
+            CaptureBackendName::AdbScreencap,
+        )
+        .expect("frame");
+        assert_same_refusal(
+            &navigable,
+            vec![wrong_size],
+            "contained_task_frame_resolution_mismatch",
+        );
+
+        let exhaustion = prepare(&package(PackageOptions {
+            step_timeout_ms: 60_000,
+            ..PackageOptions::default()
+        }));
+        assert_same_refusal(
+            &exhaustion,
+            vec![solid_frame([0, 0, 0], [0, 0, 0])],
+            FIXTURE_EXHAUSTED_CODE,
+        );
     }
 
     #[test]
@@ -303,20 +459,25 @@ mod tests {
     }
 
     #[test]
-    fn simulation_fails_loud_for_unknown_conflict_guard_and_resolution() {
+    fn simulation_receipts_bind_typed_refusals_to_decision_fingerprints() {
         let package_bytes = package(PackageOptions::default());
         let task = prepare(&package_bytes);
+        let unknown_task = prepare(&package(PackageOptions {
+            step_timeout_ms: 1,
+            ..PackageOptions::default()
+        }));
+        let unknown_frame = solid_frame([0, 0, 0], [0, 0, 0]);
+        let unknown = simulate_contained_task(&unknown_task, vec![unknown_frame; 16])
+            .expect("unknown-page refusal receipt");
+        assert_refusal(&unknown, "contained_task_page_unknown");
+        let guard =
+            simulate_contained_task(&task, vec![home_frame(false)]).expect("guard refusal receipt");
+        assert_refusal(&guard, "contained_task_guard_refused");
+        let guard_replay = simulate_contained_task(&task, vec![home_frame(false)])
+            .expect("guard refusal replay receipt");
         assert_eq!(
-            simulate_contained_task(&task, vec![solid_frame([0, 0, 0], [0, 0, 0])])
-                .expect_err("unknown page")
-                .code(),
-            "contained_task_page_unknown"
-        );
-        assert_eq!(
-            simulate_contained_task(&task, vec![home_frame(false)])
-                .expect_err("guard refusal")
-                .code(),
-            "contained_task_guard_refused"
+            guard.decision_fingerprint,
+            guard_replay.decision_fingerprint
         );
         let wrong_size = Frame::from_pixels(
             1,
@@ -326,23 +487,58 @@ mod tests {
             CaptureBackendName::AdbScreencap,
         )
         .expect("frame");
-        assert_eq!(
-            simulate_contained_task(&task, vec![wrong_size])
-                .expect_err("resolution mismatch")
-                .code(),
-            "contained_task_frame_resolution_mismatch"
-        );
+        let resolution =
+            simulate_contained_task(&task, vec![wrong_size]).expect("resolution refusal receipt");
+        assert_refusal(&resolution, "contained_task_frame_resolution_mismatch");
 
         let conflict = package(PackageOptions {
             conflicting_page: true,
             ..PackageOptions::default()
         });
+        let conflict = simulate_contained_task(&prepare(&conflict), vec![home_frame(true)])
+            .expect("conflict refusal receipt");
+        assert_refusal(&conflict, "contained_task_recognition_conflict");
+        let fingerprints = [
+            &unknown.decision_fingerprint,
+            &guard.decision_fingerprint,
+            &resolution.decision_fingerprint,
+            &conflict.decision_fingerprint,
+        ]
+        .into_iter()
+        .collect::<std::collections::BTreeSet<_>>();
         assert_eq!(
-            simulate_contained_task(&prepare(&conflict), vec![home_frame(true)])
-                .expect_err("conflicting pages")
-                .code(),
-            "contained_task_recognition_conflict"
+            fingerprints.len(),
+            4,
+            "distinct refusals must have distinct decision fingerprints"
         );
+    }
+
+    fn assert_refusal(result: &OfflineSimulationResult, expected: &str) {
+        assert!(matches!(
+            &result.decision,
+            OfflineDecision::Refused { code, .. } if code == expected
+        ));
+        assert_eq!(result.decision_fingerprint.len(), 64);
+        assert!(
+            result
+                .decision_fingerprint
+                .bytes()
+                .all(|byte| byte.is_ascii_hexdigit())
+        );
+    }
+
+    fn assert_same_refusal(task: &PreparedContainedTask, frames: Vec<Frame>, expected: &str) {
+        let offline =
+            simulate_contained_task(task, frames.clone()).expect("offline refusal result");
+        let effecting = effecting_decision(task, frames);
+        assert_refusal(&offline, expected);
+        assert!(matches!(
+            &effecting.decision,
+            OfflineDecision::Refused { code, .. } if code == expected
+        ));
+        assert_eq!(effecting.decision, offline.decision);
+        assert_eq!(effecting.decision_fingerprint, offline.decision_fingerprint);
+        assert!(effecting.actions.is_empty());
     }
 
     #[test]
@@ -372,6 +568,7 @@ mod tests {
         include_guard: bool,
         conflicting_page: bool,
         recovery: bool,
+        step_timeout_ms: u64,
     }
 
     impl Default for PackageOptions {
@@ -381,6 +578,7 @@ mod tests {
                 include_guard: true,
                 conflicting_page: false,
                 recovery: false,
+                step_timeout_ms: 10,
             }
         }
     }
@@ -395,7 +593,7 @@ mod tests {
             "resolution": {"width": 2, "height": 1},
             "entry_task_id": "task",
             "capture_interval_ms": 1,
-            "step_timeout_ms": 10,
+            "step_timeout_ms": options.step_timeout_ms,
             "timeout_ms": 100,
             "max_steps": 2
         });
@@ -519,6 +717,16 @@ mod tests {
     struct EffectingRuntime {
         frames: VecDeque<Frame>,
         actions: Vec<InputAction>,
+        recognition: Vec<OfflineRecognitionResult>,
+        first_effect: Option<PlannedEffect>,
+        recognition_at_first_effect: Option<Vec<OfflineRecognitionResult>>,
+    }
+
+    #[derive(Debug)]
+    enum EffectingBoundary {
+        FirstEffectIntercepted,
+        FixtureExhausted,
+        Invariant(&'static str),
     }
 
     impl EffectingRuntime {
@@ -526,24 +734,150 @@ mod tests {
             Self {
                 frames: frames.into(),
                 actions: Vec::new(),
+                recognition: Vec::new(),
+                first_effect: None,
+                recognition_at_first_effect: None,
             }
         }
     }
 
     impl ContainedTaskRuntime for EffectingRuntime {
-        type Error = &'static str;
+        type Error = EffectingBoundary;
 
         fn capture(&mut self) -> Result<Frame, Self::Error> {
-            self.frames.pop_front().ok_or("fixture exhausted")
+            self.frames
+                .pop_front()
+                .ok_or(EffectingBoundary::FixtureExhausted)
         }
 
         fn input(&mut self, action: InputAction) -> Result<(), Self::Error> {
+            let Some(planned) = &self.first_effect else {
+                return Err(EffectingBoundary::Invariant(
+                    "effecting_fake_effect_intent_missing",
+                ));
+            };
+            if planned.action != action {
+                return Err(EffectingBoundary::Invariant(
+                    "effecting_fake_action_mismatch",
+                ));
+            }
             self.actions.push(action);
-            Ok(())
+            Err(EffectingBoundary::FirstEffectIntercepted)
         }
 
-        fn record(&mut self, _trace: ContainedTaskTrace) -> Result<(), Self::Error> {
+        fn record(&mut self, trace: ContainedTaskTrace) -> Result<(), Self::Error> {
+            match trace {
+                ContainedTaskTrace::RecognitionCompleted {
+                    candidate_pages,
+                    page_label,
+                    width,
+                    height,
+                } => self.recognition.push(OfflineRecognitionResult {
+                    candidate_pages,
+                    matched_page: page_label,
+                    width,
+                    height,
+                }),
+                ContainedTaskTrace::EffectIntent {
+                    operation_label,
+                    action,
+                    guard,
+                    ..
+                } => {
+                    if self.first_effect.is_some() {
+                        return Err(EffectingBoundary::Invariant(
+                            "effecting_fake_multiple_effects",
+                        ));
+                    }
+                    self.recognition_at_first_effect = Some(self.recognition.clone());
+                    self.first_effect = Some(PlannedEffect {
+                        operation_label,
+                        action,
+                        guard,
+                    });
+                }
+                _ => {}
+            }
             Ok(())
+        }
+    }
+
+    struct EffectingDecision {
+        decision: OfflineDecision,
+        decision_fingerprint: String,
+        actions: Vec<InputAction>,
+    }
+
+    fn effecting_decision(task: &PreparedContainedTask, frames: Vec<Frame>) -> EffectingDecision {
+        let mut runtime = EffectingRuntime::new(frames);
+        let outcome = task.run(&mut runtime);
+        let (decision, recognition) = if let Some(planned) = runtime.first_effect.take() {
+            match outcome {
+                Err(ContainedTaskRunError::Boundary(EffectingBoundary::FirstEffectIntercepted)) => {
+                }
+                Err(ContainedTaskRunError::Boundary(EffectingBoundary::Invariant(code))) => {
+                    panic!("unexpected effecting invariant after first effect: {code}")
+                }
+                other => panic!("effecting runtime did not stop at the first effect: {other:?}"),
+            }
+            (
+                OfflineDecision::WouldClick {
+                    operation_label: planned.operation_label,
+                    action: planned.action,
+                    guard: planned.guard,
+                },
+                runtime
+                    .recognition_at_first_effect
+                    .take()
+                    .expect("recognition snapshot at first effect"),
+            )
+        } else {
+            let decision = match outcome {
+                Ok(outcome)
+                    if outcome.executed_steps == 0 && task.execution_mode() == "recognize_only" =>
+                {
+                    OfflineDecision::NoOp {
+                        final_page: outcome.final_page,
+                    }
+                }
+                Ok(outcome) if outcome.executed_steps == 0 => OfflineDecision::WouldComplete {
+                    final_page: outcome.final_page,
+                },
+                Ok(outcome) => panic!(
+                    "effecting runtime completed {} step(s) without a first-effect trace",
+                    outcome.executed_steps
+                ),
+                Err(ContainedTaskRunError::Task(error)) => OfflineDecision::Refused {
+                    code: error.code().to_string(),
+                    detail: error.detail().map(str::to_string),
+                },
+                Err(ContainedTaskRunError::Boundary(EffectingBoundary::FixtureExhausted)) => {
+                    OfflineDecision::Refused {
+                        code: FIXTURE_EXHAUSTED_CODE.to_string(),
+                        detail: None,
+                    }
+                }
+                Err(ContainedTaskRunError::Boundary(EffectingBoundary::FirstEffectIntercepted)) => {
+                    panic!("effecting runtime intercepted input without an effect trace")
+                }
+                Err(ContainedTaskRunError::Boundary(EffectingBoundary::Invariant(code))) => {
+                    panic!("unexpected effecting invariant: {code}")
+                }
+            };
+            (decision, runtime.recognition.clone())
+        };
+        let decision_fingerprint = fingerprint_decision(
+            task.package_label(),
+            &task.package_sha256().to_string(),
+            task.task_label(),
+            &recognition,
+            &decision,
+        )
+        .expect("effecting decision fingerprint");
+        EffectingDecision {
+            decision,
+            decision_fingerprint,
+            actions: runtime.actions,
         }
     }
 }

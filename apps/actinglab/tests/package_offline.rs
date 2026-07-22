@@ -1,6 +1,10 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
+use actingcommand_contract::{
+    MAX_READONLY_OBSERVATION_ARTIFACT_BYTES, MAX_RUNTIME_CAPTURE_SEQUENCE_FRAMES,
+};
 use actingcommand_device::{CaptureBackendName, Frame, PixelFormat};
+use actingcommand_pack_containment::DEFAULT_MAX_COMPRESSED_BYTES;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::ffi::{OsStr, OsString};
@@ -27,6 +31,21 @@ fn package_dry_run_binds_inputs_and_writes_a_deterministic_offline_bundle() {
     assert_eq!(record["executed"], false);
     assert_eq!(record["production_global_ledger_written"], false);
     assert_eq!(record["package_sha256"], fixture.package_sha256);
+    let decision_fingerprint = record["decision_fingerprint"].as_str().unwrap();
+    assert_eq!(decision_fingerprint.len(), 64);
+    assert!(
+        decision_fingerprint
+            .bytes()
+            .all(|byte| byte.is_ascii_hexdigit())
+    );
+    assert_eq!(
+        record["simulation"]["decision_fingerprint"],
+        decision_fingerprint
+    );
+    assert_eq!(
+        envelope_data(&first)["decision_fingerprint"],
+        decision_fingerprint
+    );
     assert_eq!(
         record["simulation"]["package_sha256"],
         fixture.package_sha256
@@ -63,6 +82,10 @@ fn package_dry_run_binds_inputs_and_writes_a_deterministic_offline_bundle() {
     let decorated_record = read_result_record(&fixture.temp.path().join("decorated.result.zip"));
     assert_eq!(decorated_record["package_sha256"], fixture.package_sha256);
     assert_eq!(
+        decorated_record["decision_fingerprint"],
+        record["decision_fingerprint"]
+    );
+    assert_eq!(
         fs::read(fixture.temp.path().join("first.result.zip")).unwrap(),
         fs::read(fixture.temp.path().join("decorated.result.zip")).unwrap()
     );
@@ -98,11 +121,31 @@ fn package_dry_run_reports_complete_no_op_and_recovery_closure() {
 }
 
 #[test]
-fn package_dry_run_fails_loud_for_recognition_and_guard_failures() {
-    let unknown = TestFixture::new(PackageOptions::default(), solid_frame([0, 0, 0], [0, 0, 0]));
-    assert_error_code(
-        &unknown.run(&[], "unknown.zip"),
+fn package_dry_run_emits_typed_receipts_for_runtime_refusals() {
+    let unknown = TestFixture::new(
+        PackageOptions {
+            step_timeout_ms: 1,
+            ..PackageOptions::default()
+        },
+        solid_frame([0, 0, 0], [0, 0, 0]),
+    );
+    assert_refusal_receipt(
+        &unknown.run_with_fixture_count(16, "unknown.zip"),
+        &unknown.temp.path().join("unknown.zip"),
         "contained_task_page_unknown",
+    );
+
+    let exhausted = TestFixture::new(
+        PackageOptions {
+            step_timeout_ms: 60_000,
+            ..PackageOptions::default()
+        },
+        solid_frame([0, 0, 0], [0, 0, 0]),
+    );
+    assert_refusal_receipt(
+        &exhausted.run(&[], "exhausted.zip"),
+        &exhausted.temp.path().join("exhausted.zip"),
+        "offline_fixture_exhausted",
     );
 
     let conflict = TestFixture::new(
@@ -112,17 +155,23 @@ fn package_dry_run_fails_loud_for_recognition_and_guard_failures() {
         },
         home_frame(true),
     );
-    assert_error_code(
+    assert_refusal_receipt(
         &conflict.run(&[], "conflict.zip"),
+        &conflict.temp.path().join("conflict.zip"),
         "contained_task_recognition_conflict",
     );
 
     let guard = TestFixture::new(PackageOptions::default(), home_frame(false));
-    assert_error_code(&guard.run(&[], "guard.zip"), "contained_task_guard_refused");
+    assert_refusal_receipt(
+        &guard.run(&[], "guard.zip"),
+        &guard.temp.path().join("guard.zip"),
+        "contained_task_guard_refused",
+    );
 
     let mismatch = TestFixture::new(PackageOptions::default(), solid_frame_1x1([255, 0, 0]));
-    assert_error_code(
+    assert_refusal_receipt(
         &mismatch.run(&[], "mismatch.zip"),
+        &mismatch.temp.path().join("mismatch.zip"),
         "contained_task_frame_resolution_mismatch",
     );
 }
@@ -224,14 +273,21 @@ fn package_dry_run_rejects_missing_inputs_and_device_scope() {
 
     for (name, extra) in [
         ("instance", vec!["--instance", "neutral-instance"]),
+        ("instances-empty", vec!["--instances", ""]),
         ("capture", vec!["--capture-backend", "adb"]),
         ("input", vec!["--touch-backend", "maatouch"]),
         ("runtime", vec!["--runtime-endpoint", "http://127.0.0.1:9"]),
+        ("global-dry-run", vec!["--dry-run"]),
     ] {
         let output = fixture.run(&extra, &format!("{name}.zip"));
         assert_error_code(&output, "offline_device_scope_forbidden");
     }
-    assert_failure(&fixture.run(&["--send-input", "true"], "unsupported.zip"));
+    let mut capability_attempt = fixture.args_with_hash(&fixture.package_sha256, "unsupported.zip");
+    capability_attempt.extend([OsString::from("--send-input"), OsString::from("true")]);
+    assert_error_code(
+        &run_actinglab(&fixture.temp, capability_attempt),
+        "offline_device_scope_forbidden",
+    );
 
     let alias_dir = fixture.temp.path().join("alias");
     fs::create_dir(&alias_dir).unwrap();
@@ -253,6 +309,160 @@ fn package_dry_run_rejects_missing_inputs_and_device_scope() {
         ],
     );
     assert_error_code(&output, "offline_output_conflicts_with_input");
+}
+
+#[test]
+fn package_dry_run_enforces_finite_regular_input_budgets() {
+    let fixture = TestFixture::new(PackageOptions::default(), home_frame(true));
+    let maximum_fixtures = usize::from(MAX_RUNTIME_CAPTURE_SEQUENCE_FRAMES);
+    for count in [maximum_fixtures - 1, maximum_fixtures] {
+        let out_name = format!("fixture-count-{count}.zip");
+        assert_success(
+            &fixture.run_with_fixture_count(count, &out_name),
+            "would_click",
+        );
+    }
+    let too_many_out = fixture.temp.path().join("fixture-count-too-many.zip");
+    assert_error_code(
+        &fixture.run_with_fixture_count(maximum_fixtures + 1, "fixture-count-too-many.zip"),
+        "offline_fixture_count_exceeded",
+    );
+    assert!(!too_many_out.exists());
+
+    let oversized_package = fixture.temp.path().join("oversized-package.zip");
+    fs::File::create(&oversized_package)
+        .unwrap()
+        .set_len(DEFAULT_MAX_COMPRESSED_BYTES + 1)
+        .unwrap();
+    assert_bounded_input_failure(
+        &fixture,
+        &oversized_package,
+        &[fixture.fixture_path.clone()],
+        "oversized-package-result.zip",
+        "offline_package_too_large",
+    );
+
+    let package_directory = fixture.temp.path().join("package-directory");
+    fs::create_dir(&package_directory).unwrap();
+    assert_bounded_input_failure(
+        &fixture,
+        &package_directory,
+        &[fixture.fixture_path.clone()],
+        "package-directory-result.zip",
+        "offline_package_not_regular_file",
+    );
+
+    let oversized_fixture = fixture.temp.path().join("oversized-fixture.png");
+    fs::File::create(&oversized_fixture)
+        .unwrap()
+        .set_len(MAX_READONLY_OBSERVATION_ARTIFACT_BYTES + 1)
+        .unwrap();
+    assert_bounded_input_failure(
+        &fixture,
+        &fixture.package_path,
+        &[oversized_fixture],
+        "oversized-fixture-result.zip",
+        "offline_fixture_too_large",
+    );
+
+    let fixture_directory = fixture.temp.path().join("fixture-directory");
+    fs::create_dir(&fixture_directory).unwrap();
+    assert_bounded_input_failure(
+        &fixture,
+        &fixture.package_path,
+        &[fixture_directory],
+        "fixture-directory-result.zip",
+        "offline_fixture_not_regular_file",
+    );
+
+    let oversized_pixels = fixture.temp.path().join("oversized-pixels.png");
+    let maximum_pixels = MAX_READONLY_OBSERVATION_ARTIFACT_BYTES / 4;
+    fs::write(
+        &oversized_pixels,
+        png_header(u32::try_from(maximum_pixels + 1).unwrap(), 1),
+    )
+    .unwrap();
+    assert_bounded_input_failure(
+        &fixture,
+        &fixture.package_path,
+        &[oversized_pixels],
+        "oversized-pixels-result.zip",
+        "offline_fixture_decoded_pixels_exceeded",
+    );
+}
+
+#[test]
+fn package_dry_run_cannot_be_false_greened_by_version() {
+    let fixture = TestFixture::new(PackageOptions::default(), home_frame(true));
+    for (name, version_index) in [("before", 1usize), ("between", 2), ("after", 3)] {
+        let out_name = format!("version-{name}.zip");
+        let out = fixture.temp.path().join(&out_name);
+        let mut args = fixture.args_with_hash(&fixture.package_sha256, &out_name);
+        args.insert(version_index, OsString::from("--version"));
+        let output = run_actinglab(&fixture.temp, args);
+        assert!(!output.status.success());
+        let result = envelope(&output);
+        assert_eq!(result["ok"], false);
+        assert_eq!(result["command"], "package dry-run");
+        assert_eq!(result["error"]["code"], "validation_failed");
+        assert!(!out.exists(), "{} unexpectedly created", out.display());
+    }
+}
+
+#[test]
+fn package_dry_run_rejects_empty_values_and_duplicate_singletons() {
+    let fixture = TestFixture::new(PackageOptions::default(), home_frame(true));
+
+    for (name, flag, value) in [
+        ("duplicate-zip", "--zip", fixture.package_path.as_os_str()),
+        (
+            "duplicate-expected",
+            "--expected-sha256",
+            OsStr::new(&fixture.package_sha256),
+        ),
+        ("duplicate-out", "--out", OsStr::new("duplicate-out.zip")),
+    ] {
+        let mut args = fixture.args_with_hash(&fixture.package_sha256, &format!("{name}.zip"));
+        args.extend([OsString::from(flag), value.to_owned()]);
+        assert_error_code(
+            &run_actinglab(&fixture.temp, args),
+            "offline_argument_invalid",
+        );
+    }
+
+    let mut empty_out = fixture.args_with_hash(&fixture.package_sha256, "empty-out.zip");
+    *empty_out.last_mut().unwrap() = OsString::new();
+    assert_error_code(
+        &run_actinglab(&fixture.temp, empty_out),
+        "offline_argument_invalid",
+    );
+}
+
+#[test]
+fn package_dry_run_never_overwrites_existing_or_hard_linked_inputs() {
+    let fixture = TestFixture::new(PackageOptions::default(), home_frame(true));
+    let package_before = fs::read(&fixture.package_path).unwrap();
+    let fixture_before = fs::read(&fixture.fixture_path).unwrap();
+
+    for (name, input) in [
+        ("package-alias.zip", &fixture.package_path),
+        ("fixture-alias.png", &fixture.fixture_path),
+    ] {
+        let alias = fixture.temp.path().join(name);
+        fs::hard_link(input, &alias).unwrap();
+        let output = fixture.run(&[], name);
+        assert_error_code(&output, "offline_output_already_exists");
+    }
+    assert_eq!(fs::read(&fixture.package_path).unwrap(), package_before);
+    assert_eq!(fs::read(&fixture.fixture_path).unwrap(), fixture_before);
+
+    let first = fixture.run(&[], "existing-result.zip");
+    assert_success(&first, "would_click");
+    let existing = fixture.temp.path().join("existing-result.zip");
+    let existing_before = fs::read(&existing).unwrap();
+    let second = fixture.run(&[], "existing-result.zip");
+    assert_error_code(&second, "offline_output_already_exists");
+    assert_eq!(fs::read(existing).unwrap(), existing_before);
 }
 
 #[test]
@@ -291,6 +501,16 @@ fn production_entry_boundaries_remain_explicit() {
     assert_eq!(command["needs"], json!(["offline"]));
     assert_eq!(command["status"], "available");
     assert_eq!(command["executed"], false);
+    assert_eq!(
+        command["limits"],
+        json!({
+            "package_compressed_bytes": 512_u64 * 1024 * 1024,
+            "fixture_count": 60,
+            "fixture_bytes": 64_u64 * 1024 * 1024,
+            "fixture_decoded_pixels": 16_777_216,
+            "fixture_aggregate_resident_bytes": 256_u64 * 1024 * 1024
+        })
+    );
 
     let lab_run = capability(&capability_data, "lab run");
     assert_eq!(lab_run["needs"], json!(["device"]));
@@ -335,9 +555,26 @@ impl TestFixture {
     }
 
     fn run_with_hash(&self, expected: &str, extra: &[&str], out_name: &str) -> Output {
-        let out = self.temp.path().join(out_name);
         let mut args = extra.iter().map(OsString::from).collect::<Vec<_>>();
-        args.extend([
+        args.extend(self.args_with_hash(expected, out_name));
+        run_actinglab(&self.temp, args)
+    }
+
+    fn run_with_fixture_count(&self, count: usize, out_name: &str) -> Output {
+        run_actinglab(
+            &self.temp,
+            dry_run_args(
+                &self.package_path,
+                &self.package_sha256,
+                &vec![self.fixture_path.clone(); count],
+                &self.temp.path().join(out_name),
+            ),
+        )
+    }
+
+    fn args_with_hash(&self, expected: &str, out_name: &str) -> Vec<OsString> {
+        let out = self.temp.path().join(out_name);
+        vec![
             OsString::from("--json"),
             OsString::from("package"),
             OsString::from("dry-run"),
@@ -349,9 +586,41 @@ impl TestFixture {
             self.fixture_path.as_os_str().to_owned(),
             OsString::from("--out"),
             out.as_os_str().to_owned(),
-        ]);
-        run_actinglab(&self.temp, args)
+        ]
     }
+}
+
+fn dry_run_args(package: &Path, expected: &str, fixtures: &[PathBuf], out: &Path) -> Vec<OsString> {
+    let mut args = vec![
+        OsString::from("--json"),
+        OsString::from("package"),
+        OsString::from("dry-run"),
+        OsString::from("--zip"),
+        package.as_os_str().to_owned(),
+        OsString::from("--expected-sha256"),
+        OsString::from(expected),
+    ];
+    for fixture in fixtures {
+        args.extend([OsString::from("--fixture"), fixture.as_os_str().to_owned()]);
+    }
+    args.extend([OsString::from("--out"), out.as_os_str().to_owned()]);
+    args
+}
+
+fn assert_bounded_input_failure(
+    fixture: &TestFixture,
+    package: &Path,
+    fixtures: &[PathBuf],
+    out_name: &str,
+    expected_code: &str,
+) {
+    let out = fixture.temp.path().join(out_name);
+    let output = run_actinglab(
+        &fixture.temp,
+        dry_run_args(package, &fixture.package_sha256, fixtures, &out),
+    );
+    assert_error_code(&output, expected_code);
+    assert!(!out.exists(), "{} unexpectedly exists", out.display());
 }
 
 fn run_actinglab<I, S>(temp: &TempDir, args: I) -> Output
@@ -426,6 +695,30 @@ fn assert_error_code(output: &Output, expected: &str) {
     assert_eq!(envelope(output)["error"]["code"], expected);
 }
 
+fn assert_refusal_receipt(output: &Output, path: &Path, expected: &str) {
+    assert_error_code(output, expected);
+    let response = envelope(output);
+    let details = &response["error"]["details"];
+    assert_eq!(details["status"], "refused");
+    assert_eq!(details["decision"]["status"], "refused");
+    assert_eq!(details["decision"]["code"], expected);
+    assert_eq!(details["executed"], false);
+    assert_eq!(details["production_global_ledger_written"], false);
+    let fingerprint = details["decision_fingerprint"]
+        .as_str()
+        .expect("refusal decision fingerprint");
+    assert_eq!(fingerprint.len(), 64);
+    assert!(fingerprint.bytes().all(|byte| byte.is_ascii_hexdigit()));
+
+    let record = read_result_record(path);
+    assert_eq!(record["decision_fingerprint"], fingerprint);
+    assert_eq!(record["simulation"]["decision_fingerprint"], fingerprint);
+    assert_eq!(record["simulation"]["decision"]["status"], "refused");
+    assert_eq!(record["simulation"]["decision"]["code"], expected);
+    assert_eq!(record["executed"], false);
+    assert_eq!(record["production_global_ledger_written"], false);
+}
+
 fn read_result_record(path: &Path) -> Value {
     let bytes = fs::read(path).unwrap();
     let mut archive = ZipArchive::new(Cursor::new(bytes)).unwrap();
@@ -446,6 +739,7 @@ struct PackageOptions {
     dangling_resource: bool,
     recovery: bool,
     include_recovery_task: bool,
+    step_timeout_ms: u64,
 }
 
 impl Default for PackageOptions {
@@ -459,6 +753,7 @@ impl Default for PackageOptions {
             dangling_resource: false,
             recovery: false,
             include_recovery_task: false,
+            step_timeout_ms: 10,
         }
     }
 }
@@ -473,7 +768,7 @@ fn package(options: PackageOptions) -> Vec<u8> {
         "resolution": {"width": 2, "height": 1},
         "entry_task_id": "task",
         "capture_interval_ms": 1,
-        "step_timeout_ms": 10,
+        "step_timeout_ms": options.step_timeout_ms,
         "timeout_ms": 100,
         "max_steps": 2
     });
@@ -620,6 +915,16 @@ fn frame_png(width: u32, height: u32, pixels: Vec<u8>) -> Vec<u8> {
     .unwrap()
     .png_for_artifact()
     .unwrap()
+}
+
+fn png_header(width: u32, height: u32) -> Vec<u8> {
+    let mut png = vec![0_u8; 24];
+    png[..8].copy_from_slice(&[137, 80, 78, 71, 13, 10, 26, 10]);
+    png[8..12].copy_from_slice(&13_u32.to_be_bytes());
+    png[12..16].copy_from_slice(b"IHDR");
+    png[16..20].copy_from_slice(&width.to_be_bytes());
+    png[20..24].copy_from_slice(&height.to_be_bytes());
+    png
 }
 
 fn sha256_hex(bytes: &[u8]) -> String {

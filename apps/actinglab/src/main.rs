@@ -169,7 +169,7 @@ struct GlobalOptions {
     json: bool,
     run_root: Option<PathBuf>,
     instance: Option<String>,
-    instances: Vec<String>,
+    instances: Option<Vec<String>>,
     profile: Option<String>,
     resource_root: Option<PathBuf>,
     dry_run: bool,
@@ -518,7 +518,7 @@ where
             }
             "--instances" => {
                 index += 1;
-                global.instances = split_csv(&require_raw(&raw, index, "--instances")?);
+                global.instances = Some(split_csv(&require_raw(&raw, index, "--instances")?));
             }
             "--profile" => {
                 index += 1;
@@ -582,7 +582,7 @@ where
         index += 1;
     }
 
-    let (command, args) = if global.version {
+    let (command, args) = if global.version && !package_cli::is_offline_command(&rest) {
         (vec!["version".to_string()], rest)
     } else if rest.is_empty() {
         (vec!["help".to_string()], Vec::new())
