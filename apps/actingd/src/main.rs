@@ -12,7 +12,7 @@ use actingcommand_contract::{
 };
 use actingcommand_runtime_client::{RuntimeClient, RuntimeClientConfig, RuntimeClientError};
 use actingcommand_runtime_host::{
-    PolicyAdmissionContext, PolicyTrigger, RuntimeHost, RuntimeHostError,
+    PolicyAdmissionContext, PolicyDispatchAdmission, PolicyTrigger, RuntimeHost, RuntimeHostError,
 };
 use config::{PolicyBootstrap, RuntimeAssembly};
 use std::collections::BTreeSet;
@@ -140,22 +140,35 @@ fn initialize_policy(host: &RuntimeHost, policy: &PolicyBootstrap) -> Result<(),
             .iter()
             .find(|reason_chain| reason_chain.id == intent.reason_chain_id)
             .ok_or_else(|| ActingdError::process("policy_reason_chain_missing"))?;
-        host.admit_policy_dispatch(
-            intent,
-            reason_chain,
-            &PolicyAdmissionContext {
-                fact_ledger_position: intent.input_ledger_position,
-                fact_snapshot_id: intent.fact_snapshot_id.clone(),
-                approval_fact_ids: intent
-                    .approval_refs
-                    .iter()
-                    .cloned()
-                    .collect::<BTreeSet<_>>(),
-                fencing_owner_epoch: host.runtime_info().owner_epoch(),
-                now_unix_ms: intent.prerequisites.evaluated_at_unix_ms,
-            },
-        )
-        .map_err(ActingdError::runtime)?;
+        let admission = host
+            .admit_policy_dispatch(
+                intent,
+                reason_chain,
+                &PolicyAdmissionContext {
+                    fact_ledger_position: intent.input_ledger_position,
+                    fact_snapshot_id: intent.fact_snapshot_id.clone(),
+                    approval_fact_ids: intent
+                        .approval_refs
+                        .iter()
+                        .cloned()
+                        .collect::<BTreeSet<_>>(),
+                    fencing_owner_epoch: host.runtime_info().owner_epoch(),
+                    now_unix_ms: intent.prerequisites.evaluated_at_unix_ms,
+                },
+            )
+            .map_err(ActingdError::runtime)?;
+        let PolicyDispatchAdmission::Granted { context } = admission else {
+            continue;
+        };
+        let task = policy
+            .scheduled_tasks
+            .get(context.procedure_ref())
+            .ok_or_else(|| ActingdError::process("policy_scheduled_task_missing"))?;
+        let receipt = host
+            .run_scheduled_contained_task(&context, task)
+            .map_err(ActingdError::runtime)?;
+        host.complete_scheduled_policy_run(&context, &receipt)
+            .map_err(ActingdError::runtime)?;
     }
     Ok(())
 }

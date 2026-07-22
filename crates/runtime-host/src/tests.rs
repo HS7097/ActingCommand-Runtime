@@ -1581,9 +1581,10 @@ fn predictive_maintenance_publishes_one_evidence_pinned_recheck_signal() {
                 },
             )
             .expect("maintenance dispatch admission");
-        let PolicyDispatchAdmission::Granted { admission, .. } = admission else {
+        let PolicyDispatchAdmission::Granted { context } = admission else {
             panic!("expected maintenance dispatch admission")
         };
+        let admission = context.admission();
         last_observed_at = next_evaluation_at + duration_ms;
         clock.advance(duration_ms);
         host.record_policy_dispatch_outcome(&intent.decision_id, &PolicyExecutionInput::Succeeded)
@@ -2092,6 +2093,162 @@ fn neutral_contained_task_package() -> Vec<u8> {
         zip.write_all(contents).expect("zip content");
     }
     zip.finish().expect("finish zip").into_inner()
+}
+
+#[test]
+fn scheduled_policy_run_reuses_one_request_receipt_and_admits_effect_at_most_once() {
+    let root = TempDir::new().expect("tempdir");
+    let package = neutral_contained_task_package();
+    let package_path = root.path().join("scheduled-task.zip");
+    fs::write(&package_path, &package).expect("write package");
+    let package_sha256 = format!("{:x}", Sha256::digest(&package));
+    let state = Arc::new(FakeState::default());
+    state
+        .transition_capture_after_input
+        .store(true, Ordering::Release);
+    state.block_input.store(true, Ordering::Release);
+    let host = Arc::new(
+        RuntimeHost::start(
+            config(&root).with_procedure_manifest(procedure_manifest_with_primary(
+                &package,
+                vec!["after_observation".to_owned()],
+            )),
+            Arc::new(FakeProvider::one(
+                POLICY_INSTANCE_ALIAS,
+                instance_id(),
+                Arc::clone(&state),
+            )),
+        )
+        .expect("runtime host"),
+    );
+    host.activate_policy_catalog(&policy_sources(1))
+        .expect("activate policy catalog");
+    let (_, intent, reasons) = evaluated_policy_dispatch(&host, PolicyTrigger::FactsChanged);
+    record_policy_approval(&host, &intent);
+    let admission = host
+        .admit_policy_dispatch(&intent, &reasons, &policy_context(&host, &intent))
+        .expect("policy admission");
+    let PolicyDispatchAdmission::Granted { context } = admission else {
+        panic!("expected policy run context")
+    };
+    let request =
+        ContainedTaskRequest::new(package_path.to_string_lossy().into_owned(), package_sha256)
+            .expect("contained task request");
+
+    let first_host = Arc::clone(&host);
+    let first_context = context.as_ref().clone();
+    let first_request = request.clone();
+    let first = thread::spawn(move || {
+        first_host.run_scheduled_contained_task(&first_context, &first_request)
+    });
+    wait_until(Duration::from_secs(2), || {
+        state.input_started.load(Ordering::Acquire)
+    });
+
+    let concurrent_error = host
+        .run_scheduled_contained_task(&context, &request)
+        .expect_err("cloned context must not admit the same run twice");
+    assert_eq!(concurrent_error.code(), "policy_run_already_executed");
+    state.block_input.store(false, Ordering::Release);
+    let receipt = first
+        .join()
+        .expect("join first policy run")
+        .expect("first policy run receipt");
+    assert_eq!(receipt.state(), RuntimeReceiptState::Completed);
+    let receipt_value = serde_json::to_value(&receipt).expect("receipt JSON");
+    let assert_receipt_error = |value: serde_json::Value, expected_code: &str| {
+        let mismatched = serde_json::from_value::<RuntimeReceipt>(value)
+            .expect("well-formed mismatched receipt");
+        let error = host
+            .complete_scheduled_policy_run(&context, &mismatched)
+            .expect_err("mismatched receipt must be rejected");
+        assert_eq!(error.code(), expected_code);
+    };
+
+    let mut missing_terminal_value = receipt_value.clone();
+    missing_terminal_value
+        .as_object_mut()
+        .expect("receipt object")
+        .remove("terminal");
+    assert_receipt_error(
+        missing_terminal_value,
+        "policy_run_receipt_terminal_missing",
+    );
+
+    let issuer = IdentifierIssuer::new().expect("identifier issuer");
+    let mut wrong_correlation_value = receipt_value.clone();
+    wrong_correlation_value["correlation_id"] = serde_json::to_value(
+        issuer
+            .mint_correlation_id()
+            .expect("correlation id")
+            .transport(),
+    )
+    .expect("correlation id JSON");
+    assert_receipt_error(
+        wrong_correlation_value,
+        "policy_run_receipt_identity_mismatch",
+    );
+
+    let mut wrong_run_value = receipt_value.clone();
+    wrong_run_value["result"]["run_id"] =
+        serde_json::to_value(issuer.mint_run_id().expect("run id").transport())
+            .expect("run id JSON");
+    assert_receipt_error(wrong_run_value, "policy_run_receipt_identity_mismatch");
+
+    let mut wrong_task_value = receipt_value.clone();
+    wrong_task_value["result"]["task_id"] =
+        serde_json::to_value(issuer.mint_task_id().expect("task id").transport())
+            .expect("task id JSON");
+    assert_receipt_error(wrong_task_value, "policy_run_receipt_identity_mismatch");
+
+    let mut wrong_request_value = receipt_value;
+    wrong_request_value["request_id"] =
+        serde_json::to_value(context.admission_request_id()).expect("request id JSON");
+    assert_receipt_error(wrong_request_value, "policy_run_receipt_terminal_mismatch");
+    host.complete_scheduled_policy_run(&context, &receipt)
+        .expect("complete scheduled policy run");
+
+    let replay_error = host
+        .run_scheduled_contained_task(&context, &request)
+        .expect_err("completed run must not replay");
+    assert_eq!(replay_error.code(), "policy_run_not_admitted");
+    let completion_replay = host
+        .complete_scheduled_policy_run(&context, &receipt)
+        .expect_err("policy outcome must be recorded once");
+    assert_eq!(completion_replay.code(), "policy_run_not_admitted");
+
+    let mut client = TestClient::connect(&host);
+    let events = projected_events(
+        &mut client,
+        EventQuery {
+            run_id: Some(context.run_id()),
+            ..EventQuery::default()
+        },
+    );
+    for event_type in [
+        EventType::TaskEffectCompleted,
+        EventType::TaskCompleted,
+        EventType::PolicyExecutionRecorded,
+        EventType::PolicyDispatchCompleted,
+    ] {
+        assert_eq!(
+            events
+                .iter()
+                .filter(|event| event.event_type == event_type)
+                .count(),
+            1,
+            "{event_type:?} must be unique"
+        );
+    }
+    let terminal = events
+        .iter()
+        .find(|event| event.event_type == EventType::TaskCompleted)
+        .expect("task terminal");
+    assert_eq!(terminal.links.request_id(), Some(&receipt.request_id()));
+    assert_eq!(state.input_count.load(Ordering::Acquire), 1);
+    drop(client);
+    let host = Arc::try_unwrap(host).unwrap_or_else(|_| panic!("host reference remained"));
+    host.close().expect("close runtime host");
 }
 
 fn wait_until(timeout: Duration, mut predicate: impl FnMut() -> bool) {
@@ -6128,9 +6285,10 @@ fn policy_budget_recovery_keeps_the_window_count_across_runtime_restarts() {
         let admission = host
             .admit_policy_dispatch(&intent, &reasons, &policy_context(&host, &intent))
             .expect("budget admission");
-        let PolicyDispatchAdmission::Granted { admission, .. } = admission else {
+        let PolicyDispatchAdmission::Granted { context } = admission else {
             panic!("expected budget admission")
         };
+        let admission = context.admission();
         assert_eq!(admission.budget.task_window_used, index as u32 + 1);
         clock.advance(75_000);
         host.record_policy_dispatch_outcome(&intent.decision_id, &PolicyExecutionInput::Succeeded)
@@ -6185,9 +6343,10 @@ fn policy_completion_charges_runtime_owned_monotonic_elapsed_time() {
         let admission = host
             .admit_policy_dispatch(&intent, &reasons, &policy_context(&host, &intent))
             .unwrap_or_else(|error| panic!("{case}: policy admission: {error}"));
-        let PolicyDispatchAdmission::Granted { admission, .. } = admission else {
+        let PolicyDispatchAdmission::Granted { context } = admission else {
             panic!("{case}: expected granted policy admission")
         };
+        let admission = context.admission();
 
         clock.set_unix_ms(completion_unix_ms);
         clock.set_monotonic_ms(1_000 + elapsed_ms);
@@ -6283,9 +6442,10 @@ fn accelerated_48h_replay_consumes_runtime_owned_counts_and_runtime_budget() {
             let admission = host
                 .admit_policy_dispatch(&intent, &reasons, &policy_context(&host, &intent))
                 .expect("accelerated budget admission");
-            let PolicyDispatchAdmission::Granted { admission, .. } = admission else {
+            let PolicyDispatchAdmission::Granted { context } = admission else {
                 panic!("expected accelerated budget admission")
             };
+            let admission = context.admission();
             assert_eq!(admission.budget.task_daily_used, iteration as u32 + 1);
             assert_eq!(admission.budget.task_window_used, iteration as u32 + 1);
             assert_eq!(
@@ -7469,13 +7629,10 @@ fn policy_failure_activity_and_planning_facts_recover_without_duplicate_side_eff
     let admission = host
         .admit_policy_dispatch(&intent, &reasons, &policy_context(&host, &intent))
         .expect("policy admission");
-    let PolicyDispatchAdmission::Granted {
-        admission: budget_record,
-        ..
-    } = admission
-    else {
+    let PolicyDispatchAdmission::Granted { context } = admission else {
         panic!("expected granted policy admission")
     };
+    let budget_record = context.admission();
     assert_eq!(budget_record.budget.task_daily_used, 1);
     assert_eq!(budget_record.budget.activity_window_used, 1);
     assert!(budget_record.activity.seed > 0);
@@ -7577,7 +7734,7 @@ fn policy_failure_activity_and_planning_facts_recover_without_duplicate_side_eff
             ProjectionPayload::Full(payload) => matches!(
                 payload.as_ref(),
                 EventPayload::Policy(PolicyPayload::DispatchAdmitted(payload))
-                    if payload.admission() == Some(&budget_record)
+                    if payload.admission() == Some(budget_record)
             ),
             _ => false,
         }
@@ -9828,9 +9985,10 @@ fn orphaned_policy_admission_is_reconciled_after_real_process_kill() {
                 &policy_context(&host, &next_intent),
             )
             .expect("post-recovery admission");
-        let PolicyDispatchAdmission::Granted { admission, .. } = admission else {
+        let PolicyDispatchAdmission::Granted { context } = admission else {
             panic!("expected post-recovery grant")
         };
+        let admission = context.admission();
         assert_eq!(admission.budget.task_daily_used, 1);
         assert_eq!(admission.budget.activity_window_used, 1);
         host.close().expect("close recovered host");

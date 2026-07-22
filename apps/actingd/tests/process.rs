@@ -2,11 +2,11 @@
 
 use actingcommand_contract::{
     AgentPayload, AgentSessionId, ApplicationLifecycleAction, EventActor, EventPayload, EventQuery,
-    EventSource, EventType, FactScope, IdentifierIssuer, InstanceId, PolicyPayload,
-    PolicyPlanningSignalEventData, PolicyPlanningSignalKind, ProjectInterfaceRequest,
-    ProjectedArtifactReference, ProjectionPayload, ProjectionProfile, RUNTIME_INFO_FILE,
-    RuntimeInfo, RuntimeOperation, RuntimeReceipt, RuntimeReceiptState, RuntimeRequest,
-    RuntimeResult,
+    EventSource, EventType, FactScope, IdentifierIssuer, InstanceId, PolicyExecutionOutcome,
+    PolicyPayload, PolicyPlanningSignalEventData, PolicyPlanningSignalKind,
+    ProjectInterfaceRequest, ProjectedArtifactReference, ProjectionPayload, ProjectionProfile,
+    RUNTIME_INFO_FILE, RuntimeInfo, RuntimeOperation, RuntimeReceipt, RuntimeReceiptState,
+    RuntimeRequest, RuntimeResult,
 };
 use actingcommand_device::{
     CaptureBackend, CaptureBackendName, DeviceError, DeviceResult, Frame, InputBackend, PixelFormat,
@@ -27,8 +27,9 @@ use actingcommand_runtime_host::{
     RuntimeHost, RuntimeHostConfig,
 };
 use serde_json::json;
+use sha2::{Digest, Sha256};
 use std::fs;
-use std::io::{Read, Write};
+use std::io::{Cursor, Read, Write};
 use std::net::TcpStream;
 use std::path::Path;
 use std::process::{Child, Command, Stdio};
@@ -36,6 +37,7 @@ use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tempfile::TempDir;
+use zip::{ZipWriter, write::FileOptions};
 
 const INSTANCE_ALIAS: &str = "node.a";
 const PROCESS_TEST_SALT: &str = "actingd-process-test-salt";
@@ -96,83 +98,232 @@ fn actingd_outlives_disposable_clients_and_accepts_reconnection() {
 }
 
 #[test]
-fn actingd_runs_configured_policy_through_decision_admission_and_lease() {
+fn actingd_rejects_policy_without_a_scheduled_package_before_runtime_start() {
     let root = TempDir::new().expect("tempdir");
     let config_path = root.path().join("actingd.json");
-    let instance_id = instance_id();
-    write_policy_config(&config_path, root.path(), instance_id);
+    write_policy_config_without_package(&config_path, root.path(), instance_id());
 
-    let child = start_actingd(&config_path);
-    let mut child = ChildGuard(child);
-    wait_for_runtime_info(&mut child.0, root.path());
-    let client = wait_for_agent_client(&mut child.0, root.path());
-    let started = Instant::now();
-    let events = loop {
-        let events = client
-            .query_events(EventQuery::default(), ProjectionProfile::Forensic)
-            .expect("query policy startup events");
-        if events
-            .iter()
-            .any(|event| event.event_type == EventType::LeaseGranted)
-        {
-            break events;
-        }
-        if let Some(status) = child.0.try_wait().expect("process state") {
-            panic!("actingd exited before policy lease with {status}");
-        }
-        assert!(
-            started.elapsed() < Duration::from_secs(5),
-            "actingd policy startup timed out with events: {:?}",
-            events
-                .iter()
-                .map(|event| event.event_type)
-                .collect::<Vec<_>>()
+    let output = Command::new(env!("CARGO_BIN_EXE_actingcommand-actingd"))
+        .args(["--config", config_path.to_str().expect("config path")])
+        .output()
+        .expect("run actingd");
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("procedure_package_path_missing"));
+    assert!(!root.path().join(RUNTIME_INFO_FILE).exists());
+}
+
+#[test]
+fn actingd_closes_one_policy_run_through_fixture_receipt_ledger_and_report_inputs() {
+    for (case, frames, max_inputs, expected_effects) in [
+        (
+            "effecting",
+            vec![vec![255, 0, 0, 0, 255, 0], vec![0, 0, 255, 0, 255, 0]],
+            1,
+            1,
+        ),
+        ("no-op", vec![vec![0, 0, 255, 0, 255, 0]], 0, 0),
+    ] {
+        let root = TempDir::new().expect("tempdir");
+        let config_path = root.path().join("actingd.json");
+        write_policy_execution_config(
+            &config_path,
+            root.path(),
+            instance_id(),
+            &frames,
+            max_inputs,
         );
-        thread::sleep(Duration::from_millis(20));
-    };
 
-    assert_eq!(
-        events
-            .iter()
-            .filter(|event| event.event_type == EventType::PolicyDispatchIntent)
-            .count(),
-        1
-    );
-    assert_eq!(
-        events
-            .iter()
-            .filter(|event| event.event_type == EventType::PolicyDispatchAdmitted)
-            .count(),
-        1
-    );
-    assert_eq!(
-        events
-            .iter()
-            .filter(|event| event.event_type == EventType::LeaseGranted)
-            .count(),
-        1
-    );
-    let admitted = events
-        .iter()
-        .find(|event| event.event_type == EventType::PolicyDispatchAdmitted)
-        .expect("policy admission event");
-    let ProjectionPayload::Full(payload) = &admitted.payload else {
-        panic!("expected forensic policy admission payload")
-    };
-    let EventPayload::Policy(PolicyPayload::DispatchAdmitted(payload)) = payload.as_ref() else {
-        panic!("expected policy dispatch admission")
-    };
-    assert_eq!(payload.operation_id(), "operation.observe");
-    assert_eq!(
-        payload.package_digest(),
-        format!("sha256:{}", "c".repeat(64))
-    );
-    assert!(!payload.procedure_binding_digest().is_empty());
-    assert!(child.0.try_wait().expect("process state").is_none());
+        let child = start_actingd(&config_path);
+        let mut child = ChildGuard(child);
+        wait_for_runtime_info(&mut child.0, root.path());
+        let client = wait_for_agent_client(&mut child.0, root.path());
+        let started = Instant::now();
+        let events = loop {
+            let queried = client.query_events(EventQuery::default(), ProjectionProfile::Forensic);
+            let events = match queried {
+                Ok(events) => events,
+                Err(error) => {
+                    if let Some(status) = child.0.try_wait().expect("process state") {
+                        let mut stderr = String::new();
+                        if let Some(pipe) = child.0.stderr.as_mut() {
+                            pipe.read_to_string(&mut stderr)
+                                .expect("read actingd stderr");
+                        }
+                        panic!(
+                            "{case}: actingd exited while querying with {status}: {error}: {stderr}"
+                        );
+                    }
+                    assert!(
+                        started.elapsed() < Duration::from_secs(5),
+                        "{case}: query run events failed: {error}"
+                    );
+                    thread::sleep(Duration::from_millis(20));
+                    continue;
+                }
+            };
+            if events
+                .iter()
+                .any(|event| event.event_type == EventType::PolicyDispatchCompleted)
+            {
+                break events;
+            }
+            if let Some(status) = child.0.try_wait().expect("process state") {
+                let mut stderr = String::new();
+                if let Some(pipe) = child.0.stderr.as_mut() {
+                    pipe.read_to_string(&mut stderr)
+                        .expect("read actingd stderr");
+                }
+                panic!("{case}: actingd exited before completed run with {status}: {stderr}");
+            }
+            assert!(
+                started.elapsed() < Duration::from_secs(5),
+                "{case}: completed policy run timed out"
+            );
+            thread::sleep(Duration::from_millis(20));
+        };
 
-    drop(client);
-    child.0.kill().expect("kill actingd");
-    child.0.wait().expect("wait actingd");
+        let intent = events
+            .iter()
+            .find(|event| event.event_type == EventType::PolicyDispatchIntent)
+            .unwrap_or_else(|| panic!("{case}: policy intent"));
+        let run_id = intent.links.run_id().copied().expect("run id");
+        let task_id = intent.links.task_id().copied().expect("task id");
+        let correlation_id = intent
+            .links
+            .correlation_id()
+            .copied()
+            .expect("correlation id");
+        let run_events = events
+            .iter()
+            .filter(|event| event.links.run_id() == Some(&run_id))
+            .collect::<Vec<_>>();
+        assert!(
+            run_events.iter().all(|event| {
+                event.links.task_id() == Some(&task_id)
+                    && event.links.correlation_id() == Some(&correlation_id)
+            }),
+            "{case}: every run-linked event must share task and correlation identity"
+        );
+        for event_type in [
+            EventType::PolicyDispatchIntent,
+            EventType::PolicyDispatchAdmitted,
+            EventType::LeaseGranted,
+            EventType::LabRequest,
+            EventType::TaskCompleted,
+            EventType::LeaseReleased,
+            EventType::PolicyExecutionRecorded,
+            EventType::PolicyDispatchCompleted,
+        ] {
+            assert_eq!(
+                run_events
+                    .iter()
+                    .filter(|event| event.event_type == event_type)
+                    .count(),
+                1,
+                "{case}: {event_type:?}"
+            );
+        }
+        assert_eq!(
+            run_events
+                .iter()
+                .filter(|event| event.event_type == EventType::TaskEffectCompleted)
+                .count(),
+            expected_effects,
+            "{case}: effect count"
+        );
+        let lease_id = run_events
+            .iter()
+            .find(|event| event.event_type == EventType::LeaseGranted)
+            .and_then(|event| event.links.lease_id())
+            .copied()
+            .expect("lease id");
+        assert!(
+            run_events
+                .iter()
+                .filter(|event| {
+                    matches!(
+                        event.event_type,
+                        EventType::TaskCompleted
+                            | EventType::LeaseReleased
+                            | EventType::PolicyExecutionRecorded
+                            | EventType::PolicyDispatchCompleted
+                    )
+                })
+                .all(|event| event.links.lease_id() == Some(&lease_id))
+        );
+        let lab_request = run_events
+            .iter()
+            .find(|event| event.event_type == EventType::LabRequest)
+            .expect("lab request");
+        let task_completed = run_events
+            .iter()
+            .find(|event| event.event_type == EventType::TaskCompleted)
+            .expect("task completed");
+        assert_eq!(
+            lab_request.links.request_id(),
+            task_completed.links.request_id(),
+            "{case}: receipt terminal must use the contained request identity"
+        );
+        let execution = run_events
+            .iter()
+            .find(|event| event.event_type == EventType::PolicyExecutionRecorded)
+            .expect("policy execution");
+        let ProjectionPayload::Full(payload) = &execution.payload else {
+            panic!("{case}: forensic execution payload")
+        };
+        let EventPayload::Policy(PolicyPayload::ExecutionRecorded(payload)) = payload.as_ref()
+        else {
+            panic!("{case}: policy execution payload")
+        };
+        assert!(matches!(
+            payload.outcome(),
+            PolicyExecutionOutcome::Succeeded { .. }
+        ));
+        let summary = client
+            .summarize_run(run_id)
+            .unwrap_or_else(|error| panic!("{case}: summarize completed run: {error}"));
+        assert_eq!(
+            summary.get("status").and_then(serde_json::Value::as_str),
+            Some("completed")
+        );
+        assert_eq!(
+            summary.get("effect").and_then(serde_json::Value::as_str),
+            Some(if expected_effects == 1 {
+                "effecting"
+            } else {
+                "no_op"
+            })
+        );
+        assert_eq!(
+            summary
+                .get("effect_count")
+                .and_then(serde_json::Value::as_u64),
+            Some(expected_effects as u64)
+        );
+        assert_eq!(
+            summary
+                .get("request")
+                .and_then(|request| request.get("lab_request_id")),
+            summary
+                .get("request")
+                .and_then(|request| request.get("receipt_request_id")),
+            "{case}: report must preserve the receipt request identity"
+        );
+        let unknown_run_id = *IdentifierIssuer::new()
+            .expect("identifier issuer")
+            .mint_run_id()
+            .expect("unknown run id")
+            .transport();
+        let missing = client
+            .summarize_run(unknown_run_id)
+            .expect_err("unknown run must not produce a success-looking summary");
+        assert_eq!(missing.code(), "run_summary_not_found", "{case}");
+        assert!(child.0.try_wait().expect("process state").is_none());
+
+        drop(client);
+        child.0.kill().expect("kill actingd");
+        child.0.wait().expect("wait actingd");
+    }
 }
 
 #[test]
@@ -321,7 +472,13 @@ fn invalid_startup_returns_nonzero() {
 fn policy_startup_rejects_approval_ids_that_do_not_match_the_catalog() {
     let root = TempDir::new().expect("tempdir");
     let config_path = root.path().join("actingd.json");
-    write_policy_config(&config_path, root.path(), instance_id());
+    write_policy_execution_config(
+        &config_path,
+        root.path(),
+        instance_id(),
+        &[vec![0, 0, 255, 0, 255, 0]],
+        0,
+    );
     let mut config: serde_json::Value =
         serde_json::from_slice(&fs::read(&config_path).expect("read policy config"))
             .expect("decode policy config");
@@ -415,7 +572,7 @@ fn write_config(path: &Path, state_root: &Path, instance_id: InstanceId, dispatc
     .expect("write config");
 }
 
-fn write_policy_config(path: &Path, state_root: &Path, instance_id: InstanceId) {
+fn write_policy_config_without_package(path: &Path, state_root: &Path, instance_id: InstanceId) {
     let policy_root = state_root.join("policy");
     fs::create_dir(&policy_root).expect("create policy directory");
     let sources = actingd_policy_sources(1);
@@ -467,6 +624,152 @@ fn write_policy_config(path: &Path, state_root: &Path, instance_id: InstanceId) 
         serde_json::to_vec_pretty(&value).expect("policy config json"),
     )
     .expect("write policy config");
+}
+
+fn write_policy_execution_config(
+    path: &Path,
+    state_root: &Path,
+    instance_id: InstanceId,
+    frames: &[Vec<u8>],
+    max_inputs: u16,
+) {
+    let policy_root = state_root.join("policy");
+    fs::create_dir(&policy_root).expect("create policy directory");
+    let sources = actingd_policy_sources(1);
+    for (name, source) in [
+        ("tasks.json", sources.tasks),
+        ("pools.json", sources.pools),
+        ("activity.json", sources.activity),
+        ("timeline.json", sources.timeline),
+    ] {
+        fs::write(policy_root.join(name), source.bytes).expect("write policy document");
+    }
+    let package = neutral_contained_task_package();
+    fs::write(policy_root.join("task.zip"), &package).expect("write contained package");
+    let package_sha256 = Sha256::digest(&package)
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    let fixture_frames = frames
+        .iter()
+        .map(|rgb| json!({"width": 2, "height": 1, "rgb": rgb}))
+        .collect::<Vec<_>>();
+    let now_unix_ms = unix_ms_now();
+    let value = json!({
+        "schema_version": "actingcommand.actingd.config.v1",
+        "state_root": state_root,
+        "bind_host": "127.0.0.1",
+        "bind_port": 0,
+        "secret_fingerprint_salt": PROCESS_TEST_SALT,
+        "governance_capability": "actingd-policy-bootstrap-capability",
+        "policy": {
+            "facts": configured_policy_facts(now_unix_ms),
+            "resources": configured_policy_resources(now_unix_ms),
+            "catalog": {
+                "tasks": "policy/tasks.json",
+                "pools": "policy/pools.json",
+                "activity": "policy/activity.json",
+                "timeline": "policy/timeline.json"
+            },
+            "catalog_approval_ids": ["approval:fixture-a"],
+            "procedure_manifest": [{
+                "procedure_ref": "procedure.observe",
+                "package_digest": format!("sha256:{package_sha256}"),
+                "operation_id": "operation.observe",
+                "yield_points": ["after_observation"],
+                "package_path": "policy/task.zip"
+            }]
+        },
+        "instances": [{
+            "alias": INSTANCE_ALIAS,
+            "instance_id": instance_id,
+            "fixture_backend": {
+                "frames": fixture_frames,
+                "max_inputs": max_inputs
+            }
+        }]
+    });
+    fs::write(
+        path,
+        serde_json::to_vec_pretty(&value).expect("policy execution config json"),
+    )
+    .expect("write policy execution config");
+}
+
+fn neutral_contained_task_package() -> Vec<u8> {
+    let cursor = Cursor::new(Vec::new());
+    let mut zip = ZipWriter::new(cursor);
+    let options = FileOptions::default().compression_method(zip::CompressionMethod::Stored);
+    let files: &[(&str, &[u8])] = &[
+        (
+            "control.json",
+            br#"{
+                "schema_version":"Lab-1y.control.v1",
+                "package_id":"neutral.semantic.task",
+                "execution_mode":"navigable_route",
+                "game":"neutral",
+                "server":"test",
+                "resolution":{"width":2,"height":1},
+                "entry_task_id":"task",
+                "capture_interval_ms":1,
+                "step_timeout_ms":50,
+                "timeout_ms":1000,
+                "max_steps":2
+            }"#,
+        ),
+        (
+            "resources/manifest.json",
+            br#"{"schema_version":"0.3","entry_task_id":"task"}"#,
+        ),
+        (
+            "resources/operations/task/task.json",
+            br#"{
+                "schema_version":"0.6",
+                "task_id":"task",
+                "game":"neutral",
+                "server_scope":["test"],
+                "coordinate_space":{"width":2,"height":1},
+                "entry_page":"home",
+                "target_page":"terminal",
+                "operations":[{
+                    "id":"open_terminal",
+                    "from":"home",
+                    "to":"terminal",
+                    "click":{"kind":"point","x":1,"y":0},
+                    "unguarded_trusted_coordinate":true
+                }]
+            }"#,
+        ),
+        (
+            "resources/recognition/neutral.test.pack.json",
+            br#"{
+                "schema_version":"0.3",
+                "game":"neutral",
+                "server":"test",
+                "coordinate_space":{"width":2,"height":1},
+                "defaults":{"color_max_distance":0.0},
+                "targets":[
+                    {"type":"color","id":"page/home","region":{"x":0,"y":0,"width":1,"height":1},"expected":[255,0,0]},
+                    {"type":"color","id":"page/terminal","region":{"x":0,"y":0,"width":1,"height":1},"expected":[0,0,255]}
+                ]
+            }"#,
+        ),
+        (
+            "resources/recognition/neutral.test.pages.json",
+            br#"{
+                "schema_version":"0.3",
+                "pages":[
+                    {"id":"neutral/home","required":["page/home"],"optional":[],"forbidden":[]},
+                    {"id":"neutral/terminal","required":["page/terminal"],"optional":[],"forbidden":[]}
+                ]
+            }"#,
+        ),
+    ];
+    for (path, contents) in files {
+        zip.start_file(*path, options).expect("zip entry");
+        zip.write_all(contents).expect("zip content");
+    }
+    zip.finish().expect("finish zip").into_inner()
 }
 
 fn wait_for_runtime_info(child: &mut Child, state_root: &Path) -> RuntimeInfo {

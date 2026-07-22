@@ -28,8 +28,8 @@ use crate::{
     AgentDispatcherConfig, CatalogGeneration, FatalState, MaintenanceLedgerQuery,
     PerformanceControlConfig, PerformanceControlDirective, PerformanceMonitorConfig,
     PipelinePerformanceSignal, PolicyAdmissionContext, PolicyCadence, PolicyCycle,
-    PolicyDispatchAdmission, PolicyExecutionInput, PolicyTrigger, ProcedureManifest,
-    RuntimeHostError, RuntimeHostResult,
+    PolicyDispatchAdmission, PolicyExecutionInput, PolicyRunContext, PolicyTrigger,
+    ProcedureManifest, RuntimeHostError, RuntimeHostResult,
 };
 use actingcommand_artifact_store::{
     ArtifactEventSink, ArtifactStore, ArtifactStoreError, ArtifactStoreResult,
@@ -517,6 +517,7 @@ impl RuntimeHost {
             admission_guards: Mutex::new(BTreeMap::new()),
             debug_runs: Mutex::new(BTreeMap::new()),
             contained_runs: Mutex::new(BTreeSet::new()),
+            scheduled_policy_runs: Mutex::new(BTreeSet::new()),
             next_connection_id: AtomicU64::new(1),
             clock: Arc::clone(&config.clock),
             clock_origin_monotonic_ms: clock_origin.monotonic_ms,
@@ -793,19 +794,53 @@ impl RuntimeHost {
             .pinned_policy_catalog(decision_id)
     }
 
-    pub fn complete_policy_dispatch(&self, decision_id: &str) -> RuntimeHostResult<()> {
+    #[cfg(test)]
+    pub(crate) fn complete_policy_dispatch(&self, decision_id: &str) -> RuntimeHostResult<()> {
         self.shared_ref("complete_policy_dispatch")?
-            .record_policy_dispatch_outcome(decision_id, &PolicyExecutionInput::Succeeded)
+            .record_policy_dispatch_outcome(decision_id, &PolicyExecutionInput::Succeeded, None)
             .map(|_| ())
     }
 
-    pub fn record_policy_dispatch_outcome(
+    #[cfg(test)]
+    pub(crate) fn record_policy_dispatch_outcome(
         &self,
         decision_id: &str,
         input: &PolicyExecutionInput,
     ) -> RuntimeHostResult<PolicyExecutionEventData> {
         self.shared_ref("record_policy_dispatch_outcome")?
-            .record_policy_dispatch_outcome(decision_id, input)
+            .record_policy_dispatch_outcome(decision_id, input, None)
+    }
+
+    /// Executes one admitted policy run through the contained-task boundary without reacquiring
+    /// its scheduler lease.
+    pub fn run_scheduled_contained_task(
+        &self,
+        context: &PolicyRunContext,
+        request: &ContainedTaskRequest,
+    ) -> RuntimeHostResult<RuntimeReceipt> {
+        let shared = self.shared_ref("run_scheduled_contained_task")?;
+        let (request, success) = match shared.run_scheduled_contained_task(context, request) {
+            Ok(success) => success,
+            Err(failure) => {
+                let error = *failure.error;
+                if failure.poison_runtime {
+                    shared.fatal.mark(error.clone())?;
+                }
+                return Err(error);
+            }
+        };
+        RuntimeReceipt::success(&request, success.state, success.terminal, success.result)
+            .map_err(|_| receipt_error())
+    }
+
+    /// Validates a same-run contained-task receipt and records the policy execution outcome.
+    pub fn complete_scheduled_policy_run(
+        &self,
+        context: &PolicyRunContext,
+        receipt: &RuntimeReceipt,
+    ) -> RuntimeHostResult<PolicyExecutionEventData> {
+        self.shared_ref("complete_scheduled_policy_run")?
+            .complete_scheduled_policy_run(context, receipt)
     }
 
     pub fn record_policy_planning_signal(
@@ -1632,10 +1667,29 @@ struct HostShared {
     admission_guards: Mutex<BTreeMap<InstanceId, Arc<Mutex<()>>>>,
     debug_runs: Mutex<BTreeMap<CorrelationId, DebugRunContext>>,
     contained_runs: Mutex<BTreeSet<RequestId>>,
+    // One policy run may cross the effect boundary at most once, including through cloned
+    // in-process contexts. Reservations remain consumed after failure to fail closed.
+    scheduled_policy_runs: Mutex<BTreeSet<actingcommand_contract::RunId>>,
     next_connection_id: AtomicU64,
     clock: Arc<dyn RuntimeClock>,
     clock_origin_monotonic_ms: u64,
     fatal: FatalState,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct RuntimeRunLinks {
+    task_id: IssuedTaskId,
+    run_id: IssuedRunId,
+}
+
+impl RuntimeRunLinks {
+    const fn new(task_id: IssuedTaskId, run_id: IssuedRunId) -> Self {
+        Self { task_id, run_id }
+    }
+
+    fn apply(self, links: EventLinksDraft) -> EventLinksDraft {
+        links.with_task_id(self.task_id).with_run_id(self.run_id)
+    }
 }
 
 struct PolicyAdmissionAppender<'a> {
@@ -2663,6 +2717,17 @@ impl HostShared {
             .issuer()
             .mint_holder_id()
             .map_err(|_| policy_id_error("issue_policy_holder_id"))?;
+        let task_id = self
+            .events
+            .issuer()
+            .mint_task_id()
+            .map_err(|_| policy_id_error("issue_policy_task_id"))?;
+        let run_id = self
+            .events
+            .issuer()
+            .mint_run_id()
+            .map_err(|_| policy_id_error("issue_policy_run_id"))?;
+        let run_links = RuntimeRunLinks::new(task_id, run_id);
         let holder_id = *holder.transport();
         let request = RuntimeRequest::new(
             request_id,
@@ -2680,12 +2745,12 @@ impl HostShared {
         let connection_id = ConnectionId::new(POLICY_CONNECTION_VALUE)
             .map_err(|error| RuntimeHostError::scheduler("build_policy_connection", &error))?;
         let action_id = self.events.action_id()?;
-        let links = self.events.request_links(
+        let links = run_links.apply(self.events.request_links(
             &validated,
             Some(resolved.instance_id()),
             None,
             Some(action_id),
-        );
+        ));
         let data = policy_event_data(intent, reason_chain)?;
         let event = self.events.draft(
             EventSeverity::Info,
@@ -2791,6 +2856,7 @@ impl HostShared {
                     &intent.instance_id,
                     holder_id,
                     connection_id,
+                    Some(run_links),
                 );
                 match admission {
                     Ok(success) => match success.result {
@@ -2885,10 +2951,17 @@ impl HostShared {
                     return Err(error);
                 }
                 Ok(PolicyDispatchAdmission::Granted {
-                    decision_id: intent.decision_id.clone(),
-                    catalog,
-                    token,
-                    admission: Box::new(admission),
+                    context: Box::new(PolicyRunContext::new(
+                        request,
+                        correlation_id,
+                        run_id,
+                        task_id,
+                        catalog,
+                        token,
+                        admission,
+                        intent.clone(),
+                        reason_chain.clone(),
+                    )?),
                 })
             }
             Err(CriticalExecutionError::Action { error, .. }) => {
@@ -2921,13 +2994,120 @@ impl HostShared {
         Ok(lock(&self.policy, "read_pinned_policy_catalog")?.pinned_catalog(decision_id))
     }
 
+    fn complete_scheduled_policy_run(
+        &self,
+        context: &PolicyRunContext,
+        receipt: &RuntimeReceipt,
+    ) -> RuntimeHostResult<PolicyExecutionEventData> {
+        receipt.validate().map_err(|_| {
+            RuntimeHostError::fatal(
+                "policy_run_receipt_invalid",
+                "complete_scheduled_policy_run",
+                RuntimeErrorCode::RuntimeFatal,
+            )
+        })?;
+        let terminal = receipt.terminal().ok_or_else(|| {
+            RuntimeHostError::fatal(
+                "policy_run_receipt_terminal_missing",
+                "complete_scheduled_policy_run",
+                RuntimeErrorCode::RuntimeFatal,
+            )
+        })?;
+        let Some(RuntimeResult::ContainedTaskCompleted {
+            run_id,
+            task_id,
+            outcome,
+            ..
+        }) = receipt.result()
+        else {
+            return Err(RuntimeHostError::fatal(
+                "policy_run_receipt_result_invalid",
+                "complete_scheduled_policy_run",
+                RuntimeErrorCode::RuntimeFatal,
+            ));
+        };
+        if receipt.state() != RuntimeReceiptState::Completed
+            || receipt.correlation_id() != context.correlation_id()
+            || *run_id != context.run_id()
+            || *task_id != context.task_id()
+            || *outcome != TaskOutcome::Success
+        {
+            return Err(RuntimeHostError::fatal(
+                "policy_run_receipt_identity_mismatch",
+                "complete_scheduled_policy_run",
+                RuntimeErrorCode::RuntimeFatal,
+            ));
+        }
+        let terminal_events = self
+            .ledger
+            .query(EventQuery {
+                event_type: Some(EventType::TaskCompleted),
+                request_id: Some(receipt.request_id()),
+                task_id: Some(context.task_id()),
+                run_id: Some(context.run_id()),
+                lease_id: Some(context.lease_token().lease_id()),
+                ..EventQuery::default()
+            })
+            .map_err(|_| ledger_error("validate_policy_run_receipt"))?;
+        let [terminal_event] = terminal_events.as_slice() else {
+            return Err(RuntimeHostError::fatal(
+                "policy_run_receipt_terminal_mismatch",
+                "complete_scheduled_policy_run",
+                RuntimeErrorCode::RuntimeFatal,
+            ));
+        };
+        if terminal_event.sequence() != terminal.sequence
+            || terminal_event.event_id() != &terminal.event_id
+            || terminal_event.links().correlation_id() != Some(&context.correlation_id())
+        {
+            return Err(RuntimeHostError::fatal(
+                "policy_run_receipt_terminal_mismatch",
+                "complete_scheduled_policy_run",
+                RuntimeErrorCode::RuntimeFatal,
+            ));
+        }
+        let release_events = self
+            .ledger
+            .query(EventQuery {
+                event_type: Some(EventType::LeaseReleased),
+                run_id: Some(context.run_id()),
+                task_id: Some(context.task_id()),
+                lease_id: Some(context.lease_token().lease_id()),
+                ..EventQuery::default()
+            })
+            .map_err(|_| ledger_error("validate_policy_run_release"))?;
+        if release_events.len() != 1 {
+            return Err(RuntimeHostError::fatal(
+                "policy_run_release_missing",
+                "complete_scheduled_policy_run",
+                RuntimeErrorCode::RuntimeFatal,
+            ));
+        }
+        self.record_policy_dispatch_outcome(
+            context.decision_id(),
+            &PolicyExecutionInput::Succeeded,
+            Some(context),
+        )
+    }
+
     fn record_policy_dispatch_outcome(
         &self,
         decision_id: &str,
         input: &PolicyExecutionInput,
+        context: Option<&PolicyRunContext>,
     ) -> RuntimeHostResult<PolicyExecutionEventData> {
         let result: RuntimeHostResult<PolicyExecutionEventData> = (|| {
             let _gate = lock(&self.policy_outcome_gate, "record_policy_dispatch_outcome")?;
+            if let Some(context) = context {
+                if context.decision_id() != decision_id {
+                    return Err(RuntimeHostError::fatal(
+                        "policy_run_decision_mismatch",
+                        "record_policy_dispatch_outcome",
+                        RuntimeErrorCode::RuntimeFatal,
+                    ));
+                }
+                lock(&self.policy, "validate_policy_run_context")?.validate_run_context(context)?;
+            }
             let (instance_id, admitted_at_unix_ms) = {
                 let policy = lock(&self.policy, "read_policy_dispatch_instance")?;
                 if let Some(existing) = policy.replay_execution(decision_id, input)? {
@@ -2987,7 +3167,10 @@ impl HostShared {
                 &perf_context,
             )? {
                 PolicyExecutionPreparation::New(data) => {
-                    let links = self.events.system_links()?;
+                    let links = match context {
+                        Some(context) => self.policy_run_event_links(context)?,
+                        None => self.events.system_links()?,
+                    };
                     self.append_event_raw(
                         policy_execution_severity(&data),
                         EventSource::Scheduler,
@@ -3003,7 +3186,10 @@ impl HostShared {
             };
             if policy.dispatch_needs_completion(decision_id)? {
                 let (dispatch, admission) = policy.completion_data(decision_id)?;
-                let links = self.events.system_links()?;
+                let links = match context {
+                    Some(context) => self.policy_run_event_links(context)?,
+                    None => self.events.system_links()?,
+                };
                 self.append_event_raw(
                     EventSeverity::Info,
                     EventSource::Scheduler,
@@ -3023,6 +3209,30 @@ impl HostShared {
             self.fatal.mark(error.clone())?;
         }
         result
+    }
+
+    fn policy_run_event_links(
+        &self,
+        context: &PolicyRunContext,
+    ) -> RuntimeHostResult<EventLinksDraft> {
+        let request = context.request().validate().map_err(|_| {
+            RuntimeHostError::fatal(
+                "policy_run_request_invalid",
+                "build_policy_run_event_links",
+                RuntimeErrorCode::RuntimeFatal,
+            )
+        })?;
+        let action_id = self.events.action_id()?;
+        Ok(
+            RuntimeRunLinks::new(context.issued_task_id(), context.issued_run_id()).apply(
+                self.events.request_links(
+                    &request,
+                    Some(context.lease_token().instance_id()),
+                    Some(context.lease_token().lease_id()),
+                    Some(action_id),
+                ),
+            ),
+        )
     }
 
     fn record_policy_planning_signal(
@@ -3176,6 +3386,7 @@ impl HostShared {
                 instance_alias,
                 *holder_id,
                 connection_id,
+                None,
             ),
             RuntimeOperation::QueueLease {
                 instance_alias,
@@ -3199,7 +3410,7 @@ impl HostShared {
                 self.renew_lease(validated, request.request_id(), token, connection_id)
             }
             RuntimeOperation::ReleaseLease { token } => {
-                self.release_lease(validated, request.request_id(), token, connection_id)
+                self.release_lease(validated, request.request_id(), token, connection_id, None)
             }
             RuntimeOperation::ObserveReadonly { instance_alias } => {
                 self.observe_readonly(request, validated, instance_alias)
@@ -5236,6 +5447,7 @@ impl HostShared {
             request,
             resolved.instance_id(),
             EventAction::MonitorConfigure,
+            None,
         )?;
         let update = match lock(&self.monitor_registry, "configure_monitor_registry")?.configure(
             instance_alias,
@@ -5268,6 +5480,7 @@ impl HostShared {
             request,
             resolved.instance_id(),
             EventAction::MonitorClear,
+            None,
         )?;
         let update =
             match lock(&self.monitor_registry, "clear_monitor_registry")?.clear(instance_alias) {
@@ -5686,6 +5899,7 @@ impl HostShared {
         instance_alias: &str,
         holder_id: actingcommand_contract::HolderId,
         connection_id: ConnectionId,
+        run_links: Option<RuntimeRunLinks>,
     ) -> Result<OperationSuccess, RequestFailure> {
         let resolved = self.resolve_instance(instance_alias)?;
         let instance_guard = self.instance_guard(resolved.instance_id())?;
@@ -5708,7 +5922,7 @@ impl HostShared {
                 return Err(self.scheduler_denied(request, &resolved, None, error)?);
             }
         };
-        self.grant_prepared_lease(request, request_id, &resolved, preparation)
+        self.grant_prepared_lease(request, request_id, &resolved, preparation, run_links)
     }
 
     fn grant_prepared_lease(
@@ -5717,6 +5931,7 @@ impl HostShared {
         request_id: RequestId,
         resolved: &RegisteredInstance,
         preparation: LeasePreparation,
+        run_links: Option<RuntimeRunLinks>,
     ) -> Result<OperationSuccess, RequestFailure> {
         if preparation.is_existing() {
             let terminal = self.existing_lease_terminal(
@@ -5739,12 +5954,15 @@ impl HostShared {
             .events
             .action_id()
             .map_err(RequestFailure::poison_without_terminal)?;
-        let links = self.events.request_links(
+        let mut links = self.events.request_links(
             request,
             Some(resolved.instance_id()),
             Some(token.lease_id()),
             Some(action_id),
         );
+        if let Some(run_links) = run_links {
+            links = run_links.apply(links);
+        }
         let intent = self.lease_intent(
             EventAction::LeaseAcquire,
             links.clone(),
@@ -5855,9 +6073,13 @@ impl HostShared {
                     result: RuntimeResult::LeaseGranted { token },
                 })
             }
-            QueueAdmissionDecision::Lease(preparation) => {
-                self.grant_prepared_lease(request, original.request_id(), &resolved, preparation)
-            }
+            QueueAdmissionDecision::Lease(preparation) => self.grant_prepared_lease(
+                request,
+                original.request_id(),
+                &resolved,
+                preparation,
+                None,
+            ),
             QueueAdmissionDecision::Queued(queued) => {
                 if let Some(existing) = lock(&self.queued_requests, "read_queued_request")?
                     .get(&original.request_id())
@@ -6839,6 +7061,7 @@ impl HostShared {
         request_id: RequestId,
         token: &LeaseToken,
         connection_id: ConnectionId,
+        run_links: Option<RuntimeRunLinks>,
     ) -> Result<OperationSuccess, RequestFailure> {
         let replayed = lock(&self.scheduler, "replay_release_lease").and_then(|scheduler| {
             scheduler
@@ -6893,7 +7116,7 @@ impl HostShared {
         self.append_scheduler_admitted_for_token(request, token, resolved.audit_endpoint())?;
         match transfer {
             TransferPreparation::Ready(prepared) => {
-                return self.release_via_transfer(request, token, &resolved, prepared);
+                return self.release_via_transfer(request, token, &resolved, prepared, run_links);
             }
             TransferPreparation::Deferred => {
                 return Err(self.scheduler_denied_error(
@@ -6913,12 +7136,15 @@ impl HostShared {
             .events
             .action_id()
             .map_err(RequestFailure::poison_without_terminal)?;
-        let links = self.events.request_links(
+        let mut links = self.events.request_links(
             request,
             Some(token.instance_id()),
             Some(token.lease_id()),
             Some(action_id),
         );
+        if let Some(run_links) = run_links {
+            links = run_links.apply(links);
+        }
         let intent = self.lease_intent(
             EventAction::LeaseRelease,
             links.clone(),
@@ -6987,6 +7213,7 @@ impl HostShared {
             request,
             resolved.instance_id(),
             EventAction::RuntimeReadonlyObserve,
+            None,
         )?;
         self.append_scheduler_admitted(request, &resolved, None)?;
         let completed =
@@ -7024,6 +7251,7 @@ impl HostShared {
             request,
             resolved.instance_id(),
             EventAction::RuntimeCaptureSequence,
+            None,
         )?;
         self.append_scheduler_admitted(request, &resolved, None)?;
         let mut observations = Vec::with_capacity(usize::from(spec.frame_count()));
@@ -7343,6 +7571,7 @@ impl HostShared {
             request,
             resolved.instance_id(),
             EventAction::InputReset,
+            None,
         )?;
         let acquired = self.acquire_lease(
             request,
@@ -7350,6 +7579,7 @@ impl HostShared {
             instance_alias,
             holder_id,
             connection_id,
+            None,
         )?;
         let RuntimeResult::LeaseGranted { token } = acquired.result else {
             return Err(RequestFailure::poison_without_terminal(
@@ -7378,7 +7608,7 @@ impl HostShared {
             ));
         };
         let released =
-            match self.release_lease(request, original.request_id(), &token, connection_id) {
+            match self.release_lease(request, original.request_id(), &token, connection_id, None) {
                 Ok(success) => success,
                 Err(failure) => {
                     return Err(self.cleanup_composite_failure(token, connection_id, failure));
@@ -7485,6 +7715,7 @@ impl HostShared {
             request,
             resolved.instance_id(),
             action.event_action(),
+            None,
         )?;
         let acquired = self.acquire_lease(
             request,
@@ -7492,6 +7723,7 @@ impl HostShared {
             instance_alias,
             holder_id,
             connection_id,
+            None,
         )?;
         let RuntimeResult::LeaseGranted { token } = acquired.result else {
             return Err(RequestFailure::poison_without_terminal(
@@ -7520,7 +7752,7 @@ impl HostShared {
             ));
         };
         let released =
-            match self.release_lease(request, original.request_id(), &token, connection_id) {
+            match self.release_lease(request, original.request_id(), &token, connection_id, None) {
                 Ok(success) => success,
                 Err(failure) => {
                     return Err(self.cleanup_composite_failure(token, connection_id, failure));
@@ -7555,6 +7787,7 @@ impl HostShared {
             request,
             resolved.instance_id(),
             EventAction::RuntimeTaskRun,
+            None,
         )?;
         let task_id = self
             .events
@@ -7572,6 +7805,7 @@ impl HostShared {
             instance_alias,
             holder_id,
             connection_id,
+            None,
         )?;
         let RuntimeResult::LeaseGranted { token } = acquired.result else {
             return Err(RequestFailure::poison_without_terminal(
@@ -7582,6 +7816,180 @@ impl HostShared {
                 ),
             ));
         };
+        self.execute_contained_task_with_lease(
+            original,
+            request,
+            instance_alias,
+            connection_id,
+            prepared,
+            token,
+            task_id,
+            run_id,
+            None,
+        )
+    }
+
+    fn run_scheduled_contained_task(
+        &self,
+        context: &PolicyRunContext,
+        task_request: &ContainedTaskRequest,
+    ) -> Result<(RuntimeRequest, OperationSuccess), RequestFailure> {
+        lock(&self.policy, "validate_policy_run_context")?
+            .validate_run_context(context)
+            .map_err(|error| {
+                if error.is_fatal() {
+                    RequestFailure::poison_without_terminal(error)
+                } else {
+                    RequestFailure::request(error, RuntimeReceiptState::Denied, None)
+                }
+            })?;
+        let token = context.lease_token();
+        let RuntimeOperation::AcquireLease {
+            instance_alias,
+            holder_id,
+        } = context.request().operation()
+        else {
+            return Err(RequestFailure::poison_without_terminal(
+                RuntimeHostError::fatal(
+                    "policy_run_request_invalid",
+                    "run_scheduled_contained_task",
+                    RuntimeErrorCode::RuntimeFatal,
+                ),
+            ));
+        };
+        let expected_sha256 = context
+            .package_digest()
+            .strip_prefix("sha256:")
+            .ok_or_else(|| {
+                RequestFailure::poison_without_terminal(RuntimeHostError::fatal(
+                    "policy_run_package_digest_invalid",
+                    "run_scheduled_contained_task",
+                    RuntimeErrorCode::RuntimeFatal,
+                ))
+            })?;
+        if context.correlation_id() != context.request().correlation_id()
+            || context.instance_alias() != instance_alias
+            || context.lease_token().owner_epoch() != self.owner_epoch
+            || context.lease_token().holder_id() != *holder_id
+            || task_request.expected_sha256() != expected_sha256
+        {
+            return Err(RequestFailure::poison_without_terminal(
+                RuntimeHostError::fatal(
+                    "policy_run_identity_mismatch",
+                    "run_scheduled_contained_task",
+                    RuntimeErrorCode::RuntimeFatal,
+                ),
+            ));
+        }
+        let resolved = self.resolve_instance(instance_alias)?;
+        if resolved.instance_id() != token.instance_id() {
+            return Err(RequestFailure::poison_without_terminal(
+                RuntimeHostError::fatal(
+                    "policy_run_lease_instance_mismatch",
+                    "run_scheduled_contained_task",
+                    RuntimeErrorCode::RuntimeFatal,
+                ),
+            ));
+        }
+        let request_id = self
+            .events
+            .issuer()
+            .mint_request_id()
+            .map_err(|_| RequestFailure::poison_without_terminal(runtime_identifier_error()))?;
+        let task_request_message = RuntimeRequest::new(
+            request_id,
+            context.issued_correlation_id(),
+            None,
+            EventActor::Lab,
+            EventSource::Lab,
+            unix_ms_now().map_err(RequestFailure::poison_without_terminal)?,
+            RuntimeOperation::RunContainedTask {
+                instance_alias: instance_alias.clone(),
+                holder_id: *holder_id,
+                request: task_request.clone(),
+            },
+        )
+        .map_err(|_| {
+            RequestFailure::poison_without_terminal(RuntimeHostError::fatal(
+                "policy_task_request_invalid",
+                "run_scheduled_contained_task",
+                RuntimeErrorCode::RuntimeFatal,
+            ))
+        })?;
+        let validated = task_request_message.validate().map_err(|_| {
+            RequestFailure::poison_without_terminal(RuntimeHostError::fatal(
+                "policy_task_request_invalid",
+                "run_scheduled_contained_task",
+                RuntimeErrorCode::RuntimeFatal,
+            ))
+        })?;
+        let connection_id = ConnectionId::new(POLICY_CONNECTION_VALUE).map_err(|error| {
+            RequestFailure::poison_without_terminal(RuntimeHostError::scheduler(
+                "build_policy_connection",
+                &error,
+            ))
+        })?;
+        self.validated_instance(&validated, token, connection_id)?;
+        self.admit_scheduled_policy_run(context.run_id())?;
+        let _active_run = self.begin_contained_run(task_request_message.request_id())?;
+        let prepared = prepare_contained_task(instance_alias, task_request)?;
+        let run_links = RuntimeRunLinks::new(context.issued_task_id(), context.issued_run_id());
+        self.append_request_lifecycle(
+            &task_request_message,
+            &validated,
+            resolved.instance_id(),
+            EventAction::RuntimeTaskRun,
+            Some(run_links),
+        )?;
+        let success = self.execute_contained_task_with_lease(
+            &task_request_message,
+            &validated,
+            instance_alias,
+            connection_id,
+            prepared,
+            token.clone(),
+            context.issued_task_id(),
+            context.issued_run_id(),
+            Some(run_links),
+        )?;
+        Ok((task_request_message, success))
+    }
+
+    fn admit_scheduled_policy_run(
+        &self,
+        run_id: actingcommand_contract::RunId,
+    ) -> Result<(), RequestFailure> {
+        let mut reserved = lock(&self.scheduled_policy_runs, "admit_scheduled_policy_run")?;
+        let previously_recorded = self
+            .ledger
+            .query(EventQuery {
+                run_id: Some(run_id),
+                ..EventQuery::default()
+            })
+            .map_err(|_| {
+                RequestFailure::poison_without_terminal(ledger_error("query_scheduled_policy_run"))
+            })?
+            .into_iter()
+            .any(|event| matches!(event.payload(), EventPayload::Task(_)));
+        if previously_recorded || !reserved.insert(run_id) {
+            return Err(contained_task_replay_denied("policy_run_already_executed"));
+        }
+        Ok(())
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn execute_contained_task_with_lease(
+        &self,
+        original: &RuntimeRequest,
+        request: &ValidatedRuntimeRequest<'_>,
+        instance_alias: &str,
+        connection_id: ConnectionId,
+        prepared: PreparedContainedTask,
+        token: LeaseToken,
+        task_id: IssuedTaskId,
+        run_id: IssuedRunId,
+        run_links: Option<RuntimeRunLinks>,
+    ) -> Result<OperationSuccess, RequestFailure> {
         let mut runtime = RuntimeContainedTask {
             host: self,
             request,
@@ -7669,7 +8077,13 @@ impl HostShared {
                 failure_code: None,
             },
         )?;
-        match self.release_lease(request, original.request_id(), &token, connection_id) {
+        match self.release_lease(
+            request,
+            original.request_id(),
+            &token,
+            connection_id,
+            run_links,
+        ) {
             Ok(_) => Ok(OperationSuccess {
                 state: RuntimeReceiptState::Completed,
                 terminal: Some(terminal(&task_terminal)),
@@ -7975,8 +8389,10 @@ impl HostShared {
         request: &ValidatedRuntimeRequest<'_>,
         instance_id: InstanceId,
         action: EventAction,
+        run_links: Option<RuntimeRunLinks>,
     ) -> Result<(), RequestFailure> {
-        let links = self.append_client_command_intent(original, request, instance_id, action)?;
+        let links =
+            self.append_client_command_intent(original, request, instance_id, action, run_links)?;
         self.append_event(
             EventSeverity::Info,
             EventSource::Runtime,
@@ -7998,6 +8414,7 @@ impl HostShared {
         request: &ValidatedRuntimeRequest<'_>,
         instance_id: InstanceId,
         action: EventAction,
+        run_links: Option<RuntimeRunLinks>,
     ) -> Result<EventLinksDraft, RequestFailure> {
         self.validate_c4_client_source(original)?;
         let (source, module, payload) = match original.source() {
@@ -8032,9 +8449,12 @@ impl HostShared {
                 ));
             }
         };
-        let links = self
+        let mut links = self
             .events
             .request_links(request, Some(instance_id), None, None);
+        if let Some(run_links) = run_links {
+            links = run_links.apply(links);
+        }
         self.append_event(
             EventSeverity::Info,
             source,
@@ -8576,17 +8996,21 @@ impl HostShared {
         token: &LeaseToken,
         resolved: &RegisteredInstance,
         prepared: Box<PreparedLeaseTransfer>,
+        run_links: Option<RuntimeRunLinks>,
     ) -> Result<OperationSuccess, RequestFailure> {
         let action_id = self
             .events
             .action_id()
             .map_err(RequestFailure::poison_without_terminal)?;
-        let links = self.events.request_links(
+        let mut links = self.events.request_links(
             request,
             Some(token.instance_id()),
             Some(token.lease_id()),
             Some(action_id),
         );
+        if let Some(run_links) = run_links {
+            links = run_links.apply(links);
+        }
         self.append_event(
             EventSeverity::Info,
             EventSource::Scheduler,

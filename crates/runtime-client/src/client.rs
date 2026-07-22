@@ -6,12 +6,13 @@ use actingcommand_contract::{
     ActionId, AgentSessionContext, AgentSessionId, AgentSessionResponse, AgentSessionStatus,
     AgentWakeId, ApplicationLifecycleAction, ApprovalDecisionRecord, CaptureSequenceSpec,
     CatalogProposal, ClientActionRecord, ContainedTaskRequest, CorrelationId, EventActor,
-    EventQuery, EventSource, FactScope, IdentifierIssuer, InputAction, IssuedCorrelationId,
-    LeaseQueuePolicy, LeaseQueueStatus, LeaseToken, OwnerEpoch, PackageDebugRequest,
-    ProjectDecisionPageCursor, ProjectDecisionPageRequest, ProjectInterfaceRequest,
-    ProjectLedgerSnapshot, ProjectedArtifactReference, ProjectedEvent, ProjectionProfile,
+    EventPayload, EventQuery, EventSource, EventType, FactScope, IdentifierIssuer, InputAction,
+    IssuedCorrelationId, LeaseQueuePolicy, LeaseQueueStatus, LeaseToken, OwnerEpoch,
+    PackageDebugRequest, PolicyExecutionOutcome, PolicyPayload, ProjectDecisionPageCursor,
+    ProjectDecisionPageRequest, ProjectInterfaceRequest, ProjectLedgerSnapshot,
+    ProjectedArtifactReference, ProjectedEvent, ProjectionPayload, ProjectionProfile,
     ProposalPreview, ProposalPromotion, RUNTIME_INFO_FILE, RequestId, ResourceAuthoringEvent,
-    RuntimeControlPlaneStatus, RuntimeDebugEvent, RuntimeEventBatch, RuntimeEventQueryPage,
+    RunId, RuntimeControlPlaneStatus, RuntimeDebugEvent, RuntimeEventBatch, RuntimeEventQueryPage,
     RuntimeEventQueryPageRequest, RuntimeEvidenceExportRequest, RuntimeForwardProjectionRequest,
     RuntimeInfo, RuntimeMaintenanceQuery, RuntimeMonitorInstanceStatus, RuntimeMonitorPolicy,
     RuntimeMonitorRegistryStatus, RuntimeOperation, RuntimePlanningDocument,
@@ -25,6 +26,7 @@ use actingcommand_policy::{
 };
 use serde::Serialize;
 use serde::de::DeserializeOwned;
+use serde_json::{Value, json};
 use std::fmt;
 use std::fs;
 use std::net::TcpStream;
@@ -920,6 +922,18 @@ impl RuntimeClient {
         Ok(page.events().to_vec())
     }
 
+    /// Projects one completed scheduler/policy/contained-task run from authoritative ledger links.
+    pub fn summarize_run(&self, run_id: RunId) -> RuntimeClientResult<Value> {
+        let events = self.query_events(
+            EventQuery {
+                run_id: Some(run_id),
+                ..EventQuery::default()
+            },
+            ProjectionProfile::Forensic,
+        )?;
+        project_run_summary(run_id, &events)
+    }
+
     pub fn query_event_page(
         &self,
         query: EventQuery,
@@ -1601,6 +1615,192 @@ impl RuntimeConnection {
             operation,
         )
         .map_err(|_| RuntimeClientError::fatal("runtime_request_invalid", operation_name))
+    }
+}
+
+fn project_run_summary(run_id: RunId, events: &[ProjectedEvent]) -> RuntimeClientResult<Value> {
+    if events.is_empty() {
+        return Err(RuntimeClientError::fatal(
+            "run_summary_not_found",
+            "summarize_run",
+        ));
+    }
+    let intent_event = exactly_one_run_event(events, EventType::PolicyDispatchIntent)?;
+    let admitted_event = exactly_one_run_event(events, EventType::PolicyDispatchAdmitted)?;
+    let lease_event = exactly_one_run_event(events, EventType::LeaseGranted)?;
+    let lab_request_event = exactly_one_run_event(events, EventType::LabRequest)?;
+    let task_event = exactly_one_run_event(events, EventType::TaskCompleted)?;
+    let release_event = exactly_one_run_event(events, EventType::LeaseReleased)?;
+    let execution_event = exactly_one_run_event(events, EventType::PolicyExecutionRecorded)?;
+    let completed_event = exactly_one_run_event(events, EventType::PolicyDispatchCompleted)?;
+
+    let task_id = intent_event.links.task_id().copied().ok_or_else(|| {
+        RuntimeClientError::fatal("run_summary_identity_missing", "summarize_run")
+    })?;
+    let correlation_id = intent_event
+        .links
+        .correlation_id()
+        .copied()
+        .ok_or_else(|| {
+            RuntimeClientError::fatal("run_summary_identity_missing", "summarize_run")
+        })?;
+    if events.iter().any(|event| {
+        event.links.run_id() != Some(&run_id)
+            || event.links.task_id() != Some(&task_id)
+            || event.links.correlation_id() != Some(&correlation_id)
+    }) {
+        return Err(RuntimeClientError::fatal(
+            "run_summary_identity_mismatch",
+            "summarize_run",
+        ));
+    }
+    let lease_id = lease_event.links.lease_id().copied().ok_or_else(|| {
+        RuntimeClientError::fatal("run_summary_identity_missing", "summarize_run")
+    })?;
+    for event in [task_event, release_event, execution_event, completed_event] {
+        if event.links.lease_id() != Some(&lease_id) {
+            return Err(RuntimeClientError::fatal(
+                "run_summary_lease_mismatch",
+                "summarize_run",
+            ));
+        }
+    }
+    let lab_request_id = lab_request_event
+        .links
+        .request_id()
+        .copied()
+        .ok_or_else(|| {
+            RuntimeClientError::fatal("run_summary_identity_missing", "summarize_run")
+        })?;
+    let receipt_request_id = task_event.links.request_id().copied().ok_or_else(|| {
+        RuntimeClientError::fatal("run_summary_identity_missing", "summarize_run")
+    })?;
+    if lab_request_id != receipt_request_id {
+        return Err(RuntimeClientError::fatal(
+            "run_summary_receipt_request_mismatch",
+            "summarize_run",
+        ));
+    }
+    let intent = policy_dispatch_payload(intent_event, EventType::PolicyDispatchIntent)?;
+    let admitted = policy_dispatch_payload(admitted_event, EventType::PolicyDispatchAdmitted)?;
+    let completed = policy_dispatch_payload(completed_event, EventType::PolicyDispatchCompleted)?;
+    let execution = match full_payload(execution_event)? {
+        EventPayload::Policy(PolicyPayload::ExecutionRecorded(payload)) => payload,
+        _ => {
+            return Err(RuntimeClientError::fatal(
+                "run_summary_payload_mismatch",
+                "summarize_run",
+            ));
+        }
+    };
+    if intent.decision_id() != admitted.decision_id()
+        || intent.decision_id() != completed.decision_id()
+        || intent.decision_id() != execution.decision_id()
+        || intent.admission().is_some()
+        || admitted.admission().is_none()
+        || completed.admission() != admitted.admission()
+        || !matches!(
+            execution.outcome(),
+            PolicyExecutionOutcome::Succeeded { .. }
+        )
+    {
+        return Err(RuntimeClientError::fatal(
+            "run_summary_policy_mismatch",
+            "summarize_run",
+        ));
+    }
+    let effect_count = events
+        .iter()
+        .filter(|event| event.event_type == EventType::TaskEffectCompleted)
+        .count();
+    Ok(json!({
+        "schema_version": "actingcommand.run-summary.v1",
+        "status": "completed",
+        "run_id": run_id,
+        "task_id": task_id,
+        "correlation_id": correlation_id,
+        "decision_id": intent.decision_id(),
+        "operation_id": intent.operation_id(),
+        "instance_id": intent.instance_id(),
+        "package_digest": intent.package_digest(),
+        "procedure_binding_digest": intent.procedure_binding_digest(),
+        "reason_chain": {
+            "id": intent.reason_chain_id(),
+            "reasons": intent.reasons()
+        },
+        "catalog": {
+            "hash": intent.catalog_hash(),
+            "version": intent.catalog_version()
+        },
+        "admission": admitted.admission(),
+        "lease": {
+            "lease_id": lease_id,
+            "grant_sequence": lease_event.sequence,
+            "release_sequence": release_event.sequence
+        },
+        "request": {
+            "lab_request_id": lab_request_id,
+            "receipt_request_id": receipt_request_id,
+            "terminal_event_id": task_event.event_id,
+            "terminal_sequence": task_event.sequence
+        },
+        "outcome": execution.outcome(),
+        "effect": if effect_count == 0 { "no_op" } else { "effecting" },
+        "effect_count": effect_count,
+        "event_count": events.len(),
+        "completed_sequence": completed_event.sequence
+    }))
+}
+
+fn exactly_one_run_event(
+    events: &[ProjectedEvent],
+    event_type: EventType,
+) -> RuntimeClientResult<&ProjectedEvent> {
+    let mut matching = events.iter().filter(|event| event.event_type == event_type);
+    let event = matching.next().ok_or_else(|| {
+        RuntimeClientError::fatal("run_summary_event_count_invalid", "summarize_run")
+    })?;
+    if matching.next().is_some() {
+        return Err(RuntimeClientError::fatal(
+            "run_summary_event_count_invalid",
+            "summarize_run",
+        ));
+    }
+    Ok(event)
+}
+
+fn full_payload(event: &ProjectedEvent) -> RuntimeClientResult<&EventPayload> {
+    match &event.payload {
+        ProjectionPayload::Full(payload) => Ok(payload.as_ref()),
+        _ => Err(RuntimeClientError::fatal(
+            "run_summary_projection_incomplete",
+            "summarize_run",
+        )),
+    }
+}
+
+fn policy_dispatch_payload(
+    event: &ProjectedEvent,
+    event_type: EventType,
+) -> RuntimeClientResult<&actingcommand_contract::PolicyDispatchPayload> {
+    let payload = full_payload(event)?;
+    match (event_type, payload) {
+        (
+            EventType::PolicyDispatchIntent,
+            EventPayload::Policy(PolicyPayload::DispatchIntent(payload)),
+        )
+        | (
+            EventType::PolicyDispatchAdmitted,
+            EventPayload::Policy(PolicyPayload::DispatchAdmitted(payload)),
+        )
+        | (
+            EventType::PolicyDispatchCompleted,
+            EventPayload::Policy(PolicyPayload::DispatchCompleted(payload)),
+        ) => Ok(payload),
+        _ => Err(RuntimeClientError::fatal(
+            "run_summary_payload_mismatch",
+            "summarize_run",
+        )),
     }
 }
 

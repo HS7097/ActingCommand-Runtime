@@ -60,6 +60,7 @@ mod readonly_cli;
 pub mod recovery_exec;
 mod resource_authoring;
 mod resource_convert;
+mod run_summary;
 mod runtime_capture_backend;
 mod runtime_debug;
 mod runtime_input_backend;
@@ -699,7 +700,9 @@ fn execute(invocation: &Invocation) -> CliOutcome<Value> {
         [group, sub] if group == "session" => {
             run_session(sub, &invocation.global, &invocation.args)
         }
-        [group, sub] if group == "run" => run_run_report(sub, &invocation.global, &invocation.args),
+        [group, sub] if group == "run" => {
+            run_summary::dispatch(sub, &invocation.global, &invocation.args)
+        }
         [group, sub] if group == "report" => run_report(sub, &invocation.global, &invocation.args),
         _ => Err(CliError::usage(format!(
             "unknown actinglab command: {}",
@@ -9764,35 +9767,6 @@ fn run_resource(sub: &str, global: &GlobalOptions, args: &[String]) -> CliOutcom
     }
 }
 
-fn run_run_report(sub: &str, global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
-    let flags = FlagArgs::parse(args)?;
-    let run_root = effective_run_root(global, &read_user_config()?)
-        .unwrap_or_else(|| PathBuf::from("target").join("actinglab-runs"));
-    match sub {
-        "list" => list_runs(&run_root),
-        "show" | "open" | "summary" | "export" => {
-            let run_id = args
-                .iter()
-                .find(|arg| !arg.starts_with("--"))
-                .ok_or_else(|| CliError::usage(format!("run {sub} requires <run-id>")))?;
-            if sub == "export" {
-                let out = flags.required_path("--out")?;
-                create_error_report_zip(&out, run_id, "run export placeholder")?;
-                return Ok(json!({
-                    "run_id": run_id,
-                    "out": out.display().to_string()
-                }));
-            }
-            Ok(json!({
-                "run_id": run_id,
-                "run_root": run_root.display().to_string(),
-                "status": "reserved"
-            }))
-        }
-        _ => Err(CliError::usage(format!("unknown run command: {sub}"))),
-    }
-}
-
 fn run_report(sub: &str, _global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
     match sub {
         "export" => {
@@ -11417,6 +11391,7 @@ fn command_capabilities() -> Vec<Value> {
         command_cap("operation inspect", ["offline"], "available"),
         command_cap("operation explain", ["offline"], "available"),
         command_cap("status", ["running_runtime"], "available"),
+        command_cap("run summary", ["running_runtime", "read_only"], "available"),
         command_cap("devices", ["device"], "available"),
         command_cap("touch-probe", ["device"], "available"),
         command_cap("tap", ["device"], "available"),
@@ -12773,6 +12748,31 @@ mod tests {
         assert_eq!(
             result.envelope.error.as_ref().unwrap().code,
             "scheduler_not_available"
+        );
+    }
+
+    #[test]
+    fn run_summary_capability_is_read_only_and_available() {
+        let command = command_capabilities()
+            .into_iter()
+            .find(|command| command.get("command").and_then(Value::as_str) == Some("run summary"))
+            .expect("run summary capability");
+        assert_eq!(
+            command.get("status").and_then(Value::as_str),
+            Some("available")
+        );
+        assert_eq!(
+            command.get("needs").and_then(Value::as_array),
+            Some(&vec![
+                Value::String("running_runtime".to_string()),
+                Value::String("read_only".to_string()),
+            ])
+        );
+        assert!(
+            command
+                .get("needs")
+                .and_then(Value::as_array)
+                .is_some_and(|needs| needs.iter().all(Value::is_string))
         );
     }
 

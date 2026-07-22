@@ -46,7 +46,8 @@ pub use policy_control::PolicyExecutionInput;
 pub use policy_host::{
     CatalogGeneration, PolicyAdmissionContext, PolicyCadence, PolicyCycle, PolicyDispatchAdmission,
     PolicyEvaluationCost, PolicyEvaluationExecution, PolicyEvaluationMeasurement,
-    PolicyRecomputeDirective, PolicyRecomputeKind, PolicyRecomputeReason, PolicyTrigger,
+    PolicyRecomputeDirective, PolicyRecomputeKind, PolicyRecomputeReason, PolicyRunContext,
+    PolicyTrigger,
 };
 pub use procedure_manifest::{ProcedureBinding, ProcedureManifest};
 pub use provider::*;
