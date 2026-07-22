@@ -86,7 +86,7 @@
             "any_of_total": 0,
             "matched": true,
             "message": "page matched",
-            "page": "arknights/home",
+            "page": "sample/home",
             "targets": [
               {
                 "id": "home_anchor",
@@ -101,7 +101,7 @@
             "any_of_total": 0,
             "matched": false,
             "message": "required target failed: target_anchor",
-            "page": "arknights/target",
+            "page": "sample/target",
             "targets": [
               {
                 "id": "target_anchor",
@@ -118,7 +118,7 @@
           "written": false
         },
         "matched": true,
-        "page": "arknights/home",
+        "page": "sample/home",
         "projection_source": {
           "durable": false,
           "kind": "isolated_offline",
@@ -190,7 +190,7 @@
             "any_of_total": 0,
             "matched": true,
             "message": "page matched",
-            "page": "arknights/home",
+            "page": "sample/home",
             "targets": [
               {
                 "id": "home_anchor",
@@ -205,7 +205,7 @@
             "any_of_total": 0,
             "matched": false,
             "message": "required target failed: target_anchor",
-            "page": "arknights/target",
+            "page": "sample/target",
             "targets": [
               {
                 "id": "target_anchor",
@@ -217,7 +217,7 @@
           }
         ],
         "matched": true,
-        "page": "arknights/home",
+        "page": "sample/home",
         "standby": false
       },
       "ok": true,
@@ -443,7 +443,7 @@
       "command": "navigate",
       "data": {
         "executed": false,
-        "from": "arknights/home",
+        "from": "sample/home",
         "instance": "default",
         "ledger": {
           "reason": "isolated_offline_projection",
@@ -460,7 +460,7 @@
         "route": [
           {
             "action_id": "<ACTION_ID>",
-            "from_page": "arknights/home",
+            "from_page": "sample/home",
             "id": "home_to_target",
             "input": {
               "point": {
@@ -476,12 +476,12 @@
               "type": "tap"
             },
             "source": null,
-            "to_page": "arknights/target"
+            "to_page": "sample/target"
           }
         ],
         "safety_gate": "navigation_only_default",
         "status": "planned",
-        "to": "arknights/target",
+        "to": "sample/target",
         "trace_record_count": 3
       },
       "ok": true,
@@ -503,7 +503,7 @@
           "blocked_error": {
             "blocked_by": [],
             "code": "validation_failed",
-            "message": "no navigation route from 'arknights/home' to 'arknights/missing'"
+            "message": "no navigation route from 'sample/home' to 'sample/missing'"
           },
           "command": "navigate",
           "details": null,
@@ -523,7 +523,7 @@
           "state": "failed",
           "trace_record_count": 2
         },
-        "message": "no navigation route from 'arknights/home' to 'arknights/missing'"
+        "message": "no navigation route from 'sample/home' to 'sample/missing'"
       },
       "ok": false,
       "runtime_version": "runtime-embedded-p1g",
@@ -596,39 +596,39 @@
         "dry_run": true,
         "execution_mode": "navigable_route",
         "from_remote": null,
-        "game": "arknights",
+        "game": "sample",
         "included_tasks": [
           "operator_task"
         ],
         "mode": "build-task",
         "out": null,
-        "package_id": "arknights.cn.operator_task",
+        "package_id": "sample.local.operator_task",
         "repo": "<PATH>",
         "resource_layout": "direct",
         "resource_root": "<PATH>",
-        "server": "cn",
+        "server": "local",
         "status": "validated",
         "task_id": "<TASK_ID>",
         "validation": {
           "control": {
             "entry_task_id": "operator_task",
             "execution_mode": "navigable_route",
-            "game": "arknights",
-            "package_id": "arknights.cn.operator_task",
+            "game": "sample",
+            "package_id": "sample.local.operator_task",
             "resolution": {
               "height": 720,
               "width": 1280
             },
-            "server": "cn"
+            "server": "local"
           },
           "entry_count": 10,
           "resources": {
             "manifest": "resources/manifest.json",
-            "navigation": "resources/navigation/arknights.cn.navigation.json",
+            "navigation": "resources/navigation/sample.local.navigation.json",
             "operation": "resources/operations/operator_task/task.json",
             "operation_count": 1,
-            "pack": "resources/recognition/arknights.cn.pack.json",
-            "pages": "resources/recognition/arknights.cn.pages.json",
+            "pack": "resources/recognition/sample.local.pack.json",
+            "pages": "resources/recognition/sample.local.pages.json",
             "recognition_unsupported_target_count": 0,
             "recognition_unsupported_targets": [],
             "resource_root": "resources"
@@ -670,13 +670,13 @@
         "control": {
           "entry_task_id": "task",
           "execution_mode": "recognize_only",
-          "game": "arknights",
+          "game": "sample",
           "package_id": "golden.task",
           "resolution": {
             "height": 2,
             "width": 2
           },
-          "server": "cn"
+          "server": "local"
         },
         "entry_count": 6,
         "externally_verified": false,
@@ -687,8 +687,8 @@
           "navigation": null,
           "operation": "resources/operations/task/task.json",
           "operation_count": 1,
-          "pack": "resources/recognition/arknights.cn.pack.json",
-          "pages": "resources/recognition/arknights.cn.pages.json",
+          "pack": "resources/recognition/sample.local.pack.json",
+          "pages": "resources/recognition/sample.local.pages.json",
           "recognition_unsupported_target_count": 0,
           "recognition_unsupported_targets": [],
           "resource_root": "resources"
@@ -1011,7 +1011,7 @@
                       "fact": {
                         "kind": "package_admitted",
                         "package_label": "golden.task",
-                        "package_sha256": "a2de00e91e4433aba1a79d4b03a6f8d6fd4505a1d49ff86ffa1269601da4a88c",
+                        "package_sha256": "d30069bb812aff619f07c871f9e0d126d58098dfa850f53f98c1bcef825c38ad",
                         "task_label": "task"
                       }
                     },
@@ -1366,7 +1366,7 @@
                       "audit": {},
                       "fact": {
                         "candidate_pages": [
-                          "arknights/home"
+                          "sample/home"
                         ],
                         "frame_height": 2,
                         "frame_width": 2,
@@ -1456,12 +1456,12 @@
                       "audit": {},
                       "fact": {
                         "candidate_pages": [
-                          "arknights/home"
+                          "sample/home"
                         ],
                         "frame_height": 2,
                         "frame_width": 2,
                         "kind": "recognition_completed",
-                        "matched_page": "arknights/home"
+                        "matched_page": "sample/home"
                       }
                     },
                     "kind": "semantic"
@@ -1543,7 +1543,7 @@
                       "audit": {},
                       "fact": {
                         "executed_steps": 0,
-                        "final_page": "arknights/home",
+                        "final_page": "sample/home",
                         "kind": "terminal_committed",
                         "outcome": "success"
                       }
@@ -1679,7 +1679,7 @@
             "request_id": "<REQUEST_ID>",
             "result": {
               "executed_steps": 0,
-              "final_page": "arknights/home",
+              "final_page": "sample/home",
               "kind": "contained_task_completed",
               "outcome": "success",
               "run_id": "<RUN_ID>",
@@ -1726,7 +1726,7 @@
       "data": {
         "detector_id": "detect_resolution",
         "detector_version": "1",
-        "game_id": "arknights",
+        "game_id": "sample",
         "instance": "fixture:5555",
         "instance_id": "<IID>",
         "ledger": {
@@ -1753,17 +1753,17 @@
           },
           "detector_id": "detect_resolution",
           "detector_version": "1",
-          "game_id": "arknights",
+          "game_id": "sample",
           "generated_at_unix_ms": "<TIME>",
           "instance_id": "<IID>",
-          "resource_pack_hash": "4e9584a6e1ab4dd67016bc92ae1bcfcd845a695db09009732704dd738c257c84",
+          "resource_pack_hash": "7ae7367444e657ffce58cb781a0ea4e34f76008b1dba88998dc33747372638f9",
           "resource_pack_id": "golden-pack",
           "schema_version": "env-detect-result.v1",
-          "server_id": "cn"
+          "server_id": "local"
         },
         "result_path": "<PATH>",
         "schema_version": "env-detect-command.v1",
-        "server_id": "cn",
+        "server_id": "local",
         "status": "detected",
         "steps": [],
         "steps_executed": false,
@@ -1881,12 +1881,12 @@
             "detections": [],
             "detector_id": "detect_resolution",
             "detector_version": "1",
-            "game_id": "arknights",
+            "game_id": "sample",
             "instance_id": "<IID>",
             "reason": "missing_result",
             "recommended_action": "run_detect",
             "result_path": "<PATH>",
-            "server_id": "cn",
+            "server_id": "local",
             "status": "needs_detection",
             "task": "detect_resolution"
           },
@@ -1934,13 +1934,13 @@
           },
           "detector_id": "detect_resolution",
           "detector_version": "1",
-          "game_id": "arknights",
+          "game_id": "sample",
           "generated_at_unix_ms": "<TIME>",
           "instance_id": "<IID>",
-          "resource_pack_hash": "4e9584a6e1ab4dd67016bc92ae1bcfcd845a695db09009732704dd738c257c84",
+          "resource_pack_hash": "7ae7367444e657ffce58cb781a0ea4e34f76008b1dba88998dc33747372638f9",
           "resource_pack_id": "golden-pack",
           "schema_version": "env-detect-result.v1",
-          "server_id": "cn"
+          "server_id": "local"
         },
         "result_path": "<PATH>",
         "schema_version": "env-status-command.v1",
@@ -1975,14 +1975,14 @@
           "detector_id": "detect_resolution",
           "detector_version": "2",
           "error": "env detection result detector is stale: result detect_resolution@1 command detect_resolution@2",
-          "game_id": "arknights",
+          "game_id": "sample",
           "instance_id": "<IID>",
           "reason": "detector_mismatch",
           "recommended_action": "run_detect",
           "result_generated_at_unix_ms": "<TIME>",
           "result_path": "<PATH>",
-          "result_resource_pack_hash": "4e9584a6e1ab4dd67016bc92ae1bcfcd845a695db09009732704dd738c257c84",
-          "server_id": "cn",
+          "result_resource_pack_hash": "7ae7367444e657ffce58cb781a0ea4e34f76008b1dba88998dc33747372638f9",
+          "server_id": "local",
           "source_result": "detect_resolution@<TIME>",
           "status": "needs_detection",
           "task": "detect_resolution"
@@ -2000,13 +2000,13 @@
           },
           "detector_id": "detect_resolution",
           "detector_version": "1",
-          "game_id": "arknights",
+          "game_id": "sample",
           "generated_at_unix_ms": "<TIME>",
           "instance_id": "<IID>",
-          "resource_pack_hash": "4e9584a6e1ab4dd67016bc92ae1bcfcd845a695db09009732704dd738c257c84",
+          "resource_pack_hash": "7ae7367444e657ffce58cb781a0ea4e34f76008b1dba88998dc33747372638f9",
           "resource_pack_id": "golden-pack",
           "schema_version": "env-detect-result.v1",
-          "server_id": "cn"
+          "server_id": "local"
         },
         "result_path": "<PATH>",
         "schema_version": "env-status-command.v1",
@@ -2028,7 +2028,7 @@
       "data": {
         "actions": [
           {
-            "from_page": "arknights/home",
+            "from_page": "sample/home",
             "id": "home_to_target",
             "input": {
               "point": {
@@ -2044,7 +2044,7 @@
               "type": "tap"
             },
             "source": null,
-            "to_page": "arknights/target"
+            "to_page": "sample/target"
           }
         ],
         "arbitration": {
@@ -2062,7 +2062,7 @@
         },
         "instance": "default",
         "matched": true,
-        "page": "arknights/home",
+        "page": "sample/home",
         "projection_schema_version": "actingcommand.projection.v0.1",
         "req_id": "<REQ_ID>",
         "standby": false,
@@ -2199,7 +2199,7 @@
               "any_of_total": 0,
               "matched": true,
               "message": "page matched",
-              "page": "arknights/home",
+              "page": "sample/home",
               "targets": [
                 {
                   "id": "home_anchor",
@@ -2214,7 +2214,7 @@
               "any_of_total": 0,
               "matched": false,
               "message": "required target failed: target_anchor",
-              "page": "arknights/target",
+              "page": "sample/target",
               "targets": [
                 {
                   "id": "target_anchor",
@@ -2226,10 +2226,10 @@
             }
           ],
           "matched": true,
-          "page": "arknights/home",
+          "page": "sample/home",
           "standby": false
         },
-        "page": "arknights/home",
+        "page": "sample/home",
         "projection_schema_version": "actingcommand.projection.v0.1",
         "reco_id": "<RECO_ID>",
         "req_id": "<REQ_ID>",
@@ -2258,7 +2258,7 @@
           "error": "resource_drift",
           "hint": "observe-current-page-and-refresh-resource-or-target",
           "req_id": "<REQ_ID>",
-          "state": "arknights/target",
+          "state": "sample/target",
           "suspicion": {
             "actual": "color failed",
             "expected": "home_button",

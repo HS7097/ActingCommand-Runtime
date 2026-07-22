@@ -238,11 +238,11 @@ mod tests {
 
     impl ExecutionBackendProvider for SealedProvider {
         fn instance_aliases(&self) -> Vec<String> {
-            vec!["ak.cn".to_string()]
+            vec!["instance.primary".to_string()]
         }
 
         fn resolve(&self, instance_alias: &str) -> Option<ResolvedExecutionInstance> {
-            (instance_alias == "ak.cn")
+            (instance_alias == "instance.primary")
                 .then(|| ResolvedExecutionInstance::new(self.instance_id, "sealed-device"))
         }
 
@@ -253,7 +253,7 @@ mod tests {
         }
 
         fn open_capture(&self, instance_alias: &str) -> DeviceResult<Box<dyn CaptureBackend>> {
-            if instance_alias != "ak.cn" {
+            if instance_alias != "instance.primary" {
                 return Err(DeviceError::fatal("unexpected sealed instance"));
             }
             Ok(Box::new(SealedCapture))
@@ -309,7 +309,8 @@ mod tests {
             Arc::new(SealedProvider { instance_id }),
         )
         .expect("Runtime host");
-        let endpoint = RuntimeCaptureEndpoint::new("ak.cn".to_string(), root.path().to_path_buf());
+        let endpoint =
+            RuntimeCaptureEndpoint::new("instance.primary".to_string(), root.path().to_path_buf());
         let report = CaptureBackendObservation::default();
         let mut backend = open_runtime_capture(
             endpoint,
@@ -346,7 +347,8 @@ mod tests {
             Arc::new(SealedProvider { instance_id }),
         )
         .expect("Runtime host");
-        let endpoint = RuntimeCaptureEndpoint::new("ak.cn".to_string(), root.path().to_path_buf());
+        let endpoint =
+            RuntimeCaptureEndpoint::new("instance.primary".to_string(), root.path().to_path_buf());
 
         let frames = capture_runtime_sequence(&endpoint, 2, Duration::from_millis(1))
             .expect("Runtime-owned sequence");

@@ -92,16 +92,16 @@ struct SealedProvider {
 
 impl ExecutionBackendProvider for SealedProvider {
     fn instance_aliases(&self) -> Vec<String> {
-        vec!["ak".to_string()]
+        vec!["instance.primary".to_string()]
     }
 
     fn resolve(&self, instance_alias: &str) -> Option<ResolvedExecutionInstance> {
-        (instance_alias == "ak")
+        (instance_alias == "instance.primary")
             .then(|| ResolvedExecutionInstance::new(self.instance_id, "sealed-authoring"))
     }
 
     fn open_input(&self, instance_alias: &str) -> DeviceResult<Box<dyn InputBackend>> {
-        if instance_alias != "ak" {
+        if instance_alias != "instance.primary" {
             return Err(DeviceError::fatal("unexpected sealed authoring instance"));
         }
         Ok(Box::new(SealedInput {
@@ -110,7 +110,7 @@ impl ExecutionBackendProvider for SealedProvider {
     }
 
     fn open_capture(&self, instance_alias: &str) -> DeviceResult<Box<dyn CaptureBackend>> {
-        if instance_alias != "ak" {
+        if instance_alias != "instance.primary" {
             return Err(DeviceError::fatal("unexpected sealed authoring instance"));
         }
         Ok(Box::new(SealedCapture {
@@ -168,7 +168,7 @@ fn recorded_resource_is_deterministically_packaged_and_runs_from_containment() {
         vec![
             "--json",
             "--instance",
-            "ak",
+            "instance.primary",
             "session",
             "record",
             "start",
@@ -200,7 +200,7 @@ fn recorded_resource_is_deterministically_packaged_and_runs_from_containment() {
         vec![
             "--json",
             "--instance",
-            "ak",
+            "instance.primary",
             "session",
             "record",
             "step",
@@ -224,7 +224,7 @@ fn recorded_resource_is_deterministically_packaged_and_runs_from_containment() {
         vec![
             "--json",
             "--instance",
-            "ak",
+            "instance.primary",
             "session",
             "record",
             "promote",
@@ -233,9 +233,9 @@ fn recorded_resource_is_deterministically_packaged_and_runs_from_containment() {
             "--repo",
             path(&repo),
             "--game",
-            "arknights",
+            "sample",
             "--server",
-            "cn",
+            "local",
             "--locale",
             "zh-CN",
         ],
@@ -327,11 +327,11 @@ fn recorded_resource_is_deterministically_packaged_and_runs_from_containment() {
         vec![
             "--json",
             "--instance",
-            "ak",
+            "instance.primary",
             "--game",
-            "arknights",
+            "sample",
             "--server",
-            "cn",
+            "local",
             "lab",
             "run",
             "--zip",
@@ -365,7 +365,7 @@ fn record_anchor(
         vec![
             "--json",
             "--instance",
-            "ak",
+            "instance.primary",
             "session",
             "record",
             "step",

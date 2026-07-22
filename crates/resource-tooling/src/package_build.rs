@@ -3223,10 +3223,10 @@ mod tests {
             .add_json(
                 "control.json",
                 control_json(
-                    "arknights.cn.operator_task",
+                    "game_alpha.region-a.operator_task",
                     "navigable_route",
-                    "arknights",
-                    "cn",
+                    "game_alpha",
+                    "region-a",
                     (1280, 720),
                     "operator_task",
                 ),
@@ -3238,8 +3238,8 @@ mod tests {
                 json!({
                     "schema_version": "0.3",
                     "task_id": "operator_task",
-                    "game": "arknights",
-                    "server_scope": ["cn"],
+                    "game": "game_alpha",
+                    "server_scope": ["region-a"],
                     "coordinate_space": {"width": 1280, "height": 720},
                     "operations": [{
                         "id": "noop",
@@ -3254,11 +3254,11 @@ mod tests {
             .expect("operation");
         entries
             .add_json(
-                "resources/recognition/arknights.cn.pack.json",
+                "resources/recognition/game_alpha.region-a.pack.json",
                 json!({
                     "schema_version": "0.3",
-                    "game": "arknights",
-                    "server": "cn",
+                    "game": "game_alpha",
+                    "server": "region-a",
                     "coordinate_space": {"width": 1280, "height": 720},
                     "targets": [{
                         "type": "color",
@@ -3271,7 +3271,7 @@ mod tests {
             .expect("recognition pack");
         entries
             .add_json(
-                "resources/recognition/arknights.cn.pages.json",
+                "resources/recognition/game_alpha.region-a.pages.json",
                 json!({
                     "schema_version": "0.3",
                     "pages": [{"id": "home", "required": ["page/home"]}]
@@ -3280,7 +3280,7 @@ mod tests {
             .expect("pages");
         entries
             .add_json(
-                "resources/navigation/arknights.cn.navigation.json",
+                "resources/navigation/game_alpha.region-a.navigation.json",
                 json!({"schema_version": "0.3", "control_points": []}),
             )
             .expect("navigation");
@@ -3395,7 +3395,7 @@ mod tests {
         );
         let pack: Value = serde_json::from_slice(
             entries
-                .get("resources/recognition/arknights.cn.pack.json")
+                .get("resources/recognition/game_alpha.region-a.pack.json")
                 .unwrap(),
         )
         .unwrap();
@@ -3410,7 +3410,7 @@ mod tests {
         }
         let pages: Value = serde_json::from_slice(
             entries
-                .get("resources/recognition/arknights.cn.pages.json")
+                .get("resources/recognition/game_alpha.region-a.pages.json")
                 .unwrap(),
         )
         .unwrap();
@@ -3418,7 +3418,7 @@ mod tests {
             .as_array()
             .unwrap()
             .iter()
-            .find(|page| page["id"] == "arknights/operator")
+            .find(|page| page["id"] == "game_alpha/operator")
             .unwrap();
         assert_eq!(operator["required"], json!([]));
         assert_eq!(
@@ -3502,7 +3502,7 @@ mod tests {
         assert!(!entries.contains_key("resources/operations/recruit_task/task.json"));
         let pages: Value = serde_json::from_slice(
             entries
-                .get("resources/recognition/arknights.cn.pages.json")
+                .get("resources/recognition/game_alpha.region-a.pages.json")
                 .unwrap(),
         )
         .unwrap();
@@ -3511,11 +3511,11 @@ mod tests {
                 .as_array()
                 .unwrap()
                 .iter()
-                .any(|page| page["id"] == "arknights/recruit")
+                .any(|page| page["id"] == "game_alpha/recruit")
         );
         let pack: Value = serde_json::from_slice(
             entries
-                .get("resources/recognition/arknights.cn.pack.json")
+                .get("resources/recognition/game_alpha.region-a.pack.json")
                 .unwrap(),
         )
         .unwrap();
@@ -3555,7 +3555,7 @@ mod tests {
         let out = temp.path().join("resolved.zip");
         let prepared = prepare_package_build_task(build_task_request(repo, out.clone()))
             .expect("prepare resolved snapshot");
-        let environment = environment_snapshot("server", "cn");
+        let environment = environment_snapshot("server", "region-a");
         prepared.build(&environment).expect("resolved build");
 
         let entries = read_zip_entries(&out);
@@ -3565,7 +3565,7 @@ mod tests {
                 .expect("operation task"),
         )
         .expect("task json");
-        assert_eq!(task["goal"], "operator-cn");
+        assert_eq!(task["goal"], "operator-region-a");
         let index: Value = serde_json::from_slice(
             entries
                 .get("resources/operations/operations.index.json")
@@ -3578,7 +3578,7 @@ mod tests {
             .iter()
             .find(|entry| entry["task_id"] == "operator_task")
             .expect("operator index");
-        assert_eq!(operator["goal"], "operator-cn");
+        assert_eq!(operator["goal"], "operator-region-a");
     }
 
     #[test]
@@ -3602,10 +3602,10 @@ mod tests {
 
         catalog
             .build_full_archive(
-                &environment_snapshot("server", "cn"),
+                &environment_snapshot("server", "region-a"),
                 PackageFullArchiveRequest {
                     entry_task_id: "operator_task".to_string(),
-                    package_id: "arknights.cn.full".to_string(),
+                    package_id: "game_alpha.region-a.full".to_string(),
                     execution_mode: "recognize_only".to_string(),
                     resolution: None,
                     out: out.clone(),
@@ -3622,7 +3622,7 @@ mod tests {
                 .expect("operation task"),
         )
         .expect("task json");
-        assert_eq!(task["goal"], "operator-cn");
+        assert_eq!(task["goal"], "operator-region-a");
         let index: Value = serde_json::from_slice(
             entries
                 .get("resources/operations/operations.index.json")
@@ -3634,7 +3634,9 @@ mod tests {
                 .as_array()
                 .expect("index operations")
                 .iter()
-                .any(|entry| entry["task_id"] == "operator_task" && entry["goal"] == "operator-cn")
+                .any(|entry| {
+                    entry["task_id"] == "operator_task" && entry["goal"] == "operator-region-a"
+                })
         );
     }
 
@@ -3661,7 +3663,7 @@ mod tests {
                 &AuthoringEnvironmentSnapshot::default(),
                 PackageFullArchiveRequest {
                     entry_task_id: "operator_task".to_string(),
-                    package_id: "arknights.cn.full".to_string(),
+                    package_id: "game_alpha.region-a.full".to_string(),
                     execution_mode: "recognize_only".to_string(),
                     resolution: None,
                     out: out.clone(),
@@ -3750,8 +3752,8 @@ mod tests {
                 )
                 .unwrap();
         }
-        assert_published_file(&split_dir.join("arknights.cn.operator_task.zip"));
-        assert_published_file(&split_dir.join("arknights.cn.return_home.zip"));
+        assert_published_file(&split_dir.join("game_alpha.region-a.operator_task.zip"));
+        assert_published_file(&split_dir.join("game_alpha.region-a.return_home.zip"));
     }
 
     #[test]
@@ -3804,8 +3806,8 @@ mod tests {
             serde_json::to_string_pretty(&json!({
                 "schema_version": "1.0",
                 "resources": [
-                    {"id": "sanity", "name": {"cn": "sanity"}},
-                    {"id": "credit", "name": {"cn": "credit"}}
+                    {"id": "sanity", "name": {"region-a": "sanity"}},
+                    {"id": "credit", "name": {"region-a": "credit"}}
                 ],
                 "resource_count": 2
             }))
@@ -3826,8 +3828,8 @@ mod tests {
             serde_json::to_string_pretty(&json!({
                 "schema_version": "0.3",
                 "task_id": "operator_task",
-                "game": "arknights",
-                "server_scope": ["cn"],
+                "game": "game_alpha",
+                "server_scope": ["region-a"],
                 "locale": "zh-CN",
                 "goal": "fixture",
                 "coordinate_space": {"width": 1280, "height": 720},
@@ -3853,8 +3855,8 @@ mod tests {
             serde_json::to_string_pretty(&json!({
                 "schema_version": "0.3",
                 "task_id": "return_home",
-                "game": "arknights",
-                "server_scope": ["cn"],
+                "game": "game_alpha",
+                "server_scope": ["region-a"],
                 "locale": "zh-CN",
                 "goal": "fixture",
                 "coordinate_space": {"width": 1280, "height": 720},
@@ -3872,7 +3874,7 @@ mod tests {
         )
         .unwrap();
         fs::write(
-            root.join("navigation/arknights.cn.navigation.json"),
+            root.join("navigation/game_alpha.region-a.navigation.json"),
             serde_json::to_string_pretty(&json!({
                 "schema_version": "0.3",
                 "control_points": [{"name": "home", "point": [1, 1]}]
@@ -3913,8 +3915,8 @@ mod tests {
             serde_json::to_string_pretty(&json!({
                 "schema_version": "0.3",
                 "task_id": "recruit_task",
-                "game": "arknights",
-                "server_scope": ["cn"],
+                "game": "game_alpha",
+                "server_scope": ["region-a"],
                 "locale": "zh-CN",
                 "goal": "fixture",
                 "coordinate_space": {"width": 1280, "height": 720},

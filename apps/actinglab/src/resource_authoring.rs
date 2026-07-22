@@ -488,11 +488,11 @@ mod tests {
 
     impl ExecutionBackendProvider for AuthoringTestProvider {
         fn instance_aliases(&self) -> Vec<String> {
-            vec!["ak.cn".to_string()]
+            vec!["instance.primary".to_string()]
         }
 
         fn resolve(&self, instance_alias: &str) -> Option<ResolvedExecutionInstance> {
-            (instance_alias == "ak.cn")
+            (instance_alias == "instance.primary")
                 .then(|| ResolvedExecutionInstance::new(self.instance_id, "test-device"))
         }
 
