@@ -14,6 +14,8 @@ use std::collections::VecDeque;
 use std::error::Error;
 use std::fmt;
 
+const FIXTURE_EXHAUSTED_CODE: &str = "offline_fixture_exhausted";
+
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct OfflineRecognitionResult {
     pub candidate_pages: Vec<String>,
@@ -140,17 +142,8 @@ pub fn simulate_contained_task(
                     OfflineSimulationError::new("offline_simulation_effect_intent_missing")
                 })?,
             Err(ContainedTaskRunError::Boundary(OfflineBoundary::FixtureExhausted)) => {
-                let code = if runtime
-                    .recognition
-                    .last()
-                    .is_some_and(|result| result.matched_page.is_none())
-                {
-                    "contained_task_page_unknown"
-                } else {
-                    "offline_fixture_exhausted"
-                };
                 OfflineDecision::Refused {
-                    code: code.to_string(),
+                    code: FIXTURE_EXHAUSTED_CODE.to_string(),
                     detail: None,
                 }
             }
@@ -347,17 +340,16 @@ mod tests {
     }
 
     #[test]
-    fn offline_and_effecting_runtime_share_refusal_completion_and_no_op() {
+    fn offline_and_effecting_runtime_share_completion_and_no_op() {
         let navigable = package(PackageOptions::default());
         let navigable = prepare(&navigable);
-        for frames in [vec![home_frame(false)], vec![terminal_frame()]] {
-            let offline =
-                simulate_contained_task(&navigable, frames.clone()).expect("offline result");
-            let effecting = effecting_decision(&navigable, frames);
-            assert_eq!(effecting.decision, offline.decision);
-            assert_eq!(effecting.decision_fingerprint, offline.decision_fingerprint);
-            assert!(effecting.actions.is_empty());
-        }
+        let frames = vec![terminal_frame()];
+        let offline =
+            simulate_contained_task(&navigable, frames.clone()).expect("offline completion");
+        let effecting = effecting_decision(&navigable, frames);
+        assert_eq!(effecting.decision, offline.decision);
+        assert_eq!(effecting.decision_fingerprint, offline.decision_fingerprint);
+        assert!(effecting.actions.is_empty());
 
         let recognize_only = package(PackageOptions {
             execution_mode: "recognize_only",
@@ -370,6 +362,61 @@ mod tests {
         assert_eq!(effecting.decision, offline.decision);
         assert_eq!(effecting.decision_fingerprint, offline.decision_fingerprint);
         assert!(effecting.actions.is_empty());
+    }
+
+    #[test]
+    fn offline_and_effecting_runtime_share_all_typed_refusals() {
+        let navigable = prepare(&package(PackageOptions::default()));
+        assert_same_refusal(
+            &navigable,
+            vec![home_frame(false)],
+            "contained_task_guard_refused",
+        );
+
+        let unknown = prepare(&package(PackageOptions {
+            step_timeout_ms: 1,
+            ..PackageOptions::default()
+        }));
+        let unknown_frame = solid_frame([0, 0, 0], [0, 0, 0]);
+        assert_same_refusal(
+            &unknown,
+            vec![unknown_frame; 16],
+            "contained_task_page_unknown",
+        );
+
+        let conflict = prepare(&package(PackageOptions {
+            conflicting_page: true,
+            ..PackageOptions::default()
+        }));
+        assert_same_refusal(
+            &conflict,
+            vec![home_frame(true)],
+            "contained_task_recognition_conflict",
+        );
+
+        let wrong_size = Frame::from_pixels(
+            1,
+            1,
+            vec![255, 0, 0],
+            PixelFormat::Rgb8,
+            CaptureBackendName::AdbScreencap,
+        )
+        .expect("frame");
+        assert_same_refusal(
+            &navigable,
+            vec![wrong_size],
+            "contained_task_frame_resolution_mismatch",
+        );
+
+        let exhaustion = prepare(&package(PackageOptions {
+            step_timeout_ms: 60_000,
+            ..PackageOptions::default()
+        }));
+        assert_same_refusal(
+            &exhaustion,
+            vec![solid_frame([0, 0, 0], [0, 0, 0])],
+            FIXTURE_EXHAUSTED_CODE,
+        );
     }
 
     #[test]
@@ -395,7 +442,12 @@ mod tests {
     fn simulation_receipts_bind_typed_refusals_to_decision_fingerprints() {
         let package_bytes = package(PackageOptions::default());
         let task = prepare(&package_bytes);
-        let unknown = simulate_contained_task(&task, vec![solid_frame([0, 0, 0], [0, 0, 0])])
+        let unknown_task = prepare(&package(PackageOptions {
+            step_timeout_ms: 1,
+            ..PackageOptions::default()
+        }));
+        let unknown_frame = solid_frame([0, 0, 0], [0, 0, 0]);
+        let unknown = simulate_contained_task(&unknown_task, vec![unknown_frame; 16])
             .expect("unknown-page refusal receipt");
         assert_refusal(&unknown, "contained_task_page_unknown");
         let guard =
@@ -455,6 +507,20 @@ mod tests {
         );
     }
 
+    fn assert_same_refusal(task: &PreparedContainedTask, frames: Vec<Frame>, expected: &str) {
+        let offline =
+            simulate_contained_task(task, frames.clone()).expect("offline refusal result");
+        let effecting = effecting_decision(task, frames);
+        assert_refusal(&offline, expected);
+        assert!(matches!(
+            &effecting.decision,
+            OfflineDecision::Refused { code, .. } if code == expected
+        ));
+        assert_eq!(effecting.decision, offline.decision);
+        assert_eq!(effecting.decision_fingerprint, offline.decision_fingerprint);
+        assert!(effecting.actions.is_empty());
+    }
+
     #[test]
     fn admission_rejects_missing_guard_and_recovery_task() {
         let missing_guard = package(PackageOptions {
@@ -482,6 +548,7 @@ mod tests {
         include_guard: bool,
         conflicting_page: bool,
         recovery: bool,
+        step_timeout_ms: u64,
     }
 
     impl Default for PackageOptions {
@@ -491,6 +558,7 @@ mod tests {
                 include_guard: true,
                 conflicting_page: false,
                 recovery: false,
+                step_timeout_ms: 10,
             }
         }
     }
@@ -505,7 +573,7 @@ mod tests {
             "resolution": {"width": 2, "height": 1},
             "entry_task_id": "task",
             "capture_interval_ms": 1,
-            "step_timeout_ms": 10,
+            "step_timeout_ms": options.step_timeout_ms,
             "timeout_ms": 100,
             "max_steps": 2
         });
@@ -634,6 +702,12 @@ mod tests {
         recognition_at_first_effect: Option<Vec<OfflineRecognitionResult>>,
     }
 
+    #[derive(Debug)]
+    enum EffectingBoundary {
+        FixtureExhausted,
+        Invariant(&'static str),
+    }
+
     impl EffectingRuntime {
         fn new(frames: Vec<Frame>) -> Self {
             Self {
@@ -647,10 +721,12 @@ mod tests {
     }
 
     impl ContainedTaskRuntime for EffectingRuntime {
-        type Error = &'static str;
+        type Error = EffectingBoundary;
 
         fn capture(&mut self) -> Result<Frame, Self::Error> {
-            self.frames.pop_front().ok_or("fixture exhausted")
+            self.frames
+                .pop_front()
+                .ok_or(EffectingBoundary::FixtureExhausted)
         }
 
         fn input(&mut self, action: InputAction) -> Result<(), Self::Error> {
@@ -678,7 +754,9 @@ mod tests {
                     ..
                 } => {
                     if self.first_effect.is_some() {
-                        return Err("multiple effect intents");
+                        return Err(EffectingBoundary::Invariant(
+                            "effecting_fake_multiple_effects",
+                        ));
                     }
                     self.recognition_at_first_effect = Some(self.recognition.clone());
                     self.first_effect = Some(PlannedEffect {
@@ -735,8 +813,14 @@ mod tests {
                     code: error.code().to_string(),
                     detail: error.detail().map(str::to_string),
                 },
-                Err(ContainedTaskRunError::Boundary(error)) => {
-                    panic!("unexpected effecting boundary error: {error}")
+                Err(ContainedTaskRunError::Boundary(EffectingBoundary::FixtureExhausted)) => {
+                    OfflineDecision::Refused {
+                        code: FIXTURE_EXHAUSTED_CODE.to_string(),
+                        detail: None,
+                    }
+                }
+                Err(ContainedTaskRunError::Boundary(EffectingBoundary::Invariant(code))) => {
+                    panic!("unexpected effecting invariant: {code}")
                 }
             };
             (decision, runtime.recognition.clone())
