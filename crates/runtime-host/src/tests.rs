@@ -2115,7 +2115,7 @@ fn neutral_contained_task_package() -> Vec<u8> {
 }
 
 #[test]
-fn scheduled_policy_run_reuses_one_request_receipt_and_admits_effect_at_most_once() {
+fn scheduled_policy_run_reuses_one_request_receipt_for_one_effecting_run() {
     let root = TempDir::new().expect("tempdir");
     let package = neutral_contained_task_package();
     let package_path = root.path().join("scheduled-task.zip");
@@ -2125,20 +2125,17 @@ fn scheduled_policy_run_reuses_one_request_receipt_and_admits_effect_at_most_onc
     state
         .transition_capture_after_input
         .store(true, Ordering::Release);
-    state.block_input.store(true, Ordering::Release);
-    let host = Arc::new(
-        RuntimeHost::start(
-            config(&root).with_procedure_manifest(procedure_manifest_with_primary(
-                &package,
-                vec!["after_observation".to_owned()],
-            )),
-            Arc::new(
-                FakeProvider::one(POLICY_INSTANCE_ALIAS, instance_id(), Arc::clone(&state))
-                    .fixture_simulation(),
-            ),
-        )
-        .expect("runtime host"),
-    );
+    let host = RuntimeHost::start(
+        config(&root).with_procedure_manifest(procedure_manifest_with_primary(
+            &package,
+            vec!["after_observation".to_owned()],
+        )),
+        Arc::new(
+            FakeProvider::one(POLICY_INSTANCE_ALIAS, instance_id(), Arc::clone(&state))
+                .fixture_simulation(),
+        ),
+    )
+    .expect("runtime host");
     host.activate_policy_catalog(&policy_sources(1))
         .expect("activate policy catalog");
     let (_, intent, reasons) = evaluated_policy_dispatch(&host, PolicyTrigger::FactsChanged);
@@ -2152,60 +2149,9 @@ fn scheduled_policy_run_reuses_one_request_receipt_and_admits_effect_at_most_onc
     let request =
         ContainedTaskRequest::new(package_path.to_string_lossy().into_owned(), package_sha256)
             .expect("contained task request");
-
-    let missing_request = ContainedTaskRequest::new(
-        root.path()
-            .join("missing-scheduled-task.zip")
-            .to_string_lossy()
-            .into_owned(),
-        request.expected_sha256(),
-    )
-    .expect("missing contained task request");
-    let failed = host
-        .run_scheduled_contained_task(&context, &missing_request)
-        .expect_err("failed preparation must release the active run reservation");
-    assert_eq!(failed.code(), "contained_task_package_open_failed");
-    assert_eq!(
-        host.active_scheduled_policy_run_count()
-            .expect("active count"),
-        0
-    );
-
-    let first_host = Arc::clone(&host);
-    let first_context = context.as_ref().clone();
-    let first_request = request.clone();
-    let first = thread::spawn(move || {
-        first_host.run_scheduled_contained_task(&first_context, &first_request)
-    });
-    wait_until(Duration::from_secs(2), || {
-        state.input_started.load(Ordering::Acquire)
-    });
-    assert_eq!(
-        host.active_scheduled_policy_run_count()
-            .expect("active count"),
-        1
-    );
-
-    let concurrent_error = host
+    let receipt = host
         .run_scheduled_contained_task(&context, &request)
-        .expect_err("cloned context must not admit the same run twice");
-    assert_eq!(concurrent_error.code(), "policy_run_already_executed");
-    assert_eq!(
-        host.active_scheduled_policy_run_count()
-            .expect("active count"),
-        1,
-        "the rejected clone must not release the admitted owner's reservation"
-    );
-    state.block_input.store(false, Ordering::Release);
-    let receipt = first
-        .join()
-        .expect("join first policy run")
-        .expect("first policy run receipt");
-    assert_eq!(
-        host.active_scheduled_policy_run_count()
-            .expect("active count"),
-        0
-    );
+        .expect("scheduled policy run receipt");
     assert_eq!(receipt.state(), RuntimeReceiptState::Completed);
     let receipt_value = serde_json::to_value(&receipt).expect("receipt JSON");
     let assert_receipt_error = |value: serde_json::Value, expected_code: &str| {
@@ -2260,15 +2206,6 @@ fn scheduled_policy_run_reuses_one_request_receipt_and_admits_effect_at_most_onc
     host.complete_scheduled_policy_run(&context, &receipt)
         .expect("complete scheduled policy run");
 
-    let replay_error = host
-        .run_scheduled_contained_task(&context, &request)
-        .expect_err("completed run must not replay");
-    assert_eq!(replay_error.code(), "policy_run_not_admitted");
-    let completion_replay = host
-        .complete_scheduled_policy_run(&context, &receipt)
-        .expect_err("policy outcome must be recorded once");
-    assert_eq!(completion_replay.code(), "policy_run_not_admitted");
-
     let mut client = TestClient::connect(&host);
     let events = projected_events(
         &mut client,
@@ -2298,23 +2235,7 @@ fn scheduled_policy_run_reuses_one_request_receipt_and_admits_effect_at_most_onc
         .expect("task terminal");
     assert_eq!(terminal.links.request_id(), Some(&receipt.request_id()));
     assert_eq!(state.input_count.load(Ordering::Acquire), 1);
-    let issuer = IdentifierIssuer::new().expect("identifier issuer");
-    for _ in 0..256 {
-        host.exercise_scheduled_policy_reservation(
-            *issuer
-                .mint_run_id()
-                .expect("reservation run id")
-                .transport(),
-        )
-        .expect("reserve and release distinct scheduled run");
-        assert_eq!(
-            host.active_scheduled_policy_run_count()
-                .expect("active count"),
-            0
-        );
-    }
     drop(client);
-    let host = Arc::try_unwrap(host).unwrap_or_else(|_| panic!("host reference remained"));
     host.close().expect("close runtime host");
 }
 

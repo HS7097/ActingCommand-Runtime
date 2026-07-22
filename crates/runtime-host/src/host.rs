@@ -518,7 +518,6 @@ impl RuntimeHost {
             admission_guards: Mutex::new(BTreeMap::new()),
             debug_runs: Mutex::new(BTreeMap::new()),
             contained_runs: Mutex::new(BTreeSet::new()),
-            active_scheduled_policy_runs: Mutex::new(BTreeSet::new()),
             next_connection_id: AtomicU64::new(1),
             clock: Arc::clone(&config.clock),
             clock_origin_monotonic_ms: clock_origin.monotonic_ms,
@@ -842,42 +841,6 @@ impl RuntimeHost {
     ) -> RuntimeHostResult<PolicyExecutionEventData> {
         self.shared_ref("complete_scheduled_policy_run")?
             .complete_scheduled_policy_run(context, receipt)
-    }
-
-    #[cfg(test)]
-    pub(crate) fn active_scheduled_policy_run_count(&self) -> RuntimeHostResult<usize> {
-        let shared = self.shared_ref("active_scheduled_policy_run_count")?;
-        Ok(lock(
-            &shared.active_scheduled_policy_runs,
-            "active_scheduled_policy_run_count",
-        )?
-        .len())
-    }
-
-    #[cfg(test)]
-    pub(crate) fn exercise_scheduled_policy_reservation(
-        &self,
-        run_id: actingcommand_contract::RunId,
-    ) -> RuntimeHostResult<()> {
-        let shared = self.shared_ref("exercise_scheduled_policy_reservation")?;
-        let reservation = shared
-            .admit_scheduled_policy_run(run_id)
-            .map_err(|failure| *failure.error)?;
-        if lock(
-            &shared.active_scheduled_policy_runs,
-            "exercise_scheduled_policy_reservation",
-        )?
-        .len()
-            != 1
-        {
-            return Err(RuntimeHostError::fatal(
-                "scheduled_policy_reservation_count_invalid",
-                "exercise_scheduled_policy_reservation",
-                RuntimeErrorCode::RuntimeFatal,
-            ));
-        }
-        drop(reservation);
-        Ok(())
     }
 
     pub fn record_policy_planning_signal(
@@ -1710,8 +1673,6 @@ struct HostShared {
     admission_guards: Mutex<BTreeMap<InstanceId, Arc<Mutex<()>>>>,
     debug_runs: Mutex<BTreeMap<CorrelationId, DebugRunContext>>,
     contained_runs: Mutex<BTreeSet<RequestId>>,
-    // Process-local mutual exclusion only. Durable replay authority remains in GlobalLedger.
-    active_scheduled_policy_runs: Mutex<BTreeSet<actingcommand_contract::RunId>>,
     next_connection_id: AtomicU64,
     clock: Arc<dyn RuntimeClock>,
     clock_origin_monotonic_ms: u64,
@@ -8031,7 +7992,6 @@ impl HostShared {
             ))
         })?;
         self.validated_instance(&validated, token, connection_id)?;
-        let _active_policy_run = self.admit_scheduled_policy_run(context.run_id())?;
         let _active_run = self.begin_contained_run(task_request_message.request_id())?;
         let prepared = prepare_contained_task(instance_alias, task_request)?;
         let run_links = RuntimeRunLinks::new(context.issued_task_id(), context.issued_run_id());
@@ -8055,35 +8015,6 @@ impl HostShared {
             Some(run_links),
         )?;
         Ok((task_request_message, success))
-    }
-
-    fn admit_scheduled_policy_run(
-        &self,
-        run_id: actingcommand_contract::RunId,
-    ) -> Result<ActiveScheduledPolicyRun<'_>, RequestFailure> {
-        let mut reserved = lock(
-            &self.active_scheduled_policy_runs,
-            "admit_scheduled_policy_run",
-        )?;
-        let previously_recorded = self
-            .ledger
-            .query(EventQuery {
-                run_id: Some(run_id),
-                ..EventQuery::default()
-            })
-            .map_err(|_| {
-                RequestFailure::poison_without_terminal(ledger_error("query_scheduled_policy_run"))
-            })?
-            .into_iter()
-            .any(|event| matches!(event.payload(), EventPayload::Task(_)));
-        if previously_recorded || !reserved.insert(run_id) {
-            return Err(contained_task_replay_denied("policy_run_already_executed"));
-        }
-        drop(reserved);
-        Ok(ActiveScheduledPolicyRun {
-            active: &self.active_scheduled_policy_runs,
-            run_id,
-        })
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -10042,24 +9973,6 @@ struct ContainedTaskTerminalDraft {
 struct ActiveContainedRun<'a> {
     active: &'a Mutex<BTreeSet<RequestId>>,
     request_id: RequestId,
-}
-
-struct ActiveScheduledPolicyRun<'a> {
-    active: &'a Mutex<BTreeSet<actingcommand_contract::RunId>>,
-    run_id: actingcommand_contract::RunId,
-}
-
-impl Drop for ActiveScheduledPolicyRun<'_> {
-    fn drop(&mut self) {
-        let mut active = self
-            .active
-            .lock()
-            .expect("active scheduled-policy registry poisoned");
-        assert!(
-            active.remove(&self.run_id),
-            "active scheduled-policy identity missing during cleanup"
-        );
-    }
 }
 
 impl Drop for ActiveContainedRun<'_> {
