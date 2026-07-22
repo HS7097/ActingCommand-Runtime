@@ -18,7 +18,8 @@ use actingcommand_contract::{
     RuntimeInfo, RuntimeMaintenanceQuery, RuntimeMonitorInstanceStatus, RuntimeMonitorPolicy,
     RuntimeMonitorRegistryStatus, RuntimeOperation, RuntimePlanningDocument,
     RuntimePlanningDocumentKind, RuntimeReceipt, RuntimeRequest, RuntimeResult,
-    RuntimeStrategicReportRequest, RuntimeSubscriptionRequest, TerminalEvent,
+    RuntimeStrategicReportRequest, RuntimeSubscriptionRequest, TaskPayload, TaskSemanticFact,
+    TerminalEvent,
 };
 use actingcommand_policy::{
     EvaluationFacts, EvaluationResources, EvaluationTime, ForwardProjection,
@@ -42,7 +43,7 @@ const MAX_RUNTIME_IO_TIMEOUT: Duration = Duration::from_secs(60);
 const MAX_BACKEND_OPEN_TIMEOUT: Duration = Duration::from_secs(120);
 const MAX_RUNTIME_INFO_BYTES: u64 = 64 * 1024;
 const MAX_RUN_SUMMARY_EVENTS: usize = 16_384;
-const MAX_RUN_SUMMARY_PAGES: usize = 128;
+const MAX_RUN_SUMMARY_PAGES: usize = 64;
 const MAX_RUN_SUMMARY_RESIDENT_BYTES: usize = 64 * 1024 * 1024;
 
 /// Discovery, identity, framing, and timeout configuration for one local Runtime session.
@@ -993,6 +994,12 @@ impl RuntimeClient {
             if !page.has_more() {
                 return Ok(events);
             }
+            if events.len() == MAX_RUN_SUMMARY_EVENTS {
+                return Err(RuntimeClientError::fatal(
+                    "run_summary_event_limit_exceeded",
+                    "summarize_run",
+                ));
+            }
             let next = page.next_cursor().cloned().ok_or_else(|| {
                 RuntimeClientError::fatal("run_summary_pagination_invalid", "summarize_run")
             })?;
@@ -1787,6 +1794,7 @@ fn project_run_summary(run_id: RunId, events: &[ProjectedEvent]) -> RuntimeClien
             "summarize_run",
         ));
     }
+    validate_admitted_package(events, &lab_request_id, intent.package_digest())?;
     let simulated_effect_count = validate_fixture_simulation(events)?;
     Ok(json!({
         "schema_version": "actingcommand.run-summary.v1",
@@ -1838,6 +1846,50 @@ fn project_run_summary(run_id: RunId, events: &[ProjectedEvent]) -> RuntimeClien
         "event_count": events.len(),
         "completed_sequence": completed_event.sequence
     }))
+}
+
+fn validate_admitted_package(
+    events: &[ProjectedEvent],
+    request_id: &RequestId,
+    policy_package_digest: &str,
+) -> RuntimeClientResult<()> {
+    let mut admitted_package_sha256 = Vec::new();
+    for event in events
+        .iter()
+        .filter(|event| event.event_type == EventType::TaskRequested)
+    {
+        let EventPayload::Task(TaskPayload::Semantic(payload)) = full_payload(event)? else {
+            continue;
+        };
+        let TaskSemanticFact::PackageAdmitted { package_sha256, .. } = payload.fact() else {
+            continue;
+        };
+        if event.links.request_id() != Some(request_id) {
+            return Err(RuntimeClientError::fatal(
+                "run_summary_package_request_mismatch",
+                "summarize_run",
+            ));
+        }
+        admitted_package_sha256.push(package_sha256.as_str());
+    }
+    let [admitted_package_sha256] = admitted_package_sha256.as_slice() else {
+        return Err(RuntimeClientError::fatal(
+            "run_summary_package_fact_count_invalid",
+            "summarize_run",
+        ));
+    };
+    let policy_package_sha256 = policy_package_digest
+        .strip_prefix("sha256:")
+        .ok_or_else(|| {
+            RuntimeClientError::fatal("run_summary_package_digest_invalid", "summarize_run")
+        })?;
+    if policy_package_sha256 != *admitted_package_sha256 {
+        return Err(RuntimeClientError::fatal(
+            "run_summary_package_digest_mismatch",
+            "summarize_run",
+        ));
+    }
+    Ok(())
 }
 
 fn validate_fixture_simulation(events: &[ProjectedEvent]) -> RuntimeClientResult<usize> {
@@ -2037,4 +2089,123 @@ fn capture_sequence_response_timeout(
                 "capture_sequence",
             )
         })
+}
+
+#[cfg(test)]
+mod run_summary_package_tests {
+    use super::validate_admitted_package;
+    use actingcommand_contract::{
+        AuditInput, EventActor, EventDraft, EventLinksDraft, EventOrigin, EventSeverity,
+        EventSource, IdentifierIssuer, IssuedRequestId, OriginModule, ProjectedEvent,
+        ProjectionPayload, SanitizationError, SecretField, SecretFingerprinter, Sha256Fingerprint,
+        TaskPayloadDraft, TaskSemanticFact,
+    };
+
+    struct RejectSecrets;
+
+    impl SecretFingerprinter for RejectSecrets {
+        fn fingerprint(
+            &self,
+            _field: SecretField,
+            _original: &str,
+        ) -> Result<Sha256Fingerprint, SanitizationError> {
+            panic!("package admission facts do not contain secrets")
+        }
+    }
+
+    fn digest(byte: char) -> (String, String) {
+        let raw = byte.to_string().repeat(64);
+        let canonical = format!("sha256:{raw}");
+        (raw, canonical)
+    }
+
+    fn package_event(
+        issuer: &IdentifierIssuer,
+        request_id: IssuedRequestId,
+        package_sha256: String,
+        sequence: u64,
+    ) -> ProjectedEvent {
+        let sanitized = EventDraft::new(
+            issuer.mint_event_id().expect("event id"),
+            sequence,
+            EventSeverity::Info,
+            EventOrigin::new(
+                EventSource::Runtime,
+                OriginModule::Runtime,
+                EventActor::Runtime,
+            ),
+            EventLinksDraft::default().with_request_id(request_id),
+            TaskPayloadDraft::semantic(
+                TaskSemanticFact::PackageAdmitted {
+                    package_label: "package".to_string(),
+                    task_label: "task".to_string(),
+                    package_sha256,
+                },
+                AuditInput::new(),
+            )
+            .into(),
+        )
+        .sanitize(&RejectSecrets)
+        .expect("sanitize package admission");
+        ProjectedEvent {
+            schema_version: sanitized.schema_version().to_string(),
+            sequence,
+            event_id: *sanitized.event_id(),
+            timestamp_unix_ms: sanitized.timestamp_unix_ms(),
+            event_type: sanitized.event_type(),
+            severity: sanitized.severity(),
+            sensitivity: sanitized.sensitivity(),
+            origin: sanitized.origin().clone(),
+            links: sanitized.links().clone(),
+            payload_schema: sanitized.payload_schema().to_string(),
+            payload: ProjectionPayload::Full(Box::new(sanitized.payload().clone())),
+            artifacts: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn exactly_one_matching_package_admission_is_required() {
+        let issuer = IdentifierIssuer::new().expect("identifier issuer");
+        let request_id = issuer.mint_request_id().expect("request id");
+        let (raw, canonical) = digest('a');
+        let events = [package_event(&issuer, request_id, raw, 1)];
+        validate_admitted_package(&events, request_id.transport(), &canonical)
+            .expect("matching admitted package");
+    }
+
+    #[test]
+    fn missing_package_admission_fails_closed() {
+        let issuer = IdentifierIssuer::new().expect("identifier issuer");
+        let request_id = issuer.mint_request_id().expect("request id");
+        let (_, canonical) = digest('a');
+        let error = validate_admitted_package(&[], request_id.transport(), &canonical)
+            .expect_err("missing package admission");
+        assert_eq!(error.code(), "run_summary_package_fact_count_invalid");
+    }
+
+    #[test]
+    fn duplicate_package_admission_fails_closed() {
+        let issuer = IdentifierIssuer::new().expect("identifier issuer");
+        let request_id = issuer.mint_request_id().expect("request id");
+        let (raw, canonical) = digest('a');
+        let events = [
+            package_event(&issuer, request_id, raw.clone(), 1),
+            package_event(&issuer, request_id, raw, 2),
+        ];
+        let error = validate_admitted_package(&events, request_id.transport(), &canonical)
+            .expect_err("duplicate package admission");
+        assert_eq!(error.code(), "run_summary_package_fact_count_invalid");
+    }
+
+    #[test]
+    fn mismatched_package_admission_fails_closed() {
+        let issuer = IdentifierIssuer::new().expect("identifier issuer");
+        let request_id = issuer.mint_request_id().expect("request id");
+        let (_, canonical) = digest('a');
+        let (other, _) = digest('b');
+        let events = [package_event(&issuer, request_id, other, 1)];
+        let error = validate_admitted_package(&events, request_id.transport(), &canonical)
+            .expect_err("mismatched package admission");
+        assert_eq!(error.code(), "run_summary_package_digest_mismatch");
+    }
 }

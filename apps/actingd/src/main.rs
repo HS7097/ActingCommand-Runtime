@@ -160,15 +160,13 @@ fn initialize_policy(host: &RuntimeHost, policy: &PolicyBootstrap) -> Result<(),
         let PolicyDispatchAdmission::Granted { context } = admission else {
             continue;
         };
-        let task = policy
-            .scheduled_tasks
-            .get(context.procedure_ref())
-            .ok_or_else(|| ActingdError::process("policy_scheduled_task_missing"))?;
-        let receipt = host
-            .run_scheduled_contained_task(&context, task)
-            .map_err(ActingdError::runtime)?;
-        host.complete_scheduled_policy_run(&context, &receipt)
-            .map_err(ActingdError::runtime)?;
+        if let Some(task) = policy.scheduled_tasks.get(context.procedure_ref()) {
+            let receipt = host
+                .run_scheduled_contained_task(&context, task)
+                .map_err(ActingdError::runtime)?;
+            host.complete_scheduled_policy_run(&context, &receipt)
+                .map_err(ActingdError::runtime)?;
+        }
     }
     Ok(())
 }

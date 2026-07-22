@@ -85,7 +85,16 @@ struct ProcedureBindingConfigFile {
     operation_id: String,
     yield_points: Vec<String>,
     #[serde(default)]
-    package_path: Option<PathBuf>,
+    scheduled_execution: Option<ScheduledExecutionConfigFile>,
+}
+
+#[derive(Deserialize)]
+#[serde(tag = "mode", rename_all = "snake_case", deny_unknown_fields)]
+enum ScheduledExecutionConfigFile {
+    FixtureSimulation {
+        #[serde(default)]
+        package_path: Option<PathBuf>,
+    },
 }
 
 #[derive(Deserialize)]
@@ -180,7 +189,7 @@ enum ConfiguredInstanceBackend {
 }
 
 type ScheduledProcedureTask = (String, ContainedTaskRequest);
-type AssembledProcedureBinding = (ProcedureBinding, ScheduledProcedureTask);
+type AssembledProcedureBinding = (ProcedureBinding, Option<ScheduledProcedureTask>);
 
 pub(super) fn load(path: &Path) -> Result<ActingdConfigFile, &'static str> {
     let metadata = fs::metadata(path).map_err(|_| "config_unavailable")?;
@@ -229,8 +238,12 @@ impl ActingdConfigFile {
             .policy
             .map(|policy| policy.assemble(&self.source_root))
             .transpose()?;
-        if policy.is_some() && !registry.is_fixture_simulation() {
-            return Err("policy_execution_requires_fixture_simulation");
+        if policy
+            .as_ref()
+            .is_some_and(|policy| !policy.scheduled_tasks.is_empty())
+            && !registry.is_fixture_simulation()
+        {
+            return Err("fixture_simulation_requires_fixture_backend");
         }
         let policy_state_root = self.state_root.clone();
         let policy_governance_capability = self.governance_capability.clone();
@@ -285,8 +298,9 @@ impl PolicyConfigFile {
         let mut scheduled_tasks = BTreeMap::new();
         for configured in self.procedure_manifest {
             let (binding, scheduled_task) = configured.binding(source_root)?;
-            let (procedure_ref, request) = scheduled_task;
-            if scheduled_tasks.insert(procedure_ref, request).is_some() {
+            if let Some((procedure_ref, request)) = scheduled_task
+                && scheduled_tasks.insert(procedure_ref, request).is_some()
+            {
                 return Err("procedure_task_duplicate");
             }
             bindings.push(binding);
@@ -353,36 +367,46 @@ impl PolicyCatalogConfigFile {
 
 impl ProcedureBindingConfigFile {
     fn binding(self, source_root: &Path) -> Result<AssembledProcedureBinding, &'static str> {
-        if self.yield_points.len() > MAX_REFERENCES_PER_TASK {
-            return Err("procedure_binding_size_invalid");
-        }
-        let procedure_ref = self.procedure_ref;
-        let package_digest = self.package_digest;
-        let configured_path = self.package_path.ok_or("procedure_package_path_missing")?;
-        let path = if configured_path.is_absolute() {
-            configured_path
-        } else {
-            source_root.join(configured_path)
-        };
-        let path = fs::canonicalize(path).map_err(|_| "procedure_package_unavailable")?;
-        let metadata = fs::metadata(&path).map_err(|_| "procedure_package_unavailable")?;
-        if !metadata.is_file() {
-            return Err("procedure_package_not_regular");
-        }
-        let expected_sha256 = package_digest
-            .strip_prefix("sha256:")
-            .ok_or("procedure_package_digest_invalid")?;
-        let request =
-            ContainedTaskRequest::new(path.to_string_lossy().into_owned(), expected_sha256)
-                .map_err(|_| "procedure_task_request_invalid")?;
-        let scheduled_task = (procedure_ref.clone(), request);
-        let binding = ProcedureBinding::new(
+        let Self {
             procedure_ref,
             package_digest,
-            self.operation_id,
-            self.yield_points,
+            operation_id,
+            yield_points,
+            scheduled_execution,
+        } = self;
+        if yield_points.len() > MAX_REFERENCES_PER_TASK {
+            return Err("procedure_binding_size_invalid");
+        }
+        let binding = ProcedureBinding::new(
+            procedure_ref.clone(),
+            package_digest.clone(),
+            operation_id,
+            yield_points,
         )
         .map_err(|_| "procedure_binding_invalid")?;
+        let scheduled_task = match scheduled_execution {
+            None => None,
+            Some(ScheduledExecutionConfigFile::FixtureSimulation { package_path }) => {
+                let package_path = package_path.ok_or("procedure_package_path_missing")?;
+                let path = if package_path.is_absolute() {
+                    package_path
+                } else {
+                    source_root.join(package_path)
+                };
+                let path = fs::canonicalize(path).map_err(|_| "procedure_package_unavailable")?;
+                let metadata = fs::metadata(&path).map_err(|_| "procedure_package_unavailable")?;
+                if !metadata.is_file() {
+                    return Err("procedure_package_not_regular");
+                }
+                let expected_sha256 = package_digest
+                    .strip_prefix("sha256:")
+                    .ok_or("procedure_package_digest_invalid")?;
+                let request =
+                    ContainedTaskRequest::new(path.to_string_lossy().into_owned(), expected_sha256)
+                        .map_err(|_| "procedure_task_request_invalid")?;
+                Some((procedure_ref, request))
+            }
+        };
         Ok((binding, scheduled_task))
     }
 }

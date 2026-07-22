@@ -3,10 +3,12 @@
 use actingcommand_contract::{
     AgentPayload, AgentSessionId, ApplicationLifecycleAction, EffectDisposition, EventActor,
     EventPayload, EventQuery, EventSource, EventType, FactScope, IdentifierIssuer, InputPayload,
-    InstanceId, OriginModule, PolicyExecutionOutcome, PolicyPayload, PolicyPlanningSignalEventData,
-    PolicyPlanningSignalKind, ProjectInterfaceRequest, ProjectedArtifactReference,
-    ProjectionPayload, ProjectionProfile, RUNTIME_INFO_FILE, RuntimeErrorCode, RuntimeInfo,
+    InstanceId, MAX_RUNTIME_EVENT_QUERY_EVENTS, OriginModule, PolicyExecutionOutcome,
+    PolicyPayload, PolicyPlanningSignalEventData, PolicyPlanningSignalKind,
+    ProjectInterfaceRequest, ProjectedArtifactReference, ProjectionPayload, ProjectionProfile,
+    RUNTIME_INFO_FILE, RuntimeErrorCode, RuntimeEventQueryPageRequest, RuntimeInfo,
     RuntimeOperation, RuntimeReceipt, RuntimeReceiptState, RuntimeRequest, RuntimeResult,
+    TaskPayload, TaskSemanticFact,
 };
 use actingcommand_device::{
     CaptureBackend, CaptureBackendName, DeviceError, DeviceResult, Frame, InputBackend, PixelFormat,
@@ -98,22 +100,90 @@ fn actingd_outlives_disposable_clients_and_accepts_reconnection() {
 }
 
 #[test]
-fn actingd_rejects_policy_without_a_scheduled_package_before_runtime_start() {
+fn actingd_preserves_legacy_physical_policy_intent_admission_and_lease() {
     let root = TempDir::new().expect("tempdir");
     let config_path = root.path().join("actingd.json");
-    write_policy_config_without_package(&config_path, root.path(), instance_id());
+    write_legacy_physical_policy_config(&config_path, root.path(), instance_id());
 
-    let output = Command::new(env!("CARGO_BIN_EXE_actingcommand-actingd"))
-        .args(["--config", config_path.to_str().expect("config path")])
-        .output()
-        .expect("run actingd");
-    assert!(!output.status.success());
-    assert!(String::from_utf8_lossy(&output.stderr).contains("procedure_package_path_missing"));
-    assert!(!root.path().join(RUNTIME_INFO_FILE).exists());
+    let child = start_actingd(&config_path);
+    let mut child = ChildGuard(child);
+    wait_for_runtime_info(&mut child.0, root.path());
+    let client = wait_for_agent_client(&mut child.0, root.path());
+    let started = Instant::now();
+    let events = loop {
+        let events = client
+            .query_events(EventQuery::default(), ProjectionProfile::Forensic)
+            .expect("query legacy policy startup events");
+        if events
+            .iter()
+            .any(|event| event.event_type == EventType::LeaseGranted)
+        {
+            break events;
+        }
+        if let Some(status) = child.0.try_wait().expect("process state") {
+            panic!("actingd exited before legacy policy lease with {status}");
+        }
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "legacy policy startup timed out"
+        );
+        thread::sleep(Duration::from_millis(20));
+    };
+    for event_type in [
+        EventType::PolicyDispatchIntent,
+        EventType::PolicyDispatchAdmitted,
+        EventType::LeaseGranted,
+    ] {
+        assert_eq!(
+            events
+                .iter()
+                .filter(|event| event.event_type == event_type)
+                .count(),
+            1,
+            "legacy {event_type:?}"
+        );
+    }
+    for event_type in [
+        EventType::LabRequest,
+        EventType::TaskRequested,
+        EventType::TaskCompleted,
+        EventType::PolicyExecutionRecorded,
+        EventType::PolicyDispatchCompleted,
+    ] {
+        assert_eq!(
+            events
+                .iter()
+                .filter(|event| event.event_type == event_type)
+                .count(),
+            0,
+            "legacy policy must not enter fixture execution: {event_type:?}"
+        );
+    }
+    let admitted = events
+        .iter()
+        .find(|event| event.event_type == EventType::PolicyDispatchAdmitted)
+        .expect("legacy policy admission event");
+    let ProjectionPayload::Full(payload) = &admitted.payload else {
+        panic!("legacy forensic policy admission payload")
+    };
+    let EventPayload::Policy(PolicyPayload::DispatchAdmitted(payload)) = payload.as_ref() else {
+        panic!("legacy policy dispatch admission")
+    };
+    assert_eq!(payload.operation_id(), "operation.observe");
+    assert_eq!(
+        payload.package_digest(),
+        format!("sha256:{}", "c".repeat(64))
+    );
+    assert!(!payload.procedure_binding_digest().is_empty());
+    assert!(child.0.try_wait().expect("process state").is_none());
+
+    drop(client);
+    child.0.kill().expect("kill actingd");
+    child.0.wait().expect("wait actingd");
 }
 
 #[test]
-fn actingd_rejects_policy_execution_on_a_physical_device_registry() {
+fn actingd_rejects_explicit_fixture_simulation_on_a_physical_registry() {
     let root = TempDir::new().expect("tempdir");
     let config_path = root.path().join("actingd.json");
     let instance_id = instance_id();
@@ -149,13 +219,126 @@ fn actingd_rejects_policy_execution_on_a_physical_device_registry() {
     assert!(!output.status.success());
     assert!(
         String::from_utf8_lossy(&output.stderr)
-            .contains("policy_execution_requires_fixture_simulation")
+            .contains("fixture_simulation_requires_fixture_backend")
     );
     assert!(!root.path().join(RUNTIME_INFO_FILE).exists());
 }
 
 #[test]
+fn actingd_requires_package_path_only_for_explicit_fixture_simulation() {
+    let root = TempDir::new().expect("tempdir");
+    let config_path = root.path().join("actingd.json");
+    write_policy_execution_config(
+        &config_path,
+        root.path(),
+        instance_id(),
+        &[vec![0, 0, 255, 0, 255, 0]],
+        0,
+    );
+    let mut config: serde_json::Value =
+        serde_json::from_slice(&fs::read(&config_path).expect("read fixture config"))
+            .expect("decode fixture config");
+    config["policy"]["procedure_manifest"][0]["scheduled_execution"]
+        .as_object_mut()
+        .expect("scheduled execution object")
+        .remove("package_path");
+    fs::write(
+        &config_path,
+        serde_json::to_vec_pretty(&config).expect("missing package config JSON"),
+    )
+    .expect("write missing package config");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_actingcommand-actingd"))
+        .args(["--config", config_path.to_str().expect("config path")])
+        .output()
+        .expect("run actingd");
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("procedure_package_path_missing"));
+    assert!(!root.path().join(RUNTIME_INFO_FILE).exists());
+}
+
+#[test]
+fn actingd_does_not_execute_fixture_without_an_explicit_scheduled_binding() {
+    let root = TempDir::new().expect("tempdir");
+    let config_path = root.path().join("actingd.json");
+    write_policy_execution_config(
+        &config_path,
+        root.path(),
+        instance_id(),
+        &[vec![0, 0, 255, 0, 255, 0]],
+        0,
+    );
+    let mut config: serde_json::Value =
+        serde_json::from_slice(&fs::read(&config_path).expect("read fixture config"))
+            .expect("decode fixture config");
+    config["policy"]["procedure_manifest"][0]
+        .as_object_mut()
+        .expect("procedure binding object")
+        .remove("scheduled_execution");
+    fs::write(
+        &config_path,
+        serde_json::to_vec_pretty(&config).expect("admission-only fixture config JSON"),
+    )
+    .expect("write admission-only fixture config");
+
+    let child = start_actingd(&config_path);
+    let mut child = ChildGuard(child);
+    wait_for_runtime_info(&mut child.0, root.path());
+    let client = wait_for_agent_client(&mut child.0, root.path());
+    let started = Instant::now();
+    let events = loop {
+        let events = client
+            .query_events(EventQuery::default(), ProjectionProfile::Forensic)
+            .expect("query admission-only fixture events");
+        if events
+            .iter()
+            .any(|event| event.event_type == EventType::LeaseGranted)
+        {
+            break events;
+        }
+        if let Some(status) = child.0.try_wait().expect("process state") {
+            panic!("actingd exited before admission-only fixture lease with {status}");
+        }
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "admission-only fixture policy timed out"
+        );
+        thread::sleep(Duration::from_millis(20));
+    };
+    assert_eq!(
+        events
+            .iter()
+            .filter(|event| event.event_type == EventType::PolicyDispatchAdmitted)
+            .count(),
+        1
+    );
+    for event_type in [
+        EventType::LabRequest,
+        EventType::TaskRequested,
+        EventType::TaskCompleted,
+        EventType::PolicyExecutionRecorded,
+        EventType::PolicyDispatchCompleted,
+    ] {
+        assert_eq!(
+            events
+                .iter()
+                .filter(|event| event.event_type == event_type)
+                .count(),
+            0,
+            "untyped fixture binding must not execute: {event_type:?}"
+        );
+    }
+    assert!(child.0.try_wait().expect("process state").is_none());
+
+    drop(client);
+    child.0.kill().expect("kill actingd");
+    child.0.wait().expect("wait actingd");
+}
+
+#[test]
 fn actingd_closes_one_policy_run_through_fixture_receipt_ledger_and_report_inputs() {
+    let expected_package_sha256 = format!("{:x}", Sha256::digest(neutral_contained_task_package()));
+    let expected_package_digest = format!("sha256:{expected_package_sha256}");
     for (case, frames, max_inputs, expected_effects) in [
         (
             "effecting",
@@ -257,6 +440,7 @@ fn actingd_closes_one_policy_run_through_fixture_receipt_ledger_and_report_input
             EventType::PolicyDispatchAdmitted,
             EventType::LeaseGranted,
             EventType::LabRequest,
+            EventType::TaskRequested,
             EventType::TaskCompleted,
             EventType::LeaseReleased,
             EventType::PolicyExecutionRecorded,
@@ -271,6 +455,23 @@ fn actingd_closes_one_policy_run_through_fixture_receipt_ledger_and_report_input
                 "{case}: {event_type:?}"
             );
         }
+        let package_admitted = run_events
+            .iter()
+            .find(|event| event.event_type == EventType::TaskRequested)
+            .expect("package admitted fact");
+        assert!(matches!(
+            &package_admitted.payload,
+            ProjectionPayload::Full(payload)
+                if matches!(
+                    payload.as_ref(),
+                    EventPayload::Task(TaskPayload::Semantic(payload))
+                        if matches!(
+                            payload.fact(),
+                            TaskSemanticFact::PackageAdmitted { package_sha256, .. }
+                                if package_sha256 == &expected_package_sha256
+                        )
+                )
+        ));
         assert_eq!(
             run_events
                 .iter()
@@ -378,6 +579,12 @@ fn actingd_closes_one_policy_run_through_fixture_receipt_ledger_and_report_input
             Some("simulated_completed")
         );
         assert_eq!(
+            summary
+                .get("package_digest")
+                .and_then(serde_json::Value::as_str),
+            Some(expected_package_digest.as_str())
+        );
+        assert_eq!(
             summary.get("effect").and_then(serde_json::Value::as_str),
             Some(if expected_effects == 1 {
                 "would_effect"
@@ -470,10 +677,11 @@ fn actingd_closes_one_policy_run_through_fixture_receipt_ledger_and_report_input
 
 #[test]
 fn actingd_summarizes_a_completed_policy_run_across_more_than_one_event_page() {
-    const STEP_COUNT: usize = 20;
+    const STEP_COUNT: usize = 31;
     let root = TempDir::new().expect("tempdir");
     let config_path = root.path().join("actingd.json");
     let (package, frames) = sequential_contained_task_package(STEP_COUNT);
+    let expected_package_digest = format!("sha256:{:x}", Sha256::digest(&package));
     write_policy_execution_config_with_package(
         &config_path,
         root.path(),
@@ -528,6 +736,70 @@ fn actingd_summarizes_a_completed_policy_run_across_more_than_one_event_page() {
         .iter()
         .find_map(|event| event.links.run_id().copied())
         .expect("policy run id");
+    let run_query = EventQuery {
+        run_id: Some(run_id),
+        ..EventQuery::default()
+    };
+    let first_page = client
+        .query_event_page(
+            run_query.clone(),
+            ProjectionProfile::Forensic,
+            RuntimeEventQueryPageRequest::new(MAX_RUNTIME_EVENT_QUERY_EVENTS, None)
+                .expect("first page request"),
+        )
+        .expect("first run event page");
+    assert_eq!(
+        first_page.returned_count(),
+        MAX_RUNTIME_EVENT_QUERY_EVENTS,
+        "the first page must fill the actual Runtime page limit"
+    );
+    assert!(
+        first_page.has_more(),
+        "the first page must expose a continuation"
+    );
+    let cursor = first_page
+        .next_cursor()
+        .cloned()
+        .expect("first page continuation cursor");
+    assert_eq!(
+        cursor.snapshot_ledger_position(),
+        first_page.snapshot_ledger_position()
+    );
+    assert_eq!(
+        first_page.events().last().map(|event| event.sequence),
+        Some(cursor.after_sequence())
+    );
+    assert!(
+        cursor
+            .matches(&run_query, ProjectionProfile::Forensic)
+            .expect("cursor query identity")
+    );
+    let second_page = client
+        .query_event_page(
+            run_query,
+            ProjectionProfile::Forensic,
+            RuntimeEventQueryPageRequest::new(MAX_RUNTIME_EVENT_QUERY_EVENTS, Some(cursor.clone()))
+                .expect("second page request"),
+        )
+        .expect("second run event page");
+    assert_eq!(
+        second_page.snapshot_ledger_position(),
+        first_page.snapshot_ledger_position(),
+        "continuation must stay on the frozen ledger snapshot"
+    );
+    assert!(
+        second_page
+            .events()
+            .first()
+            .is_some_and(|event| event.sequence > cursor.after_sequence()),
+        "continuation must advance beyond the first page"
+    );
+    assert!(second_page.events().iter().all(|second| {
+        first_page
+            .events()
+            .iter()
+            .all(|first| first.event_id != second.event_id)
+    }));
     let summary = client
         .summarize_run(run_id)
         .expect("summarize all pages of the completed policy run");
@@ -535,8 +807,8 @@ fn actingd_summarizes_a_completed_policy_run_across_more_than_one_event_page() {
         summary
             .get("event_count")
             .and_then(serde_json::Value::as_u64)
-            .is_some_and(|count| count > 128),
-        "the regression must cross the default event-page boundary: {summary}"
+            .is_some_and(|count| count > u64::from(MAX_RUNTIME_EVENT_QUERY_EVENTS)),
+        "the regression must cross the actual Runtime event-page boundary: {summary}"
     );
     assert_eq!(
         summary.get("status").and_then(serde_json::Value::as_str),
@@ -560,6 +832,12 @@ fn actingd_summarizes_a_completed_policy_run_across_more_than_one_event_page() {
             .get("actual_effect_count")
             .and_then(serde_json::Value::as_u64),
         Some(0)
+    );
+    assert_eq!(
+        summary
+            .get("package_digest")
+            .and_then(serde_json::Value::as_str),
+        Some(expected_package_digest.as_str())
     );
     assert!(child.0.try_wait().expect("process state").is_none());
 
@@ -814,7 +1092,7 @@ fn write_config(path: &Path, state_root: &Path, instance_id: InstanceId, dispatc
     .expect("write config");
 }
 
-fn write_policy_config_without_package(path: &Path, state_root: &Path, instance_id: InstanceId) {
+fn write_legacy_physical_policy_config(path: &Path, state_root: &Path, instance_id: InstanceId) {
     let policy_root = state_root.join("policy");
     fs::create_dir(&policy_root).expect("create policy directory");
     let sources = actingd_policy_sources(1);
@@ -936,7 +1214,10 @@ fn write_policy_execution_config_with_package(
                 "package_digest": format!("sha256:{package_sha256}"),
                 "operation_id": "operation.observe",
                 "yield_points": ["after_observation"],
-                "package_path": "policy/task.zip"
+                "scheduled_execution": {
+                    "mode": "fixture_simulation",
+                    "package_path": "policy/task.zip"
+                }
             }]
         },
         "instances": [{
