@@ -5,10 +5,21 @@ use actingcommand_contract::{ApplicationLifecycleAction, InstanceId, MonitorObse
 use actingcommand_device::{CaptureBackend, DeviceResult, Frame, InputBackend};
 use std::fmt;
 
+/// Runtime-owned provenance for an execution backend instance.
+///
+/// Fixture simulation is an explicit zero-device boundary. It must not be accepted by normal
+/// device-facing Runtime operations.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ExecutionBackendProvenance {
+    PhysicalDevice,
+    FixtureSimulation,
+}
+
 #[derive(Clone, PartialEq, Eq)]
 pub struct ResolvedExecutionInstance {
     instance_id: InstanceId,
     audit_endpoint: String,
+    provenance: ExecutionBackendProvenance,
 }
 
 impl ResolvedExecutionInstance {
@@ -16,6 +27,15 @@ impl ResolvedExecutionInstance {
         Self {
             instance_id,
             audit_endpoint: audit_endpoint.into(),
+            provenance: ExecutionBackendProvenance::PhysicalDevice,
+        }
+    }
+
+    pub fn fixture_simulation(instance_id: InstanceId) -> Self {
+        Self {
+            instance_id,
+            audit_endpoint: "fixture-simulation".to_owned(),
+            provenance: ExecutionBackendProvenance::FixtureSimulation,
         }
     }
 
@@ -26,6 +46,10 @@ impl ResolvedExecutionInstance {
     pub fn audit_endpoint(&self) -> &str {
         &self.audit_endpoint
     }
+
+    pub const fn provenance(&self) -> ExecutionBackendProvenance {
+        self.provenance
+    }
 }
 
 impl fmt::Debug for ResolvedExecutionInstance {
@@ -34,6 +58,7 @@ impl fmt::Debug for ResolvedExecutionInstance {
             .debug_struct("ResolvedExecutionInstance")
             .field("instance_id", &self.instance_id)
             .field("audit_endpoint", &"<redacted>")
+            .field("provenance", &self.provenance)
             .finish()
     }
 }

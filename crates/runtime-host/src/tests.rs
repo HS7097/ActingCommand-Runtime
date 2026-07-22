@@ -34,6 +34,7 @@ use actingcommand_contract::{
 use actingcommand_device::{
     CaptureBackend, CaptureBackendName, DeviceError, DeviceResult, Frame, InputBackend, PixelFormat,
 };
+use actingcommand_execution_kernel::ExecutionBackendProvenance;
 use actingcommand_policy::{
     CatalogDocumentSource, CatalogSources, CohortBudgets, Comparison, DecisionReasonChain,
     DispatchIntent, EvaluationFacts, EvaluationResources, EvaluationTime, FactValue,
@@ -127,6 +128,7 @@ struct FakeBackend {
 
 struct FakeCapture {
     state: Arc<FakeState>,
+    provenance: ExecutionBackendProvenance,
     closed: bool,
 }
 
@@ -208,7 +210,12 @@ impl CaptureBackend for FakeCapture {
             1,
             [first.as_slice(), &[0, 255, 0]].concat(),
             PixelFormat::Rgb8,
-            CaptureBackendName::AdbScreencap,
+            match self.provenance {
+                ExecutionBackendProvenance::PhysicalDevice => CaptureBackendName::AdbScreencap,
+                ExecutionBackendProvenance::FixtureSimulation => {
+                    CaptureBackendName::FixtureSimulation
+                }
+            },
         )
     }
 }
@@ -232,6 +239,7 @@ struct FakeEntry {
 struct FakeProvider {
     entries: BTreeMap<String, FakeEntry>,
     advertised_aliases: Option<Vec<String>>,
+    provenance: ExecutionBackendProvenance,
 }
 
 impl FakeProvider {
@@ -248,7 +256,13 @@ impl FakeProvider {
                 .map(|(alias, instance_id, state)| (alias, FakeEntry { instance_id, state }))
                 .collect(),
             advertised_aliases: None,
+            provenance: ExecutionBackendProvenance::PhysicalDevice,
         }
+    }
+
+    fn fixture_simulation(mut self) -> Self {
+        self.provenance = ExecutionBackendProvenance::FixtureSimulation;
+        self
     }
 
     fn with_inventory(mut self, aliases: impl IntoIterator<Item = String>) -> Self {
@@ -266,10 +280,14 @@ impl ExecutionBackendProvider for FakeProvider {
 
     fn resolve(&self, instance_alias: &str) -> Option<ResolvedExecutionInstance> {
         let entry = self.entries.get(instance_alias)?;
-        Some(ResolvedExecutionInstance::new(
-            entry.instance_id,
-            "127.0.0.1:16384",
-        ))
+        Some(match self.provenance {
+            ExecutionBackendProvenance::PhysicalDevice => {
+                ResolvedExecutionInstance::new(entry.instance_id, "127.0.0.1:16384")
+            }
+            ExecutionBackendProvenance::FixtureSimulation => {
+                ResolvedExecutionInstance::fixture_simulation(entry.instance_id)
+            }
+        })
     }
 
     fn open_input(&self, instance_alias: &str) -> DeviceResult<Box<dyn InputBackend>> {
@@ -295,6 +313,7 @@ impl ExecutionBackendProvider for FakeProvider {
             .fetch_add(1, Ordering::AcqRel);
         Ok(Box::new(FakeCapture {
             state: Arc::clone(&entry.state),
+            provenance: self.provenance,
             closed: false,
         }))
     }
@@ -2113,11 +2132,10 @@ fn scheduled_policy_run_reuses_one_request_receipt_and_admits_effect_at_most_onc
                 &package,
                 vec!["after_observation".to_owned()],
             )),
-            Arc::new(FakeProvider::one(
-                POLICY_INSTANCE_ALIAS,
-                instance_id(),
-                Arc::clone(&state),
-            )),
+            Arc::new(
+                FakeProvider::one(POLICY_INSTANCE_ALIAS, instance_id(), Arc::clone(&state))
+                    .fixture_simulation(),
+            ),
         )
         .expect("runtime host"),
     );
@@ -2135,6 +2153,24 @@ fn scheduled_policy_run_reuses_one_request_receipt_and_admits_effect_at_most_onc
         ContainedTaskRequest::new(package_path.to_string_lossy().into_owned(), package_sha256)
             .expect("contained task request");
 
+    let missing_request = ContainedTaskRequest::new(
+        root.path()
+            .join("missing-scheduled-task.zip")
+            .to_string_lossy()
+            .into_owned(),
+        request.expected_sha256(),
+    )
+    .expect("missing contained task request");
+    let failed = host
+        .run_scheduled_contained_task(&context, &missing_request)
+        .expect_err("failed preparation must release the active run reservation");
+    assert_eq!(failed.code(), "contained_task_package_open_failed");
+    assert_eq!(
+        host.active_scheduled_policy_run_count()
+            .expect("active count"),
+        0
+    );
+
     let first_host = Arc::clone(&host);
     let first_context = context.as_ref().clone();
     let first_request = request.clone();
@@ -2144,16 +2180,32 @@ fn scheduled_policy_run_reuses_one_request_receipt_and_admits_effect_at_most_onc
     wait_until(Duration::from_secs(2), || {
         state.input_started.load(Ordering::Acquire)
     });
+    assert_eq!(
+        host.active_scheduled_policy_run_count()
+            .expect("active count"),
+        1
+    );
 
     let concurrent_error = host
         .run_scheduled_contained_task(&context, &request)
         .expect_err("cloned context must not admit the same run twice");
     assert_eq!(concurrent_error.code(), "policy_run_already_executed");
+    assert_eq!(
+        host.active_scheduled_policy_run_count()
+            .expect("active count"),
+        1,
+        "the rejected clone must not release the admitted owner's reservation"
+    );
     state.block_input.store(false, Ordering::Release);
     let receipt = first
         .join()
         .expect("join first policy run")
         .expect("first policy run receipt");
+    assert_eq!(
+        host.active_scheduled_policy_run_count()
+            .expect("active count"),
+        0
+    );
     assert_eq!(receipt.state(), RuntimeReceiptState::Completed);
     let receipt_value = serde_json::to_value(&receipt).expect("receipt JSON");
     let assert_receipt_error = |value: serde_json::Value, expected_code: &str| {
@@ -2246,6 +2298,21 @@ fn scheduled_policy_run_reuses_one_request_receipt_and_admits_effect_at_most_onc
         .expect("task terminal");
     assert_eq!(terminal.links.request_id(), Some(&receipt.request_id()));
     assert_eq!(state.input_count.load(Ordering::Acquire), 1);
+    let issuer = IdentifierIssuer::new().expect("identifier issuer");
+    for _ in 0..256 {
+        host.exercise_scheduled_policy_reservation(
+            *issuer
+                .mint_run_id()
+                .expect("reservation run id")
+                .transport(),
+        )
+        .expect("reserve and release distinct scheduled run");
+        assert_eq!(
+            host.active_scheduled_policy_run_count()
+                .expect("active count"),
+            0
+        );
+    }
     drop(client);
     let host = Arc::try_unwrap(host).unwrap_or_else(|_| panic!("host reference remained"));
     host.close().expect("close runtime host");

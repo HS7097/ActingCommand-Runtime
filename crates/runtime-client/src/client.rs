@@ -5,9 +5,10 @@ use crate::{RuntimeClientError, RuntimeClientResult};
 use actingcommand_contract::{
     ActionId, AgentSessionContext, AgentSessionId, AgentSessionResponse, AgentSessionStatus,
     AgentWakeId, ApplicationLifecycleAction, ApprovalDecisionRecord, CaptureSequenceSpec,
-    CatalogProposal, ClientActionRecord, ContainedTaskRequest, CorrelationId, EventActor,
-    EventPayload, EventQuery, EventSource, EventType, FactScope, IdentifierIssuer, InputAction,
-    IssuedCorrelationId, LeaseQueuePolicy, LeaseQueueStatus, LeaseToken, OwnerEpoch,
+    CatalogProposal, ClientActionRecord, ContainedTaskRequest, CorrelationId, EffectDisposition,
+    EventActor, EventId, EventPayload, EventQuery, EventSource, EventType, FactScope,
+    IdentifierIssuer, InputAction, InputPayload, IssuedCorrelationId, LeaseQueuePolicy,
+    LeaseQueueStatus, LeaseToken, MAX_RUNTIME_EVENT_QUERY_EVENTS, OriginModule, OwnerEpoch,
     PackageDebugRequest, PolicyExecutionOutcome, PolicyPayload, ProjectDecisionPageCursor,
     ProjectDecisionPageRequest, ProjectInterfaceRequest, ProjectLedgerSnapshot,
     ProjectedArtifactReference, ProjectedEvent, ProjectionPayload, ProjectionProfile,
@@ -27,6 +28,7 @@ use actingcommand_policy::{
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
+use std::collections::BTreeSet;
 use std::fmt;
 use std::fs;
 use std::net::TcpStream;
@@ -39,6 +41,9 @@ const DEFAULT_BACKEND_OPEN_TIMEOUT: Duration = Duration::from_secs(60);
 const MAX_RUNTIME_IO_TIMEOUT: Duration = Duration::from_secs(60);
 const MAX_BACKEND_OPEN_TIMEOUT: Duration = Duration::from_secs(120);
 const MAX_RUNTIME_INFO_BYTES: u64 = 64 * 1024;
+const MAX_RUN_SUMMARY_EVENTS: usize = 16_384;
+const MAX_RUN_SUMMARY_PAGES: usize = 128;
+const MAX_RUN_SUMMARY_RESIDENT_BYTES: usize = 64 * 1024 * 1024;
 
 /// Discovery, identity, framing, and timeout configuration for one local Runtime session.
 #[derive(Clone)]
@@ -924,14 +929,87 @@ impl RuntimeClient {
 
     /// Projects one completed scheduler/policy/contained-task run from authoritative ledger links.
     pub fn summarize_run(&self, run_id: RunId) -> RuntimeClientResult<Value> {
-        let events = self.query_events(
-            EventQuery {
-                run_id: Some(run_id),
-                ..EventQuery::default()
-            },
-            ProjectionProfile::Forensic,
-        )?;
+        let events = self.query_complete_run_events(run_id)?;
         project_run_summary(run_id, &events)
+    }
+
+    fn query_complete_run_events(&self, run_id: RunId) -> RuntimeClientResult<Vec<ProjectedEvent>> {
+        let query = EventQuery {
+            run_id: Some(run_id),
+            ..EventQuery::default()
+        };
+        let mut events = Vec::new();
+        let mut event_ids = BTreeSet::<EventId>::new();
+        let mut cursor = None;
+        let mut snapshot_ledger_position = None;
+        let mut last_sequence = 0_u64;
+        let mut resident_bytes = 0_usize;
+        for _ in 0..MAX_RUN_SUMMARY_PAGES {
+            let request =
+                RuntimeEventQueryPageRequest::new(MAX_RUNTIME_EVENT_QUERY_EVENTS, cursor.clone())
+                    .map_err(|_| {
+                    RuntimeClientError::fatal("run_summary_page_request_invalid", "summarize_run")
+                })?;
+            let page =
+                self.query_event_page(query.clone(), ProjectionProfile::Forensic, request)?;
+            match snapshot_ledger_position {
+                Some(expected) if expected != page.snapshot_ledger_position() => {
+                    return Err(RuntimeClientError::fatal(
+                        "run_summary_snapshot_changed",
+                        "summarize_run",
+                    ));
+                }
+                None => snapshot_ledger_position = Some(page.snapshot_ledger_position()),
+                Some(_) => {}
+            }
+            for event in page.events() {
+                if event.sequence <= last_sequence || !event_ids.insert(event.event_id) {
+                    return Err(RuntimeClientError::fatal(
+                        "run_summary_pagination_invalid",
+                        "summarize_run",
+                    ));
+                }
+                if events.len() == MAX_RUN_SUMMARY_EVENTS {
+                    return Err(RuntimeClientError::fatal(
+                        "run_summary_event_limit_exceeded",
+                        "summarize_run",
+                    ));
+                }
+                let event_bytes = serde_json::to_vec(event).map_err(|_| {
+                    RuntimeClientError::fatal("run_summary_event_encode_failed", "summarize_run")
+                })?;
+                resident_bytes = resident_bytes
+                    .checked_add(event_bytes.len())
+                    .filter(|total| *total <= MAX_RUN_SUMMARY_RESIDENT_BYTES)
+                    .ok_or_else(|| {
+                        RuntimeClientError::fatal(
+                            "run_summary_resident_limit_exceeded",
+                            "summarize_run",
+                        )
+                    })?;
+                last_sequence = event.sequence;
+                events.push(event.clone());
+            }
+            if !page.has_more() {
+                return Ok(events);
+            }
+            let next = page.next_cursor().cloned().ok_or_else(|| {
+                RuntimeClientError::fatal("run_summary_pagination_invalid", "summarize_run")
+            })?;
+            let previous_sequence = cursor.as_ref().map_or(0, |value| value.after_sequence());
+            if next.after_sequence() != last_sequence || next.after_sequence() <= previous_sequence
+            {
+                return Err(RuntimeClientError::fatal(
+                    "run_summary_pagination_invalid",
+                    "summarize_run",
+                ));
+            }
+            cursor = Some(next);
+        }
+        Err(RuntimeClientError::fatal(
+            "run_summary_page_limit_exceeded",
+            "summarize_run",
+        ))
     }
 
     pub fn query_event_page(
@@ -1709,13 +1787,10 @@ fn project_run_summary(run_id: RunId, events: &[ProjectedEvent]) -> RuntimeClien
             "summarize_run",
         ));
     }
-    let effect_count = events
-        .iter()
-        .filter(|event| event.event_type == EventType::TaskEffectCompleted)
-        .count();
+    let simulated_effect_count = validate_fixture_simulation(events)?;
     Ok(json!({
         "schema_version": "actingcommand.run-summary.v1",
-        "status": "completed",
+        "status": "simulated_completed",
         "run_id": run_id,
         "task_id": task_id,
         "correlation_id": correlation_id,
@@ -1744,12 +1819,112 @@ fn project_run_summary(run_id: RunId, events: &[ProjectedEvent]) -> RuntimeClien
             "terminal_event_id": task_event.event_id,
             "terminal_sequence": task_event.sequence
         },
-        "outcome": execution.outcome(),
-        "effect": if effect_count == 0 { "no_op" } else { "effecting" },
-        "effect_count": effect_count,
+        "outcome": {
+            "kind": "fixture_simulation",
+            "policy": execution.outcome(),
+            "result": if simulated_effect_count == 0 { "no_op" } else { "would_effect" }
+        },
+        "execution_provenance": {
+            "kind": "fixture_simulation",
+            "device_access": false,
+            "account_access": false,
+            "production_input": false,
+            "actual_effect_count": 0,
+            "simulated_effect_count": simulated_effect_count
+        },
+        "effect": if simulated_effect_count == 0 { "no_op" } else { "would_effect" },
+        "actual_effect_count": 0,
+        "simulated_effect_count": simulated_effect_count,
         "event_count": events.len(),
         "completed_sequence": completed_event.sequence
     }))
+}
+
+fn validate_fixture_simulation(events: &[ProjectedEvent]) -> RuntimeClientResult<usize> {
+    if events
+        .iter()
+        .any(|event| event.origin.source() == EventSource::Device)
+    {
+        return Err(RuntimeClientError::fatal(
+            "run_summary_device_event_forbidden",
+            "summarize_run",
+        ));
+    }
+    let simulation_origin = |event: &ProjectedEvent| {
+        event.origin.source() == EventSource::Lab
+            && event.origin.module() == OriginModule::Actinglab
+    };
+    let capture_events = events
+        .iter()
+        .filter(|event| {
+            matches!(
+                event.event_type,
+                EventType::CaptureRequested
+                    | EventType::CaptureCompleted
+                    | EventType::CaptureFailed
+            )
+        })
+        .collect::<Vec<_>>();
+    if !capture_events
+        .iter()
+        .any(|event| event.event_type == EventType::CaptureCompleted)
+        || capture_events.iter().any(|event| !simulation_origin(event))
+    {
+        return Err(RuntimeClientError::fatal(
+            "run_summary_simulation_provenance_invalid",
+            "summarize_run",
+        ));
+    }
+    let input_events = events
+        .iter()
+        .filter(|event| {
+            matches!(
+                event.event_type,
+                EventType::InputIntent | EventType::InputCommitted | EventType::InputFailed
+            )
+        })
+        .collect::<Vec<_>>();
+    if input_events.iter().any(|event| !simulation_origin(event))
+        || input_events
+            .iter()
+            .any(|event| event.event_type == EventType::InputFailed)
+    {
+        return Err(RuntimeClientError::fatal(
+            "run_summary_simulation_provenance_invalid",
+            "summarize_run",
+        ));
+    }
+    let input_intent_count = input_events
+        .iter()
+        .filter(|event| event.event_type == EventType::InputIntent)
+        .count();
+    let committed_inputs = input_events
+        .iter()
+        .filter(|event| event.event_type == EventType::InputCommitted)
+        .map(|event| match full_payload(event)? {
+            EventPayload::Input(InputPayload::Committed(payload))
+                if payload.effect_disposition() == EffectDisposition::NotPerformed =>
+            {
+                Ok(())
+            }
+            _ => Err(RuntimeClientError::fatal(
+                "run_summary_simulation_effect_invalid",
+                "summarize_run",
+            )),
+        })
+        .collect::<RuntimeClientResult<Vec<_>>>()?
+        .len();
+    let simulated_effect_count = events
+        .iter()
+        .filter(|event| event.event_type == EventType::TaskEffectCompleted)
+        .count();
+    if input_intent_count != simulated_effect_count || committed_inputs != simulated_effect_count {
+        return Err(RuntimeClientError::fatal(
+            "run_summary_simulation_effect_invalid",
+            "summarize_run",
+        ));
+    }
+    Ok(simulated_effect_count)
 }
 
 fn exactly_one_run_event(

@@ -74,8 +74,9 @@ use actingcommand_contract::{
 };
 use actingcommand_device::{CaptureBackendName, Frame};
 use actingcommand_execution_kernel::{
-    ContainedTaskRunError, ContainedTaskRuntime, ContainedTaskTrace, ExecutionBackendProvider,
-    ExecutionKernel, ExternalExpectedSha256, PreparedContainedTask, decide_monitor,
+    ContainedTaskRunError, ContainedTaskRuntime, ContainedTaskTrace, ExecutionBackendProvenance,
+    ExecutionBackendProvider, ExecutionKernel, ExternalExpectedSha256, PreparedContainedTask,
+    decide_monitor,
 };
 use actingcommand_ledger::critical::{
     CatalogTransitionTarget, CriticalActionReport, CriticalEventPlan, CriticalExecutionError,
@@ -517,7 +518,7 @@ impl RuntimeHost {
             admission_guards: Mutex::new(BTreeMap::new()),
             debug_runs: Mutex::new(BTreeMap::new()),
             contained_runs: Mutex::new(BTreeSet::new()),
-            scheduled_policy_runs: Mutex::new(BTreeSet::new()),
+            active_scheduled_policy_runs: Mutex::new(BTreeSet::new()),
             next_connection_id: AtomicU64::new(1),
             clock: Arc::clone(&config.clock),
             clock_origin_monotonic_ms: clock_origin.monotonic_ms,
@@ -843,6 +844,42 @@ impl RuntimeHost {
             .complete_scheduled_policy_run(context, receipt)
     }
 
+    #[cfg(test)]
+    pub(crate) fn active_scheduled_policy_run_count(&self) -> RuntimeHostResult<usize> {
+        let shared = self.shared_ref("active_scheduled_policy_run_count")?;
+        Ok(lock(
+            &shared.active_scheduled_policy_runs,
+            "active_scheduled_policy_run_count",
+        )?
+        .len())
+    }
+
+    #[cfg(test)]
+    pub(crate) fn exercise_scheduled_policy_reservation(
+        &self,
+        run_id: actingcommand_contract::RunId,
+    ) -> RuntimeHostResult<()> {
+        let shared = self.shared_ref("exercise_scheduled_policy_reservation")?;
+        let reservation = shared
+            .admit_scheduled_policy_run(run_id)
+            .map_err(|failure| *failure.error)?;
+        if lock(
+            &shared.active_scheduled_policy_runs,
+            "exercise_scheduled_policy_reservation",
+        )?
+        .len()
+            != 1
+        {
+            return Err(RuntimeHostError::fatal(
+                "scheduled_policy_reservation_count_invalid",
+                "exercise_scheduled_policy_reservation",
+                RuntimeErrorCode::RuntimeFatal,
+            ));
+        }
+        drop(reservation);
+        Ok(())
+    }
+
     pub fn record_policy_planning_signal(
         &self,
         signal: PolicyPlanningSignalEventData,
@@ -1088,6 +1125,7 @@ struct RegisteredInstance {
     instance_alias: String,
     instance_id: InstanceId,
     audit_endpoint: String,
+    provenance: ExecutionBackendProvenance,
 }
 
 #[derive(Clone)]
@@ -1267,6 +1305,10 @@ impl RegisteredInstance {
     fn audit_endpoint(&self) -> &str {
         &self.audit_endpoint
     }
+
+    const fn provenance(&self) -> ExecutionBackendProvenance {
+        self.provenance
+    }
 }
 
 fn initial_registered_instances(
@@ -1312,6 +1354,7 @@ fn initial_registered_instances(
             instance_alias,
             instance_id: resolved.instance_id(),
             audit_endpoint: resolved.audit_endpoint().to_string(),
+            provenance: resolved.provenance(),
         };
         if instances
             .insert(registration.instance_id, registration)
@@ -1667,9 +1710,8 @@ struct HostShared {
     admission_guards: Mutex<BTreeMap<InstanceId, Arc<Mutex<()>>>>,
     debug_runs: Mutex<BTreeMap<CorrelationId, DebugRunContext>>,
     contained_runs: Mutex<BTreeSet<RequestId>>,
-    // One policy run may cross the effect boundary at most once, including through cloned
-    // in-process contexts. Reservations remain consumed after failure to fail closed.
-    scheduled_policy_runs: Mutex<BTreeSet<actingcommand_contract::RunId>>,
+    // Process-local mutual exclusion only. Durable replay authority remains in GlobalLedger.
+    active_scheduled_policy_runs: Mutex<BTreeSet<actingcommand_contract::RunId>>,
     next_connection_id: AtomicU64,
     clock: Arc<dyn RuntimeClock>,
     clock_origin_monotonic_ms: u64,
@@ -3373,33 +3415,43 @@ impl HostShared {
             RuntimeOperation::ConfigureMonitor {
                 instance_alias,
                 policy,
-            } => self.configure_monitor(request, validated, instance_alias, policy.clone()),
+            } => {
+                self.require_physical_instance_alias(instance_alias)?;
+                self.configure_monitor(request, validated, instance_alias, policy.clone())
+            }
             RuntimeOperation::ClearMonitor { instance_alias } => {
+                self.require_physical_instance_alias(instance_alias)?;
                 self.clear_monitor(request, validated, instance_alias)
             }
             RuntimeOperation::AcquireLease {
                 instance_alias,
                 holder_id,
-            } => self.acquire_lease(
-                validated,
-                request.request_id(),
-                instance_alias,
-                *holder_id,
-                connection_id,
-                None,
-            ),
+            } => {
+                self.require_physical_instance_alias(instance_alias)?;
+                self.acquire_lease(
+                    validated,
+                    request.request_id(),
+                    instance_alias,
+                    *holder_id,
+                    connection_id,
+                    None,
+                )
+            }
             RuntimeOperation::QueueLease {
                 instance_alias,
                 holder_id,
                 policy,
-            } => self.queue_lease(
-                request,
-                validated,
-                instance_alias,
-                *holder_id,
-                *policy,
-                connection_id,
-            ),
+            } => {
+                self.require_physical_instance_alias(instance_alias)?;
+                self.queue_lease(
+                    request,
+                    validated,
+                    instance_alias,
+                    *holder_id,
+                    *policy,
+                    connection_id,
+                )
+            }
             RuntimeOperation::PollQueuedLease { queued_request_id } => {
                 self.poll_queued_lease(validated, *queued_request_id, connection_id)
             }
@@ -3407,55 +3459,75 @@ impl HostShared {
                 self.cancel_queued_lease(validated, *queued_request_id, connection_id)
             }
             RuntimeOperation::RenewLease { token } => {
+                self.require_physical_instance_id(token.instance_id())?;
                 self.renew_lease(validated, request.request_id(), token, connection_id)
             }
             RuntimeOperation::ReleaseLease { token } => {
+                self.require_physical_instance_id(token.instance_id())?;
                 self.release_lease(validated, request.request_id(), token, connection_id, None)
             }
             RuntimeOperation::ObserveReadonly { instance_alias } => {
+                self.require_physical_instance_alias(instance_alias)?;
                 self.observe_readonly(request, validated, instance_alias)
             }
             RuntimeOperation::CaptureSequence {
                 instance_alias,
                 spec,
-            } => self.capture_sequence(request, validated, instance_alias, *spec),
+            } => {
+                self.require_physical_instance_alias(instance_alias)?;
+                self.capture_sequence(request, validated, instance_alias, *spec)
+            }
             RuntimeOperation::SafeReset {
                 instance_alias,
                 holder_id,
-            } => self.safe_reset(
-                request,
-                validated,
-                instance_alias,
-                *holder_id,
-                connection_id,
-            ),
+            } => {
+                self.require_physical_instance_alias(instance_alias)?;
+                self.safe_reset(
+                    request,
+                    validated,
+                    instance_alias,
+                    *holder_id,
+                    connection_id,
+                )
+            }
             RuntimeOperation::ApplicationLifecycle {
                 instance_alias,
                 holder_id,
                 action,
-            } => self.application_lifecycle(
-                request,
-                validated,
-                instance_alias,
-                *holder_id,
-                *action,
-                connection_id,
-            ),
+            } => {
+                self.require_physical_instance_alias(instance_alias)?;
+                self.application_lifecycle(
+                    request,
+                    validated,
+                    instance_alias,
+                    *holder_id,
+                    *action,
+                    connection_id,
+                )
+            }
             RuntimeOperation::RunContainedTask {
                 instance_alias,
                 holder_id,
                 request: task_request,
-            } => self.run_contained_task(
-                request,
-                validated,
-                instance_alias,
-                *holder_id,
-                task_request,
-                connection_id,
-            ),
-            RuntimeOperation::Input { token, action } => {
-                self.input(validated, token, action, connection_id)
+            } => {
+                self.require_physical_instance_alias(instance_alias)?;
+                self.run_contained_task(
+                    request,
+                    validated,
+                    instance_alias,
+                    *holder_id,
+                    task_request,
+                    connection_id,
+                )
             }
+            RuntimeOperation::Input { token, action } => self.input(
+                validated,
+                token,
+                action,
+                connection_id,
+                ExecutionBackendProvenance::PhysicalDevice,
+                None,
+            ),
             RuntimeOperation::QueryEvents {
                 query,
                 profile,
@@ -5550,6 +5622,13 @@ impl HostShared {
     fn run_monitor_probe(&self, probe: &DueMonitorProbe) -> RuntimeHostResult<()> {
         let started_at_unix_ms = unix_ms_now()?;
         let instance = self.monitor_instance(&probe.instance_alias)?;
+        if instance.provenance() != ExecutionBackendProvenance::PhysicalDevice {
+            return Err(RuntimeHostError::fatal(
+                "fixture_monitor_scope_forbidden",
+                "run_monitor_probe",
+                RuntimeErrorCode::RuntimeFatal,
+            ));
+        }
         let issued = self
             .events
             .issuer()
@@ -5882,6 +5961,7 @@ impl HostShared {
             .map_err(|error| RuntimeHostError::execution("resolve_monitor_instance", &error))?;
         if resolved.instance_id() != registered.instance_id
             || resolved.audit_endpoint() != registered.audit_endpoint
+            || resolved.provenance() != registered.provenance
         {
             return Err(RuntimeHostError::fatal(
                 "runtime_instance_identity_mismatch",
@@ -7292,6 +7372,7 @@ impl HostShared {
         instance_alias: &str,
         instance_id: InstanceId,
     ) -> Result<CompletedReadonlyObservation, RequestFailure> {
+        self.require_physical_instance_id(instance_id)?;
         let capability = self.issue_readonly_capability(instance_id)?;
         let debug_run =
             if request.actor() == EventActor::Lab && request.source() == EventSource::Lab {
@@ -7440,7 +7521,8 @@ impl HostShared {
             frame.width,
             frame.height,
             RecognitionVerdict::FrameDecoded,
-            runtime_capture_backend(frame.backend_name),
+            runtime_capture_backend(frame.backend_name)
+                .map_err(RequestFailure::poison_without_terminal)?,
             stored.reference().project(true),
         )
         .map_err(|_| {
@@ -7590,7 +7672,14 @@ impl HostShared {
                 ),
             ));
         };
-        let action = match self.input(request, &token, &InputAction::Reset, connection_id) {
+        let action = match self.input(
+            request,
+            &token,
+            &InputAction::Reset,
+            connection_id,
+            ExecutionBackendProvenance::PhysicalDevice,
+            None,
+        ) {
             Ok(success) => success,
             Err(failure) => {
                 return Err(self.cleanup_composite_failure(token, connection_id, failure));
@@ -7825,6 +7914,7 @@ impl HostShared {
             token,
             task_id,
             run_id,
+            ExecutionBackendProvenance::PhysicalDevice,
             None,
         )
     }
@@ -7891,6 +7981,17 @@ impl HostShared {
                 ),
             ));
         }
+        if resolved.provenance() != ExecutionBackendProvenance::FixtureSimulation {
+            return Err(RequestFailure::request(
+                RuntimeHostError::request(
+                    "policy_run_fixture_simulation_required",
+                    "run_scheduled_contained_task",
+                    RuntimeErrorCode::InvalidRequest,
+                ),
+                RuntimeReceiptState::Denied,
+                None,
+            ));
+        }
         let request_id = self
             .events
             .issuer()
@@ -7930,7 +8031,7 @@ impl HostShared {
             ))
         })?;
         self.validated_instance(&validated, token, connection_id)?;
-        self.admit_scheduled_policy_run(context.run_id())?;
+        let _active_policy_run = self.admit_scheduled_policy_run(context.run_id())?;
         let _active_run = self.begin_contained_run(task_request_message.request_id())?;
         let prepared = prepare_contained_task(instance_alias, task_request)?;
         let run_links = RuntimeRunLinks::new(context.issued_task_id(), context.issued_run_id());
@@ -7950,6 +8051,7 @@ impl HostShared {
             token.clone(),
             context.issued_task_id(),
             context.issued_run_id(),
+            ExecutionBackendProvenance::FixtureSimulation,
             Some(run_links),
         )?;
         Ok((task_request_message, success))
@@ -7958,8 +8060,11 @@ impl HostShared {
     fn admit_scheduled_policy_run(
         &self,
         run_id: actingcommand_contract::RunId,
-    ) -> Result<(), RequestFailure> {
-        let mut reserved = lock(&self.scheduled_policy_runs, "admit_scheduled_policy_run")?;
+    ) -> Result<ActiveScheduledPolicyRun<'_>, RequestFailure> {
+        let mut reserved = lock(
+            &self.active_scheduled_policy_runs,
+            "admit_scheduled_policy_run",
+        )?;
         let previously_recorded = self
             .ledger
             .query(EventQuery {
@@ -7974,7 +8079,11 @@ impl HostShared {
         if previously_recorded || !reserved.insert(run_id) {
             return Err(contained_task_replay_denied("policy_run_already_executed"));
         }
-        Ok(())
+        drop(reserved);
+        Ok(ActiveScheduledPolicyRun {
+            active: &self.active_scheduled_policy_runs,
+            run_id,
+        })
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -7988,6 +8097,7 @@ impl HostShared {
         token: LeaseToken,
         task_id: IssuedTaskId,
         run_id: IssuedRunId,
+        execution_provenance: ExecutionBackendProvenance,
         run_links: Option<RuntimeRunLinks>,
     ) -> Result<OperationSuccess, RequestFailure> {
         let mut runtime = RuntimeContainedTask {
@@ -7998,6 +8108,7 @@ impl HostShared {
             connection_id,
             task_id,
             run_id,
+            execution_provenance,
             last_frame_id: None,
             current_recognition_id: None,
             step_actions: BTreeMap::new(),
@@ -8532,6 +8643,8 @@ impl HostShared {
         token: &LeaseToken,
         action: &InputAction,
         connection_id: ConnectionId,
+        execution_provenance: ExecutionBackendProvenance,
+        run_links: Option<RuntimeRunLinks>,
     ) -> Result<OperationSuccess, RequestFailure> {
         let (resolved, transferred) = {
             let instance_guard = self.instance_guard(token.instance_id())?;
@@ -8541,6 +8654,15 @@ impl HostShared {
                 self.transfer_preempted_while_guarded(token, connection_id, &admission)?;
             (resolved, transferred)
         };
+        if resolved.provenance() != execution_provenance {
+            return Err(RequestFailure::poison_without_terminal(
+                RuntimeHostError::fatal(
+                    "execution_backend_provenance_mismatch",
+                    "execute_input",
+                    RuntimeErrorCode::RuntimeFatal,
+                ),
+            ));
+        }
         if transferred {
             return Err(self.scheduler_denied_error(
                 request,
@@ -8558,22 +8680,42 @@ impl HostShared {
             .events
             .action_id()
             .map_err(RequestFailure::poison_without_terminal)?;
-        let links = self.events.request_links(
+        let mut links = self.events.request_links(
             request,
             Some(token.instance_id()),
             Some(token.lease_id()),
             Some(action_id),
         );
+        if let Some(run_links) = run_links {
+            links = run_links.apply(links);
+        }
+        let (source, module, success_effect, backend_failure_effect) = match execution_provenance {
+            ExecutionBackendProvenance::PhysicalDevice => (
+                EventSource::Device,
+                OriginModule::DeviceProxy,
+                DefiniteEffectDisposition::Performed,
+                EffectDisposition::Indeterminate,
+            ),
+            ExecutionBackendProvenance::FixtureSimulation => (
+                EventSource::Lab,
+                OriginModule::Actinglab,
+                DefiniteEffectDisposition::NotPerformed,
+                EffectDisposition::NotPerformed,
+            ),
+        };
         let event_action = action.event_action();
         let intent = self
             .events
             .draft(
                 EventSeverity::Info,
-                EventSource::Device,
-                OriginModule::DeviceProxy,
+                source,
+                module,
                 EventActor::Runtime,
                 links.clone(),
-                InputPayloadDraft::intent(event_action, audit_endpoint(resolved.audit_endpoint())),
+                InputPayloadDraft::intent(
+                    event_action,
+                    execution_audit(execution_provenance, resolved.audit_endpoint()),
+                ),
             )
             .and_then(|draft| self.events.sanitize(draft))
             .map_err(RequestFailure::poison_without_terminal)?;
@@ -8606,14 +8748,14 @@ impl HostShared {
                 match self.execution.input(&instance_alias, action_for_worker) {
                     Ok(()) => CriticalActionReport::Succeeded {
                         value: (),
-                        effect: DefiniteEffectDisposition::Performed,
+                        effect: success_effect,
                     },
                     Err(error) => CriticalActionReport::Failed {
                         error: ActionFailure::backend(RuntimeHostError::execution(
                             "execute_input_backend",
                             &error,
                         )),
-                        effect: EffectDisposition::Indeterminate,
+                        effect: backend_failure_effect,
                     },
                 }
             },
@@ -8621,14 +8763,14 @@ impl HostShared {
                 self.events
                     .draft(
                         EventSeverity::Info,
-                        EventSource::Device,
-                        OriginModule::DeviceProxy,
+                        source,
+                        module,
                         EventActor::Runtime,
                         outcome_links,
                         InputPayloadDraft::committed(
                             event_action,
                             effect.into(),
-                            audit_endpoint(&endpoint),
+                            execution_audit(execution_provenance, &endpoint),
                         ),
                     )
                     .map_err(|_| actingcommand_contract::SanitizationError::fingerprinter_failure())
@@ -8637,15 +8779,15 @@ impl HostShared {
                 self.events
                     .draft(
                         EventSeverity::Error,
-                        EventSource::Device,
-                        OriginModule::DeviceProxy,
+                        source,
+                        module,
                         EventActor::Runtime,
                         failure_links,
                         InputPayloadDraft::failed(
                             event_action,
                             error.diagnostic,
                             effect,
-                            audit_endpoint(&endpoint),
+                            execution_audit(execution_provenance, &endpoint),
                         ),
                     )
                     .map_err(|_| actingcommand_contract::SanitizationError::fingerprinter_failure())
@@ -8694,6 +8836,7 @@ impl HostShared {
         action: ApplicationLifecycleAction,
         connection_id: ConnectionId,
     ) -> Result<OperationSuccess, RequestFailure> {
+        self.require_physical_instance_id(token.instance_id())?;
         let (resolved, transferred) = {
             let instance_guard = self.instance_guard(token.instance_id())?;
             let admission = lock(&instance_guard, "lock_instance_admission")?;
@@ -9492,6 +9635,7 @@ impl HostShared {
         })?;
         if resolved.instance_id() != registered.instance_id
             || resolved.audit_endpoint() != registered.audit_endpoint
+            || resolved.provenance() != registered.provenance
         {
             return Err(RequestFailure::poison_without_terminal(
                 RuntimeHostError::fatal(
@@ -9502,6 +9646,47 @@ impl HostShared {
             ));
         }
         Ok(registered)
+    }
+
+    fn require_physical_instance_alias(&self, instance_alias: &str) -> Result<(), RequestFailure> {
+        let instance = self.resolve_instance(instance_alias)?;
+        self.require_physical_provenance(&instance)
+    }
+
+    fn require_physical_instance_id(&self, instance_id: InstanceId) -> Result<(), RequestFailure> {
+        let instance = lock(&self.registered_instances, "read_instance_registry")?
+            .get(&instance_id)
+            .cloned()
+            .ok_or_else(|| {
+                RequestFailure::request(
+                    RuntimeHostError::request(
+                        "instance_unknown",
+                        "require_physical_execution_backend",
+                        RuntimeErrorCode::InstanceUnknown,
+                    ),
+                    RuntimeReceiptState::Denied,
+                    None,
+                )
+            })?;
+        self.require_physical_provenance(&instance)
+    }
+
+    fn require_physical_provenance(
+        &self,
+        instance: &RegisteredInstance,
+    ) -> Result<(), RequestFailure> {
+        if instance.provenance() == ExecutionBackendProvenance::PhysicalDevice {
+            return Ok(());
+        }
+        Err(RequestFailure::request(
+            RuntimeHostError::request(
+                "fixture_execution_scope_forbidden",
+                "require_physical_execution_backend",
+                RuntimeErrorCode::InvalidRequest,
+            ),
+            RuntimeReceiptState::Denied,
+            None,
+        ))
     }
 
     fn instance_guard(&self, instance_id: InstanceId) -> Result<Arc<Mutex<()>>, RequestFailure> {
@@ -9859,6 +10044,24 @@ struct ActiveContainedRun<'a> {
     request_id: RequestId,
 }
 
+struct ActiveScheduledPolicyRun<'a> {
+    active: &'a Mutex<BTreeSet<actingcommand_contract::RunId>>,
+    run_id: actingcommand_contract::RunId,
+}
+
+impl Drop for ActiveScheduledPolicyRun<'_> {
+    fn drop(&mut self) {
+        let mut active = self
+            .active
+            .lock()
+            .expect("active scheduled-policy registry poisoned");
+        assert!(
+            active.remove(&self.run_id),
+            "active scheduled-policy identity missing during cleanup"
+        );
+    }
+}
+
 impl Drop for ActiveContainedRun<'_> {
     fn drop(&mut self) {
         let mut active = self
@@ -9880,6 +10083,7 @@ struct RuntimeContainedTask<'a> {
     connection_id: ConnectionId,
     task_id: IssuedTaskId,
     run_id: IssuedRunId,
+    execution_provenance: ExecutionBackendProvenance,
     last_frame_id: Option<IssuedFrameId>,
     current_recognition_id: Option<IssuedRecognitionId>,
     step_actions: BTreeMap<u32, (IssuedActionId, String)>,
@@ -9887,6 +10091,17 @@ struct RuntimeContainedTask<'a> {
 }
 
 impl RuntimeContainedTask<'_> {
+    const fn capture_origin(&self) -> (EventSource, OriginModule) {
+        match self.execution_provenance {
+            ExecutionBackendProvenance::PhysicalDevice => {
+                (EventSource::Device, OriginModule::Capture)
+            }
+            ExecutionBackendProvenance::FixtureSimulation => {
+                (EventSource::Lab, OriginModule::Actinglab)
+            }
+        }
+    }
+
     fn links(&self) -> EventLinksDraft {
         self.host
             .events
@@ -9930,10 +10145,11 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
             .mint_frame_id()
             .map_err(|_| RequestFailure::poison_without_terminal(runtime_identifier_error()))?;
         let links = self.links().with_frame_id(frame_id);
+        let (source, module) = self.capture_origin();
         self.host.append_event(
             EventSeverity::Info,
-            EventSource::Device,
-            OriginModule::Capture,
+            source,
+            module,
             EventActor::Runtime,
             links.clone(),
             CapturePayloadDraft::requested(EventAction::CaptureObserve, AuditInput::new()),
@@ -9986,8 +10202,8 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
                     RuntimeHostError::execution("run_contained_task_capture", &error);
                 let failed = self.host.append_event(
                     EventSeverity::Error,
-                    EventSource::Device,
-                    OriginModule::Capture,
+                    source,
+                    module,
                     EventActor::Runtime,
                     links,
                     CapturePayloadDraft::failed(
@@ -10008,9 +10224,14 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
     }
 
     fn input(&mut self, action: InputAction) -> Result<(), Self::Error> {
-        let success = self
-            .host
-            .input(self.request, self.token, &action, self.connection_id)?;
+        let success = self.host.input(
+            self.request,
+            self.token,
+            &action,
+            self.connection_id,
+            self.execution_provenance,
+            Some(RuntimeRunLinks::new(self.task_id, self.run_id)),
+        )?;
         if matches!(success.result, RuntimeResult::InputCommitted { .. }) {
             Ok(())
         } else {
@@ -10056,10 +10277,11 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
                     ))
                 })?;
                 let links = self.links().with_frame_id(frame_id);
+                let (source, module) = self.capture_origin();
                 self.host.append_event(
                     EventSeverity::Info,
-                    EventSource::Device,
-                    OriginModule::Capture,
+                    source,
+                    module,
                     EventActor::Runtime,
                     links.clone(),
                     CapturePayloadDraft::completed(
@@ -10371,13 +10593,20 @@ impl ArtifactEventSink for RuntimeArtifactEventSink<'_> {
     }
 }
 
-const fn runtime_capture_backend(backend: CaptureBackendName) -> RuntimeCaptureBackend {
+fn runtime_capture_backend(
+    backend: CaptureBackendName,
+) -> RuntimeHostResult<RuntimeCaptureBackend> {
     match backend {
-        CaptureBackendName::AdbScreencap => RuntimeCaptureBackend::AdbScreencap,
-        CaptureBackendName::AdbScreencapEncode => RuntimeCaptureBackend::AdbScreencapEncode,
-        CaptureBackendName::AdbScreencapRawGzip => RuntimeCaptureBackend::AdbScreencapRawGzip,
-        CaptureBackendName::DroidcastRaw => RuntimeCaptureBackend::DroidcastRaw,
-        CaptureBackendName::NemuIpc => RuntimeCaptureBackend::NemuIpc,
+        CaptureBackendName::FixtureSimulation => Err(RuntimeHostError::fatal(
+            "fixture_capture_outside_simulation_scope",
+            "map_runtime_capture_backend",
+            RuntimeErrorCode::RuntimeFatal,
+        )),
+        CaptureBackendName::AdbScreencap => Ok(RuntimeCaptureBackend::AdbScreencap),
+        CaptureBackendName::AdbScreencapEncode => Ok(RuntimeCaptureBackend::AdbScreencapEncode),
+        CaptureBackendName::AdbScreencapRawGzip => Ok(RuntimeCaptureBackend::AdbScreencapRawGzip),
+        CaptureBackendName::DroidcastRaw => Ok(RuntimeCaptureBackend::DroidcastRaw),
+        CaptureBackendName::NemuIpc => Ok(RuntimeCaptureBackend::NemuIpc),
     }
 }
 
@@ -11441,6 +11670,13 @@ fn audit_endpoint(endpoint: &str) -> AuditInput {
         AuditInput::new()
     } else {
         AuditInput::new().with_device_endpoint(endpoint)
+    }
+}
+
+fn execution_audit(provenance: ExecutionBackendProvenance, endpoint: &str) -> AuditInput {
+    match provenance {
+        ExecutionBackendProvenance::PhysicalDevice => audit_endpoint(endpoint),
+        ExecutionBackendProvenance::FixtureSimulation => AuditInput::new(),
     }
 }
 

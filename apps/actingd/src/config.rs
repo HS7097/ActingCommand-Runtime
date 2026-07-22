@@ -229,6 +229,9 @@ impl ActingdConfigFile {
             .policy
             .map(|policy| policy.assemble(&self.source_root))
             .transpose()?;
+        if policy.is_some() && !registry.is_fixture_simulation() {
+            return Err("policy_execution_requires_fixture_simulation");
+        }
         let policy_state_root = self.state_root.clone();
         let policy_governance_capability = self.governance_capability.clone();
         let mut host =
@@ -576,7 +579,7 @@ impl InstanceConfig {
                     frame.height,
                     frame.rgb,
                     PixelFormat::Rgb8,
-                    CaptureBackendName::AdbScreencap,
+                    CaptureBackendName::FixtureSimulation,
                 )
                 .map_err(|_| "fixture_frame_invalid")
             })
@@ -618,6 +621,10 @@ impl ConfiguredExecutionBackendRegistry {
             })),
             _ => Err("execution_backend_mode_mixed"),
         }
+    }
+
+    fn is_fixture_simulation(&self) -> bool {
+        matches!(self, Self::Fixture(_))
     }
 }
 
@@ -668,12 +675,9 @@ impl ExecutionBackendProvider for FixtureExecutionBackendRegistry {
     }
 
     fn resolve(&self, instance_alias: &str) -> Option<ResolvedExecutionInstance> {
-        self.instances.get(instance_alias).map(|backend| {
-            ResolvedExecutionInstance::new(
-                backend.instance_id,
-                format!("fixture://{instance_alias}"),
-            )
-        })
+        self.instances
+            .get(instance_alias)
+            .map(|backend| ResolvedExecutionInstance::fixture_simulation(backend.instance_id))
     }
 
     fn open_input(&self, instance_alias: &str) -> DeviceResult<Box<dyn InputBackend>> {

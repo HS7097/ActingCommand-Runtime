@@ -1,12 +1,12 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 use actingcommand_contract::{
-    AgentPayload, AgentSessionId, ApplicationLifecycleAction, EventActor, EventPayload, EventQuery,
-    EventSource, EventType, FactScope, IdentifierIssuer, InstanceId, PolicyExecutionOutcome,
-    PolicyPayload, PolicyPlanningSignalEventData, PolicyPlanningSignalKind,
-    ProjectInterfaceRequest, ProjectedArtifactReference, ProjectionPayload, ProjectionProfile,
-    RUNTIME_INFO_FILE, RuntimeInfo, RuntimeOperation, RuntimeReceipt, RuntimeReceiptState,
-    RuntimeRequest, RuntimeResult,
+    AgentPayload, AgentSessionId, ApplicationLifecycleAction, EffectDisposition, EventActor,
+    EventPayload, EventQuery, EventSource, EventType, FactScope, IdentifierIssuer, InputPayload,
+    InstanceId, OriginModule, PolicyExecutionOutcome, PolicyPayload, PolicyPlanningSignalEventData,
+    PolicyPlanningSignalKind, ProjectInterfaceRequest, ProjectedArtifactReference,
+    ProjectionPayload, ProjectionProfile, RUNTIME_INFO_FILE, RuntimeErrorCode, RuntimeInfo,
+    RuntimeOperation, RuntimeReceipt, RuntimeReceiptState, RuntimeRequest, RuntimeResult,
 };
 use actingcommand_device::{
     CaptureBackend, CaptureBackendName, DeviceError, DeviceResult, Frame, InputBackend, PixelFormat,
@@ -113,6 +113,48 @@ fn actingd_rejects_policy_without_a_scheduled_package_before_runtime_start() {
 }
 
 #[test]
+fn actingd_rejects_policy_execution_on_a_physical_device_registry() {
+    let root = TempDir::new().expect("tempdir");
+    let config_path = root.path().join("actingd.json");
+    let instance_id = instance_id();
+    write_policy_execution_config(
+        &config_path,
+        root.path(),
+        instance_id,
+        &[vec![0, 0, 255, 0, 255, 0]],
+        0,
+    );
+    let mut config: serde_json::Value =
+        serde_json::from_slice(&fs::read(&config_path).expect("read fixture config"))
+            .expect("decode fixture config");
+    config["instances"] = json!([{
+        "alias": INSTANCE_ALIAS,
+        "instance_id": instance_id,
+        "application_id": "neutral.application",
+        "adb_path": "must-not-run-adb",
+        "touch_backend": "maatouch",
+        "capture_backend": "adb",
+        "push_touch_tool": false
+    }]);
+    fs::write(
+        &config_path,
+        serde_json::to_vec_pretty(&config).expect("physical policy config JSON"),
+    )
+    .expect("write physical policy config");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_actingcommand-actingd"))
+        .args(["--config", config_path.to_str().expect("config path")])
+        .output()
+        .expect("run actingd");
+    assert!(!output.status.success());
+    assert!(
+        String::from_utf8_lossy(&output.stderr)
+            .contains("policy_execution_requires_fixture_simulation")
+    );
+    assert!(!root.path().join(RUNTIME_INFO_FILE).exists());
+}
+
+#[test]
 fn actingd_closes_one_policy_run_through_fixture_receipt_ledger_and_report_inputs() {
     for (case, frames, max_inputs, expected_effects) in [
         (
@@ -198,6 +240,12 @@ fn actingd_closes_one_policy_run_through_fixture_receipt_ledger_and_report_input
             .filter(|event| event.links.run_id() == Some(&run_id))
             .collect::<Vec<_>>();
         assert!(
+            run_events
+                .iter()
+                .all(|event| event.origin.source() != EventSource::Device),
+            "{case}: fixture simulation must not emit device-origin events"
+        );
+        assert!(
             run_events.iter().all(|event| {
                 event.links.task_id() == Some(&task_id)
                     && event.links.correlation_id() == Some(&correlation_id)
@@ -230,6 +278,49 @@ fn actingd_closes_one_policy_run_through_fixture_receipt_ledger_and_report_input
                 .count(),
             expected_effects,
             "{case}: effect count"
+        );
+        let simulation_events = run_events
+            .iter()
+            .filter(|event| {
+                matches!(
+                    event.event_type,
+                    EventType::CaptureRequested
+                        | EventType::CaptureCompleted
+                        | EventType::InputIntent
+                        | EventType::InputCommitted
+                )
+            })
+            .collect::<Vec<_>>();
+        assert!(
+            !simulation_events.is_empty()
+                && simulation_events.iter().all(|event| {
+                    event.origin.source() == EventSource::Lab
+                        && event.origin.module() == OriginModule::Actinglab
+                }),
+            "{case}: captures and simulated inputs must carry Lab/Actinglab provenance"
+        );
+        let committed_inputs = simulation_events
+            .iter()
+            .filter(|event| event.event_type == EventType::InputCommitted)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            committed_inputs.len(),
+            expected_effects,
+            "{case}: input count"
+        );
+        assert!(
+            committed_inputs.iter().all(|event| {
+                matches!(
+                    &event.payload,
+                    ProjectionPayload::Full(payload)
+                        if matches!(
+                            payload.as_ref(),
+                            EventPayload::Input(InputPayload::Committed(outcome))
+                                if outcome.effect_disposition() == EffectDisposition::NotPerformed
+                        )
+                )
+            }),
+            "{case}: fixture input must be recorded as not performed"
         );
         let lease_id = run_events
             .iter()
@@ -284,22 +375,42 @@ fn actingd_closes_one_policy_run_through_fixture_receipt_ledger_and_report_input
             .unwrap_or_else(|error| panic!("{case}: summarize completed run: {error}"));
         assert_eq!(
             summary.get("status").and_then(serde_json::Value::as_str),
-            Some("completed")
+            Some("simulated_completed")
         );
         assert_eq!(
             summary.get("effect").and_then(serde_json::Value::as_str),
             Some(if expected_effects == 1 {
-                "effecting"
+                "would_effect"
             } else {
                 "no_op"
             })
         );
         assert_eq!(
             summary
-                .get("effect_count")
+                .get("actual_effect_count")
+                .and_then(serde_json::Value::as_u64),
+            Some(0)
+        );
+        assert_eq!(
+            summary
+                .get("simulated_effect_count")
                 .and_then(serde_json::Value::as_u64),
             Some(expected_effects as u64)
         );
+        let provenance = summary
+            .get("execution_provenance")
+            .expect("structured execution provenance");
+        assert_eq!(
+            provenance.get("kind").and_then(serde_json::Value::as_str),
+            Some("fixture_simulation")
+        );
+        for field in ["device_access", "account_access", "production_input"] {
+            assert_eq!(
+                provenance.get(field).and_then(serde_json::Value::as_bool),
+                Some(false),
+                "{case}: {field}"
+            );
+        }
         assert_eq!(
             summary
                 .get("request")
@@ -318,12 +429,143 @@ fn actingd_closes_one_policy_run_through_fixture_receipt_ledger_and_report_input
             .summarize_run(unknown_run_id)
             .expect_err("unknown run must not produce a success-looking summary");
         assert_eq!(missing.code(), "run_summary_not_found", "{case}");
+        let capture_count_before = client
+            .query_events(
+                EventQuery {
+                    event_type: Some(EventType::CaptureRequested),
+                    ..EventQuery::default()
+                },
+                ProjectionProfile::Forensic,
+            )
+            .expect("query fixture captures")
+            .len();
+        let device_client = connect(root.path());
+        let denied = device_client
+            .observe_readonly(INSTANCE_ALIAS)
+            .expect_err("fixture provider must be isolated from normal device operations");
+        assert_eq!(denied.code(), "runtime_request_rejected");
+        assert_eq!(
+            denied.projection().map(|projection| projection.code),
+            Some(RuntimeErrorCode::InvalidRequest)
+        );
+        drop(device_client);
+        let capture_count_after = client
+            .query_events(
+                EventQuery {
+                    event_type: Some(EventType::CaptureRequested),
+                    ..EventQuery::default()
+                },
+                ProjectionProfile::Forensic,
+            )
+            .expect("query fixture captures after denied device operation")
+            .len();
+        assert_eq!(capture_count_after, capture_count_before);
         assert!(child.0.try_wait().expect("process state").is_none());
 
         drop(client);
         child.0.kill().expect("kill actingd");
         child.0.wait().expect("wait actingd");
     }
+}
+
+#[test]
+fn actingd_summarizes_a_completed_policy_run_across_more_than_one_event_page() {
+    const STEP_COUNT: usize = 20;
+    let root = TempDir::new().expect("tempdir");
+    let config_path = root.path().join("actingd.json");
+    let (package, frames) = sequential_contained_task_package(STEP_COUNT);
+    write_policy_execution_config_with_package(
+        &config_path,
+        root.path(),
+        instance_id(),
+        &package,
+        &frames,
+        STEP_COUNT as u16,
+    );
+
+    let child = start_actingd(&config_path);
+    let mut child = ChildGuard(child);
+    wait_for_runtime_info(&mut child.0, root.path());
+    let client = wait_for_agent_client(&mut child.0, root.path());
+    let started = Instant::now();
+    loop {
+        let completed = client
+            .query_events(
+                EventQuery {
+                    event_type: Some(EventType::PolicyDispatchCompleted),
+                    ..EventQuery::default()
+                },
+                ProjectionProfile::Forensic,
+            )
+            .expect("query policy completion");
+        if !completed.is_empty() {
+            break;
+        }
+        if let Some(status) = child.0.try_wait().expect("process state") {
+            let mut stderr = String::new();
+            if let Some(pipe) = child.0.stderr.as_mut() {
+                pipe.read_to_string(&mut stderr)
+                    .expect("read actingd stderr");
+            }
+            panic!("actingd exited before paginated run completed with {status}: {stderr}");
+        }
+        assert!(
+            started.elapsed() < Duration::from_secs(10),
+            "paginated policy run timed out"
+        );
+        thread::sleep(Duration::from_millis(20));
+    }
+    let intents = client
+        .query_events(
+            EventQuery {
+                event_type: Some(EventType::PolicyDispatchIntent),
+                ..EventQuery::default()
+            },
+            ProjectionProfile::Forensic,
+        )
+        .expect("query policy intent");
+    let run_id = intents
+        .iter()
+        .find_map(|event| event.links.run_id().copied())
+        .expect("policy run id");
+    let summary = client
+        .summarize_run(run_id)
+        .expect("summarize all pages of the completed policy run");
+    assert!(
+        summary
+            .get("event_count")
+            .and_then(serde_json::Value::as_u64)
+            .is_some_and(|count| count > 128),
+        "the regression must cross the default event-page boundary: {summary}"
+    );
+    assert_eq!(
+        summary.get("status").and_then(serde_json::Value::as_str),
+        Some("simulated_completed")
+    );
+    assert_eq!(
+        summary
+            .get("execution_provenance")
+            .and_then(|value| value.get("kind"))
+            .and_then(serde_json::Value::as_str),
+        Some("fixture_simulation")
+    );
+    assert_eq!(
+        summary
+            .get("simulated_effect_count")
+            .and_then(serde_json::Value::as_u64),
+        Some(STEP_COUNT as u64)
+    );
+    assert_eq!(
+        summary
+            .get("actual_effect_count")
+            .and_then(serde_json::Value::as_u64),
+        Some(0)
+    );
+    assert!(child.0.try_wait().expect("process state").is_none());
+
+    drop(client);
+    child.0.kill().expect("kill actingd");
+    child.0.wait().expect("wait actingd");
 }
 
 #[test]
@@ -633,6 +875,24 @@ fn write_policy_execution_config(
     frames: &[Vec<u8>],
     max_inputs: u16,
 ) {
+    write_policy_execution_config_with_package(
+        path,
+        state_root,
+        instance_id,
+        &neutral_contained_task_package(),
+        frames,
+        max_inputs,
+    );
+}
+
+fn write_policy_execution_config_with_package(
+    path: &Path,
+    state_root: &Path,
+    instance_id: InstanceId,
+    package: &[u8],
+    frames: &[Vec<u8>],
+    max_inputs: u16,
+) {
     let policy_root = state_root.join("policy");
     fs::create_dir(&policy_root).expect("create policy directory");
     let sources = actingd_policy_sources(1);
@@ -644,9 +904,8 @@ fn write_policy_execution_config(
     ] {
         fs::write(policy_root.join(name), source.bytes).expect("write policy document");
     }
-    let package = neutral_contained_task_package();
-    fs::write(policy_root.join("task.zip"), &package).expect("write contained package");
-    let package_sha256 = Sha256::digest(&package)
+    fs::write(policy_root.join("task.zip"), package).expect("write contained package");
+    let package_sha256 = Sha256::digest(package)
         .iter()
         .map(|byte| format!("{byte:02x}"))
         .collect::<String>();
@@ -770,6 +1029,109 @@ fn neutral_contained_task_package() -> Vec<u8> {
         zip.write_all(contents).expect("zip content");
     }
     zip.finish().expect("finish zip").into_inner()
+}
+
+fn sequential_contained_task_package(step_count: usize) -> (Vec<u8>, Vec<Vec<u8>>) {
+    assert!((1..=31).contains(&step_count));
+    let page_names = (0..=step_count)
+        .map(|index| format!("page-{index:02}"))
+        .collect::<Vec<_>>();
+    let operations = (0..step_count)
+        .map(|index| {
+            json!({
+                "id": format!("step_{index:02}"),
+                "from": page_names[index],
+                "to": page_names[index + 1],
+                "click": {"kind": "point", "x": 1, "y": 0},
+                "unguarded_trusted_coordinate": true
+            })
+        })
+        .collect::<Vec<_>>();
+    let recognition_targets = page_names
+        .iter()
+        .enumerate()
+        .map(|(index, page)| {
+            json!({
+                "type": "color",
+                "id": format!("page/{page}"),
+                "region": {"x": 0, "y": 0, "width": 1, "height": 1},
+                "expected": [u8::try_from(index).expect("page color"), 0, 0]
+            })
+        })
+        .collect::<Vec<_>>();
+    let recognition_pages = page_names
+        .iter()
+        .map(|page| {
+            json!({
+                "id": format!("neutral/{page}"),
+                "required": [format!("page/{page}")],
+                "optional": [],
+                "forbidden": []
+            })
+        })
+        .collect::<Vec<_>>();
+    let documents = [
+        (
+            "control.json",
+            json!({
+                "schema_version": "Lab-1y.control.v1",
+                "package_id": "neutral.pagination.task",
+                "execution_mode": "navigable_route",
+                "game": "neutral",
+                "server": "test",
+                "resolution": {"width": 2, "height": 1},
+                "entry_task_id": "task",
+                "capture_interval_ms": 1,
+                "step_timeout_ms": 250,
+                "timeout_ms": 10_000,
+                "max_steps": step_count + 1
+            }),
+        ),
+        (
+            "resources/manifest.json",
+            json!({"schema_version": "0.3", "entry_task_id": "task"}),
+        ),
+        (
+            "resources/operations/task/task.json",
+            json!({
+                "schema_version": "0.6",
+                "task_id": "task",
+                "game": "neutral",
+                "server_scope": ["test"],
+                "coordinate_space": {"width": 2, "height": 1},
+                "entry_page": page_names.first().expect("entry page"),
+                "target_page": page_names.last().expect("target page"),
+                "operations": operations
+            }),
+        ),
+        (
+            "resources/recognition/neutral.test.pack.json",
+            json!({
+                "schema_version": "0.3",
+                "game": "neutral",
+                "server": "test",
+                "coordinate_space": {"width": 2, "height": 1},
+                "defaults": {"color_max_distance": 0.0},
+                "targets": recognition_targets
+            }),
+        ),
+        (
+            "resources/recognition/neutral.test.pages.json",
+            json!({"schema_version": "0.3", "pages": recognition_pages}),
+        ),
+    ];
+    let cursor = Cursor::new(Vec::new());
+    let mut zip = ZipWriter::new(cursor);
+    let options = FileOptions::default().compression_method(zip::CompressionMethod::Stored);
+    for (path, document) in documents {
+        zip.start_file(path, options).expect("zip entry");
+        zip.write_all(&serde_json::to_vec(&document).expect("zip JSON"))
+            .expect("zip content");
+    }
+    let frames = (0..=step_count)
+        .map(|index| vec![u8::try_from(index).expect("frame color"), 0, 0, 0, 255, 0])
+        .collect();
+    (zip.finish().expect("finish zip").into_inner(), frames)
 }
 
 fn wait_for_runtime_info(child: &mut Child, state_root: &Path) -> RuntimeInfo {

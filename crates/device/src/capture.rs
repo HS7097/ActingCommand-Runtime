@@ -69,6 +69,7 @@ impl PixelFormat {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum CaptureBackendName {
+    FixtureSimulation,
     AdbScreencap,
     AdbScreencapEncode,
     AdbScreencapRawGzip,
@@ -79,6 +80,7 @@ pub enum CaptureBackendName {
 impl CaptureBackendName {
     pub fn as_str(self) -> &'static str {
         match self {
+            Self::FixtureSimulation => "fixture_simulation",
             Self::AdbScreencap => "adb_screencap",
             Self::AdbScreencapEncode => "adb_screencap_encode",
             Self::AdbScreencapRawGzip => "adb_screencap_raw_gzip",
@@ -593,6 +595,9 @@ fn build_capture_backend(
     name: CaptureBackendName,
 ) -> DeviceResult<Box<dyn CaptureBackend>> {
     match name {
+        CaptureBackendName::FixtureSimulation => Err(DeviceError::fatal(
+            "fixture simulation cannot be opened through the device capture factory",
+        )),
         CaptureBackendName::NemuIpc => Ok(Box::new(NemuIpcBackend::new(
             config.target.clone(),
             config.nemu.clone(),
