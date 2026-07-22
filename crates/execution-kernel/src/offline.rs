@@ -326,17 +326,37 @@ mod tests {
     fn offline_and_effecting_runtime_share_the_first_decision() {
         let package_bytes = package(PackageOptions::default());
         let task = prepare(&package_bytes);
-        let offline =
-            simulate_contained_task(&task, vec![home_frame(true)]).expect("offline simulation");
+        let frames = vec![home_frame(true)];
+        let offline = simulate_contained_task(&task, frames.clone()).expect("offline simulation");
         let offline_action = match &offline.decision {
             OfflineDecision::WouldClick { action, .. } => action.clone(),
             other => panic!("expected would-click, got {other:?}"),
         };
-        let effecting = effecting_decision(&task, vec![home_frame(true), terminal_frame()]);
+        let effecting = effecting_decision(&task, frames);
 
         assert_eq!(effecting.decision, offline.decision);
         assert_eq!(effecting.decision_fingerprint, offline.decision_fingerprint);
         assert_eq!(effecting.actions, vec![offline_action]);
+    }
+
+    #[test]
+    fn effecting_runtime_stops_at_the_typed_first_effect_boundary() {
+        let package_bytes = package(PackageOptions::default());
+        let task = prepare(&package_bytes);
+        let mut runtime = EffectingRuntime::new(vec![home_frame(true)]);
+
+        let outcome = task.run(&mut runtime);
+
+        assert!(matches!(
+            outcome,
+            Err(ContainedTaskRunError::Boundary(
+                EffectingBoundary::FirstEffectIntercepted
+            ))
+        ));
+        assert!(runtime.frames.is_empty());
+        assert_eq!(runtime.actions.len(), 1);
+        assert!(runtime.first_effect.is_some());
+        assert!(runtime.recognition_at_first_effect.is_some());
     }
 
     #[test]
@@ -704,6 +724,7 @@ mod tests {
 
     #[derive(Debug)]
     enum EffectingBoundary {
+        FirstEffectIntercepted,
         FixtureExhausted,
         Invariant(&'static str),
     }
@@ -730,8 +751,18 @@ mod tests {
         }
 
         fn input(&mut self, action: InputAction) -> Result<(), Self::Error> {
+            let Some(planned) = &self.first_effect else {
+                return Err(EffectingBoundary::Invariant(
+                    "effecting_fake_effect_intent_missing",
+                ));
+            };
+            if planned.action != action {
+                return Err(EffectingBoundary::Invariant(
+                    "effecting_fake_action_mismatch",
+                ));
+            }
             self.actions.push(action);
-            Ok(())
+            Err(EffectingBoundary::FirstEffectIntercepted)
         }
 
         fn record(&mut self, trace: ContainedTaskTrace) -> Result<(), Self::Error> {
@@ -781,7 +812,14 @@ mod tests {
         let mut runtime = EffectingRuntime::new(frames);
         let outcome = task.run(&mut runtime);
         let (decision, recognition) = if let Some(planned) = runtime.first_effect.take() {
-            outcome.expect("effecting first-effect execution");
+            match outcome {
+                Err(ContainedTaskRunError::Boundary(EffectingBoundary::FirstEffectIntercepted)) => {
+                }
+                Err(ContainedTaskRunError::Boundary(EffectingBoundary::Invariant(code))) => {
+                    panic!("unexpected effecting invariant after first effect: {code}")
+                }
+                other => panic!("effecting runtime did not stop at the first effect: {other:?}"),
+            }
             (
                 OfflineDecision::WouldClick {
                     operation_label: planned.operation_label,
@@ -818,6 +856,9 @@ mod tests {
                         code: FIXTURE_EXHAUSTED_CODE.to_string(),
                         detail: None,
                     }
+                }
+                Err(ContainedTaskRunError::Boundary(EffectingBoundary::FirstEffectIntercepted)) => {
+                    panic!("effecting runtime intercepted input without an effect trace")
                 }
                 Err(ContainedTaskRunError::Boundary(EffectingBoundary::Invariant(code))) => {
                     panic!("unexpected effecting invariant: {code}")
