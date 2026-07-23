@@ -4,7 +4,8 @@ use actingcommand_contract::{
     AgentPayload, AgentSessionId, ApplicationLifecycleAction, EffectDisposition, EventActor,
     EventPayload, EventQuery, EventSource, EventType, FactScope, IdentifierIssuer, InputPayload,
     InstanceId, MAX_RUNTIME_EVENT_QUERY_EVENTS, OriginModule, PolicyExecutionOutcome,
-    PolicyPayload, PolicyPlanningSignalEventData, PolicyPlanningSignalKind,
+    PolicyFailureClass, PolicyFailureDisposition, PolicyPayload, PolicyPlanningSignalEventData,
+    PolicyPlanningSignalKind,
     ProjectInterfaceRequest, ProjectedArtifactReference, ProjectionPayload, ProjectionProfile,
     RUNTIME_INFO_FILE, RuntimeErrorCode, RuntimeEventQueryPageRequest, RuntimeInfo,
     RuntimeOperation, RuntimeReceipt, RuntimeReceiptState, RuntimeRequest, RuntimeResult,
@@ -810,6 +811,139 @@ fn actingd_closes_one_policy_run_through_fixture_receipt_ledger_and_report_input
         child.0.kill().expect("kill actingd");
         child.0.wait().expect("wait actingd");
     }
+}
+
+#[test]
+fn actingd_scheduled_failure_persists_failed_outcome_completion_and_report() {
+    let root = TempDir::new().expect("tempdir");
+    let config_path = root.path().join("actingd.json");
+    write_policy_execution_config(
+        &config_path,
+        root.path(),
+        instance_id(),
+        &[
+            vec![255, 0, 0, 0, 255, 0],
+            vec![255, 0, 0, 0, 255, 0],
+            vec![255, 0, 0, 0, 255, 0],
+        ],
+        2,
+    );
+
+    let failed = Command::new(env!("CARGO_BIN_EXE_actingcommand-actingd"))
+        .args(["--config", config_path.to_str().expect("config path")])
+        .output()
+        .expect("run failing scheduled actingd");
+    assert!(!failed.status.success());
+    assert!(
+        String::from_utf8_lossy(&failed.stderr).contains("contained_task_requires_scheduler"),
+        "unexpected scheduled failure: {}",
+        String::from_utf8_lossy(&failed.stderr)
+    );
+
+    let mut recovery_config: Value =
+        serde_json::from_slice(&fs::read(&config_path).expect("read recovery config"))
+            .expect("decode recovery config");
+    recovery_config
+        .as_object_mut()
+        .expect("recovery config object")
+        .remove("policy");
+    fs::write(
+        &config_path,
+        serde_json::to_vec_pretty(&recovery_config).expect("recovery config JSON"),
+    )
+    .expect("write recovery config");
+    let recovered = start_actingd(&config_path);
+    let mut recovered = ChildGuard(recovered);
+    wait_for_runtime_info(&mut recovered.0, root.path());
+    let client = wait_for_agent_client(&mut recovered.0, root.path());
+    let events = client
+        .query_events(EventQuery::default(), ProjectionProfile::Forensic)
+        .expect("query recovered scheduled failure");
+    let intent = events
+        .iter()
+        .find(|event| event.event_type == EventType::PolicyDispatchIntent)
+        .expect("failed policy intent");
+    let run_id = intent.links.run_id().copied().expect("failed run id");
+    let run_events = events
+        .iter()
+        .filter(|event| event.links.run_id() == Some(&run_id))
+        .collect::<Vec<_>>();
+    for event_type in [
+        EventType::PolicyDispatchIntent,
+        EventType::PolicyDispatchAdmitted,
+        EventType::LeaseGranted,
+        EventType::LabRequest,
+        EventType::TaskRequested,
+        EventType::TaskFailed,
+        EventType::LeaseReleased,
+        EventType::PolicyExecutionRecorded,
+        EventType::PolicyDispatchCompleted,
+    ] {
+        assert_eq!(
+            run_events
+                .iter()
+                .filter(|event| event.event_type == event_type)
+                .count(),
+            1,
+            "failed scheduled {event_type:?}"
+        );
+    }
+    let execution = run_events
+        .iter()
+        .find(|event| event.event_type == EventType::PolicyExecutionRecorded)
+        .expect("failed policy execution");
+    let ProjectionPayload::Full(payload) = &execution.payload else {
+        panic!("failed forensic execution payload")
+    };
+    let EventPayload::Policy(PolicyPayload::ExecutionRecorded(payload)) = payload.as_ref() else {
+        panic!("failed policy execution payload")
+    };
+    let PolicyExecutionOutcome::Failed { failure } = payload.outcome() else {
+        panic!("expected failed policy outcome")
+    };
+    assert_eq!(failure.error_code, "contained_task_requires_scheduler");
+    assert_eq!(failure.original_class, PolicyFailureClass::Recoverable);
+    assert_eq!(failure.consecutive_same_error, 1);
+    assert_eq!(
+        failure.disposition,
+        PolicyFailureDisposition::RetryScheduled
+    );
+
+    let summary = client
+        .summarize_run(run_id)
+        .expect("summarize failed scheduled run");
+    assert_eq!(
+        summary.get("status").and_then(Value::as_str),
+        Some("simulated_failed")
+    );
+    assert_eq!(
+        summary.pointer("/outcome/result").and_then(Value::as_str),
+        Some("failed")
+    );
+    assert_eq!(
+        summary.get("effect").and_then(Value::as_str),
+        Some("failed")
+    );
+    assert_eq!(
+        summary.pointer("/outcome/policy"),
+        Some(&serde_json::to_value(payload.outcome()).expect("failed outcome JSON"))
+    );
+    assert_eq!(
+        summary
+            .get("actual_effect_count")
+            .and_then(Value::as_u64),
+        Some(0)
+    );
+    assert_eq!(
+        summary
+            .get("simulated_effect_count")
+            .and_then(Value::as_u64),
+        Some(2)
+    );
+    assert!(recovered.0.try_wait().expect("recovery process state").is_none());
+    drop(client);
+    recovered.0.kill().expect("kill recovery actingd");
+    recovered.0.wait().expect("wait recovery actingd");
 }
 
 #[test]

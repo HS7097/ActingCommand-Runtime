@@ -1714,10 +1714,27 @@ fn project_run_summary(run_id: RunId, events: &[ProjectedEvent]) -> RuntimeClien
     let admitted_event = exactly_one_run_event(events, EventType::PolicyDispatchAdmitted)?;
     let lease_event = exactly_one_run_event(events, EventType::LeaseGranted)?;
     let lab_request_event = exactly_one_run_event(events, EventType::LabRequest)?;
-    let task_event = exactly_one_run_event(events, EventType::TaskCompleted)?;
     let release_event = exactly_one_run_event(events, EventType::LeaseReleased)?;
     let execution_event = exactly_one_run_event(events, EventType::PolicyExecutionRecorded)?;
     let completed_event = exactly_one_run_event(events, EventType::PolicyDispatchCompleted)?;
+    let execution = match full_payload(execution_event)? {
+        EventPayload::Policy(PolicyPayload::ExecutionRecorded(payload)) => payload,
+        _ => {
+            return Err(RuntimeClientError::fatal(
+                "run_summary_payload_mismatch",
+                "summarize_run",
+            ));
+        }
+    };
+    let (task_event_type, status, result) = match execution.outcome() {
+        PolicyExecutionOutcome::Succeeded { .. } => {
+            (EventType::TaskCompleted, "simulated_completed", None)
+        }
+        PolicyExecutionOutcome::Failed { .. } => {
+            (EventType::TaskFailed, "simulated_failed", Some("failed"))
+        }
+    };
+    let task_event = exactly_one_run_event(events, task_event_type)?;
 
     let task_id = intent_event.links.task_id().copied().ok_or_else(|| {
         RuntimeClientError::fatal("run_summary_identity_missing", "summarize_run")
@@ -1769,36 +1786,29 @@ fn project_run_summary(run_id: RunId, events: &[ProjectedEvent]) -> RuntimeClien
     let intent = policy_dispatch_payload(intent_event, EventType::PolicyDispatchIntent)?;
     let admitted = policy_dispatch_payload(admitted_event, EventType::PolicyDispatchAdmitted)?;
     let completed = policy_dispatch_payload(completed_event, EventType::PolicyDispatchCompleted)?;
-    let execution = match full_payload(execution_event)? {
-        EventPayload::Policy(PolicyPayload::ExecutionRecorded(payload)) => payload,
-        _ => {
-            return Err(RuntimeClientError::fatal(
-                "run_summary_payload_mismatch",
-                "summarize_run",
-            ));
-        }
-    };
     if intent.decision_id() != admitted.decision_id()
         || intent.decision_id() != completed.decision_id()
         || intent.decision_id() != execution.decision_id()
         || intent.admission().is_some()
         || admitted.admission().is_none()
         || completed.admission() != admitted.admission()
-        || !matches!(
-            execution.outcome(),
-            PolicyExecutionOutcome::Succeeded { .. }
-        )
     {
         return Err(RuntimeClientError::fatal(
             "run_summary_policy_mismatch",
             "summarize_run",
         ));
     }
+    validate_task_terminal(task_event, execution.outcome())?;
     validate_admitted_package(events, &lab_request_id, intent.package_digest())?;
     let simulated_effect_count = validate_fixture_simulation(events)?;
+    let result = result.unwrap_or(if simulated_effect_count == 0 {
+        "no_op"
+    } else {
+        "would_effect"
+    });
     Ok(json!({
         "schema_version": "actingcommand.run-summary.v1",
-        "status": "simulated_completed",
+        "status": status,
         "run_id": run_id,
         "task_id": task_id,
         "correlation_id": correlation_id,
@@ -1830,7 +1840,7 @@ fn project_run_summary(run_id: RunId, events: &[ProjectedEvent]) -> RuntimeClien
         "outcome": {
             "kind": "fixture_simulation",
             "policy": execution.outcome(),
-            "result": if simulated_effect_count == 0 { "no_op" } else { "would_effect" }
+            "result": result
         },
         "execution_provenance": {
             "kind": "fixture_simulation",
@@ -1840,12 +1850,51 @@ fn project_run_summary(run_id: RunId, events: &[ProjectedEvent]) -> RuntimeClien
             "actual_effect_count": 0,
             "simulated_effect_count": simulated_effect_count
         },
-        "effect": if simulated_effect_count == 0 { "no_op" } else { "would_effect" },
+        "effect": result,
         "actual_effect_count": 0,
         "simulated_effect_count": simulated_effect_count,
         "event_count": events.len(),
         "completed_sequence": completed_event.sequence
     }))
+}
+
+fn validate_task_terminal(
+    task_event: &ProjectedEvent,
+    execution: &PolicyExecutionOutcome,
+) -> RuntimeClientResult<()> {
+    let EventPayload::Task(TaskPayload::Semantic(payload)) = full_payload(task_event)? else {
+        return Err(RuntimeClientError::fatal(
+            "run_summary_payload_mismatch",
+            "summarize_run",
+        ));
+    };
+    let TaskSemanticFact::TerminalCommitted {
+        outcome,
+        failure_code,
+        ..
+    } = payload.fact()
+    else {
+        return Err(RuntimeClientError::fatal(
+            "run_summary_payload_mismatch",
+            "summarize_run",
+        ));
+    };
+    let matches = match execution {
+        PolicyExecutionOutcome::Succeeded { .. } => {
+            *outcome == actingcommand_contract::TaskOutcome::Success && failure_code.is_none()
+        }
+        PolicyExecutionOutcome::Failed { failure } => {
+            *outcome == actingcommand_contract::TaskOutcome::Failure
+                && failure_code.as_deref() == Some(failure.error_code.as_str())
+        }
+    };
+    if !matches {
+        return Err(RuntimeClientError::fatal(
+            "run_summary_policy_mismatch",
+            "summarize_run",
+        ));
+    }
+    Ok(())
 }
 
 fn validate_admitted_package(

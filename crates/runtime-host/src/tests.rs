@@ -828,6 +828,43 @@ fn budget_policy_sources(version: u64) -> CatalogSources {
     sources
 }
 
+fn scheduled_retry_policy_sources(version: u64) -> CatalogSources {
+    let mut sources = policy_sources(version);
+    let mut tasks: serde_json::Value =
+        serde_json::from_slice(&sources.tasks.bytes).expect("scheduled retry task fixture");
+    tasks["tasks"][0]["on_failure"] = serde_json::json!({
+        "action": "continue",
+        "retry_limit": 5,
+        "retry_backoff_ms": 1,
+        "escalation_threshold": 100
+    });
+    tasks["tasks"][0]["cooldown_ms"] = serde_json::json!(0);
+    tasks["tasks"][0]["loop_budget"] = serde_json::json!({
+        "daily_limit": 10,
+        "window_iteration_limit": 10,
+        "max_runtime_ms": 1_000_000
+    });
+    sources.tasks.bytes =
+        serde_json::to_vec_pretty(&tasks).expect("scheduled retry task bytes");
+
+    let mut activity: serde_json::Value =
+        serde_json::from_slice(&sources.activity.bytes).expect("scheduled retry activity fixture");
+    activity["profiles"][0]["daily_budget"] = serde_json::json!(10);
+    activity["profiles"][0]["max_window_iterations"] = serde_json::json!(10);
+    activity["profiles"][0]["session_max_ms"] = serde_json::json!(1_000_000);
+    activity["profiles"][0]["minimum_interval_ms"] = serde_json::json!(1);
+    activity["profiles"][0]["maximum_interval_ms"] = serde_json::json!(1);
+    activity["profiles"][0]["windows"] = serde_json::json!([{
+        "weekdays": [1, 2, 3, 4, 5, 6, 7],
+        "utc_offset_minutes": 0,
+        "start_minute_of_day": 0,
+        "end_minute_of_day": 0
+    }]);
+    sources.activity.bytes =
+        serde_json::to_vec_pretty(&activity).expect("scheduled retry activity bytes");
+    sources
+}
+
 fn high_volume_forward_policy_sources(version: u64) -> CatalogSources {
     let mut sources = policy_sources(version);
     let mut tasks: serde_json::Value =
@@ -2251,6 +2288,231 @@ fn scheduled_policy_run_reuses_one_request_receipt_for_one_effecting_run() {
     );
     assert_eq!(state.input_count.load(Ordering::Acquire), 1);
     drop(client);
+    host.close().expect("close runtime host");
+}
+
+#[test]
+fn scheduled_policy_run_failure_records_terminal_outcome_and_completion() {
+    let root = TempDir::new().expect("tempdir");
+    let package = neutral_contained_task_package();
+    let package_path = root.path().join("scheduled-task.zip");
+    fs::write(&package_path, &package).expect("write package");
+    let package_sha256 = format!("{:x}", Sha256::digest(&package));
+    let state = Arc::new(FakeState::default());
+    let host = RuntimeHost::start(
+        config(&root).with_procedure_manifest(procedure_manifest_with_primary(
+            &package,
+            vec!["after_observation".to_owned()],
+        )),
+        Arc::new(
+            FakeProvider::one(POLICY_INSTANCE_ALIAS, instance_id(), Arc::clone(&state))
+                .fixture_simulation(),
+        ),
+    )
+    .expect("runtime host");
+    host.activate_policy_catalog(&policy_sources(1))
+        .expect("activate policy catalog");
+    let (_, intent, reasons) = evaluated_policy_dispatch(&host, PolicyTrigger::FactsChanged);
+    record_policy_approval(&host, &intent);
+    let admission = host
+        .admit_policy_dispatch(&intent, &reasons, &policy_context(&host, &intent))
+        .expect("policy admission");
+    let PolicyDispatchAdmission::Granted { context } = admission else {
+        panic!("expected policy run context")
+    };
+    let request =
+        ContainedTaskRequest::new(package_path.to_string_lossy().into_owned(), package_sha256)
+            .expect("contained task request");
+
+    let error = host
+        .run_scheduled_contained_task(&context, &request)
+        .expect_err("scheduled task failure");
+
+    assert!(!error.is_fatal(), "unexpected fatal scheduled error: {error}");
+    assert_eq!(error.code(), "contained_task_requires_scheduler");
+    let mut client = TestClient::connect(&host);
+    let events = projected_events(
+        &mut client,
+        EventQuery {
+            run_id: Some(context.run_id()),
+            ..EventQuery::default()
+        },
+    );
+    for event_type in [
+        EventType::TaskFailed,
+        EventType::LeaseReleased,
+        EventType::PolicyExecutionRecorded,
+        EventType::PolicyDispatchCompleted,
+    ] {
+        assert_eq!(
+            events
+                .iter()
+                .filter(|event| event.event_type == event_type)
+                .count(),
+            1,
+            "{event_type:?} must be unique"
+        );
+    }
+    assert!(events.iter().any(|event| {
+        matches!(
+            &event.payload,
+            ProjectionPayload::Full(payload)
+                if matches!(
+                    payload.as_ref(),
+                    EventPayload::Task(TaskPayload::Semantic(payload))
+                        if matches!(
+                            payload.fact(),
+                            TaskSemanticFact::TerminalCommitted {
+                                outcome: TaskOutcome::Failure,
+                                failure_code: Some(code),
+                                ..
+                            } if code == error.code()
+                        )
+                )
+        )
+    }));
+    assert!(events.iter().any(|event| {
+        matches!(
+            &event.payload,
+            ProjectionPayload::Full(payload)
+                if matches!(
+                    payload.as_ref(),
+                    EventPayload::Policy(PolicyPayload::ExecutionRecorded(payload))
+                        if matches!(
+                            payload.outcome(),
+                            PolicyExecutionOutcome::Failed { failure }
+                                if failure.error_code == error.code()
+                                    && failure.original_class
+                                        == PolicyFailureClass::Recoverable
+                        )
+                )
+        )
+    }));
+    assert!(
+        host.pinned_policy_catalog(&intent.decision_id)
+            .expect("catalog pin")
+            .is_none()
+    );
+    assert_eq!(state.input_count.load(Ordering::Acquire), 2);
+    drop(client);
+    host.close().expect("close runtime host");
+}
+
+#[test]
+fn scheduled_failure_chain_retries_five_times_and_stops_on_sixth() {
+    let root = TempDir::new().expect("tempdir");
+    let package = neutral_contained_task_package();
+    let package_path = root.path().join("scheduled-task.zip");
+    fs::write(&package_path, &package).expect("write package");
+    let package_sha256 = format!("{:x}", Sha256::digest(&package));
+    let clock = Arc::new(ManualRuntimeClock::new(POLICY_NOW_UNIX_MS, 0));
+    let state = Arc::new(FakeState::default());
+    let host = RuntimeHost::start(
+        config(&root)
+            .with_runtime_clock(clock.clone())
+            .with_procedure_manifest(procedure_manifest_with_primary(
+                &package,
+                vec!["after_observation".to_owned()],
+            )),
+        Arc::new(
+            FakeProvider::one(POLICY_INSTANCE_ALIAS, instance_id(), Arc::clone(&state))
+                .fixture_simulation(),
+        ),
+    )
+    .expect("runtime host");
+    host.activate_policy_catalog(&scheduled_retry_policy_sources(1))
+        .expect("activate retry policy catalog");
+    let request =
+        ContainedTaskRequest::new(package_path.to_string_lossy().into_owned(), package_sha256)
+            .expect("contained task request");
+    let mut recorded_approval = false;
+
+    for attempt in 1_u16..=6 {
+        if attempt > 1 {
+            clock.advance(1_000);
+        }
+        let now = POLICY_NOW_UNIX_MS + u64::from(attempt - 1) * 1_000;
+        let (_, intent, reasons) =
+            evaluated_policy_dispatch_at(&host, PolicyTrigger::FactsChanged, now, u64::from(attempt));
+        if !recorded_approval {
+            record_policy_approval(&host, &intent);
+            recorded_approval = true;
+        }
+        let admission = host
+            .admit_policy_dispatch(&intent, &reasons, &policy_context(&host, &intent))
+            .unwrap_or_else(|error| panic!("attempt {attempt} policy admission: {error}"));
+        let PolicyDispatchAdmission::Granted { context } = admission else {
+            panic!("attempt {attempt}: expected policy run context")
+        };
+        let error = host
+            .run_scheduled_contained_task(&context, &request)
+            .expect_err("scheduled task failure");
+        assert_eq!(error.code(), "contained_task_requires_scheduler");
+        assert!(!error.is_fatal());
+
+        let mut client = TestClient::connect(&host);
+        let events = projected_events(
+            &mut client,
+            EventQuery {
+                run_id: Some(context.run_id()),
+                ..EventQuery::default()
+            },
+        );
+        for event_type in [
+            EventType::TaskFailed,
+            EventType::LeaseReleased,
+            EventType::PolicyExecutionRecorded,
+            EventType::PolicyDispatchCompleted,
+        ] {
+            assert_eq!(
+                events
+                    .iter()
+                    .filter(|event| event.event_type == event_type)
+                    .count(),
+                1,
+                "attempt {attempt}: {event_type:?}"
+            );
+        }
+        let outcome = events
+            .iter()
+            .find_map(|event| match &event.payload {
+                ProjectionPayload::Full(payload) => match payload.as_ref() {
+                    EventPayload::Policy(PolicyPayload::ExecutionRecorded(payload)) => {
+                        Some(payload.outcome())
+                    }
+                    _ => None,
+                },
+                _ => None,
+            })
+            .expect("scheduled failure outcome");
+        let PolicyExecutionOutcome::Failed { failure } = outcome else {
+            panic!("attempt {attempt}: expected failed policy outcome")
+        };
+        assert_eq!(failure.error_code, error.code());
+        assert_eq!(failure.original_class, PolicyFailureClass::Recoverable);
+        assert_eq!(failure.effective_class, PolicyFailureClass::Recoverable);
+        assert_eq!(failure.consecutive_same_error, attempt);
+        assert_eq!(failure.escalation_streak, attempt);
+        if attempt <= 5 {
+            assert_eq!(
+                failure.disposition,
+                PolicyFailureDisposition::RetryScheduled
+            );
+            assert_eq!(failure.retry_attempt, attempt);
+            assert!(failure.retry_at_unix_ms.is_some());
+        } else {
+            assert_eq!(failure.disposition, PolicyFailureDisposition::Continue);
+            assert_eq!(failure.retry_attempt, 0);
+            assert!(failure.retry_at_unix_ms.is_none());
+        }
+        assert!(
+            host.pinned_policy_catalog(&intent.decision_id)
+                .expect("catalog pin")
+                .is_none()
+        );
+        drop(client);
+    }
+    assert_eq!(state.input_count.load(Ordering::Acquire), 12);
     host.close().expect("close runtime host");
 }
 
@@ -9772,6 +10034,14 @@ fn policy_dispatch_crash_child_process() {
         .admit_policy_dispatch(&intent, &reason_chain, &policy_context(&host, &intent))
         .expect("child policy admission");
     assert!(matches!(admission, PolicyDispatchAdmission::Granted { .. }));
+    if matches!(
+        std::env::var("ACTINGCOMMAND_POLICY_CRASH_POINT").as_deref(),
+        Ok("after_policy_execution" | "after_policy_completion")
+    ) {
+        host.record_policy_dispatch_outcome(&intent.decision_id, &PolicyExecutionInput::Succeeded)
+            .expect("child policy outcome");
+        panic!("policy outcome crash barrier did not stop the child");
+    }
     fs::write(
         Path::new(&root).join("admitted-before-crash.json"),
         serde_json::to_vec(&(intent, reason_chain)).expect("admitted dispatch bytes"),
@@ -10158,6 +10428,94 @@ fn policy_dispatch_accepts_one_late_outcome_after_process_crash() {
     );
     drop(client);
     reopened.close().expect("close replayed late outcome host");
+}
+
+#[test]
+fn split_policy_outcome_append_boundaries_recover_completion_exactly_once() {
+    for point in ["after_policy_execution", "after_policy_completion"] {
+        let root = TempDir::new().expect("tempdir");
+        let shared_instance_id = instance_id();
+        fs::write(
+            root.path().join("instance.json"),
+            serde_json::to_vec(&shared_instance_id).expect("instance bytes"),
+        )
+        .expect("instance file");
+        let marker = root.path().join("policy-crash-marker");
+        let mut child = Command::new(std::env::current_exe().expect("test executable"))
+            .args([
+                "--exact",
+                "tests::policy_dispatch_crash_child_process",
+                "--nocapture",
+            ])
+            .env("ACTINGCOMMAND_POLICY_CRASH_ROOT", root.path())
+            .env("ACTINGCOMMAND_POLICY_CRASH_POINT", point)
+            .env("ACTINGCOMMAND_POLICY_CRASH_MARKER", &marker)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("spawn outcome crash child");
+        let deadline = Instant::now() + Duration::from_secs(20);
+        while !marker.is_file() {
+            assert!(
+                Instant::now() < deadline,
+                "outcome crash marker timeout at {point}"
+            );
+            assert!(
+                child.try_wait().expect("poll outcome crash child").is_none(),
+                "outcome crash child exited before {point}"
+            );
+            thread::sleep(Duration::from_millis(10));
+        }
+        child.kill().expect("kill outcome crash child");
+        let status = child.wait().expect("wait outcome crash child");
+        assert!(!status.success());
+
+        let (intent, _): (DispatchIntent, DecisionReasonChain) = serde_json::from_slice(
+            &fs::read(root.path().join("dispatch-before-crash.json"))
+                .expect("outcome dispatch marker"),
+        )
+        .expect("outcome dispatch JSON");
+        for restart in 1..=2 {
+            let host = RuntimeHost::start(
+                config(&root),
+                Arc::new(FakeProvider::one(
+                    POLICY_INSTANCE_ALIAS,
+                    shared_instance_id,
+                    Arc::new(FakeState::default()),
+                )),
+            )
+            .unwrap_or_else(|error| {
+                panic!("restart {restart} after {point} failed: {error}")
+            });
+            let mut client = TestClient::connect(&host);
+            let events = projected_events(&mut client, EventQuery::default());
+            assert_eq!(
+                events
+                    .iter()
+                    .filter(|event| event.event_type == EventType::PolicyExecutionRecorded)
+                    .count(),
+                1,
+                "restart {restart} after {point}: execution count"
+            );
+            assert_eq!(
+                events
+                    .iter()
+                    .filter(|event| event.event_type == EventType::PolicyDispatchCompleted)
+                    .count(),
+                1,
+                "restart {restart} after {point}: completion count"
+            );
+            assert!(
+                host.pinned_policy_catalog(&intent.decision_id)
+                    .expect("recovered catalog pin")
+                    .is_none(),
+                "restart {restart} after {point}: catalog pin retained"
+            );
+            drop(client);
+            host.close().expect("close recovered outcome host");
+        }
+    }
 }
 
 #[test]
