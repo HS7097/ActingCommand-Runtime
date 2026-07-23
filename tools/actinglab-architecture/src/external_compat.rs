@@ -242,11 +242,14 @@ impl<'a> ExternalCompatReader<'a> {
     }
 
     fn audit_source(&self, entry: &ExternalCompatEntry, output: &[u8]) -> Result<(), String> {
-        if matches!(entry.source, ExternalCompatSource::Upstream { .. }) {
-            return Err(format!(
-                "entry {} uses disabled upstream provenance; verified repository-object transport is required",
-                entry.id
-            ));
+        if let ExternalCompatSource::Upstream { sha256, .. } = &entry.source {
+            if format!("{:x}", Sha256::digest(output)) != *sha256 {
+                return Err(format!(
+                    "entry {} upstream raw-byte hash drifted",
+                    entry.id
+                ));
+            }
+            return Ok(());
         }
         let ExternalCompatSource::Generated {
             generator_id,
@@ -369,8 +372,11 @@ fn validate_manifest_structure(
         if !is_sha256(&entry.sha256) {
             errors.push(format!("entry {} has invalid sha256", entry.id));
         }
-        if entry.purpose.trim().is_empty() {
-            errors.push(format!("entry {} has empty purpose", entry.id));
+        if entry.purpose.trim().is_empty() || entry.purpose.trim() != entry.purpose {
+            errors.push(format!(
+                "entry {} purpose must be nonempty and have no surrounding whitespace",
+                entry.id
+            ));
         }
         validate_scopes(entry, &mut errors);
         validate_source_structure(entry, generators, &mut errors);
@@ -1122,13 +1128,22 @@ fn validate_data_path(path: &str) -> Result<(), String> {
 }
 
 fn validate_repo_path(path: &str) -> Result<(), String> {
+    let components = Path::new(path)
+        .components()
+        .map(|component| match component {
+            Component::Normal(component) => component
+                .to_str()
+                .map(ToString::to_string)
+                .ok_or(()),
+            _ => Err(()),
+        })
+        .collect::<Result<Vec<_>, _>>();
+    let is_canonical = matches!(&components, Ok(components) if components.join("/") == path);
     if path.is_empty()
         || path.contains(['\\', '*', '?'])
         || path.starts_with('/')
         || path.ends_with('/')
-        || Path::new(path)
-            .components()
-            .any(|component| !matches!(component, Component::Normal(_)))
+        || !is_canonical
     {
         return Err(format!("has invalid exact path {path}"));
     }
@@ -1148,9 +1163,25 @@ fn normalize_workspace_path(root: &Path, path: &Path) -> Result<String, String> 
 }
 
 fn is_pinned_repository_url(value: &str) -> bool {
-    value.starts_with("https://github.com/")
-        && !value.contains([' ', '\t', '\n', '\r', '?', '#', '*'])
-        && value.trim_end_matches('/').split('/').count() == 5
+    let Some(repository) = value.strip_prefix("https://github.com/") else {
+        return false;
+    };
+    if repository.ends_with('/')
+        || repository.ends_with(".git")
+        || repository.contains([' ', '\t', '\n', '\r', '?', '#', '*', '\\'])
+    {
+        return false;
+    }
+    let parts = repository.split('/').collect::<Vec<_>>();
+    parts.len() == 2
+        && parts.iter().all(|part| {
+            !part.is_empty()
+                && *part != "."
+                && *part != ".."
+                && part.bytes().all(|byte| {
+                    byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.')
+                })
+        })
 }
 
 fn is_registry_id(value: &str) -> bool {
@@ -1266,18 +1297,17 @@ mod tests {
     }
 
     #[test]
-    fn upstream_entry_is_fail_closed_until_object_transport_is_verified() {
+    fn upstream_entry_validates_the_offline_pinned_protocol() {
         let root = fixture_root("upstream");
         let path = "tests/external-compat/data/sample.json";
         write_file(&root, path, b"{\"value\":1}\n");
         let hash = sha256_file(&root.join(path));
         let manifest = upstream_manifest(path, &hash, ExternalCompatScope::ParserSchema);
         write_parsed_manifest(&root, &manifest);
-        let error = ExternalCompatReader::open(&root)
+        ExternalCompatReader::open(&root)
             .unwrap()
             .audit_all()
-            .unwrap_err();
-        assert!(error.contains("uses disabled upstream provenance"));
+            .unwrap();
 
         write_file(&root, "tests/external-compat/unregistered.json", b"{}\n");
         let error = ExternalCompatReader::open(&root)
@@ -1294,6 +1324,111 @@ mod tests {
             .unwrap_err();
         assert!(error.contains("content hash drifted"));
         assert!(!error.contains(&sha256_file(&root.join(path))));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn upstream_entry_rejects_url_commit_path_hash_purpose_and_scope_drift() {
+        let root = fixture_root("upstream-metadata-drift");
+        let path = "tests/external-compat/data/sample.json";
+        write_file(&root, path, b"{\"value\":1}\n");
+        let hash = sha256_file(&root.join(path));
+        let manifest = upstream_manifest(path, &hash, ExternalCompatScope::ParserSchema);
+
+        let mut url_drift = manifest.clone();
+        let ExternalCompatSource::Upstream { repository_url, .. } =
+            &mut url_drift.entry[0].source
+        else {
+            unreachable!()
+        };
+        repository_url.push('/');
+        assert!(
+            validate_manifest_structure(&url_drift, REGISTERED_GENERATORS)
+                .unwrap_err()
+                .contains("invalid upstream repository URL")
+        );
+
+        let mut commit_drift = manifest.clone();
+        let ExternalCompatSource::Upstream { commit_sha, .. } =
+            &mut commit_drift.entry[0].source
+        else {
+            unreachable!()
+        };
+        *commit_sha = "main".to_string();
+        assert!(
+            validate_manifest_structure(&commit_drift, REGISTERED_GENERATORS)
+                .unwrap_err()
+                .contains("invalid upstream commit SHA")
+        );
+
+        let mut upstream_path_drift = manifest.clone();
+        let ExternalCompatSource::Upstream { upstream_path, .. } =
+            &mut upstream_path_drift.entry[0].source
+        else {
+            unreachable!()
+        };
+        *upstream_path = "../fixtures/sample.json".to_string();
+        assert!(
+            validate_manifest_structure(&upstream_path_drift, REGISTERED_GENERATORS)
+                .unwrap_err()
+                .contains("upstream path has invalid exact path")
+        );
+
+        let mut hash_drift = manifest.clone();
+        let ExternalCompatSource::Upstream { sha256, .. } = &mut hash_drift.entry[0].source else {
+            unreachable!()
+        };
+        *sha256 = "f".repeat(64);
+        assert!(
+            validate_manifest_structure(&hash_drift, REGISTERED_GENERATORS)
+                .unwrap_err()
+                .contains("raw-byte hash does not match entry sha256")
+        );
+
+        let mut exact_path_drift = manifest.clone();
+        exact_path_drift.entry[0].path = "fixtures/sample.json".to_string();
+        assert!(
+            validate_manifest_structure(&exact_path_drift, REGISTERED_GENERATORS)
+                .unwrap_err()
+                .contains("path must be under tests/external-compat/data/")
+        );
+
+        let mut purpose_drift = manifest.clone();
+        purpose_drift.entry[0].purpose.clear();
+        assert!(
+            validate_manifest_structure(&purpose_drift, REGISTERED_GENERATORS)
+                .unwrap_err()
+                .contains("purpose must be nonempty")
+        );
+
+        let mut purpose_whitespace = manifest.clone();
+        purpose_whitespace.entry[0].purpose = " parser compatibility ".to_string();
+        assert!(
+            validate_manifest_structure(&purpose_whitespace, REGISTERED_GENERATORS)
+                .unwrap_err()
+                .contains("no surrounding whitespace")
+        );
+
+        for noncanonical in ["fixtures//sample.json", "fixtures/./sample.json"] {
+            let mut path_drift = manifest.clone();
+            let ExternalCompatSource::Upstream { upstream_path, .. } =
+                &mut path_drift.entry[0].source
+            else {
+                unreachable!()
+            };
+            *upstream_path = noncanonical.to_string();
+            assert!(
+                validate_manifest_structure(&path_drift, REGISTERED_GENERATORS)
+                    .unwrap_err()
+                    .contains("upstream path has invalid exact path"),
+                "accepted noncanonical path {noncanonical}"
+            );
+        }
+
+        write_parsed_manifest(&root, &manifest);
+        let reader = ExternalCompatReader::open(&root).unwrap();
+        let error = reader.read_parser_generated(path).unwrap_err();
+        assert!(error.contains("does not allow scope parser.generated"));
         fs::remove_dir_all(root).unwrap();
     }
 

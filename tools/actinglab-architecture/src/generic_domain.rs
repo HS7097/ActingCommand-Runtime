@@ -2,11 +2,14 @@
 
 //! Machine-readable generic-domain concepts and protected Runtime surfaces.
 
-use std::collections::{HashMap, HashSet};
+use std::cell::RefCell;
+use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
 use std::fs::{self, File};
 use std::io::Read;
 use std::path::{Component, Path, PathBuf};
 use std::process::Command;
+use std::sync::Arc;
+use std::time::Instant;
 
 use quote::ToTokens;
 use serde::{Deserialize, Serialize};
@@ -27,9 +30,6 @@ use crate::{
 pub const GENERIC_DOMAIN_SCHEMA_VERSION: &str = "actingcommand.generic-domain.v1";
 pub const GENERIC_DOMAIN_REGISTRY_PATH: &str =
     "tools/actinglab-architecture/generic-domain-v1.toml";
-pub const GENERIC_DOMAIN_SURFACE_SCHEMA_VERSION: &str = "actingcommand.generic-domain-surfaces.v1";
-pub const GENERIC_DOMAIN_SURFACE_MANIFEST_PATH: &str =
-    "tools/actinglab-architecture/generic-domain-surfaces-v1.jsonl";
 const EXTERNAL_COMPAT_ROOT: &str = "tests/external-compat";
 const MAX_PROTECTED_FILE_BYTES: u64 = 32 * 1024 * 1024;
 const INITIAL_CONCEPT_APPROVAL_COMMENT_ID: u64 = 5_010_683_904;
@@ -69,37 +69,13 @@ enum TrackedFileClass {
 pub struct GenericDomainRegistry {
     pub schema_version: String,
     #[serde(default)]
-    pub surface_manifest: Option<SurfaceManifestReference>,
-    #[serde(default)]
     pub concept: Vec<GenericConcept>,
+    #[serde(default)]
+    pub mapping_source: Vec<MappingSource>,
     #[serde(default)]
     pub identity_allowance: Vec<IdentityAllowance>,
     #[serde(default)]
     pub surface: Vec<ProtectedSurface>,
-}
-
-#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
-pub struct SurfaceManifestReference {
-    pub path: String,
-    pub sha256: String,
-}
-
-#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
-struct SurfaceManifestHeader {
-    pub schema_version: String,
-}
-
-#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
-pub struct SurfaceRecord {
-    pub surface_id: String,
-    pub kind: String,
-    pub stable_path: String,
-    pub selector: String,
-    pub concept_ids: Vec<String>,
-    pub fingerprint: String,
 }
 
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
@@ -117,10 +93,66 @@ pub struct GenericConcept {
 pub struct ProtectedSurface {
     pub surface_id: String,
     pub kind: String,
+    pub semantic_role: SemanticRole,
     pub stable_path: String,
     pub selector: String,
     pub concept_ids: Vec<String>,
     pub fingerprint: String,
+    pub mapping_source_id: String,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[serde(rename_all = "snake_case")]
+pub enum SemanticRole {
+    Contract,
+    Wire,
+    Schema,
+    Cli,
+    Default,
+    Template,
+    TaskDefinition,
+    IdentityBranch,
+    TestFixtureGolden,
+}
+
+impl SemanticRole {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Contract => "contract",
+            Self::Wire => "wire",
+            Self::Schema => "schema",
+            Self::Cli => "cli",
+            Self::Default => "default",
+            Self::Template => "template",
+            Self::TaskDefinition => "task_definition",
+            Self::IdentityBranch => "identity_branch",
+            Self::TestFixtureGolden => "test_fixture_golden",
+        }
+    }
+
+    fn anchor_concept(self) -> &'static str {
+        match self {
+            Self::Contract => "interface.contract",
+            Self::Wire => "interface.payload",
+            Self::Schema => "catalog.schema",
+            Self::Cli => "interface.cli",
+            Self::Default => "decision.policy",
+            Self::Template => "catalog.template",
+            Self::TaskDefinition => "catalog.task",
+            Self::IdentityBranch => "identity.scope",
+            Self::TestFixtureGolden => "catalog.validation",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct MappingSource {
+    pub id: String,
+    pub task_issue: u64,
+    pub implementation_pr: u64,
+    pub source_kind: String,
+    pub change_kind: String,
 }
 
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
@@ -140,6 +172,7 @@ pub struct IdentityAllowance {
 pub struct SurfaceSnapshot {
     pub surface_id: String,
     pub kind: String,
+    pub semantic_role: SemanticRole,
     pub stable_path: String,
     pub selector: String,
     pub fingerprint: String,
@@ -194,78 +227,48 @@ fn read_bounded_regular_text(path: &Path) -> Result<String, String> {
 
 pub fn load_generic_domain_registry(path: &Path) -> Result<GenericDomainRegistry, String> {
     let source = read_bounded_regular_text(path)?;
-    let mut registry = parse_generic_domain_registry(&source)?;
-    let Some(reference) = registry.surface_manifest.clone() else {
-        return Ok(registry);
-    };
-    let workspace_root = path
+    reject_external_generic_domain_registries(path)?;
+    parse_generic_domain_registry(&source)
+}
+
+fn reject_external_generic_domain_registries(path: &Path) -> Result<(), String> {
+    let directory = path
         .parent()
-        .and_then(Path::parent)
-        .and_then(Path::parent)
-        .ok_or_else(|| format!("registry path {} is not under tools/<name>", path.display()))?;
-    validate_stable_path(&reference.path)?;
-    if reference.path != GENERIC_DOMAIN_SURFACE_MANIFEST_PATH {
-        return Err(format!(
-            "generic-domain registry references unexpected surface manifest {}",
-            reference.path
-        ));
-    }
-    let manifest_path = workspace_root.join(&reference.path);
-    let bytes = read_bounded_regular_file(&manifest_path)?;
-    let actual = format!("{:x}", Sha256::digest(&bytes));
-    if actual != reference.sha256 {
-        return Err(format!(
-            "surface manifest hash drifted: registered {}, actual {actual}",
-            reference.sha256
-        ));
-    }
-    let source = std::str::from_utf8(&bytes)
-        .map_err(|error| format!("surface manifest is not UTF-8: {error}"))?;
-    let mut lines = source.lines();
-    let header: SurfaceManifestHeader = serde_json::from_str(
-        lines
-            .next()
-            .ok_or_else(|| "surface manifest is empty".to_string())?,
-    )
-    .map_err(|error| format!("invalid surface manifest header: {error}"))?;
-    if header.schema_version != GENERIC_DOMAIN_SURFACE_SCHEMA_VERSION {
-        return Err(format!(
-            "unsupported surface manifest schema_version {}; expected {GENERIC_DOMAIN_SURFACE_SCHEMA_VERSION}",
-            header.schema_version
-        ));
-    }
-    let mut records = Vec::new();
-    for (index, line) in lines.enumerate() {
-        if line.trim().is_empty() {
+        .ok_or_else(|| format!("generic-domain registry has no parent: {}", path.display()))?;
+    let expected = path
+        .file_name()
+        .ok_or_else(|| format!("generic-domain registry has no file name: {}", path.display()))?;
+    for entry in fs::read_dir(directory)
+        .map_err(|error| format!("failed to inspect {}: {error}", directory.display()))?
+    {
+        let entry = entry.map_err(|error| {
+            format!(
+                "failed to inspect generic-domain registry directory {}: {error}",
+                directory.display()
+            )
+        })?;
+        let file_name = entry.file_name();
+        if file_name == expected {
+            continue;
+        }
+        let file_name = file_name.to_string_lossy();
+        let extension = entry
+            .path()
+            .extension()
+            .and_then(|value| value.to_str())
+            .unwrap_or("")
+            .to_ascii_lowercase();
+        if file_name.starts_with("generic-domain-")
+            && matches!(extension.as_str(), "json" | "jsonl" | "toml")
+        {
             return Err(format!(
-                "surface manifest contains a blank record at line {}",
-                index + 2
+                "generic-domain surfaces must be inline in {}; external registry {} is forbidden",
+                path.display(),
+                entry.path().display()
             ));
         }
-        records.push(
-            serde_json::from_str::<SurfaceRecord>(line).map_err(|error| {
-                format!(
-                    "invalid surface manifest record at line {}: {error}",
-                    index + 2
-                )
-            })?,
-        );
     }
-    if !registry.surface.is_empty() {
-        return Err("registry cannot combine inline and external surfaces".to_string());
-    }
-    registry.surface = records
-        .into_iter()
-        .map(|surface| ProtectedSurface {
-            surface_id: surface.surface_id,
-            kind: surface.kind,
-            stable_path: surface.stable_path,
-            selector: surface.selector,
-            concept_ids: surface.concept_ids,
-            fingerprint: surface.fingerprint,
-        })
-        .collect();
-    Ok(registry)
+    Ok(())
 }
 
 pub fn validate_generic_domain_registry(registry: &GenericDomainRegistry) -> Result<(), String> {
@@ -279,21 +282,12 @@ pub fn validate_generic_domain_registry(registry: &GenericDomainRegistry) -> Res
     if registry.concept.is_empty() {
         errors.push("generic-domain registry contains no concepts".to_string());
     }
+    if registry.mapping_source.is_empty() {
+        errors.push("generic-domain registry contains no mapping sources".to_string());
+    }
     if registry.surface.is_empty() {
         errors.push("generic-domain registry contains no protected surfaces".to_string());
     }
-    if let Some(reference) = &registry.surface_manifest {
-        if reference.path != GENERIC_DOMAIN_SURFACE_MANIFEST_PATH {
-            errors.push(format!(
-                "surface manifest has unexpected path {}",
-                reference.path
-            ));
-        }
-        if !is_sha256(&reference.sha256) {
-            errors.push("surface manifest sha256 must be lowercase SHA-256".to_string());
-        }
-    }
-
     let mut concept_ids = HashSet::new();
     let mut previous_concept = None;
     for concept in &registry.concept {
@@ -536,36 +530,19 @@ pub fn validate_generic_domain_registry(registry: &GenericDomainRegistry) -> Res
             ));
         }
         previous_surface = Some(surface.surface_id.as_str());
-        if !matches!(
-            surface.kind.as_str(),
-            "rust_public_item"
-                | "rust_wire_item"
-                | "rust_public_field"
-                | "rust_wire_field"
-                | "rust_public_variant"
-                | "rust_wire_variant"
-                | "rust_public_impl_item"
-                | "rust_default_impl"
-                | "rust_wire_impl"
-                | "rust_wire_attribute"
-                | "rust_cli_attribute"
-                | "rust_derive_attribute"
-                | "rust_ffi_attribute"
-                | "rust_ffi_item"
-                | "rust_attribute"
-                | "rust_match_literal"
-                | "rust_macro_item"
-                | "rust_macro_invocation"
-                | "rust_macro_variant"
-                | "rust_macro_wire_value"
-                | "structured_key"
-                | "structured_value"
-                | "text_record"
-        ) {
-            errors.push(format!(
-                "surface {} has invalid kind {}",
+        match semantic_role_for_kind(&surface.kind) {
+            Some(expected) if expected != surface.semantic_role => errors.push(format!(
+                "surface {} role {} is incompatible with kind {}; expected {}",
+                surface.surface_id,
+                surface.semantic_role.as_str(),
+                surface.kind,
+                expected.as_str()
+            )),
+            Some(_) => {}
+            None => errors.push(format!(
+                "surface {} has unknown protected kind {}",
                 surface.surface_id, surface.kind
-            ));
+            )),
         }
         if let Err(error) = validate_stable_path(&surface.stable_path) {
             errors.push(format!("surface {} {error}", surface.surface_id));
@@ -600,6 +577,18 @@ pub fn validate_generic_domain_registry(registry: &GenericDomainRegistry) -> Res
                 surface.surface_id
             ));
         }
+        let anchor = surface.semantic_role.anchor_concept();
+        if !surface
+            .concept_ids
+            .iter()
+            .any(|concept_id| concept_id == anchor)
+        {
+            errors.push(format!(
+                "surface {} role {} requires anchor concept {anchor}",
+                surface.surface_id,
+                surface.semantic_role.as_str()
+            ));
+        }
         let mut previous_mapping = None;
         let mut mappings = HashSet::new();
         for concept_id in &surface.concept_ids {
@@ -629,6 +618,13 @@ pub fn validate_generic_domain_registry(registry: &GenericDomainRegistry) -> Res
                     surface.surface_id
                 ));
             }
+            if !concept_is_applicable(surface.semantic_role, concept_id) {
+                errors.push(format!(
+                    "surface {} role {} cannot map concept {concept_id}",
+                    surface.surface_id,
+                    surface.semantic_role.as_str()
+                ));
+            }
         }
         if !is_sha256(&surface.fingerprint) {
             errors.push(format!(
@@ -636,27 +632,291 @@ pub fn validate_generic_domain_registry(registry: &GenericDomainRegistry) -> Res
                 surface.surface_id
             ));
         }
+        if !is_surface_id(&surface.mapping_source_id) {
+            errors.push(format!(
+                "surface {} has invalid mapping_source_id {}",
+                surface.surface_id, surface.mapping_source_id
+            ));
+        }
     }
+
+    validate_mapping_sources(registry, &surface_ids, &mut errors);
 
     finish_errors(errors)
 }
 
+fn semantic_role_for_kind(kind: &str) -> Option<SemanticRole> {
+    match kind {
+        "rust_public_item"
+        | "rust_public_field"
+        | "rust_public_variant"
+        | "rust_public_impl_item"
+        | "rust_ffi_attribute"
+        | "rust_ffi_item"
+        | "rust_macro_item"
+        | "rust_macro_invocation"
+        | "rust_macro_variant"
+        | "rust_contract_attribute"
+        | "rust_contract_carrier" => Some(SemanticRole::Contract),
+        "rust_wire_item"
+        | "rust_wire_field"
+        | "rust_wire_variant"
+        | "rust_wire_impl"
+        | "rust_wire_attribute"
+        | "rust_macro_wire_value"
+        | "rust_wire_carrier" => Some(SemanticRole::Wire),
+        "schema_key" | "schema_value" | "schema_carrier" => Some(SemanticRole::Schema),
+        "rust_cli_attribute" | "rust_cli_carrier" => Some(SemanticRole::Cli),
+        "rust_default_impl" | "rust_default_attribute" | "rust_default_carrier" => {
+            Some(SemanticRole::Default)
+        }
+        "rust_template_carrier" => Some(SemanticRole::Template),
+        "rust_task_definition_carrier" => Some(SemanticRole::TaskDefinition),
+        "rust_identity_branch_carrier" => Some(SemanticRole::IdentityBranch),
+        "rust_test_fixture_carrier" => Some(SemanticRole::TestFixtureGolden),
+        _ => None,
+    }
+}
+
+fn concept_is_applicable(role: SemanticRole, concept_id: &str) -> bool {
+    let family = concept_id
+        .split_once('.')
+        .map(|(family, _)| family)
+        .unwrap_or_default();
+    match role {
+        SemanticRole::Contract | SemanticRole::Wire | SemanticRole::TestFixtureGolden => {
+            APPROVED_CONCEPT_FAMILIES.contains(&family)
+        }
+        SemanticRole::Schema => matches!(
+            family,
+            "catalog"
+                | "decision"
+                | "identity"
+                | "interface"
+                | "release"
+                | "state_value"
+                | "structure"
+                | "time"
+                | "unit_qualifier"
+        ),
+        SemanticRole::Cli => matches!(
+            family,
+            "artifact"
+                | "catalog"
+                | "decision"
+                | "device"
+                | "execution"
+                | "identity"
+                | "interface"
+                | "operation"
+                | "release"
+                | "schedule"
+                | "state_value"
+                | "structure"
+                | "unit_qualifier"
+        ),
+        SemanticRole::Default => matches!(
+            family,
+            "catalog"
+                | "decision"
+                | "execution"
+                | "fact"
+                | "identity"
+                | "interface"
+                | "release"
+                | "schedule"
+                | "state_value"
+                | "structure"
+                | "time"
+                | "unit_qualifier"
+        ),
+        SemanticRole::Template => matches!(
+            family,
+            "artifact"
+                | "catalog"
+                | "decision"
+                | "device"
+                | "execution"
+                | "identity"
+                | "interface"
+                | "recognition"
+                | "release"
+                | "schedule"
+                | "state_value"
+                | "structure"
+        ),
+        SemanticRole::TaskDefinition => matches!(
+            family,
+            "artifact"
+                | "catalog"
+                | "decision"
+                | "device"
+                | "execution"
+                | "identity"
+                | "interface"
+                | "recognition"
+                | "schedule"
+                | "state_value"
+                | "structure"
+                | "time"
+        ),
+        SemanticRole::IdentityBranch => matches!(
+            family,
+            "catalog" | "decision" | "identity" | "interface" | "operation" | "structure"
+        ),
+    }
+}
+
+fn validate_mapping_sources(
+    registry: &GenericDomainRegistry,
+    surface_ids: &HashSet<&str>,
+    errors: &mut Vec<String>,
+) {
+    let mut source_ids = HashSet::new();
+    let mut previous = None;
+    for source in &registry.mapping_source {
+        if !is_surface_id(&source.id) || !source_ids.insert(source.id.as_str()) {
+            errors.push(format!(
+                "mapping source has invalid or duplicate id {}",
+                source.id
+            ));
+        }
+        if previous.is_some_and(|left: &str| left >= source.id.as_str()) {
+            errors.push(format!(
+                "mapping source ids are not strictly sorted at {}",
+                source.id
+            ));
+        }
+        previous = Some(source.id.as_str());
+        if source.task_issue == 0 || source.implementation_pr == 0 {
+            errors.push(format!(
+                "mapping source {} must bind nonzero task_issue and implementation_pr",
+                source.id
+            ));
+        }
+        if source.source_kind != "workflow_task" {
+            errors.push(format!(
+                "mapping source {} has invalid source_kind {}",
+                source.id, source.source_kind
+            ));
+        }
+        if !matches!(
+            source.change_kind.as_str(),
+            "initial_import" | "repair" | "extension" | "correction"
+        ) {
+            errors.push(format!(
+                "mapping source {} has invalid change_kind {}",
+                source.id, source.change_kind
+            ));
+        }
+    }
+
+    for surface in &registry.surface {
+        if !source_ids.contains(surface.mapping_source_id.as_str()) {
+            errors.push(format!(
+                "surface {} references missing mapping source {}",
+                surface.surface_id, surface.mapping_source_id
+            ));
+        }
+    }
+    for source in &registry.mapping_source {
+        let mut mapped = registry
+            .surface
+            .iter()
+            .filter(|surface| surface.mapping_source_id == source.id)
+            .collect::<Vec<_>>();
+        mapped.sort_by(|left, right| left.surface_id.cmp(&right.surface_id));
+        if mapped.is_empty() {
+            errors.push(format!("mapping source {} is unreferenced", source.id));
+            continue;
+        }
+        let expected = mapping_source_id(source, &mapped);
+        if source.id != expected {
+            errors.push(format!(
+                "mapping source {} is not content-bound; expected {expected}",
+                source.id
+            ));
+        }
+        for surface in mapped {
+            if !surface_ids.contains(surface.surface_id.as_str()) {
+                errors.push(format!(
+                    "mapping source {} references unknown surface {}",
+                    source.id, surface.surface_id
+                ));
+            }
+        }
+    }
+}
+
+fn mapping_source_id(source: &MappingSource, surfaces: &[&ProtectedSurface]) -> String {
+    let mut canonical = format!(
+        "{}\0{}\0{}\0{}\n",
+        source.task_issue, source.implementation_pr, source.source_kind, source.change_kind
+    );
+    for surface in surfaces {
+        canonical.push_str(&surface.surface_id);
+        canonical.push('\0');
+        canonical.push_str(surface.semantic_role.as_str());
+        canonical.push('\0');
+        canonical.push_str(&surface.concept_ids.join(","));
+        canonical.push('\n');
+    }
+    let digest = format!("{:x}", Sha256::digest(canonical.as_bytes()));
+    format!(
+        "mapping_source.issue{}_pr{}_{}_{}",
+        source.task_issue,
+        source.implementation_pr,
+        source.change_kind,
+        &digest[..24]
+    )
+}
+
 pub fn workspace_surface_snapshot(root: &Path) -> Result<Vec<SurfaceSnapshot>, String> {
+    let profile_started = Instant::now();
     let files = protected_files(root)?;
+    eprintln!(
+        "PERF workspace_surface_snapshot protected_files={} elapsed_ms={}",
+        files.len(),
+        profile_started.elapsed().as_millis()
+    );
 
     let mut snapshots = Vec::new();
+    let mut rust_sources = HashMap::<String, syn::File>::new();
     for file in files {
         let relative = file
             .strip_prefix(root)
             .map_err(|_| format!("{} escaped workspace root", file.display()))?;
         let relative = normalize_path(relative)?;
-        if relative == GENERIC_DOMAIN_REGISTRY_PATH
-            || relative == GENERIC_DOMAIN_SURFACE_MANIFEST_PATH
-        {
+        if relative == GENERIC_DOMAIN_REGISTRY_PATH {
             continue;
         }
-        snapshots.extend(snapshot_for_file(&file, &relative)?);
+        if file.extension().is_some_and(|extension| extension == "rs") {
+            let source = read_bounded_regular_text(&file)?;
+            let parsed = syn::parse_file(&source)
+                .map_err(|error| format!("failed to parse {relative}: {error}"))?;
+            snapshots.extend(snapshots_from_raw(
+                &relative,
+                rust_base_surface_inventory(&parsed)?,
+            )?);
+            rust_sources.insert(relative, parsed);
+        } else {
+            snapshots.extend(snapshot_for_file(&file, &relative)?);
+        }
     }
+    eprintln!(
+        "PERF workspace_surface_snapshot base_surfaces={} rust_sources={} elapsed_ms={}",
+        snapshots.len(),
+        rust_sources.len(),
+        profile_started.elapsed().as_millis()
+    );
+    for (stable_path, surface) in workspace_rust_carrier_inventory(root, &rust_sources)? {
+        snapshots.extend(snapshots_from_raw(&stable_path, vec![surface])?);
+    }
+    eprintln!(
+        "PERF workspace_surface_snapshot with_carriers={} elapsed_ms={}",
+        snapshots.len(),
+        profile_started.elapsed().as_millis()
+    );
     snapshots.sort_by(|left, right| left.surface_id.cmp(&right.surface_id));
     if let Some(pair) = snapshots
         .windows(2)
@@ -676,6 +936,452 @@ pub fn workspace_surface_snapshot(root: &Path) -> Result<Vec<SurfaceSnapshot>, S
     Ok(snapshots)
 }
 
+fn workspace_rust_carrier_inventory(
+    root: &Path,
+    sources: &HashMap<String, syn::File>,
+) -> Result<Vec<(String, RawSurface)>, String> {
+    let graph = build_workspace_rust_graph(root, sources)?;
+    finish_rust_carrier_catalog(graph.catalog, &graph.type_facts)
+}
+
+struct RustWorkspaceGraph {
+    catalog: RustCarrierCatalog,
+    type_facts: IdentityTypeFacts,
+    assignments: Vec<RustSourceAssignment>,
+}
+
+fn build_workspace_rust_graph(
+    root: &Path,
+    sources: &HashMap<String, syn::File>,
+) -> Result<RustWorkspaceGraph, String> {
+    let profile_started = Instant::now();
+    let metadata = load_cargo_metadata(root)?;
+    let workspace_ids = metadata
+        .workspace_members
+        .iter()
+        .map(String::as_str)
+        .collect::<HashSet<_>>();
+    let tracked_paths = git_tracked_files(root)?
+        .into_iter()
+        .map(|(path, _)| path)
+        .collect::<Vec<_>>();
+    let tracked = tracked_paths.iter().map(String::as_str).collect::<HashSet<_>>();
+    let mut catalog = RustCarrierCatalog::default();
+    let mut assignments = Vec::<RustSourceAssignment>::new();
+    let mut ownership = HashMap::<String, Vec<String>>::new();
+    let mut errors = Vec::new();
+
+    for package in metadata
+        .packages
+        .iter()
+        .filter(|package| workspace_ids.contains(package.id.as_str()))
+    {
+        let manifest = metadata_relative_path(root, &package.manifest_path)?;
+        for target in &package.targets {
+            let target_root = metadata_relative_path(root, &target.src_path)?;
+            if !sources.contains_key(&target_root) {
+                errors.push(format!(
+                    "Cargo target {} ({}) root {target_root} is not a protected tracked Rust source",
+                    target.name,
+                    target.kind.join(",")
+                ));
+                continue;
+            }
+            let unit_id = short_hash(&format!(
+                "{manifest}\0{}\0{}\0{target_root}",
+                target.name,
+                target.kind.join(",")
+            ));
+            let unit_root = format!("$unit${unit_id}");
+            let mut inherited_roles = BTreeSet::new();
+            if target
+                .kind
+                .iter()
+                .any(|kind| matches!(kind.as_str(), "test" | "bench"))
+            {
+                inherited_roles.insert(SemanticRole::TestFixtureGolden);
+            }
+            let mut external_crates = package
+                .dependencies
+                .iter()
+                .map(|dependency| {
+                    dependency
+                        .rename
+                        .as_deref()
+                        .unwrap_or(&dependency.name)
+                        .replace('-', "_")
+                })
+                .collect::<HashSet<_>>();
+            external_crates.insert(package.name.replace('-', "_"));
+            collect_rust_compile_unit_assignments(
+                &target.name,
+                RustSourceAssignment {
+                stable_path: target_root.clone(),
+                module: vec![unit_root.clone()],
+                inherited_roles: inherited_roles.clone(),
+                include_stack: vec![target_root.clone()],
+                external_crates: external_crates.clone(),
+                },
+                &tracked,
+                sources,
+                &mut assignments,
+                &mut ownership,
+                &mut errors,
+            );
+        }
+    }
+    let unowned_test_fixtures = sources
+        .keys()
+        .filter(|path| !ownership.contains_key(*path) && is_test_source_path(path))
+        .cloned()
+        .collect::<Vec<_>>();
+    for stable_path in unowned_test_fixtures {
+        let candidates = metadata
+            .packages
+            .iter()
+            .filter(|package| workspace_ids.contains(package.id.as_str()))
+            .filter_map(|package| {
+                let manifest = metadata_relative_path(root, &package.manifest_path).ok()?;
+                let package_root = manifest.strip_suffix("/Cargo.toml")?;
+                path_is_within(&stable_path, package_root)
+                    .then_some((package, manifest))
+            })
+            .collect::<Vec<_>>();
+        let [(package, manifest)] = candidates.as_slice() else {
+            errors.push(format!(
+                "test fixture Rust source {stable_path} belongs to {} workspace package roots; expected exactly one",
+                candidates.len()
+            ));
+            continue;
+        };
+        let mut external_crates = package
+            .dependencies
+            .iter()
+            .map(|dependency| {
+                dependency
+                    .rename
+                    .as_deref()
+                    .unwrap_or(&dependency.name)
+                    .replace('-', "_")
+            })
+            .collect::<HashSet<_>>();
+        external_crates.insert(package.name.replace('-', "_"));
+        let mut bound_crates = external_crates.iter().cloned().collect::<Vec<_>>();
+        bound_crates.sort();
+        let unit_id = short_hash(&format!(
+            "{manifest}\0{}\0{}\0test-fixture\0{stable_path}\0{}",
+            package.name,
+            package.edition,
+            bound_crates.join(",")
+        ));
+        collect_rust_compile_unit_assignments(
+            &format!("test-fixture:{stable_path}"),
+            RustSourceAssignment {
+                stable_path: stable_path.clone(),
+                module: vec![format!("$unit${unit_id}")],
+                inherited_roles: BTreeSet::from([SemanticRole::TestFixtureGolden]),
+                include_stack: vec![stable_path],
+                external_crates,
+            },
+            &tracked,
+            sources,
+            &mut assignments,
+            &mut ownership,
+            &mut errors,
+        );
+    }
+    for stable_path in sources.keys() {
+        if !ownership.contains_key(stable_path) {
+            errors.push(format!(
+                "protected Rust source {stable_path} is not owned by any Cargo compile unit"
+            ));
+        }
+    }
+    if !errors.is_empty() {
+        errors.sort();
+        errors.dedup();
+        return Err(errors.join("\n"));
+    }
+    eprintln!(
+        "PERF build_workspace_rust_graph assignments={} owned_sources={} elapsed_ms={}",
+        assignments.len(),
+        ownership.len(),
+        profile_started.elapsed().as_millis()
+    );
+    let mut type_facts = IdentityTypeFacts::default();
+    for assignment in &assignments {
+        let file = sources
+            .get(&assignment.stable_path)
+            .expect("validated Rust source assignment");
+        type_facts.register_external_crates(&assignment.module, &assignment.external_crates);
+        type_facts.collect_symbols(&file.items, &assignment.module)?;
+    }
+    eprintln!(
+        "PERF build_workspace_rust_graph collected_symbols modules={} items={} pending_imports={} pending_fields={} elapsed_ms={}",
+        type_facts.modules.len(),
+        type_facts.module_items.len(),
+        type_facts.pending_imports.len(),
+        type_facts.pending_struct_fields.len(),
+        profile_started.elapsed().as_millis()
+    );
+    type_facts.finish_symbols()?;
+    eprintln!(
+        "PERF build_workspace_rust_graph modules={} items={} imports={} prefixes={} elapsed_ms={}",
+        type_facts.modules.len(),
+        type_facts.module_items.len(),
+        type_facts.imports.len(),
+        type_facts.local_path_prefixes.len(),
+        profile_started.elapsed().as_millis()
+    );
+    for assignment in &assignments {
+        let file = sources
+            .get(&assignment.stable_path)
+            .expect("validated Rust source assignment");
+        catalog.collect_items(
+            &file.items,
+            &assignment.module,
+            &assignment.inherited_roles,
+            &assignment.stable_path,
+            &type_facts,
+        )?;
+    }
+    type_facts.ensure_resolution_succeeded()?;
+    let type_facts = carrier_type_facts(&catalog, type_facts);
+    eprintln!(
+        "PERF build_workspace_rust_graph nodes={} functions={} impl_index={} elapsed_ms={}",
+        catalog.nodes.len(),
+        type_facts.functions.len(),
+        type_facts.impl_functions.len(),
+        profile_started.elapsed().as_millis()
+    );
+    Ok(RustWorkspaceGraph {
+        catalog,
+        type_facts,
+        assignments,
+    })
+}
+
+#[derive(Clone)]
+struct RustSourceAssignment {
+    stable_path: String,
+    module: Vec<String>,
+    inherited_roles: BTreeSet<SemanticRole>,
+    include_stack: Vec<String>,
+    external_crates: HashSet<String>,
+}
+
+fn collect_rust_compile_unit_assignments(
+    unit_name: &str,
+    root_assignment: RustSourceAssignment,
+    tracked: &HashSet<&str>,
+    sources: &HashMap<String, syn::File>,
+    assignments: &mut Vec<RustSourceAssignment>,
+    ownership: &mut HashMap<String, Vec<String>>,
+    errors: &mut Vec<String>,
+) {
+    let mut queue = VecDeque::from([root_assignment]);
+    let mut assigned = HashMap::<String, Vec<String>>::new();
+    while let Some(assignment) = queue.pop_front() {
+        let RustSourceAssignment {
+            stable_path,
+            module,
+            inherited_roles,
+            include_stack,
+            external_crates,
+        } = assignment;
+        if let Some(existing) = assigned.get(&stable_path) {
+            if existing != &module {
+                errors.push(format!(
+                    "Cargo compile unit {unit_name} maps {stable_path} to ambiguous modules {} and {}",
+                    module_label(existing),
+                    module_label(&module)
+                ));
+            }
+            continue;
+        }
+        assigned.insert(stable_path.clone(), module.clone());
+        ownership
+            .entry(stable_path.clone())
+            .or_default()
+            .push(module_label(&module));
+        let Some(file) = sources.get(&stable_path) else {
+            errors.push(format!(
+                "Cargo compile unit {unit_name} module {} references missing protected source {stable_path}",
+                module_label(&module)
+            ));
+            continue;
+        };
+        assignments.push(RustSourceAssignment {
+            stable_path: stable_path.clone(),
+            module: module.clone(),
+            inherited_roles: inherited_roles.clone(),
+            include_stack: include_stack.clone(),
+            external_crates: external_crates.clone(),
+        });
+        match rust_source_bindings(
+            tracked,
+            &stable_path,
+            &file.items,
+            &module,
+            &inherited_roles,
+        ) {
+            Ok(bindings) => {
+                for binding in bindings {
+                    let next_stack = if binding.is_include {
+                        if include_stack.contains(&binding.stable_path) {
+                            errors.push(format!(
+                                "static include cycle in Cargo compile unit {unit_name}: {} -> {}",
+                                include_stack.join(" -> "),
+                                binding.stable_path
+                            ));
+                            continue;
+                        }
+                        let mut stack = include_stack.clone();
+                        stack.push(binding.stable_path.clone());
+                        stack
+                    } else {
+                        vec![binding.stable_path.clone()]
+                    };
+                    queue.push_back(RustSourceAssignment {
+                        stable_path: binding.stable_path,
+                        module: binding.module,
+                        inherited_roles: binding.inherited_roles,
+                        include_stack: next_stack,
+                        external_crates: external_crates.clone(),
+                    });
+                }
+            }
+            Err(error) => errors.push(error),
+        }
+    }
+}
+
+struct RustSourceBinding {
+    stable_path: String,
+    module: Vec<String>,
+    inherited_roles: BTreeSet<SemanticRole>,
+    is_include: bool,
+}
+
+fn metadata_relative_path(root: &Path, path: &str) -> Result<String, String> {
+    let canonical_root = fs::canonicalize(root).map_err(|error| {
+        format!(
+            "failed to resolve workspace root {}: {error}",
+            root.display()
+        )
+    })?;
+    let canonical = fs::canonicalize(path)
+        .map_err(|error| format!("failed to resolve Cargo metadata path {path}: {error}"))?;
+    let relative = canonical.strip_prefix(&canonical_root).map_err(|_| {
+        format!("Cargo metadata path escaped workspace: {}", canonical.display())
+    })?;
+    normalize_path(relative)
+}
+
+fn rust_source_bindings(
+    tracked_paths: &HashSet<&str>,
+    stable_path: &str,
+    items: &[Item],
+    module: &[String],
+    inherited_roles: &BTreeSet<SemanticRole>,
+) -> Result<Vec<RustSourceBinding>, String> {
+    let source_dir = Path::new(stable_path)
+        .parent()
+        .unwrap_or_else(|| Path::new(""));
+    let module_dir = rust_module_directory(stable_path)?;
+    let mut bindings = Vec::new();
+    collect_rust_source_bindings(
+        tracked_paths,
+        stable_path,
+        items,
+        &module_dir,
+        source_dir,
+        module,
+        inherited_roles,
+        &mut bindings,
+    )?;
+    Ok(bindings)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn collect_rust_source_bindings(
+    tracked_paths: &HashSet<&str>,
+    owner: &str,
+    items: &[Item],
+    module_dir: &Path,
+    path_attribute_dir: &Path,
+    lexical_module: &[String],
+    inherited_roles: &BTreeSet<SemanticRole>,
+    bindings: &mut Vec<RustSourceBinding>,
+) -> Result<(), String> {
+    for item in items {
+        if let Item::Macro(item) = item
+            && item.mac.path.is_ident("include")
+        {
+            let literal = syn::parse2::<LitStr>(item.mac.tokens.clone()).map_err(|_| {
+                format!("unsupported dynamic include! compile input in {owner}")
+            })?;
+            let target = normalize_compile_input(path_attribute_dir, &literal.value())?;
+            if !tracked_paths.contains(target.as_str()) {
+                return Err(format!(
+                    "include! compile input {target} referenced by {owner} is not tracked"
+                ));
+            }
+            let mut roles = inherited_roles.clone();
+            roles.extend(semantic_roles_for_attributes(&item.attrs));
+            bindings.push(RustSourceBinding {
+                stable_path: target,
+                module: lexical_module.to_vec(),
+                inherited_roles: roles,
+                is_include: true,
+            });
+            continue;
+        }
+        let Item::Mod(module) = item else { continue };
+        let path_attribute = module
+            .attrs
+            .iter()
+            .find(|attribute| attribute.path().is_ident("path"));
+        let mut nested_module = lexical_module.to_vec();
+        nested_module.push(module.ident.to_string());
+        let mut nested_roles = inherited_roles.clone();
+        nested_roles.extend(semantic_roles_for_attributes(&module.attrs));
+        if let Some((_, nested)) = &module.content {
+            if path_attribute.is_some() {
+                return Err(format!(
+                    "unsupported #[path] on inline module {} in {owner}",
+                    module.ident
+                ));
+            }
+            collect_rust_source_bindings(
+                tracked_paths,
+                owner,
+                nested,
+                &module_dir.join(module.ident.to_string()),
+                &path_attribute_dir.join(module.ident.to_string()),
+                &nested_module,
+                &nested_roles,
+                bindings,
+            )?;
+            continue;
+        }
+        let target = resolve_external_module_input(
+            tracked_paths,
+            owner,
+            module,
+            module_dir,
+            path_attribute_dir,
+        )?;
+        bindings.push(RustSourceBinding {
+            stable_path: target,
+            module: nested_module,
+            inherited_roles: nested_roles,
+            is_include: false,
+        });
+    }
+    Ok(())
+}
+
 pub fn workspace_identity_allowance_candidates(
     root: &Path,
 ) -> Result<Vec<IdentityAllowanceCandidate>, String> {
@@ -683,6 +1389,7 @@ pub fn workspace_identity_allowance_candidates(
         .into_iter()
         .collect::<HashSet<_>>();
     let files = protected_files(root)?;
+    let rust_identity_contexts = workspace_rust_identity_contexts(root)?;
 
     let mut candidates = Vec::new();
     for file in files {
@@ -691,19 +1398,13 @@ pub fn workspace_identity_allowance_candidates(
                 .map_err(|_| format!("{} escaped workspace root", file.display()))?,
         )?;
         if relative == GENERIC_DOMAIN_REGISTRY_PATH
-            || relative == GENERIC_DOMAIN_SURFACE_MANIFEST_PATH
             || relative == EXTERNAL_COMPAT_MANIFEST_PATH
             || external_paths.contains(relative.as_str())
         {
             continue;
         }
         let identity_source = read_bounded_regular_text(&file)?;
-        let rust_identity_contexts = if file.extension().is_some_and(|extension| extension == "rs")
-        {
-            Some(rust_identity_branch_contexts(&relative, &identity_source)?)
-        } else {
-            None
-        };
+        let is_rust = file.extension().is_some_and(|extension| extension == "rs");
         for fragment in identity_fragments_for_source(&relative, &identity_source)? {
             let label = format!("{}#{}", relative, fragment.selector);
             let mut detector_tokens = inspect_generic_runtime_identity(&label, &fragment.content)
@@ -714,8 +1415,13 @@ pub fn workspace_identity_allowance_candidates(
                 .collect::<Vec<_>>();
             detector_tokens.sort();
             detector_tokens.dedup();
-            let branch_violations = if let Some(rust_identity_contexts) = &rust_identity_contexts {
-                inspect_rust_identity_fragment(&label, &fragment, rust_identity_contexts)?
+            let branch_violations = if is_rust {
+                inspect_workspace_rust_identity_fragment(
+                    &label,
+                    &relative,
+                    &fragment,
+                    &rust_identity_contexts,
+                )?
             } else {
                 Vec::new()
             };
@@ -763,16 +1469,19 @@ pub fn validate_workspace_surface_registry(
             continue;
         };
         if surface.kind != snapshot.kind
+            || surface.semantic_role != snapshot.semantic_role
             || surface.stable_path != snapshot.stable_path
             || surface.selector != snapshot.selector
         {
             errors.push(format!(
-                "surface {} identity drifted: registered {} {} {}, actual {} {} {}",
+                "surface {} identity drifted: registered {} {} {} {}, actual {} {} {} {}",
                 snapshot.surface_id,
                 surface.kind,
+                surface.semantic_role.as_str(),
                 surface.stable_path,
                 surface.selector,
                 snapshot.kind,
+                snapshot.semantic_role.as_str(),
                 snapshot.stable_path,
                 snapshot.selector
             ));
@@ -818,6 +1527,7 @@ pub fn validate_workspace_genericity(
     let allowance_by_fragment = validate_identity_allowance_fragments(root, registry)?;
 
     let files = protected_files(root)?;
+    let rust_identity_contexts = workspace_rust_identity_contexts(root)?;
 
     let mut errors = Vec::new();
     let mut covered_paths = HashSet::new();
@@ -828,19 +1538,13 @@ pub fn validate_workspace_genericity(
         let relative = normalize_path(relative)?;
         covered_paths.insert(relative.clone());
         if relative == GENERIC_DOMAIN_REGISTRY_PATH
-            || relative == GENERIC_DOMAIN_SURFACE_MANIFEST_PATH
             || relative == EXTERNAL_COMPAT_MANIFEST_PATH
             || external_paths.contains(relative.as_str())
         {
             continue;
         }
         let identity_source = read_bounded_regular_text(&file)?;
-        let rust_identity_contexts = if file.extension().is_some_and(|extension| extension == "rs")
-        {
-            Some(rust_identity_branch_contexts(&relative, &identity_source)?)
-        } else {
-            None
-        };
+        let is_rust = file.extension().is_some_and(|extension| extension == "rs");
         for fragment in identity_fragments_for_source(&relative, &identity_source)? {
             let key = (relative.clone(), fragment.selector.clone());
             let allowance = allowance_by_fragment.get(&key).copied();
@@ -866,13 +1570,13 @@ pub fn validate_workspace_genericity(
                     .iter()
                     .any(|scope| scope == "identity.branch")
             });
-            if let Some(rust_identity_contexts) = &rust_identity_contexts
-                && !branch_allowed
+            if is_rust && !branch_allowed
             {
-                errors.extend(inspect_rust_identity_fragment(
+                errors.extend(inspect_workspace_rust_identity_fragment(
                     &label,
+                    &relative,
                     &fragment,
-                    rust_identity_contexts,
+                    &rust_identity_contexts,
                 )?);
             }
         }
@@ -1016,7 +1720,7 @@ pub fn inspect_identity_axis_branches(path: &str, source: &str) -> Result<Vec<St
 fn inspect_rust_identity_fragment(
     path: &str,
     fragment: &IdentityFragment,
-    contexts: &HashMap<String, syn::File>,
+    contexts: &RustIdentityBranchContexts,
 ) -> Result<Vec<String>, String> {
     let context_key = fragment.rust_context_key.as_ref().ok_or_else(|| {
         format!(
@@ -1024,33 +1728,89 @@ fn inspect_rust_identity_fragment(
             fragment.selector
         )
     })?;
-    let context = contexts.get(context_key).ok_or_else(|| {
+    let owner = contexts.owners.get(context_key).ok_or_else(|| {
         format!(
             "Rust identity fragment {} references missing context {context_key}",
             fragment.selector
         )
     })?;
-    inspect_identity_axis_fragment_with_context(path, &fragment.content, context)
+    inspect_identity_axis_fragment_with_context(path, &fragment.content, &contexts.file, owner)
+}
+
+fn inspect_workspace_rust_identity_fragment(
+    path: &str,
+    stable_path: &str,
+    fragment: &IdentityFragment,
+    contexts: &RustWorkspaceIdentityContexts,
+) -> Result<Vec<String>, String> {
+    let context_key = fragment.rust_context_key.as_ref().ok_or_else(|| {
+        format!("Rust identity fragment {} has no context", fragment.selector)
+    })?;
+    let owners = contexts
+        .owners
+        .get(&(stable_path.to_string(), context_key.clone()))
+        .ok_or_else(|| {
+            format!(
+                "Rust identity fragment {} in {stable_path} references missing compile-unit context {context_key}",
+                fragment.selector
+            )
+        })?;
+    let fragment_file = syn::parse_file(&fragment.content)
+        .map_err(|error| format!("failed to parse {path}: {error}"))?;
+    let mut violations = Vec::new();
+    for owner in owners {
+        violations.extend(inspect_identity_axis_branches_with_analysis(
+            path,
+            &fragment_file,
+            owner,
+            &contexts.inferred_parameters,
+            &contexts.inferred_returns,
+            &contexts.type_facts,
+        )?);
+    }
+    violations.sort();
+    violations.dedup();
+    Ok(violations)
 }
 
 fn inspect_identity_axis_fragment_with_context(
     path: &str,
     fragment_source: &str,
     file: &syn::File,
+    owner: &IdentityOwner,
 ) -> Result<Vec<String>, String> {
     let fragment = syn::parse_file(fragment_source)
         .map_err(|error| format!("failed to parse {path}: {error}"))?;
-    inspect_identity_axis_branches_with_context(path, &fragment, file)
+    inspect_identity_axis_branches_with_context(path, &fragment, file, owner)
 }
 
 fn inspect_identity_axis_branches_with_context(
     path: &str,
     inspected: &syn::File,
     context: &syn::File,
+    owner: &IdentityOwner,
 ) -> Result<Vec<String>, String> {
-    let inferred_parameters = infer_identity_parameter_axes(context);
-    let inferred_returns = infer_function_return_strings(context);
-    let type_facts = identity_type_facts(context);
+    let inferred_parameters = infer_identity_parameter_axes(context)?;
+    let inferred_returns = infer_function_return_strings(context)?;
+    let type_facts = identity_type_facts(context)?;
+    inspect_identity_axis_branches_with_analysis(
+        path,
+        inspected,
+        owner,
+        &inferred_parameters,
+        &inferred_returns,
+        &type_facts,
+    )
+}
+
+fn inspect_identity_axis_branches_with_analysis(
+    path: &str,
+    inspected: &syn::File,
+    owner: &IdentityOwner,
+    inferred_parameters: &HashMap<IdentityFunctionKey, Vec<Option<&'static str>>>,
+    inferred_returns: &HashMap<IdentityFunctionKey, Vec<String>>,
+    type_facts: &IdentityTypeFacts,
+) -> Result<Vec<String>, String> {
     let mut visitor = IdentityBranchVisitor {
         path,
         violations: Vec::new(),
@@ -1060,11 +1820,15 @@ fn inspect_identity_axis_branches_with_context(
         types: vec![HashMap::new()],
         collections: vec![HashMap::new()],
         return_axis: None,
-        inferred_parameters,
-        inferred_returns,
-        type_facts,
+        owner: owner.clone(),
+        inferred_parameters: inferred_parameters.clone(),
+        inferred_returns: inferred_returns.clone(),
+        type_facts: type_facts.clone(),
     };
     visitor.visit_file(inspected);
+    visitor
+        .errors
+        .extend(visitor.type_facts.resolution_error_messages());
     if !visitor.errors.is_empty() {
         visitor.errors.sort();
         return Err(visitor.errors.join("\n"));
@@ -1083,10 +1847,28 @@ struct CargoMetadata {
 #[derive(Debug, Deserialize)]
 struct CargoMetadataPackage {
     id: String,
+    name: String,
+    edition: String,
     manifest_path: String,
+    targets: Vec<CargoMetadataTarget>,
+    #[serde(default)]
+    dependencies: Vec<CargoMetadataDependency>,
 }
 
-fn workspace_members(root: &Path) -> Result<Vec<String>, String> {
+#[derive(Debug, Deserialize)]
+struct CargoMetadataTarget {
+    name: String,
+    kind: Vec<String>,
+    src_path: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct CargoMetadataDependency {
+    name: String,
+    rename: Option<String>,
+}
+
+fn load_cargo_metadata(root: &Path) -> Result<CargoMetadata, String> {
     let mut command = Command::new("cargo");
     command.current_dir(root).args([
         "metadata",
@@ -1107,8 +1889,12 @@ fn workspace_members(root: &Path) -> Result<Vec<String>, String> {
             String::from_utf8_lossy(&output.stderr).trim()
         ));
     }
-    let metadata: CargoMetadata = serde_json::from_slice(&output.stdout)
-        .map_err(|error| format!("invalid Cargo metadata output: {error}"))?;
+    serde_json::from_slice(&output.stdout)
+        .map_err(|error| format!("invalid Cargo metadata output: {error}"))
+}
+
+fn workspace_members(root: &Path) -> Result<Vec<String>, String> {
+    let metadata = load_cargo_metadata(root)?;
     let packages = metadata
         .packages
         .iter()
@@ -1498,54 +2284,70 @@ fn collect_module_inputs(
             continue;
         }
 
-        let target = if let Some(attribute) = path_attribute {
-            let literal = attribute
-                .meta
-                .require_name_value()
-                .ok()
-                .and_then(|value| match &value.value {
-                    Expr::Lit(expression) => match &expression.lit {
-                        Lit::Str(value) => Some(value.value()),
-                        _ => None,
-                    },
-                    _ => None,
-                })
-                .ok_or_else(|| {
-                    format!(
-                        "unsupported dynamic #[path] for module {} in {owner}",
-                        module.ident
-                    )
-                })?;
-            normalize_compile_input(path_attribute_dir, &literal)?
-        } else {
-            let file = module_dir.join(format!("{}.rs", module.ident));
-            let nested = module_dir.join(module.ident.to_string()).join("mod.rs");
-            let candidates = [file, nested]
-                .into_iter()
-                .map(|path| normalize_path(&path))
-                .collect::<Result<Vec<_>, _>>()?
-                .into_iter()
-                .filter(|path| tracked_paths.contains(path.as_str()))
-                .collect::<Vec<_>>();
-            match candidates.as_slice() {
-                [target] => target.clone(),
-                [] => {
-                    return Err(format!(
-                        "module {} in {owner} has no compile input file",
-                        module.ident
-                    ));
-                }
-                _ => {
-                    return Err(format!(
-                        "module {} in {owner} has ambiguous compile input files",
-                        module.ident
-                    ));
-                }
-            }
-        };
+        let target = resolve_external_module_input(
+            tracked_paths,
+            owner,
+            module,
+            module_dir,
+            path_attribute_dir,
+        )?;
         inputs.push(target);
     }
     Ok(())
+}
+
+fn resolve_external_module_input(
+    tracked_paths: &HashSet<&str>,
+    owner: &str,
+    module: &syn::ItemMod,
+    module_dir: &Path,
+    path_attribute_dir: &Path,
+) -> Result<String, String> {
+    let path_attribute = module
+        .attrs
+        .iter()
+        .find(|attribute| attribute.path().is_ident("path"));
+    if let Some(attribute) = path_attribute {
+        let literal = attribute
+            .meta
+            .require_name_value()
+            .ok()
+            .and_then(|value| match &value.value {
+                Expr::Lit(expression) => match &expression.lit {
+                    Lit::Str(value) => Some(value.value()),
+                    _ => None,
+                },
+                _ => None,
+            })
+            .ok_or_else(|| {
+                format!(
+                    "unsupported dynamic #[path] for module {} in {owner}",
+                    module.ident
+                )
+            })?;
+        return normalize_compile_input(path_attribute_dir, &literal);
+    }
+
+    let file = module_dir.join(format!("{}.rs", module.ident));
+    let nested = module_dir.join(module.ident.to_string()).join("mod.rs");
+    let candidates = [file, nested]
+        .into_iter()
+        .map(|path| normalize_path(&path))
+        .collect::<Result<Vec<_>, _>>()?
+        .into_iter()
+        .filter(|path| tracked_paths.contains(path.as_str()))
+        .collect::<Vec<_>>();
+    match candidates.as_slice() {
+        [target] => Ok(target.clone()),
+        [] => Err(format!(
+            "module {} in {owner} has no compile input file",
+            module.ident
+        )),
+        _ => Err(format!(
+            "module {} in {owner} has ambiguous compile input files",
+            module.ident
+        )),
+    }
 }
 
 struct IncludeMacroVisitor<'a> {
@@ -1910,6 +2712,64 @@ fn rust_impl_owner(item: &syn::ItemImpl, module: &[String]) -> String {
     )
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+enum IdentityOwner {
+    Module(Vec<String>),
+    Impl {
+        module: Vec<String>,
+        self_ty: String,
+        trait_name: Option<String>,
+    },
+}
+
+impl IdentityOwner {
+    fn module(&self) -> &[String] {
+        match self {
+            Self::Module(module) | Self::Impl { module, .. } => module,
+        }
+    }
+}
+
+fn identity_impl_owner(item: &syn::ItemImpl, module: &[String]) -> IdentityOwner {
+    IdentityOwner::Impl {
+        module: module.to_vec(),
+        self_ty: item.self_ty.to_token_stream().to_string(),
+        trait_name: item
+            .trait_
+            .as_ref()
+            .map(|(_, path, _)| path.to_token_stream().to_string()),
+    }
+}
+
+fn identity_impl_owner_with_facts(
+    item: &syn::ItemImpl,
+    module: &[String],
+    facts: &IdentityTypeFacts,
+) -> IdentityOwner {
+    let lexical_owner = IdentityOwner::Module(module.to_vec());
+    IdentityOwner::Impl {
+        module: module.to_vec(),
+        self_ty: tracked_identity_type_with_facts(&item.self_ty, &lexical_owner, facts)
+            .unwrap_or_else(|| item.self_ty.to_token_stream().to_string()),
+        trait_name: item
+            .trait_
+            .as_ref()
+            .map(|(_, path, _)| {
+                resolve_type_path_with_facts(path, &lexical_owner, facts)
+                    .unwrap_or_else(|| path.to_token_stream().to_string())
+            }),
+    }
+}
+
+fn identity_trait_owner(item: &syn::ItemTrait, module: &[String]) -> IdentityOwner {
+    let trait_name = canonical_symbol_label(module, &item.ident.to_string());
+    IdentityOwner::Impl {
+        module: module.to_vec(),
+        self_ty: trait_name.clone(),
+        trait_name: Some(trait_name),
+    }
+}
+
 impl RustIdentityFragmentCollector {
     fn collect_items(&mut self, items: &[Item], module: &[String]) {
         let module_context_key = rust_module_context_key(module);
@@ -1976,35 +2836,141 @@ impl RustIdentityFragmentCollector {
     }
 }
 
+struct RustIdentityBranchContexts {
+    file: syn::File,
+    owners: HashMap<String, IdentityOwner>,
+}
+
+struct RustWorkspaceIdentityContexts {
+    owners: HashMap<(String, String), Vec<IdentityOwner>>,
+    inferred_parameters: HashMap<IdentityFunctionKey, Vec<Option<&'static str>>>,
+    inferred_returns: HashMap<IdentityFunctionKey, Vec<String>>,
+    type_facts: IdentityTypeFacts,
+}
+
+fn workspace_rust_identity_contexts(
+    root: &Path,
+) -> Result<RustWorkspaceIdentityContexts, String> {
+    let mut sources = HashMap::<String, syn::File>::new();
+    for file in protected_files(root)? {
+        if !file.extension().is_some_and(|extension| extension == "rs") {
+            continue;
+        }
+        let stable_path = normalize_path(
+            file.strip_prefix(root)
+                .map_err(|_| format!("{} escaped workspace root", file.display()))?,
+        )?;
+        let source = read_bounded_regular_text(&file)?;
+        let parsed = syn::parse_file(&source)
+            .map_err(|error| format!("failed to parse {stable_path}: {error}"))?;
+        sources.insert(stable_path, parsed);
+    }
+    let graph = build_workspace_rust_graph(root, &sources)?;
+    let mut functions = Vec::new();
+    let mut owners = HashMap::<(String, String), Vec<IdentityOwner>>::new();
+    for assignment in &graph.assignments {
+        let file = sources
+            .get(&assignment.stable_path)
+            .expect("validated workspace Rust assignment");
+        collect_identity_functions(
+            &file.items,
+            &assignment.module,
+            &graph.type_facts,
+            &mut functions,
+        );
+        collect_workspace_identity_owners(
+            &file.items,
+            &assignment.stable_path,
+            &[],
+            &assignment.module,
+            &graph.type_facts,
+            &mut owners,
+        );
+    }
+    for owner_set in owners.values_mut() {
+        owner_set.sort();
+        owner_set.dedup();
+    }
+    let inferred_parameters =
+        infer_identity_parameter_axes_for_functions(&functions, &graph.type_facts)?;
+    let inferred_returns =
+        infer_function_return_strings_for_functions(&functions, &graph.type_facts)?;
+    graph.type_facts.ensure_resolution_succeeded()?;
+    Ok(RustWorkspaceIdentityContexts {
+        owners,
+        inferred_parameters,
+        inferred_returns,
+        type_facts: graph.type_facts,
+    })
+}
+
+fn collect_workspace_identity_owners(
+    items: &[Item],
+    stable_path: &str,
+    relative_module: &[String],
+    absolute_module: &[String],
+    facts: &IdentityTypeFacts,
+    owners: &mut HashMap<(String, String), Vec<IdentityOwner>>,
+) {
+    owners
+        .entry((
+            stable_path.to_string(),
+            rust_module_context_key(relative_module),
+        ))
+        .or_default()
+        .push(IdentityOwner::Module(absolute_module.to_vec()));
+    for item in items {
+        match item {
+            Item::Impl(item) => {
+                let relative_owner = rust_impl_owner(item, relative_module);
+                owners
+                    .entry((
+                        stable_path.to_string(),
+                        rust_impl_context_key(&relative_owner),
+                    ))
+                    .or_default()
+                    .push(identity_impl_owner_with_facts(item, absolute_module, facts));
+            }
+            Item::Mod(item) => {
+                if let Some((_, nested)) = &item.content {
+                    let mut relative = relative_module.to_vec();
+                    relative.push(item.ident.to_string());
+                    let mut absolute = absolute_module.to_vec();
+                    absolute.push(item.ident.to_string());
+                    collect_workspace_identity_owners(
+                        nested,
+                        stable_path,
+                        &relative,
+                        &absolute,
+                        facts,
+                        owners,
+                    );
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
 fn rust_identity_branch_contexts(
     path: &str,
     source: &str,
-) -> Result<HashMap<String, syn::File>, String> {
+) -> Result<RustIdentityBranchContexts, String> {
     let file =
         syn::parse_file(source).map_err(|error| format!("failed to parse {path}: {error}"))?;
-    let mut contexts = HashMap::new();
-    collect_rust_identity_branch_contexts(&file.items, &[], &mut contexts);
-    Ok(contexts)
+    let mut owners = HashMap::new();
+    collect_rust_identity_branch_contexts(&file.items, &[], &mut owners);
+    Ok(RustIdentityBranchContexts { file, owners })
 }
 
 fn collect_rust_identity_branch_contexts(
     items: &[Item],
     module: &[String],
-    contexts: &mut HashMap<String, syn::File>,
+    contexts: &mut HashMap<String, IdentityOwner>,
 ) {
-    let module_context = contexts
+    contexts
         .entry(rust_module_context_key(module))
-        .or_insert_with(|| syn::File {
-            shebang: None,
-            attrs: Vec::new(),
-            items: Vec::new(),
-        });
-    module_context.items.extend(
-        items
-            .iter()
-            .filter(|item| matches!(item, Item::Fn(_) | Item::Struct(_)))
-            .cloned(),
-    );
+        .or_insert_with(|| IdentityOwner::Module(module.to_vec()));
 
     for item in items {
         match item {
@@ -2018,13 +2984,7 @@ fn collect_rust_identity_branch_contexts(
             Item::Impl(item) => {
                 contexts
                     .entry(rust_impl_context_key(&rust_impl_owner(item, module)))
-                    .or_insert_with(|| syn::File {
-                        shebang: None,
-                        attrs: Vec::new(),
-                        items: Vec::new(),
-                    })
-                    .items
-                    .push(Item::Impl(item.clone()));
+                    .or_insert_with(|| identity_impl_owner(item, module));
             }
             _ => {}
         }
@@ -2074,24 +3034,36 @@ fn snapshot_for_source(stable_path: &str, source: &str) -> Result<Vec<SurfaceSna
         .unwrap_or("");
     let raw = match extension {
         "rs" => rust_surface_inventory(stable_path, source)?,
-        "json" => structured_json_inventory(stable_path, source)?,
-        "toml" => structured_toml_inventory(stable_path, source)?,
-        _ => text_surface_inventory(source),
+        "json" => structured_json_schema_inventory(stable_path, source)?,
+        _ => Vec::new(),
     };
-    Ok(raw
-        .into_iter()
+    snapshots_from_raw(stable_path, raw)
+}
+
+fn snapshots_from_raw(
+    stable_path: &str,
+    raw: Vec<RawSurface>,
+) -> Result<Vec<SurfaceSnapshot>, String> {
+    raw.into_iter()
         .map(|item| {
+            let semantic_role = semantic_role_for_kind(item.kind).ok_or_else(|| {
+                format!(
+                    "protected surface extractor emitted unknown kind {} for {stable_path}",
+                    item.kind
+                )
+            })?;
             let surface_id = surface_id_for(item.kind, stable_path, &item.selector);
             let fingerprint = format!("{:x}", Sha256::digest(item.content.as_bytes()));
-            SurfaceSnapshot {
+            Ok(SurfaceSnapshot {
                 surface_id,
                 kind: item.kind.to_string(),
+                semantic_role,
                 stable_path: stable_path.to_string(),
                 selector: item.selector,
                 fingerprint,
-            }
+            })
         })
-        .collect())
+        .collect()
 }
 
 fn surface_id_for(kind: &str, stable_path: &str, selector: &str) -> String {
@@ -2105,20 +3077,27 @@ fn surface_id_for(kind: &str, stable_path: &str, selector: &str) -> String {
 fn rust_surface_inventory(path: &str, source: &str) -> Result<Vec<RawSurface>, String> {
     let file =
         syn::parse_file(source).map_err(|error| format!("failed to parse {path}: {error}"))?;
+    let mut items = rust_base_surface_inventory(&file)?;
+    items.extend(rust_carrier_inventory(path, &file)?);
+    Ok(normalize_raw_surfaces(items))
+}
+
+fn rust_base_surface_inventory(file: &syn::File) -> Result<Vec<RawSurface>, String> {
     let mut collector = RustSurfaceCollector::default();
     collector.collect_items(&file.items, &[])?;
-    let mut match_collector = MatchLiteralCollector::default();
-    match_collector.visit_file(&file);
-    collector.items.extend(match_collector.items);
-    collector.items.sort_by(|left, right| {
+    Ok(normalize_raw_surfaces(collector.items))
+}
+
+fn normalize_raw_surfaces(mut items: Vec<RawSurface>) -> Vec<RawSurface> {
+    items.sort_by(|left, right| {
         (left.kind, left.selector.as_str(), left.content.as_str()).cmp(&(
             right.kind,
             right.selector.as_str(),
             right.content.as_str(),
         ))
     });
-    collector.items.dedup();
-    let counts = collector.items.iter().fold(
+    items.dedup();
+    let counts = items.iter().fold(
         HashMap::<(&'static str, String), usize>::new(),
         |mut counts, item| {
             *counts
@@ -2128,7 +3107,7 @@ fn rust_surface_inventory(path: &str, source: &str) -> Result<Vec<RawSurface>, S
         },
     );
     let mut ordinals = HashMap::<(&'static str, String, String), usize>::new();
-    for item in &mut collector.items {
+    for item in &mut items {
         let key = (item.kind, item.selector.clone());
         if counts.get(&key).copied().unwrap_or_default() > 1 {
             let digest = short_hash(&item.content);
@@ -2139,7 +3118,7 @@ fn rust_surface_inventory(path: &str, source: &str) -> Result<Vec<RawSurface>, S
             *ordinal += 1;
         }
     }
-    Ok(collector.items)
+    items
 }
 
 #[derive(Default)]
@@ -2362,26 +3341,47 @@ impl RustSurfaceCollector {
                 continue;
             };
             let attribute_tokens = attribute.to_token_stream().to_string();
-            let kind = match name.as_str() {
-                "serde" | "value" => "rust_wire_attribute",
-                "arg" | "clap" | "command" => "rust_cli_attribute",
-                "derive" => "rust_derive_attribute",
-                "export_name" | "link" | "link_name" | "no_mangle" | "repr" => "rust_ffi_attribute",
+            let kinds = match name.as_str() {
+                "serde" | "value" => vec!["rust_wire_attribute"],
+                "arg" | "clap" | "command" => vec!["rust_cli_attribute"],
+                "derive" => {
+                    let mut kinds = Vec::new();
+                    if attribute_tokens.contains("Serialize")
+                        || attribute_tokens.contains("Deserialize")
+                    {
+                        kinds.push("rust_wire_attribute");
+                    }
+                    if attribute_tokens.contains("Default") {
+                        kinds.push("rust_default_attribute");
+                    }
+                    if ["Parser", "Args", "Subcommand", "ValueEnum", "CommandFactory"]
+                        .iter()
+                        .any(|derive| attribute_tokens.contains(derive))
+                    {
+                        kinds.push("rust_cli_attribute");
+                    }
+                    kinds
+                }
+                "export_name" | "link" | "link_name" | "no_mangle" | "repr" => {
+                    vec!["rust_ffi_attribute"]
+                }
                 "unsafe"
                     if attribute_tokens.contains("no_mangle")
                         || attribute_tokens.contains("export_name") =>
                 {
-                    "rust_ffi_attribute"
+                    vec!["rust_ffi_attribute"]
                 }
-                _ if is_inert_rust_attribute(&name) => continue,
-                _ => "rust_attribute",
+                _ if is_inert_rust_attribute(&name) => Vec::new(),
+                _ => vec!["rust_contract_attribute"],
             };
             let index = ordinal.entry(name.clone()).or_default();
-            self.push(
-                kind,
-                format!("attribute:{owner}:{name}:{}", *index),
-                attribute.to_token_stream(),
-            );
+            for kind in kinds {
+                self.push(
+                    kind,
+                    format!("attribute:{owner}:{name}:{}:{kind}", *index),
+                    attribute.to_token_stream(),
+                );
+            }
             *index += 1;
         }
     }
@@ -2445,6 +3445,1081 @@ impl RustSurfaceCollector {
             selector,
             content: content.to_token_stream().to_string(),
         });
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+enum RustCarrierItemKind {
+    Function,
+    Const,
+    Static,
+    Macro,
+}
+
+impl RustCarrierItemKind {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Function => "fn",
+            Self::Const => "const",
+            Self::Static => "static",
+            Self::Macro => "macro",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+struct RustCarrierKey {
+    owner: IdentityOwner,
+    kind: RustCarrierItemKind,
+    name: String,
+}
+
+impl RustCarrierKey {
+    fn function(key: IdentityFunctionKey) -> Self {
+        Self {
+            owner: key.owner,
+            kind: RustCarrierItemKind::Function,
+            name: key.name,
+        }
+    }
+
+    fn selector(&self) -> String {
+        format!(
+            "carrier:{}:{}:{}",
+            identity_owner_label(&self.owner),
+            self.kind.as_str(),
+            self.name
+        )
+    }
+}
+
+#[derive(Clone)]
+enum RustCarrierBody {
+    Block(syn::Block),
+    Expression(Expr),
+    None,
+}
+
+struct RustCarrierNode {
+    key: RustCarrierKey,
+    stable_path: String,
+    content: String,
+    body: RustCarrierBody,
+    parameter_types: HashMap<String, TrackedIdentityType>,
+    return_type: Option<TrackedIdentityType>,
+    root_roles: BTreeSet<SemanticRole>,
+}
+
+struct PendingCarrierRoot {
+    owner: IdentityOwner,
+    path: syn::Path,
+    roles: BTreeSet<SemanticRole>,
+    source: String,
+}
+
+#[derive(Default)]
+struct RustCarrierCatalog {
+    nodes: HashMap<RustCarrierKey, RustCarrierNode>,
+    pending_roots: Vec<PendingCarrierRoot>,
+    errors: Vec<String>,
+}
+
+impl RustCarrierCatalog {
+    fn collect_items(
+        &mut self,
+        items: &[Item],
+        module: &[String],
+        inherited_roles: &BTreeSet<SemanticRole>,
+        stable_path: &str,
+        facts: &IdentityTypeFacts,
+    ) -> Result<(), String> {
+        for item in items {
+            let mut roles = inherited_roles.clone();
+            roles.extend(semantic_roles_for_attributes(item_attrs(item)));
+            match item {
+                Item::Const(item) => {
+                    if is_public(&item.vis) {
+                        roles.insert(SemanticRole::Contract);
+                    }
+                    self.insert_node(RustCarrierNode {
+                        key: RustCarrierKey {
+                            owner: IdentityOwner::Module(module.to_vec()),
+                            kind: RustCarrierItemKind::Const,
+                            name: item.ident.to_string(),
+                        },
+                        stable_path: stable_path.to_string(),
+                        content: item.to_token_stream().to_string(),
+                        body: RustCarrierBody::Expression((*item.expr).clone()),
+                        parameter_types: HashMap::new(),
+                        return_type: tracked_identity_type_with_facts(
+                            &item.ty,
+                            &IdentityOwner::Module(module.to_vec()),
+                            facts,
+                        ),
+                        root_roles: roles,
+                    });
+                    self.collect_attribute_roots(
+                        &item.attrs,
+                        IdentityOwner::Module(module.to_vec()),
+                        &format!("const {}", item.ident),
+                    )?;
+                }
+                Item::Fn(item) => {
+                    if is_public(&item.vis) {
+                        roles.insert(SemanticRole::Contract);
+                    }
+                    if item.sig.ident == "main" {
+                        roles.insert(SemanticRole::Cli);
+                    }
+                    self.insert_node(RustCarrierNode {
+                        key: RustCarrierKey {
+                            owner: IdentityOwner::Module(module.to_vec()),
+                            kind: RustCarrierItemKind::Function,
+                            name: item.sig.ident.to_string(),
+                        },
+                        stable_path: stable_path.to_string(),
+                        content: item.to_token_stream().to_string(),
+                        body: RustCarrierBody::Block((*item.block).clone()),
+                        parameter_types: tracked_parameter_types_with_facts(
+                            &item.sig.inputs,
+                            &IdentityOwner::Module(module.to_vec()),
+                            facts,
+                        ),
+                        return_type: tracked_return_type_with_facts(
+                            &item.sig.output,
+                            &IdentityOwner::Module(module.to_vec()),
+                            facts,
+                        ),
+                        root_roles: roles,
+                    });
+                    self.collect_attribute_roots(
+                        &item.attrs,
+                        IdentityOwner::Module(module.to_vec()),
+                        &format!("fn {}", item.sig.ident),
+                    )?;
+                }
+                Item::Static(item) => {
+                    if is_public(&item.vis) {
+                        roles.insert(SemanticRole::Contract);
+                    }
+                    self.insert_node(RustCarrierNode {
+                        key: RustCarrierKey {
+                            owner: IdentityOwner::Module(module.to_vec()),
+                            kind: RustCarrierItemKind::Static,
+                            name: item.ident.to_string(),
+                        },
+                        stable_path: stable_path.to_string(),
+                        content: item.to_token_stream().to_string(),
+                        body: RustCarrierBody::Expression((*item.expr).clone()),
+                        parameter_types: HashMap::new(),
+                        return_type: tracked_identity_type_with_facts(
+                            &item.ty,
+                            &IdentityOwner::Module(module.to_vec()),
+                            facts,
+                        ),
+                        root_roles: roles,
+                    });
+                    self.collect_attribute_roots(
+                        &item.attrs,
+                        IdentityOwner::Module(module.to_vec()),
+                        &format!("static {}", item.ident),
+                    )?;
+                }
+                Item::Macro(item) => {
+                    if let Some(identifier) = &item.ident {
+                        self.insert_node(RustCarrierNode {
+                            key: RustCarrierKey {
+                                owner: IdentityOwner::Module(module.to_vec()),
+                                kind: RustCarrierItemKind::Macro,
+                                name: identifier.to_string(),
+                            },
+                            stable_path: stable_path.to_string(),
+                            content: item.to_token_stream().to_string(),
+                            body: RustCarrierBody::None,
+                            parameter_types: HashMap::new(),
+                            return_type: None,
+                            root_roles: roles,
+                        });
+                    }
+                }
+                Item::Mod(item) => {
+                    self.collect_attribute_roots(
+                        &item.attrs,
+                        IdentityOwner::Module(module.to_vec()),
+                        &format!("mod {}", item.ident),
+                    )?;
+                    if let Some((_, nested)) = &item.content {
+                        let mut nested_roles = inherited_roles.clone();
+                        nested_roles.extend(semantic_roles_for_attributes(&item.attrs));
+                        let mut next = module.to_vec();
+                        next.push(item.ident.to_string());
+                        self.collect_items(nested, &next, &nested_roles, stable_path, facts)?;
+                    }
+                }
+                Item::Impl(item) => {
+                    let owner = identity_impl_owner_with_facts(item, module, facts);
+                    let trait_name = item
+                        .trait_
+                        .as_ref()
+                        .and_then(|(_, path, _)| path.segments.last())
+                        .map(|segment| segment.ident.to_string());
+                    let mut impl_roles = roles;
+                    match trait_name.as_deref() {
+                        Some("Default") => {
+                            impl_roles.insert(SemanticRole::Default);
+                        }
+                        Some("Serialize" | "Deserialize") => {
+                            impl_roles.insert(SemanticRole::Wire);
+                        }
+                        Some(_) => {
+                            impl_roles.insert(SemanticRole::Contract);
+                        }
+                        None => {}
+                    }
+                    self.collect_attribute_roots(
+                        &item.attrs,
+                        owner.clone(),
+                        &format!("impl {}", identity_owner_label(&owner)),
+                    )?;
+                    for member in &item.items {
+                        match member {
+                            ImplItem::Const(member) => {
+                                let mut member_roles = impl_roles.clone();
+                                member_roles.extend(semantic_roles_for_attributes(&member.attrs));
+                                if is_public(&member.vis) {
+                                    member_roles.insert(SemanticRole::Contract);
+                                }
+                                self.insert_node(RustCarrierNode {
+                                    key: RustCarrierKey {
+                                        owner: owner.clone(),
+                                        kind: RustCarrierItemKind::Const,
+                                        name: member.ident.to_string(),
+                                    },
+                                    stable_path: stable_path.to_string(),
+                                    content: member.to_token_stream().to_string(),
+                                    body: RustCarrierBody::Expression(member.expr.clone()),
+                                    parameter_types: HashMap::new(),
+                                    return_type: tracked_identity_type_with_facts(
+                                        &member.ty,
+                                        &owner,
+                                        facts,
+                                    ),
+                                    root_roles: member_roles,
+                                });
+                                self.collect_attribute_roots(
+                                    &member.attrs,
+                                    owner.clone(),
+                                    &format!("impl const {}", member.ident),
+                                )?;
+                            }
+                            ImplItem::Fn(member) => {
+                                let mut member_roles = impl_roles.clone();
+                                member_roles.extend(semantic_roles_for_attributes(&member.attrs));
+                                if is_public(&member.vis) {
+                                    member_roles.insert(SemanticRole::Contract);
+                                }
+                                self.insert_node(RustCarrierNode {
+                                    key: RustCarrierKey {
+                                        owner: owner.clone(),
+                                        kind: RustCarrierItemKind::Function,
+                                        name: member.sig.ident.to_string(),
+                                    },
+                                    stable_path: stable_path.to_string(),
+                                    content: member.to_token_stream().to_string(),
+                                    body: RustCarrierBody::Block(member.block.clone()),
+                                    parameter_types: tracked_parameter_types_with_facts(
+                                        &member.sig.inputs,
+                                        &owner,
+                                        facts,
+                                    ),
+                                    return_type: tracked_return_type_with_facts(
+                                        &member.sig.output,
+                                        &owner,
+                                        facts,
+                                    ),
+                                    root_roles: member_roles,
+                                });
+                                self.collect_attribute_roots(
+                                    &member.attrs,
+                                    owner.clone(),
+                                    &format!("impl fn {}", member.sig.ident),
+                                )?;
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+                Item::Enum(item) => {
+                    self.collect_attribute_roots(
+                        &item.attrs,
+                        IdentityOwner::Module(module.to_vec()),
+                        &format!("enum {}", item.ident),
+                    )?;
+                    for variant in &item.variants {
+                        self.collect_attribute_roots(
+                            &variant.attrs,
+                            IdentityOwner::Module(module.to_vec()),
+                            &format!("variant {}::{}", item.ident, variant.ident),
+                        )?;
+                        for field in &variant.fields {
+                            self.collect_attribute_roots(
+                                &field.attrs,
+                                IdentityOwner::Module(module.to_vec()),
+                                &format!("variant field {}::{}", item.ident, variant.ident),
+                            )?;
+                        }
+                    }
+                }
+                Item::Struct(item) => {
+                    self.collect_attribute_roots(
+                        &item.attrs,
+                        IdentityOwner::Module(module.to_vec()),
+                        &format!("struct {}", item.ident),
+                    )?;
+                    for field in &item.fields {
+                        self.collect_attribute_roots(
+                            &field.attrs,
+                            IdentityOwner::Module(module.to_vec()),
+                            &format!("field {}", item.ident),
+                        )?;
+                    }
+                }
+                Item::Trait(item) => {
+                    let owner = identity_trait_owner(item, module);
+                    let mut trait_roles = roles;
+                    if is_public(&item.vis) {
+                        trait_roles.insert(SemanticRole::Contract);
+                    }
+                    self.collect_attribute_roots(
+                        &item.attrs,
+                        owner.clone(),
+                        &format!("trait {}", item.ident),
+                    )?;
+                    for member in &item.items {
+                        let syn::TraitItem::Fn(member) = member else {
+                            continue;
+                        };
+                        self.collect_attribute_roots(
+                            &member.attrs,
+                            owner.clone(),
+                            &format!("trait fn {}", member.sig.ident),
+                        )?;
+                        let Some(block) = &member.default else {
+                            continue;
+                        };
+                        let mut member_roles = trait_roles.clone();
+                        member_roles.extend(semantic_roles_for_attributes(&member.attrs));
+                        self.insert_node(RustCarrierNode {
+                            key: RustCarrierKey {
+                                owner: owner.clone(),
+                                kind: RustCarrierItemKind::Function,
+                                name: member.sig.ident.to_string(),
+                            },
+                            stable_path: stable_path.to_string(),
+                            content: member.to_token_stream().to_string(),
+                            body: RustCarrierBody::Block(block.clone()),
+                            parameter_types: tracked_parameter_types_with_facts(
+                                &member.sig.inputs,
+                                &owner,
+                                facts,
+                            ),
+                            return_type: tracked_return_type_with_facts(
+                                &member.sig.output,
+                                &owner,
+                                facts,
+                            ),
+                            root_roles: member_roles,
+                        });
+                    }
+                }
+                _ => {
+                    self.collect_attribute_roots(
+                        item_attrs(item),
+                        IdentityOwner::Module(module.to_vec()),
+                        &identity_item_selector(item, module),
+                    )?;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn insert_node(&mut self, node: RustCarrierNode) {
+        if self.nodes.insert(node.key.clone(), node).is_some() {
+            self.errors
+                .push("duplicate fully-qualified Rust carrier item".to_string());
+        }
+    }
+
+    fn collect_attribute_roots(
+        &mut self,
+        attributes: &[Attribute],
+        owner: IdentityOwner,
+        source: &str,
+    ) -> Result<(), String> {
+        for attribute in attributes {
+            let name = attribute
+                .path()
+                .segments
+                .last()
+                .map(|segment| segment.ident.to_string())
+                .unwrap_or_default();
+            let roles = match name.as_str() {
+                "serde" => BTreeSet::from([SemanticRole::Wire, SemanticRole::Default]),
+                "arg" | "clap" | "command" => BTreeSet::from([SemanticRole::Cli]),
+                _ => continue,
+            };
+            for path in attribute_reference_paths(attribute)? {
+                self.pending_roots.push(PendingCarrierRoot {
+                    owner: owner.clone(),
+                    path,
+                    roles: roles.clone(),
+                    source: source.to_string(),
+                });
+            }
+        }
+        Ok(())
+    }
+}
+
+fn rust_carrier_inventory(path: &str, file: &syn::File) -> Result<Vec<RawSurface>, String> {
+    let mut inherited_roles = BTreeSet::new();
+    if is_test_source_path(path) {
+        inherited_roles.insert(SemanticRole::TestFixtureGolden);
+    }
+    let mut type_facts = IdentityTypeFacts::default();
+    type_facts.collect_symbols(&file.items, &[])?;
+    type_facts.finish_symbols()?;
+    let mut catalog = RustCarrierCatalog::default();
+    catalog.collect_items(&file.items, &[], &inherited_roles, path, &type_facts)?;
+    type_facts.ensure_resolution_succeeded()?;
+    let type_facts = carrier_type_facts(&catalog, type_facts);
+    finish_rust_carrier_catalog(catalog, &type_facts).map(|surfaces| {
+        surfaces
+            .into_iter()
+            .map(|(_, surface)| surface)
+            .collect()
+    })
+}
+
+fn finish_rust_carrier_catalog(
+    mut catalog: RustCarrierCatalog,
+    type_facts: &IdentityTypeFacts,
+) -> Result<Vec<(String, RawSurface)>, String> {
+    let profile_started = Instant::now();
+    for pending in std::mem::take(&mut catalog.pending_roots) {
+        match resolve_call_path(&pending.path, &pending.owner, type_facts) {
+            RustCallResolution::Local(function) => {
+                let key = RustCarrierKey::function(function);
+                let Some(node) = catalog.nodes.get_mut(&key) else {
+                    catalog.errors.push(format!(
+                        "attribute {} resolved missing local carrier {}",
+                        pending.source,
+                        key.selector()
+                    ));
+                    continue;
+                };
+                node.root_roles.extend(pending.roles);
+            }
+            RustCallResolution::LocalConstructor(kind) => {
+                catalog.errors.push(format!(
+                    "attribute {} resolved constructor {kind} instead of a carrier function for {}",
+                    pending.source,
+                    pending.path.to_token_stream()
+                ));
+            }
+            RustCallResolution::Ambiguous(error)
+            | RustCallResolution::UnsupportedLocal(error) => {
+                catalog.errors.push(format!(
+                    "attribute {} has unresolved local carrier reference {}: {error}",
+                    pending.source,
+                    pending.path.to_token_stream()
+                ));
+            }
+            RustCallResolution::ProvenExternal
+            | RustCallResolution::GeneratedByTrackedDerive => {}
+        }
+    }
+
+    let mut queue = VecDeque::new();
+    for node in catalog.nodes.values() {
+        for role in &node.root_roles {
+            queue.push_back((node.key.clone(), *role));
+        }
+    }
+    eprintln!(
+        "PERF finish_rust_carrier_catalog roots={} nodes={} elapsed_ms={}",
+        queue.len(),
+        catalog.nodes.len(),
+        profile_started.elapsed().as_millis()
+    );
+    let mut reached = BTreeSet::<(RustCarrierKey, SemanticRole)>::new();
+    let mut edge_cache = HashMap::<RustCarrierKey, Result<Vec<RustCarrierKey>, String>>::new();
+    while let Some((key, role)) = queue.pop_front() {
+        if !reached.insert((key.clone(), role)) {
+            continue;
+        }
+        if reached.len() % 1_000 == 0 {
+            eprintln!(
+                "PERF finish_rust_carrier_catalog reached={} queued={} edge_cache={} elapsed_ms={}",
+                reached.len(),
+                queue.len(),
+                edge_cache.len(),
+                profile_started.elapsed().as_millis()
+            );
+        }
+        let edges = edge_cache.entry(key.clone()).or_insert_with(|| {
+            let node = catalog
+                .nodes
+                .get(&key)
+                .ok_or_else(|| format!("missing carrier node {}", key.selector()))?;
+            rust_carrier_edges(node, &catalog.nodes, &type_facts)
+        });
+        match edges {
+            Ok(edges) => {
+                for edge in edges {
+                    queue.push_back((edge.clone(), role));
+                }
+            }
+            Err(error) => catalog.errors.push(error.clone()),
+        }
+    }
+    catalog
+        .errors
+        .extend(type_facts.resolution_error_messages());
+    if !catalog.errors.is_empty() {
+        catalog.errors.sort();
+        catalog.errors.dedup();
+        return Err(catalog.errors.join("\n"));
+    }
+
+    let mut surfaces = reached
+        .into_iter()
+        .filter_map(|(key, role)| {
+            let node = catalog.nodes.get(&key)?;
+            Some(RawSurface {
+                kind: carrier_kind(role),
+                selector: key.selector(),
+                content: node.content.clone(),
+            })
+            .map(|surface| (node.stable_path.clone(), surface))
+        })
+        .collect::<Vec<_>>();
+    surfaces.sort_by(|left, right| {
+        (&left.0, left.1.kind, &left.1.selector).cmp(&(&right.0, right.1.kind, &right.1.selector))
+    });
+    surfaces.dedup();
+    Ok(surfaces)
+}
+
+fn carrier_type_facts(
+    catalog: &RustCarrierCatalog,
+    mut facts: IdentityTypeFacts,
+) -> IdentityTypeFacts {
+    let functions = catalog
+        .nodes
+        .keys()
+        .filter(|key| key.kind == RustCarrierItemKind::Function)
+        .map(|key| IdentityFunctionKey {
+            owner: key.owner.clone(),
+            name: key.name.clone(),
+        })
+        .collect::<HashSet<_>>();
+    let function_returns = catalog
+        .nodes
+        .values()
+        .filter(|node| node.key.kind == RustCarrierItemKind::Function)
+        .filter_map(|node| {
+            node.return_type.clone().map(|return_type| {
+                (
+                    IdentityFunctionKey {
+                        owner: node.key.owner.clone(),
+                        name: node.key.name.clone(),
+                    },
+                    return_type,
+                )
+            })
+        })
+        .collect();
+    facts.set_functions(functions);
+    for key in catalog.nodes.keys() {
+        if let IdentityOwner::Impl { self_ty, .. } = &key.owner {
+            facts
+                .impl_owners
+                .entry(self_ty.clone())
+                .or_default()
+                .push(key.owner.clone());
+        }
+    }
+    for owners in facts.impl_owners.values_mut() {
+        owners.sort();
+        owners.dedup();
+    }
+    facts.function_returns = function_returns;
+    facts
+}
+
+fn carrier_kind(role: SemanticRole) -> &'static str {
+    match role {
+        SemanticRole::Contract => "rust_contract_carrier",
+        SemanticRole::Wire => "rust_wire_carrier",
+        SemanticRole::Schema => "schema_carrier",
+        SemanticRole::Cli => "rust_cli_carrier",
+        SemanticRole::Default => "rust_default_carrier",
+        SemanticRole::Template => "rust_template_carrier",
+        SemanticRole::TaskDefinition => "rust_task_definition_carrier",
+        SemanticRole::IdentityBranch => "rust_identity_branch_carrier",
+        SemanticRole::TestFixtureGolden => "rust_test_fixture_carrier",
+    }
+}
+
+fn identity_owner_label(owner: &IdentityOwner) -> String {
+    match owner {
+        IdentityOwner::Module(module) if module.is_empty() => "crate".to_string(),
+        IdentityOwner::Module(module) => module_label(module),
+        IdentityOwner::Impl {
+            module,
+            self_ty,
+            trait_name,
+        } => format!(
+            "{}::impl:{}:{}",
+            module_label(module),
+            self_ty,
+            trait_name.as_deref().unwrap_or("inherent")
+        ),
+    }
+}
+
+fn module_label(module: &[String]) -> String {
+    let root = compile_unit_root(module);
+    let visible = &module[root.len()..];
+    let prefix = root
+        .first()
+        .and_then(|value| value.strip_prefix("$unit$"))
+        .map_or_else(|| "crate".to_string(), |id| format!("crate@{id}"));
+    if visible.is_empty() {
+        prefix
+    } else {
+        format!("{prefix}::{}", visible.join("::"))
+    }
+}
+
+fn compile_unit_root(module: &[String]) -> &[String] {
+    if module
+        .first()
+        .is_some_and(|segment| segment.starts_with("$unit$"))
+    {
+        &module[..1]
+    } else {
+        &[]
+    }
+}
+
+fn is_test_source_path(path: &str) -> bool {
+    path.starts_with("tests/") || path.contains("/tests/") || path.ends_with("/tests.rs")
+}
+
+fn semantic_roles_for_attributes(attributes: &[Attribute]) -> BTreeSet<SemanticRole> {
+    let mut roles = BTreeSet::new();
+    for attribute in attributes {
+        let name = attribute
+            .path()
+            .segments
+            .last()
+            .map(|segment| segment.ident.to_string())
+            .unwrap_or_default();
+        let tokens = attribute.to_token_stream().to_string();
+        match name.as_str() {
+            "test" => {
+                roles.insert(SemanticRole::TestFixtureGolden);
+            }
+            "cfg" | "cfg_attr" if meta_mentions_test(&attribute.meta) => {
+                roles.insert(SemanticRole::TestFixtureGolden);
+            }
+            "serde" | "value" => {
+                roles.insert(SemanticRole::Wire);
+            }
+            "arg" | "clap" | "command" => {
+                roles.insert(SemanticRole::Cli);
+            }
+            "derive" => {
+                if tokens.contains("Serialize") || tokens.contains("Deserialize") {
+                    roles.insert(SemanticRole::Wire);
+                }
+                if tokens.contains("Default") {
+                    roles.insert(SemanticRole::Default);
+                }
+                if ["Parser", "Args", "Subcommand", "ValueEnum", "CommandFactory"]
+                    .iter()
+                    .any(|derive| tokens.contains(derive))
+                {
+                    roles.insert(SemanticRole::Cli);
+                }
+            }
+            _ => {}
+        }
+    }
+    roles
+}
+
+fn meta_mentions_test(meta: &syn::Meta) -> bool {
+    match meta {
+        syn::Meta::Path(path) => path.is_ident("test"),
+        syn::Meta::NameValue(_) => false,
+        syn::Meta::List(list) => list
+            .parse_args_with(
+                syn::punctuated::Punctuated::<syn::Meta, Token![,]>::parse_terminated,
+            )
+            .map(|nested| nested.iter().any(meta_mentions_test))
+            .unwrap_or(false),
+    }
+}
+
+fn tracked_parameter_types_with_facts(
+    inputs: &syn::punctuated::Punctuated<FnArg, Token![,]>,
+    owner: &IdentityOwner,
+    facts: &IdentityTypeFacts,
+) -> HashMap<String, TrackedIdentityType> {
+    inputs
+        .iter()
+        .filter_map(|input| match input {
+            FnArg::Typed(input) => {
+                let syn::Pat::Ident(pattern) = input.pat.as_ref() else {
+                    return None;
+                };
+                tracked_identity_type_with_facts(&input.ty, owner, facts)
+                    .map(|kind| (pattern.ident.to_string(), kind))
+            }
+            FnArg::Receiver(_) => match owner {
+                IdentityOwner::Impl { self_ty, .. } => {
+                    Some(("self".to_string(), self_ty.clone()))
+                }
+                IdentityOwner::Module(_) => None,
+            },
+        })
+        .collect()
+}
+
+fn tracked_return_type_with_facts(
+    output: &syn::ReturnType,
+    owner: &IdentityOwner,
+    facts: &IdentityTypeFacts,
+) -> Option<TrackedIdentityType> {
+    match output {
+        syn::ReturnType::Default => None,
+        syn::ReturnType::Type(_, kind) => tracked_identity_type_with_facts(kind, owner, facts),
+    }
+}
+
+fn attribute_reference_paths(attribute: &Attribute) -> Result<Vec<syn::Path>, String> {
+    let mut paths = Vec::new();
+    collect_meta_reference_paths(&attribute.meta, &mut paths)?;
+    paths.sort_by_key(|path| path.to_token_stream().to_string());
+    paths.dedup_by_key(|path| path.to_token_stream().to_string());
+    Ok(paths)
+}
+
+fn collect_meta_reference_paths(
+    meta: &syn::Meta,
+    paths: &mut Vec<syn::Path>,
+) -> Result<(), String> {
+    match meta {
+        syn::Meta::Path(_) => {}
+        syn::Meta::NameValue(value) => {
+            let terminal = value.path.segments.last().map(|segment| segment.ident.to_string());
+            if terminal.as_deref().is_some_and(|name| {
+                matches!(
+                    name,
+                    "default"
+                        | "default_value_t"
+                        | "deserialize_with"
+                        | "serialize_with"
+                        | "skip_serializing_if"
+                        | "value_parser"
+                        | "with"
+                )
+            }) && let Expr::Lit(literal) = &value.value
+                && let Lit::Str(literal) = &literal.lit
+            {
+                if terminal.as_deref() == Some("with") {
+                    for method in ["serialize", "deserialize"] {
+                        let path = syn::parse_str::<syn::Path>(&format!(
+                            "{}::{method}",
+                            literal.value()
+                        ))
+                        .map_err(|error| {
+                            format!(
+                                "failed to parse serde with path {:?}: {error}",
+                                literal.value()
+                            )
+                        })?;
+                        paths.push(path);
+                    }
+                } else {
+                    let path = syn::parse_str::<syn::Path>(&literal.value()).map_err(|error| {
+                        format!(
+                            "failed to parse attribute reference {:?}: {error}",
+                            literal.value()
+                        )
+                    })?;
+                    paths.push(path);
+                }
+            }
+            let mut collector = AttributeExpressionPathCollector { paths };
+            collector.visit_expr(&value.value);
+        }
+        syn::Meta::List(list) => {
+            let nested = list
+                .parse_args_with(
+                    syn::punctuated::Punctuated::<syn::Meta, Token![,]>::parse_terminated,
+                )
+                .map_err(|error| {
+                    format!(
+                        "failed to parse structured attribute {}: {error}",
+                        list.path.to_token_stream()
+                    )
+                })?;
+            for meta in nested {
+                collect_meta_reference_paths(&meta, paths)?;
+            }
+        }
+    }
+    Ok(())
+}
+
+struct AttributeExpressionPathCollector<'a> {
+    paths: &'a mut Vec<syn::Path>,
+}
+
+impl Visit<'_> for AttributeExpressionPathCollector<'_> {
+    fn visit_expr_call(&mut self, node: &syn::ExprCall) {
+        if let Expr::Path(path) = node.func.as_ref() {
+            self.paths.push(path.path.clone());
+        }
+        syn::visit::visit_expr_call(self, node);
+    }
+
+    fn visit_expr_path(&mut self, node: &syn::ExprPath) {
+        self.paths.push(node.path.clone());
+        syn::visit::visit_expr_path(self, node);
+    }
+}
+
+fn rust_carrier_edges(
+    node: &RustCarrierNode,
+    nodes: &HashMap<RustCarrierKey, RustCarrierNode>,
+    facts: &IdentityTypeFacts,
+) -> Result<Vec<RustCarrierKey>, String> {
+    let mut visitor = RustCarrierEdgeVisitor {
+        owner: &node.key.owner,
+        nodes,
+        facts,
+        types: vec![node.parameter_types.clone()],
+        edges: BTreeSet::new(),
+        errors: Vec::new(),
+    };
+    match &node.body {
+        RustCarrierBody::Block(block) => visitor.visit_block(block),
+        RustCarrierBody::Expression(expression) => visitor.visit_expr(expression),
+        RustCarrierBody::None => {}
+    }
+    if visitor.errors.is_empty() {
+        Ok(visitor.edges.into_iter().collect())
+    } else {
+        visitor.errors.sort();
+        visitor.errors.dedup();
+        Err(format!(
+            "carrier {} has unresolved protected edges: {}",
+            node.key.selector(),
+            visitor.errors.join("; ")
+        ))
+    }
+}
+
+struct RustCarrierEdgeVisitor<'a> {
+    owner: &'a IdentityOwner,
+    nodes: &'a HashMap<RustCarrierKey, RustCarrierNode>,
+    facts: &'a IdentityTypeFacts,
+    types: Vec<HashMap<String, TrackedIdentityType>>,
+    edges: BTreeSet<RustCarrierKey>,
+    errors: Vec<String>,
+}
+
+impl Visit<'_> for RustCarrierEdgeVisitor<'_> {
+    fn visit_block(&mut self, node: &syn::Block) {
+        self.types.push(HashMap::new());
+        syn::visit::visit_block(self, node);
+        self.types.pop();
+    }
+
+    fn visit_local(&mut self, node: &syn::Local) {
+        if let Some((name, declared_type)) = local_binding(&node.pat)
+            && let Some(initializer) = &node.init
+            && let Some(kind) = declared_type
+                .and_then(|kind| tracked_identity_type_with_facts(kind, self.owner, self.facts))
+                .or_else(|| {
+                    expression_tracked_type(
+                        &initializer.expr,
+                        self.owner,
+                        &self.types,
+                        self.facts,
+                    )
+                })
+        {
+            self.types
+                .last_mut()
+                .expect("carrier type scope")
+                .insert(name, kind);
+        }
+        syn::visit::visit_local(self, node);
+    }
+
+    fn visit_expr_call(&mut self, node: &syn::ExprCall) {
+        if let Expr::Path(path) = node.func.as_ref() {
+            match resolve_call_path(&path.path, self.owner, self.facts) {
+                RustCallResolution::Local(function) => {
+                    self.edges.insert(RustCarrierKey::function(function));
+                }
+                RustCallResolution::LocalConstructor(_)
+                | RustCallResolution::ProvenExternal
+                | RustCallResolution::GeneratedByTrackedDerive => {}
+                RustCallResolution::Ambiguous(error)
+                | RustCallResolution::UnsupportedLocal(error) => self.errors.push(error),
+            }
+        }
+        syn::visit::visit_expr_call(self, node);
+    }
+
+    fn visit_expr_method_call(&mut self, node: &syn::ExprMethodCall) {
+        match resolve_method_call(node, self.owner, &self.types, self.facts) {
+            RustCallResolution::Local(function) => {
+                self.edges.insert(RustCarrierKey::function(function));
+            }
+            RustCallResolution::LocalConstructor(_)
+            | RustCallResolution::ProvenExternal
+            | RustCallResolution::GeneratedByTrackedDerive => {}
+            RustCallResolution::Ambiguous(error)
+            | RustCallResolution::UnsupportedLocal(error) => self.errors.push(error),
+        }
+        syn::visit::visit_expr_method_call(self, node);
+    }
+
+    fn visit_expr_path(&mut self, node: &syn::ExprPath) {
+        match resolve_named_carrier_path(
+            &node.path,
+            self.owner,
+            self.nodes,
+            self.facts,
+            &[RustCarrierItemKind::Const, RustCarrierItemKind::Static],
+        ) {
+            Ok(Some(key)) => {
+                self.edges.insert(key);
+            }
+            Ok(None) => {}
+            Err(error) => self.errors.push(error),
+        }
+        syn::visit::visit_expr_path(self, node);
+    }
+
+    fn visit_expr_macro(&mut self, node: &syn::ExprMacro) {
+        match resolve_named_carrier_path(
+            &node.mac.path,
+            self.owner,
+            self.nodes,
+            self.facts,
+            &[RustCarrierItemKind::Macro],
+        ) {
+            Ok(Some(key)) => {
+                self.edges.insert(key);
+            }
+            Ok(None) => {}
+            Err(error) => self.errors.push(error),
+        }
+        syn::visit::visit_expr_macro(self, node);
+    }
+
+    fn visit_item_fn(&mut self, _node: &syn::ItemFn) {}
+
+    fn visit_impl_item_fn(&mut self, _node: &syn::ImplItemFn) {}
+}
+
+fn resolve_named_carrier_path(
+    path: &syn::Path,
+    owner: &IdentityOwner,
+    nodes: &HashMap<RustCarrierKey, RustCarrierNode>,
+    facts: &IdentityTypeFacts,
+    kinds: &[RustCarrierItemKind],
+) -> Result<Option<RustCarrierKey>, String> {
+    let segments = path
+        .segments
+        .iter()
+        .map(|segment| segment.ident.to_string())
+        .collect::<Vec<_>>();
+    let Some((name, prefix)) = segments.split_last() else {
+        return Ok(None);
+    };
+    let mut candidates = Vec::new();
+    if prefix == ["Self"] {
+        for kind in kinds {
+            let key = RustCarrierKey {
+                owner: owner.clone(),
+                kind: *kind,
+                name: name.clone(),
+            };
+            if nodes.contains_key(&key) {
+                candidates.push(key);
+            }
+        }
+    } else {
+        for target in expanded_symbol_paths(&segments, owner, facts)? {
+            let RustImportTarget::Local(path) = target else {
+                continue;
+            };
+            let Some((name, module)) = path.split_last() else {
+                continue;
+            };
+            for kind in kinds {
+                let key = RustCarrierKey {
+                    owner: IdentityOwner::Module(module.to_vec()),
+                    kind: *kind,
+                    name: name.clone(),
+                };
+                if nodes.contains_key(&key) {
+                    candidates.push(key);
+                }
+            }
+            let type_label = module.join("::");
+            if facts.local_types.contains(&type_label) {
+                for kind in kinds {
+                    for impl_owner in facts
+                        .impl_owners
+                        .get(&type_label)
+                        .into_iter()
+                        .flatten()
+                    {
+                        let key = RustCarrierKey {
+                            owner: impl_owner.clone(),
+                            kind: *kind,
+                            name: name.clone(),
+                        };
+                        if nodes.contains_key(&key) {
+                            candidates.push(key);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    candidates.sort();
+    candidates.dedup();
+    match candidates.as_slice() {
+        [] => Ok(None),
+        [candidate] => Ok(Some(candidate.clone())),
+        _ => Err(format!(
+            "path {} resolved to {} local carrier items",
+            path.to_token_stream(),
+            candidates.len()
+        )),
     }
 }
 
@@ -2547,35 +4622,54 @@ impl Parse for ClosedCodeDefinition {
     }
 }
 
-#[derive(Default)]
-struct MatchLiteralCollector {
-    items: Vec<RawSurface>,
-    ordinal: usize,
-}
-
-impl Visit<'_> for MatchLiteralCollector {
-    fn visit_expr_match(&mut self, node: &ExprMatch) {
-        for arm in &node.arms {
-            let mut strings = PatternStringVisitor::default();
-            strings.visit_pat(&arm.pat);
-            for value in strings.values {
-                self.items.push(RawSurface {
-                    kind: "rust_match_literal",
-                    selector: format!("match_literal:{:06}", self.ordinal),
-                    content: value,
-                });
-                self.ordinal += 1;
-            }
-        }
-        syn::visit::visit_expr_match(self, node);
-    }
-}
-
 fn structured_json_inventory(path: &str, source: &str) -> Result<Vec<RawSurface>, String> {
     let value: serde_json::Value = serde_json::from_str(source)
         .map_err(|error| format!("failed to parse protected JSON {path}: {error}"))?;
     let mut items = Vec::new();
-    collect_structured_value(&value, "", &mut items)?;
+    collect_structured_value_as(
+        &value,
+        "",
+        &mut items,
+        "structured_key",
+        "structured_value",
+    )?;
+    Ok(items)
+}
+
+fn structured_json_schema_inventory(
+    path: &str,
+    source: &str,
+) -> Result<Vec<RawSurface>, String> {
+    let value: serde_json::Value = serde_json::from_str(source)
+        .map_err(|error| format!("failed to parse protected JSON {path}: {error}"))?;
+    let Some(object) = value.as_object() else {
+        return Ok(Vec::new());
+    };
+    let declared_schema = object
+        .get("$schema")
+        .and_then(serde_json::Value::as_str)
+        .is_some_and(|schema| !schema.trim().is_empty());
+    let structural_schema = [
+        "$defs",
+        "allOf",
+        "anyOf",
+        "definitions",
+        "oneOf",
+        "properties",
+    ]
+    .iter()
+    .any(|key| object.contains_key(*key));
+    if !declared_schema && !structural_schema {
+        return Ok(Vec::new());
+    }
+    let mut items = Vec::new();
+    collect_structured_value_as(
+        &value,
+        "",
+        &mut items,
+        "schema_key",
+        "schema_value",
+    )?;
     Ok(items)
 }
 
@@ -2585,20 +4679,28 @@ fn structured_toml_inventory(path: &str, source: &str) -> Result<Vec<RawSurface>
     let value = serde_json::to_value(value)
         .map_err(|error| format!("failed to normalize protected TOML {path}: {error}"))?;
     let mut items = Vec::new();
-    collect_structured_value(&value, "", &mut items)?;
+    collect_structured_value_as(
+        &value,
+        "",
+        &mut items,
+        "structured_key",
+        "structured_value",
+    )?;
     Ok(items)
 }
 
-fn collect_structured_value(
+fn collect_structured_value_as(
     value: &serde_json::Value,
     pointer: &str,
     items: &mut Vec<RawSurface>,
+    key_kind: &'static str,
+    value_kind: &'static str,
 ) -> Result<(), String> {
     match value {
         serde_json::Value::Object(map) => {
             if map.is_empty() {
                 items.push(RawSurface {
-                    kind: "structured_value",
+                    kind: value_kind,
                     selector: format!("value:{pointer}"),
                     content: "{}".to_string(),
                 });
@@ -2608,27 +4710,39 @@ fn collect_structured_value(
             for (key, child) in entries {
                 let child_pointer = format!("{pointer}/{}", escape_json_pointer(key));
                 items.push(RawSurface {
-                    kind: "structured_key",
+                    kind: key_kind,
                     selector: format!("key:{child_pointer}"),
                     content: key.clone(),
                 });
-                collect_structured_value(child, &child_pointer, items)?;
+                collect_structured_value_as(
+                    child,
+                    &child_pointer,
+                    items,
+                    key_kind,
+                    value_kind,
+                )?;
             }
         }
         serde_json::Value::Array(values) => {
             if values.is_empty() {
                 items.push(RawSurface {
-                    kind: "structured_value",
+                    kind: value_kind,
                     selector: format!("value:{pointer}"),
                     content: "[]".to_string(),
                 });
             }
             for (index, child) in values.iter().enumerate() {
-                collect_structured_value(child, &format!("{pointer}/{index}"), items)?;
+                collect_structured_value_as(
+                    child,
+                    &format!("{pointer}/{index}"),
+                    items,
+                    key_kind,
+                    value_kind,
+                )?;
             }
         }
         _ => items.push(RawSurface {
-            kind: "structured_value",
+            kind: value_kind,
             selector: format!("value:{pointer}"),
             content: serde_json::to_string(value)
                 .map_err(|error| format!("failed to normalize structured value: {error}"))?,
@@ -2657,100 +4771,1159 @@ fn text_surface_inventory(source: &str) -> Vec<RawSurface> {
 }
 
 struct IdentityFunction<'a> {
-    name: String,
+    key: IdentityFunctionKey,
     inputs: &'a syn::punctuated::Punctuated<FnArg, Token![,]>,
     output: &'a syn::ReturnType,
     block: &'a syn::Block,
 }
 
-type TrackedIdentityType = String;
-
-struct IdentityTypeFacts {
-    function_returns: HashMap<String, TrackedIdentityType>,
-    struct_fields: HashMap<(String, String), TrackedIdentityType>,
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+struct IdentityFunctionKey {
+    owner: IdentityOwner,
+    name: String,
 }
 
-fn identity_type_facts(file: &syn::File) -> IdentityTypeFacts {
-    let mut functions = Vec::new();
-    collect_identity_functions(&file.items, &mut functions);
-    let mut facts = IdentityTypeFacts {
-        function_returns: HashMap::new(),
-        struct_fields: HashMap::new(),
+type TrackedIdentityType = String;
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+enum RustImportTarget {
+    Local(Vec<String>),
+    External(Vec<String>),
+}
+
+type RustImportKey = (Vec<String>, String);
+
+#[derive(Clone)]
+struct PendingRustImport {
+    module: Vec<String>,
+    alias: Option<String>,
+    path: Vec<String>,
+    glob: bool,
+}
+
+#[derive(Clone)]
+struct PendingStructField {
+    owner: String,
+    module: Vec<String>,
+    name: String,
+    kind: Type,
+}
+
+#[derive(Clone)]
+struct PendingTypeAlias {
+    owner: String,
+    module: Vec<String>,
+    kind: Type,
+}
+
+#[derive(Clone, Default)]
+struct IdentityTypeFacts {
+    functions: HashSet<IdentityFunctionKey>,
+    function_returns: HashMap<IdentityFunctionKey, TrackedIdentityType>,
+    impl_functions: HashMap<(String, String), Vec<IdentityFunctionKey>>,
+    impl_owners: HashMap<String, Vec<IdentityOwner>>,
+    unit_impl_method_names: HashSet<(Vec<String>, String)>,
+    struct_fields: HashMap<(String, String), TrackedIdentityType>,
+    modules: HashSet<Vec<String>>,
+    module_items: HashSet<Vec<String>>,
+    local_path_prefixes: HashSet<Vec<String>>,
+    local_types: HashSet<String>,
+    local_constructors: HashSet<String>,
+    enum_variants: HashSet<String>,
+    generated_methods: HashSet<(String, String)>,
+    type_alias_targets: HashMap<String, TrackedIdentityType>,
+    imports: HashMap<RustImportKey, Vec<RustImportTarget>>,
+    glob_imports: HashMap<Vec<String>, Vec<RustImportTarget>>,
+    external_crates: HashMap<Vec<String>, HashSet<String>>,
+    pending_imports: Vec<PendingRustImport>,
+    pending_struct_fields: Vec<PendingStructField>,
+    pending_type_aliases: Vec<PendingTypeAlias>,
+    resolution_errors: RefCell<BTreeSet<String>>,
+}
+
+impl IdentityTypeFacts {
+    fn record_resolution_error(&self, error: String) {
+        self.resolution_errors.borrow_mut().insert(error);
+    }
+
+    fn resolution_error_messages(&self) -> Vec<String> {
+        self.resolution_errors.borrow().iter().cloned().collect()
+    }
+
+    fn ensure_resolution_succeeded(&self) -> Result<(), String> {
+        let errors = self.resolution_error_messages();
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(errors.join("\n"))
+        }
+    }
+
+    fn set_functions(&mut self, functions: HashSet<IdentityFunctionKey>) {
+        self.functions = functions;
+        self.impl_functions.clear();
+        self.unit_impl_method_names.clear();
+        for function in &self.functions {
+            if let IdentityOwner::Impl { self_ty, .. } = &function.owner {
+                self.unit_impl_method_names.insert((
+                    compile_unit_root(function.owner.module()).to_vec(),
+                    function.name.clone(),
+                ));
+                self.impl_functions
+                    .entry((self_ty.clone(), function.name.clone()))
+                    .or_default()
+                    .push(function.clone());
+            }
+        }
+        for functions in self.impl_functions.values_mut() {
+            functions.sort();
+            functions.dedup();
+        }
+    }
+
+    fn register_external_crates(&mut self, module: &[String], crates: &HashSet<String>) {
+        self.external_crates
+            .entry(compile_unit_root(module).to_vec())
+            .or_default()
+            .extend(crates.iter().cloned());
+    }
+
+    fn collect_symbols(&mut self, items: &[Item], module: &[String]) -> Result<(), String> {
+        self.modules.insert(module.to_vec());
+        for item in items {
+            match item {
+                Item::Const(item) => self.register_module_item(module, &item.ident.to_string()),
+                Item::Enum(item) => {
+                    let owner = self.register_type(module, &item.ident.to_string());
+                    self.register_derive_methods(&owner, &item.attrs)?;
+                    for variant in &item.variants {
+                        let variant = format!("{owner}::{}", variant.ident);
+                        self.enum_variants.insert(variant.clone());
+                        self.local_constructors.insert(variant);
+                    }
+                }
+                Item::ExternCrate(item) => {
+                    let alias = item
+                        .rename
+                        .as_ref()
+                        .map_or_else(|| item.ident.to_string(), |(_, alias)| alias.to_string());
+                    self.imports
+                        .entry((module.to_vec(), alias))
+                        .or_default()
+                        .push(RustImportTarget::External(vec![item.ident.to_string()]));
+                }
+                Item::Fn(item) => self.register_module_item(module, &item.sig.ident.to_string()),
+                Item::Macro(item) => {
+                    if let Some(identifier) = &item.ident {
+                        self.register_module_item(module, &identifier.to_string());
+                    }
+                }
+                Item::Mod(item) => {
+                    self.register_module_item(module, &item.ident.to_string());
+                    if let Some((_, nested)) = &item.content {
+                        let mut next = module.to_vec();
+                        next.push(item.ident.to_string());
+                        self.collect_symbols(nested, &next)?;
+                    }
+                }
+                Item::Static(item) => self.register_module_item(module, &item.ident.to_string()),
+                Item::Struct(item) => {
+                    let owner = self.register_type(module, &item.ident.to_string());
+                    self.register_derive_methods(&owner, &item.attrs)?;
+                    if matches!(item.fields, Fields::Unnamed(_) | Fields::Unit) {
+                        self.local_constructors.insert(owner.clone());
+                    }
+                    for field in &item.fields {
+                        if let Some(name) = &field.ident {
+                            self.pending_struct_fields.push(PendingStructField {
+                                owner: owner.clone(),
+                                module: module.to_vec(),
+                                name: name.to_string(),
+                                kind: field.ty.clone(),
+                            });
+                        }
+                    }
+                }
+                Item::Type(item) => {
+                    let owner = self.register_type(module, &item.ident.to_string());
+                    self.pending_type_aliases.push(PendingTypeAlias {
+                        owner,
+                        module: module.to_vec(),
+                        kind: (*item.ty).clone(),
+                    });
+                }
+                Item::Trait(item) => {
+                    self.register_type(module, &item.ident.to_string());
+                }
+                Item::TraitAlias(item) => {
+                    self.register_type(module, &item.ident.to_string());
+                }
+                Item::Union(item) => {
+                    let owner = self.register_type(module, &item.ident.to_string());
+                    for field in &item.fields.named {
+                        if let Some(name) = &field.ident {
+                            self.pending_struct_fields.push(PendingStructField {
+                                owner: owner.clone(),
+                                module: module.to_vec(),
+                                name: name.to_string(),
+                                kind: field.ty.clone(),
+                            });
+                        }
+                    }
+                }
+                Item::Use(item) => {
+                    collect_pending_use_tree(
+                        &item.tree,
+                        module,
+                        Vec::new(),
+                        &mut self.pending_imports,
+                    )?;
+                }
+                _ => {}
+            }
+        }
+        Ok(())
+    }
+
+    fn register_module_item(&mut self, module: &[String], name: &str) {
+        let mut path = module.to_vec();
+        path.push(name.to_string());
+        self.module_items.insert(path);
+    }
+
+    fn register_type(&mut self, module: &[String], name: &str) -> String {
+        self.register_module_item(module, name);
+        let owner = canonical_symbol_label(module, name);
+        self.local_types.insert(owner.clone());
+        owner
+    }
+
+    fn register_derive_methods(
+        &mut self,
+        owner: &str,
+        attributes: &[Attribute],
+    ) -> Result<(), String> {
+        for attribute in attributes
+            .iter()
+            .filter(|attribute| attribute.path().is_ident("derive"))
+        {
+            let derives = attribute
+                .parse_args_with(
+                    syn::punctuated::Punctuated::<syn::Path, Token![,]>::parse_terminated,
+                )
+                .map_err(|error| {
+                    format!("failed to parse derive list for {owner}: {error}")
+                })?;
+            for derive in derives {
+                let normalized = derive
+                    .segments
+                    .iter()
+                    .map(|segment| segment.ident.to_string())
+                    .collect::<Vec<_>>();
+                let method = match normalized.as_slice() {
+                    [name] if name == "Clone" => Some("clone"),
+                    [name] if name == "Default" => Some("default"),
+                    [root, module, name]
+                        if matches!(root.as_str(), "std" | "core")
+                            && module == "clone"
+                            && name == "Clone" =>
+                    {
+                        Some("clone")
+                    }
+                    [root, module, name]
+                        if matches!(root.as_str(), "std" | "core")
+                            && module == "default"
+                            && name == "Default" =>
+                    {
+                        Some("default")
+                    }
+                    _ => None,
+                };
+                if let Some(method) = method {
+                    self.generated_methods
+                        .insert((owner.to_string(), method.to_string()));
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn finish_symbols(&mut self) -> Result<(), String> {
+        let profile_started = Instant::now();
+        let pending_imports = std::mem::take(&mut self.pending_imports);
+        let declared_aliases = pending_imports
+            .iter()
+            .filter_map(|pending| {
+                pending
+                    .alias
+                    .as_ref()
+                    .map(|alias| (pending.module.clone(), alias.clone()))
+            })
+            .collect::<HashSet<_>>();
+        for pending in &pending_imports {
+            if let Some(alias) = &pending.alias {
+                self.register_module_item(&pending.module, alias);
+            }
+        }
+        self.rebuild_local_path_prefixes();
+        eprintln!(
+            "PERF finish_symbols prefixes={} pending_imports={} elapsed_ms={}",
+            self.local_path_prefixes.len(),
+            pending_imports.len(),
+            profile_started.elapsed().as_millis()
+        );
+        let mut errors = Vec::new();
+        for (index, pending) in pending_imports.into_iter().enumerate() {
+            match self.resolve_use_target(
+                &pending.module,
+                &pending.path,
+                &declared_aliases,
+            ) {
+                Ok(target) => {
+                    if pending.glob {
+                        self.glob_imports
+                            .entry(pending.module)
+                            .or_default()
+                            .push(target);
+                    } else if let Some(alias) = pending.alias {
+                        self.imports
+                            .entry((pending.module, alias))
+                            .or_default()
+                            .push(target);
+                    }
+                }
+                Err(error) => errors.push(error),
+            }
+            if (index + 1) % 250 == 0 {
+                eprintln!(
+                    "PERF finish_symbols imports={} elapsed_ms={}",
+                    index + 1,
+                    profile_started.elapsed().as_millis()
+                );
+            }
+        }
+        for targets in self.imports.values_mut() {
+            targets.sort();
+            targets.dedup();
+        }
+        for targets in self.glob_imports.values_mut() {
+            targets.sort();
+            targets.dedup();
+        }
+        if !errors.is_empty() {
+            errors.sort();
+            errors.dedup();
+            return Err(errors.join("\n"));
+        }
+        self.imports = resolve_import_aliases(
+            &self.imports,
+            &self.modules,
+            &self.local_types,
+        )?;
+        let pending_globs = std::mem::take(&mut self.glob_imports);
+        for (module, targets) in pending_globs {
+            let mut resolved = Vec::new();
+            for target in targets {
+                resolved.extend(expand_import_targets(vec![target], self)?);
+            }
+            resolved.sort();
+            resolved.dedup();
+            self.glob_imports.insert(module, resolved);
+        }
+        let pending_aliases = std::mem::take(&mut self.pending_type_aliases);
+        let mut raw_type_aliases = HashMap::new();
+        for pending in pending_aliases {
+            let lexical_owner = IdentityOwner::Module(pending.module);
+            if let Some(target) =
+                tracked_identity_type_with_facts_checked(&pending.kind, &lexical_owner, self)?
+            {
+                raw_type_aliases.insert(pending.owner, target);
+            }
+        }
+        self.type_alias_targets = resolve_type_alias_targets(&raw_type_aliases)?;
+        let pending_fields = std::mem::take(&mut self.pending_struct_fields);
+        eprintln!(
+            "PERF finish_symbols imports_done={} glob_modules={} pending_fields={} elapsed_ms={}",
+            self.imports.len(),
+            self.glob_imports.len(),
+            pending_fields.len(),
+            profile_started.elapsed().as_millis()
+        );
+        for (index, pending) in pending_fields.into_iter().enumerate() {
+            if (5_240..=5_260).contains(&index) {
+                eprintln!(
+                    "PERF finish_symbols field_index={} owner={} name={} type={}",
+                    index,
+                    pending.owner,
+                    pending.name,
+                    pending.kind.to_token_stream()
+                );
+            }
+            let owner = IdentityOwner::Module(pending.module.clone());
+            match tracked_identity_type_with_facts_checked(&pending.kind, &owner, self) {
+                Ok(Some(kind)) => {
+                    self.struct_fields
+                        .insert((pending.owner, pending.name), kind);
+                }
+                Ok(None) => {}
+                Err(error) => errors.push(format!(
+                    "failed to resolve field {}.{}: {error}",
+                    pending.owner, pending.name
+                )),
+            }
+            if (index + 1) % 250 == 0 {
+                eprintln!(
+                    "PERF finish_symbols fields={} elapsed_ms={}",
+                    index + 1,
+                    profile_started.elapsed().as_millis()
+                );
+            }
+        }
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            errors.sort();
+            errors.dedup();
+            Err(errors.join("\n"))
+        }
+    }
+
+    fn resolve_use_target(
+        &self,
+        module: &[String],
+        path: &[String],
+        declared_aliases: &HashSet<RustImportKey>,
+    ) -> Result<RustImportTarget, String> {
+        let first = path
+            .first()
+            .ok_or_else(|| format!("empty use path in {}", module_label(module)))?;
+        let root = compile_unit_root(module);
+        if first == "crate" {
+            let mut target = root.to_vec();
+            target.extend(path.iter().skip(1).cloned());
+            return Ok(RustImportTarget::Local(target));
+        }
+        if first == "self" || first == "super" {
+            let mut target = module.to_vec();
+            let mut index = usize::from(first == "self");
+            while path.get(index).is_some_and(|part| part == "super") {
+                if target.len() == root.len() {
+                    return Err(format!(
+                        "use path {} escapes compile unit {}",
+                        path.join("::"),
+                        module_label(module)
+                    ));
+                }
+                target.pop();
+                index += 1;
+            }
+            target.extend(path[index..].iter().cloned());
+            return Ok(RustImportTarget::Local(target));
+        }
+        let mut lexical_local = module.to_vec();
+        lexical_local.extend(path.iter().cloned());
+        if self.has_local_path_prefix(&lexical_local) {
+            return Ok(RustImportTarget::Local(lexical_local));
+        }
+        if path_contains_declared_import_alias(&lexical_local, declared_aliases) {
+            return Ok(RustImportTarget::Local(lexical_local));
+        }
+        let mut root_local = root.to_vec();
+        root_local.extend(path.iter().cloned());
+        if root_local != lexical_local && self.has_local_path_prefix(&root_local) {
+            return Ok(RustImportTarget::Local(root_local));
+        }
+        if root_local != lexical_local
+            && path_contains_declared_import_alias(&root_local, declared_aliases)
+        {
+            return Ok(RustImportTarget::Local(root_local));
+        }
+        if self
+            .external_crates
+            .get(root)
+            .is_some_and(|crates| crates.contains(first))
+            || is_rust_external_crate(first)
+        {
+            return Ok(RustImportTarget::External(path.to_vec()));
+        }
+        Err(format!(
+            "use path {} in {} is neither a local compile-unit symbol nor a declared external crate",
+            path.join("::"),
+            module_label(module)
+        ))
+    }
+
+    fn has_local_path_prefix(&self, path: &[String]) -> bool {
+        self.local_path_prefixes.contains(path)
+    }
+
+    fn rebuild_local_path_prefixes(&mut self) {
+        self.local_path_prefixes.clear();
+        for path in self.modules.iter().chain(self.module_items.iter()) {
+            for length in 1..=path.len() {
+                self.local_path_prefixes.insert(path[..length].to_vec());
+            }
+        }
+    }
+}
+
+fn collect_pending_use_tree(
+    tree: &syn::UseTree,
+    module: &[String],
+    prefix: Vec<String>,
+    pending: &mut Vec<PendingRustImport>,
+) -> Result<(), String> {
+    match tree {
+        syn::UseTree::Path(path) => {
+            let mut prefix = prefix;
+            prefix.push(path.ident.to_string());
+            collect_pending_use_tree(&path.tree, module, prefix, pending)
+        }
+        syn::UseTree::Name(name) => {
+            let mut path = prefix;
+            let identifier = name.ident.to_string();
+            if identifier == "self" {
+                let alias = path.last().cloned().ok_or_else(|| {
+                    format!("use self has no owner in {}", module_label(module))
+                })?;
+                pending.push(PendingRustImport {
+                    module: module.to_vec(),
+                    alias: Some(alias),
+                    path,
+                    glob: false,
+                });
+            } else {
+                path.push(identifier.clone());
+                pending.push(PendingRustImport {
+                    module: module.to_vec(),
+                    alias: Some(identifier),
+                    path,
+                    glob: false,
+                });
+            }
+            Ok(())
+        }
+        syn::UseTree::Rename(rename) => {
+            let mut path = prefix;
+            if rename.ident != "self" {
+                path.push(rename.ident.to_string());
+            }
+            if path.is_empty() {
+                return Err(format!(
+                    "use self as {} has no owner in {}",
+                    rename.rename,
+                    module_label(module)
+                ));
+            }
+            pending.push(PendingRustImport {
+                module: module.to_vec(),
+                alias: Some(rename.rename.to_string()),
+                path,
+                glob: false,
+            });
+            Ok(())
+        }
+        syn::UseTree::Glob(_) => {
+            pending.push(PendingRustImport {
+                module: module.to_vec(),
+                alias: None,
+                path: prefix,
+                glob: true,
+            });
+            Ok(())
+        }
+        syn::UseTree::Group(group) => {
+            for tree in &group.items {
+                collect_pending_use_tree(tree, module, prefix.clone(), pending)?;
+            }
+            Ok(())
+        }
+    }
+}
+
+fn rust_import_key_label(key: &RustImportKey) -> String {
+    let (module, alias) = key;
+    if module.is_empty() {
+        alias.clone()
+    } else {
+        format!("{}::{alias}", module_label(module))
+    }
+}
+
+fn resolve_import_aliases(
+    imports: &HashMap<RustImportKey, Vec<RustImportTarget>>,
+    modules: &HashSet<Vec<String>>,
+    local_types: &HashSet<String>,
+) -> Result<HashMap<RustImportKey, Vec<RustImportTarget>>, String> {
+    let mut keys = imports.keys().cloned().collect::<Vec<_>>();
+    keys.sort();
+    let edge_budget = imports
+        .values()
+        .map(Vec::len)
+        .sum::<usize>()
+        .saturating_add(imports.len())
+        .max(1);
+    let mut memo = HashMap::<RustImportKey, Arc<[RustImportTarget]>>::new();
+    for key in &keys {
+        let mut visiting = Vec::<RustImportKey>::new();
+        resolve_import_alias(
+            key,
+            imports,
+            &mut memo,
+            &mut visiting,
+            edge_budget,
+            modules,
+            local_types,
+        )?;
+    }
+    Ok(keys
+        .into_iter()
+        .map(|key| {
+            let targets = memo
+                .remove(&key)
+                .expect("resolved import alias")
+                .as_ref()
+                .to_vec();
+            (key, targets)
+        })
+        .collect())
+}
+
+fn resolve_import_alias(
+    key: &RustImportKey,
+    imports: &HashMap<RustImportKey, Vec<RustImportTarget>>,
+    memo: &mut HashMap<RustImportKey, Arc<[RustImportTarget]>>,
+    visiting: &mut Vec<RustImportKey>,
+    edge_budget: usize,
+    modules: &HashSet<Vec<String>>,
+    local_types: &HashSet<String>,
+) -> Result<Arc<[RustImportTarget]>, String> {
+    if let Some(resolved) = memo.get(key) {
+        return Ok(Arc::clone(resolved));
+    }
+    if let Some(index) = visiting.iter().position(|candidate| candidate == key) {
+        let mut cycle = visiting[index..]
+            .iter()
+            .map(rust_import_key_label)
+            .collect::<Vec<_>>();
+        cycle.push(rust_import_key_label(key));
+        return Err(format!("local import alias cycle: {}", cycle.join(" -> ")));
+    }
+    let targets = imports.get(key).ok_or_else(|| {
+        format!("missing local import alias {}", rust_import_key_label(key))
+    })?;
+    visiting.push(key.clone());
+    let mut resolved = BTreeSet::new();
+    for target in targets {
+        resolved.extend(resolve_import_target(
+            target.clone(),
+            imports,
+            memo,
+            visiting,
+            edge_budget,
+            modules,
+            local_types,
+        )?);
+        if resolved.len() > edge_budget {
+            return Err(format!(
+                "import alias {} expansion exceeded deterministic edge budget {edge_budget}",
+                rust_import_key_label(key)
+            ));
+        }
+    }
+    visiting.pop();
+    let resolved: Arc<[RustImportTarget]> =
+        resolved.into_iter().collect::<Vec<_>>().into();
+    memo.insert(key.clone(), Arc::clone(&resolved));
+    Ok(resolved)
+}
+
+fn resolve_import_target(
+    target: RustImportTarget,
+    imports: &HashMap<RustImportKey, Vec<RustImportTarget>>,
+    memo: &mut HashMap<RustImportKey, Arc<[RustImportTarget]>>,
+    visiting: &mut Vec<RustImportKey>,
+    edge_budget: usize,
+    modules: &HashSet<Vec<String>>,
+    local_types: &HashSet<String>,
+) -> Result<BTreeSet<RustImportTarget>, String> {
+    let RustImportTarget::Local(path) = target else {
+        return Ok(BTreeSet::from([target]));
     };
-    let mut ambiguous_returns = HashSet::new();
+    let Some((key, suffix)) = first_import_alias(
+        &path,
+        imports,
+        modules,
+        local_types,
+    ) else {
+        return Ok(BTreeSet::from([RustImportTarget::Local(path)]));
+    };
+    let bases = resolve_import_alias(
+        &key,
+        imports,
+        memo,
+        visiting,
+        edge_budget,
+        modules,
+        local_types,
+    )?;
+    let mut resolved = BTreeSet::new();
+    for base in bases.iter() {
+        let combined = append_import_suffix(base.clone(), suffix);
+        resolved.extend(resolve_import_target(
+            combined,
+            imports,
+            memo,
+            visiting,
+            edge_budget,
+            modules,
+            local_types,
+        )?);
+        if resolved.len() > edge_budget {
+            return Err(format!(
+                "import path expansion exceeded deterministic edge budget {edge_budget}"
+            ));
+        }
+    }
+    Ok(resolved)
+}
+
+fn first_import_alias<'a>(
+    path: &'a [String],
+    imports: &HashMap<RustImportKey, Vec<RustImportTarget>>,
+    modules: &HashSet<Vec<String>>,
+    local_types: &HashSet<String>,
+) -> Option<(RustImportKey, &'a [String])> {
+    for index in 1..=path.len() {
+        if index < path.len()
+            && (modules.contains(&path[..index])
+                || local_types.contains(&path[..index].join("::")))
+        {
+            continue;
+        }
+        let key = (path[..index - 1].to_vec(), path[index - 1].clone());
+        if imports.contains_key(&key) {
+            return Some((key, &path[index..]));
+        }
+    }
+    None
+}
+
+fn path_contains_declared_import_alias(
+    path: &[String],
+    aliases: &HashSet<RustImportKey>,
+) -> bool {
+    (1..=path.len()).any(|index| {
+        aliases.contains(&(path[..index - 1].to_vec(), path[index - 1].clone()))
+    })
+}
+
+fn append_import_suffix(target: RustImportTarget, suffix: &[String]) -> RustImportTarget {
+    match target {
+        RustImportTarget::Local(mut path) => {
+            path.extend(suffix.iter().cloned());
+            RustImportTarget::Local(path)
+        }
+        RustImportTarget::External(mut path) => {
+            path.extend(suffix.iter().cloned());
+            RustImportTarget::External(path)
+        }
+    }
+}
+
+fn resolve_type_alias_targets(
+    aliases: &HashMap<String, TrackedIdentityType>,
+) -> Result<HashMap<String, TrackedIdentityType>, String> {
+    fn resolve(
+        owner: &str,
+        aliases: &HashMap<String, TrackedIdentityType>,
+        memo: &mut HashMap<String, TrackedIdentityType>,
+        visiting: &mut Vec<String>,
+    ) -> Result<TrackedIdentityType, String> {
+        if let Some(target) = memo.get(owner) {
+            return Ok(target.clone());
+        }
+        if let Some(index) = visiting.iter().position(|candidate| candidate == owner) {
+            let mut cycle = visiting[index..].to_vec();
+            cycle.push(owner.to_string());
+            return Err(format!("local type alias cycle: {}", cycle.join(" -> ")));
+        }
+        let target = aliases
+            .get(owner)
+            .ok_or_else(|| format!("missing local type alias {owner}"))?;
+        visiting.push(owner.to_string());
+        let resolved = if aliases.contains_key(target) {
+            resolve(target, aliases, memo, visiting)?
+        } else {
+            target.clone()
+        };
+        visiting.pop();
+        memo.insert(owner.to_string(), resolved.clone());
+        Ok(resolved)
+    }
+
+    let mut keys = aliases.keys().cloned().collect::<Vec<_>>();
+    keys.sort();
+    let mut resolved = HashMap::new();
+    for key in keys {
+        resolve(&key, aliases, &mut resolved, &mut Vec::new())?;
+    }
+    Ok(resolved)
+}
+
+fn canonical_symbol_label(module: &[String], name: &str) -> String {
+    if module.is_empty() {
+        name.to_string()
+    } else {
+        format!("{}::{name}", module.join("::"))
+    }
+}
+
+fn is_rust_external_crate(name: &str) -> bool {
+    matches!(name, "std" | "core" | "alloc" | "proc_macro" | "test")
+}
+
+fn identity_type_facts(file: &syn::File) -> Result<IdentityTypeFacts, String> {
+    let mut facts = IdentityTypeFacts::default();
+    facts.collect_symbols(&file.items, &[])?;
+    facts.finish_symbols()?;
+    let mut functions = Vec::new();
+    collect_identity_functions(&file.items, &[], &facts, &mut functions);
+    facts.set_functions(functions
+        .iter()
+        .map(|function| function.key.clone())
+        .collect());
     for function in functions {
         let syn::ReturnType::Type(_, kind) = function.output else {
             continue;
         };
-        let Some(kind) = tracked_identity_type(kind) else {
+        let Some(kind) = tracked_identity_type_with_facts(kind, &function.key.owner, &facts) else {
             continue;
         };
-        if ambiguous_returns.contains(&function.name) {
-            continue;
-        }
-        match facts.function_returns.get(&function.name) {
-            Some(existing) if existing != &kind => {
-                facts.function_returns.remove(&function.name);
-                ambiguous_returns.insert(function.name);
-            }
-            Some(_) => {}
-            None => {
-                facts.function_returns.insert(function.name, kind);
-            }
-        }
+        facts.function_returns.insert(function.key, kind);
     }
-    collect_identity_struct_fields(&file.items, &mut facts.struct_fields);
-    facts
+    facts.ensure_resolution_succeeded()?;
+    Ok(facts)
 }
 
-fn collect_identity_struct_fields(
-    items: &[Item],
-    fields: &mut HashMap<(String, String), TrackedIdentityType>,
-) {
-    for item in items {
-        match item {
-            Item::Struct(item) => {
-                let owner = item.ident.to_string();
-                for field in &item.fields {
-                    let Some(name) = &field.ident else {
-                        continue;
-                    };
-                    if let Some(kind) = tracked_identity_type(&field.ty) {
-                        fields.insert((owner.clone(), name.to_string()), kind);
-                    }
-                }
-            }
-            Item::Mod(item) => {
-                if let Some((_, nested)) = &item.content {
-                    collect_identity_struct_fields(nested, fields);
-                }
-            }
-            _ => {}
+fn tracked_identity_type_with_facts(
+    kind: &Type,
+    owner: &IdentityOwner,
+    facts: &IdentityTypeFacts,
+) -> Option<TrackedIdentityType> {
+    match tracked_identity_type_with_facts_checked(kind, owner, facts) {
+        Ok(kind) => kind,
+        Err(error) => {
+            facts.record_resolution_error(error);
+            None
         }
     }
 }
 
-fn tracked_identity_type(kind: &Type) -> Option<TrackedIdentityType> {
+fn tracked_identity_type_with_facts_checked(
+    kind: &Type,
+    owner: &IdentityOwner,
+    facts: &IdentityTypeFacts,
+) -> Result<Option<TrackedIdentityType>, String> {
     if type_is_raw_identity(kind) {
-        return Some(String::new());
+        return Ok(Some(String::new()));
     }
     match kind {
-        Type::Reference(reference) => tracked_identity_type(&reference.elem),
-        Type::Paren(paren) => tracked_identity_type(&paren.elem),
-        Type::Group(group) => tracked_identity_type(&group.elem),
-        Type::Path(path) => path
-            .path
-            .segments
-            .last()
-            .map(|segment| segment.ident.to_string()),
-        _ => None,
+        Type::Reference(reference) => {
+            tracked_identity_type_with_facts_checked(&reference.elem, owner, facts)
+        }
+        Type::Paren(paren) => tracked_identity_type_with_facts_checked(&paren.elem, owner, facts),
+        Type::Group(group) => tracked_identity_type_with_facts_checked(&group.elem, owner, facts),
+        Type::Path(path) => {
+            let resolved = resolve_type_path_with_facts_checked(&path.path, owner, facts)?
+                .or_else(|| {
+                path.path
+                    .segments
+                    .last()
+                    .map(|segment| format!("$unknown$::{}", segment.ident))
+                });
+            Ok(resolved.map(|kind| {
+                facts
+                    .type_alias_targets
+                    .get(&kind)
+                    .cloned()
+                    .unwrap_or(kind)
+            }))
+        }
+        _ => Ok(None),
     }
 }
 
-fn infer_identity_parameter_axes(file: &syn::File) -> HashMap<String, Vec<Option<&'static str>>> {
+fn resolve_type_path_with_facts(
+    path: &syn::Path,
+    owner: &IdentityOwner,
+    facts: &IdentityTypeFacts,
+) -> Option<TrackedIdentityType> {
+    match resolve_type_path_with_facts_checked(path, owner, facts) {
+        Ok(kind) => kind,
+        Err(error) => {
+            facts.record_resolution_error(error);
+            None
+        }
+    }
+}
+
+fn resolve_type_path_with_facts_checked(
+    path: &syn::Path,
+    owner: &IdentityOwner,
+    facts: &IdentityTypeFacts,
+) -> Result<Option<TrackedIdentityType>, String> {
+    let segments = path
+        .segments
+        .iter()
+        .map(|segment| segment.ident.to_string())
+        .collect::<Vec<_>>();
+    if segments == ["Self"] {
+        return Ok(match owner {
+            IdentityOwner::Impl { self_ty, .. } => Some(self_ty.clone()),
+            IdentityOwner::Module(_) => None,
+        });
+    }
+    let candidates = expanded_symbol_paths(&segments, owner, facts)?;
+    let mut local = candidates
+        .iter()
+        .filter_map(|target| match target {
+            RustImportTarget::Local(path) => {
+                let label = path.join("::");
+                facts.local_types.contains(&label).then_some(label)
+            }
+            RustImportTarget::External(_) => None,
+        })
+        .collect::<Vec<_>>();
+    local.sort();
+    local.dedup();
+    if local.len() == 1 {
+        let kind = local.into_iter().next().expect("one local type");
+        return Ok(Some(
+            facts
+                .type_alias_targets
+                .get(&kind)
+                .cloned()
+                .unwrap_or(kind),
+        ));
+    }
+    if local.len() > 1 {
+        return Err(format!(
+            "type path {} resolved to {} local types",
+            path.to_token_stream(),
+            local.len()
+        ));
+    }
+    let mut external = candidates
+        .iter()
+        .filter_map(|target| match target {
+            RustImportTarget::External(path) => Some(format!("$external$::{}", path.join("::"))),
+            RustImportTarget::Local(_) => None,
+        })
+        .collect::<Vec<_>>();
+    external.sort();
+    external.dedup();
+    if external.len() == 1 {
+        return Ok(external.into_iter().next());
+    }
+    if external.len() > 1 {
+        return Err(format!(
+            "type path {} resolved to {} external types",
+            path.to_token_stream(),
+            external.len()
+        ));
+    }
+    Ok(segments.last().and_then(|name| {
+        is_rust_prelude_type(name).then(|| format!("$rust$::{name}"))
+    }))
+}
+
+fn expanded_symbol_paths(
+    segments: &[String],
+    owner: &IdentityOwner,
+    facts: &IdentityTypeFacts,
+) -> Result<Vec<RustImportTarget>, String> {
+    let Some(first) = segments.first() else {
+        return Ok(Vec::new());
+    };
+    let module = owner.module();
+    let root = compile_unit_root(module);
+    if first == "crate" || first == "self" || first == "super" {
+        let mut target = if first == "crate" {
+            root.to_vec()
+        } else {
+            module.to_vec()
+        };
+        let mut index = usize::from(first == "crate" || first == "self");
+        while segments.get(index).is_some_and(|part| part == "super") {
+            if target.len() == root.len() {
+                return Ok(Vec::new());
+            }
+            target.pop();
+            index += 1;
+        }
+        target.extend(segments[index..].iter().cloned());
+        return expand_import_targets(vec![RustImportTarget::Local(target)], facts);
+    }
+    let mut lexical_namespace = module.to_vec();
+    lexical_namespace.push(first.clone());
+    let first_is_local_namespace = segments.len() > 1
+        && (facts.modules.contains(&lexical_namespace)
+            || facts
+                .local_types
+                .contains(&lexical_namespace.join("::")));
+    if !first_is_local_namespace
+        && let Some(targets) = facts.imports.get(&(module.to_vec(), first.clone()))
+    {
+        let targets = targets
+            .iter()
+            .map(|target| match target {
+                RustImportTarget::Local(path) => {
+                    let mut path = path.clone();
+                    path.extend(segments.iter().skip(1).cloned());
+                    RustImportTarget::Local(path)
+                }
+                RustImportTarget::External(path) => {
+                    let mut path = path.clone();
+                    path.extend(segments.iter().skip(1).cloned());
+                    RustImportTarget::External(path)
+                }
+            })
+            .collect();
+        return expand_import_targets(targets, facts);
+    }
+    let mut candidates = Vec::new();
+    let mut current = module.to_vec();
+    current.extend(segments.iter().cloned());
+    candidates.push(RustImportTarget::Local(current));
+    if let Some(globs) = facts.glob_imports.get(module) {
+        for glob in globs {
+            match glob {
+                RustImportTarget::Local(path) => {
+                    let mut path = path.clone();
+                    path.extend(segments.iter().cloned());
+                    candidates.push(RustImportTarget::Local(path));
+                }
+                RustImportTarget::External(path) => {
+                    let mut path = path.clone();
+                    path.extend(segments.iter().cloned());
+                    candidates.push(RustImportTarget::External(path));
+                }
+            }
+        }
+    }
+    if facts
+        .external_crates
+        .get(root)
+        .is_some_and(|crates| crates.contains(first))
+        || is_rust_external_crate(first)
+    {
+        candidates.push(RustImportTarget::External(segments.to_vec()));
+    }
+    expand_import_targets(candidates, facts)
+}
+
+fn expand_import_targets(
+    targets: Vec<RustImportTarget>,
+    facts: &IdentityTypeFacts,
+) -> Result<Vec<RustImportTarget>, String> {
+    let mut expanded = Vec::new();
+    for target in targets {
+        expand_normalized_import_target(target, facts, &mut Vec::new(), &mut expanded)?;
+    }
+    expanded.sort();
+    expanded.dedup();
+    Ok(expanded)
+}
+
+fn expand_normalized_import_target(
+    target: RustImportTarget,
+    facts: &IdentityTypeFacts,
+    visiting: &mut Vec<RustImportKey>,
+    expanded: &mut Vec<RustImportTarget>,
+) -> Result<(), String> {
+    let RustImportTarget::Local(path) = target else {
+        expanded.push(target);
+        return Ok(());
+    };
+    let Some((key, suffix)) = first_import_alias(
+        &path,
+        &facts.imports,
+        &facts.modules,
+        &facts.local_types,
+    ) else {
+        expanded.push(RustImportTarget::Local(path));
+        return Ok(());
+    };
+    if let Some(index) = visiting.iter().position(|candidate| candidate == &key) {
+        let mut cycle = visiting[index..]
+            .iter()
+            .map(rust_import_key_label)
+            .collect::<Vec<_>>();
+        cycle.push(rust_import_key_label(&key));
+        return Err(format!("local import alias cycle: {}", cycle.join(" -> ")));
+    }
+    let replacements = facts.imports.get(&key).ok_or_else(|| {
+        format!("missing normalized import alias {}", rust_import_key_label(&key))
+    })?;
+    if replacements.len() != 1 {
+        return Err(format!(
+            "import alias {} resolves ambiguously to {} targets",
+            rust_import_key_label(&key),
+            replacements.len()
+        ));
+    }
+    visiting.push(key);
+    expand_normalized_import_target(
+        append_import_suffix(replacements[0].clone(), suffix),
+        facts,
+        visiting,
+        expanded,
+    )?;
+    visiting.pop();
+    Ok(())
+}
+
+fn is_rust_prelude_type(name: &str) -> bool {
+    matches!(
+        name,
+        "bool"
+            | "char"
+            | "f32"
+            | "f64"
+            | "i8"
+            | "i16"
+            | "i32"
+            | "i64"
+            | "i128"
+            | "isize"
+            | "u8"
+            | "u16"
+            | "u32"
+            | "u64"
+            | "u128"
+            | "usize"
+            | "Box"
+            | "Option"
+            | "Result"
+            | "String"
+            | "Vec"
+    )
+}
+
+fn infer_identity_parameter_axes(
+    file: &syn::File,
+) -> Result<HashMap<IdentityFunctionKey, Vec<Option<&'static str>>>, String> {
+    let type_facts = identity_type_facts(file)?;
     let mut functions = Vec::new();
-    collect_identity_functions(&file.items, &mut functions);
-    let type_facts = identity_type_facts(file);
+    collect_identity_functions(&file.items, &[], &type_facts, &mut functions);
+    infer_identity_parameter_axes_for_functions(&functions, &type_facts)
+}
+
+fn infer_identity_parameter_axes_for_functions(
+    functions: &[IdentityFunction<'_>],
+    type_facts: &IdentityTypeFacts,
+) -> Result<HashMap<IdentityFunctionKey, Vec<Option<&'static str>>>, String> {
     let mut axes = functions
         .iter()
         .map(|function| {
@@ -2771,24 +5944,27 @@ fn infer_identity_parameter_axes(file: &syn::File) -> HashMap<String, Vec<Option
                 .collect::<Vec<_>>()
         })
         .collect::<Vec<_>>();
-    let targets = functions.iter().enumerate().fold(
-        HashMap::<String, Vec<usize>>::new(),
-        |mut targets, (index, function)| {
-            targets
-                .entry(function.name.clone())
-                .or_default()
-                .push(index);
-            targets
-        },
-    );
+    let mut targets = HashMap::<IdentityFunctionKey, Vec<usize>>::new();
+    for (index, function) in functions.iter().enumerate() {
+        targets
+            .entry(function.key.clone())
+            .or_default()
+            .push(index);
+    }
     let propagation_budget = axes.iter().map(Vec::len).sum::<usize>().saturating_add(1);
+    let mut resolution_errors = Vec::new();
     for _ in 0..propagation_budget {
         let mut inferred_calls = Vec::new();
         for (function, parameters) in functions.iter().zip(&axes) {
-            let mut visitor =
-                IdentityCallPropagation::new(function.inputs, parameters, &type_facts);
+            let mut visitor = IdentityCallPropagation::new(
+                function.inputs,
+                parameters,
+                &function.key.owner,
+                &type_facts,
+            );
             visitor.visit_block(function.block);
             inferred_calls.extend(visitor.calls);
+            resolution_errors.extend(visitor.errors);
         }
         let mut changed = false;
         for (callee, parameter_index, axis) in inferred_calls {
@@ -2819,10 +5995,16 @@ fn infer_identity_parameter_axes(file: &syn::File) -> HashMap<String, Vec<Option
         }
     }
 
-    let mut merged = HashMap::<String, Vec<Option<&'static str>>>::new();
+    if !resolution_errors.is_empty() {
+        resolution_errors.sort();
+        resolution_errors.dedup();
+        return Err(resolution_errors.join("\n"));
+    }
+
+    let mut merged = HashMap::<IdentityFunctionKey, Vec<Option<&'static str>>>::new();
     for (function, parameters) in functions.iter().zip(axes) {
         let entry = merged
-            .entry(function.name.clone())
+            .entry(function.key.clone())
             .or_insert_with(|| vec![None; parameters.len()]);
         if entry.len() < parameters.len() {
             entry.resize(parameters.len(), None);
@@ -2833,23 +6015,35 @@ fn infer_identity_parameter_axes(file: &syn::File) -> HashMap<String, Vec<Option
             }
         }
     }
-    merged
+    Ok(merged)
 }
 
-fn collect_identity_functions<'a>(items: &'a [Item], functions: &mut Vec<IdentityFunction<'a>>) {
+fn collect_identity_functions<'a>(
+    items: &'a [Item],
+    module: &[String],
+    facts: &IdentityTypeFacts,
+    functions: &mut Vec<IdentityFunction<'a>>,
+) {
     for item in items {
         match item {
             Item::Fn(function) => functions.push(IdentityFunction {
-                name: function.sig.ident.to_string(),
+                key: IdentityFunctionKey {
+                    owner: IdentityOwner::Module(module.to_vec()),
+                    name: function.sig.ident.to_string(),
+                },
                 inputs: &function.sig.inputs,
                 output: &function.sig.output,
                 block: &function.block,
             }),
             Item::Impl(implementation) => {
+                let owner = identity_impl_owner_with_facts(implementation, module, facts);
                 for item in &implementation.items {
                     if let ImplItem::Fn(function) = item {
                         functions.push(IdentityFunction {
-                            name: function.sig.ident.to_string(),
+                            key: IdentityFunctionKey {
+                                owner: owner.clone(),
+                                name: function.sig.ident.to_string(),
+                            },
                             inputs: &function.sig.inputs,
                             output: &function.sig.output,
                             block: &function.block,
@@ -2857,9 +6051,31 @@ fn collect_identity_functions<'a>(items: &'a [Item], functions: &mut Vec<Identit
                     }
                 }
             }
-            Item::Mod(module) => {
-                if let Some((_, items)) = &module.content {
-                    collect_identity_functions(items, functions);
+            Item::Trait(item) => {
+                let owner = identity_trait_owner(item, module);
+                for member in &item.items {
+                    let syn::TraitItem::Fn(function) = member else {
+                        continue;
+                    };
+                    let Some(block) = &function.default else {
+                        continue;
+                    };
+                    functions.push(IdentityFunction {
+                        key: IdentityFunctionKey {
+                            owner: owner.clone(),
+                            name: function.sig.ident.to_string(),
+                        },
+                        inputs: &function.sig.inputs,
+                        output: &function.sig.output,
+                        block,
+                    });
+                }
+            }
+            Item::Mod(item_module) => {
+                if let Some((_, items)) = &item_module.content {
+                    let mut nested = module.to_vec();
+                    nested.push(item_module.ident.to_string());
+                    collect_identity_functions(items, &nested, facts, functions);
                 }
             }
             _ => {}
@@ -2867,19 +6083,361 @@ fn collect_identity_functions<'a>(items: &'a [Item], functions: &mut Vec<Identit
     }
 }
 
-fn infer_function_return_strings(file: &syn::File) -> HashMap<String, Vec<String>> {
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum RustCallResolution {
+    Local(IdentityFunctionKey),
+    LocalConstructor(TrackedIdentityType),
+    ProvenExternal,
+    GeneratedByTrackedDerive,
+    Ambiguous(String),
+    UnsupportedLocal(String),
+}
+
+fn resolve_call_path(
+    path: &syn::Path,
+    owner: &IdentityOwner,
+    facts: &IdentityTypeFacts,
+) -> RustCallResolution {
+    let segments = path
+        .segments
+        .iter()
+        .map(|segment| segment.ident.to_string())
+        .collect::<Vec<_>>();
+    let Some((name, prefix)) = segments.split_last() else {
+        return RustCallResolution::UnsupportedLocal("empty call path".to_string());
+    };
+    if segments == ["Self"] {
+        return match owner {
+            IdentityOwner::Impl { self_ty, .. } => {
+                RustCallResolution::LocalConstructor(self_ty.clone())
+            }
+            IdentityOwner::Module(_) => RustCallResolution::UnsupportedLocal(
+                "Self constructor outside an impl".to_string(),
+            ),
+        };
+    }
+    if prefix == ["Self"] {
+        let key = IdentityFunctionKey {
+            owner: owner.clone(),
+            name: name.clone(),
+        };
+        if facts.functions.contains(&key) {
+            return RustCallResolution::Local(key);
+        }
+        if let IdentityOwner::Impl { self_ty, .. } = owner
+            && facts
+                .generated_methods
+                .contains(&(self_ty.clone(), name.clone()))
+        {
+            return RustCallResolution::GeneratedByTrackedDerive;
+        }
+        return RustCallResolution::UnsupportedLocal(format!(
+            "unresolved Self call {}",
+            path.to_token_stream()
+        ));
+    }
+
+    let expanded = match expanded_symbol_paths(&segments, owner, facts) {
+        Ok(expanded) => expanded,
+        Err(error) => return RustCallResolution::UnsupportedLocal(error),
+    };
+    let mut local = Vec::<IdentityFunctionKey>::new();
+    let mut constructors = Vec::<String>::new();
+    let mut generated = false;
+    let mut external = false;
+    let mut local_evidence = false;
+    for target in expanded {
+        match target {
+            RustImportTarget::External(_) => external = true,
+            RustImportTarget::Local(path) => {
+                let label = path.join("::");
+                if facts.local_constructors.contains(&label)
+                    || facts.enum_variants.contains(&label)
+                {
+                    constructors.push(label.clone());
+                }
+                if let Some((function, module)) = path.split_last() {
+                    let key = IdentityFunctionKey {
+                        owner: IdentityOwner::Module(module.to_vec()),
+                        name: function.clone(),
+                    };
+                    if facts.functions.contains(&key) {
+                        local.push(key);
+                    }
+                    let type_label = module.join("::");
+                    if facts.local_types.contains(&type_label) {
+                        if let Some(associated) = facts
+                            .impl_functions
+                            .get(&(type_label.clone(), function.clone()))
+                        {
+                            local.extend(associated.iter().cloned());
+                        }
+                        generated |= facts
+                            .generated_methods
+                            .contains(&(type_label, function.clone()));
+                    }
+                }
+                let first_visible = compile_unit_root(&path).len().saturating_add(1);
+                local_evidence |= (first_visible..=path.len()).any(|length| {
+                    facts.has_local_path_prefix(&path[..length])
+                        || facts
+                            .local_types
+                            .contains(&path[..length].join("::"))
+                });
+            }
+        }
+    }
+    local.sort();
+    local.dedup();
+    constructors.sort();
+    constructors.dedup();
+    match (local.as_slice(), constructors.as_slice()) {
+        ([function], []) => return RustCallResolution::Local(function.clone()),
+        ([], [constructor]) => {
+            return RustCallResolution::LocalConstructor(constructor.clone());
+        }
+        ([], []) => {}
+        _ => {
+            return RustCallResolution::Ambiguous(format!(
+                "call {} resolved to {} functions and {} constructors",
+                path.to_token_stream(),
+                local.len(),
+                constructors.len()
+            ));
+        }
+    }
+    if generated {
+        return RustCallResolution::GeneratedByTrackedDerive;
+    }
+    if external {
+        return RustCallResolution::ProvenExternal;
+    }
+    if local_evidence
+        || matches!(segments.first().map(String::as_str), Some("crate" | "self" | "super"))
+    {
+        RustCallResolution::UnsupportedLocal(format!(
+            "unresolved local call {}",
+            path.to_token_stream()
+        ))
+    } else if is_rust_prelude_call(&segments) {
+        RustCallResolution::ProvenExternal
+    } else {
+        RustCallResolution::UnsupportedLocal(format!(
+            "unproven external call {}",
+            path.to_token_stream()
+        ))
+    }
+}
+
+fn resolve_function_path(
+    path: &syn::Path,
+    owner: &IdentityOwner,
+    facts: &IdentityTypeFacts,
+) -> Option<IdentityFunctionKey> {
+    match resolve_call_path(path, owner, facts) {
+        RustCallResolution::Local(key) => Some(key),
+        _ => None,
+    }
+}
+
+fn resolve_method_call(
+    call: &syn::ExprMethodCall,
+    owner: &IdentityOwner,
+    types: &[HashMap<String, TrackedIdentityType>],
+    facts: &IdentityTypeFacts,
+) -> RustCallResolution {
+    if matches!(call.receiver.as_ref(), Expr::Path(path) if path.path.is_ident("self")) {
+        let key = IdentityFunctionKey {
+            owner: owner.clone(),
+            name: call.method.to_string(),
+        };
+        if matches!(owner, IdentityOwner::Impl { .. }) && facts.functions.contains(&key) {
+            return RustCallResolution::Local(key);
+        }
+    }
+    let receiver_type = expression_tracked_type(&call.receiver, owner, types, facts);
+    if receiver_type.as_deref() == Some("")
+        || receiver_type
+            .as_deref()
+            .is_some_and(|kind| kind.starts_with("$external$::") || kind.starts_with("$rust$::"))
+    {
+        return RustCallResolution::ProvenExternal;
+    }
+    let candidates = receiver_type
+        .as_ref()
+        .and_then(|receiver| {
+            facts
+                .impl_functions
+                .get(&(receiver.clone(), call.method.to_string()))
+        })
+        .cloned()
+        .unwrap_or_default();
+    let mut inherent = candidates
+        .iter()
+        .filter(|candidate| {
+            matches!(candidate.owner, IdentityOwner::Impl { trait_name: None, .. })
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    let mut trait_methods = candidates
+        .into_iter()
+        .filter(|candidate| {
+            matches!(candidate.owner, IdentityOwner::Impl { trait_name: Some(_), .. })
+        })
+        .collect::<Vec<_>>();
+    inherent.sort();
+    inherent.dedup();
+    trait_methods.sort();
+    trait_methods.dedup();
+    if let [candidate] = inherent.as_slice() {
+        return RustCallResolution::Local(candidate.clone());
+    }
+    if inherent.len() > 1 {
+        return RustCallResolution::Ambiguous(format!(
+            "method {} resolved to {} inherent impl items",
+            call.method,
+            inherent.len()
+        ));
+    }
+    if let Some(receiver) = receiver_type.as_ref()
+        && facts
+            .generated_methods
+            .contains(&(receiver.clone(), call.method.to_string()))
+    {
+        return RustCallResolution::GeneratedByTrackedDerive;
+    }
+    match trait_methods.as_slice() {
+        [candidate] => RustCallResolution::Local(candidate.clone()),
+        [] => {
+            let same_name_local = facts.unit_impl_method_names.contains(&(
+                compile_unit_root(owner.module()).to_vec(),
+                call.method.to_string(),
+            ));
+            if receiver_type
+                .as_ref()
+                .is_some_and(|kind| facts.local_types.contains(kind))
+            {
+                RustCallResolution::UnsupportedLocal(format!(
+                    "unresolved local method {} for receiver {}",
+                    call.method,
+                    receiver_type.unwrap_or_default()
+                ))
+            } else if same_name_local {
+                RustCallResolution::Ambiguous(format!(
+                    "method {} has local candidates but receiver type is {}",
+                    call.method,
+                    receiver_type.as_deref().unwrap_or("unresolved")
+                ))
+            } else {
+                RustCallResolution::UnsupportedLocal(format!(
+                    "method {} has unproven receiver type {}",
+                    call.method,
+                    receiver_type.as_deref().unwrap_or("unresolved")
+                ))
+            }
+        }
+        _ => RustCallResolution::Ambiguous(format!(
+            "method {} resolved to {} local trait impl items",
+            call.method,
+            trait_methods.len()
+        )),
+    }
+}
+
+fn resolve_method_key(
+    call: &syn::ExprMethodCall,
+    owner: &IdentityOwner,
+    types: &[HashMap<String, TrackedIdentityType>],
+    facts: &IdentityTypeFacts,
+) -> Option<IdentityFunctionKey> {
+    match resolve_method_call(call, owner, types, facts) {
+        RustCallResolution::Local(key) => Some(key),
+        _ => None,
+    }
+}
+
+fn is_rust_prelude_call(segments: &[String]) -> bool {
+    matches!(segments, [name] if matches!(name.as_str(), "drop" | "Some" | "None" | "Ok" | "Err"))
+        || matches!(segments, [owner, _] if is_rust_prelude_type(owner))
+}
+
+fn is_builtin_rust_macro_path(path: &syn::Path) -> bool {
+    let segments = path
+        .segments
+        .iter()
+        .map(|segment| segment.ident.to_string())
+        .collect::<Vec<_>>();
+    matches!(
+        segments.as_slice(),
+        [name]
+            if matches!(
+                name.as_str(),
+                "assert"
+                    | "assert_eq"
+                    | "assert_ne"
+                    | "cfg"
+                    | "column"
+                    | "compile_error"
+                    | "concat"
+                    | "dbg"
+                    | "debug_assert"
+                    | "debug_assert_eq"
+                    | "debug_assert_ne"
+                    | "eprint"
+                    | "eprintln"
+                    | "env"
+                    | "file"
+                    | "format"
+                    | "format_args"
+                    | "include"
+                    | "include_bytes"
+                    | "include_str"
+                    | "line"
+                    | "matches"
+                    | "module_path"
+                    | "option_env"
+                    | "panic"
+                    | "print"
+                    | "println"
+                    | "stringify"
+                    | "todo"
+                    | "unimplemented"
+                    | "unreachable"
+                    | "vec"
+                    | "write"
+                    | "writeln"
+            )
+    )
+}
+
+fn infer_function_return_strings(
+    file: &syn::File,
+) -> Result<HashMap<IdentityFunctionKey, Vec<String>>, String> {
+    let type_facts = identity_type_facts(file)?;
     let mut functions = Vec::new();
-    collect_identity_functions(&file.items, &mut functions);
-    let type_facts = identity_type_facts(file);
-    let mut returns = HashMap::<String, Vec<String>>::new();
+    collect_identity_functions(&file.items, &[], &type_facts, &mut functions);
+    infer_function_return_strings_for_functions(&functions, &type_facts)
+}
+
+fn infer_function_return_strings_for_functions(
+    functions: &[IdentityFunction<'_>],
+    type_facts: &IdentityTypeFacts,
+) -> Result<HashMap<IdentityFunctionKey, Vec<String>>, String> {
+    let mut returns = HashMap::<IdentityFunctionKey, Vec<String>>::new();
     for _ in 0..functions.len().saturating_add(1) {
         let mut changed = false;
-        for function in &functions {
+        for function in functions {
             let mut values =
-                return_strings_for_block(function.inputs, function.block, &returns, &type_facts);
+                return_strings_for_block(
+                    function.inputs,
+                    function.block,
+                    &function.key.owner,
+                    &returns,
+                    &type_facts,
+                );
             values.sort();
             values.dedup();
-            let entry = returns.entry(function.name.clone()).or_default();
+            let entry = returns.entry(function.key.clone()).or_default();
             let before = entry.len();
             entry.extend(values);
             entry.sort();
@@ -2890,17 +6448,19 @@ fn infer_function_return_strings(file: &syn::File) -> HashMap<String, Vec<String
             break;
         }
     }
-    returns
+    Ok(returns)
 }
 
 fn return_strings_for_block(
     inputs: &syn::punctuated::Punctuated<FnArg, Token![,]>,
     block: &syn::Block,
-    inferred_returns: &HashMap<String, Vec<String>>,
+    owner: &IdentityOwner,
+    inferred_returns: &HashMap<IdentityFunctionKey, Vec<String>>,
     type_facts: &IdentityTypeFacts,
 ) -> Vec<String> {
     struct ReturnStringVisitor<'a> {
-        inferred_returns: &'a HashMap<String, Vec<String>>,
+        owner: &'a IdentityOwner,
+        inferred_returns: &'a HashMap<IdentityFunctionKey, Vec<String>>,
         type_facts: &'a IdentityTypeFacts,
         types: Vec<HashMap<String, TrackedIdentityType>>,
         values: Vec<String>,
@@ -2912,6 +6472,7 @@ fn return_strings_for_block(
             syn::visit::visit_block(self, node);
             self.values.extend(block_return_strings_with_returns(
                 node,
+                self.owner,
                 self.inferred_returns,
                 &self.types,
                 self.type_facts,
@@ -2922,9 +6483,18 @@ fn return_strings_for_block(
         fn visit_local(&mut self, node: &syn::Local) {
             if let Some((name, declared_type)) = local_binding(&node.pat)
                 && let Some(initializer) = &node.init
-                && let Some(kind) = declared_type.and_then(tracked_identity_type).or_else(|| {
-                    expression_tracked_type(&initializer.expr, &self.types, self.type_facts)
-                })
+                && let Some(kind) = declared_type
+                    .and_then(|kind| {
+                        tracked_identity_type_with_facts(kind, self.owner, self.type_facts)
+                    })
+                    .or_else(|| {
+                        expression_tracked_type(
+                            &initializer.expr,
+                            self.owner,
+                            &self.types,
+                            self.type_facts,
+                        )
+                    })
             {
                 self.types
                     .last_mut()
@@ -2938,6 +6508,7 @@ fn return_strings_for_block(
             if let Some(expression) = &node.expr {
                 self.values.extend(returned_strings_with_returns(
                     expression,
+                    self.owner,
                     self.inferred_returns,
                     &self.types,
                     self.type_facts,
@@ -2963,10 +6534,12 @@ fn return_strings_for_block(
             let syn::Pat::Ident(pattern) = input.pat.as_ref() else {
                 return None;
             };
-            tracked_identity_type(&input.ty).map(|kind| (pattern.ident.to_string(), kind))
+            tracked_identity_type_with_facts(&input.ty, owner, type_facts)
+                .map(|kind| (pattern.ident.to_string(), kind))
         })
         .collect::<HashMap<_, _>>();
     let mut visitor = ReturnStringVisitor {
+        owner,
         inferred_returns,
         type_facts,
         types: vec![parameter_types],
@@ -2983,14 +6556,17 @@ struct IdentityCallPropagation<'a> {
     aliases: Vec<HashMap<String, &'static str>>,
     non_identity: Vec<HashSet<String>>,
     types: Vec<HashMap<String, TrackedIdentityType>>,
+    owner: &'a IdentityOwner,
     type_facts: &'a IdentityTypeFacts,
-    calls: Vec<(String, usize, &'static str)>,
+    calls: Vec<(IdentityFunctionKey, usize, &'static str)>,
+    errors: Vec<String>,
 }
 
 impl<'a> IdentityCallPropagation<'a> {
     fn new(
         inputs: &syn::punctuated::Punctuated<FnArg, Token![,]>,
         parameters: &[Option<&'static str>],
+        owner: &'a IdentityOwner,
         type_facts: &'a IdentityTypeFacts,
     ) -> Self {
         let mut aliases = HashMap::new();
@@ -2999,6 +6575,9 @@ impl<'a> IdentityCallPropagation<'a> {
         let mut typed_index = 0;
         for input in inputs {
             let FnArg::Typed(input) = input else {
+                if let IdentityOwner::Impl { self_ty, .. } = owner {
+                    types.insert("self".to_string(), self_ty.clone());
+                }
                 continue;
             };
             let parameter_axis = parameters.get(typed_index).copied().flatten();
@@ -3012,7 +6591,7 @@ impl<'a> IdentityCallPropagation<'a> {
             } else if exact_identity_axis(&name).is_some() && !type_is_raw_identity(&input.ty) {
                 non_identity.insert(name);
             }
-            if let Some(kind) = tracked_identity_type(&input.ty) {
+            if let Some(kind) = tracked_identity_type_with_facts(&input.ty, owner, type_facts) {
                 types.insert(pattern.ident.to_string(), kind);
             }
         }
@@ -3020,8 +6599,10 @@ impl<'a> IdentityCallPropagation<'a> {
             aliases: vec![aliases],
             non_identity: vec![non_identity],
             types: vec![types],
+            owner,
             type_facts,
             calls: Vec::new(),
+            errors: Vec::new(),
         }
     }
 
@@ -3031,16 +6612,28 @@ impl<'a> IdentityCallPropagation<'a> {
             &self.aliases,
             &self.non_identity,
             &self.types,
+            self.owner,
             self.type_facts,
         )
     }
 
-    fn record_call<'expr>(&mut self, callee: &str, arguments: impl Iterator<Item = &'expr Expr>) {
+    fn record_call<'expr>(
+        &mut self,
+        callee: IdentityFunctionKey,
+        arguments: impl Iterator<Item = &'expr Expr>,
+    ) {
         for (index, argument) in arguments.enumerate() {
             if let Some(axis) = self.axis(argument) {
-                self.calls.push((callee.to_string(), index, axis));
+                self.calls.push((callee.clone(), index, axis));
             }
         }
+    }
+
+    fn arguments_carry_identity<'expr>(
+        &self,
+        arguments: impl Iterator<Item = &'expr Expr>,
+    ) -> bool {
+        arguments.into_iter().any(|argument| self.axis(argument).is_some())
     }
 }
 
@@ -3061,9 +6654,18 @@ impl Visit<'_> for IdentityCallPropagation<'_> {
         {
             let declared_axis = exact_identity_axis(&name);
             let initializer_axis = self.axis(&initializer.expr);
-            let inferred_type = declared_type.and_then(tracked_identity_type).or_else(|| {
-                expression_tracked_type(&initializer.expr, &self.types, self.type_facts)
-            });
+            let inferred_type = declared_type
+                .and_then(|kind| {
+                    tracked_identity_type_with_facts(kind, self.owner, self.type_facts)
+                })
+                .or_else(|| {
+                    expression_tracked_type(
+                        &initializer.expr,
+                        self.owner,
+                        &self.types,
+                        self.type_facts,
+                    )
+                });
             let axis = match (declared_axis, declared_type) {
                 (Some(axis), Some(kind)) if type_is_raw_identity(kind) => Some(axis),
                 (Some(_), Some(_)) => None,
@@ -3092,16 +6694,45 @@ impl Visit<'_> for IdentityCallPropagation<'_> {
     }
 
     fn visit_expr_call(&mut self, node: &syn::ExprCall) {
-        if let Expr::Path(path) = node.func.as_ref()
-            && let Some(segment) = path.path.segments.last()
-        {
-            self.record_call(&segment.ident.to_string(), node.args.iter());
+        if let Expr::Path(path) = node.func.as_ref() {
+            match resolve_call_path(&path.path, self.owner, self.type_facts) {
+                RustCallResolution::Local(callee) => {
+                    self.record_call(callee, node.args.iter());
+                }
+                RustCallResolution::Ambiguous(error)
+                | RustCallResolution::UnsupportedLocal(error)
+                    if self.arguments_carry_identity(node.args.iter()) =>
+                {
+                    self.errors.push(error);
+                }
+                RustCallResolution::LocalConstructor(_)
+                | RustCallResolution::ProvenExternal
+                | RustCallResolution::GeneratedByTrackedDerive
+                | RustCallResolution::Ambiguous(_)
+                | RustCallResolution::UnsupportedLocal(_) => {}
+            }
         }
         syn::visit::visit_expr_call(self, node);
     }
 
     fn visit_expr_method_call(&mut self, node: &syn::ExprMethodCall) {
-        self.record_call(&node.method.to_string(), node.args.iter());
+        match resolve_method_call(node, self.owner, &self.types, self.type_facts) {
+            RustCallResolution::Local(callee) => {
+                self.record_call(callee, node.args.iter());
+            }
+            RustCallResolution::Ambiguous(error)
+            | RustCallResolution::UnsupportedLocal(error)
+                if self.axis(&node.receiver).is_some()
+                    || self.arguments_carry_identity(node.args.iter()) =>
+            {
+                self.errors.push(error);
+            }
+            RustCallResolution::LocalConstructor(_)
+            | RustCallResolution::ProvenExternal
+            | RustCallResolution::GeneratedByTrackedDerive
+            | RustCallResolution::Ambiguous(_)
+            | RustCallResolution::UnsupportedLocal(_) => {}
+        }
         syn::visit::visit_expr_method_call(self, node);
     }
 }
@@ -3115,8 +6746,9 @@ struct IdentityBranchVisitor<'a> {
     types: Vec<HashMap<String, TrackedIdentityType>>,
     collections: Vec<HashMap<String, Vec<String>>>,
     return_axis: Option<&'static str>,
-    inferred_parameters: HashMap<String, Vec<Option<&'static str>>>,
-    inferred_returns: HashMap<String, Vec<String>>,
+    owner: IdentityOwner,
+    inferred_parameters: HashMap<IdentityFunctionKey, Vec<Option<&'static str>>>,
+    inferred_returns: HashMap<IdentityFunctionKey, Vec<String>>,
     type_facts: IdentityTypeFacts,
 }
 
@@ -3139,9 +6771,18 @@ impl Visit<'_> for IdentityBranchVisitor<'_> {
         {
             let declared_axis = exact_identity_axis(&name);
             let initializer_axis = self.axis(&initializer.expr);
-            let inferred_type = declared_type.and_then(tracked_identity_type).or_else(|| {
-                expression_tracked_type(&initializer.expr, &self.types, &self.type_facts)
-            });
+            let inferred_type = declared_type
+                .and_then(|kind| {
+                    tracked_identity_type_with_facts(kind, &self.owner, &self.type_facts)
+                })
+                .or_else(|| {
+                    expression_tracked_type(
+                        &initializer.expr,
+                        &self.owner,
+                        &self.types,
+                        &self.type_facts,
+                    )
+                });
             let axis = match (declared_axis, declared_type) {
                 (Some(axis), Some(kind)) if type_is_raw_identity(kind) => Some(axis),
                 (Some(_), Some(_)) => None,
@@ -3212,6 +6853,7 @@ impl Visit<'_> for IdentityBranchVisitor<'_> {
                 &self.aliases,
                 &self.non_identity,
                 &self.types,
+                &self.owner,
                 &self.type_facts,
             ) {
                 let mut values = self.strings(argument);
@@ -3302,7 +6944,11 @@ impl Visit<'_> for IdentityBranchVisitor<'_> {
     }
 
     fn visit_item_fn(&mut self, node: &syn::ItemFn) {
-        self.push_parameter_scope(&node.sig.ident.to_string(), &node.sig.inputs);
+        let key = IdentityFunctionKey {
+            owner: self.owner.clone(),
+            name: node.sig.ident.to_string(),
+        };
+        self.push_parameter_scope(&key, &node.sig.inputs);
         let previous = self.return_axis;
         self.return_axis = identity_return_axis(&node.sig.ident.to_string());
         if let Some(axis) = self.return_axis {
@@ -3314,7 +6960,11 @@ impl Visit<'_> for IdentityBranchVisitor<'_> {
     }
 
     fn visit_impl_item_fn(&mut self, node: &syn::ImplItemFn) {
-        self.push_parameter_scope(&node.sig.ident.to_string(), &node.sig.inputs);
+        let key = IdentityFunctionKey {
+            owner: self.owner.clone(),
+            name: node.sig.ident.to_string(),
+        };
+        self.push_parameter_scope(&key, &node.sig.inputs);
         let previous = self.return_axis;
         self.return_axis = identity_return_axis(&node.sig.ident.to_string());
         if let Some(axis) = self.return_axis {
@@ -3330,6 +6980,7 @@ impl IdentityBranchVisitor<'_> {
     fn strings(&self, expression: &Expr) -> Vec<String> {
         expression_strings_with_returns(
             expression,
+            &self.owner,
             &self.inferred_returns,
             &self.types,
             &self.type_facts,
@@ -3339,6 +6990,7 @@ impl IdentityBranchVisitor<'_> {
     fn block_strings(&self, block: &syn::Block) -> Vec<String> {
         block_tail_strings_with_returns(
             block,
+            &self.owner,
             &self.inferred_returns,
             &self.types,
             &self.type_facts,
@@ -3351,22 +7003,26 @@ impl IdentityBranchVisitor<'_> {
             &self.aliases,
             &self.non_identity,
             &self.types,
+            &self.owner,
             &self.type_facts,
         )
     }
 
     fn push_parameter_scope(
         &mut self,
-        function_name: &str,
+        function_key: &IdentityFunctionKey,
         inputs: &syn::punctuated::Punctuated<FnArg, Token![,]>,
     ) {
         let mut aliases = HashMap::new();
         let mut non_identity = HashSet::new();
         let mut types = HashMap::new();
-        let inferred = self.inferred_parameters.get(function_name);
+        let inferred = self.inferred_parameters.get(function_key);
         let mut typed_index = 0;
         for input in inputs {
             let FnArg::Typed(input) = input else {
+                if let IdentityOwner::Impl { self_ty, .. } = &self.owner {
+                    types.insert("self".to_string(), self_ty.clone());
+                }
                 continue;
             };
             let parameter_index = typed_index;
@@ -3387,7 +7043,11 @@ impl IdentityBranchVisitor<'_> {
             } else if declared_axis.is_some() {
                 non_identity.insert(name);
             }
-            if let Some(kind) = tracked_identity_type(&input.ty) {
+            if let Some(kind) = tracked_identity_type_with_facts(
+                &input.ty,
+                &self.owner,
+                &self.type_facts,
+            ) {
                 types.insert(pattern.ident.to_string(), kind);
             }
         }
@@ -3494,58 +7154,133 @@ fn tracked_type_for_name(
 
 fn expression_tracked_type(
     expression: &Expr,
+    owner: &IdentityOwner,
     types: &[HashMap<String, TrackedIdentityType>],
     facts: &IdentityTypeFacts,
 ) -> Option<TrackedIdentityType> {
     match expression {
-        Expr::Lit(literal) if matches!(literal.lit, Lit::Str(_)) => Some(String::new()),
+        Expr::Lit(literal) => match &literal.lit {
+            Lit::Str(_) => Some(String::new()),
+            Lit::Bool(_) => Some("$rust$::bool".to_string()),
+            Lit::Char(_) => Some("$rust$::char".to_string()),
+            Lit::Byte(_) => Some("$rust$::u8".to_string()),
+            Lit::ByteStr(_) | Lit::CStr(_) => Some("$rust$::bytes".to_string()),
+            Lit::Int(value) => Some(format!(
+                "$rust$::{}",
+                if value.suffix().is_empty() { "i32" } else { value.suffix() }
+            )),
+            Lit::Float(value) => Some(format!(
+                "$rust$::{}",
+                if value.suffix().is_empty() { "f64" } else { value.suffix() }
+            )),
+            _ => None,
+        },
         Expr::Path(path) => {
             let segments = path.path.segments.iter().collect::<Vec<_>>();
             let last = segments.last()?;
             tracked_type_for_name(&last.ident.to_string(), types).or_else(|| {
-                (segments.len() > 1).then(|| segments[segments.len() - 2].ident.to_string())
+                resolve_type_path_with_facts(&path.path, owner, facts)
             })
         }
-        Expr::Struct(expression) => expression
-            .path
-            .segments
-            .last()
-            .map(|segment| segment.ident.to_string()),
+        Expr::Struct(expression) => {
+            resolve_type_path_with_facts(&expression.path, owner, facts)
+        }
         Expr::Field(field) => {
-            let owner = expression_tracked_type(&field.base, types, facts)?;
-            if owner.is_empty() {
+            let field_owner = expression_tracked_type(&field.base, owner, types, facts)?;
+            if field_owner.is_empty() {
                 return None;
+            }
+            if field_owner.starts_with("$external$::")
+                || field_owner.starts_with("$rust$::")
+            {
+                return Some("$external$::opaque".to_string());
             }
             let Member::Named(field) = &field.member else {
                 return None;
             };
             facts
                 .struct_fields
-                .get(&(owner, field.to_string()))
+                .get(&(field_owner, field.to_string()))
                 .cloned()
         }
         Expr::Call(call) => {
             let Expr::Path(path) = call.func.as_ref() else {
                 return None;
             };
-            path.path
-                .segments
-                .last()
-                .and_then(|segment| facts.function_returns.get(&segment.ident.to_string()))
-                .cloned()
+            match resolve_call_path(&path.path, owner, facts) {
+                RustCallResolution::Local(key) => facts.function_returns.get(&key).cloned(),
+                RustCallResolution::LocalConstructor(kind) => Some(kind),
+                RustCallResolution::ProvenExternal => {
+                    Some("$external$::opaque".to_string())
+                }
+                RustCallResolution::GeneratedByTrackedDerive
+                | RustCallResolution::Ambiguous(_)
+                | RustCallResolution::UnsupportedLocal(_) => None,
+            }
         }
         Expr::MethodCall(call)
             if identity_passthrough_method(&call.method.to_string())
-                && expression_tracked_type(&call.receiver, types, facts) == Some(String::new()) =>
+                && expression_tracked_type(&call.receiver, owner, types, facts)
+                    == Some(String::new()) =>
         {
             Some(String::new())
         }
-        Expr::Paren(expression) => expression_tracked_type(&expression.expr, types, facts),
-        Expr::Group(expression) => expression_tracked_type(&expression.expr, types, facts),
-        Expr::Reference(expression) => expression_tracked_type(&expression.expr, types, facts),
-        Expr::Try(expression) => expression_tracked_type(&expression.expr, types, facts),
-        Expr::Await(expression) => expression_tracked_type(&expression.base, types, facts),
-        Expr::Cast(expression) => tracked_identity_type(&expression.ty),
+        Expr::MethodCall(call) => match resolve_method_call(call, owner, types, facts) {
+            RustCallResolution::Local(key) => facts.function_returns.get(&key).cloned(),
+            RustCallResolution::LocalConstructor(kind) => Some(kind),
+            RustCallResolution::ProvenExternal => {
+                Some("$external$::opaque".to_string())
+            }
+            RustCallResolution::GeneratedByTrackedDerive => {
+                expression_tracked_type(&call.receiver, owner, types, facts)
+            }
+            RustCallResolution::Ambiguous(_)
+            | RustCallResolution::UnsupportedLocal(_) => None,
+        },
+        Expr::Array(_) | Expr::Repeat(_) => Some("$rust$::array".to_string()),
+        Expr::Tuple(_) => Some("$rust$::tuple".to_string()),
+        Expr::Closure(_) => Some("$rust$::closure".to_string()),
+        Expr::Range(_) => Some("$rust$::range".to_string()),
+        Expr::Macro(expression)
+            if is_builtin_rust_macro_path(&expression.mac.path) =>
+        {
+            Some("$external$::macro-output".to_string())
+        }
+        Expr::Unary(expression) => {
+            expression_tracked_type(&expression.expr, owner, types, facts)
+        }
+        Expr::Binary(expression) => {
+            if matches!(
+                expression.op,
+                BinOp::Eq(_)
+                    | BinOp::Lt(_)
+                    | BinOp::Le(_)
+                    | BinOp::Ne(_)
+                    | BinOp::Ge(_)
+                    | BinOp::Gt(_)
+                    | BinOp::And(_)
+                    | BinOp::Or(_)
+            ) {
+                Some("$rust$::bool".to_string())
+            } else {
+                expression_tracked_type(&expression.left, owner, types, facts)
+            }
+        }
+        Expr::Index(expression) => {
+            let base = expression_tracked_type(&expression.expr, owner, types, facts)?;
+            (base.starts_with("$external$::") || base.starts_with("$rust$::"))
+                .then(|| "$external$::opaque".to_string())
+        }
+        Expr::Paren(expression) => expression_tracked_type(&expression.expr, owner, types, facts),
+        Expr::Group(expression) => expression_tracked_type(&expression.expr, owner, types, facts),
+        Expr::Reference(expression) => {
+            expression_tracked_type(&expression.expr, owner, types, facts)
+        }
+        Expr::Try(expression) => expression_tracked_type(&expression.expr, owner, types, facts),
+        Expr::Await(expression) => expression_tracked_type(&expression.base, owner, types, facts),
+        Expr::Cast(expression) => {
+            tracked_identity_type_with_facts(&expression.ty, owner, facts)
+        }
         _ => None,
     }
 }
@@ -3555,11 +7290,12 @@ fn identity_axis(
     aliases: &[HashMap<String, &'static str>],
     non_identity: &[HashSet<String>],
     types: &[HashMap<String, TrackedIdentityType>],
+    owner: &IdentityOwner,
     facts: &IdentityTypeFacts,
 ) -> Option<&'static str> {
     match expression {
         Expr::Field(field) => {
-            if expression_tracked_type(expression, types, facts)
+            if expression_tracked_type(expression, owner, types, facts)
                 .is_some_and(|kind| !kind.is_empty())
             {
                 return None;
@@ -3583,36 +7319,38 @@ fn identity_axis(
                 .find_map(|scope| scope.get(&name).copied())
                 .or_else(|| exact_identity_axis(&name))
         }),
-        Expr::Paren(paren) => identity_axis(&paren.expr, aliases, non_identity, types, facts),
-        Expr::Group(group) => identity_axis(&group.expr, aliases, non_identity, types, facts),
+        Expr::Paren(paren) => identity_axis(&paren.expr, aliases, non_identity, types, owner, facts),
+        Expr::Group(group) => identity_axis(&group.expr, aliases, non_identity, types, owner, facts),
         Expr::Reference(reference) => {
-            identity_axis(&reference.expr, aliases, non_identity, types, facts)
+            identity_axis(&reference.expr, aliases, non_identity, types, owner, facts)
         }
         Expr::Try(expression) => {
-            identity_axis(&expression.expr, aliases, non_identity, types, facts)
+            identity_axis(&expression.expr, aliases, non_identity, types, owner, facts)
         }
         Expr::Await(expression) => {
-            identity_axis(&expression.base, aliases, non_identity, types, facts)
+            identity_axis(&expression.base, aliases, non_identity, types, owner, facts)
         }
         Expr::Cast(expression) => {
-            identity_axis(&expression.expr, aliases, non_identity, types, facts)
+            identity_axis(&expression.expr, aliases, non_identity, types, owner, facts)
         }
         Expr::Unary(expression) => {
-            identity_axis(&expression.expr, aliases, non_identity, types, facts)
+            identity_axis(&expression.expr, aliases, non_identity, types, owner, facts)
         }
         Expr::MethodCall(call)
-            if expression_tracked_type(&call.receiver, types, facts) == Some(String::new())
+            if expression_tracked_type(&call.receiver, owner, types, facts) == Some(String::new())
                 && identity_passthrough_method(&call.method.to_string()) =>
         {
-            identity_axis(&call.receiver, aliases, non_identity, types, facts)
+            identity_axis(&call.receiver, aliases, non_identity, types, owner, facts)
         }
         Expr::MethodCall(_) => None,
         Expr::Call(call)
-            if expression_tracked_type(expression, types, facts) == Some(String::new()) =>
+            if expression_tracked_type(expression, owner, types, facts) == Some(String::new()) =>
         {
             call.args
                 .iter()
-                .find_map(|argument| identity_axis(argument, aliases, non_identity, types, facts))
+                .find_map(|argument| {
+                    identity_axis(argument, aliases, non_identity, types, owner, facts)
+                })
         }
         _ => None,
     }
@@ -3644,12 +7382,14 @@ fn identity_axes_in_expression(
     aliases: &[HashMap<String, &'static str>],
     non_identity: &[HashSet<String>],
     types: &[HashMap<String, TrackedIdentityType>],
+    owner: &IdentityOwner,
     facts: &IdentityTypeFacts,
 ) -> Vec<&'static str> {
     struct AxisUseVisitor<'a> {
         aliases: &'a [HashMap<String, &'static str>],
         non_identity: &'a [HashSet<String>],
         types: &'a [HashMap<String, TrackedIdentityType>],
+        owner: &'a IdentityOwner,
         facts: &'a IdentityTypeFacts,
         axes: HashSet<&'static str>,
     }
@@ -3661,6 +7401,7 @@ fn identity_axes_in_expression(
                 self.aliases,
                 self.non_identity,
                 self.types,
+                self.owner,
                 self.facts,
             ) {
                 self.axes.insert(axis);
@@ -3673,6 +7414,7 @@ fn identity_axes_in_expression(
         aliases,
         non_identity,
         types,
+        owner,
         facts,
         axes: HashSet::new(),
     };
@@ -3726,7 +7468,8 @@ fn type_is_raw_identity(kind: &Type) -> bool {
 
 fn returned_strings_with_returns(
     expression: &Expr,
-    inferred_returns: &HashMap<String, Vec<String>>,
+    owner: &IdentityOwner,
+    inferred_returns: &HashMap<IdentityFunctionKey, Vec<String>>,
     types: &[HashMap<String, TrackedIdentityType>],
     type_facts: &IdentityTypeFacts,
 ) -> Vec<String> {
@@ -3739,53 +7482,72 @@ fn returned_strings_with_returns(
             .elems
             .iter()
             .flat_map(|item| {
-                returned_strings_with_returns(item, inferred_returns, types, type_facts)
+                returned_strings_with_returns(item, owner, inferred_returns, types, type_facts)
             })
             .collect(),
         Expr::Tuple(tuple) => tuple
             .elems
             .iter()
             .flat_map(|item| {
-                returned_strings_with_returns(item, inferred_returns, types, type_facts)
+                returned_strings_with_returns(item, owner, inferred_returns, types, type_facts)
             })
             .collect(),
         Expr::Paren(paren) => {
-            returned_strings_with_returns(&paren.expr, inferred_returns, types, type_facts)
+            returned_strings_with_returns(&paren.expr, owner, inferred_returns, types, type_facts)
         }
         Expr::Group(group) => {
-            returned_strings_with_returns(&group.expr, inferred_returns, types, type_facts)
+            returned_strings_with_returns(&group.expr, owner, inferred_returns, types, type_facts)
         }
         Expr::Reference(reference) => {
-            returned_strings_with_returns(&reference.expr, inferred_returns, types, type_facts)
+            returned_strings_with_returns(
+                &reference.expr,
+                owner,
+                inferred_returns,
+                types,
+                type_facts,
+            )
         }
         Expr::Try(expression) => {
-            returned_strings_with_returns(&expression.expr, inferred_returns, types, type_facts)
+            returned_strings_with_returns(
+                &expression.expr,
+                owner,
+                inferred_returns,
+                types,
+                type_facts,
+            )
         }
         Expr::Await(expression) => {
-            returned_strings_with_returns(&expression.base, inferred_returns, types, type_facts)
+            returned_strings_with_returns(
+                &expression.base,
+                owner,
+                inferred_returns,
+                types,
+                type_facts,
+            )
         }
         Expr::Call(call) => {
-            let callee = if let Expr::Path(path) = call.func.as_ref() {
-                path.path
-                    .segments
-                    .last()
-                    .map(|segment| segment.ident.to_string())
+            let path = if let Expr::Path(path) = call.func.as_ref() {
+                Some(&path.path)
             } else {
                 None
             };
-            if let Some(values) = callee
-                .as_ref()
-                .and_then(|callee| inferred_returns.get(callee))
+            if let Some(values) = path
+                .and_then(|path| resolve_function_path(path, owner, type_facts))
+                .and_then(|callee| inferred_returns.get(&callee))
             {
                 values.clone()
-            } else if callee
-                .as_deref()
-                .is_some_and(|callee| matches!(callee, "Some" | "Ok" | "Borrowed" | "Owned"))
+            } else if path.is_some_and(language_string_wrapper)
             {
                 call.args
                     .iter()
                     .flat_map(|argument| {
-                        returned_strings_with_returns(argument, inferred_returns, types, type_facts)
+                        returned_strings_with_returns(
+                            argument,
+                            owner,
+                            inferred_returns,
+                            types,
+                            type_facts,
+                        )
                     })
                     .collect()
             } else {
@@ -3794,18 +7556,30 @@ fn returned_strings_with_returns(
         }
         Expr::MethodCall(call) => {
             let method = call.method.to_string();
-            if identity_passthrough_method(&method)
-                && expression_tracked_type(&call.receiver, types, type_facts) == Some(String::new())
+            if let Some(values) = resolve_method_key(call, owner, types, type_facts)
+                .and_then(|callee| inferred_returns.get(&callee))
+            {
+                values.clone()
+            } else if identity_passthrough_method(&method)
+                && expression_tracked_type(&call.receiver, owner, types, type_facts)
+                    == Some(String::new())
             {
                 let mut values = returned_strings_with_returns(
                     &call.receiver,
+                    owner,
                     inferred_returns,
                     types,
                     type_facts,
                 );
                 if matches!(method.as_str(), "unwrap_or" | "unwrap_or_else") {
                     values.extend(call.args.iter().flat_map(|argument| {
-                        returned_strings_with_returns(argument, inferred_returns, types, type_facts)
+                        returned_strings_with_returns(
+                            argument,
+                            owner,
+                            inferred_returns,
+                            types,
+                            type_facts,
+                        )
                     }));
                 }
                 values
@@ -3814,11 +7588,18 @@ fn returned_strings_with_returns(
             }
         }
         Expr::Block(block) => {
-            block_return_strings_with_returns(&block.block, inferred_returns, types, type_facts)
+            block_return_strings_with_returns(
+                &block.block,
+                owner,
+                inferred_returns,
+                types,
+                type_facts,
+            )
         }
         Expr::If(expression) => {
             let mut values = block_return_strings_with_returns(
                 &expression.then_branch,
+                owner,
                 inferred_returns,
                 types,
                 type_facts,
@@ -3826,6 +7607,7 @@ fn returned_strings_with_returns(
             if let Some((_, otherwise)) = &expression.else_branch {
                 values.extend(returned_strings_with_returns(
                     otherwise,
+                    owner,
                     inferred_returns,
                     types,
                     type_facts,
@@ -3837,7 +7619,13 @@ fn returned_strings_with_returns(
             .arms
             .iter()
             .flat_map(|arm| {
-                returned_strings_with_returns(&arm.body, inferred_returns, types, type_facts)
+                returned_strings_with_returns(
+                    &arm.body,
+                    owner,
+                    inferred_returns,
+                    types,
+                    type_facts,
+                )
             })
             .collect(),
         _ => Vec::new(),
@@ -3846,7 +7634,8 @@ fn returned_strings_with_returns(
 
 fn block_return_strings_with_returns(
     block: &syn::Block,
-    inferred_returns: &HashMap<String, Vec<String>>,
+    owner: &IdentityOwner,
+    inferred_returns: &HashMap<IdentityFunctionKey, Vec<String>>,
     types: &[HashMap<String, TrackedIdentityType>],
     type_facts: &IdentityTypeFacts,
 ) -> Vec<String> {
@@ -3856,6 +7645,7 @@ fn block_return_strings_with_returns(
         .and_then(|statement| match statement {
             syn::Stmt::Expr(expression, None) => Some(returned_strings_with_returns(
                 expression,
+                owner,
                 inferred_returns,
                 types,
                 type_facts,
@@ -3867,7 +7657,8 @@ fn block_return_strings_with_returns(
 
 fn expression_strings_with_returns(
     expression: &Expr,
-    inferred_returns: &HashMap<String, Vec<String>>,
+    owner: &IdentityOwner,
+    inferred_returns: &HashMap<IdentityFunctionKey, Vec<String>>,
     types: &[HashMap<String, TrackedIdentityType>],
     type_facts: &IdentityTypeFacts,
 ) -> Vec<String> {
@@ -3880,31 +7671,35 @@ fn expression_strings_with_returns(
             .elems
             .iter()
             .flat_map(|item| {
-                expression_strings_with_returns(item, inferred_returns, types, type_facts)
+                expression_strings_with_returns(item, owner, inferred_returns, types, type_facts)
             })
             .collect(),
         Expr::Tuple(tuple) => tuple
             .elems
             .iter()
             .flat_map(|item| {
-                expression_strings_with_returns(item, inferred_returns, types, type_facts)
+                expression_strings_with_returns(item, owner, inferred_returns, types, type_facts)
             })
             .collect(),
         Expr::Paren(paren) => {
-            expression_strings_with_returns(&paren.expr, inferred_returns, types, type_facts)
+            expression_strings_with_returns(&paren.expr, owner, inferred_returns, types, type_facts)
         }
         Expr::Group(group) => {
-            expression_strings_with_returns(&group.expr, inferred_returns, types, type_facts)
+            expression_strings_with_returns(&group.expr, owner, inferred_returns, types, type_facts)
         }
         Expr::Reference(reference) => {
-            expression_strings_with_returns(&reference.expr, inferred_returns, types, type_facts)
+            expression_strings_with_returns(
+                &reference.expr,
+                owner,
+                inferred_returns,
+                types,
+                type_facts,
+            )
         }
         Expr::Call(call) => {
             let known = if let Expr::Path(path) = call.func.as_ref() {
-                path.path
-                    .segments
-                    .last()
-                    .and_then(|segment| inferred_returns.get(&segment.ident.to_string()))
+                resolve_function_path(&path.path, owner, type_facts)
+                    .and_then(|callee| inferred_returns.get(&callee))
                     .cloned()
             } else {
                 None
@@ -3915,6 +7710,7 @@ fn expression_strings_with_returns(
                     .flat_map(|argument| {
                         expression_strings_with_returns(
                             argument,
+                            owner,
                             inferred_returns,
                             types,
                             type_facts,
@@ -3925,11 +7721,17 @@ fn expression_strings_with_returns(
         }
         Expr::MethodCall(call) => {
             let method = call.method.to_string();
-            if identity_passthrough_method(&method)
-                && expression_tracked_type(&call.receiver, types, type_facts) == Some(String::new())
+            if let Some(values) = resolve_method_key(call, owner, types, type_facts)
+                .and_then(|callee| inferred_returns.get(&callee))
+            {
+                values.clone()
+            } else if identity_passthrough_method(&method)
+                && expression_tracked_type(&call.receiver, owner, types, type_facts)
+                    == Some(String::new())
             {
                 let mut values = expression_strings_with_returns(
                     &call.receiver,
+                    owner,
                     inferred_returns,
                     types,
                     type_facts,
@@ -3938,6 +7740,7 @@ fn expression_strings_with_returns(
                     values.extend(call.args.iter().flat_map(|argument| {
                         expression_strings_with_returns(
                             argument,
+                            owner,
                             inferred_returns,
                             types,
                             type_facts,
@@ -3951,6 +7754,7 @@ fn expression_strings_with_returns(
                     .flat_map(|argument| {
                         expression_strings_with_returns(
                             argument,
+                            owner,
                             inferred_returns,
                             types,
                             type_facts,
@@ -3961,11 +7765,18 @@ fn expression_strings_with_returns(
         }
         Expr::Closure(closure) => literal_strings_in_expression(&closure.body),
         Expr::Block(block) => {
-            block_tail_strings_with_returns(&block.block, inferred_returns, types, type_facts)
+            block_tail_strings_with_returns(
+                &block.block,
+                owner,
+                inferred_returns,
+                types,
+                type_facts,
+            )
         }
         Expr::If(expression) => {
             let mut values = block_tail_strings_with_returns(
                 &expression.then_branch,
+                owner,
                 inferred_returns,
                 types,
                 type_facts,
@@ -3973,6 +7784,7 @@ fn expression_strings_with_returns(
             if let Some((_, otherwise)) = &expression.else_branch {
                 values.extend(expression_strings_with_returns(
                     otherwise,
+                    owner,
                     inferred_returns,
                     types,
                     type_facts,
@@ -3984,7 +7796,13 @@ fn expression_strings_with_returns(
             .arms
             .iter()
             .flat_map(|arm| {
-                expression_strings_with_returns(&arm.body, inferred_returns, types, type_facts)
+                expression_strings_with_returns(
+                    &arm.body,
+                    owner,
+                    inferred_returns,
+                    types,
+                    type_facts,
+                )
             })
             .collect(),
         _ => Vec::new(),
@@ -4012,7 +7830,8 @@ fn literal_strings_in_expression(expression: &Expr) -> Vec<String> {
 
 fn block_tail_strings_with_returns(
     block: &syn::Block,
-    inferred_returns: &HashMap<String, Vec<String>>,
+    owner: &IdentityOwner,
+    inferred_returns: &HashMap<IdentityFunctionKey, Vec<String>>,
     types: &[HashMap<String, TrackedIdentityType>],
     type_facts: &IdentityTypeFacts,
 ) -> Vec<String> {
@@ -4022,6 +7841,7 @@ fn block_tail_strings_with_returns(
         .and_then(|statement| match statement {
             syn::Stmt::Expr(expression, None) => Some(expression_strings_with_returns(
                 expression,
+                owner,
                 inferred_returns,
                 types,
                 type_facts,
@@ -4029,6 +7849,17 @@ fn block_tail_strings_with_returns(
             _ => None,
         })
         .unwrap_or_default()
+}
+
+fn language_string_wrapper(path: &syn::Path) -> bool {
+    path.leading_colon.is_none()
+        && path.segments.len() == 1
+        && path.segments.first().is_some_and(|segment| {
+            matches!(
+                segment.ident.to_string().as_str(),
+                "Some" | "Ok" | "Borrowed" | "Owned"
+            )
+        })
 }
 
 fn identity_return_axis(name: &str) -> Option<&'static str> {
@@ -4162,6 +7993,29 @@ mod tests {
             "crates/example/src/lib.rs",
             "struct:Summary",
         );
+        let mut surface = ProtectedSurface {
+            surface_id: surface_id.clone(),
+            kind: "rust_public_item".to_string(),
+            semantic_role: SemanticRole::Contract,
+            stable_path: "crates/example/src/lib.rs".to_string(),
+            selector: "struct:Summary".to_string(),
+            concept_ids: vec![
+                "identity.game".to_string(),
+                "interface.contract".to_string(),
+                "structure.value".to_string(),
+            ],
+            fingerprint: "0".repeat(64),
+            mapping_source_id: String::new(),
+        };
+        let mut mapping_source = MappingSource {
+            id: String::new(),
+            task_issue: 75,
+            implementation_pr: 137,
+            source_kind: "workflow_task".to_string(),
+            change_kind: "initial_import".to_string(),
+        };
+        mapping_source.id = mapping_source_id(&mapping_source, &[&surface]);
+        surface.mapping_source_id = mapping_source.id.clone();
         format!(
             r#"
 schema_version = "actingcommand.generic-domain.v1"
@@ -4172,19 +8026,35 @@ status = "active"
 approval_comment_id = 5010683904
 
 [[concept]]
+id = "interface.contract"
+status = "active"
+approval_comment_id = 5010683904
+
+[[concept]]
 id = "structure.value"
 status = "active"
 approval_comment_id = 5010683904
 
+[[mapping_source]]
+id = "{}"
+task_issue = 75
+implementation_pr = 137
+source_kind = "workflow_task"
+change_kind = "initial_import"
+
 [[surface]]
 surface_id = "{surface_id}"
 kind = "rust_public_item"
+semantic_role = "contract"
 stable_path = "crates/example/src/lib.rs"
 selector = "struct:Summary"
-concept_ids = ["identity.game", "structure.value"]
+concept_ids = ["identity.game", "interface.contract", "structure.value"]
 fingerprint = "{}"
+mapping_source_id = "{}"
 "#,
-            "0".repeat(64)
+            mapping_source.id,
+            surface.fingerprint,
+            surface.mapping_source_id,
         )
     }
 
@@ -4195,10 +8065,37 @@ fingerprint = "{}"
     }
 
     #[test]
+    fn registry_rejects_external_or_hybrid_surface_tables() {
+        let hybrid = registry_source().replace(
+            "schema_version = \"actingcommand.generic-domain.v1\"",
+            "schema_version = \"actingcommand.generic-domain.v1\"\n\n[surface_manifest]\npath = \"generic-domain-extra.jsonl\"\nsha256 = \"0000000000000000000000000000000000000000000000000000000000000000\"",
+        );
+        let error = parse_generic_domain_registry(&hybrid).unwrap_err();
+        assert!(error.contains("unknown field `surface_manifest`"));
+
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let directory = std::env::temp_dir().join(format!(
+            "actingcommand-generic-domain-single-registry-{}-{nonce}",
+            std::process::id()
+        ));
+        fs::create_dir_all(&directory).unwrap();
+        let registry_path = directory.join("generic-domain-v1.toml");
+        fs::write(&registry_path, registry_source()).unwrap();
+        fs::write(directory.join("generic-domain-extra.jsonl"), "{}\n").unwrap();
+        let error = load_generic_domain_registry(&registry_path).unwrap_err();
+        assert!(error.contains("external registry"));
+        assert!(error.contains("must be inline"));
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
     fn registry_rejects_unknown_concept_duplicate_and_wildcard_surface() {
         let source = registry_source()
             .replace(
-                "concept_ids = [\"identity.game\", \"structure.value\"]",
+                "concept_ids = [\"identity.game\", \"interface.contract\", \"structure.value\"]",
                 "concept_ids = [\"identity.unknown\", \"identity.unknown\"]",
             )
             .replace("crates/example/src/lib.rs", "crates/*/src/lib.rs");
@@ -4221,6 +8118,109 @@ fingerprint = "{}"
         let error = validate_generic_domain_registry(&registry).unwrap_err();
         assert!(error.contains("invalid status retired"));
         assert!(error.contains("approval_comment_id must be 5010683904"));
+    }
+
+    #[test]
+    fn registry_enforces_closed_roles_applicability_and_non_catch_all_mappings() {
+        let mut registry = parse_generic_domain_registry(&registry_source()).unwrap();
+        registry.surface[0].semantic_role = SemanticRole::Wire;
+        rebind_mapping_source(&mut registry);
+        let error = validate_generic_domain_registry(&registry).unwrap_err();
+        assert!(error.contains("role wire is incompatible with kind rust_public_item"));
+
+        let mut registry = parse_generic_domain_registry(&registry_source()).unwrap();
+        registry.surface[0].concept_ids = vec!["structure.value".to_string()];
+        rebind_mapping_source(&mut registry);
+        let error = validate_generic_domain_registry(&registry).unwrap_err();
+        assert!(error.contains("requires anchor concept interface.contract"));
+
+        let snapshot = SurfaceSnapshot {
+            surface_id: surface_id_for("schema_key", "contracts/example.json", "key:/properties"),
+            kind: "schema_key".to_string(),
+            semantic_role: SemanticRole::Schema,
+            stable_path: "contracts/example.json".to_string(),
+            selector: "key:/properties".to_string(),
+            fingerprint: "a".repeat(64),
+        };
+        let mut registry = registry_for_snapshots(&[snapshot]);
+        registry.concept.insert(
+            0,
+            GenericConcept {
+                id: "agent.agent".to_string(),
+                status: "active".to_string(),
+                approval_comment_id: INITIAL_CONCEPT_APPROVAL_COMMENT_ID,
+                replaced_by: None,
+            },
+        );
+        registry.surface[0]
+            .concept_ids
+            .insert(0, "agent.agent".to_string());
+        rebind_mapping_source(&mut registry);
+        let error = validate_generic_domain_registry(&registry).unwrap_err();
+        assert!(error.contains("role schema cannot map concept agent.agent"));
+    }
+
+    #[test]
+    fn registry_requires_exact_nonzero_mapping_sources_and_rejects_reuse() {
+        let mut registry = parse_generic_domain_registry(&registry_source()).unwrap();
+        registry.mapping_source[0].task_issue = 0;
+        let error = validate_generic_domain_registry(&registry).unwrap_err();
+        assert!(error.contains("must bind nonzero task_issue and implementation_pr"));
+
+        let mut registry = parse_generic_domain_registry(&registry_source()).unwrap();
+        registry.mapping_source[0].source_kind = "candidate_claim".to_string();
+        let error = validate_generic_domain_registry(&registry).unwrap_err();
+        assert!(error.contains("invalid source_kind candidate_claim"));
+
+        let mut registry = parse_generic_domain_registry(&registry_source()).unwrap();
+        registry.surface[0].mapping_source_id = "mapping_source.missing".to_string();
+        let error = validate_generic_domain_registry(&registry).unwrap_err();
+        assert!(error.contains("references missing mapping source"));
+
+        let mut registry = parse_generic_domain_registry(&registry_source()).unwrap();
+        let mut added = registry.surface[0].clone();
+        added.selector = "struct:Added".to_string();
+        added.surface_id = surface_id_for(&added.kind, &added.stable_path, &added.selector);
+        registry.surface.push(added);
+        registry
+            .surface
+            .sort_by(|left, right| left.surface_id.cmp(&right.surface_id));
+        let error = validate_generic_domain_registry(&registry).unwrap_err();
+        assert!(error.contains("is not content-bound"));
+    }
+
+    #[test]
+    fn registry_accepts_all_nine_closed_semantic_roles_with_exact_anchors() {
+        let kinds = [
+            ("rust_public_item", SemanticRole::Contract),
+            ("rust_wire_item", SemanticRole::Wire),
+            ("schema_key", SemanticRole::Schema),
+            ("rust_cli_attribute", SemanticRole::Cli),
+            ("rust_default_impl", SemanticRole::Default),
+            ("rust_template_carrier", SemanticRole::Template),
+            ("rust_task_definition_carrier", SemanticRole::TaskDefinition),
+            ("rust_identity_branch_carrier", SemanticRole::IdentityBranch),
+            (
+                "rust_test_fixture_carrier",
+                SemanticRole::TestFixtureGolden,
+            ),
+        ];
+        let snapshots = kinds
+            .into_iter()
+            .enumerate()
+            .map(|(index, (kind, semantic_role))| {
+                let selector = format!("role:{index}");
+                SurfaceSnapshot {
+                    surface_id: surface_id_for(kind, "crates/example/src/lib.rs", &selector),
+                    kind: kind.to_string(),
+                    semantic_role,
+                    stable_path: "crates/example/src/lib.rs".to_string(),
+                    selector,
+                    fingerprint: format!("{index:064x}"),
+                }
+            })
+            .collect::<Vec<_>>();
+        validate_generic_domain_registry(&registry_for_snapshots(&snapshots)).unwrap();
     }
 
     #[test]
@@ -4393,6 +8393,64 @@ fingerprint = "{}"
     }
 
     #[test]
+    fn identity_flow_uses_qualified_module_owners_without_same_name_pollution() {
+        let source = r#"
+            mod accepted {
+                pub fn helper(candidate: &str) -> bool {
+                    candidate == "synthetic_project_code"
+                }
+            }
+            mod neutral {
+                pub fn helper(candidate: &str) -> bool {
+                    candidate == "ordinary-neutral-value"
+                }
+                pub fn ordinary(value: &str) -> bool { helper(value) }
+            }
+            fn route(game: &str) -> bool { accepted::helper(game) }
+        "#;
+        let violations = inspect_identity_axis_branches("qualified-owner.rs", source).unwrap();
+        assert!(violations.iter().any(|violation| {
+            violation.contains("synthetic_project_code") && violation.contains("axis game")
+        }));
+        assert!(
+            !violations
+                .iter()
+                .any(|violation| violation.contains("ordinary-neutral-value")),
+            "{violations:#?}"
+        );
+    }
+
+    #[test]
+    fn identity_flow_resolves_same_name_methods_by_receiver_owner() {
+        let source = r#"
+            struct Accepted;
+            struct Neutral;
+            impl Accepted {
+                fn helper(&self, candidate: &str) -> bool {
+                    candidate == "synthetic_method_project"
+                }
+            }
+            impl Neutral {
+                fn helper(&self, candidate: &str) -> bool {
+                    candidate == "ordinary-method-value"
+                }
+            }
+            fn route(owner: &Accepted, game: &str) -> bool { owner.helper(game) }
+            fn ordinary(owner: &Neutral, value: &str) -> bool { owner.helper(value) }
+        "#;
+        let violations = inspect_identity_axis_branches("qualified-method.rs", source).unwrap();
+        assert!(violations.iter().any(|violation| {
+            violation.contains("synthetic_method_project") && violation.contains("axis game")
+        }));
+        assert!(
+            !violations
+                .iter()
+                .any(|violation| violation.contains("ordinary-method-value")),
+            "{violations:#?}"
+        );
+    }
+
+    #[test]
     fn typed_identity_and_neighboring_names_remain_allowed() {
         let source = r#"
             enum GameIdentity { Alpha, Beta }
@@ -4487,6 +8545,597 @@ fingerprint = "{}"
     }
 
     #[test]
+    fn carrier_closure_tracks_private_defaults_cli_tasks_and_templates_transitively() {
+        let source = r#"
+            const TASKS: [&str; 1] = ["task.default"];
+            static TEMPLATE: &str = "template.default";
+
+            fn task_value() -> &'static str { TASKS[0] }
+            fn intermediate() -> &'static str { task_value() }
+            fn serde_default() -> String { TEMPLATE.to_owned() }
+
+            #[derive(Deserialize)]
+            struct WireRecord {
+                #[serde(default = "serde_default")]
+                value: String,
+            }
+
+            fn select(argument: &str) -> &'static str {
+                if argument == "--task" { intermediate() } else { "none" }
+            }
+            fn main() { let _ = select("--task"); }
+
+            fn unrelated_numeric(left: u64, right: u64) -> u64 { left + right }
+        "#;
+        let surfaces = rust_surface_inventory("crates/example/src/main.rs", source).unwrap();
+        for expected in [
+            "carrier:crate:fn:main",
+            "carrier:crate:fn:select",
+            "carrier:crate:fn:intermediate",
+            "carrier:crate:fn:task_value",
+            "carrier:crate:const:TASKS",
+            "carrier:crate:fn:serde_default",
+            "carrier:crate:static:TEMPLATE",
+        ] {
+            assert!(
+                surfaces.iter().any(|surface| surface.selector == expected),
+                "missing {expected}: {surfaces:#?}"
+            );
+        }
+        assert!(surfaces.iter().any(|surface| {
+            surface.kind == "rust_cli_carrier" && surface.selector.ends_with(":fn:select")
+        }));
+        assert!(surfaces.iter().any(|surface| {
+            surface.kind == "rust_default_carrier"
+                && surface.selector.ends_with(":fn:serde_default")
+        }));
+        assert!(surfaces.iter().any(|surface| {
+            surface.kind == "rust_wire_carrier"
+                && surface.selector.ends_with(":fn:serde_default")
+        }));
+        assert!(!surfaces.iter().any(|surface| {
+            surface.selector.ends_with(":fn:unrelated_numeric")
+        }));
+
+        let changed = rust_surface_inventory(
+            "crates/example/src/main.rs",
+            &source.replace("template.default", "template.changed"),
+        )
+        .unwrap();
+        let original = surfaces
+            .iter()
+            .find(|surface| surface.selector.ends_with(":static:TEMPLATE"))
+            .unwrap();
+        let changed = changed
+            .iter()
+            .find(|surface| {
+                surface.kind == original.kind && surface.selector == original.selector
+            })
+            .unwrap();
+        assert_ne!(original.content, changed.content);
+    }
+
+    #[test]
+    fn carrier_closure_resolves_modules_and_impl_receivers_without_cross_pollution() {
+        let source = r#"
+            mod accepted {
+                pub fn start() -> &'static str { helper() }
+                fn helper() -> &'static str { "accepted" }
+            }
+            mod neutral {
+                fn helper() -> &'static str { "neutral" }
+            }
+            struct Accepted;
+            struct Neutral;
+            impl Accepted {
+                pub fn start(&self) -> &'static str { self.helper() }
+                fn helper(&self) -> &'static str { "accepted-method" }
+            }
+            impl Neutral {
+                fn helper(&self) -> &'static str { "neutral-method" }
+            }
+        "#;
+        let surfaces = rust_surface_inventory("fixture.rs", source).unwrap();
+        assert!(surfaces.iter().any(|surface| {
+            surface.selector == "carrier:crate::accepted:fn:helper"
+        }));
+        assert!(!surfaces.iter().any(|surface| {
+            surface.selector == "carrier:crate::neutral:fn:helper"
+        }));
+        assert!(surfaces.iter().any(|surface| {
+            surface.selector.contains("impl:Accepted:inherent:fn:helper")
+        }));
+        assert!(!surfaces.iter().any(|surface| {
+            surface.selector.contains("impl:Neutral:inherent:fn:helper")
+        }));
+    }
+
+    #[test]
+    fn carrier_closure_fails_closed_on_unresolved_local_edges() {
+        let source = r#"
+            mod local { fn available() {} }
+            pub fn root() { local::missing(); }
+        "#;
+        let error = rust_surface_inventory("fixture.rs", source).unwrap_err();
+        assert!(error.contains("unresolved local call local :: missing"), "{error}");
+    }
+
+    #[test]
+    fn import_alias_resolution_rejects_cycles_without_path_growth() {
+        for source in [
+            r#"
+                use crate::looped as looped;
+                pub struct Root { pub value: looped::Value }
+            "#,
+            r#"
+                use crate::second as first;
+                use crate::first as second;
+                pub struct Root { pub value: first::Value }
+            "#,
+            r#"
+                mod facade {
+                    pub use crate::alias::next as next;
+                    pub struct Value;
+                }
+                use crate::facade as alias;
+                pub struct Root { pub value: alias::next::Value }
+            "#,
+        ] {
+            let error = rust_surface_inventory("fixture.rs", source).unwrap_err();
+            assert!(error.contains("local import alias cycle"), "{error}");
+        }
+    }
+
+    #[test]
+    fn import_alias_resolution_accepts_bounded_transitive_aliases() {
+        let surfaces = rust_surface_inventory(
+            "fixture.rs",
+            r#"
+                mod backend { pub struct Value; }
+                mod facade { pub use crate::backend as api; }
+                use crate::facade::api as selected;
+                pub struct Root { pub value: selected::Value }
+            "#,
+        )
+        .unwrap();
+        assert!(!surfaces.is_empty());
+    }
+
+    #[test]
+    fn import_alias_resolution_is_independent_of_declaration_order() {
+        for source in [
+            r#"
+                use platform::string::String as Text;
+                use std as platform;
+                pub struct Root { pub value: Text }
+            "#,
+            r#"
+                use std as platform;
+                use platform::string::String as Text;
+                pub struct Root { pub value: Text }
+            "#,
+        ] {
+            rust_surface_inventory("fixture.rs", source).unwrap();
+        }
+    }
+
+    #[test]
+    fn import_alias_resolution_preserves_module_value_namespace_shadowing() {
+        let surfaces = rust_surface_inventory(
+            "fixture.rs",
+            r#"
+                mod worker {
+                    pub fn worker() {}
+                    pub fn helper() {}
+                }
+                pub use worker::worker;
+                pub fn root() {
+                    worker::helper();
+                    worker();
+                }
+            "#,
+        )
+        .unwrap();
+        assert!(surfaces.iter().any(|surface| {
+            surface.selector.ends_with(":fn:helper")
+        }), "{surfaces:#?}");
+        assert!(surfaces.iter().any(|surface| {
+            surface.selector.ends_with(":fn:worker")
+        }), "{surfaces:#?}");
+    }
+
+    #[test]
+    fn import_resolution_prefers_lexical_modules_and_rejects_missing_bare_paths() {
+        rust_surface_inventory(
+            "fixture.rs",
+            r#"
+                mod event {
+                    mod artifact { pub struct Value; }
+                    use artifact::Value;
+                    pub struct Root { pub value: Value }
+                }
+            "#,
+        )
+        .unwrap();
+
+        let error = rust_surface_inventory(
+            "fixture.rs",
+            r#"
+                mod event {
+                    use missing::Value;
+                    pub struct Root { pub value: Value }
+                }
+            "#,
+        )
+        .unwrap_err();
+        assert!(error.contains("use path missing::Value"), "{error}");
+        assert!(error.contains("neither a local compile-unit symbol"), "{error}");
+    }
+
+    #[test]
+    fn glob_resolution_filters_candidates_by_actual_symbol_kind() {
+        rust_surface_inventory(
+            "fixture.rs",
+            r#"
+                mod parent {
+                    pub struct Value;
+                    mod child {
+                        use super::*;
+                        pub struct Root { pub value: Value }
+                    }
+                }
+            "#,
+        )
+        .unwrap();
+
+        let error = rust_surface_inventory(
+            "fixture.rs",
+            r#"
+                mod left { pub struct Value; }
+                mod right { pub struct Value; }
+                mod consumer {
+                    use crate::left::*;
+                    use crate::right::*;
+                    pub struct Root { pub value: Value }
+                }
+            "#,
+        )
+        .unwrap_err();
+        assert!(error.contains("resolved to 2 local types"), "{error}");
+    }
+
+    #[test]
+    fn carrier_closure_catalogs_local_trait_default_bodies() {
+        let surfaces = rust_surface_inventory(
+            "fixture.rs",
+            r#"
+                fn private_default() -> &'static str { "default" }
+                pub trait Policy {
+                    fn selected() -> &'static str { private_default() }
+                }
+            "#,
+        )
+        .unwrap();
+        assert!(surfaces.iter().any(|surface| {
+            surface.selector.ends_with(":fn:private_default")
+        }), "{surfaces:#?}");
+        assert!(surfaces.iter().any(|surface| {
+            surface.selector.contains("Policy")
+                && surface.selector.ends_with(":fn:selected")
+        }), "{surfaces:#?}");
+    }
+
+    #[test]
+    fn carrier_closure_treats_prelude_attribute_helpers_as_external() {
+        rust_surface_inventory(
+            "fixture.rs",
+            r#"
+                #[derive(serde::Serialize)]
+                pub struct Wire {
+                    #[serde(skip_serializing_if = "Option::is_none")]
+                    pub optional: Option<String>,
+                    #[serde(skip_serializing_if = "Vec::is_empty")]
+                    pub values: Vec<String>,
+                }
+            "#,
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn carrier_closure_covers_integration_and_cfg_test_roots() {
+        let integration = rust_surface_inventory(
+            "crates/example/tests/integration.rs",
+            "fn private_fixture() -> &'static str { \"fixture\" }",
+        )
+        .unwrap();
+        assert!(integration.iter().any(|surface| {
+            surface.kind == "rust_test_fixture_carrier"
+                && surface.selector.ends_with(":fn:private_fixture")
+        }));
+
+        let cfg_test = rust_surface_inventory(
+            "crates/example/src/lib.rs",
+            "#[cfg(test)] mod tests { fn private_fixture() -> &'static str { \"fixture\" } }",
+        )
+        .unwrap();
+        assert!(cfg_test.iter().any(|surface| {
+            surface.kind == "rust_test_fixture_carrier"
+                && surface.selector == "carrier:crate::tests:fn:private_fixture"
+        }));
+    }
+
+    #[test]
+    fn workspace_carrier_graph_preserves_out_of_line_roles_includes_and_imports() {
+        let root = temporary_workspace("carrier-workspace-graph");
+        write_workspace_manifest(&root, &["crates/example"]);
+        fs::create_dir_all(root.join("crates/example/src")).unwrap();
+        fs::write(
+            root.join("crates/example/src/lib.rs"),
+            r#"
+                mod backend;
+                mod caller;
+                #[cfg(test)] mod tests;
+                include!("included.rs");
+
+                pub fn public_root() -> &'static str {
+                    caller::route()
+                }
+            "#,
+        )
+        .unwrap();
+        fs::write(
+            root.join("crates/example/src/backend.rs"),
+            r#"
+                pub struct RuntimeInputBackend(&'static str);
+                pub struct NeutralBackend(&'static str);
+                pub enum Endpoint { Named(&'static str) }
+
+                impl RuntimeInputBackend {
+                    pub(super) fn connect() -> Self { Self("protected") }
+                    pub(super) fn value(&self) -> &'static str { self.0 }
+                }
+                impl NeutralBackend {
+                    fn connect() -> Self { Self("neutral") }
+                    fn value(&self) -> &'static str { self.0 }
+                }
+
+                pub(super) fn helper() -> &'static str {
+                    let endpoint = Endpoint::Named("endpoint");
+                    let backend = RuntimeInputBackend::connect();
+                    match endpoint { Endpoint::Named(_) => backend.value() }
+                }
+            "#,
+        )
+        .unwrap();
+        fs::write(
+            root.join("crates/example/src/caller.rs"),
+            r#"
+                use super::backend::helper as selected;
+                pub(super) fn route() -> &'static str { selected() }
+            "#,
+        )
+        .unwrap();
+        fs::write(
+            root.join("crates/example/src/tests.rs"),
+            "fn out_of_line_fixture() -> &'static str { \"fixture\" }\n",
+        )
+        .unwrap();
+        fs::write(
+            root.join("crates/example/src/included.rs"),
+            r#"
+                pub fn included_root() -> &'static str { included_helper() }
+                fn included_helper() -> &'static str { "included" }
+            "#,
+        )
+        .unwrap();
+        create_required_roots(&root);
+
+        let snapshots = workspace_surface_snapshot(&root).unwrap();
+        for expected in [
+            "fn:public_root",
+            "fn:route",
+            "fn:helper",
+            "RuntimeInputBackend:inherent:fn:connect",
+            "fn:included_helper",
+        ] {
+            assert!(
+                snapshots
+                    .iter()
+                    .any(|surface| surface.selector.contains(expected)),
+                "missing {expected}: {snapshots:#?}"
+            );
+        }
+        assert!(snapshots.iter().any(|surface| {
+            surface.stable_path == "crates/example/src/included.rs"
+                && surface.selector.ends_with(":fn:included_helper")
+        }));
+        assert!(snapshots.iter().any(|surface| {
+            surface.stable_path == "crates/example/src/tests.rs"
+                && surface.semantic_role == SemanticRole::TestFixtureGolden
+                && surface.selector.ends_with(":fn:out_of_line_fixture")
+        }));
+        assert!(!snapshots.iter().any(|surface| {
+            surface.selector.contains("NeutralBackend")
+                && surface.selector.ends_with(":fn:connect")
+        }));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn workspace_carrier_graph_isolates_same_names_by_compile_unit() {
+        let root = temporary_workspace("carrier-compile-units");
+        write_workspace_manifest(&root, &["crates/alpha", "crates/beta"]);
+        for (member, value) in [("alpha", "alpha"), ("beta", "beta")] {
+            fs::create_dir_all(root.join(format!("crates/{member}/src"))).unwrap();
+            fs::write(
+                root.join(format!("crates/{member}/src/lib.rs")),
+                format!(
+                    "fn helper() -> &'static str {{ \"{value}\" }}\npub fn root() -> &'static str {{ crate::helper() }}\n"
+                ),
+            )
+            .unwrap();
+        }
+        create_required_roots(&root);
+
+        let snapshots = workspace_surface_snapshot(&root).unwrap();
+        let helpers = snapshots
+            .iter()
+            .filter(|surface| surface.selector.ends_with(":fn:helper"))
+            .collect::<Vec<_>>();
+        assert_eq!(helpers.len(), 2, "{helpers:#?}");
+        assert_ne!(helpers[0].selector, helpers[1].selector);
+        assert_ne!(helpers[0].stable_path, helpers[1].stable_path);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn workspace_carrier_graph_rejects_include_cycles_and_unowned_sources() {
+        let root = temporary_workspace("carrier-include-cycle");
+        write_workspace_manifest(&root, &["crates/example"]);
+        fs::create_dir_all(root.join("crates/example/src")).unwrap();
+        fs::write(
+            root.join("crates/example/src/lib.rs"),
+            "include!(\"cycle.rs\");\n",
+        )
+        .unwrap();
+        fs::write(
+            root.join("crates/example/src/cycle.rs"),
+            "include!(\"cycle.rs\");\n",
+        )
+        .unwrap();
+        create_required_roots(&root);
+        let error = workspace_surface_snapshot(&root).unwrap_err();
+        assert!(error.contains("static include cycle"), "{error}");
+        fs::remove_dir_all(root).unwrap();
+
+        let root = temporary_workspace("carrier-unowned-source");
+        write_workspace_manifest(&root, &["crates/example"]);
+        fs::create_dir_all(root.join("crates/example/src")).unwrap();
+        fs::write(root.join("crates/example/src/lib.rs"), "pub struct Root;\n").unwrap();
+        fs::write(
+            root.join("crates/example/src/orphan.rs"),
+            "pub struct Orphan;\n",
+        )
+        .unwrap();
+        create_required_roots(&root);
+        let error = workspace_surface_snapshot(&root).unwrap_err();
+        assert!(error.contains("is not owned by any Cargo compile unit"), "{error}");
+        assert!(error.contains("orphan.rs"), "{error}");
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn workspace_identity_flow_reuses_compile_unit_types_imports_and_owners() {
+        let root = temporary_workspace("identity-workspace-graph");
+        write_workspace_manifest(&root, &["crates/example"]);
+        fs::create_dir_all(root.join("crates/example/src")).unwrap();
+        fs::write(
+            root.join("crates/example/src/lib.rs"),
+            r#"
+                mod backend;
+                mod accepted;
+                mod neutral;
+                pub(crate) use backend::RuntimeInputBackend as SelectedBackend;
+                pub fn route(game: &str) -> bool { accepted::route(game) }
+            "#,
+        )
+        .unwrap();
+        fs::write(
+            root.join("crates/example/src/backend.rs"),
+            r#"
+                pub(crate) struct RuntimeInputBackend;
+                impl RuntimeInputBackend {
+                    pub(crate) fn select(candidate: &str) -> bool {
+                        candidate == "synthetic_project_code"
+                    }
+                }
+            "#,
+        )
+        .unwrap();
+        fs::write(
+            root.join("crates/example/src/accepted.rs"),
+            r#"
+                use super::SelectedBackend;
+                struct Request { game: String }
+                fn select_request(request: &Request) -> bool {
+                    request.game == "synthetic_request_game"
+                }
+                pub(super) fn route(game: &str) -> bool {
+                    SelectedBackend::select(game)
+                }
+            "#,
+        )
+        .unwrap();
+        fs::write(
+            root.join("crates/example/src/neutral.rs"),
+            r#"
+                struct NeutralValue;
+                struct Request { game: NeutralValue }
+                struct RuntimeInputBackend;
+                impl RuntimeInputBackend {
+                    fn select(candidate: &str) -> bool {
+                        candidate == "ordinary-neutral-value"
+                    }
+                }
+                fn inspect(request: &Request) -> bool {
+                    let _ = &request.game;
+                    false
+                }
+            "#,
+        )
+        .unwrap();
+        create_required_roots(&root);
+
+        let contexts = workspace_rust_identity_contexts(&root).unwrap();
+        let mut violations = Vec::new();
+        for stable_path in [
+            "crates/example/src/lib.rs",
+            "crates/example/src/backend.rs",
+            "crates/example/src/accepted.rs",
+            "crates/example/src/neutral.rs",
+        ] {
+            let source = fs::read_to_string(root.join(stable_path)).unwrap();
+            for fragment in rust_identity_fragments(stable_path, &source).unwrap() {
+                violations.extend(
+                    inspect_workspace_rust_identity_fragment(
+                        stable_path,
+                        stable_path,
+                        &fragment,
+                        &contexts,
+                    )
+                    .unwrap(),
+                );
+            }
+        }
+        assert!(violations.iter().any(|violation| {
+            violation.contains("synthetic_project_code") && violation.contains("axis game")
+        }), "{violations:#?}");
+        assert!(!violations.iter().any(|violation| {
+            violation.contains("ordinary-neutral-value")
+        }), "{violations:#?}");
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn identity_flow_fails_closed_for_ambiguous_local_method_with_identity() {
+        let source = r#"
+            struct Backend;
+            trait First { fn select(&self, value: &str) -> bool; }
+            trait Second { fn select(&self, value: &str) -> bool; }
+            impl First for Backend {
+                fn select(&self, value: &str) -> bool { value == "first" }
+            }
+            impl Second for Backend {
+                fn select(&self, value: &str) -> bool { value == "second" }
+            }
+            fn route(backend: &Backend, game: &str) -> bool { backend.select(game) }
+        "#;
+        let error = inspect_identity_axis_branches("ambiguous-method.rs", source).unwrap_err();
+        assert!(error.contains("resolved to 2 local impl items"), "{error}");
+    }
+
+    #[test]
     fn rust_surface_inventory_closes_macro_serde_derive_and_ffi_boundaries() {
         let source = r#"
             macro_rules! typed_identity { ($name:ident) => { pub struct $name(String); }; }
@@ -4510,7 +9159,7 @@ fingerprint = "{}"
         for kind in [
             "rust_macro_item",
             "rust_macro_invocation",
-            "rust_derive_attribute",
+            "rust_wire_attribute",
             "rust_wire_impl",
             "rust_ffi_attribute",
             "rust_ffi_item",
@@ -4605,9 +9254,9 @@ fingerprint = "{}"
         let snapshots = workspace_surface_snapshot(&root).unwrap();
         let registry = registry_for_snapshots(&snapshots);
         let error = validate_workspace_genericity(&root, &registry).unwrap_err();
-        assert!(error.contains("unknown_project_code"));
-        assert!(error.contains("project-specific word baas"));
-        assert!(error.contains("project-specific word pvp"));
+        assert!(error.contains("unknown_project_code"), "{error}");
+        assert!(error.contains("project-specific word baas"), "{error}");
+        assert!(error.contains("project-specific word pvp"), "{error}");
 
         fs::remove_dir_all(root).unwrap();
     }
@@ -4618,7 +9267,11 @@ fingerprint = "{}"
         write_workspace_manifest(&root, &["crates/example"]);
         fs::create_dir_all(root.join("crates/example/src")).unwrap();
         let path = "crates/example/src/lib.rs";
-        fs::write(root.join(path), "fn compile_maa_tasks() {}\n").unwrap();
+        fs::write(
+            root.join(path),
+            "pub struct Marker;\nfn compile_maa_tasks() {}\n",
+        )
+        .unwrap();
         create_required_roots(&root);
         write_external_compat_manifest(&root);
 
@@ -4644,7 +9297,11 @@ fingerprint = "{}"
         validate_generic_domain_registry(&registry).unwrap();
         validate_workspace_genericity(&root, &registry).unwrap();
 
-        fs::write(root.join(path), "fn compile_maa_jobs() {}\n").unwrap();
+        fs::write(
+            root.join(path),
+            "pub struct Marker;\nfn compile_maa_jobs() {}\n",
+        )
+        .unwrap();
         run_git(&root, &["add", "--", path]);
         let error = validate_workspace_genericity(&root, &registry).unwrap_err();
         assert!(error.contains("missing selector") || error.contains("fragment hash drifted"));
@@ -4687,7 +9344,7 @@ fingerprint = "{}"
         let path = "crates/example/src/lib.rs";
         fs::write(
             root.join(path),
-            "fn compile_maa_tasks() {}\nfn compile_maa_jobs() {}\n",
+            "pub struct Marker;\nfn compile_maa_tasks() {}\nfn compile_maa_jobs() {}\n",
         )
         .unwrap();
         create_required_roots(&root);
@@ -4797,7 +9454,7 @@ fingerprint = "{}"
         .unwrap();
         run_git(&root, &["add", "--", "contracts/example.schema.json"]);
         let error = validate_workspace_surface_registry(&root, &registry).unwrap_err();
-        assert!(error.contains("unmapped protected surface structured_key"));
+        assert!(error.contains("unmapped protected surface schema_key"));
         assert!(error.contains("/properties/game/default"));
 
         fs::remove_dir_all(root).unwrap();
@@ -5132,7 +9789,7 @@ fingerprint = "{}"
     }
 
     #[test]
-    fn proto_and_root_script_are_itemized_protected_surfaces() {
+    fn nonsemantic_proto_and_root_script_do_not_gain_approved_mappings() {
         let root = temporary_workspace("new-text-surfaces");
         write_workspace_manifest(&root, &["crates/example"]);
         fs::create_dir_all(root.join("crates/example/src")).unwrap();
@@ -5151,16 +9808,12 @@ fingerprint = "{}"
         track_workspace(&root);
 
         let snapshots = workspace_surface_snapshot(&root).unwrap();
-        assert!(
-            snapshots
-                .iter()
-                .any(|surface| surface.stable_path == "contracts/example.proto")
-        );
-        assert!(
-            snapshots
-                .iter()
-                .any(|surface| surface.stable_path == "verify.ps1")
-        );
+        assert!(!snapshots.iter().any(|surface| {
+            matches!(
+                surface.stable_path.as_str(),
+                "contracts/example.proto" | "verify.ps1"
+            )
+        }));
         fs::remove_dir_all(root).unwrap();
     }
 
@@ -5266,27 +9919,62 @@ purpose = "Exact test allowance."
     }
 
     fn registry_for_snapshots(snapshots: &[SurfaceSnapshot]) -> GenericDomainRegistry {
+        let mut concept_ids = snapshots
+            .iter()
+            .map(|snapshot| snapshot.semantic_role.anchor_concept().to_string())
+            .collect::<Vec<_>>();
+        concept_ids.sort();
+        concept_ids.dedup();
+        let mut surfaces = snapshots
+            .iter()
+            .map(|snapshot| ProtectedSurface {
+                surface_id: snapshot.surface_id.clone(),
+                kind: snapshot.kind.clone(),
+                semantic_role: snapshot.semantic_role,
+                stable_path: snapshot.stable_path.clone(),
+                selector: snapshot.selector.clone(),
+                concept_ids: vec![snapshot.semantic_role.anchor_concept().to_string()],
+                fingerprint: snapshot.fingerprint.clone(),
+                mapping_source_id: String::new(),
+            })
+            .collect::<Vec<_>>();
+        surfaces.sort_by(|left, right| left.surface_id.cmp(&right.surface_id));
+        let mut source = MappingSource {
+            id: String::new(),
+            task_issue: 75,
+            implementation_pr: 137,
+            source_kind: "workflow_task".to_string(),
+            change_kind: "initial_import".to_string(),
+        };
+        let mapped = surfaces.iter().collect::<Vec<_>>();
+        source.id = mapping_source_id(&source, &mapped);
+        for surface in &mut surfaces {
+            surface.mapping_source_id = source.id.clone();
+        }
         GenericDomainRegistry {
             schema_version: GENERIC_DOMAIN_SCHEMA_VERSION.to_string(),
-            surface_manifest: None,
-            concept: vec![GenericConcept {
-                id: "structure.value".to_string(),
-                status: "active".to_string(),
-                approval_comment_id: 5010683904,
-                replaced_by: None,
-            }],
-            identity_allowance: Vec::new(),
-            surface: snapshots
-                .iter()
-                .map(|snapshot| ProtectedSurface {
-                    surface_id: snapshot.surface_id.clone(),
-                    kind: snapshot.kind.clone(),
-                    stable_path: snapshot.stable_path.clone(),
-                    selector: snapshot.selector.clone(),
-                    concept_ids: vec!["structure.value".to_string()],
-                    fingerprint: snapshot.fingerprint.clone(),
+            concept: concept_ids
+                .into_iter()
+                .map(|id| GenericConcept {
+                    id,
+                    status: "active".to_string(),
+                    approval_comment_id: INITIAL_CONCEPT_APPROVAL_COMMENT_ID,
+                    replaced_by: None,
                 })
                 .collect(),
+            mapping_source: vec![source],
+            identity_allowance: Vec::new(),
+            surface: surfaces,
+        }
+    }
+
+    fn rebind_mapping_source(registry: &mut GenericDomainRegistry) {
+        assert_eq!(registry.mapping_source.len(), 1);
+        let source = &mut registry.mapping_source[0];
+        let mapped = registry.surface.iter().collect::<Vec<_>>();
+        source.id = mapping_source_id(source, &mapped);
+        for surface in &mut registry.surface {
+            surface.mapping_source_id = source.id.clone();
         }
     }
 }
