@@ -5,18 +5,21 @@ use crate::{RuntimeClientError, RuntimeClientResult};
 use actingcommand_contract::{
     ActionId, AgentSessionContext, AgentSessionId, AgentSessionResponse, AgentSessionStatus,
     AgentWakeId, ApplicationLifecycleAction, ApprovalDecisionRecord, CaptureSequenceSpec,
-    CatalogProposal, ClientActionRecord, ContainedTaskRequest, CorrelationId, EventActor,
-    EventQuery, EventSource, FactScope, IdentifierIssuer, InputAction, IssuedCorrelationId,
-    LeaseQueuePolicy, LeaseQueueStatus, LeaseToken, OwnerEpoch, PackageDebugRequest,
-    ProjectDecisionPageCursor, ProjectDecisionPageRequest, ProjectInterfaceRequest,
-    ProjectLedgerSnapshot, ProjectedArtifactReference, ProjectedEvent, ProjectionProfile,
+    CatalogProposal, ClientActionRecord, ContainedTaskRequest, CorrelationId, EffectDisposition,
+    EventActor, EventId, EventPayload, EventQuery, EventSource, EventType, FactScope,
+    IdentifierIssuer, InputAction, InputPayload, IssuedCorrelationId, LeaseQueuePolicy,
+    LeaseQueueStatus, LeaseToken, MAX_RUNTIME_EVENT_QUERY_EVENTS, OriginModule, OwnerEpoch,
+    PackageDebugRequest, PolicyExecutionOutcome, PolicyPayload, ProjectDecisionPageCursor,
+    ProjectDecisionPageRequest, ProjectInterfaceRequest, ProjectLedgerSnapshot,
+    ProjectedArtifactReference, ProjectedEvent, ProjectionPayload, ProjectionProfile,
     ProposalPreview, ProposalPromotion, RUNTIME_INFO_FILE, RequestId, ResourceAuthoringEvent,
-    RuntimeControlPlaneStatus, RuntimeDebugEvent, RuntimeEventBatch, RuntimeEventQueryPage,
+    RunId, RuntimeControlPlaneStatus, RuntimeDebugEvent, RuntimeEventBatch, RuntimeEventQueryPage,
     RuntimeEventQueryPageRequest, RuntimeEvidenceExportRequest, RuntimeForwardProjectionRequest,
     RuntimeInfo, RuntimeMaintenanceQuery, RuntimeMonitorInstanceStatus, RuntimeMonitorPolicy,
     RuntimeMonitorRegistryStatus, RuntimeOperation, RuntimePlanningDocument,
     RuntimePlanningDocumentKind, RuntimeReceipt, RuntimeRequest, RuntimeResult,
-    RuntimeStrategicReportRequest, RuntimeSubscriptionRequest, TerminalEvent,
+    RuntimeStrategicReportRequest, RuntimeSubscriptionRequest, TaskPayload, TaskSemanticFact,
+    TerminalEvent,
 };
 use actingcommand_policy::{
     EvaluationFacts, EvaluationResources, EvaluationTime, ForwardProjection,
@@ -25,6 +28,8 @@ use actingcommand_policy::{
 };
 use serde::Serialize;
 use serde::de::DeserializeOwned;
+use serde_json::{Value, json};
+use std::collections::BTreeSet;
 use std::fmt;
 use std::fs;
 use std::net::TcpStream;
@@ -37,6 +42,9 @@ const DEFAULT_BACKEND_OPEN_TIMEOUT: Duration = Duration::from_secs(60);
 const MAX_RUNTIME_IO_TIMEOUT: Duration = Duration::from_secs(60);
 const MAX_BACKEND_OPEN_TIMEOUT: Duration = Duration::from_secs(120);
 const MAX_RUNTIME_INFO_BYTES: u64 = 64 * 1024;
+const MAX_RUN_SUMMARY_EVENTS: usize = 16_384;
+const MAX_RUN_SUMMARY_PAGES: usize = 64;
+const MAX_RUN_SUMMARY_RESIDENT_BYTES: usize = 64 * 1024 * 1024;
 
 /// Discovery, identity, framing, and timeout configuration for one local Runtime session.
 #[derive(Clone)]
@@ -920,6 +928,97 @@ impl RuntimeClient {
         Ok(page.events().to_vec())
     }
 
+    /// Projects one completed scheduler/policy/contained-task run from authoritative ledger links.
+    pub fn summarize_run(&self, run_id: RunId) -> RuntimeClientResult<Value> {
+        let events = self.query_complete_run_events(run_id)?;
+        project_run_summary(run_id, &events)
+    }
+
+    fn query_complete_run_events(&self, run_id: RunId) -> RuntimeClientResult<Vec<ProjectedEvent>> {
+        let query = EventQuery {
+            run_id: Some(run_id),
+            ..EventQuery::default()
+        };
+        let mut events = Vec::new();
+        let mut event_ids = BTreeSet::<EventId>::new();
+        let mut cursor = None;
+        let mut snapshot_ledger_position = None;
+        let mut last_sequence = 0_u64;
+        let mut resident_bytes = 0_usize;
+        for _ in 0..MAX_RUN_SUMMARY_PAGES {
+            let request =
+                RuntimeEventQueryPageRequest::new(MAX_RUNTIME_EVENT_QUERY_EVENTS, cursor.clone())
+                    .map_err(|_| {
+                    RuntimeClientError::fatal("run_summary_page_request_invalid", "summarize_run")
+                })?;
+            let page =
+                self.query_event_page(query.clone(), ProjectionProfile::Forensic, request)?;
+            match snapshot_ledger_position {
+                Some(expected) if expected != page.snapshot_ledger_position() => {
+                    return Err(RuntimeClientError::fatal(
+                        "run_summary_snapshot_changed",
+                        "summarize_run",
+                    ));
+                }
+                None => snapshot_ledger_position = Some(page.snapshot_ledger_position()),
+                Some(_) => {}
+            }
+            for event in page.events() {
+                if event.sequence <= last_sequence || !event_ids.insert(event.event_id) {
+                    return Err(RuntimeClientError::fatal(
+                        "run_summary_pagination_invalid",
+                        "summarize_run",
+                    ));
+                }
+                if events.len() == MAX_RUN_SUMMARY_EVENTS {
+                    return Err(RuntimeClientError::fatal(
+                        "run_summary_event_limit_exceeded",
+                        "summarize_run",
+                    ));
+                }
+                let event_bytes = serde_json::to_vec(event).map_err(|_| {
+                    RuntimeClientError::fatal("run_summary_event_encode_failed", "summarize_run")
+                })?;
+                resident_bytes = resident_bytes
+                    .checked_add(event_bytes.len())
+                    .filter(|total| *total <= MAX_RUN_SUMMARY_RESIDENT_BYTES)
+                    .ok_or_else(|| {
+                        RuntimeClientError::fatal(
+                            "run_summary_resident_limit_exceeded",
+                            "summarize_run",
+                        )
+                    })?;
+                last_sequence = event.sequence;
+                events.push(event.clone());
+            }
+            if !page.has_more() {
+                return Ok(events);
+            }
+            if events.len() == MAX_RUN_SUMMARY_EVENTS {
+                return Err(RuntimeClientError::fatal(
+                    "run_summary_event_limit_exceeded",
+                    "summarize_run",
+                ));
+            }
+            let next = page.next_cursor().cloned().ok_or_else(|| {
+                RuntimeClientError::fatal("run_summary_pagination_invalid", "summarize_run")
+            })?;
+            let previous_sequence = cursor.as_ref().map_or(0, |value| value.after_sequence());
+            if next.after_sequence() != last_sequence || next.after_sequence() <= previous_sequence
+            {
+                return Err(RuntimeClientError::fatal(
+                    "run_summary_pagination_invalid",
+                    "summarize_run",
+                ));
+            }
+            cursor = Some(next);
+        }
+        Err(RuntimeClientError::fatal(
+            "run_summary_page_limit_exceeded",
+            "summarize_run",
+        ))
+    }
+
     pub fn query_event_page(
         &self,
         query: EventQuery,
@@ -1604,6 +1703,334 @@ impl RuntimeConnection {
     }
 }
 
+fn project_run_summary(run_id: RunId, events: &[ProjectedEvent]) -> RuntimeClientResult<Value> {
+    if events.is_empty() {
+        return Err(RuntimeClientError::fatal(
+            "run_summary_not_found",
+            "summarize_run",
+        ));
+    }
+    let intent_event = exactly_one_run_event(events, EventType::PolicyDispatchIntent)?;
+    let admitted_event = exactly_one_run_event(events, EventType::PolicyDispatchAdmitted)?;
+    let lease_event = exactly_one_run_event(events, EventType::LeaseGranted)?;
+    let lab_request_event = exactly_one_run_event(events, EventType::LabRequest)?;
+    let task_event = exactly_one_run_event(events, EventType::TaskCompleted)?;
+    let release_event = exactly_one_run_event(events, EventType::LeaseReleased)?;
+    let execution_event = exactly_one_run_event(events, EventType::PolicyExecutionRecorded)?;
+    let completed_event = exactly_one_run_event(events, EventType::PolicyDispatchCompleted)?;
+
+    let task_id = intent_event.links.task_id().copied().ok_or_else(|| {
+        RuntimeClientError::fatal("run_summary_identity_missing", "summarize_run")
+    })?;
+    let correlation_id = intent_event
+        .links
+        .correlation_id()
+        .copied()
+        .ok_or_else(|| {
+            RuntimeClientError::fatal("run_summary_identity_missing", "summarize_run")
+        })?;
+    if events.iter().any(|event| {
+        event.links.run_id() != Some(&run_id)
+            || event.links.task_id() != Some(&task_id)
+            || event.links.correlation_id() != Some(&correlation_id)
+    }) {
+        return Err(RuntimeClientError::fatal(
+            "run_summary_identity_mismatch",
+            "summarize_run",
+        ));
+    }
+    let lease_id = lease_event.links.lease_id().copied().ok_or_else(|| {
+        RuntimeClientError::fatal("run_summary_identity_missing", "summarize_run")
+    })?;
+    for event in [task_event, release_event, execution_event, completed_event] {
+        if event.links.lease_id() != Some(&lease_id) {
+            return Err(RuntimeClientError::fatal(
+                "run_summary_lease_mismatch",
+                "summarize_run",
+            ));
+        }
+    }
+    let lab_request_id = lab_request_event
+        .links
+        .request_id()
+        .copied()
+        .ok_or_else(|| {
+            RuntimeClientError::fatal("run_summary_identity_missing", "summarize_run")
+        })?;
+    let receipt_request_id = task_event.links.request_id().copied().ok_or_else(|| {
+        RuntimeClientError::fatal("run_summary_identity_missing", "summarize_run")
+    })?;
+    if lab_request_id != receipt_request_id {
+        return Err(RuntimeClientError::fatal(
+            "run_summary_receipt_request_mismatch",
+            "summarize_run",
+        ));
+    }
+    let intent = policy_dispatch_payload(intent_event, EventType::PolicyDispatchIntent)?;
+    let admitted = policy_dispatch_payload(admitted_event, EventType::PolicyDispatchAdmitted)?;
+    let completed = policy_dispatch_payload(completed_event, EventType::PolicyDispatchCompleted)?;
+    let execution = match full_payload(execution_event)? {
+        EventPayload::Policy(PolicyPayload::ExecutionRecorded(payload)) => payload,
+        _ => {
+            return Err(RuntimeClientError::fatal(
+                "run_summary_payload_mismatch",
+                "summarize_run",
+            ));
+        }
+    };
+    if intent.decision_id() != admitted.decision_id()
+        || intent.decision_id() != completed.decision_id()
+        || intent.decision_id() != execution.decision_id()
+        || intent.admission().is_some()
+        || admitted.admission().is_none()
+        || completed.admission() != admitted.admission()
+        || !matches!(
+            execution.outcome(),
+            PolicyExecutionOutcome::Succeeded { .. }
+        )
+    {
+        return Err(RuntimeClientError::fatal(
+            "run_summary_policy_mismatch",
+            "summarize_run",
+        ));
+    }
+    validate_admitted_package(events, &lab_request_id, intent.package_digest())?;
+    let simulated_effect_count = validate_fixture_simulation(events)?;
+    Ok(json!({
+        "schema_version": "actingcommand.run-summary.v1",
+        "status": "simulated_completed",
+        "run_id": run_id,
+        "task_id": task_id,
+        "correlation_id": correlation_id,
+        "decision_id": intent.decision_id(),
+        "operation_id": intent.operation_id(),
+        "instance_id": intent.instance_id(),
+        "package_digest": intent.package_digest(),
+        "procedure_binding_digest": intent.procedure_binding_digest(),
+        "reason_chain": {
+            "id": intent.reason_chain_id(),
+            "reasons": intent.reasons()
+        },
+        "catalog": {
+            "hash": intent.catalog_hash(),
+            "version": intent.catalog_version()
+        },
+        "admission": admitted.admission(),
+        "lease": {
+            "lease_id": lease_id,
+            "grant_sequence": lease_event.sequence,
+            "release_sequence": release_event.sequence
+        },
+        "request": {
+            "lab_request_id": lab_request_id,
+            "receipt_request_id": receipt_request_id,
+            "terminal_event_id": task_event.event_id,
+            "terminal_sequence": task_event.sequence
+        },
+        "outcome": {
+            "kind": "fixture_simulation",
+            "policy": execution.outcome(),
+            "result": if simulated_effect_count == 0 { "no_op" } else { "would_effect" }
+        },
+        "execution_provenance": {
+            "kind": "fixture_simulation",
+            "device_access": false,
+            "account_access": false,
+            "production_input": false,
+            "actual_effect_count": 0,
+            "simulated_effect_count": simulated_effect_count
+        },
+        "effect": if simulated_effect_count == 0 { "no_op" } else { "would_effect" },
+        "actual_effect_count": 0,
+        "simulated_effect_count": simulated_effect_count,
+        "event_count": events.len(),
+        "completed_sequence": completed_event.sequence
+    }))
+}
+
+fn validate_admitted_package(
+    events: &[ProjectedEvent],
+    request_id: &RequestId,
+    policy_package_digest: &str,
+) -> RuntimeClientResult<()> {
+    let mut admitted_package_sha256 = Vec::new();
+    for event in events
+        .iter()
+        .filter(|event| event.event_type == EventType::TaskRequested)
+    {
+        let EventPayload::Task(TaskPayload::Semantic(payload)) = full_payload(event)? else {
+            continue;
+        };
+        let TaskSemanticFact::PackageAdmitted { package_sha256, .. } = payload.fact() else {
+            continue;
+        };
+        if event.links.request_id() != Some(request_id) {
+            return Err(RuntimeClientError::fatal(
+                "run_summary_package_request_mismatch",
+                "summarize_run",
+            ));
+        }
+        admitted_package_sha256.push(package_sha256.as_str());
+    }
+    let [admitted_package_sha256] = admitted_package_sha256.as_slice() else {
+        return Err(RuntimeClientError::fatal(
+            "run_summary_package_fact_count_invalid",
+            "summarize_run",
+        ));
+    };
+    let policy_package_sha256 = policy_package_digest
+        .strip_prefix("sha256:")
+        .ok_or_else(|| {
+            RuntimeClientError::fatal("run_summary_package_digest_invalid", "summarize_run")
+        })?;
+    if policy_package_sha256 != *admitted_package_sha256 {
+        return Err(RuntimeClientError::fatal(
+            "run_summary_package_digest_mismatch",
+            "summarize_run",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_fixture_simulation(events: &[ProjectedEvent]) -> RuntimeClientResult<usize> {
+    if events
+        .iter()
+        .any(|event| event.origin.source() == EventSource::Device)
+    {
+        return Err(RuntimeClientError::fatal(
+            "run_summary_device_event_forbidden",
+            "summarize_run",
+        ));
+    }
+    let simulation_origin = |event: &ProjectedEvent| {
+        event.origin.source() == EventSource::Lab
+            && event.origin.module() == OriginModule::Actinglab
+    };
+    let capture_events = events
+        .iter()
+        .filter(|event| {
+            matches!(
+                event.event_type,
+                EventType::CaptureRequested
+                    | EventType::CaptureCompleted
+                    | EventType::CaptureFailed
+            )
+        })
+        .collect::<Vec<_>>();
+    if !capture_events
+        .iter()
+        .any(|event| event.event_type == EventType::CaptureCompleted)
+        || capture_events.iter().any(|event| !simulation_origin(event))
+    {
+        return Err(RuntimeClientError::fatal(
+            "run_summary_simulation_provenance_invalid",
+            "summarize_run",
+        ));
+    }
+    let input_events = events
+        .iter()
+        .filter(|event| {
+            matches!(
+                event.event_type,
+                EventType::InputIntent | EventType::InputCommitted | EventType::InputFailed
+            )
+        })
+        .collect::<Vec<_>>();
+    if input_events.iter().any(|event| !simulation_origin(event))
+        || input_events
+            .iter()
+            .any(|event| event.event_type == EventType::InputFailed)
+    {
+        return Err(RuntimeClientError::fatal(
+            "run_summary_simulation_provenance_invalid",
+            "summarize_run",
+        ));
+    }
+    let input_intent_count = input_events
+        .iter()
+        .filter(|event| event.event_type == EventType::InputIntent)
+        .count();
+    let committed_inputs = input_events
+        .iter()
+        .filter(|event| event.event_type == EventType::InputCommitted)
+        .map(|event| match full_payload(event)? {
+            EventPayload::Input(InputPayload::Committed(payload))
+                if payload.effect_disposition() == EffectDisposition::NotPerformed =>
+            {
+                Ok(())
+            }
+            _ => Err(RuntimeClientError::fatal(
+                "run_summary_simulation_effect_invalid",
+                "summarize_run",
+            )),
+        })
+        .collect::<RuntimeClientResult<Vec<_>>>()?
+        .len();
+    let simulated_effect_count = events
+        .iter()
+        .filter(|event| event.event_type == EventType::TaskEffectCompleted)
+        .count();
+    if input_intent_count != simulated_effect_count || committed_inputs != simulated_effect_count {
+        return Err(RuntimeClientError::fatal(
+            "run_summary_simulation_effect_invalid",
+            "summarize_run",
+        ));
+    }
+    Ok(simulated_effect_count)
+}
+
+fn exactly_one_run_event(
+    events: &[ProjectedEvent],
+    event_type: EventType,
+) -> RuntimeClientResult<&ProjectedEvent> {
+    let mut matching = events.iter().filter(|event| event.event_type == event_type);
+    let event = matching.next().ok_or_else(|| {
+        RuntimeClientError::fatal("run_summary_event_count_invalid", "summarize_run")
+    })?;
+    if matching.next().is_some() {
+        return Err(RuntimeClientError::fatal(
+            "run_summary_event_count_invalid",
+            "summarize_run",
+        ));
+    }
+    Ok(event)
+}
+
+fn full_payload(event: &ProjectedEvent) -> RuntimeClientResult<&EventPayload> {
+    match &event.payload {
+        ProjectionPayload::Full(payload) => Ok(payload.as_ref()),
+        _ => Err(RuntimeClientError::fatal(
+            "run_summary_projection_incomplete",
+            "summarize_run",
+        )),
+    }
+}
+
+fn policy_dispatch_payload(
+    event: &ProjectedEvent,
+    event_type: EventType,
+) -> RuntimeClientResult<&actingcommand_contract::PolicyDispatchPayload> {
+    let payload = full_payload(event)?;
+    match (event_type, payload) {
+        (
+            EventType::PolicyDispatchIntent,
+            EventPayload::Policy(PolicyPayload::DispatchIntent(payload)),
+        )
+        | (
+            EventType::PolicyDispatchAdmitted,
+            EventPayload::Policy(PolicyPayload::DispatchAdmitted(payload)),
+        )
+        | (
+            EventType::PolicyDispatchCompleted,
+            EventPayload::Policy(PolicyPayload::DispatchCompleted(payload)),
+        ) => Ok(payload),
+        _ => Err(RuntimeClientError::fatal(
+            "run_summary_payload_mismatch",
+            "summarize_run",
+        )),
+    }
+}
+
 fn read_runtime_info(state_root: &Path) -> RuntimeClientResult<RuntimeInfo> {
     let path = state_root.join(RUNTIME_INFO_FILE);
     let metadata = fs::metadata(&path)
@@ -1662,4 +2089,123 @@ fn capture_sequence_response_timeout(
                 "capture_sequence",
             )
         })
+}
+
+#[cfg(test)]
+mod run_summary_package_tests {
+    use super::validate_admitted_package;
+    use actingcommand_contract::{
+        AuditInput, EventActor, EventDraft, EventLinksDraft, EventOrigin, EventSeverity,
+        EventSource, IdentifierIssuer, IssuedRequestId, OriginModule, ProjectedEvent,
+        ProjectionPayload, SanitizationError, SecretField, SecretFingerprinter, Sha256Fingerprint,
+        TaskPayloadDraft, TaskSemanticFact,
+    };
+
+    struct RejectSecrets;
+
+    impl SecretFingerprinter for RejectSecrets {
+        fn fingerprint(
+            &self,
+            _field: SecretField,
+            _original: &str,
+        ) -> Result<Sha256Fingerprint, SanitizationError> {
+            panic!("package admission facts do not contain secrets")
+        }
+    }
+
+    fn digest(byte: char) -> (String, String) {
+        let raw = byte.to_string().repeat(64);
+        let canonical = format!("sha256:{raw}");
+        (raw, canonical)
+    }
+
+    fn package_event(
+        issuer: &IdentifierIssuer,
+        request_id: IssuedRequestId,
+        package_sha256: String,
+        sequence: u64,
+    ) -> ProjectedEvent {
+        let sanitized = EventDraft::new(
+            issuer.mint_event_id().expect("event id"),
+            sequence,
+            EventSeverity::Info,
+            EventOrigin::new(
+                EventSource::Runtime,
+                OriginModule::Runtime,
+                EventActor::Runtime,
+            ),
+            EventLinksDraft::default().with_request_id(request_id),
+            TaskPayloadDraft::semantic(
+                TaskSemanticFact::PackageAdmitted {
+                    package_label: "package".to_string(),
+                    task_label: "task".to_string(),
+                    package_sha256,
+                },
+                AuditInput::new(),
+            )
+            .into(),
+        )
+        .sanitize(&RejectSecrets)
+        .expect("sanitize package admission");
+        ProjectedEvent {
+            schema_version: sanitized.schema_version().to_string(),
+            sequence,
+            event_id: *sanitized.event_id(),
+            timestamp_unix_ms: sanitized.timestamp_unix_ms(),
+            event_type: sanitized.event_type(),
+            severity: sanitized.severity(),
+            sensitivity: sanitized.sensitivity(),
+            origin: sanitized.origin().clone(),
+            links: sanitized.links().clone(),
+            payload_schema: sanitized.payload_schema().to_string(),
+            payload: ProjectionPayload::Full(Box::new(sanitized.payload().clone())),
+            artifacts: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn exactly_one_matching_package_admission_is_required() {
+        let issuer = IdentifierIssuer::new().expect("identifier issuer");
+        let request_id = issuer.mint_request_id().expect("request id");
+        let (raw, canonical) = digest('a');
+        let events = [package_event(&issuer, request_id, raw, 1)];
+        validate_admitted_package(&events, request_id.transport(), &canonical)
+            .expect("matching admitted package");
+    }
+
+    #[test]
+    fn missing_package_admission_fails_closed() {
+        let issuer = IdentifierIssuer::new().expect("identifier issuer");
+        let request_id = issuer.mint_request_id().expect("request id");
+        let (_, canonical) = digest('a');
+        let error = validate_admitted_package(&[], request_id.transport(), &canonical)
+            .expect_err("missing package admission");
+        assert_eq!(error.code(), "run_summary_package_fact_count_invalid");
+    }
+
+    #[test]
+    fn duplicate_package_admission_fails_closed() {
+        let issuer = IdentifierIssuer::new().expect("identifier issuer");
+        let request_id = issuer.mint_request_id().expect("request id");
+        let (raw, canonical) = digest('a');
+        let events = [
+            package_event(&issuer, request_id, raw.clone(), 1),
+            package_event(&issuer, request_id, raw, 2),
+        ];
+        let error = validate_admitted_package(&events, request_id.transport(), &canonical)
+            .expect_err("duplicate package admission");
+        assert_eq!(error.code(), "run_summary_package_fact_count_invalid");
+    }
+
+    #[test]
+    fn mismatched_package_admission_fails_closed() {
+        let issuer = IdentifierIssuer::new().expect("identifier issuer");
+        let request_id = issuer.mint_request_id().expect("request id");
+        let (_, canonical) = digest('a');
+        let (other, _) = digest('b');
+        let events = [package_event(&issuer, request_id, other, 1)];
+        let error = validate_admitted_package(&events, request_id.transport(), &canonical)
+            .expect_err("mismatched package admission");
+        assert_eq!(error.code(), "run_summary_package_digest_mismatch");
+    }
 }

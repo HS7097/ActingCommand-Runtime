@@ -44,7 +44,9 @@ dependencies = [
  "actingcommand-runtime-host",
  "serde",
  "serde_json",
+ "sha2",
  "tempfile",
+ "zip",
 ]
 
 [[package]]

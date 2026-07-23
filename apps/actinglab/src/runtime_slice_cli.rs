@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
-use super::{CliError, CliOutcome, FlagArgs, GlobalOptions};
+use super::{CliError, CliOutcome, ErrorKind, FlagArgs, GlobalOptions};
 use actingcommand_contract::{EventActor, EventSource, RuntimeErrorCode};
 use actingcommand_runtime_client::{RuntimeClient, RuntimeClientConfig, RuntimeClientError};
 use serde_json::Value;
@@ -42,6 +42,14 @@ pub(super) fn run(subcommand: &str, global: &GlobalOptions, args: &[String]) -> 
 }
 
 pub(super) fn map_runtime_error(error: RuntimeClientError) -> CliError {
+    if error.projection().is_none() && error.code() == "run_summary_not_found" {
+        return CliError::new(
+            ErrorKind::UsageValidation,
+            error.code(),
+            error.to_string(),
+            &[],
+        );
+    }
     let unavailable = error.projection().is_none_or(|projection| {
         matches!(
             projection.code,

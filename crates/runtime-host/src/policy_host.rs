@@ -7,11 +7,12 @@ use crate::policy_control::{
 };
 use crate::{PerformanceControlWorkload, ProcedureManifest, RuntimeHostError, RuntimeHostResult};
 use actingcommand_contract::{
-    CatalogPayload, EventPayload, EventQuery, EventType, LeaseToken, OwnerEpoch,
-    PerformanceContext, PolicyAdmissionRecord, PolicyDetectionBudgetRecord,
-    PolicyDispatchEventData, PolicyExecutionEventData, PolicyExecutionOutcome, PolicyPayload,
-    PolicyPlanningSignalEventData, PolicyPlanningSignalKind, PolicyReasonRecord,
-    ProjectDecisionPageRequest, RuntimeErrorCode,
+    CatalogPayload, CorrelationId, EventPayload, EventQuery, EventType, IssuedCorrelationId,
+    IssuedRunId, IssuedTaskId, LeaseToken, OwnerEpoch, PerformanceContext, PolicyAdmissionRecord,
+    PolicyDetectionBudgetRecord, PolicyDispatchEventData, PolicyExecutionEventData,
+    PolicyExecutionOutcome, PolicyPayload, PolicyPlanningSignalEventData, PolicyPlanningSignalKind,
+    PolicyReasonRecord, ProjectDecisionPageRequest, RequestId, RunId, RuntimeErrorCode,
+    RuntimeRequest, TaskId,
 };
 use actingcommand_ledger::GlobalLedger;
 use actingcommand_policy::{
@@ -218,16 +219,145 @@ pub struct PolicyAdmissionContext {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PolicyDispatchAdmission {
     Granted {
-        decision_id: String,
-        catalog: CatalogGeneration,
-        token: LeaseToken,
-        admission: Box<PolicyAdmissionRecord>,
+        context: Box<PolicyRunContext>,
     },
     ReplaySuppressed {
         decision_id: String,
         catalog: CatalogGeneration,
         original_intent_sequence: u64,
     },
+}
+
+/// Non-forgeable in-process authority for one admitted policy run.
+///
+/// The scheduler mints this context once and the scheduled contained-task path consumes it
+/// without acquiring another lease or reconstructing identity from strings or logs.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PolicyRunContext {
+    request: RuntimeRequest,
+    correlation_id: IssuedCorrelationId,
+    run_id: IssuedRunId,
+    task_id: IssuedTaskId,
+    catalog: CatalogGeneration,
+    token: LeaseToken,
+    admission: PolicyAdmissionRecord,
+    intent: DispatchIntent,
+    reason_chain: DecisionReasonChain,
+    package_digest: String,
+}
+
+impl PolicyRunContext {
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn new(
+        request: RuntimeRequest,
+        correlation_id: IssuedCorrelationId,
+        run_id: IssuedRunId,
+        task_id: IssuedTaskId,
+        catalog: CatalogGeneration,
+        token: LeaseToken,
+        admission: PolicyAdmissionRecord,
+        intent: DispatchIntent,
+        reason_chain: DecisionReasonChain,
+    ) -> RuntimeHostResult<Self> {
+        let package_digest = intent.package_digest.clone().ok_or_else(|| {
+            RuntimeHostError::fatal(
+                "policy_run_package_digest_missing",
+                "build_policy_run_context",
+                RuntimeErrorCode::RuntimeFatal,
+            )
+        })?;
+        if reason_chain.decision_id != intent.decision_id
+            || reason_chain.id != intent.reason_chain_id
+            || catalog.catalog_hash() != intent.catalog_hash
+            || catalog.catalog_version() != intent.catalog_version
+        {
+            return Err(RuntimeHostError::fatal(
+                "policy_run_identity_mismatch",
+                "build_policy_run_context",
+                RuntimeErrorCode::RuntimeFatal,
+            ));
+        }
+        Ok(Self {
+            request,
+            correlation_id,
+            run_id,
+            task_id,
+            catalog,
+            token,
+            admission,
+            intent,
+            reason_chain,
+            package_digest,
+        })
+    }
+
+    pub fn decision_id(&self) -> &str {
+        &self.intent.decision_id
+    }
+
+    pub const fn run_id(&self) -> RunId {
+        *self.run_id.transport()
+    }
+
+    pub const fn task_id(&self) -> TaskId {
+        *self.task_id.transport()
+    }
+
+    pub const fn admission_request_id(&self) -> RequestId {
+        self.request.request_id()
+    }
+
+    pub const fn correlation_id(&self) -> CorrelationId {
+        *self.correlation_id.transport()
+    }
+
+    pub fn instance_alias(&self) -> &str {
+        &self.intent.instance_id
+    }
+
+    pub fn operation_id(&self) -> &str {
+        &self.intent.operation_id
+    }
+
+    pub fn procedure_ref(&self) -> &str {
+        &self.intent.procedure_ref
+    }
+
+    pub fn package_digest(&self) -> &str {
+        &self.package_digest
+    }
+
+    pub fn reason_chain(&self) -> &DecisionReasonChain {
+        &self.reason_chain
+    }
+
+    pub const fn lease_token(&self) -> &LeaseToken {
+        &self.token
+    }
+
+    pub const fn admission(&self) -> &PolicyAdmissionRecord {
+        &self.admission
+    }
+
+    pub const fn catalog(&self) -> &CatalogGeneration {
+        &self.catalog
+    }
+
+    pub(crate) const fn request(&self) -> &RuntimeRequest {
+        &self.request
+    }
+
+    pub(crate) const fn issued_correlation_id(&self) -> IssuedCorrelationId {
+        self.correlation_id
+    }
+
+    pub(crate) const fn issued_run_id(&self) -> IssuedRunId {
+        self.run_id
+    }
+
+    pub(crate) const fn issued_task_id(&self) -> IssuedTaskId {
+        self.task_id
+    }
 }
 
 pub(crate) enum PolicyExecutionPreparation {
@@ -957,6 +1087,29 @@ impl PolicyHost {
 
     pub(crate) fn pinned_catalog(&self, decision_id: &str) -> Option<CatalogGeneration> {
         self.pinned_dispatches.get(decision_id).cloned()
+    }
+
+    pub(crate) fn validate_run_context(&self, context: &PolicyRunContext) -> RuntimeHostResult<()> {
+        let dispatch = self
+            .seen_dispatches
+            .get(context.decision_id())
+            .ok_or_else(|| request("policy_run_dispatch_unknown", "validate_policy_run_context"))?;
+        let expected_data = dispatch_event_data(&context.intent, &context.reason_chain)?;
+        let pinned = self.pinned_dispatches.get(context.decision_id());
+        if dispatch.data != expected_data || dispatch.admission.as_ref() != Some(&context.admission)
+        {
+            return Err(fatal(
+                "policy_run_context_mismatch",
+                "validate_policy_run_context",
+            ));
+        }
+        if dispatch.lifecycle != DispatchLifecycle::Admitted || pinned != Some(&context.catalog) {
+            return Err(request(
+                "policy_run_not_admitted",
+                "validate_policy_run_context",
+            ));
+        }
+        Ok(())
     }
 
     pub(crate) fn admitted_at(&self, decision_id: &str) -> RuntimeHostResult<u64> {
