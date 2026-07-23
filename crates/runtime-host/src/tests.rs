@@ -2146,6 +2146,11 @@ fn scheduled_policy_run_reuses_one_request_receipt_for_one_effecting_run() {
     let PolicyDispatchAdmission::Granted { context } = admission else {
         panic!("expected policy run context")
     };
+    assert_eq!(
+        context.lease_token().owner_epoch(),
+        host.runtime_info().owner_epoch(),
+        "scheduled context must retain the Runtime fencing epoch validated at admission"
+    );
     let request =
         ContainedTaskRequest::new(package_path.to_string_lossy().into_owned(), package_sha256)
             .expect("contained task request");
@@ -2234,6 +2239,16 @@ fn scheduled_policy_run_reuses_one_request_receipt_for_one_effecting_run() {
         .find(|event| event.event_type == EventType::TaskCompleted)
         .expect("task terminal");
     assert_eq!(terminal.links.request_id(), Some(&receipt.request_id()));
+    let context_lease_id = context.lease_token().lease_id();
+    let granted = events
+        .iter()
+        .find(|event| event.event_type == EventType::LeaseGranted)
+        .expect("lease grant");
+    assert_eq!(
+        granted.links.lease_id(),
+        Some(&context_lease_id),
+        "scheduled events must use the lease carried by the fenced policy context"
+    );
     assert_eq!(state.input_count.load(Ordering::Acquire), 1);
     drop(client);
     host.close().expect("close runtime host");

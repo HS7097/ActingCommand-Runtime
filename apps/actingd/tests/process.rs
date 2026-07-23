@@ -28,12 +28,12 @@ use actingcommand_runtime_host::{
     AgentDispatcherConfig, CatalogGeneration, ExecutionBackendProvider, ResolvedExecutionInstance,
     RuntimeHost, RuntimeHostConfig,
 };
-use serde_json::json;
+use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::fs;
 use std::io::{Cursor, Read, Write};
 use std::net::TcpStream;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::Arc;
 use std::thread;
@@ -422,6 +422,13 @@ fn actingd_closes_one_policy_run_through_fixture_receipt_ledger_and_report_input
             .iter()
             .filter(|event| event.links.run_id() == Some(&run_id))
             .collect::<Vec<_>>();
+        let intent_payload = match &intent.payload {
+            ProjectionPayload::Full(payload) => match payload.as_ref() {
+                EventPayload::Policy(PolicyPayload::DispatchIntent(payload)) => payload,
+                _ => panic!("{case}: policy intent payload"),
+            },
+            _ => panic!("{case}: forensic policy intent"),
+        };
         assert!(
             run_events
                 .iter()
@@ -529,6 +536,17 @@ fn actingd_closes_one_policy_run_through_fixture_receipt_ledger_and_report_input
             .and_then(|event| event.links.lease_id())
             .copied()
             .expect("lease id");
+        let admitted_payload = run_events
+            .iter()
+            .find(|event| event.event_type == EventType::PolicyDispatchAdmitted)
+            .and_then(|event| match &event.payload {
+                ProjectionPayload::Full(payload) => match payload.as_ref() {
+                    EventPayload::Policy(PolicyPayload::DispatchAdmitted(payload)) => Some(payload),
+                    _ => None,
+                },
+                _ => None,
+            })
+            .expect("policy admission payload");
         assert!(
             run_events
                 .iter()
@@ -627,6 +645,64 @@ fn actingd_closes_one_policy_run_through_fixture_receipt_ledger_and_report_input
                 .and_then(|request| request.get("receipt_request_id")),
             "{case}: report must preserve the receipt request identity"
         );
+        assert_eq!(
+            summary.get("decision_id"),
+            Some(&json!(intent_payload.decision_id())),
+            "{case}: report decision must come from the run's intent event"
+        );
+        assert_eq!(
+            summary.get("admission"),
+            Some(
+                &serde_json::to_value(
+                    admitted_payload
+                        .admission()
+                        .expect("admitted event admission record"),
+                )
+                .expect("admission JSON")
+            ),
+            "{case}: report admission must come from the run's admitted event"
+        );
+        assert_eq!(
+            summary.pointer("/lease/lease_id"),
+            Some(&serde_json::to_value(lease_id).expect("lease id JSON")),
+            "{case}: report lease must match the run's granted lease"
+        );
+        assert_eq!(
+            summary.pointer("/reason_chain/id"),
+            Some(&json!(intent_payload.reason_chain_id())),
+            "{case}: report reason-chain identity must come from the run's intent"
+        );
+        assert_eq!(
+            summary.pointer("/reason_chain/reasons"),
+            Some(
+                &serde_json::to_value(intent_payload.reasons())
+                    .expect("policy intent reasons JSON")
+            ),
+            "{case}: report reasons must come from the run's intent"
+        );
+        assert_eq!(
+            summary.pointer("/outcome/policy"),
+            Some(&serde_json::to_value(payload.outcome()).expect("policy outcome JSON")),
+            "{case}: report outcome must come from the run's execution event"
+        );
+        let (summary_status, summary_envelope) = run_actinglab_summary(root.path(), run_id, case);
+        assert!(
+            summary_status.success(),
+            "{case}: formal actinglab summary must exit zero: {summary_envelope}"
+        );
+        assert_eq!(
+            summary_envelope.get("ok").and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            summary_envelope.get("command").and_then(Value::as_str),
+            Some("run summary")
+        );
+        assert_eq!(
+            summary_envelope.get("data"),
+            Some(&summary),
+            "{case}: formal CLI must return the same typed Runtime projection"
+        );
         let unknown_run_id = *IdentifierIssuer::new()
             .expect("identifier issuer")
             .mint_run_id()
@@ -636,6 +712,26 @@ fn actingd_closes_one_policy_run_through_fixture_receipt_ledger_and_report_input
             .summarize_run(unknown_run_id)
             .expect_err("unknown run must not produce a success-looking summary");
         assert_eq!(missing.code(), "run_summary_not_found", "{case}");
+        let (missing_status, missing_envelope) =
+            run_actinglab_summary(root.path(), unknown_run_id, case);
+        assert!(
+            !missing_status.success(),
+            "{case}: unknown typed run must exit non-zero"
+        );
+        assert_eq!(
+            missing_envelope.get("ok").and_then(Value::as_bool),
+            Some(false)
+        );
+        assert_eq!(
+            missing_envelope
+                .pointer("/error/code")
+                .and_then(Value::as_str),
+            Some("run_summary_not_found")
+        );
+        assert!(
+            missing_envelope.get("data").is_none(),
+            "{case}: unknown run must not carry success-style data"
+        );
         let capture_count_before = client
             .query_events(
                 EventQuery {
@@ -1442,6 +1538,62 @@ fn start_actingd(config_path: &Path) -> Child {
         .stderr(Stdio::piped())
         .spawn()
         .expect("start actingd")
+}
+
+fn run_actinglab_summary(
+    state_root: &Path,
+    run_id: actingcommand_contract::RunId,
+    case: &str,
+) -> (std::process::ExitStatus, Value) {
+    let run_id = serde_json::to_value(run_id)
+        .expect("run id JSON")
+        .as_str()
+        .expect("run id string")
+        .to_owned();
+    let output = Command::new(actinglab_binary())
+        .args([
+            "--json",
+            "run",
+            "summary",
+            &run_id,
+            "--state-root",
+            state_root.to_str().expect("state root"),
+        ])
+        .output()
+        .unwrap_or_else(|error| panic!("{case}: start actinglab summary: {error}"));
+    let envelope = serde_json::from_slice::<Value>(&output.stdout).unwrap_or_else(|error| {
+        panic!(
+            "{case}: parse actinglab summary JSON: {error}; stdout={}; stderr={}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        )
+    });
+    (output.status, envelope)
+}
+
+fn actinglab_binary() -> PathBuf {
+    if let Some(path) = option_env!("CARGO_BIN_EXE_actinglab") {
+        return PathBuf::from(path);
+    }
+    if let Some(path) = std::env::var_os("ACTINGCOMMAND_ACTINGLAB_BIN") {
+        return PathBuf::from(path);
+    }
+    let mut path = std::env::current_exe().expect("current process-test executable");
+    path.pop();
+    if path.file_name().is_some_and(|name| name == "deps") {
+        path.pop();
+    }
+    path.push(if cfg!(windows) {
+        "actinglab.exe"
+    } else {
+        "actinglab"
+    });
+    assert!(
+        path.is_file(),
+        "build actingcommand-actinglab before the actingd process integration test: {}",
+        path.display()
+    );
+    path
 }
 
 fn seed_agent_wake(state_root: &Path, instance_id: InstanceId) {
