@@ -339,6 +339,7 @@ fn actingd_does_not_execute_fixture_without_an_explicit_scheduled_binding() {
 fn actingd_closes_one_policy_run_through_fixture_receipt_ledger_and_report_inputs() {
     let expected_package_sha256 = format!("{:x}", Sha256::digest(neutral_contained_task_package()));
     let expected_package_digest = format!("sha256:{expected_package_sha256}");
+    let (_actinglab_target, actinglab_binary) = build_candidate_actinglab();
     for (case, frames, max_inputs, expected_effects) in [
         (
             "effecting",
@@ -569,9 +570,18 @@ fn actingd_closes_one_policy_run_through_fixture_receipt_ledger_and_report_input
             .iter()
             .find(|event| event.event_type == EventType::TaskCompleted)
             .expect("task completed");
+        let lab_request_id = lab_request
+            .links
+            .request_id()
+            .copied()
+            .expect("lab request id");
+        let terminal_request_id = task_completed
+            .links
+            .request_id()
+            .copied()
+            .expect("task completed request id");
         assert_eq!(
-            lab_request.links.request_id(),
-            task_completed.links.request_id(),
+            lab_request_id, terminal_request_id,
             "{case}: receipt terminal must use the contained request identity"
         );
         let execution = run_events
@@ -646,6 +656,31 @@ fn actingd_closes_one_policy_run_through_fixture_receipt_ledger_and_report_input
             "{case}: report must preserve the receipt request identity"
         );
         assert_eq!(
+            summary.get("run_id"),
+            Some(&json!(run_id)),
+            "{case}: report run must match the source event"
+        );
+        assert_eq!(
+            summary.get("task_id"),
+            Some(&json!(task_id)),
+            "{case}: report task must match the source event"
+        );
+        assert_eq!(
+            summary.get("correlation_id"),
+            Some(&json!(correlation_id)),
+            "{case}: report correlation must match the source event"
+        );
+        assert_eq!(
+            summary.pointer("/request/lab_request_id"),
+            Some(&json!(lab_request_id)),
+            "{case}: report request must match the source LabRequest event"
+        );
+        assert_eq!(
+            summary.pointer("/request/receipt_request_id"),
+            Some(&json!(terminal_request_id)),
+            "{case}: report receipt must match the source TaskCompleted event"
+        );
+        assert_eq!(
             summary.get("decision_id"),
             Some(&json!(intent_payload.decision_id())),
             "{case}: report decision must come from the run's intent event"
@@ -685,7 +720,8 @@ fn actingd_closes_one_policy_run_through_fixture_receipt_ledger_and_report_input
             Some(&serde_json::to_value(payload.outcome()).expect("policy outcome JSON")),
             "{case}: report outcome must come from the run's execution event"
         );
-        let (summary_status, summary_envelope) = run_actinglab_summary(root.path(), run_id, case);
+        let (summary_status, summary_envelope) =
+            run_actinglab_summary(&actinglab_binary, root.path(), run_id, case);
         assert!(
             summary_status.success(),
             "{case}: formal actinglab summary must exit zero: {summary_envelope}"
@@ -713,10 +749,15 @@ fn actingd_closes_one_policy_run_through_fixture_receipt_ledger_and_report_input
             .expect_err("unknown run must not produce a success-looking summary");
         assert_eq!(missing.code(), "run_summary_not_found", "{case}");
         let (missing_status, missing_envelope) =
-            run_actinglab_summary(root.path(), unknown_run_id, case);
+            run_actinglab_summary(&actinglab_binary, root.path(), unknown_run_id, case);
         assert!(
             !missing_status.success(),
             "{case}: unknown typed run must exit non-zero"
+        );
+        assert_eq!(
+            missing_status.code(),
+            Some(2),
+            "{case}: unknown typed run must retain the usage-validation exit"
         );
         assert_eq!(
             missing_envelope.get("ok").and_then(Value::as_bool),
@@ -1541,6 +1582,7 @@ fn start_actingd(config_path: &Path) -> Child {
 }
 
 fn run_actinglab_summary(
+    actinglab_binary: &Path,
     state_root: &Path,
     run_id: actingcommand_contract::RunId,
     case: &str,
@@ -1550,7 +1592,7 @@ fn run_actinglab_summary(
         .as_str()
         .expect("run id string")
         .to_owned();
-    let output = Command::new(actinglab_binary())
+    let output = Command::new(actinglab_binary)
         .args([
             "--json",
             "run",
@@ -1571,29 +1613,48 @@ fn run_actinglab_summary(
     (output.status, envelope)
 }
 
-fn actinglab_binary() -> PathBuf {
-    if let Some(path) = option_env!("CARGO_BIN_EXE_actinglab") {
-        return PathBuf::from(path);
-    }
-    if let Some(path) = std::env::var_os("ACTINGCOMMAND_ACTINGLAB_BIN") {
-        return PathBuf::from(path);
-    }
-    let mut path = std::env::current_exe().expect("current process-test executable");
-    path.pop();
-    if path.file_name().is_some_and(|name| name == "deps") {
-        path.pop();
-    }
-    path.push(if cfg!(windows) {
+fn build_candidate_actinglab() -> (TempDir, PathBuf) {
+    let target = TempDir::new().expect("fresh actinglab target");
+    let workspace_root = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .and_then(Path::parent)
+        .expect("workspace root");
+    let cargo = std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
+    let output = Command::new(cargo)
+        .current_dir(workspace_root)
+        .args([
+            "build",
+            "--locked",
+            "-p",
+            "actingcommand-actinglab",
+            "--bin",
+            "actinglab",
+            "--target-dir",
+        ])
+        .arg(target.path())
+        .output()
+        .expect("build exact actinglab candidate");
+    assert!(
+        output.status.success(),
+        "build exact actinglab candidate: stdout={}; stderr={}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let binary = target.path().join("debug").join(if cfg!(windows) {
         "actinglab.exe"
     } else {
         "actinglab"
     });
+    let binary = binary
+        .canonicalize()
+        .expect("exact actinglab candidate binary");
+    let target_root = target.path().canonicalize().expect("actinglab target root");
     assert!(
-        path.is_file(),
-        "build actingcommand-actinglab before the actingd process integration test: {}",
-        path.display()
+        binary.starts_with(&target_root),
+        "actinglab candidate escaped its fresh target: {}",
+        binary.display()
     );
-    path
+    (target, binary)
 }
 
 fn seed_agent_wake(state_root: &Path, instance_id: InstanceId) {
