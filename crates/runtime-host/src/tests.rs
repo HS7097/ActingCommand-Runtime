@@ -113,8 +113,13 @@ struct FakeState {
     capture_count: AtomicUsize,
     capture_close_count: AtomicUsize,
     fail_capture: AtomicBool,
+    transient_capture_failure: AtomicBool,
     fail_capture_on: AtomicUsize,
+    unknown_capture: AtomicBool,
+    refuse_guard_capture: AtomicBool,
     transition_capture_after_input: AtomicBool,
+    transition_capture_after_inputs: AtomicUsize,
+    error_capture_after_input: AtomicBool,
     monitor_observation_count: AtomicUsize,
     monitor_mode: AtomicUsize,
     application_count: AtomicUsize,
@@ -193,22 +198,43 @@ impl CaptureBackend for FakeCapture {
         if self.state.fail_capture.load(Ordering::Acquire)
             || self.state.fail_capture_on.load(Ordering::Acquire) == capture_number
         {
-            return Err(DeviceError::fatal("injected capture failure"));
+            return Err(
+                if self.state.transient_capture_failure.load(Ordering::Acquire) {
+                    DeviceError::transient("injected capture failure")
+                } else {
+                    DeviceError::fatal("injected capture failure")
+                },
+            );
         }
-        let first = if self
+        let input_count = self.state.input_count.load(Ordering::Acquire);
+        let transition_after = self
+            .state
+            .transition_capture_after_inputs
+            .load(Ordering::Acquire);
+        let first = if self.state.unknown_capture.load(Ordering::Acquire) {
+            [1, 2, 3]
+        } else if self.state.error_capture_after_input.load(Ordering::Acquire) && input_count > 0 {
+            [255, 255, 0]
+        } else if (self
             .state
             .transition_capture_after_input
             .load(Ordering::Acquire)
-            && self.state.input_count.load(Ordering::Acquire) > 0
+            && input_count > 0)
+            || (transition_after > 0 && input_count >= transition_after)
         {
             [0, 0, 255]
         } else {
             [255, 0, 0]
         };
+        let guard = if self.state.refuse_guard_capture.load(Ordering::Acquire) {
+            [1, 2, 3]
+        } else {
+            [0, 255, 0]
+        };
         Frame::from_pixels(
             2,
             1,
-            [first.as_slice(), &[0, 255, 0]].concat(),
+            [first.as_slice(), guard.as_slice()].concat(),
             PixelFormat::Rgb8,
             match self.provenance {
                 ExecutionBackendProvenance::PhysicalDevice => CaptureBackendName::AdbScreencap,
@@ -825,43 +851,6 @@ fn budget_policy_sources(version: u64) -> CatalogSources {
         "end_minute_of_day": 0
     }]);
     sources.activity.bytes = serde_json::to_vec_pretty(&activity).expect("budget activity bytes");
-    sources
-}
-
-fn scheduled_retry_policy_sources(version: u64) -> CatalogSources {
-    let mut sources = policy_sources(version);
-    let mut tasks: serde_json::Value =
-        serde_json::from_slice(&sources.tasks.bytes).expect("scheduled retry task fixture");
-    tasks["tasks"][0]["on_failure"] = serde_json::json!({
-        "action": "continue",
-        "retry_limit": 5,
-        "retry_backoff_ms": 1,
-        "escalation_threshold": 100
-    });
-    tasks["tasks"][0]["cooldown_ms"] = serde_json::json!(0);
-    tasks["tasks"][0]["loop_budget"] = serde_json::json!({
-        "daily_limit": 10,
-        "window_iteration_limit": 10,
-        "max_runtime_ms": 1_000_000
-    });
-    sources.tasks.bytes =
-        serde_json::to_vec_pretty(&tasks).expect("scheduled retry task bytes");
-
-    let mut activity: serde_json::Value =
-        serde_json::from_slice(&sources.activity.bytes).expect("scheduled retry activity fixture");
-    activity["profiles"][0]["daily_budget"] = serde_json::json!(10);
-    activity["profiles"][0]["max_window_iterations"] = serde_json::json!(10);
-    activity["profiles"][0]["session_max_ms"] = serde_json::json!(1_000_000);
-    activity["profiles"][0]["minimum_interval_ms"] = serde_json::json!(1);
-    activity["profiles"][0]["maximum_interval_ms"] = serde_json::json!(1);
-    activity["profiles"][0]["windows"] = serde_json::json!([{
-        "weekdays": [1, 2, 3, 4, 5, 6, 7],
-        "utc_offset_minutes": 0,
-        "start_minute_of_day": 0,
-        "end_minute_of_day": 0
-    }]);
-    sources.activity.bytes =
-        serde_json::to_vec_pretty(&activity).expect("scheduled retry activity bytes");
     sources
 }
 
@@ -2076,6 +2065,86 @@ fn project_interface_pages_decision_history_without_duplicates_or_loss() {
 }
 
 fn neutral_contained_task_package() -> Vec<u8> {
+    neutral_contained_task_package_with_task(
+        br#"{
+            "schema_version":"0.6",
+            "task_id":"task",
+            "game":"neutral",
+            "server_scope":["test"],
+            "coordinate_space":{"width":2,"height":1},
+            "entry_page":"home",
+            "target_page":"terminal",
+             "operations":[{
+                 "id":"open_terminal",
+                 "from":"home",
+                 "click":{"kind":"point","x":1,"y":0},
+                 "unguarded_trusted_coordinate":true,
+                 "retryable":false
+             }]
+        }"#,
+    )
+}
+
+fn neutral_retrying_contained_task_package() -> Vec<u8> {
+    neutral_contained_task_package_with_task(
+        br#"{
+            "schema_version":"0.6",
+            "task_id":"task",
+            "game":"neutral",
+            "server_scope":["test"],
+            "coordinate_space":{"width":2,"height":1},
+            "entry_page":"home",
+            "target_page":"terminal",
+             "operations":[{
+                 "id":"open_terminal",
+                 "from":"home",
+                 "to":"terminal",
+                 "click":{"kind":"point","x":1,"y":0},
+                 "guard":{
+                     "page_id":"home",
+                     "target_id":"guard/ready",
+                     "expected_rect":{"x":1,"y":0,"width":1,"height":1},
+                     "color_probe":"guard/ready"
+                 },
+                 "retryable":true,
+                 "max_attempts":6,
+                 "retry_interval_ms":1
+             }]
+        }"#,
+    )
+}
+
+fn neutral_error_page_retrying_contained_task_package() -> Vec<u8> {
+    neutral_contained_task_package_with_task(
+        br#"{
+            "schema_version":"0.6",
+            "task_id":"task",
+            "game":"neutral",
+            "server_scope":["test"],
+            "coordinate_space":{"width":2,"height":1},
+            "entry_page":"home",
+            "target_page":"terminal",
+            "error_pages":["error"],
+             "operations":[{
+                 "id":"open_terminal",
+                 "from":"home",
+                 "to":"terminal",
+                 "click":{"kind":"point","x":1,"y":0},
+                 "guard":{
+                     "page_id":"home",
+                     "target_id":"guard/ready",
+                     "expected_rect":{"x":1,"y":0,"width":1,"height":1},
+                     "color_probe":"guard/ready"
+                 },
+                 "retryable":true,
+                 "max_attempts":6,
+                 "retry_interval_ms":1
+             }]
+        }"#,
+    )
+}
+
+fn neutral_contained_task_package_with_task(task: &[u8]) -> Vec<u8> {
     let cursor = Cursor::new(Vec::new());
     let mut zip = ZipWriter::new(cursor);
     let options = FileOptions::default().compression_method(zip::CompressionMethod::Stored);
@@ -2092,7 +2161,7 @@ fn neutral_contained_task_package() -> Vec<u8> {
                 "entry_task_id":"task",
                 "capture_interval_ms":1,
                 "step_timeout_ms":50,
-                "timeout_ms":1000,
+                "timeout_ms":5000,
                 "max_steps":2
             }"#,
         ),
@@ -2102,22 +2171,7 @@ fn neutral_contained_task_package() -> Vec<u8> {
         ),
         (
             "resources/operations/task/task.json",
-            br#"{
-                "schema_version":"0.6",
-                "task_id":"task",
-                "game":"neutral",
-                "server_scope":["test"],
-                "coordinate_space":{"width":2,"height":1},
-                "entry_page":"home",
-                "target_page":"terminal",
-                 "operations":[{
-                     "id":"open_terminal",
-                     "from":"home",
-                     "to":"terminal",
-                     "click":{"kind":"point","x":1,"y":0},
-                     "unguarded_trusted_coordinate":true
-                 }]
-            }"#,
+            task,
         ),
         (
             "resources/recognition/neutral.test.pack.json",
@@ -2129,7 +2183,9 @@ fn neutral_contained_task_package() -> Vec<u8> {
                 "defaults":{"color_max_distance":0.0},
                 "targets":[
                     {"type":"color","id":"page/home","region":{"x":0,"y":0,"width":1,"height":1},"expected":[255,0,0]},
-                    {"type":"color","id":"page/terminal","region":{"x":0,"y":0,"width":1,"height":1},"expected":[0,0,255]}
+                    {"type":"color","id":"page/terminal","region":{"x":0,"y":0,"width":1,"height":1},"expected":[0,0,255]},
+                    {"type":"color","id":"page/error","region":{"x":0,"y":0,"width":1,"height":1},"expected":[255,255,0]},
+                    {"type":"color","id":"guard/ready","region":{"x":1,"y":0,"width":1,"height":1},"expected":[0,255,0]}
                 ]
             }"#,
         ),
@@ -2139,7 +2195,8 @@ fn neutral_contained_task_package() -> Vec<u8> {
                 "schema_version":"0.3",
                 "pages":[
                     {"id":"neutral/home","required":["page/home"],"optional":[],"forbidden":[]},
-                    {"id":"neutral/terminal","required":["page/terminal"],"optional":[],"forbidden":[]}
+                    {"id":"neutral/terminal","required":["page/terminal"],"optional":[],"forbidden":[]},
+                    {"id":"neutral/error","required":["page/error"],"optional":[],"forbidden":[]}
                 ]
             }"#,
         ),
@@ -2328,7 +2385,10 @@ fn scheduled_policy_run_failure_records_terminal_outcome_and_completion() {
         .run_scheduled_contained_task(&context, &request)
         .expect_err("scheduled task failure");
 
-    assert!(!error.is_fatal(), "unexpected fatal scheduled error: {error}");
+    assert!(
+        !error.is_fatal(),
+        "unexpected fatal scheduled error: {error}"
+    );
     assert_eq!(error.code(), "contained_task_requires_scheduler");
     let mut client = TestClient::connect(&host);
     let events = projected_events(
@@ -2399,56 +2459,57 @@ fn scheduled_policy_run_failure_records_terminal_outcome_and_completion() {
 }
 
 #[test]
-fn scheduled_failure_chain_retries_five_times_and_stops_on_sixth() {
-    let root = TempDir::new().expect("tempdir");
-    let package = neutral_contained_task_package();
-    let package_path = root.path().join("scheduled-task.zip");
-    fs::write(&package_path, &package).expect("write package");
-    let package_sha256 = format!("{:x}", Sha256::digest(&package));
-    let clock = Arc::new(ManualRuntimeClock::new(POLICY_NOW_UNIX_MS, 0));
-    let state = Arc::new(FakeState::default());
-    let host = RuntimeHost::start(
-        config(&root)
-            .with_runtime_clock(clock.clone())
-            .with_procedure_manifest(procedure_manifest_with_primary(
+fn scheduled_recognition_and_guard_failures_settle_on_the_admitted_run() {
+    for (case, expected_code) in [
+        ("recognition-uncertain", "contained_task_page_unknown"),
+        ("guard-refused", "contained_task_guard_refused"),
+    ] {
+        let root = TempDir::new().expect("tempdir");
+        let package = if case == "guard-refused" {
+            neutral_retrying_contained_task_package()
+        } else {
+            neutral_contained_task_package()
+        };
+        let package_path = root.path().join("scheduled-task.zip");
+        fs::write(&package_path, &package).expect("write package");
+        let package_sha256 = format!("{:x}", Sha256::digest(&package));
+        let state = Arc::new(FakeState::default());
+        if case == "recognition-uncertain" {
+            state.unknown_capture.store(true, Ordering::Release);
+        } else {
+            state.refuse_guard_capture.store(true, Ordering::Release);
+        }
+        let host = RuntimeHost::start(
+            config(&root).with_procedure_manifest(procedure_manifest_with_primary(
                 &package,
                 vec!["after_observation".to_owned()],
             )),
-        Arc::new(
-            FakeProvider::one(POLICY_INSTANCE_ALIAS, instance_id(), Arc::clone(&state))
-                .fixture_simulation(),
-        ),
-    )
-    .expect("runtime host");
-    host.activate_policy_catalog(&scheduled_retry_policy_sources(1))
-        .expect("activate retry policy catalog");
-    let request =
-        ContainedTaskRequest::new(package_path.to_string_lossy().into_owned(), package_sha256)
-            .expect("contained task request");
-    let mut recorded_approval = false;
-
-    for attempt in 1_u16..=6 {
-        if attempt > 1 {
-            clock.advance(1_000);
-        }
-        let now = POLICY_NOW_UNIX_MS + u64::from(attempt - 1) * 1_000;
-        let (_, intent, reasons) =
-            evaluated_policy_dispatch_at(&host, PolicyTrigger::FactsChanged, now, u64::from(attempt));
-        if !recorded_approval {
-            record_policy_approval(&host, &intent);
-            recorded_approval = true;
-        }
+            Arc::new(
+                FakeProvider::one(POLICY_INSTANCE_ALIAS, instance_id(), Arc::clone(&state))
+                    .fixture_simulation(),
+            ),
+        )
+        .expect("runtime host");
+        host.activate_policy_catalog(&policy_sources(1))
+            .expect("activate policy catalog");
+        let (_, intent, reasons) = evaluated_policy_dispatch(&host, PolicyTrigger::FactsChanged);
+        record_policy_approval(&host, &intent);
         let admission = host
             .admit_policy_dispatch(&intent, &reasons, &policy_context(&host, &intent))
-            .unwrap_or_else(|error| panic!("attempt {attempt} policy admission: {error}"));
+            .expect("policy admission");
         let PolicyDispatchAdmission::Granted { context } = admission else {
-            panic!("attempt {attempt}: expected policy run context")
+            panic!("{case}: expected policy run context")
         };
-        let error = host
-            .run_scheduled_contained_task(&context, &request)
-            .expect_err("scheduled task failure");
-        assert_eq!(error.code(), "contained_task_requires_scheduler");
-        assert!(!error.is_fatal());
+        let request =
+            ContainedTaskRequest::new(package_path.to_string_lossy().into_owned(), package_sha256)
+                .expect("contained task request");
+
+        let error = match host.run_scheduled_contained_task(&context, &request) {
+            Ok(_) => panic!("{case}: scheduled failure missing"),
+            Err(error) => error,
+        };
+        assert_eq!(error.code(), expected_code, "{case}");
+        assert!(!error.is_fatal(), "{case}: unexpected fatal error");
 
         let mut client = TestClient::connect(&host);
         let events = projected_events(
@@ -2470,49 +2531,546 @@ fn scheduled_failure_chain_retries_five_times_and_stops_on_sixth() {
                     .filter(|event| event.event_type == event_type)
                     .count(),
                 1,
-                "attempt {attempt}: {event_type:?}"
+                "{case}: {event_type:?}"
             );
         }
-        let outcome = events
+        let task_failed = events
             .iter()
-            .find_map(|event| match &event.payload {
-                ProjectionPayload::Full(payload) => match payload.as_ref() {
-                    EventPayload::Policy(PolicyPayload::ExecutionRecorded(payload)) => {
-                        Some(payload.outcome())
-                    }
-                    _ => None,
-                },
-                _ => None,
-            })
-            .expect("scheduled failure outcome");
-        let PolicyExecutionOutcome::Failed { failure } = outcome else {
-            panic!("attempt {attempt}: expected failed policy outcome")
-        };
-        assert_eq!(failure.error_code, error.code());
-        assert_eq!(failure.original_class, PolicyFailureClass::Recoverable);
-        assert_eq!(failure.effective_class, PolicyFailureClass::Recoverable);
-        assert_eq!(failure.consecutive_same_error, attempt);
-        assert_eq!(failure.escalation_streak, attempt);
-        if attempt <= 5 {
-            assert_eq!(
-                failure.disposition,
-                PolicyFailureDisposition::RetryScheduled
-            );
-            assert_eq!(failure.retry_attempt, attempt);
-            assert!(failure.retry_at_unix_ms.is_some());
-        } else {
-            assert_eq!(failure.disposition, PolicyFailureDisposition::Continue);
-            assert_eq!(failure.retry_attempt, 0);
-            assert!(failure.retry_at_unix_ms.is_none());
-        }
+            .find(|event| event.event_type == EventType::TaskFailed)
+            .expect("task failure");
+        assert_eq!(task_failed.severity, EventSeverity::Warning, "{case}");
+        assert!(matches!(
+            &task_failed.payload,
+            ProjectionPayload::Full(payload)
+                if matches!(
+                    payload.as_ref(),
+                    EventPayload::Task(TaskPayload::Semantic(payload))
+                        if matches!(
+                            payload.fact(),
+                            TaskSemanticFact::TerminalCommitted {
+                                outcome: TaskOutcome::Failure,
+                                failure_code: Some(code),
+                                ..
+                            } if code == expected_code
+                        )
+                )
+        ));
+        let execution = events
+            .iter()
+            .find(|event| event.event_type == EventType::PolicyExecutionRecorded)
+            .expect("policy execution");
+        assert!(matches!(
+            &execution.payload,
+            ProjectionPayload::Full(payload)
+                if matches!(
+                    payload.as_ref(),
+                    EventPayload::Policy(PolicyPayload::ExecutionRecorded(payload))
+                        if matches!(
+                            payload.outcome(),
+                            PolicyExecutionOutcome::Failed { failure }
+                                if failure.error_code == expected_code
+                                    && failure.original_class
+                                        == PolicyFailureClass::Recoverable
+                        )
+                )
+        ));
         assert!(
             host.pinned_policy_catalog(&intent.decision_id)
                 .expect("catalog pin")
-                .is_none()
+                .is_none(),
+            "{case}: catalog pin"
         );
+        assert_eq!(state.input_count.load(Ordering::Acquire), 0, "{case}");
         drop(client);
+        host.close()
+            .unwrap_or_else(|error| panic!("{case}: close runtime host: {error}"));
     }
-    assert_eq!(state.input_count.load(Ordering::Acquire), 12);
+}
+
+#[test]
+fn scheduled_lab_rejection_settles_without_a_fake_task_terminal() {
+    let root = TempDir::new().expect("tempdir");
+    let package = neutral_contained_task_package();
+    let package_path = root.path().join("scheduled-task.zip");
+    fs::write(&package_path, &package).expect("write package");
+    let package_sha256 = format!("{:x}", Sha256::digest(&package));
+    let state = Arc::new(FakeState::default());
+    let host = RuntimeHost::start(
+        config(&root).with_procedure_manifest(procedure_manifest_with_primary(
+            &package,
+            vec!["after_observation".to_owned()],
+        )),
+        Arc::new(FakeProvider::one(
+            POLICY_INSTANCE_ALIAS,
+            instance_id(),
+            Arc::clone(&state),
+        )),
+    )
+    .expect("runtime host");
+    host.activate_policy_catalog(&policy_sources(1))
+        .expect("activate policy catalog");
+    let (_, intent, reasons) = evaluated_policy_dispatch(&host, PolicyTrigger::FactsChanged);
+    record_policy_approval(&host, &intent);
+    let admission = host
+        .admit_policy_dispatch(&intent, &reasons, &policy_context(&host, &intent))
+        .expect("policy admission");
+    let PolicyDispatchAdmission::Granted { context } = admission else {
+        panic!("expected policy run context")
+    };
+    let request =
+        ContainedTaskRequest::new(package_path.to_string_lossy().into_owned(), package_sha256)
+            .expect("contained task request");
+
+    let error = host
+        .run_scheduled_contained_task(&context, &request)
+        .expect_err("physical backend must be rejected for scheduled Lab execution");
+    assert_eq!(error.code(), "policy_run_fixture_simulation_required");
+    assert!(!error.is_fatal());
+
+    let mut client = TestClient::connect(&host);
+    let events = projected_events(
+        &mut client,
+        EventQuery {
+            run_id: Some(context.run_id()),
+            ..EventQuery::default()
+        },
+    );
+    for event_type in [
+        EventType::PolicyDispatchAdmitted,
+        EventType::LeaseGranted,
+        EventType::LeaseReleased,
+        EventType::PolicyExecutionRecorded,
+        EventType::PolicyDispatchCompleted,
+    ] {
+        assert_eq!(
+            events
+                .iter()
+                .filter(|event| event.event_type == event_type)
+                .count(),
+            1,
+            "{event_type:?} must be unique"
+        );
+    }
+    assert!(events.iter().all(|event| !matches!(
+        event.event_type,
+        EventType::LabRequest | EventType::TaskFailed
+    )));
+    let outcome = events
+        .iter()
+        .find_map(|event| match &event.payload {
+            ProjectionPayload::Full(payload) => match payload.as_ref() {
+                EventPayload::Policy(PolicyPayload::ExecutionRecorded(payload)) => {
+                    Some(payload.outcome())
+                }
+                _ => None,
+            },
+            _ => None,
+        })
+        .expect("failed policy outcome");
+    assert!(matches!(
+        outcome,
+        PolicyExecutionOutcome::Failed { failure }
+            if failure.error_code == error.code()
+                && failure.original_class == PolicyFailureClass::Recoverable
+    ));
+    assert!(
+        host.pinned_policy_catalog(&intent.decision_id)
+            .expect("catalog pin")
+            .is_none()
+    );
+    assert_eq!(state.input_count.load(Ordering::Acquire), 0);
+    drop(client);
+    host.close().expect("close runtime host");
+}
+
+#[test]
+fn scheduled_expired_lease_is_fenced_and_settled_on_the_original_run() {
+    let root = TempDir::new().expect("tempdir");
+    let package = neutral_contained_task_package();
+    let package_path = root.path().join("scheduled-task.zip");
+    fs::write(&package_path, &package).expect("write package");
+    let package_sha256 = format!("{:x}", Sha256::digest(&package));
+    let state = Arc::new(FakeState::default());
+    let host = RuntimeHost::start(
+        config(&root)
+            .with_scheduler(SchedulerConfig {
+                maximum_client_heartbeat_interval_ms: 20,
+                takeover_cooldown_ms: 40,
+                lease_ttl_ms: 200,
+                ..SchedulerConfig::default()
+            })
+            .with_procedure_manifest(procedure_manifest_with_primary(
+                &package,
+                vec!["after_observation".to_owned()],
+            )),
+        Arc::new(
+            FakeProvider::one(POLICY_INSTANCE_ALIAS, instance_id(), Arc::clone(&state))
+                .fixture_simulation(),
+        ),
+    )
+    .expect("runtime host");
+    host.activate_policy_catalog(&policy_sources(1))
+        .expect("activate policy catalog");
+    let (_, intent, reasons) = evaluated_policy_dispatch(&host, PolicyTrigger::FactsChanged);
+    record_policy_approval(&host, &intent);
+    let admission = host
+        .admit_policy_dispatch(&intent, &reasons, &policy_context(&host, &intent))
+        .expect("policy admission");
+    let PolicyDispatchAdmission::Granted { context } = admission else {
+        panic!("expected policy run context")
+    };
+    let request =
+        ContainedTaskRequest::new(package_path.to_string_lossy().into_owned(), package_sha256)
+            .expect("contained task request");
+
+    thread::sleep(Duration::from_millis(250));
+    let error = host
+        .run_scheduled_contained_task(&context, &request)
+        .expect_err("expired scheduled lease must be fenced");
+    assert_eq!(error.code(), "lease_mismatch");
+    assert!(!error.is_fatal());
+
+    let mut client = TestClient::connect(&host);
+    let events = projected_events(
+        &mut client,
+        EventQuery {
+            run_id: Some(context.run_id()),
+            ..EventQuery::default()
+        },
+    );
+    for event_type in [
+        EventType::LeaseReleased,
+        EventType::PolicyExecutionRecorded,
+        EventType::PolicyDispatchCompleted,
+    ] {
+        assert_eq!(
+            events
+                .iter()
+                .filter(|event| event.event_type == event_type)
+                .count(),
+            1,
+            "{event_type:?} must settle the fenced run exactly once"
+        );
+    }
+    assert!(
+        host.pinned_policy_catalog(&intent.decision_id)
+            .expect("catalog pin")
+            .is_none()
+    );
+    assert_eq!(state.input_count.load(Ordering::Acquire), 0);
+    drop(client);
+    host.close().expect("close runtime host");
+}
+
+#[test]
+fn scheduled_failure_chain_retries_five_times_and_stops_on_sixth() {
+    let root = TempDir::new().expect("tempdir");
+    let package = neutral_retrying_contained_task_package();
+    let package_path = root.path().join("scheduled-task.zip");
+    fs::write(&package_path, &package).expect("write package");
+    let package_sha256 = format!("{:x}", Sha256::digest(&package));
+    let state = Arc::new(FakeState::default());
+    let host = RuntimeHost::start(
+        config(&root).with_procedure_manifest(procedure_manifest_with_primary(
+            &package,
+            vec!["after_observation".to_owned()],
+        )),
+        Arc::new(
+            FakeProvider::one(POLICY_INSTANCE_ALIAS, instance_id(), Arc::clone(&state))
+                .fixture_simulation(),
+        ),
+    )
+    .expect("runtime host");
+    host.activate_policy_catalog(&policy_sources(1))
+        .expect("activate policy catalog");
+    let (_, intent, reasons) = evaluated_policy_dispatch(&host, PolicyTrigger::FactsChanged);
+    record_policy_approval(&host, &intent);
+    let admission = host
+        .admit_policy_dispatch(&intent, &reasons, &policy_context(&host, &intent))
+        .expect("policy admission");
+    let PolicyDispatchAdmission::Granted { context } = admission else {
+        panic!("expected one policy run context")
+    };
+    let request =
+        ContainedTaskRequest::new(package_path.to_string_lossy().into_owned(), package_sha256)
+            .expect("contained task request");
+    let error = host
+        .run_scheduled_contained_task(&context, &request)
+        .expect_err("sixth operation attempt must stop the scheduled run");
+    assert_eq!(error.code(), "contained_task_requires_scheduler");
+    assert!(!error.is_fatal());
+
+    let mut client = TestClient::connect(&host);
+    let events = projected_events(
+        &mut client,
+        EventQuery {
+            run_id: Some(context.run_id()),
+            ..EventQuery::default()
+        },
+    );
+    for event_type in [
+        EventType::TaskStepStarted,
+        EventType::TaskEffectIntent,
+        EventType::TaskEffectCompleted,
+        EventType::TaskStepFinished,
+    ] {
+        assert_eq!(
+            events
+                .iter()
+                .filter(|event| event.event_type == event_type)
+                .count(),
+            6,
+            "{event_type:?} must record every in-run attempt"
+        );
+    }
+    for event_type in [
+        EventType::PolicyDispatchAdmitted,
+        EventType::LeaseGranted,
+        EventType::TaskFailed,
+        EventType::LeaseReleased,
+        EventType::PolicyExecutionRecorded,
+        EventType::PolicyDispatchCompleted,
+    ] {
+        assert_eq!(
+            events
+                .iter()
+                .filter(|event| event.event_type == event_type)
+                .count(),
+            1,
+            "{event_type:?} must be unique for the formal run"
+        );
+    }
+    let attempts = events
+        .iter()
+        .filter(|event| event.event_type == EventType::TaskEffectIntent)
+        .collect::<Vec<_>>();
+    let first_attempt = attempts.first().expect("first effect attempt");
+    assert!(attempts.iter().all(|attempt| {
+        attempt.links.request_id() == first_attempt.links.request_id()
+            && attempt.links.correlation_id() == first_attempt.links.correlation_id()
+            && attempt.links.task_id() == first_attempt.links.task_id()
+            && attempt.links.run_id() == first_attempt.links.run_id()
+            && attempt.links.lease_id() == first_attempt.links.lease_id()
+    }));
+    let task_id = context.task_id();
+    let run_id = context.run_id();
+    let lease_id = context.lease_token().lease_id();
+    assert_eq!(first_attempt.links.task_id(), Some(&task_id));
+    assert_eq!(first_attempt.links.run_id(), Some(&run_id));
+    assert_eq!(first_attempt.links.lease_id(), Some(&lease_id));
+    let outcome = events
+        .iter()
+        .find_map(|event| match &event.payload {
+            ProjectionPayload::Full(payload) => match payload.as_ref() {
+                EventPayload::Policy(PolicyPayload::ExecutionRecorded(payload)) => {
+                    Some(payload.outcome())
+                }
+                _ => None,
+            },
+            _ => None,
+        })
+        .expect("scheduled failure outcome");
+    let PolicyExecutionOutcome::Failed { failure } = outcome else {
+        panic!("expected one final failed policy outcome")
+    };
+    assert_eq!(failure.error_code, error.code());
+    assert_eq!(failure.original_class, PolicyFailureClass::Recoverable);
+    assert_eq!(failure.effective_class, PolicyFailureClass::Recoverable);
+    assert_eq!(failure.consecutive_same_error, 1);
+    assert!(
+        host.pinned_policy_catalog(&intent.decision_id)
+            .expect("catalog pin")
+            .is_none()
+    );
+    assert_eq!(state.input_count.load(Ordering::Acquire), 6);
+    assert_eq!(
+        state.capture_count.load(Ordering::Acquire),
+        12,
+        "the guarded operation must use one initial capture, one post-effect capture per attempt, and a fresh pre-guard capture before attempts 2-6"
+    );
+    drop(client);
+    host.close().expect("close runtime host");
+}
+
+#[test]
+fn scheduled_guarded_retry_stops_after_third_attempt_success() {
+    let root = TempDir::new().expect("tempdir");
+    let package = neutral_retrying_contained_task_package();
+    let package_path = root.path().join("scheduled-task.zip");
+    fs::write(&package_path, &package).expect("write package");
+    let package_sha256 = format!("{:x}", Sha256::digest(&package));
+    let state = Arc::new(FakeState::default());
+    state
+        .transition_capture_after_inputs
+        .store(3, Ordering::Release);
+    let host = RuntimeHost::start(
+        config(&root).with_procedure_manifest(procedure_manifest_with_primary(
+            &package,
+            vec!["after_observation".to_owned()],
+        )),
+        Arc::new(
+            FakeProvider::one(POLICY_INSTANCE_ALIAS, instance_id(), Arc::clone(&state))
+                .fixture_simulation(),
+        ),
+    )
+    .expect("runtime host");
+    host.activate_policy_catalog(&policy_sources(1))
+        .expect("activate policy catalog");
+    let (_, intent, reasons) = evaluated_policy_dispatch(&host, PolicyTrigger::FactsChanged);
+    record_policy_approval(&host, &intent);
+    let admission = host
+        .admit_policy_dispatch(&intent, &reasons, &policy_context(&host, &intent))
+        .expect("policy admission");
+    let PolicyDispatchAdmission::Granted { context } = admission else {
+        panic!("expected one policy run context")
+    };
+    let request =
+        ContainedTaskRequest::new(package_path.to_string_lossy().into_owned(), package_sha256)
+            .expect("contained task request");
+    let receipt = host
+        .run_scheduled_contained_task(&context, &request)
+        .expect("third guarded attempt must complete the scheduled run");
+    assert_eq!(receipt.state(), RuntimeReceiptState::Completed);
+    host.complete_scheduled_policy_run(&context, &receipt)
+        .expect("complete successful scheduled policy run");
+
+    let mut client = TestClient::connect(&host);
+    let events = projected_events(
+        &mut client,
+        EventQuery {
+            run_id: Some(context.run_id()),
+            ..EventQuery::default()
+        },
+    );
+    for event_type in [
+        EventType::TaskStepStarted,
+        EventType::TaskEffectIntent,
+        EventType::TaskEffectCompleted,
+        EventType::TaskStepFinished,
+    ] {
+        assert_eq!(
+            events
+                .iter()
+                .filter(|event| event.event_type == event_type)
+                .count(),
+            3,
+            "{event_type:?} must stop at the successful guarded attempt"
+        );
+    }
+    for event_type in [
+        EventType::PolicyDispatchAdmitted,
+        EventType::LeaseGranted,
+        EventType::TaskCompleted,
+        EventType::LeaseReleased,
+        EventType::PolicyExecutionRecorded,
+        EventType::PolicyDispatchCompleted,
+    ] {
+        assert_eq!(
+            events
+                .iter()
+                .filter(|event| event.event_type == event_type)
+                .count(),
+            1,
+            "{event_type:?} must be unique for the successful formal run"
+        );
+    }
+    assert!(
+        events
+            .iter()
+            .all(|event| event.links.run_id() == Some(&context.run_id())),
+        "every projected attempt and settlement event must stay on the admitted run"
+    );
+    assert_eq!(state.input_count.load(Ordering::Acquire), 3);
+    assert_eq!(
+        state.capture_count.load(Ordering::Acquire),
+        6,
+        "three guarded attempts require initial, post-effect, and fresh retry captures"
+    );
+    assert!(
+        host.pinned_policy_catalog(&intent.decision_id)
+            .expect("catalog pin")
+            .is_none()
+    );
+    drop(client);
+    host.close().expect("close runtime host");
+}
+
+#[test]
+fn scheduled_declared_error_page_skips_ordinary_retry() {
+    let root = TempDir::new().expect("tempdir");
+    let package = neutral_error_page_retrying_contained_task_package();
+    let package_path = root.path().join("scheduled-task.zip");
+    fs::write(&package_path, &package).expect("write package");
+    let package_sha256 = format!("{:x}", Sha256::digest(&package));
+    let state = Arc::new(FakeState::default());
+    state
+        .error_capture_after_input
+        .store(true, Ordering::Release);
+    let host = RuntimeHost::start(
+        config(&root).with_procedure_manifest(procedure_manifest_with_primary(
+            &package,
+            vec!["after_observation".to_owned()],
+        )),
+        Arc::new(
+            FakeProvider::one(POLICY_INSTANCE_ALIAS, instance_id(), Arc::clone(&state))
+                .fixture_simulation(),
+        ),
+    )
+    .expect("runtime host");
+    host.activate_policy_catalog(&policy_sources(1))
+        .expect("activate policy catalog");
+    let (_, intent, reasons) = evaluated_policy_dispatch(&host, PolicyTrigger::FactsChanged);
+    record_policy_approval(&host, &intent);
+    let admission = host
+        .admit_policy_dispatch(&intent, &reasons, &policy_context(&host, &intent))
+        .expect("policy admission");
+    let PolicyDispatchAdmission::Granted { context } = admission else {
+        panic!("expected one policy run context")
+    };
+    let request =
+        ContainedTaskRequest::new(package_path.to_string_lossy().into_owned(), package_sha256)
+            .expect("contained task request");
+    let error = host
+        .run_scheduled_contained_task(&context, &request)
+        .expect_err("declared error page must not enter the ordinary retry path");
+    assert_eq!(error.code(), "contained_task_requires_scheduler");
+    assert!(!error.is_fatal());
+
+    let mut client = TestClient::connect(&host);
+    let events = projected_events(
+        &mut client,
+        EventQuery {
+            run_id: Some(context.run_id()),
+            ..EventQuery::default()
+        },
+    );
+    for event_type in [
+        EventType::TaskStepStarted,
+        EventType::TaskEffectIntent,
+        EventType::TaskEffectCompleted,
+        EventType::TaskStepFinished,
+        EventType::TaskFailed,
+        EventType::LeaseReleased,
+        EventType::PolicyExecutionRecorded,
+        EventType::PolicyDispatchCompleted,
+    ] {
+        assert_eq!(
+            events
+                .iter()
+                .filter(|event| event.event_type == event_type)
+                .count(),
+            1,
+            "{event_type:?} must occur once when the first post-effect page is declared erroneous"
+        );
+    }
+    assert_eq!(state.input_count.load(Ordering::Acquire), 1);
+    assert_eq!(state.capture_count.load(Ordering::Acquire), 2);
+    assert!(
+        host.pinned_policy_catalog(&intent.decision_id)
+            .expect("catalog pin")
+            .is_none()
+    );
+    drop(client);
     host.close().expect("close runtime host");
 }
 
@@ -10002,20 +10560,62 @@ fn policy_dispatch_crash_child_process() {
     let Ok(root) = std::env::var("ACTINGCOMMAND_POLICY_CRASH_ROOT") else {
         return;
     };
+    let recovery_case = std::env::var("ACTINGCOMMAND_POLICY_RECOVERY_CASE").ok();
+    let outcome_crash = matches!(
+        std::env::var("ACTINGCOMMAND_POLICY_CRASH_POINT").as_deref(),
+        Ok("after_policy_execution" | "after_policy_completion" | "fail_policy_execution_append")
+    );
     let instance_bytes = fs::read(Path::new(&root).join("instance.json")).expect("instance bytes");
     let instance_id: InstanceId =
         serde_json::from_slice(&instance_bytes).expect("instance identifier");
-    let host = RuntimeHost::start(
-        RuntimeHostConfig::new(&root, b"policy-crash-process-salt")
-            .with_procedure_manifest(procedure_manifest())
-            .with_governance_capability(TEST_GOVERNANCE_CAPABILITY),
-        Arc::new(FakeProvider::one(
-            POLICY_INSTANCE_ALIAS,
-            instance_id,
-            Arc::new(FakeState::default()),
+    let package = outcome_crash.then(neutral_contained_task_package);
+    let package_path = Path::new(&root).join("scheduled-task.zip");
+    if let Some(package) = &package {
+        fs::write(&package_path, package).expect("scheduled package");
+    }
+    let mut runtime_config = RuntimeHostConfig::new(&root, b"policy-crash-process-salt")
+        .with_governance_capability(TEST_GOVERNANCE_CAPABILITY);
+    runtime_config = match &package {
+        Some(package) => runtime_config.with_procedure_manifest(procedure_manifest_with_primary(
+            package,
+            vec!["after_observation".to_owned()],
         )),
-    )
-    .expect("child runtime host");
+        None => runtime_config.with_procedure_manifest(procedure_manifest()),
+    };
+    if recovery_case.as_deref() == Some("lease-expired") {
+        runtime_config = runtime_config.with_scheduler(SchedulerConfig {
+            maximum_client_heartbeat_interval_ms: 20,
+            takeover_cooldown_ms: 40,
+            lease_ttl_ms: 200,
+            ..SchedulerConfig::default()
+        });
+    }
+    let state = Arc::new(FakeState::default());
+    match recovery_case.as_deref() {
+        Some("task-recoverable") => {
+            state.fail_capture.store(true, Ordering::Release);
+            state
+                .transient_capture_failure
+                .store(true, Ordering::Release);
+        }
+        Some("task-severe") => {
+            state.fail_capture.store(true, Ordering::Release);
+        }
+        Some("lab-rejection" | "lease-expired") => {}
+        _ if outcome_crash => {
+            state
+                .transition_capture_after_input
+                .store(true, Ordering::Release);
+        }
+        _ => {}
+    }
+    let provider = FakeProvider::one(POLICY_INSTANCE_ALIAS, instance_id, state);
+    let provider = if outcome_crash && recovery_case.as_deref() != Some("lab-rejection") {
+        provider.fixture_simulation()
+    } else {
+        provider
+    };
+    let host = RuntimeHost::start(runtime_config, Arc::new(provider)).expect("child runtime host");
     let catalog = host
         .activate_policy_catalog(&policy_sources(1))
         .expect("child catalog activation");
@@ -10033,15 +10633,45 @@ fn policy_dispatch_crash_child_process() {
     let admission = host
         .admit_policy_dispatch(&intent, &reason_chain, &policy_context(&host, &intent))
         .expect("child policy admission");
-    assert!(matches!(admission, PolicyDispatchAdmission::Granted { .. }));
-    if matches!(
-        std::env::var("ACTINGCOMMAND_POLICY_CRASH_POINT").as_deref(),
-        Ok("after_policy_execution" | "after_policy_completion")
-    ) {
-        host.record_policy_dispatch_outcome(&intent.decision_id, &PolicyExecutionInput::Succeeded)
-            .expect("child policy outcome");
+    if outcome_crash {
+        let PolicyDispatchAdmission::Granted { context } = admission else {
+            panic!("expected child policy run context")
+        };
+        if recovery_case.as_deref() == Some("lease-expired") {
+            thread::sleep(Duration::from_millis(250));
+        }
+        let package = package.expect("scheduled package");
+        let request = ContainedTaskRequest::new(
+            package_path.to_string_lossy().into_owned(),
+            format!("{:x}", Sha256::digest(package)),
+        )
+        .expect("scheduled request");
+        match recovery_case.as_deref() {
+            Some("task-recoverable" | "task-severe" | "lab-rejection" | "lease-expired") => {
+                let error = host
+                    .run_scheduled_contained_task(&context, &request)
+                    .expect_err("child scheduled failure");
+                assert_eq!(error.code(), "ledger_failure");
+            }
+            _ => {
+                let receipt = host
+                    .run_scheduled_contained_task(&context, &request)
+                    .expect("child scheduled run");
+                let error = host
+                    .complete_scheduled_policy_run(&context, &receipt)
+                    .expect_err("child policy append failure");
+                assert_eq!(error.code(), "ledger_failure");
+            }
+        }
+        if std::env::var("ACTINGCOMMAND_POLICY_CRASH_POINT").as_deref()
+            == Ok("fail_policy_execution_append")
+        {
+            assert!(Path::new(&root).join("policy-crash-marker").is_file());
+            std::process::exit(87);
+        }
         panic!("policy outcome crash barrier did not stop the child");
     }
+    assert!(matches!(admission, PolicyDispatchAdmission::Granted { .. }));
     fs::write(
         Path::new(&root).join("admitted-before-crash.json"),
         serde_json::to_vec(&(intent, reason_chain)).expect("admitted dispatch bytes"),
@@ -10431,6 +11061,278 @@ fn policy_dispatch_accepts_one_late_outcome_after_process_crash() {
 }
 
 #[test]
+fn first_policy_execution_append_failure_recovers_each_scheduled_outcome_once() {
+    let mut recovered_task_failure_code = None;
+    for (case, expected_terminal, expected_class) in [
+        ("success", Some(EventType::TaskCompleted), None),
+        (
+            "task-recoverable",
+            Some(EventType::TaskFailed),
+            Some(PolicyFailureClass::Recoverable),
+        ),
+        (
+            "task-severe",
+            Some(EventType::TaskFailed),
+            Some(PolicyFailureClass::Severe),
+        ),
+        ("lab-rejection", None, Some(PolicyFailureClass::Severe)),
+        ("lease-expired", None, Some(PolicyFailureClass::Severe)),
+    ] {
+        let root = TempDir::new().expect("tempdir");
+        let shared_instance_id = instance_id();
+        fs::write(
+            root.path().join("instance.json"),
+            serde_json::to_vec(&shared_instance_id).expect("instance bytes"),
+        )
+        .expect("instance file");
+        let marker = root.path().join("policy-crash-marker");
+        let status = Command::new(std::env::current_exe().expect("test executable"))
+            .args([
+                "--exact",
+                "tests::policy_dispatch_crash_child_process",
+                "--nocapture",
+            ])
+            .env("ACTINGCOMMAND_POLICY_CRASH_ROOT", root.path())
+            .env(
+                "ACTINGCOMMAND_POLICY_CRASH_POINT",
+                "fail_policy_execution_append",
+            )
+            .env("ACTINGCOMMAND_POLICY_CRASH_MARKER", &marker)
+            .env("ACTINGCOMMAND_POLICY_RECOVERY_CASE", case)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .unwrap_or_else(|error| panic!("run {case} append-failure child: {error}"));
+        assert_eq!(
+            status.code(),
+            Some(87),
+            "{case}: child must stop after the deterministic first execution append failure"
+        );
+        assert!(marker.is_file(), "{case}: append-failure marker");
+        let (intent, _): (DispatchIntent, DecisionReasonChain) = serde_json::from_slice(
+            &fs::read(root.path().join("dispatch-before-crash.json"))
+                .expect("outcome dispatch marker"),
+        )
+        .expect("outcome dispatch JSON");
+        let recovered_state = Arc::new(FakeState::default());
+        let host = RuntimeHost::start(
+            config(&root),
+            Arc::new(FakeProvider::one(
+                POLICY_INSTANCE_ALIAS,
+                shared_instance_id,
+                Arc::clone(&recovered_state),
+            )),
+        )
+        .unwrap_or_else(|error| panic!("{case}: recover runtime host: {error}"));
+        let mut client = TestClient::connect(&host);
+        let events = projected_events(&mut client, EventQuery::default());
+        let intent_event = events
+            .iter()
+            .find(|event| event.event_type == EventType::PolicyDispatchIntent)
+            .expect("policy intent");
+        let lease_granted = events
+            .iter()
+            .find(|event| event.event_type == EventType::LeaseGranted)
+            .expect("lease grant");
+        let execution = events
+            .iter()
+            .find(|event| event.event_type == EventType::PolicyExecutionRecorded)
+            .expect("recovered execution");
+        let completion = events
+            .iter()
+            .find(|event| event.event_type == EventType::PolicyDispatchCompleted)
+            .expect("recovered completion");
+        for event in [lease_granted, execution, completion] {
+            assert_eq!(
+                event.links.request_id(),
+                intent_event.links.request_id(),
+                "{case}: policy request identity"
+            );
+            assert_eq!(
+                event.links.correlation_id(),
+                intent_event.links.correlation_id(),
+                "{case}: correlation identity"
+            );
+            assert_eq!(
+                event.links.instance_id(),
+                intent_event.links.instance_id(),
+                "{case}: instance identity"
+            );
+            assert_eq!(
+                event.links.task_id(),
+                intent_event.links.task_id(),
+                "{case}: task identity"
+            );
+            assert_eq!(
+                event.links.run_id(),
+                intent_event.links.run_id(),
+                "{case}: run identity"
+            );
+            assert_eq!(
+                event.links.lease_id(),
+                lease_granted.links.lease_id(),
+                "{case}: lease identity"
+            );
+        }
+        assert_eq!(
+            events
+                .iter()
+                .filter(|event| event.event_type == EventType::PolicyExecutionRecorded)
+                .count(),
+            1,
+            "{case}: execution count"
+        );
+        assert_eq!(
+            events
+                .iter()
+                .filter(|event| event.event_type == EventType::PolicyDispatchCompleted)
+                .count(),
+            1,
+            "{case}: completion count"
+        );
+        let source = match expected_terminal {
+            Some(event_type) => events
+                .iter()
+                .find(|event| event.event_type == event_type)
+                .expect("task terminal"),
+            None => events
+                .iter()
+                .find(|event| {
+                    event.event_type == EventType::LeaseReleased
+                        && event.links.run_id() == intent_event.links.run_id()
+                })
+                .expect("failure release"),
+        };
+        let ProjectionPayload::Full(execution_payload) = &execution.payload else {
+            panic!("{case}: full execution payload")
+        };
+        let EventPayload::Policy(PolicyPayload::ExecutionRecorded(execution_payload)) =
+            execution_payload.as_ref()
+        else {
+            panic!("{case}: policy execution payload")
+        };
+        assert_eq!(
+            execution_payload.observed_at_unix_ms(),
+            source.timestamp_unix_ms,
+            "{case}: persisted recovery time"
+        );
+        match (case, execution_payload.outcome()) {
+            ("success", PolicyExecutionOutcome::Succeeded { .. }) => {}
+            ("task-recoverable" | "task-severe", PolicyExecutionOutcome::Failed { failure }) => {
+                assert_eq!(
+                    failure.original_class,
+                    expected_class.expect("failure class")
+                );
+                let task_terminal = events
+                    .iter()
+                    .find(|event| event.event_type == EventType::TaskFailed)
+                    .expect("task failure");
+                assert_eq!(
+                    task_terminal.severity,
+                    if case == "task-recoverable" {
+                        EventSeverity::Warning
+                    } else {
+                        EventSeverity::Fatal
+                    }
+                );
+                let ProjectionPayload::Full(payload) = &task_terminal.payload else {
+                    panic!("{case}: full task failure payload")
+                };
+                let EventPayload::Task(TaskPayload::Semantic(payload)) = payload.as_ref() else {
+                    panic!("{case}: semantic task failure")
+                };
+                let TaskSemanticFact::TerminalCommitted {
+                    failure_code: Some(code),
+                    ..
+                } = payload.fact()
+                else {
+                    panic!("{case}: task failure code")
+                };
+                assert_eq!(failure.error_code, *code);
+                match &recovered_task_failure_code {
+                    Some(expected) => assert_eq!(
+                        code, expected,
+                        "structured severity must not depend on the failure code"
+                    ),
+                    None => recovered_task_failure_code = Some(code.clone()),
+                }
+            }
+            ("lab-rejection" | "lease-expired", PolicyExecutionOutcome::Failed { failure }) => {
+                assert_eq!(failure.error_code, "policy_settlement_interrupted");
+                assert_eq!(failure.original_class, PolicyFailureClass::Severe);
+                assert_eq!(failure.effective_class, PolicyFailureClass::Severe);
+                assert_eq!(failure.disposition, PolicyFailureDisposition::PausedTask);
+                assert_eq!(failure.retry_attempt, 0);
+                assert_eq!(failure.retry_at_unix_ms, None);
+                assert!(!failure.reported_success);
+                assert_eq!(failure.runtime_ms, 0);
+                assert!(events.iter().all(|event| {
+                    !matches!(
+                        event.event_type,
+                        EventType::TaskCompleted
+                            | EventType::TaskFailed
+                            | EventType::TaskCancelled
+                            | EventType::TaskEffectIntent
+                            | EventType::TaskEffectCompleted
+                            | EventType::InputIntent
+                            | EventType::InputCommitted
+                            | EventType::InputFailed
+                    )
+                }));
+            }
+            _ => panic!("{case}: unexpected recovered outcome"),
+        }
+        assert_eq!(
+            recovered_state.input_count.load(Ordering::Acquire),
+            0,
+            "{case}: restart must not replay a business effect"
+        );
+        assert!(
+            host.pinned_policy_catalog(&intent.decision_id)
+                .expect("catalog pin")
+                .is_none(),
+            "{case}: catalog pin"
+        );
+        drop(client);
+        host.close()
+            .unwrap_or_else(|error| panic!("{case}: close recovered host: {error}"));
+
+        let reopened = RuntimeHost::start(
+            config(&root),
+            Arc::new(FakeProvider::one(
+                POLICY_INSTANCE_ALIAS,
+                shared_instance_id,
+                Arc::new(FakeState::default()),
+            )),
+        )
+        .unwrap_or_else(|error| panic!("{case}: second restart: {error}"));
+        let mut client = TestClient::connect(&reopened);
+        let events = projected_events(&mut client, EventQuery::default());
+        assert_eq!(
+            events
+                .iter()
+                .filter(|event| event.event_type == EventType::PolicyExecutionRecorded)
+                .count(),
+            1,
+            "{case}: second-restart execution count"
+        );
+        assert_eq!(
+            events
+                .iter()
+                .filter(|event| event.event_type == EventType::PolicyDispatchCompleted)
+                .count(),
+            1,
+            "{case}: second-restart completion count"
+        );
+        drop(client);
+        reopened
+            .close()
+            .unwrap_or_else(|error| panic!("{case}: close second restart: {error}"));
+    }
+}
+
+#[test]
 fn split_policy_outcome_append_boundaries_recover_completion_exactly_once() {
     for point in ["after_policy_execution", "after_policy_completion"] {
         let root = TempDir::new().expect("tempdir");
@@ -10462,7 +11364,10 @@ fn split_policy_outcome_append_boundaries_recover_completion_exactly_once() {
                 "outcome crash marker timeout at {point}"
             );
             assert!(
-                child.try_wait().expect("poll outcome crash child").is_none(),
+                child
+                    .try_wait()
+                    .expect("poll outcome crash child")
+                    .is_none(),
                 "outcome crash child exited before {point}"
             );
             thread::sleep(Duration::from_millis(10));
@@ -10485,13 +11390,101 @@ fn split_policy_outcome_append_boundaries_recover_completion_exactly_once() {
                     Arc::new(FakeState::default()),
                 )),
             )
-            .unwrap_or_else(|error| {
-                panic!("restart {restart} after {point} failed: {error}")
-            });
+            .unwrap_or_else(|error| panic!("restart {restart} after {point} failed: {error}"));
             let mut client = TestClient::connect(&host);
             let events = projected_events(&mut client, EventQuery::default());
+            let intent_event = events
+                .iter()
+                .find(|event| event.event_type == EventType::PolicyDispatchIntent)
+                .expect("original policy intent");
+            let original_run_id = intent_event
+                .links
+                .run_id()
+                .copied()
+                .expect("original run id");
+            let original_request_id = intent_event
+                .links
+                .request_id()
+                .copied()
+                .expect("original request id");
+            let original_correlation_id = intent_event
+                .links
+                .correlation_id()
+                .copied()
+                .expect("original correlation id");
+            let original_instance_id = intent_event
+                .links
+                .instance_id()
+                .copied()
+                .expect("original instance id");
+            let original_task_id = intent_event
+                .links
+                .task_id()
+                .copied()
+                .expect("original task id");
+            let lease_granted = events
+                .iter()
+                .find(|event| event.event_type == EventType::LeaseGranted)
+                .expect("original lease grant");
+            let original_lease_id = lease_granted
+                .links
+                .lease_id()
+                .copied()
+                .expect("original lease id");
+            let execution = events
+                .iter()
+                .find(|event| event.event_type == EventType::PolicyExecutionRecorded)
+                .expect("policy execution");
+            let completion = events
+                .iter()
+                .find(|event| event.event_type == EventType::PolicyDispatchCompleted)
+                .expect("recovered policy completion");
+            for event in [lease_granted, execution, completion] {
+                assert_eq!(
+                    event.links.request_id(),
+                    Some(&original_request_id),
+                    "restart {restart} after {point}: request identity"
+                );
+                assert_eq!(
+                    event.links.correlation_id(),
+                    Some(&original_correlation_id),
+                    "restart {restart} after {point}: correlation identity"
+                );
+                assert_eq!(
+                    event.links.instance_id(),
+                    Some(&original_instance_id),
+                    "restart {restart} after {point}: instance identity"
+                );
+                assert_eq!(
+                    event.links.task_id(),
+                    Some(&original_task_id),
+                    "restart {restart} after {point}: task identity"
+                );
+                assert_eq!(
+                    event.links.run_id(),
+                    Some(&original_run_id),
+                    "restart {restart} after {point}: run identity"
+                );
+                assert_eq!(
+                    event.links.lease_id(),
+                    Some(&original_lease_id),
+                    "restart {restart} after {point}: lease identity"
+                );
+            }
+            assert_ne!(
+                execution.links.action_id(),
+                completion.links.action_id(),
+                "restart {restart} after {point}: recovery must mint a fresh action"
+            );
+            let original_run_events = projected_events(
+                &mut client,
+                EventQuery {
+                    run_id: Some(original_run_id),
+                    ..EventQuery::default()
+                },
+            );
             assert_eq!(
-                events
+                original_run_events
                     .iter()
                     .filter(|event| event.event_type == EventType::PolicyExecutionRecorded)
                     .count(),
@@ -10499,7 +11492,7 @@ fn split_policy_outcome_append_boundaries_recover_completion_exactly_once() {
                 "restart {restart} after {point}: execution count"
             );
             assert_eq!(
-                events
+                original_run_events
                     .iter()
                     .filter(|event| event.event_type == EventType::PolicyDispatchCompleted)
                     .count(),

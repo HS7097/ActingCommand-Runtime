@@ -2,14 +2,13 @@
 
 use actingcommand_contract::{
     AgentPayload, AgentSessionId, ApplicationLifecycleAction, EffectDisposition, EventActor,
-    EventPayload, EventQuery, EventSource, EventType, FactScope, IdentifierIssuer, InputPayload,
-    InstanceId, MAX_RUNTIME_EVENT_QUERY_EVENTS, OriginModule, PolicyExecutionOutcome,
+    EventPayload, EventQuery, EventSeverity, EventSource, EventType, FactScope, IdentifierIssuer,
+    InputPayload, InstanceId, MAX_RUNTIME_EVENT_QUERY_EVENTS, OriginModule, PolicyExecutionOutcome,
     PolicyFailureClass, PolicyFailureDisposition, PolicyPayload, PolicyPlanningSignalEventData,
-    PolicyPlanningSignalKind,
-    ProjectInterfaceRequest, ProjectedArtifactReference, ProjectionPayload, ProjectionProfile,
-    RUNTIME_INFO_FILE, RuntimeErrorCode, RuntimeEventQueryPageRequest, RuntimeInfo,
-    RuntimeOperation, RuntimeReceipt, RuntimeReceiptState, RuntimeRequest, RuntimeResult,
-    TaskPayload, TaskSemanticFact,
+    PolicyPlanningSignalKind, ProjectInterfaceRequest, ProjectedArtifactReference,
+    ProjectionPayload, ProjectionProfile, RUNTIME_INFO_FILE, RuntimeErrorCode,
+    RuntimeEventQueryPageRequest, RuntimeInfo, RuntimeOperation, RuntimeReceipt,
+    RuntimeReceiptState, RuntimeRequest, RuntimeResult, TaskPayload, TaskSemanticFact,
 };
 use actingcommand_device::{
     CaptureBackend, CaptureBackendName, DeviceError, DeviceResult, Frame, InputBackend, PixelFormat,
@@ -313,6 +312,16 @@ fn actingd_does_not_execute_fixture_without_an_explicit_scheduled_binding() {
             .count(),
         1
     );
+    let run_id = events
+        .iter()
+        .find(|event| event.event_type == EventType::PolicyDispatchIntent)
+        .and_then(|event| event.links.run_id())
+        .copied()
+        .expect("admitted policy run id");
+    let projection_error = client
+        .summarize_run(run_id)
+        .expect_err("an incomplete admitted run must not produce a success-looking report");
+    assert_eq!(projection_error.code(), "run_summary_event_count_invalid");
     for event_type in [
         EventType::LabRequest,
         EventType::TaskRequested,
@@ -888,6 +897,19 @@ fn actingd_scheduled_failure_persists_failed_outcome_completion_and_report() {
             "failed scheduled {event_type:?}"
         );
     }
+    let task_failed = run_events
+        .iter()
+        .find(|event| event.event_type == EventType::TaskFailed)
+        .expect("failed task terminal");
+    assert_eq!(task_failed.severity, EventSeverity::Warning);
+    assert!(
+        run_events
+            .iter()
+            .filter(|event| event.severity == EventSeverity::Warning)
+            .count()
+            >= 2,
+        "the task terminal and recoverable policy execution must remain visible in warning counts"
+    );
     let execution = run_events
         .iter()
         .find(|event| event.event_type == EventType::PolicyExecutionRecorded)
@@ -929,9 +951,7 @@ fn actingd_scheduled_failure_persists_failed_outcome_completion_and_report() {
         Some(&serde_json::to_value(payload.outcome()).expect("failed outcome JSON"))
     );
     assert_eq!(
-        summary
-            .get("actual_effect_count")
-            .and_then(Value::as_u64),
+        summary.get("actual_effect_count").and_then(Value::as_u64),
         Some(0)
     );
     assert_eq!(
@@ -940,7 +960,13 @@ fn actingd_scheduled_failure_persists_failed_outcome_completion_and_report() {
             .and_then(Value::as_u64),
         Some(2)
     );
-    assert!(recovered.0.try_wait().expect("recovery process state").is_none());
+    assert!(
+        recovered
+            .0
+            .try_wait()
+            .expect("recovery process state")
+            .is_none()
+    );
     drop(client);
     recovered.0.kill().expect("kill recovery actingd");
     recovered.0.wait().expect("wait recovery actingd");

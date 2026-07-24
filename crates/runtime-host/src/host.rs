@@ -55,22 +55,23 @@ use actingcommand_contract::{
     LeaseToken, MAX_GOVERNANCE_CAPABILITY_BYTES, MAX_INSTANCE_ALIAS_BYTES,
     MIN_GOVERNANCE_CAPABILITY_BYTES, MonitorPayloadDraft, MonitorRecoveryCoordinationReason,
     OriginModule, PackageDebugLayout, PackageDebugRequest, PackageDebugSummary, PerformanceContext,
-    PerformancePayloadDraft, PolicyDispatchEventData, PolicyExecutionEventData, PolicyPayload,
-    PolicyFailureClass, PolicyPayloadDraft, PolicyPlanningSignalEventData, PolicyReasonRecord,
-    ProjectDecisionPageRequest, ProjectInterfaceRequest, ProjectedArtifactReference, ProposalClass,
-    ProposalPromotion, RUNTIME_INFO_FILE, ReadonlyObservation, RecognitionPayloadDraft,
-    RecognitionVerdict, ReleasePayload, ReleasePayloadDraft, ReleaseTransitionKind, RequestId,
-    ResourceAuthoringEvent, ResourceAuthoringPayloadDraft, ResourceAuthoringPhase, RetentionClass,
-    RuntimeCaptureBackend, RuntimeContractError, RuntimeControlPlaneStatus, RuntimeDebugEvent,
-    RuntimeDebugOperation, RuntimeDebugPhase, RuntimeErrorCode, RuntimeErrorProjection,
-    RuntimeEventBatch, RuntimeEventQueryCursor, RuntimeEventQueryPage,
-    RuntimeEventQueryPageRequest, RuntimeEvidenceExportRequest, RuntimeEvidenceExportSummary,
-    RuntimeEvidenceScreenshotCounts, RuntimeInfo, RuntimeInstanceStatus, RuntimeMaintenanceQuery,
-    RuntimeMonitorPolicy, RuntimeOperation, RuntimePayloadDraft, RuntimePlanningDocument,
-    RuntimePlanningDocumentKind, RuntimeReceipt, RuntimeReceiptState, RuntimeReleaseSet,
-    RuntimeRequest, RuntimeResult, RuntimeStrategicPlanResult, RuntimeSubscriptionRequest,
-    SchedulerPayloadDraft, StatePayload, StatePayloadDraft, TaskOutcome, TaskPayload,
-    TaskPayloadDraft, TaskSemanticFact, TerminalEvent, ValidatedRuntimeRequest,
+    PerformancePayloadDraft, PolicyDispatchEventData, PolicyExecutionEventData,
+    PolicyExecutionOutcome, PolicyFailureClass, PolicyPayload, PolicyPayloadDraft,
+    PolicyPlanningSignalEventData, PolicyReasonRecord, ProjectDecisionPageRequest,
+    ProjectInterfaceRequest, ProjectedArtifactReference, ProposalClass, ProposalPromotion,
+    RUNTIME_INFO_FILE, ReadonlyObservation, RecognitionPayloadDraft, RecognitionVerdict,
+    ReleasePayload, ReleasePayloadDraft, ReleaseTransitionKind, RequestId, ResourceAuthoringEvent,
+    ResourceAuthoringPayloadDraft, ResourceAuthoringPhase, RetentionClass, RuntimeCaptureBackend,
+    RuntimeContractError, RuntimeControlPlaneStatus, RuntimeDebugEvent, RuntimeDebugOperation,
+    RuntimeDebugPhase, RuntimeErrorCode, RuntimeErrorProjection, RuntimeEventBatch,
+    RuntimeEventQueryCursor, RuntimeEventQueryPage, RuntimeEventQueryPageRequest,
+    RuntimeEvidenceExportRequest, RuntimeEvidenceExportSummary, RuntimeEvidenceScreenshotCounts,
+    RuntimeInfo, RuntimeInstanceStatus, RuntimeMaintenanceQuery, RuntimeMonitorPolicy,
+    RuntimeOperation, RuntimePayloadDraft, RuntimePlanningDocument, RuntimePlanningDocumentKind,
+    RuntimeReceipt, RuntimeReceiptState, RuntimeReleaseSet, RuntimeRequest, RuntimeResult,
+    RuntimeStrategicPlanResult, RuntimeSubscriptionRequest, SchedulerPayloadDraft, StatePayload,
+    StatePayloadDraft, TaskOutcome, TaskPayload, TaskPayloadDraft, TaskSemanticFact, TerminalEvent,
+    ValidatedRuntimeRequest,
 };
 use actingcommand_device::{CaptureBackendName, Frame};
 use actingcommand_execution_kernel::{
@@ -158,6 +159,19 @@ fn policy_crash_test_barrier(point: &str) {
     loop {
         thread::sleep(Duration::from_secs(60));
     }
+}
+
+#[cfg(test)]
+fn fail_policy_execution_append_for_test() -> RuntimeHostResult<()> {
+    if std::env::var("ACTINGCOMMAND_POLICY_CRASH_POINT").as_deref()
+        != Ok("fail_policy_execution_append")
+    {
+        return Ok(());
+    }
+    let marker =
+        std::env::var_os("ACTINGCOMMAND_POLICY_CRASH_MARKER").expect("policy crash marker path");
+    fs::write(marker, b"fail_policy_execution_append").expect("policy append failure marker");
+    Err(ledger_error("append_policy_execution"))
 }
 
 #[derive(Clone)]
@@ -822,10 +836,7 @@ impl RuntimeHost {
         let (request, success) = match shared.run_scheduled_contained_task(context, request) {
             Ok(success) => success,
             Err(failure) => {
-                let settlement = failure
-                    .terminal
-                    .map(|_| shared.complete_scheduled_policy_failure(context, &failure))
-                    .transpose();
+                let settlement = shared.complete_scheduled_policy_failure(context, &failure);
                 let error = *failure.error;
                 if failure.poison_runtime {
                     shared.fatal.mark(error.clone())?;
@@ -1005,6 +1016,7 @@ impl RuntimeHost {
                     final_page,
                     executed_steps,
                     failure_code,
+                    failure_severity: None,
                 },
             )
             .map(|event| terminal(&event))
@@ -1427,7 +1439,7 @@ fn reconcile_policy_dispatches(
             EventSource::Scheduler,
             OriginModule::Policy,
             EventActor::Scheduler,
-            events.system_links()?,
+            EventLinksDraft::default(),
             PolicyPayloadDraft::dispatch_completed(dispatch, admission, AuditInput::new()),
         )?;
         let draft = events.sanitize(draft)?;
@@ -1517,11 +1529,43 @@ fn reconcile_scheduled_policy_outcomes(
                 "reconcile_policy_outcomes",
             ));
         };
-        let (Some(run_id), Some(task_id), Some(correlation_id)) = (
-            intent.links().run_id().copied(),
-            intent.links().task_id().copied(),
-            intent.links().correlation_id().copied(),
-        ) else {
+        let (
+            Some(instance_id),
+            Some(request_id),
+            Some(correlation_id),
+            Some(task_id),
+            Some(run_id),
+        ) = (
+            intent.links().instance_id(),
+            intent.links().request_id(),
+            intent.links().correlation_id(),
+            intent.links().task_id(),
+            intent.links().run_id(),
+        )
+        else {
+            return Err(policy_admission_fatal(
+                "policy_run_identity_missing",
+                "reconcile_policy_outcomes",
+            ));
+        };
+        let lease_grants = persisted
+            .iter()
+            .filter(|event| {
+                event.event_type() == EventType::LeaseGranted
+                    && event.links().instance_id() == Some(instance_id)
+                    && event.links().request_id() == Some(request_id)
+                    && event.links().correlation_id() == Some(correlation_id)
+                    && event.links().task_id() == Some(task_id)
+                    && event.links().run_id() == Some(run_id)
+            })
+            .collect::<Vec<_>>();
+        let [lease_granted] = lease_grants.as_slice() else {
+            return Err(policy_admission_fatal(
+                "policy_run_lease_fact_not_unique",
+                "reconcile_policy_outcomes",
+            ));
+        };
+        let Some(lease_id) = lease_granted.links().lease_id() else {
             return Err(policy_admission_fatal(
                 "policy_run_identity_missing",
                 "reconcile_policy_outcomes",
@@ -1533,14 +1577,87 @@ fn reconcile_scheduled_policy_outcomes(
                 matches!(
                     event.event_type(),
                     EventType::TaskCompleted | EventType::TaskFailed | EventType::TaskCancelled
-                ) && event.links().run_id() == Some(&run_id)
-                    && event.links().task_id() == Some(&task_id)
-                    && event.links().correlation_id() == Some(&correlation_id)
+                ) && event.links().correlation_id() == Some(correlation_id)
+                    && event.links().task_id() == Some(task_id)
+                    && event.links().run_id() == Some(run_id)
+                    && event.links().lease_id() == Some(lease_id)
             })
             .collect::<Vec<_>>();
-        let terminal = match terminals.as_slice() {
-            [] => continue,
-            [terminal] => *terminal,
+        let (source, input, runtime_ms) = match terminals.as_slice() {
+            [terminal] if terminal.event_type() == EventType::TaskCompleted => {
+                let runtime_ms = recovered_scheduled_task_runtime_ms(&persisted, terminal)?;
+                (*terminal, PolicyExecutionInput::Succeeded, runtime_ms)
+            }
+            [terminal] if terminal.event_type() == EventType::TaskFailed => {
+                let class = match terminal.severity() {
+                    EventSeverity::Warning => PolicyFailureClass::Recoverable,
+                    EventSeverity::Fatal => PolicyFailureClass::Severe,
+                    EventSeverity::Debug | EventSeverity::Info | EventSeverity::Error => {
+                        return Err(policy_admission_fatal(
+                            "policy_run_failure_severity_ambiguous",
+                            "reconcile_policy_outcomes",
+                        ));
+                    }
+                };
+                let EventPayload::Task(TaskPayload::Semantic(payload)) = terminal.payload() else {
+                    return Err(policy_admission_fatal(
+                        "policy_run_terminal_invalid",
+                        "reconcile_policy_outcomes",
+                    ));
+                };
+                let TaskSemanticFact::TerminalCommitted {
+                    outcome: TaskOutcome::Failure,
+                    failure_code: Some(error_code),
+                    ..
+                } = payload.fact()
+                else {
+                    return Err(policy_admission_fatal(
+                        "policy_run_terminal_invalid",
+                        "reconcile_policy_outcomes",
+                    ));
+                };
+                let runtime_ms = recovered_scheduled_task_runtime_ms(&persisted, terminal)?;
+                (
+                    *terminal,
+                    PolicyExecutionInput::Failed {
+                        error_code: error_code.clone(),
+                        class,
+                    },
+                    runtime_ms,
+                )
+            }
+            [] => {
+                let releases = persisted
+                    .iter()
+                    .filter(|event| {
+                        event.event_type() == EventType::LeaseReleased
+                            && event.links().instance_id() == Some(instance_id)
+                            && event.links().request_id() == Some(request_id)
+                            && event.links().correlation_id() == Some(correlation_id)
+                            && event.links().task_id() == Some(task_id)
+                            && event.links().run_id() == Some(run_id)
+                            && event.links().lease_id() == Some(lease_id)
+                    })
+                    .collect::<Vec<_>>();
+                let release = match releases.as_slice() {
+                    [] => continue,
+                    [release] => *release,
+                    _ => {
+                        return Err(policy_admission_fatal(
+                            "policy_run_release_fact_not_unique",
+                            "reconcile_policy_outcomes",
+                        ));
+                    }
+                };
+                (
+                    release,
+                    PolicyExecutionInput::Failed {
+                        error_code: "policy_settlement_interrupted".to_owned(),
+                        class: PolicyFailureClass::Severe,
+                    },
+                    0,
+                )
+            }
             _ => {
                 return Err(policy_admission_fatal(
                     "policy_run_terminal_conflict",
@@ -1548,85 +1665,7 @@ fn reconcile_scheduled_policy_outcomes(
                 ));
             }
         };
-        let (Some(request_id), Some(lease_id)) = (
-            terminal.links().request_id().copied(),
-            terminal.links().lease_id().copied(),
-        ) else {
-            return Err(policy_admission_fatal(
-                "policy_run_identity_missing",
-                "reconcile_policy_outcomes",
-            ));
-        };
-        let scheduled_requests = persisted
-            .iter()
-            .filter(|event| {
-                event.event_type() == EventType::LabRequest
-                    && event.links().run_id() == Some(&run_id)
-                    && event.links().task_id() == Some(&task_id)
-                    && event.links().correlation_id() == Some(&correlation_id)
-                    && event.links().request_id() == Some(&request_id)
-            })
-            .count();
-        let releases = persisted
-            .iter()
-            .filter(|event| {
-                event.event_type() == EventType::LeaseReleased
-                    && event.links().run_id() == Some(&run_id)
-                    && event.links().task_id() == Some(&task_id)
-                    && event.links().correlation_id() == Some(&correlation_id)
-                    && event.links().request_id() == Some(&request_id)
-                    && event.links().lease_id() == Some(&lease_id)
-            })
-            .count();
-        if scheduled_requests != 1 || releases != 1 {
-            return Err(policy_admission_fatal(
-                "policy_run_settlement_evidence_incomplete",
-                "reconcile_policy_outcomes",
-            ));
-        }
-        let input = match terminal.payload() {
-            EventPayload::Task(TaskPayload::Semantic(payload)) => match payload.fact() {
-                TaskSemanticFact::TerminalCommitted {
-                    outcome: TaskOutcome::Success,
-                    failure_code: None,
-                    ..
-                } if terminal.event_type() == EventType::TaskCompleted => {
-                    PolicyExecutionInput::Succeeded
-                }
-                TaskSemanticFact::TerminalCommitted {
-                    outcome: TaskOutcome::Failure,
-                    failure_code: Some(error_code),
-                    ..
-                } if terminal.event_type() == EventType::TaskFailed => {
-                    PolicyExecutionInput::Failed {
-                        error_code: error_code.clone(),
-                        class: PolicyFailureClass::Recoverable,
-                    }
-                }
-                _ => {
-                    return Err(policy_admission_fatal(
-                        "policy_run_terminal_invalid",
-                        "reconcile_policy_outcomes",
-                    ));
-                }
-            },
-            _ => {
-                return Err(policy_admission_fatal(
-                    "policy_run_terminal_invalid",
-                    "reconcile_policy_outcomes",
-                ));
-            }
-        };
-        let admitted_at_unix_ms = policy.admitted_at(&decision_id)?;
-        let observed_at_unix_ms = terminal.timestamp_unix_ms();
-        let runtime_ms = observed_at_unix_ms
-            .checked_sub(admitted_at_unix_ms)
-            .ok_or_else(|| {
-                policy_admission_fatal(
-                    "policy_execution_clock_regressed",
-                    "reconcile_policy_outcomes",
-                )
-            })?;
+        let observed_at_unix_ms = source.timestamp_unix_ms();
         let data = match policy.prepare_execution(
             &decision_id,
             observed_at_unix_ms,
@@ -1642,20 +1681,78 @@ fn reconcile_scheduled_policy_outcomes(
                 ));
             }
         };
+        if !policy_recovery_outcome_matches(&data.outcome, &input) {
+            return Err(policy_admission_fatal(
+                "policy_execution_recovery_outcome_conflict",
+                "reconcile_policy_outcomes",
+            ));
+        }
         let draft = events.draft(
             policy_execution_severity(&data),
             EventSource::Scheduler,
             OriginModule::Policy,
             EventActor::Scheduler,
-            events.system_links()?,
+            EventLinksDraft::default(),
             PolicyPayloadDraft::execution_recorded(data.clone(), AuditInput::new()),
         )?;
+        let draft = events.sanitize(draft)?;
         ledger
-            .append(events.sanitize(draft)?)
-            .map_err(|_| ledger_error("reconcile_policy_outcome"))?;
+            .append(draft)
+            .map_err(|_| ledger_error("reconcile_policy_outcomes"))?;
         policy.commit_execution(&data)?;
     }
     Ok(())
+}
+
+fn recovered_scheduled_task_runtime_ms(
+    persisted: &[PersistedEvent],
+    terminal: &PersistedEvent,
+) -> RuntimeHostResult<u64> {
+    let requests = persisted
+        .iter()
+        .filter(|event| {
+            event.event_type() == EventType::LabRequest
+                && event.links().instance_id() == terminal.links().instance_id()
+                && event.links().request_id() == terminal.links().request_id()
+                && event.links().correlation_id() == terminal.links().correlation_id()
+                && event.links().task_id() == terminal.links().task_id()
+                && event.links().run_id() == terminal.links().run_id()
+                && event.links().lease_id().is_none()
+        })
+        .collect::<Vec<_>>();
+    let [request] = requests.as_slice() else {
+        return Err(policy_admission_fatal(
+            "policy_run_task_request_not_unique",
+            "reconcile_policy_outcomes",
+        ));
+    };
+    terminal
+        .timestamp_unix_ms()
+        .checked_sub(request.timestamp_unix_ms())
+        .ok_or_else(|| {
+            policy_admission_fatal(
+                "policy_execution_clock_regressed",
+                "reconcile_policy_outcomes",
+            )
+        })
+}
+
+fn policy_recovery_outcome_matches(
+    outcome: &PolicyExecutionOutcome,
+    input: &PolicyExecutionInput,
+) -> bool {
+    match (outcome, input) {
+        (PolicyExecutionOutcome::Succeeded { .. }, PolicyExecutionInput::Succeeded) => true,
+        (
+            PolicyExecutionOutcome::Failed { failure },
+            PolicyExecutionInput::Failed { error_code, class },
+        ) => {
+            !failure.reported_success
+                && failure.error_code == *error_code
+                && failure.original_class == *class
+        }
+        _ => false,
+    }
 }
 
 fn ledger_has_release_stage(ledger: &GlobalLedger, release_id: &str) -> RuntimeHostResult<bool> {
@@ -1963,6 +2060,13 @@ struct RequestFailure {
     terminal: Option<TerminalEvent>,
     error: Box<RuntimeHostError>,
     poison_runtime: bool,
+    task_failure: Option<TaskFailureEvidence>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct TaskFailureEvidence {
+    code: &'static str,
+    severity: EventSeverity,
 }
 
 struct ActionFailure {
@@ -1973,6 +2077,7 @@ struct ActionFailure {
     release_after: bool,
     destructive_started: bool,
     transfer_after: bool,
+    task_failure: Option<TaskFailureEvidence>,
 }
 
 impl HostShared {
@@ -3252,39 +3357,156 @@ impl HostShared {
         context: &PolicyRunContext,
         failure: &RequestFailure,
     ) -> RuntimeHostResult<PolicyExecutionEventData> {
-        let terminal = failure.terminal.ok_or_else(|| {
-            RuntimeHostError::fatal(
-                "policy_run_failure_terminal_missing",
-                "complete_scheduled_policy_failure",
-                RuntimeErrorCode::RuntimeFatal,
-            )
-        })?;
-        if failure.state != RuntimeReceiptState::Failed {
+        if !matches!(
+            failure.state,
+            RuntimeReceiptState::Denied
+                | RuntimeReceiptState::Failed
+                | RuntimeReceiptState::Cancelled
+        ) {
             return Err(RuntimeHostError::fatal(
                 "policy_run_failure_state_invalid",
                 "complete_scheduled_policy_failure",
                 RuntimeErrorCode::RuntimeFatal,
             ));
         }
-        self.validate_scheduled_policy_terminal(
-            context,
-            terminal,
-            None,
-            TaskOutcome::Failure,
-            Some(failure.error.code()),
-        )?;
-        self.record_policy_dispatch_outcome(
-            context.decision_id(),
-            &PolicyExecutionInput::Failed {
-                error_code: failure.error.code().to_string(),
-                class: if failure.error.is_fatal() {
-                    PolicyFailureClass::Severe
-                } else {
-                    PolicyFailureClass::Recoverable
-                },
-            },
-            Some(context),
-        )
+        self.ensure_scheduled_policy_lease_released(context)?;
+        let input = self.scheduled_policy_failure_input(context, failure)?;
+        self.record_policy_dispatch_outcome(context.decision_id(), &input, Some(context))
+    }
+
+    fn ensure_scheduled_policy_lease_released(
+        &self,
+        context: &PolicyRunContext,
+    ) -> RuntimeHostResult<()> {
+        let release_query = || {
+            self.ledger
+                .query(EventQuery {
+                    event_type: Some(EventType::LeaseReleased),
+                    correlation_id: Some(context.correlation_id()),
+                    task_id: Some(context.task_id()),
+                    run_id: Some(context.run_id()),
+                    lease_id: Some(context.lease_token().lease_id()),
+                    ..EventQuery::default()
+                })
+                .map_err(|_| ledger_error("validate_policy_run_release"))
+        };
+        let existing = release_query()?;
+        if existing.is_empty() {
+            let request = context.request().validate().map_err(|_| {
+                RuntimeHostError::fatal(
+                    "policy_run_request_invalid",
+                    "release_failed_policy_run",
+                    RuntimeErrorCode::RuntimeFatal,
+                )
+            })?;
+            let connection_id = ConnectionId::new(POLICY_CONNECTION_VALUE)
+                .map_err(|error| RuntimeHostError::scheduler("build_policy_connection", &error))?;
+            self.cleanup_token_with_run_links(
+                &request,
+                context.lease_token(),
+                connection_id,
+                LeaseReleaseReason::BackendFailure,
+                RuntimeRunLinks::new(context.issued_task_id(), context.issued_run_id()),
+            )?;
+        }
+        if release_query()?.len() != 1 {
+            return Err(RuntimeHostError::fatal(
+                "policy_run_release_missing",
+                "complete_scheduled_policy_failure",
+                RuntimeErrorCode::RuntimeFatal,
+            ));
+        }
+        Ok(())
+    }
+
+    fn scheduled_policy_failure_input(
+        &self,
+        context: &PolicyRunContext,
+        failure: &RequestFailure,
+    ) -> RuntimeHostResult<PolicyExecutionInput> {
+        let task_terminals = self
+            .ledger
+            .query(EventQuery {
+                correlation_id: Some(context.correlation_id()),
+                task_id: Some(context.task_id()),
+                run_id: Some(context.run_id()),
+                lease_id: Some(context.lease_token().lease_id()),
+                ..EventQuery::default()
+            })
+            .map_err(|_| ledger_error("validate_policy_run_failure"))?;
+        let task_terminals = task_terminals
+            .iter()
+            .filter(|event| {
+                matches!(
+                    event.event_type(),
+                    EventType::TaskCompleted | EventType::TaskFailed | EventType::TaskCancelled
+                )
+            })
+            .collect::<Vec<_>>();
+        let task_failure = match task_terminals.as_slice() {
+            [] => {
+                return Ok(PolicyExecutionInput::Failed {
+                    error_code: failure.error.code().to_owned(),
+                    class: if failure.error.is_fatal() {
+                        PolicyFailureClass::Severe
+                    } else {
+                        PolicyFailureClass::Recoverable
+                    },
+                });
+            }
+            [task_failure] if task_failure.event_type() == EventType::TaskFailed => *task_failure,
+            _ => {
+                return Err(RuntimeHostError::fatal(
+                    "policy_run_failure_terminal_conflict",
+                    "complete_scheduled_policy_failure",
+                    RuntimeErrorCode::RuntimeFatal,
+                ));
+            }
+        };
+        let class = match task_failure.severity() {
+            EventSeverity::Warning => PolicyFailureClass::Recoverable,
+            EventSeverity::Fatal => PolicyFailureClass::Severe,
+            EventSeverity::Debug | EventSeverity::Info | EventSeverity::Error => {
+                return Err(RuntimeHostError::fatal(
+                    "policy_run_failure_severity_ambiguous",
+                    "complete_scheduled_policy_failure",
+                    RuntimeErrorCode::RuntimeFatal,
+                ));
+            }
+        };
+        let EventPayload::Task(TaskPayload::Semantic(payload)) = task_failure.payload() else {
+            return Err(RuntimeHostError::fatal(
+                "policy_run_failure_terminal_invalid",
+                "complete_scheduled_policy_failure",
+                RuntimeErrorCode::RuntimeFatal,
+            ));
+        };
+        let TaskSemanticFact::TerminalCommitted {
+            outcome: TaskOutcome::Failure,
+            failure_code: Some(code),
+            ..
+        } = payload.fact()
+        else {
+            return Err(RuntimeHostError::fatal(
+                "policy_run_failure_terminal_invalid",
+                "complete_scheduled_policy_failure",
+                RuntimeErrorCode::RuntimeFatal,
+            ));
+        };
+        if failure.terminal.is_none_or(|terminal| {
+            terminal.sequence != task_failure.sequence()
+                || terminal.event_id != *task_failure.event_id()
+        }) {
+            return Err(RuntimeHostError::fatal(
+                "policy_run_failure_terminal_mismatch",
+                "complete_scheduled_policy_failure",
+                RuntimeErrorCode::RuntimeFatal,
+            ));
+        }
+        Ok(PolicyExecutionInput::Failed {
+            error_code: code.clone(),
+            class,
+        })
     }
 
     fn validate_scheduled_policy_terminal(
@@ -3442,6 +3664,8 @@ impl HostShared {
                         Some(context) => self.policy_run_event_links(context)?,
                         None => self.events.system_links()?,
                     };
+                    #[cfg(test)]
+                    fail_policy_execution_append_for_test()?;
                     self.append_event_raw(
                         policy_execution_severity(&data),
                         EventSource::Scheduler,
@@ -8303,6 +8527,7 @@ impl HostShared {
         execution_provenance: ExecutionBackendProvenance,
         run_links: Option<RuntimeRunLinks>,
     ) -> Result<OperationSuccess, RequestFailure> {
+        let scheduled = run_links.is_some();
         let mut runtime = RuntimeContainedTask {
             host: self,
             request,
@@ -8323,7 +8548,9 @@ impl HostShared {
         let outcome = match execution {
             Ok(outcome) => outcome,
             Err(ContainedTaskRunError::Boundary(mut failure)) => {
-                if !failure.poison_runtime {
+                let task_failure = scheduled.then_some(failure.task_failure).flatten();
+                let failure_severity = task_failure.map(|evidence| evidence.severity);
+                if failure_severity.is_some() || !scheduled && !failure.poison_runtime {
                     let event = self.append_contained_task_terminal(
                         request,
                         &token,
@@ -8334,7 +8561,12 @@ impl HostShared {
                             intent_already_recorded: finalizing.is_some(),
                             final_page: None,
                             executed_steps: 0,
-                            failure_code: Some(failure.error.code()),
+                            failure_code: Some(
+                                task_failure
+                                    .map(|evidence| evidence.code)
+                                    .unwrap_or_else(|| failure.error.code()),
+                            ),
+                            failure_severity,
                         },
                     )?;
                     failure.terminal = Some(terminal(&event));
@@ -8348,6 +8580,7 @@ impl HostShared {
                 ));
             }
             Err(ContainedTaskRunError::Task(error)) => {
+                let failure_severity = scheduled.then_some(EventSeverity::Warning);
                 let event = self.append_contained_task_terminal(
                     request,
                     &token,
@@ -8359,9 +8592,10 @@ impl HostShared {
                         final_page: None,
                         executed_steps: 0,
                         failure_code: Some(error.code()),
+                        failure_severity,
                     },
                 )?;
-                let failure = RequestFailure::request(
+                let mut failure = RequestFailure::request(
                     RuntimeHostError::request(
                         error.code(),
                         "run_contained_task",
@@ -8370,6 +8604,10 @@ impl HostShared {
                     RuntimeReceiptState::Failed,
                     Some(terminal(&event)),
                 );
+                failure.task_failure = failure_severity.map(|severity| TaskFailureEvidence {
+                    code: error.code(),
+                    severity,
+                });
                 return Err(self.cleanup_composite_failure_with_run_links(
                     request,
                     token,
@@ -8403,6 +8641,7 @@ impl HostShared {
                 final_page: outcome.final_page.clone(),
                 executed_steps: outcome.executed_steps,
                 failure_code: None,
+                failure_severity: None,
             },
         )?;
         match self.release_lease(
@@ -8679,12 +8918,26 @@ impl HostShared {
                 ),
             )?;
         }
+        let severity = match (draft.outcome, draft.failure_severity) {
+            (TaskOutcome::Success, None) => EventSeverity::Info,
+            (TaskOutcome::Failure, None) => EventSeverity::Error,
+            (
+                TaskOutcome::Failure,
+                Some(severity @ (EventSeverity::Warning | EventSeverity::Fatal)),
+            ) => severity,
+            (TaskOutcome::Cancelled, None) => EventSeverity::Warning,
+            _ => {
+                return Err(RequestFailure::poison_without_terminal(
+                    RuntimeHostError::fatal(
+                        "contained_task_terminal_severity_invalid",
+                        "append_contained_task_terminal",
+                        RuntimeErrorCode::RuntimeFatal,
+                    ),
+                ));
+            }
+        };
         self.append_event(
-            match draft.outcome {
-                TaskOutcome::Success => EventSeverity::Info,
-                TaskOutcome::Failure => EventSeverity::Error,
-                TaskOutcome::Cancelled => EventSeverity::Warning,
-            },
+            severity,
             EventSource::Runtime,
             OriginModule::Runtime,
             EventActor::Runtime,
@@ -8856,7 +9109,7 @@ impl HostShared {
     ) -> RequestFailure {
         match self.cleanup_token(&token, connection_id, LeaseReleaseReason::BackendFailure) {
             Ok(()) => failure,
-            Err(error) => RequestFailure::poison(error, failure.terminal),
+            Err(error) => failure.replace_with_poison(error),
         }
     }
 
@@ -8880,7 +9133,7 @@ impl HostShared {
         };
         match cleanup {
             Ok(()) => failure,
-            Err(error) => RequestFailure::poison(error, failure.terminal),
+            Err(error) => failure.replace_with_poison(error),
         }
     }
 
@@ -9063,10 +9316,14 @@ impl HostShared {
                     terminal: Some(terminal(&outcome)),
                     error: Box::new(error.error),
                     poison_runtime: error.poison_runtime,
+                    task_failure: error.task_failure,
                 };
-                if release_after {
-                    self.cleanup_token(token, connection_id, LeaseReleaseReason::BackendFailure)
-                        .map_err(RequestFailure::poison_without_terminal)?;
+                if release_after
+                    && run_links.is_none()
+                    && let Err(error) =
+                        self.cleanup_token(token, connection_id, LeaseReleaseReason::BackendFailure)
+                {
+                    return Err(failure.replace_with_poison(error));
                 }
                 Err(failure)
             }
@@ -9228,6 +9485,7 @@ impl HostShared {
                     terminal: Some(terminal(&outcome)),
                     error: Box::new(error.error),
                     poison_runtime: error.poison_runtime,
+                    task_failure: None,
                 };
                 if release_after {
                     self.cleanup_token(token, connection_id, LeaseReleaseReason::BackendFailure)
@@ -9452,12 +9710,7 @@ impl HostShared {
         reason: LeaseReleaseReason,
         run_links: RuntimeRunLinks,
     ) -> RuntimeHostResult<()> {
-        self.cleanup_token_inner(
-            token,
-            connection_id,
-            reason,
-            Some((request, run_links)),
-        )
+        self.cleanup_token_inner(token, connection_id, reason, Some((request, run_links)))
     }
 
     fn cleanup_token_inner(
@@ -10121,6 +10374,7 @@ impl HostShared {
             terminal: Some(terminal(&event)),
             poison_runtime: error.is_fatal(),
             error: Box::new(error),
+            task_failure: None,
         })
     }
 
@@ -10301,6 +10555,7 @@ impl HostShared {
                 terminal: Some(terminal(&outcome)),
                 poison_runtime: error.poison_runtime,
                 error: Box::new(error.error),
+                task_failure: None,
             }),
             Err(error) => Err(RequestFailure::poison_without_terminal(
                 critical_execution_error(&error),
@@ -10318,6 +10573,7 @@ struct ContainedTaskTerminalDraft {
     final_page: Option<String>,
     executed_steps: u32,
     failure_code: Option<&'static str>,
+    failure_severity: Option<EventSeverity>,
 }
 
 struct ActiveContainedRun<'a> {
@@ -10480,6 +10736,14 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
                     state: RuntimeReceiptState::Failed,
                     terminal: Some(terminal(&failed)),
                     poison_runtime: runtime_error.is_fatal(),
+                    task_failure: Some(TaskFailureEvidence {
+                        code: runtime_error.code(),
+                        severity: if runtime_error.is_fatal() {
+                            EventSeverity::Fatal
+                        } else {
+                            EventSeverity::Warning
+                        },
+                    }),
                     error: Box::new(runtime_error),
                 })
             }
@@ -10884,6 +11148,7 @@ impl RequestFailure {
             terminal,
             error: Box::new(error),
             poison_runtime: false,
+            task_failure: None,
         }
     }
 
@@ -10893,11 +11158,61 @@ impl RequestFailure {
             terminal,
             error: Box::new(error),
             poison_runtime: true,
+            task_failure: None,
         }
     }
 
     fn poison_without_terminal(error: RuntimeHostError) -> Self {
         Self::poison(error, None)
+    }
+
+    fn replace_with_poison(self, error: RuntimeHostError) -> Self {
+        Self {
+            state: RuntimeReceiptState::Failed,
+            terminal: self.terminal,
+            error: Box::new(error),
+            poison_runtime: true,
+            task_failure: self.task_failure,
+        }
+    }
+}
+
+#[cfg(test)]
+mod request_failure_tests {
+    use super::*;
+
+    #[test]
+    fn cleanup_escalation_preserves_the_original_task_failure_classification() {
+        let original = RequestFailure {
+            state: RuntimeReceiptState::Failed,
+            terminal: None,
+            error: Box::new(RuntimeHostError::request(
+                "capture_backend_operation_failed",
+                "run_contained_task_capture",
+                RuntimeErrorCode::CaptureFailed,
+            )),
+            poison_runtime: false,
+            task_failure: Some(TaskFailureEvidence {
+                code: "capture_backend_operation_failed",
+                severity: EventSeverity::Warning,
+            }),
+        };
+
+        let escalated = original.replace_with_poison(RuntimeHostError::fatal(
+            "lease_cleanup_failed",
+            "release_failed_policy_run",
+            RuntimeErrorCode::RuntimeFatal,
+        ));
+
+        assert_eq!(escalated.error.code(), "lease_cleanup_failed");
+        assert!(escalated.poison_runtime);
+        assert_eq!(
+            escalated.task_failure,
+            Some(TaskFailureEvidence {
+                code: "capture_backend_operation_failed",
+                severity: EventSeverity::Warning,
+            })
+        );
     }
 }
 
@@ -10916,11 +11231,20 @@ impl ActionFailure {
             release_after: false,
             destructive_started: false,
             transfer_after: error.code() == "lease_transfer_not_safe",
+            task_failure: None,
             error,
         }
     }
 
     fn backend(error: RuntimeHostError) -> Self {
+        let task_failure = Some(TaskFailureEvidence {
+            code: error.code(),
+            severity: if error.is_fatal() {
+                EventSeverity::Fatal
+            } else {
+                EventSeverity::Warning
+            },
+        });
         Self {
             diagnostic: DiagnosticCode::BackendOperationFailed,
             effect: EffectDisposition::Indeterminate,
@@ -10928,6 +11252,7 @@ impl ActionFailure {
             release_after: true,
             destructive_started: true,
             transfer_after: false,
+            task_failure,
             error,
         }
     }
@@ -10940,6 +11265,7 @@ impl ActionFailure {
             release_after: false,
             destructive_started: false,
             transfer_after: false,
+            task_failure: None,
             error,
         }
     }

@@ -73,6 +73,17 @@ impl PersistedEvent {
         Ok(event)
     }
 
+    pub(crate) fn from_sanitized_with_recovery_links(
+        sequence: u64,
+        draft: SanitizedEventDraft,
+        links: EventLinks,
+    ) -> Result<Self, FactValidationError> {
+        let mut event = Self::from_sanitized(sequence, draft)?;
+        event.links = links;
+        event.validate()?;
+        Ok(event)
+    }
+
     pub fn schema_version(&self) -> &str {
         &self.schema_version
     }

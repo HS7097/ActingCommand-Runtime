@@ -106,6 +106,72 @@ impl EventLinks {
     pub const fn recognition_id(&self) -> Option<&RecognitionId> {
         self.recognition_id.as_ref()
     }
+
+    /// Rebuilds the exact links for one recovered scheduled-policy event.
+    ///
+    /// This does not produce producer capabilities or an `EventLinksDraft`. The ledger uses the
+    /// returned transport links only after revalidating the persisted dispatch and lease facts
+    /// that supplied them.
+    pub fn revalidated_scheduled_recovery(
+        dispatch: &Self,
+        lease_granted: &Self,
+        action_id: IssuedActionId,
+    ) -> Result<Self, SanitizationError> {
+        let (
+            Some(instance_id),
+            Some(request_id),
+            Some(correlation_id),
+            Some(task_id),
+            Some(run_id),
+        ) = (
+            dispatch.instance_id,
+            dispatch.request_id,
+            dispatch.correlation_id,
+            dispatch.task_id,
+            dispatch.run_id,
+        )
+        else {
+            return Err(SanitizationError::new(
+                "scheduled_recovery_link_missing",
+                "dispatch_links",
+            ));
+        };
+        let Some(lease_id) = lease_granted.lease_id else {
+            return Err(SanitizationError::new(
+                "scheduled_recovery_link_missing",
+                "lease_id",
+            ));
+        };
+        if dispatch.lease_id.is_some()
+            || dispatch.frame_id.is_some()
+            || dispatch.recognition_id.is_some()
+            || lease_granted.instance_id != Some(instance_id)
+            || lease_granted.request_id != Some(request_id)
+            || lease_granted.correlation_id != Some(correlation_id)
+            || lease_granted.causation_id != dispatch.causation_id
+            || lease_granted.task_id != Some(task_id)
+            || lease_granted.run_id != Some(run_id)
+            || lease_granted.frame_id.is_some()
+            || lease_granted.recognition_id.is_some()
+        {
+            return Err(SanitizationError::new(
+                "scheduled_recovery_link_conflict",
+                "source_links",
+            ));
+        }
+        Ok(Self {
+            instance_id: Some(instance_id),
+            request_id: Some(request_id),
+            correlation_id: Some(correlation_id),
+            causation_id: dispatch.causation_id,
+            task_id: Some(task_id),
+            run_id: Some(run_id),
+            lease_id: Some(lease_id),
+            frame_id: None,
+            action_id: Some(action_id.into_transport()),
+            recognition_id: None,
+        })
+    }
 }
 
 /// Producer-only links whose values can only come from an identifier issuer.
