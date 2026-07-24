@@ -424,7 +424,7 @@ impl PreparedContainedTask {
                                 })?;
                             break;
                         };
-                        if !policy.retryable() {
+                        if operation.to.is_none() {
                             machine
                                 .operation_succeeded(
                                     &operation_id,

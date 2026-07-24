@@ -2157,6 +2157,37 @@ fn neutral_error_page_retrying_contained_task_package() -> Vec<u8> {
     )
 }
 
+fn neutral_non_retryable_destination_package(with_error_page: bool) -> Vec<u8> {
+    let mut task = serde_json::json!({
+        "schema_version": "0.6",
+        "task_id": "task",
+        "game": "neutral",
+        "server_scope": ["test"],
+        "coordinate_space": {"width": 2, "height": 1},
+        "entry_page": "home",
+        "target_page": "terminal",
+        "operations": [{
+            "id": "open_terminal",
+            "from": "home",
+            "to": "terminal",
+            "click": {"kind": "point", "x": 1, "y": 0},
+            "guard": {
+                "page_id": "home",
+                "target_id": "guard/ready",
+                "expected_rect": {"x": 1, "y": 0, "width": 1, "height": 1},
+                "color_probe": "guard/ready"
+            },
+            "retryable": false
+        }]
+    });
+    if with_error_page {
+        task["error_pages"] = serde_json::json!(["error"]);
+    }
+    neutral_contained_task_package_with_task(
+        &serde_json::to_vec(&task).expect("non-retryable destination task JSON"),
+    )
+}
+
 fn neutral_contained_task_package_with_task(task: &[u8]) -> Vec<u8> {
     let cursor = Cursor::new(Vec::new());
     let mut zip = ZipWriter::new(cursor);
@@ -3085,6 +3116,124 @@ fn scheduled_declared_error_page_skips_ordinary_retry() {
     );
     drop(client);
     host.close().expect("close runtime host");
+}
+
+#[test]
+fn scheduled_non_retryable_destination_observation_is_fail_closed_and_no_destination_remains_compatible()
+ {
+    for (case, with_destination, error_page, reaches_target, expected_success) in [
+        ("target-reached", true, false, true, true),
+        ("source-unchanged", true, false, false, false),
+        ("declared-error-page", true, true, false, false),
+        ("no-destination", false, false, true, true),
+    ] {
+        let root = TempDir::new().expect("tempdir");
+        let package = if with_destination {
+            neutral_non_retryable_destination_package(error_page)
+        } else {
+            neutral_contained_task_package()
+        };
+        let package_path = root.path().join("scheduled-task.zip");
+        fs::write(&package_path, &package).expect("write package");
+        let package_sha256 = format!("{:x}", Sha256::digest(&package));
+        let state = Arc::new(FakeState::default());
+        if reaches_target {
+            state
+                .transition_capture_after_input
+                .store(true, Ordering::Release);
+        }
+        if error_page {
+            state
+                .error_capture_after_input
+                .store(true, Ordering::Release);
+        }
+        let host = RuntimeHost::start(
+            config(&root).with_procedure_manifest(procedure_manifest_with_primary(
+                &package,
+                vec!["after_observation".to_owned()],
+            )),
+            Arc::new(
+                FakeProvider::one(POLICY_INSTANCE_ALIAS, instance_id(), Arc::clone(&state))
+                    .fixture_simulation(),
+            ),
+        )
+        .unwrap_or_else(|error| panic!("{case}: runtime host: {error}"));
+        host.activate_policy_catalog(&policy_sources(1))
+            .unwrap_or_else(|error| panic!("{case}: activate policy catalog: {error}"));
+        let (_, intent, reasons) = evaluated_policy_dispatch(&host, PolicyTrigger::FactsChanged);
+        record_policy_approval(&host, &intent);
+        let PolicyDispatchAdmission::Granted { context } = host
+            .admit_policy_dispatch(&intent, &reasons, &policy_context(&host, &intent))
+            .unwrap_or_else(|error| panic!("{case}: policy admission: {error}"))
+        else {
+            panic!("{case}: expected one policy run context")
+        };
+        let request =
+            ContainedTaskRequest::new(package_path.to_string_lossy().into_owned(), package_sha256)
+                .unwrap_or_else(|error| panic!("{case}: contained task request: {error}"));
+
+        if expected_success {
+            let receipt = host
+                .run_scheduled_contained_task(&context, &request)
+                .unwrap_or_else(|error| panic!("{case}: scheduled run: {error}"));
+            assert_eq!(receipt.state(), RuntimeReceiptState::Completed, "{case}");
+            host.complete_scheduled_policy_run(&context, &receipt)
+                .unwrap_or_else(|error| panic!("{case}: complete scheduled run: {error}"));
+        } else {
+            let error = host
+                .run_scheduled_contained_task(&context, &request)
+                .expect_err("non-retryable destination failure must settle once");
+            assert_eq!(error.code(), "contained_task_requires_scheduler", "{case}");
+            assert!(!error.is_fatal(), "{case}");
+        }
+
+        let mut client = TestClient::connect(&host);
+        let events = projected_events(
+            &mut client,
+            EventQuery {
+                run_id: Some(context.run_id()),
+                ..EventQuery::default()
+            },
+        );
+        for event_type in [
+            EventType::TaskEffectIntent,
+            EventType::TaskEffectCompleted,
+            EventType::PolicyExecutionRecorded,
+            EventType::PolicyDispatchCompleted,
+        ] {
+            assert_eq!(
+                events
+                    .iter()
+                    .filter(|event| event.event_type == event_type)
+                    .count(),
+                1,
+                "{case}: {event_type:?} must occur exactly once"
+            );
+        }
+        let terminal = if expected_success {
+            EventType::TaskCompleted
+        } else {
+            EventType::TaskFailed
+        };
+        assert_eq!(
+            events
+                .iter()
+                .filter(|event| event.event_type == terminal)
+                .count(),
+            1,
+            "{case}: scheduled run must produce one final terminal"
+        );
+        assert!(
+            events
+                .iter()
+                .all(|event| event.links.run_id() == Some(&context.run_id())),
+            "{case}: every effect and terminal must remain on the admitted run"
+        );
+        assert_eq!(state.input_count.load(Ordering::Acquire), 1, "{case}");
+        drop(client);
+        host.close()
+            .unwrap_or_else(|error| panic!("{case}: close runtime host: {error}"));
+    }
 }
 
 #[test]
