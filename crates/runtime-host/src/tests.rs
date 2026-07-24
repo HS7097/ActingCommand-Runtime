@@ -119,7 +119,9 @@ struct FakeState {
     refuse_guard_capture: AtomicBool,
     transition_capture_after_input: AtomicBool,
     transition_capture_after_inputs: AtomicUsize,
+    transition_capture_after_capture: AtomicUsize,
     error_capture_after_input: AtomicBool,
+    error_capture_after_capture: AtomicUsize,
     monitor_observation_count: AtomicUsize,
     monitor_mode: AtomicUsize,
     application_count: AtomicUsize,
@@ -211,9 +213,19 @@ impl CaptureBackend for FakeCapture {
             .state
             .transition_capture_after_inputs
             .load(Ordering::Acquire);
+        let transition_after_capture = self
+            .state
+            .transition_capture_after_capture
+            .load(Ordering::Acquire);
+        let error_after_capture = self
+            .state
+            .error_capture_after_capture
+            .load(Ordering::Acquire);
         let first = if self.state.unknown_capture.load(Ordering::Acquire) {
             [1, 2, 3]
-        } else if self.state.error_capture_after_input.load(Ordering::Acquire) && input_count > 0 {
+        } else if (self.state.error_capture_after_input.load(Ordering::Acquire) && input_count > 0)
+            || (error_after_capture > 0 && capture_number >= error_after_capture)
+        {
             [255, 255, 0]
         } else if (self
             .state
@@ -221,6 +233,7 @@ impl CaptureBackend for FakeCapture {
             .load(Ordering::Acquire)
             && input_count > 0)
             || (transition_after > 0 && input_count >= transition_after)
+            || (transition_after_capture > 0 && capture_number >= transition_after_capture)
         {
             [0, 0, 255]
         } else {
@@ -3070,6 +3083,153 @@ fn scheduled_declared_error_page_skips_ordinary_retry() {
             .expect("catalog pin")
             .is_none()
     );
+    drop(client);
+    host.close().expect("close runtime host");
+}
+
+#[test]
+fn scheduled_fresh_retry_observation_target_prevents_second_effect() {
+    let root = TempDir::new().expect("tempdir");
+    let package = neutral_retrying_contained_task_package();
+    let package_path = root.path().join("scheduled-task.zip");
+    fs::write(&package_path, &package).expect("write package");
+    let package_sha256 = format!("{:x}", Sha256::digest(&package));
+    let state = Arc::new(FakeState::default());
+    state
+        .transition_capture_after_capture
+        .store(3, Ordering::Release);
+    let host = RuntimeHost::start(
+        config(&root).with_procedure_manifest(procedure_manifest_with_primary(
+            &package,
+            vec!["after_observation".to_owned()],
+        )),
+        Arc::new(
+            FakeProvider::one(POLICY_INSTANCE_ALIAS, instance_id(), Arc::clone(&state))
+                .fixture_simulation(),
+        ),
+    )
+    .expect("runtime host");
+    host.activate_policy_catalog(&policy_sources(1))
+        .expect("activate policy catalog");
+    let (_, intent, reasons) = evaluated_policy_dispatch(&host, PolicyTrigger::FactsChanged);
+    record_policy_approval(&host, &intent);
+    let PolicyDispatchAdmission::Granted { context } = host
+        .admit_policy_dispatch(&intent, &reasons, &policy_context(&host, &intent))
+        .expect("policy admission")
+    else {
+        panic!("expected one policy run context")
+    };
+    let request =
+        ContainedTaskRequest::new(package_path.to_string_lossy().into_owned(), package_sha256)
+            .expect("contained task request");
+
+    let receipt = host
+        .run_scheduled_contained_task(&context, &request)
+        .expect("fresh target observation must complete the original operation");
+    host.complete_scheduled_policy_run(&context, &receipt)
+        .expect("complete scheduled policy run");
+
+    let mut client = TestClient::connect(&host);
+    let events = projected_events(
+        &mut client,
+        EventQuery {
+            run_id: Some(context.run_id()),
+            ..EventQuery::default()
+        },
+    );
+    for event_type in [
+        EventType::TaskStepStarted,
+        EventType::TaskEffectIntent,
+        EventType::TaskEffectCompleted,
+        EventType::TaskStepFinished,
+        EventType::TaskCompleted,
+        EventType::PolicyExecutionRecorded,
+        EventType::PolicyDispatchCompleted,
+    ] {
+        assert_eq!(
+            events
+                .iter()
+                .filter(|event| event.event_type == event_type)
+                .count(),
+            1,
+            "fresh target must not start a second attempt: {event_type:?}"
+        );
+    }
+    assert_eq!(state.input_count.load(Ordering::Acquire), 1);
+    assert_eq!(state.capture_count.load(Ordering::Acquire), 3);
+    drop(client);
+    host.close().expect("close runtime host");
+}
+
+#[test]
+fn scheduled_fresh_retry_observation_error_page_prevents_second_effect() {
+    let root = TempDir::new().expect("tempdir");
+    let package = neutral_error_page_retrying_contained_task_package();
+    let package_path = root.path().join("scheduled-task.zip");
+    fs::write(&package_path, &package).expect("write package");
+    let package_sha256 = format!("{:x}", Sha256::digest(&package));
+    let state = Arc::new(FakeState::default());
+    state
+        .error_capture_after_capture
+        .store(3, Ordering::Release);
+    let host = RuntimeHost::start(
+        config(&root).with_procedure_manifest(procedure_manifest_with_primary(
+            &package,
+            vec!["after_observation".to_owned()],
+        )),
+        Arc::new(
+            FakeProvider::one(POLICY_INSTANCE_ALIAS, instance_id(), Arc::clone(&state))
+                .fixture_simulation(),
+        ),
+    )
+    .expect("runtime host");
+    host.activate_policy_catalog(&policy_sources(1))
+        .expect("activate policy catalog");
+    let (_, intent, reasons) = evaluated_policy_dispatch(&host, PolicyTrigger::FactsChanged);
+    record_policy_approval(&host, &intent);
+    let PolicyDispatchAdmission::Granted { context } = host
+        .admit_policy_dispatch(&intent, &reasons, &policy_context(&host, &intent))
+        .expect("policy admission")
+    else {
+        panic!("expected one policy run context")
+    };
+    let request =
+        ContainedTaskRequest::new(package_path.to_string_lossy().into_owned(), package_sha256)
+            .expect("contained task request");
+
+    let error = host
+        .run_scheduled_contained_task(&context, &request)
+        .expect_err("fresh declared error page must not start another operation attempt");
+    assert_eq!(error.code(), "contained_task_requires_scheduler");
+
+    let mut client = TestClient::connect(&host);
+    let events = projected_events(
+        &mut client,
+        EventQuery {
+            run_id: Some(context.run_id()),
+            ..EventQuery::default()
+        },
+    );
+    for event_type in [
+        EventType::TaskStepStarted,
+        EventType::TaskEffectIntent,
+        EventType::TaskEffectCompleted,
+        EventType::TaskStepFinished,
+        EventType::TaskFailed,
+        EventType::PolicyExecutionRecorded,
+        EventType::PolicyDispatchCompleted,
+    ] {
+        assert_eq!(
+            events
+                .iter()
+                .filter(|event| event.event_type == event_type)
+                .count(),
+            1,
+            "fresh error page must not start a second attempt: {event_type:?}"
+        );
+    }
+    assert_eq!(state.input_count.load(Ordering::Acquire), 1);
+    assert_eq!(state.capture_count.load(Ordering::Acquire), 3);
     drop(client);
     host.close().expect("close runtime host");
 }

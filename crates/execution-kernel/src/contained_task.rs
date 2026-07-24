@@ -477,6 +477,61 @@ impl PreparedContainedTask {
                                     step_timeout,
                                     capture_interval,
                                 )?;
+                                let fresh_hit_error_page = self
+                                    .program
+                                    .is_error_page(&self.control, &observation.page_label);
+                                if !fresh_hit_error_page
+                                    && operation.reached_expected_page(&self.control, &observation)
+                                {
+                                    machine
+                                        .operation_succeeded(
+                                            &operation_id,
+                                            Some(observation.page_label.clone()),
+                                        )
+                                        .map_err(|_| {
+                                            ContainedTaskError::new(
+                                                "contained_task_state_invalid",
+                                            )
+                                        })?;
+                                    break;
+                                }
+                                if fresh_hit_error_page {
+                                    match operation.failure_decision(
+                                        policy,
+                                        attempt,
+                                        "page_confirmation_failed",
+                                        Some(observation.page_label.clone()),
+                                        RunFailureStage::PostExecution {
+                                            hit_error_page: true,
+                                        },
+                                    )? {
+                                        RunOperationFailureDecision::RequestRecovery(trigger) => {
+                                            machine.operation_needs_recovery(trigger).map_err(
+                                                |_| {
+                                                    ContainedTaskError::new(
+                                                        "contained_task_state_invalid",
+                                                    )
+                                                },
+                                            )?;
+                                            break;
+                                        }
+                                        RunOperationFailureDecision::Fail(_) => {
+                                            return Err(ContainedTaskError::with_detail(
+                                                "contained_task_requires_scheduler",
+                                                format!(
+                                                    "operation={operation_id} attempts={attempt} reason=page_confirmation_failed"
+                                                ),
+                                            )
+                                            .into());
+                                        }
+                                        RunOperationFailureDecision::Retry { .. } => {
+                                            return Err(ContainedTaskError::new(
+                                                "contained_task_state_invalid",
+                                            )
+                                            .into());
+                                        }
+                                    }
+                                }
                                 attempt = next_attempt;
                             }
                             RunOperationFailureDecision::RequestRecovery(trigger) => {
