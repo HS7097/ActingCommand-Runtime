@@ -1141,3 +1141,553 @@ fn post_terminal_projection_failure_preserves_committed_receipt() {
     assert!(error.is_fatal());
     assert!(error.to_string().contains("terminal receipt was committed"));
 }
+
+#[cfg(test)]
+mod run_summary_runtime_e2e_tests {
+    use crate::{RuntimeClient, RuntimeClientConfig};
+    use actingcommand_contract::{
+        ApplicationLifecycleAction, ApprovalDecisionRecord, ApprovalDisposition, ApprovalTarget,
+        ContainedTaskRequest, EventActor, EventQuery, EventSource, EventType, IdentifierIssuer,
+        InstanceId, ProjectionProfile, RunId,
+    };
+    use actingcommand_device::{CaptureBackend, DeviceError, DeviceResult, InputBackend};
+    use actingcommand_policy::{
+        CatalogDocumentSource, CatalogSources, EvaluationFacts, EvaluationResources, FactValue,
+        HostResourceSnapshot, InstanceSnapshot, ObservedOutcome, PoolValueSnapshot,
+    };
+    use actingcommand_runtime_host::{
+        ExecutionBackendProvider, PolicyAdmissionContext, PolicyCadence, PolicyDispatchAdmission,
+        PolicyInputSnapshot, PolicyRunContext, PolicyTrigger, ProcedureBinding, ProcedureManifest,
+        ResolvedExecutionInstance, RuntimeClock, RuntimeClockSample, RuntimeHost,
+        RuntimeHostConfig, RuntimeHostResult,
+    };
+    use actingcommand_scheduler::SchedulerConfig;
+    use std::collections::BTreeSet;
+    use std::env;
+    use std::fs;
+    use std::path::{Path, PathBuf};
+    use std::process::{Command, Stdio};
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+    use std::thread;
+    use std::time::{Duration, Instant};
+    use tempfile::TempDir;
+
+    const CHILD_ROOT_ENV: &str = "ACTINGCOMMAND_RUNTIME_CLIENT_SETTLEMENT_ROOT";
+    const CHILD_TEST: &str =
+        "tests::run_summary_runtime_e2e_tests::actual_no_task_failed_recovery_child";
+    const GOVERNANCE_CAPABILITY: &str = "runtime-client-settlement-test-capability";
+    const INSTANCE_ALIAS: &str = "fixture-instance-a";
+    const NOW_UNIX_MS: u64 = 1_699_963_200_000;
+
+    struct PhysicalProvider {
+        instance_id: InstanceId,
+    }
+
+    impl ExecutionBackendProvider for PhysicalProvider {
+        fn instance_aliases(&self) -> Vec<String> {
+            vec![INSTANCE_ALIAS.to_owned()]
+        }
+
+        fn resolve(&self, instance_alias: &str) -> Option<ResolvedExecutionInstance> {
+            (instance_alias == INSTANCE_ALIAS)
+                .then(|| ResolvedExecutionInstance::new(self.instance_id, "127.0.0.1:16384"))
+        }
+
+        fn open_input(&self, _instance_alias: &str) -> DeviceResult<Box<dyn InputBackend>> {
+            Err(DeviceError::fatal(
+                "physical provider must be rejected before input opens",
+            ))
+        }
+
+        fn open_capture(&self, _instance_alias: &str) -> DeviceResult<Box<dyn CaptureBackend>> {
+            Err(DeviceError::fatal(
+                "physical provider must be rejected before capture opens",
+            ))
+        }
+
+        fn control_application(
+            &self,
+            _instance_alias: &str,
+            _action: ApplicationLifecycleAction,
+        ) -> DeviceResult<()> {
+            Err(DeviceError::fatal(
+                "physical provider must be rejected before application control",
+            ))
+        }
+    }
+
+    struct FixedClock {
+        unix_ms: AtomicU64,
+        monotonic_ms: AtomicU64,
+    }
+
+    impl FixedClock {
+        fn new() -> Self {
+            Self {
+                unix_ms: AtomicU64::new(NOW_UNIX_MS),
+                monotonic_ms: AtomicU64::new(NOW_UNIX_MS),
+            }
+        }
+    }
+
+    impl RuntimeClock for FixedClock {
+        fn sample(&self) -> RuntimeHostResult<RuntimeClockSample> {
+            Ok(RuntimeClockSample {
+                unix_ms: self.unix_ms.fetch_add(10, Ordering::AcqRel),
+                monotonic_ms: self.monotonic_ms.fetch_add(10, Ordering::AcqRel),
+            })
+        }
+    }
+
+    struct CrashAfterReleaseClock {
+        clock: FixedClock,
+        marker: PathBuf,
+        armed: AtomicBool,
+        armed_samples: AtomicU64,
+        crash_after_armed_sample: u64,
+    }
+
+    impl CrashAfterReleaseClock {
+        fn new(marker: PathBuf, crash_after_armed_sample: u64) -> Self {
+            Self {
+                clock: FixedClock::new(),
+                marker,
+                armed: AtomicBool::new(false),
+                armed_samples: AtomicU64::new(0),
+                crash_after_armed_sample,
+            }
+        }
+
+        fn arm(&self) {
+            self.armed.store(true, Ordering::Release);
+        }
+
+        fn armed_samples(&self) -> u64 {
+            self.armed_samples.load(Ordering::Acquire)
+        }
+    }
+
+    impl RuntimeClock for CrashAfterReleaseClock {
+        fn sample(&self) -> RuntimeHostResult<RuntimeClockSample> {
+            if self.armed.load(Ordering::Acquire) {
+                let sample = self.armed_samples.fetch_add(1, Ordering::AcqRel) + 1;
+                if sample == self.crash_after_armed_sample {
+                    fs::write(&self.marker, b"post-release-before-policy-execution")
+                        .expect("write post-release crash marker");
+                    std::process::exit(87);
+                }
+            }
+            self.clock.sample()
+        }
+    }
+
+    fn policy_sources() -> CatalogSources {
+        let mut sources = CatalogSources {
+            tasks: CatalogDocumentSource::new(
+                "memory://runtime-client-settlement/tasks.json",
+                include_bytes!("../../../contracts/scheduling/examples/catalog-a/tasks.json")
+                    .to_vec(),
+            ),
+            pools: CatalogDocumentSource::new(
+                "memory://runtime-client-settlement/pools.json",
+                include_bytes!("../../../contracts/scheduling/examples/catalog-a/pools.json")
+                    .to_vec(),
+            ),
+            activity: CatalogDocumentSource::new(
+                "memory://runtime-client-settlement/activity.json",
+                include_bytes!("../../../contracts/scheduling/examples/catalog-a/activity.json")
+                    .to_vec(),
+            ),
+            timeline: CatalogDocumentSource::new(
+                "memory://runtime-client-settlement/timeline.json",
+                include_bytes!("../../../contracts/scheduling/examples/catalog-a/timeline.json")
+                    .to_vec(),
+            ),
+        };
+        for source in [
+            &mut sources.tasks,
+            &mut sources.pools,
+            &mut sources.activity,
+            &mut sources.timeline,
+        ] {
+            let mut document: serde_json::Value =
+                serde_json::from_slice(&source.bytes).expect("policy fixture JSON");
+            document["catalog"]["catalog_version"] = serde_json::json!(1);
+            source.bytes = serde_json::to_vec(&document).expect("policy fixture bytes");
+        }
+        sources
+    }
+
+    fn policy_inputs() -> PolicyInputSnapshot {
+        let facts = EvaluationFacts {
+            ledger_position: 1,
+            fact_snapshot_id: "snapshot:runtime-client-settlement".to_owned(),
+            facts: Vec::new(),
+            outcomes: vec![ObservedOutcome {
+                task_id: "fixture.observe".to_owned(),
+                instance_id: INSTANCE_ALIAS.to_owned(),
+                outcome_key: "completed".to_owned(),
+                value: FactValue::Boolean(false),
+                observed_at_unix_ms: NOW_UNIX_MS,
+            }],
+            tasks: Vec::new(),
+            instances: vec![InstanceSnapshot {
+                instance_id: INSTANCE_ALIAS.to_owned(),
+                server_id: "fixture-server-a".to_owned(),
+                game_id: "fixture-game-a".to_owned(),
+                host_id: "fixture-host-a".to_owned(),
+                available: true,
+                capability_operation_ids: vec!["operation.observe".to_owned()],
+                preferred_task_ids: Vec::new(),
+            }],
+        };
+        let resources = EvaluationResources {
+            pools: vec![PoolValueSnapshot {
+                pool_id: "fixture-pool-a".to_owned(),
+                value: 10,
+                observed_at_unix_ms: NOW_UNIX_MS,
+            }],
+            hosts: vec![HostResourceSnapshot {
+                host_id: "fixture-host-a".to_owned(),
+                cpu_available_milli: 1_000,
+                gpu_available_milli: 1_000,
+                io_available_milli: 1_000,
+                host_responsiveness_basis_points: 10_000,
+                third_party_pressure_basis_points: 0,
+                heavy_dispatch_limit: 1,
+                active_heavy_dispatches: 0,
+            }],
+        };
+        PolicyInputSnapshot::new(facts, resources)
+    }
+
+    fn procedure_manifest() -> ProcedureManifest {
+        ProcedureManifest::new(
+            [(
+                "procedure.observe",
+                "operation.observe",
+                vec!["after_observation".to_owned()],
+            )]
+            .into_iter()
+            .map(|(procedure_ref, operation_id, yield_points)| {
+                ProcedureBinding::new(
+                    procedure_ref,
+                    format!("sha256:{}", "a".repeat(64)),
+                    operation_id,
+                    yield_points,
+                )
+                .expect("procedure binding")
+            }),
+        )
+        .expect("procedure manifest")
+    }
+
+    fn host_config(root: &Path, clock: Arc<dyn RuntimeClock>) -> RuntimeHostConfig {
+        RuntimeHostConfig::new(root, b"runtime-client-settlement-test-salt")
+            .with_policy_inputs(policy_inputs())
+            .with_procedure_manifest(procedure_manifest())
+            .with_governance_capability(GOVERNANCE_CAPABILITY)
+            .with_runtime_clock(clock)
+            .with_policy_cadence(PolicyCadence {
+                debounce_ms: 1,
+                cooldown_ms: 1,
+                reconciliation_interval_ms: 1,
+                clock_jump_threshold_ms: 1_000_000,
+            })
+            .with_scheduler(SchedulerConfig {
+                lease_ttl_ms: 1_000_000,
+                ..SchedulerConfig::default()
+            })
+            .with_io_timeout(Duration::from_millis(500))
+    }
+
+    fn start_host(
+        root: &Path,
+        instance_id: InstanceId,
+        clock: Arc<dyn RuntimeClock>,
+    ) -> RuntimeHost {
+        RuntimeHost::start(
+            host_config(root, clock),
+            Arc::new(PhysicalProvider { instance_id }),
+        )
+        .expect("runtime host")
+    }
+
+    fn runtime_client(root: &Path) -> RuntimeClient {
+        RuntimeClient::connect(
+            RuntimeClientConfig::new(root, EventActor::User, EventSource::Ui)
+                .with_io_timeout(Duration::from_secs(2)),
+        )
+        .expect("runtime client")
+    }
+
+    fn admit_scheduled_run(
+        host: &RuntimeHost,
+        root: &Path,
+    ) -> (Box<PolicyRunContext>, ContainedTaskRequest) {
+        let catalog = host
+            .activate_policy_catalog(&policy_sources())
+            .expect("activate policy catalog");
+        let cycle = host
+            .evaluate_policy_cycle(PolicyTrigger::FactsChanged)
+            .expect("evaluate policy cycle");
+        let evaluation = cycle.evaluation.as_ref().expect("policy evaluation");
+        let intent = evaluation
+            .dispatch_intents
+            .first()
+            .expect("policy dispatch intent")
+            .clone();
+        assert_eq!(intent.catalog_hash, catalog.catalog_hash());
+        let client = runtime_client(root);
+        client
+            .authenticate_governance(GOVERNANCE_CAPABILITY)
+            .expect("authenticate governance");
+        client
+            .record_approval_decision(
+                ApprovalDecisionRecord::new(
+                    "approval:fixture-a",
+                    ApprovalDisposition::Approved,
+                    ApprovalTarget::Catalog {
+                        catalog_hash: intent.catalog_hash.clone(),
+                        catalog_version: intent.catalog_version,
+                    },
+                    "user_confirmed",
+                )
+                .expect("approval decision"),
+            )
+            .expect("record approval decision");
+
+        let approved_cycle = host
+            .evaluate_policy_cycle(PolicyTrigger::Reconciliation)
+            .expect("reevaluate policy cycle after approval");
+        let approved_evaluation = approved_cycle
+            .evaluation
+            .as_ref()
+            .expect("approved policy evaluation");
+        let intent = approved_evaluation
+            .dispatch_intents
+            .first()
+            .expect("approved policy dispatch intent")
+            .clone();
+        let reason_chain = approved_evaluation
+            .reason_chains
+            .iter()
+            .find(|chain| chain.id == intent.reason_chain_id)
+            .expect("approved policy reason chain")
+            .clone();
+
+        let admission = host
+            .admit_policy_dispatch(
+                &intent,
+                &reason_chain,
+                &PolicyAdmissionContext {
+                    fact_ledger_position: intent.input_ledger_position,
+                    fact_snapshot_id: intent.fact_snapshot_id.clone(),
+                    approval_fact_ids: BTreeSet::from(["approval:fixture-a".to_owned()]),
+                    fencing_owner_epoch: host.runtime_info().owner_epoch(),
+                    now_unix_ms: intent.prerequisites.evaluated_at_unix_ms,
+                },
+            )
+            .expect("admit policy dispatch");
+        let PolicyDispatchAdmission::Granted { context } = admission else {
+            panic!("expected scheduled policy admission")
+        };
+        let request = ContainedTaskRequest::new(
+            root.join("physical-provider-not-opened.zip")
+                .to_string_lossy()
+                .into_owned(),
+            context
+                .package_digest()
+                .strip_prefix("sha256:")
+                .expect("policy package digest"),
+        )
+        .expect("contained task request");
+        (context, request)
+    }
+
+    #[test]
+    fn actual_no_task_failed_recovery_child() {
+        let Ok(root) = env::var(CHILD_ROOT_ENV) else {
+            return;
+        };
+        let root = PathBuf::from(root);
+        let instance_id: InstanceId = serde_json::from_slice(
+            &fs::read(root.join("instance-id.json")).expect("instance id bytes"),
+        )
+        .expect("instance id JSON");
+        let crash_clock = Arc::new(CrashAfterReleaseClock::new(root.join("crash-marker"), 3));
+        let host = start_host(
+            &root,
+            instance_id,
+            Arc::clone(&crash_clock) as Arc<dyn RuntimeClock>,
+        );
+        let (context, request) = admit_scheduled_run(&host, &root);
+        let run_id = context.run_id();
+        let task_id = context.task_id();
+        let correlation_id = context.correlation_id();
+        let lease_id = context.lease_token().lease_id();
+        fs::write(
+            root.join("scheduled-identities.json"),
+            serde_json::to_vec(&(run_id, task_id, correlation_id, lease_id))
+                .expect("scheduled identities JSON"),
+        )
+        .expect("write scheduled identities");
+
+        crash_clock.arm();
+        let error = host
+            .run_scheduled_contained_task(&context, &request)
+            .expect_err("clock must end child after same-chain release");
+        panic!(
+            "scheduled task returned before crash after {} armed clock samples: {error}",
+            crash_clock.armed_samples()
+        );
+    }
+
+    #[test]
+    fn public_summary_recovers_actual_no_task_failed_scheduled_chain() {
+        let root = TempDir::new().expect("tempdir");
+        let issuer = IdentifierIssuer::new().expect("identifier issuer");
+        let instance_id = *issuer.mint_instance_id().expect("instance id").transport();
+        fs::write(
+            root.path().join("instance-id.json"),
+            serde_json::to_vec(&instance_id).expect("instance id JSON"),
+        )
+        .expect("write instance id");
+
+        let mut child = Command::new(env::current_exe().expect("test executable"))
+            .args(["--exact", CHILD_TEST, "--nocapture"])
+            .env(CHILD_ROOT_ENV, root.path())
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("spawn scheduled failure child");
+        let deadline = Instant::now() + Duration::from_secs(20);
+        let status = loop {
+            if let Some(status) = child.try_wait().expect("poll scheduled failure child") {
+                break status;
+            }
+            if Instant::now() >= deadline {
+                child
+                    .kill()
+                    .expect("kill timed out scheduled failure child");
+                let _ = child.wait();
+                panic!("scheduled failure child timed out");
+            }
+            thread::sleep(Duration::from_millis(10));
+        };
+        assert_eq!(status.code(), Some(87), "post-release crash status");
+        assert!(root.path().join("crash-marker").is_file(), "crash marker");
+        let (run_id, task_id, correlation_id, lease_id): (
+            RunId,
+            actingcommand_contract::TaskId,
+            actingcommand_contract::CorrelationId,
+            actingcommand_contract::LeaseId,
+        ) = serde_json::from_slice(
+            &fs::read(root.path().join("scheduled-identities.json"))
+                .expect("scheduled identities bytes"),
+        )
+        .expect("scheduled identities JSON");
+
+        let host = start_host(
+            root.path(),
+            instance_id,
+            Arc::new(FixedClock::new()) as Arc<dyn RuntimeClock>,
+        );
+        let client = runtime_client(root.path());
+        let recovery_events = client
+            .query_events(
+                EventQuery {
+                    run_id: Some(run_id),
+                    ..EventQuery::default()
+                },
+                ProjectionProfile::Forensic,
+            )
+            .expect("public recovered run events before summary");
+        let summary = client
+            .summarize_run(run_id)
+            .expect("public recovered run summary");
+        assert_eq!(summary["status"], "policy_settlement_interrupted");
+        assert_eq!(summary["outcome"]["kind"], "policy_settlement_interrupted");
+        assert_eq!(summary["outcome"]["result"], "original_cause_unavailable");
+        assert_eq!(summary["actual_effect_count"], 0);
+        assert_eq!(summary["simulated_effect_count"], 0);
+        assert_eq!(summary["effect"], "not_performed");
+        assert_ne!(summary["status"], "success");
+        assert_ne!(summary["status"], "no_op");
+        assert_eq!(
+            summary["run_id"],
+            serde_json::to_value(run_id).expect("run id summary JSON")
+        );
+        assert_eq!(
+            summary["task_id"],
+            serde_json::to_value(task_id).expect("task id summary JSON")
+        );
+        assert_eq!(
+            summary["correlation_id"],
+            serde_json::to_value(correlation_id).expect("correlation id summary JSON")
+        );
+        assert_eq!(
+            summary["lease"]["lease_id"],
+            serde_json::to_value(lease_id).expect("lease id summary JSON")
+        );
+
+        let events = recovery_events;
+        assert_eq!(
+            events
+                .iter()
+                .filter(|event| event.event_type == EventType::PolicyExecutionRecorded)
+                .count(),
+            1,
+            "one recovered policy execution"
+        );
+        assert_eq!(
+            events
+                .iter()
+                .filter(|event| event.event_type == EventType::PolicyDispatchCompleted)
+                .count(),
+            1,
+            "one recovered policy completion"
+        );
+        assert_eq!(
+            events
+                .iter()
+                .filter(|event| event.event_type == EventType::LeaseReleased)
+                .count(),
+            1,
+            "one same-chain lease release"
+        );
+        assert!(events.iter().all(|event| {
+            !matches!(
+                event.event_type,
+                EventType::TaskCompleted
+                    | EventType::TaskFailed
+                    | EventType::TaskEffectIntent
+                    | EventType::TaskEffectCompleted
+                    | EventType::InputIntent
+                    | EventType::InputCommitted
+                    | EventType::InputFailed
+            )
+        }));
+        for event in &events {
+            assert_eq!(event.links.run_id(), Some(&run_id), "run linkage");
+            assert_eq!(event.links.task_id(), Some(&task_id), "task linkage");
+            assert_eq!(
+                event.links.correlation_id(),
+                Some(&correlation_id),
+                "correlation linkage"
+            );
+            if matches!(
+                event.event_type,
+                EventType::LeaseGranted
+                    | EventType::LeaseReleased
+                    | EventType::PolicyExecutionRecorded
+                    | EventType::PolicyDispatchCompleted
+            ) {
+                assert_eq!(event.links.lease_id(), Some(&lease_id), "lease linkage");
+            }
+        }
+        host.close().expect("close recovered runtime host");
+    }
+}

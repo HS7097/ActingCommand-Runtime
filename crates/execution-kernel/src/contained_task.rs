@@ -3,8 +3,9 @@
 //! Runtime-owned admission and execution for contained semantic task packages.
 
 use crate::{
-    ExternalExpectedSha256, ExternallyVerifiedBundle, RunDirective, RunOperationCandidate,
-    RunStateConfig, RunStateMachine, RunTerminal,
+    ExternalExpectedSha256, ExternallyVerifiedBundle, RunDirective, RunFailureObservation,
+    RunFailureStage, RunOperationCandidate, RunOperationFailureDecision, RunOperationPolicy,
+    RunStateConfig, RunStateMachine, RunTerminal, decide_run_operation_failure,
 };
 use actingcommand_contract::{InputAction, TaskOutcome};
 use actingcommand_device::{Frame, PixelFormat};
@@ -327,48 +328,227 @@ impl PreparedContainedTask {
                         .ok_or_else(|| {
                             ContainedTaskError::new("contained_task_operation_missing")
                         })?;
-                    runtime
-                        .record(ContainedTaskTrace::StepStarted {
-                            step_index,
-                            operation_label: operation_id.clone(),
-                            from_page,
-                        })
-                        .map_err(ContainedTaskRunError::Boundary)?;
-                    let (guard, target) =
-                        operation.guard_outcome(&self.control, &observation, &self.evaluator)?;
-                    let action = operation
-                        .click
-                        .input_action(&self.control.resolution, target.as_ref())?;
-                    runtime
-                        .record(ContainedTaskTrace::EffectIntent {
-                            step_index,
-                            operation_label: operation_id.clone(),
-                            action: action.clone(),
-                            guard,
-                        })
-                        .map_err(ContainedTaskRunError::Boundary)?;
-                    runtime
-                        .input(action)
-                        .map_err(ContainedTaskRunError::Boundary)?;
-                    runtime
-                        .record(ContainedTaskTrace::EffectCompleted {
-                            step_index,
-                            operation_label: operation_id.clone(),
-                        })
-                        .map_err(ContainedTaskRunError::Boundary)?;
-                    observation =
-                        self.capture_until_page(runtime, step_timeout, capture_interval)?;
-                    let observed_page = observation.page_label.clone();
-                    runtime
-                        .record(ContainedTaskTrace::StepFinished {
-                            step_index,
-                            operation_label: operation_id.clone(),
-                            page_label: observed_page,
-                        })
-                        .map_err(ContainedTaskRunError::Boundary)?;
-                    machine
-                        .operation_succeeded(&operation_id, Some(observation.page_label.clone()))
-                        .map_err(|_| ContainedTaskError::new("contained_task_state_invalid"))?;
+                    let retry_policy = operation.retry_policy(
+                        self.program.defaults,
+                        self.control.timeout_ms.unwrap_or(DEFAULT_TASK_TIMEOUT_MS),
+                    )?;
+                    let mut attempt = 1;
+                    loop {
+                        if started.elapsed() > task_timeout {
+                            return Err(ContainedTaskError::new("contained_task_timeout").into());
+                        }
+                        runtime
+                            .record(ContainedTaskTrace::StepStarted {
+                                step_index,
+                                operation_label: operation_id.clone(),
+                                from_page: from_page.clone(),
+                            })
+                            .map_err(ContainedTaskRunError::Boundary)?;
+                        let (guard, target) = match operation.guard_outcome(
+                            &self.control,
+                            &observation,
+                            &self.evaluator,
+                        ) {
+                            Ok(outcome) => outcome,
+                            Err(error) => {
+                                let Some(policy) = retry_policy.as_ref() else {
+                                    return Err(error.into());
+                                };
+                                match operation.failure_decision(
+                                    policy,
+                                    attempt,
+                                    error.code(),
+                                    Some(observation.page_label.clone()),
+                                    RunFailureStage::PreExecutionGuard,
+                                )? {
+                                    RunOperationFailureDecision::RequestRecovery(trigger) => {
+                                        machine.operation_needs_recovery(trigger).map_err(
+                                            |_| {
+                                                ContainedTaskError::new(
+                                                    "contained_task_state_invalid",
+                                                )
+                                            },
+                                        )?;
+                                        break;
+                                    }
+                                    RunOperationFailureDecision::Fail(_) => {
+                                        return Err(error.into());
+                                    }
+                                    RunOperationFailureDecision::Retry { .. } => {
+                                        return Err(ContainedTaskError::new(
+                                            "contained_task_state_invalid",
+                                        )
+                                        .into());
+                                    }
+                                }
+                            }
+                        };
+                        let action = operation
+                            .click
+                            .input_action(&self.control.resolution, target.as_ref())?;
+                        runtime
+                            .record(ContainedTaskTrace::EffectIntent {
+                                step_index,
+                                operation_label: operation_id.clone(),
+                                action: action.clone(),
+                                guard,
+                            })
+                            .map_err(ContainedTaskRunError::Boundary)?;
+                        runtime
+                            .input(action)
+                            .map_err(ContainedTaskRunError::Boundary)?;
+                        runtime
+                            .record(ContainedTaskTrace::EffectCompleted {
+                                step_index,
+                                operation_label: operation_id.clone(),
+                            })
+                            .map_err(ContainedTaskRunError::Boundary)?;
+                        observation =
+                            self.capture_until_page(runtime, step_timeout, capture_interval)?;
+                        runtime
+                            .record(ContainedTaskTrace::StepFinished {
+                                step_index,
+                                operation_label: operation_id.clone(),
+                                page_label: observation.page_label.clone(),
+                            })
+                            .map_err(ContainedTaskRunError::Boundary)?;
+
+                        let Some(policy) = retry_policy.as_ref() else {
+                            machine
+                                .operation_succeeded(
+                                    &operation_id,
+                                    Some(observation.page_label.clone()),
+                                )
+                                .map_err(|_| {
+                                    ContainedTaskError::new("contained_task_state_invalid")
+                                })?;
+                            break;
+                        };
+                        if operation.to.is_none() {
+                            machine
+                                .operation_succeeded(
+                                    &operation_id,
+                                    Some(observation.page_label.clone()),
+                                )
+                                .map_err(|_| {
+                                    ContainedTaskError::new("contained_task_state_invalid")
+                                })?;
+                            break;
+                        }
+                        let hit_error_page = self
+                            .program
+                            .is_error_page(&self.control, &observation.page_label);
+                        if !hit_error_page
+                            && operation.reached_expected_page(&self.control, &observation)
+                        {
+                            machine
+                                .operation_succeeded(
+                                    &operation_id,
+                                    Some(observation.page_label.clone()),
+                                )
+                                .map_err(|_| {
+                                    ContainedTaskError::new("contained_task_state_invalid")
+                                })?;
+                            break;
+                        }
+                        match operation.failure_decision(
+                            policy,
+                            attempt,
+                            "page_confirmation_failed",
+                            Some(observation.page_label.clone()),
+                            RunFailureStage::PostExecution { hit_error_page },
+                        )? {
+                            RunOperationFailureDecision::Retry {
+                                next_attempt,
+                                delay_ms,
+                            } => {
+                                let delay = Duration::from_millis(delay_ms);
+                                if task_timeout
+                                    .checked_sub(started.elapsed())
+                                    .is_none_or(|remaining| delay > remaining)
+                                {
+                                    return Err(
+                                        ContainedTaskError::new("contained_task_timeout").into()
+                                    );
+                                }
+                                thread::sleep(delay);
+                                observation = self.capture_until_page(
+                                    runtime,
+                                    step_timeout,
+                                    capture_interval,
+                                )?;
+                                let fresh_hit_error_page = self
+                                    .program
+                                    .is_error_page(&self.control, &observation.page_label);
+                                if !fresh_hit_error_page
+                                    && operation.reached_expected_page(&self.control, &observation)
+                                {
+                                    machine
+                                        .operation_succeeded(
+                                            &operation_id,
+                                            Some(observation.page_label.clone()),
+                                        )
+                                        .map_err(|_| {
+                                            ContainedTaskError::new("contained_task_state_invalid")
+                                        })?;
+                                    break;
+                                }
+                                if fresh_hit_error_page {
+                                    match operation.failure_decision(
+                                        policy,
+                                        attempt,
+                                        "page_confirmation_failed",
+                                        Some(observation.page_label.clone()),
+                                        RunFailureStage::PostExecution {
+                                            hit_error_page: true,
+                                        },
+                                    )? {
+                                        RunOperationFailureDecision::RequestRecovery(trigger) => {
+                                            machine.operation_needs_recovery(trigger).map_err(
+                                                |_| {
+                                                    ContainedTaskError::new(
+                                                        "contained_task_state_invalid",
+                                                    )
+                                                },
+                                            )?;
+                                            break;
+                                        }
+                                        RunOperationFailureDecision::Fail(_) => {
+                                            return Err(ContainedTaskError::with_detail(
+                                                "contained_task_requires_scheduler",
+                                                format!(
+                                                    "operation={operation_id} attempts={attempt} reason=page_confirmation_failed"
+                                                ),
+                                            )
+                                            .into());
+                                        }
+                                        RunOperationFailureDecision::Retry { .. } => {
+                                            return Err(ContainedTaskError::new(
+                                                "contained_task_state_invalid",
+                                            )
+                                            .into());
+                                        }
+                                    }
+                                }
+                                attempt = next_attempt;
+                            }
+                            RunOperationFailureDecision::RequestRecovery(trigger) => {
+                                machine.operation_needs_recovery(trigger).map_err(|_| {
+                                    ContainedTaskError::new("contained_task_state_invalid")
+                                })?;
+                                break;
+                            }
+                            RunOperationFailureDecision::Fail(_) => {
+                                return Err(ContainedTaskError::with_detail(
+                                    "contained_task_requires_scheduler",
+                                    format!(
+                                        "operation={operation_id} attempts={attempt} reason=page_confirmation_failed"
+                                    ),
+                                )
+                                .into());
+                            }
+                        }
+                    }
                 }
                 RunDirective::Continue { .. } => {
                     return Err(ContainedTaskError::new("contained_task_state_invalid").into());
@@ -572,7 +752,11 @@ struct TaskProgram {
     #[serde(default)]
     target_page: Option<String>,
     #[serde(default)]
+    error_pages: Vec<String>,
+    #[serde(default)]
     recovery: Option<TaskRecovery>,
+    #[serde(default)]
+    defaults: TaskOperationDefaults,
     operations: Vec<TaskOperation>,
 }
 
@@ -597,18 +781,25 @@ impl TaskProgram {
                 .target_page
                 .as_deref()
                 .is_some_and(|value| value.trim().is_empty())
+            || self.error_pages.iter().any(|value| value.trim().is_empty())
         {
             return Err(ContainedTaskError::new("contained_task_program_invalid"));
         }
         let mut operation_ids = BTreeSet::new();
         for operation in &self.operations {
-            operation.validate(control)?;
+            operation.validate(control, self.defaults)?;
             if !operation_ids.insert(&operation.id) {
                 return Err(ContainedTaskError::new("contained_task_program_invalid"));
             }
         }
         self.validate_recovery(bundle)?;
         Ok(())
+    }
+
+    fn is_error_page(&self, control: &TaskControl, page_label: &str) -> bool {
+        self.error_pages
+            .iter()
+            .any(|expected| crate::page_anchor_matches(&control.game, page_label, expected))
     }
 
     fn validate_recovery(&self, bundle: &LoadedBundle) -> Result<(), ContainedTaskError> {
@@ -647,6 +838,14 @@ impl TaskProgram {
         }
         Ok(())
     }
+}
+
+#[derive(Debug, Clone, Copy, Default, Deserialize)]
+struct TaskOperationDefaults {
+    #[serde(default)]
+    max_attempts: Option<u32>,
+    #[serde(default)]
+    retry_interval_ms: Option<u64>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -693,13 +892,23 @@ struct TaskOperation {
     #[serde(default)]
     on_error: Option<String>,
     #[serde(default)]
+    retryable: Option<bool>,
+    #[serde(default)]
+    max_attempts: Option<u32>,
+    #[serde(default)]
+    retry_interval_ms: Option<u64>,
+    #[serde(default)]
     guard: Option<OperationGuard>,
     #[serde(default)]
     unguarded_trusted_coordinate: bool,
 }
 
 impl TaskOperation {
-    fn validate(&self, control: &TaskControl) -> Result<(), ContainedTaskError> {
+    fn validate(
+        &self,
+        control: &TaskControl,
+        defaults: TaskOperationDefaults,
+    ) -> Result<(), ContainedTaskError> {
         if self.id.trim().is_empty()
             || self.from.trim().is_empty()
             || self
@@ -716,6 +925,10 @@ impl TaskOperation {
         {
             return Err(ContainedTaskError::new("contained_task_operation_invalid"));
         }
+        self.retry_policy(
+            defaults,
+            control.timeout_ms.unwrap_or(DEFAULT_TASK_TIMEOUT_MS),
+        )?;
         match (&self.guard, self.unguarded_trusted_coordinate) {
             (Some(_), true) | (None, false) => {
                 return Err(ContainedTaskError::new("contained_task_guard_missing"));
@@ -725,6 +938,69 @@ impl TaskOperation {
         }
         self.click
             .validate(&control.resolution, self.guard.as_ref())
+    }
+
+    fn retry_policy(
+        &self,
+        defaults: TaskOperationDefaults,
+        task_timeout_ms: u64,
+    ) -> Result<Option<RunOperationPolicy>, ContainedTaskError> {
+        let (retryable, max_attempts, retry_interval_ms) =
+            match (self.retryable, self.max_attempts, self.retry_interval_ms) {
+                (None, None, None) => return Ok(None),
+                (Some(false), max_attempts, retry_interval_ms) => (
+                    false,
+                    max_attempts.or(defaults.max_attempts).unwrap_or(1),
+                    retry_interval_ms
+                        .or(defaults.retry_interval_ms)
+                        .unwrap_or(1),
+                ),
+                (Some(true), max_attempts, retry_interval_ms) => (
+                    true,
+                    max_attempts.or(defaults.max_attempts).ok_or_else(|| {
+                        ContainedTaskError::new("contained_task_operation_invalid")
+                    })?,
+                    retry_interval_ms
+                        .or(defaults.retry_interval_ms)
+                        .ok_or_else(|| {
+                            ContainedTaskError::new("contained_task_operation_invalid")
+                        })?,
+                ),
+                _ => {
+                    return Err(ContainedTaskError::new("contained_task_operation_invalid"));
+                }
+            };
+        if retryable && (self.to.is_none() || retry_interval_ms > task_timeout_ms) {
+            return Err(ContainedTaskError::new("contained_task_operation_invalid"));
+        }
+        RunOperationPolicy::new(
+            retryable,
+            max_attempts,
+            retry_interval_ms,
+            self.on_error.clone(),
+        )
+        .map(Some)
+        .map_err(|_| ContainedTaskError::new("contained_task_operation_invalid"))
+    }
+
+    fn failure_decision(
+        &self,
+        policy: &RunOperationPolicy,
+        attempt: u32,
+        reason: &str,
+        after_page: Option<String>,
+        stage: RunFailureStage,
+    ) -> Result<RunOperationFailureDecision, ContainedTaskError> {
+        let observation = RunFailureObservation::new(&self.id, attempt, reason, after_page, stage)
+            .map_err(|_| ContainedTaskError::new("contained_task_state_invalid"))?;
+        decide_run_operation_failure(policy, observation)
+            .map_err(|_| ContainedTaskError::new("contained_task_state_invalid"))
+    }
+
+    fn reached_expected_page(&self, control: &TaskControl, observation: &PageObservation) -> bool {
+        self.to.as_deref().is_some_and(|expected| {
+            crate::page_anchor_matches(&control.game, &observation.page_label, expected)
+        })
     }
 
     fn guard_outcome(
@@ -1042,4 +1318,264 @@ fn scene_from_frame(frame: &Frame) -> Result<Scene, ContainedTaskError> {
     };
     Scene::from_pixels(frame.width, frame.height, &frame.pixels, format)
         .map_err(|_| ContainedTaskError::new("contained_task_frame_invalid"))
+}
+
+#[cfg(test)]
+mod retry_wiring_tests {
+    use super::*;
+    use serde_json::{Value, json};
+
+    fn control() -> TaskControl {
+        serde_json::from_value(json!({
+            "schema_version": "Lab-1y.control.v1",
+            "package_id": "neutral.semantic.task",
+            "execution_mode": "navigable_route",
+            "game": "neutral",
+            "server": "test",
+            "resolution": {"width": 2, "height": 1},
+            "entry_task_id": "task"
+        }))
+        .expect("task control")
+    }
+
+    fn operation(retry: Value, on_error: Option<&str>) -> TaskOperation {
+        let mut value = json!({
+            "id": "open_terminal",
+            "from": "home",
+            "to": "terminal",
+            "click": {"kind": "point", "x": 1, "y": 0},
+            "unguarded_trusted_coordinate": true
+        });
+        if let Value::Object(fields) = retry {
+            value
+                .as_object_mut()
+                .expect("operation object")
+                .extend(fields);
+        }
+        if let Some(on_error) = on_error {
+            value["on_error"] = Value::String(on_error.to_string());
+        }
+        serde_json::from_value(value).expect("task operation")
+    }
+
+    #[test]
+    fn operation_without_explicit_retry_policy_preserves_non_retry_behavior() {
+        assert!(
+            operation(json!({}), None)
+                .retry_policy(TaskOperationDefaults::default(), 100)
+                .expect("absent retry policy")
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn explicit_retry_policy_uses_existing_bounded_decision_owner() {
+        let operation = operation(
+            json!({
+                "retryable": true,
+                "max_attempts": 6,
+                "retry_interval_ms": 1
+            }),
+            None,
+        );
+        let policy = operation
+            .retry_policy(TaskOperationDefaults::default(), 100)
+            .expect("retry policy")
+            .expect("explicit retry policy");
+        for attempt in 1..=5 {
+            assert_eq!(
+                operation
+                    .failure_decision(
+                        &policy,
+                        attempt,
+                        "page_confirmation_failed",
+                        Some("home".to_string()),
+                        RunFailureStage::PostExecution {
+                            hit_error_page: false,
+                        },
+                    )
+                    .expect("retry decision"),
+                RunOperationFailureDecision::Retry {
+                    next_attempt: attempt + 1,
+                    delay_ms: 1,
+                }
+            );
+        }
+        assert!(matches!(
+            operation
+                .failure_decision(
+                    &policy,
+                    6,
+                    "page_confirmation_failed",
+                    Some("home".to_string()),
+                    RunFailureStage::PostExecution {
+                        hit_error_page: false,
+                    },
+                )
+                .expect("final decision"),
+            RunOperationFailureDecision::Fail(_)
+        ));
+    }
+
+    #[test]
+    fn explicit_retry_policy_consumes_existing_task_defaults() {
+        let operation = operation(json!({"retryable": true}), None);
+        let policy = operation
+            .retry_policy(
+                TaskOperationDefaults {
+                    max_attempts: Some(3),
+                    retry_interval_ms: Some(1),
+                },
+                100,
+            )
+            .expect("retry policy from task defaults")
+            .expect("explicit retry policy");
+
+        assert!(policy.retryable());
+        assert_eq!(policy.max_attempts(), 3);
+        assert_eq!(policy.retry_interval_ms(), 1);
+    }
+
+    #[test]
+    fn non_retryable_and_invalid_policies_fail_closed() {
+        let non_retryable = operation(json!({"retryable": false}), None);
+        let policy = non_retryable
+            .retry_policy(TaskOperationDefaults::default(), 100)
+            .expect("non-retryable policy")
+            .expect("explicit non-retryable policy");
+        assert!(matches!(
+            non_retryable
+                .failure_decision(
+                    &policy,
+                    1,
+                    "page_confirmation_failed",
+                    Some("home".to_string()),
+                    RunFailureStage::PostExecution {
+                        hit_error_page: false,
+                    },
+                )
+                .expect("non-retryable decision"),
+            RunOperationFailureDecision::Fail(_)
+        ));
+
+        for invalid in [
+            json!({"retryable": true}),
+            json!({"retryable": true, "max_attempts": 0, "retry_interval_ms": 1}),
+            json!({"retryable": true, "max_attempts": 2, "retry_interval_ms": 101}),
+            json!({"max_attempts": 2, "retry_interval_ms": 1}),
+        ] {
+            assert_eq!(
+                operation(invalid, None)
+                    .retry_policy(TaskOperationDefaults::default(), 100)
+                    .expect_err("invalid retry policy")
+                    .code(),
+                "contained_task_operation_invalid"
+            );
+        }
+    }
+
+    #[test]
+    fn explicit_non_retryable_operation_without_destination_remains_valid() {
+        let operation: TaskOperation = serde_json::from_value(json!({
+            "id": "record_observation",
+            "from": "home",
+            "click": {"kind": "point", "x": 1, "y": 0},
+            "unguarded_trusted_coordinate": true,
+            "retryable": false
+        }))
+        .expect("non-retryable operation");
+
+        operation
+            .validate(&control(), TaskOperationDefaults::default())
+            .expect("explicitly non-retryable operation without to");
+        let policy = operation
+            .retry_policy(TaskOperationDefaults::default(), 100)
+            .expect("non-retryable policy")
+            .expect("explicit policy");
+        assert!(!policy.retryable());
+        assert_eq!(policy.max_attempts(), 1);
+    }
+
+    #[test]
+    fn declared_error_page_requests_recovery_without_ordinary_retry() {
+        let program: TaskProgram = serde_json::from_value(json!({
+            "schema_version": "0.6",
+            "task_id": "task",
+            "game": "neutral",
+            "coordinate_space": {"width": 2, "height": 1},
+            "error_pages": ["error"],
+            "operations": [{
+                "id": "open_terminal",
+                "from": "home",
+                "to": "terminal",
+                "click": {"kind": "point", "x": 1, "y": 0},
+                "unguarded_trusted_coordinate": true
+            }]
+        }))
+        .expect("task program");
+        let operation = operation(
+            json!({
+                "retryable": true,
+                "max_attempts": 6,
+                "retry_interval_ms": 1
+            }),
+            Some("return_home"),
+        );
+        let policy = operation
+            .retry_policy(TaskOperationDefaults::default(), 100)
+            .expect("retry policy")
+            .expect("explicit retry policy");
+        let hit_error_page = program.is_error_page(&control(), "neutral/error");
+
+        assert!(hit_error_page);
+        assert!(matches!(
+            operation
+                .failure_decision(
+                    &policy,
+                    1,
+                    "page_confirmation_failed",
+                    Some("neutral/error".to_string()),
+                    RunFailureStage::PostExecution { hit_error_page },
+                )
+                .expect("error-page decision"),
+            RunOperationFailureDecision::RequestRecovery(trigger)
+                if trigger.operation_id == "open_terminal"
+                    && trigger.attempts == 1
+                    && trigger.after_page.as_deref() == Some("neutral/error")
+                    && trigger.recovery_task_id == "return_home"
+        ));
+    }
+
+    #[test]
+    fn final_retry_decision_preserves_existing_recovery_path() {
+        let operation = operation(
+            json!({
+                "retryable": true,
+                "max_attempts": 2,
+                "retry_interval_ms": 1
+            }),
+            Some("return_home"),
+        );
+        let policy = operation
+            .retry_policy(TaskOperationDefaults::default(), 100)
+            .expect("recovery policy")
+            .expect("explicit recovery policy");
+        assert!(matches!(
+            operation
+                .failure_decision(
+                    &policy,
+                    2,
+                    "page_confirmation_failed",
+                    Some("home".to_string()),
+                    RunFailureStage::PostExecution {
+                        hit_error_page: false,
+                    },
+                )
+                .expect("recovery decision"),
+            RunOperationFailureDecision::RequestRecovery(trigger)
+                if trigger.operation_id == "open_terminal"
+                    && trigger.attempts == 2
+                    && trigger.recovery_task_id == "return_home"
+        ));
+    }
 }
