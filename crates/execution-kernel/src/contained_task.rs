@@ -489,9 +489,7 @@ impl PreparedContainedTask {
                                             Some(observation.page_label.clone()),
                                         )
                                         .map_err(|_| {
-                                            ContainedTaskError::new(
-                                                "contained_task_state_invalid",
-                                            )
+                                            ContainedTaskError::new("contained_task_state_invalid")
                                         })?;
                                     break;
                                 }

@@ -8,12 +8,13 @@ use crate::PersistedEvent;
 use crate::fact::StoredEventRecord;
 use actingcommand_contract::{
     AuditInput, EffectDisposition, EventAction, EventActor, EventDraft, EventId, EventLinks,
-    EventLinksDraft, EventOrigin, EventPayload, EventSeverity, EventSource, EventType,
-    GLOBAL_EVENT_SCHEMA_VERSION, IdentifierIssuer, IssuedActionId, LeasePayload, LedgerPayload,
-    LedgerPayloadDraft, OriginModule, PolicyDispatchPayload, PolicyExecutionOutcome,
-    PolicyFailureClass, PolicyFailureDisposition, PolicyPayload, ProjectedArtifactReference,
-    RecoveryReason, SanitizedEventDraft, Sensitivity, TaskOutcome, TaskPayload, TaskSemanticFact,
-    VerifiedArtifactReference,
+    EventLinksDraft, EventOrigin, EventPayload, EventPayloadDraft, EventSeverity, EventSource,
+    EventType, GLOBAL_EVENT_SCHEMA_VERSION, IdentifierIssuer, IssuedActionId, LeasePayload,
+    LedgerPayload, LedgerPayloadDraft, OriginModule, PolicyDispatchEventData,
+    PolicyDispatchPayload, PolicyExecutionEventData, PolicyExecutionOutcome, PolicyFailureClass,
+    PolicyFailureDisposition, PolicyPayload, PolicyPayloadDraft, ProjectedArtifactReference,
+    RecoveryReason, SanitizedEventDraft, ScheduledPolicyRecoveryContinuation, Sensitivity,
+    TaskOutcome, TaskPayload, TaskSemanticFact, VerifiedArtifactReference,
 };
 use serde::de::{self, MapAccess, SeqAccess, Visitor};
 use serde::{Deserialize, Deserializer, Serialize};
@@ -150,22 +151,112 @@ impl SegmentStore {
         &mut self,
         draft: SanitizedEventDraft,
     ) -> GlobalLedgerResult<PersistedEvent> {
-        if event_links_empty(draft.links())
-            && draft.origin().source() == EventSource::Scheduler
-            && draft.origin().module() == OriginModule::Policy
-            && draft.origin().actor() == EventActor::Scheduler
-        {
-            match draft.event_type() {
-                EventType::PolicyExecutionRecorded => {
-                    return self.append_recovered_policy_execution(draft);
-                }
-                EventType::PolicyDispatchCompleted => {
-                    return self.append_recovered_policy_completion(draft);
-                }
-                _ => {}
-            }
+        if is_unlinked_scheduled_settlement_draft(&draft) {
+            return Err(GlobalLedgerError::fatal(
+                "scheduled_settlement_continuation_required",
+                "append_event",
+            ));
         }
         self.append_with_event_id(draft, None)
+    }
+
+    /// The only ledger-owned continuation for a persisted scheduled policy settlement.
+    ///
+    /// Callers provide policy-owned outcome semantics, never links, identifiers, release reasons,
+    /// or an event draft. This method revalidates the persisted source chain and can append at
+    /// most one execution and one completion for that decision.
+    pub(super) fn reconcile_scheduled_policy_settlement(
+        &mut self,
+        execution: PolicyExecutionEventData,
+    ) -> GlobalLedgerResult<(PersistedEvent, Vec<PersistedEvent>)> {
+        let first_new_sequence = self.next_sequence;
+        let execution_draft = scheduled_policy_execution_recovery_draft(&execution)?;
+        self.append_recovered_policy_execution(execution_draft)?;
+        let completion_draft =
+            self.scheduled_policy_completion_recovery_draft(&execution.decision_id)?;
+        let completion = self.append_recovered_policy_completion(completion_draft)?;
+        let appended = self
+            .events
+            .iter()
+            .filter(|event| event.sequence() >= first_new_sequence)
+            .cloned()
+            .collect();
+        Ok((completion, appended))
+    }
+
+    fn scheduled_policy_completion_recovery_draft(
+        &self,
+        decision_id: &str,
+    ) -> GlobalLedgerResult<SanitizedEventDraft> {
+        let intents = self
+            .events
+            .iter()
+            .filter_map(|event| match event.payload() {
+                EventPayload::Policy(PolicyPayload::DispatchIntent(payload))
+                    if payload.decision_id() == decision_id =>
+                {
+                    Some(payload)
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        let [intent] = intents.as_slice() else {
+            return Err(GlobalLedgerError::fatal(
+                "scheduled_recovery_intent_not_unique",
+                "build_policy_completion_recovery",
+            ));
+        };
+        let admissions = self
+            .events
+            .iter()
+            .filter_map(|event| match event.payload() {
+                EventPayload::Policy(PolicyPayload::DispatchAdmitted(payload))
+                    if payload.decision_id() == decision_id =>
+                {
+                    Some(payload)
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        let [admission] = admissions.as_slice() else {
+            return Err(GlobalLedgerError::fatal(
+                "scheduled_recovery_admission_not_unique",
+                "build_policy_completion_recovery",
+            ));
+        };
+        let Some(admission) = admission.admission() else {
+            return Err(GlobalLedgerError::fatal(
+                "scheduled_recovery_payload_conflict",
+                "build_policy_completion_recovery",
+            ));
+        };
+        let executions = self
+            .events
+            .iter()
+            .filter(|event| {
+                matches!(
+                    event.payload(),
+                    EventPayload::Policy(PolicyPayload::ExecutionRecorded(payload))
+                        if payload.decision_id() == decision_id
+                )
+            })
+            .collect::<Vec<_>>();
+        let [execution] = executions.as_slice() else {
+            return Err(GlobalLedgerError::fatal(
+                "scheduled_recovery_execution_not_unique",
+                "build_policy_completion_recovery",
+            ));
+        };
+        scheduled_policy_recovery_draft(
+            execution.timestamp_unix_ms(),
+            EventSeverity::Info,
+            PolicyPayloadDraft::dispatch_completed(
+                dispatch_event_data(intent),
+                admission.clone(),
+                AuditInput::new(),
+            )
+            .into(),
+        )
     }
 
     fn append_with_event_id(
@@ -183,17 +274,15 @@ impl SegmentStore {
         self.persist_event(event)
     }
 
-    fn append_with_recovery_links(
+    fn append_with_scheduled_recovery_continuation(
         &mut self,
         draft: SanitizedEventDraft,
-        links: EventLinks,
+        continuation: ScheduledPolicyRecoveryContinuation,
     ) -> GlobalLedgerResult<PersistedEvent> {
-        let event =
-            PersistedEvent::from_sanitized_with_recovery_links(self.next_sequence, draft, links)
-                .map_err(|error| {
-                    GlobalLedgerError::request(error.code(), "validate_recovered_scheduled_event")
-                })?;
-        self.persist_event(event)
+        let draft = continuation.apply_to(draft).map_err(|error| {
+            GlobalLedgerError::request(error.code(), "validate_recovered_scheduled_event")
+        })?;
+        self.append_with_event_id(draft, None)
     }
 
     fn append_recovered_policy_completion(
@@ -282,18 +371,27 @@ impl SegmentStore {
                 "recover_policy_completion",
             ));
         };
-        if self.events.iter().any(|event| {
-            matches!(
-                event.payload(),
-                EventPayload::Policy(PolicyPayload::DispatchCompleted(payload))
-                    if payload.decision_id() == execution.decision_id()
-            )
-        }) {
-            return Err(GlobalLedgerError::fatal(
-                "scheduled_recovery_completion_exists",
-                "recover_policy_completion",
-            ));
-        }
+        let completions = self
+            .events
+            .iter()
+            .filter(|event| {
+                matches!(
+                    event.payload(),
+                    EventPayload::Policy(PolicyPayload::DispatchCompleted(payload))
+                        if payload.decision_id() == execution.decision_id()
+                )
+            })
+            .collect::<Vec<_>>();
+        let existing_completion = match completions.as_slice() {
+            [] => None,
+            [completion] => Some(*completion),
+            _ => {
+                return Err(GlobalLedgerError::fatal(
+                    "scheduled_recovery_completion_not_unique",
+                    "recover_policy_completion",
+                ));
+            }
+        };
         if !same_dispatch_definition(intent, admission)
             || !same_dispatch_definition(intent, completion)
             || admission.admission() != completion.admission()
@@ -327,10 +425,59 @@ impl SegmentStore {
                 "recover_policy_completion",
             ));
         };
+        let recovered_links = execution_fact.links();
+        if !same_scheduled_chain(recovered_links, lease_granted.links()) {
+            return Err(GlobalLedgerError::fatal(
+                "scheduled_recovery_execution_links_conflict",
+                "recover_policy_completion",
+            ));
+        }
+        let releases = self
+            .events
+            .iter()
+            .filter(|event| {
+                event.event_type() == EventType::LeaseReleased
+                    && same_task_run_chain(event.links(), lease_granted.links())
+            })
+            .collect::<Vec<_>>();
+        let [release] = releases.as_slice() else {
+            return Err(GlobalLedgerError::fatal(
+                "scheduled_recovery_release_not_unique",
+                "recover_policy_completion",
+            ));
+        };
+        if release.sequence() <= admission_fact.sequence()
+            || release.sequence() >= execution_fact.sequence()
+        {
+            return Err(GlobalLedgerError::fatal(
+                "scheduled_recovery_release_order_invalid",
+                "recover_policy_completion",
+            ));
+        }
+        if let Some(existing_completion) = existing_completion {
+            let EventPayload::Policy(PolicyPayload::DispatchCompleted(existing)) =
+                existing_completion.payload()
+            else {
+                return Err(GlobalLedgerError::fatal(
+                    "scheduled_recovery_fact_type_invalid",
+                    "recover_policy_completion",
+                ));
+            };
+            if existing != completion
+                || !same_scheduled_chain(existing_completion.links(), lease_granted.links())
+                || existing_completion.sequence() <= execution_fact.sequence()
+            {
+                return Err(GlobalLedgerError::fatal(
+                    "scheduled_recovery_completion_conflict",
+                    "recover_policy_completion",
+                ));
+            }
+            return Ok(existing_completion.clone());
+        }
         let action_id = issue_scheduled_recovery_action_id()?;
-        let recovered_links = EventLinks::revalidated_scheduled_recovery(
-            intent_fact.links(),
-            lease_granted.links(),
+        let continuation = ScheduledPolicyRecoveryContinuation::materialize(
+            intent_fact.links().scheduled_policy_recovery_source(),
+            lease_granted.links().scheduled_policy_recovery_source(),
             action_id,
         )
         .map_err(|_| {
@@ -339,13 +486,7 @@ impl SegmentStore {
                 "recover_policy_completion",
             )
         })?;
-        if !same_scheduled_chain(execution_fact.links(), &recovered_links) {
-            return Err(GlobalLedgerError::fatal(
-                "scheduled_recovery_execution_links_conflict",
-                "recover_policy_completion",
-            ));
-        }
-        self.append_with_recovery_links(draft, recovered_links)
+        self.append_with_scheduled_recovery_continuation(draft, continuation)
     }
 
     fn append_recovered_policy_execution(
@@ -435,19 +576,41 @@ impl SegmentStore {
                 "recover_policy_execution",
             ));
         }
-        if self.events.iter().any(|event| {
-            matches!(
-                event.payload(),
-                EventPayload::Policy(PolicyPayload::ExecutionRecorded(payload))
-                    if payload.decision_id() == execution.decision_id()
-            ) || matches!(
-                event.payload(),
-                EventPayload::Policy(PolicyPayload::DispatchCompleted(payload))
-                    if payload.decision_id() == execution.decision_id()
-            )
-        }) {
+        let existing_executions = self
+            .events
+            .iter()
+            .filter(|event| {
+                matches!(
+                    event.payload(),
+                    EventPayload::Policy(PolicyPayload::ExecutionRecorded(payload))
+                        if payload.decision_id() == execution.decision_id()
+                )
+            })
+            .collect::<Vec<_>>();
+        let existing_execution = match existing_executions.as_slice() {
+            [] => None,
+            [existing] => Some(*existing),
+            _ => {
+                return Err(GlobalLedgerError::fatal(
+                    "scheduled_execution_recovery_not_unique",
+                    "recover_policy_execution",
+                ));
+            }
+        };
+        let completion_count = self
+            .events
+            .iter()
+            .filter(|event| {
+                matches!(
+                    event.payload(),
+                    EventPayload::Policy(PolicyPayload::DispatchCompleted(payload))
+                        if payload.decision_id() == execution.decision_id()
+                )
+            })
+            .count();
+        if completion_count > 1 || completion_count == 1 && existing_execution.is_none() {
             return Err(GlobalLedgerError::fatal(
-                "scheduled_execution_recovery_outcome_exists",
+                "scheduled_execution_recovery_outcome_conflict",
                 "recover_policy_execution",
             ));
         }
@@ -466,25 +629,14 @@ impl SegmentStore {
                 "recover_policy_execution",
             ));
         };
-        let action_id = issue_scheduled_recovery_action_id()?;
-        let recovered_links = EventLinks::revalidated_scheduled_recovery(
-            intent_fact.links(),
-            lease_granted.links(),
-            action_id,
-        )
-        .map_err(|_| {
-            GlobalLedgerError::fatal(
-                "scheduled_execution_recovery_links_invalid",
-                "recover_policy_execution",
-            )
-        })?;
+        let recovered_links = lease_granted.links();
 
         let releases = self
             .events
             .iter()
             .filter(|event| {
                 event.event_type() == EventType::LeaseReleased
-                    && event.links().lease_id() == recovered_links.lease_id()
+                    && same_task_run_chain(event.links(), recovered_links)
             })
             .collect::<Vec<_>>();
         let [release] = releases.as_slice() else {
@@ -540,6 +692,62 @@ impl SegmentStore {
                 "recover_policy_execution",
             ));
         }
+        if let Some(existing_execution) = existing_execution {
+            let EventPayload::Policy(PolicyPayload::ExecutionRecorded(existing)) =
+                existing_execution.payload()
+            else {
+                return Err(GlobalLedgerError::fatal(
+                    "scheduled_execution_recovery_fact_type_invalid",
+                    "recover_policy_execution",
+                ));
+            };
+            let topology_valid = match source_fact.event_type() {
+                EventType::TaskCompleted | EventType::TaskFailed => {
+                    same_task_run_chain(source_fact.links(), recovered_links)
+                        && same_task_run_chain(release.links(), recovered_links)
+                        && release.sequence() > source_fact.sequence()
+                }
+                EventType::LeaseReleased => {
+                    same_scheduled_chain(source_fact.links(), recovered_links)
+                        && terminals.is_empty()
+                        && !self.events.iter().any(|event| {
+                            event.links().task_id() == recovered_links.task_id()
+                                && event.links().run_id() == recovered_links.run_id()
+                                && matches!(
+                                    event.event_type(),
+                                    EventType::TaskEffectIntent
+                                        | EventType::TaskEffectCompleted
+                                        | EventType::InputIntent
+                                        | EventType::InputCommitted
+                                        | EventType::InputFailed
+                                )
+                        })
+                        && matches!(
+                            execution.outcome(),
+                            PolicyExecutionOutcome::Failed { failure }
+                                if failure.error_code == "policy_settlement_interrupted"
+                                    && failure.original_class == PolicyFailureClass::Severe
+                                    && failure.effective_class == PolicyFailureClass::Severe
+                                    && failure.disposition == PolicyFailureDisposition::PausedTask
+                                    && failure.retry_attempt == 0
+                                    && failure.retry_at_unix_ms.is_none()
+                                    && !failure.reported_success
+                                    && failure.runtime_ms == 0
+                        )
+                }
+                _ => false,
+            };
+            if existing != execution
+                || !same_scheduled_chain(existing_execution.links(), recovered_links)
+                || !topology_valid
+            {
+                return Err(GlobalLedgerError::fatal(
+                    "scheduled_execution_recovery_conflict",
+                    "recover_policy_execution",
+                ));
+            }
+            return Ok(existing_execution.clone());
+        }
         match source_fact.event_type() {
             EventType::TaskCompleted => {
                 let [terminal] = terminals.as_slice() else {
@@ -549,7 +757,7 @@ impl SegmentStore {
                     ));
                 };
                 let task_requests =
-                    matching_scheduled_task_requests(&self.events, source_fact, &recovered_links);
+                    matching_scheduled_task_requests(&self.events, source_fact, recovered_links);
                 let [task_request] = task_requests.as_slice() else {
                     return Err(GlobalLedgerError::fatal(
                         "scheduled_execution_recovery_task_request_not_unique",
@@ -566,8 +774,8 @@ impl SegmentStore {
                         )
                     })?;
                 if *terminal != source_fact
-                    || !same_task_run_chain(source_fact.links(), &recovered_links)
-                    || !same_task_run_chain(release.links(), &recovered_links)
+                    || !same_task_run_chain(source_fact.links(), recovered_links)
+                    || !same_task_run_chain(release.links(), recovered_links)
                     || release.links().request_id() != source_fact.links().request_id()
                     || source_fact.severity() != EventSeverity::Info
                     || release.sequence() <= source_fact.sequence()
@@ -634,7 +842,7 @@ impl SegmentStore {
                     ));
                 };
                 let task_requests =
-                    matching_scheduled_task_requests(&self.events, source_fact, &recovered_links);
+                    matching_scheduled_task_requests(&self.events, source_fact, recovered_links);
                 let [task_request] = task_requests.as_slice() else {
                     return Err(GlobalLedgerError::fatal(
                         "scheduled_execution_recovery_task_request_not_unique",
@@ -651,8 +859,8 @@ impl SegmentStore {
                         )
                     })?;
                 if *terminal != source_fact
-                    || !same_task_run_chain(source_fact.links(), &recovered_links)
-                    || !same_task_run_chain(release.links(), &recovered_links)
+                    || !same_task_run_chain(source_fact.links(), recovered_links)
+                    || !same_task_run_chain(release.links(), recovered_links)
                     || release.links().request_id() != source_fact.links().request_id()
                     || release.sequence() <= source_fact.sequence()
                     || !(admission_fact.sequence() < task_request.sequence()
@@ -674,7 +882,7 @@ impl SegmentStore {
             }
             EventType::LeaseReleased => {
                 if source_fact != *release
-                    || !same_scheduled_chain(source_fact.links(), &recovered_links)
+                    || !same_scheduled_chain(source_fact.links(), recovered_links)
                     || !terminals.is_empty()
                     || source_fact.timestamp_unix_ms() != execution.observed_at_unix_ms()
                     || self.events.iter().any(|event| {
@@ -721,7 +929,19 @@ impl SegmentStore {
                 "recover_policy_execution",
             ));
         }
-        self.append_with_recovery_links(draft, recovered_links)
+        let action_id = issue_scheduled_recovery_action_id()?;
+        let continuation = ScheduledPolicyRecoveryContinuation::materialize(
+            intent_fact.links().scheduled_policy_recovery_source(),
+            lease_granted.links().scheduled_policy_recovery_source(),
+            action_id,
+        )
+        .map_err(|_| {
+            GlobalLedgerError::fatal(
+                "scheduled_execution_recovery_links_invalid",
+                "recover_policy_execution",
+            )
+        })?;
+        self.append_with_scheduled_recovery_continuation(draft, continuation)
     }
 
     fn persist_event(&mut self, event: PersistedEvent) -> GlobalLedgerResult<PersistedEvent> {
@@ -866,6 +1086,93 @@ impl SegmentStore {
     }
 }
 
+fn scheduled_policy_execution_recovery_draft(
+    execution: &PolicyExecutionEventData,
+) -> GlobalLedgerResult<SanitizedEventDraft> {
+    scheduled_policy_recovery_draft(
+        execution.observed_at_unix_ms,
+        scheduled_policy_execution_severity(&execution.outcome),
+        PolicyPayloadDraft::execution_recorded(execution.clone(), AuditInput::new()).into(),
+    )
+}
+
+fn scheduled_policy_recovery_draft(
+    timestamp_unix_ms: u64,
+    severity: EventSeverity,
+    payload: EventPayloadDraft,
+) -> GlobalLedgerResult<SanitizedEventDraft> {
+    let identifiers = IdentifierIssuer::new().map_err(|_| {
+        GlobalLedgerError::fatal(
+            "scheduled_recovery_event_id_failed",
+            "build_scheduled_policy_recovery",
+        )
+    })?;
+    EventDraft::new(
+        identifiers.mint_event_id().map_err(|_| {
+            GlobalLedgerError::fatal(
+                "scheduled_recovery_event_id_failed",
+                "build_scheduled_policy_recovery",
+            )
+        })?,
+        timestamp_unix_ms,
+        severity,
+        EventOrigin::new(
+            EventSource::Scheduler,
+            OriginModule::Policy,
+            EventActor::Scheduler,
+        ),
+        EventLinksDraft::default(),
+        payload,
+    )
+    .sanitize(
+        &Sha256SecretFingerprinter::new(b"actingcommand-ledger-scheduled-settlement-v1").map_err(
+            |_| {
+                GlobalLedgerError::fatal(
+                    "scheduled_recovery_sanitize_failed",
+                    "build_scheduled_policy_recovery",
+                )
+            },
+        )?,
+    )
+    .map_err(|_| {
+        GlobalLedgerError::fatal(
+            "scheduled_recovery_sanitize_failed",
+            "build_scheduled_policy_recovery",
+        )
+    })
+}
+
+fn scheduled_policy_execution_severity(outcome: &PolicyExecutionOutcome) -> EventSeverity {
+    match outcome {
+        PolicyExecutionOutcome::Succeeded { .. } => EventSeverity::Info,
+        PolicyExecutionOutcome::Failed { failure }
+            if failure.effective_class == PolicyFailureClass::Recoverable =>
+        {
+            EventSeverity::Warning
+        }
+        PolicyExecutionOutcome::Failed { .. } => EventSeverity::Error,
+    }
+}
+
+fn dispatch_event_data(payload: &PolicyDispatchPayload) -> PolicyDispatchEventData {
+    PolicyDispatchEventData {
+        decision_id: payload.decision_id().to_owned(),
+        task_id: payload.task_id().to_owned(),
+        instance_id: payload.instance_id().to_owned(),
+        operation_id: payload.operation_id().to_owned(),
+        package_digest: payload.package_digest().to_owned(),
+        procedure_binding_digest: payload.procedure_binding_digest().to_owned(),
+        reason_chain_id: payload.reason_chain_id().to_owned(),
+        reasons: payload.reasons().to_vec(),
+        catalog_hash: payload.catalog_hash().to_owned(),
+        catalog_version: payload.catalog_version(),
+        input_ledger_position: payload.input_ledger_position(),
+        fact_snapshot_id: payload.fact_snapshot_id().to_owned(),
+        approval_fact_ids: payload.approval_fact_ids().to_vec(),
+        urgency_milli: payload.urgency_milli(),
+    }
+}
+
 fn issue_scheduled_recovery_action_id() -> GlobalLedgerResult<IssuedActionId> {
     IdentifierIssuer::new()
         .and_then(|issuer| issuer.mint_action_id())
@@ -888,6 +1195,16 @@ fn event_links_empty(links: &EventLinks) -> bool {
         && links.frame_id().is_none()
         && links.action_id().is_none()
         && links.recognition_id().is_none()
+}
+
+fn is_unlinked_scheduled_settlement_draft(draft: &SanitizedEventDraft) -> bool {
+    matches!(
+        draft.event_type(),
+        EventType::PolicyExecutionRecorded | EventType::PolicyDispatchCompleted
+    ) && draft.origin().source() == EventSource::Scheduler
+        && draft.origin().module() == OriginModule::Policy
+        && draft.origin().actor() == EventActor::Scheduler
+        && event_links_empty(draft.links())
 }
 
 fn same_chain_without_lease(left: &EventLinks, right: &EventLinks) -> bool {

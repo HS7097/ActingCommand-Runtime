@@ -5,15 +5,16 @@ use crate::PersistedEvent;
 use crate::fact::StoredEventRecord;
 use actingcommand_contract::{
     AuditInput, ClientPayloadDraft, CommandPayloadDraft, DiagnosticCode, EffectDisposition,
-    EventAction, EventActor, EventDraft, EventLinksDraft, EventOrigin, EventPayloadDraft,
-    EventQuery, EventSeverity, EventSource, EventType, IdentifierIssuer, InputAction,
-    IssuedActionId, IssuedCausationId, IssuedCorrelationId, IssuedEventId, IssuedFrameId,
-    IssuedInstanceId, IssuedLeaseId, IssuedRecognitionId, IssuedRequestId, IssuedRunId,
-    IssuedTaskId, LeasePayloadDraft, OriginModule, PerformanceContext, PolicyActivitySample,
-    PolicyAdmissionRecord, PolicyBudgetReceipt, PolicyDispatchEventData, PolicyExecutionEventData,
-    PolicyExecutionOutcome, PolicyFailureClass, PolicyFailureDisposition, PolicyFailureRecord,
-    PolicyPayloadDraft, PolicyReasonRecord, ProjectionPayload, ProjectionProfile, SecretField,
-    SecretFingerprinter, SubscriptionCursor, TaskOutcome, TaskPayloadDraft, TaskSemanticFact,
+    EventAction, EventActor, EventDraft, EventLinksDraft, EventOrigin, EventPayload,
+    EventPayloadDraft, EventQuery, EventSeverity, EventSource, EventType, IdentifierIssuer,
+    InputAction, IssuedActionId, IssuedCausationId, IssuedCorrelationId, IssuedEventId,
+    IssuedFrameId, IssuedInstanceId, IssuedLeaseId, IssuedRecognitionId, IssuedRequestId,
+    IssuedRunId, IssuedTaskId, LeasePayloadDraft, OriginModule, PerformanceContext,
+    PolicyActivitySample, PolicyAdmissionRecord, PolicyBudgetReceipt, PolicyDispatchEventData,
+    PolicyExecutionEventData, PolicyExecutionOutcome, PolicyFailureClass, PolicyFailureDisposition,
+    PolicyFailureRecord, PolicyPayload, PolicyPayloadDraft, PolicyReasonRecord, ProjectionPayload,
+    ProjectionProfile, SecretField, SecretFingerprinter, SubscriptionCursor, TaskOutcome,
+    TaskPayloadDraft, TaskSemanticFact,
 };
 use serde_json::Value;
 use std::fs::{self, OpenOptions};
@@ -182,7 +183,6 @@ struct ScheduledRecoveryDrafts {
     lease_granted: actingcommand_contract::SanitizedEventDraft,
     admission: actingcommand_contract::SanitizedEventDraft,
     execution: actingcommand_contract::SanitizedEventDraft,
-    completion: actingcommand_contract::SanitizedEventDraft,
     task_request: actingcommand_contract::SanitizedEventDraft,
     task_completed: actingcommand_contract::SanitizedEventDraft,
     task_failed_warning: actingcommand_contract::SanitizedEventDraft,
@@ -294,7 +294,7 @@ fn scheduled_recovery_drafts() -> ScheduledRecoveryDrafts {
         task_id: dispatch.task_id.clone(),
         instance_id: dispatch.instance_id.clone(),
         observed_at_unix_ms: 1_752_147_200_400,
-        outcome: PolicyExecutionOutcome::Succeeded { runtime_ms: 300 },
+        outcome: PolicyExecutionOutcome::Succeeded { runtime_ms: 50 },
     };
     let policy_failure = |class, runtime_ms| PolicyFailureRecord {
         error_code: if class == PolicyFailureClass::Recoverable {
@@ -408,22 +408,6 @@ fn scheduled_recovery_drafts() -> ScheduledRecoveryDrafts {
             ),
             execution_links,
             PolicyPayloadDraft::execution_recorded(execution, AuditInput::new()).into(),
-        ),
-        completion: sanitize(
-            1_752_147_200_500,
-            EventSeverity::Info,
-            EventOrigin::new(
-                EventSource::Scheduler,
-                OriginModule::Policy,
-                EventActor::Scheduler,
-            ),
-            EventLinksDraft::default(),
-            PolicyPayloadDraft::dispatch_completed(
-                dispatch.clone(),
-                admission.clone(),
-                AuditInput::new(),
-            )
-            .into(),
         ),
         task_request: sanitize(
             1_752_147_200_350,
@@ -712,6 +696,15 @@ fn append_scheduled_recovery_prefix(
         .append(drafts.lease_granted.clone())
         .expect("lease grant");
     let admission = ledger.append(drafts.admission.clone()).expect("admission");
+    ledger
+        .append(drafts.task_request.clone())
+        .expect("task request");
+    ledger
+        .append(drafts.task_completed.clone())
+        .expect("task completed");
+    ledger
+        .append(drafts.task_release.clone())
+        .expect("task release");
     let execution = ledger.append(drafts.execution.clone()).expect("execution");
     (admission, execution)
 }
@@ -756,13 +749,58 @@ fn assert_recovered_execution_chain(recovered: &PersistedEvent, drafts: &Schedul
     assert!(recovered.links().action_id().is_some());
 }
 
+fn recovery_execution_data(
+    draft: &actingcommand_contract::SanitizedEventDraft,
+) -> PolicyExecutionEventData {
+    let EventPayload::Policy(PolicyPayload::ExecutionRecorded(payload)) = draft.payload() else {
+        panic!("scheduled recovery fixture must carry an execution payload");
+    };
+    PolicyExecutionEventData {
+        decision_id: payload.decision_id().to_owned(),
+        task_id: payload.task_id().to_owned(),
+        instance_id: payload.instance_id().to_owned(),
+        observed_at_unix_ms: payload.observed_at_unix_ms(),
+        outcome: payload.outcome().clone(),
+    }
+}
+
+fn reconcile_scheduled_settlement(
+    ledger: &GlobalLedger,
+    draft: &actingcommand_contract::SanitizedEventDraft,
+) -> GlobalLedgerResult<PersistedEvent> {
+    ledger.reconcile_scheduled_policy_settlement(recovery_execution_data(draft))
+}
+
+fn recovered_execution_fact(
+    ledger: &GlobalLedger,
+    draft: &actingcommand_contract::SanitizedEventDraft,
+) -> PersistedEvent {
+    let decision_id = recovery_execution_data(draft).decision_id;
+    let events = ledger
+        .query(EventQuery::default())
+        .expect("query recovered facts");
+    let executions = events
+        .into_iter()
+        .filter(|event| {
+            matches!(
+                event.payload(),
+                EventPayload::Policy(PolicyPayload::ExecutionRecorded(payload))
+                    if payload.decision_id() == decision_id
+            )
+        })
+        .collect::<Vec<_>>();
+    let [execution] = executions.as_slice() else {
+        panic!("expected exactly one recovered execution fact");
+    };
+    execution.clone()
+}
+
 fn expect_recovered_execution_error(
     ledger: GlobalLedger,
     draft: actingcommand_contract::SanitizedEventDraft,
     expected_code: &str,
 ) {
-    let error = ledger
-        .append(draft)
+    let error = reconcile_scheduled_settlement(&ledger, &draft)
         .expect_err("invalid recovery evidence must fail");
     assert_eq!(error.code(), expected_code);
     assert!(error.is_fatal());
@@ -772,15 +810,31 @@ fn expect_recovered_execution_error(
 }
 
 #[test]
+fn generic_append_rejects_an_unlinked_scheduled_settlement() {
+    let temp = TempDir::new().expect("temp");
+    let ledger = GlobalLedger::open(config(&temp, "generic-settlement-writer")).expect("ledger");
+    let drafts = scheduled_recovery_drafts();
+
+    let error = ledger
+        .append(drafts.recovered_interrupted_execution)
+        .expect_err("generic append must not become recovery authority");
+
+    assert_eq!(error.code(), "scheduled_settlement_continuation_required");
+    assert!(error.is_fatal());
+    ledger
+        .close()
+        .expect_err("fatal generic settlement rejection terminates the ledger");
+}
+
+#[test]
 fn recovered_policy_completion_preserves_the_persisted_scheduled_chain() {
     let temp = TempDir::new().expect("temp");
     let ledger = GlobalLedger::open(config(&temp, "recovery-writer")).expect("ledger");
     let drafts = scheduled_recovery_drafts();
     let (_, execution) = append_scheduled_recovery_prefix(&ledger, &drafts);
 
-    let completion = ledger
-        .append(drafts.completion)
-        .expect("recover completion");
+    let completion =
+        reconcile_scheduled_settlement(&ledger, &drafts.execution).expect("recover completion");
 
     assert_eq!(completion.event_type(), EventType::PolicyDispatchCompleted);
     assert_eq!(
@@ -808,6 +862,37 @@ fn recovered_policy_completion_preserves_the_persisted_scheduled_chain() {
 }
 
 #[test]
+fn scheduled_settlement_continuation_is_one_shot_and_idempotent() {
+    let temp = TempDir::new().expect("temp");
+    let ledger = GlobalLedger::open(config(&temp, "one-shot-settlement-writer")).expect("ledger");
+    let drafts = scheduled_recovery_drafts();
+    append_scheduled_recovery_prefix(&ledger, &drafts);
+
+    let first = reconcile_scheduled_settlement(&ledger, &drafts.execution)
+        .expect("first settlement continuation");
+    let second = reconcile_scheduled_settlement(&ledger, &drafts.execution)
+        .expect("second settlement continuation");
+
+    assert_eq!(first.event_id(), second.event_id());
+    let events = ledger.query(EventQuery::default()).expect("query facts");
+    assert_eq!(
+        events
+            .iter()
+            .filter(|event| event.event_type() == EventType::PolicyExecutionRecorded)
+            .count(),
+        1
+    );
+    assert_eq!(
+        events
+            .iter()
+            .filter(|event| event.event_type() == EventType::PolicyDispatchCompleted)
+            .count(),
+        1
+    );
+    ledger.close().expect("close ledger");
+}
+
+#[test]
 fn recovered_policy_execution_accepts_only_the_four_structured_outcome_lanes() {
     let success_root = TempDir::new().expect("success temp");
     let success =
@@ -823,9 +908,9 @@ fn recovered_policy_execution_accepts_only_the_four_structured_outcome_lanes() {
     success
         .append(success_drafts.task_release.clone())
         .expect("task release");
-    let recovered = success
-        .append(success_drafts.recovered_success_execution.clone())
+    reconcile_scheduled_settlement(&success, &success_drafts.recovered_success_execution)
         .expect("recover successful execution");
+    let recovered = recovered_execution_fact(&success, &success_drafts.recovered_success_execution);
     assert_recovered_execution_chain(&recovered, &success_drafts);
     assert_eq!(recovered.timestamp_unix_ms(), completed.timestamp_unix_ms());
     success.close().expect("close success ledger");
@@ -844,9 +929,15 @@ fn recovered_policy_execution_accepts_only_the_four_structured_outcome_lanes() {
     recoverable
         .append(recoverable_drafts.task_release.clone())
         .expect("task release");
-    let recovered = recoverable
-        .append(recoverable_drafts.recovered_warning_execution.clone())
-        .expect("recover recoverable execution");
+    reconcile_scheduled_settlement(
+        &recoverable,
+        &recoverable_drafts.recovered_warning_execution,
+    )
+    .expect("recover recoverable execution");
+    let recovered = recovered_execution_fact(
+        &recoverable,
+        &recoverable_drafts.recovered_warning_execution,
+    );
     assert_recovered_execution_chain(&recovered, &recoverable_drafts);
     assert_eq!(recovered.severity(), EventSeverity::Warning);
     recoverable.close().expect("close recoverable ledger");
@@ -865,9 +956,9 @@ fn recovered_policy_execution_accepts_only_the_four_structured_outcome_lanes() {
     severe
         .append(severe_drafts.task_release.clone())
         .expect("task release");
-    let recovered = severe
-        .append(severe_drafts.recovered_fatal_execution.clone())
+    reconcile_scheduled_settlement(&severe, &severe_drafts.recovered_fatal_execution)
         .expect("recover severe execution");
+    let recovered = recovered_execution_fact(&severe, &severe_drafts.recovered_fatal_execution);
     assert_recovered_execution_chain(&recovered, &severe_drafts);
     assert_eq!(recovered.severity(), EventSeverity::Error);
     severe.close().expect("close severe ledger");
@@ -880,9 +971,15 @@ fn recovered_policy_execution_accepts_only_the_four_structured_outcome_lanes() {
     let release = interrupted
         .append(interrupted_drafts.interrupted_release.clone())
         .expect("failure release");
-    let recovered = interrupted
-        .append(interrupted_drafts.recovered_interrupted_execution.clone())
-        .expect("recover interrupted settlement");
+    reconcile_scheduled_settlement(
+        &interrupted,
+        &interrupted_drafts.recovered_interrupted_execution,
+    )
+    .expect("recover interrupted settlement");
+    let recovered = recovered_execution_fact(
+        &interrupted,
+        &interrupted_drafts.recovered_interrupted_execution,
+    );
     assert_recovered_execution_chain(&recovered, &interrupted_drafts);
     assert_eq!(recovered.timestamp_unix_ms(), release.timestamp_unix_ms());
     interrupted.close().expect("close interrupted ledger");
@@ -1073,11 +1170,13 @@ fn recovered_policy_completion_requires_a_complete_local_chain() {
     let drafts = scheduled_recovery_drafts();
     append_scheduled_recovery_prefix(&first, &drafts);
 
-    let error = second
-        .append(drafts.completion)
-        .expect_err("a recovery draft cannot import another ledger's facts");
+    let error = reconcile_scheduled_settlement(&second, &drafts.execution)
+        .expect_err("a recovery continuation cannot import another ledger's facts");
 
-    assert_eq!(error.code(), "scheduled_recovery_intent_not_unique");
+    assert_eq!(
+        error.code(),
+        "scheduled_execution_recovery_intent_not_unique"
+    );
     assert!(error.is_fatal());
     first.close().expect("close first ledger");
     second
@@ -1093,10 +1192,12 @@ fn recovered_policy_completion_rejects_missing_execution_and_lease_facts() {
             .expect("ledger");
     let drafts = scheduled_recovery_drafts();
     append_scheduled_execution_recovery_prefix(&missing_execution, &drafts);
-    let error = missing_execution
-        .append(drafts.completion.clone())
-        .expect_err("missing execution must fail");
-    assert_eq!(error.code(), "scheduled_recovery_execution_not_unique");
+    let error = reconcile_scheduled_settlement(&missing_execution, &drafts.execution)
+        .expect_err("missing release must fail");
+    assert_eq!(
+        error.code(),
+        "scheduled_execution_recovery_release_not_unique"
+    );
     assert!(error.is_fatal());
     missing_execution
         .close()
@@ -1107,11 +1208,13 @@ fn recovered_policy_completion_rejects_missing_execution_and_lease_facts() {
     let drafts = scheduled_recovery_drafts();
     missing.append(drafts.intent).expect("intent");
     missing.append(drafts.admission).expect("admission");
-    missing.append(drafts.execution).expect("execution");
-    let error = missing
-        .append(drafts.completion)
+    missing.append(drafts.execution.clone()).expect("execution");
+    let error = reconcile_scheduled_settlement(&missing, &drafts.execution)
         .expect_err("missing lease fact must fail");
-    assert_eq!(error.code(), "scheduled_recovery_lease_not_unique");
+    assert_eq!(
+        error.code(),
+        "scheduled_execution_recovery_lease_not_unique"
+    );
     assert!(error.is_fatal());
     missing
         .close()
@@ -1129,11 +1232,10 @@ fn recovered_policy_completion_rejects_duplicate_execution_evidence() {
         .append(duplicate.execution)
         .expect("append conflicting execution");
 
-    let error = ledger
-        .append(drafts.completion)
+    let error = reconcile_scheduled_settlement(&ledger, &drafts.execution)
         .expect_err("duplicate execution must fail");
 
-    assert_eq!(error.code(), "scheduled_recovery_execution_not_unique");
+    assert_eq!(error.code(), "scheduled_execution_recovery_not_unique");
     assert!(error.is_fatal());
     ledger
         .close()

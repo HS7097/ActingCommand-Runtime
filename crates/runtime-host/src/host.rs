@@ -1431,21 +1431,13 @@ fn reconcile_policy_dispatches(
     ledger: &GlobalLedger,
     events: &RuntimeEvents,
 ) -> RuntimeHostResult<()> {
-    reconcile_scheduled_policy_outcomes(policy, ledger, events)?;
+    reconcile_scheduled_policy_outcomes(policy, ledger)?;
     for decision_id in policy.pending_dispatch_completions() {
-        let (dispatch, admission) = policy.completion_data(&decision_id)?;
-        let draft = events.draft(
-            EventSeverity::Info,
-            EventSource::Scheduler,
-            OriginModule::Policy,
-            EventActor::Scheduler,
-            EventLinksDraft::default(),
-            PolicyPayloadDraft::dispatch_completed(dispatch, admission, AuditInput::new()),
-        )?;
-        let draft = events.sanitize(draft)?;
-        ledger
-            .append(draft)
+        let execution = policy.execution_data(&decision_id)?;
+        let completion = ledger
+            .reconcile_scheduled_policy_settlement(execution)
             .map_err(|_| ledger_error("reconcile_policy_dispatches"))?;
+        policy.complete_dispatch(&decision_id, completion.sequence())?;
     }
     policy.refresh_dispatches(ledger)?;
     let pending = policy.pending_dispatches();
@@ -1503,7 +1495,6 @@ fn reconcile_policy_dispatches(
 fn reconcile_scheduled_policy_outcomes(
     policy: &mut PolicyHost,
     ledger: &GlobalLedger,
-    events: &RuntimeEvents,
 ) -> RuntimeHostResult<()> {
     let pending = policy.pending_dispatch_outcomes();
     if pending.is_empty() {
@@ -1687,19 +1678,11 @@ fn reconcile_scheduled_policy_outcomes(
                 "reconcile_policy_outcomes",
             ));
         }
-        let draft = events.draft(
-            policy_execution_severity(&data),
-            EventSource::Scheduler,
-            OriginModule::Policy,
-            EventActor::Scheduler,
-            EventLinksDraft::default(),
-            PolicyPayloadDraft::execution_recorded(data.clone(), AuditInput::new()),
-        )?;
-        let draft = events.sanitize(draft)?;
-        ledger
-            .append(draft)
+        let completion = ledger
+            .reconcile_scheduled_policy_settlement(data.clone())
             .map_err(|_| ledger_error("reconcile_policy_outcomes"))?;
         policy.commit_execution(&data)?;
+        policy.complete_dispatch(&decision_id, completion.sequence())?;
     }
     Ok(())
 }
@@ -3401,11 +3384,10 @@ impl HostShared {
             })?;
             let connection_id = ConnectionId::new(POLICY_CONNECTION_VALUE)
                 .map_err(|error| RuntimeHostError::scheduler("build_policy_connection", &error))?;
-            self.cleanup_token_with_run_links(
+            self.cleanup_scheduled_failure_with_run_links(
                 &request,
                 context.lease_token(),
                 connection_id,
-                LeaseReleaseReason::BackendFailure,
                 RuntimeRunLinks::new(context.issued_task_id(), context.issued_run_id()),
             )?;
         }
@@ -9122,11 +9104,10 @@ impl HostShared {
         failure: RequestFailure,
     ) -> RequestFailure {
         let cleanup = match run_links {
-            Some(run_links) => self.cleanup_token_with_run_links(
+            Some(run_links) => self.cleanup_scheduled_failure_with_run_links(
                 request,
                 &token,
                 connection_id,
-                LeaseReleaseReason::BackendFailure,
                 run_links,
             ),
             None => self.cleanup_token(&token, connection_id, LeaseReleaseReason::BackendFailure),
@@ -9702,15 +9683,23 @@ impl HostShared {
         self.cleanup_token_inner(token, connection_id, reason, None)
     }
 
-    fn cleanup_token_with_run_links(
+    /// The sole producer of a run-linked scheduled failure cleanup.
+    ///
+    /// Its fixed `BackendFailure` reason is intentionally not caller-selectable: the resulting
+    /// full run chain is the bounded proof consumed by startup settlement recovery.
+    fn cleanup_scheduled_failure_with_run_links(
         &self,
         request: &ValidatedRuntimeRequest<'_>,
         token: &LeaseToken,
         connection_id: ConnectionId,
-        reason: LeaseReleaseReason,
         run_links: RuntimeRunLinks,
     ) -> RuntimeHostResult<()> {
-        self.cleanup_token_inner(token, connection_id, reason, Some((request, run_links)))
+        self.cleanup_token_inner(
+            token,
+            connection_id,
+            LeaseReleaseReason::BackendFailure,
+            Some((request, run_links)),
+        )
     }
 
     fn cleanup_token_inner(

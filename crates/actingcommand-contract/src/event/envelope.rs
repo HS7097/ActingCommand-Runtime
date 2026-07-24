@@ -107,16 +107,47 @@ impl EventLinks {
         self.recognition_id.as_ref()
     }
 
-    /// Rebuilds the exact links for one recovered scheduled-policy event.
+    /// Captures this already-persisted link set as an opaque scheduled-settlement source.
     ///
-    /// This does not produce producer capabilities or an `EventLinksDraft`. The ledger uses the
-    /// returned transport links only after revalidating the persisted dispatch and lease facts
-    /// that supplied them.
-    pub fn revalidated_scheduled_recovery(
-        dispatch: &Self,
-        lease_granted: &Self,
+    /// The source cannot create an event or reveal a replacement link set. The GlobalLedger
+    /// settlement owner is responsible for first proving its source facts are unique and
+    /// ordered before it materializes a continuation.
+    pub fn scheduled_policy_recovery_source(&self) -> ScheduledPolicyRecoverySource {
+        ScheduledPolicyRecoverySource {
+            links: self.clone(),
+        }
+    }
+}
+
+/// Opaque source material for the one scheduled-policy settlement continuation.
+///
+/// This is deliberately neither an identifier conversion nor an event-producer capability.
+/// It only carries a link set already observed in a persisted fact until the ledger has
+/// validated the complete source chain.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ScheduledPolicyRecoverySource {
+    links: EventLinks,
+}
+
+/// Opaque, validated links for one scheduled-policy settlement continuation.
+///
+/// The type cannot be converted into raw identifiers or an `EventLinksDraft`. It can only bind
+/// a sanitized scheduler-policy execution/completion draft through `apply_to`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ScheduledPolicyRecoveryContinuation {
+    links: EventLinks,
+}
+
+impl ScheduledPolicyRecoveryContinuation {
+    /// Materializes a continuation only from the two typed persisted-fact sources and a fresh
+    /// action issued by the ledger owner.
+    pub fn materialize(
+        dispatch: ScheduledPolicyRecoverySource,
+        lease_granted: ScheduledPolicyRecoverySource,
         action_id: IssuedActionId,
     ) -> Result<Self, SanitizationError> {
+        let dispatch = dispatch.links;
+        let lease_granted = lease_granted.links;
         let (
             Some(instance_id),
             Some(request_id),
@@ -160,18 +191,56 @@ impl EventLinks {
             ));
         }
         Ok(Self {
-            instance_id: Some(instance_id),
-            request_id: Some(request_id),
-            correlation_id: Some(correlation_id),
-            causation_id: dispatch.causation_id,
-            task_id: Some(task_id),
-            run_id: Some(run_id),
-            lease_id: Some(lease_id),
-            frame_id: None,
-            action_id: Some(action_id.into_transport()),
-            recognition_id: None,
+            links: EventLinks {
+                instance_id: Some(instance_id),
+                request_id: Some(request_id),
+                correlation_id: Some(correlation_id),
+                causation_id: dispatch.causation_id,
+                task_id: Some(task_id),
+                run_id: Some(run_id),
+                lease_id: Some(lease_id),
+                frame_id: None,
+                action_id: Some(action_id.into_transport()),
+                recognition_id: None,
+            },
         })
     }
+
+    /// Binds this opaque continuation to the only two event shapes it can materialize.
+    pub fn apply_to(
+        self,
+        mut draft: SanitizedEventDraft,
+    ) -> Result<SanitizedEventDraft, SanitizationError> {
+        if !matches!(
+            draft.event_type,
+            EventType::PolicyExecutionRecorded | EventType::PolicyDispatchCompleted
+        ) || draft.origin.source() != EventSource::Scheduler
+            || draft.origin.module() != OriginModule::Policy
+            || draft.origin.actor() != EventActor::Scheduler
+            || !draft.artifacts.is_empty()
+            || !event_links_are_empty(&draft.links)
+        {
+            return Err(SanitizationError::new(
+                "scheduled_recovery_draft_invalid",
+                "scheduled_policy_continuation",
+            ));
+        }
+        draft.links = self.links;
+        Ok(draft)
+    }
+}
+
+fn event_links_are_empty(links: &EventLinks) -> bool {
+    links.instance_id.is_none()
+        && links.request_id.is_none()
+        && links.correlation_id.is_none()
+        && links.causation_id.is_none()
+        && links.task_id.is_none()
+        && links.run_id.is_none()
+        && links.lease_id.is_none()
+        && links.frame_id.is_none()
+        && links.action_id.is_none()
+        && links.recognition_id.is_none()
 }
 
 /// Producer-only links whose values can only come from an identifier issuer.

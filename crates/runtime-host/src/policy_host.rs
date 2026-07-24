@@ -1258,6 +1258,30 @@ impl PolicyHost {
         Ok((dispatch.data.clone(), admission))
     }
 
+    pub(crate) fn execution_data(
+        &self,
+        decision_id: &str,
+    ) -> RuntimeHostResult<PolicyExecutionEventData> {
+        let dispatch = self.seen_dispatches.get(decision_id).ok_or_else(|| {
+            fatal(
+                "policy_dispatch_state_incomplete",
+                "read_policy_execution_outcome",
+            )
+        })?;
+        if dispatch.lifecycle != DispatchLifecycle::Admitted {
+            return Err(request(
+                "policy_dispatch_not_admitted",
+                "read_policy_execution_outcome",
+            ));
+        }
+        dispatch.execution.clone().ok_or_else(|| {
+            fatal(
+                "policy_execution_outcome_missing",
+                "read_policy_execution_outcome",
+            )
+        })
+    }
+
     pub(crate) fn complete_dispatch(
         &mut self,
         decision_id: &str,

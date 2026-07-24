@@ -9,17 +9,17 @@ use actingcommand_contract::{
     EventActor, EventId, EventPayload, EventQuery, EventSource, EventType, FactScope,
     IdentifierIssuer, InputAction, InputPayload, IssuedCorrelationId, LeaseQueuePolicy,
     LeaseQueueStatus, LeaseToken, MAX_RUNTIME_EVENT_QUERY_EVENTS, OriginModule, OwnerEpoch,
-    PackageDebugRequest, PolicyExecutionOutcome, PolicyPayload, ProjectDecisionPageCursor,
-    ProjectDecisionPageRequest, ProjectInterfaceRequest, ProjectLedgerSnapshot,
-    ProjectedArtifactReference, ProjectedEvent, ProjectionPayload, ProjectionProfile,
-    ProposalPreview, ProposalPromotion, RUNTIME_INFO_FILE, RequestId, ResourceAuthoringEvent,
-    RunId, RuntimeControlPlaneStatus, RuntimeDebugEvent, RuntimeEventBatch, RuntimeEventQueryPage,
-    RuntimeEventQueryPageRequest, RuntimeEvidenceExportRequest, RuntimeForwardProjectionRequest,
-    RuntimeInfo, RuntimeMaintenanceQuery, RuntimeMonitorInstanceStatus, RuntimeMonitorPolicy,
-    RuntimeMonitorRegistryStatus, RuntimeOperation, RuntimePlanningDocument,
-    RuntimePlanningDocumentKind, RuntimeReceipt, RuntimeRequest, RuntimeResult,
-    RuntimeStrategicReportRequest, RuntimeSubscriptionRequest, TaskPayload, TaskSemanticFact,
-    TerminalEvent,
+    PackageDebugRequest, PolicyExecutionOutcome, PolicyFailureClass, PolicyFailureDisposition,
+    PolicyPayload, ProjectDecisionPageCursor, ProjectDecisionPageRequest, ProjectInterfaceRequest,
+    ProjectLedgerSnapshot, ProjectedArtifactReference, ProjectedEvent, ProjectionPayload,
+    ProjectionProfile, ProposalPreview, ProposalPromotion, RUNTIME_INFO_FILE, RequestId,
+    ResourceAuthoringEvent, RunId, RuntimeControlPlaneStatus, RuntimeDebugEvent, RuntimeEventBatch,
+    RuntimeEventQueryPage, RuntimeEventQueryPageRequest, RuntimeEvidenceExportRequest,
+    RuntimeForwardProjectionRequest, RuntimeInfo, RuntimeMaintenanceQuery,
+    RuntimeMonitorInstanceStatus, RuntimeMonitorPolicy, RuntimeMonitorRegistryStatus,
+    RuntimeOperation, RuntimePlanningDocument, RuntimePlanningDocumentKind, RuntimeReceipt,
+    RuntimeRequest, RuntimeResult, RuntimeStrategicReportRequest, RuntimeSubscriptionRequest,
+    TaskPayload, TaskSemanticFact, TerminalEvent,
 };
 use actingcommand_policy::{
     EvaluationFacts, EvaluationResources, EvaluationTime, ForwardProjection,
@@ -1713,7 +1713,6 @@ fn project_run_summary(run_id: RunId, events: &[ProjectedEvent]) -> RuntimeClien
     let intent_event = exactly_one_run_event(events, EventType::PolicyDispatchIntent)?;
     let admitted_event = exactly_one_run_event(events, EventType::PolicyDispatchAdmitted)?;
     let lease_event = exactly_one_run_event(events, EventType::LeaseGranted)?;
-    let lab_request_event = exactly_one_run_event(events, EventType::LabRequest)?;
     let release_event = exactly_one_run_event(events, EventType::LeaseReleased)?;
     let execution_event = exactly_one_run_event(events, EventType::PolicyExecutionRecorded)?;
     let completed_event = exactly_one_run_event(events, EventType::PolicyDispatchCompleted)?;
@@ -1726,16 +1725,6 @@ fn project_run_summary(run_id: RunId, events: &[ProjectedEvent]) -> RuntimeClien
             ));
         }
     };
-    let (task_event_type, status, result) = match execution.outcome() {
-        PolicyExecutionOutcome::Succeeded { .. } => {
-            (EventType::TaskCompleted, "simulated_completed", None)
-        }
-        PolicyExecutionOutcome::Failed { .. } => {
-            (EventType::TaskFailed, "simulated_failed", Some("failed"))
-        }
-    };
-    let task_event = exactly_one_run_event(events, task_event_type)?;
-
     let task_id = intent_event.links.task_id().copied().ok_or_else(|| {
         RuntimeClientError::fatal("run_summary_identity_missing", "summarize_run")
     })?;
@@ -1759,29 +1748,13 @@ fn project_run_summary(run_id: RunId, events: &[ProjectedEvent]) -> RuntimeClien
     let lease_id = lease_event.links.lease_id().copied().ok_or_else(|| {
         RuntimeClientError::fatal("run_summary_identity_missing", "summarize_run")
     })?;
-    for event in [task_event, release_event, execution_event, completed_event] {
+    for event in [release_event, execution_event, completed_event] {
         if event.links.lease_id() != Some(&lease_id) {
             return Err(RuntimeClientError::fatal(
                 "run_summary_lease_mismatch",
                 "summarize_run",
             ));
         }
-    }
-    let lab_request_id = lab_request_event
-        .links
-        .request_id()
-        .copied()
-        .ok_or_else(|| {
-            RuntimeClientError::fatal("run_summary_identity_missing", "summarize_run")
-        })?;
-    let receipt_request_id = task_event.links.request_id().copied().ok_or_else(|| {
-        RuntimeClientError::fatal("run_summary_identity_missing", "summarize_run")
-    })?;
-    if lab_request_id != receipt_request_id {
-        return Err(RuntimeClientError::fatal(
-            "run_summary_receipt_request_mismatch",
-            "summarize_run",
-        ));
     }
     let intent = policy_dispatch_payload(intent_event, EventType::PolicyDispatchIntent)?;
     let admitted = policy_dispatch_payload(admitted_event, EventType::PolicyDispatchAdmitted)?;
@@ -1795,6 +1768,107 @@ fn project_run_summary(run_id: RunId, events: &[ProjectedEvent]) -> RuntimeClien
     {
         return Err(RuntimeClientError::fatal(
             "run_summary_policy_mismatch",
+            "summarize_run",
+        ));
+    }
+    if is_policy_settlement_interrupted(execution.outcome()) {
+        if release_event.sequence <= lease_event.sequence
+            || events.iter().any(|event| {
+                matches!(
+                    event.event_type,
+                    EventType::LabRequest
+                        | EventType::TaskRequested
+                        | EventType::TaskCompleted
+                        | EventType::TaskFailed
+                        | EventType::TaskCancelled
+                        | EventType::TaskEffectIntent
+                        | EventType::TaskEffectCompleted
+                        | EventType::InputIntent
+                        | EventType::InputCommitted
+                        | EventType::InputFailed
+                )
+            })
+        {
+            return Err(RuntimeClientError::fatal(
+                "run_summary_settlement_interrupted_invalid",
+                "summarize_run",
+            ));
+        }
+        return Ok(json!({
+            "schema_version": "actingcommand.run-summary.v1",
+            "status": "policy_settlement_interrupted",
+            "run_id": run_id,
+            "task_id": task_id,
+            "correlation_id": correlation_id,
+            "decision_id": intent.decision_id(),
+            "operation_id": intent.operation_id(),
+            "instance_id": intent.instance_id(),
+            "package_digest": intent.package_digest(),
+            "procedure_binding_digest": intent.procedure_binding_digest(),
+            "reason_chain": {
+                "id": intent.reason_chain_id(),
+                "reasons": intent.reasons()
+            },
+            "catalog": {
+                "hash": intent.catalog_hash(),
+                "version": intent.catalog_version()
+            },
+            "admission": admitted.admission(),
+            "lease": {
+                "lease_id": lease_id,
+                "grant_sequence": lease_event.sequence,
+                "release_sequence": release_event.sequence
+            },
+            "outcome": {
+                "kind": "policy_settlement_interrupted",
+                "policy": execution.outcome(),
+                "result": "original_cause_unavailable",
+                "original_cause": "unavailable"
+            },
+            "execution_provenance": {
+                "kind": "settlement_recovery",
+                "device_access": false,
+                "account_access": false,
+                "production_input": false,
+                "actual_effect_count": 0,
+                "simulated_effect_count": 0
+            },
+            "effect": "not_performed",
+            "actual_effect_count": 0,
+            "simulated_effect_count": 0,
+            "event_count": events.len(),
+            "completed_sequence": completed_event.sequence
+        }));
+    }
+    let (task_event_type, status, result) = match execution.outcome() {
+        PolicyExecutionOutcome::Succeeded { .. } => {
+            (EventType::TaskCompleted, "simulated_completed", None)
+        }
+        PolicyExecutionOutcome::Failed { .. } => {
+            (EventType::TaskFailed, "simulated_failed", Some("failed"))
+        }
+    };
+    let task_event = exactly_one_run_event(events, task_event_type)?;
+    if task_event.links.lease_id() != Some(&lease_id) {
+        return Err(RuntimeClientError::fatal(
+            "run_summary_lease_mismatch",
+            "summarize_run",
+        ));
+    }
+    let lab_request_event = exactly_one_run_event(events, EventType::LabRequest)?;
+    let lab_request_id = lab_request_event
+        .links
+        .request_id()
+        .copied()
+        .ok_or_else(|| {
+            RuntimeClientError::fatal("run_summary_identity_missing", "summarize_run")
+        })?;
+    let receipt_request_id = task_event.links.request_id().copied().ok_or_else(|| {
+        RuntimeClientError::fatal("run_summary_identity_missing", "summarize_run")
+    })?;
+    if lab_request_id != receipt_request_id {
+        return Err(RuntimeClientError::fatal(
+            "run_summary_receipt_request_mismatch",
             "summarize_run",
         ));
     }
@@ -1895,6 +1969,21 @@ fn validate_task_terminal(
         ));
     }
     Ok(())
+}
+
+fn is_policy_settlement_interrupted(execution: &PolicyExecutionOutcome) -> bool {
+    matches!(
+        execution,
+        PolicyExecutionOutcome::Failed { failure }
+            if failure.error_code == "policy_settlement_interrupted"
+                && failure.original_class == PolicyFailureClass::Severe
+                && failure.effective_class == PolicyFailureClass::Severe
+                && failure.disposition == PolicyFailureDisposition::PausedTask
+                && failure.retry_attempt == 0
+                && failure.retry_at_unix_ms.is_none()
+                && !failure.reported_success
+                && failure.runtime_ms == 0
+    )
 }
 
 fn validate_admitted_package(
@@ -2256,5 +2345,269 @@ mod run_summary_package_tests {
         let error = validate_admitted_package(&events, request_id.transport(), &canonical)
             .expect_err("mismatched package admission");
         assert_eq!(error.code(), "run_summary_package_digest_mismatch");
+    }
+}
+
+#[cfg(test)]
+mod run_summary_settlement_tests {
+    use super::{is_policy_settlement_interrupted, project_run_summary};
+    use actingcommand_contract::{
+        AuditInput, EffectDisposition, EventAction, EventActor, EventDraft, EventLinksDraft,
+        EventOrigin, EventPayloadDraft, EventSeverity, EventSource, IdentifierIssuer,
+        LeasePayloadDraft, OriginModule, PerformanceContext, PolicyActivitySample,
+        PolicyAdmissionRecord, PolicyBudgetReceipt, PolicyDispatchEventData,
+        PolicyExecutionEventData, PolicyExecutionOutcome, PolicyFailureClass,
+        PolicyFailureDisposition, PolicyFailureRecord, PolicyPayloadDraft, PolicyReasonRecord,
+        ProjectedEvent, ProjectionPayload, RunId, SanitizationError, SecretField,
+        SecretFingerprinter, Sha256Fingerprint,
+    };
+
+    struct RejectSecrets;
+
+    impl SecretFingerprinter for RejectSecrets {
+        fn fingerprint(
+            &self,
+            _field: SecretField,
+            _original: &str,
+        ) -> Result<Sha256Fingerprint, SanitizationError> {
+            panic!("settlement fixture does not contain secrets")
+        }
+    }
+
+    fn projected(
+        issuer: &IdentifierIssuer,
+        sequence: u64,
+        severity: EventSeverity,
+        origin: EventOrigin,
+        links: EventLinksDraft,
+        payload: EventPayloadDraft,
+    ) -> ProjectedEvent {
+        let sanitized = EventDraft::new(
+            issuer.mint_event_id().expect("event id"),
+            sequence,
+            severity,
+            origin,
+            links,
+            payload,
+        )
+        .sanitize(&RejectSecrets)
+        .expect("sanitize settlement fixture");
+        ProjectedEvent {
+            schema_version: sanitized.schema_version().to_owned(),
+            sequence,
+            event_id: *sanitized.event_id(),
+            timestamp_unix_ms: sanitized.timestamp_unix_ms(),
+            event_type: sanitized.event_type(),
+            severity: sanitized.severity(),
+            sensitivity: sanitized.sensitivity(),
+            origin: sanitized.origin().clone(),
+            links: sanitized.links().clone(),
+            payload_schema: sanitized.payload_schema().to_owned(),
+            payload: ProjectionPayload::Full(Box::new(sanitized.payload().clone())),
+            artifacts: Vec::new(),
+        }
+    }
+
+    fn settlement_fixture() -> (RunId, Vec<ProjectedEvent>) {
+        let issuer = IdentifierIssuer::new().expect("identifier issuer");
+        let instance_id = issuer.mint_instance_id().expect("instance id");
+        let request_id = issuer.mint_request_id().expect("request id");
+        let correlation_id = issuer.mint_correlation_id().expect("correlation id");
+        let task_id = issuer.mint_task_id().expect("task id");
+        let run_id = issuer.mint_run_id().expect("run id");
+        let lease_id = issuer.mint_lease_id().expect("lease id");
+        let dispatch = PolicyDispatchEventData {
+            decision_id: "decision:settlement".to_owned(),
+            task_id: "task:settlement".to_owned(),
+            instance_id: "instance:settlement".to_owned(),
+            operation_id: "operation:settlement".to_owned(),
+            package_digest: format!("sha256:{}", "a".repeat(64)),
+            procedure_binding_digest: format!("sha256:{}", "b".repeat(64)),
+            reason_chain_id: "reason:settlement".to_owned(),
+            reasons: vec![PolicyReasonRecord {
+                code: "scheduled".to_owned(),
+                detail: "deterministic settlement fixture".to_owned(),
+            }],
+            catalog_hash: format!("sha256:{}", "c".repeat(64)),
+            catalog_version: 1,
+            input_ledger_position: 1,
+            fact_snapshot_id: "snapshot:settlement".to_owned(),
+            approval_fact_ids: Vec::new(),
+            urgency_milli: 100,
+        };
+        let admission = PolicyAdmissionRecord {
+            activity: PolicyActivitySample {
+                profile_id: "profile:settlement".to_owned(),
+                local_day: 1,
+                window_id: "window:settlement".to_owned(),
+                admitted_at_unix_ms: 1,
+                seed: 7,
+                interval_ms: 1_000,
+                next_eligible_unix_ms: 1_001,
+            },
+            budget: PolicyBudgetReceipt {
+                task_daily_used: 1,
+                task_daily_limit: 1,
+                task_window_used: 1,
+                task_window_limit: 1,
+                task_runtime_reserved_ms: 1,
+                task_runtime_limit_ms: 1,
+                activity_daily_used: 1,
+                activity_daily_limit: 1,
+                activity_window_used: 1,
+                activity_window_limit: 1,
+                activity_runtime_reserved_ms: 1,
+                activity_runtime_limit_ms: 1,
+            },
+        };
+        let failure = PolicyFailureRecord {
+            error_code: "policy_settlement_interrupted".to_owned(),
+            reported_success: false,
+            original_class: PolicyFailureClass::Severe,
+            effective_class: PolicyFailureClass::Severe,
+            consecutive_same_error: 1,
+            escalation_streak: 1,
+            performance_tax_exempt: false,
+            retry_attempt: 0,
+            disposition: PolicyFailureDisposition::PausedTask,
+            retry_at_unix_ms: None,
+            runtime_ms: 0,
+            sensitive: false,
+            perf_context: Box::new(PerformanceContext::unavailable(4)),
+        };
+        let execution = PolicyExecutionEventData {
+            decision_id: dispatch.decision_id.clone(),
+            task_id: dispatch.task_id.clone(),
+            instance_id: dispatch.instance_id.clone(),
+            observed_at_unix_ms: 4,
+            outcome: PolicyExecutionOutcome::Failed { failure },
+        };
+        let policy_links = EventLinksDraft::default()
+            .with_instance_id(instance_id)
+            .with_request_id(request_id)
+            .with_correlation_id(correlation_id)
+            .with_task_id(task_id)
+            .with_run_id(run_id)
+            .with_action_id(issuer.mint_action_id().expect("intent action"));
+        let lease_links = policy_links
+            .clone()
+            .with_lease_id(lease_id)
+            .with_action_id(issuer.mint_action_id().expect("lease action"));
+        let scheduler_origin = EventOrigin::new(
+            EventSource::Scheduler,
+            OriginModule::Policy,
+            EventActor::Scheduler,
+        );
+        let events = vec![
+            projected(
+                &issuer,
+                1,
+                EventSeverity::Info,
+                scheduler_origin.clone(),
+                policy_links.clone(),
+                PolicyPayloadDraft::dispatch_intent(dispatch.clone(), AuditInput::new()).into(),
+            ),
+            projected(
+                &issuer,
+                2,
+                EventSeverity::Info,
+                EventOrigin::new(
+                    EventSource::Scheduler,
+                    OriginModule::Scheduler,
+                    EventActor::Scheduler,
+                ),
+                lease_links.clone(),
+                LeasePayloadDraft::granted(
+                    EventAction::LeaseAcquire,
+                    EffectDisposition::Performed,
+                    AuditInput::new(),
+                )
+                .into(),
+            ),
+            projected(
+                &issuer,
+                3,
+                EventSeverity::Info,
+                scheduler_origin.clone(),
+                policy_links,
+                PolicyPayloadDraft::dispatch_admitted(
+                    dispatch.clone(),
+                    admission.clone(),
+                    AuditInput::new(),
+                )
+                .into(),
+            ),
+            projected(
+                &issuer,
+                4,
+                EventSeverity::Info,
+                EventOrigin::new(
+                    EventSource::Scheduler,
+                    OriginModule::Scheduler,
+                    EventActor::Scheduler,
+                ),
+                lease_links.clone(),
+                LeasePayloadDraft::released(
+                    EventAction::LeaseRelease,
+                    EffectDisposition::Performed,
+                    AuditInput::new(),
+                )
+                .into(),
+            ),
+            projected(
+                &issuer,
+                5,
+                EventSeverity::Error,
+                scheduler_origin.clone(),
+                lease_links.clone(),
+                PolicyPayloadDraft::execution_recorded(execution, AuditInput::new()).into(),
+            ),
+            projected(
+                &issuer,
+                6,
+                EventSeverity::Info,
+                scheduler_origin,
+                lease_links,
+                PolicyPayloadDraft::dispatch_completed(dispatch, admission, AuditInput::new())
+                    .into(),
+            ),
+        ];
+        (*run_id.transport(), events)
+    }
+
+    #[test]
+    fn severe_settlement_interruption_has_a_typed_summary_without_task_replay() {
+        let (run_id, events) = settlement_fixture();
+
+        let summary = project_run_summary(run_id, &events).expect("settlement summary");
+
+        assert_eq!(summary["status"], "policy_settlement_interrupted");
+        assert_eq!(summary["outcome"]["kind"], "policy_settlement_interrupted");
+        assert_eq!(summary["outcome"]["result"], "original_cause_unavailable");
+        assert_eq!(summary["outcome"]["original_cause"], "unavailable");
+        assert_eq!(summary["actual_effect_count"], 0);
+        assert_eq!(summary["simulated_effect_count"], 0);
+    }
+
+    #[test]
+    fn only_the_exact_severe_interruption_shape_enters_the_settlement_lane() {
+        let failure = PolicyFailureRecord {
+            error_code: "policy_settlement_interrupted".to_owned(),
+            reported_success: false,
+            original_class: PolicyFailureClass::Recoverable,
+            effective_class: PolicyFailureClass::Recoverable,
+            consecutive_same_error: 1,
+            escalation_streak: 1,
+            performance_tax_exempt: false,
+            retry_attempt: 0,
+            disposition: PolicyFailureDisposition::Continue,
+            retry_at_unix_ms: None,
+            runtime_ms: 0,
+            sensitive: false,
+            perf_context: Box::new(PerformanceContext::unavailable(1)),
+        };
+        assert!(!is_policy_settlement_interrupted(
+            &PolicyExecutionOutcome::Failed { failure }
+        ));
     }
 }
