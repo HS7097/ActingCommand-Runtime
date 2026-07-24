@@ -264,9 +264,9 @@
         );
         let mut backend = None;
 
-        ensure_touch_backend(&mut backend, "ak.cn", &factory, &config)
+        ensure_touch_backend(&mut backend, "instance.primary", &factory, &config)
             .expect("first input backend");
-        ensure_touch_backend(&mut backend, "ak.cn", &factory, &config)
+        ensure_touch_backend(&mut backend, "instance.primary", &factory, &config)
             .expect("cached input backend");
 
         assert!(backend.is_some());
@@ -460,8 +460,8 @@
             schema_version: CONTROL_SCHEMA.to_string(),
             package_id: "pkg".to_string(),
             execution_mode: "navigable_route".to_string(),
-            game: "arknights".to_string(),
-            server: "cn".to_string(),
+            game: "game_alpha".to_string(),
+            server: "region-a".to_string(),
             resolution: Resolution {
                 width: 1280,
                 height: 720,
@@ -1337,8 +1337,8 @@
         let bundle: OperationBundle = serde_json::from_value(json!({
             "schema_version": "0.6",
             "task_id": "task",
-            "game": "arknights",
-            "server_scope": ["cn"],
+            "game": "game_alpha",
+            "server_scope": ["region-a"],
             "goal": "navigation",
             "coordinate_space": {"width": 1280, "height": 720},
             "defaults": {

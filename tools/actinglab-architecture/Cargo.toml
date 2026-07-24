@@ -12,10 +12,19 @@ publish = false
 name = "actinglab-command-inventory"
 path = "src/main.rs"
 
+[[bin]]
+name = "generic-domain-guard"
+path = "src/generic_domain_main.rs"
+
+[[bin]]
+name = "external-compat-guard"
+path = "src/external_compat_main.rs"
+
 [dependencies]
+proc-macro2 = "1"
+quote = "1"
+serde = { workspace = true }
 serde_json = { workspace = true }
+sha2 = { workspace = true }
 syn = { version = "2", features = ["full", "visit"] }
 toml = "1"
-
-[dev-dependencies]
-sha2 = { workspace = true }

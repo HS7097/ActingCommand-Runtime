@@ -126,7 +126,7 @@ pub(super) fn semantic_resource_root(include_destructive_overlap: bool) -> Seman
     fs::create_dir(&recognition).unwrap();
     fs::create_dir(&navigation).unwrap();
     fs::write(
-        recognition.join("arknights.cn.pack.json"),
+        recognition.join("sample.local.pack.json"),
         r#"{
             "schema_version":"0.3",
             "coordinate_space":{"width":1,"height":1},
@@ -139,12 +139,12 @@ pub(super) fn semantic_resource_root(include_destructive_overlap: bool) -> Seman
     )
     .unwrap();
     fs::write(
-        recognition.join("arknights.cn.pages.json"),
+        recognition.join("sample.local.pages.json"),
         r#"{
             "schema_version":"0.3",
             "pages":[
-                {"id":"arknights/home","required":["home_anchor"]},
-                {"id":"arknights/target","required":["target_anchor"]}
+                {"id":"sample/home","required":["home_anchor"]},
+                {"id":"sample/target","required":["target_anchor"]}
             ]
         }"#,
     )
@@ -155,23 +155,23 @@ pub(super) fn semantic_resource_root(include_destructive_overlap: bool) -> Seman
         "[]"
     };
     fs::write(
-        navigation.join("arknights.cn.navigation.json"),
+        navigation.join("sample.local.navigation.json"),
         format!(
             r#"{{
                 "schema_version":"0.3",
-                "game":"arknights",
-                "server":"cn",
+                "game":"sample",
+                "server":"local",
                 "control_points":[{{"name":"wake","point":[3,4],"note":"test wake"}}],
                 "navigation":[{{
                     "id":"home_to_target",
-                    "from_page":"arknights/home",
-                    "to_page":"arknights/target",
+                    "from_page":"sample/home",
+                    "to_page":"sample/target",
                     "click":{{"kind":"rect","x":10,"y":20,"width":4,"height":6}}
                 }},
                 {{
                     "id":"target_to_home",
-                    "from_page":"arknights/target",
-                    "to_page":"arknights/home",
+                    "from_page":"sample/target",
+                    "to_page":"sample/home",
                     "click":{{"kind":"point","point":"2,3"}}
                 }}],
                 "destructive_actions":{destructive}
@@ -179,10 +179,10 @@ pub(super) fn semantic_resource_root(include_destructive_overlap: bool) -> Seman
         ),
     )
     .unwrap();
-    let pack = recognition.join("arknights.cn.pack.json");
-    let pages = recognition.join("arknights.cn.pages.json");
-    let graph = navigation.join("arknights.cn.navigation.json");
-    seal_semantic_fixture(temp, "arknights", "cn", &pack, &pages, Some(&graph))
+    let pack = recognition.join("sample.local.pack.json");
+    let pages = recognition.join("sample.local.pages.json");
+    let graph = navigation.join("sample.local.navigation.json");
+    seal_semantic_fixture(temp, "sample", "local", &pack, &pages, Some(&graph))
 }
 
 pub(super) fn template_drift_resource_root() -> SemanticFixture {
@@ -197,7 +197,7 @@ pub(super) fn template_drift_resource_root() -> SemanticFixture {
     )
     .unwrap();
     fs::write(
-        recognition.join("arknights.cn.pack.json"),
+        recognition.join("sample.local.pack.json"),
         r#"{
             "schema_version":"0.3",
             "coordinate_space":{"width":3,"height":1},
@@ -215,28 +215,28 @@ pub(super) fn template_drift_resource_root() -> SemanticFixture {
     )
     .unwrap();
     fs::write(
-        recognition.join("arknights.cn.pages.json"),
+        recognition.join("sample.local.pages.json"),
         r#"{
             "schema_version":"0.3",
-            "pages":[{"id":"arknights/home","required":["home_button"]}]
+            "pages":[{"id":"sample/home","required":["home_button"]}]
         }"#,
     )
     .unwrap();
     fs::write(
-        navigation.join("arknights.cn.navigation.json"),
+        navigation.join("sample.local.navigation.json"),
         r#"{
             "schema_version":"0.3",
-            "game":"arknights",
-            "server":"cn",
+            "game":"sample",
+            "server":"local",
             "navigation":[],
             "destructive_actions":[]
         }"#,
     )
     .unwrap();
-    let pack = recognition.join("arknights.cn.pack.json");
-    let pages = recognition.join("arknights.cn.pages.json");
-    let graph = navigation.join("arknights.cn.navigation.json");
-    seal_semantic_fixture(temp, "arknights", "cn", &pack, &pages, Some(&graph))
+    let pack = recognition.join("sample.local.pack.json");
+    let pages = recognition.join("sample.local.pages.json");
+    let graph = navigation.join("sample.local.navigation.json");
+    seal_semantic_fixture(temp, "sample", "local", &pack, &pages, Some(&graph))
 }
 
 pub(super) fn synthetic_game_resource_root() -> SemanticFixture {

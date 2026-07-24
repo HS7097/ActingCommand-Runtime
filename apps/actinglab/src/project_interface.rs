@@ -354,7 +354,7 @@ mod tests {
         let interface = sample_interface();
         let selection = ProjectSelection {
             preset: Some("daily".to_string()),
-            options: BTreeMap::from([("server".to_string(), json!("jp"))]),
+            options: BTreeMap::from([("server".to_string(), json!("remote"))]),
             operation: None,
             recognition: vec!["pages".to_string()],
         };
@@ -362,10 +362,10 @@ mod tests {
         let config =
             assemble_runnable_config(&interface, &selection).expect("config should assemble");
 
-        assert_eq!(config.project_id, "ak");
+        assert_eq!(config.project_id, "project-alpha");
         assert_eq!(config.operation.id, "daily");
         assert_eq!(config.operation.task_path, "operations/daily/task.json");
-        assert_eq!(config.options.get("server"), Some(&json!("jp")));
+        assert_eq!(config.options.get("server"), Some(&json!("remote")));
         assert_eq!(config.recognition.len(), 2);
         assert_eq!(config.recognition[0].id, "home");
         assert_eq!(config.recognition[1].id, "pages");
@@ -375,7 +375,7 @@ mod tests {
     fn project_interface_rejects_unknown_option_value() {
         let interface = sample_interface();
         let selection = ProjectSelection {
-            options: BTreeMap::from([("server".to_string(), json!("kr"))]),
+            options: BTreeMap::from([("server".to_string(), json!("region-z"))]),
             operation: Some("daily".to_string()),
             ..Default::default()
         };
@@ -404,11 +404,11 @@ mod tests {
     fn project_interface_rejects_misspelled_default_key() {
         let json = r#"{
             "schema_version": "actinglab.project_interface.v0.1",
-            "project_id": "ak",
+            "project_id": "project-alpha",
             "options": {
                 "server": {
-                    "defualt": "cn",
-                    "allowed": ["cn", "jp"]
+                    "defualt": "local",
+                    "allowed": ["local", "remote"]
                 }
             },
             "operations": {
@@ -496,12 +496,12 @@ mod tests {
     fn sample_interface() -> ProjectInterface {
         ProjectInterface {
             schema_version: "actinglab.project_interface.v0.1".to_string(),
-            project_id: "ak".to_string(),
+            project_id: "project-alpha".to_string(),
             options: BTreeMap::from([(
                 "server".to_string(),
                 ProjectOption {
-                    default: json!("cn"),
-                    allowed: vec![json!("cn"), json!("jp")],
+                    default: json!("local"),
+                    allowed: vec![json!("local"), json!("remote")],
                 },
             )]),
             presets: BTreeMap::from([(
@@ -516,7 +516,7 @@ mod tests {
                 "daily".to_string(),
                 OperationSpec {
                     task_path: "operations/daily/task.json".to_string(),
-                    profile: Some("ak-b".to_string()),
+                    profile: Some("profile-primary".to_string()),
                 },
             )]),
             recognition: BTreeMap::from([
@@ -531,7 +531,7 @@ mod tests {
                     "pages".to_string(),
                     RecognitionSpec {
                         pack_path: None,
-                        page_set_path: Some("pages/ak.pages.json".to_string()),
+                        page_set_path: Some("pages/primary.pages.json".to_string()),
                     },
                 ),
             ]),

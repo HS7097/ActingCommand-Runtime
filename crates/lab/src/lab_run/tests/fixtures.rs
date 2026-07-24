@@ -5,8 +5,8 @@
             schema_version: CONTROL_SCHEMA.to_string(),
             package_id: "pkg".to_string(),
             execution_mode: "navigable_route".to_string(),
-            game: "arknights".to_string(),
-            server: "cn".to_string(),
+            game: "game_alpha".to_string(),
+            server: "region-a".to_string(),
             resolution: Resolution {
                 width: 1280,
                 height: 720,
@@ -70,8 +70,8 @@
         OperationBundle {
             schema_version: "0.3".to_string(),
             task_id: "task".to_string(),
-            game: "arknights".to_string(),
-            server_scope: vec!["cn".to_string()],
+            game: "game_alpha".to_string(),
+            server_scope: vec!["region-a".to_string()],
             goal: "test".to_string(),
             coordinate_space: Resolution {
                 width: 1280,
@@ -131,8 +131,8 @@
         let pack = load_pack_from_json_str(&format!(
             r#"{{
                 "schema_version":"0.3",
-                "game":"arknights",
-                "server":"cn",
+                "game":"game_alpha",
+                "server":"region-a",
                 "coordinate_space":{{"width":1,"height":1}},
                 "defaults":{{"color_max_distance":0.0}},
                 "targets":[{{
@@ -254,8 +254,8 @@
                         "schema_version":"Lab-1y.control.v1",
                         "package_id":"fixture.task",
                         "execution_mode":"recognize_only",
-                        "game":"arknights",
-                        "server":"cn",
+                        "game":"game_alpha",
+                        "server":"region-a",
                         "resolution":{"width":1280,"height":720},
                         "entry_task_id":"task"
                     }"#,
@@ -269,8 +269,8 @@
                     br#"{
                         "schema_version":"0.3",
                         "task_id":"task",
-                        "game":"arknights",
-                        "server_scope":["cn"],
+                        "game":"game_alpha",
+                        "server_scope":["region-a"],
                         "goal":"fixture",
                         "coordinate_space":{"width":1280,"height":720},
                         "defaults":{"template_threshold":0.9,"color_max_distance":20.0},
@@ -294,11 +294,11 @@
                 ),
                 ("resources/operations/task/assets/PAGE_HOME.png", one_pixel_png()),
                 (
-                    "resources/recognition/arknights.cn.pack.json",
+                    "resources/recognition/game_alpha.region-a.pack.json",
                     br#"{
                         "schema_version":"0.3",
-                        "game":"arknights",
-                        "server":"cn",
+                        "game":"game_alpha",
+                        "server":"region-a",
                         "locale":"zh-CN",
                         "coordinate_space":{"width":1280,"height":720},
                         "defaults":{"template_threshold":0.9,"color_max_distance":20.0},
@@ -314,11 +314,11 @@
                     }"#,
                 ),
                 (
-                    "resources/recognition/arknights.cn.pages.json",
+                    "resources/recognition/game_alpha.region-a.pages.json",
                     br#"{
                         "schema_version":"0.3",
                         "pages":[
-                            {"id":"arknights/home","required":["page/home"],"optional":[],"forbidden":[]}
+                            {"id":"game_alpha/home","required":["page/home"],"optional":[],"forbidden":[]}
                         ]
                     }"#,
                 ),
@@ -336,8 +336,8 @@
                         "schema_version":"Lab-1y.control.v1",
                         "package_id":"fixture.recovery",
                         "execution_mode":"navigable_route",
-                        "game":"arknights",
-                        "server":"cn",
+                        "game":"game_alpha",
+                        "server":"region-a",
                         "resolution":{"width":1280,"height":720},
                         "entry_task_id":"task",
                         "capture_interval_ms":1,
@@ -354,8 +354,8 @@
                     br#"{
                         "schema_version":"0.6",
                         "task_id":"task",
-                        "game":"arknights",
-                        "server_scope":["cn"],
+                        "game":"game_alpha",
+                        "server_scope":["region-a"],
                         "coordinate_space":{"width":1280,"height":720},
                         "defaults":{"timeout_ms":1,"max_attempts":1,"retry_interval_ms":1,"post_wait_freezes_ms":0},
                         "entry_page":"home",
@@ -380,8 +380,8 @@
                     br#"{
                         "schema_version":"0.6",
                         "task_id":"return_home",
-                        "game":"arknights",
-                        "server_scope":["cn"],
+                        "game":"game_alpha",
+                        "server_scope":["region-a"],
                         "coordinate_space":{"width":1280,"height":720},
                         "target_page":"home",
                         "operations":[{
@@ -396,11 +396,11 @@
                     }"#,
                 ),
                 (
-                    "resources/recognition/arknights.cn.pack.json",
+                    "resources/recognition/game_alpha.region-a.pack.json",
                     br#"{
                         "schema_version":"0.3",
-                        "game":"arknights",
-                        "server":"cn",
+                        "game":"game_alpha",
+                        "server":"region-a",
                         "locale":"zh-CN",
                         "coordinate_space":{"width":1280,"height":720},
                         "defaults":{"color_max_distance":0.0},
@@ -411,12 +411,12 @@
                     }"#,
                 ),
                 (
-                    "resources/recognition/arknights.cn.pages.json",
+                    "resources/recognition/game_alpha.region-a.pages.json",
                     br#"{
                         "schema_version":"0.3",
                         "pages":[
-                            {"id":"arknights/home","required":["page/home"],"optional":[],"forbidden":[]},
-                            {"id":"arknights/terminal","required":["page/terminal"],"optional":[],"forbidden":[]}
+                            {"id":"game_alpha/home","required":["page/home"],"optional":[],"forbidden":[]},
+                            {"id":"game_alpha/terminal","required":["page/terminal"],"optional":[],"forbidden":[]}
                         ]
                     }"#,
                 ),
@@ -434,8 +434,8 @@
                         "schema_version":"Lab-1y.control.v1",
                         "package_id":"fixture.task",
                         "execution_mode":"recognize_only",
-                        "game":"arknights",
-                        "server":"cn",
+                        "game":"game_alpha",
+                        "server":"region-a",
                         "resolution":{"width":1280,"height":720},
                         "entry_task_id":"task"
                     }"#,
@@ -449,8 +449,8 @@
                     br#"{
                         "schema_version":"0.3",
                         "task_id":"task",
-                        "game":"arknights",
-                        "server_scope":["cn"],
+                        "game":"game_alpha",
+                        "server_scope":["region-a"],
                         "goal":"fixture",
                         "coordinate_space":{"width":1280,"height":720},
                         "defaults":{"template_threshold":0.9,"color_max_distance":20.0},
@@ -474,11 +474,11 @@
                 ),
                 ("resources/operations/task/assets/PAGE_HOME.png", one_pixel_png()),
                 (
-                    "resources/recognition/arknights.cn.pack.json",
+                    "resources/recognition/game_alpha.region-a.pack.json",
                     br#"{
                         "schema_version":"0.5",
-                        "game":"arknights",
-                        "server":"cn",
+                        "game":"game_alpha",
+                        "server":"region-a",
                         "locale":"zh-CN",
                         "coordinate_space":{"width":1280,"height":720},
                         "defaults":{"template_threshold":0.9,"color_max_distance":20.0},
@@ -496,11 +496,11 @@
                     }"#,
                 ),
                 (
-                    "resources/recognition/arknights.cn.pages.json",
+                    "resources/recognition/game_alpha.region-a.pages.json",
                     br#"{
                         "schema_version":"0.3",
                         "pages":[
-                            {"id":"arknights/home","required":["page/home"],"optional":[],"forbidden":[]}
+                            {"id":"game_alpha/home","required":["page/home"],"optional":[],"forbidden":[]}
                         ]
                     }"#,
                 ),
