@@ -844,7 +844,7 @@ fn actingd_scheduled_failure_persists_failed_outcome_completion_and_report() {
         .expect("run failing scheduled actingd");
     assert!(!failed.status.success());
     assert!(
-        String::from_utf8_lossy(&failed.stderr).contains("contained_task_requires_scheduler"),
+        String::from_utf8_lossy(&failed.stderr).contains("page_confirmation_failed"),
         "unexpected scheduled failure: {}",
         String::from_utf8_lossy(&failed.stderr)
     );
@@ -923,7 +923,7 @@ fn actingd_scheduled_failure_persists_failed_outcome_completion_and_report() {
     let PolicyExecutionOutcome::Failed { failure } = payload.outcome() else {
         panic!("expected failed policy outcome")
     };
-    assert_eq!(failure.error_code, "contained_task_requires_scheduler");
+    assert_eq!(failure.error_code, "page_confirmation_failed");
     assert_eq!(failure.original_class, PolicyFailureClass::Recoverable);
     assert_eq!(failure.consecutive_same_error, 1);
     assert_eq!(
@@ -958,7 +958,7 @@ fn actingd_scheduled_failure_persists_failed_outcome_completion_and_report() {
         summary
             .get("simulated_effect_count")
             .and_then(Value::as_u64),
-        Some(2)
+        Some(1)
     );
     assert!(
         recovered
