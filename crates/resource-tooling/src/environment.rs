@@ -151,7 +151,7 @@ mod tests {
     #[test]
     fn snapshot_applies_nested_markers_and_reports_required_keys() {
         let snapshot = AuthoringEnvironmentSnapshot::from_resolved([
-            fact("server", "jp"),
+            fact("server", "region-b"),
             fact("theme", "default"),
         ])
         .expect("snapshot");
@@ -162,20 +162,21 @@ mod tests {
             BTreeSet::from(["server".to_string(), "theme".to_string()])
         );
         snapshot.apply(&mut value).expect("apply");
-        assert_eq!(value, json!({"path":"jp/x", "nested":["default"]}));
+        assert_eq!(value, json!({"path":"region-b/x", "nested":["default"]}));
     }
 
     #[test]
     fn snapshot_rejects_missing_duplicate_unsafe_and_malformed_values() {
         let duplicate = AuthoringEnvironmentSnapshot::from_resolved([
-            fact("server", "jp"),
-            fact("server", "cn"),
+            fact("server", "region-b"),
+            fact("server", "region-a"),
         ])
         .expect_err("duplicate");
         assert_eq!(duplicate.code, "validation_failed");
 
-        let unsafe_value = AuthoringEnvironmentSnapshot::from_resolved([fact("server", "../jp")])
-            .expect_err("unsafe");
+        let unsafe_value =
+            AuthoringEnvironmentSnapshot::from_resolved([fact("server", "../region-b")])
+                .expect_err("unsafe");
         assert_eq!(unsafe_value.code, "validation_failed");
 
         let snapshot = AuthoringEnvironmentSnapshot::default();

@@ -3,6 +3,33 @@
 use super::*;
 
 #[test]
+fn dangerous_semantic_contract_preserves_legacy_rejections_without_expansion() {
+    for value in ["gacha_route", "ranked_pvp_entry"] {
+        let error = reject_dangerous_semantic_id("fixture", value).unwrap_err();
+        assert_eq!(error.class, ErrorKind::SafetyBlocked);
+        assert_eq!(error.code, "semantic_action_requires_destructive_opt_in");
+    }
+    for value in ["random_draw_route", "competitive_entry"] {
+        reject_dangerous_semantic_id("fixture", value).unwrap();
+    }
+    let payload = session_self_heal_policy_payload(
+        &GlobalOptions::default(),
+        &FlagArgs::default(),
+        "session self-heal-policy",
+    )
+    .unwrap();
+    assert_eq!(
+        payload.pointer("/maintenance_boundary/pvp_or_exercise_allowed"),
+        Some(&Value::Bool(false))
+    );
+    assert!(
+        payload
+            .pointer("/maintenance_boundary/competitive_or_exercise_allowed")
+            .is_none()
+    );
+}
+
+#[test]
 fn detect_page_returns_standby_when_no_page_matches() {
     let _guard = env_lock();
     let temp = TempDir::new().unwrap();
@@ -49,8 +76,8 @@ fn detect_page_uses_verified_bundle_when_loose_root_is_also_present() {
     let temp = TempDir::new().unwrap();
     let recognition = temp.path().join("recognition");
     fs::create_dir(&recognition).unwrap();
-    let pack = recognition.join("arknights.cn.pack.json");
-    let pages = recognition.join("arknights.cn.pages.json");
+    let pack = recognition.join("sample.local.pack.json");
+    let pages = recognition.join("sample.local.pages.json");
     let scene = temp.path().join("scene.png");
     fs::write(
         &pack,
@@ -67,7 +94,7 @@ fn detect_page_uses_verified_bundle_when_loose_root_is_also_present() {
     )
     .unwrap();
     fs::write(&scene, encode_png(1, 1, [0, 0, 255])).unwrap();
-    let temp = seal_semantic_fixture(temp, "arknights", "cn", &pack, &pages, None);
+    let temp = seal_semantic_fixture(temp, "sample", "local", &pack, &pages, None);
     let result = run_semantic_cli(
         &temp,
         [
@@ -75,7 +102,7 @@ fn detect_page_uses_verified_bundle_when_loose_root_is_also_present() {
             "--resource-root",
             temp.path().to_str().unwrap(),
             "--game",
-            "ark",
+            "sample",
             "detect-page",
             "--scene",
             scene.to_str().unwrap(),
@@ -105,8 +132,8 @@ fn detect_page_ignores_reorganized_loose_root_after_bundle_admission() {
     let operations = ours.join("operations");
     fs::create_dir_all(&recognition).unwrap();
     fs::create_dir_all(&operations).unwrap();
-    let pack = recognition.join("arknights.cn.pack.json");
-    let pages = recognition.join("arknights.cn.pages.json");
+    let pack = recognition.join("sample.local.pack.json");
+    let pages = recognition.join("sample.local.pages.json");
     let scene = temp.path().join("scene.png");
     fs::write(
         &pack,
@@ -123,7 +150,7 @@ fn detect_page_ignores_reorganized_loose_root_after_bundle_admission() {
     )
     .unwrap();
     fs::write(&scene, encode_png(1, 1, [0, 0, 255])).unwrap();
-    let temp = seal_semantic_fixture(temp, "arknights", "cn", &pack, &pages, None);
+    let temp = seal_semantic_fixture(temp, "sample", "local", &pack, &pages, None);
     fs::write(&pack, b"not-json").unwrap();
 
     let result = run_semantic_cli(
@@ -133,7 +160,7 @@ fn detect_page_ignores_reorganized_loose_root_after_bundle_admission() {
             "--resource-root",
             repo.to_str().unwrap(),
             "--game",
-            "ark",
+            "sample",
             "detect-page",
             "--scene",
             scene.to_str().unwrap(),

@@ -2,21 +2,21 @@
 
     #[test]
     fn error_page_detection_matches_explicit_and_negative_pages() {
-        let explicit = vec!["arknights/error_popup".to_string()];
+        let explicit = vec!["game_alpha/error_popup".to_string()];
 
         assert!(page_is_error_page(
-            "arknights",
-            Some("arknights/error_popup"),
+            "game_alpha",
+            Some("game_alpha/error_popup"),
             &explicit
         ));
         assert!(page_is_error_page(
-            "arknights",
-            Some("arknights/negative_connection"),
+            "game_alpha",
+            Some("game_alpha/negative_connection"),
             &[]
         ));
         assert!(!page_is_error_page(
-            "arknights",
-            Some("arknights/home"),
+            "game_alpha",
+            Some("game_alpha/home"),
             &explicit
         ));
     }
@@ -27,7 +27,7 @@
             scene: Scene::from_png(one_pixel_png()).expect("scene"),
             matched_page: None,
             page_evaluations: vec![PageEvaluation {
-                page_id: "arknights/home".to_string(),
+                page_id: "game_alpha/home".to_string(),
                 matched: false,
                 required_passed: 0,
                 required_total: 1,
@@ -50,7 +50,7 @@
             height: 1,
         };
 
-        assert!(scene_hits_error_page("arknights", &scene, &[]));
+        assert!(scene_hits_error_page("game_alpha", &scene, &[]));
     }
 
     #[test]
@@ -59,7 +59,7 @@
             scene: Scene::from_png(one_pixel_png()).expect("scene"),
             matched_page: None,
             page_evaluations: vec![PageEvaluation {
-                page_id: "arknights/depot".to_string(),
+                page_id: "game_alpha/depot".to_string(),
                 matched: false,
                 required_passed: 1,
                 required_total: 1,
@@ -83,11 +83,11 @@
         };
 
         assert!(scene_hits_error_page(
-            "arknights",
+            "game_alpha",
             &scene,
             &["home".to_string()]
         ));
-        assert!(!scene_hits_error_page("arknights", &scene, &[]));
+        assert!(!scene_hits_error_page("game_alpha", &scene, &[]));
     }
 
     #[test]
@@ -137,10 +137,10 @@
         operation.guard = Some(test_color_guard());
         let guard = operation.guard.as_ref().expect("guard");
         let evaluator = one_pixel_color_evaluator([0, 0, 0]);
-        let scene = captured_rgb_scene(Some("arknights/home"), [0, 0, 0]);
+        let scene = captured_rgb_scene(Some("game_alpha/home"), [0, 0, 0]);
 
         let outcome =
-            evaluate_pre_execution_guard("arknights", &operation, guard, &scene, &evaluator)
+            evaluate_pre_execution_guard("game_alpha", &operation, guard, &scene, &evaluator)
                 .expect("guard evaluation");
 
         match outcome {
@@ -163,10 +163,10 @@
         operation.guard = Some(test_color_guard());
         let guard = operation.guard.as_ref().expect("guard");
         let evaluator = one_pixel_color_evaluator([0, 0, 0]);
-        let scene = captured_rgb_scene(Some("arknights/terminal"), [0, 0, 0]);
+        let scene = captured_rgb_scene(Some("game_alpha/terminal"), [0, 0, 0]);
 
         let outcome =
-            evaluate_pre_execution_guard("arknights", &operation, guard, &scene, &evaluator)
+            evaluate_pre_execution_guard("game_alpha", &operation, guard, &scene, &evaluator)
                 .expect("guard evaluation");
 
         assert_eq!(
@@ -176,7 +176,7 @@
                 current_page: Some("terminal".to_string()),
                 diagnostics: json!({
                     "expected_page": "home",
-                    "matched_page": "arknights/terminal",
+                    "matched_page": "game_alpha/terminal",
                     "operation_from": "home"
                 })
             }
@@ -193,10 +193,10 @@
         operation.guard = Some(guard);
         let guard = operation.guard.as_ref().expect("guard");
         let evaluator = one_pixel_color_evaluator([0, 0, 0]);
-        let scene = captured_rgb_scene(Some("arknights/terminal"), [0, 0, 0]);
+        let scene = captured_rgb_scene(Some("game_alpha/terminal"), [0, 0, 0]);
 
         let outcome =
-            evaluate_pre_execution_guard("arknights", &operation, guard, &scene, &evaluator)
+            evaluate_pre_execution_guard("game_alpha", &operation, guard, &scene, &evaluator)
                 .expect("guard evaluation");
 
         match outcome {
@@ -218,10 +218,10 @@
         operation.guard = Some(test_color_guard());
         let guard = operation.guard.as_ref().expect("guard");
         let evaluator = one_pixel_color_evaluator([255, 255, 255]);
-        let scene = captured_rgb_scene(Some("arknights/home"), [0, 0, 0]);
+        let scene = captured_rgb_scene(Some("game_alpha/home"), [0, 0, 0]);
 
         let outcome =
-            evaluate_pre_execution_guard("arknights", &operation, guard, &scene, &evaluator)
+            evaluate_pre_execution_guard("game_alpha", &operation, guard, &scene, &evaluator)
                 .expect("guard evaluation");
 
         match outcome {
@@ -376,22 +376,22 @@
 
     #[test]
     fn page_namespace_matches_operation_anchors_without_blind_split() {
-        assert_eq!(canonical_page_anchor("arknights", "arknights/home"), "home");
+        assert_eq!(canonical_page_anchor("game_alpha", "game_alpha/home"), "home");
         assert_eq!(
-            canonical_page_anchor("arknights", "arknights/navigation/home_to_task"),
+            canonical_page_anchor("game_alpha", "game_alpha/navigation/home_to_task"),
             "navigation/home_to_task"
         );
-        assert_eq!(canonical_page_anchor("arknights", "home"), "home");
-        assert!(page_anchor_matches("arknights", "arknights/home", "home"));
-        assert!(page_anchor_matches("arknights", "home", "home"));
+        assert_eq!(canonical_page_anchor("game_alpha", "home"), "home");
+        assert!(page_anchor_matches("game_alpha", "game_alpha/home", "home"));
+        assert!(page_anchor_matches("game_alpha", "home", "home"));
         assert!(page_anchor_matches(
-            "arknights",
-            "arknights/quickswitch_dropdown",
+            "game_alpha",
+            "game_alpha/quickswitch_dropdown",
             "quickswitch_dropdown"
         ));
         assert!(!page_anchor_matches(
-            "arknights",
-            "bluearchive/home",
+            "game_alpha",
+            "game_beta/home",
             "home"
         ));
     }
@@ -399,9 +399,9 @@
     #[test]
     fn operation_verification_marks_to_null_without_template_unverified() {
         let operation = test_operation(None, None);
-        let scene = captured_scene(Some("arknights/home"), false);
+        let scene = captured_scene(Some("game_alpha/home"), false);
 
-        let result = operation_verification_status("arknights", &operation, &scene);
+        let result = operation_verification_status("game_alpha", &operation, &scene);
 
         assert_eq!(result, OperationVerification::ExecutedUnverified);
         assert_eq!(result.result_label(), "executed_unverified");
@@ -410,15 +410,15 @@
     #[test]
     fn operation_verification_requires_template_when_to_is_null_with_template() {
         let operation = test_operation(None, Some("terminal.png"));
-        let failed = captured_scene(Some("arknights/home"), false);
-        let passed = captured_scene(Some("arknights/home"), true);
+        let failed = captured_scene(Some("game_alpha/home"), false);
+        let passed = captured_scene(Some("game_alpha/home"), true);
 
         assert_eq!(
-            operation_verification_status("arknights", &operation, &failed),
+            operation_verification_status("game_alpha", &operation, &failed),
             OperationVerification::Failed
         );
         assert_eq!(
-            operation_verification_status("arknights", &operation, &passed),
+            operation_verification_status("game_alpha", &operation, &passed),
             OperationVerification::Verified
         );
     }
@@ -426,10 +426,10 @@
     #[test]
     fn operation_verification_accepts_namespaced_arrival_page() {
         let operation = test_operation(Some("terminal"), None);
-        let scene = captured_scene(Some("arknights/terminal"), false);
+        let scene = captured_scene(Some("game_alpha/terminal"), false);
 
         assert_eq!(
-            operation_verification_status("arknights", &operation, &scene),
+            operation_verification_status("game_alpha", &operation, &scene),
             OperationVerification::Verified
         );
     }
@@ -442,15 +442,15 @@
             timeout_ms: Some(50),
             interval_ms: None,
         });
-        let matched = captured_scene(Some("arknights/terminal"), false);
-        let mismatched = captured_scene(Some("arknights/home"), false);
+        let matched = captured_scene(Some("game_alpha/terminal"), false);
+        let mismatched = captured_scene(Some("game_alpha/home"), false);
 
         assert_eq!(
-            operation_verification_status("arknights", &operation, &matched),
+            operation_verification_status("game_alpha", &operation, &matched),
             OperationVerification::Verified
         );
         assert_eq!(
-            operation_verification_status("arknights", &operation, &mismatched),
+            operation_verification_status("game_alpha", &operation, &mismatched),
             OperationVerification::Failed
         );
         assert_eq!(operation.expected_after_page(), Some("terminal"));

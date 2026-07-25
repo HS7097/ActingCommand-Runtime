@@ -414,10 +414,10 @@ mod tests {
         );
         assert_eq!(data.get("status"), Some(&json!("written")));
         assert_eq!(data.get("mode"), Some(&json!("build-pack")));
-        assert_eq!(data.get("game"), Some(&json!("arknights")));
-        assert_eq!(data.get("server"), Some(&json!("cn")));
+        assert_eq!(data.get("game"), Some(&json!("sample")));
+        assert_eq!(data.get("server"), Some(&json!("local")));
         assert_eq!(data.get("entry_task_id"), Some(&json!("operator_task")));
-        assert_eq!(data.get("package_id"), Some(&json!("arknights.cn.full")));
+        assert_eq!(data.get("package_id"), Some(&json!("sample.local.full")));
         assert_eq!(data.get("execution_mode"), Some(&json!("recognize_only")));
         assert_eq!(data.get("task_count"), Some(&json!(2)));
         assert_eq!(data.get("dry_run"), Some(&json!(false)));
@@ -425,7 +425,7 @@ mod tests {
         assert_eq!(data.get("from_remote"), Some(&Value::Null));
         assert_eq!(
             data["validation"].pointer("/control/package_id"),
-            Some(&json!("arknights.cn.full"))
+            Some(&json!("sample.local.full"))
         );
         assert_eq!(
             data["validation"].pointer("/control/execution_mode"),
@@ -476,8 +476,8 @@ mod tests {
         );
         assert_eq!(data.get("status"), Some(&json!("written")));
         assert_eq!(data.get("mode"), Some(&json!("build-pack-split")));
-        assert_eq!(data.get("game"), Some(&json!("arknights")));
-        assert_eq!(data.get("server"), Some(&json!("cn")));
+        assert_eq!(data.get("game"), Some(&json!("sample")));
+        assert_eq!(data.get("server"), Some(&json!("local")));
         assert_eq!(data.get("package_count"), Some(&json!(2)));
         assert_eq!(data.get("dry_run"), Some(&json!(false)));
 
@@ -495,7 +495,7 @@ mod tests {
         let mut generation_dirs = BTreeSet::new();
         for package in packages {
             let task_id = package["task_id"].as_str().unwrap();
-            let package_id = format!("arknights.cn.{task_id}");
+            let package_id = format!("sample.local.{task_id}");
             let out = split_dir.join(format!("{package_id}.zip"));
             assert_eq!(package["out"], json!(out.display().to_string()));
             assert_eq!(
@@ -562,7 +562,7 @@ mod tests {
         write_task_fixture(root, "operator_task", "operator", "OPERATOR.png", 10);
         write_task_fixture(root, "return_home", "home", "HOME.png", 20);
         fs::write(
-            root.join("navigation/arknights.cn.navigation.json"),
+            root.join("navigation/sample.local.navigation.json"),
             serde_json::to_vec_pretty(&json!({
                 "schema_version": "0.3",
                 "control_points": [{"name": "home", "point": [1, 1]}]
@@ -586,8 +586,8 @@ mod tests {
             serde_json::to_vec_pretty(&json!({
                 "schema_version": "0.3",
                 "task_id": task_id,
-                "game": "arknights",
-                "server_scope": ["cn"],
+                "game": "sample",
+                "server_scope": ["local"],
                 "locale": "zh-CN",
                 "goal": "app command fixture",
                 "coordinate_space": {"width": 1280, "height": 720},

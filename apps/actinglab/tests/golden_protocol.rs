@@ -865,9 +865,9 @@ impl Fixture {
                 os("--run-root"),
                 self.run_root.clone().into_os_string(),
                 os("--game"),
-                os("arknights"),
+                os("sample"),
                 os("--server"),
-                os("cn"),
+                os("local"),
             ]
         };
         let scene = |base: &mut Vec<OsString>, path: &Path| {
@@ -881,9 +881,9 @@ impl Fixture {
                 os("--resource-root"),
                 self.resource_root.clone().into_os_string(),
                 os("--game"),
-                os("arknights"),
+                os("sample"),
                 os("--server"),
-                os("cn"),
+                os("local"),
             ];
         }
 
@@ -902,7 +902,7 @@ impl Fixture {
                     os("detect-page"),
                     os("--pack"),
                     self.resource_root
-                        .join("recognition/arknights.cn.pack.json")
+                        .join("recognition/sample.local.pack.json")
                         .into_os_string(),
                     os("--pack-root"),
                     self.resource_root.clone().into_os_string(),
@@ -1084,9 +1084,9 @@ impl Fixture {
             os("--run-root"),
             self.run_root.clone().into_os_string(),
             os("--game"),
-            os("arknights"),
+            os("sample"),
             os("--server"),
-            os("cn"),
+            os("local"),
             os("--instance"),
             os("fixture:5555"),
             os("detect"),
@@ -1167,7 +1167,7 @@ fn write_semantic_resources(root: &Path) {
     fs::create_dir_all(&navigation).expect("navigation");
     fs::create_dir_all(&env_detection).expect("env detection");
     fs::write(
-        recognition.join("arknights.cn.pack.json"),
+        recognition.join("sample.local.pack.json"),
         r#"{
             "schema_version":"0.3",
             "coordinate_space":{"width":1,"height":1},
@@ -1180,26 +1180,26 @@ fn write_semantic_resources(root: &Path) {
     )
     .expect("pack");
     fs::write(
-        recognition.join("arknights.cn.pages.json"),
+        recognition.join("sample.local.pages.json"),
         r#"{
             "schema_version":"0.3",
             "pages":[
-                {"id":"arknights/home","required":["home_anchor"]},
-                {"id":"arknights/target","required":["target_anchor"]}
+                {"id":"sample/home","required":["home_anchor"]},
+                {"id":"sample/target","required":["target_anchor"]}
             ]
         }"#,
     )
     .expect("pages");
     fs::write(
-        navigation.join("arknights.cn.navigation.json"),
+        navigation.join("sample.local.navigation.json"),
         r#"{
             "schema_version":"0.3",
-            "game":"arknights",
-            "server":"cn",
+            "game":"sample",
+            "server":"local",
             "navigation":[{
                 "id":"home_to_target",
-                "from_page":"arknights/home",
-                "to_page":"arknights/target",
+                "from_page":"sample/home",
+                "to_page":"sample/target",
                 "click":{"kind":"rect","x":10,"y":20,"width":4,"height":6}
             }],
             "destructive_actions":[]
@@ -1213,8 +1213,8 @@ fn write_semantic_resources(root: &Path) {
             "detections":[{
                 "id":"detect_resolution",
                 "version":"1",
-                "game_id":"arknights",
-                "server_id":"cn",
+                "game_id":"sample",
+                "server_id":"local",
                 "resource_pack_id":"golden-pack",
                 "keys":[{
                     "key":"resolution",
@@ -1231,26 +1231,26 @@ fn write_semantic_resources(root: &Path) {
 }
 
 fn write_semantic_package(path: &Path, root: &Path) {
-    let pack = fs::read(root.join("recognition/arknights.cn.pack.json")).expect("semantic pack");
-    let pages = fs::read(root.join("recognition/arknights.cn.pages.json")).expect("semantic pages");
-    let navigation = fs::read(root.join("navigation/arknights.cn.navigation.json"))
+    let pack = fs::read(root.join("recognition/sample.local.pack.json")).expect("semantic pack");
+    let pages = fs::read(root.join("recognition/sample.local.pages.json")).expect("semantic pages");
+    let navigation = fs::read(root.join("navigation/sample.local.navigation.json"))
         .expect("semantic navigation");
     write_zip(
         path,
         &[
             (
                 "control.json",
-                br#"{"game":"arknights","server":"cn","entry_task_id":"task"}"#,
+                br#"{"game":"sample","server":"local","entry_task_id":"task"}"#,
             ),
             (
                 "resources/manifest.json",
                 br#"{"schema_version":"0.3","entry_task_id":"task"}"#,
             ),
             ("resources/operations/task/task.json", br#"{}"#),
-            ("resources/recognition/arknights.cn.pack.json", &pack),
-            ("resources/recognition/arknights.cn.pages.json", &pages),
+            ("resources/recognition/sample.local.pack.json", &pack),
+            ("resources/recognition/sample.local.pages.json", &pages),
             (
-                "resources/navigation/arknights.cn.navigation.json",
+                "resources/navigation/sample.local.navigation.json",
                 &navigation,
             ),
         ],
@@ -1272,8 +1272,8 @@ fn write_package_repo(root: &Path) {
         r#"{
             "schema_version":"0.3",
             "task_id":"operator_task",
-            "game":"arknights",
-            "server_scope":["cn"],
+            "game":"sample",
+            "server_scope":["local"],
             "locale":"zh-CN",
             "goal":"golden fixture",
             "coordinate_space":{"width":1280,"height":720},
@@ -1296,7 +1296,7 @@ fn write_package_repo(root: &Path) {
     )
     .expect("package task");
     fs::write(
-        root.join("navigation/arknights.cn.navigation.json"),
+        root.join("navigation/sample.local.navigation.json"),
         r#"{"schema_version":"0.3","control_points":[{"name":"home","point":[1,1]}]}"#,
     )
     .expect("package navigation file");
@@ -1334,8 +1334,8 @@ fn write_lab_package(path: &Path, scene: &[u8]) {
                     "schema_version":"Lab-1y.control.v1",
                     "package_id":"golden.task",
                     "execution_mode":"recognize_only",
-                    "game":"arknights",
-                    "server":"cn",
+                    "game":"sample",
+                    "server":"local",
                     "resolution":{"width":2,"height":2},
                     "entry_task_id":"task"
                 }"#,
@@ -1349,8 +1349,8 @@ fn write_lab_package(path: &Path, scene: &[u8]) {
                 br#"{
                     "schema_version":"0.3",
                     "task_id":"task",
-                    "game":"arknights",
-                    "server_scope":["cn"],
+                    "game":"sample",
+                    "server_scope":["local"],
                     "goal":"golden fixture",
                     "coordinate_space":{"width":2,"height":2},
                     "defaults":{"template_threshold":0.9,"color_max_distance":20.0},
@@ -1372,11 +1372,11 @@ fn write_lab_package(path: &Path, scene: &[u8]) {
             ),
             ("resources/operations/task/assets/HOME.png", scene),
             (
-                "resources/recognition/arknights.cn.pack.json",
+                "resources/recognition/sample.local.pack.json",
                 br#"{
                     "schema_version":"0.3",
-                    "game":"arknights",
-                    "server":"cn",
+                    "game":"sample",
+                    "server":"local",
                     "coordinate_space":{"width":2,"height":2},
                     "defaults":{"template_threshold":0.9,"color_max_distance":20.0},
                     "targets":[{
@@ -1389,8 +1389,8 @@ fn write_lab_package(path: &Path, scene: &[u8]) {
                 }"#,
             ),
             (
-                "resources/recognition/arknights.cn.pages.json",
-                br#"{"schema_version":"0.3","pages":[{"id":"arknights/home","required":["page/home"],"optional":[],"forbidden":[]}]}"#,
+                "resources/recognition/sample.local.pages.json",
+                br#"{"schema_version":"0.3","pages":[{"id":"sample/home","required":["page/home"],"optional":[],"forbidden":[]}]}"#,
             ),
         ],
     );

@@ -162,7 +162,7 @@ mod tests {
                 ("module/manifest.json", br#"{"schema_version":"0.2"}"#),
                 ("module/operations/task/task.json", br#"{"id":"task"}"#),
                 (
-                    "module/recognition/arknights.cn.pack.json",
+                    "module/recognition/game_alpha.region-a.pack.json",
                     br#"{
                         "schema_version":"0.5",
                         "targets":[{

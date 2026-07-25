@@ -1896,7 +1896,7 @@ mod tests {
                 ],
                 "pages": [
                   {
-                    "id": "bluearchive/task",
+                    "id": "game_beta/task",
                     "anchors": [
                       {
                         "kind": "template",
@@ -1911,14 +1911,14 @@ mod tests {
                 "navigation": [
                   {
                     "id": "home_to_task",
-                    "from_page": "bluearchive/home",
-                    "to_page": "bluearchive/task",
+                    "from_page": "game_beta/home",
+                    "to_page": "game_beta/task",
                     "click": {"kind": "point", "point": "66,237"}
                   },
                   {
                     "id": "home_drag_to_task",
-                    "from_page": "bluearchive/home",
-                    "to_page": "bluearchive/task",
+                    "from_page": "game_beta/home",
+                    "to_page": "game_beta/task",
                     "click": {
                       "kind": "drag",
                       "from": {"x": 300, "y": 600, "width": 30, "height": 20},
@@ -1928,7 +1928,7 @@ mod tests {
                   }
                 ],
                 "destructive_actions": [
-                  {"id": "collect", "page": "bluearchive/task", "kind": "claim", "point": "1150,671"}
+                  {"id": "collect", "page": "game_beta/task", "kind": "claim", "point": "1150,671"}
                 ]
             }"#,
         )
@@ -1964,7 +1964,7 @@ mod tests {
                 .overrides
                 .contains_page("navigation/home_to_task/arrive_anchor")
         );
-        assert!(bridge.overrides.contains_page("bluearchive/task"));
+        assert!(bridge.overrides.contains_page("game_beta/task"));
         let _ = fs::remove_dir_all(&dir);
     }
 
