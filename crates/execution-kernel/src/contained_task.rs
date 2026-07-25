@@ -413,17 +413,6 @@ impl PreparedContainedTask {
                             })
                             .map_err(ContainedTaskRunError::Boundary)?;
 
-                        let Some(policy) = retry_policy.as_ref() else {
-                            machine
-                                .operation_succeeded(
-                                    &operation_id,
-                                    Some(observation.page_label.clone()),
-                                )
-                                .map_err(|_| {
-                                    ContainedTaskError::new("contained_task_state_invalid")
-                                })?;
-                            break;
-                        };
                         if operation.to.is_none() {
                             machine
                                 .operation_succeeded(
@@ -451,6 +440,16 @@ impl PreparedContainedTask {
                                 })?;
                             break;
                         }
+                        let Some(policy) = retry_policy.as_ref() else {
+                            return Err(ContainedTaskError::with_detail(
+                                "page_confirmation_failed",
+                                format!(
+                                    "operation={operation_id} attempts={attempt} after_page={} hit_error_page={hit_error_page}",
+                                    observation.page_label
+                                ),
+                            )
+                            .into());
+                        };
                         match operation.failure_decision(
                             policy,
                             attempt,
@@ -1323,7 +1322,12 @@ fn scene_from_frame(frame: &Frame) -> Result<Scene, ContainedTaskError> {
 #[cfg(test)]
 mod retry_wiring_tests {
     use super::*;
+    use actingcommand_device::CaptureBackendName;
+    use actingcommand_page_detector::PageSet;
+    use actingcommand_recognition_pack::RecognitionPack;
     use serde_json::{Value, json};
+    use std::collections::VecDeque;
+    use std::path::PathBuf;
 
     fn control() -> TaskControl {
         serde_json::from_value(json!({
@@ -1356,6 +1360,244 @@ mod retry_wiring_tests {
             value["on_error"] = Value::String(on_error.to_string());
         }
         serde_json::from_value(value).expect("task operation")
+    }
+
+    fn omitted_policy_task(with_destination: bool, with_error_page: bool) -> PreparedContainedTask {
+        let control = control();
+        let mut task_operation = operation(json!({}), None);
+        if !with_destination {
+            task_operation.to = None;
+        }
+        task_operation.unguarded_trusted_coordinate = false;
+        task_operation.guard = Some(
+            serde_json::from_value(json!({
+                "page_id": "home",
+                "target_id": "guard/ready",
+                "expected_rect": {"x": 1, "y": 0, "width": 1, "height": 1},
+                "color_probe": "guard/ready"
+            }))
+            .expect("operation guard"),
+        );
+        task_operation
+            .validate(&control, TaskOperationDefaults::default())
+            .expect("valid omitted-policy operation");
+        let program = TaskProgram {
+            schema_version: "0.6".to_string(),
+            task_id: "task".to_string(),
+            game: "neutral".to_string(),
+            server_scope: vec!["test".to_string()],
+            coordinate_space: control.resolution,
+            target_page: Some("terminal".to_string()),
+            error_pages: if with_error_page {
+                vec!["error".to_string()]
+            } else {
+                Vec::new()
+            },
+            recovery: None,
+            defaults: TaskOperationDefaults::default(),
+            operations: vec![task_operation],
+        };
+        let pack: RecognitionPack = serde_json::from_value(json!({
+            "schema_version": "0.3",
+            "game": "neutral",
+            "server": "test",
+            "coordinate_space": {"width": 2, "height": 1},
+            "defaults": {"color_max_distance": 0.0},
+            "targets": [
+                {
+                    "type": "color",
+                    "id": "page/home",
+                    "region": {"x": 0, "y": 0, "width": 1, "height": 1},
+                    "expected": [255, 0, 0]
+                },
+                {
+                    "type": "color",
+                    "id": "page/terminal",
+                    "region": {"x": 0, "y": 0, "width": 1, "height": 1},
+                    "expected": [0, 0, 255]
+                },
+                {
+                    "type": "color",
+                    "id": "page/error",
+                    "region": {"x": 0, "y": 0, "width": 1, "height": 1},
+                    "expected": [255, 255, 0]
+                },
+                {
+                    "type": "color",
+                    "id": "guard/ready",
+                    "region": {"x": 1, "y": 0, "width": 1, "height": 1},
+                    "expected": [0, 255, 0]
+                }
+            ]
+        }))
+        .expect("recognition pack");
+        let evaluator =
+            RecognitionEvaluator::new(PathBuf::new(), pack).expect("recognition evaluator");
+        let page_set: PageSet = serde_json::from_value(json!({
+            "schema_version": "0.3",
+            "pages": [
+                {"id": "neutral/home", "required": ["page/home"]},
+                {"id": "neutral/terminal", "required": ["page/terminal"]},
+                {"id": "neutral/error", "required": ["page/error"]}
+            ]
+        }))
+        .expect("page set");
+        let detector = PageDetector::new(page_set).expect("page detector");
+        detector
+            .validate(&evaluator)
+            .expect("page detector targets");
+        PreparedContainedTask {
+            control,
+            program,
+            evaluator,
+            detector,
+            package_sha256: "fixture-sha256".to_string(),
+            entry_count: 5,
+            task_count: 1,
+        }
+    }
+
+    fn page_frame(page: &str) -> Frame {
+        let page_color = match page {
+            "home" => [255, 0, 0],
+            "terminal" => [0, 0, 255],
+            "error" => [255, 255, 0],
+            _ => panic!("unknown fixture page"),
+        };
+        Frame::from_pixels(
+            2,
+            1,
+            [page_color, [0, 255, 0]].concat(),
+            PixelFormat::Rgb8,
+            CaptureBackendName::FixtureSimulation,
+        )
+        .expect("fixture frame")
+    }
+
+    struct ScriptedRuntime {
+        frames: VecDeque<Frame>,
+        captures: usize,
+        inputs: usize,
+        traces: Vec<ContainedTaskTrace>,
+    }
+
+    impl ScriptedRuntime {
+        fn new(after_effect_page: &str) -> Self {
+            Self {
+                frames: [page_frame("home"), page_frame(after_effect_page)].into(),
+                captures: 0,
+                inputs: 0,
+                traces: Vec::new(),
+            }
+        }
+    }
+
+    impl ContainedTaskRuntime for ScriptedRuntime {
+        type Error = &'static str;
+
+        fn capture(&mut self) -> Result<Frame, Self::Error> {
+            self.captures += 1;
+            self.frames.pop_front().ok_or("fixture_frame_exhausted")
+        }
+
+        fn input(&mut self, _action: InputAction) -> Result<(), Self::Error> {
+            self.inputs += 1;
+            Ok(())
+        }
+
+        fn record(&mut self, trace: ContainedTaskTrace) -> Result<(), Self::Error> {
+            self.traces.push(trace);
+            Ok(())
+        }
+    }
+
+    fn run_omitted_policy(
+        with_destination: bool,
+        with_error_page: bool,
+        after_effect_page: &str,
+    ) -> (
+        Result<ContainedTaskOutcome, ContainedTaskRunError<&'static str>>,
+        ScriptedRuntime,
+    ) {
+        let task = omitted_policy_task(with_destination, with_error_page);
+        let mut runtime = ScriptedRuntime::new(after_effect_page);
+        let result = task.run(&mut runtime);
+        (result, runtime)
+    }
+
+    fn assert_single_effect(runtime: &ScriptedRuntime) {
+        assert_eq!(runtime.captures, 2);
+        assert_eq!(runtime.inputs, 1);
+        assert_eq!(
+            runtime
+                .traces
+                .iter()
+                .filter(|trace| matches!(trace, ContainedTaskTrace::EffectIntent { .. }))
+                .count(),
+            1
+        );
+        assert_eq!(
+            runtime
+                .traces
+                .iter()
+                .filter(|trace| matches!(trace, ContainedTaskTrace::EffectCompleted { .. }))
+                .count(),
+            1
+        );
+    }
+
+    fn assert_page_confirmation_failed(
+        result: Result<ContainedTaskOutcome, ContainedTaskRunError<&'static str>>,
+        after_page: &str,
+    ) {
+        let error = match result.expect_err("destination confirmation must fail") {
+            ContainedTaskRunError::Task(error) => error,
+            ContainedTaskRunError::Boundary(error) => {
+                panic!("unexpected fixture boundary error: {error}")
+            }
+        };
+        assert_eq!(error.code(), "page_confirmation_failed");
+        assert!(
+            error
+                .detail()
+                .is_some_and(|detail| detail.contains(&format!("after_page=neutral/{after_page}")))
+        );
+    }
+
+    #[test]
+    fn omitted_policy_destination_reached_succeeds_after_fresh_observation() {
+        let (result, runtime) = run_omitted_policy(true, false, "terminal");
+        let outcome = result.expect("reached destination");
+
+        assert_eq!(outcome.outcome, TaskOutcome::Success);
+        assert_eq!(outcome.final_page.as_deref(), Some("neutral/terminal"));
+        assert_single_effect(&runtime);
+    }
+
+    #[test]
+    fn omitted_policy_unchanged_page_fails_once_without_retry() {
+        let (result, runtime) = run_omitted_policy(true, false, "home");
+
+        assert_page_confirmation_failed(result, "home");
+        assert_single_effect(&runtime);
+    }
+
+    #[test]
+    fn omitted_policy_declared_error_page_fails_once_without_recovery() {
+        let (result, runtime) = run_omitted_policy(true, true, "error");
+
+        assert_page_confirmation_failed(result, "error");
+        assert_single_effect(&runtime);
+    }
+
+    #[test]
+    fn omitted_policy_without_destination_preserves_direct_success() {
+        let (result, runtime) = run_omitted_policy(false, false, "terminal");
+        let outcome = result.expect("operation without destination");
+
+        assert_eq!(outcome.outcome, TaskOutcome::Success);
+        assert_eq!(outcome.final_page.as_deref(), Some("neutral/terminal"));
+        assert_single_effect(&runtime);
     }
 
     #[test]
