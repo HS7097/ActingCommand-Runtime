@@ -4,12 +4,17 @@ use super::*;
 use crate::PersistedEvent;
 use crate::fact::StoredEventRecord;
 use actingcommand_contract::{
-    AuditInput, CommandPayloadDraft, EventAction, EventActor, EventDraft, EventLinksDraft,
-    EventOrigin, EventQuery, EventSeverity, EventSource, EventType, IdentifierIssuer,
-    IssuedActionId, IssuedCausationId, IssuedCorrelationId, IssuedEventId, IssuedFrameId,
-    IssuedInstanceId, IssuedLeaseId, IssuedRecognitionId, IssuedRequestId, IssuedRunId,
-    IssuedTaskId, OriginModule, ProjectionPayload, ProjectionProfile, SecretField,
-    SecretFingerprinter, SubscriptionCursor,
+    AuditInput, ClientPayloadDraft, CommandPayloadDraft, DiagnosticCode, EffectDisposition,
+    EventAction, EventActor, EventDraft, EventLinksDraft, EventOrigin, EventPayload,
+    EventPayloadDraft, EventQuery, EventSeverity, EventSource, EventType, IdentifierIssuer,
+    InputAction, IssuedActionId, IssuedCausationId, IssuedCorrelationId, IssuedEventId,
+    IssuedFrameId, IssuedInstanceId, IssuedLeaseId, IssuedRecognitionId, IssuedRequestId,
+    IssuedRunId, IssuedTaskId, LeasePayloadDraft, OriginModule, PerformanceContext,
+    PolicyActivitySample, PolicyAdmissionRecord, PolicyBudgetReceipt, PolicyDispatchEventData,
+    PolicyExecutionEventData, PolicyExecutionOutcome, PolicyFailureClass, PolicyFailureDisposition,
+    PolicyFailureRecord, PolicyPayload, PolicyPayloadDraft, PolicyReasonRecord, ProjectionPayload,
+    ProjectionProfile, SecretField, SecretFingerprinter, SubscriptionCursor, TaskOutcome,
+    TaskPayloadDraft, TaskSemanticFact,
 };
 use serde_json::Value;
 use std::fs::{self, OpenOptions};
@@ -170,6 +175,1071 @@ fn event_with_id_and_links(
     )
     .sanitize(&Sha256SecretFingerprinter::new(b"test-private-salt").expect("fingerprinter"))
     .expect("sanitize")
+}
+
+#[derive(Clone)]
+struct ScheduledRecoveryDrafts {
+    intent: actingcommand_contract::SanitizedEventDraft,
+    lease_granted: actingcommand_contract::SanitizedEventDraft,
+    admission: actingcommand_contract::SanitizedEventDraft,
+    execution: actingcommand_contract::SanitizedEventDraft,
+    task_request: actingcommand_contract::SanitizedEventDraft,
+    task_completed: actingcommand_contract::SanitizedEventDraft,
+    task_failed_warning: actingcommand_contract::SanitizedEventDraft,
+    task_failed_fatal: actingcommand_contract::SanitizedEventDraft,
+    task_failed_legacy: actingcommand_contract::SanitizedEventDraft,
+    task_failed_invalid: actingcommand_contract::SanitizedEventDraft,
+    task_effect: actingcommand_contract::SanitizedEventDraft,
+    task_release: actingcommand_contract::SanitizedEventDraft,
+    duplicate_task_release: actingcommand_contract::SanitizedEventDraft,
+    wrong_chain_task_release: actingcommand_contract::SanitizedEventDraft,
+    interrupted_release: actingcommand_contract::SanitizedEventDraft,
+    duplicate_interrupted_release: actingcommand_contract::SanitizedEventDraft,
+    recovered_success_execution: actingcommand_contract::SanitizedEventDraft,
+    recovered_warning_execution: actingcommand_contract::SanitizedEventDraft,
+    recovered_fatal_execution: actingcommand_contract::SanitizedEventDraft,
+    recovered_interrupted_execution: actingcommand_contract::SanitizedEventDraft,
+}
+
+fn scheduled_recovery_drafts() -> ScheduledRecoveryDrafts {
+    let issuer = identifiers();
+    let instance_id = issuer.mint_instance_id().expect("instance id");
+    let request_id = issuer.mint_request_id().expect("request id");
+    let task_request_id = issuer.mint_request_id().expect("task request id");
+    let correlation_id = issuer.mint_correlation_id().expect("correlation id");
+    let task_id = issuer.mint_task_id().expect("task id");
+    let run_id = issuer.mint_run_id().expect("run id");
+    let lease_id = issuer.mint_lease_id().expect("lease id");
+    let dispatch_links = EventLinksDraft::default()
+        .with_instance_id(instance_id)
+        .with_request_id(request_id)
+        .with_correlation_id(correlation_id)
+        .with_task_id(task_id)
+        .with_run_id(run_id)
+        .with_action_id(issuer.mint_action_id().expect("dispatch action"));
+    let lease_links = dispatch_links
+        .clone()
+        .with_lease_id(lease_id)
+        .with_action_id(issuer.mint_action_id().expect("lease action"));
+    let execution_links = lease_links
+        .clone()
+        .with_action_id(issuer.mint_action_id().expect("execution action"));
+    let task_request_links = EventLinksDraft::default()
+        .with_instance_id(instance_id)
+        .with_request_id(task_request_id)
+        .with_correlation_id(correlation_id)
+        .with_task_id(task_id)
+        .with_run_id(run_id);
+    let task_terminal_links = task_request_links.clone().with_lease_id(lease_id);
+    let task_release_links = task_terminal_links
+        .clone()
+        .with_action_id(issuer.mint_action_id().expect("task release action"));
+    let interrupted_release_links = lease_links
+        .clone()
+        .with_action_id(issuer.mint_action_id().expect("interrupted release action"));
+    let wrong_chain_task_release_links = EventLinksDraft::default()
+        .with_instance_id(instance_id)
+        .with_request_id(issuer.mint_request_id().expect("wrong request id"))
+        .with_correlation_id(correlation_id)
+        .with_task_id(task_id)
+        .with_run_id(run_id)
+        .with_lease_id(lease_id)
+        .with_action_id(issuer.mint_action_id().expect("wrong-chain release action"));
+    let dispatch = PolicyDispatchEventData {
+        decision_id: "decision:recovery-fixture".to_owned(),
+        task_id: "task:recovery-fixture".to_owned(),
+        instance_id: "instance:recovery-fixture".to_owned(),
+        operation_id: "operation:recovery-fixture".to_owned(),
+        package_digest: format!("sha256:{}", "1".repeat(64)),
+        procedure_binding_digest: format!("sha256:{}", "2".repeat(64)),
+        reason_chain_id: "reason:recovery-fixture".to_owned(),
+        reasons: vec![PolicyReasonRecord {
+            code: "scheduled".to_owned(),
+            detail: "deterministic recovery fixture".to_owned(),
+        }],
+        catalog_hash: format!("sha256:{}", "3".repeat(64)),
+        catalog_version: 1,
+        input_ledger_position: 1,
+        fact_snapshot_id: "snapshot:recovery-fixture".to_owned(),
+        approval_fact_ids: vec![],
+        urgency_milli: 100,
+    };
+    let admission = PolicyAdmissionRecord {
+        activity: PolicyActivitySample {
+            profile_id: "profile:recovery-fixture".to_owned(),
+            local_day: 1,
+            window_id: "window:recovery-fixture".to_owned(),
+            admitted_at_unix_ms: 1_752_147_200_100,
+            seed: 7,
+            interval_ms: 1_000,
+            next_eligible_unix_ms: 1_752_147_201_100,
+        },
+        budget: PolicyBudgetReceipt {
+            task_daily_used: 1,
+            task_daily_limit: 1,
+            task_window_used: 1,
+            task_window_limit: 1,
+            task_runtime_reserved_ms: 1,
+            task_runtime_limit_ms: 1,
+            activity_daily_used: 1,
+            activity_daily_limit: 1,
+            activity_window_used: 1,
+            activity_window_limit: 1,
+            activity_runtime_reserved_ms: 1,
+            activity_runtime_limit_ms: 1,
+        },
+    };
+    let execution = PolicyExecutionEventData {
+        decision_id: dispatch.decision_id.clone(),
+        task_id: dispatch.task_id.clone(),
+        instance_id: dispatch.instance_id.clone(),
+        observed_at_unix_ms: 1_752_147_200_400,
+        outcome: PolicyExecutionOutcome::Succeeded { runtime_ms: 50 },
+    };
+    let policy_failure = |class, runtime_ms| PolicyFailureRecord {
+        error_code: if class == PolicyFailureClass::Recoverable {
+            "capture_transient"
+        } else {
+            "capture_fatal"
+        }
+        .to_owned(),
+        reported_success: false,
+        original_class: class,
+        effective_class: class,
+        consecutive_same_error: 1,
+        escalation_streak: 1,
+        performance_tax_exempt: false,
+        retry_attempt: 0,
+        disposition: if class == PolicyFailureClass::Severe {
+            PolicyFailureDisposition::PausedTask
+        } else {
+            PolicyFailureDisposition::Continue
+        },
+        retry_at_unix_ms: None,
+        runtime_ms,
+        sensitive: false,
+        perf_context: Box::new(PerformanceContext::unavailable(1_752_147_200_400)),
+    };
+    let recovered_execution = |outcome| PolicyExecutionEventData {
+        decision_id: dispatch.decision_id.clone(),
+        task_id: dispatch.task_id.clone(),
+        instance_id: dispatch.instance_id.clone(),
+        observed_at_unix_ms: 1_752_147_200_400,
+        outcome,
+    };
+    let interrupted_failure = PolicyFailureRecord {
+        error_code: "policy_settlement_interrupted".to_owned(),
+        reported_success: false,
+        original_class: PolicyFailureClass::Severe,
+        effective_class: PolicyFailureClass::Severe,
+        consecutive_same_error: 1,
+        escalation_streak: 1,
+        performance_tax_exempt: false,
+        retry_attempt: 0,
+        disposition: PolicyFailureDisposition::PausedTask,
+        retry_at_unix_ms: None,
+        runtime_ms: 0,
+        sensitive: false,
+        perf_context: Box::new(PerformanceContext::unavailable(1_752_147_200_350)),
+    };
+    let sanitize = |timestamp_unix_ms, severity, origin, links, payload: EventPayloadDraft| {
+        EventDraft::new(
+            issuer.mint_event_id().expect("event id"),
+            timestamp_unix_ms,
+            severity,
+            origin,
+            links,
+            payload,
+        )
+        .sanitize(&Sha256SecretFingerprinter::new(b"scheduled-recovery-test").expect("salt"))
+        .expect("sanitize scheduled recovery fixture")
+    };
+    ScheduledRecoveryDrafts {
+        intent: sanitize(
+            1_752_147_200_100,
+            EventSeverity::Info,
+            EventOrigin::new(
+                EventSource::Scheduler,
+                OriginModule::Policy,
+                EventActor::Scheduler,
+            ),
+            dispatch_links.clone(),
+            PolicyPayloadDraft::dispatch_intent(dispatch.clone(), AuditInput::new()).into(),
+        ),
+        lease_granted: sanitize(
+            1_752_147_200_200,
+            EventSeverity::Info,
+            EventOrigin::new(
+                EventSource::Scheduler,
+                OriginModule::Scheduler,
+                EventActor::Scheduler,
+            ),
+            lease_links,
+            LeasePayloadDraft::granted(
+                EventAction::LeaseAcquire,
+                EffectDisposition::Performed,
+                AuditInput::new(),
+            )
+            .into(),
+        ),
+        admission: sanitize(
+            1_752_147_200_300,
+            EventSeverity::Info,
+            EventOrigin::new(
+                EventSource::Scheduler,
+                OriginModule::Policy,
+                EventActor::Scheduler,
+            ),
+            dispatch_links,
+            PolicyPayloadDraft::dispatch_admitted(
+                dispatch.clone(),
+                admission.clone(),
+                AuditInput::new(),
+            )
+            .into(),
+        ),
+        execution: sanitize(
+            1_752_147_200_400,
+            EventSeverity::Info,
+            EventOrigin::new(
+                EventSource::Scheduler,
+                OriginModule::Policy,
+                EventActor::Scheduler,
+            ),
+            execution_links,
+            PolicyPayloadDraft::execution_recorded(execution, AuditInput::new()).into(),
+        ),
+        task_request: sanitize(
+            1_752_147_200_350,
+            EventSeverity::Info,
+            EventOrigin::new(EventSource::Lab, OriginModule::Actinglab, EventActor::Lab),
+            task_request_links,
+            ClientPayloadDraft::lab_request(EventAction::RuntimeTaskRun, AuditInput::new()).into(),
+        ),
+        task_completed: sanitize(
+            1_752_147_200_400,
+            EventSeverity::Info,
+            EventOrigin::new(
+                EventSource::Runtime,
+                OriginModule::Runtime,
+                EventActor::Runtime,
+            ),
+            task_terminal_links.clone(),
+            TaskPayloadDraft::semantic(
+                TaskSemanticFact::TerminalCommitted {
+                    outcome: TaskOutcome::Success,
+                    final_page: Some("home".to_owned()),
+                    executed_steps: 0,
+                    failure_code: None,
+                },
+                AuditInput::new(),
+            )
+            .into(),
+        ),
+        task_failed_warning: sanitize(
+            1_752_147_200_400,
+            EventSeverity::Warning,
+            EventOrigin::new(
+                EventSource::Runtime,
+                OriginModule::Runtime,
+                EventActor::Runtime,
+            ),
+            task_terminal_links.clone(),
+            TaskPayloadDraft::semantic(
+                TaskSemanticFact::TerminalCommitted {
+                    outcome: TaskOutcome::Failure,
+                    final_page: None,
+                    executed_steps: 0,
+                    failure_code: Some("capture_transient".to_owned()),
+                },
+                AuditInput::new(),
+            )
+            .into(),
+        ),
+        task_failed_fatal: sanitize(
+            1_752_147_200_400,
+            EventSeverity::Fatal,
+            EventOrigin::new(
+                EventSource::Runtime,
+                OriginModule::Runtime,
+                EventActor::Runtime,
+            ),
+            task_terminal_links.clone(),
+            TaskPayloadDraft::semantic(
+                TaskSemanticFact::TerminalCommitted {
+                    outcome: TaskOutcome::Failure,
+                    final_page: None,
+                    executed_steps: 0,
+                    failure_code: Some("capture_fatal".to_owned()),
+                },
+                AuditInput::new(),
+            )
+            .into(),
+        ),
+        task_failed_legacy: sanitize(
+            1_752_147_200_400,
+            EventSeverity::Error,
+            EventOrigin::new(
+                EventSource::Runtime,
+                OriginModule::Runtime,
+                EventActor::Runtime,
+            ),
+            task_terminal_links.clone(),
+            TaskPayloadDraft::semantic(
+                TaskSemanticFact::TerminalCommitted {
+                    outcome: TaskOutcome::Failure,
+                    final_page: None,
+                    executed_steps: 0,
+                    failure_code: Some("capture_legacy".to_owned()),
+                },
+                AuditInput::new(),
+            )
+            .into(),
+        ),
+        task_failed_invalid: sanitize(
+            1_752_147_200_400,
+            EventSeverity::Warning,
+            EventOrigin::new(
+                EventSource::Runtime,
+                OriginModule::Runtime,
+                EventActor::Runtime,
+            ),
+            task_terminal_links.clone(),
+            TaskPayloadDraft::failed(
+                EventAction::RuntimeTaskRun,
+                DiagnosticCode::RuntimeDiagnostic,
+                EffectDisposition::Indeterminate,
+                AuditInput::new(),
+            )
+            .into(),
+        ),
+        task_effect: sanitize(
+            1_752_147_200_325,
+            EventSeverity::Info,
+            EventOrigin::new(
+                EventSource::Runtime,
+                OriginModule::Runtime,
+                EventActor::Runtime,
+            ),
+            task_terminal_links.clone(),
+            TaskPayloadDraft::semantic(
+                TaskSemanticFact::EffectIntent {
+                    step_index: 0,
+                    operation_label: "fixture".to_owned(),
+                    action: InputAction::Reset,
+                },
+                AuditInput::new(),
+            )
+            .into(),
+        ),
+        task_release: sanitize(
+            1_752_147_200_450,
+            EventSeverity::Info,
+            EventOrigin::new(
+                EventSource::Scheduler,
+                OriginModule::Scheduler,
+                EventActor::Scheduler,
+            ),
+            task_release_links.clone(),
+            LeasePayloadDraft::released(
+                EventAction::LeaseRelease,
+                EffectDisposition::Performed,
+                AuditInput::new(),
+            )
+            .into(),
+        ),
+        duplicate_task_release: sanitize(
+            1_752_147_200_451,
+            EventSeverity::Info,
+            EventOrigin::new(
+                EventSource::Scheduler,
+                OriginModule::Scheduler,
+                EventActor::Scheduler,
+            ),
+            task_release_links,
+            LeasePayloadDraft::released(
+                EventAction::LeaseRelease,
+                EffectDisposition::Performed,
+                AuditInput::new(),
+            )
+            .into(),
+        ),
+        wrong_chain_task_release: sanitize(
+            1_752_147_200_450,
+            EventSeverity::Info,
+            EventOrigin::new(
+                EventSource::Scheduler,
+                OriginModule::Scheduler,
+                EventActor::Scheduler,
+            ),
+            wrong_chain_task_release_links,
+            LeasePayloadDraft::released(
+                EventAction::LeaseRelease,
+                EffectDisposition::Performed,
+                AuditInput::new(),
+            )
+            .into(),
+        ),
+        interrupted_release: sanitize(
+            1_752_147_200_350,
+            EventSeverity::Info,
+            EventOrigin::new(
+                EventSource::Scheduler,
+                OriginModule::Scheduler,
+                EventActor::Scheduler,
+            ),
+            interrupted_release_links.clone(),
+            LeasePayloadDraft::released(
+                EventAction::LeaseRelease,
+                EffectDisposition::Performed,
+                AuditInput::new(),
+            )
+            .into(),
+        ),
+        duplicate_interrupted_release: sanitize(
+            1_752_147_200_351,
+            EventSeverity::Info,
+            EventOrigin::new(
+                EventSource::Scheduler,
+                OriginModule::Scheduler,
+                EventActor::Scheduler,
+            ),
+            interrupted_release_links,
+            LeasePayloadDraft::released(
+                EventAction::LeaseRelease,
+                EffectDisposition::Performed,
+                AuditInput::new(),
+            )
+            .into(),
+        ),
+        recovered_success_execution: sanitize(
+            1_752_147_200_400,
+            EventSeverity::Info,
+            EventOrigin::new(
+                EventSource::Scheduler,
+                OriginModule::Policy,
+                EventActor::Scheduler,
+            ),
+            EventLinksDraft::default(),
+            PolicyPayloadDraft::execution_recorded(
+                recovered_execution(PolicyExecutionOutcome::Succeeded { runtime_ms: 50 }),
+                AuditInput::new(),
+            )
+            .into(),
+        ),
+        recovered_warning_execution: sanitize(
+            1_752_147_200_400,
+            EventSeverity::Warning,
+            EventOrigin::new(
+                EventSource::Scheduler,
+                OriginModule::Policy,
+                EventActor::Scheduler,
+            ),
+            EventLinksDraft::default(),
+            PolicyPayloadDraft::execution_recorded(
+                recovered_execution(PolicyExecutionOutcome::Failed {
+                    failure: policy_failure(PolicyFailureClass::Recoverable, 50),
+                }),
+                AuditInput::new(),
+            )
+            .into(),
+        ),
+        recovered_fatal_execution: sanitize(
+            1_752_147_200_400,
+            EventSeverity::Error,
+            EventOrigin::new(
+                EventSource::Scheduler,
+                OriginModule::Policy,
+                EventActor::Scheduler,
+            ),
+            EventLinksDraft::default(),
+            PolicyPayloadDraft::execution_recorded(
+                recovered_execution(PolicyExecutionOutcome::Failed {
+                    failure: policy_failure(PolicyFailureClass::Severe, 50),
+                }),
+                AuditInput::new(),
+            )
+            .into(),
+        ),
+        recovered_interrupted_execution: sanitize(
+            1_752_147_200_350,
+            EventSeverity::Error,
+            EventOrigin::new(
+                EventSource::Scheduler,
+                OriginModule::Policy,
+                EventActor::Scheduler,
+            ),
+            EventLinksDraft::default(),
+            PolicyPayloadDraft::execution_recorded(
+                PolicyExecutionEventData {
+                    decision_id: dispatch.decision_id,
+                    task_id: dispatch.task_id,
+                    instance_id: dispatch.instance_id,
+                    observed_at_unix_ms: 1_752_147_200_350,
+                    outcome: PolicyExecutionOutcome::Failed {
+                        failure: interrupted_failure,
+                    },
+                },
+                AuditInput::new(),
+            )
+            .into(),
+        ),
+    }
+}
+
+fn append_scheduled_recovery_prefix(
+    ledger: &GlobalLedger,
+    drafts: &ScheduledRecoveryDrafts,
+) -> (PersistedEvent, PersistedEvent) {
+    ledger.append(drafts.intent.clone()).expect("intent");
+    ledger
+        .append(drafts.lease_granted.clone())
+        .expect("lease grant");
+    let admission = ledger.append(drafts.admission.clone()).expect("admission");
+    ledger
+        .append(drafts.task_request.clone())
+        .expect("task request");
+    ledger
+        .append(drafts.task_completed.clone())
+        .expect("task completed");
+    ledger
+        .append(drafts.task_release.clone())
+        .expect("task release");
+    let execution = ledger.append(drafts.execution.clone()).expect("execution");
+    (admission, execution)
+}
+
+fn append_scheduled_execution_recovery_prefix(
+    ledger: &GlobalLedger,
+    drafts: &ScheduledRecoveryDrafts,
+) {
+    ledger.append(drafts.intent.clone()).expect("intent");
+    ledger
+        .append(drafts.lease_granted.clone())
+        .expect("lease grant");
+    ledger.append(drafts.admission.clone()).expect("admission");
+}
+
+fn assert_recovered_execution_chain(recovered: &PersistedEvent, drafts: &ScheduledRecoveryDrafts) {
+    assert_eq!(recovered.event_type(), EventType::PolicyExecutionRecorded);
+    assert_eq!(
+        recovered.links().instance_id(),
+        drafts.lease_granted.links().instance_id()
+    );
+    assert_eq!(
+        recovered.links().request_id(),
+        drafts.lease_granted.links().request_id()
+    );
+    assert_eq!(
+        recovered.links().correlation_id(),
+        drafts.lease_granted.links().correlation_id()
+    );
+    assert_eq!(
+        recovered.links().task_id(),
+        drafts.lease_granted.links().task_id()
+    );
+    assert_eq!(
+        recovered.links().run_id(),
+        drafts.lease_granted.links().run_id()
+    );
+    assert_eq!(
+        recovered.links().lease_id(),
+        drafts.lease_granted.links().lease_id()
+    );
+    assert!(recovered.links().action_id().is_some());
+}
+
+fn recovery_execution_data(
+    draft: &actingcommand_contract::SanitizedEventDraft,
+) -> PolicyExecutionEventData {
+    let EventPayload::Policy(PolicyPayload::ExecutionRecorded(payload)) = draft.payload() else {
+        panic!("scheduled recovery fixture must carry an execution payload");
+    };
+    PolicyExecutionEventData {
+        decision_id: payload.decision_id().to_owned(),
+        task_id: payload.task_id().to_owned(),
+        instance_id: payload.instance_id().to_owned(),
+        observed_at_unix_ms: payload.observed_at_unix_ms(),
+        outcome: payload.outcome().clone(),
+    }
+}
+
+fn reconcile_scheduled_settlement(
+    ledger: &GlobalLedger,
+    draft: &actingcommand_contract::SanitizedEventDraft,
+) -> GlobalLedgerResult<PersistedEvent> {
+    ledger.reconcile_scheduled_policy_settlement(recovery_execution_data(draft))
+}
+
+fn recovered_execution_fact(
+    ledger: &GlobalLedger,
+    draft: &actingcommand_contract::SanitizedEventDraft,
+) -> PersistedEvent {
+    let decision_id = recovery_execution_data(draft).decision_id;
+    let events = ledger
+        .query(EventQuery::default())
+        .expect("query recovered facts");
+    let executions = events
+        .into_iter()
+        .filter(|event| {
+            matches!(
+                event.payload(),
+                EventPayload::Policy(PolicyPayload::ExecutionRecorded(payload))
+                    if payload.decision_id() == decision_id
+            )
+        })
+        .collect::<Vec<_>>();
+    let [execution] = executions.as_slice() else {
+        panic!("expected exactly one recovered execution fact");
+    };
+    execution.clone()
+}
+
+fn expect_recovered_execution_error(
+    ledger: GlobalLedger,
+    draft: actingcommand_contract::SanitizedEventDraft,
+    expected_code: &str,
+) {
+    let error = reconcile_scheduled_settlement(&ledger, &draft)
+        .expect_err("invalid recovery evidence must fail");
+    assert_eq!(error.code(), expected_code);
+    assert!(error.is_fatal());
+    ledger
+        .close()
+        .expect_err("fatal recovery rejection terminates the ledger");
+}
+
+#[test]
+fn generic_append_rejects_an_unlinked_scheduled_settlement() {
+    let temp = TempDir::new().expect("temp");
+    let ledger = GlobalLedger::open(config(&temp, "generic-settlement-writer")).expect("ledger");
+    let drafts = scheduled_recovery_drafts();
+
+    let error = ledger
+        .append(drafts.recovered_interrupted_execution)
+        .expect_err("generic append must not become recovery authority");
+
+    assert_eq!(error.code(), "scheduled_settlement_continuation_required");
+    assert!(error.is_fatal());
+    ledger
+        .close()
+        .expect_err("fatal generic settlement rejection terminates the ledger");
+}
+
+#[test]
+fn recovered_policy_completion_preserves_the_persisted_scheduled_chain() {
+    let temp = TempDir::new().expect("temp");
+    let ledger = GlobalLedger::open(config(&temp, "recovery-writer")).expect("ledger");
+    let drafts = scheduled_recovery_drafts();
+    let (_, execution) = append_scheduled_recovery_prefix(&ledger, &drafts);
+
+    let completion =
+        reconcile_scheduled_settlement(&ledger, &drafts.execution).expect("recover completion");
+
+    assert_eq!(completion.event_type(), EventType::PolicyDispatchCompleted);
+    assert_eq!(
+        completion.links().instance_id(),
+        execution.links().instance_id()
+    );
+    assert_eq!(
+        completion.links().request_id(),
+        execution.links().request_id()
+    );
+    assert_eq!(
+        completion.links().correlation_id(),
+        execution.links().correlation_id()
+    );
+    assert_eq!(completion.links().task_id(), execution.links().task_id());
+    assert_eq!(completion.links().run_id(), execution.links().run_id());
+    assert_eq!(completion.links().lease_id(), execution.links().lease_id());
+    assert!(completion.links().action_id().is_some());
+    assert_ne!(
+        completion.links().action_id(),
+        execution.links().action_id(),
+        "recovery must mint a fresh action"
+    );
+    ledger.close().expect("close ledger");
+}
+
+#[test]
+fn scheduled_settlement_continuation_is_one_shot_and_idempotent() {
+    let temp = TempDir::new().expect("temp");
+    let ledger = GlobalLedger::open(config(&temp, "one-shot-settlement-writer")).expect("ledger");
+    let drafts = scheduled_recovery_drafts();
+    append_scheduled_recovery_prefix(&ledger, &drafts);
+
+    let first = reconcile_scheduled_settlement(&ledger, &drafts.execution)
+        .expect("first settlement continuation");
+    let second = reconcile_scheduled_settlement(&ledger, &drafts.execution)
+        .expect("second settlement continuation");
+
+    assert_eq!(first.event_id(), second.event_id());
+    let events = ledger.query(EventQuery::default()).expect("query facts");
+    assert_eq!(
+        events
+            .iter()
+            .filter(|event| event.event_type() == EventType::PolicyExecutionRecorded)
+            .count(),
+        1
+    );
+    assert_eq!(
+        events
+            .iter()
+            .filter(|event| event.event_type() == EventType::PolicyDispatchCompleted)
+            .count(),
+        1
+    );
+    ledger.close().expect("close ledger");
+}
+
+#[test]
+fn recovered_policy_execution_accepts_only_the_four_structured_outcome_lanes() {
+    let success_root = TempDir::new().expect("success temp");
+    let success =
+        GlobalLedger::open(config(&success_root, "success-recovery-writer")).expect("ledger");
+    let success_drafts = scheduled_recovery_drafts();
+    append_scheduled_execution_recovery_prefix(&success, &success_drafts);
+    success
+        .append(success_drafts.task_request.clone())
+        .expect("task request");
+    let completed = success
+        .append(success_drafts.task_completed.clone())
+        .expect("task completed");
+    success
+        .append(success_drafts.task_release.clone())
+        .expect("task release");
+    reconcile_scheduled_settlement(&success, &success_drafts.recovered_success_execution)
+        .expect("recover successful execution");
+    let recovered = recovered_execution_fact(&success, &success_drafts.recovered_success_execution);
+    assert_recovered_execution_chain(&recovered, &success_drafts);
+    assert_eq!(recovered.timestamp_unix_ms(), completed.timestamp_unix_ms());
+    success.close().expect("close success ledger");
+
+    let recoverable_root = TempDir::new().expect("recoverable temp");
+    let recoverable = GlobalLedger::open(config(&recoverable_root, "recoverable-recovery-writer"))
+        .expect("ledger");
+    let recoverable_drafts = scheduled_recovery_drafts();
+    append_scheduled_execution_recovery_prefix(&recoverable, &recoverable_drafts);
+    recoverable
+        .append(recoverable_drafts.task_request.clone())
+        .expect("task request");
+    recoverable
+        .append(recoverable_drafts.task_failed_warning.clone())
+        .expect("recoverable task failure");
+    recoverable
+        .append(recoverable_drafts.task_release.clone())
+        .expect("task release");
+    reconcile_scheduled_settlement(
+        &recoverable,
+        &recoverable_drafts.recovered_warning_execution,
+    )
+    .expect("recover recoverable execution");
+    let recovered = recovered_execution_fact(
+        &recoverable,
+        &recoverable_drafts.recovered_warning_execution,
+    );
+    assert_recovered_execution_chain(&recovered, &recoverable_drafts);
+    assert_eq!(recovered.severity(), EventSeverity::Warning);
+    recoverable.close().expect("close recoverable ledger");
+
+    let severe_root = TempDir::new().expect("severe temp");
+    let severe =
+        GlobalLedger::open(config(&severe_root, "severe-recovery-writer")).expect("ledger");
+    let severe_drafts = scheduled_recovery_drafts();
+    append_scheduled_execution_recovery_prefix(&severe, &severe_drafts);
+    severe
+        .append(severe_drafts.task_request.clone())
+        .expect("task request");
+    severe
+        .append(severe_drafts.task_failed_fatal.clone())
+        .expect("severe task failure");
+    severe
+        .append(severe_drafts.task_release.clone())
+        .expect("task release");
+    reconcile_scheduled_settlement(&severe, &severe_drafts.recovered_fatal_execution)
+        .expect("recover severe execution");
+    let recovered = recovered_execution_fact(&severe, &severe_drafts.recovered_fatal_execution);
+    assert_recovered_execution_chain(&recovered, &severe_drafts);
+    assert_eq!(recovered.severity(), EventSeverity::Error);
+    severe.close().expect("close severe ledger");
+
+    let interrupted_root = TempDir::new().expect("interrupted temp");
+    let interrupted = GlobalLedger::open(config(&interrupted_root, "interrupted-recovery-writer"))
+        .expect("ledger");
+    let interrupted_drafts = scheduled_recovery_drafts();
+    append_scheduled_execution_recovery_prefix(&interrupted, &interrupted_drafts);
+    let release = interrupted
+        .append(interrupted_drafts.interrupted_release.clone())
+        .expect("failure release");
+    reconcile_scheduled_settlement(
+        &interrupted,
+        &interrupted_drafts.recovered_interrupted_execution,
+    )
+    .expect("recover interrupted settlement");
+    let recovered = recovered_execution_fact(
+        &interrupted,
+        &interrupted_drafts.recovered_interrupted_execution,
+    );
+    assert_recovered_execution_chain(&recovered, &interrupted_drafts);
+    assert_eq!(recovered.timestamp_unix_ms(), release.timestamp_unix_ms());
+    interrupted.close().expect("close interrupted ledger");
+}
+
+#[test]
+fn recovered_policy_execution_rejects_ambiguous_task_failure_evidence() {
+    let legacy_root = TempDir::new().expect("legacy temp");
+    let legacy =
+        GlobalLedger::open(config(&legacy_root, "legacy-recovery-writer")).expect("ledger");
+    let legacy_drafts = scheduled_recovery_drafts();
+    append_scheduled_execution_recovery_prefix(&legacy, &legacy_drafts);
+    legacy
+        .append(legacy_drafts.task_request.clone())
+        .expect("task request");
+    legacy
+        .append(legacy_drafts.task_failed_legacy.clone())
+        .expect("legacy task failure");
+    legacy
+        .append(legacy_drafts.task_release.clone())
+        .expect("task release");
+    expect_recovered_execution_error(
+        legacy,
+        legacy_drafts.recovered_warning_execution,
+        "scheduled_execution_recovery_failure_severity_ambiguous",
+    );
+
+    let invalid_root = TempDir::new().expect("invalid temp");
+    let invalid =
+        GlobalLedger::open(config(&invalid_root, "invalid-recovery-writer")).expect("ledger");
+    let invalid_drafts = scheduled_recovery_drafts();
+    append_scheduled_execution_recovery_prefix(&invalid, &invalid_drafts);
+    invalid
+        .append(invalid_drafts.task_request.clone())
+        .expect("task request");
+    invalid
+        .append(invalid_drafts.task_failed_invalid.clone())
+        .expect("invalid task failure");
+    invalid
+        .append(invalid_drafts.task_release.clone())
+        .expect("task release");
+    expect_recovered_execution_error(
+        invalid,
+        invalid_drafts.recovered_warning_execution,
+        "scheduled_execution_recovery_failure_invalid",
+    );
+
+    let duplicate_root = TempDir::new().expect("duplicate terminal temp");
+    let duplicate = GlobalLedger::open(config(
+        &duplicate_root,
+        "duplicate-terminal-recovery-writer",
+    ))
+    .expect("ledger");
+    let duplicate_drafts = scheduled_recovery_drafts();
+    append_scheduled_execution_recovery_prefix(&duplicate, &duplicate_drafts);
+    duplicate
+        .append(duplicate_drafts.task_request.clone())
+        .expect("task request");
+    duplicate
+        .append(duplicate_drafts.task_failed_warning.clone())
+        .expect("warning failure");
+    duplicate
+        .append(duplicate_drafts.task_failed_fatal.clone())
+        .expect("conflicting fatal failure");
+    duplicate
+        .append(duplicate_drafts.task_release.clone())
+        .expect("task release");
+    expect_recovered_execution_error(
+        duplicate,
+        duplicate_drafts.recovered_warning_execution,
+        "scheduled_execution_recovery_terminal_not_unique",
+    );
+}
+
+#[test]
+fn recovered_policy_execution_requires_one_matching_release() {
+    let missing_root = TempDir::new().expect("missing release temp");
+    let missing =
+        GlobalLedger::open(config(&missing_root, "missing-release-writer")).expect("ledger");
+    let missing_drafts = scheduled_recovery_drafts();
+    append_scheduled_execution_recovery_prefix(&missing, &missing_drafts);
+    missing
+        .append(missing_drafts.task_request.clone())
+        .expect("task request");
+    missing
+        .append(missing_drafts.task_failed_warning.clone())
+        .expect("task failure");
+    expect_recovered_execution_error(
+        missing,
+        missing_drafts.recovered_warning_execution,
+        "scheduled_execution_recovery_release_not_unique",
+    );
+
+    let duplicate_root = TempDir::new().expect("duplicate release temp");
+    let duplicate =
+        GlobalLedger::open(config(&duplicate_root, "duplicate-release-recovery-writer"))
+            .expect("ledger");
+    let duplicate_drafts = scheduled_recovery_drafts();
+    append_scheduled_execution_recovery_prefix(&duplicate, &duplicate_drafts);
+    duplicate
+        .append(duplicate_drafts.task_request.clone())
+        .expect("task request");
+    duplicate
+        .append(duplicate_drafts.task_failed_warning.clone())
+        .expect("task failure");
+    duplicate
+        .append(duplicate_drafts.task_release.clone())
+        .expect("task release");
+    duplicate
+        .append(duplicate_drafts.duplicate_task_release.clone())
+        .expect("duplicate task release");
+    expect_recovered_execution_error(
+        duplicate,
+        duplicate_drafts.recovered_warning_execution,
+        "scheduled_execution_recovery_release_not_unique",
+    );
+
+    let wrong_chain_root = TempDir::new().expect("wrong-chain release temp");
+    let wrong_chain = GlobalLedger::open(config(
+        &wrong_chain_root,
+        "wrong-chain-release-recovery-writer",
+    ))
+    .expect("ledger");
+    let wrong_chain_drafts = scheduled_recovery_drafts();
+    append_scheduled_execution_recovery_prefix(&wrong_chain, &wrong_chain_drafts);
+    wrong_chain
+        .append(wrong_chain_drafts.task_request.clone())
+        .expect("task request");
+    wrong_chain
+        .append(wrong_chain_drafts.task_failed_warning.clone())
+        .expect("task failure");
+    wrong_chain
+        .append(wrong_chain_drafts.wrong_chain_task_release.clone())
+        .expect("wrong-chain task release");
+    expect_recovered_execution_error(
+        wrong_chain,
+        wrong_chain_drafts.recovered_warning_execution,
+        "scheduled_execution_recovery_failure_conflict",
+    );
+}
+
+#[test]
+fn interrupted_policy_execution_recovery_rejects_effects_and_duplicate_release() {
+    let effect_root = TempDir::new().expect("effect temp");
+    let effect =
+        GlobalLedger::open(config(&effect_root, "effect-recovery-writer")).expect("ledger");
+    let effect_drafts = scheduled_recovery_drafts();
+    append_scheduled_execution_recovery_prefix(&effect, &effect_drafts);
+    effect
+        .append(effect_drafts.task_effect.clone())
+        .expect("task effect");
+    effect
+        .append(effect_drafts.interrupted_release.clone())
+        .expect("failure release");
+    expect_recovered_execution_error(
+        effect,
+        effect_drafts.recovered_interrupted_execution,
+        "scheduled_execution_recovery_interruption_conflict",
+    );
+
+    let duplicate_root = TempDir::new().expect("duplicate interrupted release temp");
+    let duplicate = GlobalLedger::open(config(
+        &duplicate_root,
+        "duplicate-interrupted-release-writer",
+    ))
+    .expect("ledger");
+    let duplicate_drafts = scheduled_recovery_drafts();
+    append_scheduled_execution_recovery_prefix(&duplicate, &duplicate_drafts);
+    duplicate
+        .append(duplicate_drafts.interrupted_release.clone())
+        .expect("failure release");
+    duplicate
+        .append(duplicate_drafts.duplicate_interrupted_release.clone())
+        .expect("duplicate failure release");
+    expect_recovered_execution_error(
+        duplicate,
+        duplicate_drafts.recovered_interrupted_execution,
+        "scheduled_execution_recovery_release_not_unique",
+    );
+}
+
+#[test]
+fn recovered_policy_completion_requires_a_complete_local_chain() {
+    let first_root = TempDir::new().expect("first temp");
+    let second_root = TempDir::new().expect("second temp");
+    let first = GlobalLedger::open(config(&first_root, "first-writer")).expect("first ledger");
+    let second = GlobalLedger::open(config(&second_root, "second-writer")).expect("second ledger");
+    let drafts = scheduled_recovery_drafts();
+    append_scheduled_recovery_prefix(&first, &drafts);
+
+    let error = reconcile_scheduled_settlement(&second, &drafts.execution)
+        .expect_err("a recovery continuation cannot import another ledger's facts");
+
+    assert_eq!(
+        error.code(),
+        "scheduled_execution_recovery_intent_not_unique"
+    );
+    assert!(error.is_fatal());
+    first.close().expect("close first ledger");
+    second
+        .close()
+        .expect_err("fatal recovery rejection terminates the second ledger");
+}
+
+#[test]
+fn recovered_policy_completion_rejects_missing_execution_and_lease_facts() {
+    let missing_execution_root = TempDir::new().expect("missing execution temp");
+    let missing_execution =
+        GlobalLedger::open(config(&missing_execution_root, "missing-execution-writer"))
+            .expect("ledger");
+    let drafts = scheduled_recovery_drafts();
+    append_scheduled_execution_recovery_prefix(&missing_execution, &drafts);
+    let error = reconcile_scheduled_settlement(&missing_execution, &drafts.execution)
+        .expect_err("missing release must fail");
+    assert_eq!(
+        error.code(),
+        "scheduled_execution_recovery_release_not_unique"
+    );
+    assert!(error.is_fatal());
+    missing_execution
+        .close()
+        .expect_err("fatal missing-execution rejection terminates the ledger");
+
+    let missing_root = TempDir::new().expect("missing temp");
+    let missing = GlobalLedger::open(config(&missing_root, "missing-writer")).expect("ledger");
+    let drafts = scheduled_recovery_drafts();
+    missing.append(drafts.intent).expect("intent");
+    missing.append(drafts.admission).expect("admission");
+    missing.append(drafts.execution.clone()).expect("execution");
+    let error = reconcile_scheduled_settlement(&missing, &drafts.execution)
+        .expect_err("missing lease fact must fail");
+    assert_eq!(
+        error.code(),
+        "scheduled_execution_recovery_lease_not_unique"
+    );
+    assert!(error.is_fatal());
+    missing
+        .close()
+        .expect_err("fatal missing-evidence rejection terminates the ledger");
+}
+
+#[test]
+fn recovered_policy_completion_rejects_duplicate_execution_evidence() {
+    let temp = TempDir::new().expect("temp");
+    let ledger = GlobalLedger::open(config(&temp, "duplicate-writer")).expect("ledger");
+    let drafts = scheduled_recovery_drafts();
+    append_scheduled_recovery_prefix(&ledger, &drafts);
+    let duplicate = scheduled_recovery_drafts();
+    ledger
+        .append(duplicate.execution)
+        .expect("append conflicting execution");
+
+    let error = reconcile_scheduled_settlement(&ledger, &drafts.execution)
+        .expect_err("duplicate execution must fail");
+
+    assert_eq!(error.code(), "scheduled_execution_recovery_not_unique");
+    assert!(error.is_fatal());
+    ledger
+        .close()
+        .expect_err("fatal duplicate rejection terminates the ledger");
 }
 
 #[test]

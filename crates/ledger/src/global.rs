@@ -7,9 +7,9 @@ mod storage;
 
 use crate::PersistedEvent;
 use actingcommand_contract::{
-    EventQuery, ProjectedArtifactReference, ProjectedEvent, ProjectionProfile, SanitizationError,
-    SanitizedEventDraft, SecretField, SecretFingerprinter, Sha256Fingerprint, SubscriptionCursor,
-    VerifiedArtifactReference,
+    EventQuery, PolicyExecutionEventData, ProjectedArtifactReference, ProjectedEvent,
+    ProjectionProfile, SanitizationError, SanitizedEventDraft, SecretField, SecretFingerprinter,
+    Sha256Fingerprint, SubscriptionCursor, VerifiedArtifactReference,
 };
 use sha2::{Digest, Sha256};
 use std::collections::VecDeque;
@@ -275,6 +275,10 @@ impl SecretFingerprinter for Sha256SecretFingerprinter {
 enum WriterCommand {
     Append {
         draft: Box<SanitizedEventDraft>,
+        response: SyncSender<GlobalLedgerResult<PersistedEvent>>,
+    },
+    ReconcileScheduledPolicySettlement {
+        execution: Box<PolicyExecutionEventData>,
         response: SyncSender<GlobalLedgerResult<PersistedEvent>>,
     },
     Query {
@@ -585,6 +589,32 @@ impl GlobalLedger {
         receive_response(receiver, "append_event")?
     }
 
+    /// Reconciles one already-admitted scheduled-policy outcome from ledger facts.
+    ///
+    /// This is deliberately the only recovery entry: callers can provide policy outcome
+    /// semantics, but cannot provide links, raw identifiers, cleanup reasons, or event drafts.
+    pub fn reconcile_scheduled_policy_settlement(
+        &self,
+        execution: PolicyExecutionEventData,
+    ) -> GlobalLedgerResult<PersistedEvent> {
+        let (response, receiver) = mpsc::sync_channel(1);
+        let sender = self.sender.as_ref().ok_or_else(|| {
+            GlobalLedgerError::fatal(
+                "writer_unavailable",
+                "reconcile_scheduled_policy_settlement",
+            )
+        })?;
+        send_command(
+            sender,
+            WriterCommand::ReconcileScheduledPolicySettlement {
+                execution: Box::new(execution),
+                response,
+            },
+            "reconcile_scheduled_policy_settlement",
+        )?;
+        receive_response(receiver, "reconcile_scheduled_policy_settlement")?
+    }
+
     pub fn query(&self, query: EventQuery) -> GlobalLedgerResult<Vec<PersistedEvent>> {
         let (response, receiver) = mpsc::sync_channel(1);
         let sender = self
@@ -803,6 +833,28 @@ fn writer_loop(
                 }
                 if terminal {
                     let error = result.expect_err("terminal append result must be an error");
+                    notify_terminal_failure(&mut subscribers, error.clone());
+                    let _ = response.send(Err(error.clone()));
+                    return Err(error);
+                }
+                if let Err(error) = result {
+                    let _ = response.send(Err(error));
+                }
+            }
+            WriterCommand::ReconcileScheduledPolicySettlement {
+                execution,
+                response,
+            } => {
+                let result = store.reconcile_scheduled_policy_settlement(*execution);
+                let terminal = result.as_ref().is_err_and(GlobalLedgerError::terminal);
+                if let Ok((completion, appended)) = &result {
+                    let _ = response.send(Ok(completion.clone()));
+                    for event in appended {
+                        deliver_live_event(&mut subscribers, event);
+                    }
+                }
+                if terminal {
+                    let error = result.expect_err("terminal settlement result must be an error");
                     notify_terminal_failure(&mut subscribers, error.clone());
                     let _ = response.send(Err(error.clone()));
                     return Err(error);
