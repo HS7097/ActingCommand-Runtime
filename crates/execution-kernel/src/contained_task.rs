@@ -6,8 +6,11 @@ use crate::{
     ExternalExpectedSha256, ExternallyVerifiedBundle, RunDirective, RunFailureObservation,
     RunFailureStage, RunOperationCandidate, RunOperationFailureDecision, RunOperationPolicy,
     RunStateConfig, RunStateMachine, RunTerminal, decide_run_operation_failure,
+    select_run_operation,
 };
-use actingcommand_contract::{InputAction, TaskOutcome};
+use actingcommand_contract::{
+    InputAction, SchedulingEffectCondition, SchedulingOutcomeDeclaration, TaskOutcome,
+};
 use actingcommand_device::{Frame, PixelFormat};
 use actingcommand_pack_containment::LoadedBundle;
 use actingcommand_page_detector::PageDetector;
@@ -15,7 +18,7 @@ use actingcommand_recognition::{Scene, ScenePixelFormat};
 use actingcommand_recognition_pack::{RecognitionEvaluator, TargetEvaluation, TargetKind};
 use serde::Deserialize;
 use serde::Serialize;
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, VecDeque};
 use std::error::Error;
 use std::fmt;
 use std::thread;
@@ -164,6 +167,7 @@ pub struct PreparedContainedTask {
     program: TaskProgram,
     evaluator: RecognitionEvaluator,
     detector: PageDetector,
+    scheduling_outcome: Option<SchedulingOutcomeDeclaration>,
     package_sha256: String,
     entry_count: usize,
     task_count: usize,
@@ -202,11 +206,13 @@ impl PreparedContainedTask {
             .validate(&evaluator)
             .map_err(|_| ContainedTaskError::new("contained_task_recognition_invalid"))?;
         program.validate(&control, &bundle, &detector)?;
+        let scheduling_outcome = program.scheduling_outcome.clone();
         Ok(Self {
             control,
             program,
             evaluator,
             detector,
+            scheduling_outcome,
             package_sha256,
             entry_count,
             task_count,
@@ -227,6 +233,14 @@ impl PreparedContainedTask {
 
     pub fn execution_mode(&self) -> &str {
         &self.control.execution_mode
+    }
+
+    pub fn game(&self) -> &str {
+        &self.control.game
+    }
+
+    pub fn scheduling_outcome(&self) -> Option<&SchedulingOutcomeDeclaration> {
+        self.scheduling_outcome.as_ref()
     }
 
     pub const fn entry_count(&self) -> usize {
@@ -931,6 +945,8 @@ struct TaskProgram {
     #[serde(default)]
     error_pages: Vec<String>,
     #[serde(default)]
+    scheduling_outcome: Option<SchedulingOutcomeDeclaration>,
+    #[serde(default)]
     recovery: Option<TaskRecovery>,
     #[serde(default)]
     defaults: TaskOperationDefaults,
@@ -963,6 +979,35 @@ impl TaskProgram {
         validate_page_references(&control.game, &target_pages, detector)?;
         validate_page_references(&control.game, &self.error_pages, detector)?;
         validate_page_set_overlap(&control.game, &target_pages, &self.error_pages, detector)?;
+        if let Some(declaration) = &self.scheduling_outcome {
+            validate_scheduling_outcome_execution_mode(control)?;
+            declaration.validate().map_err(|_| {
+                ContainedTaskError::new("contained_task_outcome_declaration_invalid")
+            })?;
+            if declaration
+                .designated_operation()
+                .is_some_and(|designated| {
+                    self.operations
+                        .iter()
+                        .filter(|operation| operation.id == designated)
+                        .count()
+                        != 1
+                })
+            {
+                return Err(ContainedTaskError::new(
+                    "contained_task_outcome_declaration_invalid",
+                ));
+            }
+            let terminal_pages = declaration
+                .mappings()
+                .iter()
+                .flat_map(|mapping| mapping.terminal_pages().iter().cloned())
+                .collect::<BTreeSet<_>>()
+                .into_iter()
+                .collect::<Vec<_>>();
+            validate_page_references(&control.game, &terminal_pages, detector)?;
+            validate_page_set_overlap(&control.game, &terminal_pages, &self.error_pages, detector)?;
+        }
         let mut operation_ids = BTreeSet::new();
         for operation in &self.operations {
             operation.validate(control, self.defaults)?;
@@ -977,6 +1022,16 @@ impl TaskProgram {
             if !operation_ids.insert(&operation.id) {
                 return Err(ContainedTaskError::new("contained_task_program_invalid"));
             }
+        }
+        if let Some(declaration) = &self.scheduling_outcome {
+            let observable_pages = detector.page_ids().map(str::to_owned).collect::<Vec<_>>();
+            validate_scheduling_outcome_coverage(
+                &control.game,
+                &target_pages,
+                &observable_pages,
+                &self.operations,
+                declaration,
+            )?;
         }
         self.validate_recovery(bundle)?;
         Ok(())
@@ -1032,6 +1087,124 @@ impl TaskProgram {
         }
         Ok(())
     }
+}
+
+fn validate_scheduling_outcome_execution_mode(
+    control: &TaskControl,
+) -> Result<(), ContainedTaskError> {
+    if control.execution_mode == "recognize_only" {
+        Err(ContainedTaskError::new(
+            "contained_task_outcome_declaration_invalid",
+        ))
+    } else {
+        Ok(())
+    }
+}
+
+fn validate_scheduling_outcome_coverage(
+    game: &str,
+    target_pages: &[String],
+    observable_pages: &[String],
+    operations: &[TaskOperation],
+    declaration: &SchedulingOutcomeDeclaration,
+) -> Result<(), ContainedTaskError> {
+    let designated_operation = declaration.designated_operation();
+    let candidates = operations
+        .iter()
+        .map(|operation| RunOperationCandidate::new(&operation.id, &operation.from))
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|_| ContainedTaskError::new("contained_task_operation_invalid"))?;
+    let mut pending = observable_pages
+        .iter()
+        .map(|page| (page.clone(), SchedulingEffectCondition::NoDesignatedEffect))
+        .collect::<VecDeque<_>>();
+    let mut visited = BTreeSet::new();
+    let mut reachable_terminals = BTreeSet::new();
+
+    while let Some((page, condition)) = pending.pop_front() {
+        if !visited.insert((page.clone(), condition)) {
+            continue;
+        }
+        if target_pages
+            .iter()
+            .any(|target| crate::page_anchor_matches(game, &page, target))
+        {
+            reachable_terminals.insert((condition, page));
+            continue;
+        }
+        if let Some(selected) = select_run_operation(game, &page, &candidates) {
+            let operation = operations
+                .iter()
+                .find(|operation| operation.id == selected.id())
+                .ok_or_else(|| ContainedTaskError::new("contained_task_operation_invalid"))?;
+            if condition == SchedulingEffectCondition::DesignatedEffectCompleted
+                && designated_operation == Some(operation.id.as_str())
+            {
+                return Err(ContainedTaskError::with_detail(
+                    "contained_task_outcome_declaration_incomplete",
+                    format!(
+                        "designated_operation={} is reachable after its effect completed",
+                        operation.id
+                    ),
+                ));
+            }
+            let next_condition = if condition
+                == SchedulingEffectCondition::DesignatedEffectCompleted
+                || designated_operation == Some(operation.id.as_str())
+            {
+                SchedulingEffectCondition::DesignatedEffectCompleted
+            } else {
+                SchedulingEffectCondition::NoDesignatedEffect
+            };
+            let destinations = operation.destination_pages()?;
+            if destinations.is_empty() {
+                return Err(ContainedTaskError::with_detail(
+                    "contained_task_outcome_declaration_incomplete",
+                    format!("operation={} has no finite postcondition", operation.id),
+                ));
+            }
+            for destination in destinations {
+                let matching_pages = observable_pages
+                    .iter()
+                    .filter(|page| crate::page_anchor_matches(game, page, &destination))
+                    .collect::<Vec<_>>();
+                let [concrete_page] = matching_pages.as_slice() else {
+                    return Err(ContainedTaskError::with_detail(
+                        "contained_task_outcome_declaration_incomplete",
+                        format!(
+                            "operation={} destination={} detector_matches={}",
+                            operation.id,
+                            destination,
+                            matching_pages.len()
+                        ),
+                    ));
+                };
+                pending.push_back(((*concrete_page).clone(), next_condition));
+            }
+        }
+    }
+
+    for (condition, terminal_page) in reachable_terminals {
+        let mapping_count = declaration
+            .mappings()
+            .iter()
+            .filter(|mapping| {
+                mapping.effect() == condition
+                    && mapping.terminal_pages().iter().any(|mapped_page| {
+                        crate::page_anchor_matches(game, &terminal_page, mapped_page)
+                    })
+            })
+            .count();
+        if mapping_count != 1 {
+            return Err(ContainedTaskError::with_detail(
+                "contained_task_outcome_declaration_incomplete",
+                format!(
+                    "effect={condition:?} terminal_page={terminal_page} mappings={mapping_count}"
+                ),
+            ));
+        }
+    }
+    Ok(())
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -1688,6 +1861,368 @@ mod retry_wiring_tests {
         serde_json::from_value(value).expect("task operation")
     }
 
+    fn scheduling_declaration(value: Value) -> SchedulingOutcomeDeclaration {
+        serde_json::from_value(value).expect("scheduling outcome declaration")
+    }
+
+    #[test]
+    fn scheduling_outcome_coverage_requires_only_reachable_terminal_conditions() {
+        let operations = vec![operation(json!({}), None)];
+        let declaration = scheduling_declaration(json!({
+            "designated_operation": "open_terminal",
+            "mappings": [
+                {
+                    "outcome_key": "effect-terminal",
+                    "effect": "designated_effect_completed",
+                    "terminal_pages": ["terminal"]
+                },
+                {
+                    "outcome_key": "no-effect-terminal",
+                    "effect": "no_designated_effect",
+                    "terminal_pages": ["terminal"]
+                }
+            ]
+        }));
+
+        validate_scheduling_outcome_coverage(
+            "neutral",
+            &["terminal".to_owned(), "alternate".to_owned()],
+            &[
+                "neutral/home".to_owned(),
+                "neutral/terminal".to_owned(),
+                "neutral/alternate".to_owned(),
+            ],
+            &operations,
+            &declaration,
+        )
+        .expect_err("every initial target is a reachable no-effect terminal");
+
+        let incomplete = scheduling_declaration(json!({
+            "designated_operation": "open_terminal",
+            "mappings": [
+                {
+                    "outcome_key": "wrong-page",
+                    "effect": "designated_effect_completed",
+                    "terminal_pages": ["home"]
+                },
+                {
+                    "outcome_key": "no-effect-terminal",
+                    "effect": "no_designated_effect",
+                    "terminal_pages": ["terminal"]
+                }
+            ]
+        }));
+        let error = validate_scheduling_outcome_coverage(
+            "neutral",
+            &["terminal".to_owned()],
+            &["neutral/home".to_owned(), "neutral/terminal".to_owned()],
+            &operations,
+            &incomplete,
+        )
+        .expect_err("reachable effect terminal must be covered");
+        assert_eq!(
+            error.code(),
+            "contained_task_outcome_declaration_incomplete"
+        );
+
+        let complete = scheduling_declaration(json!({
+            "designated_operation": "open_terminal",
+            "mappings": [
+                {
+                    "outcome_key": "effect-terminal",
+                    "effect": "designated_effect_completed",
+                    "terminal_pages": ["terminal"]
+                },
+                {
+                    "outcome_key": "no-effect-terminals",
+                    "effect": "no_designated_effect",
+                    "terminal_pages": ["terminal", "alternate"]
+                }
+            ]
+        }));
+        validate_scheduling_outcome_coverage(
+            "neutral",
+            &["terminal".to_owned(), "alternate".to_owned()],
+            &[
+                "neutral/home".to_owned(),
+                "neutral/terminal".to_owned(),
+                "neutral/alternate".to_owned(),
+            ],
+            &operations,
+            &complete,
+        )
+        .expect("unreachable designated-effect alternate terminal is not required");
+    }
+
+    #[test]
+    fn scheduling_outcome_coverage_accepts_unique_effect_and_no_effect_paths() {
+        let designated = operation(json!({}), None);
+        let ordinary: TaskOperation = serde_json::from_value(json!({
+            "id": "ordinary_terminal",
+            "from": "alternate",
+            "to": "terminal",
+            "click": {"kind": "point", "x": 1, "y": 0},
+            "unguarded_trusted_coordinate": true
+        }))
+        .expect("ordinary operation");
+        let declaration = scheduling_declaration(json!({
+            "designated_operation": "open_terminal",
+            "mappings": [
+                {
+                    "outcome_key": "effect-terminal",
+                    "effect": "designated_effect_completed",
+                    "terminal_pages": ["terminal"]
+                },
+                {
+                    "outcome_key": "no-effect-terminal",
+                    "effect": "no_designated_effect",
+                    "terminal_pages": ["terminal"]
+                }
+            ]
+        }));
+
+        validate_scheduling_outcome_coverage(
+            "neutral",
+            &["terminal".to_owned()],
+            &[
+                "neutral/home".to_owned(),
+                "neutral/alternate".to_owned(),
+                "neutral/terminal".to_owned(),
+            ],
+            &[designated, ordinary],
+            &declaration,
+        )
+        .expect("each mechanically reachable terminal condition has one mapping");
+    }
+
+    #[test]
+    fn scheduling_outcome_coverage_uses_formal_operation_precedence() {
+        let ordinary: TaskOperation = serde_json::from_value(json!({
+            "id": "ordinary_terminal",
+            "from": "home",
+            "to": "terminal",
+            "click": {"kind": "point", "x": 1, "y": 0},
+            "unguarded_trusted_coordinate": true
+        }))
+        .expect("ordinary operation");
+        let mut shadowed_designated = operation(json!({}), None);
+        shadowed_designated.to = None;
+        let declaration = scheduling_declaration(json!({
+            "designated_operation": "open_terminal",
+            "mappings": [
+                {
+                    "outcome_key": "effect-terminal",
+                    "effect": "designated_effect_completed",
+                    "terminal_pages": ["terminal"]
+                },
+                {
+                    "outcome_key": "no-effect-terminal",
+                    "effect": "no_designated_effect",
+                    "terminal_pages": ["terminal"]
+                }
+            ]
+        }));
+
+        validate_scheduling_outcome_coverage(
+            "neutral",
+            &["terminal".to_owned()],
+            &["neutral/home".to_owned(), "neutral/terminal".to_owned()],
+            &[ordinary, shadowed_designated],
+            &declaration,
+        )
+        .expect("a later same-page operation is unreachable under first-specific selection");
+    }
+
+    #[test]
+    fn scheduling_outcome_coverage_does_not_treat_any_as_an_observable_page() {
+        let designated = operation(json!({}), None);
+        let fallback: TaskOperation = serde_json::from_value(json!({
+            "id": "unreachable_fallback",
+            "from": "any",
+            "to": null,
+            "click": {"kind": "point", "x": 1, "y": 0},
+            "unguarded_trusted_coordinate": true
+        }))
+        .expect("fallback operation");
+        let declaration = scheduling_declaration(json!({
+            "designated_operation": "open_terminal",
+            "mappings": [
+                {
+                    "outcome_key": "effect-terminal",
+                    "effect": "designated_effect_completed",
+                    "terminal_pages": ["terminal"]
+                },
+                {
+                    "outcome_key": "no-effect-terminal",
+                    "effect": "no_designated_effect",
+                    "terminal_pages": ["terminal"]
+                }
+            ]
+        }));
+
+        validate_scheduling_outcome_coverage(
+            "neutral",
+            &["terminal".to_owned()],
+            &["neutral/home".to_owned(), "neutral/terminal".to_owned()],
+            &[designated, fallback],
+            &declaration,
+        )
+        .expect("the fallback is shadowed across the complete observable page domain");
+    }
+
+    #[test]
+    fn scheduling_outcome_coverage_canonicalizes_destination_anchors() {
+        let first: TaskOperation = serde_json::from_value(json!({
+            "id": "open_home",
+            "from": "neutral/start",
+            "to": "home",
+            "click": {"kind": "point", "x": 1, "y": 0},
+            "unguarded_trusted_coordinate": true
+        }))
+        .expect("first operation");
+        let second: TaskOperation = serde_json::from_value(json!({
+            "id": "open_terminal",
+            "from": "neutral/home",
+            "to": "terminal",
+            "click": {"kind": "point", "x": 1, "y": 0},
+            "unguarded_trusted_coordinate": true
+        }))
+        .expect("second operation");
+        let complete = scheduling_declaration(json!({
+            "designated_operation": "open_home",
+            "mappings": [
+                {
+                    "outcome_key": "effect-terminal",
+                    "effect": "designated_effect_completed",
+                    "terminal_pages": ["neutral/terminal"]
+                },
+                {
+                    "outcome_key": "no-effect-terminal",
+                    "effect": "no_designated_effect",
+                    "terminal_pages": ["neutral/terminal"]
+                }
+            ]
+        }));
+        let observable_pages = [
+            "neutral/start".to_owned(),
+            "neutral/home".to_owned(),
+            "neutral/terminal".to_owned(),
+        ];
+
+        validate_scheduling_outcome_coverage(
+            "neutral",
+            &["neutral/terminal".to_owned()],
+            &observable_pages,
+            &[first, second],
+            &complete,
+        )
+        .expect("short destinations resolve to the unique concrete detector page");
+
+        let missing_reachable_terminal = scheduling_declaration(json!({
+            "designated_operation": "open_home",
+            "mappings": [
+                {
+                    "outcome_key": "wrong-effect-page",
+                    "effect": "designated_effect_completed",
+                    "terminal_pages": ["neutral/home"]
+                },
+                {
+                    "outcome_key": "no-effect-terminal",
+                    "effect": "no_designated_effect",
+                    "terminal_pages": ["neutral/terminal"]
+                }
+            ]
+        }));
+        let error = validate_scheduling_outcome_coverage(
+            "neutral",
+            &["neutral/terminal".to_owned()],
+            &observable_pages,
+            &[
+                serde_json::from_value(json!({
+                    "id": "open_home",
+                    "from": "neutral/start",
+                    "to": "home",
+                    "click": {"kind": "point", "x": 1, "y": 0},
+                    "unguarded_trusted_coordinate": true
+                }))
+                .expect("first operation"),
+                serde_json::from_value(json!({
+                    "id": "open_terminal",
+                    "from": "neutral/home",
+                    "to": "terminal",
+                    "click": {"kind": "point", "x": 1, "y": 0},
+                    "unguarded_trusted_coordinate": true
+                }))
+                .expect("second operation"),
+            ],
+            &missing_reachable_terminal,
+        )
+        .expect_err("the concrete intermediate page must expose the reachable terminal");
+        assert_eq!(
+            error.code(),
+            "contained_task_outcome_declaration_incomplete"
+        );
+    }
+
+    #[test]
+    fn scheduling_outcome_coverage_rejects_unknown_and_repeated_effect_paths() {
+        let mut unknown = operation(json!({}), None);
+        unknown.to = None;
+        let declaration = scheduling_declaration(json!({
+            "designated_operation": "open_terminal",
+            "mappings": [
+                {
+                    "outcome_key": "effect-terminal",
+                    "effect": "designated_effect_completed",
+                    "terminal_pages": ["terminal"]
+                },
+                {
+                    "outcome_key": "no-effect-terminal",
+                    "effect": "no_designated_effect",
+                    "terminal_pages": ["terminal"]
+                }
+            ]
+        }));
+        let error = validate_scheduling_outcome_coverage(
+            "neutral",
+            &["terminal".to_owned()],
+            &["neutral/home".to_owned(), "neutral/terminal".to_owned()],
+            &[unknown],
+            &declaration,
+        )
+        .expect_err("mapped operation without a finite postcondition must fail admission");
+        assert_eq!(
+            error.code(),
+            "contained_task_outcome_declaration_incomplete"
+        );
+
+        let mut cycle = operation(json!({}), None);
+        cycle.to = Some(PageDeclaration::Singleton("home".to_owned()));
+        let error = validate_scheduling_outcome_coverage(
+            "neutral",
+            &["terminal".to_owned()],
+            &["neutral/home".to_owned(), "neutral/terminal".to_owned()],
+            &[cycle],
+            &declaration,
+        )
+        .expect_err("a reachable second designated effect must fail admission");
+        assert_eq!(
+            error.code(),
+            "contained_task_outcome_declaration_incomplete"
+        );
+    }
+
+    #[test]
+    fn recognize_only_rejects_scheduling_outcome_at_admission() {
+        let mut recognize_only = control();
+        recognize_only.execution_mode = "recognize_only".to_owned();
+
+        let error = validate_scheduling_outcome_execution_mode(&recognize_only)
+            .expect_err("recognize-only has no finite declared terminal-page closure");
+
+        assert_eq!(error.code(), "contained_task_outcome_declaration_invalid");
+    }
+
     fn omitted_policy_task(with_destination: bool, with_error_page: bool) -> PreparedContainedTask {
         let control = control();
         let mut task_operation = operation(json!({}), None);
@@ -1719,6 +2254,7 @@ mod retry_wiring_tests {
             } else {
                 Vec::new()
             },
+            scheduling_outcome: None,
             recovery: None,
             defaults: TaskOperationDefaults::default(),
             operations: vec![task_operation],
@@ -1784,6 +2320,7 @@ mod retry_wiring_tests {
             program,
             evaluator,
             detector,
+            scheduling_outcome: None,
             package_sha256: "fixture-sha256".to_string(),
             entry_count: 5,
             task_count: 1,

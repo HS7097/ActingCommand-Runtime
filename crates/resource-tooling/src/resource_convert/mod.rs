@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 use crate::{ResourceConvertRequest, ResourceConvertResponse, maa_task_graph};
-use actingcommand_contract::{LabError as CliError, LabResult as CliOutcome};
+use actingcommand_contract::{
+    LabError as CliError, LabResult as CliOutcome, SchedulingOutcomeDeclaration,
+};
 use serde_json::{Map, Value, json};
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::fs;
@@ -489,6 +491,16 @@ impl OperationConverter {
                 Ok(None) => {}
                 Err(error) => errors.push(error.message),
             }
+            match declared_scheduling_outcome_page_ids(bundle) {
+                Ok(pages) => validate_declared_page_set(
+                    &bundle.task_json_path(),
+                    "scheduling_outcome mappings",
+                    &pages,
+                    &declared_anchor_ids,
+                    &mut errors,
+                ),
+                Err(error) => errors.push(error.message),
+            }
             match required_string(&bundle.data, "game").and_then(|value| canonical_game(&value)) {
                 Ok(game) if game == self.game => {}
                 Ok(game) => errors.push(format!(
@@ -807,6 +819,15 @@ impl OperationConverter {
                 add_page(
                     &self.game,
                     anchor_id,
+                    &declared_anchor_ids,
+                    &mut pages,
+                    &mut order,
+                );
+            }
+            for anchor_id in declared_scheduling_outcome_page_ids(bundle)? {
+                add_page(
+                    &self.game,
+                    &anchor_id,
                     &declared_anchor_ids,
                     &mut pages,
                     &mut order,
@@ -1887,6 +1908,30 @@ fn declared_terminal_page_ids(bundle: &Bundle) -> CliOutcome<Option<Vec<String>>
         .get("target_page")
         .map(|value| parse_page_declaration(&bundle.task_json_path(), "target_page", value))
         .transpose()
+}
+
+fn declared_scheduling_outcome_page_ids(bundle: &Bundle) -> CliOutcome<Vec<String>> {
+    let Some(value) = bundle.data.get("scheduling_outcome") else {
+        return Ok(Vec::new());
+    };
+    let declaration: SchedulingOutcomeDeclaration =
+        serde_json::from_value(value.clone()).map_err(|_| {
+            CliError::package_invalid(format!(
+                "{}: scheduling_outcome declaration is invalid",
+                bundle.task_json_path().display()
+            ))
+        })?;
+    declaration.validate().map_err(|_| {
+        CliError::package_invalid(format!(
+            "{}: scheduling_outcome declaration is invalid",
+            bundle.task_json_path().display()
+        ))
+    })?;
+    Ok(declaration
+        .mappings()
+        .iter()
+        .flat_map(|mapping| mapping.terminal_pages().iter().cloned())
+        .collect())
 }
 
 fn operation_destination_page_ids(bundle: &Bundle, operation: &Value) -> CliOutcome<Vec<String>> {

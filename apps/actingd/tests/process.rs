@@ -1925,6 +1925,20 @@ fn actingd_policy_sources(version: u64) -> CatalogSources {
         "kind": "instance",
         "instance_id": INSTANCE_ALIAS
     });
+    tasks["tasks"][0]["feedback_stop"] = json!({
+        "kind": "clock",
+        "schedule": {
+            "kind": "at",
+            "clock_source": {
+                "kind": "server",
+                "timezone_id": "etc/utc",
+                "utc_offset_minutes": 0,
+                "dst_offset_minutes": 0,
+                "maintenance_drift_ms": 0
+            },
+            "at_ms": 4102444800000_u64
+        }
+    });
     tasks["tasks"][0]["instance_overrides"] = json!([]);
     sources.tasks.bytes = serde_json::to_vec_pretty(&tasks).expect("actingd task bytes");
 
@@ -2082,18 +2096,12 @@ fn policy_resources() -> EvaluationResources {
     }
 }
 
-fn configured_policy_facts(now_unix_ms: u64) -> EvaluationFacts {
+fn configured_policy_facts(_now_unix_ms: u64) -> EvaluationFacts {
     EvaluationFacts {
         ledger_position: 0,
         fact_snapshot_id: "snapshot:actingd-config-a".to_owned(),
         facts: Vec::new(),
-        outcomes: vec![actingcommand_policy::ObservedOutcome {
-            task_id: "fixture.observe".to_owned(),
-            instance_id: INSTANCE_ALIAS.to_owned(),
-            outcome_key: "completed".to_owned(),
-            value: FactValue::Boolean(false),
-            observed_at_unix_ms: now_unix_ms,
-        }],
+        outcomes: Vec::new(),
         tasks: Vec::new(),
         instances: vec![InstanceSnapshot {
             instance_id: INSTANCE_ALIAS.to_owned(),

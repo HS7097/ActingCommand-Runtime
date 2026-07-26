@@ -431,6 +431,7 @@ fn runtime_finishes_and_rebuilds_contained_task_after_client_is_killed() {
                 final_page: Some(page),
                 executed_steps: 1,
                 failure_code: None,
+                ..
             } if page == "neutral/terminal"
         )),
         "unexpected Runtime semantic facts after client kill: {facts:#?}"
