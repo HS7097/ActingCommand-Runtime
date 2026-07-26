@@ -1017,7 +1017,7 @@ fn validate_packaged_error_page_references(
         .iter()
         .map(|page| (page.id.as_str(), page))
         .collect::<BTreeMap<_, _>>();
-    let success_pages = packaged_success_page_ids(&error_pages.game, operation);
+    let success_pages = packaged_success_page_ids(operation_path, &error_pages.game, operation)?;
 
     for (error_page, error_page_id) in &error_pages.pages {
         let error_definition =
@@ -1053,26 +1053,140 @@ fn packaged_error_page_set_missing(operation_path: &str) -> ContainmentError {
     }
 }
 
-fn packaged_success_page_ids(game: &str, operation: &Value) -> BTreeMap<String, String> {
+fn packaged_success_page_ids(
+    operation_path: &str,
+    game: &str,
+    operation: &Value,
+) -> ContainmentResult<BTreeMap<String, String>> {
     let mut pages = BTreeMap::new();
-    if let Some(page) = operation.get("target_page").and_then(Value::as_str)
-        && page != "any"
-    {
-        pages.insert(page.to_string(), canonical_packaged_page_id(game, page));
+    if let Some(target_page) = operation.get("target_page") {
+        for page in
+            parse_packaged_page_declaration(operation_path, game, "target_page", target_page)?
+        {
+            pages.insert(page.clone(), canonical_packaged_page_id(game, &page));
+        }
     }
-    for action in operation
+    for (index, action) in operation
         .get("operations")
         .and_then(Value::as_array)
         .into_iter()
         .flatten()
+        .enumerate()
     {
-        if let Some(page) = action.get("to").and_then(Value::as_str)
-            && page != "any"
-        {
-            pages.insert(page.to_string(), canonical_packaged_page_id(game, page));
+        for page in packaged_operation_destination_pages(operation_path, game, index, action)? {
+            pages.insert(page.clone(), canonical_packaged_page_id(game, &page));
         }
     }
-    pages
+    Ok(pages)
+}
+
+fn packaged_operation_destination_pages(
+    operation_path: &str,
+    game: &str,
+    index: usize,
+    operation: &Value,
+) -> ContainmentResult<Vec<String>> {
+    let to = match operation.get("to") {
+        Some(Value::Null) | None => None,
+        Some(value) => Some(parse_packaged_page_declaration(
+            operation_path,
+            game,
+            &format!("operations[{index}].to"),
+            value,
+        )?),
+    };
+    let expected = match operation.get("expect_after") {
+        Some(Value::Null) | None => None,
+        Some(expect_after) => {
+            let expect_after =
+                expect_after
+                    .as_object()
+                    .ok_or_else(|| ContainmentError::PackParse {
+                        path: operation_path.to_string(),
+                        message: format!("operations[{index}].expect_after must be an object"),
+                    })?;
+            let page_id =
+                expect_after
+                    .get("page_id")
+                    .ok_or_else(|| ContainmentError::PackParse {
+                        path: operation_path.to_string(),
+                        message: format!("operations[{index}].expect_after missing page_id"),
+                    })?;
+            Some(parse_packaged_page_declaration(
+                operation_path,
+                game,
+                &format!("operations[{index}].expect_after.page_id"),
+                page_id,
+            )?)
+        }
+    };
+    match (to, expected) {
+        (Some(to), Some(expected)) if to != expected => Err(ContainmentError::PackParse {
+            path: operation_path.to_string(),
+            message: format!(
+                "operations[{index}] has conflicting to and expect_after destinations"
+            ),
+        }),
+        (Some(to), _) => Ok(to),
+        (None, Some(expected)) => Ok(expected),
+        (None, None) => Ok(Vec::new()),
+    }
+}
+
+fn parse_packaged_page_declaration(
+    operation_path: &str,
+    game: &str,
+    label: &str,
+    value: &Value,
+) -> ContainmentResult<Vec<String>> {
+    let mut pages = match value {
+        Value::String(page) => vec![page.clone()],
+        Value::Array(pages) => pages
+            .iter()
+            .enumerate()
+            .map(|(index, page)| {
+                page.as_str()
+                    .map(str::to_string)
+                    .ok_or_else(|| ContainmentError::PackParse {
+                        path: operation_path.to_string(),
+                        message: format!("{label}[{index}] must be a string page identifier"),
+                    })
+            })
+            .collect::<ContainmentResult<Vec<_>>>()?,
+        _ => {
+            return Err(ContainmentError::PackParse {
+                path: operation_path.to_string(),
+                message: format!("{label} must be a string or non-empty array of page identifiers"),
+            });
+        }
+    };
+    if pages.is_empty() {
+        return Err(ContainmentError::PackParse {
+            path: operation_path.to_string(),
+            message: format!("{label} must be a non-empty page set"),
+        });
+    }
+    if let Some(page) = pages
+        .iter()
+        .find(|page| page.trim().is_empty() || page.trim() != page.as_str() || *page == "any")
+    {
+        return Err(ContainmentError::PackParse {
+            path: operation_path.to_string(),
+            message: format!("{label} contains invalid exact page identifier '{page}'"),
+        });
+    }
+    let canonical = pages
+        .iter()
+        .map(|page| canonical_packaged_page_id(game, page))
+        .collect::<BTreeSet<_>>();
+    if canonical.len() != pages.len() {
+        return Err(ContainmentError::PackParse {
+            path: operation_path.to_string(),
+            message: format!("{label} contains a duplicate page identifier"),
+        });
+    }
+    pages.sort();
+    Ok(pages)
 }
 
 fn canonical_packaged_page_id(game: &str, page: &str) -> String {
@@ -1901,6 +2015,117 @@ mod tests {
         let error = containment
             .load(&instance, &zip, &expected)
             .expect_err("packaged structural overlap");
+
+        assert!(error.to_string().contains("structurally overlaps"));
+        assert!(error.to_string().contains("error_pages"));
+    }
+
+    #[test]
+    fn packaged_success_pages_include_complete_terminal_destination_and_expectation_sets() {
+        let operation = serde_json::json!({
+            "target_page": ["terminal_b", "terminal_a"],
+            "operations": [
+                {"to": ["destination_b", "destination_a"]},
+                {
+                    "to": null,
+                    "expect_after": {
+                        "page_id": ["expected_b", "expected_a"]
+                    }
+                }
+            ]
+        });
+
+        let pages = packaged_success_page_ids("operation.json", "neutral", &operation)
+            .expect("success pages");
+
+        assert_eq!(
+            pages.keys().map(String::as_str).collect::<Vec<_>>(),
+            vec![
+                "destination_a",
+                "destination_b",
+                "expected_a",
+                "expected_b",
+                "terminal_a",
+                "terminal_b",
+            ]
+        );
+    }
+
+    #[test]
+    fn packaged_success_page_declarations_fail_closed() {
+        for (case, operation, expected) in [
+            (
+                "empty target",
+                serde_json::json!({"target_page":[]}),
+                "target_page",
+            ),
+            (
+                "duplicate target",
+                serde_json::json!({"target_page":["home","home"]}),
+                "duplicate",
+            ),
+            (
+                "malformed destination",
+                serde_json::json!({"operations":[{"to":7}]}),
+                "to",
+            ),
+            (
+                "conflicting destination",
+                serde_json::json!({
+                    "operations":[{
+                        "to":"home",
+                        "expect_after":{"page_id":"terminal"}
+                    }]
+                }),
+                "conflicting",
+            ),
+        ] {
+            let error =
+                packaged_success_page_ids("operation.json", "neutral", &operation).expect_err(case);
+            assert!(error.to_string().contains(expected), "{case}: {error}");
+        }
+    }
+
+    #[test]
+    fn packaged_structural_overlap_checks_every_post_action_set_member() {
+        let task_id = "task_a";
+        let mut entries = lab_package_entries(task_id, [255, 0, 0]);
+        let operation_path = format!("resources/operations/{task_id}/task.json");
+        let mut operation: Value =
+            serde_json::from_slice(entries.get(&operation_path).expect("operation")).unwrap();
+        operation["operations"] = serde_json::json!([{
+            "id": "choose_post_action_page",
+            "purpose": "reach one of the declared post-action pages",
+            "from": "home",
+            "to": ["unrelated", "home"],
+            "click": {"kind":"point","x":0,"y":0},
+            "unguarded_trusted_coordinate": true,
+            "consumes": [],
+            "produces": []
+        }]);
+        operation["error_pages"] = serde_json::json!(["failure"]);
+        replace_manifested_entry(&mut entries, &operation_path, &operation);
+
+        let pages_path = "resources/recognition/neutral.test.pages.json";
+        let mut pages: Value =
+            serde_json::from_slice(entries.get(pages_path).expect("pages")).unwrap();
+        pages["pages"]
+            .as_array_mut()
+            .unwrap()
+            .push(serde_json::json!({
+                "id": "neutral/failure",
+                "required": ["home_color"]
+            }));
+        replace_manifested_entry(&mut entries, pages_path, &pages);
+
+        let zip = zip_from_map(entries);
+        let expected = Sha256Hash::digest(&zip);
+        let instance = InstanceId::new("set-error-page-conflict").expect("instance");
+        let mut containment = Containment::new();
+
+        let error = containment
+            .load(&instance, &zip, &expected)
+            .expect_err("second set member structurally overlaps error");
 
         assert!(error.to_string().contains("structurally overlaps"));
         assert!(error.to_string().contains("error_pages"));
