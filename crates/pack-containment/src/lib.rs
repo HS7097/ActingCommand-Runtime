@@ -1084,25 +1084,66 @@ fn canonical_packaged_page_id(game: &str, page: &str) -> String {
 }
 
 fn packaged_page_definitions_overlap(left: &PageDefinition, right: &PageDefinition) -> bool {
-    let forbidden = left
-        .forbidden
-        .iter()
-        .chain(right.forbidden.iter())
-        .map(String::as_str)
-        .collect::<BTreeSet<_>>();
-    if left
+    // A PageSet can prove overlap only when one definition implies the other.
+    // Distinct target ids may be mutually exclusive in the recognition pack.
+    packaged_page_definition_subsumes(left, right) || packaged_page_definition_subsumes(right, left)
+}
+
+fn packaged_page_definition_subsumes(broader: &PageDefinition, narrower: &PageDefinition) -> bool {
+    let narrower_required = narrower
         .required
         .iter()
-        .chain(right.required.iter())
-        .any(|target| forbidden.contains(target.as_str()))
-    {
-        return false;
-    }
-    left.any_of.iter().chain(right.any_of.iter()).all(|group| {
-        group
+        .map(String::as_str)
+        .collect::<BTreeSet<_>>();
+    let narrower_forbidden = narrower
+        .forbidden
+        .iter()
+        .map(String::as_str)
+        .collect::<BTreeSet<_>>();
+    let broader_forbidden = broader
+        .forbidden
+        .iter()
+        .map(String::as_str)
+        .collect::<BTreeSet<_>>();
+
+    let narrower_implies_target = |target: &str| {
+        narrower_required.contains(target)
+            || narrower.any_of.iter().any(|group| {
+                let viable = group
+                    .iter()
+                    .map(String::as_str)
+                    .filter(|candidate| !narrower_forbidden.contains(candidate))
+                    .collect::<Vec<_>>();
+                viable.len() == 1 && viable[0] == target
+            })
+    };
+
+    broader
+        .required
+        .iter()
+        .all(|target| narrower_implies_target(target))
+        && broader
+            .forbidden
             .iter()
-            .any(|target| !forbidden.contains(target.as_str()))
-    })
+            .all(|target| narrower_forbidden.contains(target.as_str()))
+        && broader.any_of.iter().all(|broader_group| {
+            let viable_broader = broader_group
+                .iter()
+                .map(String::as_str)
+                .filter(|target| !broader_forbidden.contains(target))
+                .collect::<BTreeSet<_>>();
+            viable_broader
+                .iter()
+                .any(|target| narrower_implies_target(target))
+                || narrower.any_of.iter().any(|narrower_group| {
+                    let viable_narrower = narrower_group
+                        .iter()
+                        .map(String::as_str)
+                        .filter(|target| !narrower_forbidden.contains(target))
+                        .collect::<BTreeSet<_>>();
+                    !viable_narrower.is_empty() && viable_narrower.is_subset(&viable_broader)
+                })
+        })
 }
 
 fn collect_recognition_pack_diagnostics(
@@ -1798,7 +1839,6 @@ mod tests {
         let pages_path = "resources/recognition/neutral.test.pages.json";
         let mut pages: Value =
             serde_json::from_slice(entries.get(pages_path).expect("pages")).unwrap();
-        pages["pages"][0]["forbidden"] = serde_json::json!(["failure_color"]);
         pages["pages"]
             .as_array_mut()
             .unwrap()
