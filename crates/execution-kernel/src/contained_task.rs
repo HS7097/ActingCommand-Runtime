@@ -1767,10 +1767,10 @@ mod retry_wiring_tests {
 
         fn capture(&mut self) -> Result<Frame, Self::Error> {
             self.captures += 1;
-            Ok(self
-                .frames
-                .pop_front()
-                .unwrap_or_else(|| self.last_frame.clone()))
+            Ok(match self.frames.pop_front() {
+                Some(frame) => frame,
+                None => self.last_frame.clone(),
+            })
         }
 
         fn input(&mut self, _action: InputAction) -> Result<(), Self::Error> {
