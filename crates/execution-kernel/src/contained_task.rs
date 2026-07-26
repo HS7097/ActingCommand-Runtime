@@ -438,7 +438,7 @@ impl PreparedContainedTask {
                                 .and_then(|expectation| expectation.interval_ms)
                                 .unwrap_or(capture_interval.as_millis() as u64),
                         );
-                        let failure = match self.await_postcondition(
+                        let (failed_observation, hit_error_page) = match self.await_postcondition(
                             runtime,
                             operation,
                             confirmation_timeout,
@@ -468,12 +468,16 @@ impl PreparedContainedTask {
                                 hit_error_page,
                             } => (observation, hit_error_page),
                         };
-                        let after_page = failure
-                            .0
+                        let after_page = failed_observation
                             .as_ref()
                             .map(|observation| observation.page_label.clone());
-                        let hit_error_page = failure.1;
                         let Some(policy) = retry_policy.as_ref() else {
+                            Self::finish_effect_attempt(
+                                runtime,
+                                step_index,
+                                &operation_id,
+                                failed_observation.as_ref(),
+                            )?;
                             return Err(ContainedTaskError::with_detail(
                                 "page_confirmation_failed",
                                 format!(
@@ -535,7 +539,15 @@ impl PreparedContainedTask {
                                         observation: fresh,
                                         hit_error_page: true,
                                     } => {
-                                        let after_page = fresh.map(|value| value.page_label);
+                                        let after_page = fresh
+                                            .as_ref()
+                                            .map(|observation| observation.page_label.clone());
+                                        Self::finish_effect_attempt(
+                                            runtime,
+                                            step_index,
+                                            &operation_id,
+                                            fresh.as_ref(),
+                                        )?;
                                         match operation.failure_decision(
                                             policy,
                                             attempt,
@@ -574,17 +586,58 @@ impl PreparedContainedTask {
                                             }
                                         }
                                     }
-                                    PostconditionResolution::Failed { .. } => {}
+                                    PostconditionResolution::Failed {
+                                        observation: Some(fresh),
+                                        hit_error_page: false,
+                                    } => {
+                                        Self::finish_effect_attempt(
+                                            runtime,
+                                            step_index,
+                                            &operation_id,
+                                            Some(&fresh),
+                                        )?;
+                                        observation = fresh;
+                                    }
+                                    PostconditionResolution::Failed {
+                                        observation: None,
+                                        hit_error_page: false,
+                                    } => {
+                                        Self::finish_effect_attempt(
+                                            runtime,
+                                            step_index,
+                                            &operation_id,
+                                            None,
+                                        )?;
+                                        return Err(ContainedTaskError::with_detail(
+                                            "page_confirmation_failed",
+                                            format!(
+                                                "operation={operation_id} attempts={attempt} after_page=<unrecognized> hit_error_page=false"
+                                            ),
+                                        )
+                                        .into());
+                                    }
                                 }
                                 attempt = next_attempt;
                             }
                             RunOperationFailureDecision::RequestRecovery(trigger) => {
+                                Self::finish_effect_attempt(
+                                    runtime,
+                                    step_index,
+                                    &operation_id,
+                                    failed_observation.as_ref(),
+                                )?;
                                 machine.operation_needs_recovery(trigger).map_err(|_| {
                                     ContainedTaskError::new("contained_task_state_invalid")
                                 })?;
                                 break;
                             }
                             RunOperationFailureDecision::Fail(_) => {
+                                Self::finish_effect_attempt(
+                                    runtime,
+                                    step_index,
+                                    &operation_id,
+                                    failed_observation.as_ref(),
+                                )?;
                                 return Err(ContainedTaskError::with_detail(
                                     "contained_task_requires_scheduler",
                                     format!(
@@ -618,6 +671,24 @@ impl PreparedContainedTask {
                 }
             }
         }
+    }
+
+    fn finish_effect_attempt<R: ContainedTaskRuntime>(
+        runtime: &mut R,
+        step_index: u32,
+        operation_label: &str,
+        observation: Option<&PageObservation>,
+    ) -> Result<(), ContainedTaskRunError<R::Error>> {
+        runtime
+            .record(ContainedTaskTrace::StepFinished {
+                step_index,
+                operation_label: operation_label.to_string(),
+                page_label: match observation {
+                    Some(observation) => observation.page_label.clone(),
+                    None => "<unrecognized>".to_string(),
+                },
+            })
+            .map_err(ContainedTaskRunError::Boundary)
     }
 
     fn capture_until_page<R: ContainedTaskRuntime>(
@@ -1737,6 +1808,17 @@ mod retry_wiring_tests {
         .expect("fixture frame")
     }
 
+    fn unrecognized_frame() -> Frame {
+        Frame::from_pixels(
+            2,
+            1,
+            [0, 0, 0, 0, 255, 0].to_vec(),
+            PixelFormat::Rgb8,
+            CaptureBackendName::FixtureSimulation,
+        )
+        .expect("unrecognized fixture frame")
+    }
+
     struct ScriptedRuntime {
         frames: VecDeque<Frame>,
         last_frame: Frame,
@@ -1818,6 +1900,30 @@ mod retry_wiring_tests {
         );
     }
 
+    fn assert_closed_effect_attempts(runtime: &ScriptedRuntime, attempts: usize) {
+        let sequence = runtime
+            .traces
+            .iter()
+            .filter_map(|trace| match trace {
+                ContainedTaskTrace::StepStarted { .. } => Some("step_started"),
+                ContainedTaskTrace::EffectIntent { .. } => Some("effect_intent"),
+                ContainedTaskTrace::EffectCompleted { .. } => Some("effect_completed"),
+                ContainedTaskTrace::StepFinished { .. } => Some("step_finished"),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            sequence,
+            [
+                "step_started",
+                "effect_intent",
+                "effect_completed",
+                "step_finished",
+            ]
+            .repeat(attempts)
+        );
+    }
+
     fn assert_page_confirmation_failed(
         result: Result<ContainedTaskOutcome, ContainedTaskRunError<&'static str>>,
         after_page: &str,
@@ -1844,6 +1950,31 @@ mod retry_wiring_tests {
         assert_eq!(outcome.outcome, TaskOutcome::Success);
         assert_eq!(outcome.final_page.as_deref(), Some("neutral/terminal"));
         assert_single_effect(&runtime);
+        assert_closed_effect_attempts(&runtime, 1);
+    }
+
+    #[test]
+    fn destination_without_expect_after_uses_the_configured_bounded_wait() {
+        let mut task = omitted_policy_task(true, false);
+        task.control.step_timeout_ms = Some(50);
+        assert!(task.program.operations[0].expect_after.is_none());
+        let terminal = page_frame("terminal");
+        let mut runtime = ScriptedRuntime {
+            frames: [page_frame("home"), page_frame("home"), terminal.clone()].into(),
+            last_frame: terminal,
+            captures: 0,
+            inputs: 0,
+            traces: Vec::new(),
+        };
+
+        let outcome = task
+            .run(&mut runtime)
+            .expect("bounded wait must observe the later destination");
+
+        assert_eq!(outcome.final_page.as_deref(), Some("neutral/terminal"));
+        assert_eq!(runtime.captures, 3);
+        assert_single_effect(&runtime);
+        assert_closed_effect_attempts(&runtime, 1);
     }
 
     #[test]
@@ -1852,6 +1983,7 @@ mod retry_wiring_tests {
 
         assert_page_confirmation_failed(result, "home");
         assert_single_effect(&runtime);
+        assert_closed_effect_attempts(&runtime, 1);
     }
 
     #[test]
@@ -1860,6 +1992,7 @@ mod retry_wiring_tests {
 
         assert_page_confirmation_failed(result, "error");
         assert_single_effect(&runtime);
+        assert_closed_effect_attempts(&runtime, 1);
     }
 
     #[test]
@@ -1870,6 +2003,7 @@ mod retry_wiring_tests {
         assert_eq!(outcome.outcome, TaskOutcome::Success);
         assert_eq!(outcome.final_page.as_deref(), Some("neutral/terminal"));
         assert_single_effect(&runtime);
+        assert_closed_effect_attempts(&runtime, 1);
     }
 
     #[test]
@@ -2064,6 +2198,61 @@ mod retry_wiring_tests {
                 .expect("final decision"),
             RunOperationFailureDecision::Fail(_)
         ));
+    }
+
+    #[test]
+    fn every_failed_retry_attempt_finishes_before_the_next_attempt_starts() {
+        let mut task = omitted_policy_task(true, false);
+        let operation = &mut task.program.operations[0];
+        operation.retryable = Some(true);
+        operation.max_attempts = Some(6);
+        operation.retry_interval_ms = Some(1);
+        let mut runtime = ScriptedRuntime::new("home");
+
+        let error = match task
+            .run(&mut runtime)
+            .expect_err("sixth failed attempt must stop")
+        {
+            ContainedTaskRunError::Task(error) => error,
+            ContainedTaskRunError::Boundary(error) => {
+                panic!("unexpected fixture boundary error: {error}")
+            }
+        };
+
+        assert_eq!(error.code(), "contained_task_requires_scheduler");
+        assert_eq!(runtime.inputs, 6);
+        assert_closed_effect_attempts(&runtime, 6);
+    }
+
+    #[test]
+    fn unrecognized_fresh_retry_observation_closes_without_second_effect() {
+        let mut task = omitted_policy_task(true, false);
+        let operation = &mut task.program.operations[0];
+        operation.retryable = Some(true);
+        operation.max_attempts = Some(6);
+        operation.retry_interval_ms = Some(1);
+        let unknown = unrecognized_frame();
+        let mut runtime = ScriptedRuntime {
+            frames: [page_frame("home"), page_frame("home"), unknown.clone()].into(),
+            last_frame: unknown,
+            captures: 0,
+            inputs: 0,
+            traces: Vec::new(),
+        };
+
+        let error = match task
+            .run(&mut runtime)
+            .expect_err("unrecognized fresh observation must stop")
+        {
+            ContainedTaskRunError::Task(error) => error,
+            ContainedTaskRunError::Boundary(error) => {
+                panic!("unexpected fixture boundary error: {error}")
+            }
+        };
+
+        assert_eq!(error.code(), "page_confirmation_failed");
+        assert_single_effect(&runtime);
+        assert_closed_effect_attempts(&runtime, 1);
     }
 
     #[test]
