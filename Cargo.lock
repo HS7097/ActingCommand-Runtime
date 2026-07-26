@@ -271,7 +271,9 @@ version = "0.1.0"
 dependencies = [
  "actingcommand-contract",
  "actingcommand-pack-containment",
+ "actingcommand-page-detector",
  "actingcommand-policy",
+ "actingcommand-recognition",
  "actingcommand-recognition-pack",
  "serde",
  "serde_json",

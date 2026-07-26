@@ -194,6 +194,234 @@ fn build_pages_rejects_unknown_page_rule() {
 }
 
 #[test]
+fn build_pages_materializes_page_referenced_only_by_error_pages() {
+    let converter = OperationConverter {
+        root: PathBuf::from("."),
+        game: "neutral".to_string(),
+        server: "test".to_string(),
+        locale: "en-US".to_string(),
+        coordinate_space: json!({"width":1,"height":1}),
+        defaults: json!({"template_threshold":0.9}),
+        resource_ids: HashSet::new(),
+        bundles: vec![Bundle {
+            task_id: "error-page-check".to_string(),
+            dir: PathBuf::from("operations/error-page-check"),
+            data: json!({
+                "schema_version": "0.5",
+                "task_id": "error-page-check",
+                "anchors": [
+                    {"id":"home","template":"assets/HOME.png","region":{"mode":"rect","rect":{"x":0,"y":0,"width":1,"height":1}}},
+                    {"id":"failure","template":"assets/FAILURE.png","region":{"mode":"rect","rect":{"x":0,"y":0,"width":1,"height":1}}}
+                ],
+                "entry_page": "home",
+                "target_page": "home",
+                "error_pages": ["failure"],
+                "operations": []
+            }),
+        }],
+        existing_navigation: None,
+        maa_task_overlays: HashMap::new(),
+    };
+
+    let pages = converter.build_pages().expect("build pages");
+
+    assert!(
+        pages["pages"]
+            .as_array()
+            .expect("pages array")
+            .iter()
+            .any(|page| page["id"] == "neutral/failure"),
+        "error-pages-only reference must be materialized"
+    );
+}
+
+fn one_pixel_png() -> &'static [u8] {
+    &[
+        137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82, 0, 0, 0, 1, 0, 0, 0, 1, 8, 2,
+        0, 0, 0, 144, 119, 83, 222, 0, 0, 0, 12, 73, 68, 65, 84, 120, 156, 99, 248, 207, 192, 0, 0,
+        3, 1, 1, 0, 201, 254, 146, 239, 0, 0, 0, 0, 73, 69, 78, 68, 174, 66, 96, 130,
+    ]
+}
+
+fn write_error_page_fixture() -> tempfile::TempDir {
+    let root = tempfile::tempdir().unwrap();
+    let task_dir = root.path().join("operations/error-page-check");
+    fs::create_dir_all(task_dir.join("assets")).unwrap();
+    for asset in ["HOME.png", "SUCCESS.png", "FAILURE.png"] {
+        fs::write(task_dir.join("assets").join(asset), one_pixel_png()).unwrap();
+    }
+    fs::write(
+        root.path().join("operations/resources.json"),
+        serde_json::to_vec(&json!({"resources":[]})).unwrap(),
+    )
+    .unwrap();
+    fs::write(
+        task_dir.join("task.json"),
+        serde_json::to_vec_pretty(&json!({
+            "schema_version": "0.5",
+            "task_id": "error-page-check",
+            "game": "neutral",
+            "server_scope": ["test"],
+            "locale": "en-US",
+            "coordinate_space": {"width":1,"height":1},
+            "defaults": {"template_threshold":0.9},
+            "anchors": [
+                {"id":"home","template":"assets/HOME.png","region":{"mode":"rect","rect":{"x":0,"y":0,"width":1,"height":1}}},
+                {"id":"success","template":"assets/SUCCESS.png","region":{"mode":"rect","rect":{"x":0,"y":0,"width":1,"height":1}}},
+                {"id":"failure","template":"assets/FAILURE.png","region":{"mode":"rect","rect":{"x":0,"y":0,"width":1,"height":1}}}
+            ],
+            "entry_page": "home",
+            "target_page": "success",
+            "error_pages": ["failure"],
+            "page_rules": {
+                "success": {"forbidden": ["page/failure"]}
+            },
+            "operations": []
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    root
+}
+
+fn update_error_page_fixture_task(root: &Path, update: impl FnOnce(&mut Value)) {
+    let task_path = root.join("operations/error-page-check/task.json");
+    let mut task: Value = serde_json::from_slice(&fs::read(&task_path).unwrap()).unwrap();
+    update(&mut task);
+    fs::write(task_path, serde_json::to_vec_pretty(&task).unwrap()).unwrap();
+}
+
+#[test]
+fn error_page_only_reference_is_consumed_by_formal_detector() {
+    let root = write_error_page_fixture();
+    let converter = OperationConverter::load(root.path(), None, None, None).unwrap();
+    let outputs = converter.build_all().unwrap();
+    let evaluator = actingcommand_recognition_pack::RecognitionEvaluator::new(
+        root.path().to_path_buf(),
+        serde_json::from_value(outputs.pack.clone()).unwrap(),
+    )
+    .unwrap();
+    let page_set: actingcommand_page_detector::PageSet =
+        serde_json::from_value(outputs.pages.clone()).unwrap();
+    let detector = actingcommand_page_detector::PageDetector::new(page_set).unwrap();
+    let scene = actingcommand_recognition::Scene::from_png(one_pixel_png()).unwrap();
+
+    detector.validate(&evaluator).unwrap();
+    assert!(detector.contains_page("neutral/failure"));
+    let evaluation = detector
+        .evaluate_page(&evaluator, &scene, "neutral/failure")
+        .unwrap();
+    assert_eq!(evaluation.page_id, "neutral/failure");
+    assert!(evaluation.matched);
+}
+
+#[test]
+fn error_page_conversion_is_byte_deterministic() {
+    let root = write_error_page_fixture();
+    let converter = OperationConverter::load(root.path(), None, None, None).unwrap();
+
+    let first = converter.build_all().unwrap();
+    let second = converter.build_all().unwrap();
+    let serialize = |outputs: ConvertOutputs| {
+        serde_json::to_vec(&json!({
+            "pack": outputs.pack,
+            "pages": outputs.pages,
+            "navigation": outputs.navigation,
+            "index": outputs.index,
+            "primitives": outputs.primitives
+        }))
+        .unwrap()
+    };
+
+    assert_eq!(serialize(first), serialize(second));
+}
+
+#[test]
+fn invalid_error_page_identifiers_fail_loud() {
+    for (case, error_pages, expected) in [
+        ("wrong-shape", json!("failure"), "must be an array"),
+        ("empty", json!([""]), "non-empty"),
+        ("duplicate", json!(["failure", "failure"]), "duplicate"),
+        ("missing", json!(["missing"]), "no matching anchor"),
+    ] {
+        let root = write_error_page_fixture();
+        update_error_page_fixture_task(root.path(), |task| {
+            task["error_pages"] = error_pages;
+        });
+
+        let error = OperationConverter::load(root.path(), None, None, None).expect_err(case);
+
+        assert_eq!(error.code, "package_invalid");
+        assert!(
+            error.message.contains(expected),
+            "{case}: {}",
+            error.message
+        );
+    }
+}
+
+#[test]
+fn error_page_rule_and_asset_references_fail_loud() {
+    let root = write_error_page_fixture();
+    update_error_page_fixture_task(root.path(), |task| {
+        task["page_rules"]["failure"] = json!({"required": ["page/missing"]});
+    });
+    let converter = OperationConverter::load(root.path(), None, None, None).unwrap();
+    let error = converter.build_all().expect_err("missing page-rule target");
+    assert!(error.message.contains("page/missing"));
+
+    let root = write_error_page_fixture();
+    fs::remove_file(
+        root.path()
+            .join("operations/error-page-check/assets/FAILURE.png"),
+    )
+    .unwrap();
+    let error = OperationConverter::load(root.path(), None, None, None)
+        .expect_err("missing error-page asset");
+    assert!(error.message.contains("FAILURE.png"));
+    assert!(error.message.contains("missing on disk"));
+}
+
+#[test]
+fn selected_build_requires_error_page_definition_in_selected_closure() {
+    let root = write_error_page_fixture();
+    let task_dir = root.path().join("operations/selected-only");
+    fs::create_dir_all(task_dir.join("assets")).unwrap();
+    fs::write(task_dir.join("assets/SELECTED.png"), one_pixel_png()).unwrap();
+    fs::write(
+        task_dir.join("task.json"),
+        serde_json::to_vec_pretty(&json!({
+            "schema_version": "0.5",
+            "task_id": "selected-only",
+            "game": "neutral",
+            "server_scope": ["test"],
+            "locale": "en-US",
+            "coordinate_space": {"width":1,"height":1},
+            "defaults": {"template_threshold":0.9},
+            "anchors": [
+                {"id":"selected","template":"assets/SELECTED.png","region":{"mode":"rect","rect":{"x":0,"y":0,"width":1,"height":1}}}
+            ],
+            "target_page": "selected",
+            "error_pages": ["failure"],
+            "page_rules": {
+                "selected": {"forbidden": ["page/failure"]}
+            },
+            "operations": []
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    let converter = OperationConverter::load(root.path(), None, None, None).unwrap();
+
+    let error = converter
+        .build_selected(&["selected-only".to_string()])
+        .expect_err("selected error page definition must remain available");
+
+    assert!(error.message.contains("error_pages"));
+    assert!(error.message.contains("no matching anchor definition"));
+}
+
+#[test]
 fn validate_page_rule_targets_rejects_missing_targets() {
     let pack = json!({"targets":[{"id":"page/home"}]});
     let bundles = vec![Bundle {
@@ -268,7 +496,9 @@ fn selected_build_prunes_nonresident_page_rules_and_soft_targets() {
         maa_task_overlays: HashMap::new(),
     };
 
-    let bundles = converter.prune_page_rules_for_selected_build(converter.bundles.clone());
+    let bundles = converter
+        .prune_page_rules_for_selected_build(converter.bundles.clone())
+        .expect("prune selected page rules");
     let recovery = bundles
         .iter()
         .find(|bundle| bundle.task_id == "return_home")
