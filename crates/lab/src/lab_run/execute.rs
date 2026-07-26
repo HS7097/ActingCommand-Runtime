@@ -39,9 +39,8 @@ fn matched_page_matches_anchor(
 
 fn next_current_page(game: &str, after: &CapturedScene, operation: &Operation) -> Option<String> {
     after.matched_anchor(game).or_else(|| {
-        operation
-            .expected_after_page()
-            .map(|page| canonical_page_anchor(game, page))
+        let destinations = operation.destination_pages().ok()?;
+        (destinations.len() == 1).then(|| canonical_page_anchor(game, &destinations[0]))
     })
 }
 
@@ -62,22 +61,77 @@ impl OperationVerification {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PostActionPageStatus {
+    None,
+    Destination,
+    Error,
+}
+
+fn post_action_page_status(
+    game: &str,
+    operation: &Operation,
+    error_pages: &[String],
+    after: &CapturedScene,
+) -> CliOutcome<PostActionPageStatus> {
+    let destinations = operation.destination_pages()?;
+    let destination_matches = after
+        .page_evaluations
+        .iter()
+        .filter(|evaluation| {
+            evaluation.matched
+                && destinations.iter().any(|page| {
+                    page_anchor_matches(game, &evaluation.page_id, page)
+                })
+        })
+        .map(|evaluation| evaluation.page_id.as_str())
+        .collect::<BTreeSet<_>>();
+    let matched_declared_error = after.page_evaluations.iter().any(|evaluation| {
+        evaluation.matched
+            && error_pages.iter().any(|page| {
+                page_anchor_matches(game, &evaluation.page_id, page)
+            })
+    });
+    let hit_error_page = matched_declared_error;
+    if destination_matches.len() > 1
+        || (!destination_matches.is_empty() && hit_error_page)
+    {
+        return Err(CliError::device(format!(
+            "recognition_conflict: operation '{}' observation matched {} destinations and error_page={hit_error_page}",
+            operation.id,
+            destination_matches.len()
+        )));
+    }
+    if destination_matches.len() == 1 {
+        Ok(PostActionPageStatus::Destination)
+    } else if hit_error_page {
+        Ok(PostActionPageStatus::Error)
+    } else {
+        Ok(PostActionPageStatus::None)
+    }
+}
+
 fn operation_verification_status(
     game: &str,
     operation: &Operation,
+    error_pages: &[String],
     after: &CapturedScene,
-) -> OperationVerification {
-    let matched_to = operation
-        .expected_after_page()
-        .is_some_and(|page| matched_page_matches_anchor(game, after.matched_page.as_deref(), page));
+) -> CliOutcome<OperationVerification> {
+    let destinations = operation.destination_pages()?;
+    let page_status = post_action_page_status(game, operation, error_pages, after)?;
+    if page_status == PostActionPageStatus::Error {
+        return Ok(OperationVerification::Failed);
+    }
     let matched_template = operation.verify_template.is_some() && after.verify_template_matched;
-    if matched_to || matched_template {
-        return OperationVerification::Verified;
+    if page_status == PostActionPageStatus::Destination
+        || (destinations.is_empty() && matched_template)
+    {
+        return Ok(OperationVerification::Verified);
     }
-    if operation.expected_after_page().is_none() && operation.verify_template.is_none() {
-        return OperationVerification::ExecutedUnverified;
+    if destinations.is_empty() && operation.verify_template.is_none() {
+        return Ok(OperationVerification::ExecutedUnverified);
     }
-    OperationVerification::Failed
+    Ok(OperationVerification::Failed)
 }
 
 #[derive(Debug, PartialEq)]
@@ -625,8 +679,14 @@ fn actionable_page_ids_for_bundle(
     {
         push_resolved_page_id(&mut pages, &mut seen, resources, &control.game, entry_page)?;
     }
-    if let Some(target_page) = &bundle.target_page {
-        push_resolved_page_id(&mut pages, &mut seen, resources, &control.game, target_page)?;
+    if let Some(target_pages) = &bundle.target_page {
+        push_resolved_page_set(
+            &mut pages,
+            &mut seen,
+            resources,
+            &control.game,
+            target_pages.as_slice(),
+        )?;
     }
     for page_key in bundle.page_rules.keys() {
         // Selected task packages may retain source page_rules for pages whose
@@ -647,8 +707,15 @@ fn actionable_page_ids_for_bundle(
                 &operation.from,
             )?;
         }
-        if let Some(to) = &operation.to {
-            push_resolved_page_id(&mut pages, &mut seen, resources, &control.game, to)?;
+        let destinations = operation.destination_pages()?;
+        if !destinations.is_empty() {
+            push_resolved_page_set(
+                &mut pages,
+                &mut seen,
+                resources,
+                &control.game,
+                destinations,
+            )?;
         }
     }
     Ok(pages)
@@ -670,8 +737,14 @@ fn initial_page_ids_for_bundle(
     {
         push_resolved_page_id(&mut pages, &mut seen, resources, &control.game, entry_page)?;
     }
-    if let Some(target_page) = &bundle.target_page {
-        push_resolved_page_id(&mut pages, &mut seen, resources, &control.game, target_page)?;
+    if let Some(target_pages) = &bundle.target_page {
+        push_resolved_page_set(
+            &mut pages,
+            &mut seen,
+            resources,
+            &control.game,
+            target_pages.as_slice(),
+        )?;
     }
     if pages.is_empty() {
         return actionable_page_ids_for_bundle(resources, control, bundle);
@@ -683,11 +756,21 @@ fn operation_arrival_page_ids(
     resources: &LabResources,
     game: &str,
     operation: &Operation,
+    error_pages: &[String],
 ) -> CliOutcome<Option<Vec<String>>> {
-    operation
-        .expected_after_page()
-        .map(|to| resolve_detector_page_id(resources, game, to).map(|page| vec![page]))
-        .transpose()
+    let destinations = operation.destination_pages()?;
+    if destinations.is_empty() && error_pages.is_empty() {
+        Ok(None)
+    } else {
+        let mut pages = resolve_page_set(resources, game, destinations)?;
+        let mut seen = pages.iter().cloned().collect::<BTreeSet<_>>();
+        for page in resolve_page_set(resources, game, error_pages)? {
+            if seen.insert(page.clone()) {
+                pages.push(page);
+            }
+        }
+        Ok(Some(pages))
+    }
 }
 
 fn resolve_detector_page_id(
@@ -721,6 +804,40 @@ fn push_resolved_page_id(
     Ok(())
 }
 
+fn resolve_page_set(
+    resources: &LabResources,
+    game: &str,
+    declared: &[String],
+) -> CliOutcome<Vec<String>> {
+    let mut resolved = Vec::with_capacity(declared.len());
+    let mut seen = BTreeSet::new();
+    for anchor in declared {
+        let page = resolve_detector_page_id(resources, game, anchor)?;
+        if !seen.insert(page.clone()) {
+            return Err(CliError::package_invalid(format!(
+                "page set contains ambiguous aliases for detector page '{page}'"
+            )));
+        }
+        resolved.push(page);
+    }
+    Ok(resolved)
+}
+
+fn push_resolved_page_set(
+    pages: &mut Vec<String>,
+    seen: &mut BTreeSet<String>,
+    resources: &LabResources,
+    game: &str,
+    declared: &[String],
+) -> CliOutcome<()> {
+    for page in resolve_page_set(resources, game, declared)? {
+        if seen.insert(page.clone()) {
+            pages.push(page);
+        }
+    }
+    Ok(())
+}
+
 fn close_backend_after_error<T>(
     backend: &mut Option<Box<dyn InputBackend>>,
     err: CliError,
@@ -735,44 +852,6 @@ fn close_backend_after_error<T>(
         }
     }
     Err(err)
-}
-
-fn page_is_error_page(game: &str, page: Option<&str>, error_pages: &[String]) -> bool {
-    let Some(page) = page else {
-        return false;
-    };
-    error_pages
-        .iter()
-        .any(|expected| page_anchor_matches(game, page, expected))
-        || page.contains("/negative_")
-        || page.contains("/forbidden")
-        || page.starts_with("negative_")
-        || page.starts_with("forbidden")
-}
-
-fn scene_hits_error_page(game: &str, scene: &CapturedScene, error_pages: &[String]) -> bool {
-    if page_is_error_page(game, scene.matched_page.as_deref(), error_pages) {
-        return true;
-    }
-    scene.page_evaluations.iter().any(|evaluation| {
-        evaluation.target_results.iter().any(|target| {
-            target.role == PageTargetRole::Forbidden
-                && target.passed
-                && target_is_error_signal(game, &target.target_id, error_pages)
-        })
-    })
-}
-
-fn target_is_error_signal(game: &str, target_id: &str, error_pages: &[String]) -> bool {
-    let anchor = target_id
-        .strip_prefix("page/")
-        .or_else(|| target_id.strip_prefix(&format!("{game}/")))
-        .unwrap_or(target_id);
-    anchor.starts_with("negative_")
-        || anchor.starts_with("forbidden")
-        || error_pages
-            .iter()
-            .any(|error_page| page_anchor_matches(game, anchor, error_page))
 }
 
 #[derive(Clone, Copy)]
@@ -873,7 +952,7 @@ fn execute_operation_with_retries<L: LedgerSink>(
         resources.has_operation_bundle(DEFAULT_RECOVERY_TASK_ID)?,
     );
     let run_policy = run_operation_policy(flow, recovery_task_id)?;
-    ctx.set_step_context(step_index, operation);
+    ctx.set_step_context(step_index, operation)?;
     ctx.event(
         "step_started",
         json!({"step_id": operation.id, "index": step_index, "operation_id": operation.id, "max_attempts": flow.max_attempts, "retryable": flow.retryable}),
@@ -1165,16 +1244,23 @@ fn execute_operation_with_retries<L: LedgerSink>(
                 task_id: &bundle.task_id,
                 defaults: bundle.defaults,
                 operation,
+                error_pages: &bundle.error_pages,
                 step_timeout_ms: operation.after_timeout_ms(bundle.defaults, step_timeout_ms),
                 post_wait_freezes_ms: flow.post_wait_freezes_ms,
                 game: &control.game,
             },
         )?;
         let after = after_result.scene;
-        let verification = operation_verification_status(&control.game, operation, &after);
-        if verification == OperationVerification::Failed || !after_result.stable_confirmed {
+        let page_status =
+            post_action_page_status(&control.game, operation, &bundle.error_pages, &after)?;
+        let verification =
+            operation_verification_status(&control.game, operation, &bundle.error_pages, &after)?;
+        let hit_error_page = page_status == PostActionPageStatus::Error;
+        if hit_error_page
+            || verification == OperationVerification::Failed
+            || !after_result.stable_confirmed
+        {
             let after_page = after.matched_page.clone();
-            let hit_error_page = scene_hits_error_page(&control.game, &after, &bundle.error_pages);
             let failure_reason = if !after_result.stable_confirmed {
                 "after_page_not_stable"
             } else {
@@ -1182,7 +1268,7 @@ fn execute_operation_with_retries<L: LedgerSink>(
             };
             ctx.event(
                 "page_guard_failed",
-                json!({"step_id": operation.id, "attempt": attempt, "expected": operation.expected_after_page(), "after_page": after_page, "error_page": hit_error_page, "reason": failure_reason}),
+                json!({"step_id": operation.id, "attempt": attempt, "expected": operation.destination_pages()?, "after_page": after_page, "error_page": hit_error_page, "reason": failure_reason}),
             )?;
             let decision_reason = if hit_error_page {
                 "error_page"
@@ -1329,6 +1415,7 @@ struct AfterOperationRequest<'a> {
     task_id: &'a str,
     defaults: OperationDefaults,
     operation: &'a Operation,
+    error_pages: &'a [String],
     step_timeout_ms: u64,
     post_wait_freezes_ms: u64,
     game: &'a str,
@@ -1344,13 +1431,15 @@ fn poll_after_operation<L: LedgerSink>(
         task_id,
         defaults,
         operation,
+        error_pages,
         step_timeout_ms,
         post_wait_freezes_ms,
         game,
     } = request;
     let started = Instant::now();
     let mut verified_since = None::<Instant>;
-    let arrival_page_candidates = operation_arrival_page_ids(resources, game, operation)?;
+    let arrival_page_candidates =
+        operation_arrival_page_ids(resources, game, operation, error_pages)?;
     loop {
         ctx.wait_for_next_capture_start();
         let mut scene = ctx.capture_scene_with_pages(
@@ -1369,7 +1458,15 @@ fn poll_after_operation<L: LedgerSink>(
                 defaults.template_threshold,
             )?;
         }
-        let verification = operation_verification_status(game, operation, &scene);
+        let page_status = post_action_page_status(game, operation, error_pages, &scene)?;
+        let verification =
+            operation_verification_status(game, operation, error_pages, &scene)?;
+        if page_status == PostActionPageStatus::Error {
+            return Ok(AfterOperationCapture {
+                scene,
+                stable_confirmed: true,
+            });
+        }
         if verification == OperationVerification::ExecutedUnverified {
             return Ok(AfterOperationCapture {
                 scene,

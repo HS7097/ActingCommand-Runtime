@@ -32,7 +32,7 @@
             id: "open_terminal".to_string(),
             purpose: "test".to_string(),
             from: "home".to_string(),
-            to: to.map(str::to_string),
+            to: to.map(|page| NormalizedPageSet(vec![page.to_string()])),
             click: OperationClick {
                 kind: "point".to_string(),
                 x: Some(100),
@@ -80,7 +80,7 @@
             defaults: OperationDefaults::default(),
             anchors: Vec::new(),
             entry_page: Some("home".to_string()),
-            target_page: Some("terminal".to_string()),
+            target_page: Some(NormalizedPageSet(vec!["terminal".to_string()])),
             error_pages: Vec::new(),
             recovery: None,
             max_task_retries: None,
@@ -109,7 +109,54 @@
         CapturedScene {
             scene: Scene::from_png(one_pixel_png()).expect("scene"),
             matched_page: page.map(str::to_string),
-            page_evaluations: Vec::new(),
+            page_evaluations: page
+                .map(|page| {
+                    vec![PageEvaluation {
+                        page_id: page.to_string(),
+                        matched: true,
+                        required_passed: 1,
+                        required_total: 1,
+                        any_of_passed: 0,
+                        any_of_total: 0,
+                        optional_passed: 0,
+                        optional_total: 0,
+                        forbidden_passed: 0,
+                        forbidden_total: 0,
+                        target_results: Vec::new(),
+                        message: "fixture matched".to_string(),
+                    }]
+                })
+                .unwrap_or_default(),
+            verify_template_matched,
+            width: 1,
+            height: 1,
+        }
+    }
+
+    fn captured_scene_with_matches(
+        pages: &[&str],
+        verify_template_matched: bool,
+    ) -> CapturedScene {
+        CapturedScene {
+            scene: Scene::from_png(one_pixel_png()).expect("scene"),
+            matched_page: pages.first().map(|page| (*page).to_string()),
+            page_evaluations: pages
+                .iter()
+                .map(|page| PageEvaluation {
+                    page_id: (*page).to_string(),
+                    matched: true,
+                    required_passed: 1,
+                    required_total: 1,
+                    any_of_passed: 0,
+                    any_of_total: 0,
+                    optional_passed: 0,
+                    optional_total: 0,
+                    forbidden_passed: 0,
+                    forbidden_total: 0,
+                    target_results: Vec::new(),
+                    message: "fixture matched".to_string(),
+                })
+                .collect(),
             verify_template_matched,
             width: 1,
             height: 1,
