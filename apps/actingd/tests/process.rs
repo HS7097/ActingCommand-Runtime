@@ -116,7 +116,7 @@ fn actingd_preserves_legacy_physical_policy_intent_admission_and_lease() {
             .expect("query legacy policy startup events");
         if events
             .iter()
-            .any(|event| event.event_type == EventType::LeaseGranted)
+            .any(|event| event.event_type == EventType::PolicyDispatchAdmitted)
         {
             break events;
         }
@@ -1548,7 +1548,7 @@ fn neutral_contained_task_package() -> Vec<u8> {
                 "server":"test",
                 "resolution":{"width":2,"height":1},
                 "entry_task_id":"task",
-                "capture_interval_ms":1,
+                "capture_interval_ms":50,
                 "step_timeout_ms":50,
                 "timeout_ms":1000,
                 "max_steps":2
