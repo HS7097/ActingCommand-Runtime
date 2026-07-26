@@ -379,7 +379,7 @@ impl OperationConverter {
                 task_ids.join(", ")
             )));
         }
-        let selected = self.prune_page_rules_for_selected_build(selected);
+        let selected = self.prune_page_rules_for_selected_build(selected)?;
         let subset = Self {
             root: self.root.clone(),
             game: self.game.clone(),
@@ -431,10 +431,10 @@ impl OperationConverter {
         Ok(task)
     }
 
-    fn prune_page_rules_for_selected_build(&self, bundles: Vec<Bundle>) -> Vec<Bundle> {
-        let available_pages = selected_available_page_ids(&self.game, &bundles);
+    fn prune_page_rules_for_selected_build(&self, bundles: Vec<Bundle>) -> CliOutcome<Vec<Bundle>> {
+        let available_pages = selected_available_page_ids(&self.game, &bundles)?;
         let available_targets = selected_available_target_ids(&bundles);
-        bundles
+        Ok(bundles
             .into_iter()
             .map(|mut bundle| {
                 bundle.data = prune_selected_page_rules(
@@ -445,10 +445,11 @@ impl OperationConverter {
                 );
                 bundle
             })
-            .collect()
+            .collect())
     }
 
     fn validate_bundles(&self) -> CliOutcome<()> {
+        self.validate_error_page_anchor_definitions()?;
         let mut errors = Vec::new();
         for bundle in &self.bundles {
             match required_string(&bundle.data, "game").and_then(|value| canonical_game(&value)) {
@@ -744,6 +745,15 @@ impl OperationConverter {
                         &mut order,
                     );
                 }
+            }
+            for anchor_id in declared_error_page_ids(bundle)? {
+                add_page(
+                    &self.game,
+                    anchor_id,
+                    &declared_anchor_ids,
+                    &mut pages,
+                    &mut order,
+                );
             }
             for operation in array_field(&bundle.data, "operations") {
                 for key in ["from", "to"] {
@@ -1301,6 +1311,64 @@ impl OperationConverter {
         }
         ids
     }
+
+    fn validate_error_page_anchor_definitions(&self) -> CliOutcome<()> {
+        let mut anchor_counts = HashMap::<String, usize>::new();
+        for bundle in &self.bundles {
+            for anchor in array_field(&bundle.data, "anchors") {
+                if let Some(id) = anchor.get("id").and_then(Value::as_str) {
+                    *anchor_counts.entry(id.to_string()).or_default() += 1;
+                }
+            }
+        }
+
+        let mut errors = Vec::new();
+        for bundle in &self.bundles {
+            for error_page in declared_error_page_ids(bundle)? {
+                let exact_count = anchor_counts.get(error_page).copied().unwrap_or(0);
+                if exact_count > 1 {
+                    errors.push(format!(
+                        "{}: error_pages identifier '{error_page}' resolves to {exact_count} duplicate anchors",
+                        bundle.task_json_path().display()
+                    ));
+                    continue;
+                }
+                if exact_count == 1 {
+                    continue;
+                }
+
+                let prefix = format!("{error_page}_");
+                let variants = anchor_counts
+                    .iter()
+                    .filter(|(anchor, _)| anchor.starts_with(&prefix))
+                    .collect::<Vec<_>>();
+                if variants.is_empty() {
+                    errors.push(format!(
+                        "{}: error_pages identifier '{error_page}' has no matching anchor definition",
+                        bundle.task_json_path().display()
+                    ));
+                    continue;
+                }
+                for (anchor, count) in variants {
+                    if *count > 1 {
+                        errors.push(format!(
+                            "{}: error_pages identifier '{error_page}' resolves through duplicate anchor variant '{anchor}'",
+                            bundle.task_json_path().display()
+                        ));
+                    }
+                }
+            }
+        }
+
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(CliError::package_invalid(format!(
+                "resource convert error page validation failed:\n  - {}",
+                errors.join("\n  - ")
+            )))
+        }
+    }
 }
 
 fn canonicalize_guard_page_id(game: &str, guard: &Value) -> CliOutcome<Value> {
@@ -1708,13 +1776,52 @@ fn add_page(
     order.push(page_id);
 }
 
-fn selected_available_page_ids(game: &str, bundles: &[Bundle]) -> BTreeSet<String> {
+fn declared_error_page_ids(bundle: &Bundle) -> CliOutcome<Vec<&str>> {
+    let Some(error_pages) = bundle.data.get("error_pages") else {
+        return Ok(Vec::new());
+    };
+    let values = error_pages.as_array().ok_or_else(|| {
+        CliError::package_invalid(format!(
+            "{}: error_pages must be an array of page identifiers",
+            bundle.task_json_path().display()
+        ))
+    })?;
+    let mut seen = BTreeSet::new();
+    let mut pages = Vec::with_capacity(values.len());
+    for (index, value) in values.iter().enumerate() {
+        let page = value.as_str().ok_or_else(|| {
+            CliError::package_invalid(format!(
+                "{}: error_pages[{index}] must be a string",
+                bundle.task_json_path().display()
+            ))
+        })?;
+        if page.trim().is_empty() || page.trim() != page || page == "any" {
+            return Err(CliError::package_invalid(format!(
+                "{}: error_pages[{index}] must be a non-empty, exact page identifier",
+                bundle.task_json_path().display()
+            )));
+        }
+        if !seen.insert(page) {
+            return Err(CliError::package_invalid(format!(
+                "{}: duplicate error_pages identifier '{page}'",
+                bundle.task_json_path().display()
+            )));
+        }
+        pages.push(page);
+    }
+    Ok(pages)
+}
+
+fn selected_available_page_ids(game: &str, bundles: &[Bundle]) -> CliOutcome<BTreeSet<String>> {
     let mut pages = BTreeSet::new();
     for bundle in bundles {
         for key in ["entry_page", "target_page"] {
             if let Some(page) = bundle.data.get(key).and_then(Value::as_str) {
                 insert_selected_page_id(game, page, &mut pages);
             }
+        }
+        for page in declared_error_page_ids(bundle)? {
+            insert_selected_page_id(game, page, &mut pages);
         }
         for operation in array_field(&bundle.data, "operations") {
             for key in ["from", "to"] {
@@ -1724,7 +1831,7 @@ fn selected_available_page_ids(game: &str, bundles: &[Bundle]) -> BTreeSet<Strin
             }
         }
     }
-    pages
+    Ok(pages)
 }
 
 fn insert_selected_page_id(game: &str, page: &str, pages: &mut BTreeSet<String>) {
