@@ -18,5 +18,7 @@ sha2 = { workspace = true }
 zip = { workspace = true }
 
 [dev-dependencies]
+actingcommand-page-detector = { workspace = true }
 actingcommand-policy = { workspace = true }
+actingcommand-recognition = { workspace = true }
 tempfile = "3"
