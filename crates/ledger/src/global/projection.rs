@@ -1,10 +1,13 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
+use super::GlobalLedgerError;
 use crate::PersistedEvent;
 use actingcommand_contract::{
-    ActionId, CausationId, CorrelationId, EventId, EventQuery, EventType, FrameId, InstanceId,
-    LeaseId, ProjectedEvent, ProjectionPayload, ProjectionProfile, RecognitionId, RequestId, RunId,
-    TaskId,
+    ActionId, AuthoritativeSchedulingOutcome, CausationId, CorrelationId, EventId, EventPayload,
+    EventQuery, EventType, FrameId, InstanceId, LeaseId, PolicyPayload, ProjectedEvent,
+    ProjectionPayload, ProjectionProfile, RecognitionId, RequestId, RunId,
+    SchedulingOutcomeIdentity, SchedulingOutcomeProjection, TaskId, TaskOutcome, TaskPayload,
+    TaskSemanticFact,
 };
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -214,6 +217,109 @@ pub(super) fn project_if_matches(
     profile: ProjectionProfile,
 ) -> Option<ProjectedEvent> {
     query_matches(query, event).then(|| project(event, profile))
+}
+
+pub(super) fn project_scheduling_outcomes(
+    terminals: &[PersistedEvent],
+    admissions: &[PersistedEvent],
+    leases: &[PersistedEvent],
+    ledger_position: u64,
+    expected: &SchedulingOutcomeIdentity,
+) -> Result<SchedulingOutcomeProjection, GlobalLedgerError> {
+    if ledger_position < expected.terminal_sequence() {
+        return Err(GlobalLedgerError::request(
+            "outcome_projection_not_ready",
+            "project_scheduling_outcomes",
+        ));
+    }
+    let [terminal] = terminals else {
+        return Err(GlobalLedgerError::fatal(
+            "outcome_projection_terminal_not_unique",
+            "project_scheduling_outcomes",
+        ));
+    };
+    let [admitted] = admissions else {
+        return Err(GlobalLedgerError::fatal(
+            "outcome_projection_admission_not_unique",
+            "project_scheduling_outcomes",
+        ));
+    };
+    let [lease_granted] = leases else {
+        return Err(GlobalLedgerError::fatal(
+            "outcome_projection_lease_not_unique",
+            "project_scheduling_outcomes",
+        ));
+    };
+    let EventPayload::Task(TaskPayload::Semantic(terminal_payload)) = terminal.payload() else {
+        return Err(GlobalLedgerError::fatal(
+            "outcome_projection_terminal_invalid",
+            "project_scheduling_outcomes",
+        ));
+    };
+    let TaskSemanticFact::TerminalCommitted {
+        outcome: TaskOutcome::Success,
+        failure_code: None,
+        scheduling_disposition: Some(disposition),
+        ..
+    } = terminal_payload.fact()
+    else {
+        return Err(GlobalLedgerError::fatal(
+            "outcome_projection_terminal_invalid",
+            "project_scheduling_outcomes",
+        ));
+    };
+    let EventPayload::Policy(PolicyPayload::DispatchAdmitted(admission)) = admitted.payload()
+    else {
+        return Err(GlobalLedgerError::fatal(
+            "outcome_projection_admission_invalid",
+            "project_scheduling_outcomes",
+        ));
+    };
+    let terminal_links = terminal.links();
+    let admission_links = admitted.links();
+    let lease_links = lease_granted.links();
+    if terminal.event_id() != &expected.terminal_event_id()
+        || terminal.sequence() != expected.terminal_sequence()
+        || terminal_links.instance_id() != Some(&expected.instance_id())
+        || terminal_links.request_id() != Some(&expected.request_id())
+        || terminal_links.correlation_id() != Some(&expected.correlation_id())
+        || terminal_links.task_id() != Some(&expected.task_id())
+        || terminal_links.run_id() != Some(&expected.run_id())
+        || terminal_links.lease_id() != Some(&expected.lease_id())
+        || admission_links.instance_id() != Some(&expected.instance_id())
+        || admission_links.correlation_id() != Some(&expected.correlation_id())
+        || admission_links.task_id() != Some(&expected.task_id())
+        || admission_links.run_id() != Some(&expected.run_id())
+        || lease_links.instance_id() != Some(&expected.instance_id())
+        || lease_links.correlation_id() != Some(&expected.correlation_id())
+        || lease_links.task_id() != Some(&expected.task_id())
+        || lease_links.run_id() != Some(&expected.run_id())
+        || lease_links.lease_id() != Some(&expected.lease_id())
+        || admission.decision_id() != expected.decision_id()
+        || admission.task_id() != expected.catalog_task_id()
+        || admission.instance_id() != expected.instance_alias()
+        || lease_granted.sequence() >= admitted.sequence()
+        || admitted.sequence() >= terminal.sequence()
+    {
+        return Err(GlobalLedgerError::fatal(
+            "outcome_projection_identity_mismatch",
+            "project_scheduling_outcomes",
+        ));
+    }
+    let outcome = AuthoritativeSchedulingOutcome::new(
+        expected.clone(),
+        disposition.clone(),
+        terminal.timestamp_unix_ms(),
+    )
+    .map_err(|_| {
+        GlobalLedgerError::fatal(
+            "outcome_projection_identity_invalid",
+            "project_scheduling_outcomes",
+        )
+    })?;
+    SchedulingOutcomeProjection::new(ledger_position, outcome).map_err(|_| {
+        GlobalLedgerError::fatal("outcome_projection_invalid", "project_scheduling_outcomes")
+    })
 }
 
 fn query_matches(query: &EventQuery, event: &PersistedEvent) -> bool {

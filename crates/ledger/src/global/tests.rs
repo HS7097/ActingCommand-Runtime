@@ -13,8 +13,9 @@ use actingcommand_contract::{
     PolicyActivitySample, PolicyAdmissionRecord, PolicyBudgetReceipt, PolicyDispatchEventData,
     PolicyExecutionEventData, PolicyExecutionOutcome, PolicyFailureClass, PolicyFailureDisposition,
     PolicyFailureRecord, PolicyPayload, PolicyPayloadDraft, PolicyReasonRecord, ProjectionPayload,
-    ProjectionProfile, SecretField, SecretFingerprinter, SubscriptionCursor, TaskOutcome,
-    TaskPayloadDraft, TaskSemanticFact,
+    ProjectionProfile, SchedulingDisposition, SchedulingEffectEvidence, SchedulingOutcomeIdentity,
+    SecretField, SecretFingerprinter, SubscriptionCursor, TaskOutcome, TaskPayloadDraft,
+    TaskSemanticFact,
 };
 use serde_json::Value;
 use std::fs::{self, OpenOptions};
@@ -185,6 +186,8 @@ struct ScheduledRecoveryDrafts {
     execution: actingcommand_contract::SanitizedEventDraft,
     task_request: actingcommand_contract::SanitizedEventDraft,
     task_completed: actingcommand_contract::SanitizedEventDraft,
+    task_completed_mapped: actingcommand_contract::SanitizedEventDraft,
+    task_completed_mapped_other_request: actingcommand_contract::SanitizedEventDraft,
     task_failed_warning: actingcommand_contract::SanitizedEventDraft,
     task_failed_fatal: actingcommand_contract::SanitizedEventDraft,
     task_failed_legacy: actingcommand_contract::SanitizedEventDraft,
@@ -231,6 +234,13 @@ fn scheduled_recovery_drafts() -> ScheduledRecoveryDrafts {
         .with_task_id(task_id)
         .with_run_id(run_id);
     let task_terminal_links = task_request_links.clone().with_lease_id(lease_id);
+    let task_terminal_other_request_links = EventLinksDraft::default()
+        .with_instance_id(instance_id)
+        .with_request_id(issuer.mint_request_id().expect("second task request id"))
+        .with_correlation_id(correlation_id)
+        .with_task_id(task_id)
+        .with_run_id(run_id)
+        .with_lease_id(lease_id);
     let task_release_links = task_terminal_links
         .clone()
         .with_action_id(issuer.mint_action_id().expect("task release action"));
@@ -431,6 +441,61 @@ fn scheduled_recovery_drafts() -> ScheduledRecoveryDrafts {
                     final_page: Some("home".to_owned()),
                     executed_steps: 0,
                     failure_code: None,
+                    scheduling_disposition: None,
+                },
+                AuditInput::new(),
+            )
+            .into(),
+        ),
+        task_completed_mapped: sanitize(
+            1_752_147_200_400,
+            EventSeverity::Info,
+            EventOrigin::new(
+                EventSource::Runtime,
+                OriginModule::Runtime,
+                EventActor::Runtime,
+            ),
+            task_terminal_links.clone(),
+            TaskPayloadDraft::semantic(
+                TaskSemanticFact::TerminalCommitted {
+                    outcome: TaskOutcome::Success,
+                    final_page: Some("home".to_owned()),
+                    executed_steps: 0,
+                    failure_code: None,
+                    scheduling_disposition: Some(
+                        SchedulingDisposition::new(
+                            "mapped-result",
+                            SchedulingEffectEvidence::NoDesignatedEffect,
+                        )
+                        .expect("mapped disposition"),
+                    ),
+                },
+                AuditInput::new(),
+            )
+            .into(),
+        ),
+        task_completed_mapped_other_request: sanitize(
+            1_752_147_200_401,
+            EventSeverity::Info,
+            EventOrigin::new(
+                EventSource::Runtime,
+                OriginModule::Runtime,
+                EventActor::Runtime,
+            ),
+            task_terminal_other_request_links,
+            TaskPayloadDraft::semantic(
+                TaskSemanticFact::TerminalCommitted {
+                    outcome: TaskOutcome::Success,
+                    final_page: Some("home".to_owned()),
+                    executed_steps: 0,
+                    failure_code: None,
+                    scheduling_disposition: Some(
+                        SchedulingDisposition::new(
+                            "mapped-result",
+                            SchedulingEffectEvidence::NoDesignatedEffect,
+                        )
+                        .expect("mapped disposition"),
+                    ),
                 },
                 AuditInput::new(),
             )
@@ -451,6 +516,7 @@ fn scheduled_recovery_drafts() -> ScheduledRecoveryDrafts {
                     final_page: None,
                     executed_steps: 0,
                     failure_code: Some("capture_transient".to_owned()),
+                    scheduling_disposition: None,
                 },
                 AuditInput::new(),
             )
@@ -471,6 +537,7 @@ fn scheduled_recovery_drafts() -> ScheduledRecoveryDrafts {
                     final_page: None,
                     executed_steps: 0,
                     failure_code: Some("capture_fatal".to_owned()),
+                    scheduling_disposition: None,
                 },
                 AuditInput::new(),
             )
@@ -491,6 +558,7 @@ fn scheduled_recovery_drafts() -> ScheduledRecoveryDrafts {
                     final_page: None,
                     executed_steps: 0,
                     failure_code: Some("capture_legacy".to_owned()),
+                    scheduling_disposition: None,
                 },
                 AuditInput::new(),
             )
@@ -762,6 +830,72 @@ fn recovery_execution_data(
         observed_at_unix_ms: payload.observed_at_unix_ms(),
         outcome: payload.outcome().clone(),
     }
+}
+
+#[test]
+fn scheduling_projection_rejects_a_second_same_run_terminal_with_another_request() {
+    let temp = TempDir::new().expect("temp");
+    let ledger = GlobalLedger::open(config(&temp, "projection-owner")).expect("ledger");
+    let drafts = scheduled_recovery_drafts();
+    ledger.append(drafts.intent.clone()).expect("intent");
+    ledger
+        .append(drafts.lease_granted.clone())
+        .expect("lease grant");
+    let admission = ledger.append(drafts.admission.clone()).expect("admission");
+    ledger
+        .append(drafts.task_request.clone())
+        .expect("task request");
+    let terminal = ledger
+        .append(drafts.task_completed_mapped.clone())
+        .expect("mapped terminal");
+    let EventPayload::Policy(PolicyPayload::DispatchAdmitted(admission_payload)) =
+        admission.payload()
+    else {
+        panic!("admission payload");
+    };
+    let links = terminal.links();
+    let expected = SchedulingOutcomeIdentity::new(
+        *terminal.event_id(),
+        terminal.sequence(),
+        *links.instance_id().expect("terminal instance"),
+        *links.task_id().expect("terminal task"),
+        *links.run_id().expect("terminal run"),
+        *links.request_id().expect("terminal request"),
+        *links.correlation_id().expect("terminal correlation"),
+        *links.lease_id().expect("terminal lease"),
+        admission_payload.decision_id(),
+        admission_payload.task_id(),
+        admission_payload.instance_id(),
+    )
+    .expect("projection identity");
+    let projected = ledger
+        .project_scheduling_outcomes(expected.clone(), terminal.sequence())
+        .expect("single mapped terminal projects");
+    assert_eq!(
+        projected.outcome().disposition().outcome_key(),
+        "mapped-result"
+    );
+    let stale = ledger
+        .project_scheduling_outcomes(expected.clone(), terminal.sequence() - 1)
+        .expect_err("projection below the terminal sequence is not ready");
+    assert_eq!(stale.code(), "outcome_projection_not_ready");
+    let future = ledger
+        .project_scheduling_outcomes(expected.clone(), terminal.sequence() + 1)
+        .expect_err("caller cannot claim a future ledger position");
+    assert_eq!(future.code(), "outcome_projection_position_invalid");
+
+    let duplicate = ledger
+        .append(drafts.task_completed_mapped_other_request.clone())
+        .expect("second-request terminal fixture");
+    assert_ne!(
+        terminal.links().request_id(),
+        duplicate.links().request_id(),
+        "the regression requires a newly minted terminal request"
+    );
+    let error = ledger
+        .project_scheduling_outcomes(expected, duplicate.sequence())
+        .expect_err("same run cannot project through two request-partitioned terminals");
+    assert_eq!(error.code(), "outcome_projection_terminal_not_unique");
 }
 
 fn reconcile_scheduled_settlement(

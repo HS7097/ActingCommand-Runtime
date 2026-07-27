@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::error::Error;
 use std::fmt;
 
@@ -12,8 +12,8 @@ use crate::validation::{CatalogSourceMaps, sort_diagnostics, validate_catalog};
 use crate::{
     ActivityDocument, CatalogBundle, CatalogDiagnostic, CatalogDiagnosticCode,
     CatalogDocumentSource, CatalogSources, DiagnosticSeverity, MAX_CATALOG_BYTES,
-    MAX_DOCUMENT_BYTES, MAX_TEXT_BYTES, PoolsDocument, RequiredNullable, SchedulingDocumentKind,
-    SourceLocation, TasksDocument, TimelineDocument,
+    MAX_DOCUMENT_BYTES, MAX_TEXT_BYTES, MetricRef, ObservationRef, PoolsDocument, PredicateSpec,
+    RequiredNullable, SchedulingDocumentKind, SourceLocation, TasksDocument, TimelineDocument,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -77,6 +77,37 @@ impl CompiledCatalog {
         &self.warnings
     }
 
+    pub fn referenced_outcome_keys(&self, task_id: &str) -> BTreeSet<String> {
+        let mut keys = BTreeSet::new();
+        for task in &self.catalog.tasks.tasks {
+            collect_predicate_outcome_keys(&task.trigger, task_id, &mut keys);
+            collect_predicate_outcome_keys(&task.feedback_stop, task_id, &mut keys);
+        }
+        for pool in &self.catalog.pools.pools {
+            if let ObservationRef::Outcome {
+                task_id: referenced_task,
+                outcome_key,
+            } = &pool.observation
+                && referenced_task == task_id
+            {
+                keys.insert(outcome_key.clone());
+            }
+        }
+        for profile in &self.catalog.activity.profiles {
+            for goal in &profile.goals {
+                if let MetricRef::Outcome {
+                    task_id: referenced_task,
+                    outcome_key,
+                } = &goal.metric
+                    && referenced_task == task_id
+                {
+                    keys.insert(outcome_key.clone());
+                }
+            }
+        }
+        keys
+    }
+
     pub fn dry_run_json(&self) -> Result<Vec<u8>, DryRunSerializationError> {
         canonical_serialized(&AcceptedDryRunReport {
             status: DryRunStatus::Accepted,
@@ -85,6 +116,36 @@ impl CompiledCatalog {
             diagnostic_statistics: diagnostic_statistics(&self.warnings),
         })
         .map_err(DryRunSerializationError)
+    }
+}
+
+fn collect_predicate_outcome_keys(
+    predicate: &PredicateSpec,
+    task_id: &str,
+    keys: &mut BTreeSet<String>,
+) {
+    match predicate {
+        PredicateSpec::All { predicates } | PredicateSpec::Any { predicates } => {
+            for predicate in predicates {
+                collect_predicate_outcome_keys(predicate, task_id, keys);
+            }
+        }
+        PredicateSpec::Not { predicate } => {
+            collect_predicate_outcome_keys(predicate, task_id, keys);
+        }
+        PredicateSpec::Outcome {
+            task_id: referenced_task,
+            outcome_key,
+            ..
+        } if referenced_task == task_id => {
+            keys.insert(outcome_key.clone());
+        }
+        PredicateSpec::Clock { .. }
+        | PredicateSpec::ResourceProjection { .. }
+        | PredicateSpec::Fact { .. }
+        | PredicateSpec::RecordDeadline { .. }
+        | PredicateSpec::DependencyCompleted { .. }
+        | PredicateSpec::Outcome { .. } => {}
     }
 }
 
@@ -480,6 +541,40 @@ mod tests {
         assert_eq!(report["diagnostic_statistics"]["total"], 0);
         assert_eq!(report["diagnostic_statistics"]["errors"], 0);
         assert_eq!(report["diagnostic_statistics"]["warnings"], 0);
+    }
+
+    #[test]
+    fn outcome_key_closure_finds_nested_any_references_for_the_producing_task() {
+        let sources = mutate_tasks(|tasks| {
+            tasks["tasks"][0]["feedback_stop"] = serde_json::json!({
+                "kind": "any",
+                "predicates": [
+                    {
+                        "kind": "outcome",
+                        "task_id": "fixture.observe",
+                        "outcome_key": "effect-applied",
+                        "comparison": "eq",
+                        "value": {"type": "boolean", "value": true}
+                    },
+                    {
+                        "kind": "not",
+                        "predicate": {
+                            "kind": "outcome",
+                            "task_id": "fixture.observe",
+                            "outcome_key": "no-effect",
+                            "comparison": "eq",
+                            "value": {"type": "boolean", "value": false}
+                        }
+                    }
+                ]
+            });
+        });
+        let compiled = compile_catalog(&sources).expect("compile nested outcome consumers");
+        assert_eq!(
+            compiled.referenced_outcome_keys("fixture.observe"),
+            BTreeSet::from(["effect-applied".to_owned(), "no-effect".to_owned()])
+        );
+        assert!(compiled.referenced_outcome_keys("missing-task").is_empty());
     }
 
     #[test]

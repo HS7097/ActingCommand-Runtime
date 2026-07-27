@@ -116,7 +116,7 @@ fn actingd_preserves_legacy_physical_policy_intent_admission_and_lease() {
             .expect("query legacy policy startup events");
         if events
             .iter()
-            .any(|event| event.event_type == EventType::LeaseGranted)
+            .any(|event| event.event_type == EventType::PolicyDispatchAdmitted)
         {
             break events;
         }
@@ -1548,7 +1548,7 @@ fn neutral_contained_task_package() -> Vec<u8> {
                 "server":"test",
                 "resolution":{"width":2,"height":1},
                 "entry_task_id":"task",
-                "capture_interval_ms":1,
+                "capture_interval_ms":50,
                 "step_timeout_ms":50,
                 "timeout_ms":1000,
                 "max_steps":2
@@ -1925,6 +1925,20 @@ fn actingd_policy_sources(version: u64) -> CatalogSources {
         "kind": "instance",
         "instance_id": INSTANCE_ALIAS
     });
+    tasks["tasks"][0]["feedback_stop"] = json!({
+        "kind": "clock",
+        "schedule": {
+            "kind": "at",
+            "clock_source": {
+                "kind": "server",
+                "timezone_id": "etc/utc",
+                "utc_offset_minutes": 0,
+                "dst_offset_minutes": 0,
+                "maintenance_drift_ms": 0
+            },
+            "at_ms": 4102444800000_u64
+        }
+    });
     tasks["tasks"][0]["instance_overrides"] = json!([]);
     sources.tasks.bytes = serde_json::to_vec_pretty(&tasks).expect("actingd task bytes");
 
@@ -2082,18 +2096,12 @@ fn policy_resources() -> EvaluationResources {
     }
 }
 
-fn configured_policy_facts(now_unix_ms: u64) -> EvaluationFacts {
+fn configured_policy_facts(_now_unix_ms: u64) -> EvaluationFacts {
     EvaluationFacts {
         ledger_position: 0,
         fact_snapshot_id: "snapshot:actingd-config-a".to_owned(),
         facts: Vec::new(),
-        outcomes: vec![actingcommand_policy::ObservedOutcome {
-            task_id: "fixture.observe".to_owned(),
-            instance_id: INSTANCE_ALIAS.to_owned(),
-            outcome_key: "completed".to_owned(),
-            value: FactValue::Boolean(false),
-            observed_at_unix_ms: now_unix_ms,
-        }],
+        outcomes: Vec::new(),
         tasks: Vec::new(),
         instances: vec![InstanceSnapshot {
             instance_id: INSTANCE_ALIAS.to_owned(),

@@ -9,19 +9,21 @@ use super::{
 use crate::{
     AgentAttentionState, AgentSessionEventData, AgentSessionId, AgentWakeData, AgentWakeId,
     AgentWakeKind, ApprovalDecisionRecord, ApprovalDisposition, ApprovalTarget, ApprovalTargetKind,
-    CatalogPromotionAuthorization, ClientActionKind, ClientActionRecord, FactInvalidationEventData,
-    FactRecord, FactScope, HolderId, InputAction, LeaseId, LeasePriority, MonitorDecision,
-    MonitorDiagnosis, MonitorDisposition, MonitorObservation, MonitorRecoveryCoordinationReason,
-    MonitorRecoveryKind, PerformanceContext, PerformanceControlEventData, PerformanceControlLevel,
-    PerformanceControlReason, PerformanceDeadlineDisposition, PerformanceMonitorHealth,
-    PerformanceMonitorStateEventData, PerformancePressureEventData, PerformancePressureRecord,
-    PerformanceStutterEventData, PerformanceSummaryEventData, ReleaseTransitionData,
-    ReleaseTransitionKind, RequestId, RuntimeReleaseSet, StateMigrationData,
-    validate_fact_invalidation, validate_performance_control, validate_performance_monitor_state,
-    validate_performance_stutter, validate_performance_summary,
+    CatalogPromotionAuthorization, ClientActionKind, ClientActionRecord, CorrelationId, EventId,
+    FactInvalidationEventData, FactRecord, FactScope, HolderId, InputAction, InstanceId, LeaseId,
+    LeasePriority, MonitorDecision, MonitorDiagnosis, MonitorDisposition, MonitorObservation,
+    MonitorRecoveryCoordinationReason, MonitorRecoveryKind, PerformanceContext,
+    PerformanceControlEventData, PerformanceControlLevel, PerformanceControlReason,
+    PerformanceDeadlineDisposition, PerformanceMonitorHealth, PerformanceMonitorStateEventData,
+    PerformancePressureEventData, PerformancePressureRecord, PerformanceStutterEventData,
+    PerformanceSummaryEventData, ReleaseTransitionData, ReleaseTransitionKind, RequestId, RunId,
+    RuntimeReleaseSet, StateMigrationData, TaskId, validate_fact_invalidation,
+    validate_performance_control, validate_performance_monitor_state, validate_performance_stutter,
+    validate_performance_summary,
 };
 use serde::de;
 use serde::{Deserialize, Deserializer, Serialize};
+use std::collections::BTreeSet;
 use std::fmt;
 
 pub const COMMAND_PAYLOAD_SCHEMA: &str = "actingcommand.payload.command.v2";
@@ -1050,12 +1052,347 @@ pub enum TaskSemanticFact {
         executed_steps: u32,
         #[serde(skip_serializing_if = "Option::is_none")]
         failure_code: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        scheduling_disposition: Option<SchedulingDisposition>,
     },
     TerminalRejected {
         committed_outcome: TaskOutcome,
         attempted_outcome: TaskOutcome,
         reason: String,
     },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SchedulingEffectCondition {
+    NoDesignatedEffect,
+    DesignatedEffectCompleted,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SchedulingOutcomeMapping {
+    outcome_key: String,
+    effect: SchedulingEffectCondition,
+    terminal_pages: Vec<String>,
+}
+
+impl SchedulingOutcomeMapping {
+    pub fn outcome_key(&self) -> &str {
+        &self.outcome_key
+    }
+
+    pub const fn effect(&self) -> SchedulingEffectCondition {
+        self.effect
+    }
+
+    pub fn terminal_pages(&self) -> &[String] {
+        &self.terminal_pages
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SchedulingOutcomeDeclaration {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    designated_operation: Option<String>,
+    mappings: Vec<SchedulingOutcomeMapping>,
+}
+
+impl SchedulingOutcomeDeclaration {
+    pub fn designated_operation(&self) -> Option<&str> {
+        self.designated_operation.as_deref()
+    }
+
+    pub fn mappings(&self) -> &[SchedulingOutcomeMapping] {
+        &self.mappings
+    }
+
+    pub fn validate(&self) -> Result<(), SanitizationError> {
+        if let Some(operation) = &self.designated_operation {
+            validate_task_semantic_label(operation, "designated_operation")?;
+        }
+        if self.mappings.is_empty() || self.mappings.len() > 64 {
+            return Err(SanitizationError::new(
+                "invalid_scheduling_outcome_declaration",
+                "mappings",
+            ));
+        }
+        let mut keys = BTreeSet::new();
+        let mut conditions = BTreeSet::new();
+        for mapping in &self.mappings {
+            validate_policy_token(&mapping.outcome_key, "outcome_key")?;
+            if !keys.insert(mapping.outcome_key.as_str()) {
+                return Err(SanitizationError::new(
+                    "invalid_scheduling_outcome_declaration",
+                    "outcome_key",
+                ));
+            }
+            if mapping.effect == SchedulingEffectCondition::DesignatedEffectCompleted
+                && self.designated_operation.is_none()
+            {
+                return Err(SanitizationError::new(
+                    "invalid_scheduling_outcome_declaration",
+                    "designated_operation",
+                ));
+            }
+            if mapping.terminal_pages.is_empty() || mapping.terminal_pages.len() > 64 {
+                return Err(SanitizationError::new(
+                    "invalid_scheduling_outcome_declaration",
+                    "terminal_pages",
+                ));
+            }
+            let mut pages = BTreeSet::new();
+            for page in &mapping.terminal_pages {
+                validate_task_semantic_label(page, "terminal_page")?;
+                if !pages.insert(page.as_str()) {
+                    return Err(SanitizationError::new(
+                        "invalid_scheduling_outcome_declaration",
+                        "terminal_pages",
+                    ));
+                }
+                if !conditions.insert((mapping.effect, page.as_str())) {
+                    return Err(SanitizationError::new(
+                        "invalid_scheduling_outcome_declaration",
+                        "mapping_overlap",
+                    ));
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum SchedulingEffectEvidence {
+    NoDesignatedEffect,
+    DesignatedEffectCompleted {
+        step_index: u32,
+        operation_label: String,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SchedulingDisposition {
+    outcome_key: String,
+    effect: SchedulingEffectEvidence,
+}
+
+impl SchedulingDisposition {
+    pub fn new(
+        outcome_key: impl Into<String>,
+        effect: SchedulingEffectEvidence,
+    ) -> Result<Self, SanitizationError> {
+        let value = Self {
+            outcome_key: outcome_key.into(),
+            effect,
+        };
+        value.validate()?;
+        Ok(value)
+    }
+
+    pub fn outcome_key(&self) -> &str {
+        &self.outcome_key
+    }
+
+    pub const fn effect(&self) -> &SchedulingEffectEvidence {
+        &self.effect
+    }
+
+    fn validate(&self) -> Result<(), SanitizationError> {
+        validate_policy_token(&self.outcome_key, "outcome_key")?;
+        if let SchedulingEffectEvidence::DesignatedEffectCompleted {
+            step_index,
+            operation_label,
+        } = &self.effect
+        {
+            validate_task_step(*step_index)?;
+            validate_task_semantic_label(operation_label, "operation_label")?;
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SchedulingOutcomeIdentity {
+    terminal_event_id: EventId,
+    terminal_sequence: u64,
+    instance_id: InstanceId,
+    task_id: TaskId,
+    run_id: RunId,
+    request_id: RequestId,
+    correlation_id: CorrelationId,
+    lease_id: LeaseId,
+    decision_id: String,
+    catalog_task_id: String,
+    instance_alias: String,
+}
+
+impl SchedulingOutcomeIdentity {
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        terminal_event_id: EventId,
+        terminal_sequence: u64,
+        instance_id: InstanceId,
+        task_id: TaskId,
+        run_id: RunId,
+        request_id: RequestId,
+        correlation_id: CorrelationId,
+        lease_id: LeaseId,
+        decision_id: impl Into<String>,
+        catalog_task_id: impl Into<String>,
+        instance_alias: impl Into<String>,
+    ) -> Result<Self, SanitizationError> {
+        let value = Self {
+            terminal_event_id,
+            terminal_sequence,
+            instance_id,
+            task_id,
+            run_id,
+            request_id,
+            correlation_id,
+            lease_id,
+            decision_id: decision_id.into(),
+            catalog_task_id: catalog_task_id.into(),
+            instance_alias: instance_alias.into(),
+        };
+        value.validate()?;
+        Ok(value)
+    }
+
+    pub const fn terminal_event_id(&self) -> EventId {
+        self.terminal_event_id
+    }
+
+    pub const fn terminal_sequence(&self) -> u64 {
+        self.terminal_sequence
+    }
+
+    pub const fn instance_id(&self) -> InstanceId {
+        self.instance_id
+    }
+
+    pub const fn task_id(&self) -> TaskId {
+        self.task_id
+    }
+
+    pub const fn run_id(&self) -> RunId {
+        self.run_id
+    }
+
+    pub const fn request_id(&self) -> RequestId {
+        self.request_id
+    }
+
+    pub const fn correlation_id(&self) -> CorrelationId {
+        self.correlation_id
+    }
+
+    pub const fn lease_id(&self) -> LeaseId {
+        self.lease_id
+    }
+
+    pub fn decision_id(&self) -> &str {
+        &self.decision_id
+    }
+
+    pub fn catalog_task_id(&self) -> &str {
+        &self.catalog_task_id
+    }
+
+    pub fn instance_alias(&self) -> &str {
+        &self.instance_alias
+    }
+
+    fn validate(&self) -> Result<(), SanitizationError> {
+        if self.terminal_sequence == 0 {
+            return Err(SanitizationError::new(
+                "invalid_authoritative_scheduling_outcome",
+                "position",
+            ));
+        }
+        validate_policy_token(&self.decision_id, "decision_id")?;
+        validate_task_semantic_label(&self.catalog_task_id, "catalog_task_id")?;
+        validate_task_semantic_label(&self.instance_alias, "instance_alias")
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AuthoritativeSchedulingOutcome {
+    identity: SchedulingOutcomeIdentity,
+    disposition: SchedulingDisposition,
+    terminal_timestamp_unix_ms: u64,
+}
+
+impl AuthoritativeSchedulingOutcome {
+    pub fn new(
+        identity: SchedulingOutcomeIdentity,
+        disposition: SchedulingDisposition,
+        terminal_timestamp_unix_ms: u64,
+    ) -> Result<Self, SanitizationError> {
+        identity.validate()?;
+        disposition.validate()?;
+        if terminal_timestamp_unix_ms == 0 {
+            return Err(SanitizationError::new(
+                "invalid_authoritative_scheduling_outcome",
+                "terminal_timestamp_unix_ms",
+            ));
+        }
+        Ok(Self {
+            identity,
+            disposition,
+            terminal_timestamp_unix_ms,
+        })
+    }
+
+    pub const fn identity(&self) -> &SchedulingOutcomeIdentity {
+        &self.identity
+    }
+
+    pub const fn disposition(&self) -> &SchedulingDisposition {
+        &self.disposition
+    }
+
+    pub const fn terminal_timestamp_unix_ms(&self) -> u64 {
+        self.terminal_timestamp_unix_ms
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SchedulingOutcomeProjection {
+    ledger_position: u64,
+    outcome: AuthoritativeSchedulingOutcome,
+}
+
+impl SchedulingOutcomeProjection {
+    pub fn new(
+        ledger_position: u64,
+        outcome: AuthoritativeSchedulingOutcome,
+    ) -> Result<Self, SanitizationError> {
+        if ledger_position == 0 || outcome.identity().terminal_sequence() > ledger_position {
+            return Err(SanitizationError::new(
+                "invalid_scheduling_outcome_projection",
+                "ledger_position",
+            ));
+        }
+        Ok(Self {
+            ledger_position,
+            outcome,
+        })
+    }
+
+    pub const fn ledger_position(&self) -> u64 {
+        self.ledger_position
+    }
+
+    pub const fn outcome(&self) -> &AuthoritativeSchedulingOutcome {
+        &self.outcome
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1226,6 +1563,7 @@ impl TaskSemanticFact {
                 final_page,
                 executed_steps,
                 failure_code,
+                scheduling_disposition,
             } => {
                 if *executed_steps > 1_000 {
                     return Err(SanitizationError::new(
@@ -1237,8 +1575,24 @@ impl TaskSemanticFact {
                     validate_task_semantic_label(page, "final_page")?;
                 }
                 match (outcome, failure_code) {
-                    (TaskOutcome::Success, None) => {}
+                    (TaskOutcome::Success, None) => {
+                        if let Some(disposition) = scheduling_disposition {
+                            if final_page.is_none() {
+                                return Err(SanitizationError::new(
+                                    "invalid_task_terminal",
+                                    "scheduling_disposition",
+                                ));
+                            }
+                            disposition.validate()?;
+                        }
+                    }
                     (TaskOutcome::Failure | TaskOutcome::Cancelled, Some(code)) => {
+                        if scheduling_disposition.is_some() {
+                            return Err(SanitizationError::new(
+                                "invalid_task_terminal",
+                                "scheduling_disposition",
+                            ));
+                        }
                         validate_task_semantic_label(code, "failure_code")?;
                     }
                     _ => {

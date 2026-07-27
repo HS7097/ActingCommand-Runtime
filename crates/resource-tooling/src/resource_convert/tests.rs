@@ -235,6 +235,61 @@ fn build_pages_materializes_page_referenced_only_by_error_pages() {
     );
 }
 
+#[test]
+fn build_pages_materializes_and_validates_scheduling_outcome_references() {
+    let bundle = |outcome_key: &str| Bundle {
+        task_id: "outcome-page-check".to_string(),
+        dir: PathBuf::from("operations/outcome-page-check"),
+        data: json!({
+            "schema_version": "0.6",
+            "task_id": "outcome-page-check",
+            "anchors": [
+                {"id":"home","template":"assets/HOME.png","region":{"mode":"rect","rect":{"x":0,"y":0,"width":1,"height":1}}},
+                {"id":"result","template":"assets/RESULT.png","region":{"mode":"rect","rect":{"x":0,"y":0,"width":1,"height":1}}}
+            ],
+            "entry_page": "home",
+            "target_page": "home",
+            "scheduling_outcome": {
+                "mappings": [{
+                    "outcome_key": outcome_key,
+                    "effect": "no_designated_effect",
+                    "terminal_pages": ["result"]
+                }]
+            },
+            "operations": []
+        }),
+    };
+    let converter = OperationConverter {
+        root: PathBuf::from("."),
+        game: "neutral".to_string(),
+        server: "test".to_string(),
+        locale: "en-US".to_string(),
+        coordinate_space: json!({"width":1,"height":1}),
+        defaults: json!({"template_threshold":0.9}),
+        resource_ids: HashSet::new(),
+        bundles: vec![bundle("opaque-result")],
+        existing_navigation: None,
+        maa_task_overlays: HashMap::new(),
+    };
+    let pages = converter.build_pages().expect("build outcome pages");
+    assert!(
+        pages["pages"]
+            .as_array()
+            .expect("pages array")
+            .iter()
+            .any(|page| page["id"] == "neutral/result")
+    );
+
+    let invalid = OperationConverter {
+        bundles: vec![bundle("invalid outcome key")],
+        ..converter
+    };
+    let error = invalid
+        .build_pages()
+        .expect_err("invalid scheduling outcome");
+    assert!(error.message.contains("scheduling_outcome"));
+}
+
 fn one_pixel_png() -> &'static [u8] {
     &[
         137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82, 0, 0, 0, 1, 0, 0, 0, 1, 8, 2,

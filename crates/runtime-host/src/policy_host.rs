@@ -7,14 +7,14 @@ use crate::policy_control::{
 };
 use crate::{PerformanceControlWorkload, ProcedureManifest, RuntimeHostError, RuntimeHostResult};
 use actingcommand_contract::{
-    CatalogPayload, CorrelationId, EventPayload, EventQuery, EventType, IssuedCorrelationId,
-    IssuedRunId, IssuedTaskId, LeaseToken, OwnerEpoch, PerformanceContext, PolicyAdmissionRecord,
-    PolicyDetectionBudgetRecord, PolicyDispatchEventData, PolicyExecutionEventData,
-    PolicyExecutionOutcome, PolicyPayload, PolicyPlanningSignalEventData, PolicyPlanningSignalKind,
-    PolicyReasonRecord, ProjectDecisionPageRequest, RequestId, RunId, RuntimeErrorCode,
-    RuntimeRequest, TaskId,
+    CatalogPayload, CorrelationId, EventPayload, EventQuery, EventType, InstanceId,
+    IssuedCorrelationId, IssuedRunId, IssuedTaskId, LeaseId, LeaseToken, OwnerEpoch,
+    PerformanceContext, PolicyAdmissionRecord, PolicyDetectionBudgetRecord,
+    PolicyDispatchEventData, PolicyExecutionEventData, PolicyExecutionOutcome, PolicyPayload,
+    PolicyPlanningSignalEventData, PolicyPlanningSignalKind, PolicyReasonRecord,
+    ProjectDecisionPageRequest, RequestId, RunId, RuntimeErrorCode, RuntimeRequest, TaskId,
 };
-use actingcommand_ledger::GlobalLedger;
+use actingcommand_ledger::{GlobalLedger, PersistedEvent};
 use actingcommand_policy::{
     ActivityProfile, CatalogDocumentSource, CatalogSources, CompiledCatalog, DecisionReasonChain,
     DispatchIntent, DispatchPrerequisites, EvaluationFacts, EvaluationResources, EvaluationTime,
@@ -319,6 +319,10 @@ impl PolicyRunContext {
         &self.intent.operation_id
     }
 
+    pub(crate) fn catalog_task_id(&self) -> &str {
+        &self.intent.task_id
+    }
+
     pub fn procedure_ref(&self) -> &str {
         &self.intent.procedure_ref
     }
@@ -391,11 +395,34 @@ struct SeenDispatch {
     data: PolicyDispatchEventData,
     admission: Option<PolicyAdmissionRecord>,
     execution: Option<PolicyExecutionEventData>,
+    completed_run: Option<CompletedPolicyRunIdentity>,
     intent_sequence: u64,
     admitted_sequence: Option<u64>,
     rejected_sequence: Option<u64>,
     completed_sequence: Option<u64>,
     lifecycle: DispatchLifecycle,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct CompletedPolicyRunIdentity {
+    pub(crate) decision_id: String,
+    pub(crate) catalog_task_id: String,
+    pub(crate) instance_alias: String,
+    pub(crate) instance_id: InstanceId,
+    pub(crate) admission_request_id: RequestId,
+    pub(crate) correlation_id: CorrelationId,
+    pub(crate) task_id: TaskId,
+    pub(crate) run_id: RunId,
+    pub(crate) lease_id: LeaseId,
+    pub(crate) execution_outcome: PolicyExecutionOutcome,
+    pub(crate) completion_sequence: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct PolicyOutcomeKeySnapshot {
+    pub(crate) generation: Option<CatalogGeneration>,
+    pub(crate) keys: BTreeMap<String, BTreeSet<String>>,
+    pub(crate) completed_runs: BTreeMap<(String, String), CompletedPolicyRunIdentity>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1132,6 +1159,135 @@ impl PolicyHost {
         Ok(())
     }
 
+    pub(crate) fn referenced_outcome_keys(
+        &self,
+        context: &PolicyRunContext,
+    ) -> RuntimeHostResult<BTreeSet<String>> {
+        self.validate_run_context(context)?;
+        let loaded = self.store.load_generation(context.catalog.catalog_hash())?;
+        if loaded.generation() != &context.catalog {
+            return Err(fatal(
+                "policy_run_catalog_identity_mismatch",
+                "read_policy_outcome_keys",
+            ));
+        }
+        Ok(loaded
+            .compiled()
+            .referenced_outcome_keys(context.catalog_task_id()))
+    }
+
+    pub(crate) fn referenced_outcome_keys_for_completed_run(
+        &self,
+        context: &PolicyRunContext,
+    ) -> RuntimeHostResult<BTreeSet<String>> {
+        let dispatch = self
+            .seen_dispatches
+            .get(context.decision_id())
+            .ok_or_else(|| request("policy_run_dispatch_unknown", "read_policy_outcome_keys"))?;
+        let expected_data = dispatch_event_data(&context.intent, &context.reason_chain)?;
+        if dispatch.data != expected_data
+            || dispatch.admission.as_ref() != Some(&context.admission)
+            || dispatch.lifecycle != DispatchLifecycle::Completed
+            || self.pinned_dispatches.contains_key(context.decision_id())
+        {
+            return Err(fatal(
+                "policy_run_completed_context_mismatch",
+                "read_policy_outcome_keys",
+            ));
+        }
+        let loaded = self.store.load_generation(context.catalog.catalog_hash())?;
+        if loaded.generation() != &context.catalog {
+            return Err(fatal(
+                "policy_run_catalog_identity_mismatch",
+                "read_policy_outcome_keys",
+            ));
+        }
+        Ok(loaded
+            .compiled()
+            .referenced_outcome_keys(context.catalog_task_id()))
+    }
+
+    pub(crate) fn outcome_key_snapshot(&self) -> RuntimeHostResult<PolicyOutcomeKeySnapshot> {
+        let Some(active) = &self.active else {
+            return Ok(PolicyOutcomeKeySnapshot {
+                generation: None,
+                keys: BTreeMap::new(),
+                completed_runs: BTreeMap::new(),
+            });
+        };
+        let mut keys = BTreeMap::new();
+        for task in &active.compiled.catalog().tasks.tasks {
+            let referenced = active.compiled.referenced_outcome_keys(&task.id);
+            if !referenced.is_empty() {
+                keys.insert(task.id.clone(), referenced);
+            }
+        }
+        let mut completed_runs = BTreeMap::new();
+        for dispatch in self
+            .seen_dispatches
+            .values()
+            .filter(|dispatch| dispatch.lifecycle == DispatchLifecycle::Completed)
+            .filter(|dispatch| keys.contains_key(&dispatch.data.task_id))
+        {
+            let completed = dispatch.completed_run.clone().ok_or_else(|| {
+                fatal(
+                    "policy_run_identity_missing",
+                    "snapshot_policy_scheduling_outcomes",
+                )
+            })?;
+            let key = (
+                completed.catalog_task_id.clone(),
+                completed.instance_alias.clone(),
+            );
+            if completed_runs
+                .get(&key)
+                .is_none_or(|current: &CompletedPolicyRunIdentity| {
+                    current.completion_sequence < completed.completion_sequence
+                })
+            {
+                completed_runs.insert(key, completed);
+            }
+        }
+        Ok(PolicyOutcomeKeySnapshot {
+            generation: Some(active.generation.clone()),
+            keys,
+            completed_runs,
+        })
+    }
+
+    pub(crate) fn validate_outcome_key_snapshot(
+        &self,
+        snapshot: &PolicyOutcomeKeySnapshot,
+    ) -> RuntimeHostResult<()> {
+        if &self.outcome_key_snapshot()? != snapshot {
+            return Err(request(
+                "policy_outcome_snapshot_changed",
+                "validate_policy_outcome_key_snapshot",
+            ));
+        }
+        Ok(())
+    }
+
+    pub(crate) fn completed_policy_runs(
+        &self,
+        limit: usize,
+    ) -> RuntimeHostResult<Vec<CompletedPolicyRunIdentity>> {
+        let completed = self
+            .seen_dispatches
+            .values()
+            .filter(|dispatch| dispatch.lifecycle == DispatchLifecycle::Completed)
+            .filter_map(|dispatch| dispatch.completed_run.clone())
+            .take(limit.saturating_add(1))
+            .collect::<Vec<_>>();
+        if completed.len() > limit {
+            return Err(fatal(
+                "policy_scheduling_outcome_capacity_exceeded",
+                "recover_policy_scheduling_outcomes",
+            ));
+        }
+        Ok(completed)
+    }
+
     pub(crate) fn admitted_at(&self, decision_id: &str) -> RuntimeHostResult<u64> {
         self.seen_dispatches
             .get(decision_id)
@@ -1285,7 +1441,7 @@ impl PolicyHost {
     pub(crate) fn complete_dispatch(
         &mut self,
         decision_id: &str,
-        completed_sequence: u64,
+        completion: &PersistedEvent,
     ) -> RuntimeHostResult<()> {
         let dispatch = self.seen_dispatches.get_mut(decision_id).ok_or_else(|| {
             fatal(
@@ -1308,7 +1464,27 @@ impl PolicyHost {
                 "complete_policy_dispatch",
             ));
         }
-        dispatch.completed_sequence = Some(completed_sequence);
+        let execution = dispatch.execution.as_ref().ok_or_else(|| {
+            fatal(
+                "policy_execution_outcome_missing",
+                "complete_policy_dispatch",
+            )
+        })?;
+        let catalog = self.store.load_generation(&dispatch.data.catalog_hash)?;
+        dispatch.completed_run = if catalog
+            .compiled()
+            .referenced_outcome_keys(&dispatch.data.task_id)
+            .is_empty()
+        {
+            None
+        } else {
+            Some(completed_policy_run_identity(
+                completion,
+                &dispatch.data,
+                execution,
+            )?)
+        };
+        dispatch.completed_sequence = Some(completion.sequence());
         dispatch.lifecycle = DispatchLifecycle::Completed;
         Ok(())
     }
@@ -1572,6 +1748,7 @@ impl PolicyHost {
                         data,
                         admission: None,
                         execution: None,
+                        completed_run: None,
                         intent_sequence: event.sequence(),
                         admitted_sequence: None,
                         rejected_sequence: None,
@@ -1641,6 +1818,26 @@ impl PolicyHost {
                             "recover_policy_dispatches",
                         ));
                     }
+                    let execution = dispatch.execution.as_ref().ok_or_else(|| {
+                        fatal(
+                            "policy_execution_outcome_missing",
+                            "recover_policy_dispatches",
+                        )
+                    })?;
+                    let catalog = self.store.load_generation(&dispatch.data.catalog_hash)?;
+                    dispatch.completed_run = if catalog
+                        .compiled()
+                        .referenced_outcome_keys(&dispatch.data.task_id)
+                        .is_empty()
+                    {
+                        None
+                    } else {
+                        Some(completed_policy_run_identity(
+                            &event,
+                            &dispatch.data,
+                            execution,
+                        )?)
+                    };
                 }
                 PolicyPayload::ExecutionRecorded(payload) => {
                     let data = execution_event_data(payload);
@@ -2200,6 +2397,48 @@ fn transition_dispatch<'a>(
     }
     intent.lifecycle = next;
     Ok(intent)
+}
+
+fn completed_policy_run_identity(
+    event: &PersistedEvent,
+    data: &PolicyDispatchEventData,
+    execution: &PolicyExecutionEventData,
+) -> RuntimeHostResult<CompletedPolicyRunIdentity> {
+    let links = event.links();
+    let (
+        Some(instance_id),
+        Some(admission_request_id),
+        Some(correlation_id),
+        Some(task_id),
+        Some(run_id),
+        Some(lease_id),
+    ) = (
+        links.instance_id(),
+        links.request_id(),
+        links.correlation_id(),
+        links.task_id(),
+        links.run_id(),
+        links.lease_id(),
+    )
+    else {
+        return Err(fatal(
+            "policy_run_identity_missing",
+            "recover_policy_dispatches",
+        ));
+    };
+    Ok(CompletedPolicyRunIdentity {
+        decision_id: data.decision_id.clone(),
+        catalog_task_id: data.task_id.clone(),
+        instance_alias: data.instance_id.clone(),
+        instance_id: *instance_id,
+        admission_request_id: *admission_request_id,
+        correlation_id: *correlation_id,
+        task_id: *task_id,
+        run_id: *run_id,
+        lease_id: *lease_id,
+        execution_outcome: execution.outcome.clone(),
+        completion_sequence: event.sequence(),
+    })
 }
 
 fn execution_event_data(

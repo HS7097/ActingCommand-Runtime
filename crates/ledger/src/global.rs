@@ -7,9 +7,10 @@ mod storage;
 
 use crate::PersistedEvent;
 use actingcommand_contract::{
-    EventQuery, PolicyExecutionEventData, ProjectedArtifactReference, ProjectedEvent,
-    ProjectionProfile, SanitizationError, SanitizedEventDraft, SecretField, SecretFingerprinter,
-    Sha256Fingerprint, SubscriptionCursor, VerifiedArtifactReference,
+    EventQuery, EventType, PolicyExecutionEventData, ProjectedArtifactReference, ProjectedEvent,
+    ProjectionProfile, SanitizationError, SanitizedEventDraft, SchedulingOutcomeIdentity,
+    SchedulingOutcomeProjection, SecretField, SecretFingerprinter, Sha256Fingerprint,
+    SubscriptionCursor, VerifiedArtifactReference,
 };
 use sha2::{Digest, Sha256};
 use std::collections::VecDeque;
@@ -291,6 +292,11 @@ enum WriterCommand {
         through_sequence: u64,
         page_events: usize,
         response: SyncSender<GlobalLedgerResult<Vec<PersistedEvent>>>,
+    },
+    ProjectSchedulingOutcomes {
+        expected: Box<SchedulingOutcomeIdentity>,
+        through_sequence: u64,
+        response: SyncSender<GlobalLedgerResult<SchedulingOutcomeProjection>>,
     },
     LatestSequence {
         response: SyncSender<GlobalLedgerResult<u64>>,
@@ -655,6 +661,27 @@ impl GlobalLedger {
         receive_response(receiver, "query_event_page")?
     }
 
+    pub fn project_scheduling_outcomes(
+        &self,
+        expected: SchedulingOutcomeIdentity,
+        through_sequence: u64,
+    ) -> GlobalLedgerResult<SchedulingOutcomeProjection> {
+        let (response, receiver) = mpsc::sync_channel(1);
+        let sender = self.sender.as_ref().ok_or_else(|| {
+            GlobalLedgerError::fatal("writer_unavailable", "project_scheduling_outcomes")
+        })?;
+        send_command(
+            sender,
+            WriterCommand::ProjectSchedulingOutcomes {
+                expected: Box::new(expected),
+                through_sequence,
+                response,
+            },
+            "project_scheduling_outcomes",
+        )?;
+        receive_response(receiver, "project_scheduling_outcomes")?
+    }
+
     pub fn latest_sequence(&self) -> GlobalLedgerResult<u64> {
         let (response, receiver) = mpsc::sync_channel(1);
         let sender = self
@@ -882,6 +909,90 @@ fn writer_loop(
                         "invalid_query_page",
                         "query_event_page",
                     ))
+                };
+                let _ = response.send(result);
+            }
+            WriterCommand::ProjectSchedulingOutcomes {
+                expected,
+                through_sequence,
+                response,
+            } => {
+                let terminal_sequence = expected.terminal_sequence();
+                let actual_high_watermark = store.latest_sequence();
+                let result = if through_sequence > actual_high_watermark {
+                    Err(GlobalLedgerError::request(
+                        "outcome_projection_position_invalid",
+                        "project_scheduling_outcomes",
+                    ))
+                } else if terminal_sequence > through_sequence {
+                    Err(GlobalLedgerError::request(
+                        "outcome_projection_not_ready",
+                        "project_scheduling_outcomes",
+                    ))
+                } else {
+                    let mut terminals = Vec::new();
+                    for event_type in [
+                        EventType::TaskCompleted,
+                        EventType::TaskFailed,
+                        EventType::TaskCancelled,
+                    ] {
+                        let remaining = 2_usize.saturating_sub(terminals.len());
+                        if remaining == 0 {
+                            break;
+                        }
+                        terminals.extend(store.query_page(
+                            &EventQuery {
+                                to_sequence: Some(through_sequence),
+                                event_type: Some(event_type),
+                                instance_id: Some(expected.instance_id()),
+                                correlation_id: Some(expected.correlation_id()),
+                                task_id: Some(expected.task_id()),
+                                run_id: Some(expected.run_id()),
+                                lease_id: Some(expected.lease_id()),
+                                ..EventQuery::default()
+                            },
+                            0,
+                            through_sequence,
+                            remaining,
+                        ));
+                    }
+                    terminals.sort_by_key(PersistedEvent::sequence);
+                    let admissions = store.query_page(
+                        &EventQuery {
+                            to_sequence: Some(terminal_sequence.saturating_sub(1)),
+                            event_type: Some(EventType::PolicyDispatchAdmitted),
+                            instance_id: Some(expected.instance_id()),
+                            correlation_id: Some(expected.correlation_id()),
+                            task_id: Some(expected.task_id()),
+                            run_id: Some(expected.run_id()),
+                            ..EventQuery::default()
+                        },
+                        0,
+                        terminal_sequence.saturating_sub(1),
+                        2,
+                    );
+                    let leases = store.query_page(
+                        &EventQuery {
+                            to_sequence: Some(terminal_sequence.saturating_sub(1)),
+                            event_type: Some(EventType::LeaseGranted),
+                            instance_id: Some(expected.instance_id()),
+                            correlation_id: Some(expected.correlation_id()),
+                            task_id: Some(expected.task_id()),
+                            run_id: Some(expected.run_id()),
+                            lease_id: Some(expected.lease_id()),
+                            ..EventQuery::default()
+                        },
+                        0,
+                        terminal_sequence.saturating_sub(1),
+                        2,
+                    );
+                    projection::project_scheduling_outcomes(
+                        &terminals,
+                        &admissions,
+                        &leases,
+                        through_sequence,
+                        &expected,
+                    )
                 };
                 let _ = response.send(result);
             }

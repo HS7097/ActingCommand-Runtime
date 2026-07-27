@@ -1512,6 +1512,7 @@ fn task_semantic_payload_rejects_invalid_facts() {
             final_page: Some("home".to_string()),
             executed_steps: 1,
             failure_code: Some("must_be_absent".to_string()),
+            scheduling_disposition: None,
         },
     ];
 
@@ -1527,6 +1528,79 @@ fn task_semantic_payload_rejects_invalid_facts() {
         )
         .sanitize(&SpyFingerprinter::new())
         .expect_err("invalid task semantic fact");
+    }
+}
+
+#[test]
+fn scheduling_outcome_declaration_is_finite_unique_and_identifier_closed() {
+    let valid: SchedulingOutcomeDeclaration = serde_json::from_value(serde_json::json!({
+        "designated_operation": "collect",
+        "mappings": [
+            {
+                "outcome_key": "effect-applied",
+                "effect": "designated_effect_completed",
+                "terminal_pages": ["terminal"]
+            },
+            {
+                "outcome_key": "no-effect",
+                "effect": "no_designated_effect",
+                "terminal_pages": ["terminal"]
+            }
+        ]
+    }))
+    .expect("valid declaration shape");
+    valid.validate().expect("valid declaration");
+
+    for invalid in [
+        serde_json::json!({"mappings": []}),
+        serde_json::json!({
+            "mappings": [
+                {
+                    "outcome_key": "duplicate",
+                    "effect": "no_designated_effect",
+                    "terminal_pages": ["terminal"]
+                },
+                {
+                    "outcome_key": "duplicate",
+                    "effect": "no_designated_effect",
+                    "terminal_pages": ["alternate"]
+                }
+            ]
+        }),
+        serde_json::json!({
+            "mappings": [
+                {
+                    "outcome_key": "first",
+                    "effect": "no_designated_effect",
+                    "terminal_pages": ["terminal"]
+                },
+                {
+                    "outcome_key": "second",
+                    "effect": "no_designated_effect",
+                    "terminal_pages": ["terminal"]
+                }
+            ]
+        }),
+        serde_json::json!({
+            "mappings": [{
+                "outcome_key": "contains whitespace",
+                "effect": "no_designated_effect",
+                "terminal_pages": ["terminal"]
+            }]
+        }),
+        serde_json::json!({
+            "mappings": [{
+                "outcome_key": "effect-applied",
+                "effect": "designated_effect_completed",
+                "terminal_pages": ["terminal"]
+            }]
+        }),
+    ] {
+        let declaration: SchedulingOutcomeDeclaration =
+            serde_json::from_value(invalid).expect("closed declaration shape");
+        declaration
+            .validate()
+            .expect_err("invalid scheduling declaration");
     }
 }
 

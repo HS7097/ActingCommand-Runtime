@@ -1152,8 +1152,8 @@ mod run_summary_runtime_e2e_tests {
     };
     use actingcommand_device::{CaptureBackend, DeviceError, DeviceResult, InputBackend};
     use actingcommand_policy::{
-        CatalogDocumentSource, CatalogSources, EvaluationFacts, EvaluationResources, FactValue,
-        HostResourceSnapshot, InstanceSnapshot, ObservedOutcome, PoolValueSnapshot,
+        CatalogDocumentSource, CatalogSources, EvaluationFacts, EvaluationResources,
+        HostResourceSnapshot, InstanceSnapshot, PoolValueSnapshot,
     };
     use actingcommand_runtime_host::{
         ExecutionBackendProvider, PolicyAdmissionContext, PolicyCadence, PolicyDispatchAdmission,
@@ -1316,6 +1316,24 @@ mod run_summary_runtime_e2e_tests {
             document["catalog"]["catalog_version"] = serde_json::json!(1);
             source.bytes = serde_json::to_vec(&document).expect("policy fixture bytes");
         }
+        let mut tasks: serde_json::Value =
+            serde_json::from_slice(&sources.tasks.bytes).expect("generic policy tasks");
+        tasks["tasks"][0]["feedback_stop"] = serde_json::json!({
+            "kind": "clock",
+            "schedule": {
+                "kind": "at",
+                "clock_source": {
+                    "kind": "server",
+                    "timezone_id": "etc/utc",
+                    "utc_offset_minutes": 0,
+                    "dst_offset_minutes": 0,
+                    "maintenance_drift_ms": 0
+                },
+                "at_ms": 4102444800000_u64
+            }
+        });
+        sources.tasks.bytes =
+            serde_json::to_vec(&tasks).expect("generic policy task fixture bytes");
         sources
     }
 
@@ -1324,13 +1342,7 @@ mod run_summary_runtime_e2e_tests {
             ledger_position: 1,
             fact_snapshot_id: "snapshot:runtime-client-settlement".to_owned(),
             facts: Vec::new(),
-            outcomes: vec![ObservedOutcome {
-                task_id: "fixture.observe".to_owned(),
-                instance_id: INSTANCE_ALIAS.to_owned(),
-                outcome_key: "completed".to_owned(),
-                value: FactValue::Boolean(false),
-                observed_at_unix_ms: NOW_UNIX_MS,
-            }],
+            outcomes: Vec::new(),
             tasks: Vec::new(),
             instances: vec![InstanceSnapshot {
                 instance_id: INSTANCE_ALIAS.to_owned(),
