@@ -4,7 +4,7 @@
 
 > The **resident Rust runtime** of a multi-game emulator automation framework: a long-lived daemon owns scheduling arbitration, device control and a global event ledger, while all game knowledge lives in declarative resource packs — the runtime kernel contains **zero game logic**. The control plane is a **clean-room Rust implementation** — rewritten from public behavior and protocols, with no C/C++ source in this repository.
 
-`cargo test --workspace` **all green (48 test binaries / 1637 tests, plus 13 doc-tests)** · CI: GitHub Actions (single windows-latest job: fmt / clippy `-D warnings` / test) · License `AGPL-3.0-only` · This repository is public
+`cargo test --workspace` **all green (48 test binaries / 1703 tests, plus 14 doc-tests)** · CI: GitHub Actions (single windows-latest job: fmt / clippy `-D warnings` / test) · License `AGPL-3.0-only` · This repository is public
 
 **Current maturity**: scheduling arbitration, the device throat, the global ledger and task containment are established and policed by the tests and architecture guards above; **recognition is currently template matching (NCC family) and color predicates**. The OCR / neural-network FFI boundary and two source-form providers are in place but **not yet wired into the runtime recognition path**, and resource-pack vocabulary cannot declare OCR/NN targets yet (see "Recognition status").
 

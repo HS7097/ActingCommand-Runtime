@@ -4,7 +4,7 @@
 
 > 多游戏模拟器自动化框架的 **Rust 常驻运行时**:一个长驻 daemon 承载调度仲裁、设备控制与全局事件账本;游戏知识全部外置于声明式资源包,运行时内核**零游戏逻辑**。控制面为**净室 Rust 实现**——参照公开行为与协议重写,仓内无任何 C/C++ 源码。
 
-`cargo test --workspace` **全绿(48 个测试二进制 / 1637 用例,另 13 个文档测试)** · CI:GitHub Actions(windows-latest 单 job:fmt / clippy `-D warnings` / test)· 许可 `AGPL-3.0-only` · 本仓公开
+`cargo test --workspace` **全绿(48 个测试二进制 / 1703 用例,另 14 个文档测试)** · CI:GitHub Actions(windows-latest 单 job:fmt / clippy `-D warnings` / test)· 许可 `AGPL-3.0-only` · 本仓公开
 
 **当前成熟度**:调度仲裁、设备咽喉、全局账本与任务收容已成体系,并由上述用例与架构守卫把关;**识别面目前为模板匹配(NCC 族)与颜色判据**,OCR / 神经网络的 FFI 边界与两个源码态 provider 已就位,但**尚未接入运行时识别路径**,资源包词表也还不能声明 OCR/NN 目标(详见「识别面现状」)。
 
