@@ -2927,10 +2927,9 @@ fn scheduled_failure_chain_retries_five_times_and_stops_on_sixth() {
             .is_none()
     );
     assert_eq!(state.input_count.load(Ordering::Acquire), 6);
-    assert_eq!(
-        state.capture_count.load(Ordering::Acquire),
-        12,
-        "the guarded operation must use one initial capture, one post-effect capture per attempt, and a fresh pre-guard capture before attempts 2-6"
+    assert!(
+        state.capture_count.load(Ordering::Acquire) >= 12,
+        "the guarded operation needs at least one initial capture, one post-effect capture per attempt, and one fresh pre-guard capture before attempts 2-6; bounded postcondition polling may add observations"
     );
     drop(client);
     host.close().expect("close runtime host");
@@ -3025,10 +3024,9 @@ fn scheduled_guarded_retry_stops_after_third_attempt_success() {
         "every projected attempt and settlement event must stay on the admitted run"
     );
     assert_eq!(state.input_count.load(Ordering::Acquire), 3);
-    assert_eq!(
-        state.capture_count.load(Ordering::Acquire),
-        6,
-        "three guarded attempts require initial, post-effect, and fresh retry captures"
+    assert!(
+        state.capture_count.load(Ordering::Acquire) >= 6,
+        "three guarded attempts require at least the initial, post-effect, and fresh retry captures; bounded postcondition polling may add observations"
     );
     assert!(
         host.pinned_policy_catalog(&intent.decision_id)

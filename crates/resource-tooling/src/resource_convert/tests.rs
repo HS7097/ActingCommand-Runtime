@@ -247,7 +247,7 @@ fn write_error_page_fixture() -> tempfile::TempDir {
     let root = tempfile::tempdir().unwrap();
     let task_dir = root.path().join("operations/error-page-check");
     fs::create_dir_all(task_dir.join("assets")).unwrap();
-    for asset in ["HOME.png", "SUCCESS.png", "FAILURE.png"] {
+    for asset in ["HOME.png", "SUCCESS.png", "ALTERNATE.png", "FAILURE.png"] {
         fs::write(task_dir.join("assets").join(asset), one_pixel_png()).unwrap();
     }
     fs::write(
@@ -268,6 +268,7 @@ fn write_error_page_fixture() -> tempfile::TempDir {
             "anchors": [
                 {"id":"home","template":"assets/HOME.png","region":{"mode":"rect","rect":{"x":0,"y":0,"width":1,"height":1}}},
                 {"id":"success","template":"assets/SUCCESS.png","region":{"mode":"rect","rect":{"x":0,"y":0,"width":1,"height":1}}},
+                {"id":"alternate","template":"assets/ALTERNATE.png","region":{"mode":"rect","rect":{"x":0,"y":0,"width":1,"height":1}}},
                 {"id":"failure","template":"assets/FAILURE.png","region":{"mode":"rect","rect":{"x":0,"y":0,"width":1,"height":1}}}
             ],
             "entry_page": "home",
@@ -352,6 +353,267 @@ fn invalid_error_page_identifiers_fail_loud() {
         let error = OperationConverter::load(root.path(), None, None, None).expect_err(case);
 
         assert_eq!(error.code, "package_invalid");
+        assert!(
+            error.message.contains(expected),
+            "{case}: {}",
+            error.message
+        );
+    }
+}
+
+fn finite_page_operation(id: &str, to: Value, expect_after: Option<Value>) -> Value {
+    let mut operation = json!({
+        "id": id,
+        "purpose": "exercise finite postcondition declarations",
+        "from": "home",
+        "to": to,
+        "click": {"kind":"point","x":0,"y":0},
+        "unguarded_trusted_coordinate": true,
+        "consumes": [],
+        "produces": []
+    });
+    if let Some(expect_after) = expect_after {
+        operation["expect_after"] = expect_after;
+    }
+    operation
+}
+
+#[test]
+fn finite_page_sets_are_normalized_materialized_and_not_truncated() {
+    let root = write_error_page_fixture();
+    update_error_page_fixture_task(root.path(), |task| {
+        task["target_page"] = json!(["success", "alternate"]);
+        task["operations"] = json!([
+            finite_page_operation("set_destination", json!(["success", "alternate"]), None,),
+            finite_page_operation(
+                "expect_after_destination",
+                Value::Null,
+                Some(json!({
+                    "page_id": ["success", "alternate"],
+                    "timeout_ms": 10
+                })),
+            ),
+        ]);
+    });
+
+    let converter = OperationConverter::load(root.path(), None, None, None).expect("load");
+    let outputs = converter.build_all().expect("convert finite sets");
+    let selected = converter
+        .build_selected(&["error-page-check".to_string()])
+        .expect("selected finite sets");
+    let canonical = converter
+        .canonical_task("error-page-check")
+        .expect("canonical task");
+
+    let page_ids = outputs.pages["pages"]
+        .as_array()
+        .expect("pages")
+        .iter()
+        .filter_map(|page| page.get("id").and_then(Value::as_str))
+        .collect::<BTreeSet<_>>();
+    assert!(page_ids.contains("neutral/success"));
+    assert!(page_ids.contains("neutral/alternate"));
+    assert_eq!(selected.pages, outputs.pages);
+    assert_eq!(canonical["target_page"], json!(["alternate", "success"]));
+    assert_eq!(
+        canonical["operations"][0]["to"],
+        json!(["alternate", "success"])
+    );
+    assert_eq!(
+        canonical["operations"][1]["expect_after"]["page_id"],
+        json!(["alternate", "success"])
+    );
+    assert_eq!(
+        outputs.primitives["primitives"][0]["to"],
+        json!(["alternate", "success"])
+    );
+    assert_eq!(
+        outputs.primitives["primitives"][1]["expect_after"]["page_id"],
+        json!(["alternate", "success"])
+    );
+    assert!(
+        outputs.navigation["navigation"]
+            .as_array()
+            .expect("navigation")
+            .is_empty(),
+        "set-shaped destinations must not be truncated into a legacy singleton edge"
+    );
+
+    let repeated = converter.build_all().expect("repeat finite-set conversion");
+    let serialize = |outputs: &ConvertOutputs| {
+        serde_json::to_vec(&json!({
+            "pack": &outputs.pack,
+            "pages": &outputs.pages,
+            "navigation": &outputs.navigation,
+            "index": &outputs.index,
+            "primitives": &outputs.primitives,
+        }))
+        .expect("serialize outputs")
+    };
+    assert_eq!(serialize(&outputs), serialize(&repeated));
+}
+
+#[test]
+fn singleton_page_declarations_keep_legacy_scalar_shapes() {
+    let root = write_error_page_fixture();
+    update_error_page_fixture_task(root.path(), |task| {
+        task["target_page"] = json!("success");
+        task["operations"] = json!([finite_page_operation(
+            "singleton_destination",
+            json!("alternate"),
+            None,
+        )]);
+    });
+
+    let converter = OperationConverter::load(root.path(), None, None, None).expect("load");
+    let outputs = converter.build_all().expect("singleton conversion");
+    let canonical = converter
+        .canonical_task("error-page-check")
+        .expect("canonical task");
+
+    assert_eq!(canonical["target_page"], json!("success"));
+    assert_eq!(canonical["operations"][0]["to"], json!("alternate"));
+    assert_eq!(
+        outputs.primitives["primitives"][0]["to"],
+        json!("alternate")
+    );
+    assert_eq!(
+        outputs.navigation["navigation"][0]["to_page"],
+        json!("neutral/alternate")
+    );
+}
+
+#[test]
+fn destructive_actions_keep_exact_pre_normalization_null_semantics() {
+    let root = write_error_page_fixture();
+    update_error_page_fixture_task(root.path(), |task| {
+        task["operations"] = json!([
+            finite_page_operation(
+                "explicit_null",
+                Value::Null,
+                Some(json!({
+                    "page_id": ["success", "alternate"],
+                    "timeout_ms": 10
+                })),
+            ),
+            {
+                "id": "omitted_to",
+                "purpose": "omitted destination remains non-destructive",
+                "from": "home",
+                "click": {"kind":"point","x":0,"y":0},
+                "unguarded_trusted_coordinate": true,
+                "consumes": [],
+                "produces": []
+            },
+        ]);
+    });
+
+    let converter = OperationConverter::load(root.path(), None, None, None).expect("load");
+    let navigation = converter.build_navigation().expect("navigation");
+    let destructive = navigation["destructive_actions"]
+        .as_array()
+        .expect("destructive actions");
+
+    assert_eq!(destructive.len(), 1);
+    assert_eq!(destructive[0]["id"], "explicit_null");
+    assert_eq!(
+        serde_json::to_vec(&navigation["destructive_actions"]).expect("serialize"),
+        br#"[{"task_id":"error-page-check","page":"neutral/home","id":"explicit_null","purpose":"exercise finite postcondition declarations","click":{"kind":"point","point":"0,0"},"expect_after":{"page_id":["success","alternate"],"timeout_ms":10},"verify_template":null,"consumes":[],"produces":[]}]"#
+    );
+}
+
+#[test]
+fn invalid_finite_page_declarations_fail_closed() {
+    for (case, update, expected) in [
+        (
+            "empty-terminal-set",
+            ("target_page", json!([]), None),
+            "target_page",
+        ),
+        (
+            "duplicate-terminal-set",
+            ("target_page", json!(["success", "success"]), None),
+            "duplicate",
+        ),
+        (
+            "malformed-destination",
+            ("to", json!(7), None),
+            "destination",
+        ),
+        (
+            "empty-destination-set",
+            ("to", json!([]), None),
+            "destination",
+        ),
+        (
+            "duplicate-destination-set",
+            ("to", json!(["success", "success"]), None),
+            "duplicate",
+        ),
+        (
+            "missing-destination",
+            ("to", json!("missing"), None),
+            "missing",
+        ),
+        (
+            "conflicting-destination",
+            ("to", json!("success"), Some(json!({"page_id":"alternate"}))),
+            "conflicting",
+        ),
+    ] {
+        let root = write_error_page_fixture();
+        update_error_page_fixture_task(root.path(), |task| {
+            if update.0 == "target_page" {
+                task["target_page"] = update.1;
+            } else {
+                task["operations"] = json!([finite_page_operation("invalid", update.1, update.2)]);
+            }
+        });
+
+        let error = OperationConverter::load(root.path(), None, None, None)
+            .and_then(|converter| converter.build_all())
+            .expect_err(case);
+        assert!(
+            error.message.contains(expected),
+            "{case}: {}",
+            error.message
+        );
+    }
+}
+
+#[test]
+fn malformed_expect_after_declarations_fail_closed() {
+    for (case, expect_after, expected) in [
+        ("not-an-object", json!("success"), "must be an object"),
+        (
+            "missing-page-id",
+            json!({"timeout_ms":10}),
+            "missing page_id",
+        ),
+        ("empty-page-set", json!({"page_id":[]}), "non-empty"),
+        (
+            "duplicate-page-set",
+            json!({"page_id":["success","success"]}),
+            "duplicate",
+        ),
+        (
+            "missing-page-reference",
+            json!({"page_id":"missing"}),
+            "missing",
+        ),
+    ] {
+        let root = write_error_page_fixture();
+        update_error_page_fixture_task(root.path(), |task| {
+            task["operations"] = json!([finite_page_operation(
+                "invalid_expectation",
+                Value::Null,
+                Some(expect_after),
+            )]);
+        });
+
+        let error = OperationConverter::load(root.path(), None, None, None)
+            .and_then(|converter| converter.build_all())
+            .expect_err(case);
         assert!(
             error.message.contains(expected),
             "{case}: {}",

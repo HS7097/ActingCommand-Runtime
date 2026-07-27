@@ -641,7 +641,7 @@
         let mut ctx = LabRunContext::create(temp.path(), Path::new("input.zip")).expect("ctx");
         ctx.set_phase("page_guard_started");
         let operation = test_operation(Some("terminal"), None);
-        ctx.set_step_context(7, &operation);
+        ctx.set_step_context(7, &operation).expect("step context");
         let mut checkpoint = Tier3PauseCheckpoint {
             last_frame_index: 12,
             resident_bytes: 34,
@@ -667,6 +667,40 @@
         assert_eq!(json["current_phase"], "page_guard_started");
         assert_eq!(json["expected_page"], "terminal");
         assert_eq!(json["last_matched_page"], "arknights/home");
+    }
+
+    #[test]
+    fn tier3_pause_checkpoint_keeps_complete_multi_destination_set() {
+        let temp = TempDir::new().expect("temp");
+        let mut ctx = LabRunContext::create(temp.path(), Path::new("input.zip")).expect("ctx");
+        let mut operation = test_operation(None, None);
+        operation.to = Some(NormalizedPageSet(vec![
+            "alternate".to_string(),
+            "terminal".to_string(),
+        ]));
+        ctx.set_step_context(7, &operation).expect("step context");
+        let mut checkpoint = Tier3PauseCheckpoint {
+            last_frame_index: 12,
+            resident_bytes: 34,
+            tier1_bytes: 10,
+            tier2_bytes: 20,
+            tier3_bytes: 30,
+            active_segment_id: None,
+            in_flight_flush_state: "idle".to_string(),
+            current_step_index: None,
+            current_step_id: None,
+            current_operation_id: None,
+            current_phase: None,
+            expected_page: None,
+            last_matched_page: None,
+        };
+
+        ctx.fill_pause_checkpoint(&mut checkpoint, Some("arknights/home"));
+
+        assert_eq!(
+            checkpoint.expected_page.as_deref(),
+            Some(r#"["alternate","terminal"]"#)
+        );
     }
 
     #[test]

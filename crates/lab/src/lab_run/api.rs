@@ -348,9 +348,15 @@ fn execute_lab_run<P: LabPorts>(
         .map(|operation| RunOperationCandidate::new(&operation.id, &operation.from))
         .collect::<Result<Vec<_>, _>>()
         .map_err(run_decision_error)?;
-    let run_config = RunStateConfig::new(
+    let run_config = RunStateConfig::new_with_target_pages(
         &state.control.game,
-        state.resources.operation_bundle.target_page.clone(),
+        state
+            .resources
+            .operation_bundle
+            .target_page
+            .as_ref()
+            .map(|pages| pages.as_slice().to_vec())
+            .unwrap_or_default(),
         state.control.stop_on_confirmation.unwrap_or(true),
         state
             .resources

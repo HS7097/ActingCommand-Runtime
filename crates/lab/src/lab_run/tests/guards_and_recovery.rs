@@ -1,96 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
     #[test]
-    fn error_page_detection_matches_explicit_and_negative_pages() {
-        let explicit = vec!["arknights/error_popup".to_string()];
-
-        assert!(page_is_error_page(
-            "arknights",
-            Some("arknights/error_popup"),
-            &explicit
-        ));
-        assert!(page_is_error_page(
-            "arknights",
-            Some("arknights/negative_connection"),
-            &[]
-        ));
-        assert!(!page_is_error_page(
-            "arknights",
-            Some("arknights/home"),
-            &explicit
-        ));
-    }
-
-    #[test]
-    fn error_page_detection_uses_passed_forbidden_targets() {
-        let scene = CapturedScene {
-            scene: Scene::from_png(one_pixel_png()).expect("scene"),
-            matched_page: None,
-            page_evaluations: vec![PageEvaluation {
-                page_id: "arknights/home".to_string(),
-                matched: false,
-                required_passed: 0,
-                required_total: 1,
-                any_of_passed: 0,
-                any_of_total: 0,
-                optional_passed: 0,
-                optional_total: 0,
-                forbidden_passed: 1,
-                forbidden_total: 1,
-                target_results: vec![PageTargetEvaluation {
-                    target_id: "page/negative_announcement".to_string(),
-                    role: PageTargetRole::Forbidden,
-                    passed: true,
-                    message: "template passed".to_string(),
-                }],
-                message: "forbidden target passed".to_string(),
-            }],
-            verify_template_matched: false,
-            width: 1,
-            height: 1,
-        };
-
-        assert!(scene_hits_error_page("arknights", &scene, &[]));
-    }
-
-    #[test]
-    fn explicit_error_pages_can_match_forbidden_page_targets() {
-        let scene = CapturedScene {
-            scene: Scene::from_png(one_pixel_png()).expect("scene"),
-            matched_page: None,
-            page_evaluations: vec![PageEvaluation {
-                page_id: "arknights/depot".to_string(),
-                matched: false,
-                required_passed: 1,
-                required_total: 1,
-                any_of_passed: 0,
-                any_of_total: 0,
-                optional_passed: 0,
-                optional_total: 0,
-                forbidden_passed: 1,
-                forbidden_total: 1,
-                target_results: vec![PageTargetEvaluation {
-                    target_id: "page/home".to_string(),
-                    role: PageTargetRole::Forbidden,
-                    passed: true,
-                    message: "template passed".to_string(),
-                }],
-                message: "forbidden target passed".to_string(),
-            }],
-            verify_template_matched: false,
-            width: 1,
-            height: 1,
-        };
-
-        assert!(scene_hits_error_page(
-            "arknights",
-            &scene,
-            &["home".to_string()]
-        ));
-        assert!(!scene_hits_error_page("arknights", &scene, &[]));
-    }
-
-    #[test]
     fn trusted_unguarded_point_and_long_press_use_original_coordinate() {
         let control = test_control();
         for kind in ["point", "long_press"] {
@@ -401,7 +311,9 @@
         let operation = test_operation(None, None);
         let scene = captured_scene(Some("arknights/home"), false);
 
-        let result = operation_verification_status("arknights", &operation, &scene);
+        let result =
+            operation_verification_status("arknights", &operation, &[], &scene)
+                .expect("verification");
 
         assert_eq!(result, OperationVerification::ExecutedUnverified);
         assert_eq!(result.result_label(), "executed_unverified");
@@ -414,12 +326,12 @@
         let passed = captured_scene(Some("arknights/home"), true);
 
         assert_eq!(
-            operation_verification_status("arknights", &operation, &failed),
-            OperationVerification::Failed
+            operation_verification_status("arknights", &operation, &[], &failed),
+            Ok(OperationVerification::Failed)
         );
         assert_eq!(
-            operation_verification_status("arknights", &operation, &passed),
-            OperationVerification::Verified
+            operation_verification_status("arknights", &operation, &[], &passed),
+            Ok(OperationVerification::Verified)
         );
     }
 
@@ -429,8 +341,8 @@
         let scene = captured_scene(Some("arknights/terminal"), false);
 
         assert_eq!(
-            operation_verification_status("arknights", &operation, &scene),
-            OperationVerification::Verified
+            operation_verification_status("arknights", &operation, &[], &scene),
+            Ok(OperationVerification::Verified)
         );
     }
 
@@ -438,7 +350,7 @@
     fn operation_verification_uses_expect_after_page() {
         let mut operation = test_operation(None, None);
         operation.expect_after = Some(OperationExpectation {
-            page_id: "terminal".to_string(),
+            page_id: NormalizedPageSet(vec!["terminal".to_string()]),
             timeout_ms: Some(50),
             interval_ms: None,
         });
@@ -446,16 +358,104 @@
         let mismatched = captured_scene(Some("arknights/home"), false);
 
         assert_eq!(
-            operation_verification_status("arknights", &operation, &matched),
-            OperationVerification::Verified
+            operation_verification_status("arknights", &operation, &[], &matched),
+            Ok(OperationVerification::Verified)
         );
         assert_eq!(
-            operation_verification_status("arknights", &operation, &mismatched),
-            OperationVerification::Failed
+            operation_verification_status("arknights", &operation, &[], &mismatched),
+            Ok(OperationVerification::Failed)
         );
-        assert_eq!(operation.expected_after_page(), Some("terminal"));
+        assert_eq!(
+            operation.destination_pages().expect("destinations"),
+            ["terminal"]
+        );
         assert_eq!(
             operation.after_timeout_ms(OperationDefaults::default(), 10_000),
             50
+        );
+    }
+
+    #[test]
+    fn each_finite_destination_can_verify_independently() {
+        let mut operation = test_operation(None, None);
+        operation.to = Some(NormalizedPageSet(vec![
+            "alternate".to_string(),
+            "terminal".to_string(),
+        ]));
+
+        for page in ["arknights/alternate", "arknights/terminal"] {
+            let scene = captured_scene_with_matches(&[page], false);
+            assert_eq!(
+                post_action_page_status("arknights", &operation, &[], &scene)
+                    .expect("page status"),
+                PostActionPageStatus::Destination
+            );
+            assert_eq!(
+                operation_verification_status("arknights", &operation, &[], &scene),
+                Ok(OperationVerification::Verified)
+            );
+        }
+    }
+
+    #[test]
+    fn multiple_destinations_in_one_observation_fail_without_order_selection() {
+        let mut operation = test_operation(None, None);
+        operation.to = Some(NormalizedPageSet(vec![
+            "alternate".to_string(),
+            "terminal".to_string(),
+        ]));
+        let scene = captured_scene_with_matches(
+            &["arknights/terminal", "arknights/alternate"],
+            false,
+        );
+
+        let error = post_action_page_status("arknights", &operation, &[], &scene)
+            .expect_err("multiple destinations");
+        assert!(error.to_string().contains("recognition_conflict"));
+    }
+
+    #[test]
+    fn destination_before_error_in_full_evaluations_still_fails_closed() {
+        let operation = test_operation(Some("terminal"), None);
+        let scene = captured_scene_with_matches(
+            &["arknights/terminal", "arknights/error_popup"],
+            false,
+        );
+
+        let error = post_action_page_status(
+            "arknights",
+            &operation,
+            &["error_popup".to_string()],
+            &scene,
+        )
+        .expect_err("destination/error conflict");
+        assert!(error.to_string().contains("recognition_conflict"));
+    }
+
+    #[test]
+    fn error_only_precedes_template_success() {
+        let operation = test_operation(Some("terminal"), Some("terminal.png"));
+        let scene = captured_scene_with_matches(&["arknights/error_popup"], true);
+        let error_pages = ["error_popup".to_string()];
+
+        assert_eq!(
+            post_action_page_status("arknights", &operation, &error_pages, &scene)
+                .expect("error status"),
+            PostActionPageStatus::Error
+        );
+        assert_eq!(
+            operation_verification_status("arknights", &operation, &error_pages, &scene),
+            Ok(OperationVerification::Failed)
+        );
+    }
+
+    #[test]
+    fn template_does_not_bypass_declared_destination_set() {
+        let operation = test_operation(Some("terminal"), Some("terminal.png"));
+        let scene = captured_scene_with_matches(&["arknights/home"], true);
+
+        assert_eq!(
+            operation_verification_status("arknights", &operation, &[], &scene),
+            Ok(OperationVerification::Failed)
         );
     }

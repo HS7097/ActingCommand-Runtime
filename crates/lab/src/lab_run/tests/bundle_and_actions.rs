@@ -1376,3 +1376,89 @@
             2
         );
     }
+
+    #[test]
+    fn lab_bundle_normalizes_finite_target_and_destination_sets() {
+        let control = test_control();
+        let bundle: OperationBundle = serde_json::from_value(json!({
+            "schema_version": "0.6",
+            "task_id": "task",
+            "game": "arknights",
+            "server_scope": ["cn"],
+            "coordinate_space": {"width": 1280, "height": 720},
+            "target_page": ["terminal", "alternate"],
+            "operations": [{
+                "id": "open_terminal",
+                "purpose": "navigation",
+                "from": "home",
+                "to": ["terminal", "alternate"],
+                "click": {"kind": "point", "x": 100, "y": 100},
+                "unguarded_trusted_coordinate": true
+            }]
+        }))
+        .expect("finite sets");
+
+        bundle
+            .validate(&control, |_relative| Ok(true))
+            .expect("finite set bundle");
+        assert_eq!(
+            bundle.target_page.as_ref().expect("target").as_slice(),
+            ["alternate", "terminal"]
+        );
+        assert_eq!(
+            bundle.operations[0]
+                .destination_pages()
+                .expect("destinations"),
+            ["alternate", "terminal"]
+        );
+    }
+
+    #[test]
+    fn normalized_page_set_serialization_preserves_singleton_and_complete_multi_shape() {
+        assert_eq!(
+            serde_json::to_string(&NormalizedPageSet(vec!["terminal".to_string()]))
+                .expect("singleton"),
+            r#""terminal""#
+        );
+        assert_eq!(
+            serde_json::to_string(&NormalizedPageSet(vec![
+                "alternate".to_string(),
+                "terminal".to_string(),
+            ]))
+            .expect("multi"),
+            r#"["alternate","terminal"]"#
+        );
+    }
+
+    #[test]
+    fn expect_after_without_to_does_not_infer_retry() {
+        let mut operation = test_operation(None, None);
+        operation.expect_after = Some(OperationExpectation {
+            page_id: NormalizedPageSet(vec!["alternate".to_string(), "terminal".to_string()]),
+            timeout_ms: Some(50),
+            interval_ms: Some(5),
+        });
+
+        let policy = operation.flow_policy(OperationDefaults::default());
+
+        assert!(!policy.retryable);
+        assert_eq!(policy.max_attempts, 1);
+        assert_eq!(
+            operation.destination_pages().expect("destinations"),
+            ["alternate", "terminal"]
+        );
+    }
+
+    #[test]
+    fn malformed_page_sets_fail_during_lab_parse() {
+        for value in [
+            json!([]),
+            json!(["terminal", "terminal"]),
+            json!([""]),
+        ] {
+            assert!(
+                serde_json::from_value::<NormalizedPageSet>(value).is_err(),
+                "malformed page set must fail"
+            );
+        }
+    }
