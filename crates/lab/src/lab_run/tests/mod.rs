@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 use super::*;
-use actingcommand_page_detector::PageTargetEvaluation;
 use actingcommand_recognition_pack::load_pack_from_json_str;
 use std::collections::VecDeque;
 use std::io::Read;

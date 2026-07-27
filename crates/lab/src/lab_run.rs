@@ -32,7 +32,7 @@ use actingcommand_ledger::{LabLedger, LabLogError};
 use actingcommand_pack_containment::{
     Containment, ContainmentError, InstanceId, LoadedBundle, Sha256Hash,
 };
-use actingcommand_page_detector::{PageDetector, PageEvaluation, PageTargetRole};
+use actingcommand_page_detector::{PageDetector, PageEvaluation};
 use actingcommand_recognition::{Scene, ScenePixelFormat};
 use actingcommand_recognition_pack::{
     PackRect, RecognitionEvaluator, TargetEvaluation, TargetKind, UnsupportedRecognitionTarget,

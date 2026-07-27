@@ -8,28 +8,29 @@ use actingcommand_artifact_store::read_projected_verified;
 use actingcommand_contract::{
     AgentAttentionState, AgentPayload, AgentResponseDisposition, AgentSessionId,
     AgentSessionResponse, AgentWakeKind, ApplicationLifecycleAction, ApprovalDecisionRecord,
-    ApprovalDisposition, ApprovalTarget, ArtifactKind, CaptureSequenceSpec,
-    CatalogDeclarationPatch, CatalogPayload, CatalogProposal, ClientActionKind, ClientActionRecord,
-    ClientActionValue, ContainedTaskRequest, EffectDisposition, EventActor, EventPayload,
-    EventQuery, EventSeverity, EventSource, EventType, FactContent, FactRecord, FactScope,
-    FactTtlPolicy, FactTtlSource, FactValue as ContractFactValue, IdentifierIssuer, InputAction,
-    InstanceFactContext, InstanceId, IssuedCorrelationId, LeasePriority, LeaseQueuePolicy,
-    LeaseQueueStatus, LeaseToken, MAX_RUNTIME_PLANNING_DOCUMENT_BYTES, MonitorDiagnosis,
-    MonitorDisposition, MonitorObservation, MonitorPayload, MonitorRecoveryCoordinationReason,
-    MonitorRecoveryKind, OriginModule, PerformanceControlLevel, PerformanceMonitorHealth,
-    PolicyExecutionOutcome, PolicyFailureClass, PolicyFailureDisposition, PolicyPayload,
-    PolicyPlanningSignalEventData, PolicyPlanningSignalKind, ProjectDecisionPageRequest,
-    ProjectDecisionState, ProjectInterfaceRequest, ProjectLedgerSnapshot,
-    ProjectedArtifactReference, ProjectionPayload, ProjectionProfile, ProposalClass,
-    ProposalDisposition, ProposalDocument, ProposalKind, ProposalPatchOperation,
-    PublicEventPayload, RUNTIME_INFO_FILE, ReleasePayload, ReleaseResourceVersion,
-    ReleaseTransitionKind, ResourceAuthoringEvent, ResourceAuthoringPhase, RuntimeCaptureBackend,
-    RuntimeErrorCode, RuntimeEventQueryCursor, RuntimeEventQueryPageRequest,
+    ApprovalDisposition, ApprovalTarget, ArtifactKind, AuthoritativeSchedulingOutcome,
+    CaptureSequenceSpec, CatalogDeclarationPatch, CatalogPayload, CatalogProposal,
+    ClientActionKind, ClientActionRecord, ClientActionValue, ContainedTaskRequest,
+    EffectDisposition, EventActor, EventPayload, EventQuery, EventSeverity, EventSource, EventType,
+    FactContent, FactRecord, FactScope, FactTtlPolicy, FactTtlSource,
+    FactValue as ContractFactValue, IdentifierIssuer, InputAction, InstanceFactContext, InstanceId,
+    IssuedCorrelationId, LeasePriority, LeaseQueuePolicy, LeaseQueueStatus, LeaseToken,
+    MAX_RUNTIME_PLANNING_DOCUMENT_BYTES, MonitorDiagnosis, MonitorDisposition, MonitorObservation,
+    MonitorPayload, MonitorRecoveryCoordinationReason, MonitorRecoveryKind, OriginModule,
+    PerformanceControlLevel, PerformanceMonitorHealth, PolicyExecutionOutcome, PolicyFailureClass,
+    PolicyFailureDisposition, PolicyPayload, PolicyPlanningSignalEventData,
+    PolicyPlanningSignalKind, ProjectDecisionPageRequest, ProjectDecisionState,
+    ProjectInterfaceRequest, ProjectLedgerSnapshot, ProjectedArtifactReference, ProjectionPayload,
+    ProjectionProfile, ProposalClass, ProposalDisposition, ProposalDocument, ProposalKind,
+    ProposalPatchOperation, PublicEventPayload, RUNTIME_INFO_FILE, ReleasePayload,
+    ReleaseResourceVersion, ReleaseTransitionKind, ResourceAuthoringEvent, ResourceAuthoringPhase,
+    RuntimeCaptureBackend, RuntimeErrorCode, RuntimeEventQueryCursor, RuntimeEventQueryPageRequest,
     RuntimeForwardProjectionRequest, RuntimeMonitorPolicy, RuntimeOperation,
     RuntimePlanningDocument, RuntimePlanningDocumentKind, RuntimeReceipt, RuntimeReceiptState,
-    RuntimeReleaseSet, RuntimeRequest, RuntimeResult, RuntimeStrategicReportRequest, StatePayload,
-    StateRecoveryAction, StateValidationResult, TaskOutcome, TaskPayload, TaskSemanticFact,
-    TaskTemplateInstantiation, TerminalEvent,
+    RuntimeReleaseSet, RuntimeRequest, RuntimeResult, RuntimeStrategicReportRequest,
+    SchedulingDisposition, SchedulingEffectEvidence, SchedulingOutcomeDeclaration,
+    SchedulingOutcomeIdentity, StatePayload, StateRecoveryAction, StateValidationResult,
+    TaskOutcome, TaskPayload, TaskSemanticFact, TaskTemplateInstantiation, TerminalEvent,
 };
 use actingcommand_device::{
     CaptureBackend, CaptureBackendName, DeviceError, DeviceResult, Frame, InputBackend, PixelFormat,
@@ -57,7 +58,7 @@ use std::net::TcpStream;
 use std::path::Path;
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
-use std::sync::{Arc, Barrier};
+use std::sync::{Arc, Barrier, mpsc};
 use std::thread;
 use std::time::{Duration, Instant};
 use tempfile::TempDir;
@@ -834,7 +835,92 @@ fn policy_sources(version: u64) -> CatalogSources {
         document["catalog"]["catalog_version"] = serde_json::json!(version);
         source.bytes = serde_json::to_vec_pretty(&document).expect("policy fixture bytes");
     }
+    let mut tasks: serde_json::Value =
+        serde_json::from_slice(&sources.tasks.bytes).expect("generic policy tasks");
+    tasks["tasks"][0]["feedback_stop"] = serde_json::json!({
+        "kind": "clock",
+        "schedule": {
+            "kind": "at",
+            "clock_source": {
+                "kind": "server",
+                "timezone_id": "etc/utc",
+                "utc_offset_minutes": 0,
+                "dst_offset_minutes": 0,
+                "maintenance_drift_ms": 0
+            },
+            "at_ms": 4102444800000_u64
+        }
+    });
+    sources.tasks.bytes = serde_json::to_vec_pretty(&tasks).expect("generic policy task bytes");
     sources
+}
+
+fn mapped_policy_sources(version: u64, outcome_key: &str) -> CatalogSources {
+    mapped_policy_sources_with_keys(
+        version,
+        &[outcome_key, &complementary_outcome_key(outcome_key)],
+    )
+}
+
+fn complementary_outcome_key(outcome_key: &str) -> String {
+    format!("{outcome_key}-alternate")
+}
+
+fn mapped_policy_sources_with_keys(version: u64, outcome_keys: &[&str]) -> CatalogSources {
+    let mut sources = policy_sources(version);
+    let mut tasks: serde_json::Value =
+        serde_json::from_slice(&sources.tasks.bytes).expect("mapped policy tasks");
+    let mut followup = tasks["tasks"][0].clone();
+    followup["id"] = serde_json::json!("fixture.followup");
+    followup["procedure_ref"] = serde_json::json!("procedure.observe-b");
+    followup["priority"] = serde_json::json!(200);
+    followup["trigger"] = serde_json::json!({
+        "kind": "any",
+        "predicates": outcome_keys.iter().map(|outcome_key| serde_json::json!({
+                "kind": "outcome",
+                "task_id": "fixture.observe",
+                "outcome_key": outcome_key,
+                "comparison": "eq",
+                "value": {"type": "boolean", "value": true}
+            })).chain(std::iter::once(serde_json::json!({
+                    "kind": "clock",
+                    "schedule": {
+                        "kind": "at",
+                        "clock_source": {
+                            "kind": "server",
+                            "timezone_id": "etc/utc",
+                            "utc_offset_minutes": 0,
+                            "dst_offset_minutes": 0,
+                            "maintenance_drift_ms": 0
+                        },
+                        "at_ms": 4102444800000_u64
+                    }
+                }))).collect::<Vec<_>>()
+    });
+    followup["feedback_stop"] = serde_json::json!({
+        "kind": "fact",
+        "scope": {"kind": "instance", "instance_id": POLICY_INSTANCE_ALIAS},
+        "fact_key": "fixture.followup.stop",
+        "comparison": "eq",
+        "value": {"type": "boolean", "value": true},
+        "max_age_ms": 900000
+    });
+    followup["produces"] = serde_json::json!([]);
+    followup["instance_overrides"] = serde_json::json!([]);
+    tasks["tasks"]
+        .as_array_mut()
+        .expect("mapped tasks array")
+        .push(followup);
+    sources.tasks.bytes = serde_json::to_vec_pretty(&tasks).expect("mapped policy task bytes");
+    sources
+}
+
+fn mapped_two_key_any_policy_sources(
+    version: u64,
+    first_outcome_key: &str,
+    second_outcome_key: &str,
+) -> CatalogSources {
+    mapped_policy_sources_with_keys(version, &[first_outcome_key, second_outcome_key])
 }
 
 fn budget_policy_sources(version: u64) -> CatalogSources {
@@ -915,7 +1001,6 @@ fn pending_policy_sources(version: u64) -> CatalogSources {
     second["scope"] =
         serde_json::json!({"kind": "instance", "instance_id": POLICY_INSTANCE_ALIAS_B});
     second["procedure_ref"] = serde_json::json!("procedure.observe-b");
-    second["feedback_stop"]["task_id"] = serde_json::json!("fixture.observe-b");
     second["produces"] = serde_json::json!([]);
     second["instance_overrides"] = serde_json::json!([]);
     tasks["tasks"]
@@ -959,7 +1044,6 @@ fn detection_policy_sources_with_budget(
         "value": {"type": "boolean", "value": true},
         "max_age_ms": 60000
     });
-    detection["feedback_stop"]["task_id"] = serde_json::json!("fixture.detect");
     detection["produces"] = serde_json::json!([]);
     detection["instance_overrides"] = serde_json::json!([]);
     tasks["tasks"]
@@ -1300,6 +1384,39 @@ fn policy_facts() -> EvaluationFacts {
             preferred_task_ids: Vec::new(),
         }],
     }
+}
+
+fn mapped_policy_facts(outcome_key: &str, include_caller_outcome: bool) -> EvaluationFacts {
+    let mut facts = policy_facts();
+    facts.fact_snapshot_id = format!(
+        "snapshot:mapped:{outcome_key}:{}",
+        if include_caller_outcome {
+            "caller"
+        } else {
+            "authoritative"
+        }
+    );
+    facts.outcomes.clear();
+    if include_caller_outcome {
+        facts.outcomes.push(ObservedOutcome {
+            task_id: "fixture.observe".to_owned(),
+            instance_id: POLICY_INSTANCE_ALIAS.to_owned(),
+            outcome_key: outcome_key.to_owned(),
+            value: FactValue::Boolean(true),
+            observed_at_unix_ms: POLICY_NOW_UNIX_MS,
+        });
+    }
+    facts.facts.push(ObservedFact {
+        scope: ScopeSelector::Instance {
+            instance_id: POLICY_INSTANCE_ALIAS.to_owned(),
+        },
+        fact_key: "fixture.followup.stop".to_owned(),
+        value: FactValue::Boolean(false),
+        observed_at_unix_ms: POLICY_NOW_UNIX_MS,
+        expires_at_unix_ms: Some(POLICY_NOW_UNIX_MS + 900_000),
+        confidence_milli: 1_000,
+    });
+    facts
 }
 
 fn pending_policy_facts() -> EvaluationFacts {
@@ -2157,6 +2274,159 @@ fn neutral_error_page_retrying_contained_task_package() -> Vec<u8> {
     )
 }
 
+fn neutral_mapped_contained_task_package(outcome_key: &str, effect: &str) -> Vec<u8> {
+    neutral_mapped_contained_task_package_with_pages(outcome_key, effect, &["terminal"], &[])
+}
+
+fn neutral_mapped_retrying_contained_task_package(outcome_key: &str) -> Vec<u8> {
+    let no_effect_outcome_key = complementary_outcome_key(outcome_key);
+    let task = serde_json::json!({
+        "schema_version": "0.6",
+        "task_id": "task",
+        "game": "neutral",
+        "server_scope": ["test"],
+        "coordinate_space": {"width": 2, "height": 1},
+        "entry_page": "home",
+        "target_page": "terminal",
+        "scheduling_outcome": {
+            "designated_operation": "open_terminal",
+            "mappings": [
+                {
+                    "outcome_key": outcome_key,
+                    "effect": "designated_effect_completed",
+                    "terminal_pages": ["terminal"]
+                },
+                {
+                    "outcome_key": no_effect_outcome_key,
+                    "effect": "no_designated_effect",
+                    "terminal_pages": ["terminal"]
+                }
+            ]
+        },
+        "operations": [{
+            "id": "open_terminal",
+            "from": "home",
+            "to": "terminal",
+            "click": {"kind": "point", "x": 1, "y": 0},
+            "guard": {
+                "page_id": "home",
+                "target_id": "guard/ready",
+                "expected_rect": {"x": 1, "y": 0, "width": 1, "height": 1},
+                "color_probe": "guard/ready"
+            },
+            "retryable": true,
+            "max_attempts": 6,
+            "retry_interval_ms": 1
+        }]
+    });
+    neutral_contained_task_package_with_task(
+        &serde_json::to_vec(&task).expect("mapped retrying contained task JSON"),
+    )
+}
+
+fn neutral_two_key_mapped_contained_task_package(
+    effect_outcome_key: &str,
+    no_effect_outcome_key: &str,
+) -> Vec<u8> {
+    let task = serde_json::json!({
+        "schema_version": "0.6",
+        "task_id": "task",
+        "game": "neutral",
+        "server_scope": ["test"],
+        "coordinate_space": {"width": 2, "height": 1},
+        "entry_page": "home",
+        "target_page": "terminal",
+        "scheduling_outcome": {
+            "designated_operation": "open_terminal",
+            "mappings": [
+                {
+                    "outcome_key": effect_outcome_key,
+                    "effect": "designated_effect_completed",
+                    "terminal_pages": ["terminal"]
+                },
+                {
+                    "outcome_key": no_effect_outcome_key,
+                    "effect": "no_designated_effect",
+                    "terminal_pages": ["terminal"]
+                }
+            ]
+        },
+        "operations": [{
+            "id": "open_terminal",
+            "from": "home",
+            "to": "terminal",
+            "click": {"kind": "point", "x": 1, "y": 0},
+            "guard": {
+                "page_id": "home",
+                "target_id": "guard/ready",
+                "expected_rect": {"x": 1, "y": 0, "width": 1, "height": 1},
+                "color_probe": "guard/ready"
+            },
+            "retryable": false
+        }]
+    });
+    neutral_contained_task_package_with_task(
+        &serde_json::to_vec(&task).expect("two-key mapped contained task JSON"),
+    )
+}
+
+fn neutral_mapped_contained_task_package_with_pages(
+    outcome_key: &str,
+    effect: &str,
+    terminal_pages: &[&str],
+    error_pages: &[&str],
+) -> Vec<u8> {
+    let complementary_key = complementary_outcome_key(outcome_key);
+    let complementary_effect = if effect == "designated_effect_completed" {
+        "no_designated_effect"
+    } else {
+        "designated_effect_completed"
+    };
+    let mut task = serde_json::json!({
+        "schema_version": "0.6",
+        "task_id": "task",
+        "game": "neutral",
+        "server_scope": ["test"],
+        "coordinate_space": {"width": 2, "height": 1},
+        "entry_page": "home",
+        "target_page": "terminal",
+        "scheduling_outcome": {
+            "designated_operation": "open_terminal",
+            "mappings": [
+                {
+                    "outcome_key": outcome_key,
+                    "effect": effect,
+                    "terminal_pages": terminal_pages
+                },
+                {
+                    "outcome_key": complementary_key,
+                    "effect": complementary_effect,
+                    "terminal_pages": ["terminal"]
+                }
+            ]
+        },
+        "operations": [{
+            "id": "open_terminal",
+            "from": "home",
+            "to": "terminal",
+            "click": {"kind": "point", "x": 1, "y": 0},
+            "guard": {
+                "page_id": "home",
+                "target_id": "guard/ready",
+                "expected_rect": {"x": 1, "y": 0, "width": 1, "height": 1},
+                "color_probe": "guard/ready"
+            },
+            "retryable": false
+        }]
+    });
+    if !error_pages.is_empty() {
+        task["error_pages"] = serde_json::json!(error_pages);
+    }
+    neutral_contained_task_package_with_task(
+        &serde_json::to_vec(&task).expect("mapped contained task JSON"),
+    )
+}
+
 fn neutral_non_retryable_destination_package(with_error_page: bool) -> Vec<u8> {
     let mut task = serde_json::json!({
         "schema_version": "0.6",
@@ -2250,6 +2520,137 @@ fn neutral_contained_task_package_with_task(task: &[u8]) -> Vec<u8> {
         zip.write_all(contents).expect("zip content");
     }
     zip.finish().expect("finish zip").into_inner()
+}
+
+fn admitted_mapped_run_fixture(
+    root: &TempDir,
+    outcome_key: &str,
+) -> (
+    RuntimeHost,
+    Arc<FakeState>,
+    Box<PolicyRunContext>,
+    ContainedTaskRequest,
+) {
+    let package = neutral_mapped_contained_task_package(outcome_key, "designated_effect_completed");
+    let package_path = root.path().join(format!("{outcome_key}-mapped-task.zip"));
+    fs::write(&package_path, &package).expect("write mapped package");
+    let package_sha256 = format!("{:x}", Sha256::digest(&package));
+    let state = Arc::new(FakeState::default());
+    state
+        .transition_capture_after_input
+        .store(true, Ordering::Release);
+    let host = RuntimeHost::start(
+        config(root)
+            .with_policy_inputs(PolicyInputSnapshot::new(
+                mapped_policy_facts(outcome_key, false),
+                policy_resources(),
+            ))
+            .with_procedure_manifest(procedure_manifest_with_primary(
+                &package,
+                vec!["after_observation".to_owned()],
+            )),
+        Arc::new(
+            FakeProvider::one(POLICY_INSTANCE_ALIAS, instance_id(), Arc::clone(&state))
+                .fixture_simulation(),
+        ),
+    )
+    .expect("mapped runtime host");
+    host.activate_policy_catalog(&mapped_policy_sources(1, outcome_key))
+        .expect("activate mapped catalog");
+    let cycle = host
+        .evaluate_policy_cycle_with_test_inputs(
+            &mapped_policy_facts(outcome_key, false),
+            &policy_resources(),
+            EvaluationTime {
+                unix_ms: POLICY_NOW_UNIX_MS,
+                monotonic_ms: POLICY_NOW_UNIX_MS,
+            },
+            70,
+            PolicyTrigger::FactsChanged,
+        )
+        .expect("mapped evaluation");
+    let evaluation = cycle.evaluation.expect("mapped evaluation result");
+    let intent = evaluation
+        .dispatch_intents
+        .iter()
+        .find(|intent| intent.task_id == "fixture.observe")
+        .expect("mapped source dispatch")
+        .clone();
+    let reasons = evaluation
+        .reason_chains
+        .iter()
+        .find(|chain| chain.id == intent.reason_chain_id)
+        .expect("mapped source reason chain")
+        .clone();
+    record_policy_approval(&host, &intent);
+    let PolicyDispatchAdmission::Granted { context } = host
+        .admit_policy_dispatch(&intent, &reasons, &policy_context(&host, &intent))
+        .expect("mapped policy admission")
+    else {
+        panic!("expected mapped policy context")
+    };
+    let request =
+        ContainedTaskRequest::new(package_path.to_string_lossy().into_owned(), package_sha256)
+            .expect("mapped package request");
+    (host, state, context, request)
+}
+
+fn admit_mapped_run_at(
+    host: &RuntimeHost,
+    outcome_key: &str,
+    unix_ms: u64,
+    seed: u64,
+) -> Box<PolicyRunContext> {
+    let facts = mapped_policy_facts_at(outcome_key, unix_ms, true);
+    let cycle = host
+        .evaluate_policy_cycle_with_test_inputs(
+            &facts,
+            &policy_resources(),
+            EvaluationTime {
+                unix_ms,
+                monotonic_ms: unix_ms,
+            },
+            seed,
+            PolicyTrigger::Reconciliation,
+        )
+        .expect("mapped policy evaluation");
+    let evaluation = cycle.evaluation.expect("mapped evaluation result");
+    let intent = evaluation
+        .dispatch_intents
+        .iter()
+        .find(|intent| intent.task_id == "fixture.observe")
+        .expect("mapped source dispatch")
+        .clone();
+    let reasons = evaluation
+        .reason_chains
+        .iter()
+        .find(|chain| chain.id == intent.reason_chain_id)
+        .expect("mapped source reason chain")
+        .clone();
+    record_policy_approval(host, &intent);
+    let PolicyDispatchAdmission::Granted { context } = host
+        .admit_policy_dispatch(&intent, &reasons, &policy_context(host, &intent))
+        .expect("mapped policy admission")
+    else {
+        panic!("expected mapped run context")
+    };
+    context
+}
+
+fn mapped_policy_facts_at(outcome_key: &str, unix_ms: u64, stop_followup: bool) -> EvaluationFacts {
+    let mut facts = mapped_policy_facts(outcome_key, false);
+    for fact in &mut facts.facts {
+        fact.observed_at_unix_ms = unix_ms;
+        fact.expires_at_unix_ms = Some(unix_ms + 900_000);
+    }
+    let followup_stop = facts
+        .facts
+        .iter_mut()
+        .find(|fact| fact.fact_key == "fixture.followup.stop")
+        .expect("followup stop fact");
+    followup_stop.value = FactValue::Boolean(stop_followup);
+    facts.fact_snapshot_id = format!("snapshot:mapped:{outcome_key}:next-run");
+    facts
 }
 
 #[test]
@@ -2388,6 +2789,1490 @@ fn scheduled_policy_run_reuses_one_request_receipt_for_one_effecting_run() {
         "scheduled events must use the lease carried by the fenced policy context"
     );
     assert_eq!(state.input_count.load(Ordering::Acquire), 1);
+    drop(client);
+    host.close().expect("close runtime host");
+}
+
+#[test]
+fn mapped_terminal_disposition_is_single_source_for_effect_no_effect_and_opaque_keys() {
+    for (case, outcome_key, effect, performs_effect) in [
+        (
+            "effect-applied",
+            "effect-applied",
+            "designated_effect_completed",
+            true,
+        ),
+        (
+            "no-designated-effect",
+            "no-designated-effect",
+            "no_designated_effect",
+            false,
+        ),
+        (
+            "opaque-navigation-result",
+            "arrived",
+            "designated_effect_completed",
+            true,
+        ),
+    ] {
+        let root = TempDir::new().expect("tempdir");
+        let package = neutral_mapped_contained_task_package(outcome_key, effect);
+        let package_path = root.path().join("scheduled-mapped-task.zip");
+        fs::write(&package_path, &package).expect("write mapped package");
+        let package_sha256 = format!("{:x}", Sha256::digest(&package));
+        let shared_instance_id = instance_id();
+        let state = Arc::new(FakeState::default());
+        if performs_effect {
+            state
+                .transition_capture_after_input
+                .store(true, Ordering::Release);
+        } else {
+            state
+                .transition_capture_after_capture
+                .store(1, Ordering::Release);
+        }
+        let host = RuntimeHost::start(
+            config(&root)
+                .with_policy_inputs(PolicyInputSnapshot::new(
+                    mapped_policy_facts(outcome_key, false),
+                    policy_resources(),
+                ))
+                .with_procedure_manifest(procedure_manifest_with_primary(
+                    &package,
+                    vec!["after_observation".to_owned()],
+                )),
+            Arc::new(
+                FakeProvider::one(
+                    POLICY_INSTANCE_ALIAS,
+                    shared_instance_id,
+                    Arc::clone(&state),
+                )
+                .fixture_simulation(),
+            ),
+        )
+        .unwrap_or_else(|error| panic!("{case}: runtime host: {error}"));
+        host.activate_policy_catalog(&mapped_policy_sources(1, outcome_key))
+            .unwrap_or_else(|error| panic!("{case}: activate catalog: {error}"));
+        let pre_terminal_conflict = host
+            .evaluate_policy_cycle_with_test_inputs(
+                &mapped_policy_facts(outcome_key, true),
+                &policy_resources(),
+                EvaluationTime {
+                    unix_ms: POLICY_NOW_UNIX_MS,
+                    monotonic_ms: POLICY_NOW_UNIX_MS,
+                },
+                6,
+                PolicyTrigger::FactsChanged,
+            )
+            .expect_err("mapped caller outcome must fail before the first terminal");
+        assert_eq!(
+            pre_terminal_conflict.code(),
+            "policy_outcome_authority_conflict",
+            "{case}"
+        );
+        let initial = host
+            .evaluate_policy_cycle_with_test_inputs(
+                &mapped_policy_facts(outcome_key, false),
+                &policy_resources(),
+                EvaluationTime {
+                    unix_ms: POLICY_NOW_UNIX_MS,
+                    monotonic_ms: POLICY_NOW_UNIX_MS,
+                },
+                7,
+                PolicyTrigger::FactsChanged,
+            )
+            .unwrap_or_else(|error| panic!("{case}: initial evaluation: {error}"));
+        let evaluation = initial.evaluation.as_ref().expect("initial evaluation");
+        let intent = evaluation
+            .dispatch_intents
+            .iter()
+            .find(|intent| intent.task_id == "fixture.observe")
+            .unwrap_or_else(|| {
+                panic!(
+                    "{case}: initial mapped dispatch missing; got {:?}",
+                    evaluation
+                        .dispatch_intents
+                        .iter()
+                        .map(|intent| intent.task_id.as_str())
+                        .collect::<Vec<_>>()
+                )
+            })
+            .clone();
+        let reasons = evaluation
+            .reason_chains
+            .iter()
+            .find(|chain| chain.id == intent.reason_chain_id)
+            .expect("mapped reason chain")
+            .clone();
+        record_policy_approval(&host, &intent);
+        let PolicyDispatchAdmission::Granted { context } = host
+            .admit_policy_dispatch(&intent, &reasons, &policy_context(&host, &intent))
+            .unwrap_or_else(|error| panic!("{case}: policy admission: {error}"))
+        else {
+            panic!("{case}: expected one mapped run context")
+        };
+        host.evaluate_policy_cycle_with_test_inputs(
+            &mapped_policy_facts(outcome_key, false),
+            &policy_resources(),
+            EvaluationTime {
+                unix_ms: POLICY_NOW_UNIX_MS + 1,
+                monotonic_ms: POLICY_NOW_UNIX_MS + 1,
+            },
+            8,
+            PolicyTrigger::FactsChanged,
+        )
+        .unwrap_or_else(|error| panic!("{case}: clear caller outcome: {error}"));
+        let request =
+            ContainedTaskRequest::new(package_path.to_string_lossy().into_owned(), package_sha256)
+                .expect("mapped task request");
+        let receipt = host
+            .run_scheduled_contained_task(&context, &request)
+            .unwrap_or_else(|error| panic!("{case}: mapped run: {error}"));
+        let completion = host
+            .complete_scheduled_policy_run(&context, &receipt)
+            .unwrap_or_else(|error| panic!("{case}: mapped completion: {error}"));
+        let repeated_completion = host
+            .complete_scheduled_policy_run(&context, &receipt)
+            .unwrap_or_else(|error| panic!("{case}: repeated mapped completion: {error}"));
+        assert_eq!(
+            repeated_completion, completion,
+            "{case}: repeated terminal delivery must reuse one settlement"
+        );
+
+        let mut client = TestClient::connect(&host);
+        let events = projected_events(
+            &mut client,
+            EventQuery {
+                run_id: Some(context.run_id()),
+                ..EventQuery::default()
+            },
+        );
+        let disposition = events
+            .iter()
+            .find_map(|event| match &event.payload {
+                ProjectionPayload::Full(payload) => match payload.as_ref() {
+                    EventPayload::Task(TaskPayload::Semantic(payload)) => match payload.fact() {
+                        TaskSemanticFact::TerminalCommitted {
+                            scheduling_disposition: Some(disposition),
+                            ..
+                        } => Some(disposition.clone()),
+                        _ => None,
+                    },
+                    _ => None,
+                },
+                _ => None,
+            })
+            .unwrap_or_else(|| panic!("{case}: terminal disposition missing"));
+        assert_eq!(disposition.outcome_key(), outcome_key, "{case}");
+        assert_eq!(
+            matches!(
+                disposition.effect(),
+                SchedulingEffectEvidence::DesignatedEffectCompleted { .. }
+            ),
+            performs_effect,
+            "{case}"
+        );
+        assert_eq!(
+            events
+                .iter()
+                .filter(|event| event.event_type == EventType::TaskCompleted)
+                .count(),
+            1,
+            "{case}: disposition must share the single terminal event"
+        );
+        for event_type in [
+            EventType::PolicyDispatchAdmitted,
+            EventType::PolicyExecutionRecorded,
+            EventType::PolicyDispatchCompleted,
+        ] {
+            assert_eq!(
+                events
+                    .iter()
+                    .filter(|event| event.event_type == event_type)
+                    .count(),
+                1,
+                "{case}: repeated delivery cannot duplicate {event_type:?}"
+            );
+        }
+        let terminal_timestamp = events
+            .iter()
+            .find(|event| event.event_type == EventType::TaskCompleted)
+            .expect("mapped terminal")
+            .timestamp_unix_ms;
+        let mut followup_facts = mapped_policy_facts(outcome_key, false);
+        for fact in &mut followup_facts.facts {
+            fact.observed_at_unix_ms = terminal_timestamp;
+            fact.expires_at_unix_ms = Some(terminal_timestamp + 900_000);
+        }
+
+        let followup = host
+            .evaluate_policy_cycle_with_test_inputs(
+                &followup_facts,
+                &policy_resources(),
+                EvaluationTime {
+                    unix_ms: terminal_timestamp + 1,
+                    monotonic_ms: terminal_timestamp + 1,
+                },
+                9,
+                PolicyTrigger::FactsChanged,
+            )
+            .unwrap_or_else(|error| panic!("{case}: authoritative evaluation: {error}"));
+        assert!(
+            followup
+                .evaluation
+                .expect("followup evaluation")
+                .dispatch_intents
+                .iter()
+                .any(|intent| intent.task_id == "fixture.followup"),
+            "{case}: exact-run authoritative outcome did not reach the policy consumer"
+        );
+        let conflict = host
+            .evaluate_policy_cycle_with_test_inputs(
+                &mapped_policy_facts(outcome_key, true),
+                &policy_resources(),
+                EvaluationTime {
+                    unix_ms: terminal_timestamp + 2,
+                    monotonic_ms: terminal_timestamp + 2,
+                },
+                10,
+                PolicyTrigger::FactsChanged,
+            )
+            .expect_err("mapped caller outcome must conflict with ledger authority");
+        assert_eq!(
+            conflict.code(),
+            "policy_outcome_authority_conflict",
+            "{case}"
+        );
+        assert_eq!(
+            state.input_count.load(Ordering::Acquire),
+            usize::from(performs_effect),
+            "{case}"
+        );
+        drop(client);
+        host.close()
+            .unwrap_or_else(|error| panic!("{case}: close runtime host: {error}"));
+
+        let restarted = RuntimeHost::start(
+            config(&root)
+                .with_policy_inputs(PolicyInputSnapshot::new(
+                    mapped_policy_facts(outcome_key, false),
+                    policy_resources(),
+                ))
+                .with_procedure_manifest(procedure_manifest_with_primary(
+                    &package,
+                    vec!["after_observation".to_owned()],
+                )),
+            Arc::new(
+                FakeProvider::one(
+                    POLICY_INSTANCE_ALIAS,
+                    shared_instance_id,
+                    Arc::clone(&state),
+                )
+                .fixture_simulation(),
+            ),
+        )
+        .unwrap_or_else(|error| panic!("{case}: restart runtime host: {error}"));
+        let replayed = restarted
+            .evaluate_policy_cycle_with_test_inputs(
+                &followup_facts,
+                &policy_resources(),
+                EvaluationTime {
+                    unix_ms: terminal_timestamp + 3,
+                    monotonic_ms: terminal_timestamp + 3,
+                },
+                11,
+                PolicyTrigger::Recovery,
+            )
+            .unwrap_or_else(|error| panic!("{case}: replayed evaluation: {error}"));
+        let replayed_followup = replayed
+            .evaluation
+            .expect("replayed evaluation")
+            .dispatch_intents
+            .into_iter()
+            .find(|intent| intent.task_id == "fixture.followup")
+            .unwrap_or_else(|| {
+                panic!("{case}: restart did not rebuild the authoritative disposition")
+            });
+        let repeated = restarted
+            .evaluate_policy_cycle_with_test_inputs(
+                &followup_facts,
+                &policy_resources(),
+                EvaluationTime {
+                    unix_ms: terminal_timestamp + 3,
+                    monotonic_ms: terminal_timestamp + 3,
+                },
+                11,
+                PolicyTrigger::Recovery,
+            )
+            .unwrap_or_else(|error| panic!("{case}: repeated replay evaluation: {error}"));
+        let repeated_followups = repeated
+            .evaluation
+            .expect("repeated replay evaluation")
+            .dispatch_intents
+            .into_iter()
+            .filter(|intent| intent.task_id == "fixture.followup")
+            .collect::<Vec<_>>();
+        assert_eq!(
+            repeated_followups.len(),
+            1,
+            "{case}: repeated projection duplicated the downstream task"
+        );
+        assert_eq!(
+            repeated_followups[0].decision_id, replayed_followup.decision_id,
+            "{case}: identical replay inputs must retain one deterministic decision"
+        );
+        let mut replay_client = TestClient::connect(&restarted);
+        let replay_events = projected_events(
+            &mut replay_client,
+            EventQuery {
+                run_id: Some(context.run_id()),
+                ..EventQuery::default()
+            },
+        );
+        let replayed_dispositions = replay_events
+            .iter()
+            .filter_map(projected_task_semantic_fact)
+            .filter_map(|fact| match fact {
+                TaskSemanticFact::TerminalCommitted {
+                    scheduling_disposition: Some(disposition),
+                    ..
+                } => Some(disposition),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(replayed_dispositions, vec![&disposition], "{case}");
+        assert_eq!(
+            replay_events
+                .iter()
+                .filter(|event| event.event_type == EventType::TaskCompleted)
+                .count(),
+            1,
+            "{case}: replay cannot append another terminal"
+        );
+        assert_eq!(
+            replay_events
+                .iter()
+                .filter(|event| event.event_type == EventType::PolicyDispatchAdmitted)
+                .count(),
+            1,
+            "{case}: replay cannot admit the original run again"
+        );
+        drop(replay_client);
+        restarted
+            .close()
+            .unwrap_or_else(|error| panic!("{case}: close restarted host: {error}"));
+    }
+}
+
+#[test]
+fn latest_failed_mapped_run_clears_the_prior_successful_outcome() {
+    let outcome_key = "mapped-current-run";
+    let root = TempDir::new().expect("tempdir");
+    let (host, state, first_context, request) = admitted_mapped_run_fixture(&root, outcome_key);
+    let first_receipt = host
+        .run_scheduled_contained_task(&first_context, &request)
+        .expect("first mapped run");
+    host.complete_scheduled_policy_run(&first_context, &first_receipt)
+        .expect("first mapped completion");
+    let first_snapshot = host
+        .policy_outcome_key_snapshot_for_test()
+        .expect("first completed-run snapshot");
+    let snapshot_key = (
+        first_context.catalog_task_id().to_owned(),
+        first_context.instance_alias().to_owned(),
+    );
+    assert_eq!(
+        first_snapshot
+            .completed_runs
+            .get(&snapshot_key)
+            .expect("first expected run")
+            .run_id,
+        first_context.run_id()
+    );
+    let first_terminal_timestamp = host
+        .query_persisted_events_for_test(EventQuery {
+            run_id: Some(first_context.run_id()),
+            event_type: Some(EventType::TaskCompleted),
+            ..EventQuery::default()
+        })
+        .expect("query first mapped terminal")
+        .into_iter()
+        .next()
+        .expect("first mapped terminal")
+        .timestamp_unix_ms();
+
+    let second_context = admit_mapped_run_at(
+        &host,
+        outcome_key,
+        first_terminal_timestamp + 120_000,
+        12_001,
+    );
+    state.input_count.store(0, Ordering::Release);
+    state
+        .transition_capture_after_input
+        .store(false, Ordering::Release);
+    state.refuse_guard_capture.store(true, Ordering::Release);
+    let failure = host
+        .run_scheduled_contained_task(&second_context, &request)
+        .expect_err("second mapped run must fail at its guard");
+    assert_eq!(failure.code(), "contained_task_guard_refused");
+    let failed_snapshot = host
+        .policy_outcome_key_snapshot_for_test()
+        .expect("failed completed-run snapshot");
+    let expected_failed = failed_snapshot
+        .completed_runs
+        .get(&snapshot_key)
+        .expect("latest failed expected run");
+    assert_eq!(expected_failed.run_id, second_context.run_id());
+    assert!(matches!(
+        expected_failed.execution_outcome,
+        PolicyExecutionOutcome::Failed { .. }
+    ));
+    assert_ne!(
+        first_snapshot, failed_snapshot,
+        "completed-run state change must invalidate the earlier policy snapshot"
+    );
+
+    let after_failure_time = first_terminal_timestamp + 180_000;
+    let after_failure_facts = mapped_policy_facts_at(outcome_key, after_failure_time, false);
+    let after_failure = host
+        .evaluate_policy_cycle_with_test_inputs(
+            &after_failure_facts,
+            &policy_resources(),
+            EvaluationTime {
+                unix_ms: after_failure_time,
+                monotonic_ms: after_failure_time,
+            },
+            12_002,
+            PolicyTrigger::FactsChanged,
+        )
+        .expect("evaluate after failed mapped run");
+    assert!(
+        after_failure
+            .evaluation
+            .expect("post-failure evaluation")
+            .dispatch_intents
+            .iter()
+            .all(|intent| intent.task_id != "fixture.followup"),
+        "a newer failed exact run cannot reuse the older successful disposition"
+    );
+    host.close().expect("close mapped current-run host");
+}
+
+#[test]
+fn mapped_completion_and_cache_transition_are_atomic_to_policy_snapshots() {
+    let outcome_key = "mapped-atomic-snapshot";
+    let root = TempDir::new().expect("tempdir");
+    let (host, _state, first_context, request) = admitted_mapped_run_fixture(&root, outcome_key);
+    let first_receipt = host
+        .run_scheduled_contained_task(&first_context, &request)
+        .expect("first mapped run");
+    host.complete_scheduled_policy_run(&first_context, &first_receipt)
+        .expect("first mapped completion");
+    let first_terminal_timestamp = host
+        .query_persisted_events_for_test(EventQuery {
+            run_id: Some(first_context.run_id()),
+            event_type: Some(EventType::TaskCompleted),
+            ..EventQuery::default()
+        })
+        .expect("query first terminal")
+        .into_iter()
+        .next()
+        .expect("first terminal")
+        .timestamp_unix_ms();
+    let second_context = admit_mapped_run_at(
+        &host,
+        outcome_key,
+        first_terminal_timestamp + 120_000,
+        12_101,
+    );
+    let second_run_id = second_context.run_id();
+    let snapshot_key = (
+        second_context.catalog_task_id().to_owned(),
+        second_context.instance_alias().to_owned(),
+    );
+    let host = Arc::new(host);
+    let control = host
+        .pause_policy_outcome_transition_for_test()
+        .expect("install atomic-transition hook");
+    let transition_host = Arc::clone(&host);
+    let transition = thread::spawn(move || {
+        transition_host.complete_scheduled_policy_failure_without_terminal_for_test(&second_context)
+    });
+    control.wait_until_completion_committed();
+
+    let snapshot_host = Arc::clone(&host);
+    let (snapshot_tx, snapshot_rx) = mpsc::channel();
+    let snapshot = thread::spawn(move || {
+        snapshot_tx
+            .send(snapshot_host.policy_outcome_key_snapshot_for_test())
+            .expect("send policy snapshot");
+    });
+    assert!(
+        matches!(
+            snapshot_rx.recv_timeout(Duration::from_millis(50)),
+            Err(mpsc::RecvTimeoutError::Timeout)
+        ),
+        "snapshot must wait while completion state and cache are between their atomic update"
+    );
+
+    control.resume();
+    transition
+        .join()
+        .expect("join outcome transition")
+        .expect("complete failed mapped transition");
+    snapshot.join().expect("join policy snapshot");
+    let completed_snapshot = snapshot_rx
+        .recv_timeout(Duration::from_secs(1))
+        .expect("receive completed policy snapshot")
+        .expect("read completed policy snapshot");
+    let completed = completed_snapshot
+        .completed_runs
+        .get(&snapshot_key)
+        .expect("failed expected run");
+    assert_eq!(completed.run_id, second_run_id);
+    assert!(matches!(
+        completed.execution_outcome,
+        PolicyExecutionOutcome::Failed { .. }
+    ));
+
+    let host = Arc::try_unwrap(host).unwrap_or_else(|_| panic!("exclusive runtime host"));
+    host.close().expect("close atomic-transition host");
+}
+
+#[test]
+fn newer_success_replaces_an_older_failed_mapped_run() {
+    let outcome_key = "mapped-failure-then-success";
+    let root = TempDir::new().expect("tempdir");
+    let (host, _state, first_context, request) = admitted_mapped_run_fixture(&root, outcome_key);
+    host.complete_scheduled_policy_failure_without_terminal_for_test(&first_context)
+        .expect("first mapped failure");
+    let first_completion_timestamp = host
+        .query_persisted_events_for_test(EventQuery {
+            run_id: Some(first_context.run_id()),
+            event_type: Some(EventType::PolicyDispatchCompleted),
+            ..EventQuery::default()
+        })
+        .expect("query first completion")
+        .into_iter()
+        .next()
+        .expect("first completion")
+        .timestamp_unix_ms();
+
+    let second_context = admit_mapped_run_at(
+        &host,
+        outcome_key,
+        first_completion_timestamp + 120_000,
+        12_201,
+    );
+    let second_receipt = host
+        .run_scheduled_contained_task(&second_context, &request)
+        .expect("second mapped run");
+    host.complete_scheduled_policy_run(&second_context, &second_receipt)
+        .expect("second mapped completion");
+    let snapshot = host
+        .policy_outcome_key_snapshot_for_test()
+        .expect("success completed-run snapshot");
+    let completed = snapshot
+        .completed_runs
+        .get(&(
+            second_context.catalog_task_id().to_owned(),
+            second_context.instance_alias().to_owned(),
+        ))
+        .expect("latest successful expected run");
+    assert_eq!(completed.run_id, second_context.run_id());
+    assert!(matches!(
+        completed.execution_outcome,
+        PolicyExecutionOutcome::Succeeded { .. }
+    ));
+
+    let followup_time = first_completion_timestamp + 180_000;
+    let cycle = host
+        .evaluate_policy_cycle_with_test_inputs(
+            &mapped_policy_facts_at(outcome_key, followup_time, false),
+            &policy_resources(),
+            EvaluationTime {
+                unix_ms: followup_time,
+                monotonic_ms: followup_time,
+            },
+            12_202,
+            PolicyTrigger::FactsChanged,
+        )
+        .expect("evaluate after successful exact run");
+    assert!(
+        cycle
+            .evaluation
+            .expect("post-success evaluation")
+            .dispatch_intents
+            .iter()
+            .any(|intent| intent.task_id == "fixture.followup"),
+        "the newer successful exact run must replace the older failed completion"
+    );
+    host.close().expect("close failure-then-success host");
+}
+
+#[test]
+fn mapped_recovery_fails_loud_for_missing_terminal_and_partial_links() {
+    for case in ["missing-terminal", "missing-disposition", "partial-links"] {
+        let outcome_key = format!("recovery-{case}");
+        let root = TempDir::new().expect("tempdir");
+        let package =
+            neutral_mapped_contained_task_package(&outcome_key, "designated_effect_completed");
+        let (host, state, context, _request) = admitted_mapped_run_fixture(&root, &outcome_key);
+        let expected_code = match case {
+            "missing-terminal" => {
+                host.complete_scheduled_policy_success_without_terminal_for_test(&context)
+                    .expect("persist full scheduled completion without terminal");
+                "policy_run_terminal_missing"
+            }
+            "missing-disposition" => {
+                host.append_contained_task_terminal_for_test(
+                    context.request(),
+                    context.lease_token(),
+                    context.issued_task_id(),
+                    context.issued_run_id(),
+                    TaskOutcome::Success,
+                    false,
+                    Some("neutral/terminal".to_owned()),
+                    0,
+                    None,
+                )
+                .expect("persist success terminal without mapped disposition");
+                host.complete_scheduled_policy_success_without_terminal_for_test(&context)
+                    .expect("persist scheduled completion after generic terminal");
+                "policy_run_terminal_disposition_missing"
+            }
+            "partial-links" => {
+                let error = host
+                    .complete_policy_success_with_partial_links_for_test(&context)
+                    .expect_err("mapped completion with partial links must fail");
+                assert_eq!(error.code(), "policy_run_identity_missing");
+                "policy_run_identity_missing"
+            }
+            _ => unreachable!(),
+        };
+        let close = host.close();
+        assert!(
+            close.is_ok()
+                || close
+                    .as_ref()
+                    .is_err_and(|error| error.code() == expected_code),
+            "{case}: unexpected close result {close:?}"
+        );
+
+        let restarted = RuntimeHost::start(
+            config(&root)
+                .with_policy_inputs(PolicyInputSnapshot::new(
+                    mapped_policy_facts(&outcome_key, false),
+                    policy_resources(),
+                ))
+                .with_procedure_manifest(procedure_manifest_with_primary(
+                    &package,
+                    vec!["after_observation".to_owned()],
+                )),
+            Arc::new(
+                FakeProvider::one(
+                    POLICY_INSTANCE_ALIAS,
+                    context.lease_token().instance_id(),
+                    state,
+                )
+                .fixture_simulation(),
+            ),
+        );
+        let error = match restarted {
+            Ok(host) => {
+                host.close().expect("close unexpectedly restarted host");
+                panic!("{case}: invalid mapped recovery evidence must fail startup")
+            }
+            Err(error) => error,
+        };
+        assert_eq!(error.code(), expected_code, "{case}");
+    }
+}
+
+#[test]
+fn mapped_failed_completion_without_a_terminal_recovers_without_an_outcome() {
+    let outcome_key = "recovery-failed-no-terminal";
+    let root = TempDir::new().expect("tempdir");
+    let package = neutral_mapped_contained_task_package(outcome_key, "designated_effect_completed");
+    let (host, state, context, _request) = admitted_mapped_run_fixture(&root, outcome_key);
+    let completion = host
+        .complete_scheduled_policy_failure_without_terminal_for_test(&context)
+        .expect("persist failed scheduled completion without terminal");
+    assert!(matches!(
+        completion.outcome,
+        PolicyExecutionOutcome::Failed { .. }
+    ));
+    host.close().expect("close failed scheduled host");
+
+    let restarted = RuntimeHost::start(
+        config(&root)
+            .with_policy_inputs(PolicyInputSnapshot::new(
+                mapped_policy_facts(outcome_key, false),
+                policy_resources(),
+            ))
+            .with_procedure_manifest(procedure_manifest_with_primary(
+                &package,
+                vec!["after_observation".to_owned()],
+            )),
+        Arc::new(
+            FakeProvider::one(
+                POLICY_INSTANCE_ALIAS,
+                context.lease_token().instance_id(),
+                state,
+            )
+            .fixture_simulation(),
+        ),
+    )
+    .expect("failed completion without terminal is a valid recovery record");
+    let cycle = restarted
+        .evaluate_policy_cycle_with_test_inputs(
+            &mapped_policy_facts(outcome_key, false),
+            &policy_resources(),
+            EvaluationTime {
+                unix_ms: POLICY_NOW_UNIX_MS + 120_000,
+                monotonic_ms: POLICY_NOW_UNIX_MS + 120_000,
+            },
+            12_003,
+            PolicyTrigger::Recovery,
+        )
+        .expect("evaluate recovered failed completion");
+    assert!(
+        cycle
+            .evaluation
+            .expect("recovered failed evaluation")
+            .dispatch_intents
+            .iter()
+            .all(|intent| intent.task_id != "fixture.followup")
+    );
+    restarted
+        .close()
+        .expect("close recovered failed scheduled host");
+}
+
+#[test]
+fn mapped_completion_request_identity_is_bound_to_the_admission_event() {
+    let root = TempDir::new().expect("tempdir");
+    let (host, _state, context, request) =
+        admitted_mapped_run_fixture(&root, "mapped-request-identity");
+    let receipt = host
+        .run_scheduled_contained_task(&context, &request)
+        .expect("mapped request-identity run");
+    host.complete_scheduled_policy_run(&context, &receipt)
+        .expect("mapped request-identity completion");
+    let terminal_sequence = receipt.terminal().expect("mapped terminal").sequence;
+    host.validate_policy_admission_request_for_test(
+        &context,
+        context.admission_request_id(),
+        terminal_sequence,
+    )
+    .expect("exact admission request");
+    let wrong_request_id = *IdentifierIssuer::new()
+        .expect("identifier issuer")
+        .mint_request_id()
+        .expect("wrong request id")
+        .transport();
+    let error = host
+        .validate_policy_admission_request_for_test(&context, wrong_request_id, terminal_sequence)
+        .expect_err("wrong admission request must fail closed");
+    assert_eq!(error.code(), "policy_run_admission_conflict");
+    host.close().expect("close request-identity host");
+}
+
+#[test]
+fn authoritative_outcome_state_advances_only_from_ordered_exact_run_projections() {
+    let ids = IdentifierIssuer::new().expect("identifier issuer");
+    let instance_id = ids.mint_instance_id().expect("instance id");
+    let task_id = ids.mint_task_id().expect("task id");
+    let lease_id = ids.mint_lease_id().expect("lease id");
+    let make_outcome = |sequence: u64, suffix: &str| {
+        AuthoritativeSchedulingOutcome::new(
+            SchedulingOutcomeIdentity::new(
+                *ids.mint_event_id().expect("terminal event id").transport(),
+                sequence,
+                *instance_id.transport(),
+                *task_id.transport(),
+                *ids.mint_run_id().expect("run id").transport(),
+                *ids.mint_request_id().expect("request id").transport(),
+                *ids.mint_correlation_id()
+                    .expect("correlation id")
+                    .transport(),
+                *lease_id.transport(),
+                format!("decision-{suffix}"),
+                "fixture.observe",
+                POLICY_INSTANCE_ALIAS,
+            )
+            .expect("exact outcome identity"),
+            SchedulingDisposition::new(
+                format!("outcome-{suffix}"),
+                SchedulingEffectEvidence::NoDesignatedEffect,
+            )
+            .expect("outcome disposition"),
+            POLICY_NOW_UNIX_MS + sequence,
+        )
+        .expect("authoritative outcome")
+    };
+    let older = make_outcome(10, "older");
+    let newer = make_outcome(20, "newer");
+    let mut outcomes = BTreeMap::new();
+
+    insert_authoritative_policy_outcome(&mut outcomes, older.clone()).expect("first exact outcome");
+    insert_authoritative_policy_outcome(&mut outcomes, newer.clone())
+        .expect("ordered exact outcome");
+    insert_authoritative_policy_outcome(&mut outcomes, newer.clone())
+        .expect("identical exact replay");
+    assert_eq!(outcomes.len(), 1);
+    assert_eq!(outcomes.values().next(), Some(&newer));
+    let error = insert_authoritative_policy_outcome(&mut outcomes, older)
+        .expect_err("out-of-order exact replay must fail closed");
+    assert_eq!(error.code(), "policy_outcome_replay_order_conflict");
+}
+
+#[test]
+fn mapped_terminal_append_failure_returns_no_success_or_disposition() {
+    let root = TempDir::new().expect("tempdir");
+    let (host, state, context, request) = admitted_mapped_run_fixture(&root, "append-failure");
+    host.fail_next_scheduling_terminal_append_for_test()
+        .expect("inject terminal append failure");
+    let error = host
+        .run_scheduled_contained_task(&context, &request)
+        .expect_err("terminal append failure cannot return a success receipt");
+    assert_eq!(error.code(), "scheduling_terminal_append_injected_failure");
+    assert_eq!(state.input_count.load(Ordering::Acquire), 1);
+    let events = host
+        .query_persisted_events_for_test(EventQuery {
+            run_id: Some(context.run_id()),
+            ..EventQuery::default()
+        })
+        .expect("query mapped append failure events");
+    assert_eq!(
+        events
+            .iter()
+            .filter(|event| event.event_type() == EventType::TaskCompleted)
+            .count(),
+        0
+    );
+    assert_eq!(
+        events
+            .iter()
+            .filter(|event| matches!(
+                event.payload(),
+                EventPayload::Task(TaskPayload::Semantic(payload))
+                    if matches!(
+                        payload.fact(),
+                        TaskSemanticFact::TerminalCommitted {
+                            scheduling_disposition: Some(_),
+                            ..
+                        }
+                    )
+            ))
+            .count(),
+        0
+    );
+    assert_eq!(
+        events
+            .iter()
+            .filter(|event| event.event_type() == EventType::PolicyDispatchAdmitted)
+            .count(),
+        1,
+        "append failure cannot admit a downstream task"
+    );
+    let close = host.close();
+    assert!(
+        close.is_ok()
+            || close
+                .as_ref()
+                .is_err_and(|error| error.code() == "scheduling_terminal_append_injected_failure")
+    );
+}
+
+#[test]
+fn two_declared_opaque_outcomes_drive_existing_any_from_one_terminal_disposition() {
+    let effect_key = "opaque-effect-result";
+    let no_effect_key = "opaque-no-effect-result";
+    let root = TempDir::new().expect("tempdir");
+    let package = neutral_two_key_mapped_contained_task_package(effect_key, no_effect_key);
+    let package_path = root.path().join("two-key-mapped-task.zip");
+    fs::write(&package_path, &package).expect("write two-key mapped package");
+    let package_sha256 = format!("{:x}", Sha256::digest(&package));
+    let state = Arc::new(FakeState::default());
+    state
+        .transition_capture_after_input
+        .store(true, Ordering::Release);
+    let host = RuntimeHost::start(
+        config(&root)
+            .with_policy_inputs(PolicyInputSnapshot::new(
+                mapped_policy_facts(effect_key, false),
+                policy_resources(),
+            ))
+            .with_procedure_manifest(procedure_manifest_with_primary(
+                &package,
+                vec!["after_observation".to_owned()],
+            )),
+        Arc::new(
+            FakeProvider::one(POLICY_INSTANCE_ALIAS, instance_id(), Arc::clone(&state))
+                .fixture_simulation(),
+        ),
+    )
+    .expect("runtime host");
+    host.activate_policy_catalog(&mapped_two_key_any_policy_sources(
+        1,
+        effect_key,
+        no_effect_key,
+    ))
+    .expect("activate two-key mapped catalog");
+    let cycle = host
+        .evaluate_policy_cycle_with_test_inputs(
+            &mapped_policy_facts(effect_key, false),
+            &policy_resources(),
+            EvaluationTime {
+                unix_ms: POLICY_NOW_UNIX_MS,
+                monotonic_ms: POLICY_NOW_UNIX_MS,
+            },
+            75,
+            PolicyTrigger::FactsChanged,
+        )
+        .expect("two-key initial evaluation");
+    let evaluation = cycle.evaluation.expect("two-key evaluation result");
+    let intent = evaluation
+        .dispatch_intents
+        .iter()
+        .find(|intent| intent.task_id == "fixture.observe")
+        .expect("two-key source dispatch")
+        .clone();
+    let reasons = evaluation
+        .reason_chains
+        .iter()
+        .find(|chain| chain.id == intent.reason_chain_id)
+        .expect("two-key source reason chain")
+        .clone();
+    record_policy_approval(&host, &intent);
+    let PolicyDispatchAdmission::Granted { context } = host
+        .admit_policy_dispatch(&intent, &reasons, &policy_context(&host, &intent))
+        .expect("two-key policy admission")
+    else {
+        panic!("expected two-key mapped policy context")
+    };
+    let request =
+        ContainedTaskRequest::new(package_path.to_string_lossy().into_owned(), package_sha256)
+            .expect("two-key package request");
+    let receipt = host
+        .run_scheduled_contained_task(&context, &request)
+        .expect("two-key mapped run");
+    host.complete_scheduled_policy_run(&context, &receipt)
+        .expect("two-key mapped completion");
+    let mut client = TestClient::connect(&host);
+    let events = projected_events(
+        &mut client,
+        EventQuery {
+            run_id: Some(context.run_id()),
+            ..EventQuery::default()
+        },
+    );
+    let terminal = events
+        .iter()
+        .find(|event| event.event_type == EventType::TaskCompleted)
+        .expect("two-key terminal");
+    let disposition = events
+        .iter()
+        .filter_map(projected_task_semantic_fact)
+        .find_map(|fact| match fact {
+            TaskSemanticFact::TerminalCommitted {
+                scheduling_disposition: Some(disposition),
+                ..
+            } => Some(disposition),
+            _ => None,
+        })
+        .expect("two-key disposition");
+    assert_eq!(disposition.outcome_key(), effect_key);
+    let mut facts = mapped_policy_facts(effect_key, false);
+    for fact in &mut facts.facts {
+        fact.observed_at_unix_ms = terminal.timestamp_unix_ms;
+        fact.expires_at_unix_ms = Some(terminal.timestamp_unix_ms + 900_000);
+    }
+    let followup = host
+        .evaluate_policy_cycle_with_test_inputs(
+            &facts,
+            &policy_resources(),
+            EvaluationTime {
+                unix_ms: terminal.timestamp_unix_ms + 1,
+                monotonic_ms: terminal.timestamp_unix_ms + 1,
+            },
+            76,
+            PolicyTrigger::FactsChanged,
+        )
+        .expect("two-key authoritative evaluation");
+    assert_eq!(
+        followup
+            .evaluation
+            .expect("two-key followup evaluation")
+            .dispatch_intents
+            .iter()
+            .filter(|intent| intent.task_id == "fixture.followup")
+            .count(),
+        1,
+        "existing Any must consume the one exact-run authoritative key"
+    );
+    drop(client);
+    host.close().expect("close runtime host");
+}
+
+#[test]
+fn mapped_startup_outcome_is_rejected_before_policy_dispatch() {
+    let root = TempDir::new().expect("tempdir");
+    let package =
+        neutral_mapped_contained_task_package("startup-forged", "designated_effect_completed");
+    let state = Arc::new(FakeState::default());
+    let host = RuntimeHost::start(
+        config(&root)
+            .with_policy_inputs(PolicyInputSnapshot::new(
+                mapped_policy_facts("startup-forged", true),
+                policy_resources(),
+            ))
+            .with_procedure_manifest(procedure_manifest_with_primary(
+                &package,
+                vec!["after_observation".to_owned()],
+            )),
+        Arc::new(
+            FakeProvider::one(POLICY_INSTANCE_ALIAS, instance_id(), state).fixture_simulation(),
+        ),
+    )
+    .expect("runtime host");
+    host.activate_policy_catalog(&mapped_policy_sources(1, "startup-forged"))
+        .expect("activate mapped catalog");
+    let error = host
+        .evaluate_policy_cycle(PolicyTrigger::FactsChanged)
+        .expect_err("startup outcome cannot become mapped policy authority");
+    assert_eq!(error.code(), "policy_outcome_authority_conflict");
+    let mut client = TestClient::connect(&host);
+    let events = projected_events(&mut client, EventQuery::default());
+    assert_eq!(
+        events
+            .iter()
+            .filter(|event| event.event_type == EventType::PolicyDispatchAdmitted)
+            .count(),
+        0
+    );
+    drop(client);
+    host.close().expect("close runtime host");
+}
+
+#[test]
+fn mapped_consumer_projection_failures_are_typed_and_dispatch_nothing() {
+    for case in ["projection-failure", "stale-position"] {
+        let root = TempDir::new().expect("tempdir");
+        let (host, _state, context, request) = admitted_mapped_run_fixture(&root, case);
+        let receipt = host
+            .run_scheduled_contained_task(&context, &request)
+            .unwrap_or_else(|error| panic!("{case}: mapped run: {error}"));
+        host.complete_scheduled_policy_run(&context, &receipt)
+            .unwrap_or_else(|error| panic!("{case}: mapped completion: {error}"));
+        let terminal = receipt.terminal().expect("mapped terminal");
+        match case {
+            "projection-failure" => host
+                .fail_next_policy_outcome_projection_for_test()
+                .expect("inject projection failure"),
+            "stale-position" => host
+                .override_next_policy_outcome_projection_position_for_test(
+                    terminal.sequence.saturating_sub(1),
+                )
+                .expect("inject stale projection position"),
+            _ => unreachable!(),
+        }
+        let evaluation_time = unix_ms_now().expect("projection evaluation time");
+        let mut facts = mapped_policy_facts(case, false);
+        for fact in &mut facts.facts {
+            fact.observed_at_unix_ms = evaluation_time;
+            fact.expires_at_unix_ms = Some(evaluation_time + 900_000);
+        }
+        let error = host
+            .evaluate_policy_cycle_with_test_inputs(
+                &facts,
+                &policy_resources(),
+                EvaluationTime {
+                    unix_ms: evaluation_time,
+                    monotonic_ms: evaluation_time,
+                },
+                74,
+                PolicyTrigger::FactsChanged,
+            )
+            .expect_err("consumer projection failure cannot return a policy cycle");
+        assert_eq!(
+            error.code(),
+            if case == "projection-failure" {
+                "policy_outcome_projection_injected_failure"
+            } else {
+                "outcome_projection_not_ready"
+            },
+            "{case}"
+        );
+        let events = host
+            .query_persisted_events_for_test(EventQuery {
+                run_id: Some(context.run_id()),
+                ..EventQuery::default()
+            })
+            .unwrap_or_else(|error| panic!("{case}: query persisted events: {error}"));
+        assert_eq!(
+            events
+                .iter()
+                .filter(|event| event.event_type() == EventType::PolicyDispatchAdmitted)
+                .count(),
+            1,
+            "{case}: failed projection cannot admit a downstream task"
+        );
+        assert_eq!(
+            events
+                .iter()
+                .filter(|event| event.event_type() == EventType::TaskCompleted)
+                .count(),
+            1,
+            "{case}: failed projection cannot rewrite the terminal"
+        );
+        let close = host.close();
+        if case == "projection-failure" {
+            assert!(
+                close.is_ok()
+                    || close.as_ref().is_err_and(|error| {
+                        error.code() == "policy_outcome_projection_injected_failure"
+                    })
+            );
+        } else {
+            close.unwrap_or_else(|error| panic!("{case}: close runtime host: {error}"));
+        }
+    }
+}
+
+#[test]
+fn mapped_catalog_requires_the_exact_package_declaration_before_effect() {
+    for (case, package) in [
+        ("missing-declaration", neutral_contained_task_package()),
+        (
+            "misspelled-declaration-key",
+            neutral_mapped_contained_task_package("mapped-reslut", "designated_effect_completed"),
+        ),
+    ] {
+        let root = TempDir::new().expect("tempdir");
+        let package_path = root.path().join(format!("{case}.zip"));
+        fs::write(&package_path, &package).expect("write mismatched package");
+        let package_sha256 = format!("{:x}", Sha256::digest(&package));
+        let state = Arc::new(FakeState::default());
+        state
+            .transition_capture_after_input
+            .store(true, Ordering::Release);
+        let host = RuntimeHost::start(
+            config(&root)
+                .with_policy_inputs(PolicyInputSnapshot::new(
+                    mapped_policy_facts("mapped-result", false),
+                    policy_resources(),
+                ))
+                .with_procedure_manifest(procedure_manifest_with_primary(
+                    &package,
+                    vec!["after_observation".to_owned()],
+                )),
+            Arc::new(
+                FakeProvider::one(POLICY_INSTANCE_ALIAS, instance_id(), Arc::clone(&state))
+                    .fixture_simulation(),
+            ),
+        )
+        .unwrap_or_else(|error| panic!("{case}: runtime host: {error}"));
+        host.activate_policy_catalog(&mapped_policy_sources(1, "mapped-result"))
+            .unwrap_or_else(|error| panic!("{case}: activate mapped catalog: {error}"));
+        let cycle = host
+            .evaluate_policy_cycle_with_test_inputs(
+                &mapped_policy_facts("mapped-result", false),
+                &policy_resources(),
+                EvaluationTime {
+                    unix_ms: POLICY_NOW_UNIX_MS,
+                    monotonic_ms: POLICY_NOW_UNIX_MS,
+                },
+                71,
+                PolicyTrigger::FactsChanged,
+            )
+            .unwrap_or_else(|error| panic!("{case}: mapped evaluation: {error}"));
+        let evaluation = cycle.evaluation.expect("mapped evaluation result");
+        let intent = evaluation
+            .dispatch_intents
+            .iter()
+            .find(|intent| intent.task_id == "fixture.observe")
+            .unwrap_or_else(|| panic!("{case}: mapped source dispatch"))
+            .clone();
+        let reasons = evaluation
+            .reason_chains
+            .iter()
+            .find(|chain| chain.id == intent.reason_chain_id)
+            .expect("mapped source reason chain")
+            .clone();
+        record_policy_approval(&host, &intent);
+        let PolicyDispatchAdmission::Granted { context } = host
+            .admit_policy_dispatch(&intent, &reasons, &policy_context(&host, &intent))
+            .unwrap_or_else(|error| panic!("{case}: policy admission: {error}"))
+        else {
+            panic!("{case}: expected mapped policy context")
+        };
+        let request =
+            ContainedTaskRequest::new(package_path.to_string_lossy().into_owned(), package_sha256)
+                .expect("mismatched package request");
+        let error = host
+            .run_scheduled_contained_task(&context, &request)
+            .expect_err("mapped catalog must reject a non-exact package declaration");
+        assert_eq!(
+            error.code(),
+            "policy_run_outcome_declaration_mismatch",
+            "{case}"
+        );
+        assert_eq!(state.capture_count.load(Ordering::Acquire), 0, "{case}");
+        assert_eq!(state.input_count.load(Ordering::Acquire), 0, "{case}");
+        host.close()
+            .unwrap_or_else(|error| panic!("{case}: close runtime host: {error}"));
+    }
+}
+
+#[test]
+fn mapped_terminal_page_conflicts_and_error_pages_fail_without_success() {
+    for (case, terminal_pages, error_pages, expected_code) in [
+        (
+            "conflicting-terminal",
+            vec!["home"],
+            Vec::new(),
+            "contained_task_outcome_declaration_incomplete",
+        ),
+        (
+            "declared-error-terminal",
+            vec!["error"],
+            vec!["error"],
+            "contained_task_page_set_invalid",
+        ),
+    ] {
+        let root = TempDir::new().expect("tempdir");
+        let package = neutral_mapped_contained_task_package_with_pages(
+            "mapped-result",
+            "designated_effect_completed",
+            &terminal_pages,
+            &error_pages,
+        );
+        let package_path = root.path().join(format!("{case}.zip"));
+        fs::write(&package_path, &package).expect("write mapped package");
+        let package_sha256 = format!("{:x}", Sha256::digest(&package));
+        let state = Arc::new(FakeState::default());
+        state
+            .transition_capture_after_input
+            .store(true, Ordering::Release);
+        let host = RuntimeHost::start(
+            config(&root)
+                .with_policy_inputs(PolicyInputSnapshot::new(
+                    mapped_policy_facts("mapped-result", false),
+                    policy_resources(),
+                ))
+                .with_procedure_manifest(procedure_manifest_with_primary(
+                    &package,
+                    vec!["after_observation".to_owned()],
+                )),
+            Arc::new(
+                FakeProvider::one(POLICY_INSTANCE_ALIAS, instance_id(), Arc::clone(&state))
+                    .fixture_simulation(),
+            ),
+        )
+        .unwrap_or_else(|error| panic!("{case}: runtime host: {error}"));
+        host.activate_policy_catalog(&mapped_policy_sources(1, "mapped-result"))
+            .unwrap_or_else(|error| panic!("{case}: activate mapped catalog: {error}"));
+        let cycle = host
+            .evaluate_policy_cycle_with_test_inputs(
+                &mapped_policy_facts("mapped-result", false),
+                &policy_resources(),
+                EvaluationTime {
+                    unix_ms: POLICY_NOW_UNIX_MS,
+                    monotonic_ms: POLICY_NOW_UNIX_MS,
+                },
+                72,
+                PolicyTrigger::FactsChanged,
+            )
+            .unwrap_or_else(|error| panic!("{case}: mapped evaluation: {error}"));
+        let evaluation = cycle.evaluation.expect("mapped evaluation result");
+        let intent = evaluation
+            .dispatch_intents
+            .iter()
+            .find(|intent| intent.task_id == "fixture.observe")
+            .unwrap_or_else(|| panic!("{case}: mapped source dispatch"))
+            .clone();
+        let reasons = evaluation
+            .reason_chains
+            .iter()
+            .find(|chain| chain.id == intent.reason_chain_id)
+            .expect("mapped source reason chain")
+            .clone();
+        record_policy_approval(&host, &intent);
+        let PolicyDispatchAdmission::Granted { context } = host
+            .admit_policy_dispatch(&intent, &reasons, &policy_context(&host, &intent))
+            .unwrap_or_else(|error| panic!("{case}: policy admission: {error}"))
+        else {
+            panic!("{case}: expected mapped policy context")
+        };
+        let request =
+            ContainedTaskRequest::new(package_path.to_string_lossy().into_owned(), package_sha256)
+                .expect("mapped package request");
+        let error = host
+            .run_scheduled_contained_task(&context, &request)
+            .expect_err("invalid terminal evidence cannot return success");
+        assert_eq!(error.code(), expected_code, "{case}");
+        assert_eq!(state.capture_count.load(Ordering::Acquire), 0, "{case}");
+        assert_eq!(state.input_count.load(Ordering::Acquire), 0, "{case}");
+        let mut client = TestClient::connect(&host);
+        let events = projected_events(
+            &mut client,
+            EventQuery {
+                run_id: Some(context.run_id()),
+                ..EventQuery::default()
+            },
+        );
+        assert_eq!(
+            events
+                .iter()
+                .filter(|event| event.event_type == EventType::TaskCompleted)
+                .count(),
+            0,
+            "{case}: invalid evidence cannot commit success"
+        );
+        assert_eq!(
+            events
+                .iter()
+                .filter_map(projected_task_semantic_fact)
+                .filter(|fact| matches!(
+                    fact,
+                    TaskSemanticFact::TerminalCommitted {
+                        scheduling_disposition: Some(_),
+                        ..
+                    }
+                ))
+                .count(),
+            0,
+            "{case}: invalid evidence cannot commit a disposition"
+        );
+        drop(client);
+        host.close()
+            .unwrap_or_else(|error| panic!("{case}: close runtime host: {error}"));
+    }
+}
+
+#[test]
+fn duplicate_designated_effects_fail_before_terminal_and_downstream_dispatch() {
+    let root = TempDir::new().expect("tempdir");
+    let package = neutral_mapped_retrying_contained_task_package("mapped-result");
+    let package_path = root.path().join("duplicate-designated-effects.zip");
+    fs::write(&package_path, &package).expect("write mapped retry package");
+    let package_sha256 = format!("{:x}", Sha256::digest(&package));
+    let state = Arc::new(FakeState::default());
+    state
+        .transition_capture_after_inputs
+        .store(3, Ordering::Release);
+    let host = RuntimeHost::start(
+        config(&root)
+            .with_policy_inputs(PolicyInputSnapshot::new(
+                mapped_policy_facts("mapped-result", false),
+                policy_resources(),
+            ))
+            .with_procedure_manifest(procedure_manifest_with_primary(
+                &package,
+                vec!["after_observation".to_owned()],
+            )),
+        Arc::new(
+            FakeProvider::one(POLICY_INSTANCE_ALIAS, instance_id(), Arc::clone(&state))
+                .fixture_simulation(),
+        ),
+    )
+    .expect("runtime host");
+    host.activate_policy_catalog(&mapped_policy_sources(1, "mapped-result"))
+        .expect("activate mapped catalog");
+    let cycle = host
+        .evaluate_policy_cycle_with_test_inputs(
+            &mapped_policy_facts("mapped-result", false),
+            &policy_resources(),
+            EvaluationTime {
+                unix_ms: POLICY_NOW_UNIX_MS,
+                monotonic_ms: POLICY_NOW_UNIX_MS,
+            },
+            73,
+            PolicyTrigger::FactsChanged,
+        )
+        .expect("mapped evaluation");
+    let evaluation = cycle.evaluation.expect("mapped evaluation result");
+    let intent = evaluation
+        .dispatch_intents
+        .iter()
+        .find(|intent| intent.task_id == "fixture.observe")
+        .expect("mapped source dispatch")
+        .clone();
+    let reasons = evaluation
+        .reason_chains
+        .iter()
+        .find(|chain| chain.id == intent.reason_chain_id)
+        .expect("mapped source reason chain")
+        .clone();
+    record_policy_approval(&host, &intent);
+    let PolicyDispatchAdmission::Granted { context } = host
+        .admit_policy_dispatch(&intent, &reasons, &policy_context(&host, &intent))
+        .expect("policy admission")
+    else {
+        panic!("expected mapped policy context")
+    };
+    let request =
+        ContainedTaskRequest::new(package_path.to_string_lossy().into_owned(), package_sha256)
+            .expect("mapped retry package request");
+    let error = host
+        .run_scheduled_contained_task(&context, &request)
+        .expect_err("duplicate designated effects cannot commit a disposition");
+    assert_eq!(
+        error.code(),
+        "contained_task_outcome_designated_effect_duplicate"
+    );
+    assert_eq!(state.input_count.load(Ordering::Acquire), 3);
+    let mut client = TestClient::connect(&host);
+    let events = projected_events(
+        &mut client,
+        EventQuery {
+            run_id: Some(context.run_id()),
+            ..EventQuery::default()
+        },
+    );
+    assert_eq!(
+        events
+            .iter()
+            .filter(|event| event.event_type == EventType::TaskEffectCompleted)
+            .count(),
+        3
+    );
+    assert_eq!(
+        events
+            .iter()
+            .filter(|event| event.event_type == EventType::TaskCompleted)
+            .count(),
+        0,
+        "duplicate evidence cannot commit a task terminal"
+    );
+    assert_eq!(
+        events
+            .iter()
+            .filter(|event| event.event_type == EventType::PolicyDispatchAdmitted)
+            .count(),
+        1,
+        "duplicate evidence cannot dispatch another task"
+    );
+    let execution_outcomes = events
+        .iter()
+        .filter_map(|event| match &event.payload {
+            ProjectionPayload::Full(payload) => match payload.as_ref() {
+                EventPayload::Policy(PolicyPayload::ExecutionRecorded(payload)) => {
+                    Some(payload.outcome())
+                }
+                _ => None,
+            },
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(execution_outcomes.len(), 1);
+    let PolicyExecutionOutcome::Failed { failure } = execution_outcomes[0] else {
+        panic!("duplicate evidence may only record a failed execution outcome")
+    };
+    assert_eq!(failure.error_code, error.code());
     drop(client);
     host.close().expect("close runtime host");
 }
@@ -2927,10 +4812,9 @@ fn scheduled_failure_chain_retries_five_times_and_stops_on_sixth() {
             .is_none()
     );
     assert_eq!(state.input_count.load(Ordering::Acquire), 6);
-    assert_eq!(
-        state.capture_count.load(Ordering::Acquire),
-        12,
-        "the guarded operation must use one initial capture, one post-effect capture per attempt, and a fresh pre-guard capture before attempts 2-6"
+    assert!(
+        state.capture_count.load(Ordering::Acquire) >= 12,
+        "the guarded operation needs at least one initial capture, one post-effect capture per attempt, and one fresh pre-guard capture before attempts 2-6; bounded postcondition polling may add observations"
     );
     drop(client);
     host.close().expect("close runtime host");
@@ -3025,10 +4909,9 @@ fn scheduled_guarded_retry_stops_after_third_attempt_success() {
         "every projected attempt and settlement event must stay on the admitted run"
     );
     assert_eq!(state.input_count.load(Ordering::Acquire), 3);
-    assert_eq!(
-        state.capture_count.load(Ordering::Acquire),
-        6,
-        "three guarded attempts require initial, post-effect, and fresh retry captures"
+    assert!(
+        state.capture_count.load(Ordering::Acquire) >= 6,
+        "three guarded attempts require at least the initial, post-effect, and fresh retry captures; bounded postcondition polling may add observations"
     );
     assert!(
         host.pinned_policy_catalog(&intent.decision_id)
@@ -5398,20 +7281,23 @@ fn contained_task_replay_without_connection_cache_reuses_runtime_terminal() {
 }
 
 #[test]
-fn contained_task_terminal_is_absorbing_and_rejections_are_audited() {
+fn contained_task_terminal_is_absorbing_across_request_ids_and_rejections_are_audited() {
     let root = TempDir::new().expect("tempdir");
     let state = Arc::new(FakeState::default());
     let host = host_with_state(&root, "neutral.instance", state);
     let mut client = TestClient::connect(&host);
     let (_, token) = client.acquire("neutral.instance");
-    let request = client.request(RuntimeOperation::Health);
+    let correlation = client.ids.mint_correlation_id().expect("correlation");
+    let first_request = client.request_with_correlation(correlation, RuntimeOperation::Health);
+    let second_request = client.request_with_correlation(correlation, RuntimeOperation::Health);
+    assert_ne!(first_request.request_id(), second_request.request_id());
     let ids = IdentifierIssuer::new().expect("identifier issuer");
     let task_id = ids.mint_task_id().expect("task id");
     let run_id = ids.mint_run_id().expect("run id");
 
     let committed = host
         .append_contained_task_terminal_for_test(
-            &request,
+            &first_request,
             &token,
             task_id,
             run_id,
@@ -5424,7 +7310,7 @@ fn contained_task_terminal_is_absorbing_and_rejections_are_audited() {
         .expect("first terminal");
     let (rejected_state, rejected_code, rejected_terminal) = host
         .append_contained_task_terminal_for_test(
-            &request,
+            &second_request,
             &token,
             task_id,
             run_id,
@@ -5472,6 +7358,255 @@ fn contained_task_terminal_is_absorbing_and_rejections_are_audited() {
     );
     drop(client);
     host.close().expect("close host");
+}
+
+#[test]
+fn concurrent_mapped_terminals_commit_exactly_one_disposition() {
+    let root = TempDir::new().expect("tempdir");
+    let state = Arc::new(FakeState::default());
+    let host = Arc::new(host_with_state(&root, "neutral.instance", state));
+    let mut client = TestClient::connect(&host);
+    let (_, token) = client.acquire("neutral.instance");
+    let request = client.request(RuntimeOperation::Health);
+    let ids = IdentifierIssuer::new().expect("identifier issuer");
+    let task_id = ids.mint_task_id().expect("task id");
+    let run_id = ids.mint_run_id().expect("run id");
+    let declaration: SchedulingOutcomeDeclaration = serde_json::from_value(serde_json::json!({
+        "mappings": [{
+            "outcome_key": "mapped-concurrent",
+            "effect": "no_designated_effect",
+            "terminal_pages": ["terminal"]
+        }]
+    }))
+    .expect("mapped terminal declaration");
+    declaration.validate().expect("valid mapped declaration");
+    host.append_contained_task_semantic_for_test(
+        &request,
+        &token,
+        task_id,
+        run_id,
+        TaskSemanticFact::RecognitionCompleted {
+            candidate_pages: vec!["neutral/terminal".to_owned()],
+            matched_page: Some("neutral/terminal".to_owned()),
+            frame_width: 2,
+            frame_height: 1,
+        },
+    )
+    .expect("same-run final observation");
+    let barrier = Arc::new(Barrier::new(3));
+
+    let attempts = (0..2)
+        .map(|_| {
+            let host = Arc::clone(&host);
+            let token = token.clone();
+            let request = request.clone();
+            let declaration = declaration.clone();
+            let barrier = Arc::clone(&barrier);
+            thread::spawn(move || {
+                barrier.wait();
+                host.append_mapped_contained_task_terminal_for_test(
+                    &request,
+                    &token,
+                    task_id,
+                    run_id,
+                    Some("neutral/terminal".to_owned()),
+                    "neutral".to_owned(),
+                    declaration,
+                )
+            })
+        })
+        .collect::<Vec<_>>();
+    barrier.wait();
+    let results = attempts
+        .into_iter()
+        .map(|attempt| attempt.join().expect("terminal attempt thread"))
+        .collect::<Vec<_>>();
+
+    assert_eq!(results.iter().filter(|result| result.is_ok()).count(), 1);
+    let rejected = results
+        .iter()
+        .filter_map(|result| result.as_ref().err())
+        .collect::<Vec<_>>();
+    assert_eq!(rejected.len(), 1);
+    assert_eq!(rejected[0].1, RuntimeReceiptState::Denied);
+    assert_eq!(rejected[0].2, RuntimeErrorCode::InvalidRequest);
+    let events = projected_events(
+        &mut client,
+        EventQuery {
+            task_id: Some(*task_id.transport()),
+            run_id: Some(*run_id.transport()),
+            ..EventQuery::default()
+        },
+    );
+    assert_eq!(
+        events
+            .iter()
+            .filter_map(projected_task_semantic_fact)
+            .filter(|fact| matches!(
+                fact,
+                TaskSemanticFact::TerminalCommitted {
+                    scheduling_disposition: Some(disposition),
+                    ..
+                } if disposition.outcome_key() == "mapped-concurrent"
+            ))
+            .count(),
+        1
+    );
+    assert_eq!(
+        events
+            .iter()
+            .filter_map(projected_task_semantic_fact)
+            .filter(|fact| matches!(fact, TaskSemanticFact::TerminalRejected { .. }))
+            .count(),
+        1
+    );
+    let release = client.request(RuntimeOperation::ReleaseLease { token });
+    assert_eq!(
+        client.send(&release).state(),
+        RuntimeReceiptState::Completed
+    );
+    drop(client);
+    match Arc::try_unwrap(host) {
+        Ok(host) => host.close().expect("close host"),
+        Err(_) => panic!("terminal attempt retained the host"),
+    }
+}
+
+#[test]
+fn mapped_terminal_requires_a_final_page_and_same_run_final_observation() {
+    for (case, final_page, expected_code) in [
+        (
+            "missing-final-page",
+            None,
+            "contained_task_outcome_terminal_page_missing",
+        ),
+        (
+            "missing-final-observation",
+            Some("neutral/terminal".to_owned()),
+            "contained_task_outcome_final_observation_missing",
+        ),
+    ] {
+        let root = TempDir::new().expect("tempdir");
+        let state = Arc::new(FakeState::default());
+        let host = host_with_state(&root, "neutral.instance", state);
+        let mut client = TestClient::connect(&host);
+        let (_, token) = client.acquire("neutral.instance");
+        let request = client.request(RuntimeOperation::Health);
+        let ids = IdentifierIssuer::new().expect("identifier issuer");
+        let task_id = ids.mint_task_id().expect("task id");
+        let run_id = ids.mint_run_id().expect("run id");
+        let declaration: SchedulingOutcomeDeclaration = serde_json::from_value(serde_json::json!({
+            "mappings": [{
+                "outcome_key": "mapped-final-evidence",
+                "effect": "no_designated_effect",
+                "terminal_pages": ["terminal"]
+            }]
+        }))
+        .expect("mapped terminal declaration");
+        let error = host
+            .append_mapped_contained_task_terminal_for_test(
+                &request,
+                &token,
+                task_id,
+                run_id,
+                final_page,
+                "neutral".to_owned(),
+                declaration,
+            )
+            .expect_err("mapped terminal evidence must fail closed");
+        assert_eq!(error.0, expected_code, "{case}");
+        let events = projected_events(
+            &mut client,
+            EventQuery {
+                task_id: Some(*task_id.transport()),
+                run_id: Some(*run_id.transport()),
+                ..EventQuery::default()
+            },
+        );
+        assert_eq!(
+            events
+                .iter()
+                .filter_map(projected_task_semantic_fact)
+                .filter(|fact| matches!(
+                    fact,
+                    TaskSemanticFact::TerminalCommitted {
+                        scheduling_disposition: Some(_),
+                        ..
+                    }
+                ))
+                .count(),
+            0,
+            "{case}"
+        );
+        let release = client.request(RuntimeOperation::ReleaseLease { token });
+        assert_eq!(
+            client.send(&release).state(),
+            RuntimeReceiptState::Completed
+        );
+        drop(client);
+        host.close().expect("close runtime host");
+    }
+}
+
+#[test]
+fn unmapped_generic_terminals_preserve_success_failure_and_cancelled_outcomes() {
+    for (outcome, final_page, failure_code) in [
+        (
+            TaskOutcome::Success,
+            Some("neutral/terminal".to_owned()),
+            None,
+        ),
+        (TaskOutcome::Failure, None, Some("generic_failure")),
+        (TaskOutcome::Cancelled, None, Some("generic_cancelled")),
+    ] {
+        let root = TempDir::new().expect("tempdir");
+        let state = Arc::new(FakeState::default());
+        let host = host_with_state(&root, "neutral.instance", state);
+        let mut client = TestClient::connect(&host);
+        let (_, token) = client.acquire("neutral.instance");
+        let ids = IdentifierIssuer::new().expect("identifier issuer");
+        let request = client.request(RuntimeOperation::Health);
+        host.append_contained_task_terminal_for_test(
+            &request,
+            &token,
+            ids.mint_task_id().expect("task id"),
+            ids.mint_run_id().expect("run id"),
+            outcome,
+            false,
+            final_page,
+            0,
+            failure_code,
+        )
+        .unwrap_or_else(|error| panic!("{outcome:?} generic terminal: {error:?}"));
+
+        let events = projected_events(
+            &mut client,
+            EventQuery {
+                lease_id: Some(token.lease_id()),
+                ..EventQuery::default()
+            },
+        );
+        let terminals = events
+            .iter()
+            .filter_map(projected_task_semantic_fact)
+            .filter_map(|fact| match fact {
+                TaskSemanticFact::TerminalCommitted {
+                    outcome,
+                    scheduling_disposition,
+                    ..
+                } => Some((*outcome, scheduling_disposition)),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(terminals, vec![(outcome, &None)]);
+        let release = client.request(RuntimeOperation::ReleaseLease { token });
+        assert_eq!(
+            client.send(&release).state(),
+            RuntimeReceiptState::Completed
+        );
+        drop(client);
+        host.close().expect("close host");
+    }
 }
 
 #[test]

@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 use crate::{ResourceConvertRequest, ResourceConvertResponse, maa_task_graph};
-use actingcommand_contract::{LabError as CliError, LabResult as CliOutcome};
+use actingcommand_contract::{
+    LabError as CliError, LabResult as CliOutcome, SchedulingOutcomeDeclaration,
+};
 use serde_json::{Map, Value, json};
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::fs;
@@ -379,7 +381,7 @@ impl OperationConverter {
                 task_ids.join(", ")
             )));
         }
-        let selected = self.prune_page_rules_for_selected_build(selected);
+        let selected = self.prune_page_rules_for_selected_build(selected)?;
         let subset = Self {
             root: self.root.clone(),
             game: self.game.clone(),
@@ -405,6 +407,14 @@ impl OperationConverter {
                 CliError::package_invalid(format!("missing task operations/{task_id}/task.json"))
             })?;
         let mut task = bundle.data.clone();
+        if let Some(target_pages) = declared_terminal_page_ids(bundle)? {
+            task.as_object_mut()
+                .expect("validated task bundle is an object")
+                .insert(
+                    "target_page".to_string(),
+                    normalized_page_set_value(&target_pages),
+                );
+        }
         let operations = task
             .get_mut("operations")
             .and_then(Value::as_array_mut)
@@ -412,6 +422,17 @@ impl OperationConverter {
                 CliError::package_invalid(format!("task '{task_id}' operations must be an array"))
             })?;
         for operation in operations {
+            let normalized_to = match operation.get("to") {
+                Some(Value::Null) => Some(Value::Null),
+                Some(value) => Some(normalized_page_set_value(&parse_page_declaration(
+                    &bundle.task_json_path(),
+                    "operation to",
+                    value,
+                )?)),
+                None => None,
+            };
+            let normalized_expect_after =
+                normalized_expect_after(&bundle.task_json_path(), operation)?;
             let guard = self.operation_guard(bundle, operation)?;
             let click = self.operation_click(bundle, operation, &guard)?;
             let trusted_coordinate = operation
@@ -427,14 +448,20 @@ impl OperationConverter {
                 "unguarded_trusted_coordinate".to_string(),
                 Value::Bool(trusted_coordinate),
             );
+            if let Some(to) = normalized_to {
+                object.insert("to".to_string(), to);
+            }
+            if let Some(expect_after) = normalized_expect_after {
+                object.insert("expect_after".to_string(), expect_after);
+            }
         }
         Ok(task)
     }
 
-    fn prune_page_rules_for_selected_build(&self, bundles: Vec<Bundle>) -> Vec<Bundle> {
-        let available_pages = selected_available_page_ids(&self.game, &bundles);
+    fn prune_page_rules_for_selected_build(&self, bundles: Vec<Bundle>) -> CliOutcome<Vec<Bundle>> {
+        let available_pages = selected_available_page_ids(&self.game, &bundles)?;
         let available_targets = selected_available_target_ids(&bundles);
-        bundles
+        Ok(bundles
             .into_iter()
             .map(|mut bundle| {
                 bundle.data = prune_selected_page_rules(
@@ -445,12 +472,35 @@ impl OperationConverter {
                 );
                 bundle
             })
-            .collect()
+            .collect())
     }
 
     fn validate_bundles(&self) -> CliOutcome<()> {
+        self.validate_error_page_anchor_definitions()?;
+        let declared_anchor_ids = self.declared_anchor_ids();
         let mut errors = Vec::new();
         for bundle in &self.bundles {
+            match declared_terminal_page_ids(bundle) {
+                Ok(Some(target_pages)) => validate_declared_page_set(
+                    &bundle.task_json_path(),
+                    "target_page",
+                    &target_pages,
+                    &declared_anchor_ids,
+                    &mut errors,
+                ),
+                Ok(None) => {}
+                Err(error) => errors.push(error.message),
+            }
+            match declared_scheduling_outcome_page_ids(bundle) {
+                Ok(pages) => validate_declared_page_set(
+                    &bundle.task_json_path(),
+                    "scheduling_outcome mappings",
+                    &pages,
+                    &declared_anchor_ids,
+                    &mut errors,
+                ),
+                Err(error) => errors.push(error.message),
+            }
             match required_string(&bundle.data, "game").and_then(|value| canonical_game(&value)) {
                 Ok(game) if game == self.game => {}
                 Ok(game) => errors.push(format!(
@@ -565,6 +615,19 @@ impl OperationConverter {
                 }
             }
             for operation in array_field(&bundle.data, "operations") {
+                match operation_destination_page_ids(bundle, operation) {
+                    Ok(destination_pages) => validate_declared_page_set(
+                        &bundle.task_json_path(),
+                        &format!(
+                            "operation {:?} destination",
+                            operation.get("id").and_then(Value::as_str)
+                        ),
+                        &destination_pages,
+                        &declared_anchor_ids,
+                        &mut errors,
+                    ),
+                    Err(error) => errors.push(error.message),
+                }
                 validate_click_shape(&bundle.task_json_path(), operation, &mut errors);
                 if let Some(template) = operation.get("verify_template").and_then(Value::as_str) {
                     if is_env_template_ref(template) {
@@ -734,8 +797,44 @@ impl OperationConverter {
         let mut pages = HashMap::<String, Value>::new();
         let mut order = Vec::<String>::new();
         for bundle in &self.bundles {
-            for key in ["entry_page", "target_page"] {
-                if let Some(anchor_id) = bundle.data.get(key).and_then(Value::as_str) {
+            if let Some(anchor_id) = bundle.data.get("entry_page").and_then(Value::as_str) {
+                add_page(
+                    &self.game,
+                    anchor_id,
+                    &declared_anchor_ids,
+                    &mut pages,
+                    &mut order,
+                );
+            }
+            for anchor_id in declared_terminal_page_ids(bundle)?.into_iter().flatten() {
+                add_page(
+                    &self.game,
+                    &anchor_id,
+                    &declared_anchor_ids,
+                    &mut pages,
+                    &mut order,
+                );
+            }
+            for anchor_id in declared_error_page_ids(bundle)? {
+                add_page(
+                    &self.game,
+                    anchor_id,
+                    &declared_anchor_ids,
+                    &mut pages,
+                    &mut order,
+                );
+            }
+            for anchor_id in declared_scheduling_outcome_page_ids(bundle)? {
+                add_page(
+                    &self.game,
+                    &anchor_id,
+                    &declared_anchor_ids,
+                    &mut pages,
+                    &mut order,
+                );
+            }
+            for operation in array_field(&bundle.data, "operations") {
+                if let Some(anchor_id) = operation.get("from").and_then(Value::as_str) {
                     add_page(
                         &self.game,
                         anchor_id,
@@ -744,18 +843,14 @@ impl OperationConverter {
                         &mut order,
                     );
                 }
-            }
-            for operation in array_field(&bundle.data, "operations") {
-                for key in ["from", "to"] {
-                    if let Some(anchor_id) = operation.get(key).and_then(Value::as_str) {
-                        add_page(
-                            &self.game,
-                            anchor_id,
-                            &declared_anchor_ids,
-                            &mut pages,
-                            &mut order,
-                        );
-                    }
+                for anchor_id in operation_destination_page_ids(bundle, operation)? {
+                    add_page(
+                        &self.game,
+                        &anchor_id,
+                        &declared_anchor_ids,
+                        &mut pages,
+                        &mut order,
+                    );
                 }
             }
         }
@@ -952,10 +1047,8 @@ impl OperationConverter {
                 ),
                 (
                     "target_page",
-                    bundle
-                        .data
-                        .get("target_page")
-                        .cloned()
+                    declared_terminal_page_ids(bundle)?
+                        .map(|pages| normalized_page_set_value(&pages))
                         .unwrap_or(Value::Null),
                 ),
                 (
@@ -1003,6 +1096,15 @@ impl OperationConverter {
         for bundle in &self.bundles {
             for operation in array_field(&bundle.data, "operations") {
                 let operation_id = required_string(operation, "id")?;
+                let normalized_to = match operation.get("to") {
+                    Some(Value::Null) => Value::Null,
+                    Some(value) => normalized_page_set_value(&parse_page_declaration(
+                        &bundle.task_json_path(),
+                        &format!("operation '{operation_id}' to"),
+                        value,
+                    )?),
+                    None => Value::Null,
+                };
                 if !seen.insert((bundle.task_id.clone(), operation_id.clone())) {
                     continue;
                 }
@@ -1025,13 +1127,11 @@ impl OperationConverter {
                         "from",
                         operation.get("from").cloned().unwrap_or(Value::Null),
                     ),
-                    ("to", operation.get("to").cloned().unwrap_or(Value::Null)),
+                    ("to", normalized_to),
                     ("click", click),
                     (
                         "expect_after",
-                        operation
-                            .get("expect_after")
-                            .cloned()
+                        normalized_expect_after(&bundle.task_json_path(), operation)?
                             .unwrap_or(Value::Null),
                     ),
                     ("verify_template", verify_template),
@@ -1300,6 +1400,64 @@ impl OperationConverter {
             }
         }
         ids
+    }
+
+    fn validate_error_page_anchor_definitions(&self) -> CliOutcome<()> {
+        let mut anchor_counts = HashMap::<String, usize>::new();
+        for bundle in &self.bundles {
+            for anchor in array_field(&bundle.data, "anchors") {
+                if let Some(id) = anchor.get("id").and_then(Value::as_str) {
+                    *anchor_counts.entry(id.to_string()).or_default() += 1;
+                }
+            }
+        }
+
+        let mut errors = Vec::new();
+        for bundle in &self.bundles {
+            for error_page in declared_error_page_ids(bundle)? {
+                let exact_count = anchor_counts.get(error_page).copied().unwrap_or(0);
+                if exact_count > 1 {
+                    errors.push(format!(
+                        "{}: error_pages identifier '{error_page}' resolves to {exact_count} duplicate anchors",
+                        bundle.task_json_path().display()
+                    ));
+                    continue;
+                }
+                if exact_count == 1 {
+                    continue;
+                }
+
+                let prefix = format!("{error_page}_");
+                let variants = anchor_counts
+                    .iter()
+                    .filter(|(anchor, _)| anchor.starts_with(&prefix))
+                    .collect::<Vec<_>>();
+                if variants.is_empty() {
+                    errors.push(format!(
+                        "{}: error_pages identifier '{error_page}' has no matching anchor definition",
+                        bundle.task_json_path().display()
+                    ));
+                    continue;
+                }
+                for (anchor, count) in variants {
+                    if *count > 1 {
+                        errors.push(format!(
+                            "{}: error_pages identifier '{error_page}' resolves through duplicate anchor variant '{anchor}'",
+                            bundle.task_json_path().display()
+                        ));
+                    }
+                }
+            }
+        }
+
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(CliError::package_invalid(format!(
+                "resource convert error page validation failed:\n  - {}",
+                errors.join("\n  - ")
+            )))
+        }
     }
 }
 
@@ -1708,23 +1866,239 @@ fn add_page(
     order.push(page_id);
 }
 
-fn selected_available_page_ids(game: &str, bundles: &[Bundle]) -> BTreeSet<String> {
+fn declared_error_page_ids(bundle: &Bundle) -> CliOutcome<Vec<&str>> {
+    let Some(error_pages) = bundle.data.get("error_pages") else {
+        return Ok(Vec::new());
+    };
+    let values = error_pages.as_array().ok_or_else(|| {
+        CliError::package_invalid(format!(
+            "{}: error_pages must be an array of page identifiers",
+            bundle.task_json_path().display()
+        ))
+    })?;
+    let mut seen = BTreeSet::new();
+    let mut pages = Vec::with_capacity(values.len());
+    for (index, value) in values.iter().enumerate() {
+        let page = value.as_str().ok_or_else(|| {
+            CliError::package_invalid(format!(
+                "{}: error_pages[{index}] must be a string",
+                bundle.task_json_path().display()
+            ))
+        })?;
+        if page.trim().is_empty() || page.trim() != page || page == "any" {
+            return Err(CliError::package_invalid(format!(
+                "{}: error_pages[{index}] must be a non-empty, exact page identifier",
+                bundle.task_json_path().display()
+            )));
+        }
+        if !seen.insert(page) {
+            return Err(CliError::package_invalid(format!(
+                "{}: duplicate error_pages identifier '{page}'",
+                bundle.task_json_path().display()
+            )));
+        }
+        pages.push(page);
+    }
+    Ok(pages)
+}
+
+fn declared_terminal_page_ids(bundle: &Bundle) -> CliOutcome<Option<Vec<String>>> {
+    bundle
+        .data
+        .get("target_page")
+        .map(|value| parse_page_declaration(&bundle.task_json_path(), "target_page", value))
+        .transpose()
+}
+
+fn declared_scheduling_outcome_page_ids(bundle: &Bundle) -> CliOutcome<Vec<String>> {
+    let Some(value) = bundle.data.get("scheduling_outcome") else {
+        return Ok(Vec::new());
+    };
+    let declaration: SchedulingOutcomeDeclaration =
+        serde_json::from_value(value.clone()).map_err(|_| {
+            CliError::package_invalid(format!(
+                "{}: scheduling_outcome declaration is invalid",
+                bundle.task_json_path().display()
+            ))
+        })?;
+    declaration.validate().map_err(|_| {
+        CliError::package_invalid(format!(
+            "{}: scheduling_outcome declaration is invalid",
+            bundle.task_json_path().display()
+        ))
+    })?;
+    Ok(declaration
+        .mappings()
+        .iter()
+        .flat_map(|mapping| mapping.terminal_pages().iter().cloned())
+        .collect())
+}
+
+fn operation_destination_page_ids(bundle: &Bundle, operation: &Value) -> CliOutcome<Vec<String>> {
+    let operation_id = operation
+        .get("id")
+        .and_then(Value::as_str)
+        .unwrap_or("<unknown>");
+    let to = match operation.get("to") {
+        Some(Value::Null) | None => None,
+        Some(value) => Some(parse_page_declaration(
+            &bundle.task_json_path(),
+            &format!("operation '{operation_id}' to destination"),
+            value,
+        )?),
+    };
+    let expected = normalized_expect_after(&bundle.task_json_path(), operation)?
+        .map(|expect_after| {
+            parse_page_declaration(
+                &bundle.task_json_path(),
+                &format!("operation '{operation_id}' expect_after.page_id destination"),
+                expect_after
+                    .get("page_id")
+                    .expect("normalized expect_after has page_id"),
+            )
+        })
+        .transpose()?;
+    match (to, expected) {
+        (Some(to), Some(expected)) if to != expected => Err(CliError::package_invalid(format!(
+            "{}: operation '{operation_id}' has conflicting to and expect_after destinations",
+            bundle.task_json_path().display()
+        ))),
+        (Some(to), _) => Ok(to),
+        (None, Some(expected)) => Ok(expected),
+        (None, None) => Ok(Vec::new()),
+    }
+}
+
+fn normalized_expect_after(path: &Path, operation: &Value) -> CliOutcome<Option<Value>> {
+    let operation_id = operation
+        .get("id")
+        .and_then(Value::as_str)
+        .unwrap_or("<unknown>");
+    let Some(expect_after) = operation.get("expect_after") else {
+        return Ok(None);
+    };
+    if expect_after.is_null() {
+        return Ok(None);
+    }
+    let mut expect_after = expect_after.as_object().cloned().ok_or_else(|| {
+        CliError::package_invalid(format!(
+            "{}: operation '{operation_id}' expect_after must be an object",
+            path.display()
+        ))
+    })?;
+    let page_id = expect_after.get("page_id").ok_or_else(|| {
+        CliError::package_invalid(format!(
+            "{}: operation '{operation_id}' expect_after missing page_id",
+            path.display()
+        ))
+    })?;
+    let pages = parse_page_declaration(
+        path,
+        &format!("operation '{operation_id}' expect_after.page_id"),
+        page_id,
+    )?;
+    expect_after.insert("page_id".to_string(), normalized_page_set_value(&pages));
+    Ok(Some(Value::Object(expect_after)))
+}
+
+fn parse_page_declaration(path: &Path, label: &str, value: &Value) -> CliOutcome<Vec<String>> {
+    let mut pages = match value {
+        Value::String(page) => vec![page.clone()],
+        Value::Array(pages) => pages
+            .iter()
+            .enumerate()
+            .map(|(index, page)| {
+                page.as_str().map(str::to_string).ok_or_else(|| {
+                    CliError::package_invalid(format!(
+                        "{}: {label}[{index}] must be a string page identifier",
+                        path.display()
+                    ))
+                })
+            })
+            .collect::<CliOutcome<Vec<_>>>()?,
+        _ => {
+            return Err(CliError::package_invalid(format!(
+                "{}: {label} must be a string or non-empty array of page identifiers",
+                path.display()
+            )));
+        }
+    };
+    if pages.is_empty() {
+        return Err(CliError::package_invalid(format!(
+            "{}: {label} must be a non-empty page set",
+            path.display()
+        )));
+    }
+    if let Some(page) = pages
+        .iter()
+        .find(|page| page.trim().is_empty() || page.trim() != page.as_str() || *page == "any")
+    {
+        return Err(CliError::package_invalid(format!(
+            "{}: {label} contains invalid exact page identifier '{page}'",
+            path.display()
+        )));
+    }
+    let unique = pages.iter().collect::<BTreeSet<_>>();
+    if unique.len() != pages.len() {
+        return Err(CliError::package_invalid(format!(
+            "{}: {label} contains a duplicate page identifier",
+            path.display()
+        )));
+    }
+    pages.sort();
+    Ok(pages)
+}
+
+fn normalized_page_set_value(pages: &[String]) -> Value {
+    match pages {
+        [page] => Value::String(page.clone()),
+        pages => Value::Array(pages.iter().cloned().map(Value::String).collect()),
+    }
+}
+
+fn validate_declared_page_set(
+    path: &Path,
+    label: &str,
+    pages: &[String],
+    declared_anchor_ids: &BTreeSet<String>,
+    errors: &mut Vec<String>,
+) {
+    for page in pages {
+        if !declared_anchor_ids.contains(page)
+            && !declared_anchor_ids
+                .iter()
+                .any(|anchor| anchor.starts_with(&format!("{page}_")))
+        {
+            errors.push(format!(
+                "{}: {label} references missing page anchor '{page}'",
+                path.display()
+            ));
+        }
+    }
+}
+
+fn selected_available_page_ids(game: &str, bundles: &[Bundle]) -> CliOutcome<BTreeSet<String>> {
     let mut pages = BTreeSet::new();
     for bundle in bundles {
-        for key in ["entry_page", "target_page"] {
-            if let Some(page) = bundle.data.get(key).and_then(Value::as_str) {
-                insert_selected_page_id(game, page, &mut pages);
-            }
+        if let Some(page) = bundle.data.get("entry_page").and_then(Value::as_str) {
+            insert_selected_page_id(game, page, &mut pages);
+        }
+        for page in declared_terminal_page_ids(bundle)?.into_iter().flatten() {
+            insert_selected_page_id(game, &page, &mut pages);
+        }
+        for page in declared_error_page_ids(bundle)? {
+            insert_selected_page_id(game, page, &mut pages);
         }
         for operation in array_field(&bundle.data, "operations") {
-            for key in ["from", "to"] {
-                if let Some(page) = operation.get(key).and_then(Value::as_str) {
-                    insert_selected_page_id(game, page, &mut pages);
-                }
+            if let Some(page) = operation.get("from").and_then(Value::as_str) {
+                insert_selected_page_id(game, page, &mut pages);
+            }
+            for page in operation_destination_page_ids(bundle, operation)? {
+                insert_selected_page_id(game, &page, &mut pages);
             }
         }
     }
-    pages
+    Ok(pages)
 }
 
 fn insert_selected_page_id(game: &str, page: &str, pages: &mut BTreeSet<String>) {

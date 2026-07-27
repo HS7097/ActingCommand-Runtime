@@ -292,7 +292,7 @@ pub fn decide_run_operation_failure(
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RunStateConfig {
     game: String,
-    target_page: Option<String>,
+    target_pages: Vec<String>,
     stop_on_confirmation: bool,
     max_task_retries: u32,
     max_steps: u32,
@@ -306,9 +306,25 @@ impl RunStateConfig {
         max_task_retries: u32,
         max_steps: u32,
     ) -> Result<Self, RunDecisionError> {
+        Self::new_with_target_pages(
+            game,
+            target_page.into_iter().collect(),
+            stop_on_confirmation,
+            max_task_retries,
+            max_steps,
+        )
+    }
+
+    pub fn new_with_target_pages(
+        game: impl Into<String>,
+        target_pages: Vec<String>,
+        stop_on_confirmation: bool,
+        max_task_retries: u32,
+        max_steps: u32,
+    ) -> Result<Self, RunDecisionError> {
         let config = Self {
             game: game.into(),
-            target_page,
+            target_pages,
             stop_on_confirmation,
             max_task_retries,
             max_steps,
@@ -329,12 +345,21 @@ impl RunStateConfig {
             ));
         }
         if config
-            .target_page
-            .as_deref()
-            .is_some_and(|page| page.trim().is_empty())
+            .target_pages
+            .iter()
+            .any(|page| page.trim().is_empty())
         {
             return Err(RunDecisionError::invalid(
-                "run state target_page must not be empty",
+                "run state target pages must not contain an empty page",
+            ));
+        }
+        let unique_pages = config
+            .target_pages
+            .iter()
+            .collect::<std::collections::BTreeSet<_>>();
+        if unique_pages.len() != config.target_pages.len() {
+            return Err(RunDecisionError::invalid(
+                "run state target pages must not contain duplicates",
             ));
         }
         Ok(config)
@@ -460,13 +485,18 @@ impl RunStateMachine {
         let Some(current_page) = self.current_page.clone() else {
             return Ok(RunDirective::AwaitPage);
         };
-        if self.config.stop_on_confirmation
-            && self
-                .config
-                .target_page
-                .as_deref()
-                .is_some_and(|target| page_anchor_matches(&self.config.game, &current_page, target))
-        {
+        let matching_targets = self
+            .config
+            .target_pages
+            .iter()
+            .filter(|target| page_anchor_matches(&self.config.game, &current_page, target))
+            .count();
+        if matching_targets > 1 {
+            return Err(RunDecisionError::invalid(format!(
+                "current page '{current_page}' ambiguously matches multiple terminal pages"
+            )));
+        }
+        if self.config.stop_on_confirmation && matching_targets == 1 {
             return Ok(self.finish(RunTerminal::Completed {
                 current_page: Some(current_page),
             }));
@@ -719,6 +749,49 @@ mod tests {
             directive,
             RunDirective::Terminal(RunTerminal::Completed { .. })
         ));
+    }
+
+    #[test]
+    fn each_terminal_in_finite_set_completes_without_operation() {
+        for terminal in ["home", "alternate"] {
+            let config = RunStateConfig::new_with_target_pages(
+                "fixture01",
+                vec!["home".to_string(), "alternate".to_string()],
+                true,
+                1,
+                4,
+            )
+            .expect("terminal set");
+            let mut machine = RunStateMachine::new(config, 0).expect("machine");
+            machine
+                .observe_page(Some(format!("fixture01/{terminal}")))
+                .expect("page");
+
+            assert!(matches!(
+                machine.next_directive(&[]).expect("terminal"),
+                RunDirective::Terminal(RunTerminal::Completed { .. })
+            ));
+        }
+    }
+
+    #[test]
+    fn ambiguous_terminal_aliases_fail_closed() {
+        let config = RunStateConfig::new_with_target_pages(
+            "fixture01",
+            vec!["home".to_string(), "fixture01/home".to_string()],
+            true,
+            1,
+            4,
+        )
+        .expect("syntactically distinct pages");
+        let mut machine = RunStateMachine::new(config, 0).expect("machine");
+        machine
+            .observe_page(Some("fixture01/home".to_string()))
+            .expect("page");
+
+        let error = machine.next_directive(&[]).expect_err("ambiguous terminal");
+        assert_eq!(error.code(), "run_decision_invalid");
+        assert!(error.message().contains("ambiguously matches"));
     }
 
     #[test]

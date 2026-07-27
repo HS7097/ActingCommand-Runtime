@@ -6,8 +6,11 @@ use crate::{
     ExternalExpectedSha256, ExternallyVerifiedBundle, RunDirective, RunFailureObservation,
     RunFailureStage, RunOperationCandidate, RunOperationFailureDecision, RunOperationPolicy,
     RunStateConfig, RunStateMachine, RunTerminal, decide_run_operation_failure,
+    select_run_operation,
 };
-use actingcommand_contract::{InputAction, TaskOutcome};
+use actingcommand_contract::{
+    InputAction, SchedulingEffectCondition, SchedulingOutcomeDeclaration, TaskOutcome,
+};
 use actingcommand_device::{Frame, PixelFormat};
 use actingcommand_pack_containment::LoadedBundle;
 use actingcommand_page_detector::PageDetector;
@@ -15,7 +18,7 @@ use actingcommand_recognition::{Scene, ScenePixelFormat};
 use actingcommand_recognition_pack::{RecognitionEvaluator, TargetEvaluation, TargetKind};
 use serde::Deserialize;
 use serde::Serialize;
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, VecDeque};
 use std::error::Error;
 use std::fmt;
 use std::thread;
@@ -164,6 +167,7 @@ pub struct PreparedContainedTask {
     program: TaskProgram,
     evaluator: RecognitionEvaluator,
     detector: PageDetector,
+    scheduling_outcome: Option<SchedulingOutcomeDeclaration>,
     package_sha256: String,
     entry_count: usize,
     task_count: usize,
@@ -190,7 +194,6 @@ impl PreparedContainedTask {
         control.validate()?;
         let program: TaskProgram = serde_json::from_value(bundle.operation().clone())
             .map_err(|_| ContainedTaskError::new("contained_task_program_invalid"))?;
-        program.validate(&control, &bundle)?;
         let evaluator = bundle
             .evaluator()
             .cloned()
@@ -202,11 +205,14 @@ impl PreparedContainedTask {
         detector
             .validate(&evaluator)
             .map_err(|_| ContainedTaskError::new("contained_task_recognition_invalid"))?;
+        program.validate(&control, &bundle, &detector)?;
+        let scheduling_outcome = program.scheduling_outcome.clone();
         Ok(Self {
             control,
             program,
             evaluator,
             detector,
+            scheduling_outcome,
             package_sha256,
             entry_count,
             task_count,
@@ -227,6 +233,14 @@ impl PreparedContainedTask {
 
     pub fn execution_mode(&self) -> &str {
         &self.control.execution_mode
+    }
+
+    pub fn game(&self) -> &str {
+        &self.control.game
+    }
+
+    pub fn scheduling_outcome(&self) -> Option<&SchedulingOutcomeDeclaration> {
+        self.scheduling_outcome.as_ref()
     }
 
     pub const fn entry_count(&self) -> usize {
@@ -286,9 +300,9 @@ impl PreparedContainedTask {
             .map(|operation| RunOperationCandidate::new(&operation.id, &operation.from))
             .collect::<Result<Vec<_>, _>>()
             .map_err(|_| ContainedTaskError::new("contained_task_program_invalid"))?;
-        let config = RunStateConfig::new(
+        let config = RunStateConfig::new_with_target_pages(
             &self.control.game,
-            self.program.target_page.clone(),
+            self.program.target_pages()?,
             self.control.stop_on_confirmation.unwrap_or(true),
             1,
             self.control.max_steps.unwrap_or(DEFAULT_MAX_STEPS),
@@ -403,17 +417,17 @@ impl PreparedContainedTask {
                                 operation_label: operation_id.clone(),
                             })
                             .map_err(ContainedTaskRunError::Boundary)?;
-                        observation =
-                            self.capture_until_page(runtime, step_timeout, capture_interval)?;
-                        runtime
-                            .record(ContainedTaskTrace::StepFinished {
-                                step_index,
-                                operation_label: operation_id.clone(),
-                                page_label: observation.page_label.clone(),
-                            })
-                            .map_err(ContainedTaskRunError::Boundary)?;
-
-                        if operation.to.is_none() {
+                        let destination_pages = operation.destination_pages()?;
+                        if destination_pages.is_empty() {
+                            observation =
+                                self.capture_until_page(runtime, step_timeout, capture_interval)?;
+                            runtime
+                                .record(ContainedTaskTrace::StepFinished {
+                                    step_index,
+                                    operation_label: operation_id.clone(),
+                                    page_label: observation.page_label.clone(),
+                                })
+                                .map_err(ContainedTaskRunError::Boundary)?;
                             machine
                                 .operation_succeeded(
                                     &operation_id,
@@ -424,28 +438,65 @@ impl PreparedContainedTask {
                                 })?;
                             break;
                         }
-                        let hit_error_page = self
-                            .program
-                            .is_error_page(&self.control, &observation.page_label);
-                        if !hit_error_page
-                            && operation.reached_expected_page(&self.control, &observation)
-                        {
-                            machine
-                                .operation_succeeded(
-                                    &operation_id,
-                                    Some(observation.page_label.clone()),
-                                )
-                                .map_err(|_| {
-                                    ContainedTaskError::new("contained_task_state_invalid")
-                                })?;
-                            break;
-                        }
+                        let confirmation_timeout = Duration::from_millis(
+                            operation
+                                .expect_after
+                                .as_ref()
+                                .and_then(|expectation| expectation.timeout_ms)
+                                .unwrap_or(step_timeout.as_millis() as u64),
+                        );
+                        let confirmation_interval = Duration::from_millis(
+                            operation
+                                .expect_after
+                                .as_ref()
+                                .and_then(|expectation| expectation.interval_ms)
+                                .unwrap_or(capture_interval.as_millis() as u64),
+                        );
+                        let (failed_observation, hit_error_page) = match self.await_postcondition(
+                            runtime,
+                            operation,
+                            confirmation_timeout,
+                            confirmation_interval,
+                        )? {
+                            PostconditionResolution::Reached(reached) => {
+                                observation = reached;
+                                runtime
+                                    .record(ContainedTaskTrace::StepFinished {
+                                        step_index,
+                                        operation_label: operation_id.clone(),
+                                        page_label: observation.page_label.clone(),
+                                    })
+                                    .map_err(ContainedTaskRunError::Boundary)?;
+                                machine
+                                    .operation_succeeded(
+                                        &operation_id,
+                                        Some(observation.page_label.clone()),
+                                    )
+                                    .map_err(|_| {
+                                        ContainedTaskError::new("contained_task_state_invalid")
+                                    })?;
+                                break;
+                            }
+                            PostconditionResolution::Failed {
+                                observation,
+                                hit_error_page,
+                            } => (observation, hit_error_page),
+                        };
+                        let after_page = failed_observation
+                            .as_ref()
+                            .map(|observation| observation.page_label.clone());
                         let Some(policy) = retry_policy.as_ref() else {
+                            Self::finish_effect_attempt(
+                                runtime,
+                                step_index,
+                                &operation_id,
+                                failed_observation.as_ref(),
+                            )?;
                             return Err(ContainedTaskError::with_detail(
                                 "page_confirmation_failed",
                                 format!(
                                     "operation={operation_id} attempts={attempt} after_page={} hit_error_page={hit_error_page}",
-                                    observation.page_label
+                                    after_page.as_deref().unwrap_or("<unrecognized>")
                                 ),
                             )
                             .into());
@@ -454,7 +505,7 @@ impl PreparedContainedTask {
                             policy,
                             attempt,
                             "page_confirmation_failed",
-                            Some(observation.page_label.clone()),
+                            after_page,
                             RunFailureStage::PostExecution { hit_error_page },
                         )? {
                             RunOperationFailureDecision::Retry {
@@ -471,73 +522,136 @@ impl PreparedContainedTask {
                                     );
                                 }
                                 thread::sleep(delay);
-                                observation = self.capture_until_page(
+                                match self.await_postcondition(
                                     runtime,
-                                    step_timeout,
-                                    capture_interval,
-                                )?;
-                                let fresh_hit_error_page = self
-                                    .program
-                                    .is_error_page(&self.control, &observation.page_label);
-                                if !fresh_hit_error_page
-                                    && operation.reached_expected_page(&self.control, &observation)
-                                {
-                                    machine
-                                        .operation_succeeded(
+                                    operation,
+                                    confirmation_timeout,
+                                    confirmation_interval,
+                                )? {
+                                    PostconditionResolution::Reached(reached) => {
+                                        observation = reached;
+                                        runtime
+                                            .record(ContainedTaskTrace::StepFinished {
+                                                step_index,
+                                                operation_label: operation_id.clone(),
+                                                page_label: observation.page_label.clone(),
+                                            })
+                                            .map_err(ContainedTaskRunError::Boundary)?;
+                                        machine
+                                            .operation_succeeded(
+                                                &operation_id,
+                                                Some(observation.page_label.clone()),
+                                            )
+                                            .map_err(|_| {
+                                                ContainedTaskError::new(
+                                                    "contained_task_state_invalid",
+                                                )
+                                            })?;
+                                        break;
+                                    }
+                                    PostconditionResolution::Failed {
+                                        observation: fresh,
+                                        hit_error_page: true,
+                                    } => {
+                                        let after_page = fresh
+                                            .as_ref()
+                                            .map(|observation| observation.page_label.clone());
+                                        Self::finish_effect_attempt(
+                                            runtime,
+                                            step_index,
                                             &operation_id,
-                                            Some(observation.page_label.clone()),
+                                            fresh.as_ref(),
+                                        )?;
+                                        match operation.failure_decision(
+                                            policy,
+                                            attempt,
+                                            "page_confirmation_failed",
+                                            after_page,
+                                            RunFailureStage::PostExecution {
+                                                hit_error_page: true,
+                                            },
+                                        )? {
+                                            RunOperationFailureDecision::RequestRecovery(
+                                                trigger,
+                                            ) => {
+                                                machine.operation_needs_recovery(trigger).map_err(
+                                                    |_| {
+                                                        ContainedTaskError::new(
+                                                            "contained_task_state_invalid",
+                                                        )
+                                                    },
+                                                )?;
+                                                break;
+                                            }
+                                            RunOperationFailureDecision::Fail(_) => {
+                                                return Err(ContainedTaskError::with_detail(
+                                                    "contained_task_requires_scheduler",
+                                                    format!(
+                                                        "operation={operation_id} attempts={attempt} reason=page_confirmation_failed"
+                                                    ),
+                                                )
+                                                .into());
+                                            }
+                                            RunOperationFailureDecision::Retry { .. } => {
+                                                return Err(ContainedTaskError::new(
+                                                    "contained_task_state_invalid",
+                                                )
+                                                .into());
+                                            }
+                                        }
+                                    }
+                                    PostconditionResolution::Failed {
+                                        observation: Some(fresh),
+                                        hit_error_page: false,
+                                    } => {
+                                        Self::finish_effect_attempt(
+                                            runtime,
+                                            step_index,
+                                            &operation_id,
+                                            Some(&fresh),
+                                        )?;
+                                        observation = fresh;
+                                    }
+                                    PostconditionResolution::Failed {
+                                        observation: None,
+                                        hit_error_page: false,
+                                    } => {
+                                        Self::finish_effect_attempt(
+                                            runtime,
+                                            step_index,
+                                            &operation_id,
+                                            None,
+                                        )?;
+                                        return Err(ContainedTaskError::with_detail(
+                                            "page_confirmation_failed",
+                                            format!(
+                                                "operation={operation_id} attempts={attempt} after_page=<unrecognized> hit_error_page=false"
+                                            ),
                                         )
-                                        .map_err(|_| {
-                                            ContainedTaskError::new("contained_task_state_invalid")
-                                        })?;
-                                    break;
-                                }
-                                if fresh_hit_error_page {
-                                    match operation.failure_decision(
-                                        policy,
-                                        attempt,
-                                        "page_confirmation_failed",
-                                        Some(observation.page_label.clone()),
-                                        RunFailureStage::PostExecution {
-                                            hit_error_page: true,
-                                        },
-                                    )? {
-                                        RunOperationFailureDecision::RequestRecovery(trigger) => {
-                                            machine.operation_needs_recovery(trigger).map_err(
-                                                |_| {
-                                                    ContainedTaskError::new(
-                                                        "contained_task_state_invalid",
-                                                    )
-                                                },
-                                            )?;
-                                            break;
-                                        }
-                                        RunOperationFailureDecision::Fail(_) => {
-                                            return Err(ContainedTaskError::with_detail(
-                                                "contained_task_requires_scheduler",
-                                                format!(
-                                                    "operation={operation_id} attempts={attempt} reason=page_confirmation_failed"
-                                                ),
-                                            )
-                                            .into());
-                                        }
-                                        RunOperationFailureDecision::Retry { .. } => {
-                                            return Err(ContainedTaskError::new(
-                                                "contained_task_state_invalid",
-                                            )
-                                            .into());
-                                        }
+                                        .into());
                                     }
                                 }
                                 attempt = next_attempt;
                             }
                             RunOperationFailureDecision::RequestRecovery(trigger) => {
+                                Self::finish_effect_attempt(
+                                    runtime,
+                                    step_index,
+                                    &operation_id,
+                                    failed_observation.as_ref(),
+                                )?;
                                 machine.operation_needs_recovery(trigger).map_err(|_| {
                                     ContainedTaskError::new("contained_task_state_invalid")
                                 })?;
                                 break;
                             }
                             RunOperationFailureDecision::Fail(_) => {
+                                Self::finish_effect_attempt(
+                                    runtime,
+                                    step_index,
+                                    &operation_id,
+                                    failed_observation.as_ref(),
+                                )?;
                                 return Err(ContainedTaskError::with_detail(
                                     "contained_task_requires_scheduler",
                                     format!(
@@ -573,6 +687,24 @@ impl PreparedContainedTask {
         }
     }
 
+    fn finish_effect_attempt<R: ContainedTaskRuntime>(
+        runtime: &mut R,
+        step_index: u32,
+        operation_label: &str,
+        observation: Option<&PageObservation>,
+    ) -> Result<(), ContainedTaskRunError<R::Error>> {
+        runtime
+            .record(ContainedTaskTrace::StepFinished {
+                step_index,
+                operation_label: operation_label.to_string(),
+                page_label: match observation {
+                    Some(observation) => observation.page_label.clone(),
+                    None => "<unrecognized>".to_string(),
+                },
+            })
+            .map_err(ContainedTaskRunError::Boundary)
+    }
+
     fn capture_until_page<R: ContainedTaskRuntime>(
         &self,
         runtime: &mut R,
@@ -581,58 +713,8 @@ impl PreparedContainedTask {
     ) -> Result<PageObservation, ContainedTaskRunError<R::Error>> {
         let started = Instant::now();
         loop {
-            let frame = runtime.capture().map_err(ContainedTaskRunError::Boundary)?;
-            self.control.resolution.validate_frame(&frame)?;
-            runtime
-                .record(ContainedTaskTrace::CaptureCompleted {
-                    width: frame.width,
-                    height: frame.height,
-                })
-                .map_err(ContainedTaskRunError::Boundary)?;
-            let scene = scene_from_frame(&frame)?;
-            let candidate_pages = self
-                .detector
-                .page_ids()
-                .map(str::to_string)
-                .collect::<Vec<_>>();
-            runtime
-                .record(ContainedTaskTrace::RecognitionStarted {
-                    candidate_pages: candidate_pages.clone(),
-                    width: frame.width,
-                    height: frame.height,
-                })
-                .map_err(ContainedTaskRunError::Boundary)?;
-            let matched_pages = self
-                .detector
-                .evaluate_all(&self.evaluator, &scene)
-                .map_err(|error| {
-                    ContainedTaskError::with_detail(
-                        "contained_task_recognition_failed",
-                        error.to_string(),
-                    )
-                })?
-                .into_iter()
-                .filter(|evaluation| evaluation.matched)
-                .map(|evaluation| evaluation.page_id)
-                .collect::<Vec<_>>();
-            if matched_pages.len() > 1 {
-                return Err(ContainedTaskError::with_detail(
-                    "contained_task_recognition_conflict",
-                    matched_pages.join(","),
-                )
-                .into());
-            }
-            let page = matched_pages.into_iter().next();
-            runtime
-                .record(ContainedTaskTrace::RecognitionCompleted {
-                    candidate_pages,
-                    page_label: page.clone(),
-                    width: frame.width,
-                    height: frame.height,
-                })
-                .map_err(ContainedTaskRunError::Boundary)?;
-            if let Some(page_label) = page {
-                return Ok(PageObservation { page_label, scene });
+            if let Some(observation) = self.capture_page(runtime)? {
+                return Ok(observation);
             }
             if started.elapsed() >= timeout {
                 return Err(ContainedTaskError::new("contained_task_page_unknown").into());
@@ -640,11 +722,121 @@ impl PreparedContainedTask {
             thread::sleep(interval);
         }
     }
+
+    fn capture_page<R: ContainedTaskRuntime>(
+        &self,
+        runtime: &mut R,
+    ) -> Result<Option<PageObservation>, ContainedTaskRunError<R::Error>> {
+        let frame = runtime.capture().map_err(ContainedTaskRunError::Boundary)?;
+        self.control.resolution.validate_frame(&frame)?;
+        runtime
+            .record(ContainedTaskTrace::CaptureCompleted {
+                width: frame.width,
+                height: frame.height,
+            })
+            .map_err(ContainedTaskRunError::Boundary)?;
+        let scene = scene_from_frame(&frame)?;
+        let candidate_pages = self
+            .detector
+            .page_ids()
+            .map(str::to_string)
+            .collect::<Vec<_>>();
+        runtime
+            .record(ContainedTaskTrace::RecognitionStarted {
+                candidate_pages: candidate_pages.clone(),
+                width: frame.width,
+                height: frame.height,
+            })
+            .map_err(ContainedTaskRunError::Boundary)?;
+        let matched_pages = self
+            .detector
+            .evaluate_all(&self.evaluator, &scene)
+            .map_err(|error| {
+                ContainedTaskError::with_detail(
+                    "contained_task_recognition_failed",
+                    error.to_string(),
+                )
+            })?
+            .into_iter()
+            .filter(|evaluation| evaluation.matched)
+            .map(|evaluation| evaluation.page_id)
+            .collect::<Vec<_>>();
+        if matched_pages.len() > 1 {
+            return Err(ContainedTaskError::with_detail(
+                "contained_task_recognition_conflict",
+                matched_pages.join(","),
+            )
+            .into());
+        }
+        let page = matched_pages.into_iter().next();
+        runtime
+            .record(ContainedTaskTrace::RecognitionCompleted {
+                candidate_pages,
+                page_label: page.clone(),
+                width: frame.width,
+                height: frame.height,
+            })
+            .map_err(ContainedTaskRunError::Boundary)?;
+        Ok(page.map(|page_label| PageObservation { page_label, scene }))
+    }
+
+    fn await_postcondition<R: ContainedTaskRuntime>(
+        &self,
+        runtime: &mut R,
+        operation: &TaskOperation,
+        timeout: Duration,
+        interval: Duration,
+    ) -> Result<PostconditionResolution, ContainedTaskRunError<R::Error>> {
+        let started = Instant::now();
+        let mut last_observation = None;
+        loop {
+            if let Some(observation) = self.capture_page(runtime)? {
+                let destination_matches =
+                    operation.matching_destination_count(&self.control, &observation)?;
+                let hit_error_page = self
+                    .program
+                    .is_error_page(&self.control, &observation.page_label);
+                if destination_matches > 1 || (destination_matches == 1 && hit_error_page) {
+                    return Err(ContainedTaskError::with_detail(
+                        "contained_task_recognition_conflict",
+                        observation.page_label,
+                    )
+                    .into());
+                }
+                if destination_matches == 1 {
+                    return Ok(PostconditionResolution::Reached(observation));
+                }
+                if hit_error_page {
+                    return Ok(PostconditionResolution::Failed {
+                        observation: Some(observation),
+                        hit_error_page: true,
+                    });
+                }
+                last_observation = Some(observation);
+            }
+            if started.elapsed() >= timeout {
+                return Ok(PostconditionResolution::Failed {
+                    observation: last_observation,
+                    hit_error_page: false,
+                });
+            }
+            let remaining = timeout.saturating_sub(started.elapsed());
+            thread::sleep(interval.min(remaining));
+        }
+    }
 }
 
 struct PageObservation {
     page_label: String,
     scene: Scene,
+}
+
+enum PostconditionResolution {
+    Reached(PageObservation),
+    Failed {
+        observation: Option<PageObservation>,
+        hit_error_page: bool,
+    },
 }
 
 #[derive(Debug, Deserialize)]
@@ -749,9 +941,11 @@ struct TaskProgram {
     server_scope: Vec<String>,
     coordinate_space: Resolution,
     #[serde(default)]
-    target_page: Option<String>,
+    target_page: Option<PageDeclaration>,
     #[serde(default)]
     error_pages: Vec<String>,
+    #[serde(default)]
+    scheduling_outcome: Option<SchedulingOutcomeDeclaration>,
     #[serde(default)]
     recovery: Option<TaskRecovery>,
     #[serde(default)]
@@ -764,6 +958,7 @@ impl TaskProgram {
         &self,
         control: &TaskControl,
         bundle: &LoadedBundle,
+        detector: &PageDetector,
     ) -> Result<(), ContainedTaskError> {
         if !matches!(self.schema_version.as_str(), "0.3" | "0.4" | "0.5" | "0.6")
             || self.task_id != control.entry_task_id
@@ -776,23 +971,78 @@ impl TaskProgram {
             || self.coordinate_space.width != control.resolution.width
             || self.coordinate_space.height != control.resolution.height
             || self.operations.is_empty()
-            || self
-                .target_page
-                .as_deref()
-                .is_some_and(|value| value.trim().is_empty())
             || self.error_pages.iter().any(|value| value.trim().is_empty())
         {
             return Err(ContainedTaskError::new("contained_task_program_invalid"));
         }
+        let target_pages = self.target_pages()?;
+        validate_page_references(&control.game, &target_pages, detector)?;
+        validate_page_references(&control.game, &self.error_pages, detector)?;
+        validate_page_set_overlap(&control.game, &target_pages, &self.error_pages, detector)?;
+        if let Some(declaration) = &self.scheduling_outcome {
+            validate_scheduling_outcome_execution_mode(control)?;
+            declaration.validate().map_err(|_| {
+                ContainedTaskError::new("contained_task_outcome_declaration_invalid")
+            })?;
+            if declaration
+                .designated_operation()
+                .is_some_and(|designated| {
+                    self.operations
+                        .iter()
+                        .filter(|operation| operation.id == designated)
+                        .count()
+                        != 1
+                })
+            {
+                return Err(ContainedTaskError::new(
+                    "contained_task_outcome_declaration_invalid",
+                ));
+            }
+            let terminal_pages = declaration
+                .mappings()
+                .iter()
+                .flat_map(|mapping| mapping.terminal_pages().iter().cloned())
+                .collect::<BTreeSet<_>>()
+                .into_iter()
+                .collect::<Vec<_>>();
+            validate_page_references(&control.game, &terminal_pages, detector)?;
+            validate_page_set_overlap(&control.game, &terminal_pages, &self.error_pages, detector)?;
+        }
         let mut operation_ids = BTreeSet::new();
         for operation in &self.operations {
             operation.validate(control, self.defaults)?;
+            let destination_pages = operation.destination_pages()?;
+            validate_page_references(&control.game, &destination_pages, detector)?;
+            validate_page_set_overlap(
+                &control.game,
+                &destination_pages,
+                &self.error_pages,
+                detector,
+            )?;
             if !operation_ids.insert(&operation.id) {
                 return Err(ContainedTaskError::new("contained_task_program_invalid"));
             }
         }
+        if let Some(declaration) = &self.scheduling_outcome {
+            let observable_pages = detector.page_ids().map(str::to_owned).collect::<Vec<_>>();
+            validate_scheduling_outcome_coverage(
+                &control.game,
+                &target_pages,
+                &observable_pages,
+                &self.operations,
+                declaration,
+            )?;
+        }
         self.validate_recovery(bundle)?;
         Ok(())
+    }
+
+    fn target_pages(&self) -> Result<Vec<String>, ContainedTaskError> {
+        self.target_page
+            .as_ref()
+            .map(PageDeclaration::normalized)
+            .transpose()
+            .map(Option::unwrap_or_default)
     }
 
     fn is_error_page(&self, control: &TaskControl, page_label: &str) -> bool {
@@ -839,12 +1089,228 @@ impl TaskProgram {
     }
 }
 
+fn validate_scheduling_outcome_execution_mode(
+    control: &TaskControl,
+) -> Result<(), ContainedTaskError> {
+    if control.execution_mode == "recognize_only" {
+        Err(ContainedTaskError::new(
+            "contained_task_outcome_declaration_invalid",
+        ))
+    } else {
+        Ok(())
+    }
+}
+
+fn validate_scheduling_outcome_coverage(
+    game: &str,
+    target_pages: &[String],
+    observable_pages: &[String],
+    operations: &[TaskOperation],
+    declaration: &SchedulingOutcomeDeclaration,
+) -> Result<(), ContainedTaskError> {
+    let designated_operation = declaration.designated_operation();
+    let candidates = operations
+        .iter()
+        .map(|operation| RunOperationCandidate::new(&operation.id, &operation.from))
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|_| ContainedTaskError::new("contained_task_operation_invalid"))?;
+    let mut pending = observable_pages
+        .iter()
+        .map(|page| (page.clone(), SchedulingEffectCondition::NoDesignatedEffect))
+        .collect::<VecDeque<_>>();
+    let mut visited = BTreeSet::new();
+    let mut reachable_terminals = BTreeSet::new();
+
+    while let Some((page, condition)) = pending.pop_front() {
+        if !visited.insert((page.clone(), condition)) {
+            continue;
+        }
+        if target_pages
+            .iter()
+            .any(|target| crate::page_anchor_matches(game, &page, target))
+        {
+            reachable_terminals.insert((condition, page));
+            continue;
+        }
+        if let Some(selected) = select_run_operation(game, &page, &candidates) {
+            let operation = operations
+                .iter()
+                .find(|operation| operation.id == selected.id())
+                .ok_or_else(|| ContainedTaskError::new("contained_task_operation_invalid"))?;
+            if condition == SchedulingEffectCondition::DesignatedEffectCompleted
+                && designated_operation == Some(operation.id.as_str())
+            {
+                return Err(ContainedTaskError::with_detail(
+                    "contained_task_outcome_declaration_incomplete",
+                    format!(
+                        "designated_operation={} is reachable after its effect completed",
+                        operation.id
+                    ),
+                ));
+            }
+            let next_condition = if condition
+                == SchedulingEffectCondition::DesignatedEffectCompleted
+                || designated_operation == Some(operation.id.as_str())
+            {
+                SchedulingEffectCondition::DesignatedEffectCompleted
+            } else {
+                SchedulingEffectCondition::NoDesignatedEffect
+            };
+            let destinations = operation.destination_pages()?;
+            if destinations.is_empty() {
+                return Err(ContainedTaskError::with_detail(
+                    "contained_task_outcome_declaration_incomplete",
+                    format!("operation={} has no finite postcondition", operation.id),
+                ));
+            }
+            for destination in destinations {
+                let matching_pages = observable_pages
+                    .iter()
+                    .filter(|page| crate::page_anchor_matches(game, page, &destination))
+                    .collect::<Vec<_>>();
+                let [concrete_page] = matching_pages.as_slice() else {
+                    return Err(ContainedTaskError::with_detail(
+                        "contained_task_outcome_declaration_incomplete",
+                        format!(
+                            "operation={} destination={} detector_matches={}",
+                            operation.id,
+                            destination,
+                            matching_pages.len()
+                        ),
+                    ));
+                };
+                pending.push_back(((*concrete_page).clone(), next_condition));
+            }
+        }
+    }
+
+    for (condition, terminal_page) in reachable_terminals {
+        let mapping_count = declaration
+            .mappings()
+            .iter()
+            .filter(|mapping| {
+                mapping.effect() == condition
+                    && mapping.terminal_pages().iter().any(|mapped_page| {
+                        crate::page_anchor_matches(game, &terminal_page, mapped_page)
+                    })
+            })
+            .count();
+        if mapping_count != 1 {
+            return Err(ContainedTaskError::with_detail(
+                "contained_task_outcome_declaration_incomplete",
+                format!(
+                    "effect={condition:?} terminal_page={terminal_page} mappings={mapping_count}"
+                ),
+            ));
+        }
+    }
+    Ok(())
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(untagged)]
+enum PageDeclaration {
+    Singleton(String),
+    Set(Vec<String>),
+}
+
+impl PageDeclaration {
+    fn normalized(&self) -> Result<Vec<String>, ContainedTaskError> {
+        let pages = match self {
+            Self::Singleton(page) => vec![page.clone()],
+            Self::Set(pages) => pages.clone(),
+        };
+        if pages.is_empty() || pages.iter().any(|page| page.trim().is_empty()) {
+            return Err(ContainedTaskError::new("contained_task_page_set_invalid"));
+        }
+        let unique = pages.iter().collect::<BTreeSet<_>>();
+        if unique.len() != pages.len() {
+            return Err(ContainedTaskError::new("contained_task_page_set_invalid"));
+        }
+        let mut pages = pages;
+        pages.sort();
+        Ok(pages)
+    }
+}
+
+fn validate_page_references(
+    game: &str,
+    pages: &[String],
+    detector: &PageDetector,
+) -> Result<(), ContainedTaskError> {
+    for page in pages {
+        let matches = detector
+            .page_ids()
+            .filter(|candidate| crate::page_anchor_matches(game, candidate, page))
+            .count();
+        if matches != 1 {
+            return Err(ContainedTaskError::with_detail(
+                "contained_task_page_set_invalid",
+                format!("page={page} detector_matches={matches}"),
+            ));
+        }
+    }
+    for candidate in detector.page_ids() {
+        let matches = pages
+            .iter()
+            .filter(|page| crate::page_anchor_matches(game, candidate, page))
+            .count();
+        if matches > 1 {
+            return Err(ContainedTaskError::with_detail(
+                "contained_task_page_set_invalid",
+                format!("detector_page={candidate} declaration_matches={matches}"),
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn validate_page_set_overlap(
+    game: &str,
+    destinations: &[String],
+    error_pages: &[String],
+    detector: &PageDetector,
+) -> Result<(), ContainedTaskError> {
+    for candidate in detector.page_ids() {
+        let destination = destinations
+            .iter()
+            .any(|page| crate::page_anchor_matches(game, candidate, page));
+        let error = error_pages
+            .iter()
+            .any(|page| crate::page_anchor_matches(game, candidate, page));
+        if destination && error {
+            return Err(ContainedTaskError::with_detail(
+                "contained_task_page_set_invalid",
+                format!("detector_page={candidate} is both destination and error"),
+            ));
+        }
+    }
+    Ok(())
+}
+
 #[derive(Debug, Clone, Copy, Default, Deserialize)]
 struct TaskOperationDefaults {
     #[serde(default)]
     max_attempts: Option<u32>,
     #[serde(default)]
     retry_interval_ms: Option<u64>,
+}
+
+#[derive(Debug, Deserialize)]
+struct TaskOperationExpectation {
+    page_id: PageDeclaration,
+    #[serde(default)]
+    timeout_ms: Option<u64>,
+    #[serde(default)]
+    interval_ms: Option<u64>,
+}
+
+impl TaskOperationExpectation {
+    fn validate(&self) -> Result<(), ContainedTaskError> {
+        self.page_id.normalized()?;
+        validate_bounded(self.timeout_ms, MAX_STEP_TIMEOUT_MS)?;
+        validate_bounded(self.interval_ms, MAX_CAPTURE_INTERVAL_MS)
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -886,7 +1352,9 @@ struct TaskOperation {
     id: String,
     from: String,
     #[serde(default)]
-    to: Option<String>,
+    to: Option<PageDeclaration>,
+    #[serde(default)]
+    expect_after: Option<TaskOperationExpectation>,
     click: TaskClick,
     #[serde(default)]
     on_error: Option<String>,
@@ -908,14 +1376,12 @@ impl TaskOperation {
         control: &TaskControl,
         defaults: TaskOperationDefaults,
     ) -> Result<(), ContainedTaskError> {
-        if self.id.trim().is_empty()
-            || self.from.trim().is_empty()
-            || self
-                .to
-                .as_deref()
-                .is_some_and(|value| value.trim().is_empty())
-        {
+        if self.id.trim().is_empty() || self.from.trim().is_empty() {
             return Err(ContainedTaskError::new("contained_task_operation_invalid"));
+        }
+        self.destination_pages()?;
+        if let Some(expectation) = &self.expect_after {
+            expectation.validate()?;
         }
         if self
             .on_error
@@ -969,7 +1435,9 @@ impl TaskOperation {
                     return Err(ContainedTaskError::new("contained_task_operation_invalid"));
                 }
             };
-        if retryable && (self.to.is_none() || retry_interval_ms > task_timeout_ms) {
+        if retryable
+            && (self.destination_pages()?.is_empty() || retry_interval_ms > task_timeout_ms)
+        {
             return Err(ContainedTaskError::new("contained_task_operation_invalid"));
         }
         RunOperationPolicy::new(
@@ -996,10 +1464,39 @@ impl TaskOperation {
             .map_err(|_| ContainedTaskError::new("contained_task_state_invalid"))
     }
 
-    fn reached_expected_page(&self, control: &TaskControl, observation: &PageObservation) -> bool {
-        self.to.as_deref().is_some_and(|expected| {
-            crate::page_anchor_matches(&control.game, &observation.page_label, expected)
-        })
+    fn destination_pages(&self) -> Result<Vec<String>, ContainedTaskError> {
+        let to = self
+            .to
+            .as_ref()
+            .map(PageDeclaration::normalized)
+            .transpose()?;
+        let expected = self
+            .expect_after
+            .as_ref()
+            .map(|expectation| expectation.page_id.normalized())
+            .transpose()?;
+        match (to, expected) {
+            (Some(to), Some(expected)) if to != expected => Err(ContainedTaskError::new(
+                "contained_task_destination_conflict",
+            )),
+            (Some(to), _) => Ok(to),
+            (None, Some(expected)) => Ok(expected),
+            (None, None) => Ok(Vec::new()),
+        }
+    }
+
+    fn matching_destination_count(
+        &self,
+        control: &TaskControl,
+        observation: &PageObservation,
+    ) -> Result<usize, ContainedTaskError> {
+        Ok(self
+            .destination_pages()?
+            .iter()
+            .filter(|expected| {
+                crate::page_anchor_matches(&control.game, &observation.page_label, expected)
+            })
+            .count())
     }
 
     fn guard_outcome(
@@ -1337,7 +1834,9 @@ mod retry_wiring_tests {
             "game": "neutral",
             "server": "test",
             "resolution": {"width": 2, "height": 1},
-            "entry_task_id": "task"
+            "entry_task_id": "task",
+            "capture_interval_ms": 1,
+            "step_timeout_ms": 2
         }))
         .expect("task control")
     }
@@ -1360,6 +1859,368 @@ mod retry_wiring_tests {
             value["on_error"] = Value::String(on_error.to_string());
         }
         serde_json::from_value(value).expect("task operation")
+    }
+
+    fn scheduling_declaration(value: Value) -> SchedulingOutcomeDeclaration {
+        serde_json::from_value(value).expect("scheduling outcome declaration")
+    }
+
+    #[test]
+    fn scheduling_outcome_coverage_requires_only_reachable_terminal_conditions() {
+        let operations = vec![operation(json!({}), None)];
+        let declaration = scheduling_declaration(json!({
+            "designated_operation": "open_terminal",
+            "mappings": [
+                {
+                    "outcome_key": "effect-terminal",
+                    "effect": "designated_effect_completed",
+                    "terminal_pages": ["terminal"]
+                },
+                {
+                    "outcome_key": "no-effect-terminal",
+                    "effect": "no_designated_effect",
+                    "terminal_pages": ["terminal"]
+                }
+            ]
+        }));
+
+        validate_scheduling_outcome_coverage(
+            "neutral",
+            &["terminal".to_owned(), "alternate".to_owned()],
+            &[
+                "neutral/home".to_owned(),
+                "neutral/terminal".to_owned(),
+                "neutral/alternate".to_owned(),
+            ],
+            &operations,
+            &declaration,
+        )
+        .expect_err("every initial target is a reachable no-effect terminal");
+
+        let incomplete = scheduling_declaration(json!({
+            "designated_operation": "open_terminal",
+            "mappings": [
+                {
+                    "outcome_key": "wrong-page",
+                    "effect": "designated_effect_completed",
+                    "terminal_pages": ["home"]
+                },
+                {
+                    "outcome_key": "no-effect-terminal",
+                    "effect": "no_designated_effect",
+                    "terminal_pages": ["terminal"]
+                }
+            ]
+        }));
+        let error = validate_scheduling_outcome_coverage(
+            "neutral",
+            &["terminal".to_owned()],
+            &["neutral/home".to_owned(), "neutral/terminal".to_owned()],
+            &operations,
+            &incomplete,
+        )
+        .expect_err("reachable effect terminal must be covered");
+        assert_eq!(
+            error.code(),
+            "contained_task_outcome_declaration_incomplete"
+        );
+
+        let complete = scheduling_declaration(json!({
+            "designated_operation": "open_terminal",
+            "mappings": [
+                {
+                    "outcome_key": "effect-terminal",
+                    "effect": "designated_effect_completed",
+                    "terminal_pages": ["terminal"]
+                },
+                {
+                    "outcome_key": "no-effect-terminals",
+                    "effect": "no_designated_effect",
+                    "terminal_pages": ["terminal", "alternate"]
+                }
+            ]
+        }));
+        validate_scheduling_outcome_coverage(
+            "neutral",
+            &["terminal".to_owned(), "alternate".to_owned()],
+            &[
+                "neutral/home".to_owned(),
+                "neutral/terminal".to_owned(),
+                "neutral/alternate".to_owned(),
+            ],
+            &operations,
+            &complete,
+        )
+        .expect("unreachable designated-effect alternate terminal is not required");
+    }
+
+    #[test]
+    fn scheduling_outcome_coverage_accepts_unique_effect_and_no_effect_paths() {
+        let designated = operation(json!({}), None);
+        let ordinary: TaskOperation = serde_json::from_value(json!({
+            "id": "ordinary_terminal",
+            "from": "alternate",
+            "to": "terminal",
+            "click": {"kind": "point", "x": 1, "y": 0},
+            "unguarded_trusted_coordinate": true
+        }))
+        .expect("ordinary operation");
+        let declaration = scheduling_declaration(json!({
+            "designated_operation": "open_terminal",
+            "mappings": [
+                {
+                    "outcome_key": "effect-terminal",
+                    "effect": "designated_effect_completed",
+                    "terminal_pages": ["terminal"]
+                },
+                {
+                    "outcome_key": "no-effect-terminal",
+                    "effect": "no_designated_effect",
+                    "terminal_pages": ["terminal"]
+                }
+            ]
+        }));
+
+        validate_scheduling_outcome_coverage(
+            "neutral",
+            &["terminal".to_owned()],
+            &[
+                "neutral/home".to_owned(),
+                "neutral/alternate".to_owned(),
+                "neutral/terminal".to_owned(),
+            ],
+            &[designated, ordinary],
+            &declaration,
+        )
+        .expect("each mechanically reachable terminal condition has one mapping");
+    }
+
+    #[test]
+    fn scheduling_outcome_coverage_uses_formal_operation_precedence() {
+        let ordinary: TaskOperation = serde_json::from_value(json!({
+            "id": "ordinary_terminal",
+            "from": "home",
+            "to": "terminal",
+            "click": {"kind": "point", "x": 1, "y": 0},
+            "unguarded_trusted_coordinate": true
+        }))
+        .expect("ordinary operation");
+        let mut shadowed_designated = operation(json!({}), None);
+        shadowed_designated.to = None;
+        let declaration = scheduling_declaration(json!({
+            "designated_operation": "open_terminal",
+            "mappings": [
+                {
+                    "outcome_key": "effect-terminal",
+                    "effect": "designated_effect_completed",
+                    "terminal_pages": ["terminal"]
+                },
+                {
+                    "outcome_key": "no-effect-terminal",
+                    "effect": "no_designated_effect",
+                    "terminal_pages": ["terminal"]
+                }
+            ]
+        }));
+
+        validate_scheduling_outcome_coverage(
+            "neutral",
+            &["terminal".to_owned()],
+            &["neutral/home".to_owned(), "neutral/terminal".to_owned()],
+            &[ordinary, shadowed_designated],
+            &declaration,
+        )
+        .expect("a later same-page operation is unreachable under first-specific selection");
+    }
+
+    #[test]
+    fn scheduling_outcome_coverage_does_not_treat_any_as_an_observable_page() {
+        let designated = operation(json!({}), None);
+        let fallback: TaskOperation = serde_json::from_value(json!({
+            "id": "unreachable_fallback",
+            "from": "any",
+            "to": null,
+            "click": {"kind": "point", "x": 1, "y": 0},
+            "unguarded_trusted_coordinate": true
+        }))
+        .expect("fallback operation");
+        let declaration = scheduling_declaration(json!({
+            "designated_operation": "open_terminal",
+            "mappings": [
+                {
+                    "outcome_key": "effect-terminal",
+                    "effect": "designated_effect_completed",
+                    "terminal_pages": ["terminal"]
+                },
+                {
+                    "outcome_key": "no-effect-terminal",
+                    "effect": "no_designated_effect",
+                    "terminal_pages": ["terminal"]
+                }
+            ]
+        }));
+
+        validate_scheduling_outcome_coverage(
+            "neutral",
+            &["terminal".to_owned()],
+            &["neutral/home".to_owned(), "neutral/terminal".to_owned()],
+            &[designated, fallback],
+            &declaration,
+        )
+        .expect("the fallback is shadowed across the complete observable page domain");
+    }
+
+    #[test]
+    fn scheduling_outcome_coverage_canonicalizes_destination_anchors() {
+        let first: TaskOperation = serde_json::from_value(json!({
+            "id": "open_home",
+            "from": "neutral/start",
+            "to": "home",
+            "click": {"kind": "point", "x": 1, "y": 0},
+            "unguarded_trusted_coordinate": true
+        }))
+        .expect("first operation");
+        let second: TaskOperation = serde_json::from_value(json!({
+            "id": "open_terminal",
+            "from": "neutral/home",
+            "to": "terminal",
+            "click": {"kind": "point", "x": 1, "y": 0},
+            "unguarded_trusted_coordinate": true
+        }))
+        .expect("second operation");
+        let complete = scheduling_declaration(json!({
+            "designated_operation": "open_home",
+            "mappings": [
+                {
+                    "outcome_key": "effect-terminal",
+                    "effect": "designated_effect_completed",
+                    "terminal_pages": ["neutral/terminal"]
+                },
+                {
+                    "outcome_key": "no-effect-terminal",
+                    "effect": "no_designated_effect",
+                    "terminal_pages": ["neutral/terminal"]
+                }
+            ]
+        }));
+        let observable_pages = [
+            "neutral/start".to_owned(),
+            "neutral/home".to_owned(),
+            "neutral/terminal".to_owned(),
+        ];
+
+        validate_scheduling_outcome_coverage(
+            "neutral",
+            &["neutral/terminal".to_owned()],
+            &observable_pages,
+            &[first, second],
+            &complete,
+        )
+        .expect("short destinations resolve to the unique concrete detector page");
+
+        let missing_reachable_terminal = scheduling_declaration(json!({
+            "designated_operation": "open_home",
+            "mappings": [
+                {
+                    "outcome_key": "wrong-effect-page",
+                    "effect": "designated_effect_completed",
+                    "terminal_pages": ["neutral/home"]
+                },
+                {
+                    "outcome_key": "no-effect-terminal",
+                    "effect": "no_designated_effect",
+                    "terminal_pages": ["neutral/terminal"]
+                }
+            ]
+        }));
+        let error = validate_scheduling_outcome_coverage(
+            "neutral",
+            &["neutral/terminal".to_owned()],
+            &observable_pages,
+            &[
+                serde_json::from_value(json!({
+                    "id": "open_home",
+                    "from": "neutral/start",
+                    "to": "home",
+                    "click": {"kind": "point", "x": 1, "y": 0},
+                    "unguarded_trusted_coordinate": true
+                }))
+                .expect("first operation"),
+                serde_json::from_value(json!({
+                    "id": "open_terminal",
+                    "from": "neutral/home",
+                    "to": "terminal",
+                    "click": {"kind": "point", "x": 1, "y": 0},
+                    "unguarded_trusted_coordinate": true
+                }))
+                .expect("second operation"),
+            ],
+            &missing_reachable_terminal,
+        )
+        .expect_err("the concrete intermediate page must expose the reachable terminal");
+        assert_eq!(
+            error.code(),
+            "contained_task_outcome_declaration_incomplete"
+        );
+    }
+
+    #[test]
+    fn scheduling_outcome_coverage_rejects_unknown_and_repeated_effect_paths() {
+        let mut unknown = operation(json!({}), None);
+        unknown.to = None;
+        let declaration = scheduling_declaration(json!({
+            "designated_operation": "open_terminal",
+            "mappings": [
+                {
+                    "outcome_key": "effect-terminal",
+                    "effect": "designated_effect_completed",
+                    "terminal_pages": ["terminal"]
+                },
+                {
+                    "outcome_key": "no-effect-terminal",
+                    "effect": "no_designated_effect",
+                    "terminal_pages": ["terminal"]
+                }
+            ]
+        }));
+        let error = validate_scheduling_outcome_coverage(
+            "neutral",
+            &["terminal".to_owned()],
+            &["neutral/home".to_owned(), "neutral/terminal".to_owned()],
+            &[unknown],
+            &declaration,
+        )
+        .expect_err("mapped operation without a finite postcondition must fail admission");
+        assert_eq!(
+            error.code(),
+            "contained_task_outcome_declaration_incomplete"
+        );
+
+        let mut cycle = operation(json!({}), None);
+        cycle.to = Some(PageDeclaration::Singleton("home".to_owned()));
+        let error = validate_scheduling_outcome_coverage(
+            "neutral",
+            &["terminal".to_owned()],
+            &["neutral/home".to_owned(), "neutral/terminal".to_owned()],
+            &[cycle],
+            &declaration,
+        )
+        .expect_err("a reachable second designated effect must fail admission");
+        assert_eq!(
+            error.code(),
+            "contained_task_outcome_declaration_incomplete"
+        );
+    }
+
+    #[test]
+    fn recognize_only_rejects_scheduling_outcome_at_admission() {
+        let mut recognize_only = control();
+        recognize_only.execution_mode = "recognize_only".to_owned();
+
+        let error = validate_scheduling_outcome_execution_mode(&recognize_only)
+            .expect_err("recognize-only has no finite declared terminal-page closure");
+
+        assert_eq!(error.code(), "contained_task_outcome_declaration_invalid");
     }
 
     fn omitted_policy_task(with_destination: bool, with_error_page: bool) -> PreparedContainedTask {
@@ -1387,12 +2248,13 @@ mod retry_wiring_tests {
             game: "neutral".to_string(),
             server_scope: vec!["test".to_string()],
             coordinate_space: control.resolution,
-            target_page: Some("terminal".to_string()),
+            target_page: Some(PageDeclaration::Singleton("terminal".to_string())),
             error_pages: if with_error_page {
                 vec!["error".to_string()]
             } else {
                 Vec::new()
             },
+            scheduling_outcome: None,
             recovery: None,
             defaults: TaskOperationDefaults::default(),
             operations: vec![task_operation],
@@ -1418,6 +2280,12 @@ mod retry_wiring_tests {
                 },
                 {
                     "type": "color",
+                    "id": "page/alternate",
+                    "region": {"x": 0, "y": 0, "width": 1, "height": 1},
+                    "expected": [255, 0, 255]
+                },
+                {
+                    "type": "color",
                     "id": "page/error",
                     "region": {"x": 0, "y": 0, "width": 1, "height": 1},
                     "expected": [255, 255, 0]
@@ -1438,6 +2306,7 @@ mod retry_wiring_tests {
             "pages": [
                 {"id": "neutral/home", "required": ["page/home"]},
                 {"id": "neutral/terminal", "required": ["page/terminal"]},
+                {"id": "neutral/alternate", "required": ["page/alternate"]},
                 {"id": "neutral/error", "required": ["page/error"]}
             ]
         }))
@@ -1451,6 +2320,7 @@ mod retry_wiring_tests {
             program,
             evaluator,
             detector,
+            scheduling_outcome: None,
             package_sha256: "fixture-sha256".to_string(),
             entry_count: 5,
             task_count: 1,
@@ -1461,6 +2331,7 @@ mod retry_wiring_tests {
         let page_color = match page {
             "home" => [255, 0, 0],
             "terminal" => [0, 0, 255],
+            "alternate" => [255, 0, 255],
             "error" => [255, 255, 0],
             _ => panic!("unknown fixture page"),
         };
@@ -1474,8 +2345,20 @@ mod retry_wiring_tests {
         .expect("fixture frame")
     }
 
+    fn unrecognized_frame() -> Frame {
+        Frame::from_pixels(
+            2,
+            1,
+            [0, 0, 0, 0, 255, 0].to_vec(),
+            PixelFormat::Rgb8,
+            CaptureBackendName::FixtureSimulation,
+        )
+        .expect("unrecognized fixture frame")
+    }
+
     struct ScriptedRuntime {
         frames: VecDeque<Frame>,
+        last_frame: Frame,
         captures: usize,
         inputs: usize,
         traces: Vec<ContainedTaskTrace>,
@@ -1483,8 +2366,14 @@ mod retry_wiring_tests {
 
     impl ScriptedRuntime {
         fn new(after_effect_page: &str) -> Self {
+            Self::from_pages("home", after_effect_page)
+        }
+
+        fn from_pages(initial_page: &str, after_effect_page: &str) -> Self {
+            let last_frame = page_frame(after_effect_page);
             Self {
-                frames: [page_frame("home"), page_frame(after_effect_page)].into(),
+                frames: [page_frame(initial_page), last_frame.clone()].into(),
+                last_frame,
                 captures: 0,
                 inputs: 0,
                 traces: Vec::new(),
@@ -1497,7 +2386,10 @@ mod retry_wiring_tests {
 
         fn capture(&mut self) -> Result<Frame, Self::Error> {
             self.captures += 1;
-            self.frames.pop_front().ok_or("fixture_frame_exhausted")
+            Ok(match self.frames.pop_front() {
+                Some(frame) => frame,
+                None => self.last_frame.clone(),
+            })
         }
 
         fn input(&mut self, _action: InputAction) -> Result<(), Self::Error> {
@@ -1526,7 +2418,6 @@ mod retry_wiring_tests {
     }
 
     fn assert_single_effect(runtime: &ScriptedRuntime) {
-        assert_eq!(runtime.captures, 2);
         assert_eq!(runtime.inputs, 1);
         assert_eq!(
             runtime
@@ -1543,6 +2434,30 @@ mod retry_wiring_tests {
                 .filter(|trace| matches!(trace, ContainedTaskTrace::EffectCompleted { .. }))
                 .count(),
             1
+        );
+    }
+
+    fn assert_closed_effect_attempts(runtime: &ScriptedRuntime, attempts: usize) {
+        let sequence = runtime
+            .traces
+            .iter()
+            .filter_map(|trace| match trace {
+                ContainedTaskTrace::StepStarted { .. } => Some("step_started"),
+                ContainedTaskTrace::EffectIntent { .. } => Some("effect_intent"),
+                ContainedTaskTrace::EffectCompleted { .. } => Some("effect_completed"),
+                ContainedTaskTrace::StepFinished { .. } => Some("step_finished"),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            sequence,
+            [
+                "step_started",
+                "effect_intent",
+                "effect_completed",
+                "step_finished",
+            ]
+            .repeat(attempts)
         );
     }
 
@@ -1572,6 +2487,31 @@ mod retry_wiring_tests {
         assert_eq!(outcome.outcome, TaskOutcome::Success);
         assert_eq!(outcome.final_page.as_deref(), Some("neutral/terminal"));
         assert_single_effect(&runtime);
+        assert_closed_effect_attempts(&runtime, 1);
+    }
+
+    #[test]
+    fn destination_without_expect_after_uses_the_configured_bounded_wait() {
+        let mut task = omitted_policy_task(true, false);
+        task.control.step_timeout_ms = Some(50);
+        assert!(task.program.operations[0].expect_after.is_none());
+        let terminal = page_frame("terminal");
+        let mut runtime = ScriptedRuntime {
+            frames: [page_frame("home"), page_frame("home"), terminal.clone()].into(),
+            last_frame: terminal,
+            captures: 0,
+            inputs: 0,
+            traces: Vec::new(),
+        };
+
+        let outcome = task
+            .run(&mut runtime)
+            .expect("bounded wait must observe the later destination");
+
+        assert_eq!(outcome.final_page.as_deref(), Some("neutral/terminal"));
+        assert_eq!(runtime.captures, 3);
+        assert_single_effect(&runtime);
+        assert_closed_effect_attempts(&runtime, 1);
     }
 
     #[test]
@@ -1580,6 +2520,7 @@ mod retry_wiring_tests {
 
         assert_page_confirmation_failed(result, "home");
         assert_single_effect(&runtime);
+        assert_closed_effect_attempts(&runtime, 1);
     }
 
     #[test]
@@ -1588,6 +2529,7 @@ mod retry_wiring_tests {
 
         assert_page_confirmation_failed(result, "error");
         assert_single_effect(&runtime);
+        assert_closed_effect_attempts(&runtime, 1);
     }
 
     #[test]
@@ -1598,6 +2540,142 @@ mod retry_wiring_tests {
         assert_eq!(outcome.outcome, TaskOutcome::Success);
         assert_eq!(outcome.final_page.as_deref(), Some("neutral/terminal"));
         assert_single_effect(&runtime);
+        assert_closed_effect_attempts(&runtime, 1);
+    }
+
+    #[test]
+    fn destination_set_accepts_each_declared_fresh_page() {
+        for destination in ["terminal", "alternate"] {
+            let mut task = omitted_policy_task(true, false);
+            task.program.operations[0].to = Some(PageDeclaration::Set(vec![
+                "terminal".to_string(),
+                "alternate".to_string(),
+            ]));
+            task.program.target_page = Some(PageDeclaration::Set(vec![
+                "terminal".to_string(),
+                "alternate".to_string(),
+            ]));
+            let mut runtime = ScriptedRuntime::new(destination);
+            let outcome = task.run(&mut runtime).expect("declared destination");
+
+            assert_eq!(
+                outcome.final_page.as_deref(),
+                Some(format!("neutral/{destination}").as_str())
+            );
+            assert_single_effect(&runtime);
+        }
+    }
+
+    #[test]
+    fn expect_after_is_the_canonical_postcondition_when_to_is_null() {
+        let mut task = omitted_policy_task(true, false);
+        let operation = &mut task.program.operations[0];
+        operation.to = None;
+        operation.expect_after = Some(
+            serde_json::from_value(json!({
+                "page_id": ["terminal", "alternate"],
+                "timeout_ms": 2,
+                "interval_ms": 1
+            }))
+            .expect("expect_after"),
+        );
+        task.program.target_page = Some(PageDeclaration::Set(vec![
+            "terminal".to_string(),
+            "alternate".to_string(),
+        ]));
+        let mut runtime = ScriptedRuntime::new("alternate");
+        let outcome = task.run(&mut runtime).expect("expect_after destination");
+
+        assert_eq!(outcome.final_page.as_deref(), Some("neutral/alternate"));
+        assert_single_effect(&runtime);
+    }
+
+    #[test]
+    fn every_declared_terminal_page_completes_through_run_state() {
+        for terminal in ["terminal", "alternate"] {
+            let mut task = omitted_policy_task(true, false);
+            task.program.target_page = Some(PageDeclaration::Set(vec![
+                "terminal".to_string(),
+                "alternate".to_string(),
+            ]));
+            let mut runtime = ScriptedRuntime::from_pages(terminal, terminal);
+            let outcome = task.run(&mut runtime).expect("terminal page");
+
+            assert_eq!(
+                outcome.final_page.as_deref(),
+                Some(format!("neutral/{terminal}").as_str())
+            );
+            assert_eq!(runtime.inputs, 0);
+            assert_eq!(runtime.captures, 1);
+        }
+    }
+
+    #[test]
+    fn page_set_declarations_fail_closed_at_admission() {
+        for invalid in [
+            PageDeclaration::Set(Vec::new()),
+            PageDeclaration::Set(vec!["terminal".to_string(), "terminal".to_string()]),
+            PageDeclaration::Set(vec!["".to_string()]),
+        ] {
+            assert_eq!(
+                invalid.normalized().expect_err("invalid page set").code(),
+                "contained_task_page_set_invalid"
+            );
+        }
+
+        let task = omitted_policy_task(true, false);
+        let missing = vec!["missing".to_string()];
+        assert_eq!(
+            validate_page_references(&task.control.game, &missing, &task.detector)
+                .expect_err("missing page reference")
+                .code(),
+            "contained_task_page_set_invalid"
+        );
+    }
+
+    #[test]
+    fn conflicting_destination_declarations_fail_admission() {
+        let mut operation = operation(json!({}), None);
+        operation.expect_after =
+            Some(serde_json::from_value(json!({"page_id": "alternate"})).expect("expect_after"));
+        assert_eq!(
+            operation
+                .destination_pages()
+                .expect_err("conflicting destinations")
+                .code(),
+            "contained_task_destination_conflict"
+        );
+    }
+
+    #[test]
+    fn destination_error_overlap_fails_before_execution() {
+        let task = omitted_policy_task(true, true);
+        assert_eq!(
+            validate_page_set_overlap(
+                &task.control.game,
+                &["error".to_string()],
+                &task.program.error_pages,
+                &task.detector,
+            )
+            .expect_err("destination/error overlap")
+            .code(),
+            "contained_task_page_set_invalid"
+        );
+    }
+
+    #[test]
+    fn alias_overlap_within_destination_set_fails_admission() {
+        let task = omitted_policy_task(true, false);
+        assert_eq!(
+            validate_page_references(
+                &task.control.game,
+                &["terminal".to_string(), "neutral/terminal".to_string()],
+                &task.detector,
+            )
+            .expect_err("ambiguous aliases")
+            .code(),
+            "contained_task_page_set_invalid"
+        );
     }
 
     #[test]
@@ -1657,6 +2735,61 @@ mod retry_wiring_tests {
                 .expect("final decision"),
             RunOperationFailureDecision::Fail(_)
         ));
+    }
+
+    #[test]
+    fn every_failed_retry_attempt_finishes_before_the_next_attempt_starts() {
+        let mut task = omitted_policy_task(true, false);
+        let operation = &mut task.program.operations[0];
+        operation.retryable = Some(true);
+        operation.max_attempts = Some(6);
+        operation.retry_interval_ms = Some(1);
+        let mut runtime = ScriptedRuntime::new("home");
+
+        let error = match task
+            .run(&mut runtime)
+            .expect_err("sixth failed attempt must stop")
+        {
+            ContainedTaskRunError::Task(error) => error,
+            ContainedTaskRunError::Boundary(error) => {
+                panic!("unexpected fixture boundary error: {error}")
+            }
+        };
+
+        assert_eq!(error.code(), "contained_task_requires_scheduler");
+        assert_eq!(runtime.inputs, 6);
+        assert_closed_effect_attempts(&runtime, 6);
+    }
+
+    #[test]
+    fn unrecognized_fresh_retry_observation_closes_without_second_effect() {
+        let mut task = omitted_policy_task(true, false);
+        let operation = &mut task.program.operations[0];
+        operation.retryable = Some(true);
+        operation.max_attempts = Some(6);
+        operation.retry_interval_ms = Some(1);
+        let unknown = unrecognized_frame();
+        let mut runtime = ScriptedRuntime {
+            frames: [page_frame("home"), page_frame("home"), unknown.clone()].into(),
+            last_frame: unknown,
+            captures: 0,
+            inputs: 0,
+            traces: Vec::new(),
+        };
+
+        let error = match task
+            .run(&mut runtime)
+            .expect_err("unrecognized fresh observation must stop")
+        {
+            ContainedTaskRunError::Task(error) => error,
+            ContainedTaskRunError::Boundary(error) => {
+                panic!("unexpected fixture boundary error: {error}")
+            }
+        };
+
+        assert_eq!(error.code(), "page_confirmation_failed");
+        assert_single_effect(&runtime);
+        assert_closed_effect_attempts(&runtime, 1);
     }
 
     #[test]

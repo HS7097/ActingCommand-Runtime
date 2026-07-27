@@ -1841,6 +1841,7 @@ fn runtime_finishes_and_rebuilds_lab_run_after_actinglab_client_is_killed() {
             final_page: Some(page),
             executed_steps: 1,
             failure_code: None,
+            ..
         } if page == "neutral/terminal"
     )));
     assert_eq!(

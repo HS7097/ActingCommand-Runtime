@@ -64,6 +64,17 @@ impl fmt::Debug for ResolvedExecutionInstance {
 }
 
 /// Daemon-only factory boundary. Implementations open backends inside execution worker threads.
+///
+/// Backend implementations have no outcome-fact ingress. Scheduling outcomes must be committed by
+/// Runtime from the terminal ledger fact instead of being supplied by a backend:
+///
+/// ```compile_fail
+/// use actingcommand_execution_kernel::ExecutionBackendProvider;
+///
+/// fn inject_outcome(provider: &dyn ExecutionBackendProvider) {
+///     let _ = provider.outcomes();
+/// }
+/// ```
 pub trait ExecutionBackendProvider: Send + Sync + 'static {
     fn instance_aliases(&self) -> Vec<String>;
 

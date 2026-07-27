@@ -45,7 +45,7 @@ struct LabRunContext<'a, L: LedgerSink> {
     current_step_index: Option<usize>,
     current_step_id: Option<String>,
     current_operation_id: Option<String>,
-    expected_page: Option<String>,
+    expected_pages: Vec<String>,
 }
 
 impl<'a, L: LedgerSink> LabRunContext<'a, L> {
@@ -124,7 +124,7 @@ impl<'a, L: LedgerSink> LabRunContext<'a, L> {
             current_step_index: None,
             current_step_id: None,
             current_operation_id: None,
-            expected_page: None,
+            expected_pages: Vec::new(),
         })
     }
 
@@ -142,18 +142,23 @@ impl<'a, L: LedgerSink> LabRunContext<'a, L> {
         }
     }
 
-    fn set_step_context(&mut self, step_index: usize, operation: &Operation) {
+    fn set_step_context(
+        &mut self,
+        step_index: usize,
+        operation: &Operation,
+    ) -> CliOutcome<()> {
         self.current_step_index = Some(step_index);
         self.current_step_id = Some(operation.id.clone());
         self.current_operation_id = Some(operation.id.clone());
-        self.expected_page = operation.to.clone();
+        self.expected_pages = operation.destination_pages()?.to_vec();
+        Ok(())
     }
 
     fn clear_step_context(&mut self) {
         self.current_step_index = None;
         self.current_step_id = None;
         self.current_operation_id = None;
-        self.expected_page = None;
+        self.expected_pages.clear();
     }
 
     fn record_capture_backend_selection(&mut self) -> CliOutcome<()> {
@@ -571,7 +576,13 @@ impl<'a, L: LedgerSink> LabRunContext<'a, L> {
         checkpoint.current_step_id = self.current_step_id.clone();
         checkpoint.current_operation_id = self.current_operation_id.clone();
         checkpoint.current_phase = Some(self.phase.clone());
-        checkpoint.expected_page = self.expected_page.clone();
+        checkpoint.expected_page = match self.expected_pages.as_slice() {
+            [] => None,
+            [page] => Some(page.clone()),
+            pages => Some(
+                Value::Array(pages.iter().cloned().map(Value::String).collect()).to_string(),
+            ),
+        };
         checkpoint.last_matched_page = matched_page.map(str::to_string);
     }
 

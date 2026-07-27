@@ -307,7 +307,7 @@ struct OperationBundle {
     #[serde(default)]
     entry_page: Option<String>,
     #[serde(default)]
-    target_page: Option<String>,
+    target_page: Option<NormalizedPageSet>,
     #[serde(default)]
     error_pages: Vec<String>,
     #[serde(default)]
@@ -371,6 +371,9 @@ impl OperationBundle {
             return Err(CliError::package_invalid(
                 "operation bundle has no operations",
             ));
+        }
+        if let Some(target_pages) = &self.target_page {
+            target_pages.validate("operation bundle target_page")?;
         }
         self.defaults.validate()?;
         for anchor in &self.anchors {
@@ -571,7 +574,7 @@ struct Operation {
     purpose: String,
     from: String,
     #[serde(default)]
-    to: Option<String>,
+    to: Option<NormalizedPageSet>,
     click: OperationClick,
     #[serde(default)]
     verify_template: Option<String>,
@@ -649,6 +652,7 @@ impl Operation {
         if let Some(expect_after) = &self.expect_after {
             expect_after.validate(&self.id)?;
         }
+        self.destination_pages()?;
         self.validate_flow()?;
         self.validate_guard(control)
     }
@@ -720,11 +724,23 @@ impl Operation {
         }
     }
 
-    fn expected_after_page(&self) -> Option<&str> {
-        self.expect_after
+    fn destination_pages(&self) -> CliOutcome<&[String]> {
+        let to = self.to.as_ref().map(NormalizedPageSet::as_slice);
+        let expected = self
+            .expect_after
             .as_ref()
-            .map(|expectation| expectation.page_id.as_str())
-            .or(self.to.as_deref())
+            .map(|expectation| expectation.page_id.as_slice());
+        match (to, expected) {
+            (Some(to), Some(expected)) if to != expected => Err(CliError::package_invalid(
+                format!(
+                    "operation '{}' has conflicting to and expect_after destinations",
+                    self.id
+                ),
+            )),
+            (Some(to), _) => Ok(to),
+            (None, Some(expected)) => Ok(expected),
+            (None, None) => Ok(&[]),
+        }
     }
 
     fn after_timeout_ms(&self, defaults: OperationDefaults, default_timeout_ms: u64) -> u64 {
@@ -770,10 +786,7 @@ impl Operation {
 
     fn is_navigation_only(&self) -> bool {
         self.effect.as_deref() == Some("navigation_only")
-            || (self
-                .to
-                .as_deref()
-                .is_some_and(|page| !page.trim().is_empty())
+            || (self.to.is_some()
                 && self.consumes.is_empty()
                 && self.produces.is_empty())
     }
@@ -806,7 +819,7 @@ impl OperationFlowPolicy {
 
 #[derive(Debug, Clone, Deserialize)]
 struct OperationExpectation {
-    page_id: String,
+    page_id: NormalizedPageSet,
     #[serde(default)]
     timeout_ms: Option<u64>,
     #[serde(default)]
@@ -815,11 +828,8 @@ struct OperationExpectation {
 
 impl OperationExpectation {
     fn validate(&self, operation_id: &str) -> CliOutcome<()> {
-        if self.page_id.trim().is_empty() {
-            return Err(CliError::package_invalid(format!(
-                "operation '{operation_id}' expect_after.page_id must not be empty"
-            )));
-        }
+        self.page_id
+            .validate(&format!("operation '{operation_id}' expect_after.page_id"))?;
         if self.timeout_ms == Some(0) {
             return Err(CliError::package_invalid(format!(
                 "operation '{operation_id}' expect_after.timeout_ms must be positive when provided"
@@ -835,10 +845,79 @@ impl OperationExpectation {
 
     fn to_json(&self) -> Value {
         json!({
-            "page_id": self.page_id.as_str(),
+            "page_id": self.page_id,
             "timeout_ms": self.timeout_ms,
             "interval_ms": self.interval_ms
         })
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct NormalizedPageSet(Vec<String>);
+
+impl NormalizedPageSet {
+    fn as_slice(&self) -> &[String] {
+        &self.0
+    }
+
+    fn validate(&self, label: &str) -> CliOutcome<()> {
+        if self.0.is_empty() || self.0.iter().any(|page| page.trim().is_empty()) {
+            return Err(CliError::package_invalid(format!(
+                "{label} must contain at least one non-empty page"
+            )));
+        }
+        let unique = self.0.iter().collect::<BTreeSet<_>>();
+        if unique.len() != self.0.len() {
+            return Err(CliError::package_invalid(format!(
+                "{label} must not contain duplicate pages"
+            )));
+        }
+        Ok(())
+    }
+}
+
+impl serde::Serialize for NormalizedPageSet {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        if let [page] = self.0.as_slice() {
+            serializer.serialize_str(page)
+        } else {
+            serde::Serialize::serialize(&self.0, serializer)
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for NormalizedPageSet {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        #[serde(untagged)]
+        enum Declaration {
+            Singleton(String),
+            Set(Vec<String>),
+        }
+
+        let mut pages = match Declaration::deserialize(deserializer)? {
+            Declaration::Singleton(page) => vec![page],
+            Declaration::Set(pages) => pages,
+        };
+        if pages.is_empty() || pages.iter().any(|page| page.trim().is_empty()) {
+            return Err(serde::de::Error::custom(
+                "page set must contain at least one non-empty page",
+            ));
+        }
+        let unique = pages.iter().collect::<BTreeSet<_>>();
+        if unique.len() != pages.len() {
+            return Err(serde::de::Error::custom(
+                "page set must not contain duplicate pages",
+            ));
+        }
+        pages.sort();
+        Ok(Self(pages))
     }
 }
 
