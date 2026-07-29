@@ -13,15 +13,15 @@ use actingcommand_contract::{
     ClientActionValue, ContainedTaskRequest, EffectDisposition, EventActor, EventPayload,
     EventQuery, EventSeverity, EventSource, EventType, FactContent, FactRecord, FactScope,
     FactTtlPolicy, FactTtlSource, FactValue as ContractFactValue, IdentifierIssuer, InputAction,
-    InstanceFactContext, InstanceId, IssuedCorrelationId, LeasePriority, LeaseQueuePolicy,
-    LeaseQueueStatus, LeaseToken, MAX_RUNTIME_PLANNING_DOCUMENT_BYTES, MonitorDiagnosis,
-    MonitorDisposition, MonitorObservation, MonitorPayload, MonitorRecoveryCoordinationReason,
-    MonitorRecoveryKind, OriginModule, PerformanceControlLevel, PerformanceMonitorHealth,
-    PolicyExecutionOutcome, PolicyFailureClass, PolicyFailureDisposition, PolicyPayload,
-    PolicyPlanningSignalEventData, PolicyPlanningSignalKind, ProjectDecisionPageRequest,
-    ProjectDecisionState, ProjectInterfaceRequest, ProjectLedgerSnapshot,
-    ProjectedArtifactReference, ProjectionPayload, ProjectionProfile, ProposalClass,
-    ProposalDisposition, ProposalDocument, ProposalKind, ProposalPatchOperation,
+    InstanceFactContext, InstanceFactSnapshot, InstanceId, IssuedCorrelationId, LeasePriority,
+    LeaseQueuePolicy, LeaseQueueStatus, LeaseToken, MAX_RUNTIME_PLANNING_DOCUMENT_BYTES,
+    MonitorDiagnosis, MonitorDisposition, MonitorObservation, MonitorPayload,
+    MonitorRecoveryCoordinationReason, MonitorRecoveryKind, OriginModule, PerformanceControlLevel,
+    PerformanceMonitorHealth, PolicyExecutionOutcome, PolicyFailureClass, PolicyFailureDisposition,
+    PolicyPayload, PolicyPlanningSignalEventData, PolicyPlanningSignalKind,
+    ProjectDecisionPageRequest, ProjectDecisionState, ProjectInterfaceRequest,
+    ProjectLedgerSnapshot, ProjectedArtifactReference, ProjectionPayload, ProjectionProfile,
+    ProposalClass, ProposalDisposition, ProposalDocument, ProposalKind, ProposalPatchOperation,
     PublicEventPayload, RUNTIME_INFO_FILE, ReleasePayload, ReleaseResourceVersion,
     ReleaseTransitionKind, ResourceAuthoringEvent, ResourceAuthoringPhase, RuntimeCaptureBackend,
     RuntimeErrorCode, RuntimeEventQueryCursor, RuntimeEventQueryPageRequest,
@@ -34,14 +34,19 @@ use actingcommand_contract::{
 use actingcommand_device::{
     CaptureBackend, CaptureBackendName, DeviceError, DeviceResult, Frame, InputBackend, PixelFormat,
 };
+use actingcommand_execution_kernel::{
+    ENV_RESULT_SCHEMA_VERSION, EnvDetectedValue, EnvDetectionResult, EnvDetector,
+    EnvironmentDetectorState, EnvironmentKeyState, EnvironmentStateEngine,
+    EnvironmentStateErrorKind, EnvironmentStateScope,
+};
 use actingcommand_policy::{
     CatalogDocumentSource, CatalogSources, CohortBudgets, Comparison, DecisionReasonChain,
-    DispatchIntent, EvaluationFacts, EvaluationResources, EvaluationTime, FactValue,
-    ForwardProjectionConfig, HostResourceSnapshot, InstanceSnapshot, LoadProfile,
+    DispatchIntent, EligibilityState, EvaluationFacts, EvaluationResources, EvaluationTime,
+    FactValue, ForwardProjectionConfig, HostResourceSnapshot, InstanceSnapshot, LoadProfile,
     MaintenanceDisposition, MaintenanceTrendPolicy, MetricRef, ObservedFact, ObservedOutcome,
-    OutlierMetric, OutlierPolicy, PoolValueSnapshot, PredicateSpec, ScopeSelector, StrategicBand,
-    StrategicEvidencePointer, StrategicGoal, StrategicInstanceAssessment, StrategicReport,
-    StrategicTemplate,
+    OutlierMetric, OutlierPolicy, PoolValueSnapshot, PredicateSpec, SchedulingDecisionState,
+    ScopeSelector, StrategicBand, StrategicEvidencePointer, StrategicGoal,
+    StrategicInstanceAssessment, StrategicReport, StrategicTemplate, TaskRank,
 };
 use actingcommand_runtime_state::{
     RUNTIME_STATE_DATABASE_FILE, RUNTIME_STATE_INTEGRITY_KEY_FILE, ReleaseArtifactSources,
@@ -1289,6 +1294,106 @@ fn detection_policy_facts(ordinary_ready: bool, snapshot_id: &str) -> Evaluation
         expires_at_unix_ms: Some(POLICY_NOW_UNIX_MS + 60_000),
         confidence_milli: 1_000,
     });
+    facts
+}
+
+#[derive(Clone, Copy)]
+struct Issue75IdentitySet {
+    game: &'static str,
+    server: &'static str,
+    instance: &'static str,
+}
+
+const ISSUE75_IDENTITY_ALPHA: Issue75IdentitySet = Issue75IdentitySet {
+    game: "synthetic-game-alpha",
+    server: "synthetic-server-alpha",
+    instance: "synthetic-instance-alpha",
+};
+const ISSUE75_IDENTITY_OMEGA: Issue75IdentitySet = Issue75IdentitySet {
+    game: "synthetic-game-omega",
+    server: "synthetic-server-omega",
+    instance: "synthetic-instance-omega",
+};
+
+fn issue75_policy_sources(identity: Issue75IdentitySet) -> CatalogSources {
+    let mut sources = detection_policy_sources(1);
+    let mut tasks: serde_json::Value =
+        serde_json::from_slice(&sources.tasks.bytes).expect("identity task fixture");
+    for task in tasks["tasks"].as_array_mut().expect("identity task array") {
+        task["instance_overrides"] = serde_json::json!([]);
+    }
+    sources.tasks.bytes = serde_json::to_vec_pretty(&tasks).expect("identity task bytes");
+
+    let mut replacements = [0_usize; 3];
+    for source in [
+        &mut sources.tasks,
+        &mut sources.pools,
+        &mut sources.activity,
+        &mut sources.timeline,
+    ] {
+        let mut document: serde_json::Value =
+            serde_json::from_slice(&source.bytes).expect("identity catalog fixture");
+        issue75_replace_identities(&mut document, identity, &mut replacements);
+        source.bytes = serde_json::to_vec_pretty(&document).expect("identity catalog bytes");
+    }
+    assert_eq!(
+        replacements,
+        [1, 1, 6],
+        "the fixture must change only its one game, one server, and six instance references"
+    );
+    sources
+}
+
+fn issue75_replace_identities(
+    value: &mut serde_json::Value,
+    identity: Issue75IdentitySet,
+    replacements: &mut [usize; 3],
+) {
+    match value {
+        serde_json::Value::String(value) if value == "fixture-game-a" => {
+            *value = identity.game.to_owned();
+            replacements[0] += 1;
+        }
+        serde_json::Value::String(value) if value == "fixture-server-a" => {
+            *value = identity.server.to_owned();
+            replacements[1] += 1;
+        }
+        serde_json::Value::String(value) if value == POLICY_INSTANCE_ALIAS => {
+            *value = identity.instance.to_owned();
+            replacements[2] += 1;
+        }
+        serde_json::Value::Array(values) => {
+            for value in values {
+                issue75_replace_identities(value, identity, replacements);
+            }
+        }
+        serde_json::Value::Object(values) => {
+            for value in values.values_mut() {
+                issue75_replace_identities(value, identity, replacements);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn issue75_policy_facts(
+    identity: Issue75IdentitySet,
+    ordinary_ready: bool,
+    snapshot_id: &str,
+) -> EvaluationFacts {
+    let mut facts = detection_policy_facts(ordinary_ready, snapshot_id);
+    facts.instances[0].instance_id = identity.instance.to_owned();
+    facts.instances[0].server_id = identity.server.to_owned();
+    facts.instances[0].game_id = identity.game.to_owned();
+    for outcome in &mut facts.outcomes {
+        outcome.instance_id = identity.instance.to_owned();
+    }
+    for fact in &mut facts.facts {
+        let ScopeSelector::Instance { instance_id } = &mut fact.scope else {
+            panic!("identity proof facts must remain instance-scoped");
+        };
+        *instance_id = identity.instance.to_owned();
+    }
     facts
 }
 
@@ -7387,6 +7492,393 @@ fn game_and_server_scope_changes_cannot_reuse_a_trusted_decision_identity() {
         );
     }
     host.close().expect("close host");
+}
+
+#[derive(Debug, PartialEq, Eq)]
+struct Issue75RuntimeSummary {
+    decisions: Vec<(
+        String,
+        EligibilityState,
+        SchedulingDecisionState,
+        Option<TaskRank>,
+        usize,
+        Vec<String>,
+    )>,
+    dispatch_count: usize,
+    task_id: String,
+    operation_id: String,
+    activity_profile_id: String,
+    placement_reason_codes: Vec<String>,
+    detection_kind: PolicyPlanningSignalKind,
+    detection_profile_id: String,
+    refusal_code: String,
+}
+
+fn issue75_runtime_summary(
+    identity: Issue75IdentitySet,
+    registered_id: InstanceId,
+) -> Issue75RuntimeSummary {
+    let root = TempDir::new().expect("identity proof tempdir");
+    let host = RuntimeHost::start(
+        config(&root),
+        Arc::new(FakeProvider::one(
+            identity.instance,
+            registered_id,
+            Arc::new(FakeState::default()),
+        )),
+    )
+    .expect("identity proof runtime");
+    host.activate_policy_catalog(&issue75_policy_sources(identity))
+        .expect("activate identity proof catalog");
+
+    let ordinary = host
+        .evaluate_policy_cycle_with_test_inputs(
+            &issue75_policy_facts(identity, true, "snapshot:identity-ready"),
+            &policy_resources(),
+            EvaluationTime {
+                unix_ms: POLICY_NOW_UNIX_MS,
+                monotonic_ms: POLICY_NOW_UNIX_MS,
+            },
+            7,
+            PolicyTrigger::FactsChanged,
+        )
+        .expect("identity proof ordinary cycle");
+    let evaluation = ordinary.evaluation.as_ref().expect("ordinary evaluation");
+    let mut decisions = evaluation
+        .decisions
+        .iter()
+        .map(|decision| {
+            (
+                decision.task_id.clone(),
+                decision.eligibility,
+                decision.state,
+                decision.rank.clone(),
+                decision.detection_suggestions.len(),
+                decision
+                    .reasons
+                    .iter()
+                    .map(|reason| reason.code.clone())
+                    .collect::<Vec<_>>(),
+            )
+        })
+        .collect::<Vec<_>>();
+    decisions.sort_by(|left, right| left.0.cmp(&right.0));
+    assert_eq!(ordinary.pending_dispatch_intents.len(), 1);
+    let intent = ordinary.pending_dispatch_intents[0].clone();
+    let reason_chain = evaluation
+        .reason_chains
+        .iter()
+        .find(|chain| chain.id == intent.reason_chain_id)
+        .expect("ordinary reason chain");
+
+    let mut wrong_instance = intent.clone();
+    wrong_instance.instance_id = "synthetic-instance-mismatch".to_owned();
+    let refusal_code = host
+        .admit_policy_dispatch(
+            &wrong_instance,
+            reason_chain,
+            &policy_context(&host, &wrong_instance),
+        )
+        .expect_err("caller identity substitution must fail")
+        .code()
+        .to_owned();
+
+    let detection = host
+        .evaluate_policy_cycle_with_test_inputs(
+            &issue75_policy_facts(identity, false, "snapshot:identity-detection"),
+            &policy_resources(),
+            EvaluationTime {
+                unix_ms: POLICY_NOW_UNIX_MS + 1_000,
+                monotonic_ms: POLICY_NOW_UNIX_MS + 1_000,
+            },
+            8,
+            PolicyTrigger::FactsChanged,
+        )
+        .expect("identity proof detection cycle");
+    assert!(detection.pending_dispatch_intents.is_empty());
+    assert_eq!(detection.detection_planning_signals.len(), 1);
+    let signal = &detection.detection_planning_signals[0];
+    let detection_profile_id = signal
+        .detection_budget
+        .as_ref()
+        .expect("detection budget")
+        .profile_id
+        .clone();
+
+    let summary = Issue75RuntimeSummary {
+        decisions,
+        dispatch_count: ordinary.pending_dispatch_intents.len(),
+        task_id: intent.task_id,
+        operation_id: intent.operation_id,
+        activity_profile_id: intent.prerequisites.activity_profile_id,
+        placement_reason_codes: reason_chain
+            .reasons
+            .iter()
+            .map(|reason| reason.code.clone())
+            .collect(),
+        detection_kind: signal.kind,
+        detection_profile_id,
+        refusal_code,
+    };
+    host.close().expect("close identity proof runtime");
+    summary
+}
+
+#[derive(Debug, PartialEq, Eq)]
+struct Issue75EnvironmentSummary {
+    state_instance_refusal: EnvironmentStateErrorKind,
+    state_game_refusal: EnvironmentStateErrorKind,
+    state_server_refusal: EnvironmentStateErrorKind,
+    fact_value: String,
+    fact_record_refusal: String,
+    fact_instance_refusal: EnvironmentStateErrorKind,
+    fact_scope_refusal: EnvironmentStateErrorKind,
+}
+
+fn issue75_environment_summary(identity: Issue75IdentitySet) -> Issue75EnvironmentSummary {
+    let detector = EnvDetector {
+        id: "detector.fixture".to_owned(),
+        version: Some("1".to_owned()),
+        game_id: Some(identity.game.to_owned()),
+        server_id: Some(identity.server.to_owned()),
+        resource_pack_id: Some("test-pack".to_owned()),
+        match_metric: None,
+        steps: Vec::new(),
+        keys: Vec::new(),
+    };
+    detector
+        .validate_scope(identity.game, identity.server)
+        .expect("matching detector scope");
+    let catalog_scope_refusal = detector
+        .validate_scope("synthetic-game-mismatch", identity.server)
+        .expect_err("mismatched detector game must fail");
+    assert_eq!(
+        catalog_scope_refusal.message(),
+        format!(
+            "env detector 'detector.fixture' is scoped to game '{}' but command game is \
+             'synthetic-game-mismatch'",
+            identity.game
+        ),
+        "the existing EnvironmentCatalogError must retain its stable scope-refusal message"
+    );
+
+    let engine = EnvironmentStateEngine::new(
+        EnvironmentStateScope {
+            instance_id: identity.instance.to_owned(),
+            game_id: identity.game.to_owned(),
+            server_id: identity.server.to_owned(),
+            resource_pack_id: "test-pack".to_owned(),
+        },
+        EnvironmentDetectorState {
+            id: "detector.fixture".to_owned(),
+            version: "1".to_owned(),
+            keys: vec![EnvironmentKeyState {
+                key: "ui_theme".to_owned(),
+                stale_threshold: 0.7,
+                allowed_values: vec!["Neutral".to_owned()],
+            }],
+        },
+    );
+    let result = issue75_environment_result(identity);
+    engine
+        .validate_result(&result, &"a".repeat(64), POLICY_NOW_UNIX_MS)
+        .expect("matching environment result");
+
+    let mut wrong_instance = result.clone();
+    wrong_instance.instance_id = "synthetic-instance-mismatch".to_owned();
+    let state_instance_refusal = engine
+        .validate_result(&wrong_instance, &"a".repeat(64), POLICY_NOW_UNIX_MS)
+        .expect_err("mismatched result instance must fail")
+        .kind();
+    let mut wrong_game = result.clone();
+    wrong_game.game_id = "synthetic-game-mismatch".to_owned();
+    let state_game_refusal = engine
+        .validate_result(&wrong_game, &"a".repeat(64), POLICY_NOW_UNIX_MS)
+        .expect_err("mismatched result game must fail")
+        .kind();
+    let mut wrong_server = result;
+    wrong_server.server_id = "synthetic-server-mismatch".to_owned();
+    let state_server_refusal = engine
+        .validate_result(&wrong_server, &"a".repeat(64), POLICY_NOW_UNIX_MS)
+        .expect_err("mismatched result server must fail")
+        .kind();
+
+    let snapshot = issue75_fact_snapshot(identity);
+    snapshot.validate().expect("matching fact snapshot");
+    let fact_value = engine
+        .resolve_key_from_fact_snapshot("ui_theme", &snapshot, &"a".repeat(64), POLICY_NOW_UNIX_MS)
+        .expect("matching fact-backed environment value")
+        .value;
+
+    let mut wrong_record = snapshot.clone();
+    wrong_record.records[0].scope = FactScope::Instance {
+        instance_id: "synthetic-instance-mismatch".to_owned(),
+    };
+    let fact_record_refusal = wrong_record
+        .validate()
+        .expect_err("out-of-scope fact record must fail")
+        .code()
+        .to_owned();
+    let fact_instance_refusal = engine
+        .resolve_key_from_fact_snapshot(
+            "ui_theme",
+            &issue75_fact_snapshot(Issue75IdentitySet {
+                instance: "synthetic-instance-mismatch",
+                ..identity
+            }),
+            &"a".repeat(64),
+            POLICY_NOW_UNIX_MS,
+        )
+        .expect_err("mismatched fact instance must fail")
+        .kind();
+    let fact_scope_refusal = engine
+        .resolve_key_from_fact_snapshot(
+            "ui_theme",
+            &issue75_fact_snapshot(Issue75IdentitySet {
+                game: "synthetic-game-mismatch",
+                server: "synthetic-server-mismatch",
+                ..identity
+            }),
+            &"a".repeat(64),
+            POLICY_NOW_UNIX_MS,
+        )
+        .expect_err("mismatched fact game/server must fail")
+        .kind();
+
+    Issue75EnvironmentSummary {
+        state_instance_refusal,
+        state_game_refusal,
+        state_server_refusal,
+        fact_value,
+        fact_record_refusal,
+        fact_instance_refusal,
+        fact_scope_refusal,
+    }
+}
+
+fn issue75_environment_result(identity: Issue75IdentitySet) -> EnvDetectionResult {
+    EnvDetectionResult {
+        schema_version: ENV_RESULT_SCHEMA_VERSION.to_owned(),
+        instance_id: identity.instance.to_owned(),
+        game_id: identity.game.to_owned(),
+        server_id: identity.server.to_owned(),
+        detector_id: "detector.fixture".to_owned(),
+        detector_version: "1".to_owned(),
+        resource_pack_id: "test-pack".to_owned(),
+        resource_pack_hash: "a".repeat(64),
+        generated_at_unix_ms: POLICY_NOW_UNIX_MS,
+        detections: BTreeMap::from([(
+            "ui_theme".to_owned(),
+            EnvDetectedValue {
+                value: "Neutral".to_owned(),
+                confidence: 0.95,
+                source: "fixture".to_owned(),
+                detected_at_unix_ms: POLICY_NOW_UNIX_MS,
+                detector_id: "detector.fixture".to_owned(),
+                expires_at_unix_ms: None,
+            },
+        )]),
+    }
+}
+
+fn issue75_fact_snapshot(identity: Issue75IdentitySet) -> InstanceFactSnapshot {
+    InstanceFactSnapshot {
+        snapshot_id: "snapshot:identity-neutrality".to_owned(),
+        ledger_position: 1,
+        context: InstanceFactContext {
+            instance_id: identity.instance.to_owned(),
+            server_id: identity.server.to_owned(),
+            game_id: identity.game.to_owned(),
+        },
+        records: vec![
+            stored_fact(
+                FactScope::Instance {
+                    instance_id: identity.instance.to_owned(),
+                },
+                "env.ui_theme",
+                ContractFactValue::String("Neutral".to_owned()),
+                "snapshot:identity-neutrality",
+                Vec::new(),
+            ),
+            stored_fact(
+                FactScope::Server {
+                    server_id: identity.server.to_owned(),
+                },
+                "display.server",
+                ContractFactValue::String("Neutral".to_owned()),
+                "snapshot:identity-neutrality",
+                Vec::new(),
+            ),
+            stored_fact(
+                FactScope::Game {
+                    game_id: identity.game.to_owned(),
+                },
+                "display.game",
+                ContractFactValue::String("Neutral".to_owned()),
+                "snapshot:identity-neutrality",
+                Vec::new(),
+            ),
+        ],
+    }
+}
+
+#[test]
+fn synthetic_identity_sets_are_behaviorally_isomorphic() {
+    let registered_id = instance_id();
+    let alpha_runtime = issue75_runtime_summary(ISSUE75_IDENTITY_ALPHA, registered_id);
+    assert_eq!(alpha_runtime.dispatch_count, 1);
+    assert_eq!(alpha_runtime.task_id, "fixture.observe");
+    assert_eq!(alpha_runtime.operation_id, "operation.observe");
+    assert_eq!(alpha_runtime.activity_profile_id, "fixture-activity-a");
+    assert_eq!(
+        alpha_runtime.detection_kind,
+        PolicyPlanningSignalKind::DetectionReserved
+    );
+    assert_eq!(
+        alpha_runtime.detection_profile_id, "fixture-activity-a",
+        "matching_activity_profile must select the same explicit detection budget profile"
+    );
+    assert_eq!(
+        alpha_runtime.refusal_code,
+        "policy_trusted_context_mismatch"
+    );
+    let omega_runtime = issue75_runtime_summary(ISSUE75_IDENTITY_OMEGA, registered_id);
+    assert_eq!(
+        alpha_runtime, omega_runtime,
+        "eligibility, placement, profile selection, and refusal classes must ignore concrete identities"
+    );
+
+    let alpha_environment = issue75_environment_summary(ISSUE75_IDENTITY_ALPHA);
+    assert_eq!(
+        alpha_environment.state_instance_refusal,
+        EnvironmentStateErrorKind::InstanceMismatch
+    );
+    assert_eq!(
+        alpha_environment.state_game_refusal,
+        EnvironmentStateErrorKind::ScopeMismatch
+    );
+    assert_eq!(
+        alpha_environment.state_server_refusal,
+        EnvironmentStateErrorKind::ScopeMismatch
+    );
+    assert_eq!(alpha_environment.fact_value, "Neutral");
+    assert_eq!(
+        alpha_environment.fact_record_refusal,
+        "invalid_fact_snapshot_record"
+    );
+    assert_eq!(
+        alpha_environment.fact_instance_refusal,
+        EnvironmentStateErrorKind::InstanceMismatch
+    );
+    assert_eq!(
+        alpha_environment.fact_scope_refusal,
+        EnvironmentStateErrorKind::ScopeMismatch
+    );
+    assert_eq!(
+        alpha_environment,
+        issue75_environment_summary(ISSUE75_IDENTITY_OMEGA),
+        "environment and fact-scope outcomes must ignore concrete identities"
+    );
 }
 
 #[test]
