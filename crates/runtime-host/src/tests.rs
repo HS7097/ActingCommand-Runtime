@@ -9,7 +9,7 @@ use actingcommand_contract::{
     AgentAttentionState, AgentPayload, AgentResponseDisposition, AgentSessionId,
     AgentSessionResponse, AgentWakeKind, ApplicationLifecycleAction, ApprovalDecisionRecord,
     ApprovalDisposition, ApprovalTarget, ArtifactKind, AuthoritativeSchedulingOutcome,
-    CaptureSequenceSpec, CatalogDeclarationPatch, CatalogPayload, CatalogProposal,
+    CapturePayload, CaptureSequenceSpec, CatalogDeclarationPatch, CatalogPayload, CatalogProposal,
     ClientActionKind, ClientActionRecord, ClientActionValue, ContainedTaskRequest,
     EffectDisposition, EventActor, EventPayload, EventQuery, EventSeverity, EventSource, EventType,
     FactContent, FactRecord, FactScope, FactTtlPolicy, FactTtlSource,
@@ -17,8 +17,8 @@ use actingcommand_contract::{
     IssuedCorrelationId, LeasePriority, LeaseQueuePolicy, LeaseQueueStatus, LeaseToken,
     MAX_RUNTIME_PLANNING_DOCUMENT_BYTES, MonitorDiagnosis, MonitorDisposition, MonitorObservation,
     MonitorPayload, MonitorRecoveryCoordinationReason, MonitorRecoveryKind, OriginModule,
-    PerformanceControlLevel, PerformanceMonitorHealth, PolicyExecutionOutcome, PolicyFailureClass,
-    PolicyFailureDisposition, PolicyPayload, PolicyPlanningSignalEventData,
+    PerformanceControlLevel, PerformanceMonitorHealth, PinnedFrameReason, PolicyExecutionOutcome,
+    PolicyFailureClass, PolicyFailureDisposition, PolicyPayload, PolicyPlanningSignalEventData,
     PolicyPlanningSignalKind, ProjectDecisionPageRequest, ProjectDecisionState,
     ProjectInterfaceRequest, ProjectLedgerSnapshot, ProjectedArtifactReference, ProjectionPayload,
     ProjectionProfile, ProposalClass, ProposalDisposition, ProposalDocument, ProposalKind,
@@ -3216,6 +3216,54 @@ fn latest_failed_mapped_run_clears_the_prior_successful_outcome() {
         .run_scheduled_contained_task(&second_context, &request)
         .expect_err("second mapped run must fail at its guard");
     assert_eq!(failure.code(), "contained_task_guard_refused");
+    let failed_run_events = host
+        .query_persisted_events_for_test(EventQuery {
+            run_id: Some(second_context.run_id()),
+            ..EventQuery::default()
+        })
+        .expect("query failed mapped run");
+    let summaries = failed_run_events
+        .iter()
+        .filter(|event| event.event_type() == EventType::CaptureSummaryCommitted)
+        .collect::<Vec<_>>();
+    let [summary_event] = summaries.as_slice() else {
+        panic!("failed run must commit one capture summary");
+    };
+    let terminal_event = failed_run_events
+        .iter()
+        .find(|event| event.event_type() == EventType::TaskFailed)
+        .expect("failed task terminal");
+    assert!(summary_event.sequence() < terminal_event.sequence());
+    let EventPayload::Capture(CapturePayload::SummaryCommitted(summary)) = summary_event.payload()
+    else {
+        panic!("typed failed capture summary");
+    };
+    assert_eq!(
+        summary.summary().evidence_completeness(),
+        actingcommand_contract::EvidenceCompleteness::Complete,
+        "task failure and evidence completeness are independent"
+    );
+    assert!(
+        summary
+            .summary()
+            .pinned()
+            .iter()
+            .any(|pin| pin.reason() == PinnedFrameReason::GuardRejection)
+    );
+    assert!(
+        summary
+            .summary()
+            .pinned()
+            .iter()
+            .any(|pin| pin.reason() == PinnedFrameReason::Failure)
+    );
+    assert!(
+        summary
+            .summary()
+            .pinned()
+            .iter()
+            .any(|pin| pin.reason() == PinnedFrameReason::Terminal)
+    );
     let failed_snapshot = host
         .policy_outcome_key_snapshot_for_test()
         .expect("failed completed-run snapshot");
@@ -7115,7 +7163,16 @@ fn runtime_executes_neutral_contained_task_without_lab_ownership() {
     state
         .transition_capture_after_input
         .store(true, Ordering::Release);
-    let host = host_with_state(&root, "neutral.instance", Arc::clone(&state));
+    let stable_instance_id = instance_id();
+    let host = RuntimeHost::start(
+        config(&root),
+        Arc::new(FakeProvider::one(
+            "neutral.instance",
+            stable_instance_id,
+            Arc::clone(&state),
+        )),
+    )
+    .expect("runtime host");
     let mut client = TestClient::connect(&host);
     let correlation = client.ids.mint_correlation_id().expect("correlation");
     let correlation_id = *correlation.transport();
@@ -7218,8 +7275,91 @@ fn runtime_executes_neutral_contained_task_without_lab_ownership() {
         .collect::<BTreeSet<_>>();
     assert_eq!(evidence_frames, verified_frames);
     assert_eq!(evidence_frames.len(), 2);
+    let summaries = events
+        .iter()
+        .filter(|event| event.event_type == EventType::CaptureSummaryCommitted)
+        .collect::<Vec<_>>();
+    let [summary_event] = summaries.as_slice() else {
+        panic!("contained task must commit one capture summary");
+    };
+    let terminal_event = events
+        .iter()
+        .find(|event| event.event_type == EventType::TaskCompleted)
+        .expect("task terminal");
+    assert!(summary_event.sequence < terminal_event.sequence);
+    assert_eq!(summary_event.links.run_id(), terminal_event.links.run_id());
+    assert_eq!(
+        summary_event.origin,
+        actingcommand_contract::EventOrigin::new(
+            EventSource::Runtime,
+            OriginModule::CapturePipeline,
+            EventActor::Runtime,
+        )
+    );
+    let ProjectionPayload::Full(payload) = &summary_event.payload else {
+        panic!("forensic capture summary");
+    };
+    let EventPayload::Capture(CapturePayload::SummaryCommitted(summary)) = payload.as_ref() else {
+        panic!("typed capture summary");
+    };
+    assert_eq!(summary.summary().captured(), 2);
+    assert_eq!(summary.summary().persisted(), 2);
+    assert_eq!(summary.summary().deduplicated(), 0);
+    assert_eq!(summary.summary().dropped(), 0);
+    assert_eq!(
+        summary.summary().evidence_completeness(),
+        actingcommand_contract::EvidenceCompleteness::Complete
+    );
+    assert_eq!(summary.summary().frames().len(), 2);
+    assert_eq!(
+        summary
+            .summary()
+            .pinned()
+            .iter()
+            .map(|pin| (pin.frame_index(), pin.reason()))
+            .collect::<Vec<_>>(),
+        vec![
+            (Some(0), PinnedFrameReason::PreInput),
+            (Some(0), PinnedFrameReason::RecognitionEvidence),
+            (Some(1), PinnedFrameReason::PostInput),
+            (Some(1), PinnedFrameReason::RecognitionEvidence),
+            (Some(1), PinnedFrameReason::Terminal),
+        ]
+    );
+    let summary_record = summary.summary().clone();
     drop(client);
     host.close().expect("close host");
+
+    let restarted = RuntimeHost::start(
+        config(&root),
+        Arc::new(FakeProvider::one(
+            "neutral.instance",
+            stable_instance_id,
+            state,
+        )),
+    )
+    .expect("restart runtime host");
+    let mut replay_client = TestClient::connect(&restarted);
+    let replayed = projected_events(
+        &mut replay_client,
+        EventQuery {
+            correlation_id: Some(correlation_id),
+            event_type: Some(EventType::CaptureSummaryCommitted),
+            ..EventQuery::default()
+        },
+    );
+    let [replayed_summary] = replayed.as_slice() else {
+        panic!("restart must project one capture summary");
+    };
+    let ProjectionPayload::Full(payload) = &replayed_summary.payload else {
+        panic!("replayed forensic capture summary");
+    };
+    let EventPayload::Capture(CapturePayload::SummaryCommitted(summary)) = payload.as_ref() else {
+        panic!("replayed typed capture summary");
+    };
+    assert_eq!(summary.summary(), &summary_record);
+    drop(replay_client);
+    restarted.close().expect("close restarted host");
 }
 
 #[test]
@@ -13635,6 +13775,71 @@ fn first_policy_execution_append_failure_recovers_each_scheduled_outcome_once() 
             1,
             "{case}: completion count"
         );
+        let capture_summaries = events
+            .iter()
+            .filter(|event| event.event_type == EventType::CaptureSummaryCommitted)
+            .collect::<Vec<_>>();
+        if let Some(terminal_type) = expected_terminal {
+            let [summary_event] = capture_summaries.as_slice() else {
+                panic!("{case}: task terminal must have one capture summary");
+            };
+            let task_terminal = events
+                .iter()
+                .find(|event| event.event_type == terminal_type)
+                .expect("task terminal");
+            assert!(
+                summary_event.sequence < task_terminal.sequence,
+                "{case}: capture summary must precede the task terminal"
+            );
+            assert_eq!(
+                summary_event.origin.source(),
+                EventSource::Runtime,
+                "{case}: capture-summary source"
+            );
+            assert_eq!(
+                summary_event.origin.module(),
+                OriginModule::CapturePipeline,
+                "{case}: capture-summary module"
+            );
+            assert_eq!(
+                summary_event.origin.actor(),
+                EventActor::Runtime,
+                "{case}: capture-summary actor"
+            );
+            let ProjectionPayload::Full(payload) = &summary_event.payload else {
+                panic!("{case}: full capture summary");
+            };
+            let EventPayload::Capture(CapturePayload::SummaryCommitted(summary)) = payload.as_ref()
+            else {
+                panic!("{case}: typed capture summary");
+            };
+            if matches!(case, "task-recoverable" | "task-severe") {
+                assert_eq!(
+                    summary.summary().evidence_completeness(),
+                    actingcommand_contract::EvidenceCompleteness::Failed,
+                    "{case}: missing capture evidence is not complete"
+                );
+                assert_eq!(summary.summary().captured(), 0, "{case}");
+                assert_eq!(summary.summary().persisted(), 0, "{case}");
+                for reason in [PinnedFrameReason::Failure, PinnedFrameReason::Terminal] {
+                    assert!(
+                        summary
+                            .summary()
+                            .pinned()
+                            .iter()
+                            .any(|pin| pin.reason() == reason
+                                && pin.frame_index().is_none()
+                                && pin.artifact().is_none()),
+                        "{case}: missing {reason:?} evidence must be explicit"
+                    );
+                }
+            }
+        } else {
+            assert!(
+                capture_summaries.is_empty(),
+                "{case}: a path without a task terminal cannot invent a capture summary"
+            );
+        }
         let source = match expected_terminal {
             Some(event_type) => events
                 .iter()
