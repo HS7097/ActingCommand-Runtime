@@ -14,47 +14,20 @@ Early Python mocks and Go legacy contracts, together with the Go/Python benchmar
 
 ## 🏛 System shape
 
-```mermaid
-graph TD
-  subgraph clients["Clients (all reach the daemon through runtime-client over typed loopback IPC)"]
-    ctl["actingctl<br/>production user CLI<br/>dependency graph cannot reach device or recognition"]
-    lab["ActingLab<br/>removable debug probe + resource authoring workbench<br/>guards: no device backend construction · no production ledger writes"]
-    fut["UI / agent clients<br/>(planned)"]
-  end
+![ActingCommand Runtime architecture](./docs/assets/runtime-architecture.png)
 
-  rc["runtime-client<br/>typed IPC client (depends only on contract + policy)"]
-
-  subgraph daemon["actingd resident daemon (exclusive state-root · crash takeover · epoch rotation)"]
-    host["runtime-host — sole orchestrator<br/>request validation · receipts · replay idempotency<br/>sole ledger writer"]
-    sched["scheduler — pure decision kernel<br/>admission · per-instance leases · fencing<br/>(depends only on contract)"]
-    kernel["execution-kernel<br/>app lifecycle · contained-task state machine<br/>capture / fenced input / recovery"]
-    ledger["GlobalLedger — single source of truth<br/>one append entry point (sanitize before persist)<br/>terminals absorbing, never overwritten"]
-    store["artifact-store<br/>content-addressed · tiered retention · evidence export"]
-  end
-
-  contain["pack-containment — sole kernel resource ingress<br/>hash before unpack · bounded extraction · LoadedBundle capability"]
-  dev["device<br/>adb / maatouch / minitouch / nemu-ipc backends"]
-  res["Resource packs (separate repos)<br/>recognition / navigation / operations / recovery — all declarative"]
-  emu["Android emulators ×N"]
-
-  ctl --> rc
-  lab --> rc
-  fut -.-> rc
-  rc --> host
-  host -->|admission · lease decisions (pure function calls)| sched
-  host -->|execution orchestration| kernel
-  host -->|constructs and owns device backends| dev
-  kernel -->|ExecutionBackendProvider| dev
-  dev --> emu
-  res -->|zip bytes + expected sha256| host
-  host --> contain
-  contain -->|LoadedBundle| kernel
-  host ==>|sole append: every event<br/>scheduler / device-proxy / capture are attribution labels, not writers| ledger
-  host --- store
-  host -.->|ledger projections / subscriptions| clients
-```
+Solid paths represent capabilities that are merged into `main`. Dashed paths represent source that is not wired into the production path or work that is still planned. Open pull requests do not count as available capability.
 
 Terminology is defined in [CONTEXT.md](./CONTEXT.md) (Runtime Host / Scheduler / Execution Kernel / Device Throat / DeviceProxy and others, one entry each).
+
+## 📍 Current progress (2026-07-30)
+
+| Stage | Current state |
+|---|---|
+| **Available on `main`** | Resident daemon, typed loopback IPC, scheduling admission and lease fencing, contained-task execution, GlobalLedger, artifact storage, pack containment, device backends, NCC template matching and color predicates, and the ActingLab resource-authoring path. |
+| **Source-ready, not production-wired** | Process-level OCR / NN FFI contracts, the PP-OCR provider, and the ONNXRuntime provider. Operators still supply models and native runtime libraries. |
+| **In integration, not a mainline capability** | Scheduling catalogs, instance facts and reports, the agent-dispatch boundary, and stronger architecture guards are being reviewed and integrated through a stacked pull-request chain. |
+| **Planned** | Production UI / agent clients. Game-specific recognition, navigation, operations, and recovery data continue to ship from separate resource repositories. |
 
 ## ⚖ Seven structural invariants (enforced by guards, tests, and compile-time and real-process counterexamples)
 

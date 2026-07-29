@@ -14,47 +14,20 @@
 
 ## 🏛 系统形态
 
-```mermaid
-graph TD
-  subgraph clients["客户端(全部经 runtime-client 走 typed loopback IPC)"]
-    ctl["actingctl<br/>生产用户 CLI<br/>依赖图不可触达设备与识别"]
-    lab["ActingLab<br/>可拆调试探针 + 资源制作工作台<br/>守卫:禁构造设备后端 · 禁生产账本写入"]
-    fut["UI / 智能体客户端<br/>(规划中)"]
-  end
+![ActingCommand Runtime 架构图](./docs/assets/runtime-architecture.png)
 
-  rc["runtime-client<br/>typed IPC 客户端(仅依赖 contract + policy)"]
-
-  subgraph daemon["actingd 常驻 daemon(state-root 排他 · 崩溃接管 · epoch 换代)"]
-    host["runtime-host — 唯一编排者<br/>请求校验 · 收据 · 重放幂等<br/>唯一账本写入者"]
-    sched["scheduler — 纯决策内核<br/>准入 · 每实例租约 · fencing<br/>(仅依赖 contract)"]
-    kernel["execution-kernel<br/>应用生命周期 · 收容任务状态机<br/>截图 / 受栅栏输入 / 恢复"]
-    ledger["GlobalLedger — 唯一事实源<br/>唯一 append 入口(脱敏先于持久化)<br/>终态吸收不可覆写"]
-    store["artifact-store<br/>content-addressed · 分级留存 · 证据导出"]
-  end
-
-  contain["pack-containment — 内核资源唯一入口<br/>哈希先于解压 · 有界解压 · LoadedBundle capability"]
-  dev["device<br/>adb / maatouch / minitouch / nemu-ipc 后端"]
-  res["资源包(独立资源仓)<br/>识别 / 导航 / 操作 / 恢复 全声明式"]
-  emu["安卓模拟器 ×N"]
-
-  ctl --> rc
-  lab --> rc
-  fut -.-> rc
-  rc --> host
-  host -->|准入 · 租约决策(纯函数调用)| sched
-  host -->|执行编排| kernel
-  host -->|构造并持有设备后端| dev
-  kernel -->|ExecutionBackendProvider| dev
-  dev --> emu
-  res -->|zip 字节 + 期望 sha256| host
-  host --> contain
-  contain -->|LoadedBundle| kernel
-  host ==>|唯一 append:全部事件<br/>scheduler / device-proxy / capture 等只是事件的归属标签,不是写入者| ledger
-  host --- store
-  host -.->|账本投影 / 订阅| clients
-```
+图中实线仅表示已经合入 `main` 的能力。虚线表示源码已经存在但尚未接入生产路径,或仍处于规划阶段;开放中的 PR 不计入可用能力。
 
 术语以仓内 [CONTEXT.md](./CONTEXT.md) 为准(Runtime Host / Scheduler / Execution Kernel / Device Throat / DeviceProxy 等逐条定义)。
+
+## 📍 当前进度(2026-07-30)
+
+| 阶段 | 当前状态 |
+|---|---|
+| **已在 `main` 可用** | 常驻 daemon、typed loopback IPC、调度准入与租约 fencing、收容任务执行、GlobalLedger、工件存储、资源包收容、设备后端、NCC 模板匹配与颜色判据、ActingLab 资源制作链路。 |
+| **源码已就位,尚未接入生产路径** | OCR / NN 的进程级 FFI 契约、PP-OCR provider 与 ONNXRuntime provider;模型与原生运行库仍由操作者提供。 |
+| **正在集成,不计入主线能力** | 调度策略目录、实例事实与报告、智能体调度边界及补强架构守卫正在 stacked PR 链中复核和合入。 |
+| **规划中** | UI / 智能体正式客户端;各游戏的识别、导航、操作与恢复数据继续由独立资源仓交付。 |
 
 ## ⚖ 七条结构不变量(守卫 / 测试 / 编译期与真实进程反例执法)
 
