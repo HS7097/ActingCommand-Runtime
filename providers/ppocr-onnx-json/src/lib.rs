@@ -112,7 +112,7 @@ fn read_text_json(
     envelope.request.validate().map_err(provider_error)?;
     envelope
         .artifacts
-        .validate_existing_files()
+        .validate_ppocr_v6_cuda_existing_files()
         .map_err(provider_error)?;
     let runtime_library = select_onnxruntime_library(&envelope.artifacts.runtime_library_paths)?;
     ensure_ort_runtime(runtime_library)?;
@@ -126,7 +126,7 @@ fn read_text_json(
         let detected = {
             let mut detector_session = detector_session
                 .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner());
+                .map_err(|_| "PPOCR detector session mutex is poisoned".to_string())?;
             detect_text_regions(
                 &mut detector_session,
                 &envelope.request.frame,
@@ -137,7 +137,7 @@ fn read_text_json(
         let mut blocks = Vec::new();
         let mut recognizer_session = recognizer_session
             .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
+            .map_err(|_| "PPOCR recognizer session mutex is poisoned".to_string())?;
         for detected_box in detected.iter().take(MAX_DETECTED_TEXT_BOXES) {
             let decoded = recognize_region(
                 &mut recognizer_session,
@@ -170,7 +170,7 @@ fn read_text_json(
     } else {
         let mut recognizer_session = recognizer_session
             .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
+            .map_err(|_| "PPOCR recognizer session mutex is poisoned".to_string())?;
         let decoded = recognize_region(
             &mut recognizer_session,
             &dictionary,
@@ -251,6 +251,14 @@ fn detector_sessions() -> &'static OrtSessionCache {
 fn load_ort_session(path: &Path) -> Result<Session, String> {
     Session::builder()
         .map_err(|err| format!("failed to create ONNXRuntime session builder: {err}"))?
+        .with_execution_providers([ort::ep::CUDA::default().build().error_on_failure()])
+        .map_err(|err| {
+            format!(
+                "failed to register required CUDA execution provider; CPU/DirectML/CoreML fallback is disabled: {err}"
+            )
+        })?
+        .with_disable_cpu_fallback()
+        .map_err(|err| format!("failed to disable PPOCR CPU fallback: {err}"))?
         .with_intra_threads(1)
         .map_err(|err| format!("failed to configure ONNXRuntime intra threads: {err}"))?
         .commit_from_file(path)

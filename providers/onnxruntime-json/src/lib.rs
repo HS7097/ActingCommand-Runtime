@@ -9,8 +9,8 @@
 
 use actingcommand_onnx_provider_support::{InferenceWatchdog, OrtRuntimeInitializer};
 use actingcommand_vision_ffi::{
-    NnClassificationResult, NnLabel, OnnxRuntimeInvokeRequest, VisionBackendKind, VisionFfiError,
-    VisionFfiOwnedBuffer, VisionFrame, VisionPixelFormat,
+    NnClassificationResult, NnLabel, OnnxExecutionProvider, OnnxRuntimeInvokeRequest,
+    VisionBackendKind, VisionFfiError, VisionFfiOwnedBuffer, VisionFrame, VisionPixelFormat,
 };
 use ort::session::{RunOptions, Session};
 use ort::value::{Tensor, TensorElementType, ValueType};
@@ -101,7 +101,7 @@ fn classify_json(
     envelope.request.validate().map_err(provider_error)?;
     envelope
         .artifacts
-        .validate_existing_files()
+        .validate_production_existing_files()
         .map_err(provider_error)?;
     let runtime_library = envelope
         .artifacts
@@ -112,10 +112,23 @@ fn classify_json(
         })?;
     ensure_ort_runtime(runtime_library)?;
 
-    let mut session = Session::builder()
+    let session_builder = Session::builder()
         .map_err(|err| format!("failed to create ONNXRuntime session builder: {err}"))?
         .with_intra_threads(1)
-        .map_err(|err| format!("failed to configure ONNXRuntime intra threads: {err}"))?
+        .map_err(|err| format!("failed to configure ONNXRuntime intra threads: {err}"))?;
+    let mut session_builder = match envelope.artifacts.execution_provider {
+        OnnxExecutionProvider::Cpu => session_builder,
+        OnnxExecutionProvider::Cuda => session_builder
+            .with_execution_providers([ort::ep::CUDA::default().build().error_on_failure()])
+            .map_err(|err| {
+                format!(
+                    "failed to register required CUDA execution provider; CPU/DirectML/CoreML fallback is disabled: {err}"
+                )
+            })?
+            .with_disable_cpu_fallback()
+            .map_err(|err| format!("failed to disable ONNXRuntime CPU fallback: {err}"))?,
+    };
+    let mut session = session_builder
         .commit_from_file(&envelope.artifacts.model_path)
         .map_err(|err| {
             format!(

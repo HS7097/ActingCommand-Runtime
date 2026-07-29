@@ -3,7 +3,8 @@
 use crate::{
     FastDeployPpocrArtifacts, FastDeployPpocrInvokeRequest, NnClassificationResult, NnEngine,
     NnInferenceRequest, OcrEngine, OcrInferenceRequest, OcrInferenceResult, OnnxRuntimeArtifacts,
-    OnnxRuntimeInvokeRequest, VisionFfiError, VisionFfiResult, VisionProviderArtifactManifest,
+    OnnxRuntimeInvokeRequest, VisionFfiError, VisionFfiErrorCode, VisionFfiResult,
+    VisionProviderArtifactManifest,
 };
 use libloading::Library;
 use serde::{Serialize, de::DeserializeOwned};
@@ -77,7 +78,7 @@ impl FastDeployPpocrBackend {
     }
 
     pub fn from_artifacts(artifacts: FastDeployPpocrArtifacts) -> VisionFfiResult<Self> {
-        artifacts.validate_existing_files()?;
+        artifacts.validate_ppocr_v6_cuda_existing_files()?;
         let library = load_library("fastdeploy-ppocr", &artifacts.provider_library_path)?;
         let read_text_json = load_symbol(&library, "fastdeploy-ppocr", OCR_READ_TEXT_SYMBOL)?;
         let free_buffer = load_symbol(&library, "fastdeploy-ppocr", FREE_BUFFER_SYMBOL)?;
@@ -90,7 +91,7 @@ impl FastDeployPpocrBackend {
     }
 
     pub fn from_manifest(manifest: &VisionProviderArtifactManifest) -> VisionFfiResult<Self> {
-        Self::from_artifacts(manifest.require_fastdeploy_ppocr()?.clone())
+        Self::from_artifacts(manifest.require_production_fastdeploy_ppocr()?.clone())
     }
 
     /// # Safety
@@ -120,7 +121,7 @@ impl FastDeployPpocrBackend {
         free_buffer: VisionFfiFreeBuffer,
         artifacts: FastDeployPpocrArtifacts,
     ) -> VisionFfiResult<Self> {
-        artifacts.validate()?;
+        artifacts.validate_ppocr_v6_cuda()?;
         Ok(Self {
             _library: None,
             read_text_json,
@@ -140,7 +141,8 @@ pub fn validate_fastdeploy_ppocr_provider_abi(path: impl AsRef<OsStr>) -> Vision
 impl OcrEngine for FastDeployPpocrBackend {
     fn read_text(&mut self, request: OcrInferenceRequest) -> VisionFfiResult<OcrInferenceResult> {
         request.validate()?;
-        if let Some(artifacts) = &self.artifacts {
+        let validation_request = request.clone();
+        let result: OcrInferenceResult = if let Some(artifacts) = &self.artifacts {
             invoke_json(
                 "fastdeploy-ppocr",
                 self.read_text_json,
@@ -157,7 +159,9 @@ impl OcrEngine for FastDeployPpocrBackend {
                 self.free_buffer,
                 &request,
             )
-        }
+        }?;
+        result.validate(&validation_request)?;
+        Ok(result)
     }
 }
 
@@ -182,7 +186,7 @@ impl OnnxRuntimeBackend {
     }
 
     pub fn from_artifacts(artifacts: OnnxRuntimeArtifacts) -> VisionFfiResult<Self> {
-        artifacts.validate_existing_files()?;
+        artifacts.validate_production_existing_files()?;
         let library = load_library("onnxruntime", &artifacts.provider_library_path)?;
         let classify_json = load_symbol(&library, "onnxruntime", NN_CLASSIFY_SYMBOL)?;
         let free_buffer = load_symbol(&library, "onnxruntime", FREE_BUFFER_SYMBOL)?;
@@ -195,7 +199,7 @@ impl OnnxRuntimeBackend {
     }
 
     pub fn from_manifest(manifest: &VisionProviderArtifactManifest) -> VisionFfiResult<Self> {
-        Self::from_artifacts(manifest.require_onnxruntime()?.clone())
+        Self::from_artifacts(manifest.require_production_onnxruntime()?.clone())
     }
 
     /// # Safety
@@ -225,7 +229,7 @@ impl OnnxRuntimeBackend {
         free_buffer: VisionFfiFreeBuffer,
         artifacts: OnnxRuntimeArtifacts,
     ) -> VisionFfiResult<Self> {
-        artifacts.validate()?;
+        artifacts.validate_production_model()?;
         Ok(Self {
             _library: None,
             classify_json,
@@ -252,7 +256,7 @@ pub fn validate_runtime_library_loadable(
 impl NnEngine for OnnxRuntimeBackend {
     fn classify(&mut self, request: NnInferenceRequest) -> VisionFfiResult<NnClassificationResult> {
         request.validate()?;
-        if let Some(artifacts) = &self.artifacts {
+        let result: NnClassificationResult = if let Some(artifacts) = &self.artifacts {
             invoke_json(
                 "onnxruntime",
                 self.classify_json,
@@ -269,7 +273,9 @@ impl NnEngine for OnnxRuntimeBackend {
                 self.free_buffer,
                 &request,
             )
-        }
+        }?;
+        result.validate()?;
+        Ok(result)
     }
 }
 
@@ -278,7 +284,8 @@ fn load_library(module: &'static str, path: impl AsRef<OsStr>) -> VisionFfiResul
     // SAFETY: loading a dynamic library is the required FFI boundary. The
     // handle is retained in the backend so loaded symbols cannot outlive it.
     let library = unsafe { Library::new(path) }.map_err(|err| {
-        VisionFfiError::fatal(
+        VisionFfiError::fatal_with_code(
+            VisionFfiErrorCode::ProviderUnavailable,
             module,
             format!(
                 "failed to load FFI library {}: {err}",
@@ -327,19 +334,30 @@ where
     let response_bytes = take_owned_buffer(module, response, free_buffer)?;
     if status != 0 {
         let response_text = String::from_utf8_lossy(&response_bytes);
-        return Err(VisionFfiError::fatal(
+        let code = if status == 2 {
+            VisionFfiErrorCode::ProviderPanic
+        } else {
+            VisionFfiErrorCode::ProviderFailure
+        };
+        return Err(VisionFfiError::fatal_with_code(
+            code,
             module,
             format!("FFI backend returned status {status}: {response_text}"),
         ));
     }
     if response_bytes.is_empty() {
-        return Err(VisionFfiError::fatal(
+        return Err(VisionFfiError::fatal_with_code(
+            VisionFfiErrorCode::InvalidResponse,
             module,
             "FFI backend returned an empty response",
         ));
     }
     serde_json::from_slice(&response_bytes).map_err(|err| {
-        VisionFfiError::fatal(module, format!("failed to parse FFI response JSON: {err}"))
+        VisionFfiError::fatal_with_code(
+            VisionFfiErrorCode::InvalidResponse,
+            module,
+            format!("failed to parse FFI response JSON: {err}"),
+        )
     })
 }
 
@@ -406,7 +424,8 @@ fn invalid_owned_buffer(
     reason: &str,
     buffer: VisionFfiOwnedBuffer,
 ) -> VisionFfiError {
-    VisionFfiError::fatal(
+    VisionFfiError::fatal_with_code(
+        VisionFfiErrorCode::InvalidResponse,
         module,
         format!(
             "FFI backend returned invalid owned buffer metadata: reason={reason}; data_is_null={}; len={}; capacity={}; limit={MAX_FFI_RESPONSE_BYTES}; action=not_read_not_released",
