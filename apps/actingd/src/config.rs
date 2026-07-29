@@ -13,17 +13,24 @@ use actingcommand_policy::{
 use actingcommand_runtime_host::{
     AgentDispatcherConfig, ExecutionBackendProvider, ExecutionBackendRegistration,
     ExecutionBackendRegistry, PerformanceMonitorConfig, PolicyInputSnapshot, ProcedureBinding,
-    ProcedureManifest, ResolvedExecutionInstance, RuntimeHostConfig,
+    ProcedureManifest, RecognitionVisionProvider, ResolvedExecutionInstance, RuntimeHostConfig,
+    VisionFfiProvider, VisionModelIdentity,
+};
+use actingcommand_vision_ffi::{
+    FastDeployPpocrBackend, NnEngine, OcrEngine, OnnxRuntimeBackend,
+    VISION_PROVIDER_ARTIFACTS_SCHEMA_VERSION, VisionProviderArtifactManifest,
 };
 use serde::Deserialize;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fs;
 use std::net::{IpAddr, SocketAddr};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::Duration;
 
 const CONFIG_SCHEMA_VERSION: &str = "actingcommand.actingd.config.v1";
 const MAX_CONFIG_BYTES: u64 = 1024 * 1024;
+const MAX_VISION_MANIFEST_BYTES: u64 = 1024 * 1024;
 const MAX_TIMEOUT_MS: u64 = 120_000;
 const MAX_FIXTURE_FRAMES: usize = 32;
 const MAX_FIXTURE_FRAME_BYTES: usize = 16 * 1024 * 1024;
@@ -45,6 +52,8 @@ pub(super) struct ActingdConfigFile {
     agent_dispatcher: Option<AgentDispatcherConfigFile>,
     #[serde(default)]
     policy: Option<PolicyConfigFile>,
+    #[serde(default)]
+    vision_provider_manifest: Option<PathBuf>,
     instances: Vec<InstanceConfig>,
     #[serde(skip)]
     source_root: PathBuf,
@@ -172,6 +181,7 @@ pub(super) enum ConfiguredExecutionBackendRegistry {
 
 pub(super) struct FixtureExecutionBackendRegistry {
     instances: BTreeMap<String, FixtureExecutionBackend>,
+    vision_provider: Option<Arc<dyn RecognitionVisionProvider>>,
 }
 
 struct FixtureExecutionBackend {
@@ -233,7 +243,12 @@ impl ActingdConfigFile {
             .into_iter()
             .map(InstanceConfig::backend)
             .collect::<Result<Vec<_>, _>>()?;
-        let registry = ConfiguredExecutionBackendRegistry::new(registrations)?;
+        let vision_provider = self
+            .vision_provider_manifest
+            .as_ref()
+            .map(|path| assemble_vision_provider(&self.source_root, path))
+            .transpose()?;
+        let registry = ConfiguredExecutionBackendRegistry::new(registrations, vision_provider)?;
         let policy = self
             .policy
             .map(|policy| policy.assemble(&self.source_root))
@@ -620,7 +635,10 @@ impl InstanceConfig {
 }
 
 impl ConfiguredExecutionBackendRegistry {
-    fn new(backends: Vec<ConfiguredInstanceBackend>) -> Result<Self, &'static str> {
+    fn new(
+        backends: Vec<ConfiguredInstanceBackend>,
+        vision_provider: Option<Arc<dyn RecognitionVisionProvider>>,
+    ) -> Result<Self, &'static str> {
         if backends.is_empty() {
             return Err("execution_registry_invalid");
         }
@@ -637,11 +655,17 @@ impl ConfiguredExecutionBackendRegistry {
             }
         }
         match (devices.is_empty(), fixtures.is_empty()) {
-            (false, true) => ExecutionBackendRegistry::new(devices)
-                .map(Self::Device)
-                .map_err(|_| "execution_registry_invalid"),
+            (false, true) => {
+                let registry = ExecutionBackendRegistry::new(devices)
+                    .map_err(|_| "execution_registry_invalid")?;
+                Ok(Self::Device(match vision_provider {
+                    Some(provider) => registry.with_vision_provider(provider),
+                    None => registry,
+                }))
+            }
             (true, false) => Ok(Self::Fixture(FixtureExecutionBackendRegistry {
                 instances: fixtures,
+                vision_provider,
             })),
             _ => Err("execution_backend_mode_mixed"),
         }
@@ -691,6 +715,13 @@ impl ExecutionBackendProvider for ConfiguredExecutionBackendRegistry {
             Self::Fixture(registry) => registry.control_application(instance_alias, action),
         }
     }
+
+    fn vision_provider(&self) -> Option<Arc<dyn RecognitionVisionProvider>> {
+        match self {
+            Self::Device(registry) => registry.vision_provider(),
+            Self::Fixture(registry) => registry.vision_provider(),
+        }
+    }
 }
 
 impl ExecutionBackendProvider for FixtureExecutionBackendRegistry {
@@ -733,6 +764,107 @@ impl ExecutionBackendProvider for FixtureExecutionBackendRegistry {
         Err(DeviceError::fatal(
             "fixture application control is forbidden",
         ))
+    }
+
+    fn vision_provider(&self) -> Option<Arc<dyn RecognitionVisionProvider>> {
+        self.vision_provider.clone()
+    }
+}
+
+fn assemble_vision_provider(
+    source_root: &Path,
+    configured_path: &Path,
+) -> Result<Arc<dyn RecognitionVisionProvider>, &'static str> {
+    if configured_path.as_os_str().is_empty() {
+        return Err("vision_provider_manifest_invalid");
+    }
+    let manifest_path = if configured_path.is_absolute() {
+        configured_path.to_path_buf()
+    } else {
+        source_root.join(configured_path)
+    };
+    let manifest_path =
+        fs::canonicalize(manifest_path).map_err(|_| "vision_provider_manifest_unavailable")?;
+    let metadata =
+        fs::metadata(&manifest_path).map_err(|_| "vision_provider_manifest_unavailable")?;
+    if !metadata.is_file() || metadata.len() == 0 || metadata.len() > MAX_VISION_MANIFEST_BYTES {
+        return Err("vision_provider_manifest_size_invalid");
+    }
+    let bytes = fs::read(&manifest_path).map_err(|_| "vision_provider_manifest_unavailable")?;
+    let mut manifest = VisionProviderArtifactManifest::from_json_slice(&bytes)
+        .map_err(|_| "vision_provider_manifest_invalid")?;
+    if manifest.schema_version != VISION_PROVIDER_ARTIFACTS_SCHEMA_VERSION {
+        return Err("vision_provider_manifest_invalid");
+    }
+    let artifact_root = manifest_path
+        .parent()
+        .ok_or("vision_provider_manifest_invalid")?;
+    resolve_vision_artifact_paths(&mut manifest, artifact_root);
+
+    let ocr = manifest
+        .fastdeploy_ppocr
+        .take()
+        .map(|artifacts| {
+            let (model_ref, model_sha256) = artifacts
+                .production_model_identity()
+                .map_err(|_| "vision_provider_manifest_invalid")?;
+            let identity = VisionModelIdentity::new(model_ref, model_sha256)
+                .map_err(|_| "vision_provider_manifest_invalid")?;
+            let engine = FastDeployPpocrBackend::from_artifacts(artifacts)
+                .map_err(|_| "vision_provider_unavailable")?;
+            Ok::<_, &'static str>((Box::new(engine) as Box<dyn OcrEngine + Send>, identity))
+        })
+        .transpose()?;
+    let nn = manifest
+        .onnxruntime
+        .take()
+        .map(|artifacts| {
+            let (model_ref, model_sha256) = artifacts
+                .production_model_identity()
+                .map_err(|_| "vision_provider_manifest_invalid")?;
+            let identity = VisionModelIdentity::new(model_ref, model_sha256)
+                .map_err(|_| "vision_provider_manifest_invalid")?;
+            let engine = OnnxRuntimeBackend::from_artifacts(artifacts)
+                .map_err(|_| "vision_provider_unavailable")?;
+            Ok::<_, &'static str>((Box::new(engine) as Box<dyn NnEngine + Send>, identity))
+        })
+        .transpose()?;
+    let provider =
+        VisionFfiProvider::new(ocr, nn).map_err(|_| "vision_provider_manifest_invalid")?;
+    Ok(Arc::new(provider))
+}
+
+fn resolve_vision_artifact_paths(
+    manifest: &mut VisionProviderArtifactManifest,
+    artifact_root: &Path,
+) {
+    if let Some(artifacts) = &mut manifest.fastdeploy_ppocr {
+        resolve_relative_path(artifact_root, &mut artifacts.provider_library_path);
+        for path in &mut artifacts.runtime_library_paths {
+            resolve_relative_path(artifact_root, path);
+        }
+        resolve_relative_path(artifact_root, &mut artifacts.detector_model_path);
+        resolve_relative_path(artifact_root, &mut artifacts.recognizer_model_path);
+        resolve_relative_path(artifact_root, &mut artifacts.dictionary_path);
+        if let Some(path) = &mut artifacts.classifier_model_path {
+            resolve_relative_path(artifact_root, path);
+        }
+    }
+    if let Some(artifacts) = &mut manifest.onnxruntime {
+        resolve_relative_path(artifact_root, &mut artifacts.provider_library_path);
+        if let Some(path) = &mut artifacts.runtime_library_path {
+            resolve_relative_path(artifact_root, path);
+        }
+        resolve_relative_path(artifact_root, &mut artifacts.model_path);
+        if let Some(path) = &mut artifacts.labels_path {
+            resolve_relative_path(artifact_root, path);
+        }
+    }
+}
+
+fn resolve_relative_path(root: &Path, path: &mut PathBuf) {
+    if path.is_relative() {
+        *path = root.join(&*path);
     }
 }
 
@@ -978,13 +1110,57 @@ mod tests {
             .expect("typed fixture config");
         let assembly = config.assemble().expect("bounded fixture assembly");
         assert!(matches!(
-            assembly.registry,
+            &assembly.registry,
             ConfiguredExecutionBackendRegistry::Fixture(_)
         ));
+        assert!(assembly.registry.vision_provider().is_none());
 
         let config = serde_json::from_value::<ActingdConfigFile>(fixture(MAX_FIXTURE_INPUTS + 1))
             .expect("typed fixture config");
         assert_eq!(config.assemble().err(), Some("fixture_backend_invalid"));
+    }
+
+    #[test]
+    fn configured_vision_provider_manifest_fails_closed_before_runtime_start() {
+        let root = TempDir::new().expect("tempdir");
+        let id = IdentifierIssuer::new()
+            .expect("issuer")
+            .mint_instance_id()
+            .expect("instance id");
+        let config_value = |manifest: &str| {
+            json!({
+                "schema_version": CONFIG_SCHEMA_VERSION,
+                "state_root": "state",
+                "bind_host": "127.0.0.1",
+                "secret_fingerprint_salt": "0123456789abcdef",
+                "vision_provider_manifest": manifest,
+                "instances": [{
+                    "alias": "neutral.fixture",
+                    "instance_id": id.transport(),
+                    "fixture_backend": {
+                        "frames": [{"width": 1, "height": 1, "rgb": [1, 2, 3]}],
+                        "max_inputs": 0
+                    }
+                }]
+            })
+        };
+
+        let mut missing = serde_json::from_value::<ActingdConfigFile>(config_value("missing.json"))
+            .expect("typed config");
+        missing.source_root = root.path().to_path_buf();
+        assert_eq!(
+            missing.assemble().err(),
+            Some("vision_provider_manifest_unavailable")
+        );
+
+        fs::write(root.path().join("invalid.json"), b"{}").expect("invalid manifest fixture");
+        let mut invalid = serde_json::from_value::<ActingdConfigFile>(config_value("invalid.json"))
+            .expect("typed config");
+        invalid.source_root = root.path().to_path_buf();
+        assert_eq!(
+            invalid.assemble().err(),
+            Some("vision_provider_manifest_invalid")
+        );
     }
 
     #[test]

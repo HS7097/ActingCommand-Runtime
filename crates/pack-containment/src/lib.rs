@@ -4,7 +4,9 @@ use actingcommand_page_detector::{
     PageDefinition, PageDetector, PageSet, load_page_set_from_json_str,
 };
 use actingcommand_recognition_pack::{
-    AssetResolver, RecognitionEvaluator, UnsupportedRecognitionTarget, load_pack_from_json_str,
+    AssetResolver, NnProviderRequest, NnProviderResult, OcrProviderRequest, OcrProviderResult,
+    RecognitionEvaluator, RecognitionPackErrorCode, UnsupportedRecognitionTarget, VisionProvider,
+    VisionProviderError, VisionProviderErrorCode, load_pack_from_json_str,
     unsupported_recognition_targets,
 };
 use serde::Deserialize;
@@ -157,6 +159,7 @@ impl Default for ContainmentLimits {
 #[derive(Debug, Default)]
 pub struct Containment {
     limits: ContainmentLimits,
+    vision_provider: Option<Arc<dyn VisionProvider>>,
     benches: BTreeMap<InstanceId, Bench>,
 }
 
@@ -168,6 +171,22 @@ impl Containment {
     pub fn with_limits(limits: ContainmentLimits) -> Self {
         Self {
             limits,
+            vision_provider: None,
+            benches: BTreeMap::new(),
+        }
+    }
+
+    pub fn with_vision_provider(vision_provider: Arc<dyn VisionProvider>) -> Self {
+        Self::with_limits_and_vision_provider(ContainmentLimits::default(), vision_provider)
+    }
+
+    pub fn with_limits_and_vision_provider(
+        limits: ContainmentLimits,
+        vision_provider: Arc<dyn VisionProvider>,
+    ) -> Self {
+        Self {
+            limits,
+            vision_provider: Some(vision_provider),
             benches: BTreeMap::new(),
         }
     }
@@ -194,7 +213,11 @@ impl Containment {
             });
         }
         let package = MemoryPackage::from_zip(task_zip_bytes, self.limits, instance)?;
-        let bundle = LoadedBundle::from_memory_package(package, actual)?;
+        let bundle = LoadedBundle::from_memory_package(
+            package,
+            actual,
+            self.vision_provider.as_ref().map(Arc::clone),
+        )?;
         let bench = self
             .benches
             .entry(instance.clone())
@@ -225,7 +248,7 @@ impl Containment {
     }
 }
 
-/// Validates recognition and page metadata against a caller-owned asset resolver.
+/// Validates recognition and page metadata without claiming a runtime vision capability.
 pub fn validate_recognition_metadata(
     pack_path: &str,
     pack_json: &str,
@@ -233,8 +256,75 @@ pub fn validate_recognition_metadata(
     pages_json: &str,
     asset_resolver: Arc<dyn AssetResolver>,
 ) -> ContainmentResult<Vec<UnsupportedRecognitionTarget>> {
-    let (evaluator, _, _) =
-        build_recognition_pipeline(pack_path, pack_json, pages_path, pages_json, asset_resolver)?;
+    let (evaluator, _, _) = build_recognition_pipeline(
+        pack_path,
+        pack_json,
+        pages_path,
+        pages_json,
+        asset_resolver,
+        Some(Arc::new(MetadataValidationVisionProvider)),
+    )?;
+    Ok(evaluator.unsupported_targets().to_vec())
+}
+
+#[derive(Debug)]
+struct MetadataValidationVisionProvider;
+
+impl VisionProvider for MetadataValidationVisionProvider {
+    fn require_ocr_model(
+        &self,
+        _model_ref: &str,
+        _model_sha256: &str,
+    ) -> Result<(), VisionProviderError> {
+        Ok(())
+    }
+
+    fn require_nn_model(
+        &self,
+        _model_ref: &str,
+        _model_sha256: &str,
+    ) -> Result<(), VisionProviderError> {
+        Ok(())
+    }
+
+    fn read_text(
+        &self,
+        _request: OcrProviderRequest<'_>,
+    ) -> Result<OcrProviderResult, VisionProviderError> {
+        Err(VisionProviderError::new(
+            VisionProviderErrorCode::Unavailable,
+            "metadata validation does not provide runtime OCR inference",
+        ))
+    }
+
+    fn classify(
+        &self,
+        _request: NnProviderRequest<'_>,
+    ) -> Result<NnProviderResult, VisionProviderError> {
+        Err(VisionProviderError::new(
+            VisionProviderErrorCode::Unavailable,
+            "metadata validation does not provide runtime NN inference",
+        ))
+    }
+}
+
+/// Validates recognition/page metadata and its required production vision capability.
+pub fn validate_recognition_metadata_with_vision_provider(
+    pack_path: &str,
+    pack_json: &str,
+    pages_path: &str,
+    pages_json: &str,
+    asset_resolver: Arc<dyn AssetResolver>,
+    vision_provider: Arc<dyn VisionProvider>,
+) -> ContainmentResult<Vec<UnsupportedRecognitionTarget>> {
+    let (evaluator, _, _) = build_recognition_pipeline(
+        pack_path,
+        pack_json,
+        pages_path,
+        pages_json,
+        asset_resolver,
+        Some(vision_provider),
+    )?;
     Ok(evaluator.unsupported_targets().to_vec())
 }
 
@@ -287,12 +377,14 @@ impl LoadedBundle {
     fn from_memory_package(
         package: MemoryPackage,
         verified: Sha256Hash,
+        vision_provider: Option<Arc<dyn VisionProvider>>,
     ) -> ContainmentResult<Self> {
         let entries = Arc::new(package.entries);
         let metadata = PackageMetadata::from_entries(&entries)?;
         validate_manifest_hashes(&metadata.manifest, &entries, &metadata.resource_root)?;
         let recognition_pack_diagnostics = collect_recognition_pack_diagnostics(&entries)?;
-        let (evaluator, detector) = load_recognition_pipeline(&entries, &metadata)?;
+        let (evaluator, detector) =
+            load_recognition_pipeline(&entries, &metadata, vision_provider)?;
 
         Ok(Self {
             task_id: metadata.task_id,
@@ -747,6 +839,11 @@ pub enum ContainmentError {
         path: String,
         message: String,
     },
+    RecognitionPack {
+        path: String,
+        code: RecognitionPackErrorCode,
+        message: String,
+    },
 }
 
 impl fmt::Display for ContainmentError {
@@ -848,6 +945,14 @@ impl fmt::Display for ContainmentError {
                     "fatal containment error: failed to parse {path}: {message}"
                 )
             }
+            Self::RecognitionPack {
+                path,
+                code,
+                message,
+            } => write!(
+                f,
+                "fatal containment error: recognition package {path} failed with {code:?}: {message}"
+            ),
         }
     }
 }
@@ -857,6 +962,7 @@ impl Error for ContainmentError {}
 fn load_recognition_pipeline(
     entries: &Arc<BTreeMap<String, Vec<u8>>>,
     metadata: &PackageMetadata,
+    vision_provider: Option<Arc<dyn VisionProvider>>,
 ) -> ContainmentResult<(Option<RecognitionEvaluator>, Option<PageDetector>)> {
     let error_pages =
         parse_packaged_error_page_references(&metadata.operation_path, &metadata.operation)?;
@@ -883,17 +989,24 @@ fn load_recognition_pipeline(
                 }
             })?;
         let evaluator =
-            RecognitionEvaluator::with_asset_resolver(pack, resolver).map_err(|err| {
-                ContainmentError::PackParse {
+            build_recognition_evaluator(pack, resolver, vision_provider).map_err(|err| {
+                ContainmentError::RecognitionPack {
                     path: pack_path.clone(),
+                    code: err.code(),
                     message: err.to_string(),
                 }
             })?;
         return Ok((Some(evaluator), None));
     };
     let pages_json = decode_utf8_entry(entries, pages_path)?;
-    let (evaluator, detector, page_set) =
-        build_recognition_pipeline(pack_path, pack_json, pages_path, pages_json, resolver)?;
+    let (evaluator, detector, page_set) = build_recognition_pipeline(
+        pack_path,
+        pack_json,
+        pages_path,
+        pages_json,
+        resolver,
+        vision_provider,
+    )?;
     validate_packaged_error_page_references(
         &metadata.operation_path,
         &metadata.operation,
@@ -909,6 +1022,7 @@ fn build_recognition_pipeline(
     pages_path: &str,
     pages_json: &str,
     asset_resolver: Arc<dyn AssetResolver>,
+    vision_provider: Option<Arc<dyn VisionProvider>>,
 ) -> ContainmentResult<(RecognitionEvaluator, PageDetector, PageSet)> {
     let pack =
         load_pack_from_json_str(pack_json.trim_start_matches('\u{feff}')).map_err(|err| {
@@ -918,9 +1032,10 @@ fn build_recognition_pipeline(
             }
         })?;
     let evaluator =
-        RecognitionEvaluator::with_asset_resolver(pack, asset_resolver).map_err(|err| {
-            ContainmentError::PackParse {
+        build_recognition_evaluator(pack, asset_resolver, vision_provider).map_err(|err| {
+            ContainmentError::RecognitionPack {
                 path: pack_path.to_string(),
+                code: err.code(),
                 message: err.to_string(),
             }
         })?;
@@ -943,6 +1058,19 @@ fn build_recognition_pipeline(
             message: err.to_string(),
         })?;
     Ok((evaluator, detector, page_set))
+}
+
+fn build_recognition_evaluator(
+    pack: actingcommand_recognition_pack::RecognitionPack,
+    asset_resolver: Arc<dyn AssetResolver>,
+    vision_provider: Option<Arc<dyn VisionProvider>>,
+) -> actingcommand_recognition_pack::RecognitionPackResult<RecognitionEvaluator> {
+    match vision_provider {
+        Some(provider) => {
+            RecognitionEvaluator::with_vision_provider(pack, asset_resolver, provider)
+        }
+        None => RecognitionEvaluator::with_asset_resolver(pack, asset_resolver),
+    }
 }
 
 #[derive(Debug)]
@@ -1533,6 +1661,67 @@ mod tests {
         let result = evaluator
             .evaluate_target(&scene, "home_color")
             .expect("target evaluated");
+        assert!(result.passed);
+    }
+
+    #[test]
+    fn schema_0_6_vision_package_requires_injected_runtime_capability() {
+        let task_id = "vision_task";
+        let mut entries = lab_package_entries(task_id, [255, 0, 0]);
+        let pack_path = "resources/recognition/neutral.test.pack.json";
+        let pages_path = "resources/recognition/neutral.test.pages.json";
+        let pack = serde_json::json!({
+            "schema_version": "0.6",
+            "game": "neutral",
+            "server": "test",
+            "coordinate_space": {"width": 1, "height": 1},
+            "targets": [{
+                "type": "ocr",
+                "id": "home_text",
+                "region": "full_frame",
+                "languages": ["en"],
+                "timeout_ms": 1000,
+                "match_mode": "exact",
+                "expected": ["home"],
+                "case_sensitive": false,
+                "minimum_confidence": 0.9,
+                "model_ref": "PP-OCRv6_medium",
+                "model_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            }]
+        });
+        let pages = serde_json::json!({
+            "schema_version": "0.6",
+            "pages": [{"id": "neutral/home", "required": ["home_text"]}]
+        });
+        replace_manifested_entry(&mut entries, pack_path, &pack);
+        replace_manifested_entry(&mut entries, pages_path, &pages);
+        let zip = zip_from_map(entries);
+        let expected = Sha256Hash::digest(&zip);
+        let instance = InstanceId::new("vision-instance").expect("instance");
+        let mut no_provider = Containment::new();
+
+        let error = no_provider
+            .load(&instance, &zip, &expected)
+            .expect_err("runtime admission without vision capability must fail");
+        assert!(
+            error
+                .to_string()
+                .contains("no production vision provider was injected")
+        );
+
+        let mut with_provider =
+            Containment::with_vision_provider(Arc::new(ContainmentVisionProvider));
+        let bundle = with_provider
+            .load(&instance, &zip, &expected)
+            .expect("vision capability admits package");
+        let result = bundle
+            .evaluator()
+            .expect("evaluator")
+            .evaluate_target(
+                &Scene::from_pixels(1, 1, &[0, 0, 0], ScenePixelFormat::Rgb8).expect("scene"),
+                "home_text",
+            )
+            .expect("OCR evaluation");
         assert!(result.passed);
     }
 
@@ -2129,6 +2318,61 @@ mod tests {
 
         assert!(error.to_string().contains("structurally overlaps"));
         assert!(error.to_string().contains("error_pages"));
+    }
+
+    #[derive(Debug)]
+    struct ContainmentVisionProvider;
+
+    impl VisionProvider for ContainmentVisionProvider {
+        fn require_ocr_model(
+            &self,
+            model_ref: &str,
+            model_sha256: &str,
+        ) -> Result<(), VisionProviderError> {
+            if model_ref == "PP-OCRv6_medium"
+                && model_sha256
+                    == "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            {
+                Ok(())
+            } else {
+                Err(VisionProviderError::new(
+                    VisionProviderErrorCode::ModelMismatch,
+                    "unexpected OCR model identity",
+                ))
+            }
+        }
+
+        fn require_nn_model(
+            &self,
+            _model_ref: &str,
+            _model_sha256: &str,
+        ) -> Result<(), VisionProviderError> {
+            Err(VisionProviderError::new(
+                VisionProviderErrorCode::Unavailable,
+                "NN capability is unavailable",
+            ))
+        }
+
+        fn read_text(
+            &self,
+            _request: OcrProviderRequest<'_>,
+        ) -> Result<OcrProviderResult, VisionProviderError> {
+            Ok(OcrProviderResult {
+                text: "home".to_string(),
+                blocks: Vec::new(),
+                confidence: Some(0.99),
+            })
+        }
+
+        fn classify(
+            &self,
+            _request: NnProviderRequest<'_>,
+        ) -> Result<NnProviderResult, VisionProviderError> {
+            Err(VisionProviderError::new(
+                VisionProviderErrorCode::Unavailable,
+                "NN capability is unavailable",
+            ))
+        }
     }
 
     fn lab_package_zip(task_id: &str, expected: [u8; 3]) -> Vec<u8> {

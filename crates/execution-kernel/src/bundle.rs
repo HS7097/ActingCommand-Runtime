@@ -5,8 +5,10 @@
 use actingcommand_pack_containment::{
     Containment, ContainmentError, InstanceId, LoadedBundle, Sha256Hash,
 };
+use actingcommand_recognition_pack::VisionProvider;
 use std::error::Error;
 use std::fmt;
+use std::sync::Arc;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ExternalExpectedSha256(Sha256Hash);
@@ -65,8 +67,34 @@ impl ExternallyVerifiedBundle {
         zip_bytes: &[u8],
         expected: ExternalExpectedSha256,
     ) -> Result<Self, ExecutionBundleError> {
+        Self::load_with_optional_vision_provider(instance_label, zip_bytes, expected, None)
+    }
+
+    pub fn load_with_vision_provider(
+        instance_label: &str,
+        zip_bytes: &[u8],
+        expected: ExternalExpectedSha256,
+        vision_provider: Arc<dyn VisionProvider>,
+    ) -> Result<Self, ExecutionBundleError> {
+        Self::load_with_optional_vision_provider(
+            instance_label,
+            zip_bytes,
+            expected,
+            Some(vision_provider),
+        )
+    }
+
+    fn load_with_optional_vision_provider(
+        instance_label: &str,
+        zip_bytes: &[u8],
+        expected: ExternalExpectedSha256,
+        vision_provider: Option<Arc<dyn VisionProvider>>,
+    ) -> Result<Self, ExecutionBundleError> {
         let instance = InstanceId::new(instance_label)?;
-        let mut containment = Containment::new();
+        let mut containment = match vision_provider {
+            Some(provider) => Containment::with_vision_provider(provider),
+            None => Containment::new(),
+        };
         containment.load(&instance, zip_bytes, &expected.hash())?;
         let bundle = containment
             .take_loaded(&instance)

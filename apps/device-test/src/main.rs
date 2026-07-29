@@ -929,6 +929,8 @@ fn resolve_cli_target_kind(pack: &RecognitionPack, target_id: &str) -> DeviceRes
             RecognitionTarget::Template(target) => target.id == target_id,
             RecognitionTarget::Color(target) => target.id == target_id,
             RecognitionTarget::ClickOnly(target) => target.id == target_id,
+            RecognitionTarget::Ocr(target) => target.id == target_id,
+            RecognitionTarget::Nn(target) => target.id == target_id,
         })
         .ok_or_else(|| DeviceError::fatal(format!("target id not found: {target_id}")))?;
 
@@ -940,6 +942,11 @@ fn resolve_cli_target_kind(pack: &RecognitionPack, target_id: &str) -> DeviceRes
             has_click: target.click.is_some(),
         },
         RecognitionTarget::ClickOnly(_) => CliTargetKind::ClickOnly,
+        RecognitionTarget::Ocr(_) | RecognitionTarget::Nn(_) => {
+            return Err(DeviceError::fatal(
+                "device-test does not inject a production vision provider",
+            ));
+        }
     })
 }
 
@@ -1003,6 +1010,9 @@ fn format_evaluation(
         }
         TargetKind::ClickOnly => Err(DeviceError::fatal(
             "click-only target cannot return evaluation output",
+        )),
+        TargetKind::Ocr | TargetKind::Nn => Err(DeviceError::fatal(
+            "device-test cannot format vision evaluation without a production provider",
         )),
     }
 }
@@ -2290,6 +2300,39 @@ mod tests {
 
         assert!(err.message().contains("does not exist"));
         let _ = fs::remove_dir_all(fixture.root);
+    }
+
+    #[test]
+    fn device_test_rejects_vision_target_without_production_provider() {
+        let pack = load_pack_from_json_str(
+            r#"{
+                "schema_version": "0.6",
+                "coordinate_space": {"width": 1, "height": 1},
+                "targets": [{
+                    "type": "ocr",
+                    "id": "fixture/text",
+                    "region": "full_frame",
+                    "languages": ["en"],
+                    "timeout_ms": 1000,
+                    "match_mode": "exact",
+                    "expected": ["home"],
+                    "case_sensitive": false,
+                    "minimum_confidence": 0.9,
+                    "model_ref": "PP-OCRv6_medium",
+                    "model_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                }]
+            }"#,
+        )
+        .expect("vision pack schema");
+
+        let error = resolve_cli_target_kind(&pack, "fixture/text")
+            .expect_err("device-test has no production vision provider");
+
+        assert!(
+            error
+                .message()
+                .contains("does not inject a production vision provider")
+        );
     }
 
     #[test]

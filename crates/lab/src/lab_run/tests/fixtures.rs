@@ -217,6 +217,8 @@
                 mean,
                 expected: mean,
             }),
+            ocr: None,
+            nn: None,
             message: if passed {
                 "color passed".to_string()
             } else {
@@ -240,6 +242,8 @@
                 threshold: 0.9,
             }),
             color: None,
+            ocr: None,
+            nn: None,
             message: "template passed".to_string(),
         }
     }

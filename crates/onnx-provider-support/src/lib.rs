@@ -9,7 +9,10 @@
 use ort::session::{RunOptions, Session};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Condvar, Mutex, OnceLock};
+use std::sync::{
+    Arc, Condvar, Mutex, OnceLock,
+    atomic::{AtomicBool, Ordering},
+};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
@@ -135,6 +138,7 @@ impl InferenceTerminator for RunOptions {
 
 pub struct InferenceWatchdog {
     state: Arc<(Mutex<bool>, Condvar)>,
+    timed_out: Arc<AtomicBool>,
     handle: Option<JoinHandle<()>>,
 }
 
@@ -153,6 +157,8 @@ impl InferenceWatchdog {
     {
         let state = Arc::new((Mutex::new(false), Condvar::new()));
         let thread_state = Arc::clone(&state);
+        let timed_out = Arc::new(AtomicBool::new(false));
+        let thread_timed_out = Arc::clone(&timed_out);
         let handle = thread::spawn(move || {
             let (lock, condvar) = &*thread_state;
             let cancelled = lock.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
@@ -162,13 +168,19 @@ impl InferenceWatchdog {
             if *cancelled {
                 on_cancel();
             } else {
+                thread_timed_out.store(true, Ordering::Release);
                 target.terminate_inference();
             }
         });
         Self {
             state,
+            timed_out,
             handle: Some(handle),
         }
+    }
+
+    pub fn timed_out(&self) -> bool {
+        self.timed_out.load(Ordering::Acquire)
     }
 
     pub fn cancel(mut self) {
@@ -304,6 +316,7 @@ mod tests {
             Duration::from_secs(60),
             move || tx.send(()).expect("cancel notification"),
         );
+        assert!(!watchdog.timed_out());
         watchdog.cancel();
 
         rx.recv_timeout(Duration::from_secs(1))
@@ -332,6 +345,7 @@ mod tests {
         }
 
         assert_eq!(target.0.load(Ordering::SeqCst), 1);
+        assert!(watchdog.timed_out());
         watchdog.cancel();
     }
 }

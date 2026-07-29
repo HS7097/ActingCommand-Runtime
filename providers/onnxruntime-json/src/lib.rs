@@ -60,12 +60,12 @@ fn panic_on_next_classify_for_test() {
 
 fn invoke_provider<F>(response_out: *mut VisionFfiOwnedBuffer, invoke: F) -> i32
 where
-    F: FnOnce() -> Result<NnClassificationResult, String> + std::panic::UnwindSafe,
+    F: FnOnce() -> Result<NnClassificationResult, ProviderInvokeError> + std::panic::UnwindSafe,
 {
     let result = std::panic::catch_unwind(invoke);
     match result {
         Ok(Ok(response)) => write_response(response_out, 0, &response),
-        Ok(Err(err)) => write_error(response_out, 1, &err),
+        Ok(Err(err)) => write_error(response_out, err.status(), err.message()),
         Err(_) => write_error(response_out, 2, "provider panicked while classifying frame"),
     }
 }
@@ -96,7 +96,7 @@ pub unsafe extern "C" fn ac_vision_free_buffer(buffer: VisionFfiOwnedBuffer) {
 fn classify_json(
     request_ptr: *const u8,
     request_len: usize,
-) -> Result<NnClassificationResult, String> {
+) -> Result<NnClassificationResult, ProviderInvokeError> {
     let envelope = read_request(request_ptr, request_len)?;
     envelope.request.validate().map_err(provider_error)?;
     envelope
@@ -144,21 +144,58 @@ fn classify_json(
     let run_options = Arc::new(
         RunOptions::new().map_err(|err| format!("failed to create ONNX run options: {err}"))?,
     );
-    let _watchdog = InferenceWatchdog::start(
+    let watchdog = InferenceWatchdog::start(
         Arc::clone(&run_options),
         Duration::from_millis(envelope.request.timeout_ms),
     );
-    let outputs = session
-        .run_with_options(ort::inputs![input], &*run_options)
-        .map_err(|err| format!("ONNXRuntime inference failed: {err}"))?;
+    let outputs = session.run_with_options(ort::inputs![input], &*run_options);
+    if watchdog.timed_out() {
+        return Err(ProviderInvokeError::timeout(
+            "ONNXRuntime inference exceeded the configured timeout",
+        ));
+    }
+    let outputs = outputs.map_err(|err| format!("ONNXRuntime inference failed: {err}"))?;
     if outputs.len() == 0 {
-        return Err("ONNXRuntime inference returned no outputs".to_string());
+        return Err("ONNXRuntime inference returned no outputs"
+            .to_string()
+            .into());
     }
     let output = &outputs[0];
     let (_, scores) = output
         .try_extract_tensor::<f32>()
         .map_err(|err| format!("ONNXRuntime first output is not an f32 tensor: {err}"))?;
-    labels_from_scores(&envelope.request.labels, scores)
+    Ok(labels_from_scores(&envelope.request.labels, scores)?)
+}
+
+#[derive(Debug)]
+enum ProviderInvokeError {
+    Failure(String),
+    Timeout(String),
+}
+
+impl ProviderInvokeError {
+    fn timeout(message: impl Into<String>) -> Self {
+        Self::Timeout(message.into())
+    }
+
+    fn status(&self) -> i32 {
+        match self {
+            Self::Failure(_) => 1,
+            Self::Timeout(_) => 3,
+        }
+    }
+
+    fn message(&self) -> &str {
+        match self {
+            Self::Failure(message) | Self::Timeout(message) => message,
+        }
+    }
+}
+
+impl From<String> for ProviderInvokeError {
+    fn from(message: String) -> Self {
+        Self::Failure(message)
+    }
 }
 
 fn ensure_ort_runtime(runtime_library: &Path) -> Result<(), String> {
@@ -460,6 +497,21 @@ mod tests {
         assert_eq!(status, 2);
         let text = take_exported_response_text(response);
         assert!(text.contains("panicked"));
+    }
+
+    #[test]
+    fn exported_provider_timeout_uses_stable_status() {
+        let mut response = VisionFfiOwnedBuffer::default();
+
+        let status = invoke_provider(&mut response, || {
+            Err(ProviderInvokeError::timeout(
+                "injected deterministic timeout",
+            ))
+        });
+
+        assert_eq!(status, 3);
+        let text = take_exported_response_text(response);
+        assert!(text.contains("injected deterministic timeout"));
     }
 
     #[test]

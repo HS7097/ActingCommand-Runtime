@@ -378,6 +378,18 @@ impl fmt::Display for VisionProviderError {
 impl Error for VisionProviderError {}
 
 pub trait VisionProvider: fmt::Debug + Send + Sync {
+    fn require_ocr_model(
+        &self,
+        model_ref: &str,
+        model_sha256: &str,
+    ) -> Result<(), VisionProviderError>;
+
+    fn require_nn_model(
+        &self,
+        model_ref: &str,
+        model_sha256: &str,
+    ) -> Result<(), VisionProviderError>;
+
     fn read_text(
         &self,
         request: OcrProviderRequest<'_>,
@@ -579,6 +591,22 @@ impl RecognitionEvaluator {
                 RecognitionPackErrorCode::VisionProviderMissing,
                 "recognition pack requires OCR/NN vision capability, but no production vision provider was injected",
             ));
+        }
+        if let Some(provider) = &vision_provider {
+            for target in &pack.targets {
+                let capability = match target {
+                    RecognitionTarget::Ocr(target) => provider
+                        .require_ocr_model(&target.model_ref, &target.model_sha256)
+                        .map_err(|error| provider_error(&target.id, "ocr admission", error)),
+                    RecognitionTarget::Nn(target) => provider
+                        .require_nn_model(&target.model_ref, &target.model_sha256)
+                        .map_err(|error| provider_error(&target.id, "nn admission", error)),
+                    RecognitionTarget::Template(_)
+                    | RecognitionTarget::Color(_)
+                    | RecognitionTarget::ClickOnly(_) => Ok(()),
+                };
+                capability?;
+            }
         }
 
         let target_indexes = pack
@@ -984,6 +1012,9 @@ fn validate_v06_wire_shape(value: &Value) -> RecognitionPackResult<()> {
         root,
         &[
             "schema_version",
+            "converter_schema_version",
+            "generated",
+            "generated_by",
             "game",
             "server",
             "locale",
@@ -993,6 +1024,21 @@ fn validate_v06_wire_shape(value: &Value) -> RecognitionPackResult<()> {
         ],
         "schema 0.6 recognition pack",
     )?;
+    for field in ["converter_schema_version", "generated_by"] {
+        if root.get(field).is_some_and(|value| !value.is_string()) {
+            return Err(RecognitionPackError::fatal(format!(
+                "schema 0.6 recognition pack field '{field}' must be a string"
+            )));
+        }
+    }
+    if root
+        .get("generated")
+        .is_some_and(|value| !value.is_boolean())
+    {
+        return Err(RecognitionPackError::fatal(
+            "schema 0.6 recognition pack field 'generated' must be a boolean",
+        ));
+    }
     if let Some(coordinate_space) = root.get("coordinate_space")
         && !coordinate_space.is_null()
     {
@@ -2020,6 +2066,29 @@ mod tests {
         .expect("legacy unknown fields remain accepted");
         assert_eq!(legacy.schema_version, "0.5");
 
+        load_pack_from_json_str(
+            r#"{
+                "schema_version": "0.6",
+                "converter_schema_version": "0.5",
+                "generated": true,
+                "generated_by": "actingcommand-resource-convert",
+                "coordinate_space": {"width": 2, "height": 1},
+                "targets": []
+            }"#,
+        )
+        .expect("declared generator metadata remains valid in strict schema");
+
+        let err = load_pack_from_json_str(
+            r#"{
+                "schema_version": "0.6",
+                "generated": "true",
+                "coordinate_space": {"width": 2, "height": 1},
+                "targets": []
+            }"#,
+        )
+        .expect_err("declared generator metadata retains its wire type");
+        assert_fatal_contains(err, "generated' must be a boolean");
+
         let err = load_pack_from_json_str(
             r#"{
                 "schema_version": "0.6",
@@ -2866,6 +2935,42 @@ mod tests {
     }
 
     impl VisionProvider for TestVisionProvider {
+        fn require_ocr_model(
+            &self,
+            model_ref: &str,
+            model_sha256: &str,
+        ) -> Result<(), VisionProviderError> {
+            if model_ref == PPOCR_V6_MEDIUM_MODEL_REF
+                && model_sha256
+                    == "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            {
+                Ok(())
+            } else {
+                Err(VisionProviderError::new(
+                    VisionProviderErrorCode::ModelMismatch,
+                    "unexpected OCR model identity",
+                ))
+            }
+        }
+
+        fn require_nn_model(
+            &self,
+            model_ref: &str,
+            model_sha256: &str,
+        ) -> Result<(), VisionProviderError> {
+            if model_ref == "fixture-page-model"
+                && model_sha256
+                    == "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+            {
+                Ok(())
+            } else {
+                Err(VisionProviderError::new(
+                    VisionProviderErrorCode::ModelMismatch,
+                    "unexpected NN model identity",
+                ))
+            }
+        }
+
         fn read_text(
             &self,
             request: OcrProviderRequest<'_>,

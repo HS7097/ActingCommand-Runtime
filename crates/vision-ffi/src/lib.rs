@@ -41,6 +41,7 @@ pub enum VisionFfiErrorCode {
     ProviderUnavailable,
     ProviderFailure,
     ProviderPanic,
+    Timeout,
     ModelMismatch,
     InvalidResponse,
     Internal,
@@ -833,6 +834,25 @@ mod tests {
     }
 
     #[test]
+    fn ffi_timeout_status_is_typed() {
+        let frame = test_frame();
+        let request = OcrInferenceRequest {
+            region: VisionRect::full_frame(&frame).expect("full frame rect"),
+            frame,
+            languages: vec!["zh_cn".to_string()],
+            timeout_ms: 1_000,
+        };
+        let mut backend = unsafe {
+            FastDeployPpocrBackend::from_raw_functions(fake_timeout_json, fake_free_buffer)
+        };
+
+        let err = backend.read_text(request).expect_err("timeout status");
+
+        assert_eq!(err.code(), VisionFfiErrorCode::Timeout);
+        assert!(err.message().contains("status 3"));
+    }
+
+    #[test]
     fn nan_confidence_is_typed_invalid_response() {
         let frame = test_frame();
         let request = OcrInferenceRequest {
@@ -1061,6 +1081,15 @@ mod tests {
     ) -> i32 {
         write_ffi_response(response_out, "fake backend failure");
         7
+    }
+
+    unsafe extern "C" fn fake_timeout_json(
+        _request_ptr: *const u8,
+        _request_len: usize,
+        response_out: *mut VisionFfiOwnedBuffer,
+    ) -> i32 {
+        write_ffi_response(response_out, "fake backend timeout");
+        3
     }
 
     unsafe extern "C" fn fake_ocr_envelope_json(

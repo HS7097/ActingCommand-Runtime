@@ -9,9 +9,13 @@ use actingcommand_device::{
     DeviceResult, DeviceTarget, InputBackend, TouchBackendChoice, TouchBackendConfig,
     create_capture_backend, create_touch_backend,
 };
-pub use actingcommand_execution_kernel::{ExecutionBackendProvider, ResolvedExecutionInstance};
+pub use actingcommand_execution_kernel::{
+    ExecutionBackendProvider, RecognitionVisionProvider, ResolvedExecutionInstance,
+    VisionFfiProvider, VisionModelIdentity,
+};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
+use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
@@ -78,6 +82,7 @@ struct ExecutionBackendEntry {
 
 pub struct ExecutionBackendRegistry {
     entries: BTreeMap<String, ExecutionBackendEntry>,
+    vision_provider: Option<Arc<dyn RecognitionVisionProvider>>,
 }
 
 impl ExecutionBackendRegistry {
@@ -124,7 +129,18 @@ impl ExecutionBackendRegistry {
                 RuntimeErrorCode::RuntimeFatal,
             ));
         }
-        Ok(Self { entries })
+        Ok(Self {
+            entries,
+            vision_provider: None,
+        })
+    }
+
+    pub fn with_vision_provider(
+        mut self,
+        vision_provider: Arc<dyn RecognitionVisionProvider>,
+    ) -> Self {
+        self.vision_provider = Some(vision_provider);
+        self
     }
 }
 
@@ -133,6 +149,7 @@ impl fmt::Debug for ExecutionBackendRegistry {
         formatter
             .debug_struct("ExecutionBackendRegistry")
             .field("instance_count", &self.entries.len())
+            .field("vision_provider", &self.vision_provider.is_some())
             .finish()
     }
 }
@@ -193,6 +210,10 @@ impl ExecutionBackendProvider for ExecutionBackendRegistry {
             }
         }
         Ok(())
+    }
+
+    fn vision_provider(&self) -> Option<Arc<dyn RecognitionVisionProvider>> {
+        self.vision_provider.as_ref().map(Arc::clone)
     }
 }
 

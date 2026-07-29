@@ -334,10 +334,10 @@ where
     let response_bytes = take_owned_buffer(module, response, free_buffer)?;
     if status != 0 {
         let response_text = String::from_utf8_lossy(&response_bytes);
-        let code = if status == 2 {
-            VisionFfiErrorCode::ProviderPanic
-        } else {
-            VisionFfiErrorCode::ProviderFailure
+        let code = match status {
+            2 => VisionFfiErrorCode::ProviderPanic,
+            3 => VisionFfiErrorCode::Timeout,
+            _ => VisionFfiErrorCode::ProviderFailure,
         };
         return Err(VisionFfiError::fatal_with_code(
             code,
