@@ -2,7 +2,16 @@
 
 //! Source-derived architecture guards for ActingCommand Runtime ownership rules.
 
+mod focused_identity_guard;
+
 use std::collections::{HashMap, HashSet, VecDeque};
+
+pub use focused_identity_guard::{
+    inspect_scheduler_identity_controls, SchedulerIdentityGuardError,
+    SchedulerIdentityGuardErrorKind, SchedulerIdentityInspection, SchedulerIdentityTarget,
+    SCHEDULER_IDENTITY_DECLARATION_VERSION, SCHEDULER_IDENTITY_SOURCE_PATHS,
+    SCHEDULER_IDENTITY_TARGETS,
+};
 
 use syn::visit::Visit;
 use syn::{

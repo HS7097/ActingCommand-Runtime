@@ -9,8 +9,10 @@ use actingcommand_actinglab_architecture::{
     inspect_generic_authoring_identity, inspect_generic_runtime_identity,
     inspect_global_append_ingress, inspect_lab_source, inspect_persisted_event_ownership,
     inspect_producer_event_capabilities, inspect_public_api, lab_removability_violations,
-    ledger_owns_query_matching, resource_tooling_removability_violations, validate_line_ratchet,
-    workspace_dependency_violations,
+    inspect_scheduler_identity_controls, ledger_owns_query_matching,
+    resource_tooling_removability_violations, validate_line_ratchet, workspace_dependency_violations,
+    SchedulerIdentityGuardErrorKind, SCHEDULER_IDENTITY_DECLARATION_VERSION,
+    SCHEDULER_IDENTITY_SOURCE_PATHS, SCHEDULER_IDENTITY_TARGETS,
 };
 use sha2::{Digest, Sha256};
 
@@ -198,6 +200,293 @@ fn c2_runtime_guard_covers_policy_and_runtime_owned_core_siblings() {
             "C2 counterexample escaped in {required_root}"
         );
     }
+}
+
+#[test]
+fn issue75_c2_focused_declaration_and_current_owners_are_exact() {
+    assert_eq!(
+        SCHEDULER_IDENTITY_DECLARATION_VERSION,
+        "issue75-c2-v1"
+    );
+    assert_eq!(
+        SCHEDULER_IDENTITY_TARGETS
+            .iter()
+            .map(|target| (target.path, target.owner, target.function))
+            .collect::<Vec<_>>(),
+        vec![
+            (
+                "crates/actingcommand-contract/src/fact.rs",
+                Some("FactScope"),
+                "matches",
+            ),
+            (
+                "crates/policy/src/evaluator.rs",
+                None,
+                "scope_matches_instance",
+            ),
+            (
+                "crates/policy/src/strategy.rs",
+                None,
+                "validate_assessment",
+            ),
+            (
+                "crates/policy/src/strategy.rs",
+                None,
+                "require_game_scope",
+            ),
+            (
+                "crates/policy/src/strategy.rs",
+                None,
+                "require_game_predicate_scopes",
+            ),
+            (
+                "crates/runtime-host/src/policy_host.rs",
+                None,
+                "matching_activity_profile",
+            ),
+            (
+                "crates/execution-kernel/src/environment.rs",
+                Some("EnvDetector"),
+                "validate_scope",
+            ),
+            (
+                "crates/execution-kernel/src/environment.rs",
+                Some("EnvironmentStateEngine"),
+                "validate_result",
+            ),
+            (
+                "crates/execution-kernel/src/environment.rs",
+                Some("EnvironmentStateEngine"),
+                "validate_fact_snapshot_scope",
+            ),
+        ]
+    );
+
+    let sources = scheduler_identity_sources();
+    let inspection = inspect_scheduler_sources(&sources).expect("focused declaration must be green");
+    assert_eq!(inspection.inspected_files, 5);
+    assert_eq!(inspection.inspected_targets, 9);
+}
+
+#[test]
+fn issue75_c2_focused_guard_rejects_literal_and_builtin_identity_controls() {
+    let mut literal = scheduler_identity_sources();
+    replace_scheduler_source_once(
+        &mut literal,
+        "crates/policy/src/evaluator.rs",
+        "game_id == &instance.game_id",
+        "game_id == \"synthetic-game-one\"",
+    );
+    assert_eq!(
+        inspect_scheduler_sources(&literal)
+            .expect_err("literal identity equality must fail")
+            .kind,
+        SchedulerIdentityGuardErrorKind::IdentityLiteral
+    );
+
+    let mut builtin = scheduler_identity_sources();
+    replace_scheduler_source_once(
+        &mut builtin,
+        "crates/policy/src/evaluator.rs",
+        "game_id == &instance.game_id",
+        "game_id == BuiltInGame::Primary",
+    );
+    assert_eq!(
+        inspect_scheduler_sources(&builtin)
+            .expect_err("built-in identity value must fail")
+            .kind,
+        SchedulerIdentityGuardErrorKind::BuiltInIdentity
+    );
+}
+
+#[test]
+fn issue75_c2_focused_guard_rejects_const_static_and_unknown_controls() {
+    let mut constant = scheduler_identity_sources();
+    replace_scheduler_source_once(
+        &mut constant,
+        "crates/policy/src/evaluator.rs",
+        "fn scope_matches_instance(scope: &ScopeSelector, instance: &InstanceSnapshot) -> bool {\n",
+        "fn scope_matches_instance(scope: &ScopeSelector, instance: &InstanceSnapshot) -> bool {\n    const BUILTIN_GAME: &str = \"synthetic-game-two\";\n",
+    );
+    replace_scheduler_source_once(
+        &mut constant,
+        "crates/policy/src/evaluator.rs",
+        "game_id == &instance.game_id",
+        "game_id == BUILTIN_GAME",
+    );
+    assert_eq!(
+        inspect_scheduler_sources(&constant)
+            .expect_err("local identity const must fail")
+            .kind,
+        SchedulerIdentityGuardErrorKind::IdentityConstant
+    );
+
+    let mut static_value = scheduler_identity_sources();
+    replace_scheduler_source_once(
+        &mut static_value,
+        "crates/policy/src/evaluator.rs",
+        "fn scope_matches_instance(scope: &ScopeSelector, instance: &InstanceSnapshot) -> bool {\n",
+        "fn scope_matches_instance(scope: &ScopeSelector, instance: &InstanceSnapshot) -> bool {\n    static BUILTIN_SERVER: &str = \"synthetic-server-two\";\n",
+    );
+    replace_scheduler_source_once(
+        &mut static_value,
+        "crates/policy/src/evaluator.rs",
+        "server_id == &instance.server_id",
+        "server_id == BUILTIN_SERVER",
+    );
+    assert_eq!(
+        inspect_scheduler_sources(&static_value)
+            .expect_err("local identity static must fail")
+            .kind,
+        SchedulerIdentityGuardErrorKind::IdentityConstant
+    );
+
+    let mut unknown = scheduler_identity_sources();
+    replace_scheduler_source_once(
+        &mut unknown,
+        "crates/policy/src/evaluator.rs",
+        "game_id == &instance.game_id",
+        "game_id == unresolved_identity",
+    );
+    assert_eq!(
+        inspect_scheduler_sources(&unknown)
+            .expect_err("unknown direct identity control must fail")
+            .kind,
+        SchedulerIdentityGuardErrorKind::UnsupportedControl
+    );
+}
+
+#[test]
+fn issue75_c2_focused_guard_covers_matches_let_chain_and_nested_closure() {
+    let mut macro_guard = scheduler_identity_sources();
+    replace_scheduler_source_once(
+        &mut macro_guard,
+        "crates/policy/src/strategy.rs",
+        "value == game_id",
+        "value == \"synthetic-game-three\"",
+    );
+    assert_eq!(
+        inspect_scheduler_sources(&macro_guard)
+            .expect_err("matches! identity guard literal must fail")
+            .kind,
+        SchedulerIdentityGuardErrorKind::IdentityLiteral
+    );
+
+    let mut let_chain = scheduler_identity_sources();
+    replace_scheduler_source_once(
+        &mut let_chain,
+        "crates/execution-kernel/src/environment.rs",
+        "server != server_id",
+        "server != \"synthetic-server-three\"",
+    );
+    assert_eq!(
+        inspect_scheduler_sources(&let_chain)
+            .expect_err("let-chain identity literal must fail")
+            .kind,
+        SchedulerIdentityGuardErrorKind::IdentityLiteral
+    );
+
+    let mut nested_closure = scheduler_identity_sources();
+    replace_scheduler_source_once(
+        &mut nested_closure,
+        "crates/runtime-host/src/policy_host.rs",
+        "game_id == &instance.game_id",
+        "game_id == \"synthetic-game-four\"",
+    );
+    assert_eq!(
+        inspect_scheduler_sources(&nested_closure)
+            .expect_err("nested closure identity literal must fail")
+            .kind,
+        SchedulerIdentityGuardErrorKind::IdentityLiteral
+    );
+}
+
+#[test]
+fn issue75_c2_focused_guard_fails_loud_on_missing_duplicate_and_source_drift() {
+    let mut missing = scheduler_identity_sources();
+    replace_scheduler_source_once(
+        &mut missing,
+        "crates/policy/src/evaluator.rs",
+        "fn scope_matches_instance(",
+        "fn renamed_scope_matches_instance(",
+    );
+    assert_eq!(
+        inspect_scheduler_sources(&missing)
+            .expect_err("renamed target must fail")
+            .kind,
+        SchedulerIdentityGuardErrorKind::MissingTarget
+    );
+
+    let mut duplicate = scheduler_identity_sources();
+    duplicate
+        .iter_mut()
+        .find(|(path, _)| path == "crates/policy/src/evaluator.rs")
+        .expect("evaluator fixture")
+        .1
+        .push_str(
+            "\nfn scope_matches_instance(scope: &ScopeSelector, instance: &InstanceSnapshot) -> bool {\n    let _ = (scope, instance);\n    true\n}\n",
+        );
+    assert_eq!(
+        inspect_scheduler_sources(&duplicate)
+            .expect_err("duplicate target must fail")
+            .kind,
+        SchedulerIdentityGuardErrorKind::DuplicateTarget
+    );
+
+    let mut incomplete = scheduler_identity_sources();
+    incomplete.pop();
+    assert_eq!(
+        inspect_scheduler_sources(&incomplete)
+            .expect_err("missing declared source must fail")
+            .kind,
+        SchedulerIdentityGuardErrorKind::SourceSet
+    );
+}
+
+fn scheduler_identity_sources() -> Vec<(String, String)> {
+    let root = workspace_root();
+    SCHEDULER_IDENTITY_SOURCE_PATHS
+        .iter()
+        .map(|path| {
+            (
+                (*path).to_owned(),
+                fs::read_to_string(root.join(path))
+                    .unwrap_or_else(|error| panic!("read {path}: {error}")),
+            )
+        })
+        .collect()
+}
+
+fn inspect_scheduler_sources(
+    sources: &[(String, String)],
+) -> Result<
+    actingcommand_actinglab_architecture::SchedulerIdentityInspection,
+    actingcommand_actinglab_architecture::SchedulerIdentityGuardError,
+> {
+    let borrowed = sources
+        .iter()
+        .map(|(path, source)| (path.as_str(), source.as_str()))
+        .collect::<Vec<_>>();
+    inspect_scheduler_identity_controls(&borrowed)
+}
+
+fn replace_scheduler_source_once(
+    sources: &mut [(String, String)],
+    path: &str,
+    from: &str,
+    to: &str,
+) {
+    let source = &mut sources
+        .iter_mut()
+        .find(|(candidate, _)| candidate == path)
+        .unwrap_or_else(|| panic!("missing source {path}"))
+        .1;
+    assert_eq!(
+        source.matches(from).count(),
+        1,
+        "controlled mutation anchor must be exact in {path}"
+    );
+    *source = source.replacen(from, to, 1);
 }
 
 #[test]
