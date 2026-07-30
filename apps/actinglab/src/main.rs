@@ -3,8 +3,8 @@
 #![allow(clippy::result_large_err)]
 
 use actingcommand_contract::{
-    ApplicationLifecycleAction, CLI_SCHEMA_VERSION, Envelope, EventActor, EventSource,
-    LabError as CliError, LabErrorClass as ErrorKind, LedgerProjection,
+    ApplicationLifecycleAction, CLI_SCHEMA_VERSION, EventActor, EventSource, LabError as CliError,
+    LabErrorClass as ErrorKind, LedgerProjection,
 };
 #[cfg(test)]
 use actingcommand_device::DeviceTarget;
@@ -30,6 +30,9 @@ use actingcommand_recognition_pack::{
 use actingcommand_resource_tooling::{canonical_game, canonical_locale, canonical_server};
 use actingcommand_runtime_client::{RuntimeClient, RuntimeClientConfig};
 #[cfg(test)]
+use cli_result::CliErrorExitCode;
+use cli_result::CliResult;
+#[cfg(test)]
 use runtime_endpoint::RuntimeEndpointChannel;
 use runtime_endpoint::{
     env_var_non_empty, runtime_endpoint_check, runtime_endpoint_policy,
@@ -52,6 +55,7 @@ use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use zip::{ZipWriter, write::FileOptions};
 
+mod cli_result;
 mod contained_resources;
 mod drive_cli;
 mod env_detection;
@@ -96,78 +100,6 @@ fn main() -> ExitCode {
         println!("{}", result.human_text());
     }
     ExitCode::from(exit_code as u8)
-}
-
-#[derive(Debug)]
-struct CliResult {
-    print_json: bool,
-    envelope: Envelope<Value>,
-    human: String,
-    exit_code: i32,
-}
-
-impl CliResult {
-    fn ok(command: String, data: Value, print_json: bool, human: String) -> Self {
-        Self {
-            print_json,
-            envelope: Envelope::ok(
-                SCHEMA_VERSION,
-                env!("CARGO_PKG_VERSION"),
-                RUNTIME_VERSION,
-                command,
-                data,
-            ),
-            human,
-            exit_code: 0,
-        }
-    }
-
-    fn err(command: String, err: CliError, print_json: bool) -> Self {
-        let exit_code = err.exit_code();
-        let human = format!("{}: {}", err.code, err.message);
-        Self {
-            print_json,
-            envelope: Envelope::err(
-                SCHEMA_VERSION,
-                env!("CARGO_PKG_VERSION"),
-                RUNTIME_VERSION,
-                command,
-                err,
-            ),
-            human,
-            exit_code,
-        }
-    }
-
-    fn exit_code(&self) -> i32 {
-        self.exit_code
-    }
-
-    fn envelope_json(&self) -> String {
-        serde_json::to_string(&self.envelope).unwrap_or_else(|err| {
-            format!(r#"{{"ok":false,"error":"json_serialize_failed:{err}"}}"#)
-        })
-    }
-
-    fn human_text(&self) -> String {
-        self.human.clone()
-    }
-}
-
-trait CliErrorExitCode {
-    fn exit_code(&self) -> i32;
-}
-
-impl CliErrorExitCode for CliError {
-    fn exit_code(&self) -> i32 {
-        match self.class {
-            ErrorKind::UsageValidation => 2,
-            ErrorKind::SafetyBlocked => 3,
-            ErrorKind::DeviceInstance => 4,
-            ErrorKind::RuntimeUnavailable => 5,
-            ErrorKind::NotImplemented => 6,
-        }
-    }
 }
 
 type CliOutcome<T> = Result<T, CliError>;

@@ -2444,6 +2444,57 @@ fn actinglab_runtime_endpoint_glue_stays_out_of_main() {
 }
 
 #[test]
+fn actinglab_cli_result_glue_stays_out_of_main() {
+    let root = workspace_root();
+    let main =
+        fs::read_to_string(root.join("apps/actinglab/src/main.rs")).expect("read ActingLab main");
+    let cli_result = fs::read_to_string(root.join("apps/actinglab/src/cli_result.rs"))
+        .expect("read ActingLab CLI result module");
+
+    assert!(
+        main.contains("mod cli_result;"),
+        "ActingLab main lost the private CLI result module"
+    );
+    for definition in [
+        "struct CliResult",
+        "impl CliResult",
+        "fn ok(command: String, data: Value, print_json: bool, human: String) -> Self",
+        "fn err(command: String, err: CliError, print_json: bool) -> Self",
+        "fn exit_code(&self) -> i32",
+        "fn envelope_json(&self) -> String",
+        "fn human_text(&self) -> String",
+        "trait CliErrorExitCode",
+        "impl CliErrorExitCode for CliError",
+        "ErrorKind::UsageValidation => 2,",
+        "ErrorKind::SafetyBlocked => 3,",
+        "ErrorKind::DeviceInstance => 4,",
+        "ErrorKind::RuntimeUnavailable => 5,",
+        "ErrorKind::NotImplemented => 6,",
+    ] {
+        assert!(
+            cli_result.contains(definition),
+            "CLI result module lost owner definition {definition}"
+        );
+        assert!(
+            !main.contains(definition),
+            "ActingLab main regained CLI result owner definition {definition}"
+        );
+    }
+    assert_eq!(
+        cli_result.matches("pub(super) ").count(),
+        9,
+        "CLI result owner visibility changed"
+    );
+    for line in cli_result.lines() {
+        let trimmed = line.trim_start();
+        assert!(
+            !trimmed.starts_with("pub ") && !trimmed.starts_with("pub(crate) "),
+            "CLI result owner exposed broader visibility: {line}"
+        );
+    }
+}
+
+#[test]
 fn main_rs_line_ratchet_matches_checked_in_baseline() {
     let root = workspace_root();
     let source = fs::read_to_string(root.join("apps/actinglab/src/main.rs"))
