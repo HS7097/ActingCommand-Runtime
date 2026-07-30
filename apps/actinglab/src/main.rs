@@ -32,6 +32,7 @@ use cli_result::CliErrorExitCode;
 use cli_result::CliResult;
 use device_runtime_config::{DeviceRuntimeConfig, device_config, effective_capture_backend_choice};
 use flag_args::FlagArgs;
+use instance_resolution::{resolve_instance_id, resolve_instance_id_for_flags};
 #[cfg(test)]
 use runtime_endpoint::RuntimeEndpointChannel;
 use runtime_endpoint::{
@@ -61,6 +62,7 @@ mod contained_resources;
 mod drive_cli;
 mod env_detection;
 mod flag_args;
+#[rustfmt::skip] mod instance_resolution;
 mod lab2_cli;
 mod lab_run;
 mod maa_task_graph;
@@ -9751,39 +9753,6 @@ fn require_runtime(global: &GlobalOptions) -> CliOutcome<Value> {
         "connection": "tcp",
         "policy": runtime_endpoint_policy_json(&policy)
     }))
-}
-
-fn resolve_instance_id(global: &GlobalOptions, config: &UserConfig) -> CliOutcome<String> {
-    if let Some(instance) = &global.instance {
-        return Ok(instance.clone());
-    }
-    if let Some((id, _instance)) = config.instances.iter().find(|(_id, instance)| {
-        let game_match = global
-            .game
-            .as_ref()
-            .is_none_or(|game| instance.game.as_ref() == Some(game));
-        let server_match = global
-            .server
-            .as_ref()
-            .is_none_or(|server| instance.server.as_ref() == Some(server));
-        game_match && server_match
-    }) {
-        return Ok(id.clone());
-    }
-    Err(CliError::instance(
-        "could not resolve instance; pass --instance or configure instance.<id>.game/server",
-    ))
-}
-
-fn resolve_instance_id_for_flags(
-    global: &GlobalOptions,
-    config: &UserConfig,
-    flags: &FlagArgs,
-) -> CliOutcome<String> {
-    if let Some(instance) = flags.optional("--instance").filter(|value| value != "true") {
-        return Ok(instance);
-    }
-    resolve_instance_id(global, config)
 }
 
 fn read_user_config() -> CliOutcome<UserConfig> {

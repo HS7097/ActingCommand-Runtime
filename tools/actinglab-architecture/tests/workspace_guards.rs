@@ -2652,6 +2652,69 @@ fn actinglab_device_runtime_config_glue_stays_out_of_main() {
 }
 
 #[test]
+fn actinglab_instance_resolution_glue_stays_out_of_main() {
+    let root = workspace_root();
+    let main =
+        fs::read_to_string(root.join("apps/actinglab/src/main.rs")).expect("read ActingLab main");
+    let instance_resolution =
+        fs::read_to_string(root.join("apps/actinglab/src/instance_resolution.rs"))
+            .expect("read ActingLab instance resolution module");
+
+    assert!(
+        main.contains("mod instance_resolution;"),
+        "ActingLab main lost the private instance resolution module"
+    );
+    for definition in [
+        "fn resolve_instance_id(",
+        "fn resolve_instance_id_for_flags(",
+    ] {
+        assert!(
+            instance_resolution.contains(definition),
+            "instance resolution module lost owner definition {definition}"
+        );
+        assert!(
+            !main.contains(definition),
+            "ActingLab main regained instance resolution owner definition {definition}"
+        );
+    }
+
+    assert_eq!(
+        instance_resolution.matches("pub(super) ").count(),
+        2,
+        "instance resolution owner visibility changed"
+    );
+    for line in instance_resolution.lines() {
+        let trimmed = line.trim_start();
+        assert!(
+            !trimmed.starts_with("pub ") && !trimmed.starts_with("pub(crate) "),
+            "instance resolution owner exposed broader visibility: {line}"
+        );
+    }
+
+    let marker = "pub(super) fn resolve_instance_id(";
+    let (_, owner_tail) = instance_resolution
+        .split_once(marker)
+        .expect("instance resolution module contains owner marker");
+    let normalized_owner =
+        format!("fn resolve_instance_id({owner_tail}").replace("pub(super) ", "");
+    assert_eq!(
+        normalized_owner.lines().count(),
+        32,
+        "instance resolution owner line count changed"
+    );
+    assert_eq!(
+        normalized_owner.len(),
+        1_076,
+        "instance resolution owner byte count changed"
+    );
+    assert_eq!(
+        format!("{:x}", Sha256::digest(normalized_owner.as_bytes())),
+        "c279bb198a5c289604faa8659299ff42b995b071ce85b8150b056cc5c19b794d",
+        "instance resolution owner body changed"
+    );
+}
+
+#[test]
 fn main_rs_line_ratchet_matches_checked_in_baseline() {
     let root = workspace_root();
     let source = fs::read_to_string(root.join("apps/actinglab/src/main.rs"))
