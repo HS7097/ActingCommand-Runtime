@@ -1519,6 +1519,110 @@
             {
               "artifacts": [],
               "event_id": "<EVENT_ID>",
+              "event_type": "capture.summary_committed",
+              "links": {
+                "correlation_id": "<CORRELATION_ID>",
+                "instance_id": "<INSTANCE_ID>",
+                "lease_id": "<LEASE_ID>",
+                "request_id": "<REQUEST_ID>",
+                "run_id": "<RUN_ID>",
+                "task_id": "<TASK_ID>"
+              },
+              "origin": {
+                "actor": "runtime",
+                "module": "capture-pipeline",
+                "source": "runtime"
+              },
+              "payload": {
+                "detail": "full",
+                "payload": {
+                  "family": "capture",
+                  "payload": {
+                    "data": {
+                      "action": "capture.summary_commit",
+                      "audit": {},
+                      "summary": {
+                        "captured": 1,
+                        "deduplicated": 0,
+                        "dropped": 0,
+                        "evidence_completeness": "complete",
+                        "frames": [
+                          {
+                            "artifact": {
+                              "artifact_id": "<ARTIFACT_ID>",
+                              "byte_count": 82,
+                              "correlation_id": "<CORRELATION_ID>",
+                              "created_at_unix_ms": "<TIME>",
+                              "frame_id": "<FRAME_ID>",
+                              "kind": "capture.frame",
+                              "media_type": "image/png",
+                              "object_key": "artifacts/0f/<ARTIFACT_ID>.png",
+                              "producer": "capture_store",
+                              "redaction_state": "not_required",
+                              "retention_class": "debug_full",
+                              "run_id": "<RUN_ID>",
+                              "sha256": "sha256:0f7765869d223939f02d7dd514fb591face3ce6f938e944d95762ed6c2184979"
+                            },
+                            "frame_index": 0
+                          }
+                        ],
+                        "persisted": 1,
+                        "pinned": [
+                          {
+                            "artifact": {
+                              "artifact_id": "<ARTIFACT_ID>",
+                              "byte_count": 82,
+                              "correlation_id": "<CORRELATION_ID>",
+                              "created_at_unix_ms": "<TIME>",
+                              "frame_id": "<FRAME_ID>",
+                              "kind": "capture.frame",
+                              "media_type": "image/png",
+                              "object_key": "artifacts/0f/<ARTIFACT_ID>.png",
+                              "producer": "capture_store",
+                              "redaction_state": "not_required",
+                              "retention_class": "debug_full",
+                              "run_id": "<RUN_ID>",
+                              "sha256": "sha256:0f7765869d223939f02d7dd514fb591face3ce6f938e944d95762ed6c2184979"
+                            },
+                            "frame_index": 0,
+                            "reason": "recognition_evidence"
+                          },
+                          {
+                            "artifact": {
+                              "artifact_id": "<ARTIFACT_ID>",
+                              "byte_count": 82,
+                              "correlation_id": "<CORRELATION_ID>",
+                              "created_at_unix_ms": "<TIME>",
+                              "frame_id": "<FRAME_ID>",
+                              "kind": "capture.frame",
+                              "media_type": "image/png",
+                              "object_key": "artifacts/0f/<ARTIFACT_ID>.png",
+                              "producer": "capture_store",
+                              "redaction_state": "not_required",
+                              "retention_class": "debug_full",
+                              "run_id": "<RUN_ID>",
+                              "sha256": "sha256:0f7765869d223939f02d7dd514fb591face3ce6f938e944d95762ed6c2184979"
+                            },
+                            "frame_index": 0,
+                            "reason": "terminal"
+                          }
+                        ]
+                      }
+                    },
+                    "kind": "summary_committed"
+                  }
+                }
+              },
+              "payload_schema": "actingcommand.payload.capture.v1",
+              "schema_version": "actingcommand.event.v2",
+              "sensitivity": "internal",
+              "sequence": 21,
+              "severity": "info",
+              "timestamp_unix_ms": "<TIME>"
+            },
+            {
+              "artifacts": [],
+              "event_id": "<EVENT_ID>",
               "event_type": "task.completed",
               "links": {
                 "correlation_id": "<CORRELATION_ID>",
@@ -1555,7 +1659,7 @@
               "payload_schema": "actingcommand.payload.task.v3",
               "schema_version": "actingcommand.event.v2",
               "sensitivity": "public",
-              "sequence": 21,
+              "sequence": 22,
               "severity": "info",
               "timestamp_unix_ms": "<TIME>"
             },
@@ -1592,7 +1696,7 @@
               "payload_schema": "actingcommand.payload.scheduler.v3",
               "schema_version": "actingcommand.event.v2",
               "sensitivity": "sensitive",
-              "sequence": 22,
+              "sequence": 23,
               "severity": "info",
               "timestamp_unix_ms": "<TIME>"
             },
@@ -1630,7 +1734,7 @@
               "payload_schema": "actingcommand.payload.lease.v3",
               "schema_version": "actingcommand.event.v2",
               "sensitivity": "sensitive",
-              "sequence": 23,
+              "sequence": 24,
               "severity": "info",
               "timestamp_unix_ms": "<TIME>"
             },
@@ -1669,7 +1773,7 @@
               "payload_schema": "actingcommand.payload.lease.v3",
               "schema_version": "actingcommand.event.v2",
               "sensitivity": "sensitive",
-              "sequence": 24,
+              "sequence": 25,
               "severity": "info",
               "timestamp_unix_ms": "<TIME>"
             }
@@ -1689,7 +1793,7 @@
             "state": "completed",
             "terminal": {
               "event_id": "<EVENT_ID>",
-              "sequence": 21
+              "sequence": 22
             }
           }
         }
