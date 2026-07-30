@@ -43,6 +43,7 @@ use safe_file_stem::safe_file_stem;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
+use sha256::{file_sha256, hex_sha256};
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::env;
 use std::ffi::OsString;
@@ -85,6 +86,7 @@ mod runtime_session_adapter;
 mod runtime_slice_cli;
 mod runtime_stream_adapter;
 mod safe_file_stem;
+mod sha256;
 mod user_config_keys;
 mod user_config_store;
 
@@ -11257,16 +11259,6 @@ fn split_csv(value: &str) -> Vec<String> {
 
 fn path_string(path: &Path) -> String {
     path.display().to_string()
-}
-
-fn file_sha256(path: &Path) -> CliOutcome<String> {
-    let bytes = fs::read(path)
-        .map_err(|err| CliError::usage(format!("failed to read {}: {err}", path.display())))?;
-    Ok(hex_sha256(&bytes))
-}
-
-fn hex_sha256(bytes: &[u8]) -> String {
-    format!("{:x}", Sha256::digest(bytes))
 }
 
 #[cfg(test)]

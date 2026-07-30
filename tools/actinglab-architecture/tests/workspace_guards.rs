@@ -3021,6 +3021,85 @@ fn actinglab_safe_file_stem_glue_stays_out_of_main() {
 }
 
 #[test]
+fn actinglab_sha256_glue_stays_out_of_main() {
+    let root = workspace_root();
+    let main =
+        fs::read_to_string(root.join("apps/actinglab/src/main.rs")).expect("read ActingLab main");
+    let sha256 = fs::read_to_string(root.join("apps/actinglab/src/sha256.rs"))
+        .expect("read ActingLab SHA-256 module");
+
+    const ROOT_DECLARATION: &str = "mod sha256;";
+    const ROOT_IMPORT: &str = "use sha256::{file_sha256, hex_sha256};";
+    let declarations = main
+        .lines()
+        .filter(|line| line.contains("mod sha256;"))
+        .collect::<Vec<_>>();
+    let imports = main
+        .lines()
+        .filter(|line| line.contains("sha256::"))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        declarations,
+        vec![ROOT_DECLARATION],
+        "ActingLab main lost the one private SHA-256 module declaration"
+    );
+    assert_eq!(
+        imports,
+        vec![ROOT_IMPORT],
+        "ActingLab main lost the one private SHA-256 import"
+    );
+
+    for definition in ["fn file_sha256(", "fn hex_sha256("] {
+        assert!(
+            sha256.contains(definition),
+            "SHA-256 module lost owner definition {definition}"
+        );
+        assert!(
+            !main.contains(definition),
+            "ActingLab main regained SHA-256 owner definition {definition}"
+        );
+    }
+
+    assert_eq!(
+        sha256.matches("pub(super) ").count(),
+        2,
+        "SHA-256 owner visibility changed"
+    );
+    for line in sha256.lines() {
+        let trimmed = line.trim_start();
+        assert!(
+            !trimmed.starts_with("pub ") && !trimmed.starts_with("pub(crate) "),
+            "SHA-256 owner exposed broader visibility: {line}"
+        );
+    }
+
+    const CHILD_IMPORTS: &str = concat!(
+        "use super::{CliError, CliOutcome};\n",
+        "use sha2::{Digest, Sha256};\n",
+        "use std::{fs, path::Path};\n\n",
+    );
+    let raw_owner = sha256
+        .strip_prefix(CHILD_IMPORTS)
+        .expect("SHA-256 module imports changed");
+    let normalized_owner = raw_owner.replacen("pub(super) ", "", 2);
+    assert_eq!(
+        normalized_owner.lines().count(),
+        9,
+        "SHA-256 owner line count changed"
+    );
+    assert_eq!(
+        normalized_owner.len(),
+        293,
+        "SHA-256 owner byte count changed"
+    );
+    assert_eq!(
+        format!("{:x}", Sha256::digest(normalized_owner.as_bytes())),
+        "f5e673a72156180e77e61ac7a711f741d80da0c6bb84328376b94a5038417748",
+        "SHA-256 owner body changed"
+    );
+}
+
+#[test]
 fn main_rs_line_ratchet_matches_checked_in_baseline() {
     let root = workspace_root();
     let source = fs::read_to_string(root.join("apps/actinglab/src/main.rs"))
