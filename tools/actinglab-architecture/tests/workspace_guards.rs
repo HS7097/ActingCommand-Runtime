@@ -3175,6 +3175,89 @@ fn actinglab_zip_error_glue_stays_out_of_main() {
 }
 
 #[test]
+fn actinglab_state_roots_glue_stays_out_of_main() {
+    let root = workspace_root();
+    let main =
+        fs::read_to_string(root.join("apps/actinglab/src/main.rs")).expect("read ActingLab main");
+    let state_roots = fs::read_to_string(root.join("apps/actinglab/src/state_roots.rs"))
+        .expect("read ActingLab state roots module");
+
+    const ROOT_DECLARATION: &str = "mod state_roots;";
+    const ROOT_IMPORT: &str =
+        "use state_roots::{app_state_root, runtime_state_root, session_state_dir_from_flags};";
+    let declarations = main
+        .lines()
+        .filter(|line| line.contains("mod state_roots;"))
+        .collect::<Vec<_>>();
+    let imports = main
+        .lines()
+        .filter(|line| line.contains("state_roots::"))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        declarations,
+        vec![ROOT_DECLARATION],
+        "ActingLab main lost the one private state roots module declaration"
+    );
+    assert_eq!(
+        imports,
+        vec![ROOT_IMPORT],
+        "ActingLab main lost the one private state roots import"
+    );
+
+    for definition in [
+        "fn app_state_root(",
+        "fn runtime_state_root(",
+        "fn session_state_dir_from_flags(",
+    ] {
+        assert!(
+            state_roots.contains(definition),
+            "state roots module lost owner definition {definition}"
+        );
+        assert!(
+            !main.contains(definition),
+            "ActingLab main regained state roots owner definition {definition}"
+        );
+    }
+
+    assert_eq!(
+        state_roots.matches("pub(super) ").count(),
+        3,
+        "state roots owner visibility changed"
+    );
+    for line in state_roots.lines() {
+        let trimmed = line.trim_start();
+        assert!(
+            !trimmed.starts_with("pub ") && !trimmed.starts_with("pub(crate) "),
+            "state roots owner exposed broader visibility: {line}"
+        );
+    }
+
+    const CHILD_IMPORTS: &str = concat!(
+        "use super::{CliError, CliOutcome, FlagArgs, RUNTIME_STATE_ROOT_ENV, SESSION_STATE_ENV};\n",
+        "use std::{env, path::PathBuf};\n\n",
+    );
+    let raw_owner = state_roots
+        .strip_prefix(CHILD_IMPORTS)
+        .expect("state roots module imports changed");
+    let normalized_owner = raw_owner.replacen("pub(super) ", "", 3);
+    assert_eq!(
+        normalized_owner.lines().count(),
+        31,
+        "state roots owner line count changed"
+    );
+    assert_eq!(
+        normalized_owner.len(),
+        1_178,
+        "state roots owner byte count changed"
+    );
+    assert_eq!(
+        format!("{:x}", Sha256::digest(normalized_owner.as_bytes())),
+        "eb07db2e6e1f6cc8384ccf06dad1a45e5b887f425ab0d50d670612c247534783",
+        "state roots owner body changed"
+    );
+}
+
+#[test]
 fn main_rs_line_ratchet_matches_checked_in_baseline() {
     let root = workspace_root();
     let source = fs::read_to_string(root.join("apps/actinglab/src/main.rs"))

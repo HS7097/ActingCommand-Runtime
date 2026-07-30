@@ -44,6 +44,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use sha256::{file_sha256, hex_sha256};
+use state_roots::{app_state_root, runtime_state_root, session_state_dir_from_flags};
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::env;
 use std::ffi::OsString;
@@ -88,6 +89,7 @@ mod runtime_slice_cli;
 mod runtime_stream_adapter;
 mod safe_file_stem;
 mod sha256;
+mod state_roots;
 mod user_config_keys;
 mod user_config_store;
 mod zip_error;
@@ -10034,38 +10036,6 @@ fn ensure_path_within(
         ));
     }
     Ok(resolved)
-}
-
-fn app_state_root() -> CliOutcome<PathBuf> {
-    let root = env::var("LOCALAPPDATA")
-        .or_else(|_| env::var("APPDATA"))
-        .map_err(|_| CliError::usage("LOCALAPPDATA or APPDATA is required for ActingLab state"))?;
-    Ok(PathBuf::from(root).join("ActingCommand").join("actinglab"))
-}
-
-fn runtime_state_root() -> CliOutcome<PathBuf> {
-    if let Ok(path) = env::var(RUNTIME_STATE_ROOT_ENV) {
-        if path.trim().is_empty() {
-            return Err(CliError::usage(format!(
-                "{RUNTIME_STATE_ROOT_ENV} must not be empty"
-            )));
-        }
-        return Ok(PathBuf::from(path));
-    }
-    let root = env::var("LOCALAPPDATA")
-        .or_else(|_| env::var("APPDATA"))
-        .map_err(|_| CliError::usage("LOCALAPPDATA or APPDATA is required for Runtime state"))?;
-    Ok(PathBuf::from(root).join("ActingCommand").join("runtime"))
-}
-
-fn session_state_dir_from_flags(flags: &FlagArgs) -> CliOutcome<PathBuf> {
-    if let Some(path) = flags.optional_path("--state-dir") {
-        return Ok(path);
-    }
-    if let Ok(path) = env::var(SESSION_STATE_ENV) {
-        return Ok(PathBuf::from(path));
-    }
-    Ok(app_state_root()?.join("session"))
 }
 
 fn current_unix_ms() -> u64 {
