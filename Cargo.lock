@@ -317,6 +317,7 @@ dependencies = [
  "actingcommand-ledger",
  "actingcommand-pack-containment",
  "actingcommand-policy",
+ "actingcommand-recognition-pack",
  "actingcommand-runtime-state",
  "actingcommand-scheduler",
  "serde",

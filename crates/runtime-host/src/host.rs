@@ -82,7 +82,7 @@ use actingcommand_device::{CaptureBackendName, Frame};
 use actingcommand_execution_kernel::{
     ContainedTaskRunError, ContainedTaskRuntime, ContainedTaskTrace, ExecutionBackendProvenance,
     ExecutionBackendProvider, ExecutionKernel, ExternalExpectedSha256, PreparedContainedTask,
-    decide_monitor, page_anchor_matches,
+    RecognitionVisionProvider, decide_monitor, page_anchor_matches,
 };
 use actingcommand_ledger::critical::{
     CatalogTransitionTarget, CriticalActionReport, CriticalEventPlan, CriticalExecutionError,
@@ -9345,7 +9345,11 @@ impl HostShared {
             return Ok(recovered);
         }
         let _active_run = self.begin_contained_run(original.request_id())?;
-        let prepared = prepare_contained_task(instance_alias, task_request)?;
+        let prepared = prepare_contained_task(
+            instance_alias,
+            task_request,
+            self.execution.vision_provider(),
+        )?;
         self.append_request_lifecycle(
             original,
             request,
@@ -9507,7 +9511,11 @@ impl HostShared {
         })?;
         self.validated_instance(&validated, token, connection_id)?;
         let _active_run = self.begin_contained_run(task_request_message.request_id())?;
-        let prepared = prepare_contained_task(instance_alias, task_request)?;
+        let prepared = prepare_contained_task(
+            instance_alias,
+            task_request,
+            self.execution.vision_provider(),
+        )?;
         let expected_outcome_keys = lock(&self.policy, "validate_policy_outcome_declaration")?
             .referenced_outcome_keys(context)
             .map_err(|error| {
@@ -13158,6 +13166,7 @@ fn inspect_debug_package(request: &PackageDebugRequest) -> RuntimeHostResult<Pac
 fn prepare_contained_task(
     instance_alias: &str,
     request: &ContainedTaskRequest,
+    vision_provider: Option<Arc<dyn RecognitionVisionProvider>>,
 ) -> Result<PreparedContainedTask, RequestFailure> {
     let path = Path::new(request.package_path());
     if !path.is_absolute() {
@@ -13178,8 +13187,16 @@ fn prepare_contained_task(
         .map_err(|_| contained_task_package_failure("contained_task_package_read_failed"))?;
     let expected = ExternalExpectedSha256::parse_hex(request.expected_sha256())
         .map_err(|_| contained_task_package_failure("contained_task_package_hash_invalid"))?;
-    PreparedContainedTask::load(instance_alias, &bytes, expected)
-        .map_err(|error| contained_task_package_failure(error.code()))
+    match vision_provider {
+        Some(provider) => PreparedContainedTask::load_with_vision_provider(
+            instance_alias,
+            &bytes,
+            expected,
+            provider,
+        ),
+        None => PreparedContainedTask::load(instance_alias, &bytes, expected),
+    }
+    .map_err(|error| contained_task_package_failure(error.code()))
 }
 
 fn contained_task_package_failure(code: &'static str) -> RequestFailure {
