@@ -2407,6 +2407,43 @@ fn dependency_path(metadata: &str, from_name: &str, to_name: &str) -> Option<Vec
 }
 
 #[test]
+fn actinglab_runtime_endpoint_glue_stays_out_of_main() {
+    let root = workspace_root();
+    let main =
+        fs::read_to_string(root.join("apps/actinglab/src/main.rs")).expect("read ActingLab main");
+    let runtime_endpoint = fs::read_to_string(root.join("apps/actinglab/src/runtime_endpoint.rs"))
+        .expect("read ActingLab Runtime endpoint module");
+
+    assert!(
+        main.contains("mod runtime_endpoint;"),
+        "ActingLab main lost the private Runtime endpoint module"
+    );
+    for definition in [
+        "struct RuntimeEndpointPolicy",
+        "enum RuntimeEndpointChannel",
+        "impl RuntimeEndpointChannel",
+        "fn runtime_endpoint_check(",
+        "fn runtime_endpoint_policy(",
+        "fn runtime_endpoint_policy_json(",
+        "fn trusted_remote_auth_material(",
+        "fn env_var_non_empty(",
+        "fn runtime_tcp_available(",
+        "fn parse_endpoint_host_port(",
+        "fn parse_endpoint_parts(",
+        "fn is_loopback_host(",
+    ] {
+        assert!(
+            runtime_endpoint.contains(definition),
+            "Runtime endpoint module lost owner definition {definition}"
+        );
+        assert!(
+            !main.contains(definition),
+            "ActingLab main regained Runtime endpoint owner definition {definition}"
+        );
+    }
+}
+
+#[test]
 fn main_rs_line_ratchet_matches_checked_in_baseline() {
     let root = workspace_root();
     let source = fs::read_to_string(root.join("apps/actinglab/src/main.rs"))

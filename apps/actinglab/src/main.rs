@@ -29,6 +29,12 @@ use actingcommand_recognition_pack::{
 };
 use actingcommand_resource_tooling::{canonical_game, canonical_locale, canonical_server};
 use actingcommand_runtime_client::{RuntimeClient, RuntimeClientConfig};
+#[cfg(test)]
+use runtime_endpoint::RuntimeEndpointChannel;
+use runtime_endpoint::{
+    env_var_non_empty, runtime_endpoint_check, runtime_endpoint_policy,
+    runtime_endpoint_policy_json, runtime_tcp_available,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -37,7 +43,6 @@ use std::env;
 use std::ffi::OsString;
 use std::fs::{self, File};
 use std::io::{self, IsTerminal, Write};
-use std::net::{TcpStream, ToSocketAddrs};
 use std::path::{Component, Path, PathBuf};
 #[cfg(any(test, unix))]
 use std::process::Command;
@@ -63,10 +68,12 @@ mod resource_convert;
 mod run_summary;
 mod runtime_capture_backend;
 mod runtime_debug;
+mod runtime_endpoint;
 mod runtime_input_backend;
 mod runtime_session_adapter;
 mod runtime_slice_cli;
 mod runtime_stream_adapter;
+
 const SCHEMA_VERSION: &str = CLI_SCHEMA_VERSION;
 const RUNTIME_VERSION: &str = "runtime-embedded-p1g";
 const CONFIG_ENV: &str = "ACTINGLAB_CONFIG_PATH";
@@ -9931,162 +9938,6 @@ fn require_runtime(global: &GlobalOptions) -> CliOutcome<Value> {
         "connection": "tcp",
         "policy": runtime_endpoint_policy_json(&policy)
     }))
-}
-
-#[derive(Debug, Clone)]
-struct RuntimeEndpointPolicy {
-    scheme: String,
-    host: String,
-    port: u16,
-    channel: RuntimeEndpointChannel,
-    auth_material: Option<&'static str>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum RuntimeEndpointChannel {
-    LocalDirect,
-    TrustedRemote,
-}
-
-impl RuntimeEndpointChannel {
-    fn as_str(self) -> &'static str {
-        match self {
-            RuntimeEndpointChannel::LocalDirect => "local_direct",
-            RuntimeEndpointChannel::TrustedRemote => "trusted_remote",
-        }
-    }
-}
-
-fn runtime_endpoint_check(endpoint: &str) -> Value {
-    match runtime_endpoint_policy(endpoint) {
-        Ok(policy) => {
-            let reachable = runtime_tcp_available(endpoint);
-            json!({
-                "ok": reachable,
-                "endpoint": endpoint,
-                "reachable": reachable,
-                "policy": runtime_endpoint_policy_json(&policy)
-            })
-        }
-        Err(err) => json!({
-            "ok": false,
-            "endpoint": endpoint,
-            "error_code": err.code,
-            "error": err.message,
-            "blocked_by": err.blocked_by
-        }),
-    }
-}
-
-fn runtime_endpoint_policy(endpoint: &str) -> CliOutcome<RuntimeEndpointPolicy> {
-    let (scheme, host, port) = parse_endpoint_parts(endpoint).ok_or_else(|| {
-        CliError::runtime_not_running(format!(
-            "runtime endpoint is invalid; expected host:port, http://host:port, or https://host:port, got {endpoint}"
-        ))
-    })?;
-    if is_loopback_host(&host) {
-        return Ok(RuntimeEndpointPolicy {
-            scheme,
-            host,
-            port,
-            channel: RuntimeEndpointChannel::LocalDirect,
-            auth_material: None,
-        });
-    }
-    if scheme != "https" {
-        return Err(CliError::safety_blocked(
-            "trusted_remote_transport_blocked",
-            "trusted remote runtime endpoints must use https:// with encryption",
-            &["trusted_remote", "encryption"],
-        ));
-    }
-    let auth_material = trusted_remote_auth_material().ok_or_else(|| {
-        CliError::safety_blocked(
-            "trusted_remote_auth_required",
-            format!(
-                "trusted remote runtime endpoints require {TRUSTED_REMOTE_TOKEN_ENV} or {TRUSTED_REMOTE_CLIENT_CERT_ENV}"
-            ),
-            &["trusted_remote", "authentication"],
-        )
-    })?;
-    Ok(RuntimeEndpointPolicy {
-        scheme,
-        host,
-        port,
-        channel: RuntimeEndpointChannel::TrustedRemote,
-        auth_material: Some(auth_material),
-    })
-}
-
-fn runtime_endpoint_policy_json(policy: &RuntimeEndpointPolicy) -> Value {
-    json!({
-        "channel": policy.channel.as_str(),
-        "scheme": policy.scheme,
-        "host": policy.host,
-        "port": policy.port,
-        "encryption_required": policy.channel == RuntimeEndpointChannel::TrustedRemote,
-        "authentication_required": policy.channel == RuntimeEndpointChannel::TrustedRemote,
-        "auth_material": policy.auth_material,
-        "auth_env": {
-            "token": TRUSTED_REMOTE_TOKEN_ENV,
-            "client_certificate": TRUSTED_REMOTE_CLIENT_CERT_ENV
-        }
-    })
-}
-
-fn trusted_remote_auth_material() -> Option<&'static str> {
-    if env_var_non_empty(TRUSTED_REMOTE_TOKEN_ENV) {
-        Some("token")
-    } else if env_var_non_empty(TRUSTED_REMOTE_CLIENT_CERT_ENV) {
-        Some("client_certificate")
-    } else {
-        None
-    }
-}
-
-fn env_var_non_empty(name: &str) -> bool {
-    env::var(name)
-        .map(|value| !value.trim().is_empty())
-        .unwrap_or(false)
-}
-
-fn runtime_tcp_available(endpoint: &str) -> bool {
-    let Some((host, port)) = parse_endpoint_host_port(endpoint) else {
-        return false;
-    };
-    let Ok(mut addrs) = (host.as_str(), port).to_socket_addrs() else {
-        return false;
-    };
-    addrs.any(|addr| TcpStream::connect_timeout(&addr, Duration::from_millis(200)).is_ok())
-}
-
-fn parse_endpoint_host_port(endpoint: &str) -> Option<(String, u16)> {
-    parse_endpoint_parts(endpoint).map(|(_scheme, host, port)| (host, port))
-}
-
-fn parse_endpoint_parts(endpoint: &str) -> Option<(String, String, u16)> {
-    let (scheme, trimmed) = if let Some(rest) = endpoint.strip_prefix("http://") {
-        ("http", rest)
-    } else if let Some(rest) = endpoint.strip_prefix("https://") {
-        ("https", rest)
-    } else {
-        ("tcp", endpoint)
-    };
-    let host_port = trimmed.split('/').next()?;
-    let (host, port) = host_port.rsplit_once(':')?;
-    Some((
-        scheme.to_string(),
-        host.trim_matches(['[', ']']).to_string(),
-        port.parse().ok()?,
-    ))
-}
-
-fn is_loopback_host(host: &str) -> bool {
-    let normalized = host.trim_matches(['[', ']']).to_ascii_lowercase();
-    normalized == "localhost"
-        || normalized == "::1"
-        || normalized == "0:0:0:0:0:0:0:1"
-        || normalized.starts_with("127.")
 }
 
 fn device_config(global: &GlobalOptions, config: &UserConfig) -> CliOutcome<DeviceRuntimeConfig> {
