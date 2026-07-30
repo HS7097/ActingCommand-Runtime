@@ -59,6 +59,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use user_config_keys::{config_get, config_set};
 use user_config_store::{config_path, read_user_config, write_user_config};
 use zip::{ZipWriter, write::FileOptions};
+use zip_error::{zip_io_error, zip_write_error};
 
 mod cli_result;
 mod contained_resources;
@@ -89,6 +90,7 @@ mod safe_file_stem;
 mod sha256;
 mod user_config_keys;
 mod user_config_store;
+mod zip_error;
 
 const SCHEMA_VERSION: &str = CLI_SCHEMA_VERSION;
 const RUNTIME_VERSION: &str = "runtime-embedded-p1g";
@@ -10452,14 +10454,6 @@ fn create_error_report_zip(out: &Path, run_id: &str, message: &str) -> CliOutcom
         .map_err(zip_io_error)?;
     zip.finish().map_err(zip_write_error)?;
     Ok(target)
-}
-
-fn zip_write_error(err: zip::result::ZipError) -> CliError {
-    CliError::package_invalid(format!("zip write failed: {err}"))
-}
-
-fn zip_io_error(err: io::Error) -> CliError {
-    CliError::package_invalid(format!("zip write failed: {err}"))
 }
 
 fn validate_operation_dir(dir: &Path) -> CliOutcome<Value> {

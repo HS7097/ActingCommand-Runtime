@@ -3100,6 +3100,81 @@ fn actinglab_sha256_glue_stays_out_of_main() {
 }
 
 #[test]
+fn actinglab_zip_error_glue_stays_out_of_main() {
+    let root = workspace_root();
+    let main =
+        fs::read_to_string(root.join("apps/actinglab/src/main.rs")).expect("read ActingLab main");
+    let zip_error = fs::read_to_string(root.join("apps/actinglab/src/zip_error.rs"))
+        .expect("read ActingLab ZIP error module");
+
+    const ROOT_DECLARATION: &str = "mod zip_error;";
+    const ROOT_IMPORT: &str = "use zip_error::{zip_io_error, zip_write_error};";
+    let declarations = main
+        .lines()
+        .filter(|line| line.contains("mod zip_error;"))
+        .collect::<Vec<_>>();
+    let imports = main
+        .lines()
+        .filter(|line| line.contains("zip_error::"))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        declarations,
+        vec![ROOT_DECLARATION],
+        "ActingLab main lost the one private ZIP error module declaration"
+    );
+    assert_eq!(
+        imports,
+        vec![ROOT_IMPORT],
+        "ActingLab main lost the one private ZIP error import"
+    );
+
+    for definition in ["fn zip_write_error(", "fn zip_io_error("] {
+        assert!(
+            zip_error.contains(definition),
+            "ZIP error module lost owner definition {definition}"
+        );
+        assert!(
+            !main.contains(definition),
+            "ActingLab main regained ZIP error owner definition {definition}"
+        );
+    }
+
+    assert_eq!(
+        zip_error.matches("pub(super) ").count(),
+        2,
+        "ZIP error owner visibility changed"
+    );
+    for line in zip_error.lines() {
+        let trimmed = line.trim_start();
+        assert!(
+            !trimmed.starts_with("pub ") && !trimmed.starts_with("pub(crate) "),
+            "ZIP error owner exposed broader visibility: {line}"
+        );
+    }
+
+    const CHILD_IMPORTS: &str = "use super::CliError;\nuse std::io;\n\n";
+    let raw_owner = zip_error
+        .strip_prefix(CHILD_IMPORTS)
+        .expect("ZIP error module imports changed");
+    let normalized_owner = raw_owner.replacen("pub(super) ", "", 2);
+    assert_eq!(
+        normalized_owner.lines().count(),
+        7,
+        "ZIP error owner line count changed"
+    );
+    assert_eq!(
+        normalized_owner.len(),
+        244,
+        "ZIP error owner byte count changed"
+    );
+    assert_eq!(
+        format!("{:x}", Sha256::digest(normalized_owner.as_bytes())),
+        "b15204ccc3490b7f5a81a792d7a13496b0809e6931644c4f27b1395cad758889",
+        "ZIP error owner body changed"
+    );
+}
+
+#[test]
 fn main_rs_line_ratchet_matches_checked_in_baseline() {
     let root = workspace_root();
     let source = fs::read_to_string(root.join("apps/actinglab/src/main.rs"))
