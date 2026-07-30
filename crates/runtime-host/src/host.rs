@@ -9327,17 +9327,8 @@ impl HostShared {
                 ),
             ));
         }
-        if resolved.provenance() != ExecutionBackendProvenance::FixtureSimulation {
-            return Err(RequestFailure::request(
-                RuntimeHostError::request(
-                    "policy_run_fixture_simulation_required",
-                    "run_scheduled_contained_task",
-                    RuntimeErrorCode::InvalidRequest,
-                ),
-                RuntimeReceiptState::Denied,
-                None,
-            ));
-        }
+        let execution_provenance = resolved.provenance();
+        let (task_actor, task_source) = scheduled_request_transport_origin(execution_provenance);
         let request_id = self
             .events
             .issuer()
@@ -9347,8 +9338,8 @@ impl HostShared {
             request_id,
             context.issued_correlation_id(),
             None,
-            EventActor::Lab,
-            EventSource::Lab,
+            task_actor,
+            task_source,
             unix_ms_now().map_err(RequestFailure::poison_without_terminal)?,
             RuntimeOperation::RunContainedTask {
                 instance_alias: instance_alias.clone(),
@@ -9376,9 +9367,28 @@ impl HostShared {
                 &error,
             ))
         })?;
-        self.validated_instance(&validated, token, connection_id)?;
+        let prepared = if execution_provenance == ExecutionBackendProvenance::PhysicalDevice {
+            Some(prepare_contained_task(instance_alias, task_request)?)
+        } else {
+            None
+        };
+        let admitted_instance = self.validated_instance(&validated, token, connection_id)?;
+        if admitted_instance.instance_id() != resolved.instance_id()
+            || admitted_instance.provenance() != execution_provenance
+        {
+            return Err(RequestFailure::poison_without_terminal(
+                RuntimeHostError::fatal(
+                    "policy_run_execution_identity_mismatch",
+                    "run_scheduled_contained_task",
+                    RuntimeErrorCode::RuntimeFatal,
+                ),
+            ));
+        }
         let _active_run = self.begin_contained_run(task_request_message.request_id())?;
-        let prepared = prepare_contained_task(instance_alias, task_request)?;
+        let prepared = match prepared {
+            Some(prepared) => prepared,
+            None => prepare_contained_task(instance_alias, task_request)?,
+        };
         let expected_outcome_keys = lock(&self.policy, "validate_policy_outcome_declaration")?
             .referenced_outcome_keys(context)
             .map_err(|error| {
@@ -9406,12 +9416,12 @@ impl HostShared {
             ));
         }
         let run_links = RuntimeRunLinks::new(context.issued_task_id(), context.issued_run_id());
-        self.append_request_lifecycle(
+        self.append_scheduled_request_lifecycle(
             &task_request_message,
             &validated,
             resolved.instance_id(),
-            EventAction::RuntimeTaskRun,
-            Some(run_links),
+            run_links,
+            execution_provenance,
         )?;
         let success = self.execute_contained_task_with_lease(
             &task_request_message,
@@ -9422,7 +9432,7 @@ impl HostShared {
             token.clone(),
             context.issued_task_id(),
             context.issued_run_id(),
-            ExecutionBackendProvenance::FixtureSimulation,
+            execution_provenance,
             Some(run_links),
         )?;
         Ok((task_request_message, success))
@@ -9966,6 +9976,61 @@ impl HostShared {
             links,
             CommandPayloadDraft::validated(
                 action,
+                EffectDisposition::NotPerformed,
+                AuditInput::new(),
+            ),
+        )?;
+        Ok(())
+    }
+
+    fn append_scheduled_request_lifecycle(
+        &self,
+        original: &RuntimeRequest,
+        request: &ValidatedRuntimeRequest<'_>,
+        instance_id: InstanceId,
+        run_links: RuntimeRunLinks,
+        execution_provenance: ExecutionBackendProvenance,
+    ) -> Result<(), RequestFailure> {
+        let expected_origin = scheduled_request_transport_origin(execution_provenance);
+        if (original.actor(), original.source()) != expected_origin {
+            return Err(RequestFailure::poison_without_terminal(
+                RuntimeHostError::fatal(
+                    "policy_task_request_origin_mismatch",
+                    "append_scheduled_request_lifecycle",
+                    RuntimeErrorCode::RuntimeFatal,
+                ),
+            ));
+        }
+        if execution_provenance == ExecutionBackendProvenance::FixtureSimulation {
+            return self.append_request_lifecycle(
+                original,
+                request,
+                instance_id,
+                EventAction::RuntimeTaskRun,
+                Some(run_links),
+            );
+        }
+        let links =
+            run_links.apply(
+                self.events
+                    .request_links(request, Some(instance_id), None, None),
+            );
+        self.append_event(
+            EventSeverity::Info,
+            EventSource::Scheduler,
+            OriginModule::Scheduler,
+            EventActor::Scheduler,
+            links.clone(),
+            CommandPayloadDraft::received(EventAction::RuntimeTaskRun, AuditInput::new()),
+        )?;
+        self.append_event(
+            EventSeverity::Info,
+            EventSource::Runtime,
+            OriginModule::Runtime,
+            EventActor::Runtime,
+            links,
+            CommandPayloadDraft::validated(
+                EventAction::RuntimeTaskRun,
                 EffectDisposition::NotPerformed,
                 AuditInput::new(),
             ),
@@ -13433,6 +13498,15 @@ fn execution_audit(provenance: ExecutionBackendProvenance, endpoint: &str) -> Au
     match provenance {
         ExecutionBackendProvenance::PhysicalDevice => audit_endpoint(endpoint),
         ExecutionBackendProvenance::FixtureSimulation => AuditInput::new(),
+    }
+}
+
+const fn scheduled_request_transport_origin(
+    provenance: ExecutionBackendProvenance,
+) -> (EventActor, EventSource) {
+    match provenance {
+        ExecutionBackendProvenance::PhysicalDevice => (EventActor::Agent, EventSource::Adapter),
+        ExecutionBackendProvenance::FixtureSimulation => (EventActor::Lab, EventSource::Lab),
     }
 }
 
