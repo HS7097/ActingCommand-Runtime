@@ -578,6 +578,94 @@ mod tests {
     }
 
     #[test]
+    fn adapter_accepts_canonical_non_full_frame_ocr_roi() {
+        let provider = VisionFfiProvider::new(
+            Some((
+                Box::new(StaticOcrEngine {
+                    backend: VisionBackendKind::FastDeployPpocr,
+                    warnings: Vec::new(),
+                }),
+                identity("PP-OCRv6_medium", 'a'),
+            )),
+            None,
+        )
+        .expect("provider");
+        let pixels = [0; 12];
+        let languages = vec!["en".to_string()];
+        let model_sha256 = "a".repeat(64);
+        let region = PackRect {
+            x: 1,
+            y: 0,
+            width: 1,
+            height: 2,
+        };
+
+        let result = RecognitionVisionProvider::read_text(
+            &provider,
+            OcrProviderRequest {
+                frame: VisionProviderFrame {
+                    width: 2,
+                    height: 2,
+                    rgb8_pixels: &pixels,
+                },
+                region,
+                languages: &languages,
+                timeout_ms: 1_000,
+                model_ref: "PP-OCRv6_medium",
+                model_sha256: &model_sha256,
+            },
+        )
+        .expect("canonical ROI accepted");
+
+        assert_eq!(result.text, "home");
+        assert_eq!(result.blocks.len(), 1);
+        assert_eq!(result.blocks[0].rect, region);
+        assert_eq!(result.blocks[0].confidence, Some(0.99));
+    }
+
+    #[test]
+    fn adapter_rejects_any_ocr_provider_warning() {
+        let provider = VisionFfiProvider::new(
+            Some((
+                Box::new(StaticOcrEngine {
+                    backend: VisionBackendKind::FastDeployPpocr,
+                    warnings: vec!["unexpected provider degradation".to_string()],
+                }),
+                identity("PP-OCRv6_medium", 'a'),
+            )),
+            None,
+        )
+        .expect("provider");
+        let pixels = [0; 12];
+        let languages = vec!["en".to_string()];
+        let model_sha256 = "a".repeat(64);
+
+        let error = RecognitionVisionProvider::read_text(
+            &provider,
+            OcrProviderRequest {
+                frame: VisionProviderFrame {
+                    width: 2,
+                    height: 2,
+                    rgb8_pixels: &pixels,
+                },
+                region: PackRect {
+                    x: 1,
+                    y: 0,
+                    width: 1,
+                    height: 2,
+                },
+                languages: &languages,
+                timeout_ms: 1_000,
+                model_ref: "PP-OCRv6_medium",
+                model_sha256: &model_sha256,
+            },
+        )
+        .expect_err("provider warning remains fail-closed");
+
+        assert_eq!(error.code(), VisionProviderErrorCode::InvalidResponse);
+    }
+
+    #[test]
     fn adapter_rejects_test_double_backend_and_retires_panicking_engine() {
         let pixels = [0, 0, 0];
         let languages = vec!["en".to_string()];
@@ -603,6 +691,7 @@ mod tests {
             Some((
                 Box::new(StaticOcrEngine {
                     backend: VisionBackendKind::TestDouble,
+                    warnings: Vec::new(),
                 }),
                 identity("PP-OCRv6_medium", 'a'),
             )),
@@ -692,6 +781,7 @@ mod tests {
 
     struct StaticOcrEngine {
         backend: VisionBackendKind,
+        warnings: Vec<String>,
     }
 
     impl OcrEngine for StaticOcrEngine {
@@ -708,7 +798,7 @@ mod tests {
                 }],
                 confidence: Some(0.99),
                 backend: self.backend,
-                warnings: Vec::new(),
+                warnings: self.warnings.clone(),
             })
         }
     }

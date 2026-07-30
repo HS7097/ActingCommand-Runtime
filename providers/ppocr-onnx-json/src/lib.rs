@@ -183,26 +183,27 @@ fn read_text_json(
             envelope.request.region,
             remaining_inference_budget(inference_deadline, "PPOCR recognizer")?,
         )?;
-        let blocks = if decoded.text.is_empty() {
-            Vec::new()
-        } else {
-            vec![OcrTextBlock {
-                text: decoded.text.clone(),
-                rect: envelope.request.region,
-                confidence: decoded.confidence,
-            }]
-        };
+        Ok(canonical_roi_result(decoded, envelope.request.region))
+    }
+}
 
-        Ok(OcrInferenceResult {
+fn canonical_roi_result(decoded: DecodedText, region: VisionRect) -> OcrInferenceResult {
+    let blocks = if decoded.text.is_empty() {
+        Vec::new()
+    } else {
+        vec![OcrTextBlock {
             text: decoded.text.clone(),
+            rect: region,
             confidence: decoded.confidence,
-            blocks,
-            backend: VisionBackendKind::FastDeployPpocr,
-            warnings: vec![
-                "ppocr_onnx_provider used recognizer-only ROI OCR because a sub-frame region was requested"
-                    .to_string(),
-            ],
-        })
+        }]
+    };
+
+    OcrInferenceResult {
+        text: decoded.text,
+        confidence: decoded.confidence,
+        blocks,
+        backend: VisionBackendKind::FastDeployPpocr,
+        warnings: Vec::new(),
     }
 }
 
@@ -1289,6 +1290,40 @@ mod tests {
                 height: 80,
             }
         ));
+    }
+
+    #[test]
+    fn canonical_sub_frame_roi_result_preserves_region_without_warning() {
+        let frame = VisionFrame {
+            width: 320,
+            height: 80,
+            pixel_format: VisionPixelFormat::Rgb8,
+            pixels: vec![0; 320 * 80 * 3],
+        };
+        let region = VisionRect {
+            x: 16,
+            y: 8,
+            width: 160,
+            height: 32,
+        };
+        assert!(!is_full_frame_region(&frame, region));
+
+        let result = canonical_roi_result(
+            DecodedText {
+                text: "home".to_string(),
+                confidence: Some(0.99),
+            },
+            region,
+        );
+
+        assert_eq!(result.text, "home");
+        assert_eq!(result.confidence, Some(0.99));
+        assert_eq!(result.backend, VisionBackendKind::FastDeployPpocr);
+        assert!(result.warnings.is_empty());
+        assert_eq!(result.blocks.len(), 1);
+        assert_eq!(result.blocks[0].text, "home");
+        assert_eq!(result.blocks[0].rect, region);
+        assert_eq!(result.blocks[0].confidence, Some(0.99));
     }
 
     #[test]
