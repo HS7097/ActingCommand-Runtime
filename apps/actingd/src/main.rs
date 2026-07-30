@@ -512,6 +512,7 @@ struct PolicyDriverControl {
 struct PolicyDriverSignal {
     pending_trigger: Option<PolicyTrigger>,
     pending_recomputes: BTreeMap<PolicyRecomputeKey, PolicyRecomputeWake>,
+    active_recomputes: BTreeMap<PolicyRecomputeKey, PolicyRecomputeWake>,
     completed_recomputes: BTreeMap<PolicyRecomputeKey, PolicyRecomputeWake>,
     shutdown: bool,
 }
@@ -557,6 +558,15 @@ impl PolicyDriverControl {
                 ))
             };
         }
+        if let Some(existing) = state.active_recomputes.get(&key) {
+            return if existing == &wake {
+                Ok(())
+            } else {
+                Err(ActingdError::process(
+                    "policy_recompute_wake_identity_conflict",
+                ))
+            };
+        }
         if let Some(existing) = state.pending_recomputes.get(&key)
             && existing != &wake
         {
@@ -564,12 +574,14 @@ impl PolicyDriverControl {
                 "policy_recompute_wake_identity_conflict",
             ));
         }
-        state.pending_recomputes.insert(key, wake);
-        if state.pending_recomputes.len() > MAX_TASKS {
+        if !state.pending_recomputes.contains_key(&key)
+            && state.pending_recomputes.len() + state.active_recomputes.len() >= MAX_TASKS
+        {
             return Err(ActingdError::process(
                 "policy_recompute_wake_budget_exceeded",
             ));
         }
+        state.pending_recomputes.insert(key, wake);
         state.pending_trigger = Some(
             state
                 .pending_trigger
@@ -578,6 +590,42 @@ impl PolicyDriverControl {
                 }),
         );
         self.changed.notify_one();
+        Ok(())
+    }
+
+    fn complete_recomputes(&self, recomputes: &[PolicyRecomputeWake]) -> Result<(), ActingdError> {
+        let completed = recompute_wakes_by_key(recomputes.iter().cloned())?;
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| ActingdError::process("policy_driver_signal_poisoned"))?;
+        for (key, wake) in &completed {
+            if state
+                .completed_recomputes
+                .get(key)
+                .is_some_and(|existing| existing != wake)
+                || state
+                    .active_recomputes
+                    .get(key)
+                    .is_some_and(|existing| existing != wake)
+                || state
+                    .pending_recomputes
+                    .get(key)
+                    .is_some_and(|existing| existing != wake)
+            {
+                return Err(ActingdError::process(
+                    "policy_recompute_wake_identity_conflict",
+                ));
+            }
+        }
+        for (key, wake) in completed {
+            state.active_recomputes.remove(&key);
+            state.pending_recomputes.remove(&key);
+            state.completed_recomputes.insert(key, wake);
+        }
+        while state.completed_recomputes.len() > MAX_TASKS {
+            state.completed_recomputes.pop_first();
+        }
         Ok(())
     }
 
@@ -630,25 +678,68 @@ fn take_policy_driver_work(
         }
         return Err(ActingdError::process("policy_recompute_trigger_missing"));
     };
+    let pending = state
+        .pending_recomputes
+        .values()
+        .cloned()
+        .collect::<Vec<_>>();
+    merge_recompute_wakes(&mut state.active_recomputes, pending)?;
     let recomputes = std::mem::take(&mut state.pending_recomputes);
-    for (key, wake) in &recomputes {
-        if let Some(existing) = state.completed_recomputes.get(key)
-            && existing != wake
+    Ok(Some((trigger, recomputes.into_values().collect())))
+}
+
+fn recompute_wakes_by_key(
+    recomputes: impl IntoIterator<Item = PolicyRecomputeWake>,
+) -> Result<BTreeMap<PolicyRecomputeKey, PolicyRecomputeWake>, ActingdError> {
+    let mut keyed = BTreeMap::new();
+    for wake in recomputes {
+        let key = wake.key();
+        if keyed
+            .get(&key)
+            .is_some_and(|existing: &PolicyRecomputeWake| existing != &wake)
         {
             return Err(ActingdError::process(
                 "policy_recompute_wake_identity_conflict",
             ));
         }
-        state.completed_recomputes.insert(*key, wake.clone());
+        keyed.insert(key, wake);
+        if keyed.len() > MAX_TASKS {
+            return Err(ActingdError::process(
+                "policy_recompute_wake_budget_exceeded",
+            ));
+        }
     }
-    while state.completed_recomputes.len() > MAX_TASKS {
-        state.completed_recomputes.pop_first();
+    Ok(keyed)
+}
+
+fn merge_recompute_wakes(
+    target: &mut BTreeMap<PolicyRecomputeKey, PolicyRecomputeWake>,
+    recomputes: impl IntoIterator<Item = PolicyRecomputeWake>,
+) -> Result<(), ActingdError> {
+    let additions = recompute_wakes_by_key(recomputes)?;
+    for (key, wake) in &additions {
+        if target.get(key).is_some_and(|existing| existing != wake) {
+            return Err(ActingdError::process(
+                "policy_recompute_wake_identity_conflict",
+            ));
+        }
     }
-    Ok(Some((trigger, recomputes.into_values().collect())))
+    let new_keys = additions
+        .keys()
+        .filter(|key| !target.contains_key(key))
+        .count();
+    if target.len() + new_keys > MAX_TASKS {
+        return Err(ActingdError::process(
+            "policy_recompute_wake_budget_exceeded",
+        ));
+    }
+    target.extend(additions);
+    Ok(())
 }
 
 struct DeferredPolicyTrigger {
     trigger: PolicyTrigger,
+    recomputes: BTreeMap<PolicyRecomputeKey, PolicyRecomputeWake>,
     eligible_at_unix_ms: u64,
 }
 
@@ -695,21 +786,15 @@ impl PolicyDriverSchedule {
             self.next_wake_unix_ms = evaluation.next_wake_unix_ms;
         }
         if cycle.directive.kind == PolicyRecomputeKind::Deferred {
-            let pending = DeferredPolicyTrigger {
-                trigger,
-                eligible_at_unix_ms: cycle.directive.eligible_at_unix_ms,
-            };
-            self.deferred = Some(match self.deferred.take() {
-                Some(existing) => DeferredPolicyTrigger {
-                    trigger: coalesce_policy_trigger(existing.trigger, pending.trigger),
-                    eligible_at_unix_ms: existing
-                        .eligible_at_unix_ms
-                        .max(pending.eligible_at_unix_ms),
-                },
-                None => pending,
-            });
+            self.merge_deferred_work(trigger, Vec::new(), cycle.directive.eligible_at_unix_ms)?;
         } else {
-            self.deferred = None;
+            if self
+                .deferred
+                .as_ref()
+                .is_none_or(|deferred| deferred.recomputes.is_empty())
+            {
+                self.deferred = None;
+            }
             if cycle.directive.kind == PolicyRecomputeKind::Full {
                 self.next_reconciliation_unix_ms =
                     checked_deadline(now_unix_ms, self.cadence.reconciliation_interval_ms)?;
@@ -718,60 +803,89 @@ impl PolicyDriverSchedule {
         Ok(())
     }
 
-    fn coalesce_deferred_event(&mut self, trigger: PolicyTrigger) -> bool {
+    fn coalesce_deferred_work(
+        &mut self,
+        trigger: PolicyTrigger,
+        recomputes: Vec<PolicyRecomputeWake>,
+    ) -> Result<bool, ActingdError> {
         let Some(deferred) = self.deferred.as_mut() else {
-            return false;
+            return Ok(false);
         };
         if trigger == PolicyTrigger::CatalogChanged {
-            return false;
+            return Ok(false);
         }
+        merge_recompute_wakes(&mut deferred.recomputes, recomputes)?;
         deferred.trigger = coalesce_policy_trigger(deferred.trigger, trigger);
-        true
+        Ok(true)
     }
 
     fn defer_projection(
         &mut self,
         trigger: PolicyTrigger,
+        recomputes: Vec<PolicyRecomputeWake>,
         now_unix_ms: u64,
     ) -> Result<(), ActingdError> {
         let eligible_at_unix_ms = checked_deadline(now_unix_ms, self.cadence.debounce_ms.max(1))?;
-        self.deferred = Some(match self.deferred.take() {
-            Some(existing) => DeferredPolicyTrigger {
-                trigger: coalesce_policy_trigger(existing.trigger, trigger),
-                eligible_at_unix_ms: existing.eligible_at_unix_ms.max(eligible_at_unix_ms),
-            },
-            None => DeferredPolicyTrigger {
-                trigger,
-                eligible_at_unix_ms,
-            },
-        });
+        self.merge_deferred_work(trigger, recomputes, eligible_at_unix_ms)
+    }
+
+    fn merge_deferred_work(
+        &mut self,
+        trigger: PolicyTrigger,
+        recomputes: Vec<PolicyRecomputeWake>,
+        eligible_at_unix_ms: u64,
+    ) -> Result<(), ActingdError> {
+        let pending = recompute_wakes_by_key(recomputes)?;
+        match self.deferred.as_mut() {
+            Some(existing) => {
+                merge_recompute_wakes(&mut existing.recomputes, pending.into_values())?;
+                existing.trigger = coalesce_policy_trigger(existing.trigger, trigger);
+                existing.eligible_at_unix_ms =
+                    existing.eligible_at_unix_ms.max(eligible_at_unix_ms);
+            }
+            None => {
+                self.deferred = Some(DeferredPolicyTrigger {
+                    trigger,
+                    recomputes: pending,
+                    eligible_at_unix_ms,
+                });
+            }
+        }
         Ok(())
     }
 
-    fn take_due_trigger(
+    fn take_due_work(
         &mut self,
         now_unix_ms: u64,
-    ) -> Result<Option<PolicyTrigger>, ActingdError> {
+    ) -> Result<Option<(PolicyTrigger, Vec<PolicyRecomputeWake>)>, ActingdError> {
         let previous = self.last_clock_observation_unix_ms;
         let delta = now_unix_ms.saturating_sub(previous);
         if now_unix_ms < previous || delta > self.cadence.clock_jump_threshold_ms {
             self.record_clock_observation(now_unix_ms)?;
-            return Ok(Some(PolicyTrigger::ClockObserved {
-                previous_unix_ms: previous,
-            }));
+            return Ok(Some((
+                PolicyTrigger::ClockObserved {
+                    previous_unix_ms: previous,
+                },
+                Vec::new(),
+            )));
         }
         if now_unix_ms >= self.next_clock_observation_unix_ms {
             self.record_clock_observation(now_unix_ms)?;
         }
         if now_unix_ms >= self.next_reconciliation_unix_ms {
-            return Ok(Some(PolicyTrigger::Reconciliation));
+            return Ok(Some((PolicyTrigger::Reconciliation, Vec::new())));
         }
         if self
             .deferred
             .as_ref()
             .is_some_and(|deferred| now_unix_ms >= deferred.eligible_at_unix_ms)
         {
-            return Ok(self.deferred.take().map(|deferred| deferred.trigger));
+            return Ok(self.deferred.take().map(|deferred| {
+                (
+                    deferred.trigger,
+                    deferred.recomputes.into_values().collect(),
+                )
+            }));
         }
         if self
             .next_wake_unix_ms
@@ -780,7 +894,10 @@ impl PolicyDriverSchedule {
             self.next_wake_unix_ms = None;
             let previous_unix_ms = self.last_clock_observation_unix_ms;
             self.record_clock_observation(now_unix_ms)?;
-            return Ok(Some(PolicyTrigger::ClockObserved { previous_unix_ms }));
+            return Ok(Some((
+                PolicyTrigger::ClockObserved { previous_unix_ms },
+                Vec::new(),
+            )));
         }
         Ok(None)
     }
@@ -833,7 +950,7 @@ fn drive_policy(
                     &control,
                     &mut schedule,
                     trigger,
-                    !recomputes.is_empty(),
+                    recomputes,
                 )?;
                 continue;
             }
@@ -841,14 +958,14 @@ fn drive_policy(
         }
 
         let now = system_unix_ms()?;
-        if let Some(trigger) = schedule.take_due_trigger(now)? {
+        if let Some((trigger, recomputes)) = schedule.take_due_work(now)? {
             execute_ready_policy_trigger(
                 &host,
                 &policy,
                 &control,
                 &mut schedule,
                 trigger,
-                false,
+                recomputes,
                 now,
             )?;
             continue;
@@ -862,7 +979,7 @@ fn drive_policy(
                     &control,
                     &mut schedule,
                     trigger,
-                    !recomputes.is_empty(),
+                    recomputes,
                 )?;
             }
             PolicyDriverWake::TimedOut => {}
@@ -876,16 +993,19 @@ fn handle_policy_driver_trigger(
     control: &PolicyDriverControl,
     schedule: &mut PolicyDriverSchedule,
     mut trigger: PolicyTrigger,
-    has_recompute: bool,
+    mut recomputes: Vec<PolicyRecomputeWake>,
 ) -> Result<(), ActingdError> {
-    if schedule.coalesce_deferred_event(trigger) {
+    if schedule.coalesce_deferred_work(trigger, recomputes.clone())? {
         return Ok(());
     }
     let now = system_unix_ms()?;
-    if let Some(due) = schedule.take_due_trigger(now)? {
+    if let Some((due, due_recomputes)) = schedule.take_due_work(now)? {
         trigger = coalesce_policy_trigger(due, trigger);
+        let mut keyed = recompute_wakes_by_key(recomputes)?;
+        merge_recompute_wakes(&mut keyed, due_recomputes)?;
+        recomputes = keyed.into_values().collect();
     }
-    execute_ready_policy_trigger(host, policy, control, schedule, trigger, has_recompute, now)
+    execute_ready_policy_trigger(host, policy, control, schedule, trigger, recomputes, now)
 }
 
 fn execute_ready_policy_trigger(
@@ -894,19 +1014,52 @@ fn execute_ready_policy_trigger(
     control: &PolicyDriverControl,
     schedule: &mut PolicyDriverSchedule,
     trigger: PolicyTrigger,
-    has_recompute: bool,
+    recomputes: Vec<PolicyRecomputeWake>,
     now_unix_ms: u64,
 ) -> Result<(), ActingdError> {
-    match execute_policy_cycle(host, policy, trigger) {
+    apply_policy_cycle_result(
+        control,
+        schedule,
+        trigger,
+        recomputes,
+        now_unix_ms,
+        execute_policy_cycle(host, policy, trigger),
+    )
+}
+
+fn apply_policy_cycle_result(
+    control: &PolicyDriverControl,
+    schedule: &mut PolicyDriverSchedule,
+    trigger: PolicyTrigger,
+    recomputes: Vec<PolicyRecomputeWake>,
+    now_unix_ms: u64,
+    result: Result<PolicyCycleExecution, ActingdError>,
+) -> Result<(), ActingdError> {
+    match result {
         Ok(execution) => {
-            schedule.apply_cycle(trigger, &execution.cycle, now_unix_ms)?;
-            for wake in execution.recompute_wakes {
-                control.notify_recompute(wake)?;
+            let policy_consumed = execution.cycle.directive.kind != PolicyRecomputeKind::Deferred;
+            let apply = (|| {
+                schedule.apply_cycle(trigger, &execution.cycle, now_unix_ms)?;
+                if !policy_consumed {
+                    schedule.merge_deferred_work(
+                        trigger,
+                        recomputes.clone(),
+                        execution.cycle.directive.eligible_at_unix_ms,
+                    )?;
+                }
+                for wake in execution.recompute_wakes {
+                    control.notify_recompute(wake)?;
+                }
+                Ok(())
+            })();
+            match apply {
+                Ok(()) if policy_consumed => control.complete_recomputes(&recomputes),
+                Ok(()) => Ok(()),
+                Err(error) => Err(error),
             }
-            Ok(())
         }
-        Err(error) if has_recompute && error.code == "outcome_projection_not_ready" => {
-            schedule.defer_projection(trigger, now_unix_ms)
+        Err(error) if !recomputes.is_empty() && error.code == "outcome_projection_not_ready" => {
+            schedule.defer_projection(trigger, recomputes, now_unix_ms)
         }
         Err(error) => Err(error),
     }
@@ -999,7 +1152,7 @@ mod tests {
     use super::*;
     use crate::config::ScheduledProcedureTask;
     use actingcommand_contract::{
-        ApplicationLifecycleAction, ContainedTaskRequest, IdentifierIssuer,
+        ApplicationLifecycleAction, ContainedTaskRequest, IdentifierIssuer, PolicyPayload,
     };
     use actingcommand_device::{
         CaptureBackend, CaptureBackendName, DeviceError, DeviceResult, Frame, InputBackend,
@@ -1180,10 +1333,120 @@ mod tests {
             panic!("mapped outcome must wake the resident driver")
         };
         assert_eq!(trigger, PolicyTrigger::FactsChanged);
-        assert_eq!(recomputes.len(), 1);
+        assert_eq!(recomputes, vec![wake.clone()]);
+        let signal = control.state.lock().expect("driver signal");
+        assert!(
+            signal.completed_recomputes.is_empty(),
+            "taking exact work must not mark it completed before policy consumption"
+        );
+        assert_eq!(
+            signal.active_recomputes.get(&wake.key()),
+            Some(wake),
+            "the exact obligation must remain active until policy consumption succeeds"
+        );
+        drop(signal);
+        let client = RuntimeClient::connect(
+            RuntimeClientConfig::new(root.path(), EventActor::Agent, EventSource::Adapter)
+                .with_io_timeout(Duration::from_secs(1)),
+        )
+        .expect("connect formal-provider runtime");
+        let defer_now = 10_000;
+        let mut projection_schedule = PolicyDriverSchedule::new(
+            policy.cadence.clone(),
+            &policy_cycle(PolicyRecomputeKind::Full, defer_now),
+            defer_now,
+        )
+        .expect("projection schedule");
+        apply_policy_cycle_result(
+            &control,
+            &mut projection_schedule,
+            trigger,
+            recomputes,
+            defer_now,
+            Err(ActingdError::process("outcome_projection_not_ready")),
+        )
+        .expect("first bounded not-ready defer");
+        assert!(
+            projection_schedule
+                .take_due_work(defer_now)
+                .expect("pre-deadline projection work")
+                .is_none()
+        );
+        let (first_deferred_trigger, first_deferred_recomputes) = projection_schedule
+            .take_due_work(defer_now + policy.cadence.debounce_ms)
+            .expect("first projection deadline")
+            .expect("first retained exact projection work");
+        assert_eq!(first_deferred_trigger, PolicyTrigger::FactsChanged);
+        assert_eq!(first_deferred_recomputes, vec![wake.clone()]);
+        assert_eq!(
+            client
+                .query_events(
+                    EventQuery {
+                        event_type: Some(EventType::PolicyDispatchIntent),
+                        ..EventQuery::default()
+                    },
+                    ProjectionProfile::Forensic,
+                )
+                .expect("query intents before projection readiness")
+                .len(),
+            1,
+            "not-ready projection attempts must not dispatch a successor"
+        );
+        apply_policy_cycle_result(
+            &control,
+            &mut projection_schedule,
+            first_deferred_trigger,
+            first_deferred_recomputes,
+            defer_now + policy.cadence.debounce_ms,
+            Err(ActingdError::process("outcome_projection_not_ready")),
+        )
+        .expect("second bounded not-ready defer");
+        let (second_deferred_trigger, second_deferred_recomputes) = projection_schedule
+            .take_due_work(defer_now + (policy.cadence.debounce_ms * 2))
+            .expect("second projection deadline")
+            .expect("second retained exact projection work");
+        assert_eq!(second_deferred_trigger, PolicyTrigger::FactsChanged);
+        assert_eq!(second_deferred_recomputes, vec![wake.clone()]);
+        assert_eq!(
+            client
+                .query_events(
+                    EventQuery {
+                        event_type: Some(EventType::PolicyDispatchIntent),
+                        ..EventQuery::default()
+                    },
+                    ProjectionProfile::Forensic,
+                )
+                .expect("query intents after second not-ready result")
+                .len(),
+            1,
+            "a second not-ready projection must still produce zero successor dispatches"
+        );
+        thread::sleep(Duration::from_millis(policy.cadence.cooldown_ms + 10));
+        let ready = execute_policy_cycle(&host, &policy, second_deferred_trigger);
+        assert_eq!(
+            ready
+                .as_ref()
+                .expect("third projection attempt is ready")
+                .cycle
+                .pending_dispatch_intents
+                .iter()
+                .filter(|intent| intent.task_id == "fixture.followup")
+                .count(),
+            1,
+            "the evaluator, not the wake, must decide exactly one successor"
+        );
+        apply_policy_cycle_result(
+            &control,
+            &mut projection_schedule,
+            second_deferred_trigger,
+            second_deferred_recomputes,
+            defer_now + (policy.cadence.debounce_ms * 2),
+            ready,
+        )
+        .expect("third cycle consumes the ready exact projection");
         control
             .notify_recompute(wake.clone())
-            .expect("replayed exact wake");
+            .expect("replayed completed exact wake");
         assert!(matches!(
             control.wait(Duration::ZERO).expect("deduplicated replay"),
             PolicyDriverWake::TimedOut
@@ -1211,56 +1474,9 @@ mod tests {
                 .code,
             "policy_recompute_wake_identity_conflict"
         );
-        let defer_now = 10_000;
-        let mut projection_schedule = PolicyDriverSchedule::new(
-            policy.cadence.clone(),
-            &policy_cycle(PolicyRecomputeKind::Full, defer_now),
-            defer_now,
-        )
-        .expect("projection schedule");
-        projection_schedule
-            .defer_projection(trigger, defer_now)
-            .expect("bounded not-ready defer");
-        assert!(
-            projection_schedule
-                .take_due_trigger(defer_now)
-                .expect("pre-deadline projection work")
-                .is_none()
-        );
-        let deferred_trigger = projection_schedule
-            .take_due_trigger(defer_now + policy.cadence.debounce_ms)
-            .expect("projection-ready deadline")
-            .expect("retained exact projection work");
-        assert_eq!(deferred_trigger, PolicyTrigger::FactsChanged);
-        let deferred = host
-            .evaluate_policy_cycle(trigger)
-            .expect("bounded mapped-outcome debounce");
-        assert_eq!(
-            deferred.directive.kind,
-            PolicyRecomputeKind::Deferred,
-            "the exact wake must use the existing bounded driver cadence"
-        );
-        thread::sleep(Duration::from_millis(policy.cadence.cooldown_ms + 10));
-        let followup = host
-            .evaluate_policy_cycle(trigger)
-            .expect("authoritative mapped-outcome evaluation after cooldown");
-        assert_eq!(
-            followup
-                .pending_dispatch_intents
-                .iter()
-                .filter(|intent| intent.task_id == "fixture.followup")
-                .count(),
-            1,
-            "the evaluator, not the wake, must decide the successor: {followup:#?}"
-        );
         assert_eq!(input_count.load(Ordering::SeqCst), 1);
         assert_eq!(capture_count.load(Ordering::SeqCst), 2);
 
-        let client = RuntimeClient::connect(
-            RuntimeClientConfig::new(root.path(), EventActor::Agent, EventSource::Adapter)
-                .with_io_timeout(Duration::from_secs(1)),
-        )
-        .expect("connect formal-provider runtime");
         let events = client
             .query_events(EventQuery::default(), ProjectionProfile::Forensic)
             .expect("query formal-provider owner chain");
@@ -1275,15 +1491,35 @@ mod tests {
             EventType::PolicyExecutionRecorded,
             EventType::PolicyDispatchCompleted,
         ] {
+            let expected = if event_type == EventType::PolicyDispatchIntent {
+                2
+            } else {
+                1
+            };
             assert_eq!(
                 events
                     .iter()
                     .filter(|event| event.event_type == event_type)
                     .count(),
-                1,
+                expected,
                 "{event_type:?}"
             );
         }
+        let followup_intents = events
+            .iter()
+            .filter(|event| {
+                matches!(
+                    &event.payload,
+                    ProjectionPayload::Full(payload)
+                        if matches!(
+                            payload.as_ref(),
+                            EventPayload::Policy(PolicyPayload::DispatchIntent(payload))
+                                if payload.task_id() == "fixture.followup"
+                        )
+                )
+            })
+            .count();
+        assert_eq!(followup_intents, 1);
         drop(client);
         host.close().expect("close formal-provider runtime");
     }
@@ -1303,9 +1539,9 @@ mod tests {
         assert_eq!(schedule.wait_duration(now), Duration::from_millis(1_000));
         assert_eq!(
             schedule
-                .take_due_trigger(now + 1_000)
+                .take_due_work(now + 1_000)
                 .expect("reconciliation deadline"),
-            Some(PolicyTrigger::Reconciliation)
+            Some((PolicyTrigger::Reconciliation, Vec::new()))
         );
 
         let cadence = PolicyCadence {
@@ -1317,10 +1553,13 @@ mod tests {
         let cycle = policy_cycle(PolicyRecomputeKind::Full, now);
         let mut schedule = PolicyDriverSchedule::new(cadence, &cycle, now).expect("clock schedule");
         assert_eq!(
-            schedule.take_due_trigger(now + 1_001).expect("clock jump"),
-            Some(PolicyTrigger::ClockObserved {
-                previous_unix_ms: now
-            })
+            schedule.take_due_work(now + 1_001).expect("clock jump"),
+            Some((
+                PolicyTrigger::ClockObserved {
+                    previous_unix_ms: now
+                },
+                Vec::new()
+            ))
         );
     }
 
