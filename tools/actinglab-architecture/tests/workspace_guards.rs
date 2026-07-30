@@ -2651,6 +2651,28 @@ fn actinglab_device_runtime_config_glue_stays_out_of_main() {
     );
 }
 
+fn actinglab_instance_resolution_root_wiring_is_frozen(main: &str) -> bool {
+    const DECLARATION: &str = "#[rustfmt::skip] mod instance_resolution;";
+
+    let lines = main.lines().collect::<Vec<_>>();
+    let declarations = lines
+        .iter()
+        .enumerate()
+        .filter(|(_, line)| line.contains("mod instance_resolution;"))
+        .map(|(index, line)| (index, *line))
+        .collect::<Vec<_>>();
+    if declarations.len() != 1 {
+        return false;
+    }
+
+    let (index, declaration) = declarations[0];
+    declaration == DECLARATION
+        && index > 0
+        && index + 1 < lines.len()
+        && lines[index - 1] == "mod flag_args;"
+        && lines[index + 1] == "mod lab2_cli;"
+}
+
 #[test]
 fn actinglab_instance_resolution_glue_stays_out_of_main() {
     let root = workspace_root();
@@ -2661,9 +2683,57 @@ fn actinglab_instance_resolution_glue_stays_out_of_main() {
             .expect("read ActingLab instance resolution module");
 
     assert!(
-        main.contains("mod instance_resolution;"),
-        "ActingLab main lost the private instance resolution module"
+        actinglab_instance_resolution_root_wiring_is_frozen(&main),
+        "ActingLab main lost the exact private instance resolution module placement"
     );
+    let declaration = "#[rustfmt::skip] mod instance_resolution;";
+    let frozen_placement =
+        "mod flag_args;\n#[rustfmt::skip] mod instance_resolution;\nmod lab2_cli;";
+    let counterexamples = [
+        (
+            "plain pub declaration",
+            main.replacen(
+                declaration,
+                "#[rustfmt::skip] pub mod instance_resolution;",
+                1,
+            ),
+        ),
+        (
+            "pub(crate) declaration",
+            main.replacen(
+                declaration,
+                "#[rustfmt::skip] pub(crate) mod instance_resolution;",
+                1,
+            ),
+        ),
+        (
+            "duplicate declaration",
+            main.replacen(
+                declaration,
+                "#[rustfmt::skip] mod instance_resolution;\n#[rustfmt::skip] mod instance_resolution;",
+                1,
+            ),
+        ),
+        ("missing declaration", main.replacen(declaration, "", 1)),
+        (
+            "moved declaration",
+            main.replacen(
+                frozen_placement,
+                "mod flag_args;\nmod lab2_cli;\n#[rustfmt::skip] mod instance_resolution;",
+                1,
+            ),
+        ),
+    ];
+    for (label, counterexample) in counterexamples {
+        assert_ne!(
+            counterexample, main,
+            "instance resolution guard counterexample was not constructed: {label}"
+        );
+        assert!(
+            !actinglab_instance_resolution_root_wiring_is_frozen(&counterexample),
+            "instance resolution guard accepted counterexample: {label}"
+        );
+    }
     for definition in [
         "fn resolve_instance_id(",
         "fn resolve_instance_id_for_flags(",
