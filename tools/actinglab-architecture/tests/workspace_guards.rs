@@ -2495,6 +2495,82 @@ fn actinglab_cli_result_glue_stays_out_of_main() {
 }
 
 #[test]
+fn actinglab_flag_args_glue_stays_out_of_main() {
+    let root = workspace_root();
+    let main =
+        fs::read_to_string(root.join("apps/actinglab/src/main.rs")).expect("read ActingLab main");
+    let flag_args = fs::read_to_string(root.join("apps/actinglab/src/flag_args.rs"))
+        .expect("read ActingLab flag args module");
+
+    assert!(
+        main.contains("mod flag_args;"),
+        "ActingLab main lost the private flag args module"
+    );
+    for definition in [
+        "struct FlagArgs",
+        "flags: BTreeMap<String, Vec<String>>",
+        "positionals: Vec<String>",
+        "impl FlagArgs",
+        "fn parse(args: &[String]) -> CliOutcome<Self>",
+        "fn bool(&self, name: &str) -> bool",
+        "fn optional(&self, name: &str) -> Option<String>",
+        "fn values(&self, name: &str) -> Vec<String>",
+        "fn without_first_positional(&self) -> Self",
+        "fn required(&self, name: &str) -> CliOutcome<String>",
+        "fn optional_path(&self, name: &str) -> Option<PathBuf>",
+        "fn required_path(&self, name: &str) -> CliOutcome<PathBuf>",
+        "fn reject_flags(&self, command: &str) -> CliOutcome<()>",
+        "fn expect_positionals(&self, command: &str, expected: usize) -> CliOutcome<()>",
+        "fn required_positional(&self, index: usize, name: &str) -> CliOutcome<&str>",
+        "fn required_i32(&self, index: usize, name: &str) -> CliOutcome<i32>",
+        "fn required_u64(&self, index: usize, name: &str) -> CliOutcome<u64>",
+    ] {
+        assert!(
+            flag_args.contains(definition),
+            "flag args module lost owner definition {definition}"
+        );
+        assert!(
+            !main.contains(definition),
+            "ActingLab main regained flag args owner definition {definition}"
+        );
+    }
+
+    assert_eq!(
+        flag_args.matches("pub(super) ").count(),
+        16,
+        "flag args owner visibility changed"
+    );
+    for line in flag_args.lines() {
+        let trimmed = line.trim_start();
+        assert!(
+            !trimmed.starts_with("pub ") && !trimmed.starts_with("pub(crate) "),
+            "flag args owner exposed broader visibility: {line}"
+        );
+    }
+
+    let marker = "#[derive(Debug, Clone, Default)]";
+    let (_, owner_tail) = flag_args
+        .split_once(marker)
+        .expect("flag args module contains owner marker");
+    let normalized_owner = format!("{marker}{owner_tail}").replace("pub(super) ", "");
+    assert_eq!(
+        normalized_owner.lines().count(),
+        120,
+        "flag args owner line count changed"
+    );
+    assert_eq!(
+        normalized_owner.len(),
+        3_791,
+        "flag args owner byte count changed"
+    );
+    assert_eq!(
+        format!("{:x}", Sha256::digest(normalized_owner.as_bytes())),
+        "16bb08d7468541b06df651ee3169ee14066ad98620c060b2ae60344262326a30",
+        "flag args owner body changed"
+    );
+}
+
+#[test]
 fn main_rs_line_ratchet_matches_checked_in_baseline() {
     let root = workspace_root();
     let source = fs::read_to_string(root.join("apps/actinglab/src/main.rs"))

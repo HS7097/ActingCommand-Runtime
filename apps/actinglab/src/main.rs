@@ -32,6 +32,7 @@ use actingcommand_runtime_client::{RuntimeClient, RuntimeClientConfig};
 #[cfg(test)]
 use cli_result::CliErrorExitCode;
 use cli_result::CliResult;
+use flag_args::FlagArgs;
 #[cfg(test)]
 use runtime_endpoint::RuntimeEndpointChannel;
 use runtime_endpoint::{
@@ -59,6 +60,7 @@ mod cli_result;
 mod contained_resources;
 mod drive_cli;
 mod env_detection;
+mod flag_args;
 mod lab2_cli;
 mod lab_run;
 mod maa_task_graph;
@@ -9732,127 +9734,6 @@ fn run_explain_run(args: &[String]) -> CliOutcome<Value> {
         "run_id": run_id,
         "status": "reserved"
     }))
-}
-
-#[derive(Debug, Clone, Default)]
-struct FlagArgs {
-    flags: BTreeMap<String, Vec<String>>,
-    positionals: Vec<String>,
-}
-
-impl FlagArgs {
-    fn parse(args: &[String]) -> CliOutcome<Self> {
-        let mut parsed = Self::default();
-        let mut index = 0usize;
-        while index < args.len() {
-            let arg = &args[index];
-            if arg.starts_with("--") {
-                if index + 1 < args.len() && !args[index + 1].starts_with("--") {
-                    parsed
-                        .flags
-                        .entry(arg.clone())
-                        .or_default()
-                        .push(args[index + 1].clone());
-                    index += 2;
-                } else {
-                    parsed
-                        .flags
-                        .entry(arg.clone())
-                        .or_default()
-                        .push("true".to_string());
-                    index += 1;
-                }
-            } else {
-                parsed.positionals.push(arg.clone());
-                index += 1;
-            }
-        }
-        Ok(parsed)
-    }
-
-    fn bool(&self, name: &str) -> bool {
-        self.flags
-            .get(name)
-            .and_then(|values| values.last())
-            .is_some_and(|value| value == "true")
-    }
-
-    fn optional(&self, name: &str) -> Option<String> {
-        self.flags
-            .get(name)
-            .and_then(|values| values.last())
-            .cloned()
-    }
-
-    fn values(&self, name: &str) -> Vec<String> {
-        self.flags.get(name).cloned().unwrap_or_default()
-    }
-
-    fn without_first_positional(&self) -> Self {
-        let mut next = self.clone();
-        if !next.positionals.is_empty() {
-            next.positionals.remove(0);
-        }
-        next
-    }
-
-    fn required(&self, name: &str) -> CliOutcome<String> {
-        self.optional(name)
-            .filter(|value| value != "true")
-            .ok_or_else(|| CliError::usage(format!("missing {name} <value>")))
-    }
-
-    fn optional_path(&self, name: &str) -> Option<PathBuf> {
-        self.optional(name)
-            .filter(|value| value != "true")
-            .map(PathBuf::from)
-    }
-
-    fn required_path(&self, name: &str) -> CliOutcome<PathBuf> {
-        self.required(name).map(PathBuf::from)
-    }
-
-    fn reject_flags(&self, command: &str) -> CliOutcome<()> {
-        if self.flags.is_empty() {
-            return Ok(());
-        }
-        let names = self.flags.keys().cloned().collect::<Vec<_>>();
-        Err(CliError::usage(format!(
-            "{command} takes positional arguments only; unexpected flags: {}",
-            names.join(", ")
-        )))
-    }
-
-    fn expect_positionals(&self, command: &str, expected: usize) -> CliOutcome<()> {
-        if self.positionals.len() == expected {
-            return Ok(());
-        }
-        Err(CliError::usage(format!(
-            "{command} expects {expected} positional argument(s), got {}",
-            self.positionals.len()
-        )))
-    }
-
-    fn required_positional(&self, index: usize, name: &str) -> CliOutcome<&str> {
-        self.positionals
-            .get(index)
-            .map(String::as_str)
-            .ok_or_else(|| CliError::usage(format!("missing {name}")))
-    }
-
-    fn required_i32(&self, index: usize, name: &str) -> CliOutcome<i32> {
-        let value = self.required_positional(index, name)?;
-        value
-            .parse::<i32>()
-            .map_err(|err| CliError::usage(format!("failed to parse {name} '{value}': {err}")))
-    }
-
-    fn required_u64(&self, index: usize, name: &str) -> CliOutcome<u64> {
-        let value = self.required_positional(index, name)?;
-        value
-            .parse::<u64>()
-            .map_err(|err| CliError::usage(format!("failed to parse {name} '{value}': {err}")))
-    }
 }
 
 fn require_runtime(global: &GlobalOptions) -> CliOutcome<Value> {
