@@ -2951,6 +2951,76 @@ fn actinglab_user_config_keys_glue_stays_out_of_main() {
 }
 
 #[test]
+fn actinglab_safe_file_stem_glue_stays_out_of_main() {
+    let root = workspace_root();
+    let main =
+        fs::read_to_string(root.join("apps/actinglab/src/main.rs")).expect("read ActingLab main");
+    let safe_file_stem = fs::read_to_string(root.join("apps/actinglab/src/safe_file_stem.rs"))
+        .expect("read ActingLab safe file stem module");
+
+    const ROOT_DECLARATION: &str = "mod safe_file_stem;";
+    const ROOT_IMPORT: &str = "use safe_file_stem::safe_file_stem;";
+    let declarations = main
+        .lines()
+        .filter(|line| line.contains("mod safe_file_stem;"))
+        .collect::<Vec<_>>();
+    let imports = main
+        .lines()
+        .filter(|line| line.contains("safe_file_stem::"))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        declarations,
+        vec![ROOT_DECLARATION],
+        "ActingLab main lost the one private safe file stem module declaration"
+    );
+    assert_eq!(
+        imports,
+        vec![ROOT_IMPORT],
+        "ActingLab main lost the one private safe file stem import"
+    );
+
+    const DEFINITION: &str = "fn safe_file_stem(value: &str) -> String {";
+    assert!(
+        safe_file_stem.contains(DEFINITION),
+        "safe file stem module lost owner definition"
+    );
+    assert!(
+        !main.contains(DEFINITION),
+        "ActingLab main regained safe file stem owner definition"
+    );
+
+    assert_eq!(
+        safe_file_stem.matches("pub(super) ").count(),
+        1,
+        "safe file stem owner visibility changed"
+    );
+    for line in safe_file_stem.lines() {
+        let trimmed = line.trim_start();
+        assert!(
+            !trimmed.starts_with("pub ") && !trimmed.starts_with("pub(crate) "),
+            "safe file stem owner exposed broader visibility: {line}"
+        );
+    }
+
+    let normalized_owner = safe_file_stem.replacen("pub(super) ", "", 1);
+    assert_eq!(
+        normalized_owner.lines().count(),
+        12,
+        "safe file stem owner line count changed"
+    );
+    assert_eq!(
+        normalized_owner.len(),
+        273,
+        "safe file stem owner byte count changed"
+    );
+    assert_eq!(
+        format!("{:x}", Sha256::digest(normalized_owner.as_bytes())),
+        "2dfd834d20ddb6ec165c3084c8ea002daa4232c1e270559962c9ecad6e0bdcb4",
+        "safe file stem owner body changed"
+    );
+}
+
+#[test]
 fn main_rs_line_ratchet_matches_checked_in_baseline() {
     let root = workspace_root();
     let source = fs::read_to_string(root.join("apps/actinglab/src/main.rs"))

@@ -39,6 +39,7 @@ use runtime_endpoint::{
     env_var_non_empty, runtime_endpoint_check, runtime_endpoint_policy,
     runtime_endpoint_policy_json, runtime_tcp_available,
 };
+use safe_file_stem::safe_file_stem;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -83,6 +84,7 @@ mod runtime_input_backend;
 mod runtime_session_adapter;
 mod runtime_slice_cli;
 mod runtime_stream_adapter;
+mod safe_file_stem;
 mod user_config_keys;
 mod user_config_store;
 
@@ -10161,19 +10163,6 @@ fn cleanup_current_process_json_tmp_files(path: &Path) -> CliOutcome<()> {
         }
     }
     Ok(())
-}
-
-fn safe_file_stem(value: &str) -> String {
-    value
-        .chars()
-        .map(|ch| {
-            if ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.') {
-                ch
-            } else {
-                '_'
-            }
-        })
-        .collect()
 }
 
 fn effective_adb_path_for_instance(
