@@ -9,17 +9,18 @@ mod config;
 use actingcommand_contract::{
     ApprovalDecisionRecord, ApprovalDisposition, ApprovalPayload, ApprovalTarget, EventActor,
     EventFamily, EventPayload, EventQuery, EventSource, EventType, MAX_RUNTIME_SUBSCRIPTION_EVENTS,
-    ProjectedEvent, ProjectionPayload, ProjectionProfile, RuntimeEventQueryPageRequest,
-    RuntimeSubscriptionRequest, SubscriptionCursor,
+    PolicyExecutionEventData, ProjectedEvent, ProjectionPayload, ProjectionProfile, RunId,
+    RuntimeEventQueryPageRequest, RuntimeReceipt, RuntimeSubscriptionRequest,
+    SchedulingOutcomeProjection, SubscriptionCursor,
 };
 use actingcommand_policy::MAX_TASKS;
 use actingcommand_runtime_client::{RuntimeClient, RuntimeClientConfig, RuntimeClientError};
 use actingcommand_runtime_host::{
     PolicyAdmissionContext, PolicyCadence, PolicyCycle, PolicyDispatchAdmission,
-    PolicyRecomputeKind, PolicyTrigger, RuntimeHost, RuntimeHostError,
+    PolicyRecomputeKind, PolicyRunContext, PolicyTrigger, RuntimeHost, RuntimeHostError,
 };
 use config::{PolicyBootstrap, RuntimeAssembly, ScheduledExecutionMode};
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::env;
 use std::error::Error;
 use std::fmt;
@@ -89,7 +90,7 @@ fn run(arguments: Vec<std::ffi::OsString>) -> Result<(), ActingdError> {
 fn initialize_policy(
     host: &RuntimeHost,
     policy: &PolicyBootstrap,
-) -> Result<PolicyCycle, ActingdError> {
+) -> Result<PolicyCycleExecution, ActingdError> {
     let generation = host
         .activate_policy_catalog(&policy.catalog)
         .map_err(ActingdError::runtime)?;
@@ -155,11 +156,12 @@ fn execute_policy_cycle(
     host: &RuntimeHost,
     policy: &PolicyBootstrap,
     trigger: PolicyTrigger,
-) -> Result<PolicyCycle, ActingdError> {
+) -> Result<PolicyCycleExecution, ActingdError> {
     let started = Instant::now();
     let cycle = host
         .evaluate_policy_cycle(trigger)
         .map_err(ActingdError::runtime)?;
+    let mut recompute_wakes = Vec::new();
     if cycle.pending_dispatch_intents.len() > MAX_TASKS {
         return Err(ActingdError::process(
             "policy_pending_dispatch_budget_exceeded",
@@ -167,7 +169,10 @@ fn execute_policy_cycle(
     }
     let Some(evaluation) = cycle.evaluation.as_ref() else {
         if cycle.pending_dispatch_intents.is_empty() {
-            return Ok(cycle);
+            return Ok(PolicyCycleExecution {
+                cycle,
+                recompute_wakes,
+            });
         }
         return Err(ActingdError::process(
             "policy_pending_dispatch_without_evaluation",
@@ -227,11 +232,83 @@ fn execute_policy_cycle(
             let receipt = host
                 .run_scheduled_contained_task(&context, &task.request)
                 .map_err(ActingdError::runtime)?;
-            host.complete_scheduled_policy_run(&context, &receipt)
+            let (execution, projection) = host
+                .complete_scheduled_policy_run(&context, &receipt)
                 .map_err(ActingdError::runtime)?;
+            if let Some(projection) = projection {
+                if recompute_wakes.len() >= MAX_TASKS {
+                    return Err(ActingdError::process(
+                        "policy_recompute_wake_budget_exceeded",
+                    ));
+                }
+                recompute_wakes.push(PolicyRecomputeWake::new(
+                    &context, &receipt, &execution, projection,
+                )?);
+            }
         }
     }
-    Ok(cycle)
+    Ok(PolicyCycleExecution {
+        cycle,
+        recompute_wakes,
+    })
+}
+
+struct PolicyCycleExecution {
+    cycle: PolicyCycle,
+    recompute_wakes: Vec<PolicyRecomputeWake>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct PolicyRecomputeWake {
+    projection: SchedulingOutcomeProjection,
+}
+
+impl PolicyRecomputeWake {
+    fn new(
+        context: &PolicyRunContext,
+        receipt: &RuntimeReceipt,
+        execution: &PolicyExecutionEventData,
+        projection: SchedulingOutcomeProjection,
+    ) -> Result<Self, ActingdError> {
+        let terminal = receipt
+            .terminal()
+            .ok_or_else(|| ActingdError::process("policy_recompute_terminal_missing"))?;
+        let identity = projection.outcome().identity();
+        if projection.ledger_position() < terminal.sequence
+            || identity.terminal_event_id() != terminal.event_id
+            || identity.terminal_sequence() != terminal.sequence
+            || identity.instance_id() != context.lease_token().instance_id()
+            || identity.task_id() != context.task_id()
+            || identity.run_id() != context.run_id()
+            || identity.request_id() != receipt.request_id()
+            || identity.correlation_id() != context.correlation_id()
+            || identity.lease_id() != context.lease_token().lease_id()
+            || identity.decision_id() != context.decision_id()
+            || identity.catalog_task_id() != execution.task_id
+            || identity.instance_alias() != context.instance_alias()
+            || execution.decision_id != context.decision_id()
+            || execution.instance_id != context.instance_alias()
+        {
+            return Err(ActingdError::process(
+                "policy_recompute_wake_identity_conflict",
+            ));
+        }
+        Ok(Self { projection })
+    }
+
+    fn key(&self) -> PolicyRecomputeKey {
+        let identity = self.projection.outcome().identity();
+        PolicyRecomputeKey {
+            run_id: identity.run_id(),
+            terminal_event_id: identity.terminal_event_id(),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+struct PolicyRecomputeKey {
+    run_id: RunId,
+    terminal_event_id: actingcommand_contract::EventId,
 }
 
 fn validate_scheduled_execution_mode(
@@ -266,7 +343,7 @@ fn monitor(host: RuntimeHost) -> Result<(), ActingdError> {
 fn monitor_policy(
     host: RuntimeHost,
     policy: PolicyBootstrap,
-    initial_cycle: PolicyCycle,
+    initial_cycle: PolicyCycleExecution,
 ) -> Result<(), ActingdError> {
     let host = Arc::new(host);
     let policy = Arc::new(policy);
@@ -434,11 +511,13 @@ struct PolicyDriverControl {
 #[derive(Default)]
 struct PolicyDriverSignal {
     pending_trigger: Option<PolicyTrigger>,
+    pending_recomputes: BTreeMap<PolicyRecomputeKey, PolicyRecomputeWake>,
+    completed_recomputes: BTreeMap<PolicyRecomputeKey, PolicyRecomputeWake>,
     shutdown: bool,
 }
 
 enum PolicyDriverWake {
-    Trigger(PolicyTrigger),
+    Trigger(PolicyTrigger, Vec<PolicyRecomputeWake>),
     Shutdown,
     TimedOut,
 }
@@ -460,6 +539,48 @@ impl PolicyDriverControl {
         Ok(())
     }
 
+    fn notify_recompute(&self, wake: PolicyRecomputeWake) -> Result<(), ActingdError> {
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| ActingdError::process("policy_driver_signal_poisoned"))?;
+        if state.shutdown {
+            return Ok(());
+        }
+        let key = wake.key();
+        if let Some(existing) = state.completed_recomputes.get(&key) {
+            return if existing == &wake {
+                Ok(())
+            } else {
+                Err(ActingdError::process(
+                    "policy_recompute_wake_identity_conflict",
+                ))
+            };
+        }
+        if let Some(existing) = state.pending_recomputes.get(&key)
+            && existing != &wake
+        {
+            return Err(ActingdError::process(
+                "policy_recompute_wake_identity_conflict",
+            ));
+        }
+        state.pending_recomputes.insert(key, wake);
+        if state.pending_recomputes.len() > MAX_TASKS {
+            return Err(ActingdError::process(
+                "policy_recompute_wake_budget_exceeded",
+            ));
+        }
+        state.pending_trigger = Some(
+            state
+                .pending_trigger
+                .map_or(PolicyTrigger::FactsChanged, |pending| {
+                    coalesce_policy_trigger(pending, PolicyTrigger::FactsChanged)
+                }),
+        );
+        self.changed.notify_one();
+        Ok(())
+    }
+
     fn shutdown(&self) -> Result<(), ActingdError> {
         let mut state = self
             .state
@@ -478,8 +599,8 @@ impl PolicyDriverControl {
         if state.shutdown {
             return Ok(PolicyDriverWake::Shutdown);
         }
-        if let Some(trigger) = state.pending_trigger.take() {
-            return Ok(PolicyDriverWake::Trigger(trigger));
+        if let Some((trigger, recomputes)) = take_policy_driver_work(&mut state)? {
+            return Ok(PolicyDriverWake::Trigger(trigger, recomputes));
         }
         if timeout.is_zero() {
             return Ok(PolicyDriverWake::TimedOut);
@@ -490,14 +611,40 @@ impl PolicyDriverControl {
             .map_err(|_| ActingdError::process("policy_driver_signal_poisoned"))?;
         if state.shutdown {
             Ok(PolicyDriverWake::Shutdown)
-        } else if let Some(trigger) = state.pending_trigger.take() {
-            Ok(PolicyDriverWake::Trigger(trigger))
+        } else if let Some((trigger, recomputes)) = take_policy_driver_work(&mut state)? {
+            Ok(PolicyDriverWake::Trigger(trigger, recomputes))
         } else if wait.timed_out() {
             Ok(PolicyDriverWake::TimedOut)
         } else {
             Err(ActingdError::process("policy_driver_wake_missing"))
         }
     }
+}
+
+fn take_policy_driver_work(
+    state: &mut PolicyDriverSignal,
+) -> Result<Option<(PolicyTrigger, Vec<PolicyRecomputeWake>)>, ActingdError> {
+    let Some(trigger) = state.pending_trigger.take() else {
+        if state.pending_recomputes.is_empty() {
+            return Ok(None);
+        }
+        return Err(ActingdError::process("policy_recompute_trigger_missing"));
+    };
+    let recomputes = std::mem::take(&mut state.pending_recomputes);
+    for (key, wake) in &recomputes {
+        if let Some(existing) = state.completed_recomputes.get(key)
+            && existing != wake
+        {
+            return Err(ActingdError::process(
+                "policy_recompute_wake_identity_conflict",
+            ));
+        }
+        state.completed_recomputes.insert(*key, wake.clone());
+    }
+    while state.completed_recomputes.len() > MAX_TASKS {
+        state.completed_recomputes.pop_first();
+    }
+    Ok(Some((trigger, recomputes.into_values().collect())))
 }
 
 struct DeferredPolicyTrigger {
@@ -582,6 +729,25 @@ impl PolicyDriverSchedule {
         true
     }
 
+    fn defer_projection(
+        &mut self,
+        trigger: PolicyTrigger,
+        now_unix_ms: u64,
+    ) -> Result<(), ActingdError> {
+        let eligible_at_unix_ms = checked_deadline(now_unix_ms, self.cadence.debounce_ms.max(1))?;
+        self.deferred = Some(match self.deferred.take() {
+            Some(existing) => DeferredPolicyTrigger {
+                trigger: coalesce_policy_trigger(existing.trigger, trigger),
+                eligible_at_unix_ms: existing.eligible_at_unix_ms.max(eligible_at_unix_ms),
+            },
+            None => DeferredPolicyTrigger {
+                trigger,
+                eligible_at_unix_ms,
+            },
+        });
+        Ok(())
+    }
+
     fn take_due_trigger(
         &mut self,
         now_unix_ms: u64,
@@ -647,22 +813,28 @@ fn drive_policy(
     host: Arc<RuntimeHost>,
     policy: Arc<PolicyBootstrap>,
     control: Arc<PolicyDriverControl>,
-    initial_cycle: PolicyCycle,
+    initial_cycle: PolicyCycleExecution,
 ) -> Result<(), ActingdError> {
-    let mut schedule =
-        PolicyDriverSchedule::new(policy.cadence.clone(), &initial_cycle, system_unix_ms()?)?;
+    let mut schedule = PolicyDriverSchedule::new(
+        policy.cadence.clone(),
+        &initial_cycle.cycle,
+        system_unix_ms()?,
+    )?;
+    for wake in initial_cycle.recompute_wakes {
+        control.notify_recompute(wake)?;
+    }
     loop {
         match control.wait(Duration::ZERO)? {
             PolicyDriverWake::Shutdown => return Ok(()),
-            PolicyDriverWake::Trigger(trigger) => {
-                if !schedule.coalesce_deferred_event(trigger) {
-                    let now = system_unix_ms()?;
-                    let trigger = schedule
-                        .take_due_trigger(now)?
-                        .map_or(trigger, |due| coalesce_policy_trigger(due, trigger));
-                    let cycle = execute_policy_cycle(&host, &policy, trigger)?;
-                    schedule.apply_cycle(trigger, &cycle, now)?;
-                }
+            PolicyDriverWake::Trigger(trigger, recomputes) => {
+                handle_policy_driver_trigger(
+                    &host,
+                    &policy,
+                    &control,
+                    &mut schedule,
+                    trigger,
+                    !recomputes.is_empty(),
+                )?;
                 continue;
             }
             PolicyDriverWake::TimedOut => {}
@@ -670,25 +842,73 @@ fn drive_policy(
 
         let now = system_unix_ms()?;
         if let Some(trigger) = schedule.take_due_trigger(now)? {
-            let cycle = execute_policy_cycle(&host, &policy, trigger)?;
-            schedule.apply_cycle(trigger, &cycle, now)?;
+            execute_ready_policy_trigger(
+                &host,
+                &policy,
+                &control,
+                &mut schedule,
+                trigger,
+                false,
+                now,
+            )?;
             continue;
         }
         match control.wait(schedule.wait_duration(now))? {
             PolicyDriverWake::Shutdown => return Ok(()),
-            PolicyDriverWake::Trigger(trigger) => {
-                if schedule.coalesce_deferred_event(trigger) {
-                    continue;
-                }
-                let now = system_unix_ms()?;
-                let trigger = schedule
-                    .take_due_trigger(now)?
-                    .map_or(trigger, |due| coalesce_policy_trigger(due, trigger));
-                let cycle = execute_policy_cycle(&host, &policy, trigger)?;
-                schedule.apply_cycle(trigger, &cycle, now)?;
+            PolicyDriverWake::Trigger(trigger, recomputes) => {
+                handle_policy_driver_trigger(
+                    &host,
+                    &policy,
+                    &control,
+                    &mut schedule,
+                    trigger,
+                    !recomputes.is_empty(),
+                )?;
             }
             PolicyDriverWake::TimedOut => {}
         }
+    }
+}
+
+fn handle_policy_driver_trigger(
+    host: &RuntimeHost,
+    policy: &PolicyBootstrap,
+    control: &PolicyDriverControl,
+    schedule: &mut PolicyDriverSchedule,
+    mut trigger: PolicyTrigger,
+    has_recompute: bool,
+) -> Result<(), ActingdError> {
+    if schedule.coalesce_deferred_event(trigger) {
+        return Ok(());
+    }
+    let now = system_unix_ms()?;
+    if let Some(due) = schedule.take_due_trigger(now)? {
+        trigger = coalesce_policy_trigger(due, trigger);
+    }
+    execute_ready_policy_trigger(host, policy, control, schedule, trigger, has_recompute, now)
+}
+
+fn execute_ready_policy_trigger(
+    host: &RuntimeHost,
+    policy: &PolicyBootstrap,
+    control: &PolicyDriverControl,
+    schedule: &mut PolicyDriverSchedule,
+    trigger: PolicyTrigger,
+    has_recompute: bool,
+    now_unix_ms: u64,
+) -> Result<(), ActingdError> {
+    match execute_policy_cycle(host, policy, trigger) {
+        Ok(execution) => {
+            schedule.apply_cycle(trigger, &execution.cycle, now_unix_ms)?;
+            for wake in execution.recompute_wakes {
+                control.notify_recompute(wake)?;
+            }
+            Ok(())
+        }
+        Err(error) if has_recompute && error.code == "outcome_projection_not_ready" => {
+            schedule.defer_projection(trigger, now_unix_ms)
+        }
+        Err(error) => Err(error),
     }
 }
 
@@ -831,7 +1051,8 @@ mod tests {
             .expect("catalog notification");
         assert!(matches!(
             control.wait(Duration::ZERO).expect("coalesced wake"),
-            PolicyDriverWake::Trigger(PolicyTrigger::CatalogChanged)
+            PolicyDriverWake::Trigger(PolicyTrigger::CatalogChanged, recomputes)
+                if recomputes.is_empty()
         ));
         assert_eq!(
             policy_trigger_for_family(EventFamily::Policy),
@@ -890,6 +1111,13 @@ mod tests {
                 vec!["after_observation".to_string()],
             )
             .expect("procedure binding"),
+            ProcedureBinding::new(
+                "procedure.followup",
+                format!("sha256:{package_sha256}"),
+                "operation.observe",
+                vec!["after_observation".to_string()],
+            )
+            .expect("followup procedure binding"),
         ])
         .expect("procedure manifest");
         let now = system_unix_ms().expect("system clock");
@@ -926,8 +1154,105 @@ mod tests {
             )]),
             cadence: PolicyCadence::default(),
         };
-        let cycle = initialize_policy(&host, &policy).expect("formal scheduled Recovery cycle");
-        assert_eq!(cycle.pending_dispatch_intents.len(), 1);
+        let execution = initialize_policy(&host, &policy).expect("formal scheduled Recovery cycle");
+        assert_eq!(execution.cycle.pending_dispatch_intents.len(), 1);
+        let [wake] = execution.recompute_wakes.as_slice() else {
+            panic!("one exact mapped-outcome wake")
+        };
+        assert_eq!(
+            wake.projection.outcome().identity().catalog_task_id(),
+            "fixture.observe"
+        );
+        assert_eq!(
+            wake.projection.outcome().disposition().outcome_key(),
+            "resident-completed"
+        );
+        let control = PolicyDriverControl::default();
+        control
+            .notify_recompute(wake.clone())
+            .expect("first mapped-outcome wake");
+        control
+            .notify_recompute(wake.clone())
+            .expect("idempotent mapped-outcome wake");
+        let PolicyDriverWake::Trigger(trigger, recomputes) =
+            control.wait(Duration::ZERO).expect("mapped-outcome work")
+        else {
+            panic!("mapped outcome must wake the resident driver")
+        };
+        assert_eq!(trigger, PolicyTrigger::FactsChanged);
+        assert_eq!(recomputes.len(), 1);
+        control
+            .notify_recompute(wake.clone())
+            .expect("replayed exact wake");
+        assert!(matches!(
+            control.wait(Duration::ZERO).expect("deduplicated replay"),
+            PolicyDriverWake::TimedOut
+        ));
+        let conflict = PolicyRecomputeWake {
+            projection: SchedulingOutcomeProjection::new(
+                wake.projection.ledger_position(),
+                actingcommand_contract::AuthoritativeSchedulingOutcome::new(
+                    wake.projection.outcome().identity().clone(),
+                    actingcommand_contract::SchedulingDisposition::new(
+                        "resident-conflict",
+                        wake.projection.outcome().disposition().effect().clone(),
+                    )
+                    .expect("conflicting disposition"),
+                    wake.projection.outcome().terminal_timestamp_unix_ms(),
+                )
+                .expect("conflicting outcome"),
+            )
+            .expect("conflicting projection"),
+        };
+        assert_eq!(
+            control
+                .notify_recompute(conflict)
+                .expect_err("same terminal identity cannot change outcome")
+                .code,
+            "policy_recompute_wake_identity_conflict"
+        );
+        let defer_now = 10_000;
+        let mut projection_schedule = PolicyDriverSchedule::new(
+            policy.cadence.clone(),
+            &policy_cycle(PolicyRecomputeKind::Full, defer_now),
+            defer_now,
+        )
+        .expect("projection schedule");
+        projection_schedule
+            .defer_projection(trigger, defer_now)
+            .expect("bounded not-ready defer");
+        assert!(
+            projection_schedule
+                .take_due_trigger(defer_now)
+                .expect("pre-deadline projection work")
+                .is_none()
+        );
+        let deferred_trigger = projection_schedule
+            .take_due_trigger(defer_now + policy.cadence.debounce_ms)
+            .expect("projection-ready deadline")
+            .expect("retained exact projection work");
+        assert_eq!(deferred_trigger, PolicyTrigger::FactsChanged);
+        let deferred = host
+            .evaluate_policy_cycle(trigger)
+            .expect("bounded mapped-outcome debounce");
+        assert_eq!(
+            deferred.directive.kind,
+            PolicyRecomputeKind::Deferred,
+            "the exact wake must use the existing bounded driver cadence"
+        );
+        thread::sleep(Duration::from_millis(policy.cadence.cooldown_ms + 10));
+        let followup = host
+            .evaluate_policy_cycle(trigger)
+            .expect("authoritative mapped-outcome evaluation after cooldown");
+        assert_eq!(
+            followup
+                .pending_dispatch_intents
+                .iter()
+                .filter(|intent| intent.task_id == "fixture.followup")
+                .count(),
+            1,
+            "the evaluator, not the wake, must decide the successor: {followup:#?}"
+        );
         assert_eq!(input_count.load(Ordering::SeqCst), 1);
         assert_eq!(capture_count.load(Ordering::SeqCst), 2);
 
@@ -1164,6 +1489,49 @@ mod tests {
                 "at_ms": 4_102_444_800_000_u64
             }
         });
+        let mut followup = tasks["tasks"][0].clone();
+        followup["id"] = json!("fixture.followup");
+        followup["procedure_ref"] = json!("procedure.followup");
+        followup["priority"] = json!(200);
+        followup["trigger"] = json!({
+            "kind": "any",
+            "predicates": [
+                {
+                    "kind": "outcome",
+                    "task_id": "fixture.observe",
+                    "outcome_key": "resident-completed",
+                    "comparison": "eq",
+                    "value": {"type": "boolean", "value": true}
+                },
+                {
+                    "kind": "outcome",
+                    "task_id": "fixture.observe",
+                    "outcome_key": "resident-no-effect",
+                    "comparison": "eq",
+                    "value": {"type": "boolean", "value": true}
+                }
+            ]
+        });
+        followup["feedback_stop"] = json!({
+            "kind": "clock",
+            "schedule": {
+                "kind": "at",
+                "clock_source": {
+                    "kind": "server",
+                    "timezone_id": "etc/utc",
+                    "utc_offset_minutes": 0,
+                    "dst_offset_minutes": 0,
+                    "maintenance_drift_ms": 0
+                },
+                "at_ms": 4_102_444_800_000_u64
+            }
+        });
+        followup["produces"] = json!([]);
+        followup["instance_overrides"] = json!([]);
+        tasks["tasks"]
+            .as_array_mut()
+            .expect("resident task array")
+            .push(followup);
         sources.tasks.bytes = serde_json::to_vec_pretty(&tasks).expect("task catalog bytes");
         let mut activity: Value =
             serde_json::from_slice(&sources.activity.bytes).expect("activity catalog JSON");
@@ -1248,6 +1616,21 @@ mod tests {
                     "coordinate_space":{"width":2,"height":1},
                     "entry_page":"home",
                     "target_page":"terminal",
+                    "scheduling_outcome":{
+                        "designated_operation":"open_terminal",
+                        "mappings":[
+                            {
+                                "outcome_key":"resident-completed",
+                                "effect":"designated_effect_completed",
+                                "terminal_pages":["terminal"]
+                            },
+                            {
+                                "outcome_key":"resident-no-effect",
+                                "effect":"no_designated_effect",
+                                "terminal_pages":["terminal"]
+                            }
+                        ]
+                    },
                     "operations":[{
                         "id":"open_terminal",
                         "from":"home",

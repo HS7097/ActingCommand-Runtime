@@ -2821,8 +2821,13 @@ fn scheduled_policy_run_reuses_one_request_receipt_for_one_effecting_run() {
     wrong_request_value["request_id"] =
         serde_json::to_value(context.admission_request_id()).expect("request id JSON");
     assert_receipt_error(wrong_request_value, "policy_run_receipt_terminal_mismatch");
-    host.complete_scheduled_policy_run(&context, &receipt)
+    let (_, projection) = host
+        .complete_scheduled_policy_run(&context, &receipt)
         .expect("complete scheduled policy run");
+    assert!(
+        projection.is_none(),
+        "an unmapped terminal must not publish a scheduling-outcome wake"
+    );
 
     let mut client = TestClient::connect(&host);
     let events = projected_events(
@@ -3011,6 +3016,19 @@ fn mapped_terminal_disposition_is_single_source_for_effect_no_effect_and_opaque_
         assert_eq!(
             repeated_completion, completion,
             "{case}: repeated terminal delivery must reuse one settlement"
+        );
+        let projection = completion
+            .1
+            .as_ref()
+            .unwrap_or_else(|| panic!("{case}: mapped completion wake missing"));
+        assert_eq!(
+            projection.outcome().disposition().outcome_key(),
+            outcome_key,
+            "{case}: wake must carry the exact tagged outcome"
+        );
+        assert!(
+            projection.ledger_position() >= projection.outcome().identity().terminal_sequence(),
+            "{case}: wake projection must cover its source terminal"
         );
 
         let mut client = TestClient::connect(&host);
@@ -3770,6 +3788,7 @@ fn two_declared_opaque_outcomes_drive_existing_any_from_one_terminal_disposition
     fs::write(&package_path, &package).expect("write two-key mapped package");
     let package_sha256 = format!("{:x}", Sha256::digest(&package));
     let state = Arc::new(FakeState::default());
+    let runtime_instance_id = instance_id();
     state
         .transition_capture_after_input
         .store(true, Ordering::Release);
@@ -3784,8 +3803,12 @@ fn two_declared_opaque_outcomes_drive_existing_any_from_one_terminal_disposition
                 vec!["after_observation".to_owned()],
             )),
         Arc::new(
-            FakeProvider::one(POLICY_INSTANCE_ALIAS, instance_id(), Arc::clone(&state))
-                .fixture_simulation(),
+            FakeProvider::one(
+                POLICY_INSTANCE_ALIAS,
+                runtime_instance_id,
+                Arc::clone(&state),
+            )
+            .fixture_simulation(),
         ),
     )
     .expect("runtime host");
@@ -3833,8 +3856,21 @@ fn two_declared_opaque_outcomes_drive_existing_any_from_one_terminal_disposition
     let receipt = host
         .run_scheduled_contained_task(&context, &request)
         .expect("two-key mapped run");
-    host.complete_scheduled_policy_run(&context, &receipt)
+    let (_, projection) = host
+        .complete_scheduled_policy_run(&context, &receipt)
         .expect("two-key mapped completion");
+    let projection = projection.expect("two-key authoritative wake projection");
+    assert_eq!(projection.outcome().identity().run_id(), context.run_id());
+    assert_eq!(projection.outcome().identity().task_id(), context.task_id());
+    assert_eq!(
+        projection.outcome().identity().decision_id(),
+        context.decision_id()
+    );
+    assert_eq!(
+        projection.outcome().identity().lease_id(),
+        context.lease_token().lease_id()
+    );
+    assert!(projection.ledger_position() >= projection.outcome().identity().terminal_sequence());
     let mut client = TestClient::connect(&host);
     let events = projected_events(
         &mut client,
@@ -3847,6 +3883,14 @@ fn two_declared_opaque_outcomes_drive_existing_any_from_one_terminal_disposition
         .iter()
         .find(|event| event.event_type == EventType::TaskCompleted)
         .expect("two-key terminal");
+    let completion = events
+        .iter()
+        .find(|event| event.event_type == EventType::PolicyDispatchCompleted)
+        .expect("two-key settlement");
+    assert!(
+        projection.ledger_position() >= completion.sequence,
+        "the wake lower bound must cover the durable policy settlement"
+    );
     let disposition = events
         .iter()
         .filter_map(projected_task_semantic_fact)
@@ -3864,7 +3908,26 @@ fn two_declared_opaque_outcomes_drive_existing_any_from_one_terminal_disposition
         fact.observed_at_unix_ms = terminal.timestamp_unix_ms;
         fact.expires_at_unix_ms = Some(terminal.timestamp_unix_ms + 900_000);
     }
-    let followup = host
+    drop(client);
+    host.close().expect("close before outcome-driven recovery");
+    let reopened = RuntimeHost::start(
+        config(&root)
+            .with_policy_inputs(PolicyInputSnapshot::new(facts.clone(), policy_resources()))
+            .with_procedure_manifest(procedure_manifest_with_primary(
+                &package,
+                vec!["after_observation".to_owned()],
+            )),
+        Arc::new(
+            FakeProvider::one(
+                POLICY_INSTANCE_ALIAS,
+                runtime_instance_id,
+                Arc::new(FakeState::default()),
+            )
+            .fixture_simulation(),
+        ),
+    )
+    .expect("reopen mapped outcome host");
+    let followup = reopened
         .evaluate_policy_cycle_with_test_inputs(
             &facts,
             &policy_resources(),
@@ -3875,7 +3938,7 @@ fn two_declared_opaque_outcomes_drive_existing_any_from_one_terminal_disposition
             76,
             PolicyTrigger::FactsChanged,
         )
-        .expect("two-key authoritative evaluation");
+        .expect("two-key authoritative recovery evaluation");
     assert_eq!(
         followup
             .evaluation
@@ -3887,8 +3950,7 @@ fn two_declared_opaque_outcomes_drive_existing_any_from_one_terminal_disposition
         1,
         "existing Any must consume the one exact-run authoritative key"
     );
-    drop(client);
-    host.close().expect("close runtime host");
+    reopened.close().expect("close recovered runtime host");
 }
 
 #[test]

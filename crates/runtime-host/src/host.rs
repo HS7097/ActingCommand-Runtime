@@ -73,8 +73,8 @@ use actingcommand_contract::{
     RuntimeRequest, RuntimeResult, RuntimeStrategicPlanResult, RuntimeSubscriptionRequest,
     SchedulerPayloadDraft, SchedulingDisposition, SchedulingEffectCondition,
     SchedulingEffectEvidence, SchedulingOutcomeDeclaration, SchedulingOutcomeIdentity,
-    StatePayload, StatePayloadDraft, TaskId, TaskOutcome, TaskPayload, TaskPayloadDraft,
-    TaskSemanticFact, TerminalEvent, ValidatedRuntimeRequest,
+    SchedulingOutcomeProjection, StatePayload, StatePayloadDraft, TaskId, TaskOutcome, TaskPayload,
+    TaskPayloadDraft, TaskSemanticFact, TerminalEvent, ValidatedRuntimeRequest,
 };
 use actingcommand_device::{CaptureBackendName, Frame};
 use actingcommand_execution_kernel::{
@@ -979,7 +979,10 @@ impl RuntimeHost {
         &self,
         context: &PolicyRunContext,
         receipt: &RuntimeReceipt,
-    ) -> RuntimeHostResult<PolicyExecutionEventData> {
+    ) -> RuntimeHostResult<(
+        PolicyExecutionEventData,
+        Option<SchedulingOutcomeProjection>,
+    )> {
         self.shared_ref("complete_scheduled_policy_run")?
             .complete_scheduled_policy_run(context, receipt)
     }
@@ -3958,7 +3961,10 @@ impl HostShared {
         &self,
         context: &PolicyRunContext,
         receipt: &RuntimeReceipt,
-    ) -> RuntimeHostResult<PolicyExecutionEventData> {
+    ) -> RuntimeHostResult<(
+        PolicyExecutionEventData,
+        Option<SchedulingOutcomeProjection>,
+    )> {
         receipt.validate().map_err(|_| {
             RuntimeHostError::fatal(
                 "policy_run_receipt_invalid",
@@ -4011,12 +4017,40 @@ impl HostShared {
             .is_some();
         let authoritative_outcome =
             self.read_scheduled_policy_outcome(context, terminal, receipt.request_id(), replayed)?;
-        self.record_policy_dispatch_outcome_with_cache_update(
+        let execution = self.record_policy_dispatch_outcome_with_cache_update(
             context.decision_id(),
             &execution_input,
             Some(context),
-            PolicyOutcomeCacheUpdate::Commit(authoritative_outcome.as_ref()),
-        )
+            PolicyOutcomeCacheUpdate::Commit(
+                authoritative_outcome
+                    .as_ref()
+                    .map(SchedulingOutcomeProjection::outcome),
+            ),
+        )?;
+        let authoritative_outcome = authoritative_outcome
+            .map(|projection| {
+                let settlement_position = self
+                    .ledger
+                    .latest_sequence()
+                    .map_err(|_| ledger_error("read_policy_recompute_position"))?;
+                if settlement_position < projection.ledger_position() {
+                    return Err(RuntimeHostError::fatal(
+                        "policy_recompute_position_regressed",
+                        "complete_scheduled_policy_run",
+                        RuntimeErrorCode::RuntimeFatal,
+                    ));
+                }
+                SchedulingOutcomeProjection::new(settlement_position, projection.outcome().clone())
+                    .map_err(|_| {
+                        RuntimeHostError::fatal(
+                            "policy_recompute_projection_invalid",
+                            "complete_scheduled_policy_run",
+                            RuntimeErrorCode::RuntimeFatal,
+                        )
+                    })
+            })
+            .transpose()?;
+        Ok((execution, authoritative_outcome))
     }
 
     fn read_scheduled_policy_outcome(
@@ -4025,7 +4059,7 @@ impl HostShared {
         terminal: TerminalEvent,
         request_id: RequestId,
         completed_replay: bool,
-    ) -> RuntimeHostResult<Option<AuthoritativeSchedulingOutcome>> {
+    ) -> RuntimeHostResult<Option<SchedulingOutcomeProjection>> {
         let expected_keys = {
             let policy = lock(&self.policy, "read_policy_outcome_keys")?;
             if completed_replay {
@@ -4151,7 +4185,7 @@ impl HostShared {
                 RuntimeErrorCode::RuntimeFatal,
             ));
         }
-        Ok(Some(projection.outcome().clone()))
+        Ok(Some(projection))
     }
 
     fn apply_policy_outcome_cache_update(
