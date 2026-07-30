@@ -54,6 +54,7 @@ use std::process::ExitCode;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use user_config_store::{config_path, read_user_config, write_user_config};
 use zip::{ZipWriter, write::FileOptions};
 
 mod cli_result;
@@ -81,6 +82,7 @@ mod runtime_input_backend;
 mod runtime_session_adapter;
 mod runtime_slice_cli;
 mod runtime_stream_adapter;
+mod user_config_store;
 
 const SCHEMA_VERSION: &str = CLI_SCHEMA_VERSION;
 const RUNTIME_VERSION: &str = "runtime-embedded-p1g";
@@ -9753,48 +9755,6 @@ fn require_runtime(global: &GlobalOptions) -> CliOutcome<Value> {
         "connection": "tcp",
         "policy": runtime_endpoint_policy_json(&policy)
     }))
-}
-
-fn read_user_config() -> CliOutcome<UserConfig> {
-    let path = config_path()?;
-    if !path.exists() {
-        return Ok(UserConfig::default());
-    }
-    let text = fs::read_to_string(&path).map_err(|err| {
-        CliError::usage(format!(
-            "failed to read config file {}: {err}",
-            path.display()
-        ))
-    })?;
-    serde_json::from_str(&text).map_err(|err| {
-        CliError::usage(format!(
-            "failed to parse config file {}: {err}",
-            path.display()
-        ))
-    })
-}
-
-fn write_user_config(config: &UserConfig) -> CliOutcome<()> {
-    let path = config_path()?;
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent).map_err(|err| {
-            CliError::usage(format!(
-                "failed to create config directory {}: {err}",
-                parent.display()
-            ))
-        })?;
-    }
-    let text = serde_json::to_string_pretty(config)
-        .map_err(|err| CliError::usage(format!("failed to serialize config: {err}")))?;
-    fs::write(&path, text)
-        .map_err(|err| CliError::usage(format!("failed to write {}: {err}", path.display())))
-}
-
-fn config_path() -> CliOutcome<PathBuf> {
-    if let Ok(path) = env::var(CONFIG_ENV) {
-        return Ok(PathBuf::from(path));
-    }
-    Ok(app_state_root()?.join("config.json"))
 }
 
 fn absolute_lexical_path(path: &Path) -> CliOutcome<PathBuf> {

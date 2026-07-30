@@ -2785,6 +2785,89 @@ fn actinglab_instance_resolution_glue_stays_out_of_main() {
 }
 
 #[test]
+fn actinglab_user_config_store_glue_stays_out_of_main() {
+    let root = workspace_root();
+    let main =
+        fs::read_to_string(root.join("apps/actinglab/src/main.rs")).expect("read ActingLab main");
+    let user_config_store =
+        fs::read_to_string(root.join("apps/actinglab/src/user_config_store.rs"))
+            .expect("read ActingLab user config store module");
+
+    const ROOT_DECLARATION: &str = "mod user_config_store;";
+    const ROOT_IMPORT: &str =
+        "use user_config_store::{config_path, read_user_config, write_user_config};";
+    let declarations = main
+        .lines()
+        .filter(|line| line.contains("mod user_config_store;"))
+        .collect::<Vec<_>>();
+    let imports = main
+        .lines()
+        .filter(|line| line.contains("user_config_store::"))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        declarations,
+        vec![ROOT_DECLARATION],
+        "ActingLab main lost the one private user config store module declaration"
+    );
+    assert_eq!(
+        imports,
+        vec![ROOT_IMPORT],
+        "ActingLab main lost the one private user config store import"
+    );
+
+    for definition in [
+        "fn read_user_config(",
+        "fn write_user_config(",
+        "fn config_path(",
+    ] {
+        assert!(
+            user_config_store.contains(definition),
+            "user config store module lost owner definition {definition}"
+        );
+        assert!(
+            !main.contains(definition),
+            "ActingLab main regained user config store owner definition {definition}"
+        );
+    }
+
+    assert_eq!(
+        user_config_store.matches("pub(super) ").count(),
+        3,
+        "user config store owner visibility changed"
+    );
+    for line in user_config_store.lines() {
+        let trimmed = line.trim_start();
+        assert!(
+            !trimmed.starts_with("pub ") && !trimmed.starts_with("pub(crate) "),
+            "user config store owner exposed broader visibility: {line}"
+        );
+    }
+
+    let marker = "pub(super) fn read_user_config() -> CliOutcome<UserConfig> {";
+    let (_, owner_tail) = user_config_store
+        .split_once(marker)
+        .expect("user config store module contains owner marker");
+    let normalized_owner =
+        format!("fn read_user_config() -> CliOutcome<UserConfig> {{{owner_tail}")
+            .replace("pub(super) ", "");
+    assert_eq!(
+        normalized_owner.lines().count(),
+        41,
+        "user config store owner line count changed"
+    );
+    assert_eq!(
+        normalized_owner.len(),
+        1_322,
+        "user config store owner byte count changed"
+    );
+    assert_eq!(
+        format!("{:x}", Sha256::digest(normalized_owner.as_bytes())),
+        "87dbf54442842ff2307fa3f60f8c05f9e3be503f32b988643de6544b8b7dd97c",
+        "user config store owner body changed"
+    );
+}
+
+#[test]
 fn main_rs_line_ratchet_matches_checked_in_baseline() {
     let root = workspace_root();
     let source = fs::read_to_string(root.join("apps/actinglab/src/main.rs"))
