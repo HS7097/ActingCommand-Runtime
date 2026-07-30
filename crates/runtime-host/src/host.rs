@@ -535,6 +535,8 @@ impl RuntimeHost {
             queue_operation_test_hook: Mutex::new(None),
             #[cfg(test)]
             policy_outcome_transition_test_hook: Mutex::new(None),
+            #[cfg(test)]
+            scheduled_policy_checkpoint_test_hook: Mutex::new(None),
             trusted_policy_dispatches: Mutex::new(TrustedPolicyDispatchStore::default()),
             policy_dispatch_clocks: Mutex::new(policy_dispatch_clocks),
             policy_outcome_gate: Mutex::new(()),
@@ -948,6 +950,57 @@ impl RuntimeHost {
             completion_committed,
             resume,
         })
+    }
+
+    #[cfg(test)]
+    pub(crate) fn count_scheduled_policy_checkpoint_for_test(
+        &self,
+        identity: ScheduledPolicyCheckpointIdentity,
+    ) -> RuntimeHostResult<ScheduledPolicyCheckpointTestControl> {
+        let consumed = Arc::new(AtomicU64::new(0));
+        self.install_scheduled_policy_checkpoint_for_test(
+            identity,
+            ScheduledPolicyCheckpointTestAction::Count(Arc::clone(&consumed)),
+        )?;
+        Ok(ScheduledPolicyCheckpointTestControl { consumed })
+    }
+
+    #[cfg(test)]
+    pub(crate) fn exit_at_scheduled_policy_checkpoint_for_test(
+        &self,
+        context: &PolicyRunContext,
+        marker: PathBuf,
+    ) -> RuntimeHostResult<()> {
+        self.install_scheduled_policy_checkpoint_for_test(
+            ScheduledPolicyCheckpointIdentity::for_context(context),
+            ScheduledPolicyCheckpointTestAction::Exit { marker },
+        )
+    }
+
+    #[cfg(test)]
+    fn install_scheduled_policy_checkpoint_for_test(
+        &self,
+        identity: ScheduledPolicyCheckpointIdentity,
+        action: ScheduledPolicyCheckpointTestAction,
+    ) -> RuntimeHostResult<()> {
+        let shared = self.shared_ref("install_scheduled_policy_checkpoint_test_hook")?;
+        let mut slot = lock(
+            &shared.scheduled_policy_checkpoint_test_hook,
+            "install_scheduled_policy_checkpoint_test_hook",
+        )?;
+        if slot.is_some() {
+            return Err(RuntimeHostError::fatal(
+                "scheduled_policy_checkpoint_test_hook_already_installed",
+                "install_scheduled_policy_checkpoint_test_hook",
+                RuntimeErrorCode::RuntimeFatal,
+            ));
+        }
+        *slot = Some(ScheduledPolicyCheckpointTestHook {
+            identity,
+            execution_thread: thread::current().id(),
+            action,
+        });
+        Ok(())
     }
 
     /// Executes one admitted policy run through the contained-task boundary without reacquiring
@@ -1395,6 +1448,72 @@ struct QueueOperationTestHook {
 struct PolicyOutcomeTransitionTestHook {
     completion_committed: Arc<Barrier>,
     resume: Arc<Barrier>,
+}
+
+#[cfg(test)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct ScheduledPolicyCheckpointIdentity {
+    run_id: RunId,
+    task_id: TaskId,
+    correlation_id: CorrelationId,
+    lease_id: LeaseId,
+}
+
+#[cfg(test)]
+impl ScheduledPolicyCheckpointIdentity {
+    pub(crate) fn for_context(context: &PolicyRunContext) -> Self {
+        Self {
+            run_id: context.run_id(),
+            task_id: context.task_id(),
+            correlation_id: context.correlation_id(),
+            lease_id: context.lease_token().lease_id(),
+        }
+    }
+
+    pub(crate) fn with_run_id(mut self, run_id: RunId) -> Self {
+        self.run_id = run_id;
+        self
+    }
+
+    pub(crate) fn with_task_id(mut self, task_id: TaskId) -> Self {
+        self.task_id = task_id;
+        self
+    }
+
+    pub(crate) fn with_correlation_id(mut self, correlation_id: CorrelationId) -> Self {
+        self.correlation_id = correlation_id;
+        self
+    }
+
+    pub(crate) fn with_lease_id(mut self, lease_id: LeaseId) -> Self {
+        self.lease_id = lease_id;
+        self
+    }
+}
+
+#[cfg(test)]
+enum ScheduledPolicyCheckpointTestAction {
+    Count(Arc<AtomicU64>),
+    Exit { marker: PathBuf },
+}
+
+#[cfg(test)]
+struct ScheduledPolicyCheckpointTestHook {
+    identity: ScheduledPolicyCheckpointIdentity,
+    execution_thread: std::thread::ThreadId,
+    action: ScheduledPolicyCheckpointTestAction,
+}
+
+#[cfg(test)]
+pub(crate) struct ScheduledPolicyCheckpointTestControl {
+    consumed: Arc<AtomicU64>,
+}
+
+#[cfg(test)]
+impl ScheduledPolicyCheckpointTestControl {
+    pub(crate) fn consumed(&self) -> u64 {
+        self.consumed.load(Ordering::Acquire)
+    }
 }
 
 #[cfg(test)]
@@ -2450,6 +2569,8 @@ struct HostShared {
     queue_operation_test_hook: Mutex<Option<QueueOperationTestHook>>,
     #[cfg(test)]
     policy_outcome_transition_test_hook: Mutex<Option<PolicyOutcomeTransitionTestHook>>,
+    #[cfg(test)]
+    scheduled_policy_checkpoint_test_hook: Mutex<Option<ScheduledPolicyCheckpointTestHook>>,
     trusted_policy_dispatches: Mutex<TrustedPolicyDispatchStore>,
     policy_dispatch_clocks: Mutex<BTreeMap<String, PolicyDispatchClock>>,
     // Outcome preparation and completion form one idempotent Runtime-owned transition.
@@ -4570,6 +4691,8 @@ impl HostShared {
                         Some(context) => self.policy_run_event_links(context)?,
                         None => self.events.system_links()?,
                     };
+                    #[cfg(test)]
+                    self.consume_scheduled_policy_checkpoint_for_test(context)?;
                     #[cfg(test)]
                     fail_policy_execution_append_for_test()?;
                     self.append_event_raw(
@@ -7643,6 +7766,52 @@ impl HostShared {
             hook.resume.wait();
         }
         Ok(())
+    }
+
+    #[cfg(test)]
+    fn consume_scheduled_policy_checkpoint_for_test(
+        &self,
+        context: Option<&PolicyRunContext>,
+    ) -> RuntimeHostResult<()> {
+        let Some(context) = context else {
+            return Ok(());
+        };
+        let identity = ScheduledPolicyCheckpointIdentity::for_context(context);
+        let hook = {
+            let mut slot = lock(
+                &self.scheduled_policy_checkpoint_test_hook,
+                "consume_scheduled_policy_checkpoint_test_hook",
+            )?;
+            slot.as_ref()
+                .is_some_and(|hook| {
+                    hook.identity == identity && hook.execution_thread == thread::current().id()
+                })
+                .then(|| slot.take())
+                .flatten()
+        };
+        let Some(hook) = hook else {
+            return Ok(());
+        };
+        match hook.action {
+            ScheduledPolicyCheckpointTestAction::Count(consumed) => {
+                consumed.fetch_add(1, Ordering::AcqRel);
+                Ok(())
+            }
+            ScheduledPolicyCheckpointTestAction::Exit { marker } => {
+                fs::write(
+                    marker,
+                    b"after-durable-lease-release-before-policy-execution-recorded",
+                )
+                .map_err(|_| {
+                    RuntimeHostError::fatal(
+                        "scheduled_policy_checkpoint_marker_write_failed",
+                        "consume_scheduled_policy_checkpoint_test_hook",
+                        RuntimeErrorCode::RuntimeFatal,
+                    )
+                })?;
+                std::process::exit(87);
+            }
+        }
     }
 
     fn existing_queue_terminal_result(
