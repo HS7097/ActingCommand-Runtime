@@ -6,8 +6,6 @@ use actingcommand_contract::{
     ApplicationLifecycleAction, CLI_SCHEMA_VERSION, EventActor, EventSource, LabError as CliError,
     LabErrorClass as ErrorKind, LedgerProjection,
 };
-#[cfg(test)]
-use actingcommand_device::DeviceTarget;
 use actingcommand_device::{
     AdbPathSource, CaptureBackendChoice, CaptureBackendName, Frame, InputBackend, PixelFormat,
     TouchBackendChoice, combine_operation_and_close, resolve_adb_path,
@@ -32,6 +30,7 @@ use actingcommand_runtime_client::{RuntimeClient, RuntimeClientConfig};
 #[cfg(test)]
 use cli_result::CliErrorExitCode;
 use cli_result::CliResult;
+use device_runtime_config::{DeviceRuntimeConfig, device_config, effective_capture_backend_choice};
 use flag_args::FlagArgs;
 #[cfg(test)]
 use runtime_endpoint::RuntimeEndpointChannel;
@@ -58,6 +57,7 @@ use zip::{ZipWriter, write::FileOptions};
 
 mod cli_result;
 mod contained_resources;
+#[rustfmt::skip] mod device_runtime_config;
 mod drive_cli;
 mod env_detection;
 mod flag_args;
@@ -9751,105 +9751,6 @@ fn require_runtime(global: &GlobalOptions) -> CliOutcome<Value> {
         "connection": "tcp",
         "policy": runtime_endpoint_policy_json(&policy)
     }))
-}
-
-fn device_config(global: &GlobalOptions, config: &UserConfig) -> CliOutcome<DeviceRuntimeConfig> {
-    device_config_for_instance(global, config, None)
-}
-
-fn device_config_for_instance(
-    global: &GlobalOptions,
-    config: &UserConfig,
-    instance_override: Option<&str>,
-) -> CliOutcome<DeviceRuntimeConfig> {
-    let instance_id = match instance_override {
-        Some(instance) => instance.to_string(),
-        None => resolve_instance_id(global, config)?,
-    };
-    let instance = config.instances.get(&instance_id);
-    #[cfg(test)]
-    let mut target = DeviceTarget::default();
-    #[cfg(test)]
-    if let Some(serial) = instance.and_then(|instance| instance.serial.clone()) {
-        target.serial = Some(serial);
-    } else if global.instance.as_deref() == Some(instance_id.as_str()) && instance.is_none() {
-        target.serial = Some(instance_id.clone());
-    }
-    let capture_backend = effective_capture_backend_choice(global, &instance_id, instance)?;
-    #[cfg(test)]
-    let touch_backend = effective_touch_backend_choice(global, &instance_id, instance)?;
-    let resolved_adb = effective_adb_path_for_instance(config, instance)?;
-    enforce_path_adb_target_boundary(&resolved_adb, instance, capture_backend)?;
-    Ok(DeviceRuntimeConfig {
-        instance_alias: instance_id,
-        runtime_state_root: runtime_state_root()?,
-        #[cfg(test)]
-        target,
-        adb_source: resolved_adb.source,
-        adb_warning: resolved_adb.warning,
-        capture_backend,
-        #[cfg(test)]
-        touch_backend,
-    })
-}
-
-#[derive(Debug)]
-struct DeviceRuntimeConfig {
-    instance_alias: String,
-    runtime_state_root: PathBuf,
-    #[cfg(test)]
-    target: DeviceTarget,
-    adb_source: AdbPathSource,
-    adb_warning: Option<String>,
-    capture_backend: CaptureBackendChoice,
-    #[cfg(test)]
-    touch_backend: TouchBackendChoice,
-}
-
-impl DeviceRuntimeConfig {
-    fn runtime_capture_endpoint(&self) -> runtime_capture_backend::RuntimeCaptureEndpoint {
-        runtime_capture_backend::RuntimeCaptureEndpoint::new(
-            self.instance_alias.clone(),
-            self.runtime_state_root.clone(),
-        )
-    }
-}
-
-fn effective_capture_backend_choice(
-    global: &GlobalOptions,
-    instance_id: &str,
-    instance: Option<&InstanceConfig>,
-) -> CliOutcome<CaptureBackendChoice> {
-    if let Some(choice) = global.capture_backend {
-        return Ok(choice);
-    }
-    let Some(value) = instance.and_then(|instance| instance.capture_backend.as_deref()) else {
-        return Ok(CaptureBackendChoice::Auto);
-    };
-    CaptureBackendChoice::parse(value).map_err(|err| {
-        CliError::usage(format!(
-            "invalid instance.{instance_id}.capture_backend '{value}': {err}"
-        ))
-    })
-}
-
-#[cfg(test)]
-fn effective_touch_backend_choice(
-    global: &GlobalOptions,
-    instance_id: &str,
-    instance: Option<&InstanceConfig>,
-) -> CliOutcome<TouchBackendChoice> {
-    if let Some(choice) = global.touch_backend {
-        return Ok(choice);
-    }
-    let Some(value) = instance.and_then(|instance| instance.touch_backend.as_deref()) else {
-        return Ok(TouchBackendChoice::Auto);
-    };
-    TouchBackendChoice::parse(value).map_err(|err| {
-        CliError::usage(format!(
-            "invalid instance.{instance_id}.touch_backend '{value}': {err}"
-        ))
-    })
 }
 
 fn resolve_instance_id(global: &GlobalOptions, config: &UserConfig) -> CliOutcome<String> {

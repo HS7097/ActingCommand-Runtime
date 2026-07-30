@@ -2571,6 +2571,87 @@ fn actinglab_flag_args_glue_stays_out_of_main() {
 }
 
 #[test]
+fn actinglab_device_runtime_config_glue_stays_out_of_main() {
+    let root = workspace_root();
+    let main =
+        fs::read_to_string(root.join("apps/actinglab/src/main.rs")).expect("read ActingLab main");
+    let device_runtime_config =
+        fs::read_to_string(root.join("apps/actinglab/src/device_runtime_config.rs"))
+            .expect("read ActingLab device Runtime config module");
+
+    assert!(
+        main.contains("mod device_runtime_config;"),
+        "ActingLab main lost the private device Runtime config module"
+    );
+    for definition in [
+        "fn device_config(",
+        "fn device_config_for_instance(",
+        "struct DeviceRuntimeConfig",
+        "impl DeviceRuntimeConfig",
+        "fn runtime_capture_endpoint(",
+        "fn effective_capture_backend_choice(",
+        "fn effective_touch_backend_choice(",
+    ] {
+        assert!(
+            device_runtime_config.contains(definition),
+            "device Runtime config module lost owner definition {definition}"
+        );
+        assert!(
+            !main.contains(definition),
+            "ActingLab main regained device Runtime config owner definition {definition}"
+        );
+    }
+    for field in [
+        "instance_alias: String",
+        "runtime_state_root: PathBuf",
+        "target: DeviceTarget",
+        "adb_source: AdbPathSource",
+        "adb_warning: Option<String>",
+        "capture_backend: CaptureBackendChoice",
+        "touch_backend: TouchBackendChoice",
+    ] {
+        assert!(
+            device_runtime_config.contains(field),
+            "device Runtime config module lost owner field {field}"
+        );
+    }
+
+    assert_eq!(
+        device_runtime_config.matches("pub(super) ").count(),
+        9,
+        "device Runtime config owner visibility changed"
+    );
+    for line in device_runtime_config.lines() {
+        let trimmed = line.trim_start();
+        assert!(
+            !trimmed.starts_with("pub ") && !trimmed.starts_with("pub(crate) "),
+            "device Runtime config owner exposed broader visibility: {line}"
+        );
+    }
+
+    let marker = "pub(super) fn device_config(";
+    let (_, owner_tail) = device_runtime_config
+        .split_once(marker)
+        .expect("device Runtime config module contains owner marker");
+    let normalized_owner = format!("fn device_config({owner_tail}").replace("pub(super) ", "");
+    assert_eq!(
+        normalized_owner.lines().count(),
+        98,
+        "device Runtime config owner line count changed"
+    );
+    assert_eq!(
+        normalized_owner.len(),
+        3_325,
+        "device Runtime config owner byte count changed"
+    );
+    assert_eq!(
+        format!("{:x}", Sha256::digest(normalized_owner.as_bytes())),
+        "33f417f67615e680b48a520e7ce547cedd924b19305f1586df7c133f9a4a4541",
+        "device Runtime config owner body changed"
+    );
+}
+
+#[test]
 fn main_rs_line_ratchet_matches_checked_in_baseline() {
     let root = workspace_root();
     let source = fs::read_to_string(root.join("apps/actinglab/src/main.rs"))
