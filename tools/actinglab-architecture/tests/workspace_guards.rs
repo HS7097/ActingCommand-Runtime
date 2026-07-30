@@ -2868,6 +2868,89 @@ fn actinglab_user_config_store_glue_stays_out_of_main() {
 }
 
 #[test]
+fn actinglab_user_config_keys_glue_stays_out_of_main() {
+    let root = workspace_root();
+    let main =
+        fs::read_to_string(root.join("apps/actinglab/src/main.rs")).expect("read ActingLab main");
+    let user_config_keys = fs::read_to_string(root.join("apps/actinglab/src/user_config_keys.rs"))
+        .expect("read ActingLab user config keys module");
+
+    const ROOT_DECLARATION: &str = "mod user_config_keys;";
+    const ROOT_IMPORT: &str = "use user_config_keys::{config_get, config_set};";
+    let declarations = main
+        .lines()
+        .filter(|line| line.contains("mod user_config_keys;"))
+        .collect::<Vec<_>>();
+    let imports = main
+        .lines()
+        .filter(|line| line.contains("user_config_keys::"))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        declarations,
+        vec![ROOT_DECLARATION],
+        "ActingLab main lost the one private user config keys module declaration"
+    );
+    assert_eq!(
+        imports,
+        vec![ROOT_IMPORT],
+        "ActingLab main lost the one private user config keys import"
+    );
+
+    for definition in [
+        "fn config_get(",
+        "fn config_set(",
+        "fn get_instance_value(",
+        "fn set_instance_value(",
+    ] {
+        assert!(
+            user_config_keys.contains(definition),
+            "user config keys module lost owner definition {definition}"
+        );
+        assert!(
+            !main.contains(definition),
+            "ActingLab main regained user config keys owner definition {definition}"
+        );
+    }
+
+    assert_eq!(
+        user_config_keys.matches("pub(super) ").count(),
+        2,
+        "user config keys owner visibility changed"
+    );
+    for line in user_config_keys.lines() {
+        let trimmed = line.trim_start();
+        assert!(
+            !trimmed.starts_with("pub ") && !trimmed.starts_with("pub(crate) "),
+            "user config keys owner exposed broader visibility: {line}"
+        );
+    }
+
+    let marker = "pub(super) fn config_get(config: &UserConfig, key: &str) -> CliOutcome<Value> {";
+    let (_, owner_tail) = user_config_keys
+        .split_once(marker)
+        .expect("user config keys module contains owner marker");
+    let normalized_owner = format!(
+        "fn config_get(config: &UserConfig, key: &str) -> CliOutcome<Value> {{{owner_tail}"
+    )
+    .replace("pub(super) ", "");
+    assert_eq!(
+        normalized_owner.lines().count(),
+        70,
+        "user config keys owner line count changed"
+    );
+    assert_eq!(
+        normalized_owner.len(),
+        3_405,
+        "user config keys owner byte count changed"
+    );
+    assert_eq!(
+        format!("{:x}", Sha256::digest(normalized_owner.as_bytes())),
+        "23ce53deda5cc13d6d3c44b2a312c94a60d2dbc68db7d34877a49b878d3463c0",
+        "user config keys owner body changed"
+    );
+}
+
+#[test]
 fn main_rs_line_ratchet_matches_checked_in_baseline() {
     let root = workspace_root();
     let source = fs::read_to_string(root.join("apps/actinglab/src/main.rs"))
