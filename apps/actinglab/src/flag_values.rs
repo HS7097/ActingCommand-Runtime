@@ -85,6 +85,18 @@ pub(super) fn parse_record_duration_ms(flags: &FlagArgs, default_ms: u64) -> Cli
     Ok(duration_ms)
 }
 
+pub(super) fn record_amend_step_id(flags: &FlagArgs) -> CliOutcome<String> {
+    let value = flags
+        .optional("--step-id")
+        .filter(|value| value != "true")
+        .or_else(|| flags.positionals.first().cloned())
+        .ok_or_else(|| CliError::usage("session record amend requires <step-id> or --step-id"))?;
+    if value.trim().is_empty() {
+        return Err(CliError::usage("record amend step id must not be empty"));
+    }
+    Ok(value)
+}
+
 pub(super) fn split_csv(value: &str) -> Vec<String> {
     value
         .split(',')

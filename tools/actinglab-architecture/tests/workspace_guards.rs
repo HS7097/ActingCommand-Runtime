@@ -3280,7 +3280,9 @@ fn actinglab_flag_values_glue_stays_out_of_main() {
         "use flag_values::{\n",
         "    parse_optional_duration_ms, parse_optional_string_value, ",
         "parse_optional_unit_f64,\n",
-        "    parse_optional_usize, parse_record_duration_ms, required_non_empty_flag, split_csv,\n",
+        "    parse_optional_usize, parse_record_duration_ms, record_amend_step_id, ",
+        "required_non_empty_flag,\n",
+        "    split_csv,\n",
         "};",
     );
     let declarations = main
@@ -3401,7 +3403,9 @@ fn actinglab_required_non_empty_flag_glue_stays_out_of_main() {
         "use flag_values::{\n",
         "    parse_optional_duration_ms, parse_optional_string_value, ",
         "parse_optional_unit_f64,\n",
-        "    parse_optional_usize, parse_record_duration_ms, required_non_empty_flag, split_csv,\n",
+        "    parse_optional_usize, parse_record_duration_ms, record_amend_step_id, ",
+        "required_non_empty_flag,\n",
+        "    split_csv,\n",
         "};",
     );
     assert_eq!(
@@ -3428,7 +3432,7 @@ fn actinglab_required_non_empty_flag_glue_stays_out_of_main() {
     );
     assert_eq!(
         flag_values.matches("pub(super) ").count(),
-        7,
+        8,
         "flag values module visibility changed"
     );
 
@@ -3487,7 +3491,9 @@ fn actinglab_optional_unit_f64_glue_stays_out_of_main() {
         "use flag_values::{\n",
         "    parse_optional_duration_ms, parse_optional_string_value, ",
         "parse_optional_unit_f64,\n",
-        "    parse_optional_usize, parse_record_duration_ms, required_non_empty_flag, split_csv,\n",
+        "    parse_optional_usize, parse_record_duration_ms, record_amend_step_id, ",
+        "required_non_empty_flag,\n",
+        "    split_csv,\n",
         "};",
     );
     assert_eq!(
@@ -3510,7 +3516,7 @@ fn actinglab_optional_unit_f64_glue_stays_out_of_main() {
     );
     assert_eq!(
         flag_values.matches("pub(super) ").count(),
-        7,
+        8,
         "flag values module visibility changed"
     );
 
@@ -3576,7 +3582,9 @@ fn actinglab_record_duration_flag_glue_stays_out_of_main() {
         "use flag_values::{\n",
         "    parse_optional_duration_ms, parse_optional_string_value, ",
         "parse_optional_unit_f64,\n",
-        "    parse_optional_usize, parse_record_duration_ms, required_non_empty_flag, split_csv,\n",
+        "    parse_optional_usize, parse_record_duration_ms, record_amend_step_id, ",
+        "required_non_empty_flag,\n",
+        "    split_csv,\n",
         "};",
     );
     assert_eq!(
@@ -3603,7 +3611,7 @@ fn actinglab_record_duration_flag_glue_stays_out_of_main() {
     );
     assert_eq!(
         flag_values.matches("pub(super) ").count(),
-        7,
+        8,
         "flag values module visibility changed"
     );
 
@@ -3626,12 +3634,12 @@ fn actinglab_record_duration_flag_glue_stays_out_of_main() {
     );
 
     let marker = "\npub(super) fn parse_record_duration_ms(";
-    let (_, owner_and_split_csv) = flag_values
+    let (_, owner_and_record_amend_step_id) = flag_values
         .rsplit_once(marker)
         .expect("flag values module lost the appended record-duration owner");
-    let (owner_tail, _) = owner_and_split_csv
-        .split_once("pub(super) fn split_csv(")
-        .expect("flag values module lost the following split CSV owner");
+    let (owner_tail, _) = owner_and_record_amend_step_id
+        .split_once("pub(super) fn record_amend_step_id(")
+        .expect("flag values module lost the following record-amend step-id owner");
     let normalized_owner = format!("fn parse_record_duration_ms({owner_tail}");
     assert_eq!(
         normalized_owner.lines().count(),
@@ -3659,6 +3667,134 @@ fn actinglab_record_duration_flag_glue_stays_out_of_main() {
 }
 
 #[test]
+fn actinglab_record_amend_step_id_glue_stays_out_of_main() {
+    let root = workspace_root();
+    let main =
+        fs::read_to_string(root.join("apps/actinglab/src/main.rs")).expect("read ActingLab main");
+    let flag_values = fs::read_to_string(root.join("apps/actinglab/src/flag_values.rs"))
+        .expect("read ActingLab flag values module");
+
+    const ROOT_DECLARATION: &str = "mod flag_values;";
+    const ROOT_IMPORT: &str = concat!(
+        "use flag_values::{\n",
+        "    parse_optional_duration_ms, parse_optional_string_value, ",
+        "parse_optional_unit_f64,\n",
+        "    parse_optional_usize, parse_record_duration_ms, record_amend_step_id, ",
+        "required_non_empty_flag,\n",
+        "    split_csv,\n",
+        "};",
+    );
+    let declarations = main
+        .lines()
+        .filter(|line| line.contains("mod flag_values;"))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        declarations,
+        vec![ROOT_DECLARATION],
+        "ActingLab main lost the one private flag values module declaration"
+    );
+    assert_eq!(
+        main.matches("flag_values::").count(),
+        1,
+        "ActingLab main gained another flag values import"
+    );
+    assert_eq!(
+        main.matches(ROOT_IMPORT).count(),
+        1,
+        "ActingLab main lost the exact record-amend step-id root import"
+    );
+
+    assert_eq!(
+        flag_values.matches("fn record_amend_step_id(").count(),
+        1,
+        "flag values module lost the one record-amend step-id definition"
+    );
+    assert!(
+        flag_values.contains("pub(super) fn record_amend_step_id("),
+        "record-amend step-id owner visibility changed"
+    );
+    assert!(
+        !main.contains("fn record_amend_step_id("),
+        "ActingLab main regained the record-amend step-id owner"
+    );
+    assert!(
+        !main.contains("pub use flag_values::"),
+        "ActingLab main publicly re-exported flag-value glue"
+    );
+    assert_eq!(
+        flag_values.matches("pub(super) ").count(),
+        8,
+        "flag values module visibility changed"
+    );
+    for line in flag_values.lines() {
+        let trimmed = line.trim_start();
+        assert!(
+            !trimmed.starts_with("pub ") && !trimmed.starts_with("pub(crate) "),
+            "flag values owner exposed broader visibility: {line}"
+        );
+    }
+
+    const CALL: &str = "let step_id = record_amend_step_id(&flags)?;";
+    const CALL_AND_LOOKUP: &str = concat!(
+        "            let step_id = record_amend_step_id(&flags)?;\n",
+        "            let Some(step) = record.steps.iter_mut().find(|step| step.step_id == step_id) else {",
+    );
+    assert_eq!(
+        main.matches("record_amend_step_id(").count(),
+        1,
+        "ActingLab main record-amend step-id caller set changed"
+    );
+    assert_eq!(
+        main.matches(CALL).count(),
+        1,
+        "ActingLab main lost the exact record-amend step-id caller"
+    );
+    assert_eq!(
+        main.matches(CALL_AND_LOOKUP).count(),
+        1,
+        "ActingLab main changed record-amend step-id caller order"
+    );
+
+    let marker = "\npub(super) fn record_amend_step_id(";
+    let (_, owner_and_split_csv) = flag_values
+        .rsplit_once(marker)
+        .expect("flag values module lost the appended record-amend step-id owner");
+    let (owner_tail, _) = owner_and_split_csv
+        .split_once("pub(super) fn split_csv(")
+        .expect("flag values module lost the following split CSV owner");
+    let normalized_owner = format!("fn record_amend_step_id({owner_tail}");
+    assert_eq!(
+        normalized_owner.matches('\n').count(),
+        12,
+        "record-amend step-id owner LF line count changed"
+    );
+    assert_eq!(
+        normalized_owner.len(),
+        449,
+        "record-amend step-id owner byte count changed"
+    );
+    assert_eq!(
+        format!("{:x}", Sha256::digest(normalized_owner.as_bytes())),
+        "07cbf7af6b9ae384308d5961a7f3226c9aab6226f983d434aa0d098dd62d5009",
+        "record-amend step-id owner body changed"
+    );
+    for invariant in [
+        ".optional(\"--step-id\")",
+        ".filter(|value| value != \"true\")",
+        ".or_else(|| flags.positionals.first().cloned())",
+        "session record amend requires <step-id> or --step-id",
+        "if value.trim().is_empty()",
+        "record amend step id must not be empty",
+        "Ok(value)",
+    ] {
+        assert!(
+            normalized_owner.contains(invariant),
+            "record-amend step-id invariant changed: {invariant}"
+        );
+    }
+}
+
+#[test]
 fn actinglab_split_csv_glue_stays_out_of_main() {
     let root = workspace_root();
     let main =
@@ -3672,7 +3808,9 @@ fn actinglab_split_csv_glue_stays_out_of_main() {
         "use flag_values::{\n",
         "    parse_optional_duration_ms, parse_optional_string_value, ",
         "parse_optional_unit_f64,\n",
-        "    parse_optional_usize, parse_record_duration_ms, required_non_empty_flag, split_csv,\n",
+        "    parse_optional_usize, parse_record_duration_ms, record_amend_step_id, ",
+        "required_non_empty_flag,\n",
+        "    split_csv,\n",
         "};",
     );
     assert_eq!(
@@ -3695,7 +3833,7 @@ fn actinglab_split_csv_glue_stays_out_of_main() {
     );
     assert_eq!(
         flag_values.matches("pub(super) ").count(),
-        7,
+        8,
         "flag values module visibility changed"
     );
 

@@ -34,7 +34,8 @@ use device_runtime_config::{DeviceRuntimeConfig, device_config, effective_captur
 use flag_args::FlagArgs;
 use flag_values::{
     parse_optional_duration_ms, parse_optional_string_value, parse_optional_unit_f64,
-    parse_optional_usize, parse_record_duration_ms, required_non_empty_flag, split_csv,
+    parse_optional_usize, parse_record_duration_ms, record_amend_step_id, required_non_empty_flag,
+    split_csv,
 };
 use instance_resolution::{resolve_instance_id, resolve_instance_id_for_flags};
 #[cfg(test)]
@@ -9002,18 +9003,6 @@ fn amend_drift_record_step(
             ))
         }
     }
-}
-
-fn record_amend_step_id(flags: &FlagArgs) -> CliOutcome<String> {
-    let value = flags
-        .optional("--step-id")
-        .filter(|value| value != "true")
-        .or_else(|| flags.positionals.first().cloned())
-        .ok_or_else(|| CliError::usage("session record amend requires <step-id> or --step-id"))?;
-    if value.trim().is_empty() {
-        return Err(CliError::usage("record amend step id must not be empty"));
-    }
-    Ok(value)
 }
 
 fn record_candidates_step_id(flags: &FlagArgs) -> CliOutcome<String> {
