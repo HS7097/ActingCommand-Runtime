@@ -97,6 +97,10 @@ pub(super) fn record_amend_step_id(flags: &FlagArgs) -> CliOutcome<String> {
     Ok(value)
 }
 
+pub(super) fn stream_check_requested(flags: &FlagArgs) -> bool {
+    flags.positionals.first().map(String::as_str) == Some("check")
+}
+
 pub(super) fn split_csv(value: &str) -> Vec<String> {
     value
         .split(',')

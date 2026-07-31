@@ -3282,7 +3282,7 @@ fn actinglab_flag_values_glue_stays_out_of_main() {
         "parse_optional_unit_f64,\n",
         "    parse_optional_usize, parse_record_duration_ms, record_amend_step_id, ",
         "required_non_empty_flag,\n",
-        "    split_csv,\n",
+        "    split_csv, stream_check_requested,\n",
         "};",
     );
     let declarations = main
@@ -3405,7 +3405,7 @@ fn actinglab_required_non_empty_flag_glue_stays_out_of_main() {
         "parse_optional_unit_f64,\n",
         "    parse_optional_usize, parse_record_duration_ms, record_amend_step_id, ",
         "required_non_empty_flag,\n",
-        "    split_csv,\n",
+        "    split_csv, stream_check_requested,\n",
         "};",
     );
     assert_eq!(
@@ -3432,7 +3432,7 @@ fn actinglab_required_non_empty_flag_glue_stays_out_of_main() {
     );
     assert_eq!(
         flag_values.matches("pub(super) ").count(),
-        8,
+        9,
         "flag values module visibility changed"
     );
 
@@ -3493,7 +3493,7 @@ fn actinglab_optional_unit_f64_glue_stays_out_of_main() {
         "parse_optional_unit_f64,\n",
         "    parse_optional_usize, parse_record_duration_ms, record_amend_step_id, ",
         "required_non_empty_flag,\n",
-        "    split_csv,\n",
+        "    split_csv, stream_check_requested,\n",
         "};",
     );
     assert_eq!(
@@ -3516,7 +3516,7 @@ fn actinglab_optional_unit_f64_glue_stays_out_of_main() {
     );
     assert_eq!(
         flag_values.matches("pub(super) ").count(),
-        8,
+        9,
         "flag values module visibility changed"
     );
 
@@ -3584,7 +3584,7 @@ fn actinglab_record_duration_flag_glue_stays_out_of_main() {
         "parse_optional_unit_f64,\n",
         "    parse_optional_usize, parse_record_duration_ms, record_amend_step_id, ",
         "required_non_empty_flag,\n",
-        "    split_csv,\n",
+        "    split_csv, stream_check_requested,\n",
         "};",
     );
     assert_eq!(
@@ -3611,7 +3611,7 @@ fn actinglab_record_duration_flag_glue_stays_out_of_main() {
     );
     assert_eq!(
         flag_values.matches("pub(super) ").count(),
-        8,
+        9,
         "flag values module visibility changed"
     );
 
@@ -3681,7 +3681,7 @@ fn actinglab_record_amend_step_id_glue_stays_out_of_main() {
         "parse_optional_unit_f64,\n",
         "    parse_optional_usize, parse_record_duration_ms, record_amend_step_id, ",
         "required_non_empty_flag,\n",
-        "    split_csv,\n",
+        "    split_csv, stream_check_requested,\n",
         "};",
     );
     let declarations = main
@@ -3723,7 +3723,7 @@ fn actinglab_record_amend_step_id_glue_stays_out_of_main() {
     );
     assert_eq!(
         flag_values.matches("pub(super) ").count(),
-        8,
+        9,
         "flag values module visibility changed"
     );
     for line in flag_values.lines() {
@@ -3756,12 +3756,12 @@ fn actinglab_record_amend_step_id_glue_stays_out_of_main() {
     );
 
     let marker = "\npub(super) fn record_amend_step_id(";
-    let (_, owner_and_split_csv) = flag_values
+    let (_, owner_and_stream_check_requested) = flag_values
         .rsplit_once(marker)
         .expect("flag values module lost the appended record-amend step-id owner");
-    let (owner_tail, _) = owner_and_split_csv
-        .split_once("pub(super) fn split_csv(")
-        .expect("flag values module lost the following split CSV owner");
+    let (owner_tail, _) = owner_and_stream_check_requested
+        .split_once("pub(super) fn stream_check_requested(")
+        .expect("flag values module lost the following stream-check owner");
     let normalized_owner = format!("fn record_amend_step_id({owner_tail}");
     assert_eq!(
         normalized_owner.matches('\n').count(),
@@ -3810,7 +3810,7 @@ fn actinglab_split_csv_glue_stays_out_of_main() {
         "parse_optional_unit_f64,\n",
         "    parse_optional_usize, parse_record_duration_ms, record_amend_step_id, ",
         "required_non_empty_flag,\n",
-        "    split_csv,\n",
+        "    split_csv, stream_check_requested,\n",
         "};",
     );
     assert_eq!(
@@ -3833,7 +3833,7 @@ fn actinglab_split_csv_glue_stays_out_of_main() {
     );
     assert_eq!(
         flag_values.matches("pub(super) ").count(),
-        8,
+        9,
         "flag values module visibility changed"
     );
 
@@ -3879,6 +3879,88 @@ fn actinglab_split_csv_glue_stays_out_of_main() {
         format!("{:x}", Sha256::digest(normalized_owner.as_bytes())),
         "edc4c9a543d64723f7428067ad6e63668d51c50e882b90f135599fe5ee9a5f1a",
         "split CSV owner body changed"
+    );
+}
+
+#[test]
+fn actinglab_stream_check_requested_glue_stays_out_of_main() {
+    let root = workspace_root();
+    let main =
+        fs::read_to_string(root.join("apps/actinglab/src/main.rs")).expect("read ActingLab main");
+    let flag_values = fs::read_to_string(root.join("apps/actinglab/src/flag_values.rs"))
+        .expect("read ActingLab flag values module");
+    let runtime_stream_adapter =
+        fs::read_to_string(root.join("apps/actinglab/src/runtime_stream_adapter.rs"))
+            .expect("read ActingLab runtime stream adapter");
+
+    assert_eq!(
+        main.matches("stream_check_requested,").count(),
+        1,
+        "ActingLab main lost the private stream-check root import"
+    );
+    assert_eq!(
+        flag_values.matches("fn stream_check_requested(").count(),
+        1,
+        "flag values module lost the one stream-check definition"
+    );
+    assert!(
+        flag_values.contains("pub(super) fn stream_check_requested("),
+        "stream-check owner visibility changed"
+    );
+    assert!(
+        !main.contains("fn stream_check_requested("),
+        "ActingLab main regained the stream-check owner"
+    );
+    assert!(
+        !main.contains("pub use flag_values::"),
+        "flag values owner became a public root re-export"
+    );
+    assert_eq!(
+        flag_values.matches("pub(super) ").count(),
+        9,
+        "flag values module visibility changed"
+    );
+
+    let caller_serialization = runtime_stream_adapter
+        .lines()
+        .enumerate()
+        .filter(|(_, line)| line.contains("stream_check_requested("))
+        .map(|(index, line)| {
+            format!(
+                "apps/actinglab/src/runtime_stream_adapter.rs:{}:{}\n",
+                index + 1,
+                line.trim()
+            )
+        })
+        .collect::<String>();
+    assert_eq!(
+        format!("{:x}", Sha256::digest(caller_serialization.as_bytes())),
+        "b82b22dfc6dd82e6216d6c0c778c2363444bf420d8dd811baa6dcbafd89af532",
+        "runtime stream adapter caller serialization changed"
+    );
+
+    let marker = "\npub(super) fn stream_check_requested(";
+    let (_, owner_and_split_csv) = flag_values
+        .rsplit_once(marker)
+        .expect("flag values module lost the appended stream-check owner");
+    let (owner_tail, _) = owner_and_split_csv
+        .split_once("pub(super) fn split_csv(")
+        .expect("flag values module lost the following split CSV owner");
+    let normalized_owner = format!("fn stream_check_requested({owner_tail}");
+    assert_eq!(
+        normalized_owner.matches('\n').count(),
+        4,
+        "stream-check owner LF line count changed"
+    );
+    assert_eq!(
+        normalized_owner.len(),
+        124,
+        "stream-check owner byte count changed"
+    );
+    assert_eq!(
+        format!("{:x}", Sha256::digest(normalized_owner.as_bytes())),
+        "01a8a647eca7a375059814b233c5825df9dbcfcd16213d270c6762ef62cd7684",
+        "stream-check owner body changed"
     );
 }
 

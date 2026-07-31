@@ -35,7 +35,7 @@ use flag_args::FlagArgs;
 use flag_values::{
     parse_optional_duration_ms, parse_optional_string_value, parse_optional_unit_f64,
     parse_optional_usize, parse_record_duration_ms, record_amend_step_id, required_non_empty_flag,
-    split_csv,
+    split_csv, stream_check_requested,
 };
 use instance_resolution::{resolve_instance_id, resolve_instance_id_for_flags};
 #[cfg(test)]
@@ -5491,10 +5491,6 @@ fn poll_for_matched_page(
 fn run_monitor(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
     let _ = global;
     runtime_session_adapter::retired_authority("monitor", args)
-}
-
-fn stream_check_requested(flags: &FlagArgs) -> bool {
-    flags.positionals.first().map(String::as_str) == Some("check")
 }
 
 fn stream_contract_json(
