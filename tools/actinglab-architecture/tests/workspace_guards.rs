@@ -3280,9 +3280,10 @@ fn actinglab_flag_values_glue_stays_out_of_main() {
         "use flag_values::{\n",
         "    parse_optional_duration_ms, parse_optional_string_value, ",
         "parse_optional_unit_f64,\n",
-        "    parse_optional_usize, parse_record_duration_ms, record_amend_step_id, ",
-        "required_non_empty_flag,\n",
-        "    session_record_drift_diagnostics_path, split_csv, stream_check_requested, target_argument,\n",
+        "    parse_optional_usize, parse_record_duration_ms, parse_touch_backend_override,\n",
+        "    record_amend_step_id, required_non_empty_flag, ",
+        "session_record_drift_diagnostics_path,\n",
+        "    split_csv, stream_check_requested, target_argument,\n",
         "};",
     );
     let declarations = main
@@ -3333,7 +3334,7 @@ fn actinglab_flag_values_glue_stays_out_of_main() {
     }
 
     const CHILD_IMPORTS: &str = concat!(
-        "use super::{CliError, CliOutcome, FlagArgs};\n",
+        "use super::{CliError, CliOutcome, FlagArgs, TouchBackendChoice};\n",
         "use std::path::PathBuf;\n",
         "use std::time::Duration;\n\n",
     );
@@ -3404,9 +3405,10 @@ fn actinglab_required_non_empty_flag_glue_stays_out_of_main() {
         "use flag_values::{\n",
         "    parse_optional_duration_ms, parse_optional_string_value, ",
         "parse_optional_unit_f64,\n",
-        "    parse_optional_usize, parse_record_duration_ms, record_amend_step_id, ",
-        "required_non_empty_flag,\n",
-        "    session_record_drift_diagnostics_path, split_csv, stream_check_requested, target_argument,\n",
+        "    parse_optional_usize, parse_record_duration_ms, parse_touch_backend_override,\n",
+        "    record_amend_step_id, required_non_empty_flag, ",
+        "session_record_drift_diagnostics_path,\n",
+        "    split_csv, stream_check_requested, target_argument,\n",
         "};",
     );
     assert_eq!(
@@ -3433,7 +3435,7 @@ fn actinglab_required_non_empty_flag_glue_stays_out_of_main() {
     );
     assert_eq!(
         flag_values.matches("pub(super) ").count(),
-        11,
+        12,
         "flag values module visibility changed"
     );
 
@@ -3492,9 +3494,10 @@ fn actinglab_optional_unit_f64_glue_stays_out_of_main() {
         "use flag_values::{\n",
         "    parse_optional_duration_ms, parse_optional_string_value, ",
         "parse_optional_unit_f64,\n",
-        "    parse_optional_usize, parse_record_duration_ms, record_amend_step_id, ",
-        "required_non_empty_flag,\n",
-        "    session_record_drift_diagnostics_path, split_csv, stream_check_requested, target_argument,\n",
+        "    parse_optional_usize, parse_record_duration_ms, parse_touch_backend_override,\n",
+        "    record_amend_step_id, required_non_empty_flag, ",
+        "session_record_drift_diagnostics_path,\n",
+        "    split_csv, stream_check_requested, target_argument,\n",
         "};",
     );
     assert_eq!(
@@ -3517,7 +3520,7 @@ fn actinglab_optional_unit_f64_glue_stays_out_of_main() {
     );
     assert_eq!(
         flag_values.matches("pub(super) ").count(),
-        11,
+        12,
         "flag values module visibility changed"
     );
 
@@ -3583,9 +3586,10 @@ fn actinglab_record_duration_flag_glue_stays_out_of_main() {
         "use flag_values::{\n",
         "    parse_optional_duration_ms, parse_optional_string_value, ",
         "parse_optional_unit_f64,\n",
-        "    parse_optional_usize, parse_record_duration_ms, record_amend_step_id, ",
-        "required_non_empty_flag,\n",
-        "    session_record_drift_diagnostics_path, split_csv, stream_check_requested, target_argument,\n",
+        "    parse_optional_usize, parse_record_duration_ms, parse_touch_backend_override,\n",
+        "    record_amend_step_id, required_non_empty_flag, ",
+        "session_record_drift_diagnostics_path,\n",
+        "    split_csv, stream_check_requested, target_argument,\n",
         "};",
     );
     assert_eq!(
@@ -3612,7 +3616,7 @@ fn actinglab_record_duration_flag_glue_stays_out_of_main() {
     );
     assert_eq!(
         flag_values.matches("pub(super) ").count(),
-        11,
+        12,
         "flag values module visibility changed"
     );
 
@@ -3680,9 +3684,10 @@ fn actinglab_record_amend_step_id_glue_stays_out_of_main() {
         "use flag_values::{\n",
         "    parse_optional_duration_ms, parse_optional_string_value, ",
         "parse_optional_unit_f64,\n",
-        "    parse_optional_usize, parse_record_duration_ms, record_amend_step_id, ",
-        "required_non_empty_flag,\n",
-        "    session_record_drift_diagnostics_path, split_csv, stream_check_requested, target_argument,\n",
+        "    parse_optional_usize, parse_record_duration_ms, parse_touch_backend_override,\n",
+        "    record_amend_step_id, required_non_empty_flag, ",
+        "session_record_drift_diagnostics_path,\n",
+        "    split_csv, stream_check_requested, target_argument,\n",
         "};",
     );
     let declarations = main
@@ -3724,7 +3729,7 @@ fn actinglab_record_amend_step_id_glue_stays_out_of_main() {
     );
     assert_eq!(
         flag_values.matches("pub(super) ").count(),
-        11,
+        12,
         "flag values module visibility changed"
     );
     for line in flag_values.lines() {
@@ -3809,9 +3814,10 @@ fn actinglab_split_csv_glue_stays_out_of_main() {
         "use flag_values::{\n",
         "    parse_optional_duration_ms, parse_optional_string_value, ",
         "parse_optional_unit_f64,\n",
-        "    parse_optional_usize, parse_record_duration_ms, record_amend_step_id, ",
-        "required_non_empty_flag,\n",
-        "    session_record_drift_diagnostics_path, split_csv, stream_check_requested, target_argument,\n",
+        "    parse_optional_usize, parse_record_duration_ms, parse_touch_backend_override,\n",
+        "    record_amend_step_id, required_non_empty_flag, ",
+        "session_record_drift_diagnostics_path,\n",
+        "    split_csv, stream_check_requested, target_argument,\n",
         "};",
     );
     assert_eq!(
@@ -3834,7 +3840,7 @@ fn actinglab_split_csv_glue_stays_out_of_main() {
     );
     assert_eq!(
         flag_values.matches("pub(super) ").count(),
-        11,
+        12,
         "flag values module visibility changed"
     );
 
@@ -3918,7 +3924,7 @@ fn actinglab_stream_check_requested_glue_stays_out_of_main() {
     );
     assert_eq!(
         flag_values.matches("pub(super) ").count(),
-        11,
+        12,
         "flag values module visibility changed"
     );
 
@@ -4003,7 +4009,7 @@ fn actinglab_target_argument_glue_stays_out_of_main() {
     );
     assert_eq!(
         flag_values.matches("pub(super) ").count(),
-        11,
+        12,
         "flag values module visibility changed"
     );
 
@@ -4119,7 +4125,7 @@ fn actinglab_session_record_drift_diagnostics_path_glue_stays_out_of_main() {
     );
     assert_eq!(
         flag_values.matches("pub(super) ").count(),
-        11,
+        12,
         "flag values module visibility changed"
     );
 
@@ -4137,7 +4143,7 @@ fn actinglab_session_record_drift_diagnostics_path_glue_stays_out_of_main() {
     let caller_serialization = caller_rows.concat();
     assert_eq!(
         format!("{:x}", Sha256::digest(caller_serialization.as_bytes())),
-        "a6bee63b6d7c4b51e9bc5f76522146d474fe8519d6cb0d1874e0dcfe8df30a62",
+        "74cc313d5615bad22280d34e6999f7ac6a76daf6763fcd0fb4d8cfdb4d5a1627",
         "drift-diagnostics path caller serialization changed"
     );
 
@@ -4145,12 +4151,12 @@ fn actinglab_session_record_drift_diagnostics_path_glue_stays_out_of_main() {
         "\n#[rustfmt::skip]\n",
         "pub(super) fn session_record_drift_diagnostics_path("
     );
-    let (_, owner_and_split_csv) = flag_values
+    let (_, owner_and_touch_backend) = flag_values
         .rsplit_once(marker)
         .expect("flag values module lost the appended drift-diagnostics path owner");
-    let (owner_tail, _) = owner_and_split_csv
-        .split_once("pub(super) fn split_csv(")
-        .expect("flag values module lost the following split CSV owner");
+    let (owner_tail, _) = owner_and_touch_backend
+        .split_once("pub(super) fn parse_touch_backend_override(")
+        .expect("flag values module lost the following touch-backend owner");
     let normalized_owner = format!("fn session_record_drift_diagnostics_path({owner_tail}");
     assert_eq!(
         normalized_owner.matches('\n').count(),
@@ -4185,11 +4191,145 @@ fn actinglab_session_record_drift_diagnostics_path_glue_stays_out_of_main() {
         .trim()
         .parse::<usize>()
         .expect("ratchet/main_rs_lines.txt must contain one integer");
-    assert_eq!(ratchet, 20_759, "drift-diagnostics path ratchet changed");
+    assert_eq!(ratchet, 20_746, "drift-diagnostics path ratchet changed");
     assert_eq!(
         main.lines().count(),
         ratchet,
         "drift-diagnostics path move and main.rs ratchet diverged"
+    );
+}
+
+#[test]
+fn actinglab_parse_touch_backend_override_glue_stays_out_of_main() {
+    let root = workspace_root();
+    let main =
+        fs::read_to_string(root.join("apps/actinglab/src/main.rs")).expect("read ActingLab main");
+    let flag_values = fs::read_to_string(root.join("apps/actinglab/src/flag_values.rs"))
+        .expect("read ActingLab flag values module");
+
+    assert_eq!(
+        main.matches("parse_touch_backend_override,").count(),
+        1,
+        "ActingLab main lost the private touch-backend root import"
+    );
+    assert_eq!(
+        flag_values
+            .matches("fn parse_touch_backend_override(")
+            .count(),
+        1,
+        "flag values module lost the one touch-backend definition"
+    );
+    assert_eq!(
+        flag_values
+            .matches("pub(super) fn parse_touch_backend_override(")
+            .count(),
+        1,
+        "touch-backend owner visibility changed"
+    );
+    assert!(
+        !main.contains("fn parse_touch_backend_override("),
+        "ActingLab main regained the touch-backend owner"
+    );
+    assert!(
+        !main.contains("pub use flag_values::"),
+        "flag values owner became a public root re-export"
+    );
+    assert_eq!(
+        flag_values
+            .matches("use super::{CliError, CliOutcome, FlagArgs, TouchBackendChoice};")
+            .count(),
+        1,
+        "touch-backend owner lost its exact private dependency import"
+    );
+    assert_eq!(
+        flag_values.matches("pub(super) ").count(),
+        12,
+        "flag values module visibility changed"
+    );
+
+    const CALL: &str =
+        "if parse_touch_backend_override(&flags)?.is_some() || global.touch_backend.is_some() {";
+    assert_eq!(
+        main.matches(CALL).count(),
+        1,
+        "ActingLab main lost the exact touch-backend caller expression"
+    );
+    let caller_rows = main
+        .lines()
+        .enumerate()
+        .filter(|(_, line)| line.contains("parse_touch_backend_override("))
+        .map(|(index, line)| format!("apps/actinglab/src/main.rs:{}:{}\n", index + 1, line.trim()))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        caller_rows.len(),
+        1,
+        "touch-backend production caller set changed"
+    );
+    let caller_serialization = caller_rows.concat();
+    assert_eq!(
+        format!("{:x}", Sha256::digest(caller_serialization.as_bytes())),
+        "432a91e7711513861cffd674b652d973a9983e872c5d6f0536cb8070483de036",
+        "touch-backend caller serialization changed"
+    );
+
+    let marker = "\npub(super) fn parse_touch_backend_override(";
+    let (_, owner_and_split_csv) = flag_values
+        .rsplit_once(marker)
+        .expect("flag values module lost the appended touch-backend owner");
+    let (owner_tail, _) = owner_and_split_csv
+        .split_once("pub(super) fn split_csv(")
+        .expect("flag values module lost the following split CSV owner");
+    let normalized_owner = format!("fn parse_touch_backend_override({owner_tail}").replace(
+        concat!(
+            "fn parse_touch_backend_override(\n",
+            "    flags: &FlagArgs,\n",
+            ") -> CliOutcome<Option<TouchBackendChoice>> {\n",
+        ),
+        concat!(
+            "fn parse_touch_backend_override(flags: &FlagArgs) ",
+            "-> CliOutcome<Option<TouchBackendChoice>> {\n",
+        ),
+    );
+    assert_eq!(
+        normalized_owner.matches('\n').count(),
+        14,
+        "touch-backend owner LF line count changed"
+    );
+    assert_eq!(
+        normalized_owner.len(),
+        484,
+        "touch-backend owner byte count changed"
+    );
+    assert_eq!(
+        format!("{:x}", Sha256::digest(normalized_owner.as_bytes())),
+        "0d9772f83ec6bbf884476c9532941a33e58af14dfae5a99e34f360eea3a4a226",
+        "touch-backend owner body changed"
+    );
+    for invariant in [
+        ".optional(\"--touch-backend\")",
+        "return Ok(None);",
+        "if value == \"true\"",
+        "--touch-backend expects auto, auto-fastest, maatouch, minitouch, or adb_shell_input",
+        "TouchBackendChoice::parse(&value)",
+        ".map(Some)",
+        ".map_err(|err| CliError::usage(err.to_string()))",
+    ] {
+        assert!(
+            normalized_owner.contains(invariant),
+            "touch-backend invariant changed: {invariant}"
+        );
+    }
+
+    let ratchet = fs::read_to_string(root.join("ratchet/main_rs_lines.txt"))
+        .expect("read ratchet/main_rs_lines.txt")
+        .trim()
+        .parse::<usize>()
+        .expect("ratchet/main_rs_lines.txt must contain one integer");
+    assert_eq!(ratchet, 20_746, "touch-backend ratchet changed");
+    assert_eq!(
+        main.lines().count(),
+        ratchet,
+        "touch-backend move and main.rs ratchet diverged"
     );
 }
 

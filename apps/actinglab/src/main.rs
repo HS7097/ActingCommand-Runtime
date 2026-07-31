@@ -34,8 +34,9 @@ use device_runtime_config::{DeviceRuntimeConfig, device_config, effective_captur
 use flag_args::FlagArgs;
 use flag_values::{
     parse_optional_duration_ms, parse_optional_string_value, parse_optional_unit_f64,
-    parse_optional_usize, parse_record_duration_ms, record_amend_step_id, required_non_empty_flag,
-    session_record_drift_diagnostics_path, split_csv, stream_check_requested, target_argument,
+    parse_optional_usize, parse_record_duration_ms, parse_touch_backend_override,
+    record_amend_step_id, required_non_empty_flag, session_record_drift_diagnostics_path,
+    split_csv, stream_check_requested, target_argument,
 };
 use instance_resolution::{resolve_instance_id, resolve_instance_id_for_flags};
 #[cfg(test)]
@@ -3008,20 +3009,6 @@ fn run_touch_probe(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value>
         "touch_backend_attempts": [],
         "touch_backend_warnings": []
     }))
-}
-
-fn parse_touch_backend_override(flags: &FlagArgs) -> CliOutcome<Option<TouchBackendChoice>> {
-    let Some(value) = flags.optional("--touch-backend") else {
-        return Ok(None);
-    };
-    if value == "true" {
-        return Err(CliError::usage(
-            "--touch-backend expects auto, auto-fastest, maatouch, minitouch, or adb_shell_input",
-        ));
-    }
-    TouchBackendChoice::parse(&value)
-        .map(Some)
-        .map_err(|err| CliError::usage(err.to_string()))
 }
 
 fn run_capture(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {

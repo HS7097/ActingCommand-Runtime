@@ -1,4 +1,4 @@
-use super::{CliError, CliOutcome, FlagArgs};
+use super::{CliError, CliOutcome, FlagArgs, TouchBackendChoice};
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -124,6 +124,22 @@ pub(super) fn session_record_drift_diagnostics_path(flags: &FlagArgs) -> CliOutc
         ));
     }
     Ok(Some(PathBuf::from(value)))
+}
+
+pub(super) fn parse_touch_backend_override(
+    flags: &FlagArgs,
+) -> CliOutcome<Option<TouchBackendChoice>> {
+    let Some(value) = flags.optional("--touch-backend") else {
+        return Ok(None);
+    };
+    if value == "true" {
+        return Err(CliError::usage(
+            "--touch-backend expects auto, auto-fastest, maatouch, minitouch, or adb_shell_input",
+        ));
+    }
+    TouchBackendChoice::parse(&value)
+        .map(Some)
+        .map_err(|err| CliError::usage(err.to_string()))
 }
 
 pub(super) fn split_csv(value: &str) -> Vec<String> {
