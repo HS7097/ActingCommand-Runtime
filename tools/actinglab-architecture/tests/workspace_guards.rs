@@ -3280,7 +3280,7 @@ fn actinglab_flag_values_glue_stays_out_of_main() {
         "use flag_values::{\n",
         "    parse_optional_duration_ms, parse_optional_string_value, ",
         "parse_optional_unit_f64,\n",
-        "    parse_optional_usize, required_non_empty_flag, split_csv,\n",
+        "    parse_optional_usize, parse_record_duration_ms, required_non_empty_flag, split_csv,\n",
         "};",
     );
     let declarations = main
@@ -3401,7 +3401,7 @@ fn actinglab_required_non_empty_flag_glue_stays_out_of_main() {
         "use flag_values::{\n",
         "    parse_optional_duration_ms, parse_optional_string_value, ",
         "parse_optional_unit_f64,\n",
-        "    parse_optional_usize, required_non_empty_flag, split_csv,\n",
+        "    parse_optional_usize, parse_record_duration_ms, required_non_empty_flag, split_csv,\n",
         "};",
     );
     assert_eq!(
@@ -3428,7 +3428,7 @@ fn actinglab_required_non_empty_flag_glue_stays_out_of_main() {
     );
     assert_eq!(
         flag_values.matches("pub(super) ").count(),
-        6,
+        7,
         "flag values module visibility changed"
     );
 
@@ -3487,7 +3487,7 @@ fn actinglab_optional_unit_f64_glue_stays_out_of_main() {
         "use flag_values::{\n",
         "    parse_optional_duration_ms, parse_optional_string_value, ",
         "parse_optional_unit_f64,\n",
-        "    parse_optional_usize, required_non_empty_flag, split_csv,\n",
+        "    parse_optional_usize, parse_record_duration_ms, required_non_empty_flag, split_csv,\n",
         "};",
     );
     assert_eq!(
@@ -3510,7 +3510,7 @@ fn actinglab_optional_unit_f64_glue_stays_out_of_main() {
     );
     assert_eq!(
         flag_values.matches("pub(super) ").count(),
-        6,
+        7,
         "flag values module visibility changed"
     );
 
@@ -3540,12 +3540,12 @@ fn actinglab_optional_unit_f64_glue_stays_out_of_main() {
     );
 
     let marker = "\npub(super) fn parse_optional_unit_f64(";
-    let (_, owner_and_split_csv) = flag_values
+    let (_, owner_and_record_duration) = flag_values
         .rsplit_once(marker)
         .expect("flag values module lost the appended unit-f64 owner");
-    let (owner_tail, _) = owner_and_split_csv
-        .split_once("\npub(super) fn split_csv(")
-        .expect("flag values module lost the following split CSV owner");
+    let (owner_tail, _) = owner_and_record_duration
+        .split_once("\npub(super) fn parse_record_duration_ms(")
+        .expect("flag values module lost the following record-duration owner");
     let normalized_owner = format!("fn parse_optional_unit_f64({owner_tail}");
     assert_eq!(
         normalized_owner.lines().count(),
@@ -3565,6 +3565,100 @@ fn actinglab_optional_unit_f64_glue_stays_out_of_main() {
 }
 
 #[test]
+fn actinglab_record_duration_flag_glue_stays_out_of_main() {
+    let root = workspace_root();
+    let main =
+        fs::read_to_string(root.join("apps/actinglab/src/main.rs")).expect("read ActingLab main");
+    let flag_values = fs::read_to_string(root.join("apps/actinglab/src/flag_values.rs"))
+        .expect("read ActingLab flag values module");
+
+    const ROOT_IMPORT: &str = concat!(
+        "use flag_values::{\n",
+        "    parse_optional_duration_ms, parse_optional_string_value, ",
+        "parse_optional_unit_f64,\n",
+        "    parse_optional_usize, parse_record_duration_ms, required_non_empty_flag, split_csv,\n",
+        "};",
+    );
+    assert_eq!(
+        main.matches(ROOT_IMPORT).count(),
+        1,
+        "ActingLab main lost the exact record-duration root import"
+    );
+    assert_eq!(
+        flag_values.matches("fn parse_record_duration_ms(").count(),
+        1,
+        "flag values module lost the one record-duration definition"
+    );
+    assert!(
+        flag_values.contains("pub(super) fn parse_record_duration_ms("),
+        "record-duration owner visibility changed"
+    );
+    assert!(
+        !main.contains("fn parse_record_duration_ms("),
+        "ActingLab main regained the record-duration owner"
+    );
+    assert!(
+        !main.contains("pub use flag_values::"),
+        "ActingLab main publicly re-exported flag-value glue"
+    );
+    assert_eq!(
+        flag_values.matches("pub(super) ").count(),
+        7,
+        "flag values module visibility changed"
+    );
+
+    const SWIPE_CALL: &str = "duration_ms: parse_record_duration_ms(flags, 500)?,";
+    const LONG_PRESS_CALL: &str = "duration_ms: parse_record_duration_ms(flags, 700)?,";
+    assert_eq!(
+        main.matches("parse_record_duration_ms(").count(),
+        2,
+        "ActingLab main record-duration caller set changed"
+    );
+    assert_eq!(
+        main.matches(SWIPE_CALL).count(),
+        1,
+        "ActingLab main lost the exact swipe/drag duration caller"
+    );
+    assert_eq!(
+        main.matches(LONG_PRESS_CALL).count(),
+        1,
+        "ActingLab main lost the exact long-press/long-tap duration caller"
+    );
+
+    let marker = "\npub(super) fn parse_record_duration_ms(";
+    let (_, owner_and_split_csv) = flag_values
+        .rsplit_once(marker)
+        .expect("flag values module lost the appended record-duration owner");
+    let (owner_tail, _) = owner_and_split_csv
+        .split_once("pub(super) fn split_csv(")
+        .expect("flag values module lost the following split CSV owner");
+    let normalized_owner = format!("fn parse_record_duration_ms({owner_tail}");
+    assert_eq!(
+        normalized_owner.lines().count(),
+        17,
+        "record-duration owner line count changed"
+    );
+    assert_eq!(
+        normalized_owner.len(),
+        557,
+        "record-duration owner byte count changed"
+    );
+    assert_eq!(
+        format!("{:x}", Sha256::digest(normalized_owner.as_bytes())),
+        "629a0606c83110e452458eab128ae1ac5f5531ca519db8b0814fd036447616fe",
+        "record-duration owner body changed"
+    );
+    assert!(
+        normalized_owner.contains("failed to parse --duration-ms '{value}': {err}"),
+        "record-duration parse error text changed"
+    );
+    assert!(
+        normalized_owner.contains("--duration-ms must be positive"),
+        "record-duration zero-value error text changed"
+    );
+}
+
+#[test]
 fn actinglab_split_csv_glue_stays_out_of_main() {
     let root = workspace_root();
     let main =
@@ -3578,7 +3672,7 @@ fn actinglab_split_csv_glue_stays_out_of_main() {
         "use flag_values::{\n",
         "    parse_optional_duration_ms, parse_optional_string_value, ",
         "parse_optional_unit_f64,\n",
-        "    parse_optional_usize, required_non_empty_flag, split_csv,\n",
+        "    parse_optional_usize, parse_record_duration_ms, required_non_empty_flag, split_csv,\n",
         "};",
     );
     assert_eq!(
@@ -3601,7 +3695,7 @@ fn actinglab_split_csv_glue_stays_out_of_main() {
     );
     assert_eq!(
         flag_values.matches("pub(super) ").count(),
-        6,
+        7,
         "flag values module visibility changed"
     );
 

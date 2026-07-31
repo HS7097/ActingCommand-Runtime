@@ -34,7 +34,7 @@ use device_runtime_config::{DeviceRuntimeConfig, device_config, effective_captur
 use flag_args::FlagArgs;
 use flag_values::{
     parse_optional_duration_ms, parse_optional_string_value, parse_optional_unit_f64,
-    parse_optional_usize, required_non_empty_flag, split_csv,
+    parse_optional_usize, parse_record_duration_ms, required_non_empty_flag, split_csv,
 };
 use instance_resolution::{resolve_instance_id, resolve_instance_id_for_flags};
 #[cfg(test)]
@@ -8661,23 +8661,6 @@ fn parse_session_record_rect(value: &str, label: &str) -> CliOutcome<SessionReco
         )));
     }
     Ok(rect)
-}
-
-fn parse_record_duration_ms(flags: &FlagArgs, default_ms: u64) -> CliOutcome<u64> {
-    let duration_ms = flags
-        .optional("--duration-ms")
-        .filter(|value| value != "true")
-        .map(|value| {
-            value.parse::<u64>().map_err(|err| {
-                CliError::usage(format!("failed to parse --duration-ms '{value}': {err}"))
-            })
-        })
-        .transpose()?
-        .unwrap_or(default_ms);
-    if duration_ms == 0 {
-        return Err(CliError::usage("--duration-ms must be positive"));
-    }
-    Ok(duration_ms)
 }
 
 fn session_record_drift_diagnostics_path(flags: &FlagArgs) -> CliOutcome<Option<PathBuf>> {

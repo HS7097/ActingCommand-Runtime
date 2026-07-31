@@ -68,6 +68,23 @@ pub(super) fn parse_optional_unit_f64(flags: &FlagArgs, name: &str) -> CliOutcom
     Ok(Some(parsed))
 }
 
+pub(super) fn parse_record_duration_ms(flags: &FlagArgs, default_ms: u64) -> CliOutcome<u64> {
+    let duration_ms = flags
+        .optional("--duration-ms")
+        .filter(|value| value != "true")
+        .map(|value| {
+            value.parse::<u64>().map_err(|err| {
+                CliError::usage(format!("failed to parse --duration-ms '{value}': {err}"))
+            })
+        })
+        .transpose()?
+        .unwrap_or(default_ms);
+    if duration_ms == 0 {
+        return Err(CliError::usage("--duration-ms must be positive"));
+    }
+    Ok(duration_ms)
+}
+
 pub(super) fn split_csv(value: &str) -> Vec<String> {
     value
         .split(',')
