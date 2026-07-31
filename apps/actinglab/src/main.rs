@@ -34,7 +34,7 @@ use device_runtime_config::{DeviceRuntimeConfig, device_config, effective_captur
 use flag_args::FlagArgs;
 use flag_values::{
     parse_optional_duration_ms, parse_optional_string_value, parse_optional_unit_f64,
-    parse_optional_usize, split_csv,
+    parse_optional_usize, required_non_empty_flag, split_csv,
 };
 use instance_resolution::{resolve_instance_id, resolve_instance_id_for_flags};
 #[cfg(test)]
@@ -8522,14 +8522,6 @@ fn crop_frame_rect(frame: &Frame, rect: &SessionRecordRect) -> CliOutcome<Frame>
         frame.backend_name,
     )
     .map_err(|err| CliError::usage(format!("failed to build record anchor crop frame: {err}")))
-}
-
-fn required_non_empty_flag(flags: &FlagArgs, name: &str) -> CliOutcome<String> {
-    let value = flags.required(name)?;
-    if value.trim().is_empty() {
-        return Err(CliError::usage(format!("{name} must not be empty")));
-    }
-    Ok(value)
 }
 
 fn parse_session_record_region(value: &str) -> CliOutcome<SessionRecordRegion> {

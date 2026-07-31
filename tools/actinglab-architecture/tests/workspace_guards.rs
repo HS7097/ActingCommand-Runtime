@@ -3280,7 +3280,7 @@ fn actinglab_flag_values_glue_stays_out_of_main() {
         "use flag_values::{\n",
         "    parse_optional_duration_ms, parse_optional_string_value, ",
         "parse_optional_unit_f64,\n",
-        "    parse_optional_usize, split_csv,\n",
+        "    parse_optional_usize, required_non_empty_flag, split_csv,\n",
         "};",
     );
     let declarations = main
@@ -3338,8 +3338,8 @@ fn actinglab_flag_values_glue_stays_out_of_main() {
         .strip_prefix(CHILD_IMPORTS)
         .expect("flag values module imports changed");
     let (parser_owner, _) = raw_owner
-        .rsplit_once("\npub(super) fn parse_optional_unit_f64(")
-        .expect("flag values module lost the appended unit-f64 owner");
+        .rsplit_once("\npub(super) fn required_non_empty_flag(")
+        .expect("flag values module lost the appended required-value owner");
     assert_eq!(
         parser_owner.matches("pub(super) ").count(),
         3,
@@ -3390,6 +3390,92 @@ fn actinglab_flag_values_glue_stays_out_of_main() {
 }
 
 #[test]
+fn actinglab_required_non_empty_flag_glue_stays_out_of_main() {
+    let root = workspace_root();
+    let main =
+        fs::read_to_string(root.join("apps/actinglab/src/main.rs")).expect("read ActingLab main");
+    let flag_values = fs::read_to_string(root.join("apps/actinglab/src/flag_values.rs"))
+        .expect("read ActingLab flag values module");
+
+    const ROOT_IMPORT: &str = concat!(
+        "use flag_values::{\n",
+        "    parse_optional_duration_ms, parse_optional_string_value, ",
+        "parse_optional_unit_f64,\n",
+        "    parse_optional_usize, required_non_empty_flag, split_csv,\n",
+        "};",
+    );
+    assert_eq!(
+        main.matches(ROOT_IMPORT).count(),
+        1,
+        "ActingLab main lost the exact required-value root import"
+    );
+    assert_eq!(
+        flag_values.matches("fn required_non_empty_flag(").count(),
+        1,
+        "flag values module lost the one required-value definition"
+    );
+    assert!(
+        flag_values.contains("pub(super) fn required_non_empty_flag("),
+        "required-value owner visibility changed"
+    );
+    assert!(
+        !main.contains("fn required_non_empty_flag("),
+        "ActingLab main regained the required-value owner"
+    );
+    assert!(
+        !main.contains("pub use flag_values::"),
+        "ActingLab main publicly re-exported flag-value glue"
+    );
+    assert_eq!(
+        flag_values.matches("pub(super) ").count(),
+        6,
+        "flag values module visibility changed"
+    );
+
+    const ID_CALL: &str = "let id = required_non_empty_flag(flags, \"--id\")?;";
+    const FROM_CALL: &str = "let from = required_non_empty_flag(flags, \"--from\")?;";
+    assert_eq!(
+        main.matches("required_non_empty_flag(").count(),
+        4,
+        "ActingLab main required-value caller set changed"
+    );
+    assert_eq!(
+        main.matches(ID_CALL).count(),
+        3,
+        "ActingLab main lost an exact --id required-value caller"
+    );
+    assert_eq!(
+        main.matches(FROM_CALL).count(),
+        1,
+        "ActingLab main lost the exact --from required-value caller"
+    );
+
+    let marker = "\npub(super) fn required_non_empty_flag(";
+    let (_, owner_and_unit_f64) = flag_values
+        .rsplit_once(marker)
+        .expect("flag values module lost the appended required-value owner");
+    let (owner_tail, _) = owner_and_unit_f64
+        .split_once("\npub(super) fn parse_optional_unit_f64(")
+        .expect("flag values module lost the following unit-f64 owner");
+    let normalized_owner = format!("fn required_non_empty_flag({owner_tail}");
+    assert_eq!(
+        normalized_owner.lines().count(),
+        7,
+        "required-value owner line count changed"
+    );
+    assert_eq!(
+        normalized_owner.len(),
+        249,
+        "required-value owner byte count changed"
+    );
+    assert_eq!(
+        format!("{:x}", Sha256::digest(normalized_owner.as_bytes())),
+        "0b7facbdfec294aeec998cc3b628950ed082dd36be61ace9703356fb8bb572cd",
+        "required-value owner body changed"
+    );
+}
+
+#[test]
 fn actinglab_optional_unit_f64_glue_stays_out_of_main() {
     let root = workspace_root();
     let main =
@@ -3401,7 +3487,7 @@ fn actinglab_optional_unit_f64_glue_stays_out_of_main() {
         "use flag_values::{\n",
         "    parse_optional_duration_ms, parse_optional_string_value, ",
         "parse_optional_unit_f64,\n",
-        "    parse_optional_usize, split_csv,\n",
+        "    parse_optional_usize, required_non_empty_flag, split_csv,\n",
         "};",
     );
     assert_eq!(
@@ -3424,7 +3510,7 @@ fn actinglab_optional_unit_f64_glue_stays_out_of_main() {
     );
     assert_eq!(
         flag_values.matches("pub(super) ").count(),
-        5,
+        6,
         "flag values module visibility changed"
     );
 
@@ -3492,7 +3578,7 @@ fn actinglab_split_csv_glue_stays_out_of_main() {
         "use flag_values::{\n",
         "    parse_optional_duration_ms, parse_optional_string_value, ",
         "parse_optional_unit_f64,\n",
-        "    parse_optional_usize, split_csv,\n",
+        "    parse_optional_usize, required_non_empty_flag, split_csv,\n",
         "};",
     );
     assert_eq!(
@@ -3515,7 +3601,7 @@ fn actinglab_split_csv_glue_stays_out_of_main() {
     );
     assert_eq!(
         flag_values.matches("pub(super) ").count(),
-        5,
+        6,
         "flag values module visibility changed"
     );
 

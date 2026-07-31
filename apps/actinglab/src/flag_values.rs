@@ -42,6 +42,14 @@ pub(super) fn parse_optional_string_value(
     }
 }
 
+pub(super) fn required_non_empty_flag(flags: &FlagArgs, name: &str) -> CliOutcome<String> {
+    let value = flags.required(name)?;
+    if value.trim().is_empty() {
+        return Err(CliError::usage(format!("{name} must not be empty")));
+    }
+    Ok(value)
+}
+
 pub(super) fn parse_optional_unit_f64(flags: &FlagArgs, name: &str) -> CliOutcome<Option<f64>> {
     let Some(value) = flags.optional(name) else {
         return Ok(None);
