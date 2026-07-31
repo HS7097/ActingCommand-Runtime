@@ -1,4 +1,5 @@
 use super::{CliError, CliOutcome, FlagArgs};
+use std::path::PathBuf;
 use std::time::Duration;
 
 pub(super) fn parse_optional_duration_ms(
@@ -110,6 +111,19 @@ pub(super) fn target_argument(flags: &FlagArgs, command: &str) -> CliOutcome<Str
         .first()
         .cloned()
         .ok_or_else(|| CliError::usage(format!("{command} requires <target> or --target <id>")))
+}
+
+#[rustfmt::skip]
+pub(super) fn session_record_drift_diagnostics_path(flags: &FlagArgs) -> CliOutcome<Option<PathBuf>> {
+    let Some(value) = flags.optional("--from-drift-diagnostics") else {
+        return Ok(None);
+    };
+    if value == "true" {
+        return Err(CliError::usage(
+            "session record amend --from-drift-diagnostics requires <path>",
+        ));
+    }
+    Ok(Some(PathBuf::from(value)))
 }
 
 pub(super) fn split_csv(value: &str) -> Vec<String> {

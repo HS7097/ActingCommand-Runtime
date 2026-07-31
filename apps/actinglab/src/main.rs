@@ -35,7 +35,7 @@ use flag_args::FlagArgs;
 use flag_values::{
     parse_optional_duration_ms, parse_optional_string_value, parse_optional_unit_f64,
     parse_optional_usize, parse_record_duration_ms, record_amend_step_id, required_non_empty_flag,
-    split_csv, stream_check_requested, target_argument,
+    session_record_drift_diagnostics_path, split_csv, stream_check_requested, target_argument,
 };
 use instance_resolution::{resolve_instance_id, resolve_instance_id_for_flags};
 #[cfg(test)]
@@ -8647,18 +8647,6 @@ fn parse_session_record_rect(value: &str, label: &str) -> CliOutcome<SessionReco
         )));
     }
     Ok(rect)
-}
-
-fn session_record_drift_diagnostics_path(flags: &FlagArgs) -> CliOutcome<Option<PathBuf>> {
-    let Some(value) = flags.optional("--from-drift-diagnostics") else {
-        return Ok(None);
-    };
-    if value == "true" {
-        return Err(CliError::usage(
-            "session record amend --from-drift-diagnostics requires <path>",
-        ));
-    }
-    Ok(Some(PathBuf::from(value)))
 }
 
 fn amend_session_record_from_drift_diagnostics(

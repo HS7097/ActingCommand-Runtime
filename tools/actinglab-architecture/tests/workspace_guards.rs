@@ -3282,7 +3282,7 @@ fn actinglab_flag_values_glue_stays_out_of_main() {
         "parse_optional_unit_f64,\n",
         "    parse_optional_usize, parse_record_duration_ms, record_amend_step_id, ",
         "required_non_empty_flag,\n",
-        "    split_csv, stream_check_requested, target_argument,\n",
+        "    session_record_drift_diagnostics_path, split_csv, stream_check_requested, target_argument,\n",
         "};",
     );
     let declarations = main
@@ -3334,6 +3334,7 @@ fn actinglab_flag_values_glue_stays_out_of_main() {
 
     const CHILD_IMPORTS: &str = concat!(
         "use super::{CliError, CliOutcome, FlagArgs};\n",
+        "use std::path::PathBuf;\n",
         "use std::time::Duration;\n\n",
     );
     let raw_owner = flag_values
@@ -3405,7 +3406,7 @@ fn actinglab_required_non_empty_flag_glue_stays_out_of_main() {
         "parse_optional_unit_f64,\n",
         "    parse_optional_usize, parse_record_duration_ms, record_amend_step_id, ",
         "required_non_empty_flag,\n",
-        "    split_csv, stream_check_requested, target_argument,\n",
+        "    session_record_drift_diagnostics_path, split_csv, stream_check_requested, target_argument,\n",
         "};",
     );
     assert_eq!(
@@ -3432,7 +3433,7 @@ fn actinglab_required_non_empty_flag_glue_stays_out_of_main() {
     );
     assert_eq!(
         flag_values.matches("pub(super) ").count(),
-        10,
+        11,
         "flag values module visibility changed"
     );
 
@@ -3493,7 +3494,7 @@ fn actinglab_optional_unit_f64_glue_stays_out_of_main() {
         "parse_optional_unit_f64,\n",
         "    parse_optional_usize, parse_record_duration_ms, record_amend_step_id, ",
         "required_non_empty_flag,\n",
-        "    split_csv, stream_check_requested, target_argument,\n",
+        "    session_record_drift_diagnostics_path, split_csv, stream_check_requested, target_argument,\n",
         "};",
     );
     assert_eq!(
@@ -3516,7 +3517,7 @@ fn actinglab_optional_unit_f64_glue_stays_out_of_main() {
     );
     assert_eq!(
         flag_values.matches("pub(super) ").count(),
-        10,
+        11,
         "flag values module visibility changed"
     );
 
@@ -3584,7 +3585,7 @@ fn actinglab_record_duration_flag_glue_stays_out_of_main() {
         "parse_optional_unit_f64,\n",
         "    parse_optional_usize, parse_record_duration_ms, record_amend_step_id, ",
         "required_non_empty_flag,\n",
-        "    split_csv, stream_check_requested, target_argument,\n",
+        "    session_record_drift_diagnostics_path, split_csv, stream_check_requested, target_argument,\n",
         "};",
     );
     assert_eq!(
@@ -3611,7 +3612,7 @@ fn actinglab_record_duration_flag_glue_stays_out_of_main() {
     );
     assert_eq!(
         flag_values.matches("pub(super) ").count(),
-        10,
+        11,
         "flag values module visibility changed"
     );
 
@@ -3681,7 +3682,7 @@ fn actinglab_record_amend_step_id_glue_stays_out_of_main() {
         "parse_optional_unit_f64,\n",
         "    parse_optional_usize, parse_record_duration_ms, record_amend_step_id, ",
         "required_non_empty_flag,\n",
-        "    split_csv, stream_check_requested, target_argument,\n",
+        "    session_record_drift_diagnostics_path, split_csv, stream_check_requested, target_argument,\n",
         "};",
     );
     let declarations = main
@@ -3723,7 +3724,7 @@ fn actinglab_record_amend_step_id_glue_stays_out_of_main() {
     );
     assert_eq!(
         flag_values.matches("pub(super) ").count(),
-        10,
+        11,
         "flag values module visibility changed"
     );
     for line in flag_values.lines() {
@@ -3810,7 +3811,7 @@ fn actinglab_split_csv_glue_stays_out_of_main() {
         "parse_optional_unit_f64,\n",
         "    parse_optional_usize, parse_record_duration_ms, record_amend_step_id, ",
         "required_non_empty_flag,\n",
-        "    split_csv, stream_check_requested, target_argument,\n",
+        "    session_record_drift_diagnostics_path, split_csv, stream_check_requested, target_argument,\n",
         "};",
     );
     assert_eq!(
@@ -3833,7 +3834,7 @@ fn actinglab_split_csv_glue_stays_out_of_main() {
     );
     assert_eq!(
         flag_values.matches("pub(super) ").count(),
-        10,
+        11,
         "flag values module visibility changed"
     );
 
@@ -3917,7 +3918,7 @@ fn actinglab_stream_check_requested_glue_stays_out_of_main() {
     );
     assert_eq!(
         flag_values.matches("pub(super) ").count(),
-        10,
+        11,
         "flag values module visibility changed"
     );
 
@@ -4002,7 +4003,7 @@ fn actinglab_target_argument_glue_stays_out_of_main() {
     );
     assert_eq!(
         flag_values.matches("pub(super) ").count(),
-        10,
+        11,
         "flag values module visibility changed"
     );
 
@@ -4038,8 +4039,8 @@ fn actinglab_target_argument_glue_stays_out_of_main() {
         .rsplit_once(marker)
         .expect("flag values module lost the appended target-argument owner");
     let (owner_tail, _) = owner_and_split_csv
-        .split_once("pub(super) fn split_csv(")
-        .expect("flag values module lost the following split CSV owner");
+        .split_once("#[rustfmt::skip]\npub(super) fn session_record_drift_diagnostics_path(")
+        .expect("flag values module lost the following drift-diagnostics path owner");
     let normalized_owner = format!("fn target_argument({owner_tail}");
     assert_eq!(
         normalized_owner.matches('\n').count(),
@@ -4070,6 +4071,126 @@ fn actinglab_target_argument_glue_stays_out_of_main() {
             "target-argument invariant changed: {invariant}"
         );
     }
+}
+
+#[test]
+fn actinglab_session_record_drift_diagnostics_path_glue_stays_out_of_main() {
+    let root = workspace_root();
+    let main =
+        fs::read_to_string(root.join("apps/actinglab/src/main.rs")).expect("read ActingLab main");
+    let flag_values = fs::read_to_string(root.join("apps/actinglab/src/flag_values.rs"))
+        .expect("read ActingLab flag values module");
+
+    assert_eq!(
+        main.matches("session_record_drift_diagnostics_path,")
+            .count(),
+        1,
+        "ActingLab main lost the private drift-diagnostics path root import"
+    );
+    assert_eq!(
+        flag_values
+            .matches("fn session_record_drift_diagnostics_path(")
+            .count(),
+        1,
+        "flag values module lost the one drift-diagnostics path definition"
+    );
+    assert_eq!(
+        flag_values
+            .matches(concat!(
+                "#[rustfmt::skip]\n",
+                "pub(super) fn session_record_drift_diagnostics_path("
+            ))
+            .count(),
+        1,
+        "drift-diagnostics path owner lost its exact private visibility or format guard"
+    );
+    assert!(
+        !main.contains("fn session_record_drift_diagnostics_path("),
+        "ActingLab main regained the drift-diagnostics path owner"
+    );
+    assert!(
+        !main.contains("pub use flag_values::"),
+        "flag values owner became a public root re-export"
+    );
+    assert_eq!(
+        flag_values.matches("use std::path::PathBuf;").count(),
+        1,
+        "drift-diagnostics path owner lost its exact PathBuf import"
+    );
+    assert_eq!(
+        flag_values.matches("pub(super) ").count(),
+        11,
+        "flag values module visibility changed"
+    );
+
+    let caller_rows = main
+        .lines()
+        .enumerate()
+        .filter(|(_, line)| line.contains("session_record_drift_diagnostics_path("))
+        .map(|(index, line)| format!("apps/actinglab/src/main.rs:{}:{}\n", index + 1, line.trim()))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        caller_rows.len(),
+        1,
+        "drift-diagnostics path production caller set changed"
+    );
+    let caller_serialization = caller_rows.concat();
+    assert_eq!(
+        format!("{:x}", Sha256::digest(caller_serialization.as_bytes())),
+        "a6bee63b6d7c4b51e9bc5f76522146d474fe8519d6cb0d1874e0dcfe8df30a62",
+        "drift-diagnostics path caller serialization changed"
+    );
+
+    let marker = concat!(
+        "\n#[rustfmt::skip]\n",
+        "pub(super) fn session_record_drift_diagnostics_path("
+    );
+    let (_, owner_and_split_csv) = flag_values
+        .rsplit_once(marker)
+        .expect("flag values module lost the appended drift-diagnostics path owner");
+    let (owner_tail, _) = owner_and_split_csv
+        .split_once("pub(super) fn split_csv(")
+        .expect("flag values module lost the following split CSV owner");
+    let normalized_owner = format!("fn session_record_drift_diagnostics_path({owner_tail}");
+    assert_eq!(
+        normalized_owner.matches('\n').count(),
+        12,
+        "drift-diagnostics path owner LF line count changed"
+    );
+    assert_eq!(
+        normalized_owner.len(),
+        390,
+        "drift-diagnostics path owner byte count changed"
+    );
+    assert_eq!(
+        format!("{:x}", Sha256::digest(normalized_owner.as_bytes())),
+        "1e969a434fe92b75824078b03b5facd48d2de473455fefc2015cd94bc2add7b0",
+        "drift-diagnostics path owner body changed"
+    );
+    for invariant in [
+        ".optional(\"--from-drift-diagnostics\")",
+        "return Ok(None);",
+        "if value == \"true\"",
+        "session record amend --from-drift-diagnostics requires <path>",
+        "Ok(Some(PathBuf::from(value)))",
+    ] {
+        assert!(
+            normalized_owner.contains(invariant),
+            "drift-diagnostics path invariant changed: {invariant}"
+        );
+    }
+
+    let ratchet = fs::read_to_string(root.join("ratchet/main_rs_lines.txt"))
+        .expect("read ratchet/main_rs_lines.txt")
+        .trim()
+        .parse::<usize>()
+        .expect("ratchet/main_rs_lines.txt must contain one integer");
+    assert_eq!(ratchet, 20_759, "drift-diagnostics path ratchet changed");
+    assert_eq!(
+        main.lines().count(),
+        ratchet,
+        "drift-diagnostics path move and main.rs ratchet diverged"
+    );
 }
 
 #[test]
