@@ -33,7 +33,8 @@ use cli_result::CliResult;
 use device_runtime_config::{DeviceRuntimeConfig, device_config, effective_capture_backend_choice};
 use flag_args::FlagArgs;
 use flag_values::{
-    parse_optional_duration_ms, parse_optional_string_value, parse_optional_usize, split_csv,
+    parse_optional_duration_ms, parse_optional_string_value, parse_optional_unit_f64,
+    parse_optional_usize, split_csv,
 };
 use instance_resolution::{resolve_instance_id, resolve_instance_id_for_flags};
 #[cfg(test)]
@@ -8561,24 +8562,6 @@ fn parse_session_record_region(value: &str) -> CliOutcome<SessionRecordRegion> {
         ));
     }
     Ok(SessionRecordRegion::Rect { rect })
-}
-
-fn parse_optional_unit_f64(flags: &FlagArgs, name: &str) -> CliOutcome<Option<f64>> {
-    let Some(value) = flags.optional(name) else {
-        return Ok(None);
-    };
-    if value == "true" {
-        return Err(CliError::usage(format!("missing {name} <value>")));
-    };
-    let parsed = value
-        .parse::<f64>()
-        .map_err(|err| CliError::usage(format!("failed to parse {name} '{value}': {err}")))?;
-    if !parsed.is_finite() || !(0.0..=1.0).contains(&parsed) {
-        return Err(CliError::usage(format!(
-            "{name} must be a finite number between 0 and 1"
-        )));
-    }
-    Ok(Some(parsed))
 }
 
 fn parse_session_record_operation_click(flags: &FlagArgs) -> CliOutcome<SessionRecordClick> {

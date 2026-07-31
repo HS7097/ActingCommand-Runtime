@@ -42,6 +42,24 @@ pub(super) fn parse_optional_string_value(
     }
 }
 
+pub(super) fn parse_optional_unit_f64(flags: &FlagArgs, name: &str) -> CliOutcome<Option<f64>> {
+    let Some(value) = flags.optional(name) else {
+        return Ok(None);
+    };
+    if value == "true" {
+        return Err(CliError::usage(format!("missing {name} <value>")));
+    };
+    let parsed = value
+        .parse::<f64>()
+        .map_err(|err| CliError::usage(format!("failed to parse {name} '{value}': {err}")))?;
+    if !parsed.is_finite() || !(0.0..=1.0).contains(&parsed) {
+        return Err(CliError::usage(format!(
+            "{name} must be a finite number between 0 and 1"
+        )));
+    }
+    Ok(Some(parsed))
+}
+
 pub(super) fn split_csv(value: &str) -> Vec<String> {
     value
         .split(',')

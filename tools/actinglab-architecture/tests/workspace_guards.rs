@@ -3279,7 +3279,8 @@ fn actinglab_flag_values_glue_stays_out_of_main() {
     const ROOT_IMPORT: &str = concat!(
         "use flag_values::{\n",
         "    parse_optional_duration_ms, parse_optional_string_value, ",
-        "parse_optional_usize, split_csv,\n",
+        "parse_optional_unit_f64,\n",
+        "    parse_optional_usize, split_csv,\n",
         "};",
     );
     let declarations = main
@@ -3337,8 +3338,8 @@ fn actinglab_flag_values_glue_stays_out_of_main() {
         .strip_prefix(CHILD_IMPORTS)
         .expect("flag values module imports changed");
     let (parser_owner, _) = raw_owner
-        .rsplit_once("\npub(super) fn split_csv(")
-        .expect("flag values module lost the appended split CSV owner");
+        .rsplit_once("\npub(super) fn parse_optional_unit_f64(")
+        .expect("flag values module lost the appended unit-f64 owner");
     assert_eq!(
         parser_owner.matches("pub(super) ").count(),
         3,
@@ -3389,6 +3390,95 @@ fn actinglab_flag_values_glue_stays_out_of_main() {
 }
 
 #[test]
+fn actinglab_optional_unit_f64_glue_stays_out_of_main() {
+    let root = workspace_root();
+    let main =
+        fs::read_to_string(root.join("apps/actinglab/src/main.rs")).expect("read ActingLab main");
+    let flag_values = fs::read_to_string(root.join("apps/actinglab/src/flag_values.rs"))
+        .expect("read ActingLab flag values module");
+
+    const ROOT_IMPORT: &str = concat!(
+        "use flag_values::{\n",
+        "    parse_optional_duration_ms, parse_optional_string_value, ",
+        "parse_optional_unit_f64,\n",
+        "    parse_optional_usize, split_csv,\n",
+        "};",
+    );
+    assert_eq!(
+        main.matches(ROOT_IMPORT).count(),
+        1,
+        "ActingLab main lost the exact unit-f64 root import"
+    );
+    assert_eq!(
+        flag_values.matches("fn parse_optional_unit_f64(").count(),
+        1,
+        "flag values module lost the one unit-f64 definition"
+    );
+    assert!(
+        flag_values.contains("pub(super) fn parse_optional_unit_f64("),
+        "unit-f64 owner visibility changed"
+    );
+    assert!(
+        !main.contains("fn parse_optional_unit_f64("),
+        "ActingLab main regained the unit-f64 owner"
+    );
+    assert_eq!(
+        flag_values.matches("pub(super) ").count(),
+        5,
+        "flag values module visibility changed"
+    );
+
+    const DEFAULT_CALL: &str = "\"template_threshold\": parse_optional_unit_f64(flags, \"--default-threshold\")?.unwrap_or(0.95),";
+    const NEW_STEP_CALL: &str = "let threshold = parse_optional_unit_f64(flags, \"--threshold\")?;";
+    const AMEND_CALL: &str =
+        "*target.threshold = parse_optional_unit_f64(flags, \"--threshold\")?;";
+    assert_eq!(
+        main.matches("parse_optional_unit_f64(").count(),
+        5,
+        "ActingLab main unit-f64 caller set changed"
+    );
+    assert_eq!(
+        main.matches(DEFAULT_CALL).count(),
+        1,
+        "ActingLab main lost the exact default-threshold caller"
+    );
+    assert_eq!(
+        main.matches(NEW_STEP_CALL).count(),
+        2,
+        "ActingLab main lost an exact new-step threshold caller"
+    );
+    assert_eq!(
+        main.matches(AMEND_CALL).count(),
+        2,
+        "ActingLab main lost an exact amend threshold caller"
+    );
+
+    let marker = "\npub(super) fn parse_optional_unit_f64(";
+    let (_, owner_and_split_csv) = flag_values
+        .rsplit_once(marker)
+        .expect("flag values module lost the appended unit-f64 owner");
+    let (owner_tail, _) = owner_and_split_csv
+        .split_once("\npub(super) fn split_csv(")
+        .expect("flag values module lost the following split CSV owner");
+    let normalized_owner = format!("fn parse_optional_unit_f64({owner_tail}");
+    assert_eq!(
+        normalized_owner.lines().count(),
+        17,
+        "unit-f64 owner line count changed"
+    );
+    assert_eq!(
+        normalized_owner.len(),
+        623,
+        "unit-f64 owner byte count changed"
+    );
+    assert_eq!(
+        format!("{:x}", Sha256::digest(normalized_owner.as_bytes())),
+        "ce0a6e73bf99c9b59f12410e320d77f65408b7686af02a5dff09bacc194af261",
+        "unit-f64 owner body changed"
+    );
+}
+
+#[test]
 fn actinglab_split_csv_glue_stays_out_of_main() {
     let root = workspace_root();
     let main =
@@ -3401,7 +3491,8 @@ fn actinglab_split_csv_glue_stays_out_of_main() {
     const ROOT_IMPORT: &str = concat!(
         "use flag_values::{\n",
         "    parse_optional_duration_ms, parse_optional_string_value, ",
-        "parse_optional_usize, split_csv,\n",
+        "parse_optional_unit_f64,\n",
+        "    parse_optional_usize, split_csv,\n",
         "};",
     );
     assert_eq!(
@@ -3424,7 +3515,7 @@ fn actinglab_split_csv_glue_stays_out_of_main() {
     );
     assert_eq!(
         flag_values.matches("pub(super) ").count(),
-        4,
+        5,
         "flag values module visibility changed"
     );
 
