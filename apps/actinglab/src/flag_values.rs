@@ -41,3 +41,12 @@ pub(super) fn parse_optional_string_value(
         Some(value) => Ok(Some(value)),
     }
 }
+
+pub(super) fn split_csv(value: &str) -> Vec<String> {
+    value
+        .split(',')
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+        .collect()
+}

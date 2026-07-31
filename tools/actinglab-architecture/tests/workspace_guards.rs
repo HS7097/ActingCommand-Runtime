@@ -3276,7 +3276,12 @@ fn actinglab_flag_values_glue_stays_out_of_main() {
         .expect("read ActingLab flag values module");
 
     const ROOT_DECLARATION: &str = "mod flag_values;";
-    const ROOT_IMPORT: &str = "use flag_values::{parse_optional_duration_ms, parse_optional_string_value, parse_optional_usize};";
+    const ROOT_IMPORT: &str = concat!(
+        "use flag_values::{\n",
+        "    parse_optional_duration_ms, parse_optional_string_value, ",
+        "parse_optional_usize, split_csv,\n",
+        "};",
+    );
     let declarations = main
         .lines()
         .filter(|line| line.contains("mod flag_values;"))
@@ -3291,9 +3296,14 @@ fn actinglab_flag_values_glue_stays_out_of_main() {
         "ActingLab main lost the one private flag values module declaration"
     );
     assert_eq!(
-        imports,
-        vec![ROOT_IMPORT],
-        "ActingLab main lost the one private flag values import"
+        imports.len(),
+        1,
+        "ActingLab main gained another flag values import"
+    );
+    assert_eq!(
+        main.matches(ROOT_IMPORT).count(),
+        1,
+        "ActingLab main lost the exact private flag values import"
     );
 
     for definition in [
@@ -3311,11 +3321,6 @@ fn actinglab_flag_values_glue_stays_out_of_main() {
         );
     }
 
-    assert_eq!(
-        flag_values.matches("pub(super) ").count(),
-        3,
-        "flag values owner visibility changed"
-    );
     for line in flag_values.lines() {
         let trimmed = line.trim_start();
         assert!(
@@ -3331,7 +3336,15 @@ fn actinglab_flag_values_glue_stays_out_of_main() {
     let raw_owner = flag_values
         .strip_prefix(CHILD_IMPORTS)
         .expect("flag values module imports changed");
-    let normalized_owner = raw_owner
+    let (parser_owner, _) = raw_owner
+        .rsplit_once("\npub(super) fn split_csv(")
+        .expect("flag values module lost the appended split CSV owner");
+    assert_eq!(
+        parser_owner.matches("pub(super) ").count(),
+        3,
+        "flag values parser-trio visibility changed"
+    );
+    let normalized_owner = parser_owner
         .replacen("pub(super) ", "", 3)
         .replace(
             concat!(
@@ -3372,6 +3385,91 @@ fn actinglab_flag_values_glue_stays_out_of_main() {
         format!("{:x}", Sha256::digest(normalized_owner.as_bytes())),
         "bf4488b5477458012436cbf5f8e8258bebeb01a184c311b9bfa6413680c6284c",
         "flag values owner body changed"
+    );
+}
+
+#[test]
+fn actinglab_split_csv_glue_stays_out_of_main() {
+    let root = workspace_root();
+    let main =
+        fs::read_to_string(root.join("apps/actinglab/src/main.rs")).expect("read ActingLab main");
+    let lab2 = fs::read_to_string(root.join("apps/actinglab/src/lab2_cli.rs"))
+        .expect("read ActingLab lab2 CLI");
+    let flag_values = fs::read_to_string(root.join("apps/actinglab/src/flag_values.rs"))
+        .expect("read ActingLab flag values module");
+
+    const ROOT_IMPORT: &str = concat!(
+        "use flag_values::{\n",
+        "    parse_optional_duration_ms, parse_optional_string_value, ",
+        "parse_optional_usize, split_csv,\n",
+        "};",
+    );
+    assert_eq!(
+        main.matches(ROOT_IMPORT).count(),
+        1,
+        "ActingLab main lost the exact split CSV root import"
+    );
+    assert_eq!(
+        flag_values.matches("fn split_csv(").count(),
+        1,
+        "flag values module lost the one split CSV definition"
+    );
+    assert!(
+        flag_values.contains("pub(super) fn split_csv("),
+        "split CSV owner visibility changed"
+    );
+    assert!(
+        !main.contains("fn split_csv("),
+        "ActingLab main regained the split CSV owner"
+    );
+    assert_eq!(
+        flag_values.matches("pub(super) ").count(),
+        4,
+        "flag values module visibility changed"
+    );
+
+    const MAIN_CALL: &str =
+        "global.instances = Some(split_csv(&require_raw(&raw, index, \"--instances\")?));";
+    const TARGETS_CALL: &str = ".flat_map(|value| split_csv(&value))";
+    assert_eq!(
+        main.matches("split_csv(").count(),
+        1,
+        "ActingLab main split CSV caller set changed"
+    );
+    assert!(
+        main.contains(MAIN_CALL),
+        "ActingLab main lost the exact --instances split CSV caller"
+    );
+    assert_eq!(
+        lab2.matches("split_csv(").count(),
+        2,
+        "ActingLab lab2 split CSV caller set changed"
+    );
+    assert_eq!(
+        lab2.matches(TARGETS_CALL).count(),
+        2,
+        "ActingLab lab2 lost the exact targets/fields split CSV callers"
+    );
+
+    let marker = "\npub(super) fn split_csv(";
+    let (_, owner_tail) = flag_values
+        .rsplit_once(marker)
+        .expect("flag values module lost the appended split CSV owner");
+    let normalized_owner = format!("fn split_csv({owner_tail}");
+    assert_eq!(
+        normalized_owner.lines().count(),
+        8,
+        "split CSV owner line count changed"
+    );
+    assert_eq!(
+        normalized_owner.len(),
+        193,
+        "split CSV owner byte count changed"
+    );
+    assert_eq!(
+        format!("{:x}", Sha256::digest(normalized_owner.as_bytes())),
+        "edc4c9a543d64723f7428067ad6e63668d51c50e882b90f135599fe5ee9a5f1a",
+        "split CSV owner body changed"
     );
 }
 

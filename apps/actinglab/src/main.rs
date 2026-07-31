@@ -32,7 +32,9 @@ use cli_result::CliErrorExitCode;
 use cli_result::CliResult;
 use device_runtime_config::{DeviceRuntimeConfig, device_config, effective_capture_backend_choice};
 use flag_args::FlagArgs;
-use flag_values::{parse_optional_duration_ms, parse_optional_string_value, parse_optional_usize};
+use flag_values::{
+    parse_optional_duration_ms, parse_optional_string_value, parse_optional_usize, split_csv,
+};
 use instance_resolution::{resolve_instance_id, resolve_instance_id_for_flags};
 #[cfg(test)]
 use runtime_endpoint::RuntimeEndpointChannel;
@@ -11178,15 +11180,6 @@ fn exit_code_table() -> Value {
         {"exit_code": 5, "meaning": "runtime_not_running"},
         {"exit_code": 6, "meaning": "not_implemented_or_scheduler_not_available"}
     ])
-}
-
-fn split_csv(value: &str) -> Vec<String> {
-    value
-        .split(',')
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(ToOwned::to_owned)
-        .collect()
 }
 
 fn path_string(path: &Path) -> String {
