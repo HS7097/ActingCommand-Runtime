@@ -2667,9 +2667,10 @@ fn actinglab_instance_resolution_root_wiring_is_frozen(main: &str) -> bool {
 
     let (index, declaration) = declarations[0];
     declaration == DECLARATION
-        && index > 0
+        && index > 1
         && index + 1 < lines.len()
-        && lines[index - 1] == "mod flag_args;"
+        && lines[index - 2] == "mod flag_args;"
+        && lines[index - 1] == "mod flag_values;"
         && lines[index + 1] == "mod lab2_cli;"
 }
 
@@ -2687,8 +2688,12 @@ fn actinglab_instance_resolution_glue_stays_out_of_main() {
         "ActingLab main lost the exact private instance resolution module placement"
     );
     let declaration = "#[rustfmt::skip] mod instance_resolution;";
-    let frozen_placement =
-        "mod flag_args;\n#[rustfmt::skip] mod instance_resolution;\nmod lab2_cli;";
+    let frozen_placement = concat!(
+        "mod flag_args;\n",
+        "mod flag_values;\n",
+        "#[rustfmt::skip] mod instance_resolution;\n",
+        "mod lab2_cli;",
+    );
     let counterexamples = [
         (
             "plain pub declaration",
@@ -2719,7 +2724,12 @@ fn actinglab_instance_resolution_glue_stays_out_of_main() {
             "moved declaration",
             main.replacen(
                 frozen_placement,
-                "mod flag_args;\nmod lab2_cli;\n#[rustfmt::skip] mod instance_resolution;",
+                concat!(
+                    "mod flag_args;\n",
+                    "mod flag_values;\n",
+                    "mod lab2_cli;\n",
+                    "#[rustfmt::skip] mod instance_resolution;",
+                ),
                 1,
             ),
         ),
@@ -3254,6 +3264,114 @@ fn actinglab_state_roots_glue_stays_out_of_main() {
         format!("{:x}", Sha256::digest(normalized_owner.as_bytes())),
         "eb07db2e6e1f6cc8384ccf06dad1a45e5b887f425ab0d50d670612c247534783",
         "state roots owner body changed"
+    );
+}
+
+#[test]
+fn actinglab_flag_values_glue_stays_out_of_main() {
+    let root = workspace_root();
+    let main =
+        fs::read_to_string(root.join("apps/actinglab/src/main.rs")).expect("read ActingLab main");
+    let flag_values = fs::read_to_string(root.join("apps/actinglab/src/flag_values.rs"))
+        .expect("read ActingLab flag values module");
+
+    const ROOT_DECLARATION: &str = "mod flag_values;";
+    const ROOT_IMPORT: &str = "use flag_values::{parse_optional_duration_ms, parse_optional_string_value, parse_optional_usize};";
+    let declarations = main
+        .lines()
+        .filter(|line| line.contains("mod flag_values;"))
+        .collect::<Vec<_>>();
+    let imports = main
+        .lines()
+        .filter(|line| line.contains("flag_values::"))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        declarations,
+        vec![ROOT_DECLARATION],
+        "ActingLab main lost the one private flag values module declaration"
+    );
+    assert_eq!(
+        imports,
+        vec![ROOT_IMPORT],
+        "ActingLab main lost the one private flag values import"
+    );
+
+    for definition in [
+        "fn parse_optional_duration_ms(",
+        "fn parse_optional_usize(",
+        "fn parse_optional_string_value(",
+    ] {
+        assert!(
+            flag_values.contains(definition),
+            "flag values module lost owner definition {definition}"
+        );
+        assert!(
+            !main.contains(definition),
+            "ActingLab main regained flag values owner definition {definition}"
+        );
+    }
+
+    assert_eq!(
+        flag_values.matches("pub(super) ").count(),
+        3,
+        "flag values owner visibility changed"
+    );
+    for line in flag_values.lines() {
+        let trimmed = line.trim_start();
+        assert!(
+            !trimmed.starts_with("pub ") && !trimmed.starts_with("pub(crate) "),
+            "flag values owner exposed broader visibility: {line}"
+        );
+    }
+
+    const CHILD_IMPORTS: &str = concat!(
+        "use super::{CliError, CliOutcome, FlagArgs};\n",
+        "use std::time::Duration;\n\n",
+    );
+    let raw_owner = flag_values
+        .strip_prefix(CHILD_IMPORTS)
+        .expect("flag values module imports changed");
+    let normalized_owner = raw_owner
+        .replacen("pub(super) ", "", 3)
+        .replace(
+            concat!(
+                "fn parse_optional_usize(\n",
+                "    flags: &FlagArgs,\n",
+                "    name: &str,\n",
+                "    default_value: usize,\n",
+                ") -> CliOutcome<usize> {\n",
+            ),
+            concat!(
+                "fn parse_optional_usize(flags: &FlagArgs, name: &str, ",
+                "default_value: usize) -> CliOutcome<usize> {\n",
+            ),
+        )
+        .replace(
+            concat!(
+                "fn parse_optional_string_value(\n",
+                "    flags: &FlagArgs,\n",
+                "    name: &str,\n",
+                ") -> CliOutcome<Option<String>> {\n",
+            ),
+            concat!(
+                "fn parse_optional_string_value(flags: &FlagArgs, name: &str) ",
+                "-> CliOutcome<Option<String>> {\n",
+            ),
+        );
+    assert_eq!(
+        normalized_owner.lines().count(),
+        33,
+        "flag values owner line count changed"
+    );
+    assert_eq!(
+        normalized_owner.len(),
+        1_219,
+        "flag values owner byte count changed"
+    );
+    assert_eq!(
+        format!("{:x}", Sha256::digest(normalized_owner.as_bytes())),
+        "bf4488b5477458012436cbf5f8e8258bebeb01a184c311b9bfa6413680c6284c",
+        "flag values owner body changed"
     );
 }
 
