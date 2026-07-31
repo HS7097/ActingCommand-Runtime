@@ -101,6 +101,17 @@ pub(super) fn stream_check_requested(flags: &FlagArgs) -> bool {
     flags.positionals.first().map(String::as_str) == Some("check")
 }
 
+pub(super) fn target_argument(flags: &FlagArgs, command: &str) -> CliOutcome<String> {
+    if let Some(target) = flags.optional("--target").filter(|value| value != "true") {
+        return Ok(target);
+    }
+    flags
+        .positionals
+        .first()
+        .cloned()
+        .ok_or_else(|| CliError::usage(format!("{command} requires <target> or --target <id>")))
+}
+
 pub(super) fn split_csv(value: &str) -> Vec<String> {
     value
         .split(',')

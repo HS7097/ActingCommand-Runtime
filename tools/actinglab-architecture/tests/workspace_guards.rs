@@ -3282,7 +3282,7 @@ fn actinglab_flag_values_glue_stays_out_of_main() {
         "parse_optional_unit_f64,\n",
         "    parse_optional_usize, parse_record_duration_ms, record_amend_step_id, ",
         "required_non_empty_flag,\n",
-        "    split_csv, stream_check_requested,\n",
+        "    split_csv, stream_check_requested, target_argument,\n",
         "};",
     );
     let declarations = main
@@ -3405,7 +3405,7 @@ fn actinglab_required_non_empty_flag_glue_stays_out_of_main() {
         "parse_optional_unit_f64,\n",
         "    parse_optional_usize, parse_record_duration_ms, record_amend_step_id, ",
         "required_non_empty_flag,\n",
-        "    split_csv, stream_check_requested,\n",
+        "    split_csv, stream_check_requested, target_argument,\n",
         "};",
     );
     assert_eq!(
@@ -3432,7 +3432,7 @@ fn actinglab_required_non_empty_flag_glue_stays_out_of_main() {
     );
     assert_eq!(
         flag_values.matches("pub(super) ").count(),
-        9,
+        10,
         "flag values module visibility changed"
     );
 
@@ -3493,7 +3493,7 @@ fn actinglab_optional_unit_f64_glue_stays_out_of_main() {
         "parse_optional_unit_f64,\n",
         "    parse_optional_usize, parse_record_duration_ms, record_amend_step_id, ",
         "required_non_empty_flag,\n",
-        "    split_csv, stream_check_requested,\n",
+        "    split_csv, stream_check_requested, target_argument,\n",
         "};",
     );
     assert_eq!(
@@ -3516,7 +3516,7 @@ fn actinglab_optional_unit_f64_glue_stays_out_of_main() {
     );
     assert_eq!(
         flag_values.matches("pub(super) ").count(),
-        9,
+        10,
         "flag values module visibility changed"
     );
 
@@ -3584,7 +3584,7 @@ fn actinglab_record_duration_flag_glue_stays_out_of_main() {
         "parse_optional_unit_f64,\n",
         "    parse_optional_usize, parse_record_duration_ms, record_amend_step_id, ",
         "required_non_empty_flag,\n",
-        "    split_csv, stream_check_requested,\n",
+        "    split_csv, stream_check_requested, target_argument,\n",
         "};",
     );
     assert_eq!(
@@ -3611,7 +3611,7 @@ fn actinglab_record_duration_flag_glue_stays_out_of_main() {
     );
     assert_eq!(
         flag_values.matches("pub(super) ").count(),
-        9,
+        10,
         "flag values module visibility changed"
     );
 
@@ -3681,7 +3681,7 @@ fn actinglab_record_amend_step_id_glue_stays_out_of_main() {
         "parse_optional_unit_f64,\n",
         "    parse_optional_usize, parse_record_duration_ms, record_amend_step_id, ",
         "required_non_empty_flag,\n",
-        "    split_csv, stream_check_requested,\n",
+        "    split_csv, stream_check_requested, target_argument,\n",
         "};",
     );
     let declarations = main
@@ -3723,7 +3723,7 @@ fn actinglab_record_amend_step_id_glue_stays_out_of_main() {
     );
     assert_eq!(
         flag_values.matches("pub(super) ").count(),
-        9,
+        10,
         "flag values module visibility changed"
     );
     for line in flag_values.lines() {
@@ -3810,7 +3810,7 @@ fn actinglab_split_csv_glue_stays_out_of_main() {
         "parse_optional_unit_f64,\n",
         "    parse_optional_usize, parse_record_duration_ms, record_amend_step_id, ",
         "required_non_empty_flag,\n",
-        "    split_csv, stream_check_requested,\n",
+        "    split_csv, stream_check_requested, target_argument,\n",
         "};",
     );
     assert_eq!(
@@ -3833,7 +3833,7 @@ fn actinglab_split_csv_glue_stays_out_of_main() {
     );
     assert_eq!(
         flag_values.matches("pub(super) ").count(),
-        9,
+        10,
         "flag values module visibility changed"
     );
 
@@ -3917,7 +3917,7 @@ fn actinglab_stream_check_requested_glue_stays_out_of_main() {
     );
     assert_eq!(
         flag_values.matches("pub(super) ").count(),
-        9,
+        10,
         "flag values module visibility changed"
     );
 
@@ -3940,12 +3940,12 @@ fn actinglab_stream_check_requested_glue_stays_out_of_main() {
     );
 
     let marker = "\npub(super) fn stream_check_requested(";
-    let (_, owner_and_split_csv) = flag_values
+    let (_, owner_and_target_argument) = flag_values
         .rsplit_once(marker)
         .expect("flag values module lost the appended stream-check owner");
-    let (owner_tail, _) = owner_and_split_csv
-        .split_once("pub(super) fn split_csv(")
-        .expect("flag values module lost the following split CSV owner");
+    let (owner_tail, _) = owner_and_target_argument
+        .split_once("pub(super) fn target_argument(")
+        .expect("flag values module lost the following target-argument owner");
     let normalized_owner = format!("fn stream_check_requested({owner_tail}");
     assert_eq!(
         normalized_owner.matches('\n').count(),
@@ -3962,6 +3962,114 @@ fn actinglab_stream_check_requested_glue_stays_out_of_main() {
         "01a8a647eca7a375059814b233c5825df9dbcfcd16213d270c6762ef62cd7684",
         "stream-check owner body changed"
     );
+}
+
+#[test]
+fn actinglab_target_argument_glue_stays_out_of_main() {
+    let root = workspace_root();
+    let main =
+        fs::read_to_string(root.join("apps/actinglab/src/main.rs")).expect("read ActingLab main");
+    let flag_values = fs::read_to_string(root.join("apps/actinglab/src/flag_values.rs"))
+        .expect("read ActingLab flag values module");
+    let drive_cli = fs::read_to_string(root.join("apps/actinglab/src/drive_cli.rs"))
+        .expect("read ActingLab drive CLI");
+    let lab2_cli = fs::read_to_string(root.join("apps/actinglab/src/lab2_cli.rs"))
+        .expect("read ActingLab lab2 CLI");
+    let readonly_cli = fs::read_to_string(root.join("apps/actinglab/src/readonly_cli.rs"))
+        .expect("read ActingLab readonly CLI");
+
+    assert_eq!(
+        main.matches("target_argument,").count(),
+        1,
+        "ActingLab main lost the private target-argument root import"
+    );
+    assert_eq!(
+        flag_values.matches("fn target_argument(").count(),
+        1,
+        "flag values module lost the one target-argument definition"
+    );
+    assert!(
+        flag_values.contains("pub(super) fn target_argument("),
+        "target-argument owner visibility changed"
+    );
+    assert!(
+        !main.contains("fn target_argument("),
+        "ActingLab main regained the target-argument owner"
+    );
+    assert!(
+        !main.contains("pub use flag_values::"),
+        "flag values owner became a public root re-export"
+    );
+    assert_eq!(
+        flag_values.matches("pub(super) ").count(),
+        10,
+        "flag values module visibility changed"
+    );
+
+    let mut caller_rows = Vec::new();
+    for (path, source) in [
+        ("apps/actinglab/src/drive_cli.rs", drive_cli.as_str()),
+        ("apps/actinglab/src/lab2_cli.rs", lab2_cli.as_str()),
+        ("apps/actinglab/src/readonly_cli.rs", readonly_cli.as_str()),
+    ] {
+        caller_rows.extend(
+            source
+                .lines()
+                .enumerate()
+                .filter(|(_, line)| line.contains("target_argument("))
+                .map(|(index, line)| format!("{path}:{}:{}\n", index + 1, line.trim())),
+        );
+    }
+    caller_rows.sort();
+    assert_eq!(
+        caller_rows.len(),
+        3,
+        "target-argument production caller set changed"
+    );
+    let caller_serialization = caller_rows.concat();
+    assert_eq!(
+        format!("{:x}", Sha256::digest(caller_serialization.as_bytes())),
+        "3ede13a2fd78b57945a62411e14898882a7cf6e22d5a59f157e50d82af2fa90d",
+        "target-argument caller serialization changed"
+    );
+
+    let marker = "\npub(super) fn target_argument(";
+    let (_, owner_and_split_csv) = flag_values
+        .rsplit_once(marker)
+        .expect("flag values module lost the appended target-argument owner");
+    let (owner_tail, _) = owner_and_split_csv
+        .split_once("pub(super) fn split_csv(")
+        .expect("flag values module lost the following split CSV owner");
+    let normalized_owner = format!("fn target_argument({owner_tail}");
+    assert_eq!(
+        normalized_owner.matches('\n').count(),
+        11,
+        "target-argument owner LF line count changed"
+    );
+    assert_eq!(
+        normalized_owner.len(),
+        362,
+        "target-argument owner byte count changed"
+    );
+    assert_eq!(
+        format!("{:x}", Sha256::digest(normalized_owner.as_bytes())),
+        "3fcd7683f2b4bdf9b74b85170ddd335d7616b040e47b0228685b9ba50e40a6d8",
+        "target-argument owner body changed"
+    );
+    for invariant in [
+        ".optional(\"--target\")",
+        ".filter(|value| value != \"true\")",
+        "return Ok(target);",
+        ".positionals",
+        ".first()",
+        ".cloned()",
+        "{command} requires <target> or --target <id>",
+    ] {
+        assert!(
+            normalized_owner.contains(invariant),
+            "target-argument invariant changed: {invariant}"
+        );
+    }
 }
 
 #[test]

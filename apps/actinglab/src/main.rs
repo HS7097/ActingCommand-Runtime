@@ -35,7 +35,7 @@ use flag_args::FlagArgs;
 use flag_values::{
     parse_optional_duration_ms, parse_optional_string_value, parse_optional_unit_f64,
     parse_optional_usize, parse_record_duration_ms, record_amend_step_id, required_non_empty_flag,
-    split_csv, stream_check_requested,
+    split_csv, stream_check_requested, target_argument,
 };
 use instance_resolution::{resolve_instance_id, resolve_instance_id_for_flags};
 #[cfg(test)]
@@ -4428,17 +4428,6 @@ fn page_detection_json(outcome: &PageDetectionOutcome) -> Value {
         });
     }
     data
-}
-
-fn target_argument(flags: &FlagArgs, command: &str) -> CliOutcome<String> {
-    if let Some(target) = flags.optional("--target").filter(|value| value != "true") {
-        return Ok(target);
-    }
-    flags
-        .positionals
-        .first()
-        .cloned()
-        .ok_or_else(|| CliError::usage(format!("{command} requires <target> or --target <id>")))
 }
 
 fn target_eval_json(evaluation: &TargetEvaluation) -> Value {
