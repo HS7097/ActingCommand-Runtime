@@ -2625,6 +2625,12 @@ struct MappedPolicyTimeline {
     clock_delta_ms: u64,
 }
 
+struct MappedPolicyTimelineFixture {
+    timeline: MappedPolicyTimeline,
+    second_context: Box<PolicyRunContext>,
+    second_directive: PolicyRecomputeDirective,
+}
+
 fn prepare_second_mapped_policy_time(
     first_context: &PolicyRunContext,
     clock: &ManualRuntimeClock,
@@ -2685,19 +2691,28 @@ fn advance_manual_clock_to(clock: &ManualRuntimeClock, target_unix_ms: u64) -> u
     delta_ms
 }
 
-fn assert_mapped_second_admission(
+fn admit_second_mapped_policy_run(
     case: &str,
-    timeline: MappedPolicyTimeline,
-    second_context: &PolicyRunContext,
-    second_directive: PolicyRecomputeDirective,
-) -> u64 {
+    host: &RuntimeHost,
+    first_context: &PolicyRunContext,
+    clock: &ManualRuntimeClock,
+    outcome_key: &str,
+    seed: u64,
+) -> MappedPolicyTimelineFixture {
+    let timeline = prepare_second_mapped_policy_time(first_context, clock);
+    let (second_context, second_directive) =
+        admit_mapped_run_at(host, outcome_key, timeline.second_policy_unix_ms, seed);
     assert_eq!(
         second_context.admission().activity.admitted_at_unix_ms,
         timeline.second_policy_unix_ms
     );
-    let post_second_policy_unix_ms = second_directive.eligible_at_unix_ms;
+    assert_eq!(second_directive.kind, PolicyRecomputeKind::Full);
+    assert_eq!(
+        second_directive.reason,
+        PolicyRecomputeReason::Reconciliation
+    );
     eprintln!(
-        "workflow110_timeline case={case} first_admitted_at={} first_interval={} first_next_eligible={} minimum_second={} selected_second={} clock_delta={} second_admitted_at={} second_directive_kind={:?} second_directive_reason={:?} second_eligible_at={} post_second={}",
+        "workflow110_timeline case={case} first_admitted_at={} first_interval={} first_next_eligible={} minimum_second={} selected_second={} clock_delta={} second_admitted_at={} second_directive_kind={:?} second_directive_reason={:?} second_eligible_at={}",
         timeline.first_admitted_at_unix_ms,
         timeline.first_interval_ms,
         timeline.first_next_eligible_unix_ms,
@@ -2708,9 +2723,12 @@ fn assert_mapped_second_admission(
         second_directive.kind,
         second_directive.reason,
         second_directive.eligible_at_unix_ms,
-        post_second_policy_unix_ms,
     );
-    post_second_policy_unix_ms
+    MappedPolicyTimelineFixture {
+        timeline,
+        second_context,
+        second_directive,
+    }
 }
 
 fn admit_mapped_run_at(
@@ -2753,6 +2771,71 @@ fn admit_mapped_run_at(
         panic!("expected mapped run context")
     };
     (context, cycle.directive)
+}
+
+fn evaluate_mapped_policy_after_outcome(
+    case: &str,
+    fixture: &MappedPolicyTimelineFixture,
+    host: &RuntimeHost,
+    clock: &ManualRuntimeClock,
+    outcome_key: &str,
+    deferred_seed: u64,
+    evaluation_seed: u64,
+) -> PolicyCycle {
+    let before_deferred = clock.sample().expect("sample post-outcome policy clock");
+    assert_eq!(
+        before_deferred.unix_ms,
+        fixture.timeline.second_policy_unix_ms
+    );
+    let deferred = host
+        .evaluate_policy_cycle_with_test_inputs(
+            &mapped_policy_facts_at(outcome_key, before_deferred.unix_ms, false),
+            &policy_resources(),
+            EvaluationTime {
+                unix_ms: before_deferred.unix_ms,
+                monotonic_ms: before_deferred.monotonic_ms,
+            },
+            deferred_seed,
+            PolicyTrigger::FactsChanged,
+        )
+        .expect("evaluate mapped cooldown boundary");
+    assert_eq!(deferred.directive.kind, PolicyRecomputeKind::Deferred);
+    assert_eq!(deferred.directive.reason, PolicyRecomputeReason::Cooldown);
+    assert!(deferred.evaluation.is_none());
+
+    let next_policy_unix_ms = deferred.directive.eligible_at_unix_ms;
+    let cooldown_delta_ms = advance_manual_clock_to(clock, next_policy_unix_ms);
+    let after_advance = clock.sample().expect("sample executable policy clock");
+    let evaluated = host
+        .evaluate_policy_cycle_with_test_inputs(
+            &mapped_policy_facts_at(outcome_key, next_policy_unix_ms, false),
+            &policy_resources(),
+            EvaluationTime {
+                unix_ms: next_policy_unix_ms,
+                monotonic_ms: after_advance.monotonic_ms,
+            },
+            evaluation_seed,
+            PolicyTrigger::FactsChanged,
+        )
+        .expect("evaluate mapped policy after cooldown");
+    assert_eq!(evaluated.directive.kind, PolicyRecomputeKind::Incremental);
+    assert_eq!(evaluated.directive.reason, PolicyRecomputeReason::Event);
+    assert!(evaluated.evaluation.is_some());
+    eprintln!(
+        "workflow110_post_outcome case={case} second_kind={:?} second_reason={:?} second_eligible_at={} deferred_at={} deferred_kind={:?} deferred_reason={:?} deferred_eligible_at={} cooldown_delta={} evaluated_at={} evaluated_kind={:?} evaluated_reason={:?}",
+        fixture.second_directive.kind,
+        fixture.second_directive.reason,
+        fixture.second_directive.eligible_at_unix_ms,
+        before_deferred.unix_ms,
+        deferred.directive.kind,
+        deferred.directive.reason,
+        deferred.directive.eligible_at_unix_ms,
+        cooldown_delta_ms,
+        after_advance.unix_ms,
+        evaluated.directive.kind,
+        evaluated.directive.reason,
+    );
+    evaluated
 }
 
 fn mapped_policy_facts_at(outcome_key: &str, unix_ms: u64, stop_followup: bool) -> EvaluationFacts {
@@ -3320,14 +3403,13 @@ fn latest_failed_mapped_run_clears_the_prior_successful_outcome() {
         .expect("first mapped terminal");
     assert_eq!(first_terminal.timestamp_unix_ms(), first_policy_unix_ms);
 
-    let timeline = prepare_second_mapped_policy_time(&first_context, clock.as_ref());
-    let (second_context, second_directive) =
-        admit_mapped_run_at(&host, outcome_key, timeline.second_policy_unix_ms, 12_001);
-    let post_second_run_unix_ms = assert_mapped_second_admission(
+    let second = admit_second_mapped_policy_run(
         outcome_key,
-        timeline,
-        &second_context,
-        second_directive,
+        &host,
+        &first_context,
+        clock.as_ref(),
+        outcome_key,
+        12_001,
     );
     state.input_count.store(0, Ordering::Release);
     state
@@ -3335,7 +3417,7 @@ fn latest_failed_mapped_run_clears_the_prior_successful_outcome() {
         .store(false, Ordering::Release);
     state.refuse_guard_capture.store(true, Ordering::Release);
     let failure = host
-        .run_scheduled_contained_task(&second_context, &request)
+        .run_scheduled_contained_task(&second.second_context, &request)
         .expect_err("second mapped run must fail at its guard");
     assert_eq!(failure.code(), "contained_task_guard_refused");
     let failed_snapshot = host
@@ -3345,7 +3427,7 @@ fn latest_failed_mapped_run_clears_the_prior_successful_outcome() {
         .completed_runs
         .get(&snapshot_key)
         .expect("latest failed expected run");
-    assert_eq!(expected_failed.run_id, second_context.run_id());
+    assert_eq!(expected_failed.run_id, second.second_context.run_id());
     assert!(matches!(
         expected_failed.execution_outcome,
         PolicyExecutionOutcome::Failed { .. }
@@ -3355,21 +3437,15 @@ fn latest_failed_mapped_run_clears_the_prior_successful_outcome() {
         "completed-run state change must invalidate the earlier policy snapshot"
     );
 
-    advance_manual_clock_to(clock.as_ref(), post_second_run_unix_ms);
-    let after_failure_facts = mapped_policy_facts_at(outcome_key, post_second_run_unix_ms, false);
-    let post_second_clock = clock.sample().expect("sample post-failure mapped clock");
-    let after_failure = host
-        .evaluate_policy_cycle_with_test_inputs(
-            &after_failure_facts,
-            &policy_resources(),
-            EvaluationTime {
-                unix_ms: post_second_run_unix_ms,
-                monotonic_ms: post_second_clock.monotonic_ms,
-            },
-            12_002,
-            PolicyTrigger::FactsChanged,
-        )
-        .expect("evaluate after failed mapped run");
+    let after_failure = evaluate_mapped_policy_after_outcome(
+        outcome_key,
+        &second,
+        &host,
+        clock.as_ref(),
+        outcome_key,
+        12_002,
+        12_003,
+    );
     assert!(
         after_failure
             .evaluation
@@ -3404,15 +3480,15 @@ fn mapped_completion_and_cache_transition_are_atomic_to_policy_snapshots() {
         .next()
         .expect("first terminal");
     assert_eq!(first_terminal.timestamp_unix_ms(), first_policy_unix_ms);
-    let timeline = prepare_second_mapped_policy_time(&first_context, clock.as_ref());
-    let (second_context, second_directive) =
-        admit_mapped_run_at(&host, outcome_key, timeline.second_policy_unix_ms, 12_101);
-    let _post_second_run_unix_ms = assert_mapped_second_admission(
+    let second = admit_second_mapped_policy_run(
         outcome_key,
-        timeline,
-        &second_context,
-        second_directive,
+        &host,
+        &first_context,
+        clock.as_ref(),
+        outcome_key,
+        12_101,
     );
+    let MappedPolicyTimelineFixture { second_context, .. } = second;
     let second_run_id = second_context.run_id();
     let snapshot_key = (
         second_context.catalog_task_id().to_owned(),
@@ -3487,23 +3563,22 @@ fn newer_success_replaces_an_older_failed_mapped_run() {
         .expect("first completion");
     assert_eq!(first_completion.timestamp_unix_ms(), first_policy_unix_ms);
 
-    let timeline = prepare_second_mapped_policy_time(&first_context, clock.as_ref());
-    let (second_context, second_directive) =
-        admit_mapped_run_at(&host, outcome_key, timeline.second_policy_unix_ms, 12_201);
-    let post_second_run_unix_ms = assert_mapped_second_admission(
+    let second = admit_second_mapped_policy_run(
         outcome_key,
-        timeline,
-        &second_context,
-        second_directive,
+        &host,
+        &first_context,
+        clock.as_ref(),
+        outcome_key,
+        12_201,
     );
     let second_receipt = host
-        .run_scheduled_contained_task(&second_context, &request)
+        .run_scheduled_contained_task(&second.second_context, &request)
         .expect("second mapped run");
-    host.complete_scheduled_policy_run(&second_context, &second_receipt)
+    host.complete_scheduled_policy_run(&second.second_context, &second_receipt)
         .expect("second mapped completion");
     let second_terminal = host
         .query_persisted_events_for_test(EventQuery {
-            run_id: Some(second_context.run_id()),
+            run_id: Some(second.second_context.run_id()),
             event_type: Some(EventType::TaskCompleted),
             ..EventQuery::default()
         })
@@ -3513,7 +3588,7 @@ fn newer_success_replaces_an_older_failed_mapped_run() {
         .expect("second terminal");
     assert_eq!(
         second_terminal.timestamp_unix_ms(),
-        timeline.second_policy_unix_ms
+        second.timeline.second_policy_unix_ms
     );
     let snapshot = host
         .policy_outcome_key_snapshot_for_test()
@@ -3521,30 +3596,25 @@ fn newer_success_replaces_an_older_failed_mapped_run() {
     let completed = snapshot
         .completed_runs
         .get(&(
-            second_context.catalog_task_id().to_owned(),
-            second_context.instance_alias().to_owned(),
+            second.second_context.catalog_task_id().to_owned(),
+            second.second_context.instance_alias().to_owned(),
         ))
         .expect("latest successful expected run");
-    assert_eq!(completed.run_id, second_context.run_id());
+    assert_eq!(completed.run_id, second.second_context.run_id());
     assert!(matches!(
         completed.execution_outcome,
         PolicyExecutionOutcome::Succeeded { .. }
     ));
 
-    advance_manual_clock_to(clock.as_ref(), post_second_run_unix_ms);
-    let post_second_clock = clock.sample().expect("sample post-success mapped clock");
-    let cycle = host
-        .evaluate_policy_cycle_with_test_inputs(
-            &mapped_policy_facts_at(outcome_key, post_second_run_unix_ms, false),
-            &policy_resources(),
-            EvaluationTime {
-                unix_ms: post_second_run_unix_ms,
-                monotonic_ms: post_second_clock.monotonic_ms,
-            },
-            12_202,
-            PolicyTrigger::FactsChanged,
-        )
-        .expect("evaluate after successful exact run");
+    let cycle = evaluate_mapped_policy_after_outcome(
+        outcome_key,
+        &second,
+        &host,
+        clock.as_ref(),
+        outcome_key,
+        12_202,
+        12_203,
+    );
     assert!(
         cycle
             .evaluation
