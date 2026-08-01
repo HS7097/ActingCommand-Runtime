@@ -3281,9 +3281,9 @@ fn actinglab_flag_values_glue_stays_out_of_main() {
         "    parse_match_metric_flag, parse_optional_duration_ms, ",
         "parse_optional_string_value,\n",
         "    parse_optional_unit_f64, parse_optional_usize, parse_record_duration_ms,\n",
-        "    parse_touch_backend_override, record_amend_step_id, required_non_empty_flag,\n",
-        "    session_record_drift_diagnostics_path, split_csv, stream_check_requested, ",
-        "target_argument,\n",
+        "    parse_touch_backend_override, record_amend_step_id, record_candidates_step_id,\n",
+        "    required_non_empty_flag, session_record_drift_diagnostics_path, split_csv,\n",
+        "    stream_check_requested, target_argument,\n",
         "};",
     );
     let declarations = main
@@ -3406,9 +3406,9 @@ fn actinglab_required_non_empty_flag_glue_stays_out_of_main() {
         "    parse_match_metric_flag, parse_optional_duration_ms, ",
         "parse_optional_string_value,\n",
         "    parse_optional_unit_f64, parse_optional_usize, parse_record_duration_ms,\n",
-        "    parse_touch_backend_override, record_amend_step_id, required_non_empty_flag,\n",
-        "    session_record_drift_diagnostics_path, split_csv, stream_check_requested, ",
-        "target_argument,\n",
+        "    parse_touch_backend_override, record_amend_step_id, record_candidates_step_id,\n",
+        "    required_non_empty_flag, session_record_drift_diagnostics_path, split_csv,\n",
+        "    stream_check_requested, target_argument,\n",
         "};",
     );
     assert_eq!(
@@ -3435,7 +3435,7 @@ fn actinglab_required_non_empty_flag_glue_stays_out_of_main() {
     );
     assert_eq!(
         flag_values.matches("pub(super) ").count(),
-        13,
+        14,
         "flag values module visibility changed"
     );
 
@@ -3495,9 +3495,9 @@ fn actinglab_optional_unit_f64_glue_stays_out_of_main() {
         "    parse_match_metric_flag, parse_optional_duration_ms, ",
         "parse_optional_string_value,\n",
         "    parse_optional_unit_f64, parse_optional_usize, parse_record_duration_ms,\n",
-        "    parse_touch_backend_override, record_amend_step_id, required_non_empty_flag,\n",
-        "    session_record_drift_diagnostics_path, split_csv, stream_check_requested, ",
-        "target_argument,\n",
+        "    parse_touch_backend_override, record_amend_step_id, record_candidates_step_id,\n",
+        "    required_non_empty_flag, session_record_drift_diagnostics_path, split_csv,\n",
+        "    stream_check_requested, target_argument,\n",
         "};",
     );
     assert_eq!(
@@ -3520,7 +3520,7 @@ fn actinglab_optional_unit_f64_glue_stays_out_of_main() {
     );
     assert_eq!(
         flag_values.matches("pub(super) ").count(),
-        13,
+        14,
         "flag values module visibility changed"
     );
 
@@ -3587,9 +3587,9 @@ fn actinglab_record_duration_flag_glue_stays_out_of_main() {
         "    parse_match_metric_flag, parse_optional_duration_ms, ",
         "parse_optional_string_value,\n",
         "    parse_optional_unit_f64, parse_optional_usize, parse_record_duration_ms,\n",
-        "    parse_touch_backend_override, record_amend_step_id, required_non_empty_flag,\n",
-        "    session_record_drift_diagnostics_path, split_csv, stream_check_requested, ",
-        "target_argument,\n",
+        "    parse_touch_backend_override, record_amend_step_id, record_candidates_step_id,\n",
+        "    required_non_empty_flag, session_record_drift_diagnostics_path, split_csv,\n",
+        "    stream_check_requested, target_argument,\n",
         "};",
     );
     assert_eq!(
@@ -3616,7 +3616,7 @@ fn actinglab_record_duration_flag_glue_stays_out_of_main() {
     );
     assert_eq!(
         flag_values.matches("pub(super) ").count(),
-        13,
+        14,
         "flag values module visibility changed"
     );
 
@@ -3685,9 +3685,9 @@ fn actinglab_record_amend_step_id_glue_stays_out_of_main() {
         "    parse_match_metric_flag, parse_optional_duration_ms, ",
         "parse_optional_string_value,\n",
         "    parse_optional_unit_f64, parse_optional_usize, parse_record_duration_ms,\n",
-        "    parse_touch_backend_override, record_amend_step_id, required_non_empty_flag,\n",
-        "    session_record_drift_diagnostics_path, split_csv, stream_check_requested, ",
-        "target_argument,\n",
+        "    parse_touch_backend_override, record_amend_step_id, record_candidates_step_id,\n",
+        "    required_non_empty_flag, session_record_drift_diagnostics_path, split_csv,\n",
+        "    stream_check_requested, target_argument,\n",
         "};",
     );
     let declarations = main
@@ -3729,7 +3729,7 @@ fn actinglab_record_amend_step_id_glue_stays_out_of_main() {
     );
     assert_eq!(
         flag_values.matches("pub(super) ").count(),
-        13,
+        14,
         "flag values module visibility changed"
     );
     for line in flag_values.lines() {
@@ -3762,12 +3762,12 @@ fn actinglab_record_amend_step_id_glue_stays_out_of_main() {
     );
 
     let marker = "\npub(super) fn record_amend_step_id(";
-    let (_, owner_and_stream_check_requested) = flag_values
+    let (_, owner_and_record_candidates_step_id) = flag_values
         .rsplit_once(marker)
         .expect("flag values module lost the appended record-amend step-id owner");
-    let (owner_tail, _) = owner_and_stream_check_requested
-        .split_once("pub(super) fn stream_check_requested(")
-        .expect("flag values module lost the following stream-check owner");
+    let (owner_tail, _) = owner_and_record_candidates_step_id
+        .split_once("pub(super) fn record_candidates_step_id(")
+        .expect("flag values module lost the following record-candidates step-id owner");
     let normalized_owner = format!("fn record_amend_step_id({owner_tail}");
     assert_eq!(
         normalized_owner.matches('\n').count(),
@@ -3815,9 +3815,9 @@ fn actinglab_split_csv_glue_stays_out_of_main() {
         "    parse_match_metric_flag, parse_optional_duration_ms, ",
         "parse_optional_string_value,\n",
         "    parse_optional_unit_f64, parse_optional_usize, parse_record_duration_ms,\n",
-        "    parse_touch_backend_override, record_amend_step_id, required_non_empty_flag,\n",
-        "    session_record_drift_diagnostics_path, split_csv, stream_check_requested, ",
-        "target_argument,\n",
+        "    parse_touch_backend_override, record_amend_step_id, record_candidates_step_id,\n",
+        "    required_non_empty_flag, session_record_drift_diagnostics_path, split_csv,\n",
+        "    stream_check_requested, target_argument,\n",
         "};",
     );
     assert_eq!(
@@ -3840,7 +3840,7 @@ fn actinglab_split_csv_glue_stays_out_of_main() {
     );
     assert_eq!(
         flag_values.matches("pub(super) ").count(),
-        13,
+        14,
         "flag values module visibility changed"
     );
 
@@ -3927,7 +3927,7 @@ fn actinglab_stream_check_requested_glue_stays_out_of_main() {
     );
     assert_eq!(
         flag_values.matches("pub(super) ").count(),
-        13,
+        14,
         "flag values module visibility changed"
     );
 
@@ -4012,7 +4012,7 @@ fn actinglab_target_argument_glue_stays_out_of_main() {
     );
     assert_eq!(
         flag_values.matches("pub(super) ").count(),
-        13,
+        14,
         "flag values module visibility changed"
     );
 
@@ -4128,7 +4128,7 @@ fn actinglab_session_record_drift_diagnostics_path_glue_stays_out_of_main() {
     );
     assert_eq!(
         flag_values.matches("pub(super) ").count(),
-        13,
+        14,
         "flag values module visibility changed"
     );
 
@@ -4146,7 +4146,7 @@ fn actinglab_session_record_drift_diagnostics_path_glue_stays_out_of_main() {
     let caller_serialization = caller_rows.concat();
     assert_eq!(
         format!("{:x}", Sha256::digest(caller_serialization.as_bytes())),
-        "89562bf202efd837ac412907377a479206d5018b729323d3ecb953518011f2d1",
+        "7da8bd60326488ccb0328ddcc5e9b90795d22595176b580d6ecf2ee663aadc4e",
         "drift-diagnostics path caller serialization changed"
     );
 
@@ -4194,7 +4194,7 @@ fn actinglab_session_record_drift_diagnostics_path_glue_stays_out_of_main() {
         .trim()
         .parse::<usize>()
         .expect("ratchet/main_rs_lines.txt must contain one integer");
-    assert_eq!(ratchet, 20_732, "drift-diagnostics path ratchet changed");
+    assert_eq!(ratchet, 20_717, "drift-diagnostics path ratchet changed");
     assert_eq!(
         main.lines().count(),
         ratchet,
@@ -4248,7 +4248,7 @@ fn actinglab_parse_touch_backend_override_glue_stays_out_of_main() {
     );
     assert_eq!(
         flag_values.matches("pub(super) ").count(),
-        13,
+        14,
         "flag values module visibility changed"
     );
 
@@ -4273,7 +4273,7 @@ fn actinglab_parse_touch_backend_override_glue_stays_out_of_main() {
     let caller_serialization = caller_rows.concat();
     assert_eq!(
         format!("{:x}", Sha256::digest(caller_serialization.as_bytes())),
-        "432a91e7711513861cffd674b652d973a9983e872c5d6f0536cb8070483de036",
+        "3dbb2ef115ae0da92bd57dd66711d2038b12744b88f0b1ffd8a1e111bb1c0eec",
         "touch-backend caller serialization changed"
     );
 
@@ -4330,7 +4330,7 @@ fn actinglab_parse_touch_backend_override_glue_stays_out_of_main() {
         .trim()
         .parse::<usize>()
         .expect("ratchet/main_rs_lines.txt must contain one integer");
-    assert_eq!(ratchet, 20_732, "touch-backend ratchet changed");
+    assert_eq!(ratchet, 20_717, "touch-backend ratchet changed");
     assert_eq!(
         main.lines().count(),
         ratchet,
@@ -4382,7 +4382,7 @@ fn actinglab_parse_match_metric_flag_glue_stays_out_of_main() {
     );
     assert_eq!(
         flag_values.matches("pub(super) ").count(),
-        13,
+        14,
         "flag values module visibility changed"
     );
 
@@ -4406,7 +4406,7 @@ fn actinglab_parse_match_metric_flag_glue_stays_out_of_main() {
     let caller_serialization = caller_rows.concat();
     assert_eq!(
         format!("{:x}", Sha256::digest(caller_serialization.as_bytes())),
-        "8283544c5912cf81452cdeee99a1b98eda4379d1b8b3b8597db45461254259f5",
+        "7f6e673beb9f0dfa5d09b928a13ee00f34ae5b8e412e0ac5a933894eb3dbf8d4",
         "match-metric caller serialization changed"
     );
 
@@ -4474,11 +4474,158 @@ fn actinglab_parse_match_metric_flag_glue_stays_out_of_main() {
         .trim()
         .parse::<usize>()
         .expect("ratchet/main_rs_lines.txt must contain one integer");
-    assert_eq!(ratchet, 20_732, "match-metric ratchet changed");
+    assert_eq!(ratchet, 20_717, "match-metric ratchet changed");
     assert_eq!(
         main.lines().count(),
         ratchet,
         "match-metric move and main.rs ratchet diverged"
+    );
+}
+
+#[test]
+fn actinglab_record_candidates_step_id_glue_stays_out_of_main() {
+    let root = workspace_root();
+    let main =
+        fs::read_to_string(root.join("apps/actinglab/src/main.rs")).expect("read ActingLab main");
+    let flag_values = fs::read_to_string(root.join("apps/actinglab/src/flag_values.rs"))
+        .expect("read ActingLab flag values module");
+
+    assert_eq!(
+        main.matches("record_candidates_step_id,").count(),
+        1,
+        "ActingLab main lost the sole private record-candidates step-id root import"
+    );
+    assert_eq!(
+        main.matches("record_candidates_step_id").count(),
+        2,
+        "ActingLab main changed the private import or production caller set"
+    );
+    assert_eq!(
+        flag_values.matches("fn record_candidates_step_id(").count(),
+        1,
+        "flag values module lost the one record-candidates step-id definition"
+    );
+    assert_eq!(
+        flag_values
+            .matches("pub(super) fn record_candidates_step_id(")
+            .count(),
+        1,
+        "record-candidates step-id owner visibility changed"
+    );
+    assert!(
+        !main.contains("fn record_candidates_step_id("),
+        "ActingLab main regained the record-candidates step-id owner"
+    );
+    assert!(
+        !main.contains("pub use flag_values::"),
+        "flag values owner became a public root re-export"
+    );
+    assert_eq!(
+        flag_values.matches("pub(super) ").count(),
+        14,
+        "flag values module visibility changed"
+    );
+
+    const CALL: &str = "let step_id = record_candidates_step_id(&flags)?;";
+    assert_eq!(
+        main.matches(CALL).count(),
+        1,
+        "ActingLab main lost the exact record-candidates step-id caller expression"
+    );
+    let caller_rows = main
+        .lines()
+        .enumerate()
+        .filter(|(_, line)| line.contains("record_candidates_step_id("))
+        .map(|(index, line)| format!("apps/actinglab/src/main.rs:{}:{}\n", index + 1, line.trim()))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        caller_rows.len(),
+        1,
+        "record-candidates step-id production caller set changed"
+    );
+    let caller_serialization = caller_rows.concat();
+    assert_eq!(
+        format!("{:x}", Sha256::digest(caller_serialization.as_bytes())),
+        "ff3a6ee40bb5fce8435449b9843ea7cb5817d2c69cf0d5b6de098e66bc10502d",
+        "record-candidates step-id caller serialization changed"
+    );
+
+    let marker = "\npub(super) fn record_candidates_step_id(";
+    let (_, owner_and_stream_check_requested) = flag_values
+        .rsplit_once(marker)
+        .expect("flag values module lost the appended record-candidates step-id owner");
+    let (owner_tail, _) = owner_and_stream_check_requested
+        .split_once("pub(super) fn stream_check_requested(")
+        .expect("flag values module lost the following stream-check owner");
+    let normalized_owner = format!("fn record_candidates_step_id({owner_tail}");
+    assert_eq!(
+        normalized_owner.matches('\n').count(),
+        16,
+        "record-candidates step-id owner LF line count changed"
+    );
+    assert_eq!(
+        normalized_owner.len(),
+        511,
+        "record-candidates step-id owner byte count changed"
+    );
+    assert_eq!(
+        format!("{:x}", Sha256::digest(normalized_owner.as_bytes())),
+        "bdce77b80115ebc41f2fa2cf5d1da60cf15e8915f7bc4557e0b706626ec8b21c",
+        "record-candidates step-id owner body changed"
+    );
+    const PRECEDENCE: &str = concat!(
+        ".optional(\"--step-id\")\n",
+        "        .filter(|value| value != \"true\")\n",
+        "        .or_else(|| flags.positionals.first().cloned())"
+    );
+    for invariant in [
+        PRECEDENCE,
+        "session record candidates requires <step-id> or --step-id",
+        "if value.trim().is_empty()",
+        "record candidates step id must not be empty",
+        "Ok(value)",
+    ] {
+        assert!(
+            normalized_owner.contains(invariant),
+            "record-candidates step-id invariant changed: {invariant}"
+        );
+    }
+    assert_eq!(
+        flag_values
+            .matches(
+                "fn record_candidates_step_id_preserves_precedence_fallback_errors_and_original_value("
+            )
+            .count(),
+        1,
+        "record-candidates step-id behavior test coverage changed"
+    );
+
+    let mut actinglab_sources = Vec::new();
+    collect_rust_files(&root.join("apps/actinglab/src"), &mut actinglab_sources);
+    let definition_count = actinglab_sources
+        .iter()
+        .map(|path| {
+            fs::read_to_string(path)
+                .unwrap_or_else(|err| panic!("read {}: {err}", path.display()))
+                .matches("fn record_candidates_step_id(")
+                .count()
+        })
+        .sum::<usize>();
+    assert_eq!(
+        definition_count, 1,
+        "ActingLab gained a second record-candidates step-id parser or authority"
+    );
+
+    let ratchet = fs::read_to_string(root.join("ratchet/main_rs_lines.txt"))
+        .expect("read ratchet/main_rs_lines.txt")
+        .trim()
+        .parse::<usize>()
+        .expect("ratchet/main_rs_lines.txt must contain one integer");
+    assert_eq!(ratchet, 20_717, "record-candidates step-id ratchet changed");
+    assert_eq!(
+        main.lines().count(),
+        ratchet,
+        "record-candidates step-id move and main.rs ratchet diverged"
     );
 }
 

@@ -98,6 +98,22 @@ pub(super) fn record_amend_step_id(flags: &FlagArgs) -> CliOutcome<String> {
     Ok(value)
 }
 
+pub(super) fn record_candidates_step_id(flags: &FlagArgs) -> CliOutcome<String> {
+    let value = flags
+        .optional("--step-id")
+        .filter(|value| value != "true")
+        .or_else(|| flags.positionals.first().cloned())
+        .ok_or_else(|| {
+            CliError::usage("session record candidates requires <step-id> or --step-id")
+        })?;
+    if value.trim().is_empty() {
+        return Err(CliError::usage(
+            "record candidates step id must not be empty",
+        ));
+    }
+    Ok(value)
+}
+
 pub(super) fn stream_check_requested(flags: &FlagArgs) -> bool {
     flags.positionals.first().map(String::as_str) == Some("check")
 }
@@ -201,6 +217,36 @@ mod tests {
         assert_eq!(
             error.message,
             "unsupported --metric 'unsupported', expected ccorr_normed or ccoeff_normed"
+        );
+    }
+
+    #[test]
+    fn record_candidates_step_id_preserves_precedence_fallback_errors_and_original_value() {
+        assert_eq!(
+            record_candidates_step_id(&flags(&["positional", "--step-id", "flagged"]))
+                .expect("flag value takes precedence"),
+            "flagged"
+        );
+        assert_eq!(
+            record_candidates_step_id(&flags(&["positional"])).expect("first positional fallback"),
+            "positional"
+        );
+
+        let missing =
+            record_candidates_step_id(&FlagArgs::default()).expect_err("missing step id must fail");
+        assert_eq!(
+            missing.message,
+            "session record candidates requires <step-id> or --step-id"
+        );
+
+        let empty = record_candidates_step_id(&flags(&["--step-id", "  "]))
+            .expect_err("trim-empty step id must fail");
+        assert_eq!(empty.message, "record candidates step id must not be empty");
+
+        assert_eq!(
+            record_candidates_step_id(&flags(&["--step-id", "  original  "]))
+                .expect("original step id"),
+            "  original  "
         );
     }
 }

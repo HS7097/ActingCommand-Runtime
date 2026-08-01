@@ -35,8 +35,9 @@ use flag_args::FlagArgs;
 use flag_values::{
     parse_match_metric_flag, parse_optional_duration_ms, parse_optional_string_value,
     parse_optional_unit_f64, parse_optional_usize, parse_record_duration_ms,
-    parse_touch_backend_override, record_amend_step_id, required_non_empty_flag,
-    session_record_drift_diagnostics_path, split_csv, stream_check_requested, target_argument,
+    parse_touch_backend_override, record_amend_step_id, record_candidates_step_id,
+    required_non_empty_flag, session_record_drift_diagnostics_path, split_csv,
+    stream_check_requested, target_argument,
 };
 use instance_resolution::{resolve_instance_id, resolve_instance_id_for_flags};
 #[cfg(test)]
@@ -8949,22 +8950,6 @@ fn amend_drift_record_step(
             ))
         }
     }
-}
-
-fn record_candidates_step_id(flags: &FlagArgs) -> CliOutcome<String> {
-    let value = flags
-        .optional("--step-id")
-        .filter(|value| value != "true")
-        .or_else(|| flags.positionals.first().cloned())
-        .ok_or_else(|| {
-            CliError::usage("session record candidates requires <step-id> or --step-id")
-        })?;
-    if value.trim().is_empty() {
-        return Err(CliError::usage(
-            "record candidates step id must not be empty",
-        ));
-    }
-    Ok(value)
 }
 
 fn session_record_candidate_report(
