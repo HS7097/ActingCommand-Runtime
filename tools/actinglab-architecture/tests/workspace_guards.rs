@@ -3284,7 +3284,7 @@ fn actinglab_flag_values_glue_stays_out_of_main() {
         "    parse_record_duration_ms, parse_session_record_region, parse_session_record_swipe_rects,\n",
         "    parse_touch_backend_override, record_amend_step_id, record_candidates_step_id,\n",
         "    required_non_empty_flag, session_record_drift_diagnostics_path, split_csv,\n",
-        "    stream_check_requested, stream_input_relay_action, target_argument,\n",
+        "    stream_check_requested, stream_input_relay_action, target_argument, parse_session_record_candidate_index,\n",
         "};",
     );
     let declarations = main
@@ -3413,7 +3413,7 @@ fn actinglab_required_non_empty_flag_glue_stays_out_of_main() {
         "    parse_record_duration_ms, parse_session_record_region, parse_session_record_swipe_rects,\n",
         "    parse_touch_backend_override, record_amend_step_id, record_candidates_step_id,\n",
         "    required_non_empty_flag, session_record_drift_diagnostics_path, split_csv,\n",
-        "    stream_check_requested, stream_input_relay_action, target_argument,\n",
+        "    stream_check_requested, stream_input_relay_action, target_argument, parse_session_record_candidate_index,\n",
         "};",
     );
     assert_eq!(
@@ -3440,7 +3440,7 @@ fn actinglab_required_non_empty_flag_glue_stays_out_of_main() {
     );
     assert_eq!(
         flag_values.matches("pub(super) ").count(),
-        19,
+        20,
         "flag values module visibility changed"
     );
 
@@ -3503,7 +3503,7 @@ fn actinglab_optional_unit_f64_glue_stays_out_of_main() {
         "    parse_record_duration_ms, parse_session_record_region, parse_session_record_swipe_rects,\n",
         "    parse_touch_backend_override, record_amend_step_id, record_candidates_step_id,\n",
         "    required_non_empty_flag, session_record_drift_diagnostics_path, split_csv,\n",
-        "    stream_check_requested, stream_input_relay_action, target_argument,\n",
+        "    stream_check_requested, stream_input_relay_action, target_argument, parse_session_record_candidate_index,\n",
         "};",
     );
     assert_eq!(
@@ -3526,7 +3526,7 @@ fn actinglab_optional_unit_f64_glue_stays_out_of_main() {
     );
     assert_eq!(
         flag_values.matches("pub(super) ").count(),
-        19,
+        20,
         "flag values module visibility changed"
     );
 
@@ -3596,7 +3596,7 @@ fn actinglab_record_duration_flag_glue_stays_out_of_main() {
         "    parse_record_duration_ms, parse_session_record_region, parse_session_record_swipe_rects,\n",
         "    parse_touch_backend_override, record_amend_step_id, record_candidates_step_id,\n",
         "    required_non_empty_flag, session_record_drift_diagnostics_path, split_csv,\n",
-        "    stream_check_requested, stream_input_relay_action, target_argument,\n",
+        "    stream_check_requested, stream_input_relay_action, target_argument, parse_session_record_candidate_index,\n",
         "};",
     );
     assert_eq!(
@@ -3623,7 +3623,7 @@ fn actinglab_record_duration_flag_glue_stays_out_of_main() {
     );
     assert_eq!(
         flag_values.matches("pub(super) ").count(),
-        19,
+        20,
         "flag values module visibility changed"
     );
 
@@ -3695,7 +3695,7 @@ fn actinglab_record_amend_step_id_glue_stays_out_of_main() {
         "    parse_record_duration_ms, parse_session_record_region, parse_session_record_swipe_rects,\n",
         "    parse_touch_backend_override, record_amend_step_id, record_candidates_step_id,\n",
         "    required_non_empty_flag, session_record_drift_diagnostics_path, split_csv,\n",
-        "    stream_check_requested, stream_input_relay_action, target_argument,\n",
+        "    stream_check_requested, stream_input_relay_action, target_argument, parse_session_record_candidate_index,\n",
         "};",
     );
     let declarations = main
@@ -3737,7 +3737,7 @@ fn actinglab_record_amend_step_id_glue_stays_out_of_main() {
     );
     assert_eq!(
         flag_values.matches("pub(super) ").count(),
-        19,
+        20,
         "flag values module visibility changed"
     );
     for line in flag_values.lines() {
@@ -3826,7 +3826,7 @@ fn actinglab_split_csv_glue_stays_out_of_main() {
         "    parse_record_duration_ms, parse_session_record_region, parse_session_record_swipe_rects,\n",
         "    parse_touch_backend_override, record_amend_step_id, record_candidates_step_id,\n",
         "    required_non_empty_flag, session_record_drift_diagnostics_path, split_csv,\n",
-        "    stream_check_requested, stream_input_relay_action, target_argument,\n",
+        "    stream_check_requested, stream_input_relay_action, target_argument, parse_session_record_candidate_index,\n",
         "};",
     );
     assert_eq!(
@@ -3849,7 +3849,7 @@ fn actinglab_split_csv_glue_stays_out_of_main() {
     );
     assert_eq!(
         flag_values.matches("pub(super) ").count(),
-        19,
+        20,
         "flag values module visibility changed"
     );
 
@@ -3936,7 +3936,7 @@ fn actinglab_stream_check_requested_glue_stays_out_of_main() {
     );
     assert_eq!(
         flag_values.matches("pub(super) ").count(),
-        19,
+        20,
         "flag values module visibility changed"
     );
 
@@ -4021,7 +4021,7 @@ fn actinglab_target_argument_glue_stays_out_of_main() {
     );
     assert_eq!(
         flag_values.matches("pub(super) ").count(),
-        19,
+        20,
         "flag values module visibility changed"
     );
 
@@ -4137,7 +4137,7 @@ fn actinglab_session_record_drift_diagnostics_path_glue_stays_out_of_main() {
     );
     assert_eq!(
         flag_values.matches("pub(super) ").count(),
-        19,
+        20,
         "flag values module visibility changed"
     );
 
@@ -4203,7 +4203,7 @@ fn actinglab_session_record_drift_diagnostics_path_glue_stays_out_of_main() {
         .trim()
         .parse::<usize>()
         .expect("ratchet/main_rs_lines.txt must contain one integer");
-    assert_eq!(ratchet, 20_594, "drift-diagnostics path ratchet changed");
+    assert_eq!(ratchet, 20_571, "drift-diagnostics path ratchet changed");
     assert_eq!(
         main.lines().count(),
         ratchet,
@@ -4261,7 +4261,7 @@ fn actinglab_parse_touch_backend_override_glue_stays_out_of_main() {
     );
     assert_eq!(
         flag_values.matches("pub(super) ").count(),
-        19,
+        20,
         "flag values module visibility changed"
     );
 
@@ -4343,7 +4343,7 @@ fn actinglab_parse_touch_backend_override_glue_stays_out_of_main() {
         .trim()
         .parse::<usize>()
         .expect("ratchet/main_rs_lines.txt must contain one integer");
-    assert_eq!(ratchet, 20_594, "touch-backend ratchet changed");
+    assert_eq!(ratchet, 20_571, "touch-backend ratchet changed");
     assert_eq!(
         main.lines().count(),
         ratchet,
@@ -4399,7 +4399,7 @@ fn actinglab_parse_match_metric_flag_glue_stays_out_of_main() {
     );
     assert_eq!(
         flag_values.matches("pub(super) ").count(),
-        19,
+        20,
         "flag values module visibility changed"
     );
 
@@ -4491,7 +4491,7 @@ fn actinglab_parse_match_metric_flag_glue_stays_out_of_main() {
         .trim()
         .parse::<usize>()
         .expect("ratchet/main_rs_lines.txt must contain one integer");
-    assert_eq!(ratchet, 20_594, "match-metric ratchet changed");
+    assert_eq!(ratchet, 20_571, "match-metric ratchet changed");
     assert_eq!(
         main.lines().count(),
         ratchet,
@@ -4539,7 +4539,7 @@ fn actinglab_record_candidates_step_id_glue_stays_out_of_main() {
     );
     assert_eq!(
         flag_values.matches("pub(super) ").count(),
-        19,
+        20,
         "flag values module visibility changed"
     );
 
@@ -4638,7 +4638,7 @@ fn actinglab_record_candidates_step_id_glue_stays_out_of_main() {
         .trim()
         .parse::<usize>()
         .expect("ratchet/main_rs_lines.txt must contain one integer");
-    assert_eq!(ratchet, 20_594, "record-candidates step-id ratchet changed");
+    assert_eq!(ratchet, 20_571, "record-candidates step-id ratchet changed");
     assert_eq!(
         main.lines().count(),
         ratchet,
@@ -4686,7 +4686,7 @@ fn actinglab_stream_input_relay_action_glue_stays_out_of_main() {
     );
     assert_eq!(
         flag_values.matches("pub(super) ").count(),
-        19,
+        20,
         "flag values module visibility changed"
     );
     for line in flag_values.lines() {
@@ -4800,7 +4800,7 @@ fn actinglab_stream_input_relay_action_glue_stays_out_of_main() {
         .trim()
         .parse::<usize>()
         .expect("ratchet/main_rs_lines.txt must contain one integer");
-    assert_eq!(ratchet, 20_594, "input-relay ratchet changed");
+    assert_eq!(ratchet, 20_571, "input-relay ratchet changed");
     assert_eq!(
         main.lines().count(),
         ratchet,
@@ -4850,7 +4850,7 @@ fn actinglab_parse_record_build_resolution_glue_stays_out_of_main() {
     );
     assert_eq!(
         flag_values.matches("pub(super) ").count(),
-        19,
+        20,
         "flag values module visibility changed"
     );
     for line in flag_values.lines() {
@@ -4961,7 +4961,7 @@ fn actinglab_parse_record_build_resolution_glue_stays_out_of_main() {
         .trim()
         .parse::<usize>()
         .expect("ratchet/main_rs_lines.txt must contain one integer");
-    assert_eq!(ratchet, 20_594, "record-build resolution ratchet changed");
+    assert_eq!(ratchet, 20_571, "record-build resolution ratchet changed");
     assert_eq!(
         main.lines().count(),
         ratchet,
@@ -5011,7 +5011,7 @@ fn actinglab_parse_session_record_region_glue_stays_out_of_main() {
     );
     assert_eq!(
         flag_values.matches("pub(super) ").count(),
-        19,
+        20,
         "flag values module visibility changed"
     );
     for line in flag_values.lines() {
@@ -5145,7 +5145,7 @@ fn actinglab_parse_session_record_region_glue_stays_out_of_main() {
         .trim()
         .parse::<usize>()
         .expect("ratchet/main_rs_lines.txt must contain one integer");
-    assert_eq!(ratchet, 20_594, "session-record region ratchet changed");
+    assert_eq!(ratchet, 20_571, "session-record region ratchet changed");
     assert_eq!(
         main.lines().count(),
         ratchet,
@@ -5200,7 +5200,7 @@ fn actinglab_parse_session_record_rect_glue_stays_out_of_main() {
     );
     assert_eq!(
         flag_values.matches("pub(super) ").count(),
-        19,
+        20,
         "flag values module visibility changed"
     );
     for line in flag_values.lines() {
@@ -5339,7 +5339,7 @@ fn actinglab_parse_session_record_rect_glue_stays_out_of_main() {
         .trim()
         .parse::<usize>()
         .expect("ratchet/main_rs_lines.txt must contain one integer");
-    assert_eq!(ratchet, 20_594, "session-record rectangle ratchet changed");
+    assert_eq!(ratchet, 20_571, "session-record rectangle ratchet changed");
     assert_eq!(
         main.lines().count(),
         ratchet,
@@ -5391,7 +5391,7 @@ fn actinglab_parse_session_record_swipe_rects_glue_stays_out_of_main() {
     );
     assert_eq!(
         flag_values.matches("pub(super) ").count(),
-        19,
+        20,
         "flag values module visibility changed"
     );
     for line in flag_values.lines() {
@@ -5445,8 +5445,8 @@ fn actinglab_parse_session_record_swipe_rects_glue_stays_out_of_main() {
         .rsplit_once(marker)
         .expect("flag values module lost the appended session-record swipe owner");
     let (owner_tail, _) = owner_and_split_csv
-        .split_once("pub(super) fn split_csv(")
-        .expect("flag values module lost the following split CSV owner");
+        .split_once("#[rustfmt::skip]\npub(super) fn parse_session_record_candidate_index(")
+        .expect("flag values module lost the following session-record candidate-index owner");
     let normalized_owner = format!("fn parse_session_record_swipe_rects({owner_tail}");
     assert_eq!(
         normalized_owner.matches('\n').count(),
@@ -5506,11 +5506,66 @@ fn actinglab_parse_session_record_swipe_rects_glue_stays_out_of_main() {
         .trim()
         .parse::<usize>()
         .expect("ratchet/main_rs_lines.txt must contain one integer");
-    assert_eq!(ratchet, 20_594, "session-record swipe ratchet changed");
+    assert_eq!(ratchet, 20_571, "session-record swipe ratchet changed");
     assert_eq!(
         main.lines().count(),
         ratchet,
         "session-record swipe move and main.rs ratchet diverged"
+    );
+}
+
+#[test]
+fn actinglab_parse_session_record_candidate_index_glue_stays_out_of_main() {
+    let root = workspace_root();
+    let main =
+        fs::read_to_string(root.join("apps/actinglab/src/main.rs")).expect("read ActingLab main");
+    let flag_values = fs::read_to_string(root.join("apps/actinglab/src/flag_values.rs"))
+        .expect("read ActingLab flag values module");
+
+    assert_eq!(
+        main.matches("parse_session_record_candidate_index,")
+            .count(),
+        1,
+        "ActingLab main lost the sole private session-record candidate-index root import"
+    );
+    assert_eq!(
+        flag_values
+            .matches("fn parse_session_record_candidate_index(")
+            .count(),
+        1,
+        "flag values module lost the one session-record candidate-index definition"
+    );
+    assert_eq!(
+        flag_values
+            .matches("pub(super) fn parse_session_record_candidate_index(")
+            .count(),
+        1,
+        "session-record candidate-index owner visibility changed"
+    );
+    assert_eq!(
+        flag_values
+            .matches("#[rustfmt::skip]\npub(super) fn parse_session_record_candidate_index(")
+            .count(),
+        1,
+        "session-record candidate-index owner lost its byte-preserving rustfmt boundary"
+    );
+    assert!(
+        !main.contains("fn parse_session_record_candidate_index("),
+        "ActingLab main regained the session-record candidate-index owner"
+    );
+
+    const CALL: &str =
+        "if let Some(candidate_index) = parse_session_record_candidate_index(flags)? {";
+    assert_eq!(
+        main.matches(CALL).count(),
+        3,
+        "ActingLab main lost the three exact session-record candidate-index callers"
+    );
+    assert_eq!(
+        main.matches("parse_session_record_candidate_index(")
+            .count(),
+        3,
+        "session-record candidate-index production caller set changed"
     );
 }
 

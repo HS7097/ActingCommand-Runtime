@@ -303,6 +303,30 @@ pub(super) fn parse_session_record_swipe_rects(
     ))
 }
 
+#[rustfmt::skip]
+pub(super) fn parse_session_record_candidate_index(flags: &FlagArgs) -> CliOutcome<Option<usize>> {
+    let candidate_index = flags.optional("--candidate-index");
+    let auto_candidate = flags.optional("--auto-candidate");
+    if candidate_index.is_some() && auto_candidate.is_some() {
+        return Err(CliError::usage(
+            "record amend accepts only one of --candidate-index or --auto-candidate",
+        ));
+    }
+    let Some(value) = candidate_index.or(auto_candidate) else {
+        return Ok(None);
+    };
+    if value == "true" {
+        return Err(CliError::usage(
+            "record amend candidate selection requires an index value",
+        ));
+    }
+    value.parse::<usize>().map(Some).map_err(|err| {
+        CliError::usage(format!(
+            "failed to parse record amend candidate index '{value}': {err}"
+        ))
+    })
+}
+
 pub(super) fn split_csv(value: &str) -> Vec<String> {
     value
         .split(',')
@@ -561,6 +585,57 @@ mod tests {
         assert_eq!(
             transitive_dimension.message,
             "--swipe to dimensions must be positive: 0x8"
+        );
+    }
+
+    #[test]
+    fn parse_session_record_candidate_index_preserves_precedence_rejection_parse_and_absence() {
+        assert_eq!(
+            parse_session_record_candidate_index(&FlagArgs::default())
+                .expect("absent candidate selection"),
+            None
+        );
+        assert_eq!(
+            parse_session_record_candidate_index(&flags(&["--candidate-index", "3"]))
+                .expect("explicit candidate index"),
+            Some(3)
+        );
+        assert_eq!(
+            parse_session_record_candidate_index(&flags(&["--auto-candidate", "4"]))
+                .expect("automatic candidate index"),
+            Some(4)
+        );
+
+        let mutually_exclusive = parse_session_record_candidate_index(&flags(&[
+            "--candidate-index",
+            "3",
+            "--auto-candidate",
+            "4",
+        ]))
+        .expect_err("candidate selectors must remain mutually exclusive");
+        assert_eq!(
+            mutually_exclusive.message,
+            "record amend accepts only one of --candidate-index or --auto-candidate"
+        );
+
+        for name in ["--candidate-index", "--auto-candidate"] {
+            let missing_value = parse_session_record_candidate_index(&flags(&[name]))
+                .expect_err("a bare candidate selector must fail");
+            assert_eq!(
+                missing_value.message,
+                "record amend candidate selection requires an index value"
+            );
+        }
+
+        let parse_error =
+            parse_session_record_candidate_index(&flags(&["--candidate-index", "oops"]))
+                .expect_err("a non-numeric candidate selector must fail");
+        let expected_parse_error = "oops"
+            .parse::<usize>()
+            .expect_err("invalid test candidate index");
+        assert_eq!(
+            parse_error.message,
+            format!("failed to parse record amend candidate index 'oops': {expected_parse_error}")
         );
     }
 

@@ -32,13 +32,13 @@ use cli_result::CliErrorExitCode;
 use cli_result::CliResult;
 use device_runtime_config::{DeviceRuntimeConfig, device_config, effective_capture_backend_choice};
 use flag_args::FlagArgs;
-use flag_values::{
+#[rustfmt::skip] use flag_values::{
     parse_match_metric_flag, parse_optional_duration_ms, parse_optional_string_value,
     parse_optional_unit_f64, parse_optional_usize, parse_record_build_resolution,
     parse_record_duration_ms, parse_session_record_region, parse_session_record_swipe_rects,
     parse_touch_backend_override, record_amend_step_id, record_candidates_step_id,
     required_non_empty_flag, session_record_drift_diagnostics_path, split_csv,
-    stream_check_requested, stream_input_relay_action, target_argument,
+    stream_check_requested, stream_input_relay_action, target_argument, parse_session_record_candidate_index,
 };
 use instance_resolution::{resolve_instance_id, resolve_instance_id_for_flags};
 #[cfg(test)]
@@ -9087,29 +9087,6 @@ fn amend_verify_template_record_step(
         refresh_amended_verify_template(context, step_id, target, flags, auto_region_override)?;
     }
     Ok(changed)
-}
-
-fn parse_session_record_candidate_index(flags: &FlagArgs) -> CliOutcome<Option<usize>> {
-    let candidate_index = flags.optional("--candidate-index");
-    let auto_candidate = flags.optional("--auto-candidate");
-    if candidate_index.is_some() && auto_candidate.is_some() {
-        return Err(CliError::usage(
-            "record amend accepts only one of --candidate-index or --auto-candidate",
-        ));
-    }
-    let Some(value) = candidate_index.or(auto_candidate) else {
-        return Ok(None);
-    };
-    if value == "true" {
-        return Err(CliError::usage(
-            "record amend candidate selection requires an index value",
-        ));
-    }
-    value.parse::<usize>().map(Some).map_err(|err| {
-        CliError::usage(format!(
-            "failed to parse record amend candidate index '{value}': {err}"
-        ))
-    })
 }
 
 fn select_recorded_auto_region_candidate(
