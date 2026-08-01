@@ -1,4 +1,7 @@
-use super::{CliError, CliOutcome, FlagArgs, MatchMetric, TouchBackendChoice};
+use super::{
+    CliError, CliOutcome, FlagArgs, MatchMetric, SessionRecordRect, SessionRecordRegion,
+    TouchBackendChoice,
+};
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -224,6 +227,38 @@ pub(super) fn parse_record_build_resolution(flags: &FlagArgs) -> CliOutcome<Opti
     Ok(Some((width, height)))
 }
 
+pub(super) fn parse_session_record_region(value: &str) -> CliOutcome<SessionRecordRegion> {
+    if value == "auto" {
+        return Ok(SessionRecordRegion::Auto);
+    }
+    let parts = value.split(',').map(str::trim).collect::<Vec<_>>();
+    if parts.len() != 4 {
+        return Err(CliError::usage(format!(
+            "record anchor region must be auto or x,y,width,height: {value}"
+        )));
+    }
+    let parse_part = |index: usize, name: &str| {
+        parts[index].parse::<i32>().map_err(|err| {
+            CliError::usage(format!(
+                "failed to parse record anchor region {name} '{}': {err}",
+                parts[index]
+            ))
+        })
+    };
+    let rect = SessionRecordRect {
+        x: parse_part(0, "x")?,
+        y: parse_part(1, "y")?,
+        width: parse_part(2, "width")?,
+        height: parse_part(3, "height")?,
+    };
+    if rect.width <= 0 || rect.height <= 0 {
+        return Err(CliError::usage(
+            "record anchor region width and height must be positive",
+        ));
+    }
+    Ok(SessionRecordRegion::Rect { rect })
+}
+
 pub(super) fn split_csv(value: &str) -> Vec<String> {
     value
         .split(',')
@@ -333,6 +368,60 @@ mod tests {
             assert_eq!(
                 zero.message,
                 "--resolution width and height must be non-zero"
+            );
+        }
+    }
+
+    #[test]
+    fn parse_session_record_region_preserves_auto_rect_whitespace_parse_errors_and_positive_dimensions()
+     {
+        assert!(matches!(
+            parse_session_record_region("auto").expect("automatic record region"),
+            SessionRecordRegion::Auto
+        ));
+
+        for (value, expected) in [
+            ("10,20,30,40", (10, 20, 30, 40)),
+            (" 10 , 20 , 30 , 40 ", (10, 20, 30, 40)),
+        ] {
+            let SessionRecordRegion::Rect { rect } =
+                parse_session_record_region(value).expect("rectangular record region")
+            else {
+                panic!("record region must be rectangular");
+            };
+            assert_eq!((rect.x, rect.y, rect.width, rect.height), expected);
+        }
+
+        let malformed = parse_session_record_region("1,2,3")
+            .expect_err("record region with the wrong part count must fail");
+        assert_eq!(
+            malformed.message,
+            "record anchor region must be auto or x,y,width,height: 1,2,3"
+        );
+
+        let expected_parse_error = "oops".parse::<i32>().expect_err("invalid test component");
+        for (value, name) in [
+            ("oops,2,3,4", "x"),
+            ("1,oops,3,4", "y"),
+            ("1,2,oops,4", "width"),
+            ("1,2,3,oops", "height"),
+        ] {
+            let error = parse_session_record_region(value)
+                .expect_err("invalid record region component must fail");
+            assert_eq!(
+                error.message,
+                format!(
+                    "failed to parse record anchor region {name} 'oops': {expected_parse_error}"
+                )
+            );
+        }
+
+        for value in ["1,2,0,4", "1,2,3,0", "1,2,-1,4", "1,2,3,-1"] {
+            let error = parse_session_record_region(value)
+                .expect_err("non-positive record region dimension must fail");
+            assert_eq!(
+                error.message,
+                "record anchor region width and height must be positive"
             );
         }
     }

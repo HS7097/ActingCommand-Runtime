@@ -3281,9 +3281,10 @@ fn actinglab_flag_values_glue_stays_out_of_main() {
         "    parse_match_metric_flag, parse_optional_duration_ms, ",
         "parse_optional_string_value,\n",
         "    parse_optional_unit_f64, parse_optional_usize, parse_record_build_resolution,\n",
-        "    parse_record_duration_ms, parse_touch_backend_override, record_amend_step_id,\n",
-        "    record_candidates_step_id, required_non_empty_flag, session_record_drift_diagnostics_path,\n",
-        "    split_csv, stream_check_requested, stream_input_relay_action, target_argument,\n",
+        "    parse_record_duration_ms, parse_session_record_region, parse_touch_backend_override,\n",
+        "    record_amend_step_id, record_candidates_step_id, required_non_empty_flag,\n",
+        "    session_record_drift_diagnostics_path, split_csv, stream_check_requested,\n",
+        "    stream_input_relay_action, target_argument,\n",
         "};",
     );
     let declarations = main
@@ -3334,7 +3335,10 @@ fn actinglab_flag_values_glue_stays_out_of_main() {
     }
 
     const CHILD_IMPORTS: &str = concat!(
-        "use super::{CliError, CliOutcome, FlagArgs, MatchMetric, TouchBackendChoice};\n",
+        "use super::{\n",
+        "    CliError, CliOutcome, FlagArgs, MatchMetric, SessionRecordRect, SessionRecordRegion,\n",
+        "    TouchBackendChoice,\n",
+        "};\n",
         "use std::path::PathBuf;\n",
         "use std::time::Duration;\n\n",
     );
@@ -3406,9 +3410,10 @@ fn actinglab_required_non_empty_flag_glue_stays_out_of_main() {
         "    parse_match_metric_flag, parse_optional_duration_ms, ",
         "parse_optional_string_value,\n",
         "    parse_optional_unit_f64, parse_optional_usize, parse_record_build_resolution,\n",
-        "    parse_record_duration_ms, parse_touch_backend_override, record_amend_step_id,\n",
-        "    record_candidates_step_id, required_non_empty_flag, session_record_drift_diagnostics_path,\n",
-        "    split_csv, stream_check_requested, stream_input_relay_action, target_argument,\n",
+        "    parse_record_duration_ms, parse_session_record_region, parse_touch_backend_override,\n",
+        "    record_amend_step_id, record_candidates_step_id, required_non_empty_flag,\n",
+        "    session_record_drift_diagnostics_path, split_csv, stream_check_requested,\n",
+        "    stream_input_relay_action, target_argument,\n",
         "};",
     );
     assert_eq!(
@@ -3435,7 +3440,7 @@ fn actinglab_required_non_empty_flag_glue_stays_out_of_main() {
     );
     assert_eq!(
         flag_values.matches("pub(super) ").count(),
-        16,
+        17,
         "flag values module visibility changed"
     );
 
@@ -3495,9 +3500,10 @@ fn actinglab_optional_unit_f64_glue_stays_out_of_main() {
         "    parse_match_metric_flag, parse_optional_duration_ms, ",
         "parse_optional_string_value,\n",
         "    parse_optional_unit_f64, parse_optional_usize, parse_record_build_resolution,\n",
-        "    parse_record_duration_ms, parse_touch_backend_override, record_amend_step_id,\n",
-        "    record_candidates_step_id, required_non_empty_flag, session_record_drift_diagnostics_path,\n",
-        "    split_csv, stream_check_requested, stream_input_relay_action, target_argument,\n",
+        "    parse_record_duration_ms, parse_session_record_region, parse_touch_backend_override,\n",
+        "    record_amend_step_id, record_candidates_step_id, required_non_empty_flag,\n",
+        "    session_record_drift_diagnostics_path, split_csv, stream_check_requested,\n",
+        "    stream_input_relay_action, target_argument,\n",
         "};",
     );
     assert_eq!(
@@ -3520,7 +3526,7 @@ fn actinglab_optional_unit_f64_glue_stays_out_of_main() {
     );
     assert_eq!(
         flag_values.matches("pub(super) ").count(),
-        16,
+        17,
         "flag values module visibility changed"
     );
 
@@ -3587,9 +3593,10 @@ fn actinglab_record_duration_flag_glue_stays_out_of_main() {
         "    parse_match_metric_flag, parse_optional_duration_ms, ",
         "parse_optional_string_value,\n",
         "    parse_optional_unit_f64, parse_optional_usize, parse_record_build_resolution,\n",
-        "    parse_record_duration_ms, parse_touch_backend_override, record_amend_step_id,\n",
-        "    record_candidates_step_id, required_non_empty_flag, session_record_drift_diagnostics_path,\n",
-        "    split_csv, stream_check_requested, stream_input_relay_action, target_argument,\n",
+        "    parse_record_duration_ms, parse_session_record_region, parse_touch_backend_override,\n",
+        "    record_amend_step_id, record_candidates_step_id, required_non_empty_flag,\n",
+        "    session_record_drift_diagnostics_path, split_csv, stream_check_requested,\n",
+        "    stream_input_relay_action, target_argument,\n",
         "};",
     );
     assert_eq!(
@@ -3616,7 +3623,7 @@ fn actinglab_record_duration_flag_glue_stays_out_of_main() {
     );
     assert_eq!(
         flag_values.matches("pub(super) ").count(),
-        16,
+        17,
         "flag values module visibility changed"
     );
 
@@ -3685,9 +3692,10 @@ fn actinglab_record_amend_step_id_glue_stays_out_of_main() {
         "    parse_match_metric_flag, parse_optional_duration_ms, ",
         "parse_optional_string_value,\n",
         "    parse_optional_unit_f64, parse_optional_usize, parse_record_build_resolution,\n",
-        "    parse_record_duration_ms, parse_touch_backend_override, record_amend_step_id,\n",
-        "    record_candidates_step_id, required_non_empty_flag, session_record_drift_diagnostics_path,\n",
-        "    split_csv, stream_check_requested, stream_input_relay_action, target_argument,\n",
+        "    parse_record_duration_ms, parse_session_record_region, parse_touch_backend_override,\n",
+        "    record_amend_step_id, record_candidates_step_id, required_non_empty_flag,\n",
+        "    session_record_drift_diagnostics_path, split_csv, stream_check_requested,\n",
+        "    stream_input_relay_action, target_argument,\n",
         "};",
     );
     let declarations = main
@@ -3729,7 +3737,7 @@ fn actinglab_record_amend_step_id_glue_stays_out_of_main() {
     );
     assert_eq!(
         flag_values.matches("pub(super) ").count(),
-        16,
+        17,
         "flag values module visibility changed"
     );
     for line in flag_values.lines() {
@@ -3815,9 +3823,10 @@ fn actinglab_split_csv_glue_stays_out_of_main() {
         "    parse_match_metric_flag, parse_optional_duration_ms, ",
         "parse_optional_string_value,\n",
         "    parse_optional_unit_f64, parse_optional_usize, parse_record_build_resolution,\n",
-        "    parse_record_duration_ms, parse_touch_backend_override, record_amend_step_id,\n",
-        "    record_candidates_step_id, required_non_empty_flag, session_record_drift_diagnostics_path,\n",
-        "    split_csv, stream_check_requested, stream_input_relay_action, target_argument,\n",
+        "    parse_record_duration_ms, parse_session_record_region, parse_touch_backend_override,\n",
+        "    record_amend_step_id, record_candidates_step_id, required_non_empty_flag,\n",
+        "    session_record_drift_diagnostics_path, split_csv, stream_check_requested,\n",
+        "    stream_input_relay_action, target_argument,\n",
         "};",
     );
     assert_eq!(
@@ -3840,7 +3849,7 @@ fn actinglab_split_csv_glue_stays_out_of_main() {
     );
     assert_eq!(
         flag_values.matches("pub(super) ").count(),
-        16,
+        17,
         "flag values module visibility changed"
     );
 
@@ -3927,7 +3936,7 @@ fn actinglab_stream_check_requested_glue_stays_out_of_main() {
     );
     assert_eq!(
         flag_values.matches("pub(super) ").count(),
-        16,
+        17,
         "flag values module visibility changed"
     );
 
@@ -4012,7 +4021,7 @@ fn actinglab_target_argument_glue_stays_out_of_main() {
     );
     assert_eq!(
         flag_values.matches("pub(super) ").count(),
-        16,
+        17,
         "flag values module visibility changed"
     );
 
@@ -4128,7 +4137,7 @@ fn actinglab_session_record_drift_diagnostics_path_glue_stays_out_of_main() {
     );
     assert_eq!(
         flag_values.matches("pub(super) ").count(),
-        16,
+        17,
         "flag values module visibility changed"
     );
 
@@ -4146,7 +4155,7 @@ fn actinglab_session_record_drift_diagnostics_path_glue_stays_out_of_main() {
     let caller_serialization = caller_rows.concat();
     assert_eq!(
         format!("{:x}", Sha256::digest(caller_serialization.as_bytes())),
-        "fe26ec9877e286c51ed9c12a24bb80a160656baa3b8bf5aa710248bc9daaeae1",
+        "ae62095a253e5d9689da50c49fff37a0055ed1f68dc9288b6de829b743261410",
         "drift-diagnostics path caller serialization changed"
     );
 
@@ -4194,7 +4203,7 @@ fn actinglab_session_record_drift_diagnostics_path_glue_stays_out_of_main() {
         .trim()
         .parse::<usize>()
         .expect("ratchet/main_rs_lines.txt must contain one integer");
-    assert_eq!(ratchet, 20_667, "drift-diagnostics path ratchet changed");
+    assert_eq!(ratchet, 20_636, "drift-diagnostics path ratchet changed");
     assert_eq!(
         main.lines().count(),
         ratchet,
@@ -4239,16 +4248,20 @@ fn actinglab_parse_touch_backend_override_glue_stays_out_of_main() {
     );
     assert_eq!(
         flag_values
-            .matches(
-                "use super::{CliError, CliOutcome, FlagArgs, MatchMetric, TouchBackendChoice};",
-            )
+            .matches(concat!(
+                "use super::{\n",
+                "    CliError, CliOutcome, FlagArgs, MatchMetric, SessionRecordRect, ",
+                "SessionRecordRegion,\n",
+                "    TouchBackendChoice,\n",
+                "};",
+            ))
             .count(),
         1,
         "touch-backend owner lost its exact private dependency import"
     );
     assert_eq!(
         flag_values.matches("pub(super) ").count(),
-        16,
+        17,
         "flag values module visibility changed"
     );
 
@@ -4273,7 +4286,7 @@ fn actinglab_parse_touch_backend_override_glue_stays_out_of_main() {
     let caller_serialization = caller_rows.concat();
     assert_eq!(
         format!("{:x}", Sha256::digest(caller_serialization.as_bytes())),
-        "3dbb2ef115ae0da92bd57dd66711d2038b12744b88f0b1ffd8a1e111bb1c0eec",
+        "af5c7803db69944596c17e068691bf218cac08c581ffad57dc707361e1a96931",
         "touch-backend caller serialization changed"
     );
 
@@ -4330,7 +4343,7 @@ fn actinglab_parse_touch_backend_override_glue_stays_out_of_main() {
         .trim()
         .parse::<usize>()
         .expect("ratchet/main_rs_lines.txt must contain one integer");
-    assert_eq!(ratchet, 20_667, "touch-backend ratchet changed");
+    assert_eq!(ratchet, 20_636, "touch-backend ratchet changed");
     assert_eq!(
         main.lines().count(),
         ratchet,
@@ -4373,16 +4386,20 @@ fn actinglab_parse_match_metric_flag_glue_stays_out_of_main() {
     );
     assert_eq!(
         flag_values
-            .matches(
-                "use super::{CliError, CliOutcome, FlagArgs, MatchMetric, TouchBackendChoice};",
-            )
+            .matches(concat!(
+                "use super::{\n",
+                "    CliError, CliOutcome, FlagArgs, MatchMetric, SessionRecordRect, ",
+                "SessionRecordRegion,\n",
+                "    TouchBackendChoice,\n",
+                "};",
+            ))
             .count(),
         1,
         "match-metric owner lost its exact private dependency import"
     );
     assert_eq!(
         flag_values.matches("pub(super) ").count(),
-        16,
+        17,
         "flag values module visibility changed"
     );
 
@@ -4406,7 +4423,7 @@ fn actinglab_parse_match_metric_flag_glue_stays_out_of_main() {
     let caller_serialization = caller_rows.concat();
     assert_eq!(
         format!("{:x}", Sha256::digest(caller_serialization.as_bytes())),
-        "dd3d48bd3f2a61c68da046b2b82b1015bd9b4a85fb91470da7e43c9b2d56561a",
+        "083f0550e9d49e84b17860ad721d5a0e32afde102f2d89e73405dfe30e1d875d",
         "match-metric caller serialization changed"
     );
 
@@ -4474,7 +4491,7 @@ fn actinglab_parse_match_metric_flag_glue_stays_out_of_main() {
         .trim()
         .parse::<usize>()
         .expect("ratchet/main_rs_lines.txt must contain one integer");
-    assert_eq!(ratchet, 20_667, "match-metric ratchet changed");
+    assert_eq!(ratchet, 20_636, "match-metric ratchet changed");
     assert_eq!(
         main.lines().count(),
         ratchet,
@@ -4522,7 +4539,7 @@ fn actinglab_record_candidates_step_id_glue_stays_out_of_main() {
     );
     assert_eq!(
         flag_values.matches("pub(super) ").count(),
-        16,
+        17,
         "flag values module visibility changed"
     );
 
@@ -4546,7 +4563,7 @@ fn actinglab_record_candidates_step_id_glue_stays_out_of_main() {
     let caller_serialization = caller_rows.concat();
     assert_eq!(
         format!("{:x}", Sha256::digest(caller_serialization.as_bytes())),
-        "dcd637cd6953853bf1ee8088e28fb45d69f225724c123250c2ed013d66c79fda",
+        "be89596608d8f5c9a201eef7f02732ddec77e27e4ee340b26cb095e28d3c1107",
         "record-candidates step-id caller serialization changed"
     );
 
@@ -4621,7 +4638,7 @@ fn actinglab_record_candidates_step_id_glue_stays_out_of_main() {
         .trim()
         .parse::<usize>()
         .expect("ratchet/main_rs_lines.txt must contain one integer");
-    assert_eq!(ratchet, 20_667, "record-candidates step-id ratchet changed");
+    assert_eq!(ratchet, 20_636, "record-candidates step-id ratchet changed");
     assert_eq!(
         main.lines().count(),
         ratchet,
@@ -4669,7 +4686,7 @@ fn actinglab_stream_input_relay_action_glue_stays_out_of_main() {
     );
     assert_eq!(
         flag_values.matches("pub(super) ").count(),
-        16,
+        17,
         "flag values module visibility changed"
     );
     for line in flag_values.lines() {
@@ -4701,7 +4718,7 @@ fn actinglab_stream_input_relay_action_glue_stays_out_of_main() {
     let caller_serialization = caller_rows.concat();
     assert_eq!(
         format!("{:x}", Sha256::digest(caller_serialization.as_bytes())),
-        "eac415bb722df604f2afb18fd3c60d3971aba9469e138611a87b84cfe7880b8c",
+        "a9776db64e58f8269cb162328ae9a53b45118d7fb459a7590b2f896e4fb83cd2",
         "input-relay caller serialization changed"
     );
 
@@ -4783,7 +4800,7 @@ fn actinglab_stream_input_relay_action_glue_stays_out_of_main() {
         .trim()
         .parse::<usize>()
         .expect("ratchet/main_rs_lines.txt must contain one integer");
-    assert_eq!(ratchet, 20_667, "input-relay ratchet changed");
+    assert_eq!(ratchet, 20_636, "input-relay ratchet changed");
     assert_eq!(
         main.lines().count(),
         ratchet,
@@ -4833,7 +4850,7 @@ fn actinglab_parse_record_build_resolution_glue_stays_out_of_main() {
     );
     assert_eq!(
         flag_values.matches("pub(super) ").count(),
-        16,
+        17,
         "flag values module visibility changed"
     );
     for line in flag_values.lines() {
@@ -4865,17 +4882,17 @@ fn actinglab_parse_record_build_resolution_glue_stays_out_of_main() {
     let caller_serialization = caller_rows.concat();
     assert_eq!(
         format!("{:x}", Sha256::digest(caller_serialization.as_bytes())),
-        "55a344f36715f61238c2f2ca65c8794e665b413a1798fa9b448668bca259425e",
+        "6aec91b003f1763ceb40c1576b852b435b6ca322ef0631bebd932178ad828a27",
         "record-build resolution caller serialization changed"
     );
 
     let marker = "\npub(super) fn parse_record_build_resolution(";
-    let (_, owner_and_split_csv) = flag_values
+    let (_, owner_and_session_record_region) = flag_values
         .rsplit_once(marker)
         .expect("flag values module lost the appended record-build resolution owner");
-    let (owner_tail, _) = owner_and_split_csv
-        .split_once("pub(super) fn split_csv(")
-        .expect("flag values module lost the following split CSV owner");
+    let (owner_tail, _) = owner_and_session_record_region
+        .split_once("pub(super) fn parse_session_record_region(")
+        .expect("flag values module lost the following session-record region owner");
     let normalized_owner = format!("fn parse_record_build_resolution({owner_tail}");
     assert_eq!(
         normalized_owner.matches('\n').count(),
@@ -4944,11 +4961,195 @@ fn actinglab_parse_record_build_resolution_glue_stays_out_of_main() {
         .trim()
         .parse::<usize>()
         .expect("ratchet/main_rs_lines.txt must contain one integer");
-    assert_eq!(ratchet, 20_667, "record-build resolution ratchet changed");
+    assert_eq!(ratchet, 20_636, "record-build resolution ratchet changed");
     assert_eq!(
         main.lines().count(),
         ratchet,
         "record-build resolution move and main.rs ratchet diverged"
+    );
+}
+
+#[test]
+fn actinglab_parse_session_record_region_glue_stays_out_of_main() {
+    let root = workspace_root();
+    let main =
+        fs::read_to_string(root.join("apps/actinglab/src/main.rs")).expect("read ActingLab main");
+    let flag_values = fs::read_to_string(root.join("apps/actinglab/src/flag_values.rs"))
+        .expect("read ActingLab flag values module");
+
+    assert_eq!(
+        main.matches("parse_session_record_region,").count(),
+        1,
+        "ActingLab main lost the sole private session-record region root import"
+    );
+    assert_eq!(
+        main.matches("parse_session_record_region(").count(),
+        6,
+        "ActingLab main changed the production caller set"
+    );
+    assert_eq!(
+        flag_values
+            .matches("fn parse_session_record_region(")
+            .count(),
+        1,
+        "flag values module lost the one session-record region definition"
+    );
+    assert_eq!(
+        flag_values
+            .matches("pub(super) fn parse_session_record_region(")
+            .count(),
+        1,
+        "session-record region owner visibility changed"
+    );
+    assert!(
+        !main.contains("fn parse_session_record_region("),
+        "ActingLab main regained the session-record region owner"
+    );
+    assert!(
+        !main.contains("pub use flag_values::"),
+        "flag values owner became a public root re-export"
+    );
+    assert_eq!(
+        flag_values.matches("pub(super) ").count(),
+        17,
+        "flag values module visibility changed"
+    );
+    for line in flag_values.lines() {
+        let trimmed = line.trim_start();
+        assert!(
+            !trimmed.starts_with("pub fn parse_session_record_region(")
+                && !trimmed.starts_with("pub(crate) fn parse_session_record_region("),
+            "session-record region owner exposed broader visibility: {line}"
+        );
+    }
+    assert_eq!(
+        main.matches("enum SessionRecordRegion {").count(),
+        1,
+        "session-record region root type changed"
+    );
+    assert_eq!(
+        main.matches("struct SessionRecordRect {").count(),
+        1,
+        "session-record rectangle root type changed"
+    );
+    assert!(
+        !main.contains("pub enum SessionRecordRegion")
+            && !main.contains("pub(crate) enum SessionRecordRegion")
+            && !main.contains("pub struct SessionRecordRect")
+            && !main.contains("pub(crate) struct SessionRecordRect"),
+        "session-record region type dependency gained broader visibility"
+    );
+
+    const CREATE_CALL: &str =
+        "let region = parse_session_record_region(&flags.required(\"--region\")?)?;";
+    const AMEND_CALL: &str = "*target.region = parse_session_record_region(&value)?;";
+    assert_eq!(
+        main.matches(CREATE_CALL).count(),
+        3,
+        "ActingLab main lost an exact session-record region create caller"
+    );
+    assert_eq!(
+        main.matches(AMEND_CALL).count(),
+        3,
+        "ActingLab main lost an exact session-record region amend caller"
+    );
+    let caller_rows = main
+        .lines()
+        .enumerate()
+        .filter(|(_, line)| line.contains("parse_session_record_region("))
+        .map(|(index, line)| format!("apps/actinglab/src/main.rs:{}:{}\n", index + 1, line.trim()))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        caller_rows.len(),
+        6,
+        "session-record region production caller set changed"
+    );
+    let caller_serialization = caller_rows.concat();
+    assert_eq!(
+        format!("{:x}", Sha256::digest(caller_serialization.as_bytes())),
+        "361b99dca71cb01f4967425fbd50c6c70accc15565198df16df9602578774439",
+        "session-record region caller serialization changed"
+    );
+
+    let marker = "\npub(super) fn parse_session_record_region(";
+    let (_, owner_and_split_csv) = flag_values
+        .rsplit_once(marker)
+        .expect("flag values module lost the appended session-record region owner");
+    let (owner_tail, _) = owner_and_split_csv
+        .split_once("pub(super) fn split_csv(")
+        .expect("flag values module lost the following split CSV owner");
+    let normalized_owner = format!("fn parse_session_record_region({owner_tail}");
+    assert_eq!(
+        normalized_owner.matches('\n').count(),
+        32,
+        "session-record region owner LF line count changed"
+    );
+    assert_eq!(
+        normalized_owner.len(),
+        1_072,
+        "session-record region owner byte count changed"
+    );
+    assert_eq!(
+        format!("{:x}", Sha256::digest(normalized_owner.as_bytes())),
+        "1e68198f7d09be2be1008039137f6a4e26bae308691247f6ba973673cbcc442c",
+        "session-record region owner body changed"
+    );
+    for invariant in [
+        "if value == \"auto\"",
+        "return Ok(SessionRecordRegion::Auto);",
+        "value.split(',').map(str::trim).collect::<Vec<_>>()",
+        "if parts.len() != 4",
+        "record anchor region must be auto or x,y,width,height: {value}",
+        "failed to parse record anchor region {name} '{}': {err}",
+        "x: parse_part(0, \"x\")?",
+        "y: parse_part(1, \"y\")?",
+        "width: parse_part(2, \"width\")?",
+        "height: parse_part(3, \"height\")?",
+        "if rect.width <= 0 || rect.height <= 0",
+        "record anchor region width and height must be positive",
+        "Ok(SessionRecordRegion::Rect { rect })",
+    ] {
+        assert!(
+            normalized_owner.contains(invariant),
+            "session-record region invariant changed: {invariant}"
+        );
+    }
+    assert_eq!(
+        flag_values
+            .matches(
+                "fn parse_session_record_region_preserves_auto_rect_whitespace_parse_errors_and_positive_dimensions("
+            )
+            .count(),
+        1,
+        "session-record region behavior test coverage changed"
+    );
+
+    let mut actinglab_sources = Vec::new();
+    collect_rust_files(&root.join("apps/actinglab/src"), &mut actinglab_sources);
+    let definition_count = actinglab_sources
+        .iter()
+        .map(|path| {
+            fs::read_to_string(path)
+                .unwrap_or_else(|err| panic!("read {}: {err}", path.display()))
+                .matches("fn parse_session_record_region(")
+                .count()
+        })
+        .sum::<usize>();
+    assert_eq!(
+        definition_count, 1,
+        "ActingLab gained a second session-record region parser or authority"
+    );
+
+    let ratchet = fs::read_to_string(root.join("ratchet/main_rs_lines.txt"))
+        .expect("read ratchet/main_rs_lines.txt")
+        .trim()
+        .parse::<usize>()
+        .expect("ratchet/main_rs_lines.txt must contain one integer");
+    assert_eq!(ratchet, 20_636, "session-record region ratchet changed");
+    assert_eq!(
+        main.lines().count(),
+        ratchet,
+        "session-record region move and main.rs ratchet diverged"
     );
 }
 

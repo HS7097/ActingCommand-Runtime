@@ -35,9 +35,10 @@ use flag_args::FlagArgs;
 use flag_values::{
     parse_match_metric_flag, parse_optional_duration_ms, parse_optional_string_value,
     parse_optional_unit_f64, parse_optional_usize, parse_record_build_resolution,
-    parse_record_duration_ms, parse_touch_backend_override, record_amend_step_id,
-    record_candidates_step_id, required_non_empty_flag, session_record_drift_diagnostics_path,
-    split_csv, stream_check_requested, stream_input_relay_action, target_argument,
+    parse_record_duration_ms, parse_session_record_region, parse_touch_backend_override,
+    record_amend_step_id, record_candidates_step_id, required_non_empty_flag,
+    session_record_drift_diagnostics_path, split_csv, stream_check_requested,
+    stream_input_relay_action, target_argument,
 };
 use instance_resolution::{resolve_instance_id, resolve_instance_id_for_flags};
 #[cfg(test)]
@@ -8432,38 +8433,6 @@ fn crop_frame_rect(frame: &Frame, rect: &SessionRecordRect) -> CliOutcome<Frame>
         frame.backend_name,
     )
     .map_err(|err| CliError::usage(format!("failed to build record anchor crop frame: {err}")))
-}
-
-fn parse_session_record_region(value: &str) -> CliOutcome<SessionRecordRegion> {
-    if value == "auto" {
-        return Ok(SessionRecordRegion::Auto);
-    }
-    let parts = value.split(',').map(str::trim).collect::<Vec<_>>();
-    if parts.len() != 4 {
-        return Err(CliError::usage(format!(
-            "record anchor region must be auto or x,y,width,height: {value}"
-        )));
-    }
-    let parse_part = |index: usize, name: &str| {
-        parts[index].parse::<i32>().map_err(|err| {
-            CliError::usage(format!(
-                "failed to parse record anchor region {name} '{}': {err}",
-                parts[index]
-            ))
-        })
-    };
-    let rect = SessionRecordRect {
-        x: parse_part(0, "x")?,
-        y: parse_part(1, "y")?,
-        width: parse_part(2, "width")?,
-        height: parse_part(3, "height")?,
-    };
-    if rect.width <= 0 || rect.height <= 0 {
-        return Err(CliError::usage(
-            "record anchor region width and height must be positive",
-        ));
-    }
-    Ok(SessionRecordRegion::Rect { rect })
 }
 
 fn parse_session_record_operation_click(flags: &FlagArgs) -> CliOutcome<SessionRecordClick> {
