@@ -3280,10 +3280,10 @@ fn actinglab_flag_values_glue_stays_out_of_main() {
         "use flag_values::{\n",
         "    parse_match_metric_flag, parse_optional_duration_ms, ",
         "parse_optional_string_value,\n",
-        "    parse_optional_unit_f64, parse_optional_usize, parse_record_duration_ms,\n",
-        "    parse_touch_backend_override, record_amend_step_id, record_candidates_step_id,\n",
-        "    required_non_empty_flag, session_record_drift_diagnostics_path, split_csv,\n",
-        "    stream_check_requested, stream_input_relay_action, target_argument,\n",
+        "    parse_optional_unit_f64, parse_optional_usize, parse_record_build_resolution,\n",
+        "    parse_record_duration_ms, parse_touch_backend_override, record_amend_step_id,\n",
+        "    record_candidates_step_id, required_non_empty_flag, session_record_drift_diagnostics_path,\n",
+        "    split_csv, stream_check_requested, stream_input_relay_action, target_argument,\n",
         "};",
     );
     let declarations = main
@@ -3405,10 +3405,10 @@ fn actinglab_required_non_empty_flag_glue_stays_out_of_main() {
         "use flag_values::{\n",
         "    parse_match_metric_flag, parse_optional_duration_ms, ",
         "parse_optional_string_value,\n",
-        "    parse_optional_unit_f64, parse_optional_usize, parse_record_duration_ms,\n",
-        "    parse_touch_backend_override, record_amend_step_id, record_candidates_step_id,\n",
-        "    required_non_empty_flag, session_record_drift_diagnostics_path, split_csv,\n",
-        "    stream_check_requested, stream_input_relay_action, target_argument,\n",
+        "    parse_optional_unit_f64, parse_optional_usize, parse_record_build_resolution,\n",
+        "    parse_record_duration_ms, parse_touch_backend_override, record_amend_step_id,\n",
+        "    record_candidates_step_id, required_non_empty_flag, session_record_drift_diagnostics_path,\n",
+        "    split_csv, stream_check_requested, stream_input_relay_action, target_argument,\n",
         "};",
     );
     assert_eq!(
@@ -3435,7 +3435,7 @@ fn actinglab_required_non_empty_flag_glue_stays_out_of_main() {
     );
     assert_eq!(
         flag_values.matches("pub(super) ").count(),
-        15,
+        16,
         "flag values module visibility changed"
     );
 
@@ -3494,10 +3494,10 @@ fn actinglab_optional_unit_f64_glue_stays_out_of_main() {
         "use flag_values::{\n",
         "    parse_match_metric_flag, parse_optional_duration_ms, ",
         "parse_optional_string_value,\n",
-        "    parse_optional_unit_f64, parse_optional_usize, parse_record_duration_ms,\n",
-        "    parse_touch_backend_override, record_amend_step_id, record_candidates_step_id,\n",
-        "    required_non_empty_flag, session_record_drift_diagnostics_path, split_csv,\n",
-        "    stream_check_requested, stream_input_relay_action, target_argument,\n",
+        "    parse_optional_unit_f64, parse_optional_usize, parse_record_build_resolution,\n",
+        "    parse_record_duration_ms, parse_touch_backend_override, record_amend_step_id,\n",
+        "    record_candidates_step_id, required_non_empty_flag, session_record_drift_diagnostics_path,\n",
+        "    split_csv, stream_check_requested, stream_input_relay_action, target_argument,\n",
         "};",
     );
     assert_eq!(
@@ -3520,7 +3520,7 @@ fn actinglab_optional_unit_f64_glue_stays_out_of_main() {
     );
     assert_eq!(
         flag_values.matches("pub(super) ").count(),
-        15,
+        16,
         "flag values module visibility changed"
     );
 
@@ -3586,10 +3586,10 @@ fn actinglab_record_duration_flag_glue_stays_out_of_main() {
         "use flag_values::{\n",
         "    parse_match_metric_flag, parse_optional_duration_ms, ",
         "parse_optional_string_value,\n",
-        "    parse_optional_unit_f64, parse_optional_usize, parse_record_duration_ms,\n",
-        "    parse_touch_backend_override, record_amend_step_id, record_candidates_step_id,\n",
-        "    required_non_empty_flag, session_record_drift_diagnostics_path, split_csv,\n",
-        "    stream_check_requested, stream_input_relay_action, target_argument,\n",
+        "    parse_optional_unit_f64, parse_optional_usize, parse_record_build_resolution,\n",
+        "    parse_record_duration_ms, parse_touch_backend_override, record_amend_step_id,\n",
+        "    record_candidates_step_id, required_non_empty_flag, session_record_drift_diagnostics_path,\n",
+        "    split_csv, stream_check_requested, stream_input_relay_action, target_argument,\n",
         "};",
     );
     assert_eq!(
@@ -3616,7 +3616,7 @@ fn actinglab_record_duration_flag_glue_stays_out_of_main() {
     );
     assert_eq!(
         flag_values.matches("pub(super) ").count(),
-        15,
+        16,
         "flag values module visibility changed"
     );
 
@@ -3684,10 +3684,10 @@ fn actinglab_record_amend_step_id_glue_stays_out_of_main() {
         "use flag_values::{\n",
         "    parse_match_metric_flag, parse_optional_duration_ms, ",
         "parse_optional_string_value,\n",
-        "    parse_optional_unit_f64, parse_optional_usize, parse_record_duration_ms,\n",
-        "    parse_touch_backend_override, record_amend_step_id, record_candidates_step_id,\n",
-        "    required_non_empty_flag, session_record_drift_diagnostics_path, split_csv,\n",
-        "    stream_check_requested, stream_input_relay_action, target_argument,\n",
+        "    parse_optional_unit_f64, parse_optional_usize, parse_record_build_resolution,\n",
+        "    parse_record_duration_ms, parse_touch_backend_override, record_amend_step_id,\n",
+        "    record_candidates_step_id, required_non_empty_flag, session_record_drift_diagnostics_path,\n",
+        "    split_csv, stream_check_requested, stream_input_relay_action, target_argument,\n",
         "};",
     );
     let declarations = main
@@ -3729,7 +3729,7 @@ fn actinglab_record_amend_step_id_glue_stays_out_of_main() {
     );
     assert_eq!(
         flag_values.matches("pub(super) ").count(),
-        15,
+        16,
         "flag values module visibility changed"
     );
     for line in flag_values.lines() {
@@ -3814,10 +3814,10 @@ fn actinglab_split_csv_glue_stays_out_of_main() {
         "use flag_values::{\n",
         "    parse_match_metric_flag, parse_optional_duration_ms, ",
         "parse_optional_string_value,\n",
-        "    parse_optional_unit_f64, parse_optional_usize, parse_record_duration_ms,\n",
-        "    parse_touch_backend_override, record_amend_step_id, record_candidates_step_id,\n",
-        "    required_non_empty_flag, session_record_drift_diagnostics_path, split_csv,\n",
-        "    stream_check_requested, stream_input_relay_action, target_argument,\n",
+        "    parse_optional_unit_f64, parse_optional_usize, parse_record_build_resolution,\n",
+        "    parse_record_duration_ms, parse_touch_backend_override, record_amend_step_id,\n",
+        "    record_candidates_step_id, required_non_empty_flag, session_record_drift_diagnostics_path,\n",
+        "    split_csv, stream_check_requested, stream_input_relay_action, target_argument,\n",
         "};",
     );
     assert_eq!(
@@ -3840,7 +3840,7 @@ fn actinglab_split_csv_glue_stays_out_of_main() {
     );
     assert_eq!(
         flag_values.matches("pub(super) ").count(),
-        15,
+        16,
         "flag values module visibility changed"
     );
 
@@ -3927,7 +3927,7 @@ fn actinglab_stream_check_requested_glue_stays_out_of_main() {
     );
     assert_eq!(
         flag_values.matches("pub(super) ").count(),
-        15,
+        16,
         "flag values module visibility changed"
     );
 
@@ -4012,7 +4012,7 @@ fn actinglab_target_argument_glue_stays_out_of_main() {
     );
     assert_eq!(
         flag_values.matches("pub(super) ").count(),
-        15,
+        16,
         "flag values module visibility changed"
     );
 
@@ -4128,7 +4128,7 @@ fn actinglab_session_record_drift_diagnostics_path_glue_stays_out_of_main() {
     );
     assert_eq!(
         flag_values.matches("pub(super) ").count(),
-        15,
+        16,
         "flag values module visibility changed"
     );
 
@@ -4194,7 +4194,7 @@ fn actinglab_session_record_drift_diagnostics_path_glue_stays_out_of_main() {
         .trim()
         .parse::<usize>()
         .expect("ratchet/main_rs_lines.txt must contain one integer");
-    assert_eq!(ratchet, 20_698, "drift-diagnostics path ratchet changed");
+    assert_eq!(ratchet, 20_667, "drift-diagnostics path ratchet changed");
     assert_eq!(
         main.lines().count(),
         ratchet,
@@ -4248,7 +4248,7 @@ fn actinglab_parse_touch_backend_override_glue_stays_out_of_main() {
     );
     assert_eq!(
         flag_values.matches("pub(super) ").count(),
-        15,
+        16,
         "flag values module visibility changed"
     );
 
@@ -4330,7 +4330,7 @@ fn actinglab_parse_touch_backend_override_glue_stays_out_of_main() {
         .trim()
         .parse::<usize>()
         .expect("ratchet/main_rs_lines.txt must contain one integer");
-    assert_eq!(ratchet, 20_698, "touch-backend ratchet changed");
+    assert_eq!(ratchet, 20_667, "touch-backend ratchet changed");
     assert_eq!(
         main.lines().count(),
         ratchet,
@@ -4382,7 +4382,7 @@ fn actinglab_parse_match_metric_flag_glue_stays_out_of_main() {
     );
     assert_eq!(
         flag_values.matches("pub(super) ").count(),
-        15,
+        16,
         "flag values module visibility changed"
     );
 
@@ -4406,17 +4406,17 @@ fn actinglab_parse_match_metric_flag_glue_stays_out_of_main() {
     let caller_serialization = caller_rows.concat();
     assert_eq!(
         format!("{:x}", Sha256::digest(caller_serialization.as_bytes())),
-        "2153d73d156def8d5d35af1ec6f7be0dfd86d6d3e08bce815a4f2c9753ed57b5",
+        "dd3d48bd3f2a61c68da046b2b82b1015bd9b4a85fb91470da7e43c9b2d56561a",
         "match-metric caller serialization changed"
     );
 
     let marker = "\npub(super) fn parse_match_metric_flag(";
-    let (_, owner_and_split_csv) = flag_values
+    let (_, owner_and_record_build_resolution) = flag_values
         .rsplit_once(marker)
         .expect("flag values module lost the appended match-metric owner");
-    let (owner_tail, _) = owner_and_split_csv
-        .split_once("pub(super) fn split_csv(")
-        .expect("flag values module lost the following split CSV owner");
+    let (owner_tail, _) = owner_and_record_build_resolution
+        .split_once("pub(super) fn parse_record_build_resolution(")
+        .expect("flag values module lost the following record-build resolution owner");
     let normalized_owner = format!("fn parse_match_metric_flag({owner_tail}");
     assert_eq!(
         normalized_owner.matches('\n').count(),
@@ -4474,7 +4474,7 @@ fn actinglab_parse_match_metric_flag_glue_stays_out_of_main() {
         .trim()
         .parse::<usize>()
         .expect("ratchet/main_rs_lines.txt must contain one integer");
-    assert_eq!(ratchet, 20_698, "match-metric ratchet changed");
+    assert_eq!(ratchet, 20_667, "match-metric ratchet changed");
     assert_eq!(
         main.lines().count(),
         ratchet,
@@ -4522,7 +4522,7 @@ fn actinglab_record_candidates_step_id_glue_stays_out_of_main() {
     );
     assert_eq!(
         flag_values.matches("pub(super) ").count(),
-        15,
+        16,
         "flag values module visibility changed"
     );
 
@@ -4621,7 +4621,7 @@ fn actinglab_record_candidates_step_id_glue_stays_out_of_main() {
         .trim()
         .parse::<usize>()
         .expect("ratchet/main_rs_lines.txt must contain one integer");
-    assert_eq!(ratchet, 20_698, "record-candidates step-id ratchet changed");
+    assert_eq!(ratchet, 20_667, "record-candidates step-id ratchet changed");
     assert_eq!(
         main.lines().count(),
         ratchet,
@@ -4669,7 +4669,7 @@ fn actinglab_stream_input_relay_action_glue_stays_out_of_main() {
     );
     assert_eq!(
         flag_values.matches("pub(super) ").count(),
-        15,
+        16,
         "flag values module visibility changed"
     );
     for line in flag_values.lines() {
@@ -4783,11 +4783,172 @@ fn actinglab_stream_input_relay_action_glue_stays_out_of_main() {
         .trim()
         .parse::<usize>()
         .expect("ratchet/main_rs_lines.txt must contain one integer");
-    assert_eq!(ratchet, 20_698, "input-relay ratchet changed");
+    assert_eq!(ratchet, 20_667, "input-relay ratchet changed");
     assert_eq!(
         main.lines().count(),
         ratchet,
         "input-relay move and main.rs ratchet diverged"
+    );
+}
+
+#[test]
+fn actinglab_parse_record_build_resolution_glue_stays_out_of_main() {
+    let root = workspace_root();
+    let main =
+        fs::read_to_string(root.join("apps/actinglab/src/main.rs")).expect("read ActingLab main");
+    let flag_values = fs::read_to_string(root.join("apps/actinglab/src/flag_values.rs"))
+        .expect("read ActingLab flag values module");
+
+    assert_eq!(
+        main.matches("parse_record_build_resolution,").count(),
+        1,
+        "ActingLab main lost the sole private record-build resolution root import"
+    );
+    assert_eq!(
+        main.matches("parse_record_build_resolution").count(),
+        2,
+        "ActingLab main changed the private import or production caller set"
+    );
+    assert_eq!(
+        flag_values
+            .matches("fn parse_record_build_resolution(")
+            .count(),
+        1,
+        "flag values module lost the one record-build resolution definition"
+    );
+    assert_eq!(
+        flag_values
+            .matches("pub(super) fn parse_record_build_resolution(")
+            .count(),
+        1,
+        "record-build resolution owner visibility changed"
+    );
+    assert!(
+        !main.contains("fn parse_record_build_resolution("),
+        "ActingLab main regained the record-build resolution owner"
+    );
+    assert!(
+        !main.contains("pub use flag_values::"),
+        "flag values owner became a public root re-export"
+    );
+    assert_eq!(
+        flag_values.matches("pub(super) ").count(),
+        16,
+        "flag values module visibility changed"
+    );
+    for line in flag_values.lines() {
+        let trimmed = line.trim_start();
+        assert!(
+            !trimmed.starts_with("pub fn parse_record_build_resolution(")
+                && !trimmed.starts_with("pub(crate) fn parse_record_build_resolution("),
+            "record-build resolution owner exposed broader visibility: {line}"
+        );
+    }
+
+    const CALL: &str = "let mut resolution = parse_record_build_resolution(flags)?;";
+    assert_eq!(
+        main.matches(CALL).count(),
+        1,
+        "ActingLab main lost the exact record-build resolution caller expression"
+    );
+    let caller_rows = main
+        .lines()
+        .enumerate()
+        .filter(|(_, line)| line.contains("parse_record_build_resolution("))
+        .map(|(index, line)| format!("apps/actinglab/src/main.rs:{}:{}\n", index + 1, line.trim()))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        caller_rows.len(),
+        1,
+        "record-build resolution production caller set changed"
+    );
+    let caller_serialization = caller_rows.concat();
+    assert_eq!(
+        format!("{:x}", Sha256::digest(caller_serialization.as_bytes())),
+        "55a344f36715f61238c2f2ca65c8794e665b413a1798fa9b448668bca259425e",
+        "record-build resolution caller serialization changed"
+    );
+
+    let marker = "\npub(super) fn parse_record_build_resolution(";
+    let (_, owner_and_split_csv) = flag_values
+        .rsplit_once(marker)
+        .expect("flag values module lost the appended record-build resolution owner");
+    let (owner_tail, _) = owner_and_split_csv
+        .split_once("pub(super) fn split_csv(")
+        .expect("flag values module lost the following split CSV owner");
+    let normalized_owner = format!("fn parse_record_build_resolution({owner_tail}");
+    assert_eq!(
+        normalized_owner.matches('\n').count(),
+        31,
+        "record-build resolution owner LF line count changed"
+    );
+    assert_eq!(
+        normalized_owner.len(),
+        1_028,
+        "record-build resolution owner byte count changed"
+    );
+    assert_eq!(
+        format!("{:x}", Sha256::digest(normalized_owner.as_bytes())),
+        "d8b63c212e52f068512adfae6175ab15a09108981e04adb1a3ce433722a16b1a",
+        "record-build resolution owner body changed"
+    );
+    const FLAG_FILTER: &str = concat!(
+        ".optional(\"--resolution\")\n",
+        "        .filter(|value| value != \"true\")"
+    );
+    for invariant in [
+        FLAG_FILTER,
+        "return Ok(None);",
+        "value.replace(['X', '*'], \"x\")",
+        "normalized.split_once('x')",
+        "--resolution must use <width>x<height>, got {value}",
+        "failed to parse --resolution width '{width}': {err}",
+        "failed to parse --resolution height '{height}': {err}",
+        "if width == 0 || height == 0",
+        "--resolution width and height must be non-zero",
+        "Ok(Some((width, height)))",
+    ] {
+        assert!(
+            normalized_owner.contains(invariant),
+            "record-build resolution invariant changed: {invariant}"
+        );
+    }
+    assert_eq!(
+        flag_values
+            .matches(
+                "fn parse_record_build_resolution_preserves_absence_bare_true_normalization_parsing_errors_and_valid_values("
+            )
+            .count(),
+        1,
+        "record-build resolution behavior test coverage changed"
+    );
+
+    let mut actinglab_sources = Vec::new();
+    collect_rust_files(&root.join("apps/actinglab/src"), &mut actinglab_sources);
+    let definition_count = actinglab_sources
+        .iter()
+        .map(|path| {
+            fs::read_to_string(path)
+                .unwrap_or_else(|err| panic!("read {}: {err}", path.display()))
+                .matches("fn parse_record_build_resolution(")
+                .count()
+        })
+        .sum::<usize>();
+    assert_eq!(
+        definition_count, 1,
+        "ActingLab gained a second record-build resolution parser or authority"
+    );
+
+    let ratchet = fs::read_to_string(root.join("ratchet/main_rs_lines.txt"))
+        .expect("read ratchet/main_rs_lines.txt")
+        .trim()
+        .parse::<usize>()
+        .expect("ratchet/main_rs_lines.txt must contain one integer");
+    assert_eq!(ratchet, 20_667, "record-build resolution ratchet changed");
+    assert_eq!(
+        main.lines().count(),
+        ratchet,
+        "record-build resolution move and main.rs ratchet diverged"
     );
 }
 

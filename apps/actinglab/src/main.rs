@@ -34,10 +34,10 @@ use device_runtime_config::{DeviceRuntimeConfig, device_config, effective_captur
 use flag_args::FlagArgs;
 use flag_values::{
     parse_match_metric_flag, parse_optional_duration_ms, parse_optional_string_value,
-    parse_optional_unit_f64, parse_optional_usize, parse_record_duration_ms,
-    parse_touch_backend_override, record_amend_step_id, record_candidates_step_id,
-    required_non_empty_flag, session_record_drift_diagnostics_path, split_csv,
-    stream_check_requested, stream_input_relay_action, target_argument,
+    parse_optional_unit_f64, parse_optional_usize, parse_record_build_resolution,
+    parse_record_duration_ms, parse_touch_backend_override, record_amend_step_id,
+    record_candidates_step_id, required_non_empty_flag, session_record_drift_diagnostics_path,
+    split_csv, stream_check_requested, stream_input_relay_action, target_argument,
 };
 use instance_resolution::{resolve_instance_id, resolve_instance_id_for_flags};
 #[cfg(test)]
@@ -7506,37 +7506,6 @@ fn validate_record_build_page_ref(
     Err(CliError::usage(format!(
         "record build-task {label} page '{page}' in '{owner_id}' has no matching anchor"
     )))
-}
-
-fn parse_record_build_resolution(flags: &FlagArgs) -> CliOutcome<Option<(u32, u32)>> {
-    let Some(value) = flags
-        .optional("--resolution")
-        .filter(|value| value != "true")
-    else {
-        return Ok(None);
-    };
-    let normalized = value.replace(['X', '*'], "x");
-    let Some((width, height)) = normalized.split_once('x') else {
-        return Err(CliError::usage(format!(
-            "--resolution must use <width>x<height>, got {value}"
-        )));
-    };
-    let width = width.trim().parse::<u32>().map_err(|err| {
-        CliError::usage(format!(
-            "failed to parse --resolution width '{width}': {err}"
-        ))
-    })?;
-    let height = height.trim().parse::<u32>().map_err(|err| {
-        CliError::usage(format!(
-            "failed to parse --resolution height '{height}': {err}"
-        ))
-    })?;
-    if width == 0 || height == 0 {
-        return Err(CliError::usage(
-            "--resolution width and height must be non-zero",
-        ));
-    }
-    Ok(Some((width, height)))
 }
 
 fn session_record_selector(

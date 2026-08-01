@@ -193,6 +193,37 @@ pub(super) fn parse_match_metric_flag(flags: &FlagArgs) -> CliOutcome<MatchMetri
     }
 }
 
+pub(super) fn parse_record_build_resolution(flags: &FlagArgs) -> CliOutcome<Option<(u32, u32)>> {
+    let Some(value) = flags
+        .optional("--resolution")
+        .filter(|value| value != "true")
+    else {
+        return Ok(None);
+    };
+    let normalized = value.replace(['X', '*'], "x");
+    let Some((width, height)) = normalized.split_once('x') else {
+        return Err(CliError::usage(format!(
+            "--resolution must use <width>x<height>, got {value}"
+        )));
+    };
+    let width = width.trim().parse::<u32>().map_err(|err| {
+        CliError::usage(format!(
+            "failed to parse --resolution width '{width}': {err}"
+        ))
+    })?;
+    let height = height.trim().parse::<u32>().map_err(|err| {
+        CliError::usage(format!(
+            "failed to parse --resolution height '{height}': {err}"
+        ))
+    })?;
+    if width == 0 || height == 0 {
+        return Err(CliError::usage(
+            "--resolution width and height must be non-zero",
+        ));
+    }
+    Ok(Some((width, height)))
+}
+
 pub(super) fn split_csv(value: &str) -> Vec<String> {
     value
         .split(',')
@@ -239,6 +270,71 @@ mod tests {
             error.message,
             "unsupported --metric 'unsupported', expected ccorr_normed or ccoeff_normed"
         );
+    }
+
+    #[test]
+    fn parse_record_build_resolution_preserves_absence_bare_true_normalization_parsing_errors_and_valid_values()
+     {
+        assert_eq!(
+            parse_record_build_resolution(&FlagArgs::default()).expect("absent resolution"),
+            None
+        );
+        assert_eq!(
+            parse_record_build_resolution(&flags(&["--resolution"])).expect("bare true resolution"),
+            None
+        );
+        assert_eq!(
+            parse_record_build_resolution(&flags(&["--resolution", "1280X720"]))
+                .expect("uppercase X resolution"),
+            Some((1280, 720))
+        );
+        assert_eq!(
+            parse_record_build_resolution(&flags(&["--resolution", "1280*720"]))
+                .expect("asterisk resolution"),
+            Some((1280, 720))
+        );
+        assert_eq!(
+            parse_record_build_resolution(&flags(&["--resolution", " 1280 x 720 "]))
+                .expect("trimmed resolution"),
+            Some((1280, 720))
+        );
+        assert_eq!(
+            parse_record_build_resolution(&flags(&["--resolution", "1920x1080"]))
+                .expect("valid resolution"),
+            Some((1920, 1080))
+        );
+
+        let malformed = parse_record_build_resolution(&flags(&["--resolution", "1280"]))
+            .expect_err("missing resolution separator must fail");
+        assert_eq!(
+            malformed.message,
+            "--resolution must use <width>x<height>, got 1280"
+        );
+
+        let width_error = parse_record_build_resolution(&flags(&["--resolution", "oopsx720"]))
+            .expect_err("invalid width must fail");
+        let expected_width_error = "oops".parse::<u32>().expect_err("invalid test width");
+        assert_eq!(
+            width_error.message,
+            format!("failed to parse --resolution width 'oops': {expected_width_error}")
+        );
+
+        let height_error = parse_record_build_resolution(&flags(&["--resolution", "1280xoops"]))
+            .expect_err("invalid height must fail");
+        let expected_height_error = "oops".parse::<u32>().expect_err("invalid test height");
+        assert_eq!(
+            height_error.message,
+            format!("failed to parse --resolution height 'oops': {expected_height_error}")
+        );
+
+        for value in ["0x720", "1280x0"] {
+            let zero = parse_record_build_resolution(&flags(&["--resolution", value]))
+                .expect_err("zero resolution dimension must fail");
+            assert_eq!(
+                zero.message,
+                "--resolution width and height must be non-zero"
+            );
+        }
     }
 
     #[test]
