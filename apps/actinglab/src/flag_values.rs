@@ -290,6 +290,19 @@ pub(super) fn parse_session_record_rect(value: &str, label: &str) -> CliOutcome<
     Ok(rect)
 }
 
+#[rustfmt::skip]
+pub(super) fn parse_session_record_swipe_rects(
+    value: &str,
+) -> CliOutcome<(SessionRecordRect, SessionRecordRect)> {
+    let (from, to) = value
+        .split_once("->")
+        .ok_or_else(|| CliError::usage("--swipe must be formatted as x,y,w,h->x,y,w,h"))?;
+    Ok((
+        parse_session_record_rect(from, "--swipe from")?,
+        parse_session_record_rect(to, "--swipe to")?,
+    ))
+}
+
 pub(super) fn split_csv(value: &str) -> Vec<String> {
     value
         .split(',')
@@ -506,6 +519,49 @@ mod tests {
                 format!("--swipe from dimensions must be positive: {width}x{height}")
             );
         }
+    }
+
+    #[test]
+    fn parse_session_record_swipe_rects_preserves_first_arrow_order_labels_and_tuple() {
+        let (from, to) = parse_session_record_swipe_rects(" 1 , 2 , 3 , 4 -> 5 , 6 , 7 , 8 ")
+            .expect("valid session record swipe rectangles");
+        assert_eq!((from.x, from.y, from.width, from.height), (1, 2, 3, 4));
+        assert_eq!((to.x, to.y, to.width, to.height), (5, 6, 7, 8));
+
+        let missing_arrow = parse_session_record_swipe_rects("1,2,3,4")
+            .expect_err("swipe rectangles without an arrow must fail");
+        assert_eq!(
+            missing_arrow.message,
+            "--swipe must be formatted as x,y,w,h->x,y,w,h"
+        );
+
+        let from_error = parse_session_record_swipe_rects("1,2,3->5,6,7")
+            .expect_err("invalid swipe-from rectangle must fail before swipe-to");
+        assert_eq!(
+            from_error.message,
+            "--swipe from must be formatted as x,y,width,height: 1,2,3"
+        );
+
+        let to_error = parse_session_record_swipe_rects("1,2,3,4->5,6,7")
+            .expect_err("invalid swipe-to rectangle must retain its label");
+        assert_eq!(
+            to_error.message,
+            "--swipe to must be formatted as x,y,width,height: 5,6,7"
+        );
+
+        let first_arrow = parse_session_record_swipe_rects("1,2,3,4->5,6,7,8->9,10,11,12")
+            .expect_err("the first arrow must remain the only split boundary");
+        assert_eq!(
+            first_arrow.message,
+            "--swipe to must be formatted as x,y,width,height: 5,6,7,8->9,10,11,12"
+        );
+
+        let transitive_dimension = parse_session_record_swipe_rects("1,2,3,4->5,6,0,8")
+            .expect_err("swipe-to rectangle dimension validation must remain active");
+        assert_eq!(
+            transitive_dimension.message,
+            "--swipe to dimensions must be positive: 0x8"
+        );
     }
 
     #[test]

@@ -35,7 +35,7 @@ use flag_args::FlagArgs;
 use flag_values::{
     parse_match_metric_flag, parse_optional_duration_ms, parse_optional_string_value,
     parse_optional_unit_f64, parse_optional_usize, parse_record_build_resolution,
-    parse_record_duration_ms, parse_session_record_rect, parse_session_record_region,
+    parse_record_duration_ms, parse_session_record_region, parse_session_record_swipe_rects,
     parse_touch_backend_override, record_amend_step_id, record_candidates_step_id,
     required_non_empty_flag, session_record_drift_diagnostics_path, split_csv,
     stream_check_requested, stream_input_relay_action, target_argument,
@@ -8498,18 +8498,6 @@ fn parse_session_record_click(value: &str) -> CliOutcome<SessionRecordClick> {
     Ok(SessionRecordClick::Target {
         target: value.to_string(),
     })
-}
-
-fn parse_session_record_swipe_rects(
-    value: &str,
-) -> CliOutcome<(SessionRecordRect, SessionRecordRect)> {
-    let (from, to) = value
-        .split_once("->")
-        .ok_or_else(|| CliError::usage("--swipe must be formatted as x,y,w,h->x,y,w,h"))?;
-    Ok((
-        parse_session_record_rect(from, "--swipe from")?,
-        parse_session_record_rect(to, "--swipe to")?,
-    ))
 }
 
 fn amend_session_record_from_drift_diagnostics(
