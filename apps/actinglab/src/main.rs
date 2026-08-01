@@ -35,10 +35,10 @@ use flag_args::FlagArgs;
 use flag_values::{
     parse_match_metric_flag, parse_optional_duration_ms, parse_optional_string_value,
     parse_optional_unit_f64, parse_optional_usize, parse_record_build_resolution,
-    parse_record_duration_ms, parse_session_record_region, parse_touch_backend_override,
-    record_amend_step_id, record_candidates_step_id, required_non_empty_flag,
-    session_record_drift_diagnostics_path, split_csv, stream_check_requested,
-    stream_input_relay_action, target_argument,
+    parse_record_duration_ms, parse_session_record_rect, parse_session_record_region,
+    parse_touch_backend_override, record_amend_step_id, record_candidates_step_id,
+    required_non_empty_flag, session_record_drift_diagnostics_path, split_csv,
+    stream_check_requested, stream_input_relay_action, target_argument,
 };
 use instance_resolution::{resolve_instance_id, resolve_instance_id_for_flags};
 #[cfg(test)]
@@ -8510,36 +8510,6 @@ fn parse_session_record_swipe_rects(
         parse_session_record_rect(from, "--swipe from")?,
         parse_session_record_rect(to, "--swipe to")?,
     ))
-}
-
-fn parse_session_record_rect(value: &str, label: &str) -> CliOutcome<SessionRecordRect> {
-    let parts = value.split(',').map(str::trim).collect::<Vec<_>>();
-    if parts.len() != 4 {
-        return Err(CliError::usage(format!(
-            "{label} must be formatted as x,y,width,height: {value}"
-        )));
-    }
-    let parse = |index: usize, name: &str| {
-        parts[index].parse::<i32>().map_err(|err| {
-            CliError::usage(format!(
-                "failed to parse {label} {name} '{}': {err}",
-                parts[index]
-            ))
-        })
-    };
-    let rect = SessionRecordRect {
-        x: parse(0, "x")?,
-        y: parse(1, "y")?,
-        width: parse(2, "width")?,
-        height: parse(3, "height")?,
-    };
-    if rect.width <= 0 || rect.height <= 0 {
-        return Err(CliError::usage(format!(
-            "{label} dimensions must be positive: {}x{}",
-            rect.width, rect.height
-        )));
-    }
-    Ok(rect)
 }
 
 fn amend_session_record_from_drift_diagnostics(

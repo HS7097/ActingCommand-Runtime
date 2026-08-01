@@ -259,6 +259,37 @@ pub(super) fn parse_session_record_region(value: &str) -> CliOutcome<SessionReco
     Ok(SessionRecordRegion::Rect { rect })
 }
 
+#[rustfmt::skip]
+pub(super) fn parse_session_record_rect(value: &str, label: &str) -> CliOutcome<SessionRecordRect> {
+    let parts = value.split(',').map(str::trim).collect::<Vec<_>>();
+    if parts.len() != 4 {
+        return Err(CliError::usage(format!(
+            "{label} must be formatted as x,y,width,height: {value}"
+        )));
+    }
+    let parse = |index: usize, name: &str| {
+        parts[index].parse::<i32>().map_err(|err| {
+            CliError::usage(format!(
+                "failed to parse {label} {name} '{}': {err}",
+                parts[index]
+            ))
+        })
+    };
+    let rect = SessionRecordRect {
+        x: parse(0, "x")?,
+        y: parse(1, "y")?,
+        width: parse(2, "width")?,
+        height: parse(3, "height")?,
+    };
+    if rect.width <= 0 || rect.height <= 0 {
+        return Err(CliError::usage(format!(
+            "{label} dimensions must be positive: {}x{}",
+            rect.width, rect.height
+        )));
+    }
+    Ok(rect)
+}
+
 pub(super) fn split_csv(value: &str) -> Vec<String> {
     value
         .split(',')
@@ -422,6 +453,57 @@ mod tests {
             assert_eq!(
                 error.message,
                 "record anchor region width and height must be positive"
+            );
+        }
+    }
+
+    #[test]
+    fn parse_session_record_rect_preserves_whitespace_parse_order_labels_errors_and_positive_dimensions()
+     {
+        for (value, expected) in [
+            ("10,20,30,40", (10, 20, 30, 40)),
+            (" 10 , 20 , 30 , 40 ", (10, 20, 30, 40)),
+        ] {
+            let rect = parse_session_record_rect(value, "--swipe from")
+                .expect("valid session record rectangle");
+            assert_eq!((rect.x, rect.y, rect.width, rect.height), expected);
+        }
+
+        let malformed = parse_session_record_rect("1,2,3", "--swipe from")
+            .expect_err("record rectangle with the wrong part count must fail");
+        assert_eq!(
+            malformed.message,
+            "--swipe from must be formatted as x,y,width,height: 1,2,3"
+        );
+
+        let expected_parse_error = "oops"
+            .parse::<i32>()
+            .expect_err("invalid test rectangle component");
+        for (value, name) in [
+            ("oops,2,3,4", "x"),
+            ("1,oops,3,4", "y"),
+            ("1,2,oops,4", "width"),
+            ("1,2,3,oops", "height"),
+        ] {
+            let error = parse_session_record_rect(value, "--swipe to")
+                .expect_err("invalid record rectangle component must fail");
+            assert_eq!(
+                error.message,
+                format!("failed to parse --swipe to {name} 'oops': {expected_parse_error}")
+            );
+        }
+
+        for (value, width, height) in [
+            ("1,2,0,4", 0, 4),
+            ("1,2,3,0", 3, 0),
+            ("1,2,-1,4", -1, 4),
+            ("1,2,3,-1", 3, -1),
+        ] {
+            let error = parse_session_record_rect(value, "--swipe from")
+                .expect_err("non-positive record rectangle dimension must fail");
+            assert_eq!(
+                error.message,
+                format!("--swipe from dimensions must be positive: {width}x{height}")
             );
         }
     }

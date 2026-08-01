@@ -3281,10 +3281,10 @@ fn actinglab_flag_values_glue_stays_out_of_main() {
         "    parse_match_metric_flag, parse_optional_duration_ms, ",
         "parse_optional_string_value,\n",
         "    parse_optional_unit_f64, parse_optional_usize, parse_record_build_resolution,\n",
-        "    parse_record_duration_ms, parse_session_record_region, parse_touch_backend_override,\n",
-        "    record_amend_step_id, record_candidates_step_id, required_non_empty_flag,\n",
-        "    session_record_drift_diagnostics_path, split_csv, stream_check_requested,\n",
-        "    stream_input_relay_action, target_argument,\n",
+        "    parse_record_duration_ms, parse_session_record_rect, parse_session_record_region,\n",
+        "    parse_touch_backend_override, record_amend_step_id, record_candidates_step_id,\n",
+        "    required_non_empty_flag, session_record_drift_diagnostics_path, split_csv,\n",
+        "    stream_check_requested, stream_input_relay_action, target_argument,\n",
         "};",
     );
     let declarations = main
@@ -3410,10 +3410,10 @@ fn actinglab_required_non_empty_flag_glue_stays_out_of_main() {
         "    parse_match_metric_flag, parse_optional_duration_ms, ",
         "parse_optional_string_value,\n",
         "    parse_optional_unit_f64, parse_optional_usize, parse_record_build_resolution,\n",
-        "    parse_record_duration_ms, parse_session_record_region, parse_touch_backend_override,\n",
-        "    record_amend_step_id, record_candidates_step_id, required_non_empty_flag,\n",
-        "    session_record_drift_diagnostics_path, split_csv, stream_check_requested,\n",
-        "    stream_input_relay_action, target_argument,\n",
+        "    parse_record_duration_ms, parse_session_record_rect, parse_session_record_region,\n",
+        "    parse_touch_backend_override, record_amend_step_id, record_candidates_step_id,\n",
+        "    required_non_empty_flag, session_record_drift_diagnostics_path, split_csv,\n",
+        "    stream_check_requested, stream_input_relay_action, target_argument,\n",
         "};",
     );
     assert_eq!(
@@ -3440,7 +3440,7 @@ fn actinglab_required_non_empty_flag_glue_stays_out_of_main() {
     );
     assert_eq!(
         flag_values.matches("pub(super) ").count(),
-        17,
+        18,
         "flag values module visibility changed"
     );
 
@@ -3500,10 +3500,10 @@ fn actinglab_optional_unit_f64_glue_stays_out_of_main() {
         "    parse_match_metric_flag, parse_optional_duration_ms, ",
         "parse_optional_string_value,\n",
         "    parse_optional_unit_f64, parse_optional_usize, parse_record_build_resolution,\n",
-        "    parse_record_duration_ms, parse_session_record_region, parse_touch_backend_override,\n",
-        "    record_amend_step_id, record_candidates_step_id, required_non_empty_flag,\n",
-        "    session_record_drift_diagnostics_path, split_csv, stream_check_requested,\n",
-        "    stream_input_relay_action, target_argument,\n",
+        "    parse_record_duration_ms, parse_session_record_rect, parse_session_record_region,\n",
+        "    parse_touch_backend_override, record_amend_step_id, record_candidates_step_id,\n",
+        "    required_non_empty_flag, session_record_drift_diagnostics_path, split_csv,\n",
+        "    stream_check_requested, stream_input_relay_action, target_argument,\n",
         "};",
     );
     assert_eq!(
@@ -3526,7 +3526,7 @@ fn actinglab_optional_unit_f64_glue_stays_out_of_main() {
     );
     assert_eq!(
         flag_values.matches("pub(super) ").count(),
-        17,
+        18,
         "flag values module visibility changed"
     );
 
@@ -3593,10 +3593,10 @@ fn actinglab_record_duration_flag_glue_stays_out_of_main() {
         "    parse_match_metric_flag, parse_optional_duration_ms, ",
         "parse_optional_string_value,\n",
         "    parse_optional_unit_f64, parse_optional_usize, parse_record_build_resolution,\n",
-        "    parse_record_duration_ms, parse_session_record_region, parse_touch_backend_override,\n",
-        "    record_amend_step_id, record_candidates_step_id, required_non_empty_flag,\n",
-        "    session_record_drift_diagnostics_path, split_csv, stream_check_requested,\n",
-        "    stream_input_relay_action, target_argument,\n",
+        "    parse_record_duration_ms, parse_session_record_rect, parse_session_record_region,\n",
+        "    parse_touch_backend_override, record_amend_step_id, record_candidates_step_id,\n",
+        "    required_non_empty_flag, session_record_drift_diagnostics_path, split_csv,\n",
+        "    stream_check_requested, stream_input_relay_action, target_argument,\n",
         "};",
     );
     assert_eq!(
@@ -3623,7 +3623,7 @@ fn actinglab_record_duration_flag_glue_stays_out_of_main() {
     );
     assert_eq!(
         flag_values.matches("pub(super) ").count(),
-        17,
+        18,
         "flag values module visibility changed"
     );
 
@@ -3692,10 +3692,10 @@ fn actinglab_record_amend_step_id_glue_stays_out_of_main() {
         "    parse_match_metric_flag, parse_optional_duration_ms, ",
         "parse_optional_string_value,\n",
         "    parse_optional_unit_f64, parse_optional_usize, parse_record_build_resolution,\n",
-        "    parse_record_duration_ms, parse_session_record_region, parse_touch_backend_override,\n",
-        "    record_amend_step_id, record_candidates_step_id, required_non_empty_flag,\n",
-        "    session_record_drift_diagnostics_path, split_csv, stream_check_requested,\n",
-        "    stream_input_relay_action, target_argument,\n",
+        "    parse_record_duration_ms, parse_session_record_rect, parse_session_record_region,\n",
+        "    parse_touch_backend_override, record_amend_step_id, record_candidates_step_id,\n",
+        "    required_non_empty_flag, session_record_drift_diagnostics_path, split_csv,\n",
+        "    stream_check_requested, stream_input_relay_action, target_argument,\n",
         "};",
     );
     let declarations = main
@@ -3737,7 +3737,7 @@ fn actinglab_record_amend_step_id_glue_stays_out_of_main() {
     );
     assert_eq!(
         flag_values.matches("pub(super) ").count(),
-        17,
+        18,
         "flag values module visibility changed"
     );
     for line in flag_values.lines() {
@@ -3823,10 +3823,10 @@ fn actinglab_split_csv_glue_stays_out_of_main() {
         "    parse_match_metric_flag, parse_optional_duration_ms, ",
         "parse_optional_string_value,\n",
         "    parse_optional_unit_f64, parse_optional_usize, parse_record_build_resolution,\n",
-        "    parse_record_duration_ms, parse_session_record_region, parse_touch_backend_override,\n",
-        "    record_amend_step_id, record_candidates_step_id, required_non_empty_flag,\n",
-        "    session_record_drift_diagnostics_path, split_csv, stream_check_requested,\n",
-        "    stream_input_relay_action, target_argument,\n",
+        "    parse_record_duration_ms, parse_session_record_rect, parse_session_record_region,\n",
+        "    parse_touch_backend_override, record_amend_step_id, record_candidates_step_id,\n",
+        "    required_non_empty_flag, session_record_drift_diagnostics_path, split_csv,\n",
+        "    stream_check_requested, stream_input_relay_action, target_argument,\n",
         "};",
     );
     assert_eq!(
@@ -3849,7 +3849,7 @@ fn actinglab_split_csv_glue_stays_out_of_main() {
     );
     assert_eq!(
         flag_values.matches("pub(super) ").count(),
-        17,
+        18,
         "flag values module visibility changed"
     );
 
@@ -3936,7 +3936,7 @@ fn actinglab_stream_check_requested_glue_stays_out_of_main() {
     );
     assert_eq!(
         flag_values.matches("pub(super) ").count(),
-        17,
+        18,
         "flag values module visibility changed"
     );
 
@@ -4021,7 +4021,7 @@ fn actinglab_target_argument_glue_stays_out_of_main() {
     );
     assert_eq!(
         flag_values.matches("pub(super) ").count(),
-        17,
+        18,
         "flag values module visibility changed"
     );
 
@@ -4137,7 +4137,7 @@ fn actinglab_session_record_drift_diagnostics_path_glue_stays_out_of_main() {
     );
     assert_eq!(
         flag_values.matches("pub(super) ").count(),
-        17,
+        18,
         "flag values module visibility changed"
     );
 
@@ -4203,7 +4203,7 @@ fn actinglab_session_record_drift_diagnostics_path_glue_stays_out_of_main() {
         .trim()
         .parse::<usize>()
         .expect("ratchet/main_rs_lines.txt must contain one integer");
-    assert_eq!(ratchet, 20_636, "drift-diagnostics path ratchet changed");
+    assert_eq!(ratchet, 20_606, "drift-diagnostics path ratchet changed");
     assert_eq!(
         main.lines().count(),
         ratchet,
@@ -4261,7 +4261,7 @@ fn actinglab_parse_touch_backend_override_glue_stays_out_of_main() {
     );
     assert_eq!(
         flag_values.matches("pub(super) ").count(),
-        17,
+        18,
         "flag values module visibility changed"
     );
 
@@ -4343,7 +4343,7 @@ fn actinglab_parse_touch_backend_override_glue_stays_out_of_main() {
         .trim()
         .parse::<usize>()
         .expect("ratchet/main_rs_lines.txt must contain one integer");
-    assert_eq!(ratchet, 20_636, "touch-backend ratchet changed");
+    assert_eq!(ratchet, 20_606, "touch-backend ratchet changed");
     assert_eq!(
         main.lines().count(),
         ratchet,
@@ -4399,7 +4399,7 @@ fn actinglab_parse_match_metric_flag_glue_stays_out_of_main() {
     );
     assert_eq!(
         flag_values.matches("pub(super) ").count(),
-        17,
+        18,
         "flag values module visibility changed"
     );
 
@@ -4491,7 +4491,7 @@ fn actinglab_parse_match_metric_flag_glue_stays_out_of_main() {
         .trim()
         .parse::<usize>()
         .expect("ratchet/main_rs_lines.txt must contain one integer");
-    assert_eq!(ratchet, 20_636, "match-metric ratchet changed");
+    assert_eq!(ratchet, 20_606, "match-metric ratchet changed");
     assert_eq!(
         main.lines().count(),
         ratchet,
@@ -4539,7 +4539,7 @@ fn actinglab_record_candidates_step_id_glue_stays_out_of_main() {
     );
     assert_eq!(
         flag_values.matches("pub(super) ").count(),
-        17,
+        18,
         "flag values module visibility changed"
     );
 
@@ -4638,7 +4638,7 @@ fn actinglab_record_candidates_step_id_glue_stays_out_of_main() {
         .trim()
         .parse::<usize>()
         .expect("ratchet/main_rs_lines.txt must contain one integer");
-    assert_eq!(ratchet, 20_636, "record-candidates step-id ratchet changed");
+    assert_eq!(ratchet, 20_606, "record-candidates step-id ratchet changed");
     assert_eq!(
         main.lines().count(),
         ratchet,
@@ -4686,7 +4686,7 @@ fn actinglab_stream_input_relay_action_glue_stays_out_of_main() {
     );
     assert_eq!(
         flag_values.matches("pub(super) ").count(),
-        17,
+        18,
         "flag values module visibility changed"
     );
     for line in flag_values.lines() {
@@ -4800,7 +4800,7 @@ fn actinglab_stream_input_relay_action_glue_stays_out_of_main() {
         .trim()
         .parse::<usize>()
         .expect("ratchet/main_rs_lines.txt must contain one integer");
-    assert_eq!(ratchet, 20_636, "input-relay ratchet changed");
+    assert_eq!(ratchet, 20_606, "input-relay ratchet changed");
     assert_eq!(
         main.lines().count(),
         ratchet,
@@ -4850,7 +4850,7 @@ fn actinglab_parse_record_build_resolution_glue_stays_out_of_main() {
     );
     assert_eq!(
         flag_values.matches("pub(super) ").count(),
-        17,
+        18,
         "flag values module visibility changed"
     );
     for line in flag_values.lines() {
@@ -4961,7 +4961,7 @@ fn actinglab_parse_record_build_resolution_glue_stays_out_of_main() {
         .trim()
         .parse::<usize>()
         .expect("ratchet/main_rs_lines.txt must contain one integer");
-    assert_eq!(ratchet, 20_636, "record-build resolution ratchet changed");
+    assert_eq!(ratchet, 20_606, "record-build resolution ratchet changed");
     assert_eq!(
         main.lines().count(),
         ratchet,
@@ -5011,7 +5011,7 @@ fn actinglab_parse_session_record_region_glue_stays_out_of_main() {
     );
     assert_eq!(
         flag_values.matches("pub(super) ").count(),
-        17,
+        18,
         "flag values module visibility changed"
     );
     for line in flag_values.lines() {
@@ -5067,7 +5067,7 @@ fn actinglab_parse_session_record_region_glue_stays_out_of_main() {
     let caller_serialization = caller_rows.concat();
     assert_eq!(
         format!("{:x}", Sha256::digest(caller_serialization.as_bytes())),
-        "361b99dca71cb01f4967425fbd50c6c70accc15565198df16df9602578774439",
+        "d2655d2f51a777eaaa5566a6f8e45fb505f4296909ab451707cebf3dc7671f31",
         "session-record region caller serialization changed"
     );
 
@@ -5076,8 +5076,8 @@ fn actinglab_parse_session_record_region_glue_stays_out_of_main() {
         .rsplit_once(marker)
         .expect("flag values module lost the appended session-record region owner");
     let (owner_tail, _) = owner_and_split_csv
-        .split_once("pub(super) fn split_csv(")
-        .expect("flag values module lost the following split CSV owner");
+        .split_once("#[rustfmt::skip]\npub(super) fn parse_session_record_rect(")
+        .expect("flag values module lost the following session-record rectangle owner");
     let normalized_owner = format!("fn parse_session_record_region({owner_tail}");
     assert_eq!(
         normalized_owner.matches('\n').count(),
@@ -5145,11 +5145,199 @@ fn actinglab_parse_session_record_region_glue_stays_out_of_main() {
         .trim()
         .parse::<usize>()
         .expect("ratchet/main_rs_lines.txt must contain one integer");
-    assert_eq!(ratchet, 20_636, "session-record region ratchet changed");
+    assert_eq!(ratchet, 20_606, "session-record region ratchet changed");
     assert_eq!(
         main.lines().count(),
         ratchet,
         "session-record region move and main.rs ratchet diverged"
+    );
+}
+
+#[test]
+fn actinglab_parse_session_record_rect_glue_stays_out_of_main() {
+    let root = workspace_root();
+    let main =
+        fs::read_to_string(root.join("apps/actinglab/src/main.rs")).expect("read ActingLab main");
+    let flag_values = fs::read_to_string(root.join("apps/actinglab/src/flag_values.rs"))
+        .expect("read ActingLab flag values module");
+
+    assert_eq!(
+        main.matches("parse_session_record_rect,").count(),
+        1,
+        "ActingLab main lost the sole private session-record rectangle root import"
+    );
+    assert_eq!(
+        main.matches("parse_session_record_rect(").count(),
+        2,
+        "ActingLab main changed the session-record rectangle production caller set"
+    );
+    assert_eq!(
+        flag_values.matches("fn parse_session_record_rect(").count(),
+        1,
+        "flag values module lost the one session-record rectangle definition"
+    );
+    assert_eq!(
+        flag_values
+            .matches("pub(super) fn parse_session_record_rect(")
+            .count(),
+        1,
+        "session-record rectangle owner visibility changed"
+    );
+    assert_eq!(
+        flag_values
+            .matches("#[rustfmt::skip]\npub(super) fn parse_session_record_rect(")
+            .count(),
+        1,
+        "session-record rectangle owner lost its byte-preserving rustfmt boundary"
+    );
+    assert!(
+        !main.contains("fn parse_session_record_rect("),
+        "ActingLab main regained the session-record rectangle owner"
+    );
+    assert!(
+        !main.contains("pub use flag_values::"),
+        "flag values owner became a public root re-export"
+    );
+    assert_eq!(
+        flag_values.matches("pub(super) ").count(),
+        18,
+        "flag values module visibility changed"
+    );
+    for line in flag_values.lines() {
+        let trimmed = line.trim_start();
+        assert!(
+            !trimmed.starts_with("pub fn parse_session_record_rect(")
+                && !trimmed.starts_with("pub(crate) fn parse_session_record_rect("),
+            "session-record rectangle owner exposed broader visibility: {line}"
+        );
+    }
+    assert_eq!(
+        main.matches("struct SessionRecordRect {").count(),
+        1,
+        "session-record rectangle root type changed"
+    );
+    assert!(
+        !main.contains("pub struct SessionRecordRect")
+            && !main.contains("pub(crate) struct SessionRecordRect"),
+        "session-record rectangle type dependency gained broader visibility"
+    );
+
+    const FROM_CALL: &str = "parse_session_record_rect(from, \"--swipe from\")?,";
+    const TO_CALL: &str = "parse_session_record_rect(to, \"--swipe to\")?,";
+    assert_eq!(
+        main.matches(FROM_CALL).count(),
+        1,
+        "ActingLab main lost the exact swipe-from rectangle caller"
+    );
+    assert_eq!(
+        main.matches(TO_CALL).count(),
+        1,
+        "ActingLab main lost the exact swipe-to rectangle caller"
+    );
+    let caller_rows = main
+        .lines()
+        .enumerate()
+        .filter(|(_, line)| line.contains("parse_session_record_rect("))
+        .map(|(index, line)| format!("apps/actinglab/src/main.rs:{}:{}\n", index + 1, line.trim()))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        caller_rows.len(),
+        2,
+        "session-record rectangle production caller set changed"
+    );
+    assert_eq!(
+        format!("{:x}", Sha256::digest(caller_rows.concat().as_bytes())),
+        "f442d934782fc60e00cd5fac93119b4e9b6e1b85b36ae1d9dc21c0707fac9dc1",
+        "session-record rectangle location-bearing caller serialization changed"
+    );
+    let semantic_callers = main
+        .lines()
+        .filter(|line| line.contains("parse_session_record_rect("))
+        .map(|line| format!("{}\n", line.trim()))
+        .collect::<String>();
+    assert_eq!(
+        format!("{:x}", Sha256::digest(semantic_callers.as_bytes())),
+        "677cacfe6595da99c9af8bcea2170c1dd39a108e2ad9eccd254c32e7fa96945f",
+        "session-record rectangle semantic caller order changed"
+    );
+
+    let marker = "\npub(super) fn parse_session_record_rect(";
+    let (_, owner_and_split_csv) = flag_values
+        .rsplit_once(marker)
+        .expect("flag values module lost the appended session-record rectangle owner");
+    let (owner_tail, _) = owner_and_split_csv
+        .split_once("pub(super) fn split_csv(")
+        .expect("flag values module lost the following split CSV owner");
+    let normalized_owner = format!("fn parse_session_record_rect({owner_tail}");
+    assert_eq!(
+        normalized_owner.matches('\n').count(),
+        30,
+        "session-record rectangle owner LF line count changed"
+    );
+    assert_eq!(
+        normalized_owner.len(),
+        961,
+        "session-record rectangle owner byte count changed"
+    );
+    assert_eq!(
+        format!("{:x}", Sha256::digest(normalized_owner.as_bytes())),
+        "5ef2557e52060d170ed15432ba253ec8b7fdb56c329c2593d7935b8e99027501",
+        "session-record rectangle owner body changed"
+    );
+    for invariant in [
+        "value.split(',').map(str::trim).collect::<Vec<_>>()",
+        "if parts.len() != 4",
+        "{label} must be formatted as x,y,width,height: {value}",
+        "failed to parse {label} {name} '{}': {err}",
+        "x: parse(0, \"x\")?",
+        "y: parse(1, \"y\")?",
+        "width: parse(2, \"width\")?",
+        "height: parse(3, \"height\")?",
+        "if rect.width <= 0 || rect.height <= 0",
+        "{label} dimensions must be positive: {}x{}",
+        "Ok(rect)",
+    ] {
+        assert!(
+            normalized_owner.contains(invariant),
+            "session-record rectangle invariant changed: {invariant}"
+        );
+    }
+    assert_eq!(
+        flag_values
+            .matches(
+                "fn parse_session_record_rect_preserves_whitespace_parse_order_labels_errors_and_positive_dimensions("
+            )
+            .count(),
+        1,
+        "session-record rectangle behavior test coverage changed"
+    );
+
+    let mut actinglab_sources = Vec::new();
+    collect_rust_files(&root.join("apps/actinglab/src"), &mut actinglab_sources);
+    let definition_count = actinglab_sources
+        .iter()
+        .map(|path| {
+            fs::read_to_string(path)
+                .unwrap_or_else(|err| panic!("read {}: {err}", path.display()))
+                .matches("fn parse_session_record_rect(")
+                .count()
+        })
+        .sum::<usize>();
+    assert_eq!(
+        definition_count, 1,
+        "ActingLab gained a second session-record rectangle parser or authority"
+    );
+
+    let ratchet = fs::read_to_string(root.join("ratchet/main_rs_lines.txt"))
+        .expect("read ratchet/main_rs_lines.txt")
+        .trim()
+        .parse::<usize>()
+        .expect("ratchet/main_rs_lines.txt must contain one integer");
+    assert_eq!(ratchet, 20_606, "session-record rectangle ratchet changed");
+    assert_eq!(
+        main.lines().count(),
+        ratchet,
+        "session-record rectangle move and main.rs ratchet diverged"
     );
 }
 
