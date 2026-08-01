@@ -5,6 +5,13 @@ use serde_json::Value;
 
 use super::{CliError, ErrorKind, RUNTIME_VERSION, SCHEMA_VERSION};
 
+pub(super) fn human_summary(command: &str, data: &Value) -> String {
+    match data {
+        Value::String(text) => text.clone(),
+        _ => format!("{command} ok"),
+    }
+}
+
 #[derive(Debug)]
 pub(super) struct CliResult {
     pub(super) print_json: bool,
@@ -74,5 +81,24 @@ impl CliErrorExitCode for CliError {
             ErrorKind::RuntimeUnavailable => 5,
             ErrorKind::NotImplemented => 6,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn human_summary_preserves_string_and_non_string_output() {
+        assert_eq!(
+            human_summary("ignored", &Value::String("ready".to_string())),
+            "ready"
+        );
+        assert_eq!(human_summary("ignored", &Value::String(String::new())), "");
+        assert_eq!(human_summary("status", &Value::Null), "status ok");
+        assert_eq!(
+            human_summary("session status!?  Mixed", &serde_json::json!({"ok": true})),
+            "session status!?  Mixed ok"
+        );
     }
 }

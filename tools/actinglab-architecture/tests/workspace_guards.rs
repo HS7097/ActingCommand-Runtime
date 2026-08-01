@@ -2455,7 +2455,21 @@ fn actinglab_cli_result_glue_stays_out_of_main() {
         main.contains("mod cli_result;"),
         "ActingLab main lost the private CLI result module"
     );
+    assert_eq!(
+        main.matches("use cli_result::human_summary;").count(),
+        1,
+        "ActingLab main lost the sole private human-summary import"
+    );
+    assert_eq!(
+        main.matches("let human = human_summary(&invocation.command_name, &data);")
+            .count(),
+        1,
+        "ActingLab main human-summary caller changed"
+    );
     for definition in [
+        "fn human_summary(command: &str, data: &Value) -> String",
+        "Value::String(text) => text.clone(),",
+        r#"_ => format!("{command} ok"),"#,
         "struct CliResult",
         "impl CliResult",
         "fn ok(command: String, data: Value, print_json: bool, human: String) -> Self",
@@ -2482,7 +2496,7 @@ fn actinglab_cli_result_glue_stays_out_of_main() {
     }
     assert_eq!(
         cli_result.matches("pub(super) ").count(),
-        9,
+        10,
         "CLI result owner visibility changed"
     );
     for line in cli_result.lines() {
@@ -4155,7 +4169,7 @@ fn actinglab_session_record_drift_diagnostics_path_glue_stays_out_of_main() {
     let caller_serialization = caller_rows.concat();
     assert_eq!(
         format!("{:x}", Sha256::digest(caller_serialization.as_bytes())),
-        "ae62095a253e5d9689da50c49fff37a0055ed1f68dc9288b6de829b743261410",
+        "495d3676e6bbf2e7427bd03a4976100a7760c9d7dc61d20ce06e3e0ea7b6584c",
         "drift-diagnostics path caller serialization changed"
     );
 
@@ -4203,7 +4217,7 @@ fn actinglab_session_record_drift_diagnostics_path_glue_stays_out_of_main() {
         .trim()
         .parse::<usize>()
         .expect("ratchet/main_rs_lines.txt must contain one integer");
-    assert_eq!(ratchet, 20_571, "drift-diagnostics path ratchet changed");
+    assert_eq!(ratchet, 20_565, "drift-diagnostics path ratchet changed");
     assert_eq!(
         main.lines().count(),
         ratchet,
@@ -4286,7 +4300,7 @@ fn actinglab_parse_touch_backend_override_glue_stays_out_of_main() {
     let caller_serialization = caller_rows.concat();
     assert_eq!(
         format!("{:x}", Sha256::digest(caller_serialization.as_bytes())),
-        "af5c7803db69944596c17e068691bf218cac08c581ffad57dc707361e1a96931",
+        "6e4bebb6d2069f27119b822c8863d755061c399c39f934db7681b970c210e653",
         "touch-backend caller serialization changed"
     );
 
@@ -4343,7 +4357,7 @@ fn actinglab_parse_touch_backend_override_glue_stays_out_of_main() {
         .trim()
         .parse::<usize>()
         .expect("ratchet/main_rs_lines.txt must contain one integer");
-    assert_eq!(ratchet, 20_571, "touch-backend ratchet changed");
+    assert_eq!(ratchet, 20_565, "touch-backend ratchet changed");
     assert_eq!(
         main.lines().count(),
         ratchet,
@@ -4423,7 +4437,7 @@ fn actinglab_parse_match_metric_flag_glue_stays_out_of_main() {
     let caller_serialization = caller_rows.concat();
     assert_eq!(
         format!("{:x}", Sha256::digest(caller_serialization.as_bytes())),
-        "083f0550e9d49e84b17860ad721d5a0e32afde102f2d89e73405dfe30e1d875d",
+        "d2baa078b31f4e7fcaf7e3d959ab69e35b326d16c83d983629fd266de4437c50",
         "match-metric caller serialization changed"
     );
 
@@ -4491,7 +4505,7 @@ fn actinglab_parse_match_metric_flag_glue_stays_out_of_main() {
         .trim()
         .parse::<usize>()
         .expect("ratchet/main_rs_lines.txt must contain one integer");
-    assert_eq!(ratchet, 20_571, "match-metric ratchet changed");
+    assert_eq!(ratchet, 20_565, "match-metric ratchet changed");
     assert_eq!(
         main.lines().count(),
         ratchet,
@@ -4563,7 +4577,7 @@ fn actinglab_record_candidates_step_id_glue_stays_out_of_main() {
     let caller_serialization = caller_rows.concat();
     assert_eq!(
         format!("{:x}", Sha256::digest(caller_serialization.as_bytes())),
-        "be89596608d8f5c9a201eef7f02732ddec77e27e4ee340b26cb095e28d3c1107",
+        "661b52c5180a2b5f7c7975aa50332191546c220b7310192cde87d66033a13b3d",
         "record-candidates step-id caller serialization changed"
     );
 
@@ -4638,7 +4652,7 @@ fn actinglab_record_candidates_step_id_glue_stays_out_of_main() {
         .trim()
         .parse::<usize>()
         .expect("ratchet/main_rs_lines.txt must contain one integer");
-    assert_eq!(ratchet, 20_571, "record-candidates step-id ratchet changed");
+    assert_eq!(ratchet, 20_565, "record-candidates step-id ratchet changed");
     assert_eq!(
         main.lines().count(),
         ratchet,
@@ -4718,7 +4732,7 @@ fn actinglab_stream_input_relay_action_glue_stays_out_of_main() {
     let caller_serialization = caller_rows.concat();
     assert_eq!(
         format!("{:x}", Sha256::digest(caller_serialization.as_bytes())),
-        "a9776db64e58f8269cb162328ae9a53b45118d7fb459a7590b2f896e4fb83cd2",
+        "af8cec0419d905468ba53211277aa050b8ac3a57eba5aaa0caf7f144224633a5",
         "input-relay caller serialization changed"
     );
 
@@ -4800,7 +4814,7 @@ fn actinglab_stream_input_relay_action_glue_stays_out_of_main() {
         .trim()
         .parse::<usize>()
         .expect("ratchet/main_rs_lines.txt must contain one integer");
-    assert_eq!(ratchet, 20_571, "input-relay ratchet changed");
+    assert_eq!(ratchet, 20_565, "input-relay ratchet changed");
     assert_eq!(
         main.lines().count(),
         ratchet,
@@ -4882,7 +4896,7 @@ fn actinglab_parse_record_build_resolution_glue_stays_out_of_main() {
     let caller_serialization = caller_rows.concat();
     assert_eq!(
         format!("{:x}", Sha256::digest(caller_serialization.as_bytes())),
-        "6aec91b003f1763ceb40c1576b852b435b6ca322ef0631bebd932178ad828a27",
+        "4b7cc71822169ca16732291715528bb7fe5e59a97232edd27f8efa3abdf43f66",
         "record-build resolution caller serialization changed"
     );
 
@@ -4961,7 +4975,7 @@ fn actinglab_parse_record_build_resolution_glue_stays_out_of_main() {
         .trim()
         .parse::<usize>()
         .expect("ratchet/main_rs_lines.txt must contain one integer");
-    assert_eq!(ratchet, 20_571, "record-build resolution ratchet changed");
+    assert_eq!(ratchet, 20_565, "record-build resolution ratchet changed");
     assert_eq!(
         main.lines().count(),
         ratchet,
@@ -5067,7 +5081,7 @@ fn actinglab_parse_session_record_region_glue_stays_out_of_main() {
     let caller_serialization = caller_rows.concat();
     assert_eq!(
         format!("{:x}", Sha256::digest(caller_serialization.as_bytes())),
-        "53d2be1e5c642ba650c7672c6b308c041ab4569dcdb2e0516c1f248fb8455bd7",
+        "55815335d133ad3124397a09f180946952744f22f88e9d561463ee23c3e80d8c",
         "session-record region caller serialization changed"
     );
 
@@ -5145,7 +5159,7 @@ fn actinglab_parse_session_record_region_glue_stays_out_of_main() {
         .trim()
         .parse::<usize>()
         .expect("ratchet/main_rs_lines.txt must contain one integer");
-    assert_eq!(ratchet, 20_571, "session-record region ratchet changed");
+    assert_eq!(ratchet, 20_565, "session-record region ratchet changed");
     assert_eq!(
         main.lines().count(),
         ratchet,
@@ -5339,7 +5353,7 @@ fn actinglab_parse_session_record_rect_glue_stays_out_of_main() {
         .trim()
         .parse::<usize>()
         .expect("ratchet/main_rs_lines.txt must contain one integer");
-    assert_eq!(ratchet, 20_571, "session-record rectangle ratchet changed");
+    assert_eq!(ratchet, 20_565, "session-record rectangle ratchet changed");
     assert_eq!(
         main.lines().count(),
         ratchet,
@@ -5422,14 +5436,14 @@ fn actinglab_parse_session_record_swipe_rects_glue_stays_out_of_main() {
     );
     assert_eq!(
         format!("{:x}", Sha256::digest(caller_rows.concat().as_bytes())),
-        "b477758fa57339b0d5a46ab893d997dbebae6438bc6744abc0ccd42971179319",
+        "bb850ae7ce0086d92f7133dacec3af38cea491cc5d5fec7d341bc1f993f6ea28",
         "session-record swipe location-bearing caller serialization changed"
     );
     let semantic_callers = caller_rows
         .iter()
         .map(|row| {
             let (_, expression) = row
-                .split_once(&format!("apps/actinglab/src/main.rs:{}:", 8466))
+                .split_once(&format!("apps/actinglab/src/main.rs:{}:", 8460))
                 .expect("session-record swipe caller row lost its frozen location");
             expression.to_string()
         })
@@ -5506,7 +5520,7 @@ fn actinglab_parse_session_record_swipe_rects_glue_stays_out_of_main() {
         .trim()
         .parse::<usize>()
         .expect("ratchet/main_rs_lines.txt must contain one integer");
-    assert_eq!(ratchet, 20_571, "session-record swipe ratchet changed");
+    assert_eq!(ratchet, 20_565, "session-record swipe ratchet changed");
     assert_eq!(
         main.lines().count(),
         ratchet,

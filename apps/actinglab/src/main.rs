@@ -675,13 +675,7 @@ fn execute(invocation: &Invocation) -> CliOutcome<Value> {
     }
 }
 
-fn human_summary(command: &str, data: &Value) -> String {
-    match data {
-        Value::String(text) => text.clone(),
-        _ => format!("{command} ok"),
-    }
-}
-
+use cli_result::human_summary;
 fn help_data() -> Value {
     json!({
         "usage": "actinglab [global-options] <command> [args]",
