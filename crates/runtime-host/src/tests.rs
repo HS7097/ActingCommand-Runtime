@@ -802,6 +802,8 @@ fn host_with_state(root: &TempDir, alias: &str, state: Arc<FakeState>) -> Runtim
 const POLICY_INSTANCE_ALIAS: &str = "fixture-instance-a";
 const POLICY_INSTANCE_ALIAS_B: &str = "fixture-instance-b";
 const POLICY_NOW_UNIX_MS: u64 = 1_699_963_200_000;
+const MAPPED_RUN_ADVANCE_MS: u64 = 120_000;
+const MAPPED_RUN_OBSERVATION_ADVANCE_MS: u64 = 60_000;
 
 fn policy_sources(version: u64) -> CatalogSources {
     let mut sources = CatalogSources {
@@ -2531,6 +2533,22 @@ fn admitted_mapped_run_fixture(
     Box<PolicyRunContext>,
     ContainedTaskRequest,
 ) {
+    let (host, state, context, request, _) =
+        admitted_mapped_run_fixture_with_policy_time(root, outcome_key);
+    (host, state, context, request)
+}
+
+fn admitted_mapped_run_fixture_with_policy_time(
+    root: &TempDir,
+    outcome_key: &str,
+) -> (
+    RuntimeHost,
+    Arc<FakeState>,
+    Box<PolicyRunContext>,
+    ContainedTaskRequest,
+    u64,
+) {
+    let policy_unix_ms = POLICY_NOW_UNIX_MS;
     let package = neutral_mapped_contained_task_package(outcome_key, "designated_effect_completed");
     let package_path = root.path().join(format!("{outcome_key}-mapped-task.zip"));
     fs::write(&package_path, &package).expect("write mapped package");
@@ -2562,8 +2580,8 @@ fn admitted_mapped_run_fixture(
             &mapped_policy_facts(outcome_key, false),
             &policy_resources(),
             EvaluationTime {
-                unix_ms: POLICY_NOW_UNIX_MS,
-                monotonic_ms: POLICY_NOW_UNIX_MS,
+                unix_ms: policy_unix_ms,
+                monotonic_ms: policy_unix_ms,
             },
             70,
             PolicyTrigger::FactsChanged,
@@ -2592,7 +2610,13 @@ fn admitted_mapped_run_fixture(
     let request =
         ContainedTaskRequest::new(package_path.to_string_lossy().into_owned(), package_sha256)
             .expect("mapped package request");
-    (host, state, context, request)
+    (host, state, context, request, policy_unix_ms)
+}
+
+fn advance_mapped_policy_time(policy_unix_ms: u64, advance_ms: u64) -> u64 {
+    policy_unix_ms
+        .checked_add(advance_ms)
+        .expect("mapped policy time overflow")
 }
 
 fn admit_mapped_run_at(
@@ -3168,7 +3192,8 @@ fn mapped_terminal_disposition_is_single_source_for_effect_no_effect_and_opaque_
 fn latest_failed_mapped_run_clears_the_prior_successful_outcome() {
     let outcome_key = "mapped-current-run";
     let root = TempDir::new().expect("tempdir");
-    let (host, state, first_context, request) = admitted_mapped_run_fixture(&root, outcome_key);
+    let (host, state, first_context, request, first_policy_unix_ms) =
+        admitted_mapped_run_fixture_with_policy_time(&root, outcome_key);
     let first_receipt = host
         .run_scheduled_contained_task(&first_context, &request)
         .expect("first mapped run");
@@ -3189,7 +3214,7 @@ fn latest_failed_mapped_run_clears_the_prior_successful_outcome() {
             .run_id,
         first_context.run_id()
     );
-    let first_terminal_timestamp = host
+    let _first_terminal = host
         .query_persisted_events_for_test(EventQuery {
             run_id: Some(first_context.run_id()),
             event_type: Some(EventType::TaskCompleted),
@@ -3198,15 +3223,11 @@ fn latest_failed_mapped_run_clears_the_prior_successful_outcome() {
         .expect("query first mapped terminal")
         .into_iter()
         .next()
-        .expect("first mapped terminal")
-        .timestamp_unix_ms();
+        .expect("first mapped terminal");
 
-    let second_context = admit_mapped_run_at(
-        &host,
-        outcome_key,
-        first_terminal_timestamp + 120_000,
-        12_001,
-    );
+    let second_policy_unix_ms =
+        advance_mapped_policy_time(first_policy_unix_ms, MAPPED_RUN_ADVANCE_MS);
+    let second_context = admit_mapped_run_at(&host, outcome_key, second_policy_unix_ms, 12_001);
     state.input_count.store(0, Ordering::Release);
     state
         .transition_capture_after_input
@@ -3233,7 +3254,8 @@ fn latest_failed_mapped_run_clears_the_prior_successful_outcome() {
         "completed-run state change must invalidate the earlier policy snapshot"
     );
 
-    let after_failure_time = first_terminal_timestamp + 180_000;
+    let after_failure_time =
+        advance_mapped_policy_time(second_policy_unix_ms, MAPPED_RUN_OBSERVATION_ADVANCE_MS);
     let after_failure_facts = mapped_policy_facts_at(outcome_key, after_failure_time, false);
     let after_failure = host
         .evaluate_policy_cycle_with_test_inputs(
@@ -3263,13 +3285,14 @@ fn latest_failed_mapped_run_clears_the_prior_successful_outcome() {
 fn mapped_completion_and_cache_transition_are_atomic_to_policy_snapshots() {
     let outcome_key = "mapped-atomic-snapshot";
     let root = TempDir::new().expect("tempdir");
-    let (host, _state, first_context, request) = admitted_mapped_run_fixture(&root, outcome_key);
+    let (host, _state, first_context, request, first_policy_unix_ms) =
+        admitted_mapped_run_fixture_with_policy_time(&root, outcome_key);
     let first_receipt = host
         .run_scheduled_contained_task(&first_context, &request)
         .expect("first mapped run");
     host.complete_scheduled_policy_run(&first_context, &first_receipt)
         .expect("first mapped completion");
-    let first_terminal_timestamp = host
+    let _first_terminal = host
         .query_persisted_events_for_test(EventQuery {
             run_id: Some(first_context.run_id()),
             event_type: Some(EventType::TaskCompleted),
@@ -3278,14 +3301,10 @@ fn mapped_completion_and_cache_transition_are_atomic_to_policy_snapshots() {
         .expect("query first terminal")
         .into_iter()
         .next()
-        .expect("first terminal")
-        .timestamp_unix_ms();
-    let second_context = admit_mapped_run_at(
-        &host,
-        outcome_key,
-        first_terminal_timestamp + 120_000,
-        12_101,
-    );
+        .expect("first terminal");
+    let second_policy_unix_ms =
+        advance_mapped_policy_time(first_policy_unix_ms, MAPPED_RUN_ADVANCE_MS);
+    let second_context = admit_mapped_run_at(&host, outcome_key, second_policy_unix_ms, 12_101);
     let second_run_id = second_context.run_id();
     let snapshot_key = (
         second_context.catalog_task_id().to_owned(),
@@ -3344,10 +3363,11 @@ fn mapped_completion_and_cache_transition_are_atomic_to_policy_snapshots() {
 fn newer_success_replaces_an_older_failed_mapped_run() {
     let outcome_key = "mapped-failure-then-success";
     let root = TempDir::new().expect("tempdir");
-    let (host, _state, first_context, request) = admitted_mapped_run_fixture(&root, outcome_key);
+    let (host, _state, first_context, request, first_policy_unix_ms) =
+        admitted_mapped_run_fixture_with_policy_time(&root, outcome_key);
     host.complete_scheduled_policy_failure_without_terminal_for_test(&first_context)
         .expect("first mapped failure");
-    let first_completion_timestamp = host
+    let _first_completion = host
         .query_persisted_events_for_test(EventQuery {
             run_id: Some(first_context.run_id()),
             event_type: Some(EventType::PolicyDispatchCompleted),
@@ -3356,15 +3376,11 @@ fn newer_success_replaces_an_older_failed_mapped_run() {
         .expect("query first completion")
         .into_iter()
         .next()
-        .expect("first completion")
-        .timestamp_unix_ms();
+        .expect("first completion");
 
-    let second_context = admit_mapped_run_at(
-        &host,
-        outcome_key,
-        first_completion_timestamp + 120_000,
-        12_201,
-    );
+    let second_policy_unix_ms =
+        advance_mapped_policy_time(first_policy_unix_ms, MAPPED_RUN_ADVANCE_MS);
+    let second_context = admit_mapped_run_at(&host, outcome_key, second_policy_unix_ms, 12_201);
     let second_receipt = host
         .run_scheduled_contained_task(&second_context, &request)
         .expect("second mapped run");
@@ -3386,7 +3402,8 @@ fn newer_success_replaces_an_older_failed_mapped_run() {
         PolicyExecutionOutcome::Succeeded { .. }
     ));
 
-    let followup_time = first_completion_timestamp + 180_000;
+    let followup_time =
+        advance_mapped_policy_time(second_policy_unix_ms, MAPPED_RUN_OBSERVATION_ADVANCE_MS);
     let cycle = host
         .evaluate_policy_cycle_with_test_inputs(
             &mapped_policy_facts_at(outcome_key, followup_time, false),
