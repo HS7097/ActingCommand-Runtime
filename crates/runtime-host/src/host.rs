@@ -382,7 +382,8 @@ impl RuntimeHost {
                 RuntimeErrorCode::RuntimeFatal,
             )
         })?;
-        let events = RuntimeEvents::new(&config.secret_fingerprint_salt)?;
+        let events =
+            RuntimeEvents::new(&config.secret_fingerprint_salt, Arc::clone(&config.clock))?;
         let clock_origin = config.clock.sample()?;
         let started_at_unix_ms = clock_origin.unix_ms;
         let OwnerStartup {

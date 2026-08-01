@@ -2533,7 +2533,7 @@ fn admitted_mapped_run_fixture(
     Box<PolicyRunContext>,
     ContainedTaskRequest,
 ) {
-    let (host, state, context, request, _) =
+    let (host, state, context, request, _, _) =
         admitted_mapped_run_fixture_with_policy_time(root, outcome_key);
     (host, state, context, request)
 }
@@ -2547,8 +2547,10 @@ fn admitted_mapped_run_fixture_with_policy_time(
     Box<PolicyRunContext>,
     ContainedTaskRequest,
     u64,
+    Arc<ManualRuntimeClock>,
 ) {
     let policy_unix_ms = POLICY_NOW_UNIX_MS;
+    let clock = Arc::new(ManualRuntimeClock::new(policy_unix_ms, policy_unix_ms));
     let package = neutral_mapped_contained_task_package(outcome_key, "designated_effect_completed");
     let package_path = root.path().join(format!("{outcome_key}-mapped-task.zip"));
     fs::write(&package_path, &package).expect("write mapped package");
@@ -2559,6 +2561,7 @@ fn admitted_mapped_run_fixture_with_policy_time(
         .store(true, Ordering::Release);
     let host = RuntimeHost::start(
         config(root)
+            .with_runtime_clock(clock.clone())
             .with_policy_inputs(PolicyInputSnapshot::new(
                 mapped_policy_facts(outcome_key, false),
                 policy_resources(),
@@ -2610,7 +2613,7 @@ fn admitted_mapped_run_fixture_with_policy_time(
     let request =
         ContainedTaskRequest::new(package_path.to_string_lossy().into_owned(), package_sha256)
             .expect("mapped package request");
-    (host, state, context, request, policy_unix_ms)
+    (host, state, context, request, policy_unix_ms, clock)
 }
 
 fn advance_mapped_policy_time(policy_unix_ms: u64, advance_ms: u64) -> u64 {
@@ -3192,7 +3195,7 @@ fn mapped_terminal_disposition_is_single_source_for_effect_no_effect_and_opaque_
 fn latest_failed_mapped_run_clears_the_prior_successful_outcome() {
     let outcome_key = "mapped-current-run";
     let root = TempDir::new().expect("tempdir");
-    let (host, state, first_context, request, first_policy_unix_ms) =
+    let (host, state, first_context, request, first_policy_unix_ms, clock) =
         admitted_mapped_run_fixture_with_policy_time(&root, outcome_key);
     let first_receipt = host
         .run_scheduled_contained_task(&first_context, &request)
@@ -3214,7 +3217,7 @@ fn latest_failed_mapped_run_clears_the_prior_successful_outcome() {
             .run_id,
         first_context.run_id()
     );
-    let _first_terminal = host
+    let first_terminal = host
         .query_persisted_events_for_test(EventQuery {
             run_id: Some(first_context.run_id()),
             event_type: Some(EventType::TaskCompleted),
@@ -3224,7 +3227,9 @@ fn latest_failed_mapped_run_clears_the_prior_successful_outcome() {
         .into_iter()
         .next()
         .expect("first mapped terminal");
+    assert_eq!(first_terminal.timestamp_unix_ms(), first_policy_unix_ms);
 
+    clock.advance(MAPPED_RUN_ADVANCE_MS);
     let second_policy_unix_ms =
         advance_mapped_policy_time(first_policy_unix_ms, MAPPED_RUN_ADVANCE_MS);
     let second_context = admit_mapped_run_at(&host, outcome_key, second_policy_unix_ms, 12_001);
@@ -3254,6 +3259,7 @@ fn latest_failed_mapped_run_clears_the_prior_successful_outcome() {
         "completed-run state change must invalidate the earlier policy snapshot"
     );
 
+    clock.advance(MAPPED_RUN_OBSERVATION_ADVANCE_MS);
     let after_failure_time =
         advance_mapped_policy_time(second_policy_unix_ms, MAPPED_RUN_OBSERVATION_ADVANCE_MS);
     let after_failure_facts = mapped_policy_facts_at(outcome_key, after_failure_time, false);
@@ -3285,14 +3291,14 @@ fn latest_failed_mapped_run_clears_the_prior_successful_outcome() {
 fn mapped_completion_and_cache_transition_are_atomic_to_policy_snapshots() {
     let outcome_key = "mapped-atomic-snapshot";
     let root = TempDir::new().expect("tempdir");
-    let (host, _state, first_context, request, first_policy_unix_ms) =
+    let (host, _state, first_context, request, first_policy_unix_ms, clock) =
         admitted_mapped_run_fixture_with_policy_time(&root, outcome_key);
     let first_receipt = host
         .run_scheduled_contained_task(&first_context, &request)
         .expect("first mapped run");
     host.complete_scheduled_policy_run(&first_context, &first_receipt)
         .expect("first mapped completion");
-    let _first_terminal = host
+    let first_terminal = host
         .query_persisted_events_for_test(EventQuery {
             run_id: Some(first_context.run_id()),
             event_type: Some(EventType::TaskCompleted),
@@ -3302,6 +3308,8 @@ fn mapped_completion_and_cache_transition_are_atomic_to_policy_snapshots() {
         .into_iter()
         .next()
         .expect("first terminal");
+    assert_eq!(first_terminal.timestamp_unix_ms(), first_policy_unix_ms);
+    clock.advance(MAPPED_RUN_ADVANCE_MS);
     let second_policy_unix_ms =
         advance_mapped_policy_time(first_policy_unix_ms, MAPPED_RUN_ADVANCE_MS);
     let second_context = admit_mapped_run_at(&host, outcome_key, second_policy_unix_ms, 12_101);
@@ -3363,11 +3371,11 @@ fn mapped_completion_and_cache_transition_are_atomic_to_policy_snapshots() {
 fn newer_success_replaces_an_older_failed_mapped_run() {
     let outcome_key = "mapped-failure-then-success";
     let root = TempDir::new().expect("tempdir");
-    let (host, _state, first_context, request, first_policy_unix_ms) =
+    let (host, _state, first_context, request, first_policy_unix_ms, clock) =
         admitted_mapped_run_fixture_with_policy_time(&root, outcome_key);
     host.complete_scheduled_policy_failure_without_terminal_for_test(&first_context)
         .expect("first mapped failure");
-    let _first_completion = host
+    let first_completion = host
         .query_persisted_events_for_test(EventQuery {
             run_id: Some(first_context.run_id()),
             event_type: Some(EventType::PolicyDispatchCompleted),
@@ -3377,7 +3385,9 @@ fn newer_success_replaces_an_older_failed_mapped_run() {
         .into_iter()
         .next()
         .expect("first completion");
+    assert_eq!(first_completion.timestamp_unix_ms(), first_policy_unix_ms);
 
+    clock.advance(MAPPED_RUN_ADVANCE_MS);
     let second_policy_unix_ms =
         advance_mapped_policy_time(first_policy_unix_ms, MAPPED_RUN_ADVANCE_MS);
     let second_context = admit_mapped_run_at(&host, outcome_key, second_policy_unix_ms, 12_201);
@@ -3402,6 +3412,7 @@ fn newer_success_replaces_an_older_failed_mapped_run() {
         PolicyExecutionOutcome::Succeeded { .. }
     ));
 
+    clock.advance(MAPPED_RUN_OBSERVATION_ADVANCE_MS);
     let followup_time =
         advance_mapped_policy_time(second_policy_unix_ms, MAPPED_RUN_OBSERVATION_ADVANCE_MS);
     let cycle = host
