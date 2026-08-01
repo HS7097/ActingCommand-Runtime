@@ -3283,7 +3283,7 @@ fn actinglab_flag_values_glue_stays_out_of_main() {
         "    parse_optional_unit_f64, parse_optional_usize, parse_record_duration_ms,\n",
         "    parse_touch_backend_override, record_amend_step_id, record_candidates_step_id,\n",
         "    required_non_empty_flag, session_record_drift_diagnostics_path, split_csv,\n",
-        "    stream_check_requested, target_argument,\n",
+        "    stream_check_requested, stream_input_relay_action, target_argument,\n",
         "};",
     );
     let declarations = main
@@ -3408,7 +3408,7 @@ fn actinglab_required_non_empty_flag_glue_stays_out_of_main() {
         "    parse_optional_unit_f64, parse_optional_usize, parse_record_duration_ms,\n",
         "    parse_touch_backend_override, record_amend_step_id, record_candidates_step_id,\n",
         "    required_non_empty_flag, session_record_drift_diagnostics_path, split_csv,\n",
-        "    stream_check_requested, target_argument,\n",
+        "    stream_check_requested, stream_input_relay_action, target_argument,\n",
         "};",
     );
     assert_eq!(
@@ -3435,7 +3435,7 @@ fn actinglab_required_non_empty_flag_glue_stays_out_of_main() {
     );
     assert_eq!(
         flag_values.matches("pub(super) ").count(),
-        14,
+        15,
         "flag values module visibility changed"
     );
 
@@ -3497,7 +3497,7 @@ fn actinglab_optional_unit_f64_glue_stays_out_of_main() {
         "    parse_optional_unit_f64, parse_optional_usize, parse_record_duration_ms,\n",
         "    parse_touch_backend_override, record_amend_step_id, record_candidates_step_id,\n",
         "    required_non_empty_flag, session_record_drift_diagnostics_path, split_csv,\n",
-        "    stream_check_requested, target_argument,\n",
+        "    stream_check_requested, stream_input_relay_action, target_argument,\n",
         "};",
     );
     assert_eq!(
@@ -3520,7 +3520,7 @@ fn actinglab_optional_unit_f64_glue_stays_out_of_main() {
     );
     assert_eq!(
         flag_values.matches("pub(super) ").count(),
-        14,
+        15,
         "flag values module visibility changed"
     );
 
@@ -3589,7 +3589,7 @@ fn actinglab_record_duration_flag_glue_stays_out_of_main() {
         "    parse_optional_unit_f64, parse_optional_usize, parse_record_duration_ms,\n",
         "    parse_touch_backend_override, record_amend_step_id, record_candidates_step_id,\n",
         "    required_non_empty_flag, session_record_drift_diagnostics_path, split_csv,\n",
-        "    stream_check_requested, target_argument,\n",
+        "    stream_check_requested, stream_input_relay_action, target_argument,\n",
         "};",
     );
     assert_eq!(
@@ -3616,7 +3616,7 @@ fn actinglab_record_duration_flag_glue_stays_out_of_main() {
     );
     assert_eq!(
         flag_values.matches("pub(super) ").count(),
-        14,
+        15,
         "flag values module visibility changed"
     );
 
@@ -3687,7 +3687,7 @@ fn actinglab_record_amend_step_id_glue_stays_out_of_main() {
         "    parse_optional_unit_f64, parse_optional_usize, parse_record_duration_ms,\n",
         "    parse_touch_backend_override, record_amend_step_id, record_candidates_step_id,\n",
         "    required_non_empty_flag, session_record_drift_diagnostics_path, split_csv,\n",
-        "    stream_check_requested, target_argument,\n",
+        "    stream_check_requested, stream_input_relay_action, target_argument,\n",
         "};",
     );
     let declarations = main
@@ -3729,7 +3729,7 @@ fn actinglab_record_amend_step_id_glue_stays_out_of_main() {
     );
     assert_eq!(
         flag_values.matches("pub(super) ").count(),
-        14,
+        15,
         "flag values module visibility changed"
     );
     for line in flag_values.lines() {
@@ -3817,7 +3817,7 @@ fn actinglab_split_csv_glue_stays_out_of_main() {
         "    parse_optional_unit_f64, parse_optional_usize, parse_record_duration_ms,\n",
         "    parse_touch_backend_override, record_amend_step_id, record_candidates_step_id,\n",
         "    required_non_empty_flag, session_record_drift_diagnostics_path, split_csv,\n",
-        "    stream_check_requested, target_argument,\n",
+        "    stream_check_requested, stream_input_relay_action, target_argument,\n",
         "};",
     );
     assert_eq!(
@@ -3840,7 +3840,7 @@ fn actinglab_split_csv_glue_stays_out_of_main() {
     );
     assert_eq!(
         flag_values.matches("pub(super) ").count(),
-        14,
+        15,
         "flag values module visibility changed"
     );
 
@@ -3927,7 +3927,7 @@ fn actinglab_stream_check_requested_glue_stays_out_of_main() {
     );
     assert_eq!(
         flag_values.matches("pub(super) ").count(),
-        14,
+        15,
         "flag values module visibility changed"
     );
 
@@ -4012,7 +4012,7 @@ fn actinglab_target_argument_glue_stays_out_of_main() {
     );
     assert_eq!(
         flag_values.matches("pub(super) ").count(),
-        14,
+        15,
         "flag values module visibility changed"
     );
 
@@ -4128,7 +4128,7 @@ fn actinglab_session_record_drift_diagnostics_path_glue_stays_out_of_main() {
     );
     assert_eq!(
         flag_values.matches("pub(super) ").count(),
-        14,
+        15,
         "flag values module visibility changed"
     );
 
@@ -4146,7 +4146,7 @@ fn actinglab_session_record_drift_diagnostics_path_glue_stays_out_of_main() {
     let caller_serialization = caller_rows.concat();
     assert_eq!(
         format!("{:x}", Sha256::digest(caller_serialization.as_bytes())),
-        "7da8bd60326488ccb0328ddcc5e9b90795d22595176b580d6ecf2ee663aadc4e",
+        "fe26ec9877e286c51ed9c12a24bb80a160656baa3b8bf5aa710248bc9daaeae1",
         "drift-diagnostics path caller serialization changed"
     );
 
@@ -4194,7 +4194,7 @@ fn actinglab_session_record_drift_diagnostics_path_glue_stays_out_of_main() {
         .trim()
         .parse::<usize>()
         .expect("ratchet/main_rs_lines.txt must contain one integer");
-    assert_eq!(ratchet, 20_717, "drift-diagnostics path ratchet changed");
+    assert_eq!(ratchet, 20_698, "drift-diagnostics path ratchet changed");
     assert_eq!(
         main.lines().count(),
         ratchet,
@@ -4248,7 +4248,7 @@ fn actinglab_parse_touch_backend_override_glue_stays_out_of_main() {
     );
     assert_eq!(
         flag_values.matches("pub(super) ").count(),
-        14,
+        15,
         "flag values module visibility changed"
     );
 
@@ -4330,7 +4330,7 @@ fn actinglab_parse_touch_backend_override_glue_stays_out_of_main() {
         .trim()
         .parse::<usize>()
         .expect("ratchet/main_rs_lines.txt must contain one integer");
-    assert_eq!(ratchet, 20_717, "touch-backend ratchet changed");
+    assert_eq!(ratchet, 20_698, "touch-backend ratchet changed");
     assert_eq!(
         main.lines().count(),
         ratchet,
@@ -4382,7 +4382,7 @@ fn actinglab_parse_match_metric_flag_glue_stays_out_of_main() {
     );
     assert_eq!(
         flag_values.matches("pub(super) ").count(),
-        14,
+        15,
         "flag values module visibility changed"
     );
 
@@ -4406,7 +4406,7 @@ fn actinglab_parse_match_metric_flag_glue_stays_out_of_main() {
     let caller_serialization = caller_rows.concat();
     assert_eq!(
         format!("{:x}", Sha256::digest(caller_serialization.as_bytes())),
-        "7f6e673beb9f0dfa5d09b928a13ee00f34ae5b8e412e0ac5a933894eb3dbf8d4",
+        "2153d73d156def8d5d35af1ec6f7be0dfd86d6d3e08bce815a4f2c9753ed57b5",
         "match-metric caller serialization changed"
     );
 
@@ -4474,7 +4474,7 @@ fn actinglab_parse_match_metric_flag_glue_stays_out_of_main() {
         .trim()
         .parse::<usize>()
         .expect("ratchet/main_rs_lines.txt must contain one integer");
-    assert_eq!(ratchet, 20_717, "match-metric ratchet changed");
+    assert_eq!(ratchet, 20_698, "match-metric ratchet changed");
     assert_eq!(
         main.lines().count(),
         ratchet,
@@ -4522,7 +4522,7 @@ fn actinglab_record_candidates_step_id_glue_stays_out_of_main() {
     );
     assert_eq!(
         flag_values.matches("pub(super) ").count(),
-        14,
+        15,
         "flag values module visibility changed"
     );
 
@@ -4546,17 +4546,17 @@ fn actinglab_record_candidates_step_id_glue_stays_out_of_main() {
     let caller_serialization = caller_rows.concat();
     assert_eq!(
         format!("{:x}", Sha256::digest(caller_serialization.as_bytes())),
-        "ff3a6ee40bb5fce8435449b9843ea7cb5817d2c69cf0d5b6de098e66bc10502d",
+        "dcd637cd6953853bf1ee8088e28fb45d69f225724c123250c2ed013d66c79fda",
         "record-candidates step-id caller serialization changed"
     );
 
     let marker = "\npub(super) fn record_candidates_step_id(";
-    let (_, owner_and_stream_check_requested) = flag_values
+    let (_, owner_and_stream_input_relay_action) = flag_values
         .rsplit_once(marker)
         .expect("flag values module lost the appended record-candidates step-id owner");
-    let (owner_tail, _) = owner_and_stream_check_requested
-        .split_once("pub(super) fn stream_check_requested(")
-        .expect("flag values module lost the following stream-check owner");
+    let (owner_tail, _) = owner_and_stream_input_relay_action
+        .split_once("pub(super) fn stream_input_relay_action(")
+        .expect("flag values module lost the following input-relay owner");
     let normalized_owner = format!("fn record_candidates_step_id({owner_tail}");
     assert_eq!(
         normalized_owner.matches('\n').count(),
@@ -4621,11 +4621,173 @@ fn actinglab_record_candidates_step_id_glue_stays_out_of_main() {
         .trim()
         .parse::<usize>()
         .expect("ratchet/main_rs_lines.txt must contain one integer");
-    assert_eq!(ratchet, 20_717, "record-candidates step-id ratchet changed");
+    assert_eq!(ratchet, 20_698, "record-candidates step-id ratchet changed");
     assert_eq!(
         main.lines().count(),
         ratchet,
         "record-candidates step-id move and main.rs ratchet diverged"
+    );
+}
+
+#[test]
+fn actinglab_stream_input_relay_action_glue_stays_out_of_main() {
+    let root = workspace_root();
+    let main =
+        fs::read_to_string(root.join("apps/actinglab/src/main.rs")).expect("read ActingLab main");
+    let flag_values = fs::read_to_string(root.join("apps/actinglab/src/flag_values.rs"))
+        .expect("read ActingLab flag values module");
+
+    assert_eq!(
+        main.matches("stream_input_relay_action,").count(),
+        1,
+        "ActingLab main lost the sole private input-relay root import"
+    );
+    assert_eq!(
+        main.matches("stream_input_relay_action").count(),
+        2,
+        "ActingLab main changed the private import or production caller set"
+    );
+    assert_eq!(
+        flag_values.matches("fn stream_input_relay_action(").count(),
+        1,
+        "flag values module lost the one input-relay definition"
+    );
+    assert_eq!(
+        flag_values
+            .matches("pub(super) fn stream_input_relay_action(")
+            .count(),
+        1,
+        "input-relay owner visibility changed"
+    );
+    assert!(
+        !main.contains("fn stream_input_relay_action("),
+        "ActingLab main regained the input-relay owner"
+    );
+    assert!(
+        !main.contains("pub use flag_values::"),
+        "flag values owner became a public root re-export"
+    );
+    assert_eq!(
+        flag_values.matches("pub(super) ").count(),
+        15,
+        "flag values module visibility changed"
+    );
+    for line in flag_values.lines() {
+        let trimmed = line.trim_start();
+        assert!(
+            !trimmed.starts_with("pub fn stream_input_relay_action(")
+                && !trimmed.starts_with("pub(crate) fn stream_input_relay_action("),
+            "input-relay owner exposed broader visibility: {line}"
+        );
+    }
+
+    const CALL: &str = "if let Some((action, action_args)) = stream_input_relay_action(flags)? {";
+    assert_eq!(
+        main.matches(CALL).count(),
+        1,
+        "ActingLab main lost the exact input-relay caller expression"
+    );
+    let caller_rows = main
+        .lines()
+        .enumerate()
+        .filter(|(_, line)| line.contains("stream_input_relay_action("))
+        .map(|(index, line)| format!("apps/actinglab/src/main.rs:{}:{}\n", index + 1, line.trim()))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        caller_rows.len(),
+        1,
+        "input-relay production caller set changed"
+    );
+    let caller_serialization = caller_rows.concat();
+    assert_eq!(
+        format!("{:x}", Sha256::digest(caller_serialization.as_bytes())),
+        "eac415bb722df604f2afb18fd3c60d3971aba9469e138611a87b84cfe7880b8c",
+        "input-relay caller serialization changed"
+    );
+
+    let marker = "\npub(super) fn stream_input_relay_action(";
+    let (_, owner_and_stream_check_requested) = flag_values
+        .rsplit_once(marker)
+        .expect("flag values module lost the appended input-relay owner");
+    let (owner_tail, _) = owner_and_stream_check_requested
+        .split_once("pub(super) fn stream_check_requested(")
+        .expect("flag values module lost the following stream-check owner");
+    const RUSTFMT_SIGNATURE_TAIL: &str =
+        "\n    flags: &FlagArgs,\n) -> CliOutcome<Option<(String, Vec<String>)>> {\n";
+    let body_tail = owner_tail
+        .strip_prefix(RUSTFMT_SIGNATURE_TAIL)
+        .expect("input-relay owner rustfmt signature layout changed");
+    let normalized_owner = format!(
+        "fn stream_input_relay_action(flags: &FlagArgs) -> CliOutcome<Option<(String, Vec<String>)>> {{\n{body_tail}"
+    );
+    assert_eq!(
+        normalized_owner.matches('\n').count(),
+        19,
+        "input-relay owner LF line count changed"
+    );
+    assert_eq!(
+        normalized_owner.len(),
+        649,
+        "input-relay owner byte count changed"
+    );
+    assert_eq!(
+        format!("{:x}", Sha256::digest(normalized_owner.as_bytes())),
+        "f6188fcb2e4b80093de0eb2ec8e797f38b0be7841cc1d7515097b16ea549dc8d",
+        "input-relay owner body changed"
+    );
+    const PRECEDENCE: &str = concat!(
+        ".optional(\"--input-relay\")\n",
+        "        .or_else(|| flags.optional(\"--interactive-input\"))"
+    );
+    for invariant in [
+        PRECEDENCE,
+        "return Ok(None);",
+        "if value == \"true\" {",
+        "stream --input-relay expects an action: tap|swipe|long-tap|key|text",
+        "flags.positionals.iter().skip(1).cloned().collect(),",
+        "Ok(Some((value, flags.positionals.clone())))",
+    ] {
+        assert!(
+            normalized_owner.contains(invariant),
+            "input-relay invariant changed: {invariant}"
+        );
+    }
+    assert_eq!(
+        flag_values
+            .matches(
+                "fn stream_input_relay_action_preserves_precedence_fallback_absence_literal_true_errors_and_arguments("
+            )
+            .count(),
+        1,
+        "input-relay behavior test coverage changed"
+    );
+
+    let mut actinglab_sources = Vec::new();
+    collect_rust_files(&root.join("apps/actinglab/src"), &mut actinglab_sources);
+    let definition_count = actinglab_sources
+        .iter()
+        .map(|path| {
+            fs::read_to_string(path)
+                .unwrap_or_else(|err| panic!("read {}: {err}", path.display()))
+                .matches("fn stream_input_relay_action(")
+                .count()
+        })
+        .sum::<usize>();
+    assert_eq!(
+        definition_count, 1,
+        "ActingLab gained a second input-relay parser or authority"
+    );
+
+    let ratchet = fs::read_to_string(root.join("ratchet/main_rs_lines.txt"))
+        .expect("read ratchet/main_rs_lines.txt")
+        .trim()
+        .parse::<usize>()
+        .expect("ratchet/main_rs_lines.txt must contain one integer");
+    assert_eq!(ratchet, 20_698, "input-relay ratchet changed");
+    assert_eq!(
+        main.lines().count(),
+        ratchet,
+        "input-relay move and main.rs ratchet diverged"
     );
 }
 

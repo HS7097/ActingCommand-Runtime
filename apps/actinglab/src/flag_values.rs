@@ -114,6 +114,27 @@ pub(super) fn record_candidates_step_id(flags: &FlagArgs) -> CliOutcome<String> 
     Ok(value)
 }
 
+pub(super) fn stream_input_relay_action(
+    flags: &FlagArgs,
+) -> CliOutcome<Option<(String, Vec<String>)>> {
+    let Some(value) = flags
+        .optional("--input-relay")
+        .or_else(|| flags.optional("--interactive-input"))
+    else {
+        return Ok(None);
+    };
+    if value == "true" {
+        let action = flags.positionals.first().cloned().ok_or_else(|| {
+            CliError::usage("stream --input-relay expects an action: tap|swipe|long-tap|key|text")
+        })?;
+        return Ok(Some((
+            action,
+            flags.positionals.iter().skip(1).cloned().collect(),
+        )));
+    }
+    Ok(Some((value, flags.positionals.clone())))
+}
+
 pub(super) fn stream_check_requested(flags: &FlagArgs) -> bool {
     flags.positionals.first().map(String::as_str) == Some("check")
 }
@@ -247,6 +268,71 @@ mod tests {
             record_candidates_step_id(&flags(&["--step-id", "  original  "]))
                 .expect("original step id"),
             "  original  "
+        );
+    }
+
+    #[test]
+    fn stream_input_relay_action_preserves_precedence_fallback_absence_literal_true_errors_and_arguments()
+     {
+        assert_eq!(
+            stream_input_relay_action(&flags(&[
+                "--interactive-input",
+                "swipe",
+                "--input-relay",
+                "tap",
+                "primary-arg",
+            ]))
+            .expect("input-relay precedence"),
+            Some(("tap".to_string(), vec!["primary-arg".to_string()]))
+        );
+        assert_eq!(
+            stream_input_relay_action(&flags(&[
+                "--interactive-input",
+                "swipe",
+                "fallback-arg-1",
+                "fallback-arg-2",
+            ]))
+            .expect("interactive-input fallback"),
+            Some((
+                "swipe".to_string(),
+                vec!["fallback-arg-1".to_string(), "fallback-arg-2".to_string(),],
+            ))
+        );
+        assert_eq!(
+            stream_input_relay_action(&FlagArgs::default()).expect("absent input relay"),
+            None
+        );
+
+        let literal_true_flags = flags(&["tap", "10", "20", "--input-relay"]);
+        assert_eq!(
+            stream_input_relay_action(&literal_true_flags).expect("literal true input relay"),
+            Some(("tap".to_string(), vec!["10".to_string(), "20".to_string()],))
+        );
+        assert_eq!(
+            literal_true_flags.positionals,
+            vec!["tap".to_string(), "10".to_string(), "20".to_string()],
+            "literal-true handling must clone rather than consume positionals"
+        );
+
+        let missing = stream_input_relay_action(&flags(&["--input-relay"]))
+            .expect_err("literal true without a positional action must fail");
+        assert_eq!(
+            missing.message,
+            "stream --input-relay expects an action: tap|swipe|long-tap|key|text"
+        );
+
+        let explicit_flags = flags(&["arg-1", "arg-2", "--input-relay", "text"]);
+        assert_eq!(
+            stream_input_relay_action(&explicit_flags).expect("explicit relay action"),
+            Some((
+                "text".to_string(),
+                vec!["arg-1".to_string(), "arg-2".to_string()],
+            ))
+        );
+        assert_eq!(
+            explicit_flags.positionals,
+            vec!["arg-1".to_string(), "arg-2".to_string()],
+            "explicit-action handling must clone all positional arguments"
         );
     }
 }
