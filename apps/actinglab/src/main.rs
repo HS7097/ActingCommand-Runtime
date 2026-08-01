@@ -33,10 +33,10 @@ use cli_result::CliResult;
 use device_runtime_config::{DeviceRuntimeConfig, device_config, effective_capture_backend_choice};
 use flag_args::FlagArgs;
 use flag_values::{
-    parse_optional_duration_ms, parse_optional_string_value, parse_optional_unit_f64,
-    parse_optional_usize, parse_record_duration_ms, parse_touch_backend_override,
-    record_amend_step_id, required_non_empty_flag, session_record_drift_diagnostics_path,
-    split_csv, stream_check_requested, target_argument,
+    parse_match_metric_flag, parse_optional_duration_ms, parse_optional_string_value,
+    parse_optional_unit_f64, parse_optional_usize, parse_record_duration_ms,
+    parse_touch_backend_override, record_amend_step_id, required_non_empty_flag,
+    session_record_drift_diagnostics_path, split_csv, stream_check_requested, target_argument,
 };
 use instance_resolution::{resolve_instance_id, resolve_instance_id_for_flags};
 #[cfg(test)]
@@ -4449,20 +4449,6 @@ fn target_eval_json(evaluation: &TargetEvaluation) -> Value {
             })
         })
     })
-}
-
-fn parse_match_metric_flag(flags: &FlagArgs) -> CliOutcome<MatchMetric> {
-    match flags
-        .optional("--metric")
-        .unwrap_or_else(|| "ccorr_normed".to_string())
-        .as_str()
-    {
-        "ccorr_normed" => Ok(MatchMetric::CrossCorrelationNormalized),
-        "ccoeff_normed" => Ok(MatchMetric::CorrelationCoefficientNormalized),
-        other => Err(CliError::usage(format!(
-            "unsupported --metric '{other}', expected ccorr_normed or ccoeff_normed"
-        ))),
-    }
 }
 
 fn load_navigation_graph(

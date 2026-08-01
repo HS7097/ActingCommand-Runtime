@@ -1,4 +1,4 @@
-use super::{CliError, CliOutcome, FlagArgs, TouchBackendChoice};
+use super::{CliError, CliOutcome, FlagArgs, MatchMetric, TouchBackendChoice};
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -142,6 +142,20 @@ pub(super) fn parse_touch_backend_override(
         .map_err(|err| CliError::usage(err.to_string()))
 }
 
+pub(super) fn parse_match_metric_flag(flags: &FlagArgs) -> CliOutcome<MatchMetric> {
+    match flags
+        .optional("--metric")
+        .unwrap_or_else(|| "ccorr_normed".to_string())
+        .as_str()
+    {
+        "ccorr_normed" => Ok(MatchMetric::CrossCorrelationNormalized),
+        "ccoeff_normed" => Ok(MatchMetric::CorrelationCoefficientNormalized),
+        other => Err(CliError::usage(format!(
+            "unsupported --metric '{other}', expected ccorr_normed or ccoeff_normed"
+        ))),
+    }
+}
+
 pub(super) fn split_csv(value: &str) -> Vec<String> {
     value
         .split(',')
@@ -149,4 +163,44 @@ pub(super) fn split_csv(value: &str) -> Vec<String> {
         .filter(|value| !value.is_empty())
         .map(ToOwned::to_owned)
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn flags(args: &[&str]) -> FlagArgs {
+        FlagArgs::parse(
+            &args
+                .iter()
+                .map(|value| (*value).to_string())
+                .collect::<Vec<_>>(),
+        )
+        .expect("parse test flags")
+    }
+
+    #[test]
+    fn match_metric_flag_preserves_default_values_and_rejection() {
+        assert_eq!(
+            parse_match_metric_flag(&FlagArgs::default()).expect("default metric"),
+            MatchMetric::CrossCorrelationNormalized
+        );
+        assert_eq!(
+            parse_match_metric_flag(&flags(&["--metric", "ccorr_normed"]))
+                .expect("ccorr_normed metric"),
+            MatchMetric::CrossCorrelationNormalized
+        );
+        assert_eq!(
+            parse_match_metric_flag(&flags(&["--metric", "ccoeff_normed"]))
+                .expect("ccoeff_normed metric"),
+            MatchMetric::CorrelationCoefficientNormalized
+        );
+
+        let error = parse_match_metric_flag(&flags(&["--metric", "unsupported"]))
+            .expect_err("unsupported metric must fail");
+        assert_eq!(
+            error.message,
+            "unsupported --metric 'unsupported', expected ccorr_normed or ccoeff_normed"
+        );
+    }
 }
