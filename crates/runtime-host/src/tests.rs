@@ -802,8 +802,7 @@ fn host_with_state(root: &TempDir, alias: &str, state: Arc<FakeState>) -> Runtim
 const POLICY_INSTANCE_ALIAS: &str = "fixture-instance-a";
 const POLICY_INSTANCE_ALIAS_B: &str = "fixture-instance-b";
 const POLICY_NOW_UNIX_MS: u64 = 1_699_963_200_000;
-const MAPPED_RUN_ADVANCE_MS: u64 = 120_000;
-const MAPPED_RUN_OBSERVATION_ADVANCE_MS: u64 = 60_000;
+const MAPPED_RUN_MIN_ADVANCE_MS: u64 = 120_000;
 
 fn policy_sources(version: u64) -> CatalogSources {
     let mut sources = CatalogSources {
@@ -2616,10 +2615,94 @@ fn admitted_mapped_run_fixture_with_policy_time(
     (host, state, context, request, policy_unix_ms, clock)
 }
 
-fn advance_mapped_policy_time(policy_unix_ms: u64, advance_ms: u64) -> u64 {
-    policy_unix_ms
-        .checked_add(advance_ms)
-        .expect("mapped policy time overflow")
+#[derive(Debug, Clone, Copy)]
+struct MappedPolicyTimeline {
+    first_admitted_at_unix_ms: u64,
+    first_interval_ms: u64,
+    first_next_eligible_unix_ms: u64,
+    minimum_second_policy_unix_ms: u64,
+    second_policy_unix_ms: u64,
+    clock_delta_ms: u64,
+}
+
+fn prepare_second_mapped_policy_time(
+    first_context: &PolicyRunContext,
+    clock: &ManualRuntimeClock,
+) -> MappedPolicyTimeline {
+    let first_activity = &first_context.admission().activity;
+    assert_eq!(first_activity.admitted_at_unix_ms, POLICY_NOW_UNIX_MS);
+    assert!((60_000..=300_000).contains(&first_activity.interval_ms));
+    assert_eq!(
+        first_activity.next_eligible_unix_ms,
+        first_activity
+            .admitted_at_unix_ms
+            .checked_add(first_activity.interval_ms)
+            .expect("mapped activity cadence overflow")
+    );
+    let minimum_second_policy_unix_ms = first_activity
+        .admitted_at_unix_ms
+        .checked_add(MAPPED_RUN_MIN_ADVANCE_MS)
+        .expect("mapped policy time overflow");
+    let second_policy_unix_ms =
+        minimum_second_policy_unix_ms.max(first_activity.next_eligible_unix_ms);
+    assert!(second_policy_unix_ms >= minimum_second_policy_unix_ms);
+    assert!(second_policy_unix_ms >= first_activity.next_eligible_unix_ms);
+    let clock_delta_ms = advance_manual_clock_to(clock, second_policy_unix_ms);
+    MappedPolicyTimeline {
+        first_admitted_at_unix_ms: first_activity.admitted_at_unix_ms,
+        first_interval_ms: first_activity.interval_ms,
+        first_next_eligible_unix_ms: first_activity.next_eligible_unix_ms,
+        minimum_second_policy_unix_ms,
+        second_policy_unix_ms,
+        clock_delta_ms,
+    }
+}
+
+fn advance_manual_clock_to(clock: &ManualRuntimeClock, target_unix_ms: u64) -> u64 {
+    let before = clock.sample().expect("sample mapped runtime clock");
+    let delta_ms = target_unix_ms
+        .checked_sub(before.unix_ms)
+        .expect("mapped runtime clock cannot move backwards");
+    clock.advance(delta_ms);
+    let after = clock.sample().expect("sample advanced runtime clock");
+    assert_eq!(after.unix_ms, target_unix_ms);
+    assert_eq!(
+        after.monotonic_ms,
+        before
+            .monotonic_ms
+            .checked_add(delta_ms)
+            .expect("mapped monotonic clock overflow")
+    );
+    delta_ms
+}
+
+fn assert_mapped_second_admission(
+    case: &str,
+    timeline: MappedPolicyTimeline,
+    second_context: &PolicyRunContext,
+) -> u64 {
+    assert_eq!(
+        second_context.admission().activity.admitted_at_unix_ms,
+        timeline.second_policy_unix_ms
+    );
+    let post_second_run_unix_ms = second_context
+        .admission()
+        .activity
+        .admitted_at_unix_ms
+        .checked_add(1)
+        .expect("post-second-run policy time overflow");
+    eprintln!(
+        "workflow110_timeline case={case} first_admitted_at={} first_interval={} first_next_eligible={} minimum_second={} selected_second={} clock_delta={} second_admitted_at={} post_second={}",
+        timeline.first_admitted_at_unix_ms,
+        timeline.first_interval_ms,
+        timeline.first_next_eligible_unix_ms,
+        timeline.minimum_second_policy_unix_ms,
+        timeline.second_policy_unix_ms,
+        timeline.clock_delta_ms,
+        second_context.admission().activity.admitted_at_unix_ms,
+        post_second_run_unix_ms,
+    );
+    post_second_run_unix_ms
 }
 
 fn admit_mapped_run_at(
@@ -3229,10 +3312,11 @@ fn latest_failed_mapped_run_clears_the_prior_successful_outcome() {
         .expect("first mapped terminal");
     assert_eq!(first_terminal.timestamp_unix_ms(), first_policy_unix_ms);
 
-    clock.advance(MAPPED_RUN_ADVANCE_MS);
-    let second_policy_unix_ms =
-        advance_mapped_policy_time(first_policy_unix_ms, MAPPED_RUN_ADVANCE_MS);
-    let second_context = admit_mapped_run_at(&host, outcome_key, second_policy_unix_ms, 12_001);
+    let timeline = prepare_second_mapped_policy_time(&first_context, clock.as_ref());
+    let second_context =
+        admit_mapped_run_at(&host, outcome_key, timeline.second_policy_unix_ms, 12_001);
+    let post_second_run_unix_ms =
+        assert_mapped_second_admission(outcome_key, timeline, &second_context);
     state.input_count.store(0, Ordering::Release);
     state
         .transition_capture_after_input
@@ -3259,17 +3343,16 @@ fn latest_failed_mapped_run_clears_the_prior_successful_outcome() {
         "completed-run state change must invalidate the earlier policy snapshot"
     );
 
-    clock.advance(MAPPED_RUN_OBSERVATION_ADVANCE_MS);
-    let after_failure_time =
-        advance_mapped_policy_time(second_policy_unix_ms, MAPPED_RUN_OBSERVATION_ADVANCE_MS);
-    let after_failure_facts = mapped_policy_facts_at(outcome_key, after_failure_time, false);
+    advance_manual_clock_to(clock.as_ref(), post_second_run_unix_ms);
+    let after_failure_facts = mapped_policy_facts_at(outcome_key, post_second_run_unix_ms, false);
+    let post_second_clock = clock.sample().expect("sample post-failure mapped clock");
     let after_failure = host
         .evaluate_policy_cycle_with_test_inputs(
             &after_failure_facts,
             &policy_resources(),
             EvaluationTime {
-                unix_ms: after_failure_time,
-                monotonic_ms: after_failure_time,
+                unix_ms: post_second_run_unix_ms,
+                monotonic_ms: post_second_clock.monotonic_ms,
             },
             12_002,
             PolicyTrigger::FactsChanged,
@@ -3309,10 +3392,11 @@ fn mapped_completion_and_cache_transition_are_atomic_to_policy_snapshots() {
         .next()
         .expect("first terminal");
     assert_eq!(first_terminal.timestamp_unix_ms(), first_policy_unix_ms);
-    clock.advance(MAPPED_RUN_ADVANCE_MS);
-    let second_policy_unix_ms =
-        advance_mapped_policy_time(first_policy_unix_ms, MAPPED_RUN_ADVANCE_MS);
-    let second_context = admit_mapped_run_at(&host, outcome_key, second_policy_unix_ms, 12_101);
+    let timeline = prepare_second_mapped_policy_time(&first_context, clock.as_ref());
+    let second_context =
+        admit_mapped_run_at(&host, outcome_key, timeline.second_policy_unix_ms, 12_101);
+    let _post_second_run_unix_ms =
+        assert_mapped_second_admission(outcome_key, timeline, &second_context);
     let second_run_id = second_context.run_id();
     let snapshot_key = (
         second_context.catalog_task_id().to_owned(),
@@ -3387,15 +3471,30 @@ fn newer_success_replaces_an_older_failed_mapped_run() {
         .expect("first completion");
     assert_eq!(first_completion.timestamp_unix_ms(), first_policy_unix_ms);
 
-    clock.advance(MAPPED_RUN_ADVANCE_MS);
-    let second_policy_unix_ms =
-        advance_mapped_policy_time(first_policy_unix_ms, MAPPED_RUN_ADVANCE_MS);
-    let second_context = admit_mapped_run_at(&host, outcome_key, second_policy_unix_ms, 12_201);
+    let timeline = prepare_second_mapped_policy_time(&first_context, clock.as_ref());
+    let second_context =
+        admit_mapped_run_at(&host, outcome_key, timeline.second_policy_unix_ms, 12_201);
+    let post_second_run_unix_ms =
+        assert_mapped_second_admission(outcome_key, timeline, &second_context);
     let second_receipt = host
         .run_scheduled_contained_task(&second_context, &request)
         .expect("second mapped run");
     host.complete_scheduled_policy_run(&second_context, &second_receipt)
         .expect("second mapped completion");
+    let second_terminal = host
+        .query_persisted_events_for_test(EventQuery {
+            run_id: Some(second_context.run_id()),
+            event_type: Some(EventType::TaskCompleted),
+            ..EventQuery::default()
+        })
+        .expect("query second terminal")
+        .into_iter()
+        .next()
+        .expect("second terminal");
+    assert_eq!(
+        second_terminal.timestamp_unix_ms(),
+        timeline.second_policy_unix_ms
+    );
     let snapshot = host
         .policy_outcome_key_snapshot_for_test()
         .expect("success completed-run snapshot");
@@ -3412,16 +3511,15 @@ fn newer_success_replaces_an_older_failed_mapped_run() {
         PolicyExecutionOutcome::Succeeded { .. }
     ));
 
-    clock.advance(MAPPED_RUN_OBSERVATION_ADVANCE_MS);
-    let followup_time =
-        advance_mapped_policy_time(second_policy_unix_ms, MAPPED_RUN_OBSERVATION_ADVANCE_MS);
+    advance_manual_clock_to(clock.as_ref(), post_second_run_unix_ms);
+    let post_second_clock = clock.sample().expect("sample post-success mapped clock");
     let cycle = host
         .evaluate_policy_cycle_with_test_inputs(
-            &mapped_policy_facts_at(outcome_key, followup_time, false),
+            &mapped_policy_facts_at(outcome_key, post_second_run_unix_ms, false),
             &policy_resources(),
             EvaluationTime {
-                unix_ms: followup_time,
-                monotonic_ms: followup_time,
+                unix_ms: post_second_run_unix_ms,
+                monotonic_ms: post_second_clock.monotonic_ms,
             },
             12_202,
             PolicyTrigger::FactsChanged,
@@ -3437,6 +3535,42 @@ fn newer_success_replaces_an_older_failed_mapped_run() {
         "the newer successful exact run must replace the older failed completion"
     );
     host.close().expect("close failure-then-success host");
+}
+
+#[test]
+fn policy_evaluation_rejects_future_observed_outcome() {
+    let root = TempDir::new().expect("tempdir");
+    let clock = Arc::new(ManualRuntimeClock::new(
+        POLICY_NOW_UNIX_MS,
+        POLICY_NOW_UNIX_MS,
+    ));
+    let host = RuntimeHost::start(
+        config(&root).with_runtime_clock(clock),
+        Arc::new(FakeProvider::one(
+            POLICY_INSTANCE_ALIAS,
+            instance_id(),
+            Arc::new(FakeState::default()),
+        )),
+    )
+    .expect("future-outcome runtime host");
+    host.activate_policy_catalog(&policy_sources(1))
+        .expect("activate future-outcome catalog");
+    let mut facts = policy_facts();
+    facts.outcomes[0].observed_at_unix_ms = POLICY_NOW_UNIX_MS + 1;
+    let error = host
+        .evaluate_policy_cycle_with_test_inputs(
+            &facts,
+            &policy_resources(),
+            EvaluationTime {
+                unix_ms: POLICY_NOW_UNIX_MS,
+                monotonic_ms: POLICY_NOW_UNIX_MS,
+            },
+            12_203,
+            PolicyTrigger::FactsChanged,
+        )
+        .expect_err("future observed outcome must remain fail-closed");
+    assert_eq!(error.code(), "policy_evaluation_rejected");
+    host.close().expect("close future-outcome host");
 }
 
 #[test]
