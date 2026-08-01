@@ -4,17 +4,17 @@ use super::*;
 use crate::ipc::{DEFAULT_RUNTIME_MAX_FRAME_BYTES, FrameRead, read_frame, write_frame};
 use crate::monitor::MONITOR_FILE_NAME;
 use crate::time::unix_ms_now;
-use actingcommand_artifact_store::read_projected_verified;
+use actingcommand_artifact_store::{ArtifactStore, read_projected_verified};
 use actingcommand_contract::{
     AgentAttentionState, AgentPayload, AgentResponseDisposition, AgentSessionId,
     AgentSessionResponse, AgentWakeKind, ApplicationLifecycleAction, ApprovalDecisionRecord,
     ApprovalDisposition, ApprovalTarget, ArtifactKind, AuthoritativeSchedulingOutcome,
     CaptureSequenceSpec, CatalogDeclarationPatch, CatalogPayload, CatalogProposal,
-    ClientActionKind, ClientActionRecord, ClientActionValue, ContainedTaskRequest,
+    ClientActionKind, ClientActionRecord, ClientActionValue, ContainedTaskRequest, CorrelationId,
     EffectDisposition, EventActor, EventPayload, EventQuery, EventSeverity, EventSource, EventType,
     FactContent, FactRecord, FactScope, FactTtlPolicy, FactTtlSource,
     FactValue as ContractFactValue, IdentifierIssuer, InputAction, InstanceFactContext, InstanceId,
-    IssuedCorrelationId, LeasePriority, LeaseQueuePolicy, LeaseQueueStatus, LeaseToken,
+    IssuedCorrelationId, LeaseId, LeasePriority, LeaseQueuePolicy, LeaseQueueStatus, LeaseToken,
     MAX_RUNTIME_PLANNING_DOCUMENT_BYTES, MonitorDiagnosis, MonitorDisposition, MonitorObservation,
     MonitorPayload, MonitorRecoveryCoordinationReason, MonitorRecoveryKind, OriginModule,
     PerformanceControlLevel, PerformanceMonitorHealth, PolicyExecutionOutcome, PolicyFailureClass,
@@ -24,18 +24,20 @@ use actingcommand_contract::{
     ProjectionProfile, ProposalClass, ProposalDisposition, ProposalDocument, ProposalKind,
     ProposalPatchOperation, PublicEventPayload, RUNTIME_INFO_FILE, ReleasePayload,
     ReleaseResourceVersion, ReleaseTransitionKind, ResourceAuthoringEvent, ResourceAuthoringPhase,
-    RuntimeCaptureBackend, RuntimeErrorCode, RuntimeEventQueryCursor, RuntimeEventQueryPageRequest,
-    RuntimeForwardProjectionRequest, RuntimeMonitorPolicy, RuntimeOperation,
-    RuntimePlanningDocument, RuntimePlanningDocumentKind, RuntimeReceipt, RuntimeReceiptState,
-    RuntimeReleaseSet, RuntimeRequest, RuntimeResult, RuntimeStrategicReportRequest,
-    SchedulingDisposition, SchedulingEffectEvidence, SchedulingOutcomeDeclaration,
-    SchedulingOutcomeIdentity, StatePayload, StateRecoveryAction, StateValidationResult,
-    TaskOutcome, TaskPayload, TaskSemanticFact, TaskTemplateInstantiation, TerminalEvent,
+    RunId, RuntimeCaptureBackend, RuntimeErrorCode, RuntimeEventQueryCursor,
+    RuntimeEventQueryPageRequest, RuntimeForwardProjectionRequest, RuntimeMonitorPolicy,
+    RuntimeOperation, RuntimePlanningDocument, RuntimePlanningDocumentKind, RuntimeReceipt,
+    RuntimeReceiptState, RuntimeReleaseSet, RuntimeRequest, RuntimeResult,
+    RuntimeStrategicReportRequest, SchedulingDisposition, SchedulingEffectEvidence,
+    SchedulingOutcomeDeclaration, SchedulingOutcomeIdentity, StatePayload, StateRecoveryAction,
+    StateValidationResult, TaskId, TaskOutcome, TaskPayload, TaskSemanticFact,
+    TaskTemplateInstantiation, TerminalEvent,
 };
 use actingcommand_device::{
     CaptureBackend, CaptureBackendName, DeviceError, DeviceResult, Frame, InputBackend, PixelFormat,
 };
 use actingcommand_execution_kernel::ExecutionBackendProvenance;
+use actingcommand_ledger::{GlobalLedger, GlobalLedgerConfig, PersistedEvent};
 use actingcommand_policy::{
     CatalogDocumentSource, CatalogSources, CohortBudgets, Comparison, DecisionReasonChain,
     DispatchIntent, EvaluationFacts, EvaluationResources, EvaluationTime, FactValue,
@@ -55,7 +57,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self, OpenOptions};
 use std::io::{Cursor, Write};
 use std::net::TcpStream;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Barrier, mpsc};
@@ -69,6 +71,7 @@ const TEST_GOVERNANCE_CAPABILITY: &str = "runtime-host-governance-test-capabilit
 struct ManualRuntimeClock {
     unix_ms: AtomicU64,
     monotonic_ms: AtomicU64,
+    samples: AtomicU64,
 }
 
 impl ManualRuntimeClock {
@@ -76,6 +79,7 @@ impl ManualRuntimeClock {
         Self {
             unix_ms: AtomicU64::new(unix_ms),
             monotonic_ms: AtomicU64::new(monotonic_ms),
+            samples: AtomicU64::new(0),
         }
     }
 
@@ -91,10 +95,15 @@ impl ManualRuntimeClock {
     fn set_monotonic_ms(&self, monotonic_ms: u64) {
         self.monotonic_ms.store(monotonic_ms, Ordering::SeqCst);
     }
+
+    fn samples(&self) -> u64 {
+        self.samples.load(Ordering::Acquire)
+    }
 }
 
 impl RuntimeClock for ManualRuntimeClock {
     fn sample(&self) -> RuntimeHostResult<RuntimeClockSample> {
+        self.samples.fetch_add(1, Ordering::AcqRel);
         Ok(RuntimeClockSample {
             unix_ms: self.unix_ms.load(Ordering::SeqCst),
             monotonic_ms: self.monotonic_ms.load(Ordering::SeqCst),
@@ -2852,6 +2861,114 @@ fn mapped_policy_facts_at(outcome_key: &str, unix_ms: u64, stop_followup: bool) 
     followup_stop.value = FactValue::Boolean(stop_followup);
     facts.fact_snapshot_id = format!("snapshot:mapped:{outcome_key}:next-run");
     facts
+}
+
+#[test]
+fn scheduled_policy_checkpoint_is_exact_thread_bound_one_shot_and_clock_independent() {
+    for mismatch in ["run", "task", "correlation", "lease"] {
+        let root = TempDir::new().expect("tempdir");
+        let outcome_key = format!("checkpoint-mismatch-{mismatch}");
+        let (host, _state, context, request) = admitted_mapped_run_fixture(&root, &outcome_key);
+        let receipt = host
+            .run_scheduled_contained_task(&context, &request)
+            .expect("mismatch scheduled run");
+        let ids = IdentifierIssuer::new().expect("mismatch identifiers");
+        let identity = ScheduledPolicyCheckpointIdentity::for_context(&context);
+        let mismatched = match mismatch {
+            "run" => {
+                identity.with_run_id(*ids.mint_run_id().expect("mismatched run id").transport())
+            }
+            "task" => {
+                identity.with_task_id(*ids.mint_task_id().expect("mismatched task id").transport())
+            }
+            "correlation" => identity.with_correlation_id(
+                *ids.mint_correlation_id()
+                    .expect("mismatched correlation id")
+                    .transport(),
+            ),
+            "lease" => identity.with_lease_id(
+                *ids.mint_lease_id()
+                    .expect("mismatched lease id")
+                    .transport(),
+            ),
+            _ => unreachable!(),
+        };
+        let control = host
+            .count_scheduled_policy_checkpoint_for_test(mismatched)
+            .expect("arm mismatched checkpoint");
+        host.complete_scheduled_policy_run(&context, &receipt)
+            .expect("mismatched checkpoint must not block settlement");
+        assert_eq!(
+            control.consumed(),
+            0,
+            "{mismatch} mismatch consumed the checkpoint"
+        );
+        host.close().expect("close mismatch host");
+    }
+
+    let root = TempDir::new().expect("tempdir");
+    let (host, _state, context, request, _, clock) =
+        admitted_mapped_run_fixture_with_policy_time(&root, "checkpoint-exact-one-shot");
+    let receipt = host
+        .run_scheduled_contained_task(&context, &request)
+        .expect("exact checkpoint scheduled run");
+    let control = host
+        .count_scheduled_policy_checkpoint_for_test(ScheduledPolicyCheckpointIdentity::for_context(
+            &context,
+        ))
+        .expect("arm exact checkpoint");
+    let samples_before_background = clock.samples();
+    let sample_deadline = Instant::now() + Duration::from_secs(2);
+    while clock.samples() == samples_before_background {
+        assert!(
+            Instant::now() < sample_deadline,
+            "lease sweeper did not sample the runtime clock"
+        );
+        thread::sleep(Duration::from_millis(10));
+    }
+    assert_eq!(
+        control.consumed(),
+        0,
+        "background sweeper/clock sample consumed the exact checkpoint"
+    );
+    host.complete_scheduled_policy_run(&context, &receipt)
+        .expect("matching execution consumes checkpoint");
+    assert_eq!(control.consumed(), 1, "matching checkpoint consumption");
+    host.complete_scheduled_policy_run(&context, &receipt)
+        .expect("matching completion replay");
+    assert_eq!(
+        control.consumed(),
+        1,
+        "completion replay consumed the one-shot checkpoint twice"
+    );
+    host.close().expect("close exact checkpoint host");
+
+    let root = TempDir::new().expect("tempdir");
+    let (host, _state, context, request) =
+        admitted_mapped_run_fixture(&root, "checkpoint-thread-bound");
+    let receipt = host
+        .run_scheduled_contained_task(&context, &request)
+        .expect("thread-bound scheduled run");
+    let control = host
+        .count_scheduled_policy_checkpoint_for_test(ScheduledPolicyCheckpointIdentity::for_context(
+            &context,
+        ))
+        .expect("arm thread-bound checkpoint");
+    let host = Arc::new(host);
+    let execution_host = Arc::clone(&host);
+    thread::spawn(move || execution_host.complete_scheduled_policy_run(&context, &receipt))
+        .join()
+        .expect("join mismatched execution thread")
+        .expect("mismatched execution thread still settles");
+    assert_eq!(
+        control.consumed(),
+        0,
+        "non-owner execution thread consumed the exact checkpoint"
+    );
+    Arc::try_unwrap(host)
+        .unwrap_or_else(|_| panic!("exclusive thread-bound host"))
+        .close()
+        .expect("close thread-bound checkpoint host");
 }
 
 #[test]
@@ -13259,7 +13376,10 @@ fn policy_dispatch_crash_child_process() {
     let recovery_case = std::env::var("ACTINGCOMMAND_POLICY_RECOVERY_CASE").ok();
     let outcome_crash = matches!(
         std::env::var("ACTINGCOMMAND_POLICY_CRASH_POINT").as_deref(),
-        Ok("after_policy_execution" | "after_policy_completion" | "fail_policy_execution_append")
+        Ok("after_policy_execution"
+            | "after_policy_completion"
+            | "fail_policy_execution_append"
+            | "after_lease_release_before_policy_execution")
     );
     let instance_bytes = fs::read(Path::new(&root).join("instance.json")).expect("instance bytes");
     let instance_id: InstanceId =
@@ -13333,6 +13453,25 @@ fn policy_dispatch_crash_child_process() {
         let PolicyDispatchAdmission::Granted { context } = admission else {
             panic!("expected child policy run context")
         };
+        if std::env::var("ACTINGCOMMAND_POLICY_CRASH_POINT").as_deref()
+            == Ok("after_lease_release_before_policy_execution")
+        {
+            fs::write(
+                Path::new(&root).join("exact-checkpoint-identities.json"),
+                serde_json::to_vec(&(
+                    context.run_id(),
+                    context.task_id(),
+                    context.correlation_id(),
+                    context.lease_token().lease_id(),
+                ))
+                .expect("exact checkpoint identity bytes"),
+            )
+            .expect("exact checkpoint identity file");
+            let marker = std::env::var_os("ACTINGCOMMAND_POLICY_CRASH_MARKER")
+                .expect("exact checkpoint marker path");
+            host.exit_at_scheduled_policy_checkpoint_for_test(&context, PathBuf::from(marker))
+                .expect("arm exact lifecycle checkpoint");
+        }
         if recovery_case.as_deref() == Some("lease-expired") {
             thread::sleep(Duration::from_millis(250));
         }
@@ -13375,6 +13514,230 @@ fn policy_dispatch_crash_child_process() {
     .expect("admitted dispatch marker");
     fs::write(Path::new(&root).join("child-ready"), b"ready").expect("child marker");
     std::process::exit(0);
+}
+
+fn exact_checkpoint_prefix_events(root: &Path, run_id: RunId) -> Vec<PersistedEvent> {
+    let artifacts = ArtifactStore::open(root).expect("open prefix artifact store");
+    let ledger = GlobalLedger::open_with_artifact_verifier(
+        GlobalLedgerConfig::new(
+            root.join("ledger"),
+            format!("exact-checkpoint-prefix-reader-{}", std::process::id()),
+        ),
+        |reference| artifacts.verify_recovery_reference(reference).ok(),
+    )
+    .expect("open exact checkpoint prefix ledger");
+    let events = ledger
+        .query(EventQuery {
+            run_id: Some(run_id),
+            ..EventQuery::default()
+        })
+        .expect("query exact checkpoint prefix");
+    ledger
+        .close()
+        .expect("close exact checkpoint prefix ledger");
+    events
+}
+
+#[test]
+fn exact_lifecycle_checkpoint_recovers_scheduled_failure_once() {
+    let root = TempDir::new().expect("tempdir");
+    let shared_instance_id = instance_id();
+    fs::write(
+        root.path().join("instance.json"),
+        serde_json::to_vec(&shared_instance_id).expect("instance bytes"),
+    )
+    .expect("instance file");
+    let marker = root.path().join("exact-lifecycle-checkpoint");
+    let stdout_path = root.path().join("exact-lifecycle-child.stdout");
+    let stderr_path = root.path().join("exact-lifecycle-child.stderr");
+    let stdout = OpenOptions::new()
+        .create_new(true)
+        .write(true)
+        .open(&stdout_path)
+        .expect("create exact-lifecycle child stdout");
+    let stderr = OpenOptions::new()
+        .create_new(true)
+        .write(true)
+        .open(&stderr_path)
+        .expect("create exact-lifecycle child stderr");
+    let mut child = Command::new(std::env::current_exe().expect("test executable"))
+        .args([
+            "--exact",
+            "tests::policy_dispatch_crash_child_process",
+            "--nocapture",
+        ])
+        .env("ACTINGCOMMAND_POLICY_CRASH_ROOT", root.path())
+        .env(
+            "ACTINGCOMMAND_POLICY_CRASH_POINT",
+            "after_lease_release_before_policy_execution",
+        )
+        .env("ACTINGCOMMAND_POLICY_CRASH_MARKER", &marker)
+        .env("ACTINGCOMMAND_POLICY_RECOVERY_CASE", "task-severe")
+        .stdin(Stdio::null())
+        .stdout(Stdio::from(stdout))
+        .stderr(Stdio::from(stderr))
+        .spawn()
+        .expect("spawn exact-lifecycle child");
+    let deadline = Instant::now() + Duration::from_secs(20);
+    let status = loop {
+        if let Some(status) = child.try_wait().expect("poll exact-lifecycle child") {
+            break status;
+        }
+        if Instant::now() >= deadline {
+            child.kill().expect("kill timed out exact-lifecycle child");
+            let _ = child.wait();
+            panic!("exact-lifecycle child timed out");
+        }
+        thread::sleep(Duration::from_millis(10));
+    };
+    let child_stdout = fs::read_to_string(&stdout_path).expect("read exact-lifecycle child stdout");
+    let child_stderr = fs::read_to_string(&stderr_path).expect("read exact-lifecycle child stderr");
+    assert_eq!(
+        status.code(),
+        Some(87),
+        "first child-process error: status={status}; stdout={child_stdout:?}; stderr={child_stderr:?}"
+    );
+    assert_eq!(
+        fs::read(&marker).expect("exact-lifecycle marker"),
+        b"after-durable-lease-release-before-policy-execution-recorded"
+    );
+    let (run_id, task_id, correlation_id, lease_id): (RunId, TaskId, CorrelationId, LeaseId) =
+        serde_json::from_slice(
+            &fs::read(root.path().join("exact-checkpoint-identities.json"))
+                .expect("exact checkpoint identity bytes"),
+        )
+        .expect("exact checkpoint identity JSON");
+
+    let prefix = exact_checkpoint_prefix_events(root.path(), run_id);
+    for event_type in [EventType::TaskFailed, EventType::LeaseReleased] {
+        assert_eq!(
+            prefix
+                .iter()
+                .filter(|event| event.event_type() == event_type)
+                .count(),
+            1,
+            "durable checkpoint prefix {event_type:?} count"
+        );
+    }
+    assert!(
+        prefix.iter().all(|event| {
+            !matches!(
+                event.event_type(),
+                EventType::TaskCompleted
+                    | EventType::TaskCancelled
+                    | EventType::PolicyExecutionRecorded
+                    | EventType::PolicyDispatchCompleted
+            )
+        }),
+        "checkpoint prefix crossed its semantic boundary"
+    );
+    let release = prefix
+        .iter()
+        .find(|event| event.event_type() == EventType::LeaseReleased)
+        .expect("checkpoint release event");
+    assert_eq!(release.links().run_id(), Some(&run_id));
+    assert_eq!(release.links().task_id(), Some(&task_id));
+    assert_eq!(release.links().correlation_id(), Some(&correlation_id));
+    assert_eq!(release.links().lease_id(), Some(&lease_id));
+
+    let package = fs::read(root.path().join("scheduled-task.zip")).expect("scheduled package");
+    let recovered_state = Arc::new(FakeState::default());
+    let recovered = RuntimeHost::start(
+        config(&root).with_procedure_manifest(procedure_manifest_with_primary(
+            &package,
+            vec!["after_observation".to_owned()],
+        )),
+        Arc::new(
+            FakeProvider::one(
+                POLICY_INSTANCE_ALIAS,
+                shared_instance_id,
+                Arc::clone(&recovered_state),
+            )
+            .fixture_simulation(),
+        ),
+    );
+    let host = match recovered {
+        Ok(host) => host,
+        Err(first_error) => panic!(
+            "first startup/reconciliation error: {first_error}; child stderr={child_stderr:?}"
+        ),
+    };
+    let mut client = TestClient::connect(&host);
+    let events = projected_events(
+        &mut client,
+        EventQuery {
+            run_id: Some(run_id),
+            ..EventQuery::default()
+        },
+    );
+    for event_type in [
+        EventType::TaskFailed,
+        EventType::LeaseReleased,
+        EventType::PolicyExecutionRecorded,
+        EventType::PolicyDispatchCompleted,
+    ] {
+        assert_eq!(
+            events
+                .iter()
+                .filter(|event| event.event_type == event_type)
+                .count(),
+            1,
+            "recovered {event_type:?} count"
+        );
+    }
+    let release_index = events
+        .iter()
+        .position(|event| event.event_type == EventType::LeaseReleased)
+        .expect("recovered release");
+    let execution_index = events
+        .iter()
+        .position(|event| event.event_type == EventType::PolicyExecutionRecorded)
+        .expect("recovered policy execution");
+    let completion_index = events
+        .iter()
+        .position(|event| event.event_type == EventType::PolicyDispatchCompleted)
+        .expect("recovered policy completion");
+    assert!(
+        release_index < execution_index && execution_index < completion_index,
+        "recovered event order"
+    );
+    for event in &events {
+        assert_eq!(event.links.run_id(), Some(&run_id), "run identity");
+        assert_eq!(event.links.task_id(), Some(&task_id), "task identity");
+        assert_eq!(
+            event.links.correlation_id(),
+            Some(&correlation_id),
+            "correlation identity"
+        );
+        if matches!(
+            event.event_type,
+            EventType::LeaseGranted
+                | EventType::LeaseReleased
+                | EventType::PolicyExecutionRecorded
+                | EventType::PolicyDispatchCompleted
+        ) {
+            assert_eq!(event.links.lease_id(), Some(&lease_id), "lease identity");
+        }
+    }
+    assert!(events.iter().all(|event| {
+        !matches!(
+            event.event_type,
+            EventType::TaskEffectIntent
+                | EventType::TaskEffectCompleted
+                | EventType::InputIntent
+                | EventType::InputCommitted
+                | EventType::InputFailed
+        )
+    }));
+    assert_eq!(
+        recovered_state.input_count.load(Ordering::Acquire),
+        0,
+        "restart must not replay a business effect"
+    );
+    drop(client);
+    if let Err(cleanup_error) = host.close() {
+        panic!("exact-lifecycle recovery passed; cleanup error appended: {cleanup_error}");
+    }
 }
 
 #[test]
