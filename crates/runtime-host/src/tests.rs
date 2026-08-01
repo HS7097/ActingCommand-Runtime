@@ -2673,6 +2673,15 @@ fn advance_manual_clock_to(clock: &ManualRuntimeClock, target_unix_ms: u64) -> u
             .checked_add(delta_ms)
             .expect("mapped monotonic clock overflow")
     );
+    eprintln!(
+        "workflow110_clock_advance before_unix={} before_monotonic={} target_unix={} delta={} after_unix={} after_monotonic={}",
+        before.unix_ms,
+        before.monotonic_ms,
+        target_unix_ms,
+        delta_ms,
+        after.unix_ms,
+        after.monotonic_ms,
+    );
     delta_ms
 }
 
@@ -2680,19 +2689,15 @@ fn assert_mapped_second_admission(
     case: &str,
     timeline: MappedPolicyTimeline,
     second_context: &PolicyRunContext,
+    second_directive: PolicyRecomputeDirective,
 ) -> u64 {
     assert_eq!(
         second_context.admission().activity.admitted_at_unix_ms,
         timeline.second_policy_unix_ms
     );
-    let post_second_run_unix_ms = second_context
-        .admission()
-        .activity
-        .admitted_at_unix_ms
-        .checked_add(1)
-        .expect("post-second-run policy time overflow");
+    let post_second_policy_unix_ms = second_directive.eligible_at_unix_ms;
     eprintln!(
-        "workflow110_timeline case={case} first_admitted_at={} first_interval={} first_next_eligible={} minimum_second={} selected_second={} clock_delta={} second_admitted_at={} post_second={}",
+        "workflow110_timeline case={case} first_admitted_at={} first_interval={} first_next_eligible={} minimum_second={} selected_second={} clock_delta={} second_admitted_at={} second_directive_kind={:?} second_directive_reason={:?} second_eligible_at={} post_second={}",
         timeline.first_admitted_at_unix_ms,
         timeline.first_interval_ms,
         timeline.first_next_eligible_unix_ms,
@@ -2700,9 +2705,12 @@ fn assert_mapped_second_admission(
         timeline.second_policy_unix_ms,
         timeline.clock_delta_ms,
         second_context.admission().activity.admitted_at_unix_ms,
-        post_second_run_unix_ms,
+        second_directive.kind,
+        second_directive.reason,
+        second_directive.eligible_at_unix_ms,
+        post_second_policy_unix_ms,
     );
-    post_second_run_unix_ms
+    post_second_policy_unix_ms
 }
 
 fn admit_mapped_run_at(
@@ -2710,7 +2718,7 @@ fn admit_mapped_run_at(
     outcome_key: &str,
     unix_ms: u64,
     seed: u64,
-) -> Box<PolicyRunContext> {
+) -> (Box<PolicyRunContext>, PolicyRecomputeDirective) {
     let facts = mapped_policy_facts_at(outcome_key, unix_ms, true);
     let cycle = host
         .evaluate_policy_cycle_with_test_inputs(
@@ -2744,7 +2752,7 @@ fn admit_mapped_run_at(
     else {
         panic!("expected mapped run context")
     };
-    context
+    (context, cycle.directive)
 }
 
 fn mapped_policy_facts_at(outcome_key: &str, unix_ms: u64, stop_followup: bool) -> EvaluationFacts {
@@ -3313,10 +3321,14 @@ fn latest_failed_mapped_run_clears_the_prior_successful_outcome() {
     assert_eq!(first_terminal.timestamp_unix_ms(), first_policy_unix_ms);
 
     let timeline = prepare_second_mapped_policy_time(&first_context, clock.as_ref());
-    let second_context =
+    let (second_context, second_directive) =
         admit_mapped_run_at(&host, outcome_key, timeline.second_policy_unix_ms, 12_001);
-    let post_second_run_unix_ms =
-        assert_mapped_second_admission(outcome_key, timeline, &second_context);
+    let post_second_run_unix_ms = assert_mapped_second_admission(
+        outcome_key,
+        timeline,
+        &second_context,
+        second_directive,
+    );
     state.input_count.store(0, Ordering::Release);
     state
         .transition_capture_after_input
@@ -3393,10 +3405,14 @@ fn mapped_completion_and_cache_transition_are_atomic_to_policy_snapshots() {
         .expect("first terminal");
     assert_eq!(first_terminal.timestamp_unix_ms(), first_policy_unix_ms);
     let timeline = prepare_second_mapped_policy_time(&first_context, clock.as_ref());
-    let second_context =
+    let (second_context, second_directive) =
         admit_mapped_run_at(&host, outcome_key, timeline.second_policy_unix_ms, 12_101);
-    let _post_second_run_unix_ms =
-        assert_mapped_second_admission(outcome_key, timeline, &second_context);
+    let _post_second_run_unix_ms = assert_mapped_second_admission(
+        outcome_key,
+        timeline,
+        &second_context,
+        second_directive,
+    );
     let second_run_id = second_context.run_id();
     let snapshot_key = (
         second_context.catalog_task_id().to_owned(),
@@ -3472,10 +3488,14 @@ fn newer_success_replaces_an_older_failed_mapped_run() {
     assert_eq!(first_completion.timestamp_unix_ms(), first_policy_unix_ms);
 
     let timeline = prepare_second_mapped_policy_time(&first_context, clock.as_ref());
-    let second_context =
+    let (second_context, second_directive) =
         admit_mapped_run_at(&host, outcome_key, timeline.second_policy_unix_ms, 12_201);
-    let post_second_run_unix_ms =
-        assert_mapped_second_admission(outcome_key, timeline, &second_context);
+    let post_second_run_unix_ms = assert_mapped_second_admission(
+        outcome_key,
+        timeline,
+        &second_context,
+        second_directive,
+    );
     let second_receipt = host
         .run_scheduled_contained_task(&second_context, &request)
         .expect("second mapped run");
