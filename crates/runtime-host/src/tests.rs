@@ -5124,8 +5124,10 @@ fn scheduled_expired_lease_is_fenced_and_settled_on_the_original_run() {
     fs::write(&package_path, &package).expect("write package");
     let package_sha256 = format!("{:x}", Sha256::digest(&package));
     let state = Arc::new(FakeState::default());
+    let clock = Arc::new(ManualRuntimeClock::new(POLICY_NOW_UNIX_MS, 0));
     let host = RuntimeHost::start(
         config(&root)
+            .with_runtime_clock(clock.clone())
             .with_scheduler(SchedulerConfig {
                 maximum_client_heartbeat_interval_ms: 20,
                 takeover_cooldown_ms: 40,
@@ -5157,14 +5159,51 @@ fn scheduled_expired_lease_is_fenced_and_settled_on_the_original_run() {
         ContainedTaskRequest::new(package_path.to_string_lossy().into_owned(), package_sha256)
             .expect("contained task request");
 
-    thread::sleep(Duration::from_millis(2_100));
+    let mut client = TestClient::connect(&host);
+    clock.advance(2_100);
+    let expiry_subscription = actingcommand_contract::RuntimeSubscriptionRequest::new(
+        EventQuery {
+            event_type: Some(EventType::LeaseExpired),
+            instance_id: Some(context.lease_token().instance_id()),
+            lease_id: Some(context.lease_token().lease_id()),
+            ..EventQuery::default()
+        },
+        ProjectionProfile::Forensic,
+        actingcommand_contract::SubscriptionCursor::default(),
+        1_000,
+        1,
+    )
+    .expect("lease expiry subscription");
+    let expiry_request = client.request(RuntimeOperation::SubscribeEvents {
+        request: expiry_subscription,
+    });
+    let expiry_receipt = client.send(&expiry_request);
+    let RuntimeResult::EventBatch { batch } = expiry_receipt
+        .result()
+        .expect("durable lease expiry observation")
+    else {
+        panic!("expected lease expiry event batch")
+    };
+    assert!(!batch.timed_out(), "lease expiry sweep must complete");
+    let [expired] = batch.events() else {
+        panic!("expected exactly one durable lease expiry")
+    };
+    assert_eq!(expired.event_type, EventType::LeaseExpired);
+    assert_eq!(
+        expired.links.instance_id(),
+        Some(&context.lease_token().instance_id())
+    );
+    assert_eq!(
+        expired.links.lease_id(),
+        Some(&context.lease_token().lease_id())
+    );
+
     let error = host
         .run_scheduled_contained_task(&context, &request)
         .expect_err("expired scheduled lease must be fenced");
     assert_eq!(error.code(), "lease_mismatch");
     assert!(!error.is_fatal());
 
-    let mut client = TestClient::connect(&host);
     let events = projected_events(
         &mut client,
         EventQuery {
