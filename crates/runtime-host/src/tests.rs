@@ -5161,48 +5161,24 @@ fn scheduled_expired_lease_is_fenced_and_settled_on_the_original_run() {
 
     let mut client = TestClient::connect(&host);
     clock.advance(2_100);
-    let expiry_subscription = actingcommand_contract::RuntimeSubscriptionRequest::new(
-        EventQuery {
-            event_type: Some(EventType::LeaseExpired),
-            instance_id: Some(context.lease_token().instance_id()),
-            lease_id: Some(context.lease_token().lease_id()),
-            ..EventQuery::default()
-        },
-        ProjectionProfile::Forensic,
-        actingcommand_contract::SubscriptionCursor::default(),
-        1_000,
-        1,
-    )
-    .expect("lease expiry subscription");
-    let expiry_request = client.request(RuntimeOperation::SubscribeEvents {
-        request: expiry_subscription,
-    });
-    let expiry_receipt = client.send(&expiry_request);
-    let RuntimeResult::EventBatch { batch } = expiry_receipt
-        .result()
-        .expect("durable lease expiry observation")
-    else {
-        panic!("expected lease expiry event batch")
-    };
-    assert!(!batch.timed_out(), "lease expiry sweep must complete");
-    let [expired] = batch.events() else {
-        panic!("expected exactly one durable lease expiry")
-    };
-    assert_eq!(expired.event_type, EventType::LeaseExpired);
+    let expiry_terminal = host
+        .expire_lease_once_for_test(context.lease_token())
+        .expect("expire the exact scheduled lease");
     assert_eq!(
-        expired.links.instance_id(),
-        Some(&context.lease_token().instance_id())
+        host.expire_lease_once_for_test(context.lease_token())
+            .expect("replay the exact scheduled lease expiry"),
+        expiry_terminal
     );
-    assert_eq!(
-        expired.links.lease_id(),
-        Some(&context.lease_token().lease_id())
-    );
-
     let error = host
         .run_scheduled_contained_task(&context, &request)
         .expect_err("expired scheduled lease must be fenced");
     assert_eq!(error.code(), "lease_mismatch");
     assert!(!error.is_fatal());
+    assert_eq!(
+        host.expire_lease_once_for_test(context.lease_token())
+            .expect("replay expiry after scheduled settlement"),
+        expiry_terminal
+    );
 
     let events = projected_events(
         &mut client,
@@ -5210,6 +5186,28 @@ fn scheduled_expired_lease_is_fenced_and_settled_on_the_original_run() {
             run_id: Some(context.run_id()),
             ..EventQuery::default()
         },
+    );
+    let expiry_events = projected_events(
+        &mut client,
+        EventQuery {
+            event_type: Some(EventType::LeaseExpired),
+            instance_id: Some(context.lease_token().instance_id()),
+            lease_id: Some(context.lease_token().lease_id()),
+            ..EventQuery::default()
+        },
+    );
+    let [expired] = expiry_events.as_slice() else {
+        panic!("the exact scheduled lease must have one durable expiry")
+    };
+    assert_eq!(expired.sequence, expiry_terminal.sequence);
+    assert_eq!(expired.event_id, expiry_terminal.event_id);
+    assert_eq!(
+        expired.links.instance_id(),
+        Some(&context.lease_token().instance_id())
+    );
+    assert_eq!(
+        expired.links.lease_id(),
+        Some(&context.lease_token().lease_id())
     );
     for event_type in [
         EventType::LeaseReleased,
@@ -6924,6 +6922,104 @@ fn lease_expiry_promotes_the_queue_and_fences_the_expired_token() {
     );
     drop(first);
     drop(second);
+    host.close().expect("close host");
+    assert_eq!(state.open_count.load(Ordering::Acquire), 0);
+}
+
+#[test]
+fn exact_lease_expiry_checkpoint_promotes_queue_once_and_replays() {
+    let root = TempDir::new().expect("tempdir");
+    let state = Arc::new(FakeState::default());
+    let clock = Arc::new(ManualRuntimeClock::new(1_000, 0));
+    let host = RuntimeHost::start(
+        config(&root)
+            .with_runtime_clock(clock.clone())
+            .with_scheduler(SchedulerConfig {
+                maximum_client_heartbeat_interval_ms: 20,
+                takeover_cooldown_ms: 40,
+                lease_ttl_ms: 200,
+                ..SchedulerConfig::default()
+            }),
+        Arc::new(FakeProvider::one(
+            "node.a",
+            instance_id(),
+            Arc::clone(&state),
+        )),
+    )
+    .expect("runtime host");
+    let mut owner = TestClient::connect(&host);
+    let mut waiter = TestClient::connect(&host);
+    let (_, expired_token) = owner.acquire("node.a");
+    let (queued_request, status) = waiter.queue("node.a", LeasePriority::Normal, 1_000);
+
+    clock.advance(250);
+    let ids = IdentifierIssuer::new().expect("identifier issuer");
+    let mismatched_token = LeaseToken::new(
+        expired_token.owner_epoch(),
+        expired_token.lease_id(),
+        expired_token.instance_id(),
+        *ids.mint_holder_id().expect("mismatched holder").transport(),
+        expired_token.expires_at_monotonic_ms(),
+    )
+    .expect("mismatched exact-lease token");
+    let mismatch = host
+        .expire_lease_once_for_test(&mismatched_token)
+        .expect_err("mismatched exact-lease identity must not consume the checkpoint");
+    assert_eq!(mismatch.code(), "test_lease_expiry_token_identity_mismatch");
+    let terminal = host
+        .expire_lease_once_for_test(&expired_token)
+        .expect("expire exact queued-owner lease");
+    assert_eq!(
+        host.expire_lease_once_for_test(&expired_token)
+            .expect("replay exact queued-owner expiry"),
+        terminal
+    );
+
+    let poll = waiter.request(RuntimeOperation::PollQueuedLease {
+        queued_request_id: status.request_id(),
+    });
+    let promoted = waiter.send(&poll);
+    let RuntimeResult::LeaseGranted { token: new_token } =
+        promoted.result().expect("promoted lease result")
+    else {
+        panic!("queue promotion must complete before the checkpoint returns")
+    };
+    let new_token = new_token.clone();
+    assert_input_denied(
+        &mut owner,
+        expired_token.clone(),
+        RuntimeErrorCode::LeaseMismatch,
+    );
+    let expiry_events = projected_events(
+        &mut owner,
+        EventQuery {
+            event_type: Some(EventType::LeaseExpired),
+            instance_id: Some(expired_token.instance_id()),
+            lease_id: Some(expired_token.lease_id()),
+            ..EventQuery::default()
+        },
+    );
+    let [expired] = expiry_events.as_slice() else {
+        panic!("the exact expired lease must have one durable terminal")
+    };
+    assert_eq!(expired.sequence, terminal.sequence);
+    assert_eq!(expired.event_id, terminal.event_id);
+    assert_eq!(
+        event_types_for_correlation(&mut waiter, queued_request.correlation_id()),
+        vec![
+            EventType::LeaseRequested,
+            EventType::SchedulerQueued,
+            EventType::LeaseTransitionIntent,
+            EventType::LeaseTransferred,
+        ]
+    );
+    let release = waiter.request(RuntimeOperation::ReleaseLease { token: new_token });
+    assert_eq!(
+        waiter.send(&release).state(),
+        RuntimeReceiptState::Completed
+    );
+    drop(owner);
+    drop(waiter);
     host.close().expect("close host");
     assert_eq!(state.open_count.load(Ordering::Acquire), 0);
 }
@@ -13566,6 +13662,8 @@ fn policy_dispatch_crash_child_process() {
     }
     let mut runtime_config = RuntimeHostConfig::new(&root, b"policy-crash-process-salt")
         .with_governance_capability(TEST_GOVERNANCE_CAPABILITY);
+    let lease_expiry_clock = (recovery_case.as_deref() == Some("lease-expired"))
+        .then(|| Arc::new(ManualRuntimeClock::new(POLICY_NOW_UNIX_MS, 0)));
     runtime_config = match &package {
         Some(package) => runtime_config.with_procedure_manifest(procedure_manifest_with_primary(
             package,
@@ -13573,13 +13671,15 @@ fn policy_dispatch_crash_child_process() {
         )),
         None => runtime_config.with_procedure_manifest(procedure_manifest()),
     };
-    if recovery_case.as_deref() == Some("lease-expired") {
-        runtime_config = runtime_config.with_scheduler(SchedulerConfig {
-            maximum_client_heartbeat_interval_ms: 20,
-            takeover_cooldown_ms: 40,
-            lease_ttl_ms: 200,
-            ..SchedulerConfig::default()
-        });
+    if let Some(clock) = &lease_expiry_clock {
+        runtime_config = runtime_config
+            .with_runtime_clock(clock.clone())
+            .with_scheduler(SchedulerConfig {
+                maximum_client_heartbeat_interval_ms: 20,
+                takeover_cooldown_ms: 40,
+                lease_ttl_ms: 200,
+                ..SchedulerConfig::default()
+            });
     }
     let state = Arc::new(FakeState::default());
     match recovery_case.as_deref() {
@@ -13647,8 +13747,10 @@ fn policy_dispatch_crash_child_process() {
             host.exit_at_scheduled_policy_checkpoint_for_test(&context, PathBuf::from(marker))
                 .expect("arm exact lifecycle checkpoint");
         }
-        if recovery_case.as_deref() == Some("lease-expired") {
-            thread::sleep(Duration::from_millis(250));
+        if let Some(clock) = &lease_expiry_clock {
+            clock.advance(250);
+            host.expire_lease_once_for_test(context.lease_token())
+                .expect("expire exact child policy lease");
         }
         let package = package.expect("scheduled package");
         let request = ContainedTaskRequest::new(
