@@ -568,12 +568,12 @@ fn actingd_does_not_execute_fixture_without_an_explicit_scheduled_binding() {
             .expect("query admission-only fixture events");
         if events
             .iter()
-            .any(|event| event.event_type == EventType::LeaseGranted)
+            .any(|event| event.event_type == EventType::PolicyDispatchAdmitted)
         {
             break events;
         }
         if let Some(status) = child.0.try_wait().expect("process state") {
-            panic!("actingd exited before admission-only fixture lease with {status}");
+            panic!("actingd exited before admission-only fixture admission with {status}");
         }
         assert!(
             started.elapsed() < Duration::from_secs(5),
@@ -581,13 +581,20 @@ fn actingd_does_not_execute_fixture_without_an_explicit_scheduled_binding() {
         );
         thread::sleep(Duration::from_millis(20));
     };
-    assert_eq!(
-        events
-            .iter()
-            .filter(|event| event.event_type == EventType::PolicyDispatchAdmitted)
-            .count(),
-        1
-    );
+    for event_type in [
+        EventType::PolicyDispatchIntent,
+        EventType::PolicyDispatchAdmitted,
+        EventType::LeaseGranted,
+    ] {
+        assert_eq!(
+            events
+                .iter()
+                .filter(|event| event.event_type == event_type)
+                .count(),
+            1,
+            "admission-only fixture {event_type:?}"
+        );
+    }
     let run_id = events
         .iter()
         .find(|event| event.event_type == EventType::PolicyDispatchIntent)
