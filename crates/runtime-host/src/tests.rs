@@ -4,17 +4,17 @@ use super::*;
 use crate::ipc::{DEFAULT_RUNTIME_MAX_FRAME_BYTES, FrameRead, read_frame, write_frame};
 use crate::monitor::MONITOR_FILE_NAME;
 use crate::time::unix_ms_now;
-use actingcommand_artifact_store::read_projected_verified;
+use actingcommand_artifact_store::{ArtifactStore, read_projected_verified};
 use actingcommand_contract::{
     AgentAttentionState, AgentPayload, AgentResponseDisposition, AgentSessionId,
     AgentSessionResponse, AgentWakeKind, ApplicationLifecycleAction, ApprovalDecisionRecord,
     ApprovalDisposition, ApprovalTarget, ArtifactKind, AuthoritativeSchedulingOutcome,
     CaptureSequenceSpec, CatalogDeclarationPatch, CatalogPayload, CatalogProposal,
-    ClientActionKind, ClientActionRecord, ClientActionValue, ContainedTaskRequest,
+    ClientActionKind, ClientActionRecord, ClientActionValue, ContainedTaskRequest, CorrelationId,
     EffectDisposition, EventActor, EventPayload, EventQuery, EventSeverity, EventSource, EventType,
     FactContent, FactRecord, FactScope, FactTtlPolicy, FactTtlSource,
     FactValue as ContractFactValue, IdentifierIssuer, InputAction, InstanceFactContext, InstanceId,
-    IssuedCorrelationId, LeasePriority, LeaseQueuePolicy, LeaseQueueStatus, LeaseToken,
+    IssuedCorrelationId, LeaseId, LeasePriority, LeaseQueuePolicy, LeaseQueueStatus, LeaseToken,
     MAX_RUNTIME_PLANNING_DOCUMENT_BYTES, MonitorDiagnosis, MonitorDisposition, MonitorObservation,
     MonitorPayload, MonitorRecoveryCoordinationReason, MonitorRecoveryKind, OriginModule,
     PerformanceControlLevel, PerformanceMonitorHealth, PolicyExecutionOutcome, PolicyFailureClass,
@@ -24,18 +24,20 @@ use actingcommand_contract::{
     ProjectionProfile, ProposalClass, ProposalDisposition, ProposalDocument, ProposalKind,
     ProposalPatchOperation, PublicEventPayload, RUNTIME_INFO_FILE, ReleasePayload,
     ReleaseResourceVersion, ReleaseTransitionKind, ResourceAuthoringEvent, ResourceAuthoringPhase,
-    RuntimeCaptureBackend, RuntimeErrorCode, RuntimeEventQueryCursor, RuntimeEventQueryPageRequest,
-    RuntimeForwardProjectionRequest, RuntimeMonitorPolicy, RuntimeOperation,
-    RuntimePlanningDocument, RuntimePlanningDocumentKind, RuntimeReceipt, RuntimeReceiptState,
-    RuntimeReleaseSet, RuntimeRequest, RuntimeResult, RuntimeStrategicReportRequest,
-    SchedulingDisposition, SchedulingEffectEvidence, SchedulingOutcomeDeclaration,
-    SchedulingOutcomeIdentity, StatePayload, StateRecoveryAction, StateValidationResult,
-    TaskOutcome, TaskPayload, TaskSemanticFact, TaskTemplateInstantiation, TerminalEvent,
+    RunId, RuntimeCaptureBackend, RuntimeErrorCode, RuntimeEventQueryCursor,
+    RuntimeEventQueryPageRequest, RuntimeForwardProjectionRequest, RuntimeMonitorPolicy,
+    RuntimeOperation, RuntimePlanningDocument, RuntimePlanningDocumentKind, RuntimeReceipt,
+    RuntimeReceiptState, RuntimeReleaseSet, RuntimeRequest, RuntimeResult,
+    RuntimeStrategicReportRequest, SchedulingDisposition, SchedulingEffectEvidence,
+    SchedulingOutcomeDeclaration, SchedulingOutcomeIdentity, StatePayload, StateRecoveryAction,
+    StateValidationResult, TaskId, TaskOutcome, TaskPayload, TaskSemanticFact,
+    TaskTemplateInstantiation, TerminalEvent,
 };
 use actingcommand_device::{
     CaptureBackend, CaptureBackendName, DeviceError, DeviceResult, Frame, InputBackend, PixelFormat,
 };
 use actingcommand_execution_kernel::ExecutionBackendProvenance;
+use actingcommand_ledger::{GlobalLedger, GlobalLedgerConfig, PersistedEvent};
 use actingcommand_policy::{
     CatalogDocumentSource, CatalogSources, CohortBudgets, Comparison, DecisionReasonChain,
     DispatchIntent, EvaluationFacts, EvaluationResources, EvaluationTime, FactValue,
@@ -55,7 +57,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self, OpenOptions};
 use std::io::{Cursor, Write};
 use std::net::TcpStream;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Barrier, mpsc};
@@ -69,6 +71,7 @@ const TEST_GOVERNANCE_CAPABILITY: &str = "runtime-host-governance-test-capabilit
 struct ManualRuntimeClock {
     unix_ms: AtomicU64,
     monotonic_ms: AtomicU64,
+    samples: AtomicU64,
 }
 
 impl ManualRuntimeClock {
@@ -76,6 +79,7 @@ impl ManualRuntimeClock {
         Self {
             unix_ms: AtomicU64::new(unix_ms),
             monotonic_ms: AtomicU64::new(monotonic_ms),
+            samples: AtomicU64::new(0),
         }
     }
 
@@ -91,10 +95,15 @@ impl ManualRuntimeClock {
     fn set_monotonic_ms(&self, monotonic_ms: u64) {
         self.monotonic_ms.store(monotonic_ms, Ordering::SeqCst);
     }
+
+    fn samples(&self) -> u64 {
+        self.samples.load(Ordering::Acquire)
+    }
 }
 
 impl RuntimeClock for ManualRuntimeClock {
     fn sample(&self) -> RuntimeHostResult<RuntimeClockSample> {
+        self.samples.fetch_add(1, Ordering::AcqRel);
         Ok(RuntimeClockSample {
             unix_ms: self.unix_ms.load(Ordering::SeqCst),
             monotonic_ms: self.monotonic_ms.load(Ordering::SeqCst),
@@ -820,6 +829,7 @@ fn host_with_state(root: &TempDir, alias: &str, state: Arc<FakeState>) -> Runtim
 const POLICY_INSTANCE_ALIAS: &str = "fixture-instance-a";
 const POLICY_INSTANCE_ALIAS_B: &str = "fixture-instance-b";
 const POLICY_NOW_UNIX_MS: u64 = 1_699_963_200_000;
+const MAPPED_RUN_MIN_ADVANCE_MS: u64 = 120_000;
 
 fn policy_sources(version: u64) -> CatalogSources {
     let mut sources = CatalogSources {
@@ -2549,6 +2559,24 @@ fn admitted_mapped_run_fixture(
     Box<PolicyRunContext>,
     ContainedTaskRequest,
 ) {
+    let (host, state, context, request, _, _) =
+        admitted_mapped_run_fixture_with_policy_time(root, outcome_key);
+    (host, state, context, request)
+}
+
+fn admitted_mapped_run_fixture_with_policy_time(
+    root: &TempDir,
+    outcome_key: &str,
+) -> (
+    RuntimeHost,
+    Arc<FakeState>,
+    Box<PolicyRunContext>,
+    ContainedTaskRequest,
+    u64,
+    Arc<ManualRuntimeClock>,
+) {
+    let policy_unix_ms = POLICY_NOW_UNIX_MS;
+    let clock = Arc::new(ManualRuntimeClock::new(policy_unix_ms, policy_unix_ms));
     let package = neutral_mapped_contained_task_package(outcome_key, "designated_effect_completed");
     let package_path = root.path().join(format!("{outcome_key}-mapped-task.zip"));
     fs::write(&package_path, &package).expect("write mapped package");
@@ -2559,6 +2587,7 @@ fn admitted_mapped_run_fixture(
         .store(true, Ordering::Release);
     let host = RuntimeHost::start(
         config(root)
+            .with_runtime_clock(clock.clone())
             .with_policy_inputs(PolicyInputSnapshot::new(
                 mapped_policy_facts(outcome_key, false),
                 policy_resources(),
@@ -2580,8 +2609,8 @@ fn admitted_mapped_run_fixture(
             &mapped_policy_facts(outcome_key, false),
             &policy_resources(),
             EvaluationTime {
-                unix_ms: POLICY_NOW_UNIX_MS,
-                monotonic_ms: POLICY_NOW_UNIX_MS,
+                unix_ms: policy_unix_ms,
+                monotonic_ms: policy_unix_ms,
             },
             70,
             PolicyTrigger::FactsChanged,
@@ -2610,7 +2639,123 @@ fn admitted_mapped_run_fixture(
     let request =
         ContainedTaskRequest::new(package_path.to_string_lossy().into_owned(), package_sha256)
             .expect("mapped package request");
-    (host, state, context, request)
+    (host, state, context, request, policy_unix_ms, clock)
+}
+
+#[derive(Debug, Clone, Copy)]
+struct MappedPolicyTimeline {
+    first_admitted_at_unix_ms: u64,
+    first_interval_ms: u64,
+    first_next_eligible_unix_ms: u64,
+    minimum_second_policy_unix_ms: u64,
+    second_policy_unix_ms: u64,
+    clock_delta_ms: u64,
+}
+
+struct MappedPolicyTimelineFixture {
+    timeline: MappedPolicyTimeline,
+    second_context: Box<PolicyRunContext>,
+    second_directive: PolicyRecomputeDirective,
+}
+
+fn prepare_second_mapped_policy_time(
+    first_context: &PolicyRunContext,
+    clock: &ManualRuntimeClock,
+) -> MappedPolicyTimeline {
+    let first_activity = &first_context.admission().activity;
+    assert_eq!(first_activity.admitted_at_unix_ms, POLICY_NOW_UNIX_MS);
+    assert!((60_000..=300_000).contains(&first_activity.interval_ms));
+    assert_eq!(
+        first_activity.next_eligible_unix_ms,
+        first_activity
+            .admitted_at_unix_ms
+            .checked_add(first_activity.interval_ms)
+            .expect("mapped activity cadence overflow")
+    );
+    let minimum_second_policy_unix_ms = first_activity
+        .admitted_at_unix_ms
+        .checked_add(MAPPED_RUN_MIN_ADVANCE_MS)
+        .expect("mapped policy time overflow");
+    let second_policy_unix_ms =
+        minimum_second_policy_unix_ms.max(first_activity.next_eligible_unix_ms);
+    assert!(second_policy_unix_ms >= minimum_second_policy_unix_ms);
+    assert!(second_policy_unix_ms >= first_activity.next_eligible_unix_ms);
+    let clock_delta_ms = advance_manual_clock_to(clock, second_policy_unix_ms);
+    MappedPolicyTimeline {
+        first_admitted_at_unix_ms: first_activity.admitted_at_unix_ms,
+        first_interval_ms: first_activity.interval_ms,
+        first_next_eligible_unix_ms: first_activity.next_eligible_unix_ms,
+        minimum_second_policy_unix_ms,
+        second_policy_unix_ms,
+        clock_delta_ms,
+    }
+}
+
+fn advance_manual_clock_to(clock: &ManualRuntimeClock, target_unix_ms: u64) -> u64 {
+    let before = clock.sample().expect("sample mapped runtime clock");
+    let delta_ms = target_unix_ms
+        .checked_sub(before.unix_ms)
+        .expect("mapped runtime clock cannot move backwards");
+    clock.advance(delta_ms);
+    let after = clock.sample().expect("sample advanced runtime clock");
+    assert_eq!(after.unix_ms, target_unix_ms);
+    assert_eq!(
+        after.monotonic_ms,
+        before
+            .monotonic_ms
+            .checked_add(delta_ms)
+            .expect("mapped monotonic clock overflow")
+    );
+    eprintln!(
+        "workflow110_clock_advance before_unix={} before_monotonic={} target_unix={} delta={} after_unix={} after_monotonic={}",
+        before.unix_ms,
+        before.monotonic_ms,
+        target_unix_ms,
+        delta_ms,
+        after.unix_ms,
+        after.monotonic_ms,
+    );
+    delta_ms
+}
+
+fn admit_second_mapped_policy_run(
+    case: &str,
+    host: &RuntimeHost,
+    first_context: &PolicyRunContext,
+    clock: &ManualRuntimeClock,
+    outcome_key: &str,
+    seed: u64,
+) -> MappedPolicyTimelineFixture {
+    let timeline = prepare_second_mapped_policy_time(first_context, clock);
+    let (second_context, second_directive) =
+        admit_mapped_run_at(host, outcome_key, timeline.second_policy_unix_ms, seed);
+    assert_eq!(
+        second_context.admission().activity.admitted_at_unix_ms,
+        timeline.second_policy_unix_ms
+    );
+    assert_eq!(second_directive.kind, PolicyRecomputeKind::Full);
+    assert_eq!(
+        second_directive.reason,
+        PolicyRecomputeReason::Reconciliation
+    );
+    eprintln!(
+        "workflow110_timeline case={case} first_admitted_at={} first_interval={} first_next_eligible={} minimum_second={} selected_second={} clock_delta={} second_admitted_at={} second_directive_kind={:?} second_directive_reason={:?} second_eligible_at={}",
+        timeline.first_admitted_at_unix_ms,
+        timeline.first_interval_ms,
+        timeline.first_next_eligible_unix_ms,
+        timeline.minimum_second_policy_unix_ms,
+        timeline.second_policy_unix_ms,
+        timeline.clock_delta_ms,
+        second_context.admission().activity.admitted_at_unix_ms,
+        second_directive.kind,
+        second_directive.reason,
+        second_directive.eligible_at_unix_ms,
+    );
+    MappedPolicyTimelineFixture {
+        timeline,
+        second_context,
+        second_directive,
+    }
 }
 
 fn admitted_physical_run_fixture(
@@ -2674,7 +2819,7 @@ fn admit_mapped_run_at(
     outcome_key: &str,
     unix_ms: u64,
     seed: u64,
-) -> Box<PolicyRunContext> {
+) -> (Box<PolicyRunContext>, PolicyRecomputeDirective) {
     let facts = mapped_policy_facts_at(outcome_key, unix_ms, true);
     let cycle = host
         .evaluate_policy_cycle_with_test_inputs(
@@ -2708,7 +2853,72 @@ fn admit_mapped_run_at(
     else {
         panic!("expected mapped run context")
     };
-    context
+    (context, cycle.directive)
+}
+
+fn evaluate_mapped_policy_after_outcome(
+    case: &str,
+    fixture: &MappedPolicyTimelineFixture,
+    host: &RuntimeHost,
+    clock: &ManualRuntimeClock,
+    outcome_key: &str,
+    deferred_seed: u64,
+    evaluation_seed: u64,
+) -> PolicyCycle {
+    let before_deferred = clock.sample().expect("sample post-outcome policy clock");
+    assert_eq!(
+        before_deferred.unix_ms,
+        fixture.timeline.second_policy_unix_ms
+    );
+    let deferred = host
+        .evaluate_policy_cycle_with_test_inputs(
+            &mapped_policy_facts_at(outcome_key, before_deferred.unix_ms, false),
+            &policy_resources(),
+            EvaluationTime {
+                unix_ms: before_deferred.unix_ms,
+                monotonic_ms: before_deferred.monotonic_ms,
+            },
+            deferred_seed,
+            PolicyTrigger::FactsChanged,
+        )
+        .expect("evaluate mapped cooldown boundary");
+    assert_eq!(deferred.directive.kind, PolicyRecomputeKind::Deferred);
+    assert_eq!(deferred.directive.reason, PolicyRecomputeReason::Cooldown);
+    assert!(deferred.evaluation.is_none());
+
+    let next_policy_unix_ms = deferred.directive.eligible_at_unix_ms;
+    let cooldown_delta_ms = advance_manual_clock_to(clock, next_policy_unix_ms);
+    let after_advance = clock.sample().expect("sample executable policy clock");
+    let evaluated = host
+        .evaluate_policy_cycle_with_test_inputs(
+            &mapped_policy_facts_at(outcome_key, next_policy_unix_ms, false),
+            &policy_resources(),
+            EvaluationTime {
+                unix_ms: next_policy_unix_ms,
+                monotonic_ms: after_advance.monotonic_ms,
+            },
+            evaluation_seed,
+            PolicyTrigger::FactsChanged,
+        )
+        .expect("evaluate mapped policy after cooldown");
+    assert_eq!(evaluated.directive.kind, PolicyRecomputeKind::Incremental);
+    assert_eq!(evaluated.directive.reason, PolicyRecomputeReason::Event);
+    assert!(evaluated.evaluation.is_some());
+    eprintln!(
+        "workflow110_post_outcome case={case} second_kind={:?} second_reason={:?} second_eligible_at={} deferred_at={} deferred_kind={:?} deferred_reason={:?} deferred_eligible_at={} cooldown_delta={} evaluated_at={} evaluated_kind={:?} evaluated_reason={:?}",
+        fixture.second_directive.kind,
+        fixture.second_directive.reason,
+        fixture.second_directive.eligible_at_unix_ms,
+        before_deferred.unix_ms,
+        deferred.directive.kind,
+        deferred.directive.reason,
+        deferred.directive.eligible_at_unix_ms,
+        cooldown_delta_ms,
+        after_advance.unix_ms,
+        evaluated.directive.kind,
+        evaluated.directive.reason,
+    );
+    evaluated
 }
 
 fn mapped_policy_facts_at(outcome_key: &str, unix_ms: u64, stop_followup: bool) -> EvaluationFacts {
@@ -2725,6 +2935,114 @@ fn mapped_policy_facts_at(outcome_key: &str, unix_ms: u64, stop_followup: bool) 
     followup_stop.value = FactValue::Boolean(stop_followup);
     facts.fact_snapshot_id = format!("snapshot:mapped:{outcome_key}:next-run");
     facts
+}
+
+#[test]
+fn scheduled_policy_checkpoint_is_exact_thread_bound_one_shot_and_clock_independent() {
+    for mismatch in ["run", "task", "correlation", "lease"] {
+        let root = TempDir::new().expect("tempdir");
+        let outcome_key = format!("checkpoint-mismatch-{mismatch}");
+        let (host, _state, context, request) = admitted_mapped_run_fixture(&root, &outcome_key);
+        let receipt = host
+            .run_scheduled_contained_task(&context, &request)
+            .expect("mismatch scheduled run");
+        let ids = IdentifierIssuer::new().expect("mismatch identifiers");
+        let identity = ScheduledPolicyCheckpointIdentity::for_context(&context);
+        let mismatched = match mismatch {
+            "run" => {
+                identity.with_run_id(*ids.mint_run_id().expect("mismatched run id").transport())
+            }
+            "task" => {
+                identity.with_task_id(*ids.mint_task_id().expect("mismatched task id").transport())
+            }
+            "correlation" => identity.with_correlation_id(
+                *ids.mint_correlation_id()
+                    .expect("mismatched correlation id")
+                    .transport(),
+            ),
+            "lease" => identity.with_lease_id(
+                *ids.mint_lease_id()
+                    .expect("mismatched lease id")
+                    .transport(),
+            ),
+            _ => unreachable!(),
+        };
+        let control = host
+            .count_scheduled_policy_checkpoint_for_test(mismatched)
+            .expect("arm mismatched checkpoint");
+        host.complete_scheduled_policy_run(&context, &receipt)
+            .expect("mismatched checkpoint must not block settlement");
+        assert_eq!(
+            control.consumed(),
+            0,
+            "{mismatch} mismatch consumed the checkpoint"
+        );
+        host.close().expect("close mismatch host");
+    }
+
+    let root = TempDir::new().expect("tempdir");
+    let (host, _state, context, request, _, clock) =
+        admitted_mapped_run_fixture_with_policy_time(&root, "checkpoint-exact-one-shot");
+    let receipt = host
+        .run_scheduled_contained_task(&context, &request)
+        .expect("exact checkpoint scheduled run");
+    let control = host
+        .count_scheduled_policy_checkpoint_for_test(ScheduledPolicyCheckpointIdentity::for_context(
+            &context,
+        ))
+        .expect("arm exact checkpoint");
+    let samples_before_background = clock.samples();
+    let sample_deadline = Instant::now() + Duration::from_secs(2);
+    while clock.samples() == samples_before_background {
+        assert!(
+            Instant::now() < sample_deadline,
+            "lease sweeper did not sample the runtime clock"
+        );
+        thread::sleep(Duration::from_millis(10));
+    }
+    assert_eq!(
+        control.consumed(),
+        0,
+        "background sweeper/clock sample consumed the exact checkpoint"
+    );
+    host.complete_scheduled_policy_run(&context, &receipt)
+        .expect("matching execution consumes checkpoint");
+    assert_eq!(control.consumed(), 1, "matching checkpoint consumption");
+    host.complete_scheduled_policy_run(&context, &receipt)
+        .expect("matching completion replay");
+    assert_eq!(
+        control.consumed(),
+        1,
+        "completion replay consumed the one-shot checkpoint twice"
+    );
+    host.close().expect("close exact checkpoint host");
+
+    let root = TempDir::new().expect("tempdir");
+    let (host, _state, context, request) =
+        admitted_mapped_run_fixture(&root, "checkpoint-thread-bound");
+    let receipt = host
+        .run_scheduled_contained_task(&context, &request)
+        .expect("thread-bound scheduled run");
+    let control = host
+        .count_scheduled_policy_checkpoint_for_test(ScheduledPolicyCheckpointIdentity::for_context(
+            &context,
+        ))
+        .expect("arm thread-bound checkpoint");
+    let host = Arc::new(host);
+    let execution_host = Arc::clone(&host);
+    thread::spawn(move || execution_host.complete_scheduled_policy_run(&context, &receipt))
+        .join()
+        .expect("join mismatched execution thread")
+        .expect("mismatched execution thread still settles");
+    assert_eq!(
+        control.consumed(),
+        0,
+        "non-owner execution thread consumed the exact checkpoint"
+    );
+    Arc::try_unwrap(host)
+        .unwrap_or_else(|_| panic!("exclusive thread-bound host"))
+        .close()
+        .expect("close thread-bound checkpoint host");
 }
 
 #[test]
@@ -3242,7 +3560,8 @@ fn mapped_terminal_disposition_is_single_source_for_effect_no_effect_and_opaque_
 fn latest_failed_mapped_run_clears_the_prior_successful_outcome() {
     let outcome_key = "mapped-current-run";
     let root = TempDir::new().expect("tempdir");
-    let (host, state, first_context, request) = admitted_mapped_run_fixture(&root, outcome_key);
+    let (host, state, first_context, request, first_policy_unix_ms, clock) =
+        admitted_mapped_run_fixture_with_policy_time(&root, outcome_key);
     let first_receipt = host
         .run_scheduled_contained_task(&first_context, &request)
         .expect("first mapped run");
@@ -3263,7 +3582,7 @@ fn latest_failed_mapped_run_clears_the_prior_successful_outcome() {
             .run_id,
         first_context.run_id()
     );
-    let first_terminal_timestamp = host
+    let first_terminal = host
         .query_persisted_events_for_test(EventQuery {
             run_id: Some(first_context.run_id()),
             event_type: Some(EventType::TaskCompleted),
@@ -3272,13 +3591,15 @@ fn latest_failed_mapped_run_clears_the_prior_successful_outcome() {
         .expect("query first mapped terminal")
         .into_iter()
         .next()
-        .expect("first mapped terminal")
-        .timestamp_unix_ms();
+        .expect("first mapped terminal");
+    assert_eq!(first_terminal.timestamp_unix_ms(), first_policy_unix_ms);
 
-    let second_context = admit_mapped_run_at(
-        &host,
+    let second = admit_second_mapped_policy_run(
         outcome_key,
-        first_terminal_timestamp + 120_000,
+        &host,
+        &first_context,
+        clock.as_ref(),
+        outcome_key,
         12_001,
     );
     state.input_count.store(0, Ordering::Release);
@@ -3287,7 +3608,7 @@ fn latest_failed_mapped_run_clears_the_prior_successful_outcome() {
         .store(false, Ordering::Release);
     state.refuse_guard_capture.store(true, Ordering::Release);
     let failure = host
-        .run_scheduled_contained_task(&second_context, &request)
+        .run_scheduled_contained_task(&second.second_context, &request)
         .expect_err("second mapped run must fail at its guard");
     assert_eq!(failure.code(), "contained_task_guard_refused");
     let failed_snapshot = host
@@ -3297,7 +3618,7 @@ fn latest_failed_mapped_run_clears_the_prior_successful_outcome() {
         .completed_runs
         .get(&snapshot_key)
         .expect("latest failed expected run");
-    assert_eq!(expected_failed.run_id, second_context.run_id());
+    assert_eq!(expected_failed.run_id, second.second_context.run_id());
     assert!(matches!(
         expected_failed.execution_outcome,
         PolicyExecutionOutcome::Failed { .. }
@@ -3307,20 +3628,15 @@ fn latest_failed_mapped_run_clears_the_prior_successful_outcome() {
         "completed-run state change must invalidate the earlier policy snapshot"
     );
 
-    let after_failure_time = first_terminal_timestamp + 180_000;
-    let after_failure_facts = mapped_policy_facts_at(outcome_key, after_failure_time, false);
-    let after_failure = host
-        .evaluate_policy_cycle_with_test_inputs(
-            &after_failure_facts,
-            &policy_resources(),
-            EvaluationTime {
-                unix_ms: after_failure_time,
-                monotonic_ms: after_failure_time,
-            },
-            12_002,
-            PolicyTrigger::FactsChanged,
-        )
-        .expect("evaluate after failed mapped run");
+    let after_failure = evaluate_mapped_policy_after_outcome(
+        outcome_key,
+        &second,
+        &host,
+        clock.as_ref(),
+        outcome_key,
+        12_002,
+        12_003,
+    );
     assert!(
         after_failure
             .evaluation
@@ -3337,13 +3653,14 @@ fn latest_failed_mapped_run_clears_the_prior_successful_outcome() {
 fn mapped_completion_and_cache_transition_are_atomic_to_policy_snapshots() {
     let outcome_key = "mapped-atomic-snapshot";
     let root = TempDir::new().expect("tempdir");
-    let (host, _state, first_context, request) = admitted_mapped_run_fixture(&root, outcome_key);
+    let (host, _state, first_context, request, first_policy_unix_ms, clock) =
+        admitted_mapped_run_fixture_with_policy_time(&root, outcome_key);
     let first_receipt = host
         .run_scheduled_contained_task(&first_context, &request)
         .expect("first mapped run");
     host.complete_scheduled_policy_run(&first_context, &first_receipt)
         .expect("first mapped completion");
-    let first_terminal_timestamp = host
+    let first_terminal = host
         .query_persisted_events_for_test(EventQuery {
             run_id: Some(first_context.run_id()),
             event_type: Some(EventType::TaskCompleted),
@@ -3352,14 +3669,17 @@ fn mapped_completion_and_cache_transition_are_atomic_to_policy_snapshots() {
         .expect("query first terminal")
         .into_iter()
         .next()
-        .expect("first terminal")
-        .timestamp_unix_ms();
-    let second_context = admit_mapped_run_at(
-        &host,
+        .expect("first terminal");
+    assert_eq!(first_terminal.timestamp_unix_ms(), first_policy_unix_ms);
+    let second = admit_second_mapped_policy_run(
         outcome_key,
-        first_terminal_timestamp + 120_000,
+        &host,
+        &first_context,
+        clock.as_ref(),
+        outcome_key,
         12_101,
     );
+    let MappedPolicyTimelineFixture { second_context, .. } = second;
     let second_run_id = second_context.run_id();
     let snapshot_key = (
         second_context.catalog_task_id().to_owned(),
@@ -3418,10 +3738,11 @@ fn mapped_completion_and_cache_transition_are_atomic_to_policy_snapshots() {
 fn newer_success_replaces_an_older_failed_mapped_run() {
     let outcome_key = "mapped-failure-then-success";
     let root = TempDir::new().expect("tempdir");
-    let (host, _state, first_context, request) = admitted_mapped_run_fixture(&root, outcome_key);
+    let (host, _state, first_context, request, first_policy_unix_ms, clock) =
+        admitted_mapped_run_fixture_with_policy_time(&root, outcome_key);
     host.complete_scheduled_policy_failure_without_terminal_for_test(&first_context)
         .expect("first mapped failure");
-    let first_completion_timestamp = host
+    let first_completion = host
         .query_persisted_events_for_test(EventQuery {
             run_id: Some(first_context.run_id()),
             event_type: Some(EventType::PolicyDispatchCompleted),
@@ -3430,49 +3751,61 @@ fn newer_success_replaces_an_older_failed_mapped_run() {
         .expect("query first completion")
         .into_iter()
         .next()
-        .expect("first completion")
-        .timestamp_unix_ms();
+        .expect("first completion");
+    assert_eq!(first_completion.timestamp_unix_ms(), first_policy_unix_ms);
 
-    let second_context = admit_mapped_run_at(
-        &host,
+    let second = admit_second_mapped_policy_run(
         outcome_key,
-        first_completion_timestamp + 120_000,
+        &host,
+        &first_context,
+        clock.as_ref(),
+        outcome_key,
         12_201,
     );
     let second_receipt = host
-        .run_scheduled_contained_task(&second_context, &request)
+        .run_scheduled_contained_task(&second.second_context, &request)
         .expect("second mapped run");
-    host.complete_scheduled_policy_run(&second_context, &second_receipt)
+    host.complete_scheduled_policy_run(&second.second_context, &second_receipt)
         .expect("second mapped completion");
+    let second_terminal = host
+        .query_persisted_events_for_test(EventQuery {
+            run_id: Some(second.second_context.run_id()),
+            event_type: Some(EventType::TaskCompleted),
+            ..EventQuery::default()
+        })
+        .expect("query second terminal")
+        .into_iter()
+        .next()
+        .expect("second terminal");
+    assert_eq!(
+        second_terminal.timestamp_unix_ms(),
+        second.timeline.second_policy_unix_ms
+    );
     let snapshot = host
         .policy_outcome_key_snapshot_for_test()
         .expect("success completed-run snapshot");
     let completed = snapshot
         .completed_runs
         .get(&(
-            second_context.catalog_task_id().to_owned(),
-            second_context.instance_alias().to_owned(),
+            second.second_context.catalog_task_id().to_owned(),
+            second.second_context.instance_alias().to_owned(),
         ))
         .expect("latest successful expected run");
-    assert_eq!(completed.run_id, second_context.run_id());
+    assert_eq!(completed.run_id, second.second_context.run_id());
     assert!(matches!(
         completed.execution_outcome,
         PolicyExecutionOutcome::Succeeded { .. }
     ));
 
-    let followup_time = first_completion_timestamp + 180_000;
-    let cycle = host
-        .evaluate_policy_cycle_with_test_inputs(
-            &mapped_policy_facts_at(outcome_key, followup_time, false),
-            &policy_resources(),
-            EvaluationTime {
-                unix_ms: followup_time,
-                monotonic_ms: followup_time,
-            },
-            12_202,
-            PolicyTrigger::FactsChanged,
-        )
-        .expect("evaluate after successful exact run");
+    let cycle = evaluate_mapped_policy_after_outcome(
+        outcome_key,
+        &second,
+        &host,
+        clock.as_ref(),
+        outcome_key,
+        12_202,
+        12_203,
+    );
     assert!(
         cycle
             .evaluation
@@ -3483,6 +3816,42 @@ fn newer_success_replaces_an_older_failed_mapped_run() {
         "the newer successful exact run must replace the older failed completion"
     );
     host.close().expect("close failure-then-success host");
+}
+
+#[test]
+fn policy_evaluation_rejects_future_observed_outcome() {
+    let root = TempDir::new().expect("tempdir");
+    let clock = Arc::new(ManualRuntimeClock::new(
+        POLICY_NOW_UNIX_MS,
+        POLICY_NOW_UNIX_MS,
+    ));
+    let host = RuntimeHost::start(
+        config(&root).with_runtime_clock(clock),
+        Arc::new(FakeProvider::one(
+            POLICY_INSTANCE_ALIAS,
+            instance_id(),
+            Arc::new(FakeState::default()),
+        )),
+    )
+    .expect("future-outcome runtime host");
+    host.activate_policy_catalog(&policy_sources(1))
+        .expect("activate future-outcome catalog");
+    let mut facts = policy_facts();
+    facts.outcomes[0].observed_at_unix_ms = POLICY_NOW_UNIX_MS + 1;
+    let error = host
+        .evaluate_policy_cycle_with_test_inputs(
+            &facts,
+            &policy_resources(),
+            EvaluationTime {
+                unix_ms: POLICY_NOW_UNIX_MS,
+                monotonic_ms: POLICY_NOW_UNIX_MS,
+            },
+            12_203,
+            PolicyTrigger::FactsChanged,
+        )
+        .expect_err("future observed outcome must remain fail-closed");
+    assert_eq!(error.code(), "policy_evaluation_rejected");
+    host.close().expect("close future-outcome host");
 }
 
 #[test]
@@ -13143,7 +13512,10 @@ fn policy_dispatch_crash_child_process() {
     let recovery_case = std::env::var("ACTINGCOMMAND_POLICY_RECOVERY_CASE").ok();
     let outcome_crash = matches!(
         std::env::var("ACTINGCOMMAND_POLICY_CRASH_POINT").as_deref(),
-        Ok("after_policy_execution" | "after_policy_completion" | "fail_policy_execution_append")
+        Ok("after_policy_execution"
+            | "after_policy_completion"
+            | "fail_policy_execution_append"
+            | "after_lease_release_before_policy_execution")
     );
     let instance_bytes = fs::read(Path::new(&root).join("instance.json")).expect("instance bytes");
     let instance_id: InstanceId =
@@ -13217,6 +13589,25 @@ fn policy_dispatch_crash_child_process() {
         let PolicyDispatchAdmission::Granted { context } = admission else {
             panic!("expected child policy run context")
         };
+        if std::env::var("ACTINGCOMMAND_POLICY_CRASH_POINT").as_deref()
+            == Ok("after_lease_release_before_policy_execution")
+        {
+            fs::write(
+                Path::new(&root).join("exact-checkpoint-identities.json"),
+                serde_json::to_vec(&(
+                    context.run_id(),
+                    context.task_id(),
+                    context.correlation_id(),
+                    context.lease_token().lease_id(),
+                ))
+                .expect("exact checkpoint identity bytes"),
+            )
+            .expect("exact checkpoint identity file");
+            let marker = std::env::var_os("ACTINGCOMMAND_POLICY_CRASH_MARKER")
+                .expect("exact checkpoint marker path");
+            host.exit_at_scheduled_policy_checkpoint_for_test(&context, PathBuf::from(marker))
+                .expect("arm exact lifecycle checkpoint");
+        }
         if recovery_case.as_deref() == Some("lease-expired") {
             thread::sleep(Duration::from_millis(250));
         }
@@ -13259,6 +13650,230 @@ fn policy_dispatch_crash_child_process() {
     .expect("admitted dispatch marker");
     fs::write(Path::new(&root).join("child-ready"), b"ready").expect("child marker");
     std::process::exit(0);
+}
+
+fn exact_checkpoint_prefix_events(root: &Path, run_id: RunId) -> Vec<PersistedEvent> {
+    let artifacts = ArtifactStore::open(root).expect("open prefix artifact store");
+    let ledger = GlobalLedger::open_with_artifact_verifier(
+        GlobalLedgerConfig::new(
+            root.join("ledger"),
+            format!("exact-checkpoint-prefix-reader-{}", std::process::id()),
+        ),
+        |reference| artifacts.verify_recovery_reference(reference).ok(),
+    )
+    .expect("open exact checkpoint prefix ledger");
+    let events = ledger
+        .query(EventQuery {
+            run_id: Some(run_id),
+            ..EventQuery::default()
+        })
+        .expect("query exact checkpoint prefix");
+    ledger
+        .close()
+        .expect("close exact checkpoint prefix ledger");
+    events
+}
+
+#[test]
+fn exact_lifecycle_checkpoint_recovers_scheduled_failure_once() {
+    let root = TempDir::new().expect("tempdir");
+    let shared_instance_id = instance_id();
+    fs::write(
+        root.path().join("instance.json"),
+        serde_json::to_vec(&shared_instance_id).expect("instance bytes"),
+    )
+    .expect("instance file");
+    let marker = root.path().join("exact-lifecycle-checkpoint");
+    let stdout_path = root.path().join("exact-lifecycle-child.stdout");
+    let stderr_path = root.path().join("exact-lifecycle-child.stderr");
+    let stdout = OpenOptions::new()
+        .create_new(true)
+        .write(true)
+        .open(&stdout_path)
+        .expect("create exact-lifecycle child stdout");
+    let stderr = OpenOptions::new()
+        .create_new(true)
+        .write(true)
+        .open(&stderr_path)
+        .expect("create exact-lifecycle child stderr");
+    let mut child = Command::new(std::env::current_exe().expect("test executable"))
+        .args([
+            "--exact",
+            "tests::policy_dispatch_crash_child_process",
+            "--nocapture",
+        ])
+        .env("ACTINGCOMMAND_POLICY_CRASH_ROOT", root.path())
+        .env(
+            "ACTINGCOMMAND_POLICY_CRASH_POINT",
+            "after_lease_release_before_policy_execution",
+        )
+        .env("ACTINGCOMMAND_POLICY_CRASH_MARKER", &marker)
+        .env("ACTINGCOMMAND_POLICY_RECOVERY_CASE", "task-severe")
+        .stdin(Stdio::null())
+        .stdout(Stdio::from(stdout))
+        .stderr(Stdio::from(stderr))
+        .spawn()
+        .expect("spawn exact-lifecycle child");
+    let deadline = Instant::now() + Duration::from_secs(20);
+    let status = loop {
+        if let Some(status) = child.try_wait().expect("poll exact-lifecycle child") {
+            break status;
+        }
+        if Instant::now() >= deadline {
+            child.kill().expect("kill timed out exact-lifecycle child");
+            let _ = child.wait();
+            panic!("exact-lifecycle child timed out");
+        }
+        thread::sleep(Duration::from_millis(10));
+    };
+    let child_stdout = fs::read_to_string(&stdout_path).expect("read exact-lifecycle child stdout");
+    let child_stderr = fs::read_to_string(&stderr_path).expect("read exact-lifecycle child stderr");
+    assert_eq!(
+        status.code(),
+        Some(87),
+        "first child-process error: status={status}; stdout={child_stdout:?}; stderr={child_stderr:?}"
+    );
+    assert_eq!(
+        fs::read(&marker).expect("exact-lifecycle marker"),
+        b"after-durable-lease-release-before-policy-execution-recorded"
+    );
+    let (run_id, task_id, correlation_id, lease_id): (RunId, TaskId, CorrelationId, LeaseId) =
+        serde_json::from_slice(
+            &fs::read(root.path().join("exact-checkpoint-identities.json"))
+                .expect("exact checkpoint identity bytes"),
+        )
+        .expect("exact checkpoint identity JSON");
+
+    let prefix = exact_checkpoint_prefix_events(root.path(), run_id);
+    for event_type in [EventType::TaskFailed, EventType::LeaseReleased] {
+        assert_eq!(
+            prefix
+                .iter()
+                .filter(|event| event.event_type() == event_type)
+                .count(),
+            1,
+            "durable checkpoint prefix {event_type:?} count"
+        );
+    }
+    assert!(
+        prefix.iter().all(|event| {
+            !matches!(
+                event.event_type(),
+                EventType::TaskCompleted
+                    | EventType::TaskCancelled
+                    | EventType::PolicyExecutionRecorded
+                    | EventType::PolicyDispatchCompleted
+            )
+        }),
+        "checkpoint prefix crossed its semantic boundary"
+    );
+    let release = prefix
+        .iter()
+        .find(|event| event.event_type() == EventType::LeaseReleased)
+        .expect("checkpoint release event");
+    assert_eq!(release.links().run_id(), Some(&run_id));
+    assert_eq!(release.links().task_id(), Some(&task_id));
+    assert_eq!(release.links().correlation_id(), Some(&correlation_id));
+    assert_eq!(release.links().lease_id(), Some(&lease_id));
+
+    let package = fs::read(root.path().join("scheduled-task.zip")).expect("scheduled package");
+    let recovered_state = Arc::new(FakeState::default());
+    let recovered = RuntimeHost::start(
+        config(&root).with_procedure_manifest(procedure_manifest_with_primary(
+            &package,
+            vec!["after_observation".to_owned()],
+        )),
+        Arc::new(
+            FakeProvider::one(
+                POLICY_INSTANCE_ALIAS,
+                shared_instance_id,
+                Arc::clone(&recovered_state),
+            )
+            .fixture_simulation(),
+        ),
+    );
+    let host = match recovered {
+        Ok(host) => host,
+        Err(first_error) => panic!(
+            "first startup/reconciliation error: {first_error}; child stderr={child_stderr:?}"
+        ),
+    };
+    let mut client = TestClient::connect(&host);
+    let events = projected_events(
+        &mut client,
+        EventQuery {
+            run_id: Some(run_id),
+            ..EventQuery::default()
+        },
+    );
+    for event_type in [
+        EventType::TaskFailed,
+        EventType::LeaseReleased,
+        EventType::PolicyExecutionRecorded,
+        EventType::PolicyDispatchCompleted,
+    ] {
+        assert_eq!(
+            events
+                .iter()
+                .filter(|event| event.event_type == event_type)
+                .count(),
+            1,
+            "recovered {event_type:?} count"
+        );
+    }
+    let release_index = events
+        .iter()
+        .position(|event| event.event_type == EventType::LeaseReleased)
+        .expect("recovered release");
+    let execution_index = events
+        .iter()
+        .position(|event| event.event_type == EventType::PolicyExecutionRecorded)
+        .expect("recovered policy execution");
+    let completion_index = events
+        .iter()
+        .position(|event| event.event_type == EventType::PolicyDispatchCompleted)
+        .expect("recovered policy completion");
+    assert!(
+        release_index < execution_index && execution_index < completion_index,
+        "recovered event order"
+    );
+    for event in &events {
+        assert_eq!(event.links.run_id(), Some(&run_id), "run identity");
+        assert_eq!(event.links.task_id(), Some(&task_id), "task identity");
+        assert_eq!(
+            event.links.correlation_id(),
+            Some(&correlation_id),
+            "correlation identity"
+        );
+        if matches!(
+            event.event_type,
+            EventType::LeaseGranted
+                | EventType::LeaseReleased
+                | EventType::PolicyExecutionRecorded
+                | EventType::PolicyDispatchCompleted
+        ) {
+            assert_eq!(event.links.lease_id(), Some(&lease_id), "lease identity");
+        }
+    }
+    assert!(events.iter().all(|event| {
+        !matches!(
+            event.event_type,
+            EventType::TaskEffectIntent
+                | EventType::TaskEffectCompleted
+                | EventType::InputIntent
+                | EventType::InputCommitted
+                | EventType::InputFailed
+        )
+    }));
+    assert_eq!(
+        recovered_state.input_count.load(Ordering::Acquire),
+        0,
+        "restart must not replay a business effect"
+    );
+    drop(client);
+    if let Err(cleanup_error) = host.close() {
+        panic!("exact-lifecycle recovery passed; cleanup error appended: {cleanup_error}");
+    }
 }
 
 #[test]
