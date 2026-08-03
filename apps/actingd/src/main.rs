@@ -515,6 +515,8 @@ struct PolicyDriverSignal {
     active_recomputes: BTreeMap<PolicyRecomputeKey, PolicyRecomputeWake>,
     completed_recomputes: BTreeMap<PolicyRecomputeKey, PolicyRecomputeWake>,
     shutdown: bool,
+    #[cfg(test)]
+    wait_predicate_checks: usize,
 }
 
 enum PolicyDriverWake {
@@ -655,7 +657,14 @@ impl PolicyDriverControl {
         }
         let (mut state, wait) = self
             .changed
-            .wait_timeout(state, timeout)
+            .wait_timeout_while(state, timeout, |state| {
+                #[cfg(test)]
+                {
+                    state.wait_predicate_checks += 1;
+                    self.changed.notify_all();
+                }
+                !state.shutdown && state.pending_trigger.is_none()
+            })
             .map_err(|_| ActingdError::process("policy_driver_signal_poisoned"))?;
         if state.shutdown {
             Ok(PolicyDriverWake::Shutdown)
@@ -1172,7 +1181,7 @@ mod tests {
     use std::collections::{BTreeMap, VecDeque};
     use std::ffi::OsString;
     use std::io::{Cursor, Write};
-    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     use tempfile::TempDir;
     use zip::ZipWriter;
     use zip::write::FileOptions;
@@ -1237,6 +1246,66 @@ mod tests {
             PolicyDriverWake::Shutdown
         ));
         assert!(started.elapsed() < Duration::from_secs(1));
+    }
+
+    #[test]
+    fn resident_driver_ignores_spurious_notification_until_a_real_wake() {
+        let control = Arc::new(PolicyDriverControl::default());
+        let finished = Arc::new(AtomicBool::new(false));
+        let waiter = thread::spawn({
+            let control = Arc::clone(&control);
+            let finished = Arc::clone(&finished);
+            move || {
+                let result = control.wait(Duration::from_secs(30));
+                finished.store(true, Ordering::SeqCst);
+                control.changed.notify_all();
+                result
+            }
+        });
+
+        let state = control.state.lock().expect("driver signal");
+        let (state, wait) = control
+            .changed
+            .wait_timeout_while(state, Duration::from_secs(5), |state| {
+                state.wait_predicate_checks == 0 && !finished.load(Ordering::SeqCst)
+            })
+            .expect("observe waiter entering its predicate wait");
+        assert!(!wait.timed_out(), "waiter did not enter its predicate wait");
+        assert!(!finished.load(Ordering::SeqCst));
+        let predicate_checks_before_notification = state.wait_predicate_checks;
+        assert!(predicate_checks_before_notification > 0);
+
+        control.changed.notify_all();
+        let (state, wait) = control
+            .changed
+            .wait_timeout_while(state, Duration::from_secs(5), |state| {
+                state.wait_predicate_checks <= predicate_checks_before_notification
+                    && !finished.load(Ordering::SeqCst)
+            })
+            .expect("observe predicate recheck after spurious notification");
+        assert!(
+            !wait.timed_out(),
+            "waiter did not recheck its predicate after notification"
+        );
+        let predicate_checks = state.wait_predicate_checks;
+        let finished_early = finished.load(Ordering::SeqCst);
+        drop(state);
+
+        if finished_early {
+            let result = waiter.join().expect("join early waiter");
+            let code = match result {
+                Ok(_) => "unexpected_policy_driver_wake",
+                Err(error) => error.code,
+            };
+            panic!("spurious notification completed the wait early: {}", code);
+        }
+        assert!(predicate_checks > predicate_checks_before_notification);
+
+        control.shutdown().expect("request driver shutdown");
+        assert!(matches!(
+            waiter.join().expect("join waiter").expect("wait result"),
+            PolicyDriverWake::Shutdown
+        ));
     }
 
     #[test]
