@@ -289,6 +289,7 @@ struct FakeProvider {
     entries: BTreeMap<String, FakeEntry>,
     advertised_aliases: Option<Vec<String>>,
     provenance: ExecutionBackendProvenance,
+    resolved_override: Option<Arc<std::sync::Mutex<ResolvedExecutionInstance>>>,
 }
 
 impl FakeProvider {
@@ -306,6 +307,7 @@ impl FakeProvider {
                 .collect(),
             advertised_aliases: None,
             provenance: ExecutionBackendProvenance::PhysicalDevice,
+            resolved_override: None,
         }
     }
 
@@ -316,6 +318,14 @@ impl FakeProvider {
 
     fn with_inventory(mut self, aliases: impl IntoIterator<Item = String>) -> Self {
         self.advertised_aliases = Some(aliases.into_iter().collect());
+        self
+    }
+
+    fn with_resolved_override(
+        mut self,
+        resolved: Arc<std::sync::Mutex<ResolvedExecutionInstance>>,
+    ) -> Self {
+        self.resolved_override = Some(resolved);
         self
     }
 }
@@ -329,6 +339,14 @@ impl ExecutionBackendProvider for FakeProvider {
 
     fn resolve(&self, instance_alias: &str) -> Option<ResolvedExecutionInstance> {
         let entry = self.entries.get(instance_alias)?;
+        if let Some(resolved) = &self.resolved_override {
+            return Some(
+                resolved
+                    .lock()
+                    .expect("resolved instance override poisoned")
+                    .clone(),
+            );
+        }
         Some(match self.provenance {
             ExecutionBackendProvenance::PhysicalDevice => {
                 ResolvedExecutionInstance::new(entry.instance_id, "127.0.0.1:16384")
@@ -2740,6 +2758,62 @@ fn admit_second_mapped_policy_run(
     }
 }
 
+fn admitted_physical_run_fixture(
+    root: &TempDir,
+) -> (
+    RuntimeHost,
+    Arc<FakeState>,
+    Box<PolicyRunContext>,
+    ContainedTaskRequest,
+    Arc<std::sync::Mutex<ResolvedExecutionInstance>>,
+) {
+    let package = neutral_contained_task_package();
+    let package_path = root.path().join("physical-scheduled-task.zip");
+    fs::write(&package_path, &package).expect("write physical package");
+    let package_sha256 = format!("{:x}", Sha256::digest(&package));
+    let state = Arc::new(FakeState::default());
+    state
+        .transition_capture_after_input
+        .store(true, Ordering::Release);
+    let resolved = Arc::new(std::sync::Mutex::new(ResolvedExecutionInstance::new(
+        instance_id(),
+        "127.0.0.1:16384",
+    )));
+    let registered_instance = resolved
+        .lock()
+        .expect("physical resolved instance poisoned")
+        .instance_id();
+    let host = RuntimeHost::start(
+        config(root).with_procedure_manifest(procedure_manifest_with_primary(
+            &package,
+            vec!["after_observation".to_owned()],
+        )),
+        Arc::new(
+            FakeProvider::one(
+                POLICY_INSTANCE_ALIAS,
+                registered_instance,
+                Arc::clone(&state),
+            )
+            .with_resolved_override(Arc::clone(&resolved)),
+        ),
+    )
+    .expect("physical runtime host");
+    host.activate_policy_catalog(&policy_sources(1))
+        .expect("activate physical policy catalog");
+    let (_, intent, reasons) = evaluated_policy_dispatch(&host, PolicyTrigger::FactsChanged);
+    record_policy_approval(&host, &intent);
+    let PolicyDispatchAdmission::Granted { context } = host
+        .admit_policy_dispatch(&intent, &reasons, &policy_context(&host, &intent))
+        .expect("physical policy admission")
+    else {
+        panic!("expected physical policy context")
+    };
+    let request =
+        ContainedTaskRequest::new(package_path.to_string_lossy().into_owned(), package_sha256)
+            .expect("physical package request");
+    (host, state, context, request, resolved)
+}
+
 fn admit_mapped_run_at(
     host: &RuntimeHost,
     outcome_key: &str,
@@ -4886,13 +4960,16 @@ fn scheduled_recognition_and_guard_failures_settle_on_the_admitted_run() {
 }
 
 #[test]
-fn scheduled_lab_rejection_settles_without_a_fake_task_terminal() {
+fn scheduled_physical_provider_uses_scheduler_origin_and_original_owner_chain() {
     let root = TempDir::new().expect("tempdir");
     let package = neutral_contained_task_package();
     let package_path = root.path().join("scheduled-task.zip");
     fs::write(&package_path, &package).expect("write package");
     let package_sha256 = format!("{:x}", Sha256::digest(&package));
     let state = Arc::new(FakeState::default());
+    state
+        .transition_capture_after_input
+        .store(true, Ordering::Release);
     let host = RuntimeHost::start(
         config(&root).with_procedure_manifest(procedure_manifest_with_primary(
             &package,
@@ -4919,11 +4996,11 @@ fn scheduled_lab_rejection_settles_without_a_fake_task_terminal() {
         ContainedTaskRequest::new(package_path.to_string_lossy().into_owned(), package_sha256)
             .expect("contained task request");
 
-    let error = host
+    let receipt = host
         .run_scheduled_contained_task(&context, &request)
-        .expect_err("physical backend must be rejected for scheduled Lab execution");
-    assert_eq!(error.code(), "policy_run_fixture_simulation_required");
-    assert!(!error.is_fatal());
+        .expect("physical scheduled run");
+    host.complete_scheduled_policy_run(&context, &receipt)
+        .expect("complete physical scheduled run");
 
     let mut client = TestClient::connect(&host);
     let events = projected_events(
@@ -4936,6 +5013,11 @@ fn scheduled_lab_rejection_settles_without_a_fake_task_terminal() {
     for event_type in [
         EventType::PolicyDispatchAdmitted,
         EventType::LeaseGranted,
+        EventType::CommandReceived,
+        EventType::CommandValidated,
+        EventType::TaskRequested,
+        EventType::InputCommitted,
+        EventType::TaskCompleted,
         EventType::LeaseReleased,
         EventType::PolicyExecutionRecorded,
         EventType::PolicyDispatchCompleted,
@@ -4953,6 +5035,13 @@ fn scheduled_lab_rejection_settles_without_a_fake_task_terminal() {
         event.event_type,
         EventType::LabRequest | EventType::TaskFailed
     )));
+    let scheduled_command = events
+        .iter()
+        .find(|event| event.event_type == EventType::CommandReceived)
+        .expect("scheduled command origin");
+    assert_eq!(scheduled_command.origin.source(), EventSource::Scheduler);
+    assert_eq!(scheduled_command.origin.module(), OriginModule::Scheduler);
+    assert_eq!(scheduled_command.origin.actor(), EventActor::Scheduler);
     let outcome = events
         .iter()
         .find_map(|event| match &event.payload {
@@ -4964,21 +5053,67 @@ fn scheduled_lab_rejection_settles_without_a_fake_task_terminal() {
             },
             _ => None,
         })
-        .expect("failed policy outcome");
-    assert!(matches!(
-        outcome,
-        PolicyExecutionOutcome::Failed { failure }
-            if failure.error_code == error.code()
-                && failure.original_class == PolicyFailureClass::Recoverable
-    ));
+        .expect("physical policy outcome");
+    assert!(matches!(outcome, PolicyExecutionOutcome::Succeeded { .. }));
     assert!(
         host.pinned_policy_catalog(&intent.decision_id)
             .expect("catalog pin")
             .is_none()
     );
-    assert_eq!(state.input_count.load(Ordering::Acquire), 0);
+    assert_eq!(state.capture_count.load(Ordering::Acquire), 2);
+    assert_eq!(state.input_count.load(Ordering::Acquire), 1);
     drop(client);
     host.close().expect("close runtime host");
+}
+
+#[test]
+fn scheduled_physical_identity_and_package_mismatches_fail_before_io() {
+    for case in ["provenance", "instance", "package"] {
+        let root = TempDir::new().expect("tempdir");
+        let (host, state, context, request, resolved) = admitted_physical_run_fixture(&root);
+        let expected_code = match case {
+            "provenance" => {
+                let instance_id = resolved
+                    .lock()
+                    .expect("physical resolved instance poisoned")
+                    .instance_id();
+                *resolved
+                    .lock()
+                    .expect("physical resolved instance poisoned") =
+                    ResolvedExecutionInstance::fixture_simulation(instance_id);
+                "runtime_instance_identity_mismatch"
+            }
+            "instance" => {
+                *resolved
+                    .lock()
+                    .expect("physical resolved instance poisoned") =
+                    ResolvedExecutionInstance::new(instance_id(), "127.0.0.1:16384");
+                "runtime_instance_identity_mismatch"
+            }
+            "package" => "policy_run_identity_mismatch",
+            _ => unreachable!(),
+        };
+        let request = if case == "package" {
+            ContainedTaskRequest::new(request.package_path(), "0".repeat(64))
+                .expect("mismatched physical package request")
+        } else {
+            request
+        };
+        let error = host
+            .run_scheduled_contained_task(&context, &request)
+            .expect_err("physical mismatch must fail closed");
+        assert_eq!(error.code(), expected_code, "{case}");
+        assert_eq!(state.capture_count.load(Ordering::Acquire), 0, "{case}");
+        assert_eq!(state.input_count.load(Ordering::Acquire), 0, "{case}");
+        let close = host.close();
+        assert!(
+            close.is_ok()
+                || close
+                    .as_ref()
+                    .is_err_and(|close_error| close_error.code() == expected_code),
+            "{case}: unexpected close result {close:?}"
+        );
+    }
 }
 
 #[test]
@@ -4996,17 +5131,18 @@ fn scheduled_expired_lease_is_fenced_and_settled_on_the_original_run() {
             .with_scheduler(SchedulerConfig {
                 maximum_client_heartbeat_interval_ms: 20,
                 takeover_cooldown_ms: 40,
-                lease_ttl_ms: 200,
+                lease_ttl_ms: 2_000,
                 ..SchedulerConfig::default()
             })
             .with_procedure_manifest(procedure_manifest_with_primary(
                 &package,
                 vec!["after_observation".to_owned()],
             )),
-        Arc::new(
-            FakeProvider::one(POLICY_INSTANCE_ALIAS, instance_id(), Arc::clone(&state))
-                .fixture_simulation(),
-        ),
+        Arc::new(FakeProvider::one(
+            POLICY_INSTANCE_ALIAS,
+            instance_id(),
+            Arc::clone(&state),
+        )),
     )
     .expect("runtime host");
     host.activate_policy_catalog(&policy_sources(1))
@@ -5023,7 +5159,8 @@ fn scheduled_expired_lease_is_fenced_and_settled_on_the_original_run() {
         ContainedTaskRequest::new(package_path.to_string_lossy().into_owned(), package_sha256)
             .expect("contained task request");
 
-    clock.advance(250);
+    let mut client = TestClient::connect(&host);
+    clock.advance(2_100);
     let expiry_terminal = host
         .expire_lease_once_for_test(context.lease_token())
         .expect("expire the exact scheduled lease");
@@ -5043,7 +5180,6 @@ fn scheduled_expired_lease_is_fenced_and_settled_on_the_original_run() {
         expiry_terminal
     );
 
-    let mut client = TestClient::connect(&host);
     let events = projected_events(
         &mut client,
         EventQuery {
@@ -13556,7 +13692,7 @@ fn policy_dispatch_crash_child_process() {
         Some("task-severe") => {
             state.fail_capture.store(true, Ordering::Release);
         }
-        Some("lab-rejection" | "lease-expired") => {}
+        Some("lease-expired") => {}
         _ if outcome_crash => {
             state
                 .transition_capture_after_input
@@ -13565,7 +13701,7 @@ fn policy_dispatch_crash_child_process() {
         _ => {}
     }
     let provider = FakeProvider::one(POLICY_INSTANCE_ALIAS, instance_id, state);
-    let provider = if outcome_crash && recovery_case.as_deref() != Some("lab-rejection") {
+    let provider = if outcome_crash {
         provider.fixture_simulation()
     } else {
         provider
@@ -13623,7 +13759,7 @@ fn policy_dispatch_crash_child_process() {
         )
         .expect("scheduled request");
         match recovery_case.as_deref() {
-            Some("task-recoverable" | "task-severe" | "lab-rejection" | "lease-expired") => {
+            Some("task-recoverable" | "task-severe" | "lease-expired") => {
                 let error = host
                     .run_scheduled_contained_task(&context, &request)
                     .expect_err("child scheduled failure");
@@ -14275,7 +14411,6 @@ fn first_policy_execution_append_failure_recovers_each_scheduled_outcome_once() 
             Some(EventType::TaskFailed),
             Some(PolicyFailureClass::Severe),
         ),
-        ("lab-rejection", None, Some(PolicyFailureClass::Severe)),
         ("lease-expired", None, Some(PolicyFailureClass::Severe)),
     ] {
         let root = TempDir::new().expect("tempdir");
@@ -14458,7 +14593,7 @@ fn first_policy_execution_append_failure_recovers_each_scheduled_outcome_once() 
                     None => recovered_task_failure_code = Some(code.clone()),
                 }
             }
-            ("lab-rejection" | "lease-expired", PolicyExecutionOutcome::Failed { failure }) => {
+            ("lease-expired", PolicyExecutionOutcome::Failed { failure }) => {
                 assert_eq!(failure.error_code, "policy_settlement_interrupted");
                 assert_eq!(failure.original_class, PolicyFailureClass::Severe);
                 assert_eq!(failure.effective_class, PolicyFailureClass::Severe);
