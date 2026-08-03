@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
-use crate::{RuntimeHostError, RuntimeHostResult, time::unix_ms_now};
+use crate::{RuntimeClock, RuntimeHostError, RuntimeHostResult};
 use actingcommand_contract::{
     ActionId, EventActor, EventDraft, EventLinksDraft, EventOrigin, EventPayloadDraft,
     EventSeverity, EventSource, IdentifierIssuer, InstanceId, LeaseId, LeaseToken, OriginModule,
@@ -8,14 +8,19 @@ use actingcommand_contract::{
     ValidatedRuntimeRequest,
 };
 use actingcommand_ledger::Sha256SecretFingerprinter;
+use std::sync::Arc;
 
 pub(crate) struct RuntimeEvents {
     issuer: IdentifierIssuer,
     fingerprinter: Sha256SecretFingerprinter,
+    clock: Arc<dyn RuntimeClock>,
 }
 
 impl RuntimeEvents {
-    pub(crate) fn new(secret_fingerprint_salt: &[u8]) -> RuntimeHostResult<Self> {
+    pub(crate) fn new(
+        secret_fingerprint_salt: &[u8],
+        clock: Arc<dyn RuntimeClock>,
+    ) -> RuntimeHostResult<Self> {
         let issuer = IdentifierIssuer::new().map_err(|_| {
             RuntimeHostError::fatal(
                 "event_issuer_failed",
@@ -34,6 +39,7 @@ impl RuntimeEvents {
         Ok(Self {
             issuer,
             fingerprinter,
+            clock,
         })
     }
 
@@ -91,7 +97,7 @@ impl RuntimeEvents {
             None,
             EventActor::Agent,
             EventSource::Adapter,
-            unix_ms_now()?,
+            self.timestamp_unix_ms()?,
             RuntimeOperation::ReleaseLease {
                 token: token.clone(),
             },
@@ -129,7 +135,7 @@ impl RuntimeEvents {
         let event_id = self.issuer.mint_event_id().map_err(|_| id_error())?;
         Ok(EventDraft::new(
             event_id,
-            unix_ms_now()?,
+            self.timestamp_unix_ms()?,
             severity,
             EventOrigin::new(source, module, actor),
             links,
@@ -145,6 +151,10 @@ impl RuntimeEvents {
                 RuntimeErrorCode::LedgerFailure,
             )
         })
+    }
+
+    fn timestamp_unix_ms(&self) -> RuntimeHostResult<u64> {
+        self.clock.sample().map(|sample| sample.unix_ms)
     }
 }
 
