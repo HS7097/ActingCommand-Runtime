@@ -3,11 +3,9 @@
 #![allow(clippy::result_large_err)]
 
 use actingcommand_contract::{
-    ApplicationLifecycleAction, CLI_SCHEMA_VERSION, Envelope, EventActor, EventSource,
-    LabError as CliError, LabErrorClass as ErrorKind, LedgerProjection,
+    ApplicationLifecycleAction, CLI_SCHEMA_VERSION, EventActor, EventSource, LabError as CliError,
+    LabErrorClass as ErrorKind, LedgerProjection,
 };
-#[cfg(test)]
-use actingcommand_device::DeviceTarget;
 use actingcommand_device::{
     AdbPathSource, CaptureBackendChoice, CaptureBackendName, Frame, InputBackend, PixelFormat,
     TouchBackendChoice, combine_operation_and_close, resolve_adb_path,
@@ -29,15 +27,37 @@ use actingcommand_recognition_pack::{
 };
 use actingcommand_resource_tooling::{canonical_game, canonical_locale, canonical_server};
 use actingcommand_runtime_client::{RuntimeClient, RuntimeClientConfig};
+#[cfg(test)]
+use cli_result::CliErrorExitCode;
+use cli_result::CliResult;
+use device_runtime_config::{DeviceRuntimeConfig, device_config, effective_capture_backend_choice};
+use flag_args::FlagArgs;
+#[rustfmt::skip] use flag_values::{
+    parse_match_metric_flag, parse_optional_duration_ms, parse_optional_string_value,
+    parse_optional_unit_f64, parse_optional_usize, parse_record_build_resolution,
+    parse_record_duration_ms, parse_session_record_region, parse_session_record_swipe_rects,
+    parse_touch_backend_override, record_amend_step_id, record_candidates_step_id,
+    required_non_empty_flag, session_record_drift_diagnostics_path, split_csv,
+    stream_check_requested, stream_input_relay_action, target_argument, parse_session_record_candidate_index,
+};
+use instance_resolution::{resolve_instance_id, resolve_instance_id_for_flags};
+#[cfg(test)]
+use runtime_endpoint::RuntimeEndpointChannel;
+use runtime_endpoint::{
+    env_var_non_empty, runtime_endpoint_check, runtime_endpoint_policy,
+    runtime_endpoint_policy_json, runtime_tcp_available,
+};
+use safe_file_stem::safe_file_stem;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
+use sha256::{file_sha256, hex_sha256};
+use state_roots::{app_state_root, runtime_state_root, session_state_dir_from_flags};
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::env;
 use std::ffi::OsString;
 use std::fs::{self, File};
 use std::io::{self, IsTerminal, Write};
-use std::net::{TcpStream, ToSocketAddrs};
 use std::path::{Component, Path, PathBuf};
 #[cfg(any(test, unix))]
 use std::process::Command;
@@ -45,11 +65,19 @@ use std::process::ExitCode;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use user_config_keys::{config_get, config_set};
+use user_config_store::{config_path, read_user_config, write_user_config};
 use zip::{ZipWriter, write::FileOptions};
+use zip_error::{zip_io_error, zip_write_error};
 
+mod cli_result;
 mod contained_resources;
+#[rustfmt::skip] mod device_runtime_config;
 mod drive_cli;
 mod env_detection;
+mod flag_args;
+mod flag_values;
+#[rustfmt::skip] mod instance_resolution;
 mod lab2_cli;
 mod lab_run;
 mod maa_task_graph;
@@ -63,10 +91,18 @@ mod resource_convert;
 mod run_summary;
 mod runtime_capture_backend;
 mod runtime_debug;
+mod runtime_endpoint;
 mod runtime_input_backend;
 mod runtime_session_adapter;
 mod runtime_slice_cli;
 mod runtime_stream_adapter;
+mod safe_file_stem;
+mod sha256;
+mod state_roots;
+mod user_config_keys;
+mod user_config_store;
+mod zip_error;
+
 const SCHEMA_VERSION: &str = CLI_SCHEMA_VERSION;
 const RUNTIME_VERSION: &str = "runtime-embedded-p1g";
 const CONFIG_ENV: &str = "ACTINGLAB_CONFIG_PATH";
@@ -89,78 +125,6 @@ fn main() -> ExitCode {
         println!("{}", result.human_text());
     }
     ExitCode::from(exit_code as u8)
-}
-
-#[derive(Debug)]
-struct CliResult {
-    print_json: bool,
-    envelope: Envelope<Value>,
-    human: String,
-    exit_code: i32,
-}
-
-impl CliResult {
-    fn ok(command: String, data: Value, print_json: bool, human: String) -> Self {
-        Self {
-            print_json,
-            envelope: Envelope::ok(
-                SCHEMA_VERSION,
-                env!("CARGO_PKG_VERSION"),
-                RUNTIME_VERSION,
-                command,
-                data,
-            ),
-            human,
-            exit_code: 0,
-        }
-    }
-
-    fn err(command: String, err: CliError, print_json: bool) -> Self {
-        let exit_code = err.exit_code();
-        let human = format!("{}: {}", err.code, err.message);
-        Self {
-            print_json,
-            envelope: Envelope::err(
-                SCHEMA_VERSION,
-                env!("CARGO_PKG_VERSION"),
-                RUNTIME_VERSION,
-                command,
-                err,
-            ),
-            human,
-            exit_code,
-        }
-    }
-
-    fn exit_code(&self) -> i32 {
-        self.exit_code
-    }
-
-    fn envelope_json(&self) -> String {
-        serde_json::to_string(&self.envelope).unwrap_or_else(|err| {
-            format!(r#"{{"ok":false,"error":"json_serialize_failed:{err}"}}"#)
-        })
-    }
-
-    fn human_text(&self) -> String {
-        self.human.clone()
-    }
-}
-
-trait CliErrorExitCode {
-    fn exit_code(&self) -> i32;
-}
-
-impl CliErrorExitCode for CliError {
-    fn exit_code(&self) -> i32 {
-        match self.class {
-            ErrorKind::UsageValidation => 2,
-            ErrorKind::SafetyBlocked => 3,
-            ErrorKind::DeviceInstance => 4,
-            ErrorKind::RuntimeUnavailable => 5,
-            ErrorKind::NotImplemented => 6,
-        }
-    }
 }
 
 type CliOutcome<T> = Result<T, CliError>;
@@ -711,13 +675,7 @@ fn execute(invocation: &Invocation) -> CliOutcome<Value> {
     }
 }
 
-fn human_summary(command: &str, data: &Value) -> String {
-    match data {
-        Value::String(text) => text.clone(),
-        _ => format!("{command} ok"),
-    }
-}
-
+use cli_result::human_summary;
 fn help_data() -> Value {
     json!({
         "usage": "actinglab [global-options] <command> [args]",
@@ -3049,20 +3007,6 @@ fn run_touch_probe(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value>
     }))
 }
 
-fn parse_touch_backend_override(flags: &FlagArgs) -> CliOutcome<Option<TouchBackendChoice>> {
-    let Some(value) = flags.optional("--touch-backend") else {
-        return Ok(None);
-    };
-    if value == "true" {
-        return Err(CliError::usage(
-            "--touch-backend expects auto, auto-fastest, maatouch, minitouch, or adb_shell_input",
-        ));
-    }
-    TouchBackendChoice::parse(&value)
-        .map(Some)
-        .map_err(|err| CliError::usage(err.to_string()))
-}
-
 fn run_capture(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
     let flags = FlagArgs::parse(args)?;
     if flags.bool("--diagnose")
@@ -3431,40 +3375,6 @@ fn capture_diagnosis_recovery_json(
     }
 }
 
-fn parse_optional_duration_ms(
-    flags: &FlagArgs,
-    name: &str,
-    default_ms: u64,
-) -> CliOutcome<Duration> {
-    let Some(value) = flags.optional(name).filter(|value| value != "true") else {
-        return Ok(Duration::from_millis(default_ms));
-    };
-    let ms = value
-        .parse::<u64>()
-        .map_err(|err| CliError::usage(format!("failed to parse {name} '{value}': {err}")))?;
-    Ok(Duration::from_millis(ms))
-}
-
-fn parse_optional_usize(flags: &FlagArgs, name: &str, default_value: usize) -> CliOutcome<usize> {
-    let Some(value) = flags.optional(name).filter(|value| value != "true") else {
-        return Ok(default_value);
-    };
-    value
-        .parse::<usize>()
-        .map_err(|err| CliError::usage(format!("failed to parse {name} '{value}': {err}")))
-}
-
-fn parse_optional_string_value(flags: &FlagArgs, name: &str) -> CliOutcome<Option<String>> {
-    match flags.optional(name) {
-        None => Ok(None),
-        Some(value) if value == "true" => Err(CliError::usage(format!("missing {name} <value>"))),
-        Some(value) if value.trim().is_empty() => {
-            Err(CliError::usage(format!("{name} must not be empty")))
-        }
-        Some(value) => Ok(Some(value)),
-    }
-}
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum DirectTouchCommand {
     Tap {
@@ -3795,25 +3705,6 @@ impl StreamInputRelayAction {
             Self::Input(command) => command.to_json(),
         }
     }
-}
-
-fn stream_input_relay_action(flags: &FlagArgs) -> CliOutcome<Option<(String, Vec<String>)>> {
-    let Some(value) = flags
-        .optional("--input-relay")
-        .or_else(|| flags.optional("--interactive-input"))
-    else {
-        return Ok(None);
-    };
-    if value == "true" {
-        let action = flags.positionals.first().cloned().ok_or_else(|| {
-            CliError::usage("stream --input-relay expects an action: tap|swipe|long-tap|key|text")
-        })?;
-        return Ok(Some((
-            action,
-            flags.positionals.iter().skip(1).cloned().collect(),
-        )));
-    }
-    Ok(Some((value, flags.positionals.clone())))
 }
 
 fn run_stream_input_relay(
@@ -4503,17 +4394,6 @@ fn page_detection_json(outcome: &PageDetectionOutcome) -> Value {
     data
 }
 
-fn target_argument(flags: &FlagArgs, command: &str) -> CliOutcome<String> {
-    if let Some(target) = flags.optional("--target").filter(|value| value != "true") {
-        return Ok(target);
-    }
-    flags
-        .positionals
-        .first()
-        .cloned()
-        .ok_or_else(|| CliError::usage(format!("{command} requires <target> or --target <id>")))
-}
-
 fn target_eval_json(evaluation: &TargetEvaluation) -> Value {
     json!({
         "target": evaluation.id,
@@ -4546,20 +4426,6 @@ fn target_eval_json(evaluation: &TargetEvaluation) -> Value {
             })
         })
     })
-}
-
-fn parse_match_metric_flag(flags: &FlagArgs) -> CliOutcome<MatchMetric> {
-    match flags
-        .optional("--metric")
-        .unwrap_or_else(|| "ccorr_normed".to_string())
-        .as_str()
-    {
-        "ccorr_normed" => Ok(MatchMetric::CrossCorrelationNormalized),
-        "ccoeff_normed" => Ok(MatchMetric::CorrelationCoefficientNormalized),
-        other => Err(CliError::usage(format!(
-            "unsupported --metric '{other}', expected ccorr_normed or ccoeff_normed"
-        ))),
-    }
 }
 
 fn load_navigation_graph(
@@ -5564,10 +5430,6 @@ fn poll_for_matched_page(
 fn run_monitor(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
     let _ = global;
     runtime_session_adapter::retired_authority("monitor", args)
-}
-
-fn stream_check_requested(flags: &FlagArgs) -> bool {
-    flags.positionals.first().map(String::as_str) == Some("check")
 }
 
 fn stream_contract_json(
@@ -7641,37 +7503,6 @@ fn validate_record_build_page_ref(
     )))
 }
 
-fn parse_record_build_resolution(flags: &FlagArgs) -> CliOutcome<Option<(u32, u32)>> {
-    let Some(value) = flags
-        .optional("--resolution")
-        .filter(|value| value != "true")
-    else {
-        return Ok(None);
-    };
-    let normalized = value.replace(['X', '*'], "x");
-    let Some((width, height)) = normalized.split_once('x') else {
-        return Err(CliError::usage(format!(
-            "--resolution must use <width>x<height>, got {value}"
-        )));
-    };
-    let width = width.trim().parse::<u32>().map_err(|err| {
-        CliError::usage(format!(
-            "failed to parse --resolution width '{width}': {err}"
-        ))
-    })?;
-    let height = height.trim().parse::<u32>().map_err(|err| {
-        CliError::usage(format!(
-            "failed to parse --resolution height '{height}': {err}"
-        ))
-    })?;
-    if width == 0 || height == 0 {
-        return Err(CliError::usage(
-            "--resolution width and height must be non-zero",
-        ));
-    }
-    Ok(Some((width, height)))
-}
-
 fn session_record_selector(
     global: &GlobalOptions,
     config: &UserConfig,
@@ -8598,64 +8429,6 @@ fn crop_frame_rect(frame: &Frame, rect: &SessionRecordRect) -> CliOutcome<Frame>
     .map_err(|err| CliError::usage(format!("failed to build record anchor crop frame: {err}")))
 }
 
-fn required_non_empty_flag(flags: &FlagArgs, name: &str) -> CliOutcome<String> {
-    let value = flags.required(name)?;
-    if value.trim().is_empty() {
-        return Err(CliError::usage(format!("{name} must not be empty")));
-    }
-    Ok(value)
-}
-
-fn parse_session_record_region(value: &str) -> CliOutcome<SessionRecordRegion> {
-    if value == "auto" {
-        return Ok(SessionRecordRegion::Auto);
-    }
-    let parts = value.split(',').map(str::trim).collect::<Vec<_>>();
-    if parts.len() != 4 {
-        return Err(CliError::usage(format!(
-            "record anchor region must be auto or x,y,width,height: {value}"
-        )));
-    }
-    let parse_part = |index: usize, name: &str| {
-        parts[index].parse::<i32>().map_err(|err| {
-            CliError::usage(format!(
-                "failed to parse record anchor region {name} '{}': {err}",
-                parts[index]
-            ))
-        })
-    };
-    let rect = SessionRecordRect {
-        x: parse_part(0, "x")?,
-        y: parse_part(1, "y")?,
-        width: parse_part(2, "width")?,
-        height: parse_part(3, "height")?,
-    };
-    if rect.width <= 0 || rect.height <= 0 {
-        return Err(CliError::usage(
-            "record anchor region width and height must be positive",
-        ));
-    }
-    Ok(SessionRecordRegion::Rect { rect })
-}
-
-fn parse_optional_unit_f64(flags: &FlagArgs, name: &str) -> CliOutcome<Option<f64>> {
-    let Some(value) = flags.optional(name) else {
-        return Ok(None);
-    };
-    if value == "true" {
-        return Err(CliError::usage(format!("missing {name} <value>")));
-    };
-    let parsed = value
-        .parse::<f64>()
-        .map_err(|err| CliError::usage(format!("failed to parse {name} '{value}': {err}")))?;
-    if !parsed.is_finite() || !(0.0..=1.0).contains(&parsed) {
-        return Err(CliError::usage(format!(
-            "{name} must be a finite number between 0 and 1"
-        )));
-    }
-    Ok(Some(parsed))
-}
-
 fn parse_session_record_operation_click(flags: &FlagArgs) -> CliOutcome<SessionRecordClick> {
     let gesture_flags = [
         flags.optional("--click").is_some(),
@@ -8719,77 +8492,6 @@ fn parse_session_record_click(value: &str) -> CliOutcome<SessionRecordClick> {
     Ok(SessionRecordClick::Target {
         target: value.to_string(),
     })
-}
-
-fn parse_session_record_swipe_rects(
-    value: &str,
-) -> CliOutcome<(SessionRecordRect, SessionRecordRect)> {
-    let (from, to) = value
-        .split_once("->")
-        .ok_or_else(|| CliError::usage("--swipe must be formatted as x,y,w,h->x,y,w,h"))?;
-    Ok((
-        parse_session_record_rect(from, "--swipe from")?,
-        parse_session_record_rect(to, "--swipe to")?,
-    ))
-}
-
-fn parse_session_record_rect(value: &str, label: &str) -> CliOutcome<SessionRecordRect> {
-    let parts = value.split(',').map(str::trim).collect::<Vec<_>>();
-    if parts.len() != 4 {
-        return Err(CliError::usage(format!(
-            "{label} must be formatted as x,y,width,height: {value}"
-        )));
-    }
-    let parse = |index: usize, name: &str| {
-        parts[index].parse::<i32>().map_err(|err| {
-            CliError::usage(format!(
-                "failed to parse {label} {name} '{}': {err}",
-                parts[index]
-            ))
-        })
-    };
-    let rect = SessionRecordRect {
-        x: parse(0, "x")?,
-        y: parse(1, "y")?,
-        width: parse(2, "width")?,
-        height: parse(3, "height")?,
-    };
-    if rect.width <= 0 || rect.height <= 0 {
-        return Err(CliError::usage(format!(
-            "{label} dimensions must be positive: {}x{}",
-            rect.width, rect.height
-        )));
-    }
-    Ok(rect)
-}
-
-fn parse_record_duration_ms(flags: &FlagArgs, default_ms: u64) -> CliOutcome<u64> {
-    let duration_ms = flags
-        .optional("--duration-ms")
-        .filter(|value| value != "true")
-        .map(|value| {
-            value.parse::<u64>().map_err(|err| {
-                CliError::usage(format!("failed to parse --duration-ms '{value}': {err}"))
-            })
-        })
-        .transpose()?
-        .unwrap_or(default_ms);
-    if duration_ms == 0 {
-        return Err(CliError::usage("--duration-ms must be positive"));
-    }
-    Ok(duration_ms)
-}
-
-fn session_record_drift_diagnostics_path(flags: &FlagArgs) -> CliOutcome<Option<PathBuf>> {
-    let Some(value) = flags.optional("--from-drift-diagnostics") else {
-        return Ok(None);
-    };
-    if value == "true" {
-        return Err(CliError::usage(
-            "session record amend --from-drift-diagnostics requires <path>",
-        ));
-    }
-    Ok(Some(PathBuf::from(value)))
 }
 
 fn amend_session_record_from_drift_diagnostics(
@@ -9121,34 +8823,6 @@ fn amend_drift_record_step(
     }
 }
 
-fn record_amend_step_id(flags: &FlagArgs) -> CliOutcome<String> {
-    let value = flags
-        .optional("--step-id")
-        .filter(|value| value != "true")
-        .or_else(|| flags.positionals.first().cloned())
-        .ok_or_else(|| CliError::usage("session record amend requires <step-id> or --step-id"))?;
-    if value.trim().is_empty() {
-        return Err(CliError::usage("record amend step id must not be empty"));
-    }
-    Ok(value)
-}
-
-fn record_candidates_step_id(flags: &FlagArgs) -> CliOutcome<String> {
-    let value = flags
-        .optional("--step-id")
-        .filter(|value| value != "true")
-        .or_else(|| flags.positionals.first().cloned())
-        .ok_or_else(|| {
-            CliError::usage("session record candidates requires <step-id> or --step-id")
-        })?;
-    if value.trim().is_empty() {
-        return Err(CliError::usage(
-            "record candidates step id must not be empty",
-        ));
-    }
-    Ok(value)
-}
-
 fn session_record_candidate_report(
     record: &SessionRecordContext,
     step: &SessionRecordStep,
@@ -9407,29 +9081,6 @@ fn amend_verify_template_record_step(
         refresh_amended_verify_template(context, step_id, target, flags, auto_region_override)?;
     }
     Ok(changed)
-}
-
-fn parse_session_record_candidate_index(flags: &FlagArgs) -> CliOutcome<Option<usize>> {
-    let candidate_index = flags.optional("--candidate-index");
-    let auto_candidate = flags.optional("--auto-candidate");
-    if candidate_index.is_some() && auto_candidate.is_some() {
-        return Err(CliError::usage(
-            "record amend accepts only one of --candidate-index or --auto-candidate",
-        ));
-    }
-    let Some(value) = candidate_index.or(auto_candidate) else {
-        return Ok(None);
-    };
-    if value == "true" {
-        return Err(CliError::usage(
-            "record amend candidate selection requires an index value",
-        ));
-    }
-    value.parse::<usize>().map(Some).map_err(|err| {
-        CliError::usage(format!(
-            "failed to parse record amend candidate index '{value}': {err}"
-        ))
-    })
 }
 
 fn select_recorded_auto_region_candidate(
@@ -9795,127 +9446,6 @@ fn run_explain_run(args: &[String]) -> CliOutcome<Value> {
     }))
 }
 
-#[derive(Debug, Clone, Default)]
-struct FlagArgs {
-    flags: BTreeMap<String, Vec<String>>,
-    positionals: Vec<String>,
-}
-
-impl FlagArgs {
-    fn parse(args: &[String]) -> CliOutcome<Self> {
-        let mut parsed = Self::default();
-        let mut index = 0usize;
-        while index < args.len() {
-            let arg = &args[index];
-            if arg.starts_with("--") {
-                if index + 1 < args.len() && !args[index + 1].starts_with("--") {
-                    parsed
-                        .flags
-                        .entry(arg.clone())
-                        .or_default()
-                        .push(args[index + 1].clone());
-                    index += 2;
-                } else {
-                    parsed
-                        .flags
-                        .entry(arg.clone())
-                        .or_default()
-                        .push("true".to_string());
-                    index += 1;
-                }
-            } else {
-                parsed.positionals.push(arg.clone());
-                index += 1;
-            }
-        }
-        Ok(parsed)
-    }
-
-    fn bool(&self, name: &str) -> bool {
-        self.flags
-            .get(name)
-            .and_then(|values| values.last())
-            .is_some_and(|value| value == "true")
-    }
-
-    fn optional(&self, name: &str) -> Option<String> {
-        self.flags
-            .get(name)
-            .and_then(|values| values.last())
-            .cloned()
-    }
-
-    fn values(&self, name: &str) -> Vec<String> {
-        self.flags.get(name).cloned().unwrap_or_default()
-    }
-
-    fn without_first_positional(&self) -> Self {
-        let mut next = self.clone();
-        if !next.positionals.is_empty() {
-            next.positionals.remove(0);
-        }
-        next
-    }
-
-    fn required(&self, name: &str) -> CliOutcome<String> {
-        self.optional(name)
-            .filter(|value| value != "true")
-            .ok_or_else(|| CliError::usage(format!("missing {name} <value>")))
-    }
-
-    fn optional_path(&self, name: &str) -> Option<PathBuf> {
-        self.optional(name)
-            .filter(|value| value != "true")
-            .map(PathBuf::from)
-    }
-
-    fn required_path(&self, name: &str) -> CliOutcome<PathBuf> {
-        self.required(name).map(PathBuf::from)
-    }
-
-    fn reject_flags(&self, command: &str) -> CliOutcome<()> {
-        if self.flags.is_empty() {
-            return Ok(());
-        }
-        let names = self.flags.keys().cloned().collect::<Vec<_>>();
-        Err(CliError::usage(format!(
-            "{command} takes positional arguments only; unexpected flags: {}",
-            names.join(", ")
-        )))
-    }
-
-    fn expect_positionals(&self, command: &str, expected: usize) -> CliOutcome<()> {
-        if self.positionals.len() == expected {
-            return Ok(());
-        }
-        Err(CliError::usage(format!(
-            "{command} expects {expected} positional argument(s), got {}",
-            self.positionals.len()
-        )))
-    }
-
-    fn required_positional(&self, index: usize, name: &str) -> CliOutcome<&str> {
-        self.positionals
-            .get(index)
-            .map(String::as_str)
-            .ok_or_else(|| CliError::usage(format!("missing {name}")))
-    }
-
-    fn required_i32(&self, index: usize, name: &str) -> CliOutcome<i32> {
-        let value = self.required_positional(index, name)?;
-        value
-            .parse::<i32>()
-            .map_err(|err| CliError::usage(format!("failed to parse {name} '{value}': {err}")))
-    }
-
-    fn required_u64(&self, index: usize, name: &str) -> CliOutcome<u64> {
-        let value = self.required_positional(index, name)?;
-        value
-            .parse::<u64>()
-            .map_err(|err| CliError::usage(format!("failed to parse {name} '{value}': {err}")))
-    }
-}
-
 fn require_runtime(global: &GlobalOptions) -> CliOutcome<Value> {
     let config = read_user_config()?;
     let endpoint = effective_runtime_endpoint(global, &config)
@@ -9931,336 +9461,6 @@ fn require_runtime(global: &GlobalOptions) -> CliOutcome<Value> {
         "connection": "tcp",
         "policy": runtime_endpoint_policy_json(&policy)
     }))
-}
-
-#[derive(Debug, Clone)]
-struct RuntimeEndpointPolicy {
-    scheme: String,
-    host: String,
-    port: u16,
-    channel: RuntimeEndpointChannel,
-    auth_material: Option<&'static str>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum RuntimeEndpointChannel {
-    LocalDirect,
-    TrustedRemote,
-}
-
-impl RuntimeEndpointChannel {
-    fn as_str(self) -> &'static str {
-        match self {
-            RuntimeEndpointChannel::LocalDirect => "local_direct",
-            RuntimeEndpointChannel::TrustedRemote => "trusted_remote",
-        }
-    }
-}
-
-fn runtime_endpoint_check(endpoint: &str) -> Value {
-    match runtime_endpoint_policy(endpoint) {
-        Ok(policy) => {
-            let reachable = runtime_tcp_available(endpoint);
-            json!({
-                "ok": reachable,
-                "endpoint": endpoint,
-                "reachable": reachable,
-                "policy": runtime_endpoint_policy_json(&policy)
-            })
-        }
-        Err(err) => json!({
-            "ok": false,
-            "endpoint": endpoint,
-            "error_code": err.code,
-            "error": err.message,
-            "blocked_by": err.blocked_by
-        }),
-    }
-}
-
-fn runtime_endpoint_policy(endpoint: &str) -> CliOutcome<RuntimeEndpointPolicy> {
-    let (scheme, host, port) = parse_endpoint_parts(endpoint).ok_or_else(|| {
-        CliError::runtime_not_running(format!(
-            "runtime endpoint is invalid; expected host:port, http://host:port, or https://host:port, got {endpoint}"
-        ))
-    })?;
-    if is_loopback_host(&host) {
-        return Ok(RuntimeEndpointPolicy {
-            scheme,
-            host,
-            port,
-            channel: RuntimeEndpointChannel::LocalDirect,
-            auth_material: None,
-        });
-    }
-    if scheme != "https" {
-        return Err(CliError::safety_blocked(
-            "trusted_remote_transport_blocked",
-            "trusted remote runtime endpoints must use https:// with encryption",
-            &["trusted_remote", "encryption"],
-        ));
-    }
-    let auth_material = trusted_remote_auth_material().ok_or_else(|| {
-        CliError::safety_blocked(
-            "trusted_remote_auth_required",
-            format!(
-                "trusted remote runtime endpoints require {TRUSTED_REMOTE_TOKEN_ENV} or {TRUSTED_REMOTE_CLIENT_CERT_ENV}"
-            ),
-            &["trusted_remote", "authentication"],
-        )
-    })?;
-    Ok(RuntimeEndpointPolicy {
-        scheme,
-        host,
-        port,
-        channel: RuntimeEndpointChannel::TrustedRemote,
-        auth_material: Some(auth_material),
-    })
-}
-
-fn runtime_endpoint_policy_json(policy: &RuntimeEndpointPolicy) -> Value {
-    json!({
-        "channel": policy.channel.as_str(),
-        "scheme": policy.scheme,
-        "host": policy.host,
-        "port": policy.port,
-        "encryption_required": policy.channel == RuntimeEndpointChannel::TrustedRemote,
-        "authentication_required": policy.channel == RuntimeEndpointChannel::TrustedRemote,
-        "auth_material": policy.auth_material,
-        "auth_env": {
-            "token": TRUSTED_REMOTE_TOKEN_ENV,
-            "client_certificate": TRUSTED_REMOTE_CLIENT_CERT_ENV
-        }
-    })
-}
-
-fn trusted_remote_auth_material() -> Option<&'static str> {
-    if env_var_non_empty(TRUSTED_REMOTE_TOKEN_ENV) {
-        Some("token")
-    } else if env_var_non_empty(TRUSTED_REMOTE_CLIENT_CERT_ENV) {
-        Some("client_certificate")
-    } else {
-        None
-    }
-}
-
-fn env_var_non_empty(name: &str) -> bool {
-    env::var(name)
-        .map(|value| !value.trim().is_empty())
-        .unwrap_or(false)
-}
-
-fn runtime_tcp_available(endpoint: &str) -> bool {
-    let Some((host, port)) = parse_endpoint_host_port(endpoint) else {
-        return false;
-    };
-    let Ok(mut addrs) = (host.as_str(), port).to_socket_addrs() else {
-        return false;
-    };
-    addrs.any(|addr| TcpStream::connect_timeout(&addr, Duration::from_millis(200)).is_ok())
-}
-
-fn parse_endpoint_host_port(endpoint: &str) -> Option<(String, u16)> {
-    parse_endpoint_parts(endpoint).map(|(_scheme, host, port)| (host, port))
-}
-
-fn parse_endpoint_parts(endpoint: &str) -> Option<(String, String, u16)> {
-    let (scheme, trimmed) = if let Some(rest) = endpoint.strip_prefix("http://") {
-        ("http", rest)
-    } else if let Some(rest) = endpoint.strip_prefix("https://") {
-        ("https", rest)
-    } else {
-        ("tcp", endpoint)
-    };
-    let host_port = trimmed.split('/').next()?;
-    let (host, port) = host_port.rsplit_once(':')?;
-    Some((
-        scheme.to_string(),
-        host.trim_matches(['[', ']']).to_string(),
-        port.parse().ok()?,
-    ))
-}
-
-fn is_loopback_host(host: &str) -> bool {
-    let normalized = host.trim_matches(['[', ']']).to_ascii_lowercase();
-    normalized == "localhost"
-        || normalized == "::1"
-        || normalized == "0:0:0:0:0:0:0:1"
-        || normalized.starts_with("127.")
-}
-
-fn device_config(global: &GlobalOptions, config: &UserConfig) -> CliOutcome<DeviceRuntimeConfig> {
-    device_config_for_instance(global, config, None)
-}
-
-fn device_config_for_instance(
-    global: &GlobalOptions,
-    config: &UserConfig,
-    instance_override: Option<&str>,
-) -> CliOutcome<DeviceRuntimeConfig> {
-    let instance_id = match instance_override {
-        Some(instance) => instance.to_string(),
-        None => resolve_instance_id(global, config)?,
-    };
-    let instance = config.instances.get(&instance_id);
-    #[cfg(test)]
-    let mut target = DeviceTarget::default();
-    #[cfg(test)]
-    if let Some(serial) = instance.and_then(|instance| instance.serial.clone()) {
-        target.serial = Some(serial);
-    } else if global.instance.as_deref() == Some(instance_id.as_str()) && instance.is_none() {
-        target.serial = Some(instance_id.clone());
-    }
-    let capture_backend = effective_capture_backend_choice(global, &instance_id, instance)?;
-    #[cfg(test)]
-    let touch_backend = effective_touch_backend_choice(global, &instance_id, instance)?;
-    let resolved_adb = effective_adb_path_for_instance(config, instance)?;
-    enforce_path_adb_target_boundary(&resolved_adb, instance, capture_backend)?;
-    Ok(DeviceRuntimeConfig {
-        instance_alias: instance_id,
-        runtime_state_root: runtime_state_root()?,
-        #[cfg(test)]
-        target,
-        adb_source: resolved_adb.source,
-        adb_warning: resolved_adb.warning,
-        capture_backend,
-        #[cfg(test)]
-        touch_backend,
-    })
-}
-
-#[derive(Debug)]
-struct DeviceRuntimeConfig {
-    instance_alias: String,
-    runtime_state_root: PathBuf,
-    #[cfg(test)]
-    target: DeviceTarget,
-    adb_source: AdbPathSource,
-    adb_warning: Option<String>,
-    capture_backend: CaptureBackendChoice,
-    #[cfg(test)]
-    touch_backend: TouchBackendChoice,
-}
-
-impl DeviceRuntimeConfig {
-    fn runtime_capture_endpoint(&self) -> runtime_capture_backend::RuntimeCaptureEndpoint {
-        runtime_capture_backend::RuntimeCaptureEndpoint::new(
-            self.instance_alias.clone(),
-            self.runtime_state_root.clone(),
-        )
-    }
-}
-
-fn effective_capture_backend_choice(
-    global: &GlobalOptions,
-    instance_id: &str,
-    instance: Option<&InstanceConfig>,
-) -> CliOutcome<CaptureBackendChoice> {
-    if let Some(choice) = global.capture_backend {
-        return Ok(choice);
-    }
-    let Some(value) = instance.and_then(|instance| instance.capture_backend.as_deref()) else {
-        return Ok(CaptureBackendChoice::Auto);
-    };
-    CaptureBackendChoice::parse(value).map_err(|err| {
-        CliError::usage(format!(
-            "invalid instance.{instance_id}.capture_backend '{value}': {err}"
-        ))
-    })
-}
-
-#[cfg(test)]
-fn effective_touch_backend_choice(
-    global: &GlobalOptions,
-    instance_id: &str,
-    instance: Option<&InstanceConfig>,
-) -> CliOutcome<TouchBackendChoice> {
-    if let Some(choice) = global.touch_backend {
-        return Ok(choice);
-    }
-    let Some(value) = instance.and_then(|instance| instance.touch_backend.as_deref()) else {
-        return Ok(TouchBackendChoice::Auto);
-    };
-    TouchBackendChoice::parse(value).map_err(|err| {
-        CliError::usage(format!(
-            "invalid instance.{instance_id}.touch_backend '{value}': {err}"
-        ))
-    })
-}
-
-fn resolve_instance_id(global: &GlobalOptions, config: &UserConfig) -> CliOutcome<String> {
-    if let Some(instance) = &global.instance {
-        return Ok(instance.clone());
-    }
-    if let Some((id, _instance)) = config.instances.iter().find(|(_id, instance)| {
-        let game_match = global
-            .game
-            .as_ref()
-            .is_none_or(|game| instance.game.as_ref() == Some(game));
-        let server_match = global
-            .server
-            .as_ref()
-            .is_none_or(|server| instance.server.as_ref() == Some(server));
-        game_match && server_match
-    }) {
-        return Ok(id.clone());
-    }
-    Err(CliError::instance(
-        "could not resolve instance; pass --instance or configure instance.<id>.game/server",
-    ))
-}
-
-fn resolve_instance_id_for_flags(
-    global: &GlobalOptions,
-    config: &UserConfig,
-    flags: &FlagArgs,
-) -> CliOutcome<String> {
-    if let Some(instance) = flags.optional("--instance").filter(|value| value != "true") {
-        return Ok(instance);
-    }
-    resolve_instance_id(global, config)
-}
-
-fn read_user_config() -> CliOutcome<UserConfig> {
-    let path = config_path()?;
-    if !path.exists() {
-        return Ok(UserConfig::default());
-    }
-    let text = fs::read_to_string(&path).map_err(|err| {
-        CliError::usage(format!(
-            "failed to read config file {}: {err}",
-            path.display()
-        ))
-    })?;
-    serde_json::from_str(&text).map_err(|err| {
-        CliError::usage(format!(
-            "failed to parse config file {}: {err}",
-            path.display()
-        ))
-    })
-}
-
-fn write_user_config(config: &UserConfig) -> CliOutcome<()> {
-    let path = config_path()?;
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent).map_err(|err| {
-            CliError::usage(format!(
-                "failed to create config directory {}: {err}",
-                parent.display()
-            ))
-        })?;
-    }
-    let text = serde_json::to_string_pretty(config)
-        .map_err(|err| CliError::usage(format!("failed to serialize config: {err}")))?;
-    fs::write(&path, text)
-        .map_err(|err| CliError::usage(format!("failed to write {}: {err}", path.display())))
-}
-
-fn config_path() -> CliOutcome<PathBuf> {
-    if let Ok(path) = env::var(CONFIG_ENV) {
-        return Ok(PathBuf::from(path));
-    }
-    Ok(app_state_root()?.join("config.json"))
 }
 
 fn absolute_lexical_path(path: &Path) -> CliOutcome<PathBuf> {
@@ -10534,38 +9734,6 @@ fn ensure_path_within(
     Ok(resolved)
 }
 
-fn app_state_root() -> CliOutcome<PathBuf> {
-    let root = env::var("LOCALAPPDATA")
-        .or_else(|_| env::var("APPDATA"))
-        .map_err(|_| CliError::usage("LOCALAPPDATA or APPDATA is required for ActingLab state"))?;
-    Ok(PathBuf::from(root).join("ActingCommand").join("actinglab"))
-}
-
-fn runtime_state_root() -> CliOutcome<PathBuf> {
-    if let Ok(path) = env::var(RUNTIME_STATE_ROOT_ENV) {
-        if path.trim().is_empty() {
-            return Err(CliError::usage(format!(
-                "{RUNTIME_STATE_ROOT_ENV} must not be empty"
-            )));
-        }
-        return Ok(PathBuf::from(path));
-    }
-    let root = env::var("LOCALAPPDATA")
-        .or_else(|_| env::var("APPDATA"))
-        .map_err(|_| CliError::usage("LOCALAPPDATA or APPDATA is required for Runtime state"))?;
-    Ok(PathBuf::from(root).join("ActingCommand").join("runtime"))
-}
-
-fn session_state_dir_from_flags(flags: &FlagArgs) -> CliOutcome<PathBuf> {
-    if let Some(path) = flags.optional_path("--state-dir") {
-        return Ok(path);
-    }
-    if let Ok(path) = env::var(SESSION_STATE_ENV) {
-        return Ok(PathBuf::from(path));
-    }
-    Ok(app_state_root()?.join("session"))
-}
-
 fn current_unix_ms() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -10663,90 +9831,6 @@ fn cleanup_current_process_json_tmp_files(path: &Path) -> CliOutcome<()> {
                 ))
             })?;
         }
-    }
-    Ok(())
-}
-
-fn safe_file_stem(value: &str) -> String {
-    value
-        .chars()
-        .map(|ch| {
-            if ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.') {
-                ch
-            } else {
-                '_'
-            }
-        })
-        .collect()
-}
-
-fn config_get(config: &UserConfig, key: &str) -> CliOutcome<Value> {
-    match key {
-        "adb_path" => Ok(json!(config.adb_path)),
-        "runtime_endpoint" => Ok(json!(config.runtime_endpoint)),
-        "run_root" => Ok(json!(config.run_root)),
-        "resource_root" => Ok(json!(config.resource_root)),
-        key if key.starts_with("instance.") => get_instance_value(config, key),
-        _ => Err(CliError::usage(format!("unknown config key: {key}"))),
-    }
-}
-
-fn config_set(config: &mut UserConfig, key: &str, value: &str) -> CliOutcome<()> {
-    match key {
-        "adb_path" => config.adb_path = Some(value.to_string()),
-        "runtime_endpoint" => config.runtime_endpoint = Some(value.to_string()),
-        "run_root" => config.run_root = Some(value.to_string()),
-        "resource_root" => config.resource_root = Some(value.to_string()),
-        key if key.starts_with("instance.") => set_instance_value(config, key, value)?,
-        _ => return Err(CliError::usage(format!("unknown config key: {key}"))),
-    }
-    Ok(())
-}
-
-fn get_instance_value(config: &UserConfig, key: &str) -> CliOutcome<Value> {
-    let parts = key.split('.').collect::<Vec<_>>();
-    if parts.len() != 3 {
-        return Err(CliError::usage(
-            "instance config keys use instance.<id>.serial|game|server|package|adb_path|capture_backend|touch_backend",
-        ));
-    }
-    let instance = config.instances.get(parts[1]);
-    let value = match parts[2] {
-        "serial" => instance.and_then(|instance| instance.serial.clone()),
-        "game" => instance.and_then(|instance| instance.game.clone()),
-        "server" => instance.and_then(|instance| instance.server.clone()),
-        "package" => instance.and_then(|instance| instance.package.clone()),
-        "adb_path" => instance.and_then(|instance| instance.adb_path.clone()),
-        "capture_backend" => instance.and_then(|instance| instance.capture_backend.clone()),
-        "touch_backend" => instance.and_then(|instance| instance.touch_backend.clone()),
-        other => return Err(CliError::usage(format!("unknown instance field: {other}"))),
-    };
-    Ok(json!(value))
-}
-
-fn set_instance_value(config: &mut UserConfig, key: &str, value: &str) -> CliOutcome<()> {
-    let parts = key.split('.').collect::<Vec<_>>();
-    if parts.len() != 3 {
-        return Err(CliError::usage(
-            "instance config keys use instance.<id>.serial|game|server|package|adb_path|capture_backend|touch_backend",
-        ));
-    }
-    let instance = config.instances.entry(parts[1].to_string()).or_default();
-    match parts[2] {
-        "serial" => instance.serial = Some(value.to_string()),
-        "game" => instance.game = Some(value.to_string()),
-        "server" => instance.server = Some(value.to_string()),
-        "package" => instance.package = Some(value.to_string()),
-        "adb_path" => instance.adb_path = Some(value.to_string()),
-        "capture_backend" => {
-            CaptureBackendChoice::parse(value).map_err(|err| CliError::usage(err.to_string()))?;
-            instance.capture_backend = Some(value.to_string());
-        }
-        "touch_backend" => {
-            TouchBackendChoice::parse(value).map_err(|err| CliError::usage(err.to_string()))?;
-            instance.touch_backend = Some(value.to_string());
-        }
-        other => return Err(CliError::usage(format!("unknown instance field: {other}"))),
     }
     Ok(())
 }
@@ -11036,14 +10120,6 @@ fn create_error_report_zip(out: &Path, run_id: &str, message: &str) -> CliOutcom
         .map_err(zip_io_error)?;
     zip.finish().map_err(zip_write_error)?;
     Ok(target)
-}
-
-fn zip_write_error(err: zip::result::ZipError) -> CliError {
-    CliError::package_invalid(format!("zip write failed: {err}"))
-}
-
-fn zip_io_error(err: io::Error) -> CliError {
-    CliError::package_invalid(format!("zip write failed: {err}"))
 }
 
 fn validate_operation_dir(dir: &Path) -> CliOutcome<Value> {
@@ -11832,27 +10908,8 @@ fn exit_code_table() -> Value {
     ])
 }
 
-fn split_csv(value: &str) -> Vec<String> {
-    value
-        .split(',')
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(ToOwned::to_owned)
-        .collect()
-}
-
 fn path_string(path: &Path) -> String {
     path.display().to_string()
-}
-
-fn file_sha256(path: &Path) -> CliOutcome<String> {
-    let bytes = fs::read(path)
-        .map_err(|err| CliError::usage(format!("failed to read {}: {err}", path.display())))?;
-    Ok(hex_sha256(&bytes))
-}
-
-fn hex_sha256(bytes: &[u8]) -> String {
-    format!("{:x}", Sha256::digest(bytes))
 }
 
 #[cfg(test)]
@@ -12269,414 +11326,7 @@ mod tests {
         );
     }
 
-    #[test]
-    fn runtime_endpoint_policy_allows_loopback_without_auth() {
-        let _guard = env_lock();
-        let _trusted_remote_env = TrustedRemoteEnvGuard::clear();
-        let policy = runtime_endpoint_policy("http://127.0.0.1:4317").unwrap();
-        assert_eq!(policy.channel, RuntimeEndpointChannel::LocalDirect);
-        assert_eq!(policy.scheme, "http");
-        assert_eq!(policy.host, "127.0.0.1");
-        assert_eq!(policy.port, 4317);
-        assert_eq!(policy.auth_material, None);
-    }
-
-    #[test]
-    fn runtime_endpoint_policy_blocks_remote_http() {
-        let _guard = env_lock();
-        let _trusted_remote_env = TrustedRemoteEnvGuard::clear();
-        let err = runtime_endpoint_policy("http://example.invalid:4317").unwrap_err();
-        assert_eq!(err.code, "trusted_remote_transport_blocked");
-        assert_eq!(err.exit_code(), 3);
-    }
-
-    #[test]
-    fn runtime_endpoint_policy_blocks_remote_https_without_auth() {
-        let _guard = env_lock();
-        let _trusted_remote_env = TrustedRemoteEnvGuard::clear();
-        let err = runtime_endpoint_policy("https://example.invalid:4317").unwrap_err();
-        assert_eq!(err.code, "trusted_remote_auth_required");
-        assert_eq!(err.exit_code(), 3);
-    }
-
-    #[test]
-    fn runtime_endpoint_policy_accepts_remote_https_with_token() {
-        let _guard = env_lock();
-        let _trusted_remote_env = TrustedRemoteEnvGuard::with_token("test-token");
-        let policy = runtime_endpoint_policy("https://example.invalid:4317").unwrap();
-        assert_eq!(policy.channel, RuntimeEndpointChannel::TrustedRemote);
-        assert_eq!(policy.scheme, "https");
-        assert_eq!(policy.auth_material, Some("token"));
-    }
-
-    #[test]
-    fn session_transport_check_reports_loopback_policy() {
-        let _guard = env_lock();
-        let _trusted_remote_env = TrustedRemoteEnvGuard::clear();
-        let result = run_cli(
-            [
-                "--json",
-                "session",
-                "transport",
-                "check",
-                "--endpoint",
-                "http://127.0.0.1:4317",
-            ],
-            true,
-        );
-
-        assert_eq!(result.exit_code(), 0, "{}", result.envelope_json());
-        let data = result.envelope.data.as_ref().unwrap();
-        assert_eq!(
-            data.get("schema_version").and_then(Value::as_str),
-            Some("session.transport_check.v0.1")
-        );
-        assert_eq!(
-            data.pointer("/check/policy/channel")
-                .and_then(Value::as_str),
-            Some("local_direct")
-        );
-        assert_eq!(
-            data.pointer("/check/policy/authentication_required")
-                .and_then(Value::as_bool),
-            Some(false)
-        );
-        assert_eq!(
-            data.get("does_not_start_listener").and_then(Value::as_bool),
-            Some(true)
-        );
-    }
-
-    #[test]
-    fn session_transport_plan_reports_reserved_trusted_channel_without_listener() {
-        let _guard = env_lock();
-        let _trusted_remote_env = TrustedRemoteEnvGuard::clear();
-        let result = run_cli(["--json", "session", "transport", "plan"], true);
-
-        assert_eq!(result.exit_code(), 0);
-        let data = result.envelope.data.as_ref().unwrap();
-        assert_eq!(
-            data.get("schema_version").and_then(Value::as_str),
-            Some("session.transport_plan.v0.1")
-        );
-        assert_eq!(data.get("status").and_then(Value::as_str), Some("reserved"));
-        assert_eq!(
-            data.pointer("/trusted_remote/network_listener_implemented")
-                .and_then(Value::as_bool),
-            Some(false)
-        );
-        assert_eq!(
-            data.pointer("/trusted_remote/ready_to_accept_remote_clients")
-                .and_then(Value::as_bool),
-            Some(false)
-        );
-        assert_eq!(
-            data.pointer("/trusted_remote/token_configured")
-                .and_then(Value::as_bool),
-            Some(false)
-        );
-        assert_eq!(
-            data.pointer("/trusted_remote/endpoint_policy/checked")
-                .and_then(Value::as_bool),
-            Some(false)
-        );
-        assert_eq!(
-            data.pointer("/trusted_remote_gate/schema_version")
-                .and_then(Value::as_str),
-            Some("session.trusted_remote_gate.v0.1")
-        );
-        assert_eq!(
-            data.pointer("/trusted_remote_gate/status")
-                .and_then(Value::as_str),
-            Some("reserved")
-        );
-        assert_eq!(
-            data.pointer("/trusted_remote_gate/auth_material_configured")
-                .and_then(Value::as_bool),
-            Some(false)
-        );
-        assert_eq!(
-            data.pointer("/trusted_remote_gate/safe_to_accept_remote_clients")
-                .and_then(Value::as_bool),
-            Some(false)
-        );
-        assert!(
-            data.pointer("/trusted_remote_gate/blocked_reasons")
-                .and_then(Value::as_array)
-                .expect("trusted remote gate must expose blocked reasons")
-                .iter()
-                .any(|reason| {
-                    reason.get("code").and_then(Value::as_str)
-                        == Some("trusted_remote_auth_required")
-                })
-        );
-        assert_eq!(
-            data.pointer("/next_actions/schema_version")
-                .and_then(Value::as_str),
-            Some("session.transport_next_actions.v0.1")
-        );
-        assert_eq!(
-            data.pointer("/next_actions/ordered/0/action")
-                .and_then(Value::as_str),
-            Some("classify_endpoint_policy")
-        );
-        assert_eq!(
-            data.pointer("/next_actions/trusted_remote/auth_material_configured")
-                .and_then(Value::as_bool),
-            Some(false)
-        );
-        assert_eq!(
-            data.pointer("/guarantees/does_not_start_listener")
-                .and_then(Value::as_bool),
-            Some(true)
-        );
-        assert_eq!(
-            data.pointer("/guarantees/does_not_probe_tcp")
-                .and_then(Value::as_bool),
-            Some(true)
-        );
-    }
-
-    #[test]
-    fn session_transport_plan_blocks_remote_http_without_tcp_probe() {
-        let _guard = env_lock();
-        let _trusted_remote_env = TrustedRemoteEnvGuard::clear();
-        let result = run_cli(
-            [
-                "--json",
-                "session",
-                "transport",
-                "plan",
-                "--endpoint",
-                "http://192.0.2.1:4317",
-            ],
-            true,
-        );
-
-        assert_eq!(result.exit_code(), 0);
-        let data = result.envelope.data.as_ref().unwrap();
-        assert_eq!(data.get("status").and_then(Value::as_str), Some("blocked"));
-        assert_eq!(
-            data.pointer("/trusted_remote/endpoint_policy/safe_for_policy")
-                .and_then(Value::as_bool),
-            Some(false)
-        );
-        assert_eq!(
-            data.pointer("/trusted_remote/endpoint_policy/error_code")
-                .and_then(Value::as_str),
-            Some("trusted_remote_transport_blocked")
-        );
-        assert_eq!(
-            data.pointer("/trusted_remote_gate/status")
-                .and_then(Value::as_str),
-            Some("blocked")
-        );
-        assert_eq!(
-            data.pointer("/trusted_remote_gate/endpoint_policy_safe")
-                .and_then(Value::as_bool),
-            Some(false)
-        );
-        assert_eq!(
-            data.pointer("/trusted_remote_gate/guarantees/does_not_probe_tcp")
-                .and_then(Value::as_bool),
-            Some(true)
-        );
-        assert_eq!(
-            data.pointer("/trusted_remote/endpoint_policy/does_not_probe_tcp")
-                .and_then(Value::as_bool),
-            Some(true)
-        );
-        assert!(
-            data.get("blockers")
-                .and_then(Value::as_array)
-                .unwrap()
-                .iter()
-                .any(|blocker| blocker.get("kind").and_then(Value::as_str)
-                    == Some("trusted_remote_endpoint_policy"))
-        );
-        assert_eq!(
-            data.pointer("/next_actions/status").and_then(Value::as_str),
-            Some("blocked")
-        );
-        assert_eq!(
-            data.pointer("/next_actions/ordered/0/action")
-                .and_then(Value::as_str),
-            Some("review_endpoint_policy_blocker")
-        );
-        assert_eq!(
-            data.pointer("/next_actions/guarantees/does_not_probe_tcp")
-                .and_then(Value::as_bool),
-            Some(true)
-        );
-    }
-
-    #[test]
-    fn session_transport_plan_accepts_remote_https_policy_but_keeps_listener_reserved() {
-        let _guard = env_lock();
-        let _trusted_remote_env = TrustedRemoteEnvGuard::with_token("test-token");
-        let result = run_cli(
-            [
-                "--json",
-                "session",
-                "transport",
-                "plan",
-                "--endpoint",
-                "https://example.invalid:4317",
-            ],
-            true,
-        );
-        assert_eq!(result.exit_code(), 0);
-        let data = result.envelope.data.as_ref().unwrap();
-        assert_eq!(data.get("status").and_then(Value::as_str), Some("reserved"));
-        assert_eq!(
-            data.pointer("/trusted_remote/endpoint_policy/safe_for_policy")
-                .and_then(Value::as_bool),
-            Some(true)
-        );
-        assert_eq!(
-            data.pointer("/trusted_remote/endpoint_policy/policy/channel")
-                .and_then(Value::as_str),
-            Some("trusted_remote")
-        );
-        assert_eq!(
-            data.pointer("/trusted_remote/endpoint_policy/policy/auth_material")
-                .and_then(Value::as_str),
-            Some("token")
-        );
-        assert_eq!(
-            data.pointer("/trusted_remote_gate/status")
-                .and_then(Value::as_str),
-            Some("reserved")
-        );
-        assert_eq!(
-            data.pointer("/trusted_remote_gate/trusted_remote_requested")
-                .and_then(Value::as_bool),
-            Some(true)
-        );
-        assert_eq!(
-            data.pointer("/trusted_remote_gate/auth_material_configured")
-                .and_then(Value::as_bool),
-            Some(true)
-        );
-        assert_eq!(
-            data.pointer("/trusted_remote_gate/network_listener_implemented")
-                .and_then(Value::as_bool),
-            Some(false)
-        );
-        assert_eq!(
-            data.pointer("/trusted_remote_gate/guarantees/does_not_start_tls")
-                .and_then(Value::as_bool),
-            Some(true)
-        );
-        assert_eq!(
-            data.pointer("/trusted_remote/ready_to_accept_remote_clients")
-                .and_then(Value::as_bool),
-            Some(false)
-        );
-        assert_eq!(
-            data.pointer("/next_actions/status").and_then(Value::as_str),
-            Some("reserved")
-        );
-        assert_eq!(
-            data.pointer("/next_actions/trusted_remote/auth_material_configured")
-                .and_then(Value::as_bool),
-            Some(true)
-        );
-        assert_eq!(
-            data.pointer("/next_actions/ordered/0/action")
-                .and_then(Value::as_str),
-            Some("review_listener_and_tls_design")
-        );
-    }
-
-    #[test]
-    fn session_transport_check_blocks_remote_http() {
-        let _guard = env_lock();
-        let _trusted_remote_env = TrustedRemoteEnvGuard::clear();
-        let result = run_cli(
-            [
-                "--json",
-                "session",
-                "transport",
-                "check",
-                "--endpoint",
-                "http://192.0.2.1:4317",
-            ],
-            true,
-        );
-
-        assert_eq!(result.exit_code(), 0);
-        let data = result.envelope.data.as_ref().unwrap();
-        assert_eq!(
-            data.get("safe_to_connect").and_then(Value::as_bool),
-            Some(false)
-        );
-        assert_eq!(
-            data.pointer("/check/error_code").and_then(Value::as_str),
-            Some("trusted_remote_transport_blocked")
-        );
-        assert_eq!(
-            data.pointer("/check/blocked_by/1").and_then(Value::as_str),
-            Some("encryption")
-        );
-    }
-
-    #[test]
-    fn status_blocks_untrusted_remote_runtime_endpoint() {
-        let _guard = env_lock();
-        set_missing_config_env();
-        let _trusted_remote_env = TrustedRemoteEnvGuard::clear();
-        let result = run_cli(
-            [
-                "--json",
-                "--runtime-endpoint",
-                "http://example.invalid:4317",
-                "status",
-            ],
-            true,
-        );
-        assert_eq!(result.exit_code(), 3);
-        assert_eq!(
-            result.envelope.error.as_ref().unwrap().code,
-            "trusted_remote_transport_blocked"
-        );
-    }
-
-    #[test]
-    fn doctor_reports_remote_endpoint_policy_without_blocking() {
-        let _guard = env_lock();
-        set_missing_config_env();
-        let _trusted_remote_env = TrustedRemoteEnvGuard::clear();
-        let result = run_cli(
-            [
-                "--json",
-                "--runtime-endpoint",
-                "https://example.invalid:4317",
-                "doctor",
-            ],
-            true,
-        );
-        assert_eq!(result.exit_code(), 0);
-        let checks = result
-            .envelope
-            .data
-            .as_ref()
-            .unwrap()
-            .get("checks")
-            .and_then(Value::as_array)
-            .unwrap();
-        let runtime = checks
-            .iter()
-            .find(|check| check.get("name").and_then(Value::as_str) == Some("runtime_endpoint"))
-            .expect("runtime endpoint check");
-        assert_eq!(runtime.get("ok").and_then(Value::as_bool), Some(false));
-        assert_eq!(
-            runtime
-                .pointer("/policy/error_code")
-                .and_then(Value::as_str),
-            Some("trusted_remote_auth_required")
-        );
-    }
+    include!("tests/runtime_transport.rs");
 
     #[test]
     fn doctor_reports_path_adb_baseline_warning() {
