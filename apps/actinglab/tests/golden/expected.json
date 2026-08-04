@@ -2132,23 +2132,7 @@
       "data": {
         "actions": [
           {
-            "from_page": "arknights/home",
-            "id": "home_to_target",
-            "input": {
-              "point": {
-                "x": 12,
-                "y": 23
-              },
-              "rect": {
-                "height": 6,
-                "width": 4,
-                "x": 10,
-                "y": 20
-              },
-              "type": "tap"
-            },
-            "source": null,
-            "to_page": "arknights/target"
+            "id": "home_to_target"
           }
         ],
         "arbitration": {
@@ -2173,28 +2157,6 @@
         "state": "observed",
         "targets": [
           {
-            "evaluation": {
-              "color": {
-                "distance": 0.0,
-                "expected": [
-                  255,
-                  0,
-                  0
-                ],
-                "max_distance": 20.0,
-                "mean": [
-                  255,
-                  0,
-                  0
-                ]
-              },
-              "kind": "Color",
-              "matched_rect": null,
-              "message": "color passed",
-              "passed": true,
-              "target": "home_button",
-              "template": null
-            },
             "id": "home_button",
             "passed": true,
             "score": 1.0

@@ -3631,7 +3631,7 @@ fn latest_failed_mapped_run_clears_the_prior_successful_outcome() {
     assert_eq!(failure.code(), "contained_task_guard_refused");
     let failed_run_events = host
         .query_persisted_events_for_test(EventQuery {
-            run_id: Some(second_context.run_id()),
+            run_id: Some(second.second_context.run_id()),
             ..EventQuery::default()
         })
         .expect("query failed mapped run");
