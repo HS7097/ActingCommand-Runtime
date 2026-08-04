@@ -170,6 +170,74 @@ fn protocol_goldens_match_current_cli() {
 }
 
 #[test]
+fn observe_success_projection_is_invariant_to_fixture_root_length() {
+    let parent = TempDir::new().expect("projection roots");
+    let short_parent = parent.path().join("s");
+    let long_parent = parent
+        .path()
+        .join("observe-success-long-fixture-root-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx");
+    fs::create_dir_all(&short_parent).expect("short projection root");
+    fs::create_dir_all(&long_parent).expect("long projection root");
+    assert!(
+        long_parent.as_os_str().len() >= short_parent.as_os_str().len() + 48,
+        "projection roots must exercise materially different absolute path lengths"
+    );
+
+    let case = CASES
+        .iter()
+        .find(|case| case.name == "observe_success")
+        .expect("observe_success case");
+    let short = capture_case(case, Fixture::new_in(case.name, &short_parent));
+    let long = capture_case(case, Fixture::new_in(case.name, &long_parent));
+
+    assert_eq!(short, long);
+    assert_eq!(
+        short.envelope.pointer("/data/frame_path"),
+        Some(&json!("observe.png"))
+    );
+    assert_eq!(
+        short.envelope.pointer("/data/frame_source/path"),
+        Some(&json!("red.png"))
+    );
+    assert_eq!(
+        short.envelope.pointer("/data/actions"),
+        Some(&json!([{
+            "from_page": "arknights/home",
+            "id": "home_to_target",
+            "input": {
+                "point": {"x": 12, "y": 23},
+                "rect": {"height": 6, "width": 4, "x": 10, "y": 20},
+                "type": "tap"
+            },
+            "source": null,
+            "to_page": "arknights/target"
+        }]))
+    );
+    assert_eq!(
+        short.envelope.pointer("/data/targets"),
+        Some(&json!([{
+            "evaluation": {
+                "color": {
+                    "distance": 0.0,
+                    "expected": [255, 0, 0],
+                    "max_distance": 20.0,
+                    "mean": [255, 0, 0]
+                },
+                "kind": "Color",
+                "matched_rect": null,
+                "message": "color passed",
+                "passed": true,
+                "target": "home_button",
+                "template": null
+            },
+            "id": "home_button",
+            "passed": true,
+            "score": 1.0
+        }]))
+    );
+}
+
+#[test]
 fn matrix_has_fifteen_commands_with_success_and_failure_paths() {
     let mut commands = BTreeMap::<&str, Vec<ExpectedKind>>::new();
     for case in CASES {
@@ -353,22 +421,23 @@ fn os_error_normalizer_leaves_non_matching_text_unchanged() {
 fn capture_cases() -> Vec<GoldenCase> {
     CASES
         .iter()
-        .map(|case| {
-            let fixture = Fixture::new(case.name);
-            fixture.prepare(case.preparation);
-            let output = fixture.run(&fixture.args(case.name));
-            assert_protocol_channels(case, &output);
-            let mut envelope = parse_single_envelope(&output.stdout, case.name);
-            assert_expected_kind(case, &output, &envelope);
-            normalize_value(&mut envelope, fixture.root(), None);
-            GoldenCase {
-                name: case.name.to_string(),
-                command: case.command.to_string(),
-                exit_code: output.status.code().unwrap_or(-1),
-                envelope: canonicalize(envelope),
-            }
-        })
+        .map(|case| capture_case(case, Fixture::new(case.name)))
         .collect()
+}
+
+fn capture_case(case: &CaseSpec, fixture: Fixture) -> GoldenCase {
+    fixture.prepare(case.preparation);
+    let output = fixture.run(&fixture.args(case.name));
+    assert_protocol_channels(case, &output);
+    let mut envelope = parse_single_envelope(&output.stdout, case.name);
+    assert_expected_kind(case, &output, &envelope);
+    normalize_value(&mut envelope, fixture.root(), None);
+    GoldenCase {
+        name: case.name.to_string(),
+        command: case.command.to_string(),
+        exit_code: output.status.code().unwrap_or(-1),
+        envelope: canonicalize(envelope),
+    }
 }
 
 fn assert_expected_kind(case: &CaseSpec, output: &Output, envelope: &Value) {
@@ -735,6 +804,15 @@ struct Fixture {
 impl Fixture {
     fn new(case: &str) -> Self {
         let temp = TempDir::new().expect("temp");
+        Self::with_temp(case, temp)
+    }
+
+    fn new_in(case: &str, parent: &Path) -> Self {
+        let temp = TempDir::new_in(parent).expect("temp in projection root");
+        Self::with_temp(case, temp)
+    }
+
+    fn with_temp(case: &str, temp: TempDir) -> Self {
         let root = temp.path();
         let resource_root = root.join("resources");
         let package_repo = root.join("package-repo");
@@ -1026,9 +1104,9 @@ impl Fixture {
                     os("--targets"),
                     os("home_button"),
                     os("--with-frame"),
-                    self.root().join("observe.png").into_os_string(),
+                    os("observe.png"),
                 ]);
-                scene(&mut args, &self.red_scene);
+                args.extend([os("--scene"), os("red.png")]);
             }
             "observe_failure" => {
                 args.push(os("observe"));

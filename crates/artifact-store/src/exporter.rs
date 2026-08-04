@@ -3,15 +3,17 @@
 use crate::{
     ArtifactEventSink, ArtifactStore, ArtifactStoreError, ArtifactStoreResult,
     ArtifactWriteContext, ArtifactWriteRequest, CapturePipelineCounts, CapturePipelineSummary,
-    ScreenshotNameAllocator, StoredArtifact, canonical_sha256,
+    ScreenshotNameAllocator, StoredArtifact, canonical_sha256, capture_summary_record,
+    validate_capture_pipeline_summary,
 };
 use actingcommand_contract::{
     ArtifactIssuePolicy, ArtifactKind, ArtifactPayloadDraft, ArtifactProducer,
-    ArtifactRedactionState, ArtifactReference, AuditInput, CorrelationId, DiagnosticCode,
-    EventActor, EventDraft, EventOrigin, EventSeverity, EventSource, EventType,
-    EvidenceCompleteness, IdentifierIssuer, OriginModule, PinnedFrameReason,
-    ProjectedArtifactReference, ProjectedEvent, ProjectionProfile, RetentionClass, RunId,
-    TaskOutcome,
+    ArtifactRedactionState, ArtifactReference, AuditInput, CapturePayload,
+    CapturePersistedEvidence, CapturePinnedEvidence, CaptureSummaryRecord, CorrelationId,
+    DiagnosticCode, EventActor, EventDraft, EventOrigin, EventPayload, EventSeverity, EventSource,
+    EventType, EvidenceCompleteness, IdentifierIssuer, OriginModule, PinnedFrameReason,
+    ProjectedArtifactReference, ProjectedEvent, ProjectionPayload, ProjectionProfile,
+    RetentionClass, RunId, TaskOutcome,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
@@ -23,7 +25,7 @@ use zip::write::FileOptions;
 use zip::{CompressionMethod, ZipArchive, ZipWriter};
 
 const EVIDENCE_MANIFEST_PATH: &str = "evidence/manifest.json";
-const EVIDENCE_SCHEMA_VERSION: &str = "actingcommand.evidence.v1";
+const EVIDENCE_SCHEMA_VERSION: &str = "actingcommand.evidence.v2";
 const TEMP_PATH_ATTEMPTS: u64 = 1_024;
 
 static NEXT_EXPORT_TEMP: AtomicU64 = AtomicU64::new(1);
@@ -164,6 +166,7 @@ pub struct EvidenceExportRequest {
     pub output_path: PathBuf,
     pub identity: EvidenceExportIdentity,
     pub events: Vec<ProjectedEvent>,
+    pub source_capture_summary_sequence: u64,
     pub pipeline: CapturePipelineSummary,
     pub documents: EvidenceExportDocuments,
     pub archive_context: ArtifactWriteContext,
@@ -210,8 +213,19 @@ pub struct EvidenceScreenshot {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct MissingPinnedFrame {
-    pub frame_index: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub frame_index: Option<usize>,
     pub reason: PinnedFrameReason,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct EvidencePinnedFrame {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub frame_index: Option<usize>,
+    pub reason: PinnedFrameReason,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub artifact: Option<ProjectedArtifactReference>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -223,6 +237,7 @@ pub struct EvidenceManifest {
     pub package: EvidencePackage,
     pub ledger_sequence_start: u64,
     pub ledger_sequence_end: u64,
+    pub source_capture_summary_sequence: u64,
     pub task_outcome: TaskOutcome,
     pub evidence_completeness: EvidenceCompleteness,
     pub terminal_receipt: ProjectedEvent,
@@ -231,6 +246,7 @@ pub struct EvidenceManifest {
     pub screenshot_counts: EvidenceScreenshotCounts,
     pub pinned_count: u64,
     pub pinned_reason_counts: BTreeMap<PinnedFrameReason, u64>,
+    pub pinned: Vec<EvidencePinnedFrame>,
     pub missing_pinned: Vec<MissingPinnedFrame>,
     pub projection_profile: ProjectionProfile,
     pub retention_class: RetentionClass,
@@ -549,6 +565,16 @@ impl EvidenceExporter {
                 )
             })?);
         let (pinned_reason_counts, missing_pinned) = pinned_accounting(&request.pipeline);
+        let pinned = request
+            .pipeline
+            .pinned
+            .iter()
+            .map(|pin| EvidencePinnedFrame {
+                frame_index: pin.frame_index,
+                reason: pin.reason,
+                artifact: pin.artifact.as_ref().map(|artifact| artifact.project(true)),
+            })
+            .collect();
         let normalized_output_path = output_path.to_str().ok_or_else(|| {
             ArtifactStoreError::fatal(
                 "evidence_output_invalid",
@@ -588,6 +614,7 @@ impl EvidenceExporter {
                 package: request.identity.package.clone(),
                 ledger_sequence_start,
                 ledger_sequence_end,
+                source_capture_summary_sequence: request.source_capture_summary_sequence,
                 task_outcome: request.identity.task_outcome,
                 evidence_completeness: request.pipeline.evidence_completeness,
                 terminal_receipt: request.identity.terminal_receipt.clone(),
@@ -602,6 +629,7 @@ impl EvidenceExporter {
                     )
                 })?,
                 pinned_reason_counts,
+                pinned,
                 missing_pinned,
                 projection_profile: request.identity.projection_profile,
                 retention_class: request.identity.retention_class,
@@ -669,7 +697,73 @@ fn validate_request(request: &EvidenceExportRequest) -> ArtifactStoreResult<()> 
         &request.identity.terminal_receipt,
         request.identity.task_outcome,
     )?;
-    validate_pipeline_summary(&request.pipeline)
+    validate_pipeline_summary(&request.pipeline)?;
+    validate_authoritative_capture_summary(request)
+}
+
+fn validate_authoritative_capture_summary(
+    request: &EvidenceExportRequest,
+) -> ArtifactStoreResult<()> {
+    let summaries = request
+        .events
+        .iter()
+        .filter(|event| event.event_type == EventType::CaptureSummaryCommitted)
+        .collect::<Vec<_>>();
+    let [event] = summaries.as_slice() else {
+        return Err(ArtifactStoreError::fatal(
+            if summaries.is_empty() {
+                "evidence_capture_summary_missing"
+            } else {
+                "evidence_capture_summary_duplicate"
+            },
+            "validate_evidence_capture_summary",
+            "evidence export requires exactly one authoritative capture summary",
+        ));
+    };
+    if event.sequence != request.source_capture_summary_sequence
+        || event.sequence >= request.identity.terminal_receipt.sequence
+    {
+        return Err(ArtifactStoreError::fatal(
+            "evidence_capture_summary_not_ready",
+            "validate_evidence_capture_summary",
+            "capture summary sequence is not covered before the terminal receipt",
+        ));
+    }
+    if event.links.run_id() != Some(&request.identity.run_id)
+        || event.links.correlation_id() != Some(&request.identity.correlation_id)
+        || event.origin.source() != EventSource::Runtime
+        || event.origin.module() != OriginModule::CapturePipeline
+        || event.origin.actor() != EventActor::Runtime
+    {
+        return Err(ArtifactStoreError::fatal(
+            "evidence_capture_summary_conflict",
+            "validate_evidence_capture_summary",
+            "capture summary links do not match the export identity",
+        ));
+    }
+    let ProjectionPayload::Full(payload) = &event.payload else {
+        return Err(ArtifactStoreError::fatal(
+            "evidence_capture_summary_invalid",
+            "validate_evidence_capture_summary",
+            "capture summary requires a forensic full projection",
+        ));
+    };
+    let EventPayload::Capture(CapturePayload::SummaryCommitted(payload)) = payload.as_ref() else {
+        return Err(ArtifactStoreError::fatal(
+            "evidence_capture_summary_invalid",
+            "validate_evidence_capture_summary",
+            "capture summary event has an incompatible payload",
+        ));
+    };
+    let expected = capture_summary_record(&request.pipeline)?;
+    if payload.summary() != &expected {
+        return Err(ArtifactStoreError::fatal(
+            "evidence_capture_summary_conflict",
+            "validate_evidence_capture_summary",
+            "capture summary payload does not match the supplied pipeline summary",
+        ));
+    }
+    Ok(())
 }
 
 fn validate_projected_events(
@@ -724,150 +818,7 @@ fn validate_projected_events(
 }
 
 fn validate_pipeline_summary(summary: &CapturePipelineSummary) -> ArtifactStoreResult<()> {
-    let persisted = u64::try_from(summary.frames.len()).map_err(|_| {
-        ArtifactStoreError::fatal(
-            "evidence_count_overflow",
-            "validate_capture_summary",
-            "persisted frame count exceeds u64",
-        )
-    })?;
-    if persisted != summary.counts.persisted {
-        return Err(ArtifactStoreError::fatal(
-            "evidence_count_mismatch",
-            "validate_capture_summary",
-            "persisted screenshot count does not match frame evidence",
-        ));
-    }
-    let mut frame_indexes = BTreeSet::new();
-    let mut artifact_ids = BTreeSet::new();
-    let mut object_keys = BTreeSet::new();
-    for frame in &summary.frames {
-        if !frame_indexes.insert(frame.frame_index)
-            || !artifact_ids.insert(*frame.artifact.artifact_id())
-            || !object_keys.insert(frame.artifact.object_key())
-        {
-            return Err(ArtifactStoreError::fatal(
-                "evidence_frame_duplicate",
-                "validate_capture_summary",
-                "persisted frame indexes and artifact identities must be unique",
-            ));
-        }
-    }
-    let (reason_counts, missing) = pinned_accounting(summary);
-    let missing_count = u64::try_from(missing.len()).map_err(|_| {
-        ArtifactStoreError::fatal(
-            "evidence_count_overflow",
-            "validate_capture_summary",
-            "missing pinned frame count exceeds u64",
-        )
-    })?;
-    let accounted = summary
-        .counts
-        .persisted
-        .checked_add(summary.counts.deduplicated)
-        .and_then(|count| count.checked_add(missing_count))
-        .ok_or_else(|| {
-            ArtifactStoreError::fatal(
-                "evidence_count_overflow",
-                "validate_capture_summary",
-                "capture accounting exceeds u64",
-            )
-        })?;
-    if summary.counts.captured != accounted {
-        return Err(ArtifactStoreError::fatal(
-            "evidence_count_mismatch",
-            "validate_capture_summary",
-            "captured count must equal persisted, deduplicated, and missing pinned frames",
-        ));
-    }
-    let expected = if !missing.is_empty() {
-        EvidenceCompleteness::Failed
-    } else if summary.counts.dropped > 0 {
-        EvidenceCompleteness::Partial
-    } else {
-        EvidenceCompleteness::Complete
-    };
-    if summary.evidence_completeness != expected {
-        return Err(ArtifactStoreError::fatal(
-            "evidence_completeness_mismatch",
-            "validate_capture_summary",
-            "evidence completeness does not match pinned and pressure-loss facts",
-        ));
-    }
-    let declared_pinned = u64::try_from(summary.pinned.len()).map_err(|_| {
-        ArtifactStoreError::fatal(
-            "evidence_count_overflow",
-            "validate_capture_summary",
-            "pinned frame count exceeds u64",
-        )
-    })?;
-    if reason_counts.values().copied().sum::<u64>() != declared_pinned {
-        return Err(ArtifactStoreError::fatal(
-            "evidence_pinned_mismatch",
-            "validate_capture_summary",
-            "pinned reason distribution is inconsistent",
-        ));
-    }
-    let mut pinned_indexes = BTreeSet::new();
-    for pinned in &summary.pinned {
-        if !pinned_indexes.insert(pinned.frame_index) {
-            return Err(ArtifactStoreError::fatal(
-                "evidence_pinned_mismatch",
-                "validate_capture_summary",
-                "pinned frame indexes must be unique",
-            ));
-        }
-        match &pinned.artifact {
-            Some(artifact) => {
-                let Some(frame) = summary
-                    .frames
-                    .iter()
-                    .find(|frame| frame.frame_index == pinned.frame_index)
-                else {
-                    return Err(ArtifactStoreError::fatal(
-                        "evidence_pinned_mismatch",
-                        "validate_capture_summary",
-                        "pinned artifact is absent from persisted frame evidence",
-                    ));
-                };
-                if frame.pinned_reason != Some(pinned.reason)
-                    || frame.artifact.artifact_id() != artifact.artifact_id()
-                {
-                    return Err(ArtifactStoreError::fatal(
-                        "evidence_pinned_mismatch",
-                        "validate_capture_summary",
-                        "pinned artifact metadata is inconsistent",
-                    ));
-                }
-            }
-            None if !missing.iter().any(|missing| {
-                missing.frame_index == pinned.frame_index && missing.reason == pinned.reason
-            }) =>
-            {
-                return Err(ArtifactStoreError::fatal(
-                    "evidence_pinned_mismatch",
-                    "validate_capture_summary",
-                    "missing pinned frame was not accounted",
-                ));
-            }
-            None => {}
-        }
-    }
-    for frame in &summary.frames {
-        if let Some(reason) = frame.pinned_reason
-            && !summary
-                .pinned
-                .iter()
-                .any(|pinned| pinned.frame_index == frame.frame_index && pinned.reason == reason)
-        {
-            return Err(ArtifactStoreError::fatal(
-                "evidence_pinned_mismatch",
-                "validate_capture_summary",
-                "persisted pinned frame is absent from pinned accounting",
-            ));
-        }
-    }
-    Ok(())
+    validate_capture_pipeline_summary(summary)
 }
 
 fn pinned_accounting(
@@ -884,7 +835,7 @@ fn pinned_accounting(
             });
         }
     }
-    missing.sort_by_key(|frame| frame.frame_index);
+    missing.sort_by_key(|frame| (frame.frame_index, frame.reason));
     (counts, missing)
 }
 
@@ -1221,6 +1172,9 @@ fn validate_manifest(
     if manifest.schema_version != EVIDENCE_SCHEMA_VERSION
         || manifest.ledger_sequence_start == 0
         || manifest.ledger_sequence_end < manifest.ledger_sequence_start
+        || manifest.source_capture_summary_sequence < manifest.ledger_sequence_start
+        || manifest.source_capture_summary_sequence >= manifest.terminal_receipt.sequence
+        || manifest.source_capture_summary_sequence > manifest.ledger_sequence_end
         || manifest.terminal_receipt.sequence < manifest.ledger_sequence_start
         || manifest.terminal_receipt.sequence > manifest.ledger_sequence_end
         || manifest.terminal_receipt.event_type != terminal_event_type(manifest.task_outcome)
@@ -1270,6 +1224,46 @@ fn validate_manifest(
             "manifest ledger bounds do not match archived projected events",
         ));
     }
+    let summary = manifest_capture_summary(manifest)?;
+    let summary_events = events
+        .iter()
+        .filter(|event| event.event_type == EventType::CaptureSummaryCommitted)
+        .collect::<Vec<_>>();
+    let [summary_event] = summary_events.as_slice() else {
+        return Err(ArtifactStoreError::fatal(
+            "evidence_capture_summary_invalid",
+            "verify_evidence_manifest",
+            "archive must contain exactly one authoritative capture summary",
+        ));
+    };
+    let ProjectionPayload::Full(payload) = &summary_event.payload else {
+        return Err(ArtifactStoreError::fatal(
+            "evidence_capture_summary_invalid",
+            "verify_evidence_manifest",
+            "archived capture summary is not a forensic full projection",
+        ));
+    };
+    let EventPayload::Capture(CapturePayload::SummaryCommitted(payload)) = payload.as_ref() else {
+        return Err(ArtifactStoreError::fatal(
+            "evidence_capture_summary_invalid",
+            "verify_evidence_manifest",
+            "archived capture summary payload is incompatible",
+        ));
+    };
+    if summary_event.sequence != manifest.source_capture_summary_sequence
+        || summary_event.links.run_id() != Some(&manifest.run_id)
+        || summary_event.links.correlation_id() != Some(&manifest.correlation_id)
+        || summary_event.origin.source() != EventSource::Runtime
+        || summary_event.origin.module() != OriginModule::CapturePipeline
+        || summary_event.origin.actor() != EventActor::Runtime
+        || payload.summary() != &summary
+    {
+        return Err(ArtifactStoreError::fatal(
+            "evidence_capture_summary_conflict",
+            "verify_evidence_manifest",
+            "manifest capture summary does not match the archived ledger fact",
+        ));
+    }
     let artifact_count = u64::try_from(manifest.screenshots.len()).map_err(|_| {
         ArtifactStoreError::fatal(
             "evidence_count_overflow",
@@ -1277,54 +1271,22 @@ fn validate_manifest(
             "evidence screenshot count exceeds u64",
         )
     })?;
+    let pinned_count = u64::try_from(manifest.pinned.len()).map_err(|_| {
+        ArtifactStoreError::fatal(
+            "evidence_count_overflow",
+            "verify_evidence_manifest",
+            "evidence pinned count exceeds u64",
+        )
+    })?;
     if manifest.artifact_count != artifact_count
         || manifest.screenshot_counts.persisted != artifact_count
+        || manifest.pinned_count != pinned_count
         || manifest.pinned_count != manifest.pinned_reason_counts.values().copied().sum::<u64>()
     {
         return Err(ArtifactStoreError::fatal(
             "evidence_count_mismatch",
             "verify_evidence_manifest",
             "manifest artifact, screenshot, or pinned counts are inconsistent",
-        ));
-    }
-    let missing_count = u64::try_from(manifest.missing_pinned.len()).map_err(|_| {
-        ArtifactStoreError::fatal(
-            "evidence_count_overflow",
-            "verify_evidence_manifest",
-            "missing pinned frame count exceeds u64",
-        )
-    })?;
-    let accounted = manifest
-        .screenshot_counts
-        .persisted
-        .checked_add(manifest.screenshot_counts.deduplicated)
-        .and_then(|count| count.checked_add(missing_count))
-        .ok_or_else(|| {
-            ArtifactStoreError::fatal(
-                "evidence_count_overflow",
-                "verify_evidence_manifest",
-                "manifest capture accounting exceeds u64",
-            )
-        })?;
-    if manifest.screenshot_counts.captured != accounted {
-        return Err(ArtifactStoreError::fatal(
-            "evidence_count_mismatch",
-            "verify_evidence_manifest",
-            "manifest captured count does not match persisted, deduplicated, and missing frames",
-        ));
-    }
-    let expected_completeness = if !manifest.missing_pinned.is_empty() {
-        EvidenceCompleteness::Failed
-    } else if manifest.screenshot_counts.dropped > 0 {
-        EvidenceCompleteness::Partial
-    } else {
-        EvidenceCompleteness::Complete
-    };
-    if manifest.evidence_completeness != expected_completeness {
-        return Err(ArtifactStoreError::fatal(
-            "evidence_completeness_mismatch",
-            "verify_evidence_manifest",
-            "manifest evidence completeness is inconsistent",
         ));
     }
 
@@ -1385,7 +1347,6 @@ fn validate_manifest(
     let mut screenshot_frames = BTreeSet::new();
     let mut screenshot_artifacts = BTreeSet::new();
     let mut screenshot_paths = BTreeSet::new();
-    let mut actual_pinned_reasons = BTreeMap::new();
     for screenshot in &manifest.screenshots {
         if !screenshot_frames.insert(screenshot.frame_index)
             || !screenshot_artifacts.insert(screenshot.artifact.artifact_id)
@@ -1422,31 +1383,141 @@ fn validate_manifest(
                 "screenshot artifact metadata does not match archived bytes",
             ));
         }
-        if let Some(reason) = screenshot.pinned_reason {
-            *actual_pinned_reasons.entry(reason).or_insert(0) += 1;
-        }
-    }
-    let mut missing_frames = BTreeSet::new();
-    for missing in &manifest.missing_pinned {
-        if !missing_frames.insert(missing.frame_index)
-            || screenshot_frames.contains(&missing.frame_index)
-        {
+        let expected_legacy_reason = manifest
+            .pinned
+            .iter()
+            .find(|pin| pin.frame_index == Some(screenshot.frame_index) && pin.artifact.is_some())
+            .map(|pin| pin.reason);
+        if screenshot.pinned_reason != expected_legacy_reason {
             return Err(ArtifactStoreError::fatal(
                 "evidence_pinned_mismatch",
                 "verify_evidence_manifest",
-                "missing pinned frame identities must be unique and absent from screenshots",
+                "legacy screenshot pin projection differs from the authoritative pin mapping",
             ));
         }
-        *actual_pinned_reasons.entry(missing.reason).or_insert(0) += 1;
     }
-    if actual_pinned_reasons != manifest.pinned_reason_counts {
+    let mut pin_pairs = BTreeSet::new();
+    let mut actual_pinned_reasons = BTreeMap::new();
+    let mut expected_missing = Vec::new();
+    for pin in &manifest.pinned {
+        if !pin_pairs.insert((pin.frame_index, pin.reason)) {
+            return Err(ArtifactStoreError::fatal(
+                "evidence_pinned_mismatch",
+                "verify_evidence_manifest",
+                "authoritative pinned frame/reason pairs must be unique",
+            ));
+        }
+        *actual_pinned_reasons.entry(pin.reason).or_insert(0) += 1;
+        match (&pin.frame_index, &pin.artifact) {
+            (Some(frame_index), Some(artifact)) => {
+                let screenshot = manifest
+                    .screenshots
+                    .iter()
+                    .find(|screenshot| screenshot.frame_index == *frame_index)
+                    .ok_or_else(|| {
+                        ArtifactStoreError::fatal(
+                            "evidence_pinned_mismatch",
+                            "verify_evidence_manifest",
+                            "pinned artifact is absent from screenshots",
+                        )
+                    })?;
+                if &screenshot.artifact != artifact {
+                    return Err(ArtifactStoreError::fatal(
+                        "evidence_pinned_mismatch",
+                        "verify_evidence_manifest",
+                        "pinned artifact does not match the persisted screenshot",
+                    ));
+                }
+            }
+            (_, None) => expected_missing.push(MissingPinnedFrame {
+                frame_index: pin.frame_index,
+                reason: pin.reason,
+            }),
+            (None, Some(_)) => {
+                return Err(ArtifactStoreError::fatal(
+                    "evidence_pinned_mismatch",
+                    "verify_evidence_manifest",
+                    "pinned artifact is missing its frame index",
+                ));
+            }
+        }
+    }
+    expected_missing.sort_by_key(|missing| (missing.frame_index, missing.reason));
+    if actual_pinned_reasons != manifest.pinned_reason_counts
+        || expected_missing != manifest.missing_pinned
+    {
         return Err(ArtifactStoreError::fatal(
             "evidence_pinned_mismatch",
             "verify_evidence_manifest",
-            "pinned reason distribution does not match screenshot and missing-frame evidence",
+            "pinned reason or missing-frame accounting is inconsistent",
         ));
     }
     Ok(())
+}
+
+fn manifest_capture_summary(
+    manifest: &EvidenceManifest,
+) -> ArtifactStoreResult<CaptureSummaryRecord> {
+    let frames = manifest
+        .screenshots
+        .iter()
+        .map(|screenshot| {
+            let frame_index = u64::try_from(screenshot.frame_index).map_err(|_| {
+                ArtifactStoreError::fatal(
+                    "evidence_count_overflow",
+                    "verify_evidence_manifest",
+                    "screenshot frame index exceeds u64",
+                )
+            })?;
+            CapturePersistedEvidence::new(frame_index, screenshot.artifact.clone()).map_err(
+                |error| {
+                    ArtifactStoreError::fatal(
+                        error.code(),
+                        "verify_evidence_manifest",
+                        error.to_string(),
+                    )
+                },
+            )
+        })
+        .collect::<ArtifactStoreResult<Vec<_>>>()?;
+    let pinned = manifest
+        .pinned
+        .iter()
+        .map(|pin| {
+            let frame_index = pin
+                .frame_index
+                .map(u64::try_from)
+                .transpose()
+                .map_err(|_| {
+                    ArtifactStoreError::fatal(
+                        "evidence_count_overflow",
+                        "verify_evidence_manifest",
+                        "pinned frame index exceeds u64",
+                    )
+                })?;
+            CapturePinnedEvidence::new(frame_index, pin.reason, pin.artifact.clone()).map_err(
+                |error| {
+                    ArtifactStoreError::fatal(
+                        error.code(),
+                        "verify_evidence_manifest",
+                        error.to_string(),
+                    )
+                },
+            )
+        })
+        .collect::<ArtifactStoreResult<Vec<_>>>()?;
+    CaptureSummaryRecord::new(
+        manifest.screenshot_counts.captured,
+        manifest.screenshot_counts.deduplicated,
+        manifest.screenshot_counts.dropped,
+        manifest.screenshot_counts.persisted,
+        manifest.evidence_completeness,
+        frames,
+        pinned,
+    )
+    .map_err(|error| {
+        ArtifactStoreError::fatal(error.code(), "verify_evidence_manifest", error.to_string())
+    })
 }
 
 fn validate_archive_path(path: &str) -> ArtifactStoreResult<()> {
@@ -1532,9 +1603,9 @@ mod tests {
     use super::*;
     use crate::{PersistedFrameEvidence, PinnedFrameEvidence};
     use actingcommand_contract::{
-        ArtifactLinksDraft, EffectDisposition, EventAction, EventLinksDraft, EventPayloadDraft,
-        IssuedCorrelationId, IssuedFrameId, IssuedRunId, ProjectionPayload, SanitizationError,
-        SecretField, SecretFingerprinter, Sha256Fingerprint, TaskPayloadDraft,
+        ArtifactLinksDraft, CapturePayloadDraft, EffectDisposition, EventAction, EventLinksDraft,
+        EventPayloadDraft, IssuedCorrelationId, IssuedFrameId, IssuedRunId, ProjectionPayload,
+        SanitizationError, SecretField, SecretFingerprinter, Sha256Fingerprint, TaskPayloadDraft,
     };
     use serde::Serialize;
 
@@ -1693,6 +1764,7 @@ mod tests {
             &mut partial_sink,
         );
         let mut partial_summary = complete_summary(vec![(1, frame)], None);
+        partial_summary.counts.captured = 4;
         partial_summary.counts.dropped = 3;
         partial_summary.evidence_completeness = EvidenceCompleteness::Partial;
         let partial_request = export_request(
@@ -1724,7 +1796,7 @@ mod tests {
             },
             evidence_completeness: EvidenceCompleteness::Failed,
             pinned: vec![PinnedFrameEvidence {
-                frame_index: 7,
+                frame_index: Some(7),
                 reason: PinnedFrameReason::Terminal,
                 artifact: None,
             }],
@@ -1747,6 +1819,89 @@ mod tests {
         );
         assert_eq!(failed.manifest().missing_pinned.len(), 1);
         assert_eq!(failed.manifest().artifact_count, 0);
+    }
+
+    #[test]
+    fn authoritative_capture_summary_failures_publish_no_archive_or_completion() {
+        for (case, expected_code) in [
+            ("missing", "evidence_capture_summary_missing"),
+            ("duplicate", "evidence_capture_summary_duplicate"),
+            ("not-ready", "evidence_capture_summary_not_ready"),
+            ("conflict", "evidence_capture_summary_conflict"),
+            ("invalid", "evidence_capture_summary_invalid"),
+        ] {
+            let temp = tempfile::tempdir().expect("tempdir");
+            let mut sink = RecordingSink::default();
+            let identity = test_identity();
+            let artifact_root = temp.path().join("artifacts");
+            let frame = store_frame(
+                &artifact_root,
+                identity,
+                1,
+                1_752_147_200_123,
+                case.as_bytes(),
+                &mut sink,
+            );
+            let output = temp.path().join(format!("{case}.zip"));
+            let mut request = export_request(
+                output.clone(),
+                identity,
+                TaskOutcome::Success,
+                complete_summary(vec![(1, frame)], None),
+            );
+            match case {
+                "missing" => {
+                    request
+                        .events
+                        .retain(|event| event.event_type != EventType::CaptureSummaryCommitted);
+                }
+                "duplicate" => {
+                    let mut duplicate = request.events[0].clone();
+                    duplicate.sequence = 2;
+                    request.events[1].sequence = 3;
+                    request.identity.terminal_receipt = request.events[1].clone();
+                    request.events.insert(1, duplicate);
+                }
+                "not-ready" => request.source_capture_summary_sequence = 2,
+                "conflict" => {
+                    let artifact = request.pipeline.frames[0].artifact.clone();
+                    request.pipeline = complete_summary(
+                        vec![(1, artifact)],
+                        Some((1, PinnedFrameReason::Terminal)),
+                    );
+                }
+                "invalid" => request.events[0].payload = ProjectionPayload::Omitted,
+                _ => unreachable!(),
+            }
+            let files_before = all_files(&artifact_root)
+                .into_iter()
+                .collect::<BTreeSet<_>>();
+            let mut exporter = EvidenceExporter::open(&artifact_root).expect("exporter");
+
+            let error = exporter
+                .export(request, &mut sink)
+                .expect_err(&format!("{case}: invalid summary cannot export"));
+
+            assert_eq!(error.code(), expected_code, "{case}");
+            assert!(!output.exists(), "{case}: no evidence ZIP");
+            assert_eq!(
+                all_files(&artifact_root)
+                    .into_iter()
+                    .collect::<BTreeSet<_>>(),
+                files_before,
+                "{case}: no archive object"
+            );
+            assert!(
+                !sink
+                    .event_types
+                    .contains(&EventType::ArtifactExportCompleted),
+                "{case}: no completed export event"
+            );
+            assert!(
+                sink.event_types.contains(&EventType::ArtifactExportFailed),
+                "{case}: typed export failure"
+            );
+        }
     }
 
     #[test]
@@ -2017,7 +2172,7 @@ mod tests {
             .collect::<Vec<_>>();
         let pinned = pinned
             .map(|(frame_index, reason)| PinnedFrameEvidence {
-                frame_index,
+                frame_index: Some(frame_index),
                 reason,
                 artifact: frames
                     .iter()
@@ -2050,7 +2205,8 @@ mod tests {
             status: &'a str,
         }
 
-        let terminal = projected_terminal(identity, outcome, 1);
+        let summary = projected_capture_summary(identity, &pipeline, 1);
+        let terminal = projected_terminal(identity, outcome, 2);
         EvidenceExportRequest {
             output_path,
             identity: EvidenceExportIdentity {
@@ -2068,7 +2224,8 @@ mod tests {
                 retention_class: RetentionClass::DebugFull,
                 archive_redaction_state: ArtifactRedactionState::NotRequired,
             },
-            events: vec![terminal],
+            events: vec![summary, terminal],
+            source_capture_summary_sequence: 1,
             pipeline,
             documents: EvidenceExportDocuments::new(
                 EvidenceJsonDocument::from_serializable(&Document { status: "result" })
@@ -2081,6 +2238,45 @@ mod tests {
             )
             .expect("documents"),
             archive_context: context(identity, None, 1_752_147_201_000),
+        }
+    }
+
+    fn projected_capture_summary(
+        identity: TestIdentity,
+        pipeline: &CapturePipelineSummary,
+        sequence: u64,
+    ) -> ProjectedEvent {
+        let identifiers = IdentifierIssuer::new().expect("identifiers");
+        let record = capture_summary_record(pipeline).expect("capture summary record");
+        let sanitized = EventDraft::new(
+            identifiers.mint_event_id().expect("event"),
+            1_752_147_200_800,
+            EventSeverity::Info,
+            EventOrigin::new(
+                EventSource::Runtime,
+                OriginModule::CapturePipeline,
+                EventActor::Runtime,
+            ),
+            EventLinksDraft::default()
+                .with_run_id(identity.run)
+                .with_correlation_id(identity.correlation),
+            CapturePayloadDraft::summary_committed(record, AuditInput::new()).into(),
+        )
+        .sanitize(&TestFingerprinter)
+        .expect("sanitize capture summary");
+        ProjectedEvent {
+            schema_version: sanitized.schema_version().to_string(),
+            sequence,
+            event_id: *sanitized.event_id(),
+            timestamp_unix_ms: sanitized.timestamp_unix_ms(),
+            event_type: sanitized.event_type(),
+            severity: sanitized.severity(),
+            sensitivity: sanitized.sensitivity(),
+            origin: sanitized.origin().clone(),
+            links: sanitized.links().clone(),
+            payload_schema: sanitized.payload_schema().to_string(),
+            payload: ProjectionPayload::Full(Box::new(sanitized.payload().clone())),
+            artifacts: Vec::new(),
         }
     }
 

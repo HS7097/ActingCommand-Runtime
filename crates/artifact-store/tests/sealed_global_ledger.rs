@@ -5,15 +5,16 @@ use actingcommand_artifact_store::{
     CapturePipeline, CapturePipelineConfig, CapturePipelineSummary, EvidenceExportDocuments,
     EvidenceExportIdentity, EvidenceExportRequest, EvidenceExporter, EvidenceJsonDocument,
     EvidencePackage, FrameStoreConfig, FrameStoreFrameInput, MemorySample, MemorySampleSource,
-    PackageVerification, RecognitionState, verify_evidence_archive,
+    PackageVerification, RecognitionState, capture_summary_record, verify_evidence_archive,
 };
 use actingcommand_contract::{
-    ArtifactKind, ArtifactLinksDraft, ArtifactRedactionState, AuditInput, CapturePolicyReason,
-    DiagnosticCode, EffectDisposition, EventAction, EventActor, EventDraft, EventLinksDraft,
-    EventOrigin, EventQuery, EventSeverity, EventSource, EventType, EvidenceCompleteness,
-    IdentifierIssuer, IssuedCorrelationId, IssuedFrameId, IssuedRunId, OriginModule,
-    PinnedFrameReason, ProjectedEvent, ProjectionProfile, RetentionClass, SanitizationError,
-    SecretField, SecretFingerprinter, Sha256Fingerprint, TaskOutcome, TaskPayloadDraft,
+    ArtifactKind, ArtifactLinksDraft, ArtifactRedactionState, AuditInput, CapturePayloadDraft,
+    CapturePolicyReason, DiagnosticCode, EffectDisposition, EventAction, EventActor, EventDraft,
+    EventLinksDraft, EventOrigin, EventQuery, EventSeverity, EventSource, EventType,
+    EvidenceCompleteness, IdentifierIssuer, IssuedCorrelationId, IssuedFrameId, IssuedRunId,
+    OriginModule, PinnedFrameReason, ProjectedEvent, ProjectionProfile, RetentionClass,
+    SanitizationError, SecretField, SecretFingerprinter, Sha256Fingerprint, TaskOutcome,
+    TaskPayloadDraft,
 };
 use actingcommand_device::{CaptureBackendName, Frame, PixelFormat};
 use actingcommand_ledger::{GlobalLedger, GlobalLedgerConfig};
@@ -93,6 +94,7 @@ fn sealed_pipeline_round_trips_through_real_global_ledger_and_verified_export() 
     let artifact_root = temp.path().join("artifacts");
     let mut sink = GlobalLedgerSink::new(&ledger);
     let summary = run_capture_pipeline(&artifact_root, temp.path(), identity, &mut sink);
+    append_capture_summary(&mut sink, identity, &summary);
     append_terminal(&mut sink, identity, TaskOutcome::Success);
     let pre_export_events = project_correlation(&ledger, identity);
     let terminal = terminal_event(&pre_export_events, TaskOutcome::Success);
@@ -194,6 +196,7 @@ fn required_global_ledger_failure_cannot_return_success_or_leave_archive() {
     let artifact_root = temp.path().join("artifacts");
     let mut sink = GlobalLedgerSink::new(&ledger);
     let summary = run_capture_pipeline(&artifact_root, temp.path(), identity, &mut sink);
+    append_capture_summary(&mut sink, identity, &summary);
     append_terminal(&mut sink, identity, TaskOutcome::Failure);
     let events = project_correlation(&ledger, identity);
     let terminal = terminal_event(&events, TaskOutcome::Failure);
@@ -249,6 +252,7 @@ fn corrupted_frame_artifact_cannot_publish_archive_and_is_ledger_visible() {
     let artifact_root = temp.path().join("artifacts");
     let mut sink = GlobalLedgerSink::new(&ledger);
     let summary = run_capture_pipeline(&artifact_root, temp.path(), identity, &mut sink);
+    append_capture_summary(&mut sink, identity, &summary);
     append_terminal(&mut sink, identity, TaskOutcome::Failure);
     let events = project_correlation(&ledger, identity);
     let terminal = terminal_event(&events, TaskOutcome::Failure);
@@ -454,6 +458,30 @@ fn append_terminal(
     .expect("append terminal");
 }
 
+fn append_capture_summary(
+    sink: &mut GlobalLedgerSink<'_>,
+    identity: SealedIdentity,
+    summary: &CapturePipelineSummary,
+) {
+    let identifiers = IdentifierIssuer::new().expect("identifiers");
+    let record = capture_summary_record(summary).expect("capture summary record");
+    sink.append(EventDraft::new(
+        identifiers.mint_event_id().expect("event"),
+        1_752_147_200_800,
+        EventSeverity::Info,
+        EventOrigin::new(
+            EventSource::Runtime,
+            OriginModule::CapturePipeline,
+            EventActor::Runtime,
+        ),
+        EventLinksDraft::default()
+            .with_run_id(identity.run)
+            .with_correlation_id(identity.correlation),
+        CapturePayloadDraft::summary_committed(record, AuditInput::new()).into(),
+    ))
+    .expect("append capture summary");
+}
+
 fn project_correlation(ledger: &GlobalLedger, identity: SealedIdentity) -> Vec<ProjectedEvent> {
     ledger
         .project(
@@ -523,6 +551,11 @@ fn export_request(
             retention_class: RetentionClass::DebugFull,
             archive_redaction_state: ArtifactRedactionState::NotRequired,
         },
+        source_capture_summary_sequence: events
+            .iter()
+            .find(|event| event.event_type == EventType::CaptureSummaryCommitted)
+            .expect("capture summary event")
+            .sequence,
         events,
         pipeline,
         documents: EvidenceExportDocuments::new(

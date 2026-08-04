@@ -136,6 +136,7 @@ closed_code!(EventAction {
     CapturePolicy => "capture.policy",
     CaptureDedup => "capture.dedup",
     CapturePressure => "capture.pressure",
+    CaptureSummaryCommit => "capture.summary_commit",
     RecognitionObserve => "recognition.observe",
     ArtifactStore => "artifact.store",
     ArtifactVerify => "artifact.verify",
