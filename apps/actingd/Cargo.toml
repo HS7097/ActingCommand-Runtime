@@ -14,6 +14,7 @@ actingcommand-device = { workspace = true }
 actingcommand-policy = { workspace = true }
 actingcommand-runtime-client = { workspace = true }
 actingcommand-runtime-host = { workspace = true }
+actingcommand-vision-ffi = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 

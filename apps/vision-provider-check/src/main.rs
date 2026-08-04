@@ -2,10 +2,10 @@
 
 use actingcommand_vision_ffi::{
     FastDeployPpocrArtifacts, FastDeployPpocrBackend, NnEngine, NnInferenceRequest, OcrEngine,
-    OcrInferenceRequest, OnnxRuntimeArtifacts, OnnxRuntimeBackend, VisionFfiError, VisionFfiResult,
-    VisionFrame, VisionPixelFormat, VisionProviderArtifactManifest, VisionRect,
-    validate_fastdeploy_ppocr_provider_abi, validate_onnxruntime_provider_abi,
-    validate_runtime_library_loadable,
+    OcrInferenceRequest, OnnxExecutionProvider, OnnxRuntimeArtifacts, OnnxRuntimeBackend,
+    VisionFfiError, VisionFfiResult, VisionFrame, VisionPixelFormat,
+    VisionProviderArtifactManifest, VisionRect, validate_fastdeploy_ppocr_provider_abi,
+    validate_onnxruntime_provider_abi, validate_runtime_library_loadable,
 };
 use image::ImageFormat;
 use serde::{Deserialize, Serialize};
@@ -531,7 +531,7 @@ fn run_ocr_smoke(
         ));
     };
     let manifest = VisionProviderArtifactManifest::load_json_file(&options.manifest)?;
-    let artifacts = manifest.require_fastdeploy_ppocr()?.clone();
+    let artifacts = manifest.require_production_fastdeploy_ppocr()?.clone();
     let mut backend = FastDeployPpocrBackend::from_artifacts(artifacts.clone())?;
     let (frame_report, vision_frame) = load_png_frame(frame)?;
     let region = match region {
@@ -568,14 +568,20 @@ fn run_nn_smoke(
         ));
     };
     let manifest = VisionProviderArtifactManifest::load_json_file(&options.manifest)?;
-    let artifacts = manifest.require_onnxruntime()?.clone();
+    let artifacts = manifest.require_production_onnxruntime()?.clone();
     let mut backend = OnnxRuntimeBackend::from_artifacts(artifacts.clone())?;
     let (frame_report, vision_frame) = load_png_frame(frame)?;
     let result = backend.classify(NnInferenceRequest {
         frame: vision_frame,
         model_id: model_id
             .clone()
-            .unwrap_or_else(|| path_string(&artifacts.model_path)),
+            .or_else(|| artifacts.model_ref.clone())
+            .ok_or_else(|| {
+                VisionFfiError::fatal(
+                    "vision-provider-check",
+                    "production NN artifacts are missing model_ref",
+                )
+            })?,
         labels: artifacts.labels,
         timeout_ms: artifacts.default_timeout_ms,
     })?;
@@ -1234,7 +1240,7 @@ fn fastdeploy_report(artifacts: &FastDeployPpocrArtifacts) -> BackendReport {
         configured: true,
         provider_library_path: Some(path_string(&artifacts.provider_library_path)),
         required_paths,
-        execution_provider: None,
+        execution_provider: artifacts.execution_provider.map(execution_provider_name),
     }
 }
 
@@ -1251,7 +1257,14 @@ fn onnxruntime_report(artifacts: &OnnxRuntimeArtifacts) -> BackendReport {
         configured: true,
         provider_library_path: Some(path_string(&artifacts.provider_library_path)),
         required_paths,
-        execution_provider: Some("cpu"),
+        execution_provider: Some(execution_provider_name(artifacts.execution_provider)),
+    }
+}
+
+fn execution_provider_name(provider: OnnxExecutionProvider) -> &'static str {
+    match provider {
+        OnnxExecutionProvider::Cpu => "cpu",
+        OnnxExecutionProvider::Cuda => "cuda",
     }
 }
 
@@ -2215,7 +2228,7 @@ mod tests {
 
     fn example_manifest_json() -> &'static str {
         r#"{
-            "schema_version": "actingcommand.vision_provider_artifacts.v0.1",
+            "schema_version": "actingcommand.vision_provider_artifacts.v0.2",
             "fastdeploy_ppocr": {
                 "provider_library_path": "external-tools/vision/fastdeploy/ac_fastdeploy_ppocr.dll",
                 "runtime_library_paths": [
@@ -2225,6 +2238,13 @@ mod tests {
                 "recognizer_model_path": "external-tools/vision/ppocr/rec/inference.pdmodel",
                 "dictionary_path": "external-tools/vision/ppocr/ppocr_keys_v1.txt",
                 "classifier_model_path": null,
+                "model_ref": "PP-OCRv6_medium",
+                "model_sha256": "6e10dbc428eeb72432e0ccd52904f924860cd2d6c56e1dfac937b85ac6e38bac",
+                "detector_model_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "recognizer_model_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+                "dictionary_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+                "classifier_model_sha256": null,
+                "execution_provider": "cuda",
                 "supported_languages": ["zh_cn", "en"],
                 "default_timeout_ms": 1000
             },
@@ -2232,6 +2252,8 @@ mod tests {
                 "provider_library_path": "external-tools/vision/onnxruntime/ac_onnxruntime.dll",
                 "runtime_library_path": "external-tools/vision/onnxruntime/onnxruntime.dll",
                 "model_path": "external-tools/vision/onnxruntime/models/page_classifier.onnx",
+                "model_ref": "page-classifier",
+                "model_sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
                 "labels": ["home", "unknown"],
                 "labels_path": null,
                 "execution_provider": "cpu",

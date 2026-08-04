@@ -43,6 +43,12 @@ impl ExecutionKernel {
             .ok_or_else(|| ExecutionKernelError::fatal("execution_instance_unknown"))
     }
 
+    pub fn vision_provider(
+        &self,
+    ) -> Option<Arc<dyn actingcommand_recognition_pack::VisionProvider>> {
+        self.provider.vision_provider()
+    }
+
     pub fn input(&self, instance_alias: &str, action: InputAction) -> ExecutionKernelResult<()> {
         self.session(instance_alias)?.input(action)
     }

@@ -9,7 +9,10 @@
 use ort::session::{RunOptions, Session};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Condvar, Mutex, OnceLock};
+use std::sync::{
+    Arc, Condvar, Mutex, OnceLock,
+    atomic::{AtomicBool, Ordering},
+};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
@@ -51,7 +54,7 @@ impl OrtRuntimeInitializer {
         let _guard = self
             .lock
             .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
+            .map_err(|_| "ONNXRuntime initializer mutex is poisoned".to_string())?;
         if let Some(existing) = self.library.get() {
             return ensure_same_runtime(existing, runtime_library);
         }
@@ -105,7 +108,7 @@ impl<T> SessionCache<T> {
         let mut sessions = self
             .sessions
             .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
+            .map_err(|_| "ONNXRuntime session cache mutex is poisoned".to_string())?;
         if let Some(session) = sessions.get(path) {
             return Ok(Arc::clone(session));
         }
@@ -135,6 +138,7 @@ impl InferenceTerminator for RunOptions {
 
 pub struct InferenceWatchdog {
     state: Arc<(Mutex<bool>, Condvar)>,
+    timed_out: Arc<AtomicBool>,
     handle: Option<JoinHandle<()>>,
 }
 
@@ -153,6 +157,8 @@ impl InferenceWatchdog {
     {
         let state = Arc::new((Mutex::new(false), Condvar::new()));
         let thread_state = Arc::clone(&state);
+        let timed_out = Arc::new(AtomicBool::new(false));
+        let thread_timed_out = Arc::clone(&timed_out);
         let handle = thread::spawn(move || {
             let (lock, condvar) = &*thread_state;
             let cancelled = lock.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
@@ -162,13 +168,19 @@ impl InferenceWatchdog {
             if *cancelled {
                 on_cancel();
             } else {
+                thread_timed_out.store(true, Ordering::Release);
                 target.terminate_inference();
             }
         });
         Self {
             state,
+            timed_out,
             handle: Some(handle),
         }
+    }
+
+    pub fn timed_out(&self) -> bool {
+        self.timed_out.load(Ordering::Acquire)
     }
 
     pub fn cancel(mut self) {
@@ -270,6 +282,23 @@ mod tests {
     }
 
     #[test]
+    fn session_cache_poison_fails_closed() {
+        let cache = Arc::new(SessionCache::<u32>::new());
+        let poison_target = Arc::clone(&cache);
+        let _ = thread::spawn(move || {
+            let _guard = poison_target.sessions.lock().expect("lock");
+            panic!("poison session cache");
+        })
+        .join();
+
+        let err = cache
+            .get_or_load(Path::new("model.onnx"), |_| Ok(1))
+            .expect_err("poisoned cache rejected");
+
+        assert!(err.contains("poisoned"));
+    }
+
+    #[test]
     fn watchdog_reports_early_cancel_before_timeout() {
         struct FakeTerminator(AtomicUsize);
 
@@ -287,6 +316,7 @@ mod tests {
             Duration::from_secs(60),
             move || tx.send(()).expect("cancel notification"),
         );
+        assert!(!watchdog.timed_out());
         watchdog.cancel();
 
         rx.recv_timeout(Duration::from_secs(1))
@@ -315,6 +345,7 @@ mod tests {
         }
 
         assert_eq!(target.0.load(Ordering::SeqCst), 1);
+        assert!(watchdog.timed_out());
         watchdog.cancel();
     }
 }

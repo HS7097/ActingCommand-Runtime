@@ -20,23 +20,54 @@ use std::fmt;
 
 pub type VisionFfiResult<T> = Result<T, VisionFfiError>;
 
+const MAX_REQUEST_TIMEOUT_MS: u64 = 60_000;
+const MAX_REQUEST_LANGUAGES: usize = 8;
+const MAX_REQUEST_LABELS: usize = 256;
+const MAX_REQUEST_STRING_BYTES: usize = 4_096;
+const MAX_OCR_TEXT_BYTES: usize = 64 * 1024;
+const MAX_OCR_BLOCKS: usize = 1_024;
+const MAX_NN_RESULTS: usize = 1_024;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum VisionFfiErrorSeverity {
     Fatal,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum VisionFfiErrorCode {
+    InvalidRequest,
+    ProviderUnavailable,
+    ProviderFailure,
+    ProviderPanic,
+    Timeout,
+    ModelMismatch,
+    InvalidResponse,
+    Internal,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct VisionFfiError {
     severity: VisionFfiErrorSeverity,
+    code: VisionFfiErrorCode,
     module: &'static str,
     message: String,
 }
 
 impl VisionFfiError {
     pub fn fatal(module: &'static str, message: impl Into<String>) -> Self {
+        Self::fatal_with_code(VisionFfiErrorCode::Internal, module, message)
+    }
+
+    pub fn fatal_with_code(
+        code: VisionFfiErrorCode,
+        module: &'static str,
+        message: impl Into<String>,
+    ) -> Self {
         Self {
             severity: VisionFfiErrorSeverity::Fatal,
+            code,
             module,
             message: message.into(),
         }
@@ -48,6 +79,10 @@ impl VisionFfiError {
 
     pub fn module(&self) -> &'static str {
         self.module
+    }
+
+    pub fn code(&self) -> VisionFfiErrorCode {
+        self.code
     }
 
     pub fn message(&self) -> &str {
@@ -168,15 +203,30 @@ impl OcrInferenceRequest {
         self.frame.validate()?;
         validate_rect(self.region, self.frame.width, self.frame.height)?;
         if self.languages.is_empty() {
-            return Err(VisionFfiError::fatal(
+            return Err(VisionFfiError::fatal_with_code(
+                VisionFfiErrorCode::InvalidRequest,
                 "ocr",
                 "OCR request must include at least one language",
             ));
         }
-        if self.timeout_ms == 0 {
-            return Err(VisionFfiError::fatal(
+        if self.languages.len() > MAX_REQUEST_LANGUAGES
+            || self.languages.iter().any(|language| {
+                language.trim().is_empty() || language.len() > MAX_REQUEST_STRING_BYTES
+            })
+        {
+            return Err(VisionFfiError::fatal_with_code(
+                VisionFfiErrorCode::InvalidRequest,
                 "ocr",
-                "OCR request timeout_ms must be non-zero",
+                format!(
+                    "OCR request languages must contain 1..={MAX_REQUEST_LANGUAGES} non-blank values of at most {MAX_REQUEST_STRING_BYTES} bytes"
+                ),
+            ));
+        }
+        if self.timeout_ms == 0 || self.timeout_ms > MAX_REQUEST_TIMEOUT_MS {
+            return Err(VisionFfiError::fatal_with_code(
+                VisionFfiErrorCode::InvalidRequest,
+                "ocr",
+                format!("OCR request timeout_ms must be in 1..={MAX_REQUEST_TIMEOUT_MS}"),
             ));
         }
         Ok(())
@@ -199,6 +249,41 @@ pub struct OcrInferenceResult {
     pub warnings: Vec<String>,
 }
 
+impl OcrInferenceResult {
+    pub fn validate(&self, request: &OcrInferenceRequest) -> VisionFfiResult<()> {
+        if self.text.len() > MAX_OCR_TEXT_BYTES {
+            return Err(invalid_response(format!(
+                "OCR text exceeds {MAX_OCR_TEXT_BYTES} bytes"
+            )));
+        }
+        validate_optional_unit_score(self.confidence, "OCR confidence")?;
+        if self.blocks.len() > MAX_OCR_BLOCKS {
+            return Err(invalid_response(format!(
+                "OCR result contains {} blocks, limit is {MAX_OCR_BLOCKS}",
+                self.blocks.len()
+            )));
+        }
+        for (index, block) in self.blocks.iter().enumerate() {
+            if block.text.len() > MAX_REQUEST_STRING_BYTES {
+                return Err(invalid_response(format!(
+                    "OCR block[{index}] text exceeds {MAX_REQUEST_STRING_BYTES} bytes"
+                )));
+            }
+            validate_optional_unit_score(
+                block.confidence,
+                &format!("OCR block[{index}] confidence"),
+            )?;
+            validate_rect(block.rect, request.frame.width, request.frame.height)?;
+            if !rect_contains(request.region, block.rect) {
+                return Err(invalid_response(format!(
+                    "OCR block[{index}] is outside the requested region"
+                )));
+            }
+        }
+        Ok(())
+    }
+}
+
 pub trait OcrEngine {
     fn read_text(&mut self, request: OcrInferenceRequest) -> VisionFfiResult<OcrInferenceResult>;
 }
@@ -215,21 +300,45 @@ impl NnInferenceRequest {
     pub fn validate(&self) -> VisionFfiResult<()> {
         self.frame.validate()?;
         if self.model_id.trim().is_empty() {
-            return Err(VisionFfiError::fatal(
+            return Err(VisionFfiError::fatal_with_code(
+                VisionFfiErrorCode::InvalidRequest,
                 "nn",
                 "NN request model_id must be non-empty",
             ));
         }
+        if self.model_id.len() > MAX_REQUEST_STRING_BYTES {
+            return Err(VisionFfiError::fatal_with_code(
+                VisionFfiErrorCode::InvalidRequest,
+                "nn",
+                format!("NN request model_id exceeds {MAX_REQUEST_STRING_BYTES} bytes"),
+            ));
+        }
         if self.labels.is_empty() {
-            return Err(VisionFfiError::fatal(
+            return Err(VisionFfiError::fatal_with_code(
+                VisionFfiErrorCode::InvalidRequest,
                 "nn",
                 "NN request must include at least one candidate label",
             ));
         }
-        if self.timeout_ms == 0 {
-            return Err(VisionFfiError::fatal(
+        if self.labels.len() > MAX_REQUEST_LABELS
+            || self
+                .labels
+                .iter()
+                .any(|label| label.trim().is_empty() || label.len() > MAX_REQUEST_STRING_BYTES)
+        {
+            return Err(VisionFfiError::fatal_with_code(
+                VisionFfiErrorCode::InvalidRequest,
                 "nn",
-                "NN request timeout_ms must be non-zero",
+                format!(
+                    "NN request labels must contain 1..={MAX_REQUEST_LABELS} non-blank values of at most {MAX_REQUEST_STRING_BYTES} bytes"
+                ),
+            ));
+        }
+        if self.timeout_ms == 0 || self.timeout_ms > MAX_REQUEST_TIMEOUT_MS {
+            return Err(VisionFfiError::fatal_with_code(
+                VisionFfiErrorCode::InvalidRequest,
+                "nn",
+                format!("NN request timeout_ms must be in 1..={MAX_REQUEST_TIMEOUT_MS}"),
             ));
         }
         Ok(())
@@ -246,6 +355,26 @@ pub struct NnLabel {
 pub struct NnClassificationResult {
     pub labels: Vec<NnLabel>,
     pub backend: VisionBackendKind,
+}
+
+impl NnClassificationResult {
+    pub fn validate(&self) -> VisionFfiResult<()> {
+        if self.labels.len() > MAX_NN_RESULTS {
+            return Err(invalid_response(format!(
+                "NN result contains {} labels, limit is {MAX_NN_RESULTS}",
+                self.labels.len()
+            )));
+        }
+        for (index, label) in self.labels.iter().enumerate() {
+            if label.label.trim().is_empty() || label.label.len() > MAX_REQUEST_STRING_BYTES {
+                return Err(invalid_response(format!(
+                    "NN result label[{index}] must be non-blank and at most {MAX_REQUEST_STRING_BYTES} bytes"
+                )));
+            }
+            validate_unit_score(label.score, &format!("NN result label[{index}] score"))?;
+        }
+        Ok(())
+    }
 }
 
 pub trait NnEngine {
@@ -268,7 +397,7 @@ pub fn r1_r3_route_decision() -> VisionFfiRouteDecision {
         route: "ffi_boundary_then_fastdeploy_ppocr_and_onnxruntime",
         ocr_backend: VisionBackendKind::FastDeployPpocr,
         nn_backend: VisionBackendKind::OnnxRuntime,
-        gpu_enabled: false,
+        gpu_enabled: true,
         directml_enabled: false,
         bundled_artifacts: false,
         expected_size_delta_mb: (150, 250),
@@ -281,7 +410,8 @@ pub struct UnavailableOcrBackend;
 impl OcrEngine for UnavailableOcrBackend {
     fn read_text(&mut self, request: OcrInferenceRequest) -> VisionFfiResult<OcrInferenceResult> {
         request.validate()?;
-        Err(VisionFfiError::fatal(
+        Err(VisionFfiError::fatal_with_code(
+            VisionFfiErrorCode::ProviderUnavailable,
             "ocr",
             "FastDeploy/PPOCR backend is not linked or configured",
         ))
@@ -294,7 +424,8 @@ pub struct UnavailableNnBackend;
 impl NnEngine for UnavailableNnBackend {
     fn classify(&mut self, request: NnInferenceRequest) -> VisionFfiResult<NnClassificationResult> {
         request.validate()?;
-        Err(VisionFfiError::fatal(
+        Err(VisionFfiError::fatal_with_code(
+            VisionFfiErrorCode::ProviderUnavailable,
             "nn",
             "ONNXRuntime backend is not linked or configured",
         ))
@@ -506,6 +637,43 @@ fn validate_rect(rect: VisionRect, frame_width: u32, frame_height: u32) -> Visio
     Ok(())
 }
 
+fn validate_optional_unit_score(score: Option<f32>, label: &str) -> VisionFfiResult<()> {
+    if let Some(score) = score {
+        validate_unit_score(score, label)?;
+    }
+    Ok(())
+}
+
+fn validate_unit_score(score: f32, label: &str) -> VisionFfiResult<()> {
+    if !score.is_finite() || !(0.0..=1.0).contains(&score) {
+        return Err(invalid_response(format!(
+            "{label} must be finite and in 0.0..=1.0, got {score}"
+        )));
+    }
+    Ok(())
+}
+
+fn invalid_response(message: impl Into<String>) -> VisionFfiError {
+    VisionFfiError::fatal_with_code(
+        VisionFfiErrorCode::InvalidResponse,
+        "vision-provider-response",
+        message,
+    )
+}
+
+fn rect_contains(outer: VisionRect, inner: VisionRect) -> bool {
+    let outer_right = i64::from(outer.x) + i64::from(outer.width);
+    let outer_bottom = i64::from(outer.y) + i64::from(outer.height);
+    let inner_right = i64::from(inner.x) + i64::from(inner.width);
+    let inner_bottom = i64::from(inner.y) + i64::from(inner.height);
+    inner.x >= outer.x
+        && inner.y >= outer.y
+        && inner.width > 0
+        && inner.height > 0
+        && inner_right <= outer_right
+        && inner_bottom <= outer_bottom
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -632,7 +800,7 @@ mod tests {
     }
 
     #[test]
-    fn route_decision_disables_gpu_and_directml() {
+    fn route_decision_requires_gpu_and_disables_directml() {
         let decision = r1_r3_route_decision();
 
         assert_eq!(
@@ -641,7 +809,7 @@ mod tests {
         );
         assert_eq!(decision.ocr_backend, VisionBackendKind::FastDeployPpocr);
         assert_eq!(decision.nn_backend, VisionBackendKind::OnnxRuntime);
-        assert!(!decision.gpu_enabled);
+        assert!(decision.gpu_enabled);
         assert!(!decision.directml_enabled);
         assert_eq!(decision.expected_size_delta_mb, (150, 250));
     }
@@ -663,6 +831,53 @@ mod tests {
 
         assert_eq!(err.severity(), VisionFfiErrorSeverity::Fatal);
         assert!(err.message().contains("status 7"));
+    }
+
+    #[test]
+    fn ffi_timeout_status_is_typed() {
+        let frame = test_frame();
+        let request = OcrInferenceRequest {
+            region: VisionRect::full_frame(&frame).expect("full frame rect"),
+            frame,
+            languages: vec!["zh_cn".to_string()],
+            timeout_ms: 1_000,
+        };
+        let mut backend = unsafe {
+            FastDeployPpocrBackend::from_raw_functions(fake_timeout_json, fake_free_buffer)
+        };
+
+        let err = backend.read_text(request).expect_err("timeout status");
+
+        assert_eq!(err.code(), VisionFfiErrorCode::Timeout);
+        assert!(err.message().contains("status 3"));
+    }
+
+    #[test]
+    fn nan_confidence_is_typed_invalid_response() {
+        let frame = test_frame();
+        let request = OcrInferenceRequest {
+            region: VisionRect::full_frame(&frame).expect("full frame rect"),
+            frame,
+            languages: vec!["en".to_string()],
+            timeout_ms: 1_000,
+        };
+        let result = OcrInferenceResult {
+            text: "invalid".to_string(),
+            blocks: vec![OcrTextBlock {
+                text: "invalid".to_string(),
+                rect: request.region,
+                confidence: Some(f32::NAN),
+            }],
+            confidence: Some(f32::NAN),
+            backend: VisionBackendKind::FastDeployPpocr,
+            warnings: Vec::new(),
+        };
+
+        let err = result
+            .validate(&request)
+            .expect_err("NaN confidence rejected");
+
+        assert_eq!(err.code(), VisionFfiErrorCode::InvalidResponse);
     }
 
     #[test]
@@ -868,6 +1083,15 @@ mod tests {
         7
     }
 
+    unsafe extern "C" fn fake_timeout_json(
+        _request_ptr: *const u8,
+        _request_len: usize,
+        response_out: *mut VisionFfiOwnedBuffer,
+    ) -> i32 {
+        write_ffi_response(response_out, "fake backend timeout");
+        3
+    }
+
     unsafe extern "C" fn fake_ocr_envelope_json(
         request_ptr: *const u8,
         request_len: usize,
@@ -954,6 +1178,12 @@ mod tests {
     }
 
     fn test_ocr_artifacts() -> FastDeployPpocrArtifacts {
+        let detector_hash = "a".repeat(64);
+        let recognizer_hash = "b".repeat(64);
+        let dictionary_hash = "c".repeat(64);
+        let model_hash =
+            ppocr_model_content_sha256(&detector_hash, &recognizer_hash, &dictionary_hash, None)
+                .expect("fixture model hash");
         FastDeployPpocrArtifacts {
             provider_library_path: PathBuf::from(
                 "external-tools/vision/fastdeploy/ac_fastdeploy_ppocr.dll",
@@ -967,6 +1197,13 @@ mod tests {
             ),
             dictionary_path: PathBuf::from("external-tools/vision/ppocr/ppocr_keys_v1.txt"),
             classifier_model_path: None,
+            model_ref: Some(PPOCR_V6_MEDIUM_MODEL_REF.to_string()),
+            model_sha256: Some(model_hash),
+            detector_model_sha256: Some(detector_hash),
+            recognizer_model_sha256: Some(recognizer_hash),
+            dictionary_sha256: Some(dictionary_hash),
+            classifier_model_sha256: None,
+            execution_provider: Some(OnnxExecutionProvider::Cuda),
             supported_languages: vec!["zh_cn".to_string(), "en".to_string()],
             default_timeout_ms: 1_000,
         }
@@ -983,6 +1220,8 @@ mod tests {
             model_path: PathBuf::from(
                 "external-tools/vision/onnxruntime/models/page_classifier.onnx",
             ),
+            model_ref: Some("page-classifier".to_string()),
+            model_sha256: Some("d".repeat(64)),
             labels: vec!["home".to_string(), "unknown".to_string()],
             labels_path: None,
             execution_provider: OnnxExecutionProvider::Cpu,

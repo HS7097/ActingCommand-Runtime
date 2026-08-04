@@ -156,6 +156,10 @@ impl Scene {
         self.rgb.height()
     }
 
+    pub fn rgb8_pixels(&self) -> &[u8] {
+        self.rgb.as_raw()
+    }
+
     pub fn match_template(
         &self,
         template_png: &[u8],
@@ -832,10 +836,12 @@ mod tests {
 
     #[test]
     fn scene_from_rgb8_uses_raw_pixels() {
-        let scene = Scene::from_rgb8(2, 1, &[255, 0, 0, 0, 255, 0]).expect("rgb scene");
+        let pixels = [255, 0, 0, 0, 255, 0];
+        let scene = Scene::from_rgb8(2, 1, &pixels).expect("rgb scene");
 
         assert_eq!(scene.width(), 2);
         assert_eq!(scene.height(), 1);
+        assert_eq!(scene.rgb8_pixels(), pixels);
     }
 
     #[test]

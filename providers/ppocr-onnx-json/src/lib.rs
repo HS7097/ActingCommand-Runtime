@@ -18,7 +18,7 @@ use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
 use std::slice;
 use std::sync::{Arc, OnceLock};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 const DEFAULT_REC_HEIGHT: usize = 48;
 const DEFAULT_DYNAMIC_REC_WIDTH: usize = 320;
@@ -71,12 +71,12 @@ fn panic_on_next_read_text_for_test() {
 
 fn invoke_provider<F>(response_out: *mut VisionFfiOwnedBuffer, invoke: F) -> i32
 where
-    F: FnOnce() -> Result<OcrInferenceResult, String> + std::panic::UnwindSafe,
+    F: FnOnce() -> Result<OcrInferenceResult, ProviderInvokeError> + std::panic::UnwindSafe,
 {
     let result = std::panic::catch_unwind(invoke);
     match result {
         Ok(Ok(response)) => write_response(response_out, 0, &response),
-        Ok(Err(err)) => write_error(response_out, 1, &err),
+        Ok(Err(err)) => write_error(response_out, err.status(), err.message()),
         Err(_) => write_error(response_out, 2, "provider panicked while reading OCR text"),
     }
 }
@@ -107,18 +107,23 @@ pub unsafe extern "C" fn ac_vision_free_buffer(buffer: VisionFfiOwnedBuffer) {
 fn read_text_json(
     request_ptr: *const u8,
     request_len: usize,
-) -> Result<OcrInferenceResult, String> {
+) -> Result<OcrInferenceResult, ProviderInvokeError> {
     let envelope = read_request(request_ptr, request_len)?;
     envelope.request.validate().map_err(provider_error)?;
     envelope
         .artifacts
-        .validate_existing_files()
+        .validate_ppocr_v6_cuda_existing_files()
         .map_err(provider_error)?;
     let runtime_library = select_onnxruntime_library(&envelope.artifacts.runtime_library_paths)?;
     ensure_ort_runtime(runtime_library)?;
     let dictionary = load_dictionary(&envelope.artifacts.dictionary_path)?;
     let recognizer_session = recognizer_sessions()
         .get_or_load(&envelope.artifacts.recognizer_model_path, load_ort_session)?;
+    let inference_deadline = Instant::now()
+        .checked_add(Duration::from_millis(envelope.request.timeout_ms))
+        .ok_or_else(|| {
+            ProviderInvokeError::from("PPOCR inference deadline overflowed".to_string())
+        })?;
 
     if is_full_frame_region(&envelope.request.frame, envelope.request.region) {
         let detector_session = detector_sessions()
@@ -126,25 +131,25 @@ fn read_text_json(
         let detected = {
             let mut detector_session = detector_session
                 .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner());
+                .map_err(|_| "PPOCR detector session mutex is poisoned".to_string())?;
             detect_text_regions(
                 &mut detector_session,
                 &envelope.request.frame,
                 envelope.request.region,
-                envelope.request.timeout_ms,
+                remaining_inference_budget(inference_deadline, "PPOCR detector")?,
             )?
         };
         let mut blocks = Vec::new();
         let mut recognizer_session = recognizer_session
             .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
+            .map_err(|_| "PPOCR recognizer session mutex is poisoned".to_string())?;
         for detected_box in detected.iter().take(MAX_DETECTED_TEXT_BOXES) {
             let decoded = recognize_region(
                 &mut recognizer_session,
                 &dictionary,
                 &envelope.request.frame,
                 detected_box.rect,
-                envelope.request.timeout_ms,
+                remaining_inference_budget(inference_deadline, "PPOCR recognizer")?,
             )?;
             if !decoded.text.is_empty() {
                 blocks.push(OcrTextBlock {
@@ -170,34 +175,35 @@ fn read_text_json(
     } else {
         let mut recognizer_session = recognizer_session
             .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
+            .map_err(|_| "PPOCR recognizer session mutex is poisoned".to_string())?;
         let decoded = recognize_region(
             &mut recognizer_session,
             &dictionary,
             &envelope.request.frame,
             envelope.request.region,
-            envelope.request.timeout_ms,
+            remaining_inference_budget(inference_deadline, "PPOCR recognizer")?,
         )?;
-        let blocks = if decoded.text.is_empty() {
-            Vec::new()
-        } else {
-            vec![OcrTextBlock {
-                text: decoded.text.clone(),
-                rect: envelope.request.region,
-                confidence: decoded.confidence,
-            }]
-        };
+        Ok(canonical_roi_result(decoded, envelope.request.region))
+    }
+}
 
-        Ok(OcrInferenceResult {
+fn canonical_roi_result(decoded: DecodedText, region: VisionRect) -> OcrInferenceResult {
+    let blocks = if decoded.text.is_empty() {
+        Vec::new()
+    } else {
+        vec![OcrTextBlock {
             text: decoded.text.clone(),
+            rect: region,
             confidence: decoded.confidence,
-            blocks,
-            backend: VisionBackendKind::FastDeployPpocr,
-            warnings: vec![
-                "ppocr_onnx_provider used recognizer-only ROI OCR because a sub-frame region was requested"
-                    .to_string(),
-            ],
-        })
+        }]
+    };
+
+    OcrInferenceResult {
+        text: decoded.text,
+        confidence: decoded.confidence,
+        blocks,
+        backend: VisionBackendKind::FastDeployPpocr,
+        warnings: Vec::new(),
     }
 }
 
@@ -251,6 +257,14 @@ fn detector_sessions() -> &'static OrtSessionCache {
 fn load_ort_session(path: &Path) -> Result<Session, String> {
     Session::builder()
         .map_err(|err| format!("failed to create ONNXRuntime session builder: {err}"))?
+        .with_execution_providers([ort::ep::CUDA::default().build().error_on_failure()])
+        .map_err(|err| {
+            format!(
+                "failed to register required CUDA execution provider; CPU/DirectML/CoreML fallback is disabled: {err}"
+            )
+        })?
+        .with_disable_cpu_fallback()
+        .map_err(|err| format!("failed to disable PPOCR CPU fallback: {err}"))?
         .with_intra_threads(1)
         .map_err(|err| format!("failed to configure ONNXRuntime intra threads: {err}"))?
         .commit_from_file(path)
@@ -272,8 +286,8 @@ fn recognize_region(
     dictionary: &[String],
     frame: &VisionFrame,
     region: VisionRect,
-    timeout_ms: u64,
-) -> Result<DecodedText, String> {
+    timeout: Duration,
+) -> Result<DecodedText, ProviderInvokeError> {
     let input_shape = select_recognition_input_shape(session, region)?;
     let input_data = frame_region_to_recognition_tensor(frame, region, &input_shape)?;
     let input = Tensor::from_array((input_shape.to_ort_shape(), input_data.into_boxed_slice()))
@@ -281,18 +295,25 @@ fn recognize_region(
     let run_options = Arc::new(
         RunOptions::new().map_err(|err| format!("failed to create ONNX run options: {err}"))?,
     );
-    let _watchdog =
-        InferenceWatchdog::start(Arc::clone(&run_options), Duration::from_millis(timeout_ms));
-    let outputs = session
-        .run_with_options(ort::inputs![input], &*run_options)
-        .map_err(|err| format!("PPOCR recognizer inference failed: {err}"))?;
+    let watchdog = InferenceWatchdog::start(Arc::clone(&run_options), timeout);
+    let outputs = session.run_with_options(ort::inputs![input], &*run_options);
+    if watchdog.timed_out() {
+        return Err(ProviderInvokeError::timeout(
+            "PPOCR recognizer inference exceeded the configured timeout",
+        ));
+    }
+    let outputs = outputs.map_err(|err| format!("PPOCR recognizer inference failed: {err}"))?;
     if outputs.len() == 0 {
-        return Err("PPOCR recognizer returned no outputs".to_string());
+        return Err("PPOCR recognizer returned no outputs".to_string().into());
     }
     let (output_shape, scores) = outputs[0]
         .try_extract_tensor::<f32>()
         .map_err(|err| format!("PPOCR recognizer first output is not an f32 tensor: {err}"))?;
-    decode_ctc_output(output_shape.as_ref(), scores, dictionary)
+    Ok(decode_ctc_output(
+        output_shape.as_ref(),
+        scores,
+        dictionary,
+    )?)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -305,8 +326,8 @@ fn detect_text_regions(
     session: &mut Session,
     frame: &VisionFrame,
     region: VisionRect,
-    timeout_ms: u64,
-) -> Result<Vec<DetectedTextBox>, String> {
+    timeout: Duration,
+) -> Result<Vec<DetectedTextBox>, ProviderInvokeError> {
     let input_shape = select_detection_input_shape(session, region)?;
     let input_data = frame_region_to_detection_tensor(frame, region, &input_shape)?;
     let input = Tensor::from_array((input_shape.to_ort_shape(), input_data.into_boxed_slice()))
@@ -314,13 +335,16 @@ fn detect_text_regions(
     let run_options = Arc::new(
         RunOptions::new().map_err(|err| format!("failed to create ONNX run options: {err}"))?,
     );
-    let _watchdog =
-        InferenceWatchdog::start(Arc::clone(&run_options), Duration::from_millis(timeout_ms));
-    let outputs = session
-        .run_with_options(ort::inputs![input], &*run_options)
-        .map_err(|err| format!("PPOCR detector inference failed: {err}"))?;
+    let watchdog = InferenceWatchdog::start(Arc::clone(&run_options), timeout);
+    let outputs = session.run_with_options(ort::inputs![input], &*run_options);
+    if watchdog.timed_out() {
+        return Err(ProviderInvokeError::timeout(
+            "PPOCR detector inference exceeded the configured timeout",
+        ));
+    }
+    let outputs = outputs.map_err(|err| format!("PPOCR detector inference failed: {err}"))?;
     if outputs.len() == 0 {
-        return Err("PPOCR detector returned no outputs".to_string());
+        return Err("PPOCR detector returned no outputs".to_string().into());
     }
     let (output_shape, scores) = outputs[0]
         .try_extract_tensor::<f32>()
@@ -328,6 +352,20 @@ fn detect_text_regions(
     let map = detector_probability_map(output_shape.as_ref(), scores)?;
     let boxes = detect_text_boxes_from_probability_map(&map, region, frame.width, frame.height)?;
     Ok(merge_detected_text_boxes(boxes, frame.width, frame.height))
+}
+
+fn remaining_inference_budget(
+    deadline: Instant,
+    stage: &str,
+) -> Result<Duration, ProviderInvokeError> {
+    deadline
+        .checked_duration_since(Instant::now())
+        .filter(|remaining| !remaining.is_zero())
+        .ok_or_else(|| {
+            ProviderInvokeError::timeout(format!(
+                "{stage} could not start before the configured timeout"
+            ))
+        })
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -995,6 +1033,37 @@ fn provider_error(err: impl std::fmt::Display) -> String {
     format!("{err}")
 }
 
+#[derive(Debug)]
+enum ProviderInvokeError {
+    Failure(String),
+    Timeout(String),
+}
+
+impl ProviderInvokeError {
+    fn timeout(message: impl Into<String>) -> Self {
+        Self::Timeout(message.into())
+    }
+
+    fn status(&self) -> i32 {
+        match self {
+            Self::Failure(_) => 1,
+            Self::Timeout(_) => 3,
+        }
+    }
+
+    fn message(&self) -> &str {
+        match self {
+            Self::Failure(message) | Self::Timeout(message) => message,
+        }
+    }
+}
+
+impl From<String> for ProviderInvokeError {
+    fn from(message: String) -> Self {
+        Self::Failure(message)
+    }
+}
+
 fn write_response<T: serde::Serialize>(
     response_out: *mut VisionFfiOwnedBuffer,
     status: i32,
@@ -1224,6 +1293,40 @@ mod tests {
     }
 
     #[test]
+    fn canonical_sub_frame_roi_result_preserves_region_without_warning() {
+        let frame = VisionFrame {
+            width: 320,
+            height: 80,
+            pixel_format: VisionPixelFormat::Rgb8,
+            pixels: vec![0; 320 * 80 * 3],
+        };
+        let region = VisionRect {
+            x: 16,
+            y: 8,
+            width: 160,
+            height: 32,
+        };
+        assert!(!is_full_frame_region(&frame, region));
+
+        let result = canonical_roi_result(
+            DecodedText {
+                text: "home".to_string(),
+                confidence: Some(0.99),
+            },
+            region,
+        );
+
+        assert_eq!(result.text, "home");
+        assert_eq!(result.confidence, Some(0.99));
+        assert_eq!(result.backend, VisionBackendKind::FastDeployPpocr);
+        assert!(result.warnings.is_empty());
+        assert_eq!(result.blocks.len(), 1);
+        assert_eq!(result.blocks[0].text, "home");
+        assert_eq!(result.blocks[0].rect, region);
+        assert_eq!(result.blocks[0].confidence, Some(0.99));
+    }
+
+    #[test]
     fn exported_read_text_reports_provider_panic() {
         let mut response = VisionFfiOwnedBuffer::default();
         PANIC_ON_NEXT_READ_TEXT.with(|flag| flag.set(true));
@@ -1239,6 +1342,21 @@ mod tests {
         assert_eq!(status, 2);
         let text = take_exported_response_text(response);
         assert!(text.contains("panicked"));
+    }
+
+    #[test]
+    fn exported_provider_timeout_uses_stable_status() {
+        let mut response = VisionFfiOwnedBuffer::default();
+
+        let status = invoke_provider(&mut response, || {
+            Err(ProviderInvokeError::timeout(
+                "injected deterministic timeout",
+            ))
+        });
+
+        assert_eq!(status, 3);
+        let text = take_exported_response_text(response);
+        assert!(text.contains("injected deterministic timeout"));
     }
 
     #[test]

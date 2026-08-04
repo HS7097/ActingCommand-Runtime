@@ -1017,8 +1017,7 @@ fn write_synthetic_maa_convert_fixture() -> (tempfile::TempDir, PathBuf) {
             "Base": {
                 "template": "BASE.png",
                 "templThreshold": 0.67,
-                "method": "RGBCount",
-                "maskRange": [7, 199],
+                "method": "NCC",
                 "rectMove": [1, 2, 3, 4],
                 "next": ["Helper"]
             },
@@ -1057,19 +1056,7 @@ fn maa_tasks_mode_feeds_expanded_template_fields_into_pack_targets() {
     );
     assert_eq!(
         target.pointer("/method").and_then(Value::as_str),
-        Some("rgb_count")
-    );
-    assert_eq!(
-        target.pointer("/mask/type").and_then(Value::as_str),
-        Some("range")
-    );
-    assert_eq!(
-        target.pointer("/mask/lower").and_then(Value::as_u64),
-        Some(7)
-    );
-    assert_eq!(
-        target.pointer("/mask/upper").and_then(Value::as_u64),
-        Some(199)
+        Some("ncc")
     );
     assert_eq!(
         target.pointer("/rect_move"),
@@ -1080,6 +1067,18 @@ fn maa_tasks_mode_feeds_expanded_template_fields_into_pack_targets() {
         primitive.pointer("/click/kind").and_then(Value::as_str),
         Some("offset")
     );
+    for output in [
+        &outputs.pack,
+        &outputs.pages,
+        &outputs.navigation,
+        &outputs.index,
+        &outputs.primitives,
+    ] {
+        assert_eq!(
+            output.get("schema_version").and_then(Value::as_str),
+            Some("0.6")
+        );
+    }
     assert_eq!(
         primitive
             .pointer("/click/target_id")
@@ -1096,6 +1095,36 @@ fn maa_tasks_mode_feeds_expanded_template_fields_into_pack_targets() {
             .and_then(Value::as_str),
         Some("terminal")
     );
+}
+
+#[test]
+fn schema_0_6_converter_rejects_deprecated_template_primitives_with_migration_diagnostics() {
+    let build = |source: Value| {
+        pack_target(
+            &source,
+            "fixture/target",
+            "operations/fixture/assets/TARGET.png",
+            Value::String("full_frame".to_string()),
+            json!(0.9),
+            None,
+            None,
+        )
+    };
+
+    for (source, expected) in [
+        (json!({"method":"RGBCount"}), "rgb_count"),
+        (json!({"method":"HSVCount"}), "hsv_count"),
+        (json!({"maskRange":[7,199]}), "template mask"),
+    ] {
+        let error = build(source).expect_err("deprecated primitive must not be emitted");
+        assert!(
+            error.message.contains(expected),
+            "expected {expected:?} in {:?}",
+            error.message
+        );
+        assert!(error.message.contains("schema 0.6"));
+        assert!(error.message.contains("migrate"));
+    }
 }
 
 #[test]

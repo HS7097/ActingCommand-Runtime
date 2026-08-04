@@ -2,7 +2,8 @@
 
 use actingcommand_recognition as recognition;
 use recognition::{MatchMetric, Scene};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
+use serde_json::{Map, Value};
 use std::collections::{HashMap, HashSet};
 use std::error::Error;
 use std::fmt;
@@ -12,27 +13,56 @@ use std::sync::Arc;
 
 pub type RecognitionPackResult<T> = Result<T, RecognitionPackError>;
 
+const MAX_VISION_TIMEOUT_MS: u64 = 60_000;
+const MAX_VISION_LANGUAGES: usize = 8;
+const MAX_VISION_EXPECTED_VALUES: usize = 64;
+const MAX_VISION_LABELS: usize = 256;
+const MAX_VISION_STRING_BYTES: usize = 4_096;
+const MAX_OCR_TEXT_BYTES: usize = 64 * 1024;
+const MAX_OCR_BLOCKS: usize = 1_024;
+const MAX_VISION_RESULTS: usize = 1_024;
+const PPOCR_V6_MEDIUM_MODEL_REF: &str = "PP-OCRv6_medium";
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RecognitionPackErrorSeverity {
     Fatal,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RecognitionPackErrorCode {
+    InvalidPackage,
+    UnsupportedTarget,
+    VisionProviderMissing,
+    VisionProviderFailure,
+    VisionProviderInvalidResponse,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RecognitionPackError {
     severity: RecognitionPackErrorSeverity,
+    code: RecognitionPackErrorCode,
     message: String,
 }
 
 impl RecognitionPackError {
     pub fn fatal(message: impl Into<String>) -> Self {
+        Self::fatal_with_code(RecognitionPackErrorCode::InvalidPackage, message)
+    }
+
+    pub fn fatal_with_code(code: RecognitionPackErrorCode, message: impl Into<String>) -> Self {
         Self {
             severity: RecognitionPackErrorSeverity::Fatal,
+            code,
             message: message.into(),
         }
     }
 
     pub fn severity(&self) -> RecognitionPackErrorSeverity {
         self.severity
+    }
+
+    pub fn code(&self) -> RecognitionPackErrorCode {
+        self.code
     }
 
     pub fn message(&self) -> &str {
@@ -52,7 +82,7 @@ impl fmt::Display for RecognitionPackError {
 
 impl Error for RecognitionPackError {}
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PackRect {
     pub x: i32,
     pub y: i32,
@@ -71,20 +101,20 @@ impl From<PackRect> for recognition::Rect {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PackPoint {
     pub x: i32,
     pub y: i32,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum PackRegion {
     Rect(PackRect),
     Keyword(String),
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PackCoordinateSpace {
     pub width: u32,
     pub height: u32,
@@ -160,6 +190,8 @@ pub enum RecognitionTarget {
     Template(TemplateTarget),
     Color(ColorTarget),
     ClickOnly(ClickOnlyTarget),
+    Ocr(OcrTarget),
+    Nn(NnTarget),
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -191,6 +223,49 @@ pub struct ClickOnlyTarget {
     pub click: PackRect,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum OcrMatchMode {
+    Exact,
+    Contains,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct OcrTarget {
+    pub id: String,
+    pub region: PackRegion,
+    pub languages: Vec<String>,
+    pub timeout_ms: u64,
+    pub match_mode: OcrMatchMode,
+    pub expected: Vec<String>,
+    pub case_sensitive: bool,
+    pub minimum_confidence: f32,
+    pub model_ref: String,
+    pub model_sha256: String,
+    pub click: Option<PackRect>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum NnSelectionMode {
+    Best,
+    Label,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct NnTarget {
+    pub id: String,
+    pub region: PackRegion,
+    pub model_ref: String,
+    pub model_sha256: String,
+    pub candidate_labels: Vec<String>,
+    pub minimum_score: f32,
+    pub selection: NnSelectionMode,
+    pub expected_label: Option<String>,
+    pub timeout_ms: u64,
+    pub click: Option<PackRect>,
+}
+
 #[derive(Debug, Clone, Copy, Deserialize)]
 pub struct ColorCheck {
     pub region: PackRect,
@@ -200,9 +275,130 @@ pub struct ColorCheck {
 #[derive(Debug, Clone)]
 pub struct RecognitionEvaluator {
     asset_resolver: Arc<dyn AssetResolver>,
+    vision_provider: Option<Arc<dyn VisionProvider>>,
     pack: RecognitionPack,
     target_indexes: HashMap<String, usize>,
     unsupported_targets: Vec<UnsupportedRecognitionTarget>,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct VisionProviderFrame<'a> {
+    pub width: u32,
+    pub height: u32,
+    pub rgb8_pixels: &'a [u8],
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct OcrProviderRequest<'a> {
+    pub frame: VisionProviderFrame<'a>,
+    pub region: PackRect,
+    pub languages: &'a [String],
+    pub timeout_ms: u64,
+    pub model_ref: &'a str,
+    pub model_sha256: &'a str,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct OcrProviderTextBlock {
+    pub text: String,
+    pub rect: PackRect,
+    pub confidence: Option<f32>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct OcrProviderResult {
+    pub text: String,
+    pub blocks: Vec<OcrProviderTextBlock>,
+    pub confidence: Option<f32>,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct NnProviderRequest<'a> {
+    pub frame: VisionProviderFrame<'a>,
+    pub region: PackRect,
+    pub model_ref: &'a str,
+    pub model_sha256: &'a str,
+    pub candidate_labels: &'a [String],
+    pub timeout_ms: u64,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct NnProviderLabel {
+    pub label: String,
+    pub score: f32,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct NnProviderResult {
+    pub labels: Vec<NnProviderLabel>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VisionProviderErrorCode {
+    Unavailable,
+    Timeout,
+    ModelMismatch,
+    InvalidResponse,
+    Internal,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VisionProviderError {
+    code: VisionProviderErrorCode,
+    message: String,
+}
+
+impl VisionProviderError {
+    pub fn new(code: VisionProviderErrorCode, message: impl Into<String>) -> Self {
+        Self {
+            code,
+            message: message.into(),
+        }
+    }
+
+    pub fn code(&self) -> VisionProviderErrorCode {
+        self.code
+    }
+
+    pub fn message(&self) -> &str {
+        &self.message
+    }
+}
+
+impl fmt::Display for VisionProviderError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "vision provider error ({:?}): {}",
+            self.code, self.message
+        )
+    }
+}
+
+impl Error for VisionProviderError {}
+
+pub trait VisionProvider: fmt::Debug + Send + Sync {
+    fn require_ocr_model(
+        &self,
+        model_ref: &str,
+        model_sha256: &str,
+    ) -> Result<(), VisionProviderError>;
+
+    fn require_nn_model(
+        &self,
+        model_ref: &str,
+        model_sha256: &str,
+    ) -> Result<(), VisionProviderError>;
+
+    fn read_text(
+        &self,
+        request: OcrProviderRequest<'_>,
+    ) -> Result<OcrProviderResult, VisionProviderError>;
+
+    fn classify(
+        &self,
+        request: NnProviderRequest<'_>,
+    ) -> Result<NnProviderResult, VisionProviderError>;
 }
 
 pub trait AssetResolver: fmt::Debug + Send + Sync {
@@ -240,24 +436,29 @@ impl AssetResolver for FsAssetResolver {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum TargetKind {
     Template,
     Color,
     ClickOnly,
+    Ocr,
+    Nn,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct TargetEvaluation {
     pub id: String,
     pub kind: TargetKind,
     pub passed: bool,
     pub template: Option<TemplateEvaluation>,
     pub color: Option<ColorEvaluation>,
+    pub ocr: Option<OcrEvaluation>,
+    pub nn: Option<NnEvaluation>,
     pub message: String,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize)]
 pub struct TemplateEvaluation {
     pub x: i32,
     pub y: i32,
@@ -274,7 +475,7 @@ pub struct UnsupportedRecognitionTarget {
     pub reason: String,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize)]
 pub struct ColorEvaluation {
     pub distance: f32,
     pub max_distance: f32,
@@ -282,10 +483,73 @@ pub struct ColorEvaluation {
     pub expected: [u8; 3],
 }
 
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct OcrEvaluation {
+    pub text: String,
+    pub confidence: Option<f32>,
+    pub matched_expected: Option<String>,
+    pub match_mode: OcrMatchMode,
+    pub blocks: Vec<OcrTextEvidence>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct OcrTextEvidence {
+    pub text: String,
+    pub rect: PackRect,
+    pub confidence: Option<f32>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct NnEvaluation {
+    pub selected_label: Option<String>,
+    pub selected_score: Option<f32>,
+    pub selection: NnSelectionMode,
+    pub labels: Vec<NnLabelEvidence>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct NnLabelEvidence {
+    pub label: String,
+    pub score: f32,
+    pub candidate: bool,
+}
+
 pub fn load_pack_from_json_str(json: &str) -> RecognitionPackResult<RecognitionPack> {
-    serde_json::from_str(json).map_err(|err| {
+    let value: Value = serde_json::from_str(json).map_err(|err| {
         RecognitionPackError::fatal(format!("failed to parse recognition pack JSON: {err}"))
-    })
+    })?;
+    let schema_version = value
+        .as_object()
+        .and_then(|object| object.get("schema_version"))
+        .and_then(Value::as_str)
+        .ok_or_else(|| {
+            RecognitionPackError::fatal(
+                "failed to parse recognition pack JSON: schema_version must be a string",
+            )
+        })?
+        .to_string();
+
+    if schema_version == "0.6" {
+        validate_v06_wire_shape(&value)?;
+    }
+
+    let pack: RecognitionPack = serde_json::from_value(value).map_err(|err| {
+        RecognitionPackError::fatal(format!("failed to parse recognition pack JSON: {err}"))
+    })?;
+    if matches!(schema_version.as_str(), "0.1" | "0.3" | "0.4" | "0.5")
+        && pack
+            .targets
+            .iter()
+            .any(|target| matches!(target, RecognitionTarget::Ocr(_) | RecognitionTarget::Nn(_)))
+    {
+        return Err(RecognitionPackError::fatal_with_code(
+            RecognitionPackErrorCode::UnsupportedTarget,
+            format!(
+                "recognition target type ocr/nn requires schema_version '0.6', got '{schema_version}'"
+            ),
+        ));
+    }
+    Ok(pack)
 }
 
 impl RecognitionEvaluator {
@@ -297,10 +561,52 @@ impl RecognitionEvaluator {
         pack: RecognitionPack,
         asset_resolver: Arc<dyn AssetResolver>,
     ) -> RecognitionPackResult<Self> {
+        Self::with_optional_vision_provider(pack, asset_resolver, None)
+    }
+
+    pub fn with_vision_provider(
+        pack: RecognitionPack,
+        asset_resolver: Arc<dyn AssetResolver>,
+        vision_provider: Arc<dyn VisionProvider>,
+    ) -> RecognitionPackResult<Self> {
+        Self::with_optional_vision_provider(pack, asset_resolver, Some(vision_provider))
+    }
+
+    fn with_optional_vision_provider(
+        pack: RecognitionPack,
+        asset_resolver: Arc<dyn AssetResolver>,
+        vision_provider: Option<Arc<dyn VisionProvider>>,
+    ) -> RecognitionPackResult<Self> {
         let mut errors = Vec::new();
         validate_pack(asset_resolver.as_ref(), &pack, &mut errors);
         if !errors.is_empty() {
             return Err(RecognitionPackError::fatal(errors.join("; ")));
+        }
+        if vision_provider.is_none()
+            && pack.targets.iter().any(|target| {
+                matches!(target, RecognitionTarget::Ocr(_) | RecognitionTarget::Nn(_))
+            })
+        {
+            return Err(RecognitionPackError::fatal_with_code(
+                RecognitionPackErrorCode::VisionProviderMissing,
+                "recognition pack requires OCR/NN vision capability, but no production vision provider was injected",
+            ));
+        }
+        if let Some(provider) = &vision_provider {
+            for target in &pack.targets {
+                let capability = match target {
+                    RecognitionTarget::Ocr(target) => provider
+                        .require_ocr_model(&target.model_ref, &target.model_sha256)
+                        .map_err(|error| provider_error(&target.id, "ocr admission", error)),
+                    RecognitionTarget::Nn(target) => provider
+                        .require_nn_model(&target.model_ref, &target.model_sha256)
+                        .map_err(|error| provider_error(&target.id, "nn admission", error)),
+                    RecognitionTarget::Template(_)
+                    | RecognitionTarget::Color(_)
+                    | RecognitionTarget::ClickOnly(_) => Ok(()),
+                };
+                capability?;
+            }
         }
 
         let target_indexes = pack
@@ -313,6 +619,7 @@ impl RecognitionEvaluator {
 
         Ok(Self {
             asset_resolver,
+            vision_provider,
             pack,
             target_indexes,
             unsupported_targets,
@@ -346,6 +653,8 @@ impl RecognitionEvaluator {
                 "click-only target '{}' cannot be evaluated",
                 target.id
             ))),
+            RecognitionTarget::Ocr(target) => self.evaluate_ocr(scene, target),
+            RecognitionTarget::Nn(target) => self.evaluate_nn(scene, target),
         }
     }
 
@@ -365,6 +674,15 @@ impl RecognitionEvaluator {
                 ))
             }),
             RecognitionTarget::ClickOnly(target) => Ok(target.click),
+            RecognitionTarget::Ocr(target) => target.click.ok_or_else(|| {
+                RecognitionPackError::fatal(format!(
+                    "ocr target '{}' has no click field",
+                    target.id
+                ))
+            }),
+            RecognitionTarget::Nn(target) => target.click.ok_or_else(|| {
+                RecognitionPackError::fatal(format!("nn target '{}' has no click field", target.id))
+            }),
         }
     }
 
@@ -381,7 +699,10 @@ impl RecognitionEvaluator {
                     target.id
                 ))),
             },
-            RecognitionTarget::Color(_) | RecognitionTarget::ClickOnly(_) => Ok(None),
+            RecognitionTarget::Color(_)
+            | RecognitionTarget::ClickOnly(_)
+            | RecognitionTarget::Ocr(_)
+            | RecognitionTarget::Nn(_) => Ok(None),
         }
     }
 
@@ -391,6 +712,8 @@ impl RecognitionEvaluator {
             RecognitionTarget::Template(_) => TargetKind::Template,
             RecognitionTarget::Color(_) => TargetKind::Color,
             RecognitionTarget::ClickOnly(_) => TargetKind::ClickOnly,
+            RecognitionTarget::Ocr(_) => TargetKind::Ocr,
+            RecognitionTarget::Nn(_) => TargetKind::Nn,
         })
     }
 
@@ -455,6 +778,8 @@ impl RecognitionEvaluator {
             passed,
             template: Some(template),
             color,
+            ocr: None,
+            nn: None,
             message: template_message(template_ok, color_ok),
         })
     }
@@ -473,10 +798,126 @@ impl RecognitionEvaluator {
             passed,
             template: None,
             color: Some(color),
+            ocr: None,
+            nn: None,
             message: if passed {
                 "color passed".to_string()
             } else {
                 "color failed".to_string()
+            },
+        })
+    }
+
+    fn evaluate_ocr(
+        &self,
+        scene: &Scene,
+        target: &OcrTarget,
+    ) -> RecognitionPackResult<TargetEvaluation> {
+        let provider = self.vision_provider.as_ref().ok_or_else(|| {
+            RecognitionPackError::fatal_with_code(
+                RecognitionPackErrorCode::VisionProviderMissing,
+                format!("ocr target '{}' has no injected vision provider", target.id),
+            )
+        })?;
+        let region = provider_region(scene, &target.id, &target.region)?;
+        let result = provider
+            .read_text(OcrProviderRequest {
+                frame: provider_frame(scene),
+                region,
+                languages: &target.languages,
+                timeout_ms: target.timeout_ms,
+                model_ref: &target.model_ref,
+                model_sha256: &target.model_sha256,
+            })
+            .map_err(|err| provider_error(&target.id, "ocr", err))?;
+        let ocr = validate_ocr_result(result, region)?;
+        let matched_expected = target
+            .expected
+            .iter()
+            .find(|expected| ocr_text_matches(&ocr.text, expected, target))
+            .cloned();
+        let confidence_ok = ocr
+            .confidence
+            .is_some_and(|confidence| confidence >= target.minimum_confidence);
+        let passed = matched_expected.is_some() && confidence_ok;
+        let message = match (matched_expected.is_some(), confidence_ok) {
+            (true, true) => "ocr passed",
+            (false, true) => "ocr text did not match",
+            (true, false) => "ocr confidence below threshold",
+            (false, false) => "ocr text did not match and confidence below threshold",
+        }
+        .to_string();
+
+        Ok(TargetEvaluation {
+            id: target.id.clone(),
+            kind: TargetKind::Ocr,
+            passed,
+            template: None,
+            color: None,
+            ocr: Some(OcrEvaluation {
+                text: ocr.text,
+                confidence: ocr.confidence,
+                matched_expected,
+                match_mode: target.match_mode,
+                blocks: ocr.blocks,
+            }),
+            nn: None,
+            message,
+        })
+    }
+
+    fn evaluate_nn(
+        &self,
+        scene: &Scene,
+        target: &NnTarget,
+    ) -> RecognitionPackResult<TargetEvaluation> {
+        let provider = self.vision_provider.as_ref().ok_or_else(|| {
+            RecognitionPackError::fatal_with_code(
+                RecognitionPackErrorCode::VisionProviderMissing,
+                format!("nn target '{}' has no injected vision provider", target.id),
+            )
+        })?;
+        let region = provider_region(scene, &target.id, &target.region)?;
+        let result = provider
+            .classify(NnProviderRequest {
+                frame: provider_frame(scene),
+                region,
+                model_ref: &target.model_ref,
+                model_sha256: &target.model_sha256,
+                candidate_labels: &target.candidate_labels,
+                timeout_ms: target.timeout_ms,
+            })
+            .map_err(|err| provider_error(&target.id, "nn", err))?;
+        let labels = validate_nn_result(result, &target.candidate_labels)?;
+        let selected = match target.selection {
+            NnSelectionMode::Best => labels.iter().find(|label| label.candidate),
+            NnSelectionMode::Label => target.expected_label.as_deref().and_then(|expected| {
+                labels
+                    .iter()
+                    .find(|label| label.candidate && label.label == expected)
+            }),
+        };
+        let selected_label = selected.map(|label| label.label.clone());
+        let selected_score = selected.map(|label| label.score);
+        let passed = selected_score.is_some_and(|score| score >= target.minimum_score);
+
+        Ok(TargetEvaluation {
+            id: target.id.clone(),
+            kind: TargetKind::Nn,
+            passed,
+            template: None,
+            color: None,
+            ocr: None,
+            nn: Some(NnEvaluation {
+                selected_label,
+                selected_score,
+                selection: target.selection,
+                labels,
+            }),
+            message: if passed {
+                "nn passed".to_string()
+            } else {
+                "nn score below threshold or no eligible label".to_string()
             },
         })
     }
@@ -543,7 +984,10 @@ pub fn unsupported_recognition_targets(
                     reason,
                 })
             }
-            RecognitionTarget::Color(_) | RecognitionTarget::ClickOnly(_) => None,
+            RecognitionTarget::Color(_)
+            | RecognitionTarget::ClickOnly(_)
+            | RecognitionTarget::Ocr(_)
+            | RecognitionTarget::Nn(_) => None,
         })
         .collect()
 }
@@ -554,8 +998,201 @@ impl RecognitionTarget {
             Self::Template(target) => &target.id,
             Self::Color(target) => &target.id,
             Self::ClickOnly(target) => &target.id,
+            Self::Ocr(target) => &target.id,
+            Self::Nn(target) => &target.id,
         }
     }
+}
+
+fn validate_v06_wire_shape(value: &Value) -> RecognitionPackResult<()> {
+    let root = value.as_object().ok_or_else(|| {
+        RecognitionPackError::fatal("schema 0.6 recognition pack root must be an object")
+    })?;
+    reject_unknown_fields(
+        root,
+        &[
+            "schema_version",
+            "converter_schema_version",
+            "generated",
+            "generated_by",
+            "game",
+            "server",
+            "locale",
+            "coordinate_space",
+            "defaults",
+            "targets",
+        ],
+        "schema 0.6 recognition pack",
+    )?;
+    for field in ["converter_schema_version", "generated_by"] {
+        if root.get(field).is_some_and(|value| !value.is_string()) {
+            return Err(RecognitionPackError::fatal(format!(
+                "schema 0.6 recognition pack field '{field}' must be a string"
+            )));
+        }
+    }
+    if root
+        .get("generated")
+        .is_some_and(|value| !value.is_boolean())
+    {
+        return Err(RecognitionPackError::fatal(
+            "schema 0.6 recognition pack field 'generated' must be a boolean",
+        ));
+    }
+    if let Some(coordinate_space) = root.get("coordinate_space")
+        && !coordinate_space.is_null()
+    {
+        validate_strict_object(
+            coordinate_space,
+            &["width", "height"],
+            "schema 0.6 coordinate_space",
+        )?;
+    }
+    if let Some(defaults) = root.get("defaults") {
+        validate_strict_object(
+            defaults,
+            &["template_threshold", "color_max_distance", "match_metric"],
+            "schema 0.6 defaults",
+        )?;
+    }
+    let targets = root
+        .get("targets")
+        .and_then(Value::as_array)
+        .ok_or_else(|| RecognitionPackError::fatal("schema 0.6 targets must be an array"))?;
+    for (index, target) in targets.iter().enumerate() {
+        let object = target.as_object().ok_or_else(|| {
+            RecognitionPackError::fatal(format!("schema 0.6 target[{index}] must be an object"))
+        })?;
+        let target_type = object.get("type").and_then(Value::as_str).ok_or_else(|| {
+            RecognitionPackError::fatal(format!("schema 0.6 target[{index}].type must be a string"))
+        })?;
+        let allowed = match target_type {
+            "template" => {
+                if object.contains_key("mask") {
+                    return Err(RecognitionPackError::fatal_with_code(
+                        RecognitionPackErrorCode::UnsupportedTarget,
+                        format!(
+                            "schema 0.6 target[{index}].mask is deprecated_in_vNext and must be migrated"
+                        ),
+                    ));
+                }
+                if let Some(method) = object.get("method").and_then(Value::as_str)
+                    && method != "ncc"
+                {
+                    return Err(RecognitionPackError::fatal_with_code(
+                        RecognitionPackErrorCode::UnsupportedTarget,
+                        format!(
+                            "schema 0.6 target[{index}].method='{method}' is deprecated_in_vNext and must be migrated"
+                        ),
+                    ));
+                }
+                &[
+                    "type",
+                    "id",
+                    "template_path",
+                    "region",
+                    "threshold",
+                    "method",
+                    "rect_move",
+                    "color_check",
+                    "click",
+                ][..]
+            }
+            "color" => &["type", "id", "region", "expected", "click"][..],
+            "click_only" => &["type", "id", "click"][..],
+            "ocr" => &[
+                "type",
+                "id",
+                "region",
+                "languages",
+                "timeout_ms",
+                "match_mode",
+                "expected",
+                "case_sensitive",
+                "minimum_confidence",
+                "model_ref",
+                "model_sha256",
+                "click",
+            ][..],
+            "nn" => &[
+                "type",
+                "id",
+                "region",
+                "model_ref",
+                "model_sha256",
+                "candidate_labels",
+                "minimum_score",
+                "selection",
+                "expected_label",
+                "timeout_ms",
+                "click",
+            ][..],
+            other => {
+                return Err(RecognitionPackError::fatal_with_code(
+                    RecognitionPackErrorCode::UnsupportedTarget,
+                    format!("schema 0.6 target[{index}] has unknown type '{other}'"),
+                ));
+            }
+        };
+        reject_unknown_fields(object, allowed, &format!("schema 0.6 target[{index}]"))?;
+        for field in ["region", "rect_move", "click"] {
+            if let Some(rect) = object.get(field)
+                && !rect.is_null()
+                && !(field == "region" && rect.is_string())
+            {
+                validate_strict_object(
+                    rect,
+                    &["x", "y", "width", "height"],
+                    &format!("schema 0.6 target[{index}].{field}"),
+                )?;
+            }
+        }
+        if let Some(color_check) = object.get("color_check")
+            && !color_check.is_null()
+        {
+            let color_check = validate_strict_object(
+                color_check,
+                &["region", "expected"],
+                &format!("schema 0.6 target[{index}].color_check"),
+            )?;
+            if let Some(region) = color_check.get("region") {
+                validate_strict_object(
+                    region,
+                    &["x", "y", "width", "height"],
+                    &format!("schema 0.6 target[{index}].color_check.region"),
+                )?;
+            }
+        }
+    }
+    Ok(())
+}
+
+fn validate_strict_object<'a>(
+    value: &'a Value,
+    allowed: &[&str],
+    label: &str,
+) -> RecognitionPackResult<&'a Map<String, Value>> {
+    let object = value
+        .as_object()
+        .ok_or_else(|| RecognitionPackError::fatal(format!("{label} must be an object")))?;
+    reject_unknown_fields(object, allowed, label)?;
+    Ok(object)
+}
+
+fn reject_unknown_fields(
+    object: &Map<String, Value>,
+    allowed: &[&str],
+    label: &str,
+) -> RecognitionPackResult<()> {
+    if let Some(field) = object
+        .keys()
+        .find(|field| !allowed.contains(&field.as_str()))
+    {
+        return Err(RecognitionPackError::fatal(format!(
+            "{label} contains unknown field '{field}'"
+        )));
+    }
+    Ok(())
 }
 
 fn validate_pack(
@@ -563,9 +1200,12 @@ fn validate_pack(
     pack: &RecognitionPack,
     errors: &mut Vec<String>,
 ) {
-    if !matches!(pack.schema_version.as_str(), "0.1" | "0.3" | "0.4" | "0.5") {
+    if !matches!(
+        pack.schema_version.as_str(),
+        "0.1" | "0.3" | "0.4" | "0.5" | "0.6"
+    ) {
         errors.push(format!(
-            "unsupported schema_version '{}', expected one of '0.1', '0.3', '0.4', '0.5'",
+            "unsupported schema_version '{}', expected one of '0.1', '0.3', '0.4', '0.5', '0.6'",
             pack.schema_version
         ));
     }
@@ -593,6 +1233,19 @@ fn validate_pack(
 
         match target {
             RecognitionTarget::Template(target) => {
+                if pack.schema_version == "0.6" {
+                    if target.method != RecognitionMethod::Ncc {
+                        errors.push(format!(
+                            "target[{index}] method={:?} is deprecated_in_vNext; migrate to template+ncc, color, ocr, or nn",
+                            target.method
+                        ));
+                    }
+                    if target.mask.is_some() {
+                        errors.push(format!(
+                            "target[{index}] mask is deprecated_in_vNext and cannot be declared by schema 0.6"
+                        ));
+                    }
+                }
                 validate_region_shape(&target.region, &format!("target[{index}].region"), errors);
                 if let Some(threshold) = target.threshold {
                     validate_template_threshold(
@@ -636,6 +1289,101 @@ fn validate_pack(
             RecognitionTarget::ClickOnly(target) => {
                 validate_rect_shape(target.click, &format!("target[{index}].click"), errors);
             }
+            RecognitionTarget::Ocr(target) => {
+                if pack.schema_version != "0.6" {
+                    errors.push(format!(
+                        "target[{index}] type=ocr requires schema_version '0.6'"
+                    ));
+                }
+                validate_region_shape(&target.region, &format!("target[{index}].region"), errors);
+                validate_region_within_coordinate_space(
+                    &target.region,
+                    pack.coordinate_space,
+                    &format!("target[{index}].region"),
+                    errors,
+                );
+                validate_string_list(
+                    &target.languages,
+                    MAX_VISION_LANGUAGES,
+                    "languages",
+                    index,
+                    errors,
+                );
+                validate_string_list(
+                    &target.expected,
+                    MAX_VISION_EXPECTED_VALUES,
+                    "expected",
+                    index,
+                    errors,
+                );
+                validate_timeout(target.timeout_ms, index, errors);
+                validate_unit_score(
+                    target.minimum_confidence,
+                    &format!("target[{index}].minimum_confidence"),
+                    errors,
+                );
+                if target.model_ref != PPOCR_V6_MEDIUM_MODEL_REF {
+                    errors.push(format!(
+                        "target[{index}].model_ref must be '{PPOCR_V6_MEDIUM_MODEL_REF}' for OCR production targets"
+                    ));
+                }
+                validate_model_reference(&target.model_ref, &target.model_sha256, index, errors);
+                if let Some(click) = target.click {
+                    validate_rect_shape(click, &format!("target[{index}].click"), errors);
+                }
+            }
+            RecognitionTarget::Nn(target) => {
+                if pack.schema_version != "0.6" {
+                    errors.push(format!(
+                        "target[{index}] type=nn requires schema_version '0.6'"
+                    ));
+                }
+                validate_region_shape(&target.region, &format!("target[{index}].region"), errors);
+                validate_region_within_coordinate_space(
+                    &target.region,
+                    pack.coordinate_space,
+                    &format!("target[{index}].region"),
+                    errors,
+                );
+                validate_string_list(
+                    &target.candidate_labels,
+                    MAX_VISION_LABELS,
+                    "candidate_labels",
+                    index,
+                    errors,
+                );
+                validate_unit_score(
+                    target.minimum_score,
+                    &format!("target[{index}].minimum_score"),
+                    errors,
+                );
+                validate_timeout(target.timeout_ms, index, errors);
+                validate_model_reference(&target.model_ref, &target.model_sha256, index, errors);
+                match target.selection {
+                    NnSelectionMode::Best if target.expected_label.is_some() => {
+                        errors.push(format!(
+                            "target[{index}].expected_label must be omitted when selection='best'"
+                        ))
+                    }
+                    NnSelectionMode::Label => match target.expected_label.as_deref() {
+                        Some(expected)
+                            if target
+                                .candidate_labels
+                                .iter()
+                                .any(|label| label == expected) => {}
+                        Some(expected) => errors.push(format!(
+                            "target[{index}].expected_label '{expected}' is not in candidate_labels"
+                        )),
+                        None => errors.push(format!(
+                            "target[{index}].expected_label is required when selection='label'"
+                        )),
+                    },
+                    NnSelectionMode::Best => {}
+                }
+                if let Some(click) = target.click {
+                    validate_rect_shape(click, &format!("target[{index}].click"), errors);
+                }
+            }
         }
     }
 }
@@ -650,6 +1398,106 @@ fn validate_defaults(defaults: RecognitionDefaults, errors: &mut Vec<String>) {
         errors.push(format!(
             "defaults.color_max_distance must be finite and >= 0.0: {}",
             defaults.color_max_distance
+        ));
+    }
+}
+
+fn validate_timeout(timeout_ms: u64, index: usize, errors: &mut Vec<String>) {
+    if timeout_ms == 0 || timeout_ms > MAX_VISION_TIMEOUT_MS {
+        errors.push(format!(
+            "target[{index}].timeout_ms must be in 1..={MAX_VISION_TIMEOUT_MS}: {timeout_ms}"
+        ));
+    }
+}
+
+fn validate_unit_score(score: f32, label: &str, errors: &mut Vec<String>) {
+    if !score.is_finite() || !(0.0..=1.0).contains(&score) {
+        errors.push(format!("{label} must be finite and in 0.0..=1.0: {score}"));
+    }
+}
+
+fn validate_string_list(
+    values: &[String],
+    maximum_count: usize,
+    field: &str,
+    index: usize,
+    errors: &mut Vec<String>,
+) {
+    if values.is_empty() {
+        errors.push(format!(
+            "target[{index}].{field} must include at least one value"
+        ));
+        return;
+    }
+    if values.len() > maximum_count {
+        errors.push(format!(
+            "target[{index}].{field} contains {} values, limit is {maximum_count}",
+            values.len()
+        ));
+    }
+    let mut seen = HashSet::new();
+    for (value_index, value) in values.iter().enumerate() {
+        if value.trim().is_empty() {
+            errors.push(format!(
+                "target[{index}].{field}[{value_index}] must not be blank"
+            ));
+        }
+        if value.len() > MAX_VISION_STRING_BYTES {
+            errors.push(format!(
+                "target[{index}].{field}[{value_index}] exceeds {MAX_VISION_STRING_BYTES} bytes"
+            ));
+        }
+        if !seen.insert(value) {
+            errors.push(format!(
+                "target[{index}].{field} contains duplicate value '{value}'"
+            ));
+        }
+    }
+}
+
+fn validate_model_reference(
+    model_ref: &str,
+    model_sha256: &str,
+    index: usize,
+    errors: &mut Vec<String>,
+) {
+    if model_ref.trim().is_empty() {
+        errors.push(format!("target[{index}].model_ref must not be blank"));
+    }
+    if model_ref.len() > 255 {
+        errors.push(format!("target[{index}].model_ref exceeds 255 bytes"));
+    }
+    if model_ref.contains(['/', '\\', ':']) || model_ref == "." || model_ref == ".." {
+        errors.push(format!(
+            "target[{index}].model_ref must be a logical identifier, not a host path"
+        ));
+    }
+    if model_sha256.len() != 64
+        || !model_sha256
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    {
+        errors.push(format!(
+            "target[{index}].model_sha256 must be exactly 64 lowercase hexadecimal characters"
+        ));
+    }
+}
+
+fn validate_region_within_coordinate_space(
+    region: &PackRegion,
+    coordinate_space: Option<PackCoordinateSpace>,
+    label: &str,
+    errors: &mut Vec<String>,
+) {
+    let (PackRegion::Rect(rect), Some(space)) = (region, coordinate_space) else {
+        return;
+    };
+    let right = i64::from(rect.x) + i64::from(rect.width);
+    let bottom = i64::from(rect.y) + i64::from(rect.height);
+    if right > i64::from(space.width) || bottom > i64::from(space.height) {
+        errors.push(format!(
+            "{label} exceeds coordinate_space {}x{}",
+            space.width, space.height
         ));
     }
 }
@@ -738,6 +1586,260 @@ fn target_region(
         PackRegion::Keyword(value) => Err(RecognitionPackError::fatal(format!(
             "template target '{target_id}' has unsupported region '{value}'"
         ))),
+    }
+}
+
+fn provider_frame(scene: &Scene) -> VisionProviderFrame<'_> {
+    VisionProviderFrame {
+        width: scene.width(),
+        height: scene.height(),
+        rgb8_pixels: scene.rgb8_pixels(),
+    }
+}
+
+fn provider_region(
+    scene: &Scene,
+    target_id: &str,
+    region: &PackRegion,
+) -> RecognitionPackResult<PackRect> {
+    let rect = match region {
+        PackRegion::Rect(rect) => *rect,
+        PackRegion::Keyword(value) if value == "full_frame" => PackRect {
+            x: 0,
+            y: 0,
+            width: i32::try_from(scene.width()).map_err(|_| {
+                RecognitionPackError::fatal(format!(
+                    "vision target '{target_id}' frame width exceeds i32 range"
+                ))
+            })?,
+            height: i32::try_from(scene.height()).map_err(|_| {
+                RecognitionPackError::fatal(format!(
+                    "vision target '{target_id}' frame height exceeds i32 range"
+                ))
+            })?,
+        },
+        PackRegion::Keyword(value) => {
+            return Err(RecognitionPackError::fatal(format!(
+                "vision target '{target_id}' has unsupported region '{value}'"
+            )));
+        }
+    };
+    if !rect_is_within(
+        rect,
+        PackRect {
+            x: 0,
+            y: 0,
+            width: i32::try_from(scene.width())
+                .map_err(|_| RecognitionPackError::fatal("scene width exceeds i32 range"))?,
+            height: i32::try_from(scene.height())
+                .map_err(|_| RecognitionPackError::fatal("scene height exceeds i32 range"))?,
+        },
+    ) {
+        return Err(RecognitionPackError::fatal(format!(
+            "vision target '{target_id}' region exceeds scene bounds"
+        )));
+    }
+    Ok(rect)
+}
+
+fn provider_error(
+    target_id: &str,
+    capability: &str,
+    err: VisionProviderError,
+) -> RecognitionPackError {
+    let code = if err.code() == VisionProviderErrorCode::InvalidResponse {
+        RecognitionPackErrorCode::VisionProviderInvalidResponse
+    } else {
+        RecognitionPackErrorCode::VisionProviderFailure
+    };
+    RecognitionPackError::fatal_with_code(
+        code,
+        format!(
+            "{capability} provider failed for target '{target_id}' with {:?}: {}",
+            err.code(),
+            err.message()
+        ),
+    )
+}
+
+#[derive(Debug)]
+struct ValidatedOcrResult {
+    text: String,
+    confidence: Option<f32>,
+    blocks: Vec<OcrTextEvidence>,
+}
+
+fn validate_ocr_result(
+    result: OcrProviderResult,
+    requested_region: PackRect,
+) -> RecognitionPackResult<ValidatedOcrResult> {
+    if result.text.len() > MAX_OCR_TEXT_BYTES {
+        return Err(invalid_provider_response(format!(
+            "OCR aggregate text exceeds {MAX_OCR_TEXT_BYTES} bytes"
+        )));
+    }
+    validate_optional_provider_score(result.confidence, "OCR aggregate confidence")?;
+    if result.blocks.len() > MAX_OCR_BLOCKS {
+        return Err(invalid_provider_response(format!(
+            "OCR returned {} blocks, limit is {MAX_OCR_BLOCKS}",
+            result.blocks.len()
+        )));
+    }
+
+    let mut blocks = Vec::with_capacity(result.blocks.len());
+    for (index, block) in result.blocks.into_iter().enumerate() {
+        if block.text.len() > MAX_VISION_STRING_BYTES {
+            return Err(invalid_provider_response(format!(
+                "OCR block[{index}] text exceeds {MAX_VISION_STRING_BYTES} bytes"
+            )));
+        }
+        validate_optional_provider_score(
+            block.confidence,
+            &format!("OCR block[{index}] confidence"),
+        )?;
+        if !rect_is_within(block.rect, requested_region) {
+            return Err(invalid_provider_response(format!(
+                "OCR block[{index}] rect is outside the requested ROI"
+            )));
+        }
+        blocks.push(OcrTextEvidence {
+            text: block.text,
+            rect: block.rect,
+            confidence: block.confidence,
+        });
+    }
+    blocks.sort_by(|left, right| {
+        (
+            left.rect.y,
+            left.rect.x,
+            left.rect.height,
+            left.rect.width,
+            &left.text,
+        )
+            .cmp(&(
+                right.rect.y,
+                right.rect.x,
+                right.rect.height,
+                right.rect.width,
+                &right.text,
+            ))
+    });
+    let text = if blocks.is_empty() {
+        result.text
+    } else {
+        let text = blocks
+            .iter()
+            .map(|block| block.text.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+        if text.len() > MAX_OCR_TEXT_BYTES {
+            return Err(invalid_provider_response(format!(
+                "sorted OCR block text exceeds {MAX_OCR_TEXT_BYTES} bytes"
+            )));
+        }
+        text
+    };
+    Ok(ValidatedOcrResult {
+        text,
+        confidence: result.confidence,
+        blocks,
+    })
+}
+
+fn validate_nn_result(
+    result: NnProviderResult,
+    candidate_labels: &[String],
+) -> RecognitionPackResult<Vec<NnLabelEvidence>> {
+    if result.labels.len() > MAX_VISION_RESULTS {
+        return Err(invalid_provider_response(format!(
+            "NN returned {} labels, limit is {MAX_VISION_RESULTS}",
+            result.labels.len()
+        )));
+    }
+    let candidates: HashSet<&str> = candidate_labels.iter().map(String::as_str).collect();
+    let mut seen = HashSet::new();
+    let mut labels = Vec::with_capacity(result.labels.len());
+    for (index, label) in result.labels.into_iter().enumerate() {
+        if label.label.trim().is_empty() || label.label.len() > MAX_VISION_STRING_BYTES {
+            return Err(invalid_provider_response(format!(
+                "NN label[{index}] must be non-blank and at most {MAX_VISION_STRING_BYTES} bytes"
+            )));
+        }
+        if !seen.insert(label.label.clone()) {
+            return Err(invalid_provider_response(format!(
+                "NN provider returned duplicate label '{}'",
+                label.label
+            )));
+        }
+        validate_provider_score(label.score, &format!("NN label[{index}] score"))?;
+        labels.push(NnLabelEvidence {
+            candidate: candidates.contains(label.label.as_str()),
+            label: label.label,
+            score: label.score,
+        });
+    }
+    labels.sort_by(|left, right| {
+        right
+            .score
+            .total_cmp(&left.score)
+            .then_with(|| left.label.cmp(&right.label))
+    });
+    Ok(labels)
+}
+
+fn validate_optional_provider_score(score: Option<f32>, label: &str) -> RecognitionPackResult<()> {
+    if let Some(score) = score {
+        validate_provider_score(score, label)?;
+    }
+    Ok(())
+}
+
+fn validate_provider_score(score: f32, label: &str) -> RecognitionPackResult<()> {
+    if !score.is_finite() || !(0.0..=1.0).contains(&score) {
+        return Err(invalid_provider_response(format!(
+            "{label} must be finite and in 0.0..=1.0, got {score}"
+        )));
+    }
+    Ok(())
+}
+
+fn invalid_provider_response(message: impl Into<String>) -> RecognitionPackError {
+    RecognitionPackError::fatal_with_code(
+        RecognitionPackErrorCode::VisionProviderInvalidResponse,
+        message,
+    )
+}
+
+fn rect_is_within(inner: PackRect, outer: PackRect) -> bool {
+    if inner.x < outer.x
+        || inner.y < outer.y
+        || inner.width <= 0
+        || inner.height <= 0
+        || outer.width <= 0
+        || outer.height <= 0
+    {
+        return false;
+    }
+    let inner_right = i64::from(inner.x) + i64::from(inner.width);
+    let inner_bottom = i64::from(inner.y) + i64::from(inner.height);
+    let outer_right = i64::from(outer.x) + i64::from(outer.width);
+    let outer_bottom = i64::from(outer.y) + i64::from(outer.height);
+    inner_right <= outer_right && inner_bottom <= outer_bottom
+}
+
+fn ocr_text_matches(text: &str, expected: &str, target: &OcrTarget) -> bool {
+    if target.case_sensitive {
+        match target.match_mode {
+            OcrMatchMode::Exact => text == expected,
+            OcrMatchMode::Contains => text.contains(expected),
+        }
+    } else {
+        let text = text.to_lowercase();
+        let expected = expected.to_lowercase();
+        match target.match_mode {
+            OcrMatchMode::Exact => text == expected,
+            OcrMatchMode::Contains => text.contains(&expected),
+        }
     }
 }
 
@@ -942,6 +2044,232 @@ mod tests {
             .expect_err("unsupported target fails loud");
 
         assert_fatal_contains(err, "unsupported recognition semantics");
+    }
+
+    #[test]
+    fn schema_0_6_rejects_unknown_fields_without_changing_legacy_parsing() {
+        let legacy = load_pack_from_json_str(
+            r#"{
+                "schema_version": "0.5",
+                "coordinate_space": {"width": 2, "height": 1},
+                "legacy_extension": true,
+                "targets": [
+                    {
+                        "type": "click_only",
+                        "id": "tap",
+                        "click": {"x": 0, "y": 0, "width": 1, "height": 1},
+                        "legacy_target_extension": true
+                    }
+                ]
+            }"#,
+        )
+        .expect("legacy unknown fields remain accepted");
+        assert_eq!(legacy.schema_version, "0.5");
+
+        load_pack_from_json_str(
+            r#"{
+                "schema_version": "0.6",
+                "converter_schema_version": "0.5",
+                "generated": true,
+                "generated_by": "actingcommand-resource-convert",
+                "coordinate_space": {"width": 2, "height": 1},
+                "targets": []
+            }"#,
+        )
+        .expect("declared generator metadata remains valid in strict schema");
+
+        let err = load_pack_from_json_str(
+            r#"{
+                "schema_version": "0.6",
+                "generated": "true",
+                "coordinate_space": {"width": 2, "height": 1},
+                "targets": []
+            }"#,
+        )
+        .expect_err("declared generator metadata retains its wire type");
+        assert_fatal_contains(err, "generated' must be a boolean");
+
+        let err = load_pack_from_json_str(
+            r#"{
+                "schema_version": "0.6",
+                "coordinate_space": {"width": 2, "height": 1},
+                "unexpected": true,
+                "targets": []
+            }"#,
+        )
+        .expect_err("v0.6 unknown root field rejected");
+        assert_fatal_contains(err, "unknown field 'unexpected'");
+
+        let err = load_pack_from_json_str(
+            r#"{
+                "schema_version": "0.6",
+                "coordinate_space": {"width": 2, "height": 1},
+                "targets": [
+                    {
+                        "type": "click_only",
+                        "id": "tap",
+                        "click": {"x": 0, "y": 0, "width": 1, "height": 1},
+                        "unexpected": true
+                    }
+                ]
+            }"#,
+        )
+        .expect_err("v0.6 unknown target field rejected");
+        assert_fatal_contains(err, "unknown field 'unexpected'");
+    }
+
+    #[test]
+    fn schema_0_6_rejects_deprecated_template_primitives() {
+        for (field, value, expected) in [
+            ("method", r#""rgb_count""#, "deprecated_in_vNext"),
+            (
+                "mask",
+                r#"{"type":"range","lower":1,"upper":255}"#,
+                "deprecated_in_vNext",
+            ),
+        ] {
+            let json = format!(
+                r#"{{
+                    "schema_version": "0.6",
+                    "coordinate_space": {{"width": 2, "height": 1}},
+                    "targets": [{{
+                        "type": "template",
+                        "id": "legacy",
+                        "template_path": "templates/legacy.png",
+                        "region": "full_frame",
+                        "{field}": {value}
+                    }}]
+                }}"#
+            );
+            let err = load_pack_from_json_str(&json).expect_err("deprecated primitive rejected");
+            assert_eq!(err.code(), RecognitionPackErrorCode::UnsupportedTarget);
+            assert_fatal_contains(err, expected);
+        }
+    }
+
+    #[test]
+    fn schema_0_6_ocr_exact_and_contains_are_runtime_owned() {
+        let scene = Scene::from_rgb8(2, 1, &[1, 2, 3, 4, 5, 6]).expect("scene");
+        let provider = Arc::new(TestVisionProvider {
+            ocr: Ok(OcrProviderResult {
+                text: "provider aggregate is not authoritative".to_string(),
+                blocks: vec![OcrProviderTextBlock {
+                    text: "Hello Runtime".to_string(),
+                    rect: rect(0, 0, 2, 1),
+                    confidence: Some(0.95),
+                }],
+                confidence: Some(0.95),
+            }),
+            nn: Err(VisionProviderError::new(
+                VisionProviderErrorCode::Unavailable,
+                "unused",
+            )),
+        });
+        let exact = vision_evaluator(
+            ocr_pack_json("exact", "hello runtime", 0.90),
+            provider.clone(),
+        );
+        let contains = vision_evaluator(ocr_pack_json("contains", "runtime", 0.90), provider);
+
+        let exact_result = exact.evaluate_target(&scene, "ocr/page").expect("exact");
+        assert!(exact_result.passed);
+        assert_eq!(exact_result.kind, TargetKind::Ocr);
+        assert_eq!(
+            exact_result.ocr.expect("ocr evidence").text,
+            "Hello Runtime"
+        );
+        assert!(
+            contains
+                .evaluate_target(&scene, "ocr/page")
+                .expect("contains")
+                .passed
+        );
+    }
+
+    #[test]
+    fn schema_0_6_vision_targets_require_provider_at_admission() {
+        let pack =
+            load_pack_from_json_str(&ocr_pack_json("exact", "hello", 0.0)).expect("pack parses");
+        let err =
+            RecognitionEvaluator::new(PathBuf::new(), pack).expect_err("missing provider rejected");
+
+        assert_eq!(err.code(), RecognitionPackErrorCode::VisionProviderMissing);
+    }
+
+    #[test]
+    fn ocr_invalid_confidence_and_out_of_roi_blocks_fail_closed() {
+        for result in [
+            OcrProviderResult {
+                text: "hello".to_string(),
+                blocks: Vec::new(),
+                confidence: Some(f32::NAN),
+            },
+            OcrProviderResult {
+                text: "hello".to_string(),
+                blocks: vec![OcrProviderTextBlock {
+                    text: "hello".to_string(),
+                    rect: rect(1, 0, 2, 1),
+                    confidence: Some(1.0),
+                }],
+                confidence: Some(1.0),
+            },
+        ] {
+            let evaluator = vision_evaluator(
+                ocr_pack_json("exact", "hello", 0.0),
+                Arc::new(TestVisionProvider {
+                    ocr: Ok(result),
+                    nn: Err(VisionProviderError::new(
+                        VisionProviderErrorCode::Unavailable,
+                        "unused",
+                    )),
+                }),
+            );
+            let scene = Scene::from_rgb8(2, 1, &[0; 6]).expect("scene");
+            let err = evaluator
+                .evaluate_target(&scene, "ocr/page")
+                .expect_err("invalid provider output rejected");
+            assert_eq!(
+                err.code(),
+                RecognitionPackErrorCode::VisionProviderInvalidResponse
+            );
+        }
+    }
+
+    #[test]
+    fn nn_label_selection_ignores_unknown_labels_and_sorts_deterministically() {
+        let provider = Arc::new(TestVisionProvider {
+            ocr: Err(VisionProviderError::new(
+                VisionProviderErrorCode::Unavailable,
+                "unused",
+            )),
+            nn: Ok(NnProviderResult {
+                labels: vec![
+                    NnProviderLabel {
+                        label: "home".to_string(),
+                        score: 0.80,
+                    },
+                    NnProviderLabel {
+                        label: "provider.private".to_string(),
+                        score: 0.99,
+                    },
+                    NnProviderLabel {
+                        label: "settings".to_string(),
+                        score: 0.70,
+                    },
+                ],
+            }),
+        });
+        let evaluator = vision_evaluator(nn_pack_json(), provider);
+        let scene = Scene::from_rgb8(2, 1, &[0; 6]).expect("scene");
+
+        let evaluation = evaluator.evaluate_target(&scene, "nn/page").expect("nn");
+
+        assert!(evaluation.passed);
+        let nn = evaluation.nn.expect("nn evidence");
+        assert_eq!(nn.selected_label.as_deref(), Some("home"));
+        assert_eq!(nn.selected_score, Some(0.80));
+        assert_eq!(nn.labels[0].label, "provider.private");
+        assert!(!nn.labels[0].candidate);
     }
 
     #[test]
@@ -1598,6 +2926,128 @@ mod tests {
         fn blank_scene(&self) -> Scene {
             Scene::from_png(&encode_png(&blank_image(64, 48, [30, 31, 32]))).expect("scene")
         }
+    }
+
+    #[derive(Debug)]
+    struct TestVisionProvider {
+        ocr: Result<OcrProviderResult, VisionProviderError>,
+        nn: Result<NnProviderResult, VisionProviderError>,
+    }
+
+    impl VisionProvider for TestVisionProvider {
+        fn require_ocr_model(
+            &self,
+            model_ref: &str,
+            model_sha256: &str,
+        ) -> Result<(), VisionProviderError> {
+            if model_ref == PPOCR_V6_MEDIUM_MODEL_REF
+                && model_sha256
+                    == "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            {
+                Ok(())
+            } else {
+                Err(VisionProviderError::new(
+                    VisionProviderErrorCode::ModelMismatch,
+                    "unexpected OCR model identity",
+                ))
+            }
+        }
+
+        fn require_nn_model(
+            &self,
+            model_ref: &str,
+            model_sha256: &str,
+        ) -> Result<(), VisionProviderError> {
+            if model_ref == "fixture-page-model"
+                && model_sha256
+                    == "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+            {
+                Ok(())
+            } else {
+                Err(VisionProviderError::new(
+                    VisionProviderErrorCode::ModelMismatch,
+                    "unexpected NN model identity",
+                ))
+            }
+        }
+
+        fn read_text(
+            &self,
+            request: OcrProviderRequest<'_>,
+        ) -> Result<OcrProviderResult, VisionProviderError> {
+            assert_eq!(request.model_ref, PPOCR_V6_MEDIUM_MODEL_REF);
+            assert_eq!(
+                request.model_sha256,
+                "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            );
+            assert_eq!(request.frame.rgb8_pixels.len(), 6);
+            self.ocr.clone()
+        }
+
+        fn classify(
+            &self,
+            request: NnProviderRequest<'_>,
+        ) -> Result<NnProviderResult, VisionProviderError> {
+            assert_eq!(request.model_ref, "fixture-page-model");
+            assert_eq!(
+                request.model_sha256,
+                "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+            );
+            assert_eq!(request.frame.rgb8_pixels.len(), 6);
+            self.nn.clone()
+        }
+    }
+
+    fn vision_evaluator(json: String, provider: Arc<dyn VisionProvider>) -> RecognitionEvaluator {
+        let pack = load_pack_from_json_str(&json).expect("vision pack parses");
+        RecognitionEvaluator::with_vision_provider(
+            pack,
+            Arc::new(FsAssetResolver::new(PathBuf::new())),
+            provider,
+        )
+        .expect("vision evaluator")
+    }
+
+    fn ocr_pack_json(match_mode: &str, expected: &str, minimum_confidence: f32) -> String {
+        format!(
+            r#"{{
+                "schema_version": "0.6",
+                "coordinate_space": {{"width": 2, "height": 1}},
+                "targets": [{{
+                    "type": "ocr",
+                    "id": "ocr/page",
+                    "region": "full_frame",
+                    "languages": ["en"],
+                    "timeout_ms": 1000,
+                    "match_mode": "{match_mode}",
+                    "expected": ["{expected}"],
+                    "case_sensitive": false,
+                    "minimum_confidence": {minimum_confidence},
+                    "model_ref": "PP-OCRv6_medium",
+                    "model_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                }}]
+            }}"#
+        )
+    }
+
+    fn nn_pack_json() -> String {
+        r#"{
+            "schema_version": "0.6",
+            "coordinate_space": {"width": 2, "height": 1},
+            "targets": [{
+                "type": "nn",
+                "id": "nn/page",
+                "region": "full_frame",
+                "model_ref": "fixture-page-model",
+                "model_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+                "candidate_labels": ["home", "settings"],
+                "minimum_score": 0.75,
+                "selection": "label",
+                "expected_label": "home",
+                "timeout_ms": 1000
+            }]
+        }"#
+        .to_string()
     }
 
     struct TestDir {

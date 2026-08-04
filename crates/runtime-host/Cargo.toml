@@ -24,5 +24,6 @@ serde_json = { workspace = true }
 sha2 = { workspace = true }
 
 [dev-dependencies]
+actingcommand-recognition-pack = { workspace = true }
 tempfile = "3"
 zip = { workspace = true }

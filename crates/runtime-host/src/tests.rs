@@ -47,6 +47,10 @@ use actingcommand_policy::{
     StrategicEvidencePointer, StrategicGoal, StrategicInstanceAssessment, StrategicReport,
     StrategicTemplate,
 };
+use actingcommand_recognition_pack::{
+    NnProviderRequest, NnProviderResult, OcrProviderRequest, OcrProviderResult, VisionProvider,
+    VisionProviderError, VisionProviderErrorCode,
+};
 use actingcommand_runtime_state::{
     RUNTIME_STATE_DATABASE_FILE, RUNTIME_STATE_INTEGRITY_KEY_FILE, ReleaseArtifactSources,
     RuntimeStateStore,
@@ -289,6 +293,7 @@ struct FakeProvider {
     entries: BTreeMap<String, FakeEntry>,
     advertised_aliases: Option<Vec<String>>,
     provenance: ExecutionBackendProvenance,
+    vision_provider: Option<Arc<dyn VisionProvider>>,
     resolved_override: Option<Arc<std::sync::Mutex<ResolvedExecutionInstance>>>,
 }
 
@@ -307,6 +312,7 @@ impl FakeProvider {
                 .collect(),
             advertised_aliases: None,
             provenance: ExecutionBackendProvenance::PhysicalDevice,
+            vision_provider: None,
             resolved_override: None,
         }
     }
@@ -318,6 +324,11 @@ impl FakeProvider {
 
     fn with_inventory(mut self, aliases: impl IntoIterator<Item = String>) -> Self {
         self.advertised_aliases = Some(aliases.into_iter().collect());
+        self
+    }
+
+    fn with_vision_provider(mut self, vision_provider: Arc<dyn VisionProvider>) -> Self {
+        self.vision_provider = Some(vision_provider);
         self
     }
 
@@ -355,6 +366,10 @@ impl ExecutionBackendProvider for FakeProvider {
                 ResolvedExecutionInstance::fixture_simulation(entry.instance_id)
             }
         })
+    }
+
+    fn vision_provider(&self) -> Option<Arc<dyn VisionProvider>> {
+        self.vision_provider.as_ref().map(Arc::clone)
     }
 
     fn open_input(&self, instance_alias: &str) -> DeviceResult<Box<dyn InputBackend>> {
@@ -441,6 +456,69 @@ impl ExecutionBackendProvider for FakeProvider {
         } else {
             Ok(())
         }
+    }
+}
+
+#[derive(Debug, Default)]
+struct FakeVisionProvider {
+    ocr_calls: AtomicU64,
+}
+
+impl VisionProvider for FakeVisionProvider {
+    fn require_ocr_model(
+        &self,
+        model_ref: &str,
+        model_sha256: &str,
+    ) -> Result<(), VisionProviderError> {
+        if model_ref == "PP-OCRv6_medium"
+            && model_sha256 == "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        {
+            Ok(())
+        } else {
+            Err(VisionProviderError::new(
+                VisionProviderErrorCode::ModelMismatch,
+                "unexpected OCR model identity",
+            ))
+        }
+    }
+
+    fn require_nn_model(
+        &self,
+        _model_ref: &str,
+        _model_sha256: &str,
+    ) -> Result<(), VisionProviderError> {
+        Err(VisionProviderError::new(
+            VisionProviderErrorCode::Unavailable,
+            "NN capability is unavailable",
+        ))
+    }
+
+    fn read_text(
+        &self,
+        request: OcrProviderRequest<'_>,
+    ) -> Result<OcrProviderResult, VisionProviderError> {
+        self.ocr_calls.fetch_add(1, Ordering::AcqRel);
+        let text = match request.frame.rgb8_pixels.get(..3) {
+            Some([255, 0, 0]) => "home",
+            Some([0, 0, 255]) => "terminal",
+            Some([255, 255, 0]) => "error",
+            _ => "unknown",
+        };
+        Ok(OcrProviderResult {
+            text: text.to_owned(),
+            blocks: Vec::new(),
+            confidence: Some(0.99),
+        })
+    }
+
+    fn classify(
+        &self,
+        _request: NnProviderRequest<'_>,
+    ) -> Result<NnProviderResult, VisionProviderError> {
+        Err(VisionProviderError::new(
+            VisionProviderErrorCode::Unavailable,
+            "NN capability is unavailable",
+        ))
     }
 }
 
@@ -2243,6 +2321,80 @@ fn neutral_contained_task_package() -> Vec<u8> {
     )
 }
 
+fn neutral_vision_contained_task_package() -> Vec<u8> {
+    neutral_contained_task_package_with_task_and_recognition(
+        br#"{
+            "schema_version":"0.6",
+            "task_id":"task",
+            "game":"neutral",
+            "server_scope":["test"],
+            "coordinate_space":{"width":2,"height":1},
+            "entry_page":"home",
+            "target_page":"terminal",
+             "operations":[{
+                 "id":"open_terminal",
+                 "from":"home",
+                 "click":{"kind":"point","x":1,"y":0},
+                 "unguarded_trusted_coordinate":true,
+                 "retryable":false
+             }]
+        }"#,
+        br#"{
+            "schema_version":"0.6",
+            "game":"neutral",
+            "server":"test",
+            "coordinate_space":{"width":2,"height":1},
+            "targets":[
+                {
+                    "type":"ocr",
+                    "id":"page/home",
+                    "region":{"x":0,"y":0,"width":1,"height":1},
+                    "languages":["en"],
+                    "timeout_ms":1000,
+                    "match_mode":"exact",
+                    "expected":["home"],
+                    "case_sensitive":true,
+                    "minimum_confidence":0.9,
+                    "model_ref":"PP-OCRv6_medium",
+                    "model_sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                },
+                {
+                    "type":"ocr",
+                    "id":"page/terminal",
+                    "region":{"x":0,"y":0,"width":1,"height":1},
+                    "languages":["en"],
+                    "timeout_ms":1000,
+                    "match_mode":"exact",
+                    "expected":["terminal"],
+                    "case_sensitive":true,
+                    "minimum_confidence":0.9,
+                    "model_ref":"PP-OCRv6_medium",
+                    "model_sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                },
+                {
+                    "type":"ocr",
+                    "id":"page/error",
+                    "region":{"x":0,"y":0,"width":1,"height":1},
+                    "languages":["en"],
+                    "timeout_ms":1000,
+                    "match_mode":"exact",
+                    "expected":["error"],
+                    "case_sensitive":true,
+                    "minimum_confidence":0.9,
+                    "model_ref":"PP-OCRv6_medium",
+                    "model_sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                },
+                {
+                    "type":"color",
+                    "id":"guard/ready",
+                    "region":{"x":1,"y":0,"width":1,"height":1},
+                    "expected":[0,255,0]
+                }
+            ]
+        }"#,
+    )
+}
+
 fn neutral_retrying_contained_task_package() -> Vec<u8> {
     neutral_contained_task_package_with_task(
         br#"{
@@ -2487,6 +2639,28 @@ fn neutral_non_retryable_destination_package(with_error_page: bool) -> Vec<u8> {
 }
 
 fn neutral_contained_task_package_with_task(task: &[u8]) -> Vec<u8> {
+    neutral_contained_task_package_with_task_and_recognition(
+        task,
+        br#"{
+            "schema_version":"0.3",
+            "game":"neutral",
+            "server":"test",
+            "coordinate_space":{"width":2,"height":1},
+            "defaults":{"color_max_distance":0.0},
+            "targets":[
+                {"type":"color","id":"page/home","region":{"x":0,"y":0,"width":1,"height":1},"expected":[255,0,0]},
+                {"type":"color","id":"page/terminal","region":{"x":0,"y":0,"width":1,"height":1},"expected":[0,0,255]},
+                {"type":"color","id":"page/error","region":{"x":0,"y":0,"width":1,"height":1},"expected":[255,255,0]},
+                {"type":"color","id":"guard/ready","region":{"x":1,"y":0,"width":1,"height":1},"expected":[0,255,0]}
+            ]
+        }"#,
+    )
+}
+
+fn neutral_contained_task_package_with_task_and_recognition(
+    task: &[u8],
+    recognition_pack: &[u8],
+) -> Vec<u8> {
     let cursor = Cursor::new(Vec::new());
     let mut zip = ZipWriter::new(cursor);
     let options = FileOptions::default().compression_method(zip::CompressionMethod::Stored);
@@ -2517,19 +2691,7 @@ fn neutral_contained_task_package_with_task(task: &[u8]) -> Vec<u8> {
         ),
         (
             "resources/recognition/neutral.test.pack.json",
-            br#"{
-                "schema_version":"0.3",
-                "game":"neutral",
-                "server":"test",
-                "coordinate_space":{"width":2,"height":1},
-                "defaults":{"color_max_distance":0.0},
-                "targets":[
-                    {"type":"color","id":"page/home","region":{"x":0,"y":0,"width":1,"height":1},"expected":[255,0,0]},
-                    {"type":"color","id":"page/terminal","region":{"x":0,"y":0,"width":1,"height":1},"expected":[0,0,255]},
-                    {"type":"color","id":"page/error","region":{"x":0,"y":0,"width":1,"height":1},"expected":[255,255,0]},
-                    {"type":"color","id":"guard/ready","region":{"x":1,"y":0,"width":1,"height":1},"expected":[0,255,0]}
-                ]
-            }"#,
+            recognition_pack,
         ),
         (
             "resources/recognition/neutral.test.pages.json",
@@ -7852,6 +8014,86 @@ fn application_lifecycle_is_denied_while_another_client_holds_the_instance() {
     drop(owner);
     drop(contender);
     host.close().expect("close host");
+}
+
+#[test]
+fn runtime_routes_vision_packages_only_through_the_injected_provider() {
+    let bytes = neutral_vision_contained_task_package();
+    let expected = actingcommand_pack_containment::Sha256Hash::digest(&bytes).to_string();
+
+    let missing_root = TempDir::new().expect("missing-provider tempdir");
+    let missing_package = missing_root.path().join("neutral-vision-task.zip");
+    fs::write(&missing_package, &bytes).expect("write missing-provider package");
+    let missing_state = Arc::new(FakeState::default());
+    let missing_host = RuntimeHost::start(
+        config(&missing_root),
+        Arc::new(FakeProvider::one(
+            "neutral.instance",
+            instance_id(),
+            Arc::clone(&missing_state),
+        )),
+    )
+    .expect("missing-provider runtime host");
+    let mut missing_client = TestClient::connect(&missing_host);
+    let missing_request = missing_client.request(RuntimeOperation::run_contained_task(
+        "neutral.instance",
+        missing_client.ids.mint_holder_id().expect("holder"),
+        ContainedTaskRequest::new(missing_package.display().to_string(), expected.clone())
+            .expect("missing-provider task request"),
+    ));
+    let missing_receipt = missing_client.send(&missing_request);
+    assert_eq!(missing_receipt.state(), RuntimeReceiptState::Denied);
+    assert_eq!(
+        missing_receipt.error_projection().expect("denial").code,
+        RuntimeErrorCode::PackageInvalid
+    );
+    assert_eq!(missing_state.capture_count.load(Ordering::Acquire), 0);
+    assert_eq!(missing_state.input_count.load(Ordering::Acquire), 0);
+    drop(missing_client);
+    missing_host.close().expect("close missing-provider host");
+
+    let injected_root = TempDir::new().expect("injected-provider tempdir");
+    let injected_package = injected_root.path().join("neutral-vision-task.zip");
+    fs::write(&injected_package, &bytes).expect("write injected-provider package");
+    let injected_state = Arc::new(FakeState::default());
+    injected_state
+        .transition_capture_after_input
+        .store(true, Ordering::Release);
+    let vision_provider = Arc::new(FakeVisionProvider::default());
+    let injected_host = RuntimeHost::start(
+        config(&injected_root),
+        Arc::new(
+            FakeProvider::one(
+                "neutral.instance",
+                instance_id(),
+                Arc::clone(&injected_state),
+            )
+            .with_vision_provider(vision_provider.clone()),
+        ),
+    )
+    .expect("injected-provider runtime host");
+    let mut injected_client = TestClient::connect(&injected_host);
+    let injected_request = injected_client.request(RuntimeOperation::run_contained_task(
+        "neutral.instance",
+        injected_client.ids.mint_holder_id().expect("holder"),
+        ContainedTaskRequest::new(injected_package.display().to_string(), expected)
+            .expect("injected-provider task request"),
+    ));
+    let injected_receipt = injected_client.send(&injected_request);
+    assert_eq!(injected_receipt.state(), RuntimeReceiptState::Completed);
+    assert!(matches!(
+        injected_receipt.result(),
+        Some(RuntimeResult::ContainedTaskCompleted {
+            outcome: TaskOutcome::Success,
+            final_page: Some(page),
+            ..
+        }) if page == "neutral/terminal"
+    ));
+    assert!(vision_provider.ocr_calls.load(Ordering::Acquire) >= 2);
+    assert_eq!(injected_state.input_count.load(Ordering::Acquire), 1);
+    assert_eq!(injected_state.capture_count.load(Ordering::Acquire), 2);
+    drop(injected_client);
+    injected_host.close().expect("close injected-provider host");
 }
 
 #[test]

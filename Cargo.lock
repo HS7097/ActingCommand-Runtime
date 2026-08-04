@@ -42,6 +42,7 @@ dependencies = [
  "actingcommand-policy",
  "actingcommand-runtime-client",
  "actingcommand-runtime-host",
+ "actingcommand-vision-ffi",
  "serde",
  "serde_json",
  "sha2",
@@ -140,6 +141,7 @@ dependencies = [
  "actingcommand-page-detector",
  "actingcommand-recognition",
  "actingcommand-recognition-pack",
+ "actingcommand-vision-ffi",
  "serde",
  "serde_json",
  "sha2",
@@ -315,6 +317,7 @@ dependencies = [
  "actingcommand-ledger",
  "actingcommand-pack-containment",
  "actingcommand-policy",
+ "actingcommand-recognition-pack",
  "actingcommand-runtime-state",
  "actingcommand-scheduler",
  "serde",
@@ -349,6 +352,7 @@ dependencies = [
  "libloading 0.8.9",
  "serde",
  "serde_json",
+ "sha2",
 ]
 
 [[package]]

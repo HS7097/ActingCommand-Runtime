@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 
 const GENERATED_BY: &str = "actinglab resource convert";
 const CONVERTER_SCHEMA_VERSION: &str = "0.5";
-const OUTPUT_SCHEMA_VERSION: &str = "0.5";
+const OUTPUT_SCHEMA_VERSION: &str = "0.6";
 const FULL_FRAME_SENTINEL: &str = "full_frame";
 
 pub fn resource_convert(request: ResourceConvertRequest) -> CliOutcome<ResourceConvertResponse> {
@@ -564,10 +564,10 @@ impl OperationConverter {
             }
             if !matches!(
                 bundle.data.get("schema_version").and_then(Value::as_str),
-                Some("0.3" | "0.4" | "0.5")
+                Some("0.3" | "0.4" | "0.5" | "0.6")
             ) {
                 errors.push(format!(
-                    "{}: unsupported schema_version, expected 0.3, 0.4, or 0.5",
+                    "{}: unsupported schema_version, expected 0.3, 0.4, 0.5, or 0.6",
                     bundle.task_json_path().display()
                 ));
             }
@@ -705,7 +705,7 @@ impl OperationConverter {
                     }),
                     color_check_to_pack(source.get("color_check"))?,
                     None,
-                );
+                )?;
                 add_first_target(&mut targets, &mut order, target_id, target);
             }
             for color_probe in array_field(&bundle.data, "color_probes") {
@@ -734,7 +734,7 @@ impl OperationConverter {
                     }),
                     None,
                     None,
-                );
+                )?;
                 add_first_target(&mut targets, &mut order, target_id, target);
             }
             for operation in array_field(&bundle.data, "operations") {
@@ -759,7 +759,7 @@ impl OperationConverter {
                         .unwrap_or(required_field(&self.defaults, "template_threshold")?.clone()),
                     None,
                     None,
-                );
+                )?;
                 add_first_target(&mut targets, &mut order, target_id, target);
             }
         }
@@ -1733,7 +1733,22 @@ fn pack_target(
     threshold: Value,
     color_check: Option<Value>,
     click: Option<Value>,
-) -> Value {
+) -> CliOutcome<Value> {
+    let method = source.get("method").map(normalize_maa_method).transpose()?;
+    if matches!(
+        method.as_ref().and_then(Value::as_str),
+        Some("rgb_count" | "hsv_count")
+    ) {
+        return Err(CliError::package_invalid(
+            "recognition schema 0.6 deprecates rgb_count and hsv_count; migrate the source target instead of emitting an unsupported target",
+        ));
+    }
+    if source.get("mask").is_some() || source.get("maskRange").is_some() {
+        return Err(CliError::package_invalid(
+            "recognition schema 0.6 deprecates template mask; migrate the source target instead of silently ignoring the mask",
+        ));
+    }
+
     let mut target = ordered_map([
         ("type", Value::String("template".to_string())),
         ("id", Value::String(id.to_string())),
@@ -1744,15 +1759,16 @@ fn pack_target(
     if let Some(click) = click {
         target.insert("click".to_string(), click);
     }
-    for key in ["method", "mask", "rect_move"] {
-        if let Some(value) = source.get(key) {
-            target.insert(key.to_string(), value.clone());
-        }
+    if let Some(method) = method {
+        target.insert("method".to_string(), method);
+    }
+    if let Some(value) = source.get("rect_move") {
+        target.insert("rect_move".to_string(), value.clone());
     }
     if let Some(color_check) = color_check {
         target.insert("color_check".to_string(), color_check);
     }
-    Value::Object(target)
+    Ok(Value::Object(target))
 }
 
 fn color_target(id: &str, region: Value, expected: Value, click: Option<Value>) -> Value {

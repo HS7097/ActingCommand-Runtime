@@ -3,24 +3,27 @@
 //! Runtime-owned admission and execution for contained semantic task packages.
 
 use crate::{
-    ExternalExpectedSha256, ExternallyVerifiedBundle, RunDirective, RunFailureObservation,
-    RunFailureStage, RunOperationCandidate, RunOperationFailureDecision, RunOperationPolicy,
-    RunStateConfig, RunStateMachine, RunTerminal, decide_run_operation_failure,
+    ExecutionBundleError, ExternalExpectedSha256, ExternallyVerifiedBundle, RunDirective,
+    RunFailureObservation, RunFailureStage, RunOperationCandidate, RunOperationFailureDecision,
+    RunOperationPolicy, RunStateConfig, RunStateMachine, RunTerminal, decide_run_operation_failure,
     select_run_operation,
 };
 use actingcommand_contract::{
     InputAction, SchedulingEffectCondition, SchedulingOutcomeDeclaration, TaskOutcome,
 };
 use actingcommand_device::{Frame, PixelFormat};
-use actingcommand_pack_containment::LoadedBundle;
+use actingcommand_pack_containment::{ContainmentError, LoadedBundle};
 use actingcommand_page_detector::PageDetector;
 use actingcommand_recognition::{Scene, ScenePixelFormat};
-use actingcommand_recognition_pack::{RecognitionEvaluator, TargetEvaluation, TargetKind};
+use actingcommand_recognition_pack::{
+    RecognitionEvaluator, RecognitionPackErrorCode, TargetEvaluation, TargetKind, VisionProvider,
+};
 use serde::Deserialize;
 use serde::Serialize;
 use std::collections::{BTreeSet, VecDeque};
 use std::error::Error;
 use std::fmt;
+use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -179,8 +182,39 @@ impl PreparedContainedTask {
         zip_bytes: &[u8],
         expected: ExternalExpectedSha256,
     ) -> Result<Self, ContainedTaskError> {
-        let bundle = ExternallyVerifiedBundle::load(instance_label, zip_bytes, expected)
-            .map_err(|_| ContainedTaskError::new("contained_task_admission_failed"))?;
+        Self::load_with_optional_vision_provider(instance_label, zip_bytes, expected, None)
+    }
+
+    pub fn load_with_vision_provider(
+        instance_label: &str,
+        zip_bytes: &[u8],
+        expected: ExternalExpectedSha256,
+        vision_provider: Arc<dyn VisionProvider>,
+    ) -> Result<Self, ContainedTaskError> {
+        Self::load_with_optional_vision_provider(
+            instance_label,
+            zip_bytes,
+            expected,
+            Some(vision_provider),
+        )
+    }
+
+    fn load_with_optional_vision_provider(
+        instance_label: &str,
+        zip_bytes: &[u8],
+        expected: ExternalExpectedSha256,
+        vision_provider: Option<Arc<dyn VisionProvider>>,
+    ) -> Result<Self, ContainedTaskError> {
+        let bundle = match vision_provider {
+            Some(provider) => ExternallyVerifiedBundle::load_with_vision_provider(
+                instance_label,
+                zip_bytes,
+                expected,
+                provider,
+            ),
+            None => ExternallyVerifiedBundle::load(instance_label, zip_bytes, expected),
+        }
+        .map_err(contained_task_admission_error)?;
         let package_sha256 = bundle.loaded_bundle().verified_hash().to_string();
         let entry_count = bundle.loaded_bundle().entry_count();
         let task_count = bundle.loaded_bundle().task_count();
@@ -1776,7 +1810,26 @@ fn target_kind_name(kind: TargetKind) -> &'static str {
         TargetKind::Template => "template",
         TargetKind::Color => "color",
         TargetKind::ClickOnly => "click_only",
+        TargetKind::Ocr => "ocr",
+        TargetKind::Nn => "nn",
     }
+}
+
+fn contained_task_admission_error(error: ExecutionBundleError) -> ContainedTaskError {
+    let code = match &error {
+        ExecutionBundleError::Containment(ContainmentError::RecognitionPack {
+            code: RecognitionPackErrorCode::VisionProviderMissing,
+            ..
+        }) => "contained_task_vision_provider_missing",
+        ExecutionBundleError::Containment(ContainmentError::RecognitionPack {
+            code:
+                RecognitionPackErrorCode::VisionProviderFailure
+                | RecognitionPackErrorCode::VisionProviderInvalidResponse,
+            ..
+        }) => "contained_task_vision_provider_failed",
+        _ => "contained_task_admission_failed",
+    };
+    ContainedTaskError::with_detail(code, error.to_string())
 }
 
 fn required<T: Copy>(value: Option<T>) -> Result<T, ContainedTaskError> {

@@ -213,7 +213,8 @@ impl PageDetector {
         for page in &self.page_set.pages {
             for target_id in page_target_ids(page) {
                 match evaluator.target_kind(target_id).map_err(pack_error)? {
-                    TargetKind::Template | TargetKind::Color => {}
+                    TargetKind::Template | TargetKind::Color | TargetKind::Ocr | TargetKind::Nn => {
+                    }
                     TargetKind::ClickOnly => {
                         return Err(PageDetectorError::fatal(format!(
                             "page definition references click-only target: {target_id}"
@@ -422,10 +423,10 @@ fn validate_batch_request(
 fn validate_page_set(page_set: &PageSet) -> PageDetectorResult<()> {
     if !matches!(
         page_set.schema_version.as_str(),
-        "0.1" | "0.3" | "0.4" | "0.5"
+        "0.1" | "0.3" | "0.4" | "0.5" | "0.6"
     ) {
         return Err(PageDetectorError::fatal(format!(
-            "unsupported schema_version '{}', expected one of '0.1', '0.3', '0.4', '0.5'",
+            "unsupported schema_version '{}', expected one of '0.1', '0.3', '0.4', '0.5', '0.6'",
             page_set.schema_version
         )));
     }
@@ -625,11 +626,14 @@ fn pack_error(err: actingcommand_recognition_pack::RecognitionPackError) -> Page
 mod tests {
     use super::*;
     use actingcommand_recognition_pack::{
-        ClickOnlyTarget, ColorTarget, PackCoordinateSpace, PackRect, PackRegion,
-        RecognitionDefaults, RecognitionPack, RecognitionTarget, TemplateTarget,
+        ClickOnlyTarget, ColorTarget, FsAssetResolver, NnProviderLabel, NnProviderRequest,
+        NnProviderResult, OcrProviderRequest, OcrProviderResult, PackCoordinateSpace, PackRect,
+        PackRegion, RecognitionDefaults, RecognitionPack, RecognitionTarget, TemplateTarget,
+        VisionProvider, VisionProviderError, load_pack_from_json_str,
     };
     use std::fs;
     use std::path::PathBuf;
+    use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     static TEMP_COUNTER: AtomicUsize = AtomicUsize::new(0);
@@ -674,6 +678,85 @@ mod tests {
             pages: vec![home_page()],
         })
         .expect("schema 0.3 detector");
+    }
+
+    #[test]
+    fn schema_0_6_page_required_ocr_and_forbidden_nn_use_unified_evaluator() {
+        let pack = load_pack_from_json_str(
+            r#"{
+                "schema_version": "0.6",
+                "coordinate_space": {"width": 2, "height": 1},
+                "targets": [
+                    {
+                        "type": "ocr",
+                        "id": "fixture/home_text",
+                        "region": "full_frame",
+                        "languages": ["en"],
+                        "timeout_ms": 1000,
+                        "match_mode": "exact",
+                        "expected": ["home"],
+                        "case_sensitive": false,
+                        "minimum_confidence": 0.9,
+                        "model_ref": "PP-OCRv6_medium",
+                        "model_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                    },
+                    {
+                        "type": "nn",
+                        "id": "fixture/popup",
+                        "region": "full_frame",
+                        "model_ref": "fixture-page-model",
+                        "model_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+                        "candidate_labels": ["popup"],
+                        "minimum_score": 0.9,
+                        "selection": "label",
+                        "expected_label": "popup",
+                        "timeout_ms": 1000
+                    }
+                ]
+            }"#,
+        )
+        .expect("vision pack");
+        let evaluator = RecognitionEvaluator::with_vision_provider(
+            pack,
+            Arc::new(FsAssetResolver::new(PathBuf::new())),
+            Arc::new(PageVisionProvider),
+        )
+        .expect("vision evaluator");
+        let detector = PageDetector::new(PageSet {
+            schema_version: "0.6".to_string(),
+            pages: vec![PageDefinition {
+                id: "fixture/vision_page".to_string(),
+                required: vec!["fixture/home_text".to_string()],
+                any_of: Vec::new(),
+                optional: Vec::new(),
+                forbidden: vec!["fixture/popup".to_string()],
+            }],
+        })
+        .expect("schema 0.6 detector");
+        detector.validate(&evaluator).expect("vision target kinds");
+
+        let evaluation = detector
+            .evaluate_page(
+                &evaluator,
+                &Scene::from_rgb8(2, 1, &[0; 6]).expect("scene"),
+                "fixture/vision_page",
+            )
+            .expect("page evaluation");
+
+        assert!(!evaluation.matched);
+        assert_eq!(evaluation.required_passed, 1);
+        assert_eq!(evaluation.forbidden_passed, 1);
+        assert_eq!(
+            evaluation
+                .target_results
+                .iter()
+                .map(|result| (result.target_id.as_str(), result.role, result.passed))
+                .collect::<Vec<_>>(),
+            vec![
+                ("fixture/home_text", PageTargetRole::Required, true),
+                ("fixture/popup", PageTargetRole::Forbidden, true),
+            ]
+        );
     }
 
     #[test]
@@ -1372,6 +1455,50 @@ mod tests {
                     click: rect(1, 2, 3, 4),
                 }),
             ],
+        }
+    }
+
+    #[derive(Debug)]
+    struct PageVisionProvider;
+
+    impl VisionProvider for PageVisionProvider {
+        fn require_ocr_model(
+            &self,
+            _model_ref: &str,
+            _model_sha256: &str,
+        ) -> Result<(), VisionProviderError> {
+            Ok(())
+        }
+
+        fn require_nn_model(
+            &self,
+            _model_ref: &str,
+            _model_sha256: &str,
+        ) -> Result<(), VisionProviderError> {
+            Ok(())
+        }
+
+        fn read_text(
+            &self,
+            _request: OcrProviderRequest<'_>,
+        ) -> Result<OcrProviderResult, VisionProviderError> {
+            Ok(OcrProviderResult {
+                text: "home".to_string(),
+                blocks: Vec::new(),
+                confidence: Some(0.99),
+            })
+        }
+
+        fn classify(
+            &self,
+            _request: NnProviderRequest<'_>,
+        ) -> Result<NnProviderResult, VisionProviderError> {
+            Ok(NnProviderResult {
+                labels: vec![NnProviderLabel {
+                    label: "popup".to_string(),
+                    score: 0.99,
+                }],
+            })
         }
     }
 
