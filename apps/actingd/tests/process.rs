@@ -39,7 +39,7 @@ use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tempfile::TempDir;
-use zip::{ZipWriter, write::FileOptions};
+use zip::{ZipArchive, ZipWriter, write::FileOptions};
 
 const INSTANCE_ALIAS: &str = "node.a";
 const PROCESS_TEST_SALT: &str = "actingd-process-test-salt";
@@ -219,13 +219,292 @@ fn actingd_rejects_explicit_fixture_simulation_on_a_physical_registry() {
     assert!(!output.status.success());
     assert!(
         String::from_utf8_lossy(&output.stderr)
-            .contains("fixture_simulation_requires_fixture_backend")
+            .contains("scheduled_execution_backend_mode_mismatch")
     );
     assert!(!root.path().join(RUNTIME_INFO_FILE).exists());
 }
 
 #[test]
-fn actingd_requires_package_path_only_for_explicit_fixture_simulation() {
+fn actingd_accepts_explicit_device_registry_scheduling_without_opening_a_device() {
+    let root = TempDir::new().expect("tempdir");
+    let config_path = root.path().join("actingd.json");
+    let instance_id = instance_id();
+    write_policy_execution_config(
+        &config_path,
+        root.path(),
+        instance_id,
+        &[vec![0, 0, 255, 0, 255, 0]],
+        0,
+    );
+    configure_policy_clock_at(root.path(), unix_ms_now() + 60_000);
+    let mut config: serde_json::Value =
+        serde_json::from_slice(&fs::read(&config_path).expect("read fixture config"))
+            .expect("decode fixture config");
+    config["policy"]["procedure_manifest"][0]["scheduled_execution"]["mode"] =
+        json!("device_registry");
+    config["instances"] = json!([{
+        "alias": INSTANCE_ALIAS,
+        "instance_id": instance_id,
+        "application_id": "neutral.application",
+        "adb_path": "must-not-run-adb",
+        "touch_backend": "maatouch",
+        "capture_backend": "adb",
+        "push_touch_tool": false
+    }]);
+    fs::write(
+        &config_path,
+        serde_json::to_vec_pretty(&config).expect("device registry policy config JSON"),
+    )
+    .expect("write device registry policy config");
+
+    let child = start_actingd(&config_path);
+    let mut child = ChildGuard(child);
+    wait_for_runtime_info(&mut child.0, root.path());
+    let client = wait_for_agent_client(&mut child.0, root.path());
+    thread::sleep(Duration::from_millis(200));
+    assert!(child.0.try_wait().expect("process state").is_none());
+    let events = match client.query_events(EventQuery::default(), ProjectionProfile::Forensic) {
+        Ok(events) => events,
+        Err(error) => {
+            let status = child.0.try_wait().expect("process state");
+            let mut stderr = String::new();
+            if let Some(pipe) = child.0.stderr.as_mut() {
+                pipe.read_to_string(&mut stderr)
+                    .expect("read actingd stderr");
+            }
+            panic!(
+                "query device registry policy events failed: {error}; status={status:?}; stderr={stderr}"
+            );
+        }
+    };
+    assert_eq!(
+        events
+            .iter()
+            .filter(|event| event.event_type == EventType::TaskRequested)
+            .count(),
+        0
+    );
+    assert_eq!(
+        events
+            .iter()
+            .filter(|event| event.event_type == EventType::InputIntent)
+            .count(),
+        0
+    );
+
+    drop(client);
+    child.0.kill().expect("kill actingd");
+    child.0.wait().expect("wait actingd");
+}
+
+#[test]
+fn actingd_evaluates_scheduled_policy_when_next_wake_becomes_due() {
+    let root = TempDir::new().expect("tempdir");
+    let config_path = root.path().join("actingd.json");
+    write_policy_execution_config(
+        &config_path,
+        root.path(),
+        instance_id(),
+        &[vec![0, 0, 255, 0, 255, 0]],
+        0,
+    );
+    let wake_at_unix_ms = unix_ms_now() + 1_500;
+    configure_policy_clock_at(root.path(), wake_at_unix_ms);
+
+    let child = start_actingd(&config_path);
+    let mut child = ChildGuard(child);
+    wait_for_runtime_info(&mut child.0, root.path());
+    let client = wait_for_agent_client(&mut child.0, root.path());
+    let before_due = client
+        .query_events(EventQuery::default(), ProjectionProfile::Forensic)
+        .expect("query pre-wake events");
+    assert_eq!(
+        before_due
+            .iter()
+            .filter(|event| event.event_type == EventType::PolicyDispatchIntent)
+            .count(),
+        0,
+        "the task must not dispatch before its declared wake"
+    );
+
+    let started = Instant::now();
+    let events = loop {
+        let events = match client.query_events(EventQuery::default(), ProjectionProfile::Forensic) {
+            Ok(events) => events,
+            Err(error) => {
+                if let Some(status) = child.0.try_wait().expect("process state") {
+                    let mut stderr = String::new();
+                    if let Some(pipe) = child.0.stderr.as_mut() {
+                        pipe.read_to_string(&mut stderr)
+                            .expect("read actingd stderr");
+                    }
+                    panic!(
+                        "actingd exited before next-wake dispatch with {status}: {error}: {stderr}"
+                    );
+                }
+                panic!("query resident policy events: {error}");
+            }
+        };
+        if events
+            .iter()
+            .any(|event| event.event_type == EventType::PolicyDispatchCompleted)
+        {
+            break events;
+        }
+        if let Some(status) = child.0.try_wait().expect("process state") {
+            let mut stderr = String::new();
+            if let Some(pipe) = child.0.stderr.as_mut() {
+                pipe.read_to_string(&mut stderr)
+                    .expect("read actingd stderr");
+            }
+            panic!("actingd exited before next-wake dispatch with {status}: {stderr}");
+        }
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "resident policy did not evaluate the declared next wake"
+        );
+        thread::sleep(Duration::from_millis(20));
+    };
+    assert_eq!(
+        events
+            .iter()
+            .filter(|event| event.event_type == EventType::PolicyDispatchIntent)
+            .count(),
+        1
+    );
+    assert_eq!(
+        events
+            .iter()
+            .filter(|event| event.event_type == EventType::PolicyDispatchCompleted)
+            .count(),
+        1
+    );
+
+    drop(client);
+    child.0.kill().expect("kill actingd");
+    child.0.wait().expect("wait actingd");
+}
+
+#[test]
+fn actingd_recovery_does_not_repeat_a_settled_scheduled_run() {
+    let root = TempDir::new().expect("tempdir");
+    let config_path = root.path().join("actingd.json");
+    write_policy_execution_config(
+        &config_path,
+        root.path(),
+        instance_id(),
+        &[vec![255, 0, 0, 0, 255, 0], vec![0, 0, 255, 0, 255, 0]],
+        1,
+    );
+
+    let first = start_actingd(&config_path);
+    let mut first = ChildGuard(first);
+    wait_for_runtime_info(&mut first.0, root.path());
+    let first_client = wait_for_agent_client(&mut first.0, root.path());
+    let started = Instant::now();
+    loop {
+        let events = first_client
+            .query_events(EventQuery::default(), ProjectionProfile::Forensic)
+            .expect("query initial settled run");
+        if events
+            .iter()
+            .any(|event| event.event_type == EventType::PolicyDispatchCompleted)
+        {
+            break;
+        }
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "initial scheduled run did not settle"
+        );
+        thread::sleep(Duration::from_millis(20));
+    }
+    drop(first_client);
+    first.0.kill().expect("stop initial actingd");
+    first.0.wait().expect("wait initial actingd");
+
+    let restarted = start_actingd(&config_path);
+    let mut restarted = ChildGuard(restarted);
+    wait_for_runtime_info(&mut restarted.0, root.path());
+    let client = wait_for_agent_client(&mut restarted.0, root.path());
+    thread::sleep(Duration::from_millis(500));
+    assert!(restarted.0.try_wait().expect("process state").is_none());
+    let events = match client.query_events(EventQuery::default(), ProjectionProfile::Forensic) {
+        Ok(events) => events,
+        Err(error) => {
+            let status = restarted.0.try_wait().expect("process state");
+            let mut stderr = String::new();
+            if let Some(pipe) = restarted.0.stderr.as_mut() {
+                pipe.read_to_string(&mut stderr)
+                    .expect("read restarted actingd stderr");
+            }
+            panic!(
+                "query recovered settled run failed: {error}; status={status:?}; stderr={stderr}"
+            );
+        }
+    };
+    for event_type in [
+        EventType::InputCommitted,
+        EventType::TaskCompleted,
+        EventType::PolicyExecutionRecorded,
+        EventType::PolicyDispatchCompleted,
+    ] {
+        assert_eq!(
+            events
+                .iter()
+                .filter(|event| event.event_type == event_type)
+                .count(),
+            1,
+            "restart duplicated {event_type:?}"
+        );
+    }
+
+    drop(client);
+    restarted.0.kill().expect("kill restarted actingd");
+    restarted.0.wait().expect("wait restarted actingd");
+}
+
+#[test]
+fn actingd_requires_package_path_for_each_explicit_scheduled_mode() {
+    for mode in ["fixture_simulation", "device_registry"] {
+        let root = TempDir::new().expect("tempdir");
+        let config_path = root.path().join("actingd.json");
+        write_policy_execution_config(
+            &config_path,
+            root.path(),
+            instance_id(),
+            &[vec![0, 0, 255, 0, 255, 0]],
+            0,
+        );
+        let mut config: serde_json::Value =
+            serde_json::from_slice(&fs::read(&config_path).expect("read fixture config"))
+                .expect("decode fixture config");
+        config["policy"]["procedure_manifest"][0]["scheduled_execution"]["mode"] = json!(mode);
+        config["policy"]["procedure_manifest"][0]["scheduled_execution"]
+            .as_object_mut()
+            .expect("scheduled execution object")
+            .remove("package_path");
+        fs::write(
+            &config_path,
+            serde_json::to_vec_pretty(&config).expect("missing package config JSON"),
+        )
+        .expect("write missing package config");
+
+        let output = Command::new(env!("CARGO_BIN_EXE_actingcommand-actingd"))
+            .args(["--config", config_path.to_str().expect("config path")])
+            .output()
+            .expect("run actingd");
+        assert!(!output.status.success(), "{mode}");
+        assert!(
+            String::from_utf8_lossy(&output.stderr).contains("procedure_package_path_missing"),
+            "{mode}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(!root.path().join(RUNTIME_INFO_FILE).exists(), "{mode}");
+    }
+}
+
+#[test]
+fn actingd_rejects_unknown_scheduled_execution_mode() {
     let root = TempDir::new().expect("tempdir");
     let config_path = root.path().join("actingd.json");
     write_policy_execution_config(
@@ -238,22 +517,19 @@ fn actingd_requires_package_path_only_for_explicit_fixture_simulation() {
     let mut config: serde_json::Value =
         serde_json::from_slice(&fs::read(&config_path).expect("read fixture config"))
             .expect("decode fixture config");
-    config["policy"]["procedure_manifest"][0]["scheduled_execution"]
-        .as_object_mut()
-        .expect("scheduled execution object")
-        .remove("package_path");
+    config["policy"]["procedure_manifest"][0]["scheduled_execution"]["mode"] = json!("adb_backend");
     fs::write(
         &config_path,
-        serde_json::to_vec_pretty(&config).expect("missing package config JSON"),
+        serde_json::to_vec_pretty(&config).expect("unknown mode config JSON"),
     )
-    .expect("write missing package config");
+    .expect("write unknown mode config");
 
     let output = Command::new(env!("CARGO_BIN_EXE_actingcommand-actingd"))
         .args(["--config", config_path.to_str().expect("config path")])
         .output()
         .expect("run actingd");
     assert!(!output.status.success());
-    assert!(String::from_utf8_lossy(&output.stderr).contains("procedure_package_path_missing"));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("config_decode_failed"));
     assert!(!root.path().join(RUNTIME_INFO_FILE).exists());
 }
 
@@ -292,12 +568,12 @@ fn actingd_does_not_execute_fixture_without_an_explicit_scheduled_binding() {
             .expect("query admission-only fixture events");
         if events
             .iter()
-            .any(|event| event.event_type == EventType::LeaseGranted)
+            .any(|event| event.event_type == EventType::PolicyDispatchAdmitted)
         {
             break events;
         }
         if let Some(status) = child.0.try_wait().expect("process state") {
-            panic!("actingd exited before admission-only fixture lease with {status}");
+            panic!("actingd exited before admission-only fixture admission with {status}");
         }
         assert!(
             started.elapsed() < Duration::from_secs(5),
@@ -305,13 +581,20 @@ fn actingd_does_not_execute_fixture_without_an_explicit_scheduled_binding() {
         );
         thread::sleep(Duration::from_millis(20));
     };
-    assert_eq!(
-        events
-            .iter()
-            .filter(|event| event.event_type == EventType::PolicyDispatchAdmitted)
-            .count(),
-        1
-    );
+    for event_type in [
+        EventType::PolicyDispatchIntent,
+        EventType::PolicyDispatchAdmitted,
+        EventType::LeaseGranted,
+    ] {
+        assert_eq!(
+            events
+                .iter()
+                .filter(|event| event.event_type == event_type)
+                .count(),
+            1,
+            "admission-only fixture {event_type:?}"
+        );
+    }
     let run_id = events
         .iter()
         .find(|event| event.event_type == EventType::PolicyDispatchIntent)
@@ -820,6 +1103,193 @@ fn actingd_closes_one_policy_run_through_fixture_receipt_ledger_and_report_input
         child.0.kill().expect("kill actingd");
         child.0.wait().expect("wait actingd");
     }
+}
+
+#[test]
+fn actingd_mapped_terminal_wakes_the_resident_driver_for_one_evaluator_successor() {
+    let root = TempDir::new().expect("tempdir");
+    let config_path = root.path().join("actingd.json");
+    write_mapped_policy_execution_config(
+        &config_path,
+        root.path(),
+        instance_id(),
+        &[vec![255, 0, 0, 0, 255, 0], vec![0, 0, 255, 0, 255, 0]],
+    );
+
+    let child = start_actingd(&config_path);
+    let mut child = ChildGuard(child);
+    wait_for_runtime_info(&mut child.0, root.path());
+    let client = wait_for_agent_client(&mut child.0, root.path());
+    let started = Instant::now();
+    let events = loop {
+        let events = match client.query_events(EventQuery::default(), ProjectionProfile::Forensic) {
+            Ok(events) => events,
+            Err(error) => {
+                if let Some(status) = child.0.try_wait().expect("process state") {
+                    let mut stderr = String::new();
+                    if let Some(pipe) = child.0.stderr.as_mut() {
+                        pipe.read_to_string(&mut stderr)
+                            .expect("read actingd stderr");
+                    }
+                    panic!(
+                        "actingd exited before mapped successor with {status}: {error}; {stderr}"
+                    );
+                }
+                assert!(
+                    started.elapsed() < Duration::from_secs(8),
+                    "mapped successor query timed out after {error}"
+                );
+                thread::sleep(Duration::from_millis(20));
+                continue;
+            }
+        };
+        if events.iter().any(|event| {
+            matches!(
+                &event.payload,
+                ProjectionPayload::Full(payload)
+                    if matches!(
+                        payload.as_ref(),
+                        EventPayload::Policy(PolicyPayload::DispatchIntent(payload))
+                            if payload.task_id() == "fixture.followup"
+                    )
+            )
+        }) {
+            break events;
+        }
+        if let Some(status) = child.0.try_wait().expect("process state") {
+            let mut stderr = String::new();
+            if let Some(pipe) = child.0.stderr.as_mut() {
+                pipe.read_to_string(&mut stderr)
+                    .expect("read actingd stderr");
+            }
+            panic!("actingd exited before mapped successor with {status}: {stderr}");
+        }
+        if started.elapsed() >= Duration::from_secs(8) {
+            let intents = client
+                .query_events(
+                    EventQuery {
+                        event_type: Some(EventType::PolicyDispatchIntent),
+                        ..EventQuery::default()
+                    },
+                    ProjectionProfile::Forensic,
+                )
+                .expect("query timed-out mapped intents");
+            let rejected = client
+                .query_events(
+                    EventQuery {
+                        event_type: Some(EventType::PolicyDispatchRejected),
+                        ..EventQuery::default()
+                    },
+                    ProjectionProfile::Forensic,
+                )
+                .expect("query timed-out mapped rejections");
+            panic!(
+                "mapped successor timed out: completions={events:?}; intents={intents:?}; rejected={rejected:?}"
+            );
+        }
+        thread::sleep(Duration::from_millis(20));
+    };
+
+    let intent_events = client
+        .query_events(
+            EventQuery {
+                event_type: Some(EventType::PolicyDispatchIntent),
+                ..EventQuery::default()
+            },
+            ProjectionProfile::Forensic,
+        )
+        .expect("query mapped successor intents");
+    let intents = intent_events
+        .iter()
+        .filter_map(|event| match &event.payload {
+            ProjectionPayload::Full(payload) => match payload.as_ref() {
+                EventPayload::Policy(PolicyPayload::DispatchIntent(payload)) => {
+                    Some((event.sequence, payload.task_id()))
+                }
+                _ => None,
+            },
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    let source_sequence = intents
+        .iter()
+        .find_map(|(sequence, task_id)| (*task_id == "fixture.observe").then_some(*sequence))
+        .expect("source decision");
+    let successor_sequence = intents
+        .iter()
+        .find_map(|(sequence, task_id)| (*task_id == "fixture.followup").then_some(*sequence))
+        .expect("outcome-driven successor decision");
+    let source_completion_sequence = events
+        .iter()
+        .find_map(|event| match &event.payload {
+            ProjectionPayload::Full(payload) => match payload.as_ref() {
+                EventPayload::Policy(PolicyPayload::DispatchCompleted(payload))
+                    if payload.task_id() == "fixture.observe" =>
+                {
+                    Some(event.sequence)
+                }
+                _ => None,
+            },
+            _ => None,
+        })
+        .expect("source settlement");
+    assert!(source_sequence < source_completion_sequence);
+    assert!(
+        source_completion_sequence < successor_sequence,
+        "the successor must be decided only after durable source settlement"
+    );
+    assert_eq!(
+        intents
+            .iter()
+            .filter(|(_, task_id)| *task_id == "fixture.observe")
+            .count(),
+        1,
+        "the exact source terminal cannot dispatch the source twice"
+    );
+    assert_eq!(
+        intents
+            .iter()
+            .filter(|(_, task_id)| *task_id == "fixture.followup")
+            .count(),
+        1
+    );
+    assert_eq!(
+        client
+            .query_events(
+                EventQuery {
+                    event_type: Some(EventType::InputCommitted),
+                    ..EventQuery::default()
+                },
+                ProjectionProfile::Forensic,
+            )
+            .expect("query mapped successor inputs")
+            .len(),
+        1,
+        "the wake itself cannot perform input"
+    );
+    assert_eq!(
+        events
+            .iter()
+            .filter(|event| {
+                matches!(
+                    &event.payload,
+                    ProjectionPayload::Full(payload)
+                        if matches!(
+                            payload.as_ref(),
+                            EventPayload::Policy(PolicyPayload::DispatchCompleted(payload))
+                                if payload.task_id() == "fixture.observe"
+                        )
+                )
+            })
+            .count(),
+        1,
+        "the source settlement must be unique before the successor decision"
+    );
+    assert!(child.0.try_wait().expect("process state").is_none());
+
+    drop(client);
+    child.0.kill().expect("kill actingd");
+    child.0.wait().expect("wait actingd");
 }
 
 #[test]
@@ -1533,6 +2003,66 @@ fn write_policy_execution_config_with_package(
     .expect("write policy execution config");
 }
 
+fn write_mapped_policy_execution_config(
+    path: &Path,
+    state_root: &Path,
+    instance_id: InstanceId,
+    frames: &[Vec<u8>],
+) {
+    let package = mapped_contained_task_package();
+    write_policy_execution_config_with_package(path, state_root, instance_id, &package, frames, 1);
+    let policy_root = state_root.join("policy");
+    let sources = actingd_mapped_policy_sources(1);
+    for (name, source) in [
+        ("tasks.json", sources.tasks),
+        ("pools.json", sources.pools),
+        ("activity.json", sources.activity),
+        ("timeline.json", sources.timeline),
+    ] {
+        fs::write(policy_root.join(name), source.bytes).expect("write mapped policy document");
+    }
+    let mut config: Value =
+        serde_json::from_slice(&fs::read(path).expect("read mapped policy config"))
+            .expect("mapped policy config JSON");
+    let mut followup = config["policy"]["procedure_manifest"][0].clone();
+    followup["procedure_ref"] = json!("procedure.followup");
+    config["policy"]["procedure_manifest"]
+        .as_array_mut()
+        .expect("procedure manifest array")
+        .push(followup);
+    fs::write(
+        path,
+        serde_json::to_vec_pretty(&config).expect("mapped policy config bytes"),
+    )
+    .expect("write mapped policy config");
+}
+
+fn configure_policy_clock_at(state_root: &Path, at_ms: u64) {
+    let tasks_path = state_root.join("policy").join("tasks.json");
+    let mut tasks: Value =
+        serde_json::from_slice(&fs::read(&tasks_path).expect("read policy tasks"))
+            .expect("decode policy tasks");
+    tasks["tasks"][0]["trigger"] = json!({
+        "kind": "clock",
+        "schedule": {
+            "kind": "at",
+            "clock_source": {
+                "kind": "server",
+                "timezone_id": "etc/utc",
+                "utc_offset_minutes": 0,
+                "dst_offset_minutes": 0,
+                "maintenance_drift_ms": 0
+            },
+            "at_ms": at_ms
+        }
+    });
+    fs::write(
+        &tasks_path,
+        serde_json::to_vec_pretty(&tasks).expect("policy clock JSON"),
+    )
+    .expect("write policy clock");
+}
+
 fn neutral_contained_task_package() -> Vec<u8> {
     let cursor = Cursor::new(Vec::new());
     let mut zip = ZipWriter::new(cursor);
@@ -1607,6 +2137,50 @@ fn neutral_contained_task_package() -> Vec<u8> {
         zip.write_all(contents).expect("zip content");
     }
     zip.finish().expect("finish zip").into_inner()
+}
+
+fn mapped_contained_task_package() -> Vec<u8> {
+    let source = neutral_contained_task_package();
+    let mut archive = ZipArchive::new(Cursor::new(source)).expect("open neutral package");
+    let mut entries = Vec::new();
+    for index in 0..archive.len() {
+        let mut entry = archive.by_index(index).expect("neutral package entry");
+        let name = entry.name().to_owned();
+        let mut bytes = Vec::new();
+        entry
+            .read_to_end(&mut bytes)
+            .expect("read neutral package entry");
+        if name == "resources/operations/task/task.json" {
+            let mut task: Value =
+                serde_json::from_slice(&bytes).expect("neutral task operation JSON");
+            task["scheduling_outcome"] = json!({
+                "designated_operation": "open_terminal",
+                "mappings": [
+                    {
+                        "outcome_key": "resident-completed",
+                        "effect": "designated_effect_completed",
+                        "terminal_pages": ["terminal"]
+                    },
+                    {
+                        "outcome_key": "resident-no-effect",
+                        "effect": "no_designated_effect",
+                        "terminal_pages": ["terminal"]
+                    }
+                ]
+            });
+            bytes = serde_json::to_vec_pretty(&task).expect("mapped task operation bytes");
+        }
+        entries.push((name, bytes));
+    }
+    drop(archive);
+    let cursor = Cursor::new(Vec::new());
+    let mut zip = ZipWriter::new(cursor);
+    let options = FileOptions::default().compression_method(zip::CompressionMethod::Stored);
+    for (name, bytes) in entries {
+        zip.start_file(name, options).expect("mapped package entry");
+        zip.write_all(&bytes).expect("mapped package bytes");
+    }
+    zip.finish().expect("finish mapped package").into_inner()
 }
 
 fn sequential_contained_task_package(step_count: usize) -> (Vec<u8>, Vec<Vec<u8>>) {
@@ -1959,6 +2533,45 @@ fn actingd_policy_sources(version: u64) -> CatalogSources {
     activity["profiles"][0]["windows"][0]["start_minute_of_day"] = json!(0);
     activity["profiles"][0]["windows"][0]["end_minute_of_day"] = json!(0);
     sources.activity.bytes = serde_json::to_vec_pretty(&activity).expect("actingd activity bytes");
+    sources
+}
+
+fn actingd_mapped_policy_sources(version: u64) -> CatalogSources {
+    let mut sources = actingd_policy_sources(version);
+    let mut tasks: Value =
+        serde_json::from_slice(&sources.tasks.bytes).expect("mapped actingd tasks");
+    tasks["tasks"][0]["cooldown_ms"] = json!(60_000);
+    let mut followup = tasks["tasks"][0].clone();
+    followup["id"] = json!("fixture.followup");
+    followup["procedure_ref"] = json!("procedure.followup");
+    followup["priority"] = json!(200);
+    followup["trigger"] = json!({
+        "kind": "any",
+        "predicates": [
+            {
+                "kind": "outcome",
+                "task_id": "fixture.observe",
+                "outcome_key": "resident-completed",
+                "comparison": "eq",
+                "value": {"type": "boolean", "value": true}
+            },
+            {
+                "kind": "outcome",
+                "task_id": "fixture.observe",
+                "outcome_key": "resident-no-effect",
+                "comparison": "eq",
+                "value": {"type": "boolean", "value": true}
+            }
+        ]
+    });
+    followup["cooldown_ms"] = json!(1_000);
+    followup["produces"] = json!([]);
+    followup["instance_overrides"] = json!([]);
+    tasks["tasks"]
+        .as_array_mut()
+        .expect("mapped task array")
+        .push(followup);
+    sources.tasks.bytes = serde_json::to_vec_pretty(&tasks).expect("mapped actingd task bytes");
     sources
 }
 
