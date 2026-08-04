@@ -8,9 +8,10 @@ use crate::{
 use actingcommand_contract::{
     ArtifactIssuePolicy, ArtifactKind, ArtifactPayloadDraft, ArtifactProducer,
     ArtifactRedactionState, ArtifactReference, AuditInput, CapturePayloadDraft,
-    CapturePolicyReason, DiagnosticCode, EventActor, EventDraft, EventLinksDraft, EventOrigin,
-    EventSeverity, EventSource, EvidenceCompleteness, IdentifierIssuer, OriginModule,
-    PinnedFrameReason, RetentionClass,
+    CapturePersistedEvidence, CapturePinnedEvidence, CapturePolicyReason, CaptureSummaryRecord,
+    DiagnosticCode, EventActor, EventDraft, EventLinksDraft, EventOrigin, EventSeverity,
+    EventSource, EvidenceCompleteness, IdentifierIssuer, OriginModule, PinnedFrameReason,
+    RetentionClass,
 };
 use serde::Serialize;
 use std::collections::{BTreeMap, BTreeSet};
@@ -62,26 +63,146 @@ pub struct CapturePipelineCounts {
     pub persisted: u64,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PinnedFrameEvidence {
-    pub frame_index: usize,
+    pub frame_index: Option<usize>,
     pub reason: PinnedFrameReason,
     pub artifact: Option<ArtifactReference>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PersistedFrameEvidence {
     pub frame_index: usize,
     pub pinned_reason: Option<PinnedFrameReason>,
     pub artifact: ArtifactReference,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CapturePipelineSummary {
     pub counts: CapturePipelineCounts,
     pub evidence_completeness: EvidenceCompleteness,
     pub pinned: Vec<PinnedFrameEvidence>,
     pub frames: Vec<PersistedFrameEvidence>,
+}
+
+pub fn build_capture_pipeline_summary(
+    counts: CapturePipelineCounts,
+    mut pinned: Vec<PinnedFrameEvidence>,
+    mut frames: Vec<PersistedFrameEvidence>,
+) -> ArtifactStoreResult<CapturePipelineSummary> {
+    frames.sort_by_key(|frame| frame.frame_index);
+    pinned.sort_by_key(|pin| (pin.frame_index, pin.reason));
+    for frame in &mut frames {
+        frame.pinned_reason = pinned
+            .iter()
+            .find(|pin| pin.frame_index == Some(frame.frame_index) && pin.artifact.is_some())
+            .map(|pin| pin.reason);
+    }
+    let accounted = counts
+        .deduplicated
+        .checked_add(counts.dropped)
+        .and_then(|count| count.checked_add(counts.persisted))
+        .ok_or_else(|| {
+            ArtifactStoreError::fatal(
+                "capture_summary_count_overflow",
+                "build_capture_summary",
+                "capture accounting exceeds u64",
+            )
+        })?;
+    let evidence_completeness =
+        if pinned.iter().any(|pin| pin.artifact.is_none()) || accounted != counts.captured {
+            EvidenceCompleteness::Failed
+        } else if counts.dropped > 0 {
+            EvidenceCompleteness::Partial
+        } else {
+            EvidenceCompleteness::Complete
+        };
+    let summary = CapturePipelineSummary {
+        counts,
+        evidence_completeness,
+        pinned,
+        frames,
+    };
+    validate_capture_pipeline_summary(&summary)?;
+    Ok(summary)
+}
+
+pub fn capture_summary_record(
+    summary: &CapturePipelineSummary,
+) -> ArtifactStoreResult<CaptureSummaryRecord> {
+    let frames = summary
+        .frames
+        .iter()
+        .map(|frame| {
+            let frame_index = u64::try_from(frame.frame_index).map_err(|_| {
+                ArtifactStoreError::fatal(
+                    "capture_summary_bound_exceeded",
+                    "build_capture_summary_record",
+                    "capture frame index exceeds u64",
+                )
+            })?;
+            CapturePersistedEvidence::new(frame_index, frame.artifact.project(true)).map_err(
+                |error| {
+                    ArtifactStoreError::fatal(
+                        error.code(),
+                        "build_capture_summary_record",
+                        error.to_string(),
+                    )
+                },
+            )
+        })
+        .collect::<ArtifactStoreResult<Vec<_>>>()?;
+    let pinned = summary
+        .pinned
+        .iter()
+        .map(|pin| {
+            let frame_index = pin
+                .frame_index
+                .map(u64::try_from)
+                .transpose()
+                .map_err(|_| {
+                    ArtifactStoreError::fatal(
+                        "capture_summary_bound_exceeded",
+                        "build_capture_summary_record",
+                        "pinned frame index exceeds u64",
+                    )
+                })?;
+            CapturePinnedEvidence::new(
+                frame_index,
+                pin.reason,
+                pin.artifact.as_ref().map(|artifact| artifact.project(true)),
+            )
+            .map_err(|error| {
+                ArtifactStoreError::fatal(
+                    error.code(),
+                    "build_capture_summary_record",
+                    error.to_string(),
+                )
+            })
+        })
+        .collect::<ArtifactStoreResult<Vec<_>>>()?;
+    CaptureSummaryRecord::new(
+        summary.counts.captured,
+        summary.counts.deduplicated,
+        summary.counts.dropped,
+        summary.counts.persisted,
+        summary.evidence_completeness,
+        frames,
+        pinned,
+    )
+    .map_err(|error| {
+        ArtifactStoreError::fatal(
+            error.code(),
+            "build_capture_summary_record",
+            error.to_string(),
+        )
+    })
+}
+
+pub fn validate_capture_pipeline_summary(
+    summary: &CapturePipelineSummary,
+) -> ArtifactStoreResult<()> {
+    capture_summary_record(summary).map(|_| ())
 }
 
 #[derive(Debug)]
@@ -187,7 +308,13 @@ impl CapturePipeline {
             self.pinned.insert(frame_index, reason);
         }
         self.contexts.insert(frame_index, context.clone());
-        self.counts.captured = self.counts.captured.saturating_add(1);
+        self.counts.captured = self.counts.captured.checked_add(1).ok_or_else(|| {
+            ArtifactStoreError::fatal(
+                "capture_summary_count_overflow",
+                "record_capture_frame",
+                "captured frame count exceeds u64",
+            )
+        })?;
 
         let frame = match self.frame_store.add_frame(input) {
             Ok(frame) => frame,
@@ -222,7 +349,28 @@ impl CapturePipeline {
                 "skipped interval count must be positive",
             ));
         }
-        self.counts.dropped = self.counts.dropped.saturating_add(skipped_intervals);
+        self.counts.captured = self
+            .counts
+            .captured
+            .checked_add(skipped_intervals)
+            .ok_or_else(|| {
+                ArtifactStoreError::fatal(
+                    "capture_summary_count_overflow",
+                    "record_pressure_skip",
+                    "captured frame count exceeds u64",
+                )
+            })?;
+        self.counts.dropped = self
+            .counts
+            .dropped
+            .checked_add(skipped_intervals)
+            .ok_or_else(|| {
+                ArtifactStoreError::fatal(
+                    "capture_summary_count_overflow",
+                    "record_pressure_skip",
+                    "dropped frame count exceeds u64",
+                )
+            })?;
         Ok(())
     }
 
@@ -244,25 +392,23 @@ impl CapturePipeline {
         sink: &mut dyn ArtifactEventSink,
     ) -> ArtifactStoreResult<CapturePipelineSummary> {
         self.persist_candidates(true, sink)?;
-        Ok(self.summary())
+        self.summary()
     }
 
-    pub fn summary(&self) -> CapturePipelineSummary {
+    pub fn summary(&self) -> ArtifactStoreResult<CapturePipelineSummary> {
         let pinned = self
             .pinned
             .iter()
             .map(|(frame_index, reason)| PinnedFrameEvidence {
-                frame_index: *frame_index,
+                frame_index: Some(*frame_index),
                 reason: *reason,
                 artifact: self.persisted.get(frame_index).cloned(),
             })
             .collect();
-        CapturePipelineSummary {
-            counts: self.counts,
-            evidence_completeness: self.evidence_completeness(),
+        build_capture_pipeline_summary(
+            self.counts,
             pinned,
-            frames: self
-                .persisted
+            self.persisted
                 .iter()
                 .map(|(frame_index, artifact)| PersistedFrameEvidence {
                     frame_index: *frame_index,
@@ -270,7 +416,7 @@ impl CapturePipeline {
                     artifact: artifact.clone(),
                 })
                 .collect(),
-        }
+        )
     }
 
     pub fn frame_store(&self) -> &FrameStore {
@@ -291,7 +437,14 @@ impl CapturePipeline {
                 Ok(artifact) => {
                     self.frame_store
                         .mark_artifact_persisted(candidate.frame_index)?;
-                    self.counts.persisted = self.counts.persisted.saturating_add(1);
+                    self.counts.persisted =
+                        self.counts.persisted.checked_add(1).ok_or_else(|| {
+                            ArtifactStoreError::fatal(
+                                "capture_summary_count_overflow",
+                                "persist_capture_frame",
+                                "persisted frame count exceeds u64",
+                            )
+                        })?;
                     self.missing_pinned.remove(&candidate.frame_index);
                     self.persisted
                         .insert(candidate.frame_index, artifact.reference().clone());
@@ -390,8 +543,17 @@ impl CapturePipeline {
                     duplicate_count,
                     duration_ms,
                 } => {
-                    self.counts.deduplicated =
-                        self.counts.deduplicated.saturating_add(duplicate_count);
+                    self.counts.deduplicated = self
+                        .counts
+                        .deduplicated
+                        .checked_add(duplicate_count)
+                        .ok_or_else(|| {
+                            ArtifactStoreError::fatal(
+                                "capture_summary_count_overflow",
+                                "emit_capture_dedup_window",
+                                "deduplicated frame count exceeds u64",
+                            )
+                        })?;
                     let representative = self.contexts.get(&representative_frame_index).ok_or_else(
                         || {
                             ArtifactStoreError::fatal(
@@ -558,13 +720,117 @@ mod tests {
         assert!(outcome.frame.retained);
         assert_eq!(outcome.persisted.len(), 1);
         assert_eq!(pipeline.counts().deduplicated, 0);
-        let summary = pipeline.summary();
+        let summary = pipeline.summary().expect("capture summary");
         assert_eq!(
             summary.evidence_completeness,
             EvidenceCompleteness::Complete
         );
         assert_eq!(summary.pinned.len(), 1);
         assert!(summary.pinned[0].artifact.is_some());
+    }
+
+    #[test]
+    fn summary_builder_is_deterministic_and_fail_closed_for_counts_and_pin_pairs() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let mut sink = RecordingSink::default();
+        let mut pipeline = CapturePipeline::open(
+            temp.path().join("artifacts"),
+            temp.path().join("frames"),
+            config(7_000),
+            context(1),
+            &mut sink,
+        )
+        .expect("pipeline");
+        let artifact = pipeline
+            .record_frame(
+                frame_input(2, Some(PinnedFrameReason::RecognitionEvidence)),
+                context(2),
+                &mut sink,
+            )
+            .expect("persist source frame")
+            .persisted
+            .into_iter()
+            .next()
+            .expect("persisted artifact");
+        let counts = CapturePipelineCounts {
+            captured: 1,
+            deduplicated: 0,
+            dropped: 0,
+            persisted: 1,
+        };
+        let frames = vec![PersistedFrameEvidence {
+            frame_index: 2,
+            pinned_reason: None,
+            artifact: artifact.clone(),
+        }];
+        let pins = vec![
+            PinnedFrameEvidence {
+                frame_index: Some(2),
+                reason: PinnedFrameReason::Terminal,
+                artifact: Some(artifact.clone()),
+            },
+            PinnedFrameEvidence {
+                frame_index: Some(2),
+                reason: PinnedFrameReason::RecognitionEvidence,
+                artifact: Some(artifact.clone()),
+            },
+        ];
+
+        let first =
+            build_capture_pipeline_summary(counts, pins.clone(), frames.clone()).expect("summary");
+        let mut reversed = pins.clone();
+        reversed.reverse();
+        let second =
+            build_capture_pipeline_summary(counts, reversed, frames.clone()).expect("summary");
+        assert_eq!(first, second);
+        assert_eq!(
+            capture_summary_record(&first).expect("first record"),
+            capture_summary_record(&second).expect("second record")
+        );
+        assert_eq!(first.evidence_completeness, EvidenceCompleteness::Complete);
+        assert_eq!(first.pinned.len(), 2);
+
+        let partial = build_capture_pipeline_summary(
+            CapturePipelineCounts {
+                captured: 2,
+                deduplicated: 0,
+                dropped: 1,
+                persisted: 1,
+            },
+            pins.clone(),
+            frames.clone(),
+        )
+        .expect("partial summary");
+        assert_eq!(partial.evidence_completeness, EvidenceCompleteness::Partial);
+
+        let failed = build_capture_pipeline_summary(
+            counts,
+            vec![PinnedFrameEvidence {
+                frame_index: None,
+                reason: PinnedFrameReason::Failure,
+                artifact: None,
+            }],
+            frames.clone(),
+        )
+        .expect("failed summary");
+        assert_eq!(failed.evidence_completeness, EvidenceCompleteness::Failed);
+
+        let mut duplicate_pins = pins;
+        duplicate_pins.push(duplicate_pins[0].clone());
+        let duplicate = build_capture_pipeline_summary(counts, duplicate_pins, frames.clone())
+            .expect_err("duplicate pin pair");
+        assert_eq!(duplicate.code(), "capture_summary_pin_conflict");
+
+        let count_conflict = build_capture_pipeline_summary(
+            CapturePipelineCounts {
+                persisted: 0,
+                ..counts
+            },
+            Vec::new(),
+            frames,
+        )
+        .expect_err("persisted count mismatch");
+        assert_eq!(count_conflict.code(), "capture_summary_count_mismatch");
     }
 
     #[test]
@@ -618,10 +884,8 @@ mod tests {
         );
         pipeline.record_pressure_skip(2).expect("pressure skip");
         assert_eq!(pipeline.counts().dropped, 2);
-        assert_eq!(
-            pipeline.summary().evidence_completeness,
-            EvidenceCompleteness::Partial
-        );
+        let summary = pipeline.finish(&mut sink).expect("finish pipeline");
+        assert_eq!(summary.evidence_completeness, EvidenceCompleteness::Partial);
     }
 
     #[test]
@@ -654,7 +918,11 @@ mod tests {
         assert!(outcome.frame.retained);
         assert_eq!(outcome.persisted.len(), 1);
         assert_eq!(pipeline.counts().deduplicated, 0);
-        assert!(pipeline.summary().pinned[0].artifact.is_some());
+        assert!(
+            pipeline.summary().expect("capture summary").pinned[0]
+                .artifact
+                .is_some()
+        );
     }
 
     #[test]
@@ -683,7 +951,10 @@ mod tests {
             .expect_err("pinned persistence failure");
         assert_eq!(error.code(), "injected_event_failure");
         assert_eq!(
-            pipeline.summary().evidence_completeness,
+            pipeline
+                .summary()
+                .expect("capture summary")
+                .evidence_completeness,
             EvidenceCompleteness::Failed
         );
         assert!(

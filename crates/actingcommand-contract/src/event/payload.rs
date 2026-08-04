@@ -2,24 +2,24 @@
 
 use super::{
     ArtifactRedactionState, CapturePolicyReason, CapturePressureState, DiagnosticCode, EventAction,
-    EventFamily, EventType, EvidenceCompleteness, PolicyFailureClass, PolicyFailureDisposition,
-    PolicyPlanningSignalKind, RecognitionVerdict, RecoveryReason, ResourceAuthoringPhase,
-    RetentionClass, SanitizationError, Sensitivity, TaskOutcome,
+    EventFamily, EventType, EvidenceCompleteness, PinnedFrameReason, PolicyFailureClass,
+    PolicyFailureDisposition, PolicyPlanningSignalKind, RecognitionVerdict, RecoveryReason,
+    ResourceAuthoringPhase, RetentionClass, SanitizationError, Sensitivity, TaskOutcome,
 };
 use crate::{
     AgentAttentionState, AgentSessionEventData, AgentSessionId, AgentWakeData, AgentWakeId,
     AgentWakeKind, ApprovalDecisionRecord, ApprovalDisposition, ApprovalTarget, ApprovalTargetKind,
-    CatalogPromotionAuthorization, ClientActionKind, ClientActionRecord, CorrelationId, EventId,
-    FactInvalidationEventData, FactRecord, FactScope, HolderId, InputAction, InstanceId, LeaseId,
-    LeasePriority, MonitorDecision, MonitorDiagnosis, MonitorDisposition, MonitorObservation,
-    MonitorRecoveryCoordinationReason, MonitorRecoveryKind, PerformanceContext,
-    PerformanceControlEventData, PerformanceControlLevel, PerformanceControlReason,
-    PerformanceDeadlineDisposition, PerformanceMonitorHealth, PerformanceMonitorStateEventData,
-    PerformancePressureEventData, PerformancePressureRecord, PerformanceStutterEventData,
-    PerformanceSummaryEventData, ReleaseTransitionData, ReleaseTransitionKind, RequestId, RunId,
-    RuntimeReleaseSet, StateMigrationData, TaskId, validate_fact_invalidation,
-    validate_performance_control, validate_performance_monitor_state, validate_performance_stutter,
-    validate_performance_summary,
+    ArtifactKind, CatalogPromotionAuthorization, ClientActionKind, ClientActionRecord,
+    CorrelationId, EventId, FactInvalidationEventData, FactRecord, FactScope, HolderId,
+    InputAction, InstanceId, LeaseId, LeasePriority, MonitorDecision, MonitorDiagnosis,
+    MonitorDisposition, MonitorObservation, MonitorRecoveryCoordinationReason, MonitorRecoveryKind,
+    PerformanceContext, PerformanceControlEventData, PerformanceControlLevel,
+    PerformanceControlReason, PerformanceDeadlineDisposition, PerformanceMonitorHealth,
+    PerformanceMonitorStateEventData, PerformancePressureEventData, PerformancePressureRecord,
+    PerformanceStutterEventData, PerformanceSummaryEventData, ProjectedArtifactReference,
+    ReleaseTransitionData, ReleaseTransitionKind, RequestId, RunId, RuntimeReleaseSet,
+    StateMigrationData, TaskId, validate_fact_invalidation, validate_performance_control,
+    validate_performance_monitor_state, validate_performance_stutter, validate_performance_summary,
 };
 use serde::de;
 use serde::{Deserialize, Deserializer, Serialize};
@@ -48,6 +48,9 @@ pub const STATE_PAYLOAD_SCHEMA: &str = "actingcommand.payload.state.v1";
 pub const RELEASE_PAYLOAD_SCHEMA: &str = "actingcommand.payload.release.v1";
 pub const AGENT_PAYLOAD_SCHEMA: &str = "actingcommand.payload.agent.v1";
 pub const LEDGER_PAYLOAD_SCHEMA: &str = "actingcommand.payload.ledger.v2";
+pub const MAX_CAPTURE_SUMMARY_COUNT: u64 = 1_000_000;
+pub const MAX_CAPTURE_SUMMARY_FRAMES: usize = 16_384;
+pub const MAX_CAPTURE_SUMMARY_PINS: usize = 65_536;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SecretField {
@@ -478,6 +481,306 @@ pub struct CapturePolicyPayload {
     retention_class: RetentionClass,
     reason: CapturePolicyReason,
     audit: SanitizedAudit,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CapturePersistedEvidence {
+    frame_index: u64,
+    artifact: ProjectedArtifactReference,
+}
+
+impl CapturePersistedEvidence {
+    pub fn new(
+        frame_index: u64,
+        artifact: ProjectedArtifactReference,
+    ) -> Result<Self, SanitizationError> {
+        let value = Self {
+            frame_index,
+            artifact,
+        };
+        value.validate()?;
+        Ok(value)
+    }
+
+    pub const fn frame_index(&self) -> u64 {
+        self.frame_index
+    }
+
+    pub const fn artifact(&self) -> &ProjectedArtifactReference {
+        &self.artifact
+    }
+
+    fn validate(&self) -> Result<(), SanitizationError> {
+        if self.artifact.kind != ArtifactKind::CaptureFrame
+            || self.artifact.run_id.is_none()
+            || self.artifact.correlation_id.is_none()
+            || self.artifact.frame_id.is_none()
+            || self.artifact.object_key.is_none()
+            || self.artifact.validate().is_err()
+        {
+            return Err(SanitizationError::new(
+                "invalid_capture_summary_artifact",
+                "frames",
+            ));
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CapturePinnedEvidence {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    frame_index: Option<u64>,
+    reason: PinnedFrameReason,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    artifact: Option<ProjectedArtifactReference>,
+}
+
+impl CapturePinnedEvidence {
+    pub fn new(
+        frame_index: Option<u64>,
+        reason: PinnedFrameReason,
+        artifact: Option<ProjectedArtifactReference>,
+    ) -> Result<Self, SanitizationError> {
+        let value = Self {
+            frame_index,
+            reason,
+            artifact,
+        };
+        value.validate_shape()?;
+        Ok(value)
+    }
+
+    pub const fn frame_index(&self) -> Option<u64> {
+        self.frame_index
+    }
+
+    pub const fn reason(&self) -> PinnedFrameReason {
+        self.reason
+    }
+
+    pub const fn artifact(&self) -> Option<&ProjectedArtifactReference> {
+        self.artifact.as_ref()
+    }
+
+    fn validate_shape(&self) -> Result<(), SanitizationError> {
+        if self.artifact.is_some() && self.frame_index.is_none() {
+            return Err(SanitizationError::new(
+                "invalid_capture_summary_pin",
+                "pinned",
+            ));
+        }
+        if let Some(artifact) = &self.artifact {
+            CapturePersistedEvidence {
+                frame_index: self.frame_index.expect("checked above"),
+                artifact: artifact.clone(),
+            }
+            .validate()?;
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CaptureSummaryRecord {
+    captured: u64,
+    deduplicated: u64,
+    dropped: u64,
+    persisted: u64,
+    evidence_completeness: EvidenceCompleteness,
+    frames: Vec<CapturePersistedEvidence>,
+    pinned: Vec<CapturePinnedEvidence>,
+}
+
+impl CaptureSummaryRecord {
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        captured: u64,
+        deduplicated: u64,
+        dropped: u64,
+        persisted: u64,
+        evidence_completeness: EvidenceCompleteness,
+        frames: Vec<CapturePersistedEvidence>,
+        pinned: Vec<CapturePinnedEvidence>,
+    ) -> Result<Self, SanitizationError> {
+        let value = Self {
+            captured,
+            deduplicated,
+            dropped,
+            persisted,
+            evidence_completeness,
+            frames,
+            pinned,
+        };
+        value.validate()?;
+        Ok(value)
+    }
+
+    pub const fn captured(&self) -> u64 {
+        self.captured
+    }
+
+    pub const fn deduplicated(&self) -> u64 {
+        self.deduplicated
+    }
+
+    pub const fn dropped(&self) -> u64 {
+        self.dropped
+    }
+
+    pub const fn persisted(&self) -> u64 {
+        self.persisted
+    }
+
+    pub const fn evidence_completeness(&self) -> EvidenceCompleteness {
+        self.evidence_completeness
+    }
+
+    pub fn frames(&self) -> &[CapturePersistedEvidence] {
+        &self.frames
+    }
+
+    pub fn pinned(&self) -> &[CapturePinnedEvidence] {
+        &self.pinned
+    }
+
+    pub fn validate(&self) -> Result<(), SanitizationError> {
+        if [
+            self.captured,
+            self.deduplicated,
+            self.dropped,
+            self.persisted,
+        ]
+        .into_iter()
+        .any(|count| count > MAX_CAPTURE_SUMMARY_COUNT)
+            || self.frames.len() > MAX_CAPTURE_SUMMARY_FRAMES
+            || self.pinned.len() > MAX_CAPTURE_SUMMARY_PINS
+        {
+            return Err(SanitizationError::new(
+                "capture_summary_bound_exceeded",
+                "summary",
+            ));
+        }
+        if u64::try_from(self.frames.len()).ok() != Some(self.persisted) {
+            return Err(SanitizationError::new(
+                "capture_summary_count_mismatch",
+                "persisted",
+            ));
+        }
+        let accounted = self
+            .deduplicated
+            .checked_add(self.dropped)
+            .and_then(|count| count.checked_add(self.persisted))
+            .ok_or_else(|| SanitizationError::new("capture_summary_count_overflow", "summary"))?;
+        if accounted > self.captured {
+            return Err(SanitizationError::new(
+                "capture_summary_count_mismatch",
+                "captured",
+            ));
+        }
+
+        let mut previous_frame_index = None;
+        let mut artifact_ids = BTreeSet::new();
+        let mut frame_ids = BTreeSet::new();
+        let mut object_keys = BTreeSet::new();
+        for frame in &self.frames {
+            frame.validate()?;
+            if frame.frame_index > MAX_CAPTURE_SUMMARY_COUNT
+                || previous_frame_index.is_some_and(|previous| previous >= frame.frame_index)
+                || !artifact_ids.insert(frame.artifact.artifact_id)
+                || !frame_ids.insert(
+                    frame
+                        .artifact
+                        .frame_id
+                        .expect("validated capture artifact has a frame id"),
+                )
+                || !object_keys.insert(
+                    frame
+                        .artifact
+                        .object_key
+                        .as_deref()
+                        .expect("validated capture artifact has an object key"),
+                )
+            {
+                return Err(SanitizationError::new(
+                    "capture_summary_frame_conflict",
+                    "frames",
+                ));
+            }
+            previous_frame_index = Some(frame.frame_index);
+        }
+
+        let mut previous_pin = None;
+        let mut missing_pin = false;
+        for pin in &self.pinned {
+            pin.validate_shape()?;
+            let key = (pin.frame_index, pin.reason);
+            if previous_pin.is_some_and(|previous| previous >= key) {
+                return Err(SanitizationError::new(
+                    "capture_summary_pin_conflict",
+                    "pinned",
+                ));
+            }
+            if let Some(frame_index) = pin.frame_index {
+                if frame_index > MAX_CAPTURE_SUMMARY_COUNT {
+                    return Err(SanitizationError::new(
+                        "capture_summary_pin_conflict",
+                        "pinned",
+                    ));
+                }
+                if let Some(artifact) = &pin.artifact {
+                    let persisted = self
+                        .frames
+                        .binary_search_by_key(&frame_index, |frame| frame.frame_index)
+                        .ok()
+                        .map(|index| &self.frames[index].artifact);
+                    if persisted != Some(artifact) {
+                        return Err(SanitizationError::new(
+                            "capture_summary_pin_artifact_mismatch",
+                            "pinned",
+                        ));
+                    }
+                } else {
+                    missing_pin = true;
+                }
+            } else {
+                missing_pin = true;
+            }
+            previous_pin = Some(key);
+        }
+
+        let expected = if missing_pin || accounted != self.captured {
+            EvidenceCompleteness::Failed
+        } else if self.dropped > 0 {
+            EvidenceCompleteness::Partial
+        } else {
+            EvidenceCompleteness::Complete
+        };
+        if self.evidence_completeness != expected {
+            return Err(SanitizationError::new(
+                "capture_summary_completeness_mismatch",
+                "evidence_completeness",
+            ));
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CaptureSummaryCommittedPayload {
+    action: EventAction,
+    summary: CaptureSummaryRecord,
+    audit: SanitizedAudit,
+}
+
+impl CaptureSummaryCommittedPayload {
+    pub const fn summary(&self) -> &CaptureSummaryRecord {
+        &self.summary
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1758,6 +2061,7 @@ common_detail_accessors!(ObservationResultPayload);
 common_detail_accessors!(CapturePressurePayload);
 common_detail_accessors!(CaptureDedupWindowPayload);
 common_detail_accessors!(CapturePolicyPayload);
+common_detail_accessors!(CaptureSummaryCommittedPayload);
 common_detail_accessors!(ArtifactExportPayload);
 common_detail_accessors!(ArtifactExportFailurePayload);
 
@@ -2284,6 +2588,7 @@ macro_rules! observation_detail {
 observation_detail!(CapturePressurePayload);
 observation_detail!(CaptureDedupWindowPayload);
 observation_detail!(CapturePolicyPayload);
+observation_detail!(CaptureSummaryCommittedPayload);
 observation_detail!(SchedulerQueuePayload);
 observation_detail!(SchedulerPreemptionPayload);
 
@@ -2660,6 +2965,11 @@ struct CapturePolicyDraft {
     cadence_ms: u64,
     retention_class: RetentionClass,
     reason: CapturePolicyReason,
+    audit: AuditInput,
+}
+
+struct CaptureSummaryCommittedDraft {
+    summary: CaptureSummaryRecord,
     audit: AuditInput,
 }
 
@@ -4212,6 +4522,20 @@ impl CapturePolicyDraft {
     }
 }
 
+impl CaptureSummaryCommittedDraft {
+    fn sanitize(
+        self,
+        fingerprinter: &dyn SecretFingerprinter,
+    ) -> Result<CaptureSummaryCommittedPayload, SanitizationError> {
+        self.summary.validate()?;
+        Ok(CaptureSummaryCommittedPayload {
+            action: EventAction::CaptureSummaryCommit,
+            summary: self.summary,
+            audit: self.audit.sanitize(fingerprinter)?,
+        })
+    }
+}
+
 impl ArtifactExportDraft {
     fn sanitize(
         self,
@@ -4723,6 +5047,7 @@ enum CaptureDraftKind {
     PressureChanged(CapturePressureDraft),
     DedupWindow(CaptureDedupWindowDraft),
     PolicyChanged(CapturePolicyDraft),
+    SummaryCommitted(CaptureSummaryCommittedDraft),
 }
 
 pub struct CapturePayloadDraft(CaptureDraftKind);
@@ -4802,6 +5127,12 @@ impl CapturePayloadDraft {
             reason,
             audit,
         }))
+    }
+
+    pub fn summary_committed(summary: CaptureSummaryRecord, audit: AuditInput) -> Self {
+        Self(CaptureDraftKind::SummaryCommitted(
+            CaptureSummaryCommittedDraft { summary, audit },
+        ))
     }
 }
 
@@ -5704,6 +6035,7 @@ pub enum CapturePayload {
     PressureChanged(CapturePressurePayload),
     DedupWindow(CaptureDedupWindowPayload),
     PolicyChanged(CapturePolicyPayload),
+    SummaryCommitted(CaptureSummaryCommittedPayload),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -5942,6 +6274,7 @@ family_payload!(CapturePayload, {
     PressureChanged => EventType::CapturePressureChanged,
     DedupWindow => EventType::CaptureDedupWindow,
     PolicyChanged => EventType::CapturePolicyChanged,
+    SummaryCommitted => EventType::CaptureSummaryCommitted,
 });
 family_payload!(RecognitionPayload, {
     Requested => EventType::RecognitionRequested,
@@ -6271,6 +6604,9 @@ impl EventPayloadDraft {
                 CaptureDraftKind::PolicyChanged(detail) => {
                     CapturePayload::PolicyChanged(detail.sanitize(fingerprinter)?)
                 }
+                CaptureDraftKind::SummaryCommitted(detail) => {
+                    CapturePayload::SummaryCommitted(detail.sanitize(fingerprinter)?)
+                }
             }),
             Self::Recognition(value) => EventPayload::Recognition(match value.0 {
                 RecognitionDraftKind::Requested(detail) => {
@@ -6372,6 +6708,9 @@ impl EventPayload {
             sensitivity = sensitivity.max(Sensitivity::Internal);
         }
         if matches!(self, Self::Performance(_)) {
+            sensitivity = sensitivity.max(Sensitivity::Internal);
+        }
+        if matches!(self, Self::Capture(CapturePayload::SummaryCommitted(_))) {
             sensitivity = sensitivity.max(Sensitivity::Internal);
         }
         if let Self::Fact(payload) = self {
@@ -6521,6 +6860,12 @@ impl EventPayload {
                     "invalid_capture_policy",
                     "cadence_ms",
                 ));
+            }
+            Self::Capture(CapturePayload::SummaryCommitted(value))
+                if value.action != EventAction::CaptureSummaryCommit
+                    || value.summary.validate().is_err() =>
+            {
+                return Err(SanitizationError::new("invalid_capture_summary", "summary"));
             }
             Self::Artifact(ArtifactPayload::ExportCompleted(value))
                 if value.artifact_count == 0 =>

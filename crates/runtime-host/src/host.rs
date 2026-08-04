@@ -37,35 +37,37 @@ use actingcommand_artifact_store::{
     ArtifactWriteContext, ArtifactWriteRequest, CapturePipelineCounts, CapturePipelineSummary,
     EvidenceExportDocuments, EvidenceExportIdentity, EvidenceExportRequest, EvidenceExporter,
     EvidenceJsonDocument, EvidencePackage, PackageVerification, PersistedFrameEvidence,
-    PreparedArtifact, read_projected_verified,
+    PinnedFrameEvidence, PreparedArtifact, StoredArtifact, build_capture_pipeline_summary,
+    capture_summary_record, read_projected_verified,
 };
 use actingcommand_contract::{
     AgentPayloadDraft, AgentSessionContext, AgentSessionId, AgentSessionResponse,
     AgentSessionStatus, AgentWakeId, AgentWakeKind, AgentWakeTrigger, ApplicationLifecycleAction,
     ApplicationPayload, ApplicationPayloadDraft, ApprovalDecisionRecord, ApprovalPayload,
     ApprovalPayloadDraft, ArtifactIssuePolicy, ArtifactKind, ArtifactLinksDraft, ArtifactProducer,
-    ArtifactRedactionState, AuditInput, AuthoritativeSchedulingOutcome, CapturePayloadDraft,
-    CaptureSequence, CaptureSequenceSpec, CatalogPayloadDraft, CatalogPromotionAuthorization,
-    CatalogProposal, CatalogTransitionEventData, ClientActionRecord, ClientPayload,
-    ClientPayloadDraft, CommandPayloadDraft, ContainedTaskRequest, CorrelationId, DiagnosticCode,
-    EffectDisposition, EventAction, EventActor, EventDraft, EventId, EventLinksDraft, EventPayload,
-    EventQuery, EventSeverity, EventSource, EventType, EvidenceCompleteness, FactPayloadDraft,
-    FactRecord, InputAction, InputPayload, InputPayloadDraft, InstanceFactContext,
-    InstanceFactSnapshot, InstanceId, IssuedActionId, IssuedFrameId, IssuedMonitorProbe,
-    IssuedReadOnlyCaptureCapability, IssuedRecognitionId, IssuedRunId, IssuedTaskId, LeaseId,
-    LeasePayloadDraft, LeaseQueuePolicy, LeaseToken, MAX_GOVERNANCE_CAPABILITY_BYTES,
-    MAX_INSTANCE_ALIAS_BYTES, MIN_GOVERNANCE_CAPABILITY_BYTES, MonitorPayloadDraft,
-    MonitorRecoveryCoordinationReason, OriginModule, PackageDebugLayout, PackageDebugRequest,
-    PackageDebugSummary, PerformanceContext, PerformancePayloadDraft, PolicyDispatchEventData,
-    PolicyExecutionEventData, PolicyExecutionOutcome, PolicyFailureClass, PolicyPayload,
-    PolicyPayloadDraft, PolicyPlanningSignalEventData, PolicyReasonRecord,
-    ProjectDecisionPageRequest, ProjectInterfaceRequest, ProjectedArtifactReference, ProposalClass,
-    ProposalPromotion, RUNTIME_INFO_FILE, ReadonlyObservation, RecognitionPayloadDraft,
-    RecognitionVerdict, ReleasePayload, ReleasePayloadDraft, ReleaseTransitionKind, RequestId,
-    ResourceAuthoringEvent, ResourceAuthoringPayloadDraft, ResourceAuthoringPhase, RetentionClass,
-    RunId, RuntimeCaptureBackend, RuntimeContractError, RuntimeControlPlaneStatus,
-    RuntimeDebugEvent, RuntimeDebugOperation, RuntimeDebugPhase, RuntimeErrorCode,
-    RuntimeErrorProjection, RuntimeEventBatch, RuntimeEventQueryCursor, RuntimeEventQueryPage,
+    ArtifactRedactionState, ArtifactReference, AuditInput, AuthoritativeSchedulingOutcome,
+    CapturePayload, CapturePayloadDraft, CaptureSequence, CaptureSequenceSpec, CatalogPayloadDraft,
+    CatalogPromotionAuthorization, CatalogProposal, CatalogTransitionEventData, ClientActionRecord,
+    ClientPayload, ClientPayloadDraft, CommandPayloadDraft, ContainedTaskRequest, CorrelationId,
+    DiagnosticCode, EffectDisposition, EventAction, EventActor, EventDraft, EventId,
+    EventLinksDraft, EventPayload, EventQuery, EventSeverity, EventSource, EventType,
+    FactPayloadDraft, FactRecord, InputAction, InputPayload, InputPayloadDraft,
+    InstanceFactContext, InstanceFactSnapshot, InstanceId, IssuedActionId, IssuedFrameId,
+    IssuedMonitorProbe, IssuedReadOnlyCaptureCapability, IssuedRecognitionId, IssuedRunId,
+    IssuedTaskId, LeaseId, LeasePayloadDraft, LeaseQueuePolicy, LeaseToken,
+    MAX_GOVERNANCE_CAPABILITY_BYTES, MAX_INSTANCE_ALIAS_BYTES, MIN_GOVERNANCE_CAPABILITY_BYTES,
+    MonitorPayloadDraft, MonitorRecoveryCoordinationReason, OriginModule, PackageDebugLayout,
+    PackageDebugRequest, PackageDebugSummary, PerformanceContext, PerformancePayloadDraft,
+    PinnedFrameReason, PolicyDispatchEventData, PolicyExecutionEventData, PolicyExecutionOutcome,
+    PolicyFailureClass, PolicyPayload, PolicyPayloadDraft, PolicyPlanningSignalEventData,
+    PolicyReasonRecord, ProjectDecisionPageRequest, ProjectInterfaceRequest,
+    ProjectedArtifactReference, ProjectionPayload, ProposalClass, ProposalPromotion,
+    RUNTIME_INFO_FILE, ReadonlyObservation, RecognitionPayloadDraft, RecognitionVerdict,
+    ReleasePayload, ReleasePayloadDraft, ReleaseTransitionKind, RequestId, ResourceAuthoringEvent,
+    ResourceAuthoringPayloadDraft, ResourceAuthoringPhase, RetentionClass, RunId,
+    RuntimeCaptureBackend, RuntimeContractError, RuntimeControlPlaneStatus, RuntimeDebugEvent,
+    RuntimeDebugOperation, RuntimeDebugPhase, RuntimeErrorCode, RuntimeErrorProjection,
+    RuntimeEventBatch, RuntimeEventQueryCursor, RuntimeEventQueryPage,
     RuntimeEventQueryPageRequest, RuntimeEvidenceExportRequest, RuntimeEvidenceExportSummary,
     RuntimeEvidenceScreenshotCounts, RuntimeInfo, RuntimeInstanceStatus, RuntimeMaintenanceQuery,
     RuntimeMonitorPolicy, RuntimeOperation, RuntimePayloadDraft, RuntimePlanningDocument,
@@ -1331,6 +1333,7 @@ impl RuntimeHost {
                     failure_code,
                     failure_severity: None,
                     scheduling_outcome: None,
+                    capture_summary: None,
                 },
             )
             .map(|event| terminal(&event))
@@ -1411,6 +1414,7 @@ impl RuntimeHost {
                     failure_code: None,
                     failure_severity: None,
                     scheduling_outcome: Some((game, declaration)),
+                    capture_summary: None,
                 },
             )
             .map(|event| terminal(&event))
@@ -5654,11 +5658,13 @@ impl HostShared {
                     RuntimeErrorCode::RuntimeFatal,
                 ))
             })?;
-        let pipeline = self.capture_pipeline_summary(
-            &events,
-            validated.correlation_id(),
-            *context.run_id.transport(),
-        )?;
+        let (source_capture_summary_sequence, pipeline) = self
+            .authoritative_capture_pipeline_summary(
+                &events,
+                validated.correlation_id(),
+                *context.run_id.transport(),
+                terminal_receipt.sequence,
+            )?;
         let documents = runtime_evidence_documents(
             context.run_id,
             context.task_id,
@@ -5684,6 +5690,7 @@ impl HostShared {
                 archive_redaction_state: ArtifactRedactionState::NotRequired,
             },
             events,
+            source_capture_summary_sequence,
             pipeline,
             documents,
             archive_context,
@@ -5773,24 +5780,74 @@ impl HostShared {
         })
     }
 
-    fn capture_pipeline_summary(
+    fn authoritative_capture_pipeline_summary(
         &self,
         events: &[actingcommand_contract::ProjectedEvent],
         correlation_id: CorrelationId,
         run_id: actingcommand_contract::RunId,
-    ) -> Result<CapturePipelineSummary, RequestFailure> {
-        let mut seen = BTreeSet::new();
-        let mut frames = Vec::new();
-        for projected in events
+        terminal_sequence: u64,
+    ) -> Result<(u64, CapturePipelineSummary), RequestFailure> {
+        let summaries = events
             .iter()
-            .flat_map(|event| &event.artifacts)
-            .filter(|artifact| artifact.kind() == ArtifactKind::CaptureFrame)
+            .filter(|event| event.event_type == EventType::CaptureSummaryCommitted)
+            .collect::<Vec<_>>();
+        let [event] = summaries.as_slice() else {
+            return Err(RequestFailure::request(
+                evidence_request_error(if summaries.is_empty() {
+                    "evidence_capture_summary_missing"
+                } else {
+                    "evidence_capture_summary_duplicate"
+                }),
+                RuntimeReceiptState::Failed,
+                None,
+            ));
+        };
+        if event.sequence == 0 || event.sequence >= terminal_sequence {
+            return Err(RequestFailure::request(
+                evidence_request_error("evidence_capture_summary_not_ready"),
+                RuntimeReceiptState::Failed,
+                None,
+            ));
+        }
+        if event.links.run_id() != Some(&run_id)
+            || event.links.correlation_id() != Some(&correlation_id)
+            || event.origin.source() != EventSource::Runtime
+            || event.origin.module() != OriginModule::CapturePipeline
+            || event.origin.actor() != EventActor::Runtime
         {
-            if !seen.insert(projected.artifact_id) {
-                continue;
-            }
-            if projected.correlation_id != Some(correlation_id)
-                || projected.run_id.is_some_and(|actual| actual != run_id)
+            return Err(RequestFailure::request(
+                evidence_request_error("evidence_capture_summary_conflict"),
+                RuntimeReceiptState::Failed,
+                None,
+            ));
+        }
+        let ProjectionPayload::Full(payload) = &event.payload else {
+            return Err(RequestFailure::request(
+                evidence_request_error("evidence_capture_summary_invalid"),
+                RuntimeReceiptState::Failed,
+                None,
+            ));
+        };
+        let EventPayload::Capture(CapturePayload::SummaryCommitted(payload)) = payload.as_ref()
+        else {
+            return Err(RequestFailure::request(
+                evidence_request_error("evidence_capture_summary_invalid"),
+                RuntimeReceiptState::Failed,
+                None,
+            ));
+        };
+        let record = payload.summary();
+        record.validate().map_err(|_| {
+            RequestFailure::request(
+                evidence_request_error("evidence_capture_summary_invalid"),
+                RuntimeReceiptState::Failed,
+                None,
+            )
+        })?;
+        let mut frames = Vec::new();
+        for declared in record.frames() {
+            let projected = declared.artifact();
+            if projected.correlation_id != Some(correlation_id) || projected.run_id != Some(run_id)
             {
                 return Err(RequestFailure::request(
                     evidence_request_error("evidence_capture_identity_mismatch"),
@@ -5809,29 +5866,101 @@ impl HostShared {
                     )
                 })?;
             frames.push(PersistedFrameEvidence {
-                frame_index: frames.len(),
+                frame_index: usize::try_from(declared.frame_index()).map_err(|_| {
+                    RequestFailure::request(
+                        evidence_request_error("evidence_capture_summary_invalid"),
+                        RuntimeReceiptState::Failed,
+                        None,
+                    )
+                })?,
                 pinned_reason: None,
                 artifact: verified.into_reference(),
             });
         }
-        let persisted = u64::try_from(frames.len()).map_err(|_| {
-            RequestFailure::poison_without_terminal(RuntimeHostError::fatal(
-                "evidence_frame_count_overflow",
-                "export_evidence",
-                RuntimeErrorCode::RuntimeFatal,
-            ))
-        })?;
-        Ok(CapturePipelineSummary {
-            counts: CapturePipelineCounts {
-                captured: persisted,
-                deduplicated: 0,
-                dropped: 0,
-                persisted,
+        let pinned = record
+            .pinned()
+            .iter()
+            .map(|declared| {
+                let frame_index = declared
+                    .frame_index()
+                    .map(usize::try_from)
+                    .transpose()
+                    .map_err(|_| {
+                        RequestFailure::request(
+                            evidence_request_error("evidence_capture_summary_invalid"),
+                            RuntimeReceiptState::Failed,
+                            None,
+                        )
+                    })?;
+                let artifact = match (frame_index, declared.artifact()) {
+                    (Some(frame_index), Some(projected)) => {
+                        let frame = frames
+                            .iter()
+                            .find(|frame| frame.frame_index == frame_index)
+                            .ok_or_else(|| {
+                                RequestFailure::request(
+                                    evidence_request_error("evidence_capture_summary_invalid"),
+                                    RuntimeReceiptState::Failed,
+                                    None,
+                                )
+                            })?;
+                        if frame.artifact.project(true) != *projected {
+                            return Err(RequestFailure::request(
+                                evidence_request_error("evidence_capture_summary_conflict"),
+                                RuntimeReceiptState::Failed,
+                                None,
+                            ));
+                        }
+                        Some(frame.artifact.clone())
+                    }
+                    (_, None) => None,
+                    (None, Some(_)) => {
+                        return Err(RequestFailure::request(
+                            evidence_request_error("evidence_capture_summary_invalid"),
+                            RuntimeReceiptState::Failed,
+                            None,
+                        ));
+                    }
+                };
+                Ok(PinnedFrameEvidence {
+                    frame_index,
+                    reason: declared.reason(),
+                    artifact,
+                })
+            })
+            .collect::<Result<Vec<_>, RequestFailure>>()?;
+        let summary = build_capture_pipeline_summary(
+            CapturePipelineCounts {
+                captured: record.captured(),
+                deduplicated: record.deduplicated(),
+                dropped: record.dropped(),
+                persisted: record.persisted(),
             },
-            evidence_completeness: EvidenceCompleteness::Complete,
-            pinned: Vec::new(),
+            pinned,
             frames,
-        })
+        )
+        .map_err(|_| {
+            RequestFailure::request(
+                evidence_request_error("evidence_capture_summary_invalid"),
+                RuntimeReceiptState::Failed,
+                None,
+            )
+        })?;
+        let rebuilt = capture_summary_record(&summary).map_err(|_| {
+            RequestFailure::request(
+                evidence_request_error("evidence_capture_summary_invalid"),
+                RuntimeReceiptState::Failed,
+                None,
+            )
+        })?;
+        if summary.evidence_completeness != record.evidence_completeness() || &rebuilt != record {
+            return Err(RequestFailure::request(
+                evidence_request_error("evidence_capture_summary_conflict"),
+                RuntimeReceiptState::Failed,
+                None,
+            ));
+        }
+        Ok((event.sequence, summary))
     }
 
     fn latest_evidence_export_terminal(
@@ -9811,9 +9940,11 @@ impl HostShared {
             current_recognition_id: None,
             step_actions: BTreeMap::new(),
             finalizing: None,
+            capture_evidence: CaptureEvidenceAccumulator::default(),
         };
         let execution = prepared.run(&mut runtime);
         let finalizing = runtime.finalizing;
+        let mut capture_evidence = std::mem::take(&mut runtime.capture_evidence);
         drop(runtime);
         let outcome = match execution {
             Ok(outcome) => outcome,
@@ -9821,6 +9952,18 @@ impl HostShared {
                 let task_failure = scheduled.then_some(failure.task_failure).flatten();
                 let failure_severity = task_failure.map(|evidence| evidence.severity);
                 if failure_severity.is_some() || !scheduled && !failure.poison_runtime {
+                    let capture_summary = match capture_evidence.finalize(TaskOutcome::Failure) {
+                        Ok(summary) => summary,
+                        Err(summary_failure) => {
+                            return Err(self.cleanup_composite_failure_with_run_links(
+                                request,
+                                token,
+                                connection_id,
+                                run_links,
+                                summary_failure,
+                            ));
+                        }
+                    };
                     let event = self.append_contained_task_terminal(
                         request,
                         &token,
@@ -9838,6 +9981,7 @@ impl HostShared {
                             ),
                             failure_severity,
                             scheduling_outcome: None,
+                            capture_summary: Some(capture_summary),
                         },
                     )?;
                     failure.terminal = Some(terminal(&event));
@@ -9851,6 +9995,35 @@ impl HostShared {
                 ));
             }
             Err(ContainedTaskRunError::Task(error)) => {
+                if matches!(
+                    error.code(),
+                    "contained_task_guard_refused"
+                        | "contained_task_guard_evaluation_failed"
+                        | "contained_task_guard_target_missing"
+                        | "contained_task_guard_target_invalid"
+                ) && let Err(pin_failure) =
+                    capture_evidence.pin_last(PinnedFrameReason::GuardRejection)
+                {
+                    return Err(self.cleanup_composite_failure_with_run_links(
+                        request,
+                        token,
+                        connection_id,
+                        run_links,
+                        pin_failure,
+                    ));
+                }
+                let capture_summary = match capture_evidence.finalize(TaskOutcome::Failure) {
+                    Ok(summary) => summary,
+                    Err(summary_failure) => {
+                        return Err(self.cleanup_composite_failure_with_run_links(
+                            request,
+                            token,
+                            connection_id,
+                            run_links,
+                            summary_failure,
+                        ));
+                    }
+                };
                 let failure_severity = scheduled.then_some(EventSeverity::Warning);
                 let event = self.append_contained_task_terminal(
                     request,
@@ -9865,6 +10038,7 @@ impl HostShared {
                         failure_code: Some(error.code()),
                         failure_severity,
                         scheduling_outcome: None,
+                        capture_summary: Some(capture_summary),
                     },
                 )?;
                 let mut failure = RequestFailure::request(
@@ -9902,6 +10076,18 @@ impl HostShared {
                 )),
             ));
         }
+        let capture_summary = match capture_evidence.finalize(outcome.outcome) {
+            Ok(summary) => summary,
+            Err(failure) => {
+                return Err(self.cleanup_composite_failure_with_run_links(
+                    request,
+                    token,
+                    connection_id,
+                    run_links,
+                    failure,
+                ));
+            }
+        };
         let task_terminal = self.append_contained_task_terminal(
             request,
             &token,
@@ -9915,6 +10101,7 @@ impl HostShared {
                 failure_code: None,
                 failure_severity: None,
                 scheduling_outcome,
+                capture_summary: Some(capture_summary),
             },
         )?;
         match self.release_lease(
@@ -10190,6 +10377,71 @@ impl HostShared {
                 ),
             ));
         }
+        let existing_summary_events = chain_events
+            .iter()
+            .filter(|event| event.event_type() == EventType::CaptureSummaryCommitted)
+            .collect::<Vec<_>>();
+        if existing_summary_events.len() > 1 {
+            return Err(RequestFailure::poison_without_terminal(
+                RuntimeHostError::fatal(
+                    "capture_summary_state_inconsistent",
+                    "append_contained_task_terminal",
+                    RuntimeErrorCode::RuntimeFatal,
+                ),
+            ));
+        }
+        let existing_summary = existing_summary_events
+            .first()
+            .map(|event| {
+                if event.origin().source() != EventSource::Runtime
+                    || event.origin().module() != OriginModule::CapturePipeline
+                    || event.origin().actor() != EventActor::Runtime
+                {
+                    return Err(RequestFailure::poison_without_terminal(
+                        RuntimeHostError::fatal(
+                            "capture_summary_state_conflict",
+                            "append_contained_task_terminal",
+                            RuntimeErrorCode::RuntimeFatal,
+                        ),
+                    ));
+                }
+                let EventPayload::Capture(CapturePayload::SummaryCommitted(payload)) =
+                    event.payload()
+                else {
+                    return Err(RequestFailure::poison_without_terminal(
+                        RuntimeHostError::fatal(
+                            "capture_summary_state_inconsistent",
+                            "append_contained_task_terminal",
+                            RuntimeErrorCode::RuntimeFatal,
+                        ),
+                    ));
+                };
+                Ok(payload.summary())
+            })
+            .transpose()?;
+        let requested_summary = draft
+            .capture_summary
+            .as_ref()
+            .map(capture_summary_record)
+            .transpose()
+            .map_err(|error| {
+                RequestFailure::poison_without_terminal(RuntimeHostError::fatal(
+                    error.code(),
+                    "append_contained_task_terminal",
+                    RuntimeErrorCode::RuntimeFatal,
+                ))
+            })?;
+        if let (Some(existing), Some(requested)) = (existing_summary, requested_summary.as_ref())
+            && existing != requested
+        {
+            return Err(RequestFailure::poison_without_terminal(
+                RuntimeHostError::fatal(
+                    "capture_summary_state_conflict",
+                    "append_contained_task_terminal",
+                    RuntimeErrorCode::RuntimeFatal,
+                ),
+            ));
+        }
         let scheduling_disposition = select_scheduling_disposition(
             &chain_events,
             draft.outcome,
@@ -10197,7 +10449,22 @@ impl HostShared {
             draft.executed_steps,
             draft.scheduling_outcome.as_ref(),
         )?;
-        let mut appended = Vec::with_capacity(2);
+        let mut appended = Vec::with_capacity(3);
+        if existing_summary.is_none()
+            && let Some(summary) = requested_summary
+        {
+            appended.push(
+                self.append_event_under_fact_gate(
+                    EventSeverity::Info,
+                    EventSource::Runtime,
+                    OriginModule::CapturePipeline,
+                    EventActor::Runtime,
+                    links.clone(),
+                    CapturePayloadDraft::summary_committed(summary, AuditInput::new()),
+                )
+                .map_err(RequestFailure::poison_without_terminal)?,
+            );
+        }
         if !draft.intent_already_recorded {
             appended.push(
                 self.append_event_under_fact_gate(
@@ -11967,6 +12234,7 @@ struct ContainedTaskTerminalDraft {
     failure_code: Option<&'static str>,
     failure_severity: Option<EventSeverity>,
     scheduling_outcome: Option<(String, SchedulingOutcomeDeclaration)>,
+    capture_summary: Option<CapturePipelineSummary>,
 }
 
 struct ActiveContainedRun<'a> {
@@ -11987,6 +12255,165 @@ impl Drop for ActiveContainedRun<'_> {
     }
 }
 
+#[derive(Default)]
+struct CaptureEvidenceAccumulator {
+    counts: CapturePipelineCounts,
+    next_frame_index: usize,
+    last_frame_index: Option<usize>,
+    frames: Vec<PersistedFrameEvidence>,
+    pinned: BTreeMap<(Option<usize>, PinnedFrameReason), Option<ArtifactReference>>,
+    pending_post_input: bool,
+}
+
+impl CaptureEvidenceAccumulator {
+    fn captured(&mut self) -> Result<usize, RequestFailure> {
+        let frame_index = self.next_frame_index;
+        self.next_frame_index = self.next_frame_index.checked_add(1).ok_or_else(|| {
+            RequestFailure::poison_without_terminal(RuntimeHostError::fatal(
+                "capture_summary_count_overflow",
+                "record_contained_task_capture",
+                RuntimeErrorCode::RuntimeFatal,
+            ))
+        })?;
+        self.counts.captured = self.counts.captured.checked_add(1).ok_or_else(|| {
+            RequestFailure::poison_without_terminal(RuntimeHostError::fatal(
+                "capture_summary_count_overflow",
+                "record_contained_task_capture",
+                RuntimeErrorCode::RuntimeFatal,
+            ))
+        })?;
+        Ok(frame_index)
+    }
+
+    fn persisted(
+        &mut self,
+        frame_index: usize,
+        stored: &StoredArtifact,
+    ) -> Result<(), RequestFailure> {
+        if self
+            .frames
+            .iter()
+            .any(|frame| frame.frame_index == frame_index)
+        {
+            return Err(RequestFailure::poison_without_terminal(
+                RuntimeHostError::fatal(
+                    "capture_summary_frame_conflict",
+                    "record_contained_task_capture",
+                    RuntimeErrorCode::RuntimeFatal,
+                ),
+            ));
+        }
+        self.counts.persisted = self.counts.persisted.checked_add(1).ok_or_else(|| {
+            RequestFailure::poison_without_terminal(RuntimeHostError::fatal(
+                "capture_summary_count_overflow",
+                "record_contained_task_capture",
+                RuntimeErrorCode::RuntimeFatal,
+            ))
+        })?;
+        self.frames.push(PersistedFrameEvidence {
+            frame_index,
+            pinned_reason: None,
+            artifact: stored.reference().clone(),
+        });
+        self.last_frame_index = Some(frame_index);
+        if self.pending_post_input {
+            self.pin_frame(frame_index, PinnedFrameReason::PostInput)?;
+            self.pending_post_input = false;
+        }
+        Ok(())
+    }
+
+    fn effect_completed(&mut self) -> Result<(), RequestFailure> {
+        if self.pending_post_input {
+            return Err(RequestFailure::poison_without_terminal(
+                RuntimeHostError::fatal(
+                    "capture_summary_phase_conflict",
+                    "record_contained_task_effect",
+                    RuntimeErrorCode::RuntimeFatal,
+                ),
+            ));
+        }
+        self.pending_post_input = true;
+        Ok(())
+    }
+
+    fn pin_last(&mut self, reason: PinnedFrameReason) -> Result<(), RequestFailure> {
+        match self.last_frame_index {
+            Some(frame_index) => self.pin_frame(frame_index, reason),
+            None => self.pin(None, reason, None),
+        }
+    }
+
+    fn pin_frame(
+        &mut self,
+        frame_index: usize,
+        reason: PinnedFrameReason,
+    ) -> Result<(), RequestFailure> {
+        let artifact = self
+            .frames
+            .iter()
+            .find(|frame| frame.frame_index == frame_index)
+            .map(|frame| frame.artifact.clone())
+            .ok_or_else(|| {
+                RequestFailure::poison_without_terminal(RuntimeHostError::fatal(
+                    "capture_summary_frame_missing",
+                    "record_contained_task_pin",
+                    RuntimeErrorCode::RuntimeFatal,
+                ))
+            })?;
+        self.pin(Some(frame_index), reason, Some(artifact))
+    }
+
+    fn pin(
+        &mut self,
+        frame_index: Option<usize>,
+        reason: PinnedFrameReason,
+        artifact: Option<ArtifactReference>,
+    ) -> Result<(), RequestFailure> {
+        let key = (frame_index, reason);
+        if let Some(existing) = self.pinned.get(&key) {
+            if existing == &artifact {
+                return Ok(());
+            }
+            return Err(RequestFailure::poison_without_terminal(
+                RuntimeHostError::fatal(
+                    "capture_summary_pin_conflict",
+                    "record_contained_task_pin",
+                    RuntimeErrorCode::RuntimeFatal,
+                ),
+            ));
+        }
+        self.pinned.insert(key, artifact);
+        Ok(())
+    }
+
+    fn finalize(mut self, outcome: TaskOutcome) -> Result<CapturePipelineSummary, RequestFailure> {
+        if self.pending_post_input {
+            self.pin(None, PinnedFrameReason::PostInput, None)?;
+        }
+        self.pin_last(PinnedFrameReason::Terminal)?;
+        if outcome == TaskOutcome::Failure {
+            self.pin_last(PinnedFrameReason::Failure)?;
+        }
+        let pinned = self
+            .pinned
+            .into_iter()
+            .map(|((frame_index, reason), artifact)| PinnedFrameEvidence {
+                frame_index,
+                reason,
+                artifact,
+            })
+            .collect();
+        build_capture_pipeline_summary(self.counts, pinned, self.frames).map_err(|error| {
+            RequestFailure::poison_without_terminal(RuntimeHostError::fatal(
+                error.code(),
+                "finalize_contained_task_capture_summary",
+                RuntimeErrorCode::RuntimeFatal,
+            ))
+        })
+    }
+}
+
 struct RuntimeContainedTask<'a> {
     host: &'a HostShared,
     request: &'a ValidatedRuntimeRequest<'a>,
@@ -12000,6 +12427,7 @@ struct RuntimeContainedTask<'a> {
     current_recognition_id: Option<IssuedRecognitionId>,
     step_actions: BTreeMap<u32, (IssuedActionId, String)>,
     finalizing: Option<TaskOutcome>,
+    capture_evidence: CaptureEvidenceAccumulator,
 }
 
 impl RuntimeContainedTask<'_> {
@@ -12068,6 +12496,7 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
         )?;
         match self.host.execution.capture(self.instance_alias) {
             Ok(frame) => {
+                let frame_index = self.capture_evidence.captured()?;
                 let artifact_png = frame.png_for_artifact().map_err(|_| {
                     RequestFailure::poison_without_terminal(RuntimeHostError::fatal(
                         "contained_task_frame_invalid",
@@ -12086,7 +12515,8 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
                     ledger: &self.host.ledger,
                     events: &self.host.events,
                 };
-                self.host
+                let stored = self
+                    .host
                     .artifacts
                     .put(
                         ArtifactWriteRequest::new(
@@ -12106,6 +12536,7 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
                             "persist_contained_task_frame",
                         ))
                     })?;
+                self.capture_evidence.persisted(frame_index, &stored)?;
                 self.last_frame_id = Some(frame_id);
                 Ok(frame)
             }
@@ -12238,6 +12669,8 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
                         ),
                     ));
                 }
+                self.capture_evidence
+                    .pin_last(PinnedFrameReason::RecognitionEvidence)?;
                 let frame_id = self.last_frame_id.ok_or_else(|| {
                     RequestFailure::poison_without_terminal(RuntimeHostError::fatal(
                         "contained_task_frame_identity_missing",
@@ -12347,6 +12780,8 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
                 operation_label,
                 from_page,
             } => {
+                self.capture_evidence
+                    .pin_last(PinnedFrameReason::PreInput)?;
                 let action_id = self.host.events.issuer().mint_action_id().map_err(|_| {
                     RequestFailure::poison_without_terminal(runtime_identifier_error())
                 })?;
@@ -12420,7 +12855,8 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
                         },
                         AuditInput::new(),
                     ),
-                )
+                )?;
+                self.capture_evidence.effect_completed()
             }
             ContainedTaskTrace::StepFinished {
                 step_index,

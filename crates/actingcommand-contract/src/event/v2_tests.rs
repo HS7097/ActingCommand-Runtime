@@ -384,6 +384,25 @@ fn all_payload_drafts(mut input: impl FnMut() -> AuditInput) -> Vec<EventPayload
         "user_confirmed",
     )
     .expect("approval");
+    let capture_artifact = artifact(b"capture-summary-frame");
+    let capture_projected = capture_artifact.reference().project(true);
+    let capture_summary = CaptureSummaryRecord::new(
+        1,
+        0,
+        0,
+        1,
+        EvidenceCompleteness::Complete,
+        vec![CapturePersistedEvidence::new(0, capture_projected.clone()).expect("capture frame")],
+        vec![
+            CapturePinnedEvidence::new(
+                Some(0),
+                PinnedFrameReason::Terminal,
+                Some(capture_projected),
+            )
+            .expect("capture pin"),
+        ],
+    )
+    .expect("capture summary");
 
     vec![
         MonitorPayloadDraft::requested(input()).into(),
@@ -609,6 +628,7 @@ fn all_payload_drafts(mut input: impl FnMut() -> AuditInput) -> Vec<EventPayload
             input(),
         )
         .into(),
+        CapturePayloadDraft::summary_committed(capture_summary, input()).into(),
         RecognitionPayloadDraft::requested(EventAction::RecognitionObserve, input()).into(),
         RecognitionPayloadDraft::completed(
             EventAction::RecognitionObserve,
@@ -1123,7 +1143,7 @@ fn tagged_payload_and_projection_layers_reject_unknown_fields() {
 #[test]
 fn event_v2_round_trips_every_c1_payload_variant() {
     let payloads = all_payload_drafts(AuditInput::new);
-    assert_eq!(payloads.len(), 92);
+    assert_eq!(payloads.len(), 93);
 
     for (index, payload) in payloads.into_iter().enumerate() {
         let sanitized = sanitize(payload, index as u64 + 1);
@@ -1883,6 +1903,113 @@ fn c2_capture_pipeline_and_export_projection_preserve_typed_facts() {
     assert_eq!(export["payload"]["task_outcome"], "cancelled");
     assert_eq!(export["payload"]["evidence_completeness"], "partial");
     assert_eq!(export["payload"]["artifact_count"], 5);
+}
+
+#[test]
+fn capture_summary_contract_is_strict_bounded_and_preserves_pin_pairs() {
+    let stored = artifact(b"capture-summary-contract");
+    let projected = stored.reference().project(true);
+    let frames =
+        vec![CapturePersistedEvidence::new(0, projected.clone()).expect("persisted frame")];
+    let pins = vec![
+        CapturePinnedEvidence::new(
+            Some(0),
+            PinnedFrameReason::PreInput,
+            Some(projected.clone()),
+        )
+        .expect("pre-input pin"),
+        CapturePinnedEvidence::new(
+            Some(0),
+            PinnedFrameReason::Terminal,
+            Some(projected.clone()),
+        )
+        .expect("terminal pin"),
+    ];
+    let record = CaptureSummaryRecord::new(
+        1,
+        0,
+        0,
+        1,
+        EvidenceCompleteness::Complete,
+        frames.clone(),
+        pins.clone(),
+    )
+    .expect("valid capture summary");
+    let event = sanitize(
+        CapturePayloadDraft::summary_committed(record.clone(), AuditInput::new()).into(),
+        12_001,
+    );
+    assert_eq!(event.event_type(), EventType::CaptureSummaryCommitted);
+    assert_eq!(event.payload().action(), EventAction::CaptureSummaryCommit);
+    assert_eq!(event.payload().sensitivity(), Sensitivity::Internal);
+    let encoded = serde_json::to_value(event.payload()).expect("capture summary JSON");
+    let decoded: EventPayload =
+        serde_json::from_value(encoded.clone()).expect("capture summary round trip");
+    assert_eq!(decoded, *event.payload());
+    let EventPayload::Capture(CapturePayload::SummaryCommitted(payload)) = decoded else {
+        panic!("unexpected capture summary payload");
+    };
+    assert_eq!(payload.summary(), &record);
+    assert_eq!(payload.summary().pinned(), pins);
+
+    let mut unknown = encoded;
+    unknown["payload"]["data"]["summary"]["unexpected"] = serde_json::json!(true);
+    serde_json::from_value::<EventPayload>(unknown)
+        .expect_err("capture summary must reject unknown fields");
+
+    let duplicate_pin = CaptureSummaryRecord::new(
+        1,
+        0,
+        0,
+        1,
+        EvidenceCompleteness::Complete,
+        frames.clone(),
+        vec![pins[0].clone(), pins[0].clone()],
+    )
+    .expect_err("duplicate frame/reason pair must fail");
+    assert_eq!(duplicate_pin.code(), "capture_summary_pin_conflict");
+
+    let invalid_counts = CaptureSummaryRecord::new(
+        1,
+        1,
+        0,
+        1,
+        EvidenceCompleteness::Complete,
+        frames.clone(),
+        Vec::new(),
+    )
+    .expect_err("capture accounting above captured must fail");
+    assert_eq!(invalid_counts.code(), "capture_summary_count_mismatch");
+
+    let missing_pin = CaptureSummaryRecord::new(
+        1,
+        0,
+        0,
+        1,
+        EvidenceCompleteness::Failed,
+        frames,
+        vec![
+            CapturePinnedEvidence::new(Some(0), PinnedFrameReason::Terminal, None)
+                .expect("missing terminal pin"),
+        ],
+    )
+    .expect("missing required pin is a valid failed summary");
+    assert_eq!(
+        missing_pin.evidence_completeness(),
+        EvidenceCompleteness::Failed
+    );
+
+    let wrong_completeness = CaptureSummaryRecord::new(
+        MAX_CAPTURE_SUMMARY_COUNT + 1,
+        0,
+        0,
+        0,
+        EvidenceCompleteness::Failed,
+        Vec::new(),
+        Vec::new(),
+    )
+    .expect_err("summary count bound must fail");
+    assert_eq!(wrong_completeness.code(), "capture_summary_bound_exceeded");
 }
 
 #[test]

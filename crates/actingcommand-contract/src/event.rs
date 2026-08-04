@@ -315,6 +315,8 @@ pub enum EventType {
     CaptureDedupWindow,
     #[serde(rename = "capture.policy_changed")]
     CapturePolicyChanged,
+    #[serde(rename = "capture.summary_committed")]
+    CaptureSummaryCommitted,
     #[serde(rename = "recognition.requested")]
     RecognitionRequested,
     #[serde(rename = "recognition.completed")]
@@ -451,7 +453,8 @@ impl EventType {
             | Self::CaptureFailed
             | Self::CapturePressureChanged
             | Self::CaptureDedupWindow
-            | Self::CapturePolicyChanged => EventFamily::Capture,
+            | Self::CapturePolicyChanged
+            | Self::CaptureSummaryCommitted => EventFamily::Capture,
             Self::RecognitionRequested | Self::RecognitionCompleted | Self::RecognitionFailed => {
                 EventFamily::Recognition
             }
