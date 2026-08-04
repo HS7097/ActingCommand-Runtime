@@ -868,7 +868,7 @@ mod tests {
         };
         let decision_fingerprint = fingerprint_decision(
             task.package_label(),
-            &task.package_sha256().to_string(),
+            task.package_sha256(),
             task.task_label(),
             &recognition,
             &decision,
