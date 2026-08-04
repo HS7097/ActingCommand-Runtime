@@ -12,9 +12,9 @@ use actingcommand_policy::{
 };
 use actingcommand_runtime_host::{
     AgentDispatcherConfig, ExecutionBackendProvider, ExecutionBackendRegistration,
-    ExecutionBackendRegistry, PerformanceMonitorConfig, PolicyInputSnapshot, ProcedureBinding,
-    ProcedureManifest, RecognitionVisionProvider, ResolvedExecutionInstance, RuntimeHostConfig,
-    VisionFfiProvider, VisionModelIdentity,
+    ExecutionBackendRegistry, PerformanceMonitorConfig, PolicyCadence, PolicyInputSnapshot,
+    ProcedureBinding, ProcedureManifest, RecognitionVisionProvider, ResolvedExecutionInstance,
+    RuntimeHostConfig, VisionFfiProvider, VisionModelIdentity,
 };
 use actingcommand_vision_ffi::{
     FastDeployPpocrBackend, NnEngine, OcrEngine, OnnxRuntimeBackend,
@@ -104,6 +104,10 @@ enum ScheduledExecutionConfigFile {
         #[serde(default)]
         package_path: Option<PathBuf>,
     },
+    DeviceRegistry {
+        #[serde(default)]
+        package_path: Option<PathBuf>,
+    },
 }
 
 #[derive(Deserialize)]
@@ -171,12 +175,15 @@ pub(super) struct PolicyBootstrap {
     pub(super) governance_capability: String,
     pub(super) catalog_approval_ids: Vec<String>,
     pub(super) catalog: CatalogSources,
-    pub(super) scheduled_tasks: BTreeMap<String, ContainedTaskRequest>,
+    pub(super) scheduled_tasks: BTreeMap<String, ScheduledProcedureTask>,
+    pub(super) registry_modes: BTreeMap<String, ScheduledExecutionMode>,
+    pub(super) cadence: PolicyCadence,
 }
 
-pub(super) enum ConfiguredExecutionBackendRegistry {
-    Device(ExecutionBackendRegistry),
-    Fixture(FixtureExecutionBackendRegistry),
+pub(super) struct ConfiguredExecutionBackendRegistry {
+    devices: Option<ExecutionBackendRegistry>,
+    fixtures: Option<FixtureExecutionBackendRegistry>,
+    modes: BTreeMap<String, ScheduledExecutionMode>,
 }
 
 pub(super) struct FixtureExecutionBackendRegistry {
@@ -191,15 +198,30 @@ struct FixtureExecutionBackend {
 }
 
 enum ConfiguredInstanceBackend {
-    Device(Box<ExecutionBackendRegistration>),
+    Device {
+        alias: String,
+        instance_id: InstanceId,
+        registration: Box<ExecutionBackendRegistration>,
+    },
     Fixture {
         alias: String,
         backend: FixtureExecutionBackend,
     },
 }
 
-type ScheduledProcedureTask = (String, ContainedTaskRequest);
-type AssembledProcedureBinding = (ProcedureBinding, Option<ScheduledProcedureTask>);
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum ScheduledExecutionMode {
+    FixtureSimulation,
+    DeviceRegistry,
+}
+
+pub(super) struct ScheduledProcedureTask {
+    pub(super) request: ContainedTaskRequest,
+    pub(super) mode: ScheduledExecutionMode,
+}
+
+type ConfiguredScheduledProcedureTask = (String, ScheduledProcedureTask);
+type AssembledProcedureBinding = (ProcedureBinding, Option<ConfiguredScheduledProcedureTask>);
 
 pub(super) fn load(path: &Path) -> Result<ActingdConfigFile, &'static str> {
     let metadata = fs::metadata(path).map_err(|_| "config_unavailable")?;
@@ -253,18 +275,16 @@ impl ActingdConfigFile {
             .policy
             .map(|policy| policy.assemble(&self.source_root))
             .transpose()?;
-        if policy
-            .as_ref()
-            .is_some_and(|policy| !policy.scheduled_tasks.is_empty())
-            && !registry.is_fixture_simulation()
-        {
-            return Err("fixture_simulation_requires_fixture_backend");
+        if let Some(policy) = policy.as_ref() {
+            policy.validate_registry_modes(&registry)?;
         }
         let policy_state_root = self.state_root.clone();
         let policy_governance_capability = self.governance_capability.clone();
+        let policy_cadence = PolicyCadence::default();
         let mut host =
             RuntimeHostConfig::new(self.state_root, self.secret_fingerprint_salt.as_bytes())
                 .with_bind_address(SocketAddr::new(bind_host, self.bind_port))
+                .with_policy_cadence(policy_cadence.clone())
                 .with_performance_monitor(PerformanceMonitorConfig::default());
         if let Some(capability) = self.governance_capability {
             host = host.with_governance_capability(capability);
@@ -284,6 +304,8 @@ impl ActingdConfigFile {
                 catalog_approval_ids: policy.catalog_approval_ids,
                 catalog: policy.catalog,
                 scheduled_tasks: policy.scheduled_tasks,
+                registry_modes: registry.modes.clone(),
+                cadence: policy_cadence,
             })
         } else {
             None
@@ -301,7 +323,8 @@ struct PolicyAssembly {
     procedure_manifest: ProcedureManifest,
     catalog_approval_ids: Vec<String>,
     catalog: CatalogSources,
-    scheduled_tasks: BTreeMap<String, ContainedTaskRequest>,
+    scheduled_tasks: BTreeMap<String, ScheduledProcedureTask>,
+    scheduled_instance_scopes: Vec<(String, String)>,
 }
 
 impl PolicyConfigFile {
@@ -344,13 +367,58 @@ impl PolicyConfigFile {
         {
             return Err("policy_catalog_approval_mismatch");
         }
+        let scheduled_instance_scopes = compiled
+            .catalog()
+            .tasks
+            .tasks
+            .iter()
+            .filter_map(|task| {
+                scheduled_tasks
+                    .contains_key(&task.procedure_ref)
+                    .then_some((&task.procedure_ref, &task.scope))
+            })
+            .filter_map(|(procedure_ref, scope)| match scope {
+                actingcommand_policy::ScopeSelector::Instance { instance_id } => {
+                    Some((procedure_ref.clone(), instance_id.clone()))
+                }
+                actingcommand_policy::ScopeSelector::Server { .. }
+                | actingcommand_policy::ScopeSelector::Game { .. } => None,
+            })
+            .collect();
         Ok(PolicyAssembly {
             inputs: PolicyInputSnapshot::new(self.facts, self.resources),
             procedure_manifest,
             catalog_approval_ids: self.catalog_approval_ids,
             catalog,
             scheduled_tasks,
+            scheduled_instance_scopes,
         })
+    }
+}
+
+impl PolicyAssembly {
+    fn validate_registry_modes(
+        &self,
+        registry: &ConfiguredExecutionBackendRegistry,
+    ) -> Result<(), &'static str> {
+        for (procedure_ref, instance_alias) in &self.scheduled_instance_scopes {
+            let scheduled = self
+                .scheduled_tasks
+                .get(procedure_ref)
+                .ok_or("scheduled_execution_binding_missing")?;
+            let actual = registry
+                .mode_for_alias(instance_alias)
+                .ok_or("scheduled_execution_instance_unknown")?;
+            if actual != scheduled.mode {
+                return Err("scheduled_execution_backend_mode_mismatch");
+            }
+        }
+        for scheduled in self.scheduled_tasks.values() {
+            if !registry.modes.values().any(|mode| mode == &scheduled.mode) {
+                return Err("scheduled_execution_backend_mode_unavailable");
+            }
+        }
+        Ok(())
     }
 }
 
@@ -401,29 +469,46 @@ impl ProcedureBindingConfigFile {
         .map_err(|_| "procedure_binding_invalid")?;
         let scheduled_task = match scheduled_execution {
             None => None,
-            Some(ScheduledExecutionConfigFile::FixtureSimulation { package_path }) => {
-                let package_path = package_path.ok_or("procedure_package_path_missing")?;
-                let path = if package_path.is_absolute() {
-                    package_path
-                } else {
-                    source_root.join(package_path)
-                };
-                let path = fs::canonicalize(path).map_err(|_| "procedure_package_unavailable")?;
-                let metadata = fs::metadata(&path).map_err(|_| "procedure_package_unavailable")?;
-                if !metadata.is_file() {
-                    return Err("procedure_package_not_regular");
-                }
-                let expected_sha256 = package_digest
-                    .strip_prefix("sha256:")
-                    .ok_or("procedure_package_digest_invalid")?;
-                let request =
-                    ContainedTaskRequest::new(path.to_string_lossy().into_owned(), expected_sha256)
-                        .map_err(|_| "procedure_task_request_invalid")?;
-                Some((procedure_ref, request))
-            }
+            Some(ScheduledExecutionConfigFile::FixtureSimulation { package_path }) => Some((
+                procedure_ref,
+                ScheduledProcedureTask {
+                    request: contained_task_request(source_root, &package_digest, package_path)?,
+                    mode: ScheduledExecutionMode::FixtureSimulation,
+                },
+            )),
+            Some(ScheduledExecutionConfigFile::DeviceRegistry { package_path }) => Some((
+                procedure_ref,
+                ScheduledProcedureTask {
+                    request: contained_task_request(source_root, &package_digest, package_path)?,
+                    mode: ScheduledExecutionMode::DeviceRegistry,
+                },
+            )),
         };
         Ok((binding, scheduled_task))
     }
+}
+
+fn contained_task_request(
+    source_root: &Path,
+    package_digest: &str,
+    package_path: Option<PathBuf>,
+) -> Result<ContainedTaskRequest, &'static str> {
+    let package_path = package_path.ok_or("procedure_package_path_missing")?;
+    let path = if package_path.is_absolute() {
+        package_path
+    } else {
+        source_root.join(package_path)
+    };
+    let path = fs::canonicalize(path).map_err(|_| "procedure_package_unavailable")?;
+    let metadata = fs::metadata(&path).map_err(|_| "procedure_package_unavailable")?;
+    if !metadata.is_file() {
+        return Err("procedure_package_not_regular");
+    }
+    let expected_sha256 = package_digest
+        .strip_prefix("sha256:")
+        .ok_or("procedure_package_digest_invalid")?;
+    ContainedTaskRequest::new(path.to_string_lossy().into_owned(), expected_sha256)
+        .map_err(|_| "procedure_task_request_invalid")
 }
 
 fn read_catalog_document(
@@ -548,15 +633,21 @@ impl InstanceConfig {
         let touch = TouchBackendConfig::new(adb, target, maatouch)
             .with_minitouch_config(minitouch)
             .with_requested(requested);
+        let alias = self.alias;
+        let instance_id = self.instance_id;
         ExecutionBackendRegistration::new(
-            self.alias,
-            self.instance_id,
+            alias.clone(),
+            instance_id,
             application_id,
             touch,
             capture,
         )
         .map(Box::new)
-        .map(ConfiguredInstanceBackend::Device)
+        .map(|registration| ConfiguredInstanceBackend::Device {
+            alias,
+            instance_id,
+            registration,
+        })
         .map_err(|_| "instance_registration_invalid")
     }
 
@@ -644,64 +735,109 @@ impl ConfiguredExecutionBackendRegistry {
         }
         let mut devices = Vec::new();
         let mut fixtures = BTreeMap::new();
+        let mut modes = BTreeMap::new();
+        let mut instance_ids = BTreeSet::new();
         for backend in backends {
             match backend {
-                ConfiguredInstanceBackend::Device(registration) => devices.push(*registration),
+                ConfiguredInstanceBackend::Device {
+                    alias,
+                    instance_id,
+                    registration,
+                } => {
+                    if modes
+                        .insert(alias, ScheduledExecutionMode::DeviceRegistry)
+                        .is_some()
+                        || !instance_ids.insert(instance_id)
+                    {
+                        return Err("execution_registry_invalid");
+                    }
+                    devices.push(*registration);
+                }
                 ConfiguredInstanceBackend::Fixture { alias, backend } => {
-                    if fixtures.insert(alias, backend).is_some() {
+                    if modes
+                        .insert(alias.clone(), ScheduledExecutionMode::FixtureSimulation)
+                        .is_some()
+                        || !instance_ids.insert(backend.instance_id)
+                        || fixtures.insert(alias, backend).is_some()
+                    {
                         return Err("execution_registry_invalid");
                     }
                 }
             }
         }
-        match (devices.is_empty(), fixtures.is_empty()) {
-            (false, true) => {
-                let registry = ExecutionBackendRegistry::new(devices)
-                    .map_err(|_| "execution_registry_invalid")?;
-                Ok(Self::Device(match vision_provider {
-                    Some(provider) => registry.with_vision_provider(provider),
-                    None => registry,
-                }))
-            }
-            (true, false) => Ok(Self::Fixture(FixtureExecutionBackendRegistry {
-                instances: fixtures,
-                vision_provider,
-            })),
-            _ => Err("execution_backend_mode_mixed"),
-        }
+        let devices = (!devices.is_empty())
+            .then(|| ExecutionBackendRegistry::new(devices))
+            .transpose()
+            .map_err(|_| "execution_registry_invalid")?
+            .map(|registry| match &vision_provider {
+                Some(provider) => registry.with_vision_provider(Arc::clone(provider)),
+                None => registry,
+            });
+        let fixtures = (!fixtures.is_empty()).then_some(FixtureExecutionBackendRegistry {
+            instances: fixtures,
+            vision_provider,
+        });
+        Ok(Self {
+            devices,
+            fixtures,
+            modes,
+        })
     }
 
-    fn is_fixture_simulation(&self) -> bool {
-        matches!(self, Self::Fixture(_))
+    pub(super) fn mode_for_alias(&self, instance_alias: &str) -> Option<ScheduledExecutionMode> {
+        self.modes.get(instance_alias).copied()
     }
 }
 
 impl ExecutionBackendProvider for ConfiguredExecutionBackendRegistry {
     fn instance_aliases(&self) -> Vec<String> {
-        match self {
-            Self::Device(registry) => registry.instance_aliases(),
-            Self::Fixture(registry) => registry.instance_aliases(),
-        }
+        self.modes.keys().cloned().collect()
     }
 
     fn resolve(&self, instance_alias: &str) -> Option<ResolvedExecutionInstance> {
-        match self {
-            Self::Device(registry) => registry.resolve(instance_alias),
-            Self::Fixture(registry) => registry.resolve(instance_alias),
+        match self.mode_for_alias(instance_alias)? {
+            ScheduledExecutionMode::DeviceRegistry => {
+                self.devices.as_ref()?.resolve(instance_alias)
+            }
+            ScheduledExecutionMode::FixtureSimulation => {
+                self.fixtures.as_ref()?.resolve(instance_alias)
+            }
         }
     }
 
     fn open_input(&self, instance_alias: &str) -> DeviceResult<Box<dyn InputBackend>> {
-        match self {
-            Self::Device(registry) => registry.open_input(instance_alias),
-            Self::Fixture(registry) => registry.open_input(instance_alias),
+        match self.mode_for_alias(instance_alias) {
+            Some(ScheduledExecutionMode::DeviceRegistry) => self
+                .devices
+                .as_ref()
+                .ok_or_else(|| DeviceError::fatal("device registry is unavailable"))?
+                .open_input(instance_alias),
+            Some(ScheduledExecutionMode::FixtureSimulation) => self
+                .fixtures
+                .as_ref()
+                .ok_or_else(|| DeviceError::fatal("fixture registry is unavailable"))?
+                .open_input(instance_alias),
+            None => Err(DeviceError::fatal(
+                "execution backend instance is not registered",
+            )),
         }
     }
 
     fn open_capture(&self, instance_alias: &str) -> DeviceResult<Box<dyn CaptureBackend>> {
-        match self {
-            Self::Device(registry) => registry.open_capture(instance_alias),
-            Self::Fixture(registry) => registry.open_capture(instance_alias),
+        match self.mode_for_alias(instance_alias) {
+            Some(ScheduledExecutionMode::DeviceRegistry) => self
+                .devices
+                .as_ref()
+                .ok_or_else(|| DeviceError::fatal("device registry is unavailable"))?
+                .open_capture(instance_alias),
+            Some(ScheduledExecutionMode::FixtureSimulation) => self
+                .fixtures
+                .as_ref()
+                .ok_or_else(|| DeviceError::fatal("fixture registry is unavailable"))?
+                .open_capture(instance_alias),
+            None => Err(DeviceError::fatal(
+                "execution backend instance is not registered",
+            )),
         }
     }
 
@@ -710,17 +846,32 @@ impl ExecutionBackendProvider for ConfiguredExecutionBackendRegistry {
         instance_alias: &str,
         action: ApplicationLifecycleAction,
     ) -> DeviceResult<()> {
-        match self {
-            Self::Device(registry) => registry.control_application(instance_alias, action),
-            Self::Fixture(registry) => registry.control_application(instance_alias, action),
+        match self.mode_for_alias(instance_alias) {
+            Some(ScheduledExecutionMode::DeviceRegistry) => self
+                .devices
+                .as_ref()
+                .ok_or_else(|| DeviceError::fatal("device registry is unavailable"))?
+                .control_application(instance_alias, action),
+            Some(ScheduledExecutionMode::FixtureSimulation) => self
+                .fixtures
+                .as_ref()
+                .ok_or_else(|| DeviceError::fatal("fixture registry is unavailable"))?
+                .control_application(instance_alias, action),
+            None => Err(DeviceError::fatal(
+                "execution backend instance is not registered",
+            )),
         }
     }
 
     fn vision_provider(&self) -> Option<Arc<dyn RecognitionVisionProvider>> {
-        match self {
-            Self::Device(registry) => registry.vision_provider(),
-            Self::Fixture(registry) => registry.vision_provider(),
-        }
+        self.devices
+            .as_ref()
+            .and_then(ExecutionBackendProvider::vision_provider)
+            .or_else(|| {
+                self.fixtures
+                    .as_ref()
+                    .and_then(ExecutionBackendProvider::vision_provider)
+            })
     }
 }
 
@@ -1109,10 +1260,10 @@ mod tests {
         let config = serde_json::from_value::<ActingdConfigFile>(fixture(MAX_FIXTURE_INPUTS))
             .expect("typed fixture config");
         let assembly = config.assemble().expect("bounded fixture assembly");
-        assert!(matches!(
-            &assembly.registry,
-            ConfiguredExecutionBackendRegistry::Fixture(_)
-        ));
+        assert_eq!(
+            assembly.registry.mode_for_alias("neutral.fixture"),
+            Some(ScheduledExecutionMode::FixtureSimulation)
+        );
         assert!(assembly.registry.vision_provider().is_none());
 
         let config = serde_json::from_value::<ActingdConfigFile>(fixture(MAX_FIXTURE_INPUTS + 1))
@@ -1189,6 +1340,48 @@ mod tests {
             config.assemble().err(),
             Some("fixture_device_fields_forbidden")
         );
+    }
+
+    #[test]
+    fn mixed_registry_keeps_device_and_fixture_modes_explicit_per_instance() {
+        let issuer = IdentifierIssuer::new().expect("issuer");
+        let device_id = issuer.mint_instance_id().expect("device instance id");
+        let fixture_id = issuer.mint_instance_id().expect("fixture instance id");
+        let value = json!({
+            "schema_version": CONFIG_SCHEMA_VERSION,
+            "state_root": "state",
+            "bind_host": "127.0.0.1",
+            "secret_fingerprint_salt": "0123456789abcdef",
+            "instances": [
+                {
+                    "alias": "neutral.device",
+                    "instance_id": device_id.transport(),
+                    "application_id": "neutral.application",
+                    "adb_path": "must-not-open",
+                    "touch_backend": "adb",
+                    "capture_backend": "adb"
+                },
+                {
+                    "alias": "neutral.fixture",
+                    "instance_id": fixture_id.transport(),
+                    "fixture_backend": {
+                        "frames": [{"width": 1, "height": 1, "rgb": [1, 2, 3]}],
+                        "max_inputs": 0
+                    }
+                }
+            ]
+        });
+        let config = serde_json::from_value::<ActingdConfigFile>(value).expect("typed config");
+        let assembly = config.assemble().expect("mixed registry assembly");
+        assert_eq!(
+            assembly.registry.mode_for_alias("neutral.device"),
+            Some(ScheduledExecutionMode::DeviceRegistry)
+        );
+        assert_eq!(
+            assembly.registry.mode_for_alias("neutral.fixture"),
+            Some(ScheduledExecutionMode::FixtureSimulation)
+        );
+        assert_eq!(assembly.registry.instance_aliases().len(), 2);
     }
 
     #[test]

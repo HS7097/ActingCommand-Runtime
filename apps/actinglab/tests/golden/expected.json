@@ -2158,11 +2158,11 @@
         },
         "backend": "scene_file",
         "frame_age_ms": 0,
-        "frame_path": "<PATH>",
+        "frame_path": "observe.png",
         "frame_source": {
           "delay_ms": null,
           "kind": "scene",
-          "path": "<PATH>"
+          "path": "red.png"
         },
         "instance": "default",
         "matched": true,

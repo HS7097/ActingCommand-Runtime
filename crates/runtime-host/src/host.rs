@@ -75,8 +75,8 @@ use actingcommand_contract::{
     RuntimeRequest, RuntimeResult, RuntimeStrategicPlanResult, RuntimeSubscriptionRequest,
     SchedulerPayloadDraft, SchedulingDisposition, SchedulingEffectCondition,
     SchedulingEffectEvidence, SchedulingOutcomeDeclaration, SchedulingOutcomeIdentity,
-    StatePayload, StatePayloadDraft, TaskId, TaskOutcome, TaskPayload, TaskPayloadDraft,
-    TaskSemanticFact, TerminalEvent, ValidatedRuntimeRequest,
+    SchedulingOutcomeProjection, StatePayload, StatePayloadDraft, TaskId, TaskOutcome, TaskPayload,
+    TaskPayloadDraft, TaskSemanticFact, TerminalEvent, ValidatedRuntimeRequest,
 };
 use actingcommand_device::{CaptureBackendName, Frame};
 use actingcommand_execution_kernel::{
@@ -384,7 +384,8 @@ impl RuntimeHost {
                 RuntimeErrorCode::RuntimeFatal,
             )
         })?;
-        let events = RuntimeEvents::new(&config.secret_fingerprint_salt)?;
+        let events =
+            RuntimeEvents::new(&config.secret_fingerprint_salt, Arc::clone(&config.clock))?;
         let clock_origin = config.clock.sample()?;
         let started_at_unix_ms = clock_origin.unix_ms;
         let OwnerStartup {
@@ -537,6 +538,10 @@ impl RuntimeHost {
             queue_operation_test_hook: Mutex::new(None),
             #[cfg(test)]
             policy_outcome_transition_test_hook: Mutex::new(None),
+            #[cfg(test)]
+            scheduled_policy_checkpoint_test_hook: Mutex::new(None),
+            #[cfg(test)]
+            lease_expiry_scan_test_gate: Mutex::new(()),
             trusted_policy_dispatches: Mutex::new(TrustedPolicyDispatchStore::default()),
             policy_dispatch_clocks: Mutex::new(policy_dispatch_clocks),
             policy_outcome_gate: Mutex::new(()),
@@ -952,6 +957,57 @@ impl RuntimeHost {
         })
     }
 
+    #[cfg(test)]
+    pub(crate) fn count_scheduled_policy_checkpoint_for_test(
+        &self,
+        identity: ScheduledPolicyCheckpointIdentity,
+    ) -> RuntimeHostResult<ScheduledPolicyCheckpointTestControl> {
+        let consumed = Arc::new(AtomicU64::new(0));
+        self.install_scheduled_policy_checkpoint_for_test(
+            identity,
+            ScheduledPolicyCheckpointTestAction::Count(Arc::clone(&consumed)),
+        )?;
+        Ok(ScheduledPolicyCheckpointTestControl { consumed })
+    }
+
+    #[cfg(test)]
+    pub(crate) fn exit_at_scheduled_policy_checkpoint_for_test(
+        &self,
+        context: &PolicyRunContext,
+        marker: PathBuf,
+    ) -> RuntimeHostResult<()> {
+        self.install_scheduled_policy_checkpoint_for_test(
+            ScheduledPolicyCheckpointIdentity::for_context(context),
+            ScheduledPolicyCheckpointTestAction::Exit { marker },
+        )
+    }
+
+    #[cfg(test)]
+    fn install_scheduled_policy_checkpoint_for_test(
+        &self,
+        identity: ScheduledPolicyCheckpointIdentity,
+        action: ScheduledPolicyCheckpointTestAction,
+    ) -> RuntimeHostResult<()> {
+        let shared = self.shared_ref("install_scheduled_policy_checkpoint_test_hook")?;
+        let mut slot = lock(
+            &shared.scheduled_policy_checkpoint_test_hook,
+            "install_scheduled_policy_checkpoint_test_hook",
+        )?;
+        if slot.is_some() {
+            return Err(RuntimeHostError::fatal(
+                "scheduled_policy_checkpoint_test_hook_already_installed",
+                "install_scheduled_policy_checkpoint_test_hook",
+                RuntimeErrorCode::RuntimeFatal,
+            ));
+        }
+        *slot = Some(ScheduledPolicyCheckpointTestHook {
+            identity,
+            execution_thread: thread::current().id(),
+            action,
+        });
+        Ok(())
+    }
+
     /// Executes one admitted policy run through the contained-task boundary without reacquiring
     /// its scheduler lease.
     pub fn run_scheduled_contained_task(
@@ -981,7 +1037,10 @@ impl RuntimeHost {
         &self,
         context: &PolicyRunContext,
         receipt: &RuntimeReceipt,
-    ) -> RuntimeHostResult<PolicyExecutionEventData> {
+    ) -> RuntimeHostResult<(
+        PolicyExecutionEventData,
+        Option<SchedulingOutcomeProjection>,
+    )> {
         self.shared_ref("complete_scheduled_policy_run")?
             .complete_scheduled_policy_run(context, receipt)
     }
@@ -1075,6 +1134,135 @@ impl RuntimeHost {
     pub(crate) fn expire_all_queued_for_test(&self) -> RuntimeHostResult<()> {
         self.shared_ref("expire_all_queued_for_test")?
             .expire_all_queued_runtime()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn expire_lease_once_for_test(
+        &self,
+        token: &LeaseToken,
+    ) -> RuntimeHostResult<TerminalEvent> {
+        let shared = self.shared_ref("expire_lease_once_for_test")?;
+        let _scan = lock(
+            &shared.lease_expiry_scan_test_gate,
+            "serialize_test_lease_expiry_scan",
+        )?;
+        let durable_terminal = || {
+            let through_sequence = shared
+                .ledger
+                .latest_sequence()
+                .map_err(|_| ledger_error("read_test_lease_expiry_position"))?;
+            let mut selected_terminal = None;
+            for event_type in [EventType::LeaseExpired, EventType::LeaseReleased] {
+                let events = shared
+                    .ledger
+                    .query_page(
+                        EventQuery {
+                            to_sequence: Some(through_sequence),
+                            event_type: Some(event_type),
+                            instance_id: Some(token.instance_id()),
+                            lease_id: Some(token.lease_id()),
+                            ..EventQuery::default()
+                        },
+                        0,
+                        through_sequence,
+                        2,
+                    )
+                    .map_err(|_| ledger_error("read_test_lease_expiry_terminal"))?;
+                let event = match events.as_slice() {
+                    [] => None,
+                    [event] => Some(terminal(event)),
+                    _ => {
+                        return Err(RuntimeHostError::fatal(
+                            "test_lease_expiry_terminal_not_unique",
+                            "expire_lease_once_for_test",
+                            RuntimeErrorCode::RuntimeFatal,
+                        ));
+                    }
+                };
+                // LeaseExpired is the exact scan result. LeaseReleased is the permitted fallback
+                // for an already-cleaned token and must not replace a durable expiry on replay.
+                selected_terminal = selected_terminal.or(event);
+            }
+            Ok(selected_terminal)
+        };
+        let active_token = || {
+            lock(&shared.scheduler, "read_test_lease_expiry_token").map(|scheduler| {
+                scheduler.active_tokens().into_iter().find(|active| {
+                    active.instance_id() == token.instance_id()
+                        && active.lease_id() == token.lease_id()
+                })
+            })
+        };
+
+        if let Some(terminal) = durable_terminal()? {
+            if active_token()?.is_some() {
+                return Err(RuntimeHostError::fatal(
+                    "test_lease_expiry_terminal_token_still_active",
+                    "expire_lease_once_for_test",
+                    RuntimeErrorCode::RuntimeFatal,
+                ));
+            }
+            return Ok(terminal);
+        }
+
+        let now = shared.monotonic_ms()?;
+        let connection_id = {
+            let scheduler = lock(&shared.scheduler, "scan_test_lease_expiry")?;
+            let active = scheduler
+                .active_tokens()
+                .into_iter()
+                .find(|active| {
+                    active.instance_id() == token.instance_id()
+                        && active.lease_id() == token.lease_id()
+                })
+                .ok_or_else(|| {
+                    RuntimeHostError::fatal(
+                        "test_lease_expiry_token_missing",
+                        "expire_lease_once_for_test",
+                        RuntimeErrorCode::RuntimeFatal,
+                    )
+                })?;
+            if active != *token {
+                return Err(RuntimeHostError::fatal(
+                    "test_lease_expiry_token_identity_mismatch",
+                    "expire_lease_once_for_test",
+                    RuntimeErrorCode::RuntimeFatal,
+                ));
+            }
+            if !scheduler
+                .due_tokens(now)
+                .into_iter()
+                .any(|due| due == *token)
+            {
+                return Err(RuntimeHostError::fatal(
+                    "test_lease_expiry_token_not_due",
+                    "expire_lease_once_for_test",
+                    RuntimeErrorCode::RuntimeFatal,
+                ));
+            }
+            scheduler.connection_for_token(token).map_err(|error| {
+                RuntimeHostError::scheduler("read_test_lease_expiry_connection", &error)
+            })?
+        };
+
+        // This existing owner returns only after token cleanup, any queued transfer, persisted
+        // scheduler state, and the durable lease terminal have all completed.
+        shared.cleanup_token(token, connection_id, LeaseReleaseReason::Expired)?;
+        let terminal = durable_terminal()?.ok_or_else(|| {
+            RuntimeHostError::fatal(
+                "test_lease_expiry_terminal_missing",
+                "expire_lease_once_for_test",
+                RuntimeErrorCode::RuntimeFatal,
+            )
+        })?;
+        if active_token()?.is_some() {
+            return Err(RuntimeHostError::fatal(
+                "test_lease_expiry_token_cleanup_incomplete",
+                "expire_lease_once_for_test",
+                RuntimeErrorCode::RuntimeFatal,
+            ));
+        }
+        Ok(terminal)
     }
 
     #[cfg(test)]
@@ -1396,6 +1584,72 @@ struct QueueOperationTestHook {
 struct PolicyOutcomeTransitionTestHook {
     completion_committed: Arc<Barrier>,
     resume: Arc<Barrier>,
+}
+
+#[cfg(test)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct ScheduledPolicyCheckpointIdentity {
+    run_id: RunId,
+    task_id: TaskId,
+    correlation_id: CorrelationId,
+    lease_id: LeaseId,
+}
+
+#[cfg(test)]
+impl ScheduledPolicyCheckpointIdentity {
+    pub(crate) fn for_context(context: &PolicyRunContext) -> Self {
+        Self {
+            run_id: context.run_id(),
+            task_id: context.task_id(),
+            correlation_id: context.correlation_id(),
+            lease_id: context.lease_token().lease_id(),
+        }
+    }
+
+    pub(crate) fn with_run_id(mut self, run_id: RunId) -> Self {
+        self.run_id = run_id;
+        self
+    }
+
+    pub(crate) fn with_task_id(mut self, task_id: TaskId) -> Self {
+        self.task_id = task_id;
+        self
+    }
+
+    pub(crate) fn with_correlation_id(mut self, correlation_id: CorrelationId) -> Self {
+        self.correlation_id = correlation_id;
+        self
+    }
+
+    pub(crate) fn with_lease_id(mut self, lease_id: LeaseId) -> Self {
+        self.lease_id = lease_id;
+        self
+    }
+}
+
+#[cfg(test)]
+enum ScheduledPolicyCheckpointTestAction {
+    Count(Arc<AtomicU64>),
+    Exit { marker: PathBuf },
+}
+
+#[cfg(test)]
+struct ScheduledPolicyCheckpointTestHook {
+    identity: ScheduledPolicyCheckpointIdentity,
+    execution_thread: std::thread::ThreadId,
+    action: ScheduledPolicyCheckpointTestAction,
+}
+
+#[cfg(test)]
+pub(crate) struct ScheduledPolicyCheckpointTestControl {
+    consumed: Arc<AtomicU64>,
+}
+
+#[cfg(test)]
+impl ScheduledPolicyCheckpointTestControl {
+    pub(crate) fn consumed(&self) -> u64 {
+        self.consumed.load(Ordering::Acquire)
+    }
 }
 
 #[cfg(test)]
@@ -2451,6 +2705,10 @@ struct HostShared {
     queue_operation_test_hook: Mutex<Option<QueueOperationTestHook>>,
     #[cfg(test)]
     policy_outcome_transition_test_hook: Mutex<Option<PolicyOutcomeTransitionTestHook>>,
+    #[cfg(test)]
+    scheduled_policy_checkpoint_test_hook: Mutex<Option<ScheduledPolicyCheckpointTestHook>>,
+    #[cfg(test)]
+    lease_expiry_scan_test_gate: Mutex<()>,
     trusted_policy_dispatches: Mutex<TrustedPolicyDispatchStore>,
     policy_dispatch_clocks: Mutex<BTreeMap<String, PolicyDispatchClock>>,
     // Outcome preparation and completion form one idempotent Runtime-owned transition.
@@ -3962,7 +4220,10 @@ impl HostShared {
         &self,
         context: &PolicyRunContext,
         receipt: &RuntimeReceipt,
-    ) -> RuntimeHostResult<PolicyExecutionEventData> {
+    ) -> RuntimeHostResult<(
+        PolicyExecutionEventData,
+        Option<SchedulingOutcomeProjection>,
+    )> {
         receipt.validate().map_err(|_| {
             RuntimeHostError::fatal(
                 "policy_run_receipt_invalid",
@@ -4015,12 +4276,40 @@ impl HostShared {
             .is_some();
         let authoritative_outcome =
             self.read_scheduled_policy_outcome(context, terminal, receipt.request_id(), replayed)?;
-        self.record_policy_dispatch_outcome_with_cache_update(
+        let execution = self.record_policy_dispatch_outcome_with_cache_update(
             context.decision_id(),
             &execution_input,
             Some(context),
-            PolicyOutcomeCacheUpdate::Commit(authoritative_outcome.as_ref()),
-        )
+            PolicyOutcomeCacheUpdate::Commit(
+                authoritative_outcome
+                    .as_ref()
+                    .map(SchedulingOutcomeProjection::outcome),
+            ),
+        )?;
+        let authoritative_outcome = authoritative_outcome
+            .map(|projection| {
+                let settlement_position = self
+                    .ledger
+                    .latest_sequence()
+                    .map_err(|_| ledger_error("read_policy_recompute_position"))?;
+                if settlement_position < projection.ledger_position() {
+                    return Err(RuntimeHostError::fatal(
+                        "policy_recompute_position_regressed",
+                        "complete_scheduled_policy_run",
+                        RuntimeErrorCode::RuntimeFatal,
+                    ));
+                }
+                SchedulingOutcomeProjection::new(settlement_position, projection.outcome().clone())
+                    .map_err(|_| {
+                        RuntimeHostError::fatal(
+                            "policy_recompute_projection_invalid",
+                            "complete_scheduled_policy_run",
+                            RuntimeErrorCode::RuntimeFatal,
+                        )
+                    })
+            })
+            .transpose()?;
+        Ok((execution, authoritative_outcome))
     }
 
     fn read_scheduled_policy_outcome(
@@ -4029,7 +4318,7 @@ impl HostShared {
         terminal: TerminalEvent,
         request_id: RequestId,
         completed_replay: bool,
-    ) -> RuntimeHostResult<Option<AuthoritativeSchedulingOutcome>> {
+    ) -> RuntimeHostResult<Option<SchedulingOutcomeProjection>> {
         let expected_keys = {
             let policy = lock(&self.policy, "read_policy_outcome_keys")?;
             if completed_replay {
@@ -4155,7 +4444,7 @@ impl HostShared {
                 RuntimeErrorCode::RuntimeFatal,
             ));
         }
-        Ok(Some(projection.outcome().clone()))
+        Ok(Some(projection))
     }
 
     fn apply_policy_outcome_cache_update(
@@ -4540,6 +4829,8 @@ impl HostShared {
                         Some(context) => self.policy_run_event_links(context)?,
                         None => self.events.system_links()?,
                     };
+                    #[cfg(test)]
+                    self.consume_scheduled_policy_checkpoint_for_test(context)?;
                     #[cfg(test)]
                     fail_policy_execution_append_for_test()?;
                     self.append_event_raw(
@@ -7740,6 +8031,52 @@ impl HostShared {
         Ok(())
     }
 
+    #[cfg(test)]
+    fn consume_scheduled_policy_checkpoint_for_test(
+        &self,
+        context: Option<&PolicyRunContext>,
+    ) -> RuntimeHostResult<()> {
+        let Some(context) = context else {
+            return Ok(());
+        };
+        let identity = ScheduledPolicyCheckpointIdentity::for_context(context);
+        let hook = {
+            let mut slot = lock(
+                &self.scheduled_policy_checkpoint_test_hook,
+                "consume_scheduled_policy_checkpoint_test_hook",
+            )?;
+            slot.as_ref()
+                .is_some_and(|hook| {
+                    hook.identity == identity && hook.execution_thread == thread::current().id()
+                })
+                .then(|| slot.take())
+                .flatten()
+        };
+        let Some(hook) = hook else {
+            return Ok(());
+        };
+        match hook.action {
+            ScheduledPolicyCheckpointTestAction::Count(consumed) => {
+                consumed.fetch_add(1, Ordering::AcqRel);
+                Ok(())
+            }
+            ScheduledPolicyCheckpointTestAction::Exit { marker } => {
+                fs::write(
+                    marker,
+                    b"after-durable-lease-release-before-policy-execution-recorded",
+                )
+                .map_err(|_| {
+                    RuntimeHostError::fatal(
+                        "scheduled_policy_checkpoint_marker_write_failed",
+                        "consume_scheduled_policy_checkpoint_test_hook",
+                        RuntimeErrorCode::RuntimeFatal,
+                    )
+                })?;
+                std::process::exit(87);
+            }
+        }
+    }
+
     fn existing_queue_terminal_result(
         &self,
         queued_request_id: RequestId,
@@ -9460,17 +9797,8 @@ impl HostShared {
                 ),
             ));
         }
-        if resolved.provenance() != ExecutionBackendProvenance::FixtureSimulation {
-            return Err(RequestFailure::request(
-                RuntimeHostError::request(
-                    "policy_run_fixture_simulation_required",
-                    "run_scheduled_contained_task",
-                    RuntimeErrorCode::InvalidRequest,
-                ),
-                RuntimeReceiptState::Denied,
-                None,
-            ));
-        }
+        let execution_provenance = resolved.provenance();
+        let (task_actor, task_source) = scheduled_request_transport_origin(execution_provenance);
         let request_id = self
             .events
             .issuer()
@@ -9480,8 +9808,8 @@ impl HostShared {
             request_id,
             context.issued_correlation_id(),
             None,
-            EventActor::Lab,
-            EventSource::Lab,
+            task_actor,
+            task_source,
             unix_ms_now().map_err(RequestFailure::poison_without_terminal)?,
             RuntimeOperation::RunContainedTask {
                 instance_alias: instance_alias.clone(),
@@ -9509,13 +9837,36 @@ impl HostShared {
                 &error,
             ))
         })?;
-        self.validated_instance(&validated, token, connection_id)?;
+        let prepared = if execution_provenance == ExecutionBackendProvenance::PhysicalDevice {
+            Some(prepare_contained_task(
+                instance_alias,
+                task_request,
+                self.execution.vision_provider(),
+            )?)
+        } else {
+            None
+        };
+        let admitted_instance = self.validated_instance(&validated, token, connection_id)?;
+        if admitted_instance.instance_id() != resolved.instance_id()
+            || admitted_instance.provenance() != execution_provenance
+        {
+            return Err(RequestFailure::poison_without_terminal(
+                RuntimeHostError::fatal(
+                    "policy_run_execution_identity_mismatch",
+                    "run_scheduled_contained_task",
+                    RuntimeErrorCode::RuntimeFatal,
+                ),
+            ));
+        }
         let _active_run = self.begin_contained_run(task_request_message.request_id())?;
-        let prepared = prepare_contained_task(
-            instance_alias,
-            task_request,
-            self.execution.vision_provider(),
-        )?;
+        let prepared = match prepared {
+            Some(prepared) => prepared,
+            None => prepare_contained_task(
+                instance_alias,
+                task_request,
+                self.execution.vision_provider(),
+            )?,
+        };
         let expected_outcome_keys = lock(&self.policy, "validate_policy_outcome_declaration")?
             .referenced_outcome_keys(context)
             .map_err(|error| {
@@ -9543,12 +9894,12 @@ impl HostShared {
             ));
         }
         let run_links = RuntimeRunLinks::new(context.issued_task_id(), context.issued_run_id());
-        self.append_request_lifecycle(
+        self.append_scheduled_request_lifecycle(
             &task_request_message,
             &validated,
             resolved.instance_id(),
-            EventAction::RuntimeTaskRun,
-            Some(run_links),
+            run_links,
+            execution_provenance,
         )?;
         let success = self.execute_contained_task_with_lease(
             &task_request_message,
@@ -9559,7 +9910,7 @@ impl HostShared {
             token.clone(),
             context.issued_task_id(),
             context.issued_run_id(),
-            ExecutionBackendProvenance::FixtureSimulation,
+            execution_provenance,
             Some(run_links),
         )?;
         Ok((task_request_message, success))
@@ -10241,6 +10592,61 @@ impl HostShared {
             links,
             CommandPayloadDraft::validated(
                 action,
+                EffectDisposition::NotPerformed,
+                AuditInput::new(),
+            ),
+        )?;
+        Ok(())
+    }
+
+    fn append_scheduled_request_lifecycle(
+        &self,
+        original: &RuntimeRequest,
+        request: &ValidatedRuntimeRequest<'_>,
+        instance_id: InstanceId,
+        run_links: RuntimeRunLinks,
+        execution_provenance: ExecutionBackendProvenance,
+    ) -> Result<(), RequestFailure> {
+        let expected_origin = scheduled_request_transport_origin(execution_provenance);
+        if (original.actor(), original.source()) != expected_origin {
+            return Err(RequestFailure::poison_without_terminal(
+                RuntimeHostError::fatal(
+                    "policy_task_request_origin_mismatch",
+                    "append_scheduled_request_lifecycle",
+                    RuntimeErrorCode::RuntimeFatal,
+                ),
+            ));
+        }
+        if execution_provenance == ExecutionBackendProvenance::FixtureSimulation {
+            return self.append_request_lifecycle(
+                original,
+                request,
+                instance_id,
+                EventAction::RuntimeTaskRun,
+                Some(run_links),
+            );
+        }
+        let links =
+            run_links.apply(
+                self.events
+                    .request_links(request, Some(instance_id), None, None),
+            );
+        self.append_event(
+            EventSeverity::Info,
+            EventSource::Scheduler,
+            OriginModule::Scheduler,
+            EventActor::Scheduler,
+            links.clone(),
+            CommandPayloadDraft::received(EventAction::RuntimeTaskRun, AuditInput::new()),
+        )?;
+        self.append_event(
+            EventSeverity::Info,
+            EventSource::Runtime,
+            OriginModule::Runtime,
+            EventActor::Runtime,
+            links,
+            CommandPayloadDraft::validated(
+                EventAction::RuntimeTaskRun,
                 EffectDisposition::NotPerformed,
                 AuditInput::new(),
             ),
@@ -11244,6 +11650,11 @@ impl HostShared {
     }
 
     fn expire_due_leases(&self) -> RuntimeHostResult<()> {
+        #[cfg(test)]
+        let _scan = lock(
+            &self.lease_expiry_scan_test_gate,
+            "serialize_test_lease_expiry_scan",
+        )?;
         self.expire_all_queued_runtime()?;
         let now = self.monotonic_ms()?;
         let (due, cooldowns_cleared) = {
@@ -13886,6 +14297,15 @@ fn execution_audit(provenance: ExecutionBackendProvenance, endpoint: &str) -> Au
     match provenance {
         ExecutionBackendProvenance::PhysicalDevice => audit_endpoint(endpoint),
         ExecutionBackendProvenance::FixtureSimulation => AuditInput::new(),
+    }
+}
+
+const fn scheduled_request_transport_origin(
+    provenance: ExecutionBackendProvenance,
+) -> (EventActor, EventSource) {
+    match provenance {
+        ExecutionBackendProvenance::PhysicalDevice => (EventActor::Agent, EventSource::Adapter),
+        ExecutionBackendProvenance::FixtureSimulation => (EventActor::Lab, EventSource::Lab),
     }
 }
 
