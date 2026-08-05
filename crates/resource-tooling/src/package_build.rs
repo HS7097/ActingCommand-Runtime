@@ -1793,7 +1793,7 @@ struct OperationBundle {
     #[serde(default)]
     entry_page: Option<String>,
     #[serde(default)]
-    target_page: Option<String>,
+    target_page: Option<PageDeclaration>,
     #[serde(default)]
     error_pages: Vec<String>,
     #[serde(default)]
@@ -1859,6 +1859,9 @@ impl OperationBundle {
             ));
         }
         self.defaults.validate()?;
+        if let Some(target_page) = &self.target_page {
+            target_page.validate("operation bundle target_page")?;
+        }
         for anchor in &self.anchors {
             if anchor.id.trim().is_empty() {
                 return Err(CliError::package_invalid(
@@ -2042,7 +2045,7 @@ struct Operation {
     purpose: String,
     from: String,
     #[serde(default)]
-    to: Option<String>,
+    to: Option<PageDeclaration>,
     click: OperationClick,
     #[serde(default)]
     verify_template: Option<String>,
@@ -2117,8 +2120,19 @@ impl Operation {
                 )));
             }
         }
+        if let Some(to) = &self.to {
+            to.validate(&format!("operation '{}' to", self.id))?;
+        }
         if let Some(expect_after) = &self.expect_after {
             expect_after.validate(&self.id)?;
+        }
+        if let (Some(to), Some(expect_after)) = (&self.to, &self.expect_after)
+            && !to.has_same_pages_as(&expect_after.page_id)
+        {
+            return Err(CliError::package_invalid(format!(
+                "operation '{}' has conflicting to and expect_after.page_id declarations",
+                self.id
+            )));
         }
         self.validate_flow()?;
         self.validate_guard(control)
@@ -2179,8 +2193,52 @@ impl Operation {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+#[serde(untagged)]
+enum PageDeclaration {
+    Singleton(String),
+    Finite(Vec<String>),
+}
+
+impl PageDeclaration {
+    fn pages(&self) -> &[String] {
+        match self {
+            Self::Singleton(page) => std::slice::from_ref(page),
+            Self::Finite(pages) => pages,
+        }
+    }
+
+    fn validate(&self, label: &str) -> CliOutcome<()> {
+        let pages = self.pages();
+        if pages.is_empty() {
+            return Err(CliError::package_invalid(format!(
+                "{label} must be a non-empty page set"
+            )));
+        }
+        let mut unique = BTreeSet::new();
+        for page in pages {
+            if page.trim().is_empty() || page.trim() != page || page == "any" {
+                return Err(CliError::package_invalid(format!(
+                    "{label} contains invalid exact page identifier '{page}'"
+                )));
+            }
+            if !unique.insert(page) {
+                return Err(CliError::package_invalid(format!(
+                    "{label} contains a duplicate page identifier '{page}'"
+                )));
+            }
+        }
+        Ok(())
+    }
+
+    fn has_same_pages_as(&self, other: &Self) -> bool {
+        self.pages().iter().collect::<BTreeSet<_>>()
+            == other.pages().iter().collect::<BTreeSet<_>>()
+    }
+}
+
+#[derive(Debug, Clone, Deserialize)]
 struct OperationExpectation {
-    page_id: String,
+    page_id: PageDeclaration,
     #[serde(default)]
     timeout_ms: Option<u64>,
     #[serde(default)]
@@ -2189,11 +2247,8 @@ struct OperationExpectation {
 
 impl OperationExpectation {
     fn validate(&self, operation_id: &str) -> CliOutcome<()> {
-        if self.page_id.trim().is_empty() {
-            return Err(CliError::package_invalid(format!(
-                "operation '{operation_id}' expect_after.page_id must not be empty"
-            )));
-        }
+        self.page_id
+            .validate(&format!("operation '{operation_id}' expect_after.page_id"))?;
         if self.timeout_ms == Some(0) {
             return Err(CliError::package_invalid(format!(
                 "operation '{operation_id}' expect_after.timeout_ms must be positive when provided"
@@ -3428,6 +3483,196 @@ mod tests {
     }
 
     #[test]
+    fn build_task_preserves_the_frozen_finite_page_set_shape() {
+        let temp = TempDir::new().expect("temp");
+        let repo = temp.path().join("repo");
+        write_fixture_repo(&repo);
+        update_fixture_operation(&repo, |task| {
+            task["target_page"] = json!(["middle", "mall"]);
+            task["operations"][0]["to"] = json!(["middle", "mall"]);
+            task["operations"][0]["expect_after"] = json!({
+                "page_id": ["mall", "middle"],
+                "timeout_ms": 500
+            });
+        });
+        let out = temp.path().join("finite-page-set.zip");
+
+        build_task(build_task_request(repo, out.clone()))
+            .expect("the approved finite page-set shape must build");
+
+        let entries = read_zip_entries(&out);
+        let task: Value = serde_json::from_slice(
+            entries
+                .get("resources/operations/operator_task/task.json")
+                .expect("packaged operation task"),
+        )
+        .expect("packaged task JSON");
+        assert_eq!(task["target_page"], json!(["mall", "middle"]));
+        assert_eq!(task["operations"][0]["to"], json!(["mall", "middle"]));
+        assert_eq!(
+            task["operations"][0]["expect_after"]["page_id"],
+            json!(["mall", "middle"])
+        );
+    }
+
+    #[test]
+    fn build_task_preserves_singleton_page_declarations() {
+        let temp = TempDir::new().expect("temp");
+        let repo = temp.path().join("repo");
+        write_fixture_repo(&repo);
+        update_fixture_operation(&repo, |task| {
+            task["operations"][0]["expect_after"] = json!({
+                "page_id": "middle",
+                "timeout_ms": 500
+            });
+        });
+        let out = temp.path().join("singleton-page-declarations.zip");
+
+        build_task(build_task_request(repo, out.clone()))
+            .expect("existing singleton declarations must remain compatible");
+
+        let entries = read_zip_entries(&out);
+        let task: Value = serde_json::from_slice(
+            entries
+                .get("resources/operations/operator_task/task.json")
+                .expect("packaged operation task"),
+        )
+        .expect("packaged task JSON");
+        assert_eq!(task["target_page"], "mall");
+        assert_eq!(task["operations"][0]["to"], "middle");
+        assert_eq!(task["operations"][0]["expect_after"]["page_id"], "middle");
+    }
+
+    #[test]
+    fn build_task_rejects_invalid_page_declarations_for_every_supported_field() {
+        let cases = [
+            ("target-empty-set", "target_page", json!([]), "non-empty"),
+            (
+                "target-empty-id",
+                "target_page",
+                json!(""),
+                "invalid exact page identifier",
+            ),
+            (
+                "target-duplicate",
+                "target_page",
+                json!(["mall", "mall"]),
+                "duplicate",
+            ),
+            (
+                "target-malformed",
+                "target_page",
+                json!(["mall", 7]),
+                "must be a string page identifier",
+            ),
+            ("to-empty-set", "to", json!([]), "non-empty"),
+            (
+                "to-empty-id",
+                "to",
+                json!(""),
+                "invalid exact page identifier",
+            ),
+            (
+                "to-duplicate",
+                "to",
+                json!(["middle", "middle"]),
+                "duplicate",
+            ),
+            (
+                "to-malformed",
+                "to",
+                json!(["middle", 7]),
+                "must be a string page identifier",
+            ),
+            (
+                "expect-after-empty-set",
+                "expect_after.page_id",
+                json!([]),
+                "non-empty",
+            ),
+            (
+                "expect-after-empty-id",
+                "expect_after.page_id",
+                json!(""),
+                "invalid exact page identifier",
+            ),
+            (
+                "expect-after-duplicate",
+                "expect_after.page_id",
+                json!(["middle", "middle"]),
+                "duplicate",
+            ),
+            (
+                "expect-after-malformed",
+                "expect_after.page_id",
+                json!(["middle", 7]),
+                "must be a string page identifier",
+            ),
+        ];
+
+        for (case, field, declaration, expected) in cases {
+            let temp = TempDir::new().expect("temp");
+            let repo = temp.path().join("repo");
+            write_fixture_repo(&repo);
+            let operation_path = repo.join("operations/operator_task/task.json");
+            let mut task: Value =
+                serde_json::from_slice(&fs::read(&operation_path).expect("fixture task"))
+                    .expect("fixture task JSON");
+            set_fixture_page_declaration(&mut task, field, declaration);
+
+            let validator_error = validate_packaged_operation_fixture(task.clone())
+                .expect_err("generated-package validation must fail closed");
+            assert_eq!(validator_error.code, "package_invalid", "{case}");
+
+            fs::write(
+                &operation_path,
+                serde_json::to_string_pretty(&task).expect("updated fixture JSON"),
+            )
+            .expect("updated fixture task");
+            let out = temp.path().join(format!("{case}.zip"));
+            let error = build_task(build_task_request(repo, out.clone()))
+                .expect_err("invalid declaration must fail the official build path");
+            assert_eq!(error.code, "package_invalid", "{case}: {error:?}");
+            assert!(
+                error.message.contains(expected),
+                "{case}: expected '{expected}' in '{}'",
+                error.message
+            );
+            assert!(!out.exists(), "{case}: invalid build published a ZIP");
+        }
+    }
+
+    #[test]
+    fn build_task_rejects_conflicting_to_and_expect_after_page_sets() {
+        let temp = TempDir::new().expect("temp");
+        let repo = temp.path().join("repo");
+        write_fixture_repo(&repo);
+        let operation_path = repo.join("operations/operator_task/task.json");
+        let mut task: Value =
+            serde_json::from_slice(&fs::read(&operation_path).expect("fixture task"))
+                .expect("fixture task JSON");
+        task["operations"][0]["to"] = json!(["middle", "mall"]);
+        task["operations"][0]["expect_after"] = json!({"page_id": ["middle"]});
+
+        let validator_error = validate_packaged_operation_fixture(task.clone())
+            .expect_err("generated-package validation must reject conflicting declarations");
+        assert_eq!(validator_error.code, "package_invalid");
+        assert!(validator_error.message.contains("conflicting"));
+
+        fs::write(
+            &operation_path,
+            serde_json::to_string_pretty(&task).expect("updated fixture JSON"),
+        )
+        .expect("updated fixture task");
+        let out = temp.path().join("conflicting-page-sets.zip");
+        let error = build_task(build_task_request(repo, out.clone()))
+            .expect_err("conflicting declarations must fail the official build path");
+        assert_eq!(error.code, "package_invalid");
+        assert!(error.message.contains("conflicting"));
+        assert!(!out.exists());
+    }
+
+    #[test]
     fn build_task_rejects_zero_max_task_retries() {
         let temp = TempDir::new().expect("temp");
         let repo = temp.path().join("repo");
@@ -3887,6 +4132,35 @@ mod tests {
         let mut operation: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
         update(&mut operation);
         fs::write(path, serde_json::to_string_pretty(&operation).unwrap()).unwrap();
+    }
+
+    fn set_fixture_page_declaration(task: &mut Value, field: &str, declaration: Value) {
+        match field {
+            "target_page" => task["target_page"] = declaration,
+            "to" => task["operations"][0]["to"] = declaration,
+            "expect_after.page_id" => {
+                task["operations"][0]["expect_after"] = json!({"page_id": declaration});
+            }
+            other => panic!("unsupported fixture field {other}"),
+        }
+    }
+
+    fn validate_packaged_operation_fixture(task: Value) -> CliOutcome<()> {
+        let control: LabControl = serde_json::from_value(control_json(
+            "arknights.cn.operator_task",
+            "navigable_route",
+            "arknights",
+            "cn",
+            (1280, 720),
+            "operator_task",
+        ))
+        .expect("fixture control");
+        let bundle: OperationBundle = serde_json::from_value(task).map_err(|error| {
+            CliError::package_invalid(format!(
+                "failed to parse packaged operation fixture: {error}"
+            ))
+        })?;
+        bundle.validate(&control, |_| Ok(true))
     }
 
     fn environment_snapshot(key: &str, value: &str) -> AuthoringEnvironmentSnapshot {
