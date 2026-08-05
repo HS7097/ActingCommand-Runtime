@@ -3,6 +3,8 @@
 # ActingCommand Runtime
 
 > The **resident Rust runtime** of a multi-game emulator automation framework: a long-lived daemon owns scheduling arbitration, device control and a global event ledger, while all game knowledge lives in declarative resource packs — the runtime kernel contains **zero game logic**. The control plane is a **clean-room Rust implementation** — rewritten from public behavior and protocols, with no C/C++ source in this repository.
+>
+> **Design stance: agents stay on the loop, the runtime stays in it.** Agents only maintain — planning, resource authoring, exception handling; frame-by-frame execution is done deterministically by the runtime, with every step on the ledger. Reasoning is spent on maintenance, not on execution.
 
 `cargo test --workspace` **all green (48 test binaries / 1703 tests, plus 14 doc-tests)** · CI: GitHub Actions (single windows-latest job: fmt / clippy `-D warnings` / test) · License `AGPL-3.0-only` · This repository is public
 
@@ -11,6 +13,14 @@
 Early Python mocks and Go legacy contracts, together with the Go/Python benchmark tooling, moved out of this repository (archived in ActingCommand-Legacy-Runtime, **not yet public**); the Rust benchmark tool `benchmarks/rust` and historical benchmark reports remain here.
 
 ---
+
+## 🔁 The self-maintaining loop
+
+![ActingCommand self-maintaining loop](./docs/assets/self-maintaining-loop.png)
+
+This architecture exists to free game automation from "the game updates, and the whole world waits for a maintainer to ship". The target loop: a game update ships (①); an agent explores it and learns what changed (②); the agent authors or revises declarative resource packs (③); packs enter the runtime through hash-gated containment, get admitted by the scheduler (④), execute deterministically (⑤), with every step on the ledger (⑥); on failure the agent diagnoses from ledger evidence and repairs the packs (⑦), returning to ③. Inside the loop there is no LLM call per action — reasoning is spent on maintenance, not on execution.
+
+Solid paths in the figure are merged on `main`; dashed paths are target state: authoring is human-agent co-op today (the ActingLab path), while auto-explore and auto-repair are on the roadmap.
 
 ## 🏛 System shape
 
