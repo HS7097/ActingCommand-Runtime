@@ -1,21 +1,32 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 use crate::{
-    FastDeployPpocrArtifacts, FastDeployPpocrInvokeRequest, NnClassificationResult, NnEngine,
-    NnInferenceRequest, OcrEngine, OcrInferenceRequest, OcrInferenceResult, OnnxRuntimeArtifacts,
+    CudaDeviceIdentity, CudaDeviceInventory, FastDeployPpocrArtifacts,
+    FastDeployPpocrInvokeRequest, FastDeployPpocrInvokeResponse, NnClassificationResult, NnEngine,
+    NnInferenceRequest, OcrEngine, OcrInferenceRequest, OcrInferenceResult, OcrInvocationId,
+    OcrSessionBinding, OcrSessionId, OnnxExecutionProvider, OnnxRuntimeArtifacts,
     OnnxRuntimeInvokeRequest, VisionFfiError, VisionFfiErrorCode, VisionFfiResult,
     VisionProviderArtifactManifest,
 };
 use libloading::Library;
 use serde::{Serialize, de::DeserializeOwned};
-use std::ffi::OsStr;
+use std::ffi::{CStr, OsStr, c_char, c_void};
 use std::slice;
-use std::sync::Arc;
+use std::sync::{
+    Arc,
+    atomic::{AtomicU64, Ordering},
+};
 
 const OCR_READ_TEXT_SYMBOL: &[u8] = b"ac_fastdeploy_ppocr_read_text_json\0";
 const NN_CLASSIFY_SYMBOL: &[u8] = b"ac_onnxruntime_classify_json\0";
 const FREE_BUFFER_SYMBOL: &[u8] = b"ac_vision_free_buffer\0";
 const MAX_FFI_RESPONSE_BYTES: usize = 128 * 1024 * 1024;
+const CUDA_SUCCESS: i32 = 0;
+const CUDA_PCI_BUS_ID_BYTES: usize = 64;
+const MAX_ONNXRUNTIME_VERSION_BYTES: usize = 256;
+
+static NEXT_OCR_SESSION_SEQUENCE: AtomicU64 = AtomicU64::new(1);
+static NEXT_OCR_INVOCATION_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 
 pub type VisionFfiInvokeJson = unsafe extern "C" fn(
     request_ptr: *const u8,
@@ -62,6 +73,7 @@ pub struct FastDeployPpocrBackend {
     read_text_json: VisionFfiInvokeJson,
     free_buffer: VisionFfiFreeBuffer,
     artifacts: Option<FastDeployPpocrArtifacts>,
+    session: Option<Arc<OcrSessionBinding>>,
 }
 
 impl FastDeployPpocrBackend {
@@ -74,11 +86,13 @@ impl FastDeployPpocrBackend {
             read_text_json,
             free_buffer,
             artifacts: None,
+            session: None,
         })
     }
 
     pub fn from_artifacts(artifacts: FastDeployPpocrArtifacts) -> VisionFfiResult<Self> {
-        artifacts.validate_ppocr_v6_cuda_existing_files()?;
+        artifacts.validate_ppocr_v6_execution_existing_files()?;
+        let session = new_session_binding(&artifacts)?;
         let library = load_library("fastdeploy-ppocr", &artifacts.provider_library_path)?;
         let read_text_json = load_symbol(&library, "fastdeploy-ppocr", OCR_READ_TEXT_SYMBOL)?;
         let free_buffer = load_symbol(&library, "fastdeploy-ppocr", FREE_BUFFER_SYMBOL)?;
@@ -87,6 +101,7 @@ impl FastDeployPpocrBackend {
             read_text_json,
             free_buffer,
             artifacts: Some(artifacts),
+            session: Some(Arc::new(session)),
         })
     }
 
@@ -108,6 +123,7 @@ impl FastDeployPpocrBackend {
             read_text_json,
             free_buffer,
             artifacts: None,
+            session: None,
         }
     }
 
@@ -121,14 +137,508 @@ impl FastDeployPpocrBackend {
         free_buffer: VisionFfiFreeBuffer,
         artifacts: FastDeployPpocrArtifacts,
     ) -> VisionFfiResult<Self> {
-        artifacts.validate_ppocr_v6_cuda()?;
+        artifacts.validate_ppocr_v6_execution()?;
+        let session = new_session_binding(&artifacts)?;
         Ok(Self {
             _library: None,
             read_text_json,
             free_buffer,
             artifacts: Some(artifacts),
+            session: Some(Arc::new(session)),
         })
     }
+
+    #[cfg(test)]
+    pub(crate) unsafe fn from_raw_functions_with_artifacts_and_inventory(
+        read_text_json: VisionFfiInvokeJson,
+        free_buffer: VisionFfiFreeBuffer,
+        artifacts: FastDeployPpocrArtifacts,
+        inventory: Option<CudaDeviceInventory>,
+    ) -> VisionFfiResult<Self> {
+        artifacts.validate_ppocr_v6_execution()?;
+        let session = new_session_binding_with(
+            &artifacts,
+            || inventory_result(inventory),
+            |_| Ok("1.24.0-test".to_string()),
+        )?;
+        Ok(Self {
+            _library: None,
+            read_text_json,
+            free_buffer,
+            artifacts: Some(artifacts),
+            session: Some(Arc::new(session)),
+        })
+    }
+
+    pub fn reconfigure(&mut self, artifacts: FastDeployPpocrArtifacts) -> VisionFfiResult<()> {
+        artifacts.validate_ppocr_v6_execution_existing_files()?;
+        let key = resolve_session_key(&artifacts)?;
+        let current = self.session.as_ref().ok_or_else(|| {
+            VisionFfiError::fatal_with_code(
+                VisionFfiErrorCode::InvalidRequest,
+                "fastdeploy-ppocr",
+                "unattested raw backend cannot be reconfigured as a production OCR session",
+            )
+        })?;
+        require_same_process_runtime(current.key(), &key)?;
+        let next_generation = current.generation().checked_add(1).ok_or_else(|| {
+            VisionFfiError::fatal_with_code(
+                VisionFfiErrorCode::Internal,
+                "fastdeploy-ppocr",
+                "OCR session generation overflowed",
+            )
+        })?;
+        let session = OcrSessionBinding::new(current.session_id().clone(), next_generation, key);
+        session.validate()?;
+        let library = load_library("fastdeploy-ppocr", &artifacts.provider_library_path)?;
+        let read_text_json = load_symbol(&library, "fastdeploy-ppocr", OCR_READ_TEXT_SYMBOL)?;
+        let free_buffer = load_symbol(&library, "fastdeploy-ppocr", FREE_BUFFER_SYMBOL)?;
+
+        self._library = Some(library);
+        self.read_text_json = read_text_json;
+        self.free_buffer = free_buffer;
+        self.artifacts = Some(artifacts);
+        self.session = Some(Arc::new(session));
+        Ok(())
+    }
+
+    #[cfg(test)]
+    pub(crate) fn session_for_test(&self) -> VisionFfiResult<Arc<OcrSessionBinding>> {
+        self.session.as_ref().map(Arc::clone).ok_or_else(|| {
+            VisionFfiError::fatal_with_code(
+                VisionFfiErrorCode::Internal,
+                "fastdeploy-ppocr",
+                "test backend is missing its immutable session binding",
+            )
+        })
+    }
+
+    #[cfg(test)]
+    pub(crate) fn reconfigure_with_inventory_for_test(
+        &mut self,
+        artifacts: FastDeployPpocrArtifacts,
+        inventory: Option<CudaDeviceInventory>,
+    ) -> VisionFfiResult<()> {
+        artifacts.validate_ppocr_v6_execution()?;
+        let key = resolve_session_key_with(
+            &artifacts,
+            || inventory_result(inventory),
+            |_| Ok("1.24.0-test".to_string()),
+        )?;
+        let current = self.session_for_test()?;
+        require_same_process_runtime(current.key(), &key)?;
+        let next_generation = current.generation().checked_add(1).ok_or_else(|| {
+            VisionFfiError::fatal_with_code(
+                VisionFfiErrorCode::Internal,
+                "fastdeploy-ppocr",
+                "OCR session generation overflowed",
+            )
+        })?;
+        let session = OcrSessionBinding::new(current.session_id().clone(), next_generation, key);
+        session.validate()?;
+
+        self.artifacts = Some(artifacts);
+        self.session = Some(Arc::new(session));
+        Ok(())
+    }
+}
+
+fn require_same_process_runtime(
+    current: &crate::OcrSessionKey,
+    candidate: &crate::OcrSessionKey,
+) -> VisionFfiResult<()> {
+    if current.runtime_library_path() == candidate.runtime_library_path()
+        && current.runtime_library_sha256() == candidate.runtime_library_sha256()
+        && current.onnxruntime_version() == candidate.onnxruntime_version()
+    {
+        Ok(())
+    } else {
+        Err(VisionFfiError::fatal_with_code(
+            VisionFfiErrorCode::ProviderUnavailable,
+            "fastdeploy-ppocr",
+            "OCR runtime-library identity cannot change in-process; restart is required",
+        ))
+    }
+}
+
+fn new_session_binding(artifacts: &FastDeployPpocrArtifacts) -> VisionFfiResult<OcrSessionBinding> {
+    new_session_binding_with(artifacts, enumerate_cuda_devices, |path| {
+        onnxruntime_version_string(path)
+    })
+}
+
+fn new_session_binding_with<F, V>(
+    artifacts: &FastDeployPpocrArtifacts,
+    inventory: F,
+    runtime_version: V,
+) -> VisionFfiResult<OcrSessionBinding>
+where
+    F: FnOnce() -> VisionFfiResult<CudaDeviceInventory>,
+    V: FnOnce(&std::path::Path) -> VisionFfiResult<String>,
+{
+    let key = resolve_session_key_with(artifacts, inventory, runtime_version)?;
+    let session = OcrSessionBinding::new(next_session_id()?, 1, key);
+    session.validate()?;
+    Ok(session)
+}
+
+fn resolve_session_key(
+    artifacts: &FastDeployPpocrArtifacts,
+) -> VisionFfiResult<crate::OcrSessionKey> {
+    resolve_session_key_with(artifacts, enumerate_cuda_devices, |path| {
+        onnxruntime_version_string(path)
+    })
+}
+
+fn resolve_session_key_with<F, V>(
+    artifacts: &FastDeployPpocrArtifacts,
+    inventory: F,
+    runtime_version: V,
+) -> VisionFfiResult<crate::OcrSessionKey>
+where
+    F: FnOnce() -> VisionFfiResult<CudaDeviceInventory>,
+    V: FnOnce(&std::path::Path) -> VisionFfiResult<String>,
+{
+    artifacts.validate_ppocr_v6_execution()?;
+    let runtime_version = runtime_version(artifacts.onnxruntime_library_path()?)?;
+    match artifacts.execution_provider {
+        Some(OnnxExecutionProvider::Cpu) => artifacts.production_session_key(None, runtime_version),
+        Some(OnnxExecutionProvider::Cuda) => {
+            let selector = artifacts.cuda_device.as_ref().ok_or_else(|| {
+                VisionFfiError::fatal_with_code(
+                    VisionFfiErrorCode::InvalidRequest,
+                    "fastdeploy-ppocr",
+                    "CUDA OCR configuration is missing its device selector",
+                )
+            })?;
+            let resolved = inventory()?.resolve(selector)?;
+            artifacts.production_session_key(Some(resolved), runtime_version)
+        }
+        None => Err(VisionFfiError::fatal_with_code(
+            VisionFfiErrorCode::InvalidRequest,
+            "fastdeploy-ppocr",
+            "production OCR execution_provider must be explicitly cpu or cuda",
+        )),
+    }
+}
+
+fn next_session_id() -> VisionFfiResult<OcrSessionId> {
+    next_sequence(&NEXT_OCR_SESSION_SEQUENCE, "OCR session").map(OcrSessionId::from_sequence)
+}
+
+fn next_invocation_id() -> VisionFfiResult<OcrInvocationId> {
+    next_sequence(&NEXT_OCR_INVOCATION_SEQUENCE, "OCR invocation")
+        .map(OcrInvocationId::from_sequence)
+}
+
+fn next_sequence(counter: &AtomicU64, label: &str) -> VisionFfiResult<u64> {
+    counter
+        .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
+            current.checked_add(1)
+        })
+        .map_err(|_| {
+            VisionFfiError::fatal_with_code(
+                VisionFfiErrorCode::Internal,
+                "ocr-adapter-identity",
+                format!("{label} identity space is exhausted"),
+            )
+        })
+}
+
+#[cfg(test)]
+fn inventory_result(
+    inventory: Option<CudaDeviceInventory>,
+) -> VisionFfiResult<CudaDeviceInventory> {
+    inventory.ok_or_else(|| {
+        VisionFfiError::fatal_with_code(
+            VisionFfiErrorCode::ProviderUnavailable,
+            "ocr-device-inventory",
+            "test CUDA inventory is unavailable",
+        )
+    })
+}
+
+#[repr(C)]
+struct CuUuid {
+    bytes: [u8; 16],
+}
+
+type CuInit = unsafe extern "system" fn(u32) -> i32;
+type CuDriverGetVersion = unsafe extern "system" fn(*mut i32) -> i32;
+type CuDeviceGetCount = unsafe extern "system" fn(*mut i32) -> i32;
+type CuDeviceGet = unsafe extern "system" fn(*mut i32, i32) -> i32;
+type CuDeviceGetUuid = unsafe extern "system" fn(*mut CuUuid, i32) -> i32;
+type CuDeviceGetPciBusId = unsafe extern "system" fn(*mut c_char, i32, i32) -> i32;
+
+#[repr(C)]
+struct OrtApiBase {
+    _get_api: unsafe extern "system" fn(u32) -> *const c_void,
+    get_version_string: unsafe extern "system" fn() -> *const c_char,
+}
+
+type OrtGetApiBase = unsafe extern "system" fn() -> *const OrtApiBase;
+
+/// Reads the exact ONNX Runtime version from the admitted native library.
+pub fn onnxruntime_version_string(path: impl AsRef<OsStr>) -> VisionFfiResult<String> {
+    let library = load_library("onnxruntime-version", path)?;
+    let get_api_base: OrtGetApiBase =
+        load_symbol(&library, "onnxruntime-version", b"OrtGetApiBase\0")?;
+    let api_base = unsafe {
+        // SAFETY: OrtGetApiBase is loaded from the admitted ONNX Runtime
+        // library and takes no arguments.
+        get_api_base()
+    };
+    let api_base = unsafe {
+        // SAFETY: a null OrtApiBase is rejected before any field is read.
+        api_base.as_ref()
+    }
+    .ok_or_else(|| {
+        VisionFfiError::fatal_with_code(
+            VisionFfiErrorCode::ProviderUnavailable,
+            "onnxruntime-version",
+            "OrtGetApiBase returned null",
+        )
+    })?;
+    let version = unsafe {
+        // SAFETY: get_version_string is part of the stable OrtApiBase ABI and
+        // returns a process-lifetime NUL-terminated string.
+        (api_base.get_version_string)()
+    };
+    let version = unsafe {
+        // SAFETY: a null version pointer is rejected before decoding.
+        version.as_ref()
+    }
+    .ok_or_else(|| {
+        VisionFfiError::fatal_with_code(
+            VisionFfiErrorCode::ProviderUnavailable,
+            "onnxruntime-version",
+            "ONNX Runtime returned a null version string",
+        )
+    })?;
+    let version = unsafe {
+        // SAFETY: the API contract guarantees a NUL-terminated version string.
+        CStr::from_ptr(version)
+    }
+    .to_str()
+    .map_err(|err| {
+        VisionFfiError::fatal_with_code(
+            VisionFfiErrorCode::InvalidResponse,
+            "onnxruntime-version",
+            format!("ONNX Runtime version is not UTF-8: {err}"),
+        )
+    })?;
+    if version.is_empty()
+        || version.len() > MAX_ONNXRUNTIME_VERSION_BYTES
+        || version.trim() != version
+        || version.chars().any(char::is_control)
+    {
+        return Err(VisionFfiError::fatal_with_code(
+            VisionFfiErrorCode::InvalidResponse,
+            "onnxruntime-version",
+            "ONNX Runtime version must be a bounded non-blank identity",
+        ));
+    }
+    Ok(version.to_string())
+}
+
+/// Enumerates CUDA driver devices without creating an OCR inference session.
+///
+/// The result is bounded and carries stable UUID/PCI identity. Callers must not
+/// use display names as a selector or as execution evidence.
+pub fn enumerate_cuda_devices() -> VisionFfiResult<CudaDeviceInventory> {
+    let library = load_library("cuda-driver", cuda_driver_library_name()?)?;
+    let cu_init: CuInit = load_symbol(&library, "cuda-driver", b"cuInit\0")?;
+    let cu_driver_get_version: CuDriverGetVersion =
+        load_symbol(&library, "cuda-driver", b"cuDriverGetVersion\0")?;
+    let cu_device_get_count: CuDeviceGetCount =
+        load_symbol(&library, "cuda-driver", b"cuDeviceGetCount\0")?;
+    let cu_device_get: CuDeviceGet = load_symbol(&library, "cuda-driver", b"cuDeviceGet\0")?;
+    let cu_device_get_pci_bus_id: CuDeviceGetPciBusId =
+        load_symbol(&library, "cuda-driver", b"cuDeviceGetPCIBusId\0")?;
+    let cu_device_get_uuid: Option<CuDeviceGetUuid> = unsafe {
+        // SAFETY: the symbol type follows the CUDA Driver API for both the v2
+        // and legacy UUID entrypoints. The loaded library outlives every call.
+        library
+            .get::<CuDeviceGetUuid>(b"cuDeviceGetUuid_v2\0")
+            .or_else(|_| library.get::<CuDeviceGetUuid>(b"cuDeviceGetUuid\0"))
+            .ok()
+            .map(|symbol| *symbol)
+    };
+
+    cuda_success("cuInit", unsafe {
+        // SAFETY: cuInit accepts a zero flags value and has no output pointers.
+        cu_init(0)
+    })?;
+    let mut driver_version = 0_i32;
+    cuda_success("cuDriverGetVersion", unsafe {
+        // SAFETY: driver_version is writable for the duration of this call.
+        cu_driver_get_version(&mut driver_version)
+    })?;
+    let driver_version = u32::try_from(driver_version).map_err(|_| {
+        VisionFfiError::fatal_with_code(
+            VisionFfiErrorCode::InvalidResponse,
+            "cuda-driver",
+            "CUDA driver returned a negative version",
+        )
+    })?;
+    let mut device_count = 0_i32;
+    cuda_success("cuDeviceGetCount", unsafe {
+        // SAFETY: device_count is writable for the duration of this call.
+        cu_device_get_count(&mut device_count)
+    })?;
+    let device_count = usize::try_from(device_count).map_err(|_| {
+        VisionFfiError::fatal_with_code(
+            VisionFfiErrorCode::InvalidResponse,
+            "cuda-driver",
+            "CUDA driver returned a negative device count",
+        )
+    })?;
+    if device_count == 0 || device_count > crate::MAX_CUDA_DEVICES {
+        return Err(VisionFfiError::fatal_with_code(
+            VisionFfiErrorCode::ProviderUnavailable,
+            "cuda-driver",
+            format!(
+                "CUDA driver reported {device_count} devices; expected 1..={}",
+                crate::MAX_CUDA_DEVICES
+            ),
+        ));
+    }
+
+    let mut devices = Vec::with_capacity(device_count);
+    for ordinal in 0..device_count {
+        let ordinal_i32 = i32::try_from(ordinal).map_err(|_| {
+            VisionFfiError::fatal_with_code(
+                VisionFfiErrorCode::InvalidResponse,
+                "cuda-driver",
+                "CUDA ordinal exceeds i32 range",
+            )
+        })?;
+        let mut device = 0_i32;
+        cuda_success("cuDeviceGet", unsafe {
+            // SAFETY: device is writable and ordinal was bounded above.
+            cu_device_get(&mut device, ordinal_i32)
+        })?;
+        let pci_bus_id = cuda_pci_bus_id(cu_device_get_pci_bus_id, device)?;
+        let uuid_result = if let Some(cu_device_get_uuid) = cu_device_get_uuid {
+            let mut uuid = CuUuid { bytes: [0; 16] };
+            let status = unsafe {
+                // SAFETY: uuid is writable and device came from cuDeviceGet.
+                cu_device_get_uuid(&mut uuid, device)
+            };
+            Some((status, uuid.bytes))
+        } else {
+            None
+        };
+        let stable_identity = cuda_stable_identity(&pci_bus_id, uuid_result)?;
+        devices.push(CudaDeviceIdentity {
+            ordinal: u32::try_from(ordinal).map_err(|_| {
+                VisionFfiError::fatal_with_code(
+                    VisionFfiErrorCode::InvalidResponse,
+                    "cuda-driver",
+                    "CUDA ordinal exceeds u32 range",
+                )
+            })?,
+            stable_identity,
+            pci_bus_id: Some(pci_bus_id),
+        });
+    }
+    let inventory = CudaDeviceInventory {
+        driver_version,
+        devices,
+    };
+    inventory.validate()?;
+    Ok(inventory)
+}
+
+fn cuda_stable_identity(
+    pci_bus_id: &str,
+    uuid_result: Option<(i32, [u8; 16])>,
+) -> VisionFfiResult<String> {
+    let Some((status, uuid)) = uuid_result else {
+        return Ok(format!("cuda-pci:{pci_bus_id}"));
+    };
+    cuda_success("cuDeviceGetUuid", status)?;
+    if uuid.iter().all(|byte| *byte == 0) {
+        return Err(VisionFfiError::fatal_with_code(
+            VisionFfiErrorCode::InvalidResponse,
+            "cuda-driver",
+            "CUDA driver returned an all-zero device UUID",
+        ));
+    }
+    Ok(format!("cuda-uuid:{}", lower_hex_bytes(&uuid)))
+}
+
+fn cuda_driver_library_name() -> VisionFfiResult<&'static OsStr> {
+    #[cfg(target_os = "windows")]
+    {
+        return Ok(OsStr::new("nvcuda.dll"));
+    }
+    #[cfg(target_os = "linux")]
+    {
+        return Ok(OsStr::new("libcuda.so.1"));
+    }
+    #[allow(unreachable_code)]
+    Err(VisionFfiError::fatal_with_code(
+        VisionFfiErrorCode::ProviderUnavailable,
+        "cuda-driver",
+        "CUDA driver discovery is unsupported on this operating system",
+    ))
+}
+
+fn cuda_pci_bus_id(
+    cu_device_get_pci_bus_id: CuDeviceGetPciBusId,
+    device: i32,
+) -> VisionFfiResult<String> {
+    let mut bytes = [0 as c_char; CUDA_PCI_BUS_ID_BYTES];
+    cuda_success("cuDeviceGetPCIBusId", unsafe {
+        // SAFETY: bytes is writable for the declared length and device was
+        // produced by cuDeviceGet in the same CUDA driver instance.
+        cu_device_get_pci_bus_id(bytes.as_mut_ptr(), CUDA_PCI_BUS_ID_BYTES as i32, device)
+    })?;
+    let value = unsafe {
+        // SAFETY: the CUDA call succeeded and promises a NUL-terminated string
+        // within the supplied fixed-size output buffer.
+        CStr::from_ptr(bytes.as_ptr())
+    }
+    .to_str()
+    .map_err(|err| {
+        VisionFfiError::fatal_with_code(
+            VisionFfiErrorCode::InvalidResponse,
+            "cuda-driver",
+            format!("CUDA PCI bus identity is not UTF-8: {err}"),
+        )
+    })?
+    .to_ascii_lowercase();
+    if value.is_empty() || value.len() >= CUDA_PCI_BUS_ID_BYTES {
+        return Err(VisionFfiError::fatal_with_code(
+            VisionFfiErrorCode::InvalidResponse,
+            "cuda-driver",
+            "CUDA PCI bus identity is empty or unbounded",
+        ));
+    }
+    Ok(value)
+}
+
+fn cuda_success(operation: &str, status: i32) -> VisionFfiResult<()> {
+    if status == CUDA_SUCCESS {
+        Ok(())
+    } else {
+        Err(VisionFfiError::fatal_with_code(
+            VisionFfiErrorCode::ProviderUnavailable,
+            "cuda-driver",
+            format!("{operation} failed with CUDA status {status}"),
+        ))
+    }
+}
+
+fn lower_hex_bytes(bytes: &[u8]) -> String {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut value = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        value.push(HEX[(byte >> 4) as usize] as char);
+        value.push(HEX[(byte & 0x0f) as usize] as char);
+    }
+    value
 }
 
 pub fn validate_fastdeploy_ppocr_provider_abi(path: impl AsRef<OsStr>) -> VisionFfiResult<()> {
@@ -142,26 +652,44 @@ impl OcrEngine for FastDeployPpocrBackend {
     fn read_text(&mut self, request: OcrInferenceRequest) -> VisionFfiResult<OcrInferenceResult> {
         request.validate()?;
         let validation_request = request.clone();
-        let result: OcrInferenceResult = if let Some(artifacts) = &self.artifacts {
-            invoke_json(
-                "fastdeploy-ppocr",
-                self.read_text_json,
-                self.free_buffer,
-                &FastDeployPpocrInvokeRequest {
-                    request,
-                    artifacts: artifacts.clone(),
-                },
-            )
-        } else {
-            invoke_json(
+        let Some(artifacts) = &self.artifacts else {
+            let result: OcrInferenceResult = invoke_json(
                 "fastdeploy-ppocr",
                 self.read_text_json,
                 self.free_buffer,
                 &request,
+            )?;
+            result.validate(&validation_request)?;
+            return Err(VisionFfiError::fatal_with_code(
+                VisionFfiErrorCode::InvalidResponse,
+                "fastdeploy-ppocr",
+                "OCR provider returned a result without a session-bound execution attestation",
+            ));
+        };
+        let session = self.session.as_ref().map(Arc::clone).ok_or_else(|| {
+            VisionFfiError::fatal_with_code(
+                VisionFfiErrorCode::Internal,
+                "fastdeploy-ppocr",
+                "production OCR backend is missing its immutable session binding",
             )
-        }?;
-        result.validate(&validation_request)?;
-        Ok(result)
+        })?;
+        let invocation_id = next_invocation_id()?;
+        let envelope = FastDeployPpocrInvokeRequest::new(
+            invocation_id.clone(),
+            session.as_ref().clone(),
+            request,
+            artifacts.clone(),
+        );
+        envelope.validate()?;
+        let response: FastDeployPpocrInvokeResponse = invoke_json(
+            "fastdeploy-ppocr",
+            self.read_text_json,
+            self.free_buffer,
+            &envelope,
+        )?;
+        response.validate_against(&invocation_id, &session)?;
+        response.result.validate(&validation_request)?;
+        Ok(response.result)
     }
 }
 
@@ -533,6 +1061,30 @@ mod tests {
 
         assert_eq!(copied, b"valid");
         assert_eq!(FREE_CALLS.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn cuda_stable_identity_uses_pci_only_when_uuid_api_is_absent() {
+        assert_eq!(
+            cuda_stable_identity("0000:02:00.0", None).expect("PCI identity"),
+            "cuda-pci:0000:02:00.0"
+        );
+        assert_eq!(
+            cuda_stable_identity("0000:02:00.0", Some((CUDA_SUCCESS, [0x11; 16])))
+                .expect("UUID identity"),
+            "cuda-uuid:11111111111111111111111111111111"
+        );
+    }
+
+    #[test]
+    fn cuda_stable_identity_fails_closed_when_uuid_query_fails_or_is_empty() {
+        let err = cuda_stable_identity("0000:02:00.0", Some((1, [0x11; 16])))
+            .expect_err("UUID query failure rejected");
+        assert_eq!(err.code(), VisionFfiErrorCode::ProviderUnavailable);
+
+        let err = cuda_stable_identity("0000:02:00.0", Some((CUDA_SUCCESS, [0; 16])))
+            .expect_err("all-zero UUID rejected");
+        assert_eq!(err.code(), VisionFfiErrorCode::InvalidResponse);
     }
 
     #[test]
