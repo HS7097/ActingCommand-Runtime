@@ -103,6 +103,10 @@ impl ManualRuntimeClock {
     fn samples(&self) -> u64 {
         self.samples.load(Ordering::Acquire)
     }
+
+    fn monotonic_ms(&self) -> u64 {
+        self.monotonic_ms.load(Ordering::SeqCst)
+    }
 }
 
 impl RuntimeClock for ManualRuntimeClock {
@@ -8358,20 +8362,23 @@ fn contained_task_over_five_seconds_completes_within_authoritative_deadline() {
     fs::write(&package, &bytes).expect("write package");
     let expected = actingcommand_pack_containment::Sha256Hash::digest(&bytes).to_string();
     let state = Arc::new(FakeState::default());
-    state.capture_delay_ms.store(2_600, Ordering::Release);
     state
         .transition_capture_after_input
         .store(true, Ordering::Release);
+    let clock = Arc::new(ManualRuntimeClock::new(1_000, 0));
+    let stable_instance_id = instance_id();
     let host = RuntimeHost::start(
-        config(&root).with_scheduler(SchedulerConfig {
-            maximum_client_heartbeat_interval_ms: 20,
-            takeover_cooldown_ms: 40,
-            lease_ttl_ms: 8_000,
-            ..SchedulerConfig::default()
-        }),
+        config(&root)
+            .with_scheduler(SchedulerConfig {
+                maximum_client_heartbeat_interval_ms: 20,
+                takeover_cooldown_ms: 40,
+                lease_ttl_ms: 8_000,
+                ..SchedulerConfig::default()
+            })
+            .with_runtime_clock(clock.clone()),
         Arc::new(FakeProvider::one(
             "neutral.instance",
-            instance_id(),
+            stable_instance_id,
             Arc::clone(&state),
         )),
     )
@@ -8388,12 +8395,19 @@ fn contained_task_over_five_seconds_completes_within_authoritative_deadline() {
                 .expect("bounded response deadline"),
         ),
     );
+    let checkpoint_clock = Arc::clone(&clock);
+    let checkpoint = host
+        .run_at_contained_task_checkpoint_for_test(
+            request.request_id(),
+            stable_instance_id,
+            None,
+            move |_| checkpoint_clock.advance(5_001),
+        )
+        .expect("install authoritative deadline checkpoint");
 
-    let started = Instant::now();
     let receipt = host
         .process_request_for_test(&request, ConnectionId::new(170).expect("connection"))
         .expect("long task receipt");
-    assert!(started.elapsed() >= Duration::from_secs(5));
     let deadline = match receipt.result() {
         Some(RuntimeResult::ContainedTaskCompleted {
             response_deadline_monotonic_ms: Some(deadline),
@@ -8402,20 +8416,154 @@ fn contained_task_over_five_seconds_completes_within_authoritative_deadline() {
         }) => *deadline,
         result => panic!("unexpected long task result: {result:?}"),
     };
+    assert_eq!(deadline, 7_000);
+    assert_eq!(clock.monotonic_ms(), 5_001);
+    assert_eq!(checkpoint.consumed(), 1);
+    let checkpoint_identity = checkpoint
+        .observed()
+        .expect("read authoritative deadline checkpoint")
+        .expect("checkpoint identity");
+    assert_eq!(checkpoint_identity.request_id(), request.request_id());
+    assert_eq!(checkpoint_identity.instance_id(), stable_instance_id);
+    assert_eq!(state.input_count.load(Ordering::Acquire), 1);
     let persisted = host
         .query_persisted_events_for_test(EventQuery {
             request_id: Some(request.request_id()),
             ..EventQuery::default()
         })
         .expect("long task events");
-    assert!(persisted.iter().any(|event| matches!(
-        event.payload(),
+    for (event_type, expected_count) in [
+        (EventType::TaskCompleted, 1),
+        (EventType::TaskCancelled, 0),
+        (EventType::LeaseReleased, 1),
+        (EventType::TaskEffectIntent, 1),
+        (EventType::TaskEffectCompleted, 1),
+    ] {
+        assert_eq!(
+            persisted
+                .iter()
+                .filter(|event| event.event_type() == event_type)
+                .count(),
+            expected_count,
+            "{event_type:?} count"
+        );
+    }
+    let admitted = persisted
+        .iter()
+        .find(|event| {
+            matches!(
+                event.payload(),
+                EventPayload::Task(TaskPayload::Semantic(payload))
+                    if matches!(payload.fact(), TaskSemanticFact::PackageAdmitted { .. })
+            )
+        })
+        .expect("package admitted event");
+    assert!(matches!(
+        admitted.payload(),
         EventPayload::Task(TaskPayload::Semantic(payload))
             if matches!(payload.fact(), TaskSemanticFact::PackageAdmitted {
                 response_deadline_monotonic_ms: Some(recorded),
                 ..
             } if *recorded == deadline)
-    )));
+    ));
+    assert_eq!(
+        admitted.links().lease_id(),
+        Some(&checkpoint_identity.lease_id())
+    );
+    host.close().expect("close host");
+}
+
+#[test]
+fn contained_task_deadline_checkpoint_fails_closed_on_lease_identity_mismatch() {
+    let root = TempDir::new().expect("tempdir");
+    let package = root.path().join("identity-mismatch-task.zip");
+    let bytes = neutral_contained_task_package();
+    fs::write(&package, &bytes).expect("write package");
+    let expected = actingcommand_pack_containment::Sha256Hash::digest(&bytes).to_string();
+    let state = Arc::new(FakeState::default());
+    state
+        .transition_capture_after_input
+        .store(true, Ordering::Release);
+    let clock = Arc::new(ManualRuntimeClock::new(1_000, 0));
+    let stable_instance_id = instance_id();
+    let host = RuntimeHost::start(
+        config(&root).with_runtime_clock(clock.clone()),
+        Arc::new(FakeProvider::one(
+            "neutral.instance",
+            stable_instance_id,
+            Arc::clone(&state),
+        )),
+    )
+    .expect("runtime host");
+    let ids = IdentifierIssuer::new().expect("identifier issuer");
+    let mismatched_lease_id = *ids.mint_lease_id().expect("mismatched lease").transport();
+    let request = runtime_request(
+        &ids,
+        RuntimeOperation::run_contained_task(
+            "neutral.instance",
+            ids.mint_holder_id().expect("holder"),
+            ContainedTaskRequest::new(package.display().to_string(), expected)
+                .expect("contained task request")
+                .with_response_deadline_ms(7_000)
+                .expect("bounded response deadline"),
+        ),
+    );
+    let checkpoint_clock = Arc::clone(&clock);
+    let checkpoint = host
+        .run_at_contained_task_checkpoint_for_test(
+            request.request_id(),
+            stable_instance_id,
+            Some(mismatched_lease_id),
+            move |_| checkpoint_clock.advance(7_000),
+        )
+        .expect("install mismatched deadline checkpoint");
+
+    let receipt = host
+        .process_request_for_test(&request, ConnectionId::new(171).expect("connection"))
+        .expect("identity mismatch receipt");
+    assert!(matches!(
+        receipt.result(),
+        Some(RuntimeResult::ContainedTaskCompleted {
+            outcome: TaskOutcome::Success,
+            ..
+        })
+    ));
+    assert_eq!(checkpoint.consumed(), 0);
+    assert_eq!(
+        checkpoint
+            .observed()
+            .expect("read mismatched deadline checkpoint"),
+        None
+    );
+    assert_eq!(clock.monotonic_ms(), 0);
+    assert_eq!(state.input_count.load(Ordering::Acquire), 1);
+    let persisted = host
+        .query_persisted_events_for_test(EventQuery {
+            request_id: Some(request.request_id()),
+            ..EventQuery::default()
+        })
+        .expect("identity mismatch events");
+    let actual_lease_id = persisted
+        .iter()
+        .find_map(|event| event.links().lease_id().copied())
+        .expect("actual lease identity");
+    assert_ne!(actual_lease_id, mismatched_lease_id);
+    for (event_type, expected_count) in [
+        (EventType::TaskCompleted, 1),
+        (EventType::TaskCancelled, 0),
+        (EventType::LeaseReleased, 1),
+        (EventType::TaskEffectIntent, 1),
+        (EventType::TaskEffectCompleted, 1),
+    ] {
+        assert_eq!(
+            persisted
+                .iter()
+                .filter(|event| event.event_type() == event_type)
+                .count(),
+            expected_count,
+            "{event_type:?} count"
+        );
+    }
     host.close().expect("close host");
 }
 
@@ -8427,8 +8575,17 @@ fn contained_task_deadline_commits_cancelled_terminal_and_releases_lease() {
     fs::write(&package, &bytes).expect("write package");
     let expected = actingcommand_pack_containment::Sha256Hash::digest(&bytes).to_string();
     let state = Arc::new(FakeState::default());
-    state.capture_delay_ms.store(100, Ordering::Release);
-    let host = host_with_state(&root, "neutral.instance", Arc::clone(&state));
+    let clock = Arc::new(ManualRuntimeClock::new(1_000, 0));
+    let stable_instance_id = instance_id();
+    let host = RuntimeHost::start(
+        config(&root).with_runtime_clock(clock.clone()),
+        Arc::new(FakeProvider::one(
+            "neutral.instance",
+            stable_instance_id,
+            Arc::clone(&state),
+        )),
+    )
+    .expect("runtime host");
     let ids = IdentifierIssuer::new().expect("identifier issuer");
     let task_request = ContainedTaskRequest::new(package.display().to_string(), expected)
         .expect("contained task request")
@@ -8442,8 +8599,17 @@ fn contained_task_deadline_commits_cancelled_terminal_and_releases_lease() {
             task_request,
         ),
     );
+    let checkpoint_clock = Arc::clone(&clock);
+    let checkpoint = host
+        .run_at_contained_task_checkpoint_for_test(
+            request.request_id(),
+            stable_instance_id,
+            None,
+            move |_| checkpoint_clock.advance(25),
+        )
+        .expect("install exceeded deadline checkpoint");
     let receipt = host
-        .process_request_for_test(&request, ConnectionId::new(171).expect("connection"))
+        .process_request_for_test(&request, ConnectionId::new(172).expect("connection"))
         .expect("deadline receipt");
 
     assert_eq!(
@@ -8460,6 +8626,14 @@ fn contained_task_deadline_commits_cancelled_terminal_and_releases_lease() {
             ..
         }) if task_request_id == &request.request_id()
     ));
+    assert_eq!(checkpoint.consumed(), 1);
+    let checkpoint_identity = checkpoint
+        .observed()
+        .expect("read exceeded deadline checkpoint")
+        .expect("exceeded deadline identity");
+    assert_eq!(checkpoint_identity.request_id(), request.request_id());
+    assert_eq!(checkpoint_identity.instance_id(), stable_instance_id);
+    assert_eq!(clock.monotonic_ms(), 25);
     assert_eq!(state.input_count.load(Ordering::Acquire), 0);
     let persisted = host
         .query_persisted_events_for_test(EventQuery {
@@ -8474,6 +8648,24 @@ fn contained_task_deadline_commits_cancelled_terminal_and_releases_lease() {
             .count(),
         1
     );
+    for event_type in [
+        EventType::TaskCompleted,
+        EventType::TaskEffectIntent,
+        EventType::TaskEffectCompleted,
+    ] {
+        assert_eq!(
+            persisted
+                .iter()
+                .filter(|event| event.event_type() == event_type)
+                .count(),
+            0,
+            "{event_type:?} count"
+        );
+    }
+    assert!(persisted.iter().any(|event| {
+        event.event_type() == EventType::LeaseReleased
+            && event.links().lease_id() == Some(&checkpoint_identity.lease_id())
+    }));
     assert_eq!(
         persisted
             .iter()
@@ -8491,7 +8683,7 @@ fn contained_task_deadline_commits_cancelled_terminal_and_releases_lease() {
         },
         _ => None,
     });
-    assert!(deadline.is_some_and(|deadline| deadline > 0));
+    assert_eq!(deadline, Some(25));
 
     let cancel = runtime_request(
         &ids,
@@ -8500,7 +8692,7 @@ fn contained_task_deadline_commits_cancelled_terminal_and_releases_lease() {
         },
     );
     let status = host
-        .process_request_for_test(&cancel, ConnectionId::new(172).expect("connection"))
+        .process_request_for_test(&cancel, ConnectionId::new(173).expect("connection"))
         .expect("cancellation status");
     assert!(matches!(
         status.result(),

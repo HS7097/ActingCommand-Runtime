@@ -542,6 +542,8 @@ impl RuntimeHost {
             #[cfg(test)]
             scheduled_policy_checkpoint_test_hook: Mutex::new(None),
             #[cfg(test)]
+            contained_task_checkpoint_test_hook: Mutex::new(None),
+            #[cfg(test)]
             lease_expiry_scan_test_gate: Mutex::new(()),
             trusted_policy_dispatches: Mutex::new(TrustedPolicyDispatchStore::default()),
             policy_dispatch_clocks: Mutex::new(policy_dispatch_clocks),
@@ -1007,6 +1009,43 @@ impl RuntimeHost {
             action,
         });
         Ok(())
+    }
+
+    #[cfg(test)]
+    pub(crate) fn run_at_contained_task_checkpoint_for_test<F>(
+        &self,
+        request_id: RequestId,
+        instance_id: InstanceId,
+        lease_id: Option<LeaseId>,
+        action: F,
+    ) -> RuntimeHostResult<ContainedTaskCheckpointTestControl>
+    where
+        F: FnOnce(ContainedTaskCheckpointIdentity) + Send + 'static,
+    {
+        let shared = self.shared_ref("install_contained_task_checkpoint_test_hook")?;
+        let consumed = Arc::new(AtomicU64::new(0));
+        let observed = Arc::new(Mutex::new(None));
+        let mut slot = lock(
+            &shared.contained_task_checkpoint_test_hook,
+            "install_contained_task_checkpoint_test_hook",
+        )?;
+        if slot.is_some() {
+            return Err(RuntimeHostError::fatal(
+                "contained_task_checkpoint_test_hook_already_installed",
+                "install_contained_task_checkpoint_test_hook",
+                RuntimeErrorCode::RuntimeFatal,
+            ));
+        }
+        *slot = Some(ContainedTaskCheckpointTestHook {
+            request_id,
+            instance_id,
+            lease_id,
+            execution_thread: thread::current().id(),
+            action: Box::new(action),
+            consumed: Arc::clone(&consumed),
+            observed: Arc::clone(&observed),
+        });
+        Ok(ContainedTaskCheckpointTestControl { consumed, observed })
     }
 
     /// Executes one admitted policy run through the contained-task boundary without reacquiring
@@ -1650,6 +1689,60 @@ pub(crate) struct ScheduledPolicyCheckpointTestControl {
 impl ScheduledPolicyCheckpointTestControl {
     pub(crate) fn consumed(&self) -> u64 {
         self.consumed.load(Ordering::Acquire)
+    }
+}
+
+#[cfg(test)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct ContainedTaskCheckpointIdentity {
+    request_id: RequestId,
+    instance_id: InstanceId,
+    lease_id: LeaseId,
+}
+
+#[cfg(test)]
+impl ContainedTaskCheckpointIdentity {
+    pub(crate) const fn request_id(&self) -> RequestId {
+        self.request_id
+    }
+
+    pub(crate) const fn instance_id(&self) -> InstanceId {
+        self.instance_id
+    }
+
+    pub(crate) const fn lease_id(&self) -> LeaseId {
+        self.lease_id
+    }
+}
+
+#[cfg(test)]
+struct ContainedTaskCheckpointTestHook {
+    request_id: RequestId,
+    instance_id: InstanceId,
+    lease_id: Option<LeaseId>,
+    execution_thread: std::thread::ThreadId,
+    action: Box<dyn FnOnce(ContainedTaskCheckpointIdentity) + Send>,
+    consumed: Arc<AtomicU64>,
+    observed: Arc<Mutex<Option<ContainedTaskCheckpointIdentity>>>,
+}
+
+#[cfg(test)]
+pub(crate) struct ContainedTaskCheckpointTestControl {
+    consumed: Arc<AtomicU64>,
+    observed: Arc<Mutex<Option<ContainedTaskCheckpointIdentity>>>,
+}
+
+#[cfg(test)]
+impl ContainedTaskCheckpointTestControl {
+    pub(crate) fn consumed(&self) -> u64 {
+        self.consumed.load(Ordering::Acquire)
+    }
+
+    pub(crate) fn observed(&self) -> RuntimeHostResult<Option<ContainedTaskCheckpointIdentity>> {
+        Ok(*lock(
+            &self.observed,
+            "read_contained_task_checkpoint_test_control",
+        )?)
     }
 }
 
@@ -2708,6 +2801,8 @@ struct HostShared {
     policy_outcome_transition_test_hook: Mutex<Option<PolicyOutcomeTransitionTestHook>>,
     #[cfg(test)]
     scheduled_policy_checkpoint_test_hook: Mutex<Option<ScheduledPolicyCheckpointTestHook>>,
+    #[cfg(test)]
+    contained_task_checkpoint_test_hook: Mutex<Option<ContainedTaskCheckpointTestHook>>,
     #[cfg(test)]
     lease_expiry_scan_test_gate: Mutex<()>,
     trusted_policy_dispatches: Mutex<TrustedPolicyDispatchStore>,
@@ -8081,6 +8176,41 @@ impl HostShared {
         }
     }
 
+    #[cfg(test)]
+    fn consume_contained_task_checkpoint_for_test(
+        &self,
+        identity: ContainedTaskCheckpointIdentity,
+    ) -> RuntimeHostResult<()> {
+        let hook = {
+            let mut slot = lock(
+                &self.contained_task_checkpoint_test_hook,
+                "consume_contained_task_checkpoint_test_hook",
+            )?;
+            let should_consume = match slot.as_mut() {
+                Some(hook)
+                    if hook.request_id == identity.request_id
+                        && hook.instance_id == identity.instance_id
+                        && hook.execution_thread == thread::current().id() =>
+                {
+                    let bound_lease_id = hook.lease_id.get_or_insert(identity.lease_id);
+                    *bound_lease_id == identity.lease_id
+                }
+                _ => false,
+            };
+            should_consume.then(|| slot.take()).flatten()
+        };
+        let Some(hook) = hook else {
+            return Ok(());
+        };
+        *lock(
+            &hook.observed,
+            "record_contained_task_checkpoint_test_identity",
+        )? = Some(identity);
+        (hook.action)(identity);
+        hook.consumed.fetch_add(1, Ordering::AcqRel);
+        Ok(())
+    }
+
     fn existing_queue_terminal_result(
         &self,
         queued_request_id: RequestId,
@@ -13377,19 +13507,29 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
                 task_label,
                 package_label,
                 package_sha256,
-            } => self.append_task(
-                EventSeverity::Info,
-                self.links(),
-                TaskPayloadDraft::semantic(
-                    TaskSemanticFact::PackageAdmitted {
-                        package_label,
-                        task_label,
-                        package_sha256,
-                        response_deadline_monotonic_ms: Some(self.control.deadline()),
-                    },
-                    AuditInput::new(),
-                ),
-            ),
+            } => {
+                #[cfg(test)]
+                self.host
+                    .consume_contained_task_checkpoint_for_test(ContainedTaskCheckpointIdentity {
+                        request_id: self.control.request_id,
+                        instance_id: self.control.instance_id,
+                        lease_id: self.token.lease_id(),
+                    })
+                    .map_err(RequestFailure::poison_without_terminal)?;
+                self.append_task(
+                    EventSeverity::Info,
+                    self.links(),
+                    TaskPayloadDraft::semantic(
+                        TaskSemanticFact::PackageAdmitted {
+                            package_label,
+                            task_label,
+                            package_sha256,
+                            response_deadline_monotonic_ms: Some(self.control.deadline()),
+                        },
+                        AuditInput::new(),
+                    ),
+                )
+            }
             ContainedTaskTrace::RunStarted => self.append_task(
                 EventSeverity::Info,
                 self.links(),
