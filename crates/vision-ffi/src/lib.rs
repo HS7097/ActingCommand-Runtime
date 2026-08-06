@@ -679,9 +679,10 @@ mod tests {
     use super::*;
     use std::path::PathBuf;
     use std::slice;
+    use std::sync::Arc;
 
     #[test]
-    fn ocr_reads_text_from_frame() {
+    fn unattested_raw_ocr_result_fails_closed() {
         let frame = test_frame();
         let region = VisionRect::full_frame(&frame).expect("full frame rect");
         let request = OcrInferenceRequest {
@@ -702,11 +703,12 @@ mod tests {
             },
         );
 
-        let result = boundary.read_text(request).expect("ocr result");
+        let err = boundary
+            .read_text(request)
+            .expect_err("unattested OCR result rejected");
 
-        assert_eq!(result.backend, VisionBackendKind::FastDeployPpocr);
-        assert!(result.text.contains("公开招募"));
-        assert_eq!(result.blocks.len(), 1);
+        assert_eq!(err.code(), VisionFfiErrorCode::InvalidResponse);
+        assert!(err.message().contains("without a session-bound"));
     }
 
     #[test]
@@ -935,10 +937,11 @@ mod tests {
             timeout_ms: 1_000,
         };
         let mut backend = unsafe {
-            FastDeployPpocrBackend::from_raw_functions_with_artifacts(
+            FastDeployPpocrBackend::from_raw_functions_with_artifacts_and_inventory(
                 fake_ocr_envelope_json,
                 fake_free_buffer,
                 test_ocr_artifacts(),
+                Some(test_cuda_inventory()),
             )
             .expect("test artifact backend")
         };
@@ -947,6 +950,198 @@ mod tests {
 
         assert_eq!(result.backend, VisionBackendKind::FastDeployPpocr);
         assert!(result.text.contains("artifact envelope"));
+    }
+
+    #[test]
+    fn cpu_ocr_session_accepts_cpu_attestation_without_cuda_inventory() {
+        let mut artifacts = test_ocr_artifacts();
+        artifacts.execution_provider = Some(OnnxExecutionProvider::Cpu);
+        artifacts.cuda_device = None;
+        let mut backend = unsafe {
+            FastDeployPpocrBackend::from_raw_functions_with_artifacts_and_inventory(
+                fake_ocr_envelope_json,
+                fake_free_buffer,
+                artifacts,
+                None,
+            )
+            .expect("CPU test backend")
+        };
+
+        let result = backend
+            .read_text(test_ocr_request())
+            .expect("CPU-attested OCR result");
+        let session = backend.session_for_test().expect("CPU session");
+
+        assert_eq!(result.backend, VisionBackendKind::FastDeployPpocr);
+        assert_eq!(
+            session.key().requested_backend(),
+            OnnxExecutionProvider::Cpu
+        );
+        assert!(session.key().requested_cuda_device().is_none());
+        assert!(session.key().resolved_cuda_device().is_none());
+    }
+
+    #[test]
+    fn adapter_rejects_backend_device_identity_and_replay_mismatches() {
+        let cases: [(&str, VisionFfiInvokeJson); 13] = [
+            ("cpu-observed-cuda", fake_cpu_observed_cuda_json),
+            ("cuda-observed-cpu", fake_cuda_observed_cpu_json),
+            ("cuda-device-a-observed-b", fake_wrong_cuda_device_json),
+            ("response-replay", fake_replayed_invocation_json),
+            ("wrong-generation", fake_wrong_generation_json),
+            ("wrong-model-ref", fake_wrong_model_ref_json),
+            ("wrong-model", fake_wrong_model_json),
+            ("wrong-configuration", fake_wrong_configuration_json),
+            ("wrong-provider-binary", fake_wrong_provider_binary_json),
+            ("wrong-runtime-version", fake_wrong_runtime_version_json),
+            ("forged-fallback-observation", fake_fallback_observed_json),
+            ("wrong-provider-registration", fake_wrong_registration_json),
+            (
+                "unknown-attestation-field",
+                fake_unknown_attestation_field_json,
+            ),
+        ];
+
+        for (name, invoke) in cases {
+            let mut artifacts = test_ocr_artifacts();
+            if name == "cpu-observed-cuda" {
+                artifacts.execution_provider = Some(OnnxExecutionProvider::Cpu);
+                artifacts.cuda_device = None;
+            }
+            let inventory = if artifacts.execution_provider == Some(OnnxExecutionProvider::Cuda) {
+                Some(test_cuda_inventory())
+            } else {
+                None
+            };
+            let mut backend = unsafe {
+                FastDeployPpocrBackend::from_raw_functions_with_artifacts_and_inventory(
+                    invoke,
+                    fake_free_buffer,
+                    artifacts,
+                    inventory,
+                )
+                .expect(name)
+            };
+
+            let err = backend.read_text(test_ocr_request()).expect_err(name);
+
+            assert_eq!(err.code(), VisionFfiErrorCode::InvalidResponse, "{name}");
+        }
+    }
+
+    #[test]
+    fn adapter_rejects_missing_or_incomplete_attestation() {
+        for (name, invoke) in [
+            (
+                "missing-attestation",
+                fake_missing_attestation_json as VisionFfiInvokeJson,
+            ),
+            (
+                "incomplete-attestation",
+                fake_incomplete_attestation_json as VisionFfiInvokeJson,
+            ),
+        ] {
+            let mut backend = unsafe {
+                FastDeployPpocrBackend::from_raw_functions_with_artifacts_and_inventory(
+                    invoke,
+                    fake_free_buffer,
+                    test_ocr_artifacts(),
+                    Some(test_cuda_inventory()),
+                )
+                .expect(name)
+            };
+
+            let err = backend.read_text(test_ocr_request()).expect_err(name);
+
+            assert_eq!(err.code(), VisionFfiErrorCode::InvalidResponse, "{name}");
+        }
+    }
+
+    #[test]
+    fn cuda_selection_is_deterministic_and_unavailable_inventory_fails_closed() {
+        let backend = unsafe {
+            FastDeployPpocrBackend::from_raw_functions_with_artifacts_and_inventory(
+                fake_ocr_envelope_json,
+                fake_free_buffer,
+                test_ocr_artifacts(),
+                Some(test_cuda_inventory()),
+            )
+            .expect("multi-GPU backend")
+        };
+        let selected = backend
+            .session_for_test()
+            .expect("session")
+            .key()
+            .resolved_cuda_device()
+            .cloned()
+            .expect("selected CUDA device");
+
+        assert_eq!(selected.ordinal, 1);
+        assert_eq!(
+            selected.stable_identity,
+            "cuda-uuid:11111111111111111111111111111111"
+        );
+
+        let err = match unsafe {
+            FastDeployPpocrBackend::from_raw_functions_with_artifacts_and_inventory(
+                fake_ocr_envelope_json,
+                fake_free_buffer,
+                test_ocr_artifacts(),
+                None,
+            )
+        } {
+            Ok(_) => panic!("unavailable CUDA inventory was accepted"),
+            Err(err) => err,
+        };
+        assert_eq!(err.code(), VisionFfiErrorCode::ProviderUnavailable);
+    }
+
+    #[test]
+    fn reconfiguration_keeps_in_flight_generation_immutable() {
+        let mut backend = unsafe {
+            FastDeployPpocrBackend::from_raw_functions_with_artifacts_and_inventory(
+                fake_ocr_envelope_json,
+                fake_free_buffer,
+                test_ocr_artifacts(),
+                Some(test_cuda_inventory()),
+            )
+            .expect("CUDA backend")
+        };
+        let in_flight = backend.session_for_test().expect("old generation");
+        let err = backend
+            .reconfigure_with_inventory_for_test(test_ocr_artifacts(), None)
+            .expect_err("unavailable replacement must not commit");
+        assert_eq!(err.code(), VisionFfiErrorCode::ProviderUnavailable);
+        assert!(Arc::ptr_eq(
+            &in_flight,
+            &backend
+                .session_for_test()
+                .expect("unchanged generation after failed replacement")
+        ));
+        let mut cpu_artifacts = test_ocr_artifacts();
+        cpu_artifacts.execution_provider = Some(OnnxExecutionProvider::Cpu);
+        cpu_artifacts.cuda_device = None;
+
+        backend
+            .reconfigure_with_inventory_for_test(cpu_artifacts, None)
+            .expect("atomic CPU reconfiguration");
+        let current = backend.session_for_test().expect("new generation");
+
+        assert_eq!(in_flight.generation(), 1);
+        assert_eq!(
+            in_flight.key().requested_backend(),
+            OnnxExecutionProvider::Cuda
+        );
+        assert_eq!(current.generation(), 2);
+        assert_eq!(
+            current.key().requested_backend(),
+            OnnxExecutionProvider::Cpu
+        );
+        assert_eq!(in_flight.session_id(), current.session_id());
+        assert!(!Arc::ptr_eq(&in_flight, &current));
+        backend
+            .read_text(test_ocr_request())
+            .expect("new CPU generation result");
     }
 
     #[test]
@@ -1034,6 +1229,16 @@ mod tests {
         VisionFrame::new(2, 2, VisionPixelFormat::Rgb8, vec![0; 12]).expect("test frame")
     }
 
+    fn test_ocr_request() -> OcrInferenceRequest {
+        let frame = test_frame();
+        OcrInferenceRequest {
+            region: VisionRect::full_frame(&frame).expect("full frame rect"),
+            frame,
+            languages: vec!["zh_cn".to_string()],
+            timeout_ms: 1_000,
+        }
+    }
+
     unsafe extern "C" fn fake_ocr_read_text_json(
         request_ptr: *const u8,
         request_len: usize,
@@ -1097,24 +1302,314 @@ mod tests {
         request_len: usize,
         response_out: *mut VisionFfiOwnedBuffer,
     ) -> i32 {
-        let envelope = read_ffi_request::<FastDeployPpocrInvokeRequest>(request_ptr, request_len);
-        write_ffi_response(
+        fake_attested_ocr_json(
+            request_ptr,
+            request_len,
             response_out,
-            &OcrInferenceResult {
-                text: format!(
-                    "artifact envelope: {}",
-                    envelope.artifacts.provider_library_path.display()
-                ),
-                blocks: vec![OcrTextBlock {
-                    text: envelope.artifacts.supported_languages[0].clone(),
-                    rect: envelope.request.region,
-                    confidence: Some(0.95),
-                }],
-                confidence: Some(0.95),
-                backend: VisionBackendKind::FastDeployPpocr,
-                warnings: Vec::new(),
-            },
+            AttestationTamper::None,
         )
+    }
+
+    #[derive(Clone, Copy)]
+    enum AttestationTamper {
+        None,
+        CpuObservedCuda,
+        CudaObservedCpu,
+        WrongCudaDevice,
+        ReplayedInvocation,
+        WrongGeneration,
+        WrongModelRef,
+        WrongModel,
+        WrongConfiguration,
+        WrongProviderBinary,
+        WrongRuntimeVersion,
+        FallbackObserved,
+        WrongRegistration,
+        UnknownAttestationField,
+        Missing,
+        Incomplete,
+    }
+
+    unsafe extern "C" fn fake_cpu_observed_cuda_json(
+        request_ptr: *const u8,
+        request_len: usize,
+        response_out: *mut VisionFfiOwnedBuffer,
+    ) -> i32 {
+        fake_attested_ocr_json(
+            request_ptr,
+            request_len,
+            response_out,
+            AttestationTamper::CpuObservedCuda,
+        )
+    }
+
+    unsafe extern "C" fn fake_cuda_observed_cpu_json(
+        request_ptr: *const u8,
+        request_len: usize,
+        response_out: *mut VisionFfiOwnedBuffer,
+    ) -> i32 {
+        fake_attested_ocr_json(
+            request_ptr,
+            request_len,
+            response_out,
+            AttestationTamper::CudaObservedCpu,
+        )
+    }
+
+    unsafe extern "C" fn fake_wrong_cuda_device_json(
+        request_ptr: *const u8,
+        request_len: usize,
+        response_out: *mut VisionFfiOwnedBuffer,
+    ) -> i32 {
+        fake_attested_ocr_json(
+            request_ptr,
+            request_len,
+            response_out,
+            AttestationTamper::WrongCudaDevice,
+        )
+    }
+
+    unsafe extern "C" fn fake_replayed_invocation_json(
+        request_ptr: *const u8,
+        request_len: usize,
+        response_out: *mut VisionFfiOwnedBuffer,
+    ) -> i32 {
+        fake_attested_ocr_json(
+            request_ptr,
+            request_len,
+            response_out,
+            AttestationTamper::ReplayedInvocation,
+        )
+    }
+
+    unsafe extern "C" fn fake_wrong_generation_json(
+        request_ptr: *const u8,
+        request_len: usize,
+        response_out: *mut VisionFfiOwnedBuffer,
+    ) -> i32 {
+        fake_attested_ocr_json(
+            request_ptr,
+            request_len,
+            response_out,
+            AttestationTamper::WrongGeneration,
+        )
+    }
+
+    unsafe extern "C" fn fake_wrong_model_json(
+        request_ptr: *const u8,
+        request_len: usize,
+        response_out: *mut VisionFfiOwnedBuffer,
+    ) -> i32 {
+        fake_attested_ocr_json(
+            request_ptr,
+            request_len,
+            response_out,
+            AttestationTamper::WrongModel,
+        )
+    }
+
+    unsafe extern "C" fn fake_wrong_model_ref_json(
+        request_ptr: *const u8,
+        request_len: usize,
+        response_out: *mut VisionFfiOwnedBuffer,
+    ) -> i32 {
+        fake_attested_ocr_json(
+            request_ptr,
+            request_len,
+            response_out,
+            AttestationTamper::WrongModelRef,
+        )
+    }
+
+    unsafe extern "C" fn fake_wrong_configuration_json(
+        request_ptr: *const u8,
+        request_len: usize,
+        response_out: *mut VisionFfiOwnedBuffer,
+    ) -> i32 {
+        fake_attested_ocr_json(
+            request_ptr,
+            request_len,
+            response_out,
+            AttestationTamper::WrongConfiguration,
+        )
+    }
+
+    unsafe extern "C" fn fake_wrong_provider_binary_json(
+        request_ptr: *const u8,
+        request_len: usize,
+        response_out: *mut VisionFfiOwnedBuffer,
+    ) -> i32 {
+        fake_attested_ocr_json(
+            request_ptr,
+            request_len,
+            response_out,
+            AttestationTamper::WrongProviderBinary,
+        )
+    }
+
+    unsafe extern "C" fn fake_wrong_runtime_version_json(
+        request_ptr: *const u8,
+        request_len: usize,
+        response_out: *mut VisionFfiOwnedBuffer,
+    ) -> i32 {
+        fake_attested_ocr_json(
+            request_ptr,
+            request_len,
+            response_out,
+            AttestationTamper::WrongRuntimeVersion,
+        )
+    }
+
+    unsafe extern "C" fn fake_fallback_observed_json(
+        request_ptr: *const u8,
+        request_len: usize,
+        response_out: *mut VisionFfiOwnedBuffer,
+    ) -> i32 {
+        fake_attested_ocr_json(
+            request_ptr,
+            request_len,
+            response_out,
+            AttestationTamper::FallbackObserved,
+        )
+    }
+
+    unsafe extern "C" fn fake_wrong_registration_json(
+        request_ptr: *const u8,
+        request_len: usize,
+        response_out: *mut VisionFfiOwnedBuffer,
+    ) -> i32 {
+        fake_attested_ocr_json(
+            request_ptr,
+            request_len,
+            response_out,
+            AttestationTamper::WrongRegistration,
+        )
+    }
+
+    unsafe extern "C" fn fake_unknown_attestation_field_json(
+        request_ptr: *const u8,
+        request_len: usize,
+        response_out: *mut VisionFfiOwnedBuffer,
+    ) -> i32 {
+        fake_attested_ocr_json(
+            request_ptr,
+            request_len,
+            response_out,
+            AttestationTamper::UnknownAttestationField,
+        )
+    }
+
+    unsafe extern "C" fn fake_missing_attestation_json(
+        request_ptr: *const u8,
+        request_len: usize,
+        response_out: *mut VisionFfiOwnedBuffer,
+    ) -> i32 {
+        fake_attested_ocr_json(
+            request_ptr,
+            request_len,
+            response_out,
+            AttestationTamper::Missing,
+        )
+    }
+
+    unsafe extern "C" fn fake_incomplete_attestation_json(
+        request_ptr: *const u8,
+        request_len: usize,
+        response_out: *mut VisionFfiOwnedBuffer,
+    ) -> i32 {
+        fake_attested_ocr_json(
+            request_ptr,
+            request_len,
+            response_out,
+            AttestationTamper::Incomplete,
+        )
+    }
+
+    fn fake_attested_ocr_json(
+        request_ptr: *const u8,
+        request_len: usize,
+        response_out: *mut VisionFfiOwnedBuffer,
+        tamper: AttestationTamper,
+    ) -> i32 {
+        let envelope = read_ffi_request::<FastDeployPpocrInvokeRequest>(request_ptr, request_len);
+        let result = OcrInferenceResult {
+            text: format!(
+                "artifact envelope: {}",
+                envelope.artifacts.provider_library_path.display()
+            ),
+            blocks: vec![OcrTextBlock {
+                text: envelope.artifacts.supported_languages[0].clone(),
+                rect: envelope.request.region,
+                confidence: Some(0.95),
+            }],
+            confidence: Some(0.95),
+            backend: VisionBackendKind::FastDeployPpocr,
+            warnings: Vec::new(),
+        };
+        let mut response =
+            serde_json::to_value(attested_ocr_response(&envelope, result)).expect("response JSON");
+        match tamper {
+            AttestationTamper::None => {}
+            AttestationTamper::CpuObservedCuda => {
+                response["attestation"]["resolved_execution_provider"] = serde_json::json!("cuda");
+            }
+            AttestationTamper::CudaObservedCpu => {
+                response["attestation"]["resolved_execution_provider"] = serde_json::json!("cpu");
+            }
+            AttestationTamper::WrongCudaDevice => {
+                response["attestation"]["session"]["key"]["resolved_cuda_device"]["stable_identity"] =
+                    serde_json::json!("cuda-uuid:22222222222222222222222222222222");
+            }
+            AttestationTamper::ReplayedInvocation => {
+                let replay = serde_json::json!("ocr-invocation-ffffffffffffffff");
+                response["invocation_id"] = replay.clone();
+                response["attestation"]["invocation_id"] = replay;
+            }
+            AttestationTamper::WrongGeneration => {
+                response["session_generation"] = serde_json::json!(999);
+                response["attestation"]["session"]["generation"] = serde_json::json!(999);
+            }
+            AttestationTamper::WrongModelRef => {
+                response["attestation"]["session"]["key"]["model_ref"] =
+                    serde_json::json!("wrong-model");
+            }
+            AttestationTamper::WrongModel => {
+                response["attestation"]["session"]["key"]["model_sha256"] =
+                    serde_json::json!("f".repeat(64));
+            }
+            AttestationTamper::WrongConfiguration => {
+                response["attestation"]["session"]["key"]["provider_options_sha256"] =
+                    serde_json::json!("f".repeat(64));
+            }
+            AttestationTamper::WrongProviderBinary => {
+                response["attestation"]["provider"]["binary_sha256"] =
+                    serde_json::json!("f".repeat(64));
+            }
+            AttestationTamper::WrongRuntimeVersion => {
+                response["attestation"]["runtime"]["onnxruntime_version"] =
+                    serde_json::json!("0.0.0-wrong");
+            }
+            AttestationTamper::FallbackObserved => {
+                response["attestation"]["fallback_observed"] = serde_json::json!(false);
+            }
+            AttestationTamper::WrongRegistration => {
+                response["attestation"]["registered_execution_providers"] =
+                    serde_json::json!(["cpu", "cuda"]);
+            }
+            AttestationTamper::UnknownAttestationField => {
+                response["attestation"]["unapproved_fact"] = serde_json::json!(true);
+            }
+            AttestationTamper::Missing => {
+                response
+                    .as_object_mut()
+                    .expect("response object")
+                    .remove("attestation");
+            }
+            AttestationTamper::Incomplete => {
+                response["attestation"]["complete"] = serde_json::json!(false);
+            }
+        }
+        write_ffi_response(response_out, &response)
     }
 
     unsafe extern "C" fn fake_nn_envelope_json(
@@ -1188,9 +1683,14 @@ mod tests {
             provider_library_path: PathBuf::from(
                 "external-tools/vision/fastdeploy/ac_fastdeploy_ppocr.dll",
             ),
+            provider_library_sha256: Some("e".repeat(64)),
             runtime_library_paths: vec![PathBuf::from(
-                "external-tools/vision/fastdeploy/fastdeploy_ppocr_maa.dll",
+                "external-tools/vision/fastdeploy/onnxruntime.dll",
             )],
+            runtime_library_path: Some(PathBuf::from(
+                "external-tools/vision/fastdeploy/onnxruntime.dll",
+            )),
+            runtime_library_sha256: Some("d".repeat(64)),
             detector_model_path: PathBuf::from("external-tools/vision/ppocr/det/inference.pdmodel"),
             recognizer_model_path: PathBuf::from(
                 "external-tools/vision/ppocr/rec/inference.pdmodel",
@@ -1204,8 +1704,79 @@ mod tests {
             dictionary_sha256: Some(dictionary_hash),
             classifier_model_sha256: None,
             execution_provider: Some(OnnxExecutionProvider::Cuda),
+            cuda_device: Some(test_cuda_selector()),
+            strict_no_fallback: Some(true),
             supported_languages: vec!["zh_cn".to_string(), "en".to_string()],
             default_timeout_ms: 1_000,
+        }
+    }
+
+    fn test_cuda_selector() -> CudaDeviceSelector {
+        CudaDeviceSelector {
+            ordinal: 1,
+            expected_stable_identity: "cuda-uuid:11111111111111111111111111111111".to_string(),
+        }
+    }
+
+    fn test_cuda_inventory() -> CudaDeviceInventory {
+        CudaDeviceInventory {
+            driver_version: 12_800,
+            devices: vec![
+                CudaDeviceIdentity {
+                    ordinal: 0,
+                    stable_identity: "cuda-uuid:00000000000000000000000000000000".to_string(),
+                    pci_bus_id: Some("0000:01:00.0".to_string()),
+                },
+                CudaDeviceIdentity {
+                    ordinal: 1,
+                    stable_identity: "cuda-uuid:11111111111111111111111111111111".to_string(),
+                    pci_bus_id: Some("0000:02:00.0".to_string()),
+                },
+            ],
+        }
+    }
+
+    fn attested_ocr_response(
+        envelope: &FastDeployPpocrInvokeRequest,
+        result: OcrInferenceResult,
+    ) -> FastDeployPpocrInvokeResponse {
+        let cuda_driver_version = match envelope.session.key().requested_backend() {
+            OnnxExecutionProvider::Cpu => None,
+            OnnxExecutionProvider::Cuda => Some(12_800),
+        };
+        FastDeployPpocrInvokeResponse {
+            schema_version: OCR_PROVIDER_RESPONSE_SCHEMA_VERSION.to_string(),
+            invocation_id: envelope.invocation_id.clone(),
+            session_id: envelope.session.session_id().clone(),
+            session_generation: envelope.session.generation(),
+            result,
+            attestation: OcrExecutionAttestation {
+                schema_version: OCR_EXECUTION_ATTESTATION_SCHEMA_VERSION.to_string(),
+                invocation_id: envelope.invocation_id.clone(),
+                session: envelope.session.clone(),
+                resolved_execution_provider: envelope.session.key().requested_backend(),
+                provider: OcrProviderBuildIdentity {
+                    implementation: "actingcommand-ppocr-onnx-json".to_string(),
+                    crate_version: "0.1.0-test".to_string(),
+                    build_git_sha: None,
+                    binary_sha256: envelope.session.key().provider_library_sha256().to_string(),
+                },
+                runtime: OcrRuntimeBuildIdentity {
+                    onnxruntime_version: envelope.session.key().onnxruntime_version().to_string(),
+                    onnxruntime_build_info: "ORT Build Info: fake test runtime".to_string(),
+                    cuda_driver_version,
+                    cuda_runtime_version: None,
+                    cudnn_version: None,
+                },
+                registered_execution_providers: vec![envelope.session.key().requested_backend()],
+                cpu_ep_registered: envelope.session.key().requested_backend()
+                    == OnnxExecutionProvider::Cpu,
+                cpu_fallback_disabled: envelope.session.key().requested_backend()
+                    == OnnxExecutionProvider::Cuda,
+                fallback_policy: OcrFallbackPolicy::Forbidden,
+                fallback_observed: None,
+                complete: true,
+            },
         }
     }
 
