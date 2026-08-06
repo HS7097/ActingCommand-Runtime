@@ -337,7 +337,7 @@ fn package_dry_run_enforces_finite_regular_input_budgets() {
     assert_bounded_input_failure(
         &fixture,
         &oversized_package,
-        &[fixture.fixture_path.clone()],
+        std::slice::from_ref(&fixture.fixture_path),
         "oversized-package-result.zip",
         "offline_package_too_large",
     );
@@ -347,7 +347,7 @@ fn package_dry_run_enforces_finite_regular_input_budgets() {
     assert_bounded_input_failure(
         &fixture,
         &package_directory,
-        &[fixture.fixture_path.clone()],
+        std::slice::from_ref(&fixture.fixture_path),
         "package-directory-result.zip",
         "offline_package_not_regular_file",
     );
