@@ -1012,6 +1012,7 @@
                         "kind": "package_admitted",
                         "package_label": "golden.task",
                         "package_sha256": "a2de00e91e4433aba1a79d4b03a6f8d6fd4505a1d49ff86ffa1269601da4a88c",
+                        "response_deadline_monotonic_ms": "<TIME>",
                         "task_label": "task"
                       }
                     },
@@ -1786,8 +1787,10 @@
               "final_page": "arknights/home",
               "kind": "contained_task_completed",
               "outcome": "success",
+              "response_deadline_monotonic_ms": "<TIME>",
               "run_id": "<RUN_ID>",
-              "task_id": "<TASK_ID>"
+              "task_id": "<TASK_ID>",
+              "task_request_id": "<REQUEST_ID>"
             },
             "schema_version": "actingcommand.runtime.receipt.v1",
             "state": "completed",

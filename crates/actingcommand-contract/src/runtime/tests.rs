@@ -195,7 +195,7 @@ fn application_lifecycle_request_is_instance_scoped_and_carries_no_application_i
 }
 
 #[test]
-fn contained_task_request_carries_only_runtime_resolved_instance_and_verified_package_identity() {
+fn contained_task_request_carries_runtime_resolved_identity_and_bounded_response_deadline() {
     let ids = IdentifierIssuer::new().expect("identifier issuer");
     let request = ContainedTaskRequest::new(
         "C:/sealed/neutral-task.zip",
@@ -212,10 +212,78 @@ fn contained_task_request_carries_only_runtime_resolved_instance_and_verified_pa
     let encoded = serde_json::to_value(&operation).expect("serialize operation");
     assert_eq!(encoded["operation"], "run_contained_task");
     assert_eq!(encoded["instance_alias"], "neutral.instance");
+    assert_eq!(
+        encoded["request"]["response_deadline_ms"],
+        ContainedTaskRequest::DEFAULT_RESPONSE_DEADLINE_MS
+    );
     assert!(encoded.get("game").is_none());
     assert!(encoded.get("server").is_none());
     assert!(encoded.get("application_id").is_none());
     assert!(!format!("{operation:?}").contains("neutral-task.zip"));
+}
+
+#[test]
+fn contained_task_deadline_defaults_for_legacy_requests_and_rejects_unbounded_values() {
+    let legacy: ContainedTaskRequest = serde_json::from_value(serde_json::json!({
+        "package_path": "C:/sealed/neutral-task.zip",
+        "expected_sha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+    }))
+    .expect("legacy contained-task request");
+    assert_eq!(
+        legacy.response_deadline_ms(),
+        ContainedTaskRequest::DEFAULT_RESPONSE_DEADLINE_MS
+    );
+    assert!(legacy.clone().with_response_deadline_ms(0).is_err());
+    assert!(
+        legacy
+            .with_response_deadline_ms(ContainedTaskRequest::MAX_RESPONSE_DEADLINE_MS + 1)
+            .is_err()
+    );
+}
+
+#[test]
+fn contained_task_cancellation_status_rejects_ambiguous_terminal_identity() {
+    let ids = issuer();
+    let event_id = *ids.mint_event_id().expect("event id").transport();
+    let same_terminal = TerminalEvent {
+        sequence: 1,
+        event_id,
+    };
+    assert!(
+        ContainedTaskCancellationStatus::RecoveryRequired {
+            deadline_monotonic_ms: Some(0),
+        }
+        .validate()
+        .is_err()
+    );
+    assert!(
+        ContainedTaskCancellationStatus::Terminal {
+            deadline_monotonic_ms: Some(1),
+            outcome: TaskOutcome::Cancelled,
+            reason: Some(ContainedTaskCancellationReason::ClientRequested),
+            task_terminal: same_terminal,
+            lease_terminal: same_terminal,
+            lease_disposition: ContainedTaskLeaseTerminal::Released,
+        }
+        .validate()
+        .is_err()
+    );
+    let lease_terminal = TerminalEvent {
+        sequence: 2,
+        event_id: *ids.mint_event_id().expect("lease event id").transport(),
+    };
+    assert!(
+        ContainedTaskCancellationStatus::Terminal {
+            deadline_monotonic_ms: Some(1),
+            outcome: TaskOutcome::Cancelled,
+            reason: None,
+            task_terminal: same_terminal,
+            lease_terminal,
+            lease_disposition: ContainedTaskLeaseTerminal::Released,
+        }
+        .validate()
+        .is_err()
+    );
 }
 
 #[test]

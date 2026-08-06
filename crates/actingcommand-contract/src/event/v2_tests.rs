@@ -1515,6 +1515,7 @@ fn task_semantic_payload_rejects_invalid_facts() {
             package_label: "package".to_string(),
             task_label: "task".to_string(),
             package_sha256: "not-a-sha256".to_string(),
+            response_deadline_monotonic_ms: Some(60_000),
         },
         TaskSemanticFact::RecognitionStarted {
             candidate_pages: Vec::new(),

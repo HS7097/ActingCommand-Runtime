@@ -125,6 +125,7 @@ struct FakeState {
     input_started: AtomicBool,
     capture_open_count: AtomicUsize,
     capture_count: AtomicUsize,
+    capture_delay_ms: AtomicU64,
     capture_close_count: AtomicUsize,
     fail_capture: AtomicBool,
     transient_capture_failure: AtomicBool,
@@ -210,6 +211,10 @@ impl InputBackend for FakeBackend {
 
 impl CaptureBackend for FakeCapture {
     fn capture(&mut self) -> DeviceResult<Frame> {
+        let capture_delay_ms = self.state.capture_delay_ms.load(Ordering::Acquire);
+        if capture_delay_ms != 0 {
+            thread::sleep(Duration::from_millis(capture_delay_ms));
+        }
         let capture_number = self.state.capture_count.fetch_add(1, Ordering::AcqRel) + 1;
         if self.state.fail_capture.load(Ordering::Acquire)
             || self.state.fail_capture_on.load(Ordering::Acquire) == capture_number
@@ -2321,6 +2326,28 @@ fn neutral_contained_task_package() -> Vec<u8> {
     )
 }
 
+fn neutral_contained_task_package_with_execution_timeout(timeout_ms: u64) -> Vec<u8> {
+    neutral_contained_task_package_with_task_and_timeout(
+        br#"{
+            "schema_version":"0.6",
+            "task_id":"task",
+            "game":"neutral",
+            "server_scope":["test"],
+            "coordinate_space":{"width":2,"height":1},
+            "entry_page":"home",
+            "target_page":"terminal",
+             "operations":[{
+                 "id":"open_terminal",
+                 "from":"home",
+                 "click":{"kind":"point","x":1,"y":0},
+                 "unguarded_trusted_coordinate":true,
+                 "retryable":false
+             }]
+        }"#,
+        timeout_ms,
+    )
+}
+
 fn neutral_vision_contained_task_package() -> Vec<u8> {
     neutral_contained_task_package_with_task_and_recognition(
         br#"{
@@ -2639,7 +2666,11 @@ fn neutral_non_retryable_destination_package(with_error_page: bool) -> Vec<u8> {
 }
 
 fn neutral_contained_task_package_with_task(task: &[u8]) -> Vec<u8> {
-    neutral_contained_task_package_with_task_and_recognition(
+    neutral_contained_task_package_with_task_and_timeout(task, 5_000)
+}
+
+fn neutral_contained_task_package_with_task_and_timeout(task: &[u8], timeout_ms: u64) -> Vec<u8> {
+    neutral_contained_task_package_with_timeout(
         task,
         br#"{
             "schema_version":"0.3",
@@ -2654,6 +2685,7 @@ fn neutral_contained_task_package_with_task(task: &[u8]) -> Vec<u8> {
                 {"type":"color","id":"guard/ready","region":{"x":1,"y":0,"width":1,"height":1},"expected":[0,255,0]}
             ]
         }"#,
+        timeout_ms,
     )
 }
 
@@ -2661,26 +2693,34 @@ fn neutral_contained_task_package_with_task_and_recognition(
     task: &[u8],
     recognition_pack: &[u8],
 ) -> Vec<u8> {
+    neutral_contained_task_package_with_timeout(task, recognition_pack, 5_000)
+}
+
+fn neutral_contained_task_package_with_timeout(
+    task: &[u8],
+    recognition_pack: &[u8],
+    timeout_ms: u64,
+) -> Vec<u8> {
     let cursor = Cursor::new(Vec::new());
     let mut zip = ZipWriter::new(cursor);
     let options = FileOptions::default().compression_method(zip::CompressionMethod::Stored);
+    let control = format!(
+        r#"{{
+            "schema_version":"Lab-1y.control.v1",
+            "package_id":"neutral.semantic.task",
+            "execution_mode":"navigable_route",
+            "game":"neutral",
+            "server":"test",
+            "resolution":{{"width":2,"height":1}},
+            "entry_task_id":"task",
+            "capture_interval_ms":1,
+            "step_timeout_ms":50,
+            "timeout_ms":{timeout_ms},
+            "max_steps":2
+        }}"#
+    );
     let files: &[(&str, &[u8])] = &[
-        (
-            "control.json",
-            br#"{
-                "schema_version":"Lab-1y.control.v1",
-                "package_id":"neutral.semantic.task",
-                "execution_mode":"navigable_route",
-                "game":"neutral",
-                "server":"test",
-                "resolution":{"width":2,"height":1},
-                "entry_task_id":"task",
-                "capture_interval_ms":1,
-                "step_timeout_ms":50,
-                "timeout_ms":5000,
-                "max_steps":2
-            }"#,
-        ),
+        ("control.json", control.as_bytes()),
         (
             "resources/manifest.json",
             br#"{"schema_version":"0.3","entry_task_id":"task"}"#,
@@ -8308,6 +8348,297 @@ fn runtime_executes_neutral_contained_task_without_lab_ownership() {
     assert_eq!(summary.summary(), &summary_record);
     drop(replay_client);
     restarted.close().expect("close restarted host");
+}
+
+#[test]
+fn contained_task_over_five_seconds_completes_within_authoritative_deadline() {
+    let root = TempDir::new().expect("tempdir");
+    let package = root.path().join("long-contained-task.zip");
+    let bytes = neutral_contained_task_package_with_execution_timeout(7_000);
+    fs::write(&package, &bytes).expect("write package");
+    let expected = actingcommand_pack_containment::Sha256Hash::digest(&bytes).to_string();
+    let state = Arc::new(FakeState::default());
+    state.capture_delay_ms.store(2_600, Ordering::Release);
+    state
+        .transition_capture_after_input
+        .store(true, Ordering::Release);
+    let host = RuntimeHost::start(
+        config(&root).with_scheduler(SchedulerConfig {
+            maximum_client_heartbeat_interval_ms: 20,
+            takeover_cooldown_ms: 40,
+            lease_ttl_ms: 8_000,
+            ..SchedulerConfig::default()
+        }),
+        Arc::new(FakeProvider::one(
+            "neutral.instance",
+            instance_id(),
+            Arc::clone(&state),
+        )),
+    )
+    .expect("runtime host");
+    let ids = IdentifierIssuer::new().expect("identifier issuer");
+    let request = runtime_request(
+        &ids,
+        RuntimeOperation::run_contained_task(
+            "neutral.instance",
+            ids.mint_holder_id().expect("holder"),
+            ContainedTaskRequest::new(package.display().to_string(), expected)
+                .expect("contained task request")
+                .with_response_deadline_ms(7_000)
+                .expect("bounded response deadline"),
+        ),
+    );
+
+    let started = Instant::now();
+    let receipt = host
+        .process_request_for_test(&request, ConnectionId::new(170).expect("connection"))
+        .expect("long task receipt");
+    assert!(started.elapsed() >= Duration::from_secs(5));
+    let deadline = match receipt.result() {
+        Some(RuntimeResult::ContainedTaskCompleted {
+            response_deadline_monotonic_ms: Some(deadline),
+            outcome: TaskOutcome::Success,
+            ..
+        }) => *deadline,
+        result => panic!("unexpected long task result: {result:?}"),
+    };
+    let persisted = host
+        .query_persisted_events_for_test(EventQuery {
+            request_id: Some(request.request_id()),
+            ..EventQuery::default()
+        })
+        .expect("long task events");
+    assert!(persisted.iter().any(|event| matches!(
+        event.payload(),
+        EventPayload::Task(TaskPayload::Semantic(payload))
+            if matches!(payload.fact(), TaskSemanticFact::PackageAdmitted {
+                response_deadline_monotonic_ms: Some(recorded),
+                ..
+            } if *recorded == deadline)
+    )));
+    host.close().expect("close host");
+}
+
+#[test]
+fn contained_task_deadline_commits_cancelled_terminal_and_releases_lease() {
+    let root = TempDir::new().expect("tempdir");
+    let package = root.path().join("deadline-task.zip");
+    let bytes = neutral_contained_task_package();
+    fs::write(&package, &bytes).expect("write package");
+    let expected = actingcommand_pack_containment::Sha256Hash::digest(&bytes).to_string();
+    let state = Arc::new(FakeState::default());
+    state.capture_delay_ms.store(100, Ordering::Release);
+    let host = host_with_state(&root, "neutral.instance", Arc::clone(&state));
+    let ids = IdentifierIssuer::new().expect("identifier issuer");
+    let task_request = ContainedTaskRequest::new(package.display().to_string(), expected)
+        .expect("contained task request")
+        .with_response_deadline_ms(25)
+        .expect("bounded task deadline");
+    let request = runtime_request(
+        &ids,
+        RuntimeOperation::run_contained_task(
+            "neutral.instance",
+            ids.mint_holder_id().expect("holder"),
+            task_request,
+        ),
+    );
+    let receipt = host
+        .process_request_for_test(&request, ConnectionId::new(171).expect("connection"))
+        .expect("deadline receipt");
+
+    assert_eq!(
+        receipt.state(),
+        RuntimeReceiptState::Cancelled,
+        "{receipt:#?}"
+    );
+    assert!(matches!(
+        receipt.result(),
+        Some(RuntimeResult::ContainedTaskCancelled {
+            task_request_id,
+            reason: actingcommand_contract::ContainedTaskCancellationReason::DeadlineExceeded,
+            lease_terminal: actingcommand_contract::ContainedTaskLeaseTerminal::Released,
+            ..
+        }) if task_request_id == &request.request_id()
+    ));
+    assert_eq!(state.input_count.load(Ordering::Acquire), 0);
+    let persisted = host
+        .query_persisted_events_for_test(EventQuery {
+            request_id: Some(request.request_id()),
+            ..EventQuery::default()
+        })
+        .expect("deadline events");
+    assert_eq!(
+        persisted
+            .iter()
+            .filter(|event| event.event_type() == EventType::TaskCancelled)
+            .count(),
+        1
+    );
+    assert_eq!(
+        persisted
+            .iter()
+            .filter(|event| event.event_type() == EventType::LeaseReleased)
+            .count(),
+        1
+    );
+    let deadline = persisted.iter().find_map(|event| match event.payload() {
+        EventPayload::Task(TaskPayload::Semantic(payload)) => match payload.fact() {
+            TaskSemanticFact::PackageAdmitted {
+                response_deadline_monotonic_ms,
+                ..
+            } => *response_deadline_monotonic_ms,
+            _ => None,
+        },
+        _ => None,
+    });
+    assert!(deadline.is_some_and(|deadline| deadline > 0));
+
+    let cancel = runtime_request(
+        &ids,
+        RuntimeOperation::CancelContainedTask {
+            task_request_id: request.request_id(),
+        },
+    );
+    let status = host
+        .process_request_for_test(&cancel, ConnectionId::new(172).expect("connection"))
+        .expect("cancellation status");
+    assert!(matches!(
+        status.result(),
+        Some(RuntimeResult::ContainedTaskCancellation {
+            task_request_id,
+            status: actingcommand_contract::ContainedTaskCancellationStatus::Terminal {
+                outcome: TaskOutcome::Cancelled,
+                lease_disposition:
+                    actingcommand_contract::ContainedTaskLeaseTerminal::Released,
+                ..
+            },
+        }) if task_request_id == &request.request_id()
+    ));
+    host.close().expect("close host");
+}
+
+#[test]
+fn scheduled_contained_task_deadline_uses_existing_failure_settlement() {
+    let root = TempDir::new().expect("tempdir");
+    let (host, state, context, request, _) = admitted_physical_run_fixture(&root);
+    state.capture_delay_ms.store(100, Ordering::Release);
+    let request = request
+        .with_response_deadline_ms(25)
+        .expect("bounded scheduled deadline");
+
+    let error = host
+        .run_scheduled_contained_task(&context, &request)
+        .expect_err("scheduled deadline must use failure settlement");
+    assert_eq!(error.code(), "contained_task_deadline_exceeded");
+    let events = host
+        .query_persisted_events_for_test(EventQuery {
+            run_id: Some(context.run_id()),
+            ..EventQuery::default()
+        })
+        .expect("scheduled deadline events");
+    for terminal in [
+        EventType::TaskFailed,
+        EventType::LeaseReleased,
+        EventType::PolicyExecutionRecorded,
+    ] {
+        assert_eq!(
+            events
+                .iter()
+                .filter(|event| event.event_type() == terminal)
+                .count(),
+            1,
+            "missing or duplicate {terminal:?}"
+        );
+    }
+    host.close().expect("close host");
+}
+
+#[test]
+fn inactive_incomplete_contained_task_replay_recovers_terminal_after_lease_expiry() {
+    let root = TempDir::new().expect("tempdir");
+    let package = root.path().join("recovered-task.zip");
+    let bytes = neutral_contained_task_package();
+    fs::write(&package, &bytes).expect("write package");
+    let expected = actingcommand_pack_containment::Sha256Hash::digest(&bytes).to_string();
+    let clock = Arc::new(ManualRuntimeClock::new(1_000, 0));
+    let state = Arc::new(FakeState::default());
+    let host = RuntimeHost::start(
+        config(&root)
+            .with_runtime_clock(clock.clone())
+            .with_scheduler(SchedulerConfig {
+                maximum_client_heartbeat_interval_ms: 20,
+                takeover_cooldown_ms: 40,
+                lease_ttl_ms: 200,
+                ..SchedulerConfig::default()
+            }),
+        Arc::new(FakeProvider::one("neutral.instance", instance_id(), state)),
+    )
+    .expect("runtime host");
+    let mut client = TestClient::connect(&host);
+    let (_, token) = client.acquire("neutral.instance");
+    let ids = IdentifierIssuer::new().expect("identifier issuer");
+    let task_id = ids.mint_task_id().expect("task id");
+    let run_id = ids.mint_run_id().expect("run id");
+    let request = runtime_request(
+        &ids,
+        RuntimeOperation::RunContainedTask {
+            instance_alias: "neutral.instance".to_owned(),
+            holder_id: token.holder_id(),
+            request: ContainedTaskRequest::new(package.display().to_string(), expected.clone())
+                .expect("task request"),
+        },
+    );
+    host.append_contained_task_semantic_for_test(
+        &request,
+        &token,
+        task_id,
+        run_id,
+        TaskSemanticFact::PackageAdmitted {
+            package_label: "neutral.semantic.task".to_owned(),
+            task_label: "task".to_owned(),
+            package_sha256: expected,
+            response_deadline_monotonic_ms: None,
+        },
+    )
+    .expect("append old package admission");
+    clock.advance(250);
+    host.expire_lease_once_for_test(&token)
+        .expect("expire orphan lease");
+
+    let recovered = host
+        .process_request_for_test(&request, ConnectionId::new(173).expect("connection"))
+        .expect("recover interrupted task");
+    assert_eq!(recovered.state(), RuntimeReceiptState::Cancelled);
+    assert!(matches!(
+        recovered.result(),
+        Some(RuntimeResult::ContainedTaskCancelled {
+            reason: actingcommand_contract::ContainedTaskCancellationReason::RecoveredAfterRestart,
+            lease_terminal: actingcommand_contract::ContainedTaskLeaseTerminal::Expired,
+            ..
+        })
+    ));
+    let events = host
+        .query_persisted_events_for_test(EventQuery {
+            lease_id: Some(token.lease_id()),
+            ..EventQuery::default()
+        })
+        .expect("recovered events");
+    assert_eq!(
+        events
+            .iter()
+            .filter(|event| event.event_type() == EventType::TaskCancelled)
+            .count(),
+        1
+    );
+    assert_eq!(
+        events
+            .iter()
+            .filter(|event| event.event_type() == EventType::LeaseExpired)
+            .count(),
+        1
+    );
+    drop(client);
+    host.close().expect("close host");
 }
 
 #[test]
