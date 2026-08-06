@@ -78,8 +78,8 @@ fn resolves_page_anchor_variants_as_any_of_group() {
 }
 
 #[test]
-fn build_pages_emits_any_of_for_anchor_variants() {
-    let converter = OperationConverter {
+fn build_pages_derives_variant_any_of_only_without_positive_page_rule() {
+    let mut converter = OperationConverter {
         root: PathBuf::from("."),
         game: "arknights".to_string(),
         server: "cn".to_string(),
@@ -112,6 +112,116 @@ fn build_pages_emits_any_of_for_anchor_variants() {
     assert_eq!(
         operator.pointer("/any_of"),
         Some(&json!([["page/operator_0", "page/operator_1"]]))
+    );
+
+    converter.bundles[0].data["page_rules"] = json!({
+        "operator": {"optional": ["page/operator_0"]}
+    });
+    let pages = converter.build_pages().unwrap();
+    let operator = pages.pointer("/pages/0").unwrap();
+    assert_eq!(operator.pointer("/required"), Some(&json!([])));
+    assert_eq!(
+        operator.pointer("/optional"),
+        Some(&json!(["page/operator_0"]))
+    );
+    assert_eq!(operator.pointer("/any_of"), None);
+}
+
+#[test]
+fn build_pages_matches_authoritative_mail_page_rule_output() {
+    let converter = OperationConverter {
+        root: PathBuf::from("."),
+        game: "arknights".to_string(),
+        server: "cn".to_string(),
+        locale: "zh-CN".to_string(),
+        coordinate_space: json!({"width":1280,"height":720}),
+        defaults: json!({"template_threshold":0.9}),
+        resource_ids: HashSet::new(),
+        bundles: vec![Bundle {
+            task_id: "mail-collect".to_string(),
+            dir: PathBuf::from("operations/mail-collect"),
+            data: json!({
+                "schema_version": "0.5",
+                "task_id": "mail-collect",
+                "anchors": [
+                    {"id":"mail_inbox_claimable","template":"assets/MAIL_RECEIVE_ALL.png","region":{"mode":"rect","rect":{"x":1,"y":2,"width":3,"height":4}}},
+                    {"id":"mail_inbox_cleared_black","template":"assets/MAIL_RETURN_BLACK.png","region":{"mode":"rect","rect":{"x":5,"y":6,"width":7,"height":8}}},
+                    {"id":"mail_inbox_cleared_white","template":"assets/MAIL_RETURN_WHITE.png","region":{"mode":"rect","rect":{"x":9,"y":10,"width":11,"height":12}}},
+                    {"id":"mail_post_claim_done","template":"assets/MAIL_RECEIVED_ALL.png","region":{"mode":"rect","rect":{"x":13,"y":14,"width":15,"height":16}}},
+                    {"id":"mail_post_claim_reward","template":"assets/MAIL_REWARD_OVERLAY.png","region":{"mode":"rect","rect":{"x":17,"y":18,"width":19,"height":20}}},
+                    {"id":"negative_mail_popup_confirm","template":"assets/NEGATIVE_POPUP_CONFIRM.png","region":{"mode":"rect","rect":{"x":21,"y":22,"width":23,"height":24}}},
+                    {"id":"negative_mail_offline_confirm","template":"assets/NEGATIVE_OFFLINE_CONFIRM.png","region":{"mode":"rect","rect":{"x":25,"y":26,"width":27,"height":28}}}
+                ],
+                "entry_page": "mail_inbox_claimable",
+                "target_page": ["mail_inbox_claimable", "mail_post_claim"],
+                "error_pages": [
+                    "negative_mail_popup_confirm",
+                    "negative_mail_offline_confirm"
+                ],
+                "page_rules": {
+                    "mail_inbox_claimable": {
+                        "any_of": [[
+                            "page/mail_inbox_cleared_black",
+                            "page/mail_inbox_cleared_white"
+                        ]],
+                        "forbidden": [
+                            "page/mail_post_claim_reward",
+                            "page/negative_mail_popup_confirm",
+                            "page/negative_mail_offline_confirm"
+                        ]
+                    },
+                    "mail_post_claim": {
+                        "required": ["page/mail_post_claim_reward"],
+                        "forbidden": [
+                            "page/negative_mail_popup_confirm",
+                            "page/negative_mail_offline_confirm"
+                        ]
+                    }
+                },
+                "operations": []
+            }),
+        }],
+        existing_navigation: None,
+        maa_task_overlays: HashMap::new(),
+    };
+
+    let pages = converter.build_pages().expect("build mail pages");
+    let pages = pages["pages"].as_array().expect("pages array");
+    let page = |id: &str| {
+        pages
+            .iter()
+            .find(|page| page["id"] == id)
+            .unwrap_or_else(|| panic!("missing generated page {id}"))
+    };
+
+    assert_eq!(
+        page("arknights/mail_inbox_claimable"),
+        &json!({
+            "id": "arknights/mail_inbox_claimable",
+            "required": ["page/mail_inbox_claimable"],
+            "optional": [],
+            "forbidden": [
+                "page/mail_post_claim_reward",
+                "page/negative_mail_popup_confirm",
+                "page/negative_mail_offline_confirm"
+            ],
+            "any_of": [[
+                "page/mail_inbox_cleared_black",
+                "page/mail_inbox_cleared_white"
+            ]]
+        })
+    );
+    assert_eq!(
+        page("arknights/mail_post_claim"),
+        &json!({
+            "id": "arknights/mail_post_claim",
+            "required": ["page/mail_post_claim_reward"],
+            "optional": [],
+            "forbidden": [
+                "page/negative_mail_popup_confirm",
+                "page/negative_mail_offline_confirm"
+            ]
+        })
     );
 }
 

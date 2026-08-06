@@ -879,6 +879,20 @@ impl OperationConverter {
     }
 
     fn apply_page_rules(&self, pages: &mut HashMap<String, Value>) -> CliOutcome<()> {
+        let explicit_positive_pages = self
+            .bundles
+            .iter()
+            .filter_map(|bundle| bundle.data.get("page_rules").and_then(Value::as_object))
+            .flat_map(|rules| rules.iter())
+            .filter(|(_, rule)| has_explicit_positive_page_rule(rule))
+            .map(|(page_key, _)| normalize_page_rule_id(&self.game, page_key))
+            .collect::<BTreeSet<_>>();
+        for page_id in explicit_positive_pages {
+            if let Some(page) = pages.get_mut(&page_id).and_then(Value::as_object_mut) {
+                page.remove("any_of");
+            }
+        }
+
         for bundle in &self.bundles {
             let Some(rules) = bundle.data.get("page_rules").and_then(Value::as_object) else {
                 continue;
@@ -2668,6 +2682,14 @@ fn validate_env_template_ref(template: &str) -> CliOutcome<()> {
         }
     }
     Ok(())
+}
+
+fn has_explicit_positive_page_rule(rule: &Value) -> bool {
+    ["required", "optional", "any_of"].iter().any(|field| {
+        rule.get(*field)
+            .and_then(Value::as_array)
+            .is_some_and(|values| !values.is_empty())
+    })
 }
 
 fn ordered_object<const N: usize>(fields: [(&str, Value); N]) -> Value {
