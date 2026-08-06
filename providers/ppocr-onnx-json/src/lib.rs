@@ -5,17 +5,19 @@
 //! This provider intentionally stays behind the ActingCommand provider boundary.
 //! It does not copy MAA C++ code and does not bundle OCR models or runtime DLLs.
 
-use actingcommand_onnx_provider_support::{
-    InferenceWatchdog, OrtRuntimeInitializer, OrtSessionCache,
-};
+use actingcommand_onnx_provider_support::{InferenceWatchdog, OrtRuntimeInitializer, SessionCache};
 use actingcommand_vision_ffi::{
-    FastDeployPpocrInvokeRequest, OcrInferenceResult, OcrTextBlock, VisionBackendKind,
-    VisionFfiOwnedBuffer, VisionFrame, VisionPixelFormat, VisionRect,
+    CudaDeviceIdentity, FastDeployPpocrInvokeRequest, FastDeployPpocrInvokeResponse,
+    OCR_EXECUTION_ATTESTATION_SCHEMA_VERSION, OCR_PROVIDER_RESPONSE_SCHEMA_VERSION,
+    OcrExecutionAttestation, OcrFallbackPolicy, OcrInferenceResult, OcrProviderBuildIdentity,
+    OcrRuntimeBuildIdentity, OcrSessionIdentity, OcrSessionKey, OcrTextBlock,
+    OnnxExecutionProvider, VisionBackendKind, VisionFfiOwnedBuffer, VisionFrame, VisionPixelFormat,
+    VisionRect, enumerate_cuda_devices, onnxruntime_version_string,
 };
 use ort::session::{RunOptions, Session};
 use ort::value::{Tensor, TensorElementType, ValueType};
 use std::collections::VecDeque;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::slice;
 use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
@@ -31,8 +33,54 @@ const DETECTION_BOX_PADDING: i32 = 16;
 const MAX_DETECTED_TEXT_BOXES: usize = 64;
 
 static ORT_RUNTIME: OrtRuntimeInitializer = OrtRuntimeInitializer::new();
-static RECOGNIZER_SESSIONS: OnceLock<OrtSessionCache> = OnceLock::new();
-static DETECTOR_SESSIONS: OnceLock<OrtSessionCache> = OnceLock::new();
+static RECOGNIZER_SESSIONS: OnceLock<ProviderSessionCache> = OnceLock::new();
+static DETECTOR_SESSIONS: OnceLock<ProviderSessionCache> = OnceLock::new();
+
+type ProviderSessionCache = SessionCache<BoundOrtSession, OcrSessionIdentity>;
+
+struct BoundOrtSession {
+    key: OcrSessionKey,
+    plan: ProviderSessionPlan,
+    session: Session,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ProviderSessionPlan {
+    resolved_execution_provider: OnnxExecutionProvider,
+    cuda_ordinal: Option<i32>,
+    registered_execution_providers: Vec<OnnxExecutionProvider>,
+    cpu_ep_registered: bool,
+    cpu_fallback_disabled: bool,
+}
+
+impl ProviderSessionPlan {
+    fn from_key(key: &OcrSessionKey) -> Result<Self, String> {
+        match key.requested_backend() {
+            OnnxExecutionProvider::Cpu => Ok(Self {
+                resolved_execution_provider: OnnxExecutionProvider::Cpu,
+                cuda_ordinal: None,
+                registered_execution_providers: vec![OnnxExecutionProvider::Cpu],
+                cpu_ep_registered: true,
+                cpu_fallback_disabled: false,
+            }),
+            OnnxExecutionProvider::Cuda => {
+                let ordinal = key
+                    .resolved_cuda_device()
+                    .ok_or_else(|| "CUDA OCR session key is missing resolved device".to_string())?
+                    .ordinal;
+                let ordinal = i32::try_from(ordinal)
+                    .map_err(|_| "CUDA OCR ordinal exceeds i32 range".to_string())?;
+                Ok(Self {
+                    resolved_execution_provider: OnnxExecutionProvider::Cuda,
+                    cuda_ordinal: Some(ordinal),
+                    registered_execution_providers: vec![OnnxExecutionProvider::Cuda],
+                    cpu_ep_registered: false,
+                    cpu_fallback_disabled: true,
+                })
+            }
+        }
+    }
+}
 
 #[cfg(test)]
 std::thread_local! {
@@ -71,7 +119,8 @@ fn panic_on_next_read_text_for_test() {
 
 fn invoke_provider<F>(response_out: *mut VisionFfiOwnedBuffer, invoke: F) -> i32
 where
-    F: FnOnce() -> Result<OcrInferenceResult, ProviderInvokeError> + std::panic::UnwindSafe,
+    F: FnOnce() -> Result<FastDeployPpocrInvokeResponse, ProviderInvokeError>
+        + std::panic::UnwindSafe,
 {
     let result = std::panic::catch_unwind(invoke);
     match result {
@@ -107,33 +156,59 @@ pub unsafe extern "C" fn ac_vision_free_buffer(buffer: VisionFfiOwnedBuffer) {
 fn read_text_json(
     request_ptr: *const u8,
     request_len: usize,
-) -> Result<OcrInferenceResult, ProviderInvokeError> {
+) -> Result<FastDeployPpocrInvokeResponse, ProviderInvokeError> {
     let envelope = read_request(request_ptr, request_len)?;
-    envelope.request.validate().map_err(provider_error)?;
+    envelope.validate().map_err(provider_error)?;
     envelope
         .artifacts
-        .validate_ppocr_v6_cuda_existing_files()
+        .validate_ppocr_v6_execution_existing_files()
         .map_err(provider_error)?;
-    let runtime_library = select_onnxruntime_library(&envelope.artifacts.runtime_library_paths)?;
+    let (resolved_cuda_device, cuda_driver_version) = resolve_provider_device(&envelope.artifacts)?;
+    let runtime_library = envelope
+        .artifacts
+        .onnxruntime_library_path()
+        .map_err(provider_error)?;
+    let onnxruntime_version =
+        onnxruntime_version_string(runtime_library).map_err(provider_error)?;
+    let expected_key = envelope
+        .artifacts
+        .production_session_key(resolved_cuda_device.clone(), onnxruntime_version.clone())
+        .map_err(provider_error)?;
+    if &expected_key != envelope.session.key() {
+        return Err(ProviderInvokeError::from(
+            "provider-resolved OCR session key does not match the adapter binding".to_string(),
+        ));
+    }
+    let session_plan = ProviderSessionPlan::from_key(&expected_key)?;
     ensure_ort_runtime(runtime_library)?;
     let dictionary = load_dictionary(&envelope.artifacts.dictionary_path)?;
-    let recognizer_session = recognizer_sessions()
-        .get_or_load(&envelope.artifacts.recognizer_model_path, load_ort_session)?;
+    let session_identity = OcrSessionIdentity::from(&envelope.session);
+    let recognizer_session = recognizer_sessions().get_or_load(&session_identity, |_| {
+        load_bound_ort_session(
+            &envelope.artifacts.recognizer_model_path,
+            expected_key.clone(),
+        )
+    })?;
     let inference_deadline = Instant::now()
         .checked_add(Duration::from_millis(envelope.request.timeout_ms))
         .ok_or_else(|| {
             ProviderInvokeError::from("PPOCR inference deadline overflowed".to_string())
         })?;
 
-    if is_full_frame_region(&envelope.request.frame, envelope.request.region) {
-        let detector_session = detector_sessions()
-            .get_or_load(&envelope.artifacts.detector_model_path, load_ort_session)?;
+    let result = if is_full_frame_region(&envelope.request.frame, envelope.request.region) {
+        let detector_session = detector_sessions().get_or_load(&session_identity, |_| {
+            load_bound_ort_session(
+                &envelope.artifacts.detector_model_path,
+                expected_key.clone(),
+            )
+        })?;
         let detected = {
             let mut detector_session = detector_session
                 .lock()
                 .map_err(|_| "PPOCR detector session mutex is poisoned".to_string())?;
+            require_bound_session_key(&detector_session, &expected_key)?;
             detect_text_regions(
-                &mut detector_session,
+                &mut detector_session.session,
                 &envelope.request.frame,
                 envelope.request.region,
                 remaining_inference_budget(inference_deadline, "PPOCR detector")?,
@@ -143,9 +218,10 @@ fn read_text_json(
         let mut recognizer_session = recognizer_session
             .lock()
             .map_err(|_| "PPOCR recognizer session mutex is poisoned".to_string())?;
+        require_bound_session_key(&recognizer_session, &expected_key)?;
         for detected_box in detected.iter().take(MAX_DETECTED_TEXT_BOXES) {
             let decoded = recognize_region(
-                &mut recognizer_session,
+                &mut recognizer_session.session,
                 &dictionary,
                 &envelope.request.frame,
                 detected_box.rect,
@@ -165,26 +241,59 @@ fn read_text_json(
             .collect::<Vec<_>>()
             .join("\n");
         let confidence = average_confidence(blocks.iter().filter_map(|block| block.confidence));
-        Ok(OcrInferenceResult {
+        OcrInferenceResult {
             text,
             blocks,
             confidence,
             backend: VisionBackendKind::FastDeployPpocr,
             warnings: Vec::new(),
-        })
+        }
     } else {
         let mut recognizer_session = recognizer_session
             .lock()
             .map_err(|_| "PPOCR recognizer session mutex is poisoned".to_string())?;
+        require_bound_session_key(&recognizer_session, &expected_key)?;
         let decoded = recognize_region(
-            &mut recognizer_session,
+            &mut recognizer_session.session,
             &dictionary,
             &envelope.request.frame,
             envelope.request.region,
             remaining_inference_budget(inference_deadline, "PPOCR recognizer")?,
         )?;
-        Ok(canonical_roi_result(decoded, envelope.request.region))
-    }
+        canonical_roi_result(decoded, envelope.request.region)
+    };
+    Ok(FastDeployPpocrInvokeResponse {
+        schema_version: OCR_PROVIDER_RESPONSE_SCHEMA_VERSION.to_string(),
+        invocation_id: envelope.invocation_id.clone(),
+        session_id: envelope.session.session_id().clone(),
+        session_generation: envelope.session.generation(),
+        result,
+        attestation: OcrExecutionAttestation {
+            schema_version: OCR_EXECUTION_ATTESTATION_SCHEMA_VERSION.to_string(),
+            invocation_id: envelope.invocation_id,
+            session: envelope.session,
+            resolved_execution_provider: session_plan.resolved_execution_provider,
+            provider: OcrProviderBuildIdentity {
+                implementation: "actingcommand-ppocr-onnx-json".to_string(),
+                crate_version: env!("CARGO_PKG_VERSION").to_string(),
+                build_git_sha: None,
+                binary_sha256: expected_key.provider_library_sha256().to_string(),
+            },
+            runtime: OcrRuntimeBuildIdentity {
+                onnxruntime_version,
+                onnxruntime_build_info: ort::info().to_string(),
+                cuda_driver_version,
+                cuda_runtime_version: None,
+                cudnn_version: None,
+            },
+            registered_execution_providers: session_plan.registered_execution_providers,
+            cpu_ep_registered: session_plan.cpu_ep_registered,
+            cpu_fallback_disabled: session_plan.cpu_fallback_disabled,
+            fallback_policy: OcrFallbackPolicy::Forbidden,
+            fallback_observed: None,
+            complete: true,
+        },
+    })
 }
 
 fn canonical_roi_result(decoded: DecodedText, region: VisionRect) -> OcrInferenceResult {
@@ -224,51 +333,91 @@ fn read_request(
         .map_err(|err| format!("failed to parse FastDeploy/PPOCR JSON envelope: {err}"))
 }
 
-fn select_onnxruntime_library(paths: &[PathBuf]) -> Result<&Path, String> {
-    if paths.is_empty() {
-        return Err("runtime_library_paths must include an ONNXRuntime DLL path".to_string());
+fn resolve_provider_device(
+    artifacts: &actingcommand_vision_ffi::FastDeployPpocrArtifacts,
+) -> Result<(Option<CudaDeviceIdentity>, Option<u32>), String> {
+    match artifacts.execution_provider {
+        Some(OnnxExecutionProvider::Cpu) => Ok((None, None)),
+        Some(OnnxExecutionProvider::Cuda) => {
+            let selector = artifacts.cuda_device.as_ref().ok_or_else(|| {
+                "CUDA OCR configuration is missing its device selector".to_string()
+            })?;
+            let inventory = enumerate_cuda_devices().map_err(provider_error)?;
+            let resolved = inventory.resolve(selector).map_err(provider_error)?;
+            Ok((Some(resolved), Some(inventory.driver_version)))
+        }
+        None => Err("OCR execution_provider must be explicitly cpu or cuda".to_string()),
     }
-    paths
-        .iter()
-        .find(|path| {
-            path.file_name()
-                .and_then(|name| name.to_str())
-                .map(|name| name.to_ascii_lowercase().contains("onnxruntime"))
-                .unwrap_or(false)
-        })
-        .map(PathBuf::as_path)
-        .ok_or_else(|| {
-            "runtime_library_paths did not include an ONNXRuntime library; configure an explicit onnxruntime DLL path".to_string()
-        })
 }
 
 fn ensure_ort_runtime(runtime_library: &Path) -> Result<(), String> {
     ORT_RUNTIME.ensure(runtime_library)
 }
 
-fn recognizer_sessions() -> &'static OrtSessionCache {
-    RECOGNIZER_SESSIONS.get_or_init(OrtSessionCache::new)
+fn recognizer_sessions() -> &'static ProviderSessionCache {
+    RECOGNIZER_SESSIONS.get_or_init(ProviderSessionCache::new)
 }
 
-fn detector_sessions() -> &'static OrtSessionCache {
-    DETECTOR_SESSIONS.get_or_init(OrtSessionCache::new)
+fn detector_sessions() -> &'static ProviderSessionCache {
+    DETECTOR_SESSIONS.get_or_init(ProviderSessionCache::new)
 }
 
-fn load_ort_session(path: &Path) -> Result<Session, String> {
-    Session::builder()
+fn load_bound_ort_session(path: &Path, key: OcrSessionKey) -> Result<BoundOrtSession, String> {
+    let plan = ProviderSessionPlan::from_key(&key)?;
+    let session = load_ort_session(path, &plan)?;
+    Ok(BoundOrtSession { key, plan, session })
+}
+
+fn require_bound_session_key(
+    session: &BoundOrtSession,
+    expected: &OcrSessionKey,
+) -> Result<(), String> {
+    if &session.key == expected && session.plan == ProviderSessionPlan::from_key(expected)? {
+        Ok(())
+    } else {
+        Err("OCR session identity was reused with a different immutable key".to_string())
+    }
+}
+
+fn load_ort_session(path: &Path, plan: &ProviderSessionPlan) -> Result<Session, String> {
+    let mut builder = Session::builder()
         .map_err(|err| format!("failed to create ONNXRuntime session builder: {err}"))?
-        .with_execution_providers([ort::ep::CUDA::default().build().error_on_failure()])
-        .map_err(|err| {
-            format!(
-                "failed to register required CUDA execution provider; CPU/DirectML/CoreML fallback is disabled: {err}"
-            )
-        })?
-        .with_disable_cpu_fallback()
-        .map_err(|err| format!("failed to disable PPOCR CPU fallback: {err}"))?
         .with_intra_threads(1)
-        .map_err(|err| format!("failed to configure ONNXRuntime intra threads: {err}"))?
-        .commit_from_file(path)
-        .map_err(|err| format!("failed to load PPOCR ONNX model {}: {err}", path.display()))
+        .map_err(|err| format!("failed to configure ONNXRuntime intra threads: {err}"))?;
+    match plan.resolved_execution_provider {
+        OnnxExecutionProvider::Cpu => builder.commit_from_file(path).map_err(|err| {
+            format!(
+                "failed to load CPU-only PPOCR ONNX model {}: {err}",
+                path.display()
+            )
+        }),
+        OnnxExecutionProvider::Cuda => {
+            let ordinal = plan.cuda_ordinal.ok_or_else(|| {
+                "CUDA OCR session plan is missing the resolved device ordinal".to_string()
+            })?;
+            builder
+                .with_execution_providers([
+                    ort::ep::CUDA::default()
+                        .with_device_id(ordinal)
+                        .build()
+                        .error_on_failure(),
+                ])
+                .map_err(|err| {
+                    format!(
+                        "failed to register required CUDA execution provider for device {ordinal}; CPU/DirectML/CoreML fallback is disabled: {err}"
+                    )
+                })?
+                .with_disable_cpu_fallback()
+                .map_err(|err| format!("failed to disable PPOCR CPU fallback: {err}"))?
+                .commit_from_file(path)
+                .map_err(|err| {
+                    format!(
+                        "failed to load CUDA PPOCR ONNX model {} on device {ordinal}: {err}",
+                        path.display()
+                    )
+                })
+        }
+    }
 }
 
 fn load_dictionary(path: &Path) -> Result<Vec<String>, String> {
@@ -1105,31 +1254,39 @@ fn write_bytes(response_out: *mut VisionFfiOwnedBuffer, status: i32, bytes: Vec<
 #[cfg(test)]
 mod tests {
     use super::*;
+    use actingcommand_vision_ffi::{
+        CudaDeviceSelector, FastDeployPpocrArtifacts, PPOCR_V6_MEDIUM_MODEL_REF,
+        ppocr_model_content_sha256,
+    };
+    use std::path::PathBuf;
 
     #[test]
-    fn selects_onnxruntime_path_by_name() {
-        let paths = vec![
-            PathBuf::from("fastdeploy_ppocr_maa.dll"),
-            PathBuf::from("onnxruntime_maa.dll"),
-        ];
+    fn session_plan_keeps_cpu_and_cuda_provider_registration_disjoint() {
+        let cpu = ProviderSessionPlan::from_key(&test_session_key(OnnxExecutionProvider::Cpu))
+            .expect("CPU plan");
+        let cuda = ProviderSessionPlan::from_key(&test_session_key(OnnxExecutionProvider::Cuda))
+            .expect("CUDA plan");
+
+        assert_eq!(cpu.resolved_execution_provider, OnnxExecutionProvider::Cpu);
+        assert_eq!(cpu.cuda_ordinal, None);
+        assert_eq!(
+            cpu.registered_execution_providers,
+            [OnnxExecutionProvider::Cpu]
+        );
+        assert!(cpu.cpu_ep_registered);
+        assert!(!cpu.cpu_fallback_disabled);
 
         assert_eq!(
-            select_onnxruntime_library(&paths).expect("path"),
-            Path::new("onnxruntime_maa.dll")
+            cuda.resolved_execution_provider,
+            OnnxExecutionProvider::Cuda
         );
-    }
-
-    #[test]
-    fn rejects_runtime_library_list_without_onnxruntime_name() {
-        let paths = vec![
-            PathBuf::from("fastdeploy_ppocr_maa.dll"),
-            PathBuf::from("helper.dll"),
-        ];
-
-        let err =
-            select_onnxruntime_library(&paths).expect_err("missing onnxruntime path rejected");
-
-        assert!(err.contains("did not include an ONNXRuntime library"));
+        assert_eq!(cuda.cuda_ordinal, Some(1));
+        assert_eq!(
+            cuda.registered_execution_providers,
+            [OnnxExecutionProvider::Cuda]
+        );
+        assert!(!cuda.cpu_ep_registered);
+        assert!(cuda.cpu_fallback_disabled);
     }
 
     #[test]
@@ -1397,5 +1554,48 @@ mod tests {
             ac_vision_free_buffer(response);
         }
         String::from_utf8(bytes).expect("utf8")
+    }
+
+    fn test_session_key(backend: OnnxExecutionProvider) -> OcrSessionKey {
+        let detector_hash = "a".repeat(64);
+        let recognizer_hash = "b".repeat(64);
+        let dictionary_hash = "c".repeat(64);
+        let model_hash =
+            ppocr_model_content_sha256(&detector_hash, &recognizer_hash, &dictionary_hash, None)
+                .expect("model hash");
+        let selector = CudaDeviceSelector {
+            ordinal: 1,
+            expected_stable_identity: "cuda-uuid:11111111111111111111111111111111".to_string(),
+        };
+        let artifacts = FastDeployPpocrArtifacts {
+            provider_library_path: PathBuf::from("provider.dll"),
+            provider_library_sha256: Some("e".repeat(64)),
+            runtime_library_paths: vec![PathBuf::from("onnxruntime.dll")],
+            runtime_library_path: Some(PathBuf::from("onnxruntime.dll")),
+            runtime_library_sha256: Some("d".repeat(64)),
+            detector_model_path: PathBuf::from("detector.onnx"),
+            recognizer_model_path: PathBuf::from("recognizer.onnx"),
+            dictionary_path: PathBuf::from("dictionary.txt"),
+            classifier_model_path: None,
+            model_ref: Some(PPOCR_V6_MEDIUM_MODEL_REF.to_string()),
+            model_sha256: Some(model_hash),
+            detector_model_sha256: Some(detector_hash),
+            recognizer_model_sha256: Some(recognizer_hash),
+            dictionary_sha256: Some(dictionary_hash),
+            classifier_model_sha256: None,
+            execution_provider: Some(backend),
+            cuda_device: (backend == OnnxExecutionProvider::Cuda).then_some(selector),
+            strict_no_fallback: Some(true),
+            supported_languages: vec!["zh_cn".to_string()],
+            default_timeout_ms: 1_000,
+        };
+        let resolved = (backend == OnnxExecutionProvider::Cuda).then_some(CudaDeviceIdentity {
+            ordinal: 1,
+            stable_identity: "cuda-uuid:11111111111111111111111111111111".to_string(),
+            pci_bus_id: Some("0000:02:00.0".to_string()),
+        });
+        artifacts
+            .production_session_key(resolved, "1.24.0-test")
+            .expect("session key")
     }
 }

@@ -1,11 +1,12 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 use actingcommand_vision_ffi::{
-    FastDeployPpocrArtifacts, FastDeployPpocrBackend, NnEngine, NnInferenceRequest, OcrEngine,
-    OcrInferenceRequest, OnnxExecutionProvider, OnnxRuntimeArtifacts, OnnxRuntimeBackend,
-    VisionFfiError, VisionFfiResult, VisionFrame, VisionPixelFormat,
-    VisionProviderArtifactManifest, VisionRect, validate_fastdeploy_ppocr_provider_abi,
-    validate_onnxruntime_provider_abi, validate_runtime_library_loadable,
+    CudaDeviceSelector, FastDeployPpocrArtifacts, FastDeployPpocrBackend, NnEngine,
+    NnInferenceRequest, OcrEngine, OcrInferenceRequest, OnnxExecutionProvider,
+    OnnxRuntimeArtifacts, OnnxRuntimeBackend, VisionFfiError, VisionFfiResult, VisionFrame,
+    VisionPixelFormat, VisionProviderArtifactManifest, VisionRect,
+    validate_fastdeploy_ppocr_provider_abi, validate_onnxruntime_provider_abi,
+    validate_runtime_library_loadable,
 };
 use image::ImageFormat;
 use serde::{Deserialize, Serialize};
@@ -90,6 +91,8 @@ struct BackendReport {
     provider_library_path: Option<String>,
     required_paths: Vec<String>,
     execution_provider: Option<&'static str>,
+    requested_cuda_device: Option<CudaDeviceSelector>,
+    strict_no_fallback: Option<bool>,
 }
 
 #[derive(Debug, Serialize)]
@@ -1241,6 +1244,8 @@ fn fastdeploy_report(artifacts: &FastDeployPpocrArtifacts) -> BackendReport {
         provider_library_path: Some(path_string(&artifacts.provider_library_path)),
         required_paths,
         execution_provider: artifacts.execution_provider.map(execution_provider_name),
+        requested_cuda_device: artifacts.cuda_device.clone(),
+        strict_no_fallback: artifacts.strict_no_fallback,
     }
 }
 
@@ -1258,6 +1263,8 @@ fn onnxruntime_report(artifacts: &OnnxRuntimeArtifacts) -> BackendReport {
         provider_library_path: Some(path_string(&artifacts.provider_library_path)),
         required_paths,
         execution_provider: Some(execution_provider_name(artifacts.execution_provider)),
+        requested_cuda_device: None,
+        strict_no_fallback: None,
     }
 }
 
@@ -1610,6 +1617,16 @@ mod tests {
         assert!(report.ok);
         assert_eq!(report.backends.len(), 2);
         assert_eq!(report.backends[0].id, "fastdeploy_ppocr");
+        assert_eq!(report.backends[0].execution_provider, Some("cuda"));
+        assert_eq!(
+            report.backends[0]
+                .requested_cuda_device
+                .as_ref()
+                .expect("CUDA selector")
+                .ordinal,
+            1
+        );
+        assert_eq!(report.backends[0].strict_no_fallback, Some(true));
         assert_eq!(report.backends[1].execution_provider, Some("cpu"));
         let _ = fs::remove_dir_all(root);
     }
@@ -2228,12 +2245,15 @@ mod tests {
 
     fn example_manifest_json() -> &'static str {
         r#"{
-            "schema_version": "actingcommand.vision_provider_artifacts.v0.2",
+            "schema_version": "actingcommand.vision_provider_artifacts.v0.3",
             "fastdeploy_ppocr": {
                 "provider_library_path": "external-tools/vision/fastdeploy/ac_fastdeploy_ppocr.dll",
+                "provider_library_sha256": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
                 "runtime_library_paths": [
-                    "external-tools/vision/fastdeploy/fastdeploy_ppocr_maa.dll"
+                    "external-tools/vision/fastdeploy/onnxruntime.dll"
                 ],
+                "runtime_library_path": "external-tools/vision/fastdeploy/onnxruntime.dll",
+                "runtime_library_sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
                 "detector_model_path": "external-tools/vision/ppocr/det/inference.pdmodel",
                 "recognizer_model_path": "external-tools/vision/ppocr/rec/inference.pdmodel",
                 "dictionary_path": "external-tools/vision/ppocr/ppocr_keys_v1.txt",
@@ -2245,6 +2265,11 @@ mod tests {
                 "dictionary_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
                 "classifier_model_sha256": null,
                 "execution_provider": "cuda",
+                "cuda_device": {
+                    "ordinal": 1,
+                    "expected_stable_identity": "cuda-uuid:11111111111111111111111111111111"
+                },
+                "strict_no_fallback": true,
                 "supported_languages": ["zh_cn", "en"],
                 "default_timeout_ms": 1000
             },
