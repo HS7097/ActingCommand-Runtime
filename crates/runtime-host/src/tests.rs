@@ -7141,18 +7141,21 @@ fn disconnect_promotes_another_connections_queue_without_opening_a_backend() {
 fn lease_expiry_promotes_the_queue_and_fences_the_expired_token() {
     let root = TempDir::new().expect("tempdir");
     let state = Arc::new(FakeState::default());
+    let clock = Arc::new(ManualRuntimeClock::new(1_000, 0));
     let provider = Arc::new(FakeProvider::one(
         "node.a",
         instance_id(),
         Arc::clone(&state),
     ));
     let host = RuntimeHost::start(
-        config(&root).with_scheduler(SchedulerConfig {
-            maximum_client_heartbeat_interval_ms: 20,
-            takeover_cooldown_ms: 40,
-            lease_ttl_ms: 200,
-            ..SchedulerConfig::default()
-        }),
+        config(&root)
+            .with_runtime_clock(clock.clone())
+            .with_scheduler(SchedulerConfig {
+                maximum_client_heartbeat_interval_ms: 20,
+                takeover_cooldown_ms: 40,
+                lease_ttl_ms: 200,
+                ..SchedulerConfig::default()
+            }),
         provider,
     )
     .expect("runtime host");
@@ -7160,6 +7163,7 @@ fn lease_expiry_promotes_the_queue_and_fences_the_expired_token() {
     let mut second = TestClient::connect(&host);
     let (_, expired_token) = first.acquire("node.a");
     let (queued_request, status) = second.queue("node.a", LeasePriority::Normal, 1_000);
+    clock.advance(250);
 
     let started = Instant::now();
     let new_token = loop {
