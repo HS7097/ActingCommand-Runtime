@@ -3,7 +3,7 @@
 use crate::{RuntimeClientError, RuntimeClientResult};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
-use std::io::{Read, Write};
+use std::io::{ErrorKind, Read, Write};
 use std::net::TcpStream;
 
 pub(crate) const DEFAULT_RUNTIME_MAX_FRAME_BYTES: usize = 1024 * 1024;
@@ -12,6 +12,7 @@ pub(crate) fn exchange<Request, Response>(
     stream: &mut TcpStream,
     request: &Request,
     maximum_frame_bytes: usize,
+    receipt_timeout_code: Option<&'static str>,
 ) -> RuntimeClientResult<Response>
 where
     Request: Serialize,
@@ -37,8 +38,8 @@ where
     })?;
 
     let mut header = [0_u8; 4];
-    stream.read_exact(&mut header).map_err(|_| {
-        RuntimeClientError::fatal("runtime_receipt_header_failed", "exchange_runtime_request")
+    stream.read_exact(&mut header).map_err(|error| {
+        receipt_read_error(error, "runtime_receipt_header_failed", receipt_timeout_code)
     })?;
     let length = u32::from_be_bytes(header) as usize;
     if length == 0 || length > maximum_frame_bytes {
@@ -48,10 +49,22 @@ where
         ));
     }
     let mut response = vec![0_u8; length];
-    stream.read_exact(&mut response).map_err(|_| {
-        RuntimeClientError::fatal("runtime_receipt_read_failed", "exchange_runtime_request")
+    stream.read_exact(&mut response).map_err(|error| {
+        receipt_read_error(error, "runtime_receipt_read_failed", receipt_timeout_code)
     })?;
     serde_json::from_slice(&response).map_err(|_| {
         RuntimeClientError::fatal("runtime_receipt_decode_failed", "exchange_runtime_request")
     })
+}
+
+fn receipt_read_error(
+    error: std::io::Error,
+    fallback_code: &'static str,
+    timeout_code: Option<&'static str>,
+) -> RuntimeClientError {
+    let code = match (error.kind(), timeout_code) {
+        (ErrorKind::TimedOut | ErrorKind::WouldBlock, Some(timeout_code)) => timeout_code,
+        _ => fallback_code,
+    };
+    RuntimeClientError::fatal(code, "exchange_runtime_request")
 }

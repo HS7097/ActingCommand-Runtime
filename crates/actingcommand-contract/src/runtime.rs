@@ -1384,9 +1384,18 @@ impl fmt::Debug for PackageDebugRequest {
 pub struct ContainedTaskRequest {
     package_path: String,
     expected_sha256: String,
+    #[serde(default = "default_contained_task_response_deadline_ms")]
+    response_deadline_ms: u64,
+}
+
+const fn default_contained_task_response_deadline_ms() -> u64 {
+    ContainedTaskRequest::DEFAULT_RESPONSE_DEADLINE_MS
 }
 
 impl ContainedTaskRequest {
+    pub const DEFAULT_RESPONSE_DEADLINE_MS: u64 = 60_000;
+    pub const MAX_RESPONSE_DEADLINE_MS: u64 = 600_000;
+
     pub fn new(
         package_path: impl Into<String>,
         expected_sha256: impl Into<String>,
@@ -1394,6 +1403,7 @@ impl ContainedTaskRequest {
         let request = Self {
             package_path: package_path.into(),
             expected_sha256: expected_sha256.into(),
+            response_deadline_ms: Self::DEFAULT_RESPONSE_DEADLINE_MS,
         };
         request.validate()?;
         Ok(request)
@@ -1407,7 +1417,13 @@ impl ContainedTaskRequest {
             return Err(RuntimeContractError::new("invalid_contained_task_path"));
         }
         validate_sha256_hex(&self.expected_sha256)
-            .map_err(|_| RuntimeContractError::new("invalid_contained_task_hash"))
+            .map_err(|_| RuntimeContractError::new("invalid_contained_task_hash"))?;
+        if !(1..=Self::MAX_RESPONSE_DEADLINE_MS).contains(&self.response_deadline_ms) {
+            return Err(RuntimeContractError::new(
+                "invalid_contained_task_response_deadline",
+            ));
+        }
+        Ok(())
     }
 
     pub fn package_path(&self) -> &str {
@@ -1417,6 +1433,19 @@ impl ContainedTaskRequest {
     pub fn expected_sha256(&self) -> &str {
         &self.expected_sha256
     }
+
+    pub const fn response_deadline_ms(&self) -> u64 {
+        self.response_deadline_ms
+    }
+
+    pub fn with_response_deadline_ms(
+        mut self,
+        response_deadline_ms: u64,
+    ) -> RuntimeContractResult<Self> {
+        self.response_deadline_ms = response_deadline_ms;
+        self.validate()?;
+        Ok(self)
+    }
 }
 
 impl fmt::Debug for ContainedTaskRequest {
@@ -1425,6 +1454,7 @@ impl fmt::Debug for ContainedTaskRequest {
             .debug_struct("ContainedTaskRequest")
             .field("package_path", &"<redacted-path>")
             .field("expected_sha256", &"<redacted-hash>")
+            .field("response_deadline_ms", &self.response_deadline_ms)
             .finish()
     }
 }
@@ -2099,6 +2129,9 @@ pub enum RuntimeOperation {
     CancelQueuedLease {
         queued_request_id: RequestId,
     },
+    CancelContainedTask {
+        task_request_id: RequestId,
+    },
     RenewLease {
         token: LeaseToken,
     },
@@ -2245,7 +2278,8 @@ impl RuntimeOperation {
             | Self::Status
             | Self::MonitorStatus
             | Self::PollQueuedLease { .. }
-            | Self::CancelQueuedLease { .. } => Ok(()),
+            | Self::CancelQueuedLease { .. }
+            | Self::CancelContainedTask { .. } => Ok(()),
             Self::QueryEvents { page, .. } => page.validate(),
             Self::ProjectInterface { request } => request
                 .validate()
@@ -2369,6 +2403,9 @@ impl fmt::Debug for RuntimeOperation {
             Self::PollQueuedLease { .. } => "RuntimeOperation::PollQueuedLease(<opaque-request>)",
             Self::CancelQueuedLease { .. } => {
                 "RuntimeOperation::CancelQueuedLease(<opaque-request>)"
+            }
+            Self::CancelContainedTask { .. } => {
+                "RuntimeOperation::CancelContainedTask(<opaque-request>)"
             }
             Self::RenewLease { .. } => "RuntimeOperation::RenewLease(<opaque-token>)",
             Self::ReleaseLease { .. } => "RuntimeOperation::ReleaseLease(<opaque-token>)",
@@ -2588,6 +2625,29 @@ impl ValidatedRuntimeRequest<'_> {
             .with_run_id(run_id)
     }
 
+    /// Rebinds task/run identities already validated from this request's durable contained-task
+    /// chain. This is only for recovery of an interrupted request replay with the same request and
+    /// correlation identities.
+    pub fn contained_task_recovery_event_links(
+        &self,
+        instance_id: InstanceId,
+        lease_id: LeaseId,
+        task_id: crate::TaskId,
+        run_id: RunId,
+        action_id: Option<ActionId>,
+    ) -> EventLinksDraft {
+        EventLinksDraft::from_verified_runtime(
+            Some(instance_id),
+            self.request.request_id,
+            self.request.correlation_id,
+            self.request.causation_id,
+            Some(lease_id),
+            action_id,
+        )
+        .with_task_id(IssuedTaskId::from_verified_transport(task_id))
+        .with_run_id(IssuedRunId::from_verified_transport(run_id))
+    }
+
     pub fn task_artifact_links(&self, run_id: IssuedRunId) -> ArtifactLinksDraft {
         ArtifactLinksDraft::default()
             .with_run_id(run_id)
@@ -2629,6 +2689,78 @@ pub struct TerminalEvent {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+pub enum ContainedTaskCancellationReason {
+    DeadlineExceeded,
+    ClientRequested,
+    RecoveredAfterRestart,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ContainedTaskLeaseTerminal {
+    Released,
+    Expired,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "state", rename_all = "snake_case", deny_unknown_fields)]
+pub enum ContainedTaskCancellationStatus {
+    Pending {
+        deadline_monotonic_ms: u64,
+    },
+    RecoveryRequired {
+        #[serde(skip_serializing_if = "Option::is_none")]
+        deadline_monotonic_ms: Option<u64>,
+    },
+    Terminal {
+        #[serde(skip_serializing_if = "Option::is_none")]
+        deadline_monotonic_ms: Option<u64>,
+        outcome: TaskOutcome,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        reason: Option<ContainedTaskCancellationReason>,
+        task_terminal: TerminalEvent,
+        lease_terminal: TerminalEvent,
+        lease_disposition: ContainedTaskLeaseTerminal,
+    },
+}
+
+impl ContainedTaskCancellationStatus {
+    fn validate(&self) -> RuntimeContractResult<()> {
+        match self {
+            Self::Pending {
+                deadline_monotonic_ms,
+            } if *deadline_monotonic_ms == 0 => Err(RuntimeContractError::new(
+                "invalid_contained_task_cancellation_status",
+            )),
+            Self::RecoveryRequired {
+                deadline_monotonic_ms: Some(0),
+            } => Err(RuntimeContractError::new(
+                "invalid_contained_task_cancellation_status",
+            )),
+            Self::Terminal {
+                deadline_monotonic_ms,
+                outcome,
+                reason,
+                task_terminal,
+                lease_terminal,
+                ..
+            } if deadline_monotonic_ms.is_some_and(|deadline| deadline == 0)
+                || task_terminal.sequence == 0
+                || lease_terminal.sequence == 0
+                || task_terminal == lease_terminal
+                || (*outcome == TaskOutcome::Cancelled) != reason.is_some() =>
+            {
+                Err(RuntimeContractError::new(
+                    "invalid_contained_task_cancellation_status",
+                ))
+            }
+            _ => Ok(()),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum RuntimeErrorCode {
     InvalidRequest,
     RuntimeUnavailable,
@@ -2658,6 +2790,9 @@ pub enum RuntimeErrorCode {
     PackageInvalid,
     EvidenceExportFailed,
     LedgerFailure,
+    ContainedTaskDeadlineExceeded,
+    ContainedTaskBusy,
+    ContainedTaskCancelled,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -2824,10 +2959,26 @@ pub enum RuntimeResult {
     ContainedTaskCompleted {
         run_id: RunId,
         task_id: crate::TaskId,
+        task_request_id: RequestId,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        response_deadline_monotonic_ms: Option<u64>,
         outcome: TaskOutcome,
         #[serde(skip_serializing_if = "Option::is_none")]
         final_page: Option<String>,
         executed_steps: u32,
+    },
+    ContainedTaskCancelled {
+        run_id: RunId,
+        task_id: crate::TaskId,
+        task_request_id: RequestId,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        response_deadline_monotonic_ms: Option<u64>,
+        reason: ContainedTaskCancellationReason,
+        lease_terminal: ContainedTaskLeaseTerminal,
+    },
+    ContainedTaskCancellation {
+        task_request_id: RequestId,
+        status: ContainedTaskCancellationStatus,
     },
     InputCommitted {
         action_id: ActionId,
@@ -2987,11 +3138,13 @@ impl RuntimeReceipt {
             Some(RuntimeResult::PackageDebugCompleted { summary }) => summary.validate()?,
             Some(RuntimeResult::EvidenceExportCompleted { summary }) => summary.validate()?,
             Some(RuntimeResult::ContainedTaskCompleted {
+                response_deadline_monotonic_ms,
                 outcome,
                 final_page,
                 executed_steps,
                 ..
-            }) if *outcome != TaskOutcome::Success
+            }) if response_deadline_monotonic_ms.is_some_and(|deadline| deadline == 0)
+                || *outcome != TaskOutcome::Success
                 || *executed_steps > 1_000
                 || final_page
                     .as_deref()
@@ -2999,6 +3152,15 @@ impl RuntimeReceipt {
             {
                 return Err(RuntimeContractError::new("invalid_contained_task_result"));
             }
+            Some(RuntimeResult::ContainedTaskCancelled {
+                response_deadline_monotonic_ms,
+                ..
+            }) if self.state != RuntimeReceiptState::Cancelled
+                || response_deadline_monotonic_ms.is_some_and(|deadline| deadline == 0) =>
+            {
+                return Err(RuntimeContractError::new("invalid_contained_task_result"));
+            }
+            Some(RuntimeResult::ContainedTaskCancellation { status, .. }) => status.validate()?,
             Some(
                 RuntimeResult::AgentSessionOpened { context }
                 | RuntimeResult::AgentSessionObserved { context },
