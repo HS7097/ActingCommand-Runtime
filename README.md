@@ -39,6 +39,16 @@
 | **正在集成,不计入主线能力** | 调度策略目录、实例事实与报告、智能体调度边界及补强架构守卫正在 stacked PR 链中复核和合入。 |
 | **规划中** | UI / 智能体正式客户端;各游戏的识别、导航、操作与恢复数据继续由独立资源仓交付。 |
 
+## 🗺 路线图
+
+以下均为目标态口径,按序推进,不承诺日期:
+
+1. **阶段一垂直闭环**——资源→离线→真机三段;当前正在真机实测最小闭环,β 判据为无人值守连续多日运行;
+2. **智能体驾驶接口正式化**——Dispatcher 合同、机器可读命令目录、会话闸(凭证由环境承载,每条指令过闸校验);
+3. **MAA / MaaFramework 兼容**——MAA 资源格式作为种子导入源:导入一次,此后由自维护环接管维护;MaaFramework 第二执行后端蓝图已立(形态 A:MaaFW 作决策内核,设备 I/O 回注本运行时咽喉,租约与账本对每次操作依旧成立;PoC 判据通过后立项);
+4. **自动摸清与自动修复**——把自维护闭环图中 ② 与 ⑦ 两段虚线转为实线;
+5. **多实例战略规划与报告管线**,以及 UI / 智能体正式客户端。
+
 ## ⚖ 七条结构不变量(守卫 / 测试 / 编译期与真实进程反例执法)
 
 1. **调度器唯一仲裁写路径**:一切改变设备状态的操作先经调度器准入并持有每实例租约;fencing 五元组(epoch / lease / instance / holder / expiry)逐字段校验先于后端调用,takeover 与 epoch 换代永久作废旧牌;只读观察走 epoch 绑定的只读采集能力(非租约),同样全程入账;
@@ -150,9 +160,9 @@ actingctl task-run --state-root <state-root> --instance <alias> \
 
 游戏数据(识别模板、导航图、操作与恢复声明)独立于运行时版本化。以下仓库**目前均为私有**,外部读者暂不可访问:
 
-- ActingCommand-Resources-Arknights
-- ActingCommand-Resources-AzurLane
-- ActingCommand-Resources-BlueArchive
+- **ActingCommand-Resources-Arknights**——上游派生层源自 MAA;自有层现有:邮件领取任务链(闭环种子)、公招与全入口导航/操作集、角色/材料图鉴、识别与恢复声明、调度声明(CN 区服);
+- **ActingCommand-Resources-AzurLane**——上游派生层源自 Alas;自有层现有:主界导航与全入口操作集、角色/装备全量图鉴模板(Git LFS)、识别与恢复声明;
+- **ActingCommand-Resources-BlueArchive**——上游派生层源自 BAAH / BAAS(坐标目录与校验区域);自有层现有:每日领取试点任务、全入口操作集、装备/材料图鉴、识别与恢复声明。
 
 各仓采用 `upstream-derived/`(第三方派生素材,含许可证与出处)+ `ours/`(自有声明数据)两层布局。
 

@@ -39,6 +39,16 @@ Terminology is defined in [CONTEXT.md](./CONTEXT.md) (Runtime Host / Scheduler /
 | **In integration, not a mainline capability** | Scheduling catalogs, instance facts and reports, the agent-dispatch boundary, and stronger architecture guards are being reviewed and integrated through a stacked pull-request chain. |
 | **Planned** | Production UI / agent clients. Game-specific recognition, navigation, operations, and recovery data continue to ship from separate resource repositories. |
 
+## 🗺 Roadmap
+
+Target-state wording throughout, in order, no dates promised:
+
+1. **Phase-one vertical loop** — resources → offline → real machine; the minimal loop is being tested on real machines now, and the beta criterion is multi-day unattended operation;
+2. **Formal agent-driving interface** — dispatcher contracts, a machine-readable command catalog, and a session gate (environment-carried credentials, checked on every command);
+3. **MAA / MaaFramework compatibility** — MAA resource formats as a seed-import source: import once, then the self-maintaining loop takes over; a MaaFramework second-execution-backend blueprint is filed (form A: MaaFW as the decision kernel with device I/O routed back through this runtime's throat, so leases and the ledger still hold for every operation; a proof-of-concept gate precedes any implementation);
+4. **Auto-explore and auto-repair** — turning dashed segments ② and ⑦ of the self-maintaining loop solid;
+5. **Multi-instance strategy planning and the report pipeline**, plus production UI / agent clients.
+
 ## ⚖ Seven structural invariants (enforced by guards, tests, and compile-time and real-process counterexamples)
 
 1. **Scheduler is the sole arbiter of the write path**: every state-changing device operation is admitted first and holds a per-instance lease; the fencing tuple (epoch / lease / instance / holder / expiry) is checked field by field before any backend call, and takeover or epoch rotation permanently invalidates stale tokens; read-only observation uses an epoch-bound read capability instead of a lease and is equally recorded;
@@ -151,9 +161,9 @@ Every `actingctl` command writes a single line of JSON to stdout, which suits sc
 
 Game data (recognition templates, navigation graphs, operation and recovery declarations) is versioned independently of the runtime. The repositories below are **currently private** and not reachable by outside readers:
 
-- ActingCommand-Resources-Arknights
-- ActingCommand-Resources-AzurLane
-- ActingCommand-Resources-BlueArchive
+- **ActingCommand-Resources-Arknights** — upstream-derived layer from MAA; our layer currently ships the mail-collection task chain (the loop seed), recruitment plus full entry navigation/operations, character/material catalogs, recognition and recovery declarations, and scheduling declarations (CN server);
+- **ActingCommand-Resources-AzurLane** — upstream-derived layer from Alas; our layer currently ships main-screen navigation with a full entry operation set, full character/equipment catalog templates (Git LFS), and recognition and recovery declarations;
+- **ActingCommand-Resources-BlueArchive** — upstream-derived layer from BAAH / BAAS (coordinate catalog and verification regions); our layer currently ships a daily-rewards pilot task, a full entry operation set, equipment/material catalogs, and recognition and recovery declarations.
 
 Each repository uses a two-tier layout: `upstream-derived/` (third-party derived material with licenses and provenance) + `ours/` (our own declarative data).
 
