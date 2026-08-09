@@ -18,17 +18,30 @@ pub type ReadonlyRecognitionResult<T> = Result<T, ReadonlyRecognitionError>;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ReadonlyRecognitionError {
     message: String,
+    conflicting_pages: Option<Vec<String>>,
 }
 
 impl ReadonlyRecognitionError {
     fn new(message: impl Into<String>) -> Self {
         Self {
             message: message.into(),
+            conflicting_pages: None,
+        }
+    }
+
+    fn page_conflict(conflicting_pages: Vec<String>) -> Self {
+        Self {
+            message: format!("multiple pages matched: {}", conflicting_pages.join(", ")),
+            conflicting_pages: Some(conflicting_pages),
         }
     }
 
     pub fn message(&self) -> &str {
         &self.message
+    }
+
+    pub fn conflicting_pages(&self) -> Option<&[String]> {
+        self.conflicting_pages.as_deref()
     }
 }
 
@@ -198,6 +211,14 @@ pub fn detect_current_page(
     let evaluations = detector
         .evaluate_all(evaluator, scene)
         .map_err(page_error)?;
+    let conflicting_pages = evaluations
+        .iter()
+        .filter(|evaluation| evaluation.matched)
+        .map(|evaluation| evaluation.page_id.clone())
+        .collect::<Vec<_>>();
+    if conflicting_pages.len() > 1 {
+        return Err(ReadonlyRecognitionError::page_conflict(conflicting_pages));
+    }
     let matched = evaluations.iter().find(|evaluation| evaluation.matched);
     let page = matched
         .map(|evaluation| evaluation.page_id.clone())
@@ -541,6 +562,72 @@ mod tests {
             .expect("current page");
         assert_eq!(current.page, "fixture/home");
         assert!(current.matched);
+    }
+
+    #[test]
+    fn detect_page_and_current_page_reject_every_matching_page() {
+        let engine = engine();
+        let detector = PageDetector::new(PageSet {
+            schema_version: "0.3".to_string(),
+            pages: vec![
+                PageDefinition {
+                    id: "fixture/home".to_string(),
+                    required: vec!["home_anchor".to_string()],
+                    any_of: Vec::new(),
+                    optional: Vec::new(),
+                    forbidden: Vec::new(),
+                },
+                PageDefinition {
+                    id: "fixture/also_home".to_string(),
+                    required: vec!["home_anchor".to_string()],
+                    any_of: Vec::new(),
+                    optional: Vec::new(),
+                    forbidden: Vec::new(),
+                },
+            ],
+        })
+        .expect("detector");
+        let scene = scene([255, 0, 0]);
+
+        let detected = match engine.detect_page(&detector, Some(&scene), false) {
+            Ok(_) => panic!("detect-page must reject multiple matches"),
+            Err(error) => error,
+        };
+        assert_eq!(
+            detected.conflicting_pages(),
+            Some(&["fixture/home".to_string(), "fixture/also_home".to_string()][..])
+        );
+
+        let current = match engine.current_page(&detector, &scene) {
+            Ok(_) => panic!("current-page must reject multiple matches"),
+            Err(error) => error,
+        };
+        assert_eq!(current.conflicting_pages(), detected.conflicting_pages());
+        assert_eq!(current.message(), detected.message());
+    }
+
+    #[test]
+    fn detect_page_and_current_page_preserve_standby_when_nothing_matches() {
+        let engine = engine();
+        let detector = detector(&engine.evaluator);
+        let scene = scene([0, 0, 255]);
+
+        let detected = engine
+            .detect_page(&detector, Some(&scene), false)
+            .expect("detect page");
+        let DetectPageResponse::Detection(detected) = detected.response else {
+            panic!("detect-page must return page detection");
+        };
+        assert_eq!(detected.page, "standby");
+        assert!(!detected.matched);
+        assert!(detected.standby);
+
+        let current = engine
+            .current_page(&detector, &scene)
+            .expect("current page");
+        assert_eq!(current.page, "standby");
+        assert!(!current.matched);
+        assert!(current.standby);
     }
 
     #[test]

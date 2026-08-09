@@ -148,6 +148,7 @@ impl Fixture {
                 "coordinate_space":{"width":1,"height":1},
                 "targets":[
                     {"type":"color","id":"home_anchor","region":{"x":0,"y":0,"width":1,"height":1},"expected":[255,0,0]},
+                    {"type":"color","id":"target_anchor","region":{"x":0,"y":0,"width":1,"height":1},"expected":[0,0,255]},
                     {"type":"color","id":"home_button","region":{"x":0,"y":0,"width":1,"height":1},"expected":[255,0,0],"click":{"x":10,"y":20,"width":4,"height":6}}
                 ]
             }"#
@@ -159,7 +160,7 @@ impl Fixture {
                 "schema_version":"0.3",
                 "pages":[
                     {"id":"fixture/home","required":["home_anchor"]},
-                    {"id":"fixture/target","required":["home_button"]}
+                    {"id":"fixture/target","required":["target_anchor"]}
                 ]
             }"#
                 .as_bytes(),

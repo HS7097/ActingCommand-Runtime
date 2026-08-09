@@ -2,7 +2,7 @@
 
 use crate::env_detection::load_scene;
 use crate::{Lab, LabPorts};
-use actingcommand_contract::{EnvResolved, LabError, LabResult};
+use actingcommand_contract::{EnvResolved, LabError, LabErrorClass, LabResult};
 use actingcommand_execution_kernel::{ReadonlyRecognitionEngine, ReadonlyRecognitionError};
 use actingcommand_page_detector::PageDetector;
 use actingcommand_recognition::Scene;
@@ -152,6 +152,15 @@ pub(crate) fn detect_current_page(
 }
 
 fn readonly_error(error: ReadonlyRecognitionError) -> LabError {
+    if let Some(conflicting_pages) = error.conflicting_pages() {
+        return LabError::new(
+            LabErrorClass::UsageValidation,
+            "page_recognition_conflict",
+            error.message(),
+            &[],
+        )
+        .with_details(serde_json::json!({ "matched_pages": conflicting_pages }));
+    }
     LabError::usage(error.message())
 }
 
