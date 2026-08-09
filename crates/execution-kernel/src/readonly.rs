@@ -3,7 +3,7 @@
 //! Pure read-only recognition decisions over caller-supplied resources and scenes.
 
 use actingcommand_contract::{EnvResolved, NeedsDetection};
-use actingcommand_page_detector::{PageDetector, PageEvaluation, PageTargetEvaluation};
+use actingcommand_page_detector::{PageDetector, PageTargetEvaluation, TimedPageEvaluation};
 use actingcommand_recognition::{MatchMetric, Scene};
 use actingcommand_recognition_pack::{
     PackRect, RecognitionEvaluator, TargetEvaluation, TargetKind,
@@ -209,26 +209,31 @@ pub fn detect_current_page(
     env_resolved: Vec<EnvResolved>,
 ) -> ReadonlyRecognitionResult<PageDetectionResponse> {
     let evaluations = detector
-        .evaluate_all(evaluator, scene)
+        .evaluate_all_timed(evaluator, scene)
         .map_err(page_error)?;
     let conflicting_pages = evaluations
         .iter()
-        .filter(|evaluation| evaluation.matched)
-        .map(|evaluation| evaluation.page_id.clone())
+        .filter(|evaluation| evaluation.evaluation.matched)
+        .map(|evaluation| evaluation.evaluation.page_id.clone())
         .collect::<Vec<_>>();
     if conflicting_pages.len() > 1 {
         return Err(ReadonlyRecognitionError::page_conflict(conflicting_pages));
     }
-    let matched = evaluations.iter().find(|evaluation| evaluation.matched);
+    let matched = evaluations
+        .iter()
+        .find(|evaluation| evaluation.evaluation.matched);
     let page = matched
-        .map(|evaluation| evaluation.page_id.clone())
+        .map(|evaluation| evaluation.evaluation.page_id.clone())
         .unwrap_or_else(|| "standby".to_string());
     let standby = matched.is_none();
     Ok(PageDetectionResponse {
         page: page.clone(),
         matched: !standby,
         standby,
-        evaluations: evaluations.iter().map(page_evaluation_response).collect(),
+        evaluations: evaluations
+            .iter()
+            .map(page_evaluation_response)
+            .collect::<ReadonlyRecognitionResult<Vec<_>>>()?,
         recovery_hint: standby.then(|| RecoveryHintResponse {
             action: "wake_safe_point".to_string(),
             point: PointResponse { x: 300, y: 2 },
@@ -313,11 +318,23 @@ fn required_scene(scene: Option<&Scene>) -> ReadonlyRecognitionResult<&Scene> {
     scene.ok_or_else(|| ReadonlyRecognitionError::new("recognition scene is required"))
 }
 
-fn page_evaluation_response(evaluation: &PageEvaluation) -> PageEvaluationResponse {
-    PageEvaluationResponse {
+fn page_evaluation_response(
+    timed_evaluation: &TimedPageEvaluation,
+) -> ReadonlyRecognitionResult<PageEvaluationResponse> {
+    let evaluation = &timed_evaluation.evaluation;
+    let evaluation_duration_ms =
+        u64::try_from(timed_evaluation.duration.as_millis()).map_err(|_| {
+            ReadonlyRecognitionError::new(format!(
+                "page evaluation evaluation_duration_ms exceeds u64 for '{}': {}",
+                evaluation.page_id,
+                timed_evaluation.duration.as_millis()
+            ))
+        })?;
+    Ok(PageEvaluationResponse {
         page: evaluation.page_id.clone(),
         matched: evaluation.matched,
         message: evaluation.message.clone(),
+        evaluation_duration_ms,
         any_of_passed: evaluation.any_of_passed,
         any_of_total: evaluation.any_of_total,
         targets: evaluation
@@ -325,7 +342,7 @@ fn page_evaluation_response(evaluation: &PageEvaluation) -> PageEvaluationRespon
             .iter()
             .map(page_target_evaluation_response)
             .collect(),
-    }
+    })
 }
 
 fn page_target_evaluation_response(
@@ -493,6 +510,7 @@ pub struct PageEvaluationResponse {
     pub page: String,
     pub matched: bool,
     pub message: String,
+    pub evaluation_duration_ms: u64,
     pub any_of_passed: usize,
     pub any_of_total: usize,
     pub targets: Vec<PageTargetEvaluationResponse>,
@@ -509,12 +527,15 @@ pub struct PageTargetEvaluationResponse {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use actingcommand_page_detector::{PageDefinition, PageSet};
+    use actingcommand_page_detector::{
+        PageDefinition, PageEvaluation, PageSet, TimedPageEvaluation,
+    };
     use actingcommand_recognition::ScenePixelFormat;
     use actingcommand_recognition_pack::{
         ClickOnlyTarget, ColorTarget, PackCoordinateSpace, RecognitionDefaults, RecognitionPack,
         RecognitionTarget,
     };
+    use std::time::Duration;
 
     #[test]
     fn recognize_evaluates_color_target() {
@@ -556,12 +577,46 @@ mod tests {
         };
         assert_eq!(detected.page, "fixture/home");
         assert!(detected.matched);
+        assert_eq!(detected.evaluations.len(), 1);
+        assert_eq!(detected.evaluations[0].page, "fixture/home");
+        assert!(
+            serde_json::to_value(&detected).expect("serialize detection")["evaluations"][0]
+                ["evaluation_duration_ms"]
+                .is_u64()
+        );
 
         let current = engine
             .current_page(&detector, &scene)
             .expect("current page");
         assert_eq!(current.page, "fixture/home");
         assert!(current.matched);
+        assert_eq!(current.evaluations.len(), 1);
+        assert_eq!(current.evaluations[0].page, "fixture/home");
+    }
+
+    #[test]
+    fn page_evaluation_response_reports_exact_duration_milliseconds() {
+        let evaluation = timed_page_evaluation(Duration::from_millis(27));
+
+        let response = page_evaluation_response(&evaluation).expect("duration response");
+
+        assert_eq!(response.page, "fixture/home");
+        assert!(response.matched);
+        assert_eq!(response.evaluation_duration_ms, 27);
+        assert_eq!(
+            serde_json::to_value(response).expect("serialize duration")["evaluation_duration_ms"],
+            serde_json::json!(27)
+        );
+    }
+
+    #[test]
+    fn page_evaluation_response_rejects_duration_overflow() {
+        let evaluation = timed_page_evaluation(Duration::MAX);
+
+        let error = page_evaluation_response(&evaluation).expect_err("duration overflow");
+
+        assert!(error.message().contains("evaluation_duration_ms"));
+        assert!(error.message().contains("fixture/home"));
     }
 
     #[test]
@@ -722,6 +777,26 @@ mod tests {
         };
         let evaluator = RecognitionEvaluator::new(std::env::temp_dir(), pack).expect("evaluator");
         ReadonlyRecognitionEngine::new(evaluator, Vec::new())
+    }
+
+    fn timed_page_evaluation(duration: Duration) -> TimedPageEvaluation {
+        TimedPageEvaluation {
+            evaluation: PageEvaluation {
+                page_id: "fixture/home".to_string(),
+                matched: true,
+                required_passed: 1,
+                required_total: 1,
+                any_of_passed: 0,
+                any_of_total: 0,
+                optional_passed: 0,
+                optional_total: 0,
+                forbidden_passed: 0,
+                forbidden_total: 0,
+                target_results: Vec::new(),
+                message: "matched".to_string(),
+            },
+            duration,
+        }
     }
 
     fn detector(evaluator: &RecognitionEvaluator) -> PageDetector {

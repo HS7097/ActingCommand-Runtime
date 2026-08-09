@@ -280,7 +280,11 @@ fn normalizer_replaces_only_dynamic_protocol_fields() {
         "path": temp.path().join("result.json").display().to_string(),
         "ledger_path": "runtime-global-ledger/correlation_abcdef",
         "schema_version": "0.2",
-        "confidence": 0.9876543
+        "confidence": 0.9876543,
+        "evaluations": [{
+            "evaluation_duration_ms": 27,
+            "matched": true
+        }]
     });
 
     normalize_value(&mut value, temp.path(), None);
@@ -308,6 +312,12 @@ fn normalizer_replaces_only_dynamic_protocol_fields() {
     assert_eq!(value["detector_id"], "detect_resolution");
     assert_eq!(value["schema_version"], "0.2");
     assert_eq!(value["confidence"], 0.9876543);
+    assert!(
+        value["evaluations"][0]
+            .get("evaluation_duration_ms")
+            .is_none()
+    );
+    assert_eq!(value["evaluations"][0]["matched"], true);
 }
 
 #[test]
@@ -500,6 +510,7 @@ fn parse_single_envelope(stdout: &[u8], case: &str) -> Value {
 fn normalize_value(value: &mut Value, root: &Path, key: Option<&str>) {
     match value {
         Value::Object(object) => {
+            object.remove("evaluation_duration_ms");
             for (field, child) in object {
                 normalize_value(child, root, Some(field));
             }
