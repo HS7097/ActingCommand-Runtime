@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 use super::*;
-use crate::ipc::DEFAULT_RUNTIME_MAX_FRAME_BYTES;
+use crate::ipc::{DEFAULT_RUNTIME_MAX_FRAME_BYTES, ReceiptReadDeadline, exchange};
 use actingcommand_contract::{
     ApprovalDecisionRecord, ApprovalDisposition, ApprovalTarget, CaptureSequenceSpec,
     ClientActionKind, ClientActionRecord, ContainedTaskRequest, EventActor, EventQuery,
@@ -25,7 +25,7 @@ use std::net::{TcpListener, TcpStream};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tempfile::TempDir;
 
 const TEST_GOVERNANCE_CAPABILITY: &str = "runtime-client-governance-test-capability";
@@ -345,6 +345,48 @@ fn contained_task_request() -> ContainedTaskRequest {
         .expect("contained task request")
 }
 
+fn receipt_eof_error(deadline: Instant) -> RuntimeClientError {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind EOF runtime");
+    let address = listener.local_addr().expect("EOF runtime address");
+    let server = thread::spawn(move || {
+        let (mut stream, _) = listener.accept().expect("accept EOF client");
+        let mut header = [0_u8; 4];
+        stream.read_exact(&mut header).expect("request header");
+        let mut body = vec![0_u8; u32::from_be_bytes(header) as usize];
+        stream.read_exact(&mut body).expect("request body");
+    });
+    let mut stream = TcpStream::connect(address).expect("connect EOF runtime");
+    let error = exchange::<_, serde_json::Value>(
+        &mut stream,
+        &"request",
+        DEFAULT_RUNTIME_MAX_FRAME_BYTES,
+        Some(ReceiptReadDeadline::at(deadline, "runtime_receipt_timeout")),
+    )
+    .expect_err("peer EOF must fail the receipt exchange");
+    server.join().expect("EOF runtime");
+    error
+}
+
+#[test]
+fn receipt_eof_at_or_after_deadline_is_typed_timeout() {
+    let deadline = Instant::now()
+        .checked_sub(Duration::from_secs(1))
+        .expect("past deadline");
+    assert_eq!(
+        receipt_eof_error(deadline).code(),
+        "runtime_receipt_timeout"
+    );
+}
+
+#[test]
+fn receipt_eof_before_deadline_remains_connection_failure() {
+    let deadline = Instant::now() + Duration::from_secs(30);
+    assert_eq!(
+        receipt_eof_error(deadline).code(),
+        "runtime_receipt_header_failed"
+    );
+}
+
 #[test]
 fn contained_task_can_outlive_the_general_five_second_exchange_timeout() {
     let root = TempDir::new().expect("tempdir");
@@ -409,12 +451,8 @@ fn contained_task_response_timeout_is_typed_and_runs_reset_recovery() {
             RuntimeOperation::RunContainedTask { request, .. }
                 if request.response_deadline_ms() == 100
         ));
-        let timed_out_connection = thread::spawn(move || {
-            thread::sleep(Duration::from_millis(200));
-            drop(timed_out_stream);
-        });
-
         let (mut recovery_stream, _) = listener.accept().expect("accept recovery client");
+        drop(timed_out_stream);
         recovery_stream
             .set_read_timeout(Some(Duration::from_secs(2)))
             .expect("bounded recovery script");
@@ -462,9 +500,6 @@ fn contained_task_response_timeout_is_typed_and_runs_reset_recovery() {
             },
         );
         respond_with_empty_event_page(&mut recovery_stream);
-        timed_out_connection
-            .join()
-            .expect("close timed-out connection");
         server_recovered.store(true, Ordering::Release);
     });
     let client = RuntimeClient::connect(
@@ -492,6 +527,37 @@ fn contained_task_response_timeout_is_typed_and_runs_reset_recovery() {
         .join()
         .unwrap_or_else(|_| panic!("scripted runtime failed after {error:#?}"));
     assert!(recovered.load(Ordering::Acquire));
+}
+
+#[test]
+fn contained_task_pre_deadline_eof_remains_receipt_failure() {
+    let root = TempDir::new().expect("tempdir");
+    let server = scripted_runtime(&root, |listener, owner_epoch| {
+        let (mut stream, _) = listener.accept().expect("accept task client");
+        respond_to_health(&mut stream, owner_epoch);
+        let request = read_scripted_request(&mut stream);
+        assert!(matches!(
+            request.operation(),
+            RuntimeOperation::RunContainedTask { request, .. }
+                if request.response_deadline_ms() == 1_000
+        ));
+    });
+    let client = RuntimeClient::connect(
+        RuntimeClientConfig::new(root.path(), EventActor::Cli, EventSource::Cli)
+            .with_io_timeout(Duration::from_millis(50)),
+    )
+    .expect("runtime client");
+
+    let error = client
+        .run_contained_task(
+            "node.a",
+            contained_task_request()
+                .with_response_deadline_ms(1_000)
+                .expect("bounded task deadline"),
+        )
+        .expect_err("pre-deadline EOF must remain a connection failure");
+    assert_eq!(error.code(), "runtime_receipt_header_failed", "{error:#?}");
+    server.join().expect("scripted runtime");
 }
 
 #[test]

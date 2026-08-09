@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
-use crate::ipc::{DEFAULT_RUNTIME_MAX_FRAME_BYTES, exchange};
+use crate::ipc::{DEFAULT_RUNTIME_MAX_FRAME_BYTES, ReceiptReadDeadline, exchange};
 use crate::{RuntimeClientError, RuntimeClientResult};
 use actingcommand_contract::{
     ActionId, AgentSessionContext, AgentSessionId, AgentSessionResponse, AgentSessionStatus,
@@ -1330,6 +1330,13 @@ impl RuntimeClient {
             _ => connection.io_timeout,
         });
         let maximum_frame_bytes = connection.maximum_frame_bytes;
+        let receipt_deadline = match &operation {
+            RuntimeOperation::RunContainedTask { request, .. } => Some(ReceiptReadDeadline::after(
+                Duration::from_millis(request.response_deadline_ms()),
+                "runtime_receipt_timeout",
+            )),
+            _ => None,
+        };
         if connection
             .stream
             .set_read_timeout(Some(response_timeout))
@@ -1344,8 +1351,7 @@ impl RuntimeClient {
             &mut connection.stream,
             &request,
             maximum_frame_bytes,
-            matches!(&operation, RuntimeOperation::RunContainedTask { .. })
-                .then_some("runtime_receipt_timeout"),
+            receipt_deadline,
         );
         if connection
             .stream
