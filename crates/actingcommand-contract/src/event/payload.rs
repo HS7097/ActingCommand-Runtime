@@ -1308,6 +1308,8 @@ pub enum TaskSemanticFact {
         package_label: String,
         task_label: String,
         package_sha256: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        response_deadline_monotonic_ms: Option<u64>,
     },
     RunStarted,
     EvidenceIndexed {
@@ -1779,6 +1781,7 @@ impl TaskSemanticFact {
                 package_label,
                 task_label,
                 package_sha256,
+                response_deadline_monotonic_ms,
             } => {
                 validate_task_semantic_label(package_label, "package_label")?;
                 validate_task_semantic_label(task_label, "task_label")?;
@@ -1790,6 +1793,12 @@ impl TaskSemanticFact {
                     return Err(SanitizationError::new(
                         "invalid_task_package_fingerprint",
                         "package_sha256",
+                    ));
+                }
+                if response_deadline_monotonic_ms.is_some_and(|deadline| deadline == 0) {
+                    return Err(SanitizationError::new(
+                        "invalid_task_response_deadline",
+                        "response_deadline_monotonic_ms",
                     ));
                 }
             }

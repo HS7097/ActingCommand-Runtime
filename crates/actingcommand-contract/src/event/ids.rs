@@ -176,6 +176,8 @@ verified_transport!(IssuedCorrelationId, CorrelationId);
 verified_transport!(IssuedCausationId, CausationId);
 verified_transport!(IssuedLeaseId, LeaseId);
 verified_transport!(IssuedActionId, ActionId);
+verified_transport!(IssuedTaskId, TaskId);
+verified_transport!(IssuedRunId, RunId);
 
 /// Mints producer capabilities without accepting caller-selected identifier bytes or strings.
 pub struct IdentifierIssuer {

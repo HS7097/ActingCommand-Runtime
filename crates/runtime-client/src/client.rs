@@ -1,11 +1,12 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
-use crate::ipc::{DEFAULT_RUNTIME_MAX_FRAME_BYTES, exchange};
+use crate::ipc::{DEFAULT_RUNTIME_MAX_FRAME_BYTES, ReceiptReadDeadline, exchange};
 use crate::{RuntimeClientError, RuntimeClientResult};
 use actingcommand_contract::{
     ActionId, AgentSessionContext, AgentSessionId, AgentSessionResponse, AgentSessionStatus,
     AgentWakeId, ApplicationLifecycleAction, ApprovalDecisionRecord, CaptureSequenceSpec,
-    CatalogProposal, ClientActionRecord, ContainedTaskRequest, CorrelationId, EffectDisposition,
+    CatalogProposal, ClientActionRecord, ContainedTaskCancellationReason,
+    ContainedTaskCancellationStatus, ContainedTaskRequest, CorrelationId, EffectDisposition,
     EventActor, EventId, EventPayload, EventQuery, EventSource, EventType, FactScope,
     IdentifierIssuer, InputAction, InputPayload, IssuedCorrelationId, LeaseQueuePolicy,
     LeaseQueueStatus, LeaseToken, MAX_RUNTIME_EVENT_QUERY_EVENTS, OriginModule, OwnerEpoch,
@@ -13,13 +14,14 @@ use actingcommand_contract::{
     PolicyPayload, ProjectDecisionPageCursor, ProjectDecisionPageRequest, ProjectInterfaceRequest,
     ProjectLedgerSnapshot, ProjectedArtifactReference, ProjectedEvent, ProjectionPayload,
     ProjectionProfile, ProposalPreview, ProposalPromotion, RUNTIME_INFO_FILE, RequestId,
-    ResourceAuthoringEvent, RunId, RuntimeControlPlaneStatus, RuntimeDebugEvent, RuntimeEventBatch,
-    RuntimeEventQueryPage, RuntimeEventQueryPageRequest, RuntimeEvidenceExportRequest,
-    RuntimeForwardProjectionRequest, RuntimeInfo, RuntimeMaintenanceQuery,
-    RuntimeMonitorInstanceStatus, RuntimeMonitorPolicy, RuntimeMonitorRegistryStatus,
-    RuntimeOperation, RuntimePlanningDocument, RuntimePlanningDocumentKind, RuntimeReceipt,
-    RuntimeRequest, RuntimeResult, RuntimeStrategicReportRequest, RuntimeSubscriptionRequest,
-    TaskPayload, TaskSemanticFact, TerminalEvent,
+    ResourceAuthoringEvent, RunId, RuntimeControlPlaneStatus, RuntimeDebugEvent, RuntimeErrorCode,
+    RuntimeEventBatch, RuntimeEventQueryPage, RuntimeEventQueryPageRequest,
+    RuntimeEvidenceExportRequest, RuntimeForwardProjectionRequest, RuntimeInfo,
+    RuntimeMaintenanceQuery, RuntimeMonitorInstanceStatus, RuntimeMonitorPolicy,
+    RuntimeMonitorRegistryStatus, RuntimeOperation, RuntimePlanningDocument,
+    RuntimePlanningDocumentKind, RuntimeReceipt, RuntimeRequest, RuntimeResult,
+    RuntimeStrategicReportRequest, RuntimeSubscriptionRequest, TaskPayload, TaskSemanticFact,
+    TerminalEvent,
 };
 use actingcommand_policy::{
     EvaluationFacts, EvaluationResources, EvaluationTime, ForwardProjection,
@@ -32,7 +34,7 @@ use serde_json::{Value, json};
 use std::collections::BTreeSet;
 use std::fmt;
 use std::fs;
-use std::net::TcpStream;
+use std::net::{Shutdown, TcpStream};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -266,21 +268,7 @@ impl RuntimeClient {
         let address = info
             .socket_addr()
             .map_err(|_| RuntimeClientError::fatal("runtime_info_invalid", "connect_runtime"))?;
-        let stream = TcpStream::connect_timeout(&address, config.io_timeout)
-            .map_err(|_| RuntimeClientError::fatal("runtime_connect_failed", "connect_runtime"))?;
-        stream
-            .set_read_timeout(Some(config.io_timeout))
-            .map_err(|_| {
-                RuntimeClientError::fatal("runtime_read_timeout_failed", "connect_runtime")
-            })?;
-        stream
-            .set_write_timeout(Some(config.io_timeout))
-            .map_err(|_| {
-                RuntimeClientError::fatal("runtime_write_timeout_failed", "connect_runtime")
-            })?;
-        stream.set_nodelay(true).map_err(|_| {
-            RuntimeClientError::fatal("runtime_tcp_nodelay_failed", "connect_runtime")
-        })?;
+        let stream = connect_runtime_stream(address, config.io_timeout, "connect_runtime")?;
         let client = Self {
             shared: Arc::new(RuntimeClientShared {
                 info,
@@ -596,7 +584,11 @@ impl RuntimeClient {
         instance_alias: &str,
         request: ContainedTaskRequest,
     ) -> RuntimeClientResult<RuntimeFlowOutput> {
-        let connection = self.connection("run_contained_task")?;
+        let mut connection = self.connection("run_contained_task")?;
+        let response_timeout = contained_task_response_timeout(
+            connection.io_timeout,
+            Duration::from_millis(request.response_deadline_ms()),
+        )?;
         let correlation = connection.ids.mint_correlation_id().map_err(|_| {
             RuntimeClientError::fatal("runtime_identifier_issue_failed", "run_contained_task")
         })?;
@@ -604,20 +596,176 @@ impl RuntimeClient {
             RuntimeClientError::fatal("runtime_identifier_issue_failed", "run_contained_task")
         })?;
         let correlation_id = *correlation.transport();
-        drop(connection);
-        let receipt = self.execute_receipt_with_correlation(
+        let operation = RuntimeOperation::run_contained_task(instance_alias, holder, request);
+        let runtime_request = connection.request_with_correlation(
             "run_contained_task",
-            RuntimeOperation::run_contained_task(instance_alias, holder, request),
+            operation.clone(),
             correlation,
-            None,
         )?;
-        if !matches!(
-            receipt.result(),
-            Some(RuntimeResult::ContainedTaskCompleted { .. })
+        let receipt = match self.exchange_receipt(
+            &mut connection,
+            "run_contained_task",
+            operation,
+            runtime_request.clone(),
+            Some(response_timeout),
         ) {
-            return Err(self.unexpected_result("run_contained_task"));
+            Ok(receipt) => receipt,
+            Err(error) if error.code() == "runtime_contained_task_response_timeout" => {
+                drop(connection);
+                let recovery =
+                    self.recover_contained_task_timeout(instance_alias, &runtime_request);
+                return Err(contained_task_recovery_outcome(error, recovery));
+            }
+            Err(error) => return Err(error),
+        };
+        match receipt.result() {
+            Some(RuntimeResult::ContainedTaskCompleted { .. }) => {}
+            Some(RuntimeResult::ContainedTaskCancelled { reason, .. }) => {
+                drop(connection);
+                let error = RuntimeClientError::fatal(
+                    match reason {
+                        ContainedTaskCancellationReason::DeadlineExceeded => {
+                            "runtime_contained_task_response_timeout"
+                        }
+                        ContainedTaskCancellationReason::ClientRequested
+                        | ContainedTaskCancellationReason::RecoveredAfterRestart => {
+                            "runtime_contained_task_cancelled"
+                        }
+                    },
+                    "run_contained_task",
+                );
+                let recovery = self.safe_reset(instance_alias).map(|_| ());
+                return Err(contained_task_recovery_outcome(error, recovery));
+            }
+            _ => return Err(self.unexpected_result("run_contained_task")),
         }
+        drop(connection);
         self.flow_output(receipt, correlation_id)
+    }
+
+    fn recover_contained_task_timeout(
+        &self,
+        instance_alias: &str,
+        original: &RuntimeRequest,
+    ) -> RuntimeClientResult<()> {
+        {
+            let mut connection = self.connection("recover_contained_task_timeout")?;
+            connection.stream.shutdown(Shutdown::Both).map_err(|_| {
+                connection.latch(RuntimeClientError::fatal(
+                    "runtime_contained_task_cancel_failed",
+                    "recover_contained_task_timeout",
+                ))
+            })?;
+            let address = self.shared.info.socket_addr().map_err(|_| {
+                connection.latch(RuntimeClientError::fatal(
+                    "runtime_info_invalid",
+                    "recover_contained_task_timeout",
+                ))
+            })?;
+            let stream = connect_runtime_stream(
+                address,
+                connection.io_timeout,
+                "recover_contained_task_timeout",
+            )
+            .map_err(|error| connection.latch(error))?;
+            connection.stream = stream;
+            connection.terminal_error = None;
+        }
+
+        let observed_epoch = self.health().map_err(|error| {
+            RuntimeClientError::fatal(
+                "runtime_contained_task_recovery_failed",
+                "recover_contained_task_timeout",
+            )
+            .with_related(error)
+        })?;
+        if observed_epoch != self.shared.info.owner_epoch() {
+            let error = RuntimeClientError::fatal(
+                "runtime_owner_epoch_changed",
+                "recover_contained_task_timeout",
+            );
+            return Err(self
+                .connection("recover_contained_task_timeout")?
+                .latch(error));
+        }
+        let recovery_timeout = {
+            let connection = self.connection("recover_contained_task_timeout")?;
+            connection.io_timeout
+        };
+        let recovery_deadline = std::time::Instant::now()
+            .checked_add(recovery_timeout)
+            .ok_or_else(|| {
+                RuntimeClientError::fatal(
+                    "runtime_contained_task_recovery_timeout_overflow",
+                    "recover_contained_task_timeout",
+                )
+            })?;
+        loop {
+            let status = self.execute(
+                "cancel_contained_task",
+                RuntimeOperation::CancelContainedTask {
+                    task_request_id: original.request_id(),
+                },
+            )?;
+            let RuntimeResult::ContainedTaskCancellation {
+                task_request_id,
+                status,
+            } = status
+            else {
+                return Err(self.unexpected_result("cancel_contained_task"));
+            };
+            if task_request_id != original.request_id() {
+                return Err(RuntimeClientError::fatal(
+                    "runtime_contained_task_cancellation_identity_mismatch",
+                    "recover_contained_task_timeout",
+                ));
+            }
+            match status {
+                ContainedTaskCancellationStatus::Terminal { .. } => break,
+                ContainedTaskCancellationStatus::RecoveryRequired { .. } => {
+                    let mut connection = self.connection("recover_contained_task_timeout")?;
+                    let response_timeout = connection.io_timeout;
+                    let operation = original.operation().clone();
+                    let receipt = self.exchange_receipt(
+                        &mut connection,
+                        "recover_contained_task_timeout",
+                        operation,
+                        original.clone(),
+                        Some(response_timeout),
+                    )?;
+                    if !matches!(
+                        receipt.result(),
+                        Some(RuntimeResult::ContainedTaskCancelled { .. })
+                            | Some(RuntimeResult::ContainedTaskCompleted { .. })
+                    ) {
+                        return Err(self.unexpected_result("recover_contained_task_timeout"));
+                    }
+                    break;
+                }
+                ContainedTaskCancellationStatus::Pending { .. } => {
+                    if std::time::Instant::now() >= recovery_deadline {
+                        return Err(RuntimeClientError::fatal(
+                            "runtime_contained_task_busy",
+                            "recover_contained_task_timeout",
+                        ));
+                    }
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+            }
+        }
+        match self.safe_reset(instance_alias) {
+            Ok(_) => Ok(()),
+            Err(error) => {
+                let error = RuntimeClientError::fatal(
+                    "runtime_contained_task_recovery_failed",
+                    "recover_contained_task_timeout",
+                )
+                .with_related(error);
+                Err(self
+                    .connection("recover_contained_task_timeout")?
+                    .latch(error))
+            }
+        }
     }
 
     pub fn input(&self, token: &LeaseToken, action: InputAction) -> RuntimeClientResult<()> {
@@ -1182,6 +1330,13 @@ impl RuntimeClient {
             _ => connection.io_timeout,
         });
         let maximum_frame_bytes = connection.maximum_frame_bytes;
+        let receipt_deadline = match &operation {
+            RuntimeOperation::RunContainedTask { request, .. } => Some(ReceiptReadDeadline::after(
+                Duration::from_millis(request.response_deadline_ms()),
+                "runtime_receipt_timeout",
+            )),
+            _ => None,
+        };
         if connection
             .stream
             .set_read_timeout(Some(response_timeout))
@@ -1192,8 +1347,12 @@ impl RuntimeClient {
                 operation_name,
             )));
         }
-        let exchange_result =
-            exchange::<_, RuntimeReceipt>(&mut connection.stream, &request, maximum_frame_bytes);
+        let exchange_result = exchange::<_, RuntimeReceipt>(
+            &mut connection.stream,
+            &request,
+            maximum_frame_bytes,
+            receipt_deadline,
+        );
         if connection
             .stream
             .set_read_timeout(Some(connection.io_timeout))
@@ -1206,6 +1365,16 @@ impl RuntimeClient {
         }
         let receipt = match exchange_result {
             Ok(receipt) => receipt,
+            Err(error)
+                if matches!(&operation, RuntimeOperation::RunContainedTask { .. })
+                    && error.code() == "runtime_receipt_timeout" =>
+            {
+                return Err(RuntimeClientError::fatal(
+                    "runtime_contained_task_response_timeout",
+                    operation_name,
+                )
+                .with_related(error));
+            }
             Err(error) => return Err(connection.latch(error)),
         };
         if receipt.validate().is_err() {
@@ -2197,6 +2366,60 @@ fn unix_ms_now() -> RuntimeClientResult<u64> {
         .map_err(|_| RuntimeClientError::fatal("runtime_clock_overflow", "create_request"))
 }
 
+fn connect_runtime_stream(
+    address: std::net::SocketAddr,
+    io_timeout: Duration,
+    operation: &'static str,
+) -> RuntimeClientResult<TcpStream> {
+    let stream = TcpStream::connect_timeout(&address, io_timeout)
+        .map_err(|_| RuntimeClientError::fatal("runtime_connect_failed", operation))?;
+    stream
+        .set_read_timeout(Some(io_timeout))
+        .map_err(|_| RuntimeClientError::fatal("runtime_read_timeout_failed", operation))?;
+    stream
+        .set_write_timeout(Some(io_timeout))
+        .map_err(|_| RuntimeClientError::fatal("runtime_write_timeout_failed", operation))?;
+    stream
+        .set_nodelay(true)
+        .map_err(|_| RuntimeClientError::fatal("runtime_tcp_nodelay_failed", operation))?;
+    Ok(stream)
+}
+
+fn contained_task_response_timeout(
+    io_timeout: Duration,
+    configured_task_timeout: Duration,
+) -> RuntimeClientResult<Duration> {
+    configured_task_timeout
+        .checked_add(io_timeout)
+        .ok_or_else(|| {
+            RuntimeClientError::fatal(
+                "runtime_contained_task_timeout_overflow",
+                "run_contained_task",
+            )
+        })
+}
+
+fn contained_task_recovery_outcome(
+    primary: RuntimeClientError,
+    recovery: RuntimeClientResult<()>,
+) -> RuntimeClientError {
+    match recovery {
+        Ok(()) => primary,
+        Err(recovery)
+            if recovery.code() == "runtime_contained_task_busy"
+                || recovery.projection().is_some_and(|projection| {
+                    matches!(
+                        projection.code,
+                        RuntimeErrorCode::ContainedTaskBusy | RuntimeErrorCode::LeaseBusy
+                    )
+                }) =>
+        {
+            recovery.with_related(primary)
+        }
+        Err(recovery) => primary.with_related(recovery),
+    }
+}
+
 fn input_response_timeout(
     io_timeout: Duration,
     action: &InputAction,
@@ -2278,6 +2501,7 @@ mod run_summary_package_tests {
                     package_label: "package".to_string(),
                     task_label: "task".to_string(),
                     package_sha256,
+                    response_deadline_monotonic_ms: Some(60_000),
                 },
                 AuditInput::new(),
             )

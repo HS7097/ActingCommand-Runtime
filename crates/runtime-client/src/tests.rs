@@ -1,14 +1,16 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 use super::*;
+use crate::ipc::{DEFAULT_RUNTIME_MAX_FRAME_BYTES, ReceiptReadDeadline, exchange};
 use actingcommand_contract::{
     ApprovalDecisionRecord, ApprovalDisposition, ApprovalTarget, CaptureSequenceSpec,
-    ClientActionKind, ClientActionRecord, EventActor, EventQuery, EventSource, EventType,
-    IdentifierIssuer, InputAction, InstanceId, LeasePriority, LeaseQueuePolicy, ProjectionProfile,
-    ResourceAuthoringEvent, ResourceAuthoringPhase, RuntimeCaptureBackend, RuntimeDebugEvent,
-    RuntimeDebugOperation, RuntimeErrorCode, RuntimeErrorProjection, RuntimeMonitorPolicy,
-    RuntimeOperation, RuntimeReceipt, RuntimeReceiptState, RuntimeRequest, RuntimeResult,
-    RuntimeSubscriptionRequest, SubscriptionCursor,
+    ClientActionKind, ClientActionRecord, ContainedTaskRequest, EventActor, EventQuery,
+    EventSource, EventType, IdentifierIssuer, InputAction, InstanceId, LeasePriority,
+    LeaseQueuePolicy, OwnerEpoch, ProjectionProfile, RUNTIME_INFO_FILE, ResourceAuthoringEvent,
+    ResourceAuthoringPhase, RuntimeCaptureBackend, RuntimeDebugEvent, RuntimeDebugOperation,
+    RuntimeErrorCode, RuntimeErrorProjection, RuntimeEventQueryPage, RuntimeInfo,
+    RuntimeMonitorPolicy, RuntimeOperation, RuntimeReceipt, RuntimeReceiptState, RuntimeRequest,
+    RuntimeResult, RuntimeSubscriptionRequest, SubscriptionCursor, TaskOutcome, TerminalEvent,
 };
 use actingcommand_device::{
     CaptureBackend, CaptureBackendName, DeviceError, DeviceResult, Frame, InputBackend, PixelFormat,
@@ -17,10 +19,13 @@ use actingcommand_runtime_host::{
     ExecutionBackendProvider, ResolvedExecutionInstance, RuntimeHost, RuntimeHostConfig,
 };
 use actingcommand_scheduler::SchedulerConfig;
+use std::fs;
+use std::io::{Read, Write};
+use std::net::{TcpListener, TcpStream};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tempfile::TempDir;
 
 const TEST_GOVERNANCE_CAPABILITY: &str = "runtime-client-governance-test-capability";
@@ -264,6 +269,295 @@ fn client_with_timeout(root: &TempDir, io_timeout: Duration) -> RuntimeClient {
             .with_io_timeout(io_timeout),
     )
     .expect("runtime client")
+}
+
+fn scripted_runtime(
+    root: &TempDir,
+    script: impl FnOnce(TcpListener, OwnerEpoch) + Send + 'static,
+) -> thread::JoinHandle<()> {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind scripted runtime");
+    let address = listener.local_addr().expect("scripted runtime address");
+    let ids = IdentifierIssuer::new().expect("identifier issuer");
+    let owner_epoch = *ids.mint_owner_epoch().expect("owner epoch").transport();
+    let info = RuntimeInfo::new(
+        std::process::id(),
+        address.ip().to_string(),
+        address.port(),
+        owner_epoch,
+        1,
+    )
+    .expect("scripted runtime info");
+    fs::write(
+        root.path().join(RUNTIME_INFO_FILE),
+        serde_json::to_vec(&info).expect("encode scripted runtime info"),
+    )
+    .expect("write scripted runtime info");
+    thread::spawn(move || script(listener, owner_epoch))
+}
+
+fn read_scripted_request(stream: &mut TcpStream) -> RuntimeRequest {
+    read_scripted_request_at(stream, "scripted")
+}
+
+fn read_scripted_request_at(stream: &mut TcpStream, stage: &str) -> RuntimeRequest {
+    let mut header = [0_u8; 4];
+    stream
+        .read_exact(&mut header)
+        .unwrap_or_else(|error| panic!("{stage} request header: {error}"));
+    let length = u32::from_be_bytes(header) as usize;
+    assert!(length > 0 && length <= DEFAULT_RUNTIME_MAX_FRAME_BYTES);
+    let mut body = vec![0_u8; length];
+    stream
+        .read_exact(&mut body)
+        .unwrap_or_else(|error| panic!("{stage} request body: {error}"));
+    serde_json::from_slice(&body).expect("decode request")
+}
+
+fn write_scripted_result(stream: &mut TcpStream, request: &RuntimeRequest, result: RuntimeResult) {
+    let receipt = RuntimeReceipt::success(request, RuntimeReceiptState::Completed, None, result)
+        .expect("scripted receipt");
+    let body = serde_json::to_vec(&receipt).expect("encode scripted receipt");
+    stream
+        .write_all(&(body.len() as u32).to_be_bytes())
+        .expect("receipt header");
+    stream.write_all(&body).expect("receipt body");
+    stream.flush().expect("flush receipt");
+}
+
+fn respond_to_health(stream: &mut TcpStream, owner_epoch: OwnerEpoch) {
+    let request = read_scripted_request(stream);
+    assert!(matches!(request.operation(), RuntimeOperation::Health));
+    write_scripted_result(stream, &request, RuntimeResult::Health { owner_epoch });
+}
+
+fn respond_with_empty_event_page(stream: &mut TcpStream) {
+    let request = read_scripted_request(stream);
+    let RuntimeOperation::QueryEvents { page, .. } = request.operation() else {
+        panic!("expected event query after flow receipt")
+    };
+    let page = RuntimeEventQueryPage::new(Vec::new(), 0, page.limit(), false, None)
+        .expect("empty event page");
+    write_scripted_result(stream, &request, RuntimeResult::EventPage { page });
+}
+
+fn contained_task_request() -> ContainedTaskRequest {
+    ContainedTaskRequest::new("C:\\fixture\\contained-task.zip", "0".repeat(64))
+        .expect("contained task request")
+}
+
+fn receipt_eof_error(deadline: Instant) -> RuntimeClientError {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind EOF runtime");
+    let address = listener.local_addr().expect("EOF runtime address");
+    let server = thread::spawn(move || {
+        let (mut stream, _) = listener.accept().expect("accept EOF client");
+        let mut header = [0_u8; 4];
+        stream.read_exact(&mut header).expect("request header");
+        let mut body = vec![0_u8; u32::from_be_bytes(header) as usize];
+        stream.read_exact(&mut body).expect("request body");
+    });
+    let mut stream = TcpStream::connect(address).expect("connect EOF runtime");
+    let error = exchange::<_, serde_json::Value>(
+        &mut stream,
+        &"request",
+        DEFAULT_RUNTIME_MAX_FRAME_BYTES,
+        Some(ReceiptReadDeadline::at(deadline, "runtime_receipt_timeout")),
+    )
+    .expect_err("peer EOF must fail the receipt exchange");
+    server.join().expect("EOF runtime");
+    error
+}
+
+#[test]
+fn receipt_eof_at_or_after_deadline_is_typed_timeout() {
+    let deadline = Instant::now()
+        .checked_sub(Duration::from_secs(1))
+        .expect("past deadline");
+    assert_eq!(
+        receipt_eof_error(deadline).code(),
+        "runtime_receipt_timeout"
+    );
+}
+
+#[test]
+fn receipt_eof_before_deadline_remains_connection_failure() {
+    let deadline = Instant::now() + Duration::from_secs(30);
+    assert_eq!(
+        receipt_eof_error(deadline).code(),
+        "runtime_receipt_header_failed"
+    );
+}
+
+#[test]
+fn contained_task_can_outlive_the_general_five_second_exchange_timeout() {
+    let root = TempDir::new().expect("tempdir");
+    let server = scripted_runtime(&root, |listener, owner_epoch| {
+        let (mut stream, _) = listener.accept().expect("accept client");
+        respond_to_health(&mut stream, owner_epoch);
+
+        let request = read_scripted_request(&mut stream);
+        assert!(matches!(
+            request.operation(),
+            RuntimeOperation::RunContainedTask { request, .. }
+                if request.response_deadline_ms()
+                    == ContainedTaskRequest::DEFAULT_RESPONSE_DEADLINE_MS
+        ));
+        thread::sleep(Duration::from_millis(5_100));
+        let ids = IdentifierIssuer::new().expect("identifier issuer");
+        write_scripted_result(
+            &mut stream,
+            &request,
+            RuntimeResult::ContainedTaskCompleted {
+                run_id: *ids.mint_run_id().expect("run id").transport(),
+                task_id: *ids.mint_task_id().expect("task id").transport(),
+                task_request_id: request.request_id(),
+                response_deadline_monotonic_ms: Some(60_000),
+                outcome: TaskOutcome::Success,
+                final_page: None,
+                executed_steps: 1,
+            },
+        );
+        respond_with_empty_event_page(&mut stream);
+    });
+    let client = RuntimeClient::connect(RuntimeClientConfig::new(
+        root.path(),
+        EventActor::Cli,
+        EventSource::Cli,
+    ))
+    .expect("runtime client");
+
+    let started = std::time::Instant::now();
+    let output = client
+        .run_contained_task("node.a", contained_task_request())
+        .expect("task inside configured response deadline");
+    assert!(started.elapsed() >= Duration::from_secs(5));
+    assert!(matches!(
+        output.receipt().result(),
+        Some(RuntimeResult::ContainedTaskCompleted { .. })
+    ));
+    server.join().expect("scripted runtime");
+}
+
+#[test]
+fn contained_task_response_timeout_is_typed_and_runs_reset_recovery() {
+    let root = TempDir::new().expect("tempdir");
+    let recovered = Arc::new(AtomicBool::new(false));
+    let server_recovered = Arc::clone(&recovered);
+    let server = scripted_runtime(&root, move |listener, owner_epoch| {
+        let (mut timed_out_stream, _) = listener.accept().expect("accept timed task client");
+        respond_to_health(&mut timed_out_stream, owner_epoch);
+        let request = read_scripted_request(&mut timed_out_stream);
+        assert!(matches!(
+            request.operation(),
+            RuntimeOperation::RunContainedTask { request, .. }
+                if request.response_deadline_ms() == 100
+        ));
+        let (mut recovery_stream, _) = listener.accept().expect("accept recovery client");
+        drop(timed_out_stream);
+        recovery_stream
+            .set_read_timeout(Some(Duration::from_secs(2)))
+            .expect("bounded recovery script");
+        respond_to_health(&mut recovery_stream, owner_epoch);
+        let cancel = read_scripted_request_at(&mut recovery_stream, "cancellation");
+        assert!(matches!(
+            cancel.operation(),
+            RuntimeOperation::CancelContainedTask { task_request_id }
+                if task_request_id == &request.request_id()
+        ));
+        let ids = IdentifierIssuer::new().expect("identifier issuer");
+        write_scripted_result(
+            &mut recovery_stream,
+            &cancel,
+            RuntimeResult::ContainedTaskCancellation {
+                task_request_id: request.request_id(),
+                status: actingcommand_contract::ContainedTaskCancellationStatus::Terminal {
+                    deadline_monotonic_ms: Some(100),
+                    outcome: TaskOutcome::Cancelled,
+                    reason: Some(
+                        actingcommand_contract::ContainedTaskCancellationReason::DeadlineExceeded,
+                    ),
+                    task_terminal: TerminalEvent {
+                        sequence: 1,
+                        event_id: *ids.mint_event_id().expect("task terminal id").transport(),
+                    },
+                    lease_terminal: TerminalEvent {
+                        sequence: 2,
+                        event_id: *ids.mint_event_id().expect("lease terminal id").transport(),
+                    },
+                    lease_disposition: actingcommand_contract::ContainedTaskLeaseTerminal::Released,
+                },
+            },
+        );
+        let reset = read_scripted_request_at(&mut recovery_stream, "safe reset");
+        assert!(matches!(
+            reset.operation(),
+            RuntimeOperation::SafeReset { .. }
+        ));
+        write_scripted_result(
+            &mut recovery_stream,
+            &reset,
+            RuntimeResult::SafeResetCompleted {
+                action_id: *ids.mint_action_id().expect("action id").transport(),
+            },
+        );
+        respond_with_empty_event_page(&mut recovery_stream);
+        server_recovered.store(true, Ordering::Release);
+    });
+    let client = RuntimeClient::connect(
+        RuntimeClientConfig::new(root.path(), EventActor::Cli, EventSource::Cli)
+            .with_io_timeout(Duration::from_millis(50))
+            .with_backend_open_timeout(Duration::from_millis(100)),
+    )
+    .expect("runtime client");
+
+    let error = client
+        .run_contained_task(
+            "node.a",
+            contained_task_request()
+                .with_response_deadline_ms(100)
+                .expect("bounded task deadline"),
+        )
+        .expect_err("missing task receipt must hit the bounded response deadline");
+    assert_eq!(
+        error.code(),
+        "runtime_contained_task_response_timeout",
+        "{error:#?}"
+    );
+    assert!(error.is_fatal());
+    server
+        .join()
+        .unwrap_or_else(|_| panic!("scripted runtime failed after {error:#?}"));
+    assert!(recovered.load(Ordering::Acquire));
+}
+
+#[test]
+fn contained_task_pre_deadline_eof_remains_receipt_failure() {
+    let root = TempDir::new().expect("tempdir");
+    let server = scripted_runtime(&root, |listener, owner_epoch| {
+        let (mut stream, _) = listener.accept().expect("accept task client");
+        respond_to_health(&mut stream, owner_epoch);
+        let request = read_scripted_request(&mut stream);
+        assert!(matches!(
+            request.operation(),
+            RuntimeOperation::RunContainedTask { request, .. }
+                if request.response_deadline_ms() == 1_000
+        ));
+    });
+    let client = RuntimeClient::connect(
+        RuntimeClientConfig::new(root.path(), EventActor::Cli, EventSource::Cli)
+            .with_io_timeout(Duration::from_millis(50)),
+    )
+    .expect("runtime client");
+
+    let error = client
+        .run_contained_task(
+            "node.a",
+            contained_task_request()
+                .with_response_deadline_ms(1_000)
+                .expect("bounded task deadline"),
+        )
+        .expect_err("pre-deadline EOF must remain a connection failure");
+    assert_eq!(error.code(), "runtime_receipt_header_failed", "{error:#?}");
+    server.join().expect("scripted runtime");
 }
 
 #[test]
