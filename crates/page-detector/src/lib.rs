@@ -6,6 +6,7 @@ use serde::Deserialize;
 use std::collections::{HashMap, HashSet};
 use std::error::Error;
 use std::fmt;
+use std::time::{Duration, Instant};
 
 pub type PageDetectorResult<T> = Result<T, PageDetectorError>;
 pub type PageBatchResult = Result<Vec<PageOutcome>, BatchLevelError>;
@@ -88,6 +89,12 @@ pub struct PageEvaluation {
     pub forbidden_total: usize,
     pub target_results: Vec<PageTargetEvaluation>,
     pub message: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TimedPageEvaluation {
+    pub evaluation: PageEvaluation,
+    pub duration: Duration,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -254,6 +261,53 @@ impl PageDetector {
             .evaluate_all_outcomes(evaluator, scene)
             .map_err(|error| PageDetectorError::fatal(error.to_string()))?;
         require_all_page_evaluations(outcomes)
+    }
+
+    pub fn evaluate_all_timed(
+        &self,
+        evaluator: &RecognitionEvaluator,
+        scene: &Scene,
+    ) -> PageDetectorResult<Vec<TimedPageEvaluation>> {
+        self.evaluate_all_timed_with(
+            evaluator,
+            scene,
+            |_index, _page| Instant::now(),
+            |started| started.elapsed(),
+        )
+    }
+
+    fn evaluate_all_timed_with<M>(
+        &self,
+        evaluator: &RecognitionEvaluator,
+        scene: &Scene,
+        mut start: impl FnMut(usize, &PageDefinition) -> M,
+        mut elapsed: impl FnMut(M) -> Duration,
+    ) -> PageDetectorResult<Vec<TimedPageEvaluation>> {
+        let mut durations = Vec::with_capacity(self.page_set.pages.len());
+        let outcomes = self
+            .evaluate_all_outcomes_with(evaluator, scene, |index, page| {
+                let started = start(index, page);
+                let result = self.evaluate_page_definition(evaluator, scene, page);
+                durations.push(elapsed(started));
+                result
+            })
+            .map_err(|error| PageDetectorError::fatal(error.to_string()))?;
+        let evaluations = require_all_page_evaluations(outcomes)?;
+        if evaluations.len() != durations.len() {
+            return Err(PageDetectorError::fatal(format!(
+                "page duration invariant failed: {} evaluation(s), {} duration(s)",
+                evaluations.len(),
+                durations.len()
+            )));
+        }
+        Ok(evaluations
+            .into_iter()
+            .zip(durations)
+            .map(|(evaluation, duration)| TimedPageEvaluation {
+                evaluation,
+                duration,
+            })
+            .collect())
     }
 
     pub fn evaluate_all_outcomes(
@@ -635,6 +689,7 @@ mod tests {
     use std::path::PathBuf;
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::time::Duration;
 
     static TEMP_COUNTER: AtomicUsize = AtomicUsize::new(0);
 
@@ -1110,6 +1165,42 @@ mod tests {
     }
 
     #[test]
+    fn evaluate_all_timed_preserves_results_order_and_deterministic_durations() {
+        let fixture = Fixture::new();
+        let scene = scene_colors(true, true, false);
+        let expected = fixture
+            .detector
+            .evaluate_all(&fixture.evaluator, &scene)
+            .expect("untimed evaluation");
+        let durations = [Duration::from_millis(7), Duration::from_millis(13)];
+
+        let timed = fixture
+            .detector
+            .evaluate_all_timed_with(
+                &fixture.evaluator,
+                &scene,
+                |index, _page| index,
+                |index| durations[index],
+            )
+            .expect("timed evaluation");
+
+        assert_eq!(
+            timed
+                .iter()
+                .map(|evaluation| evaluation.evaluation.clone())
+                .collect::<Vec<_>>(),
+            expected
+        );
+        assert_eq!(
+            timed
+                .iter()
+                .map(|evaluation| evaluation.duration)
+                .collect::<Vec<_>>(),
+            durations
+        );
+    }
+
+    #[test]
     fn evaluate_all_keeps_order_and_continues_after_page_error() {
         let fixture = Fixture::new();
         let detector = PageDetector::new(PageSet {
@@ -1161,6 +1252,11 @@ mod tests {
             .evaluate_all(&fixture.evaluator, &scene_colors(true, true, false))
             .expect_err("compatibility entry point remains fail-loud");
         assert_fatal_contains(compatibility_error, "1 failed page(s)");
+
+        let timed_error = detector
+            .evaluate_all_timed(&fixture.evaluator, &scene_colors(true, true, false))
+            .expect_err("timed entry point remains fail-loud");
+        assert_fatal_contains(timed_error, "1 failed page(s)");
     }
 
     #[test]
