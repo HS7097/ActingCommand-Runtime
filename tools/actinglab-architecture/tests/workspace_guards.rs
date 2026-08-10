@@ -4287,7 +4287,7 @@ fn actinglab_session_record_drift_diagnostics_path_glue_stays_out_of_main() {
     let caller_serialization = caller_rows.concat();
     assert_eq!(
         format!("{:x}", Sha256::digest(caller_serialization.as_bytes())),
-        "495d3676e6bbf2e7427bd03a4976100a7760c9d7dc61d20ce06e3e0ea7b6584c",
+        "0247447a649bd8162ec663c2e7b78b8a56f8c688533d4e23eb75904c44d3d319",
         "drift-diagnostics path caller serialization changed"
     );
 
@@ -4418,7 +4418,7 @@ fn actinglab_parse_touch_backend_override_glue_stays_out_of_main() {
     let caller_serialization = caller_rows.concat();
     assert_eq!(
         format!("{:x}", Sha256::digest(caller_serialization.as_bytes())),
-        "6e4bebb6d2069f27119b822c8863d755061c399c39f934db7681b970c210e653",
+        "4a73ed63164c1f41a1bc2b8f3cef59b1b9051fdf5d1bdb9338be32042dff39f3",
         "touch-backend caller serialization changed"
     );
 
@@ -4555,7 +4555,7 @@ fn actinglab_parse_match_metric_flag_glue_stays_out_of_main() {
     let caller_serialization = caller_rows.concat();
     assert_eq!(
         format!("{:x}", Sha256::digest(caller_serialization.as_bytes())),
-        "d2baa078b31f4e7fcaf7e3d959ab69e35b326d16c83d983629fd266de4437c50",
+        "781f4a829e1709426666a8f9b6941828009dfad97b0f1dea9eda4619d0c2a01d",
         "match-metric caller serialization changed"
     );
 
@@ -4695,7 +4695,7 @@ fn actinglab_record_candidates_step_id_glue_stays_out_of_main() {
     let caller_serialization = caller_rows.concat();
     assert_eq!(
         format!("{:x}", Sha256::digest(caller_serialization.as_bytes())),
-        "661b52c5180a2b5f7c7975aa50332191546c220b7310192cde87d66033a13b3d",
+        "537f4e94fa8fe97944935788e1d9dfe47bd19907381b6e8745de0efdc63894ef",
         "record-candidates step-id caller serialization changed"
     );
 
@@ -4850,7 +4850,7 @@ fn actinglab_stream_input_relay_action_glue_stays_out_of_main() {
     let caller_serialization = caller_rows.concat();
     assert_eq!(
         format!("{:x}", Sha256::digest(caller_serialization.as_bytes())),
-        "af8cec0419d905468ba53211277aa050b8ac3a57eba5aaa0caf7f144224633a5",
+        "661d2eb3186271a19dddfb56c3273ba272d007b0c7cea18dc34234293995b0df",
         "input-relay caller serialization changed"
     );
 
@@ -5014,7 +5014,7 @@ fn actinglab_parse_record_build_resolution_glue_stays_out_of_main() {
     let caller_serialization = caller_rows.concat();
     assert_eq!(
         format!("{:x}", Sha256::digest(caller_serialization.as_bytes())),
-        "4b7cc71822169ca16732291715528bb7fe5e59a97232edd27f8efa3abdf43f66",
+        "0090b3060fb96ca2275593e02a9b8e25bdb73392a2690bfb97e86de1188aebf5",
         "record-build resolution caller serialization changed"
     );
 
@@ -5199,7 +5199,7 @@ fn actinglab_parse_session_record_region_glue_stays_out_of_main() {
     let caller_serialization = caller_rows.concat();
     assert_eq!(
         format!("{:x}", Sha256::digest(caller_serialization.as_bytes())),
-        "55815335d133ad3124397a09f180946952744f22f88e9d561463ee23c3e80d8c",
+        "3d3bf23ddb70215d6627ce11c94c638b5113858998df337f6560e4b818ce572c",
         "session-record region caller serialization changed"
     );
 
@@ -5471,7 +5471,7 @@ fn actinglab_parse_session_record_rect_glue_stays_out_of_main() {
         .trim()
         .parse::<usize>()
         .expect("ratchet/main_rs_lines.txt must contain one integer");
-    assert_eq!(ratchet, 20_565, "session-record rectangle ratchet changed");
+    assert_eq!(ratchet, 20_558, "session-record rectangle ratchet changed");
     assert_eq!(
         main.lines().count(),
         ratchet,
@@ -5554,7 +5554,7 @@ fn actinglab_parse_session_record_swipe_rects_glue_stays_out_of_main() {
     );
     assert_eq!(
         format!("{:x}", Sha256::digest(caller_rows.concat().as_bytes())),
-        "bb850ae7ce0086d92f7133dacec3af38cea491cc5d5fec7d341bc1f993f6ea28",
+        "33a8657012c1cdc2ca111e2eeb77dba10d73a62121324a7a04670b3ff9204cfb",
         "session-record swipe location-bearing caller serialization changed"
     );
     let semantic_callers = caller_rows
