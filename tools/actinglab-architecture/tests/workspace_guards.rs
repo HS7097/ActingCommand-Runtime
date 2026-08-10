@@ -5638,7 +5638,7 @@ fn actinglab_parse_session_record_swipe_rects_glue_stays_out_of_main() {
         .trim()
         .parse::<usize>()
         .expect("ratchet/main_rs_lines.txt must contain one integer");
-    assert_eq!(ratchet, 20_565, "session-record swipe ratchet changed");
+    assert_eq!(ratchet, 20_558, "session-record swipe ratchet changed");
     assert_eq!(
         main.lines().count(),
         ratchet,
