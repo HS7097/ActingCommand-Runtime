@@ -3282,6 +3282,124 @@ fn actinglab_state_roots_glue_stays_out_of_main() {
 }
 
 #[test]
+fn actinglab_unix_time_glue_stays_out_of_main() {
+    let root = workspace_root();
+    let main =
+        fs::read_to_string(root.join("apps/actinglab/src/main.rs")).expect("read ActingLab main");
+    let unix_time = fs::read_to_string(root.join("apps/actinglab/src/unix_time.rs"))
+        .expect("read ActingLab Unix time module");
+
+    const ROOT_DECLARATION: &str = "mod unix_time;";
+    const ROOT_IMPORT: &str = "use unix_time::current_unix_ms;";
+    let declarations = main
+        .lines()
+        .filter(|line| line.contains("mod unix_time;"))
+        .collect::<Vec<_>>();
+    let imports = main
+        .lines()
+        .filter(|line| line.contains("unix_time::"))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        declarations,
+        vec![ROOT_DECLARATION],
+        "ActingLab main lost the one private Unix time module declaration"
+    );
+    assert_eq!(
+        imports,
+        vec![ROOT_IMPORT],
+        "ActingLab main lost the one private Unix time import"
+    );
+
+    const DEFINITION: &str = "fn current_unix_ms() -> u64 {";
+    assert!(
+        unix_time.contains(DEFINITION),
+        "Unix time module lost owner definition"
+    );
+    assert!(
+        !main.contains(DEFINITION),
+        "ActingLab main regained Unix time owner definition"
+    );
+
+    assert_eq!(
+        unix_time.matches("pub(super) ").count(),
+        1,
+        "Unix time owner visibility changed"
+    );
+    for line in unix_time.lines() {
+        let trimmed = line.trim_start();
+        assert!(
+            !trimmed.starts_with("pub ") && !trimmed.starts_with("pub(crate) "),
+            "Unix time owner exposed broader visibility: {line}"
+        );
+    }
+
+    const CHILD_IMPORTS: &str = "use std::time::{SystemTime, UNIX_EPOCH};\n\n";
+    let raw_owner = unix_time
+        .strip_prefix(CHILD_IMPORTS)
+        .expect("Unix time module imports changed");
+    let normalized_owner = format!("{}\n", raw_owner.replacen("pub(super) ", "", 1));
+    assert_eq!(
+        normalized_owner.lines().count(),
+        9,
+        "Unix time owner line count changed"
+    );
+    assert_eq!(
+        normalized_owner.len(),
+        190,
+        "Unix time owner byte count changed"
+    );
+    assert_eq!(
+        format!("{:x}", Sha256::digest(normalized_owner.as_bytes())),
+        "af8521650cc385ab755dc9937460b7246143c5e55ce75ff37223e8e334e78cf2",
+        "Unix time owner body changed"
+    );
+
+    let caller_files = [
+        ("apps/actinglab/src/env_detection.rs", 1_usize),
+        ("apps/actinglab/src/main.rs", 17_usize),
+        ("apps/actinglab/src/runtime_session_adapter.rs", 1_usize),
+        ("apps/actinglab/src/runtime_stream_adapter.rs", 1_usize),
+    ];
+    let mut caller_closure = String::new();
+    let mut call_count = 0;
+    for (path, expected_calls) in caller_files {
+        let source = fs::read_to_string(root.join(path)).expect("read Unix time caller");
+        let calls = source
+            .lines()
+            .filter(|line| line.contains("current_unix_ms()"))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            calls.len(),
+            expected_calls,
+            "Unix time caller count changed in {path}"
+        );
+        if path != "apps/actinglab/src/main.rs" {
+            let root_import = source
+                .split_once(";\n")
+                .map(|(prefix, _)| prefix)
+                .expect("Unix time child import is missing");
+            assert!(
+                root_import.contains("use super::{") && root_import.contains("current_unix_ms"),
+                "Unix time child import changed in {path}"
+            );
+        }
+        call_count += calls.len();
+        for line in calls {
+            caller_closure.push_str(path);
+            caller_closure.push(':');
+            caller_closure.push_str(line.trim());
+            caller_closure.push('\n');
+        }
+    }
+    assert_eq!(call_count, 20, "Unix time caller closure changed");
+    assert_eq!(
+        format!("{:x}", Sha256::digest(caller_closure.as_bytes())),
+        "4439d79913c18139087e796db816788d505e08397545d443ada01f7e8fa35622",
+        "Unix time caller source changed"
+    );
+}
+
+#[test]
 fn actinglab_flag_values_glue_stays_out_of_main() {
     let root = workspace_root();
     let main =
