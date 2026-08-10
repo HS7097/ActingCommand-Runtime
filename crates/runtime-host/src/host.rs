@@ -10359,14 +10359,10 @@ impl HostShared {
         control: Arc<ContainedRunControl>,
     ) -> Result<OperationSuccess, RequestFailure> {
         let scheduled = run_links.is_some();
-        let scheduling_outcome = scheduled
-            .then(|| {
-                prepared
-                    .scheduling_outcome()
-                    .cloned()
-                    .map(|declaration| (prepared.game().to_owned(), declaration))
-            })
-            .flatten();
+        let scheduling_outcome = prepared
+            .scheduling_outcome()
+            .cloned()
+            .map(|declaration| (prepared.game().to_owned(), declaration));
         let mut runtime = RuntimeContainedTask {
             host: self,
             request,

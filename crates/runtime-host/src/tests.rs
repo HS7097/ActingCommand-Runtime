@@ -8145,6 +8145,117 @@ fn runtime_routes_vision_packages_only_through_the_injected_provider() {
 }
 
 #[test]
+fn direct_mapped_contained_task_commits_typed_terminal_without_generic_fallback() {
+    for (case, performs_effect, expected_outcome_key) in [
+        ("claimed-mail", true, "claimed"),
+        ("empty-mail", false, "no-op"),
+    ] {
+        let root = TempDir::new().expect("tempdir");
+        let package = root.path().join("mapped-task.zip");
+        let bytes = neutral_two_key_mapped_contained_task_package("claimed", "no-op");
+        fs::write(&package, &bytes).expect("write mapped package");
+        let expected = actingcommand_pack_containment::Sha256Hash::digest(&bytes).to_string();
+        let state = Arc::new(FakeState::default());
+        if performs_effect {
+            state
+                .transition_capture_after_input
+                .store(true, Ordering::Release);
+        } else {
+            state
+                .transition_capture_after_capture
+                .store(1, Ordering::Release);
+        }
+        let host = RuntimeHost::start(
+            config(&root),
+            Arc::new(FakeProvider::one(
+                "neutral.instance",
+                instance_id(),
+                Arc::clone(&state),
+            )),
+        )
+        .unwrap_or_else(|error| panic!("{case}: runtime host: {error}"));
+        let mut client = TestClient::connect(&host);
+        let correlation = client.ids.mint_correlation_id().expect("correlation");
+        let correlation_id = *correlation.transport();
+        let request = client.request_with_correlation(
+            correlation,
+            RuntimeOperation::run_contained_task(
+                "neutral.instance",
+                client.ids.mint_holder_id().expect("holder"),
+                ContainedTaskRequest::new(package.display().to_string(), expected)
+                    .expect("mapped task request"),
+            ),
+        );
+
+        let receipt = client.send(&request);
+        assert_eq!(receipt.state(), RuntimeReceiptState::Completed, "{case}");
+        assert!(matches!(
+            receipt.result(),
+            Some(RuntimeResult::ContainedTaskCompleted {
+                outcome: TaskOutcome::Success,
+                final_page: Some(page),
+                ..
+            }) if page == "neutral/terminal"
+        ));
+        let events = projected_events(
+            &mut client,
+            EventQuery {
+                correlation_id: Some(correlation_id),
+                ..EventQuery::default()
+            },
+        );
+        let terminals = events
+            .iter()
+            .filter_map(projected_task_semantic_fact)
+            .filter_map(|fact| match fact {
+                TaskSemanticFact::TerminalCommitted {
+                    outcome,
+                    scheduling_disposition,
+                    ..
+                } => Some((*outcome, scheduling_disposition.as_ref())),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        let [(TaskOutcome::Success, Some(disposition))] = terminals.as_slice() else {
+            panic!("{case}: mapped direct task must commit one typed disposition: {terminals:?}");
+        };
+        assert_eq!(disposition.outcome_key(), expected_outcome_key, "{case}");
+        assert_eq!(
+            matches!(
+                disposition.effect(),
+                SchedulingEffectEvidence::DesignatedEffectCompleted { .. }
+            ),
+            performs_effect,
+            "{case}"
+        );
+        assert_eq!(
+            matches!(
+                disposition.effect(),
+                SchedulingEffectEvidence::NoDesignatedEffect
+            ),
+            !performs_effect,
+            "{case}"
+        );
+        assert_eq!(
+            state.input_count.load(Ordering::Acquire),
+            usize::from(performs_effect),
+            "{case}"
+        );
+        assert_eq!(
+            events
+                .iter()
+                .filter(|event| event.event_type == EventType::TaskCompleted)
+                .count(),
+            1,
+            "{case}: direct mapped task must commit one terminal"
+        );
+        drop(client);
+        host.close()
+            .unwrap_or_else(|error| panic!("{case}: close runtime host: {error}"));
+    }
+}
+
+#[test]
 fn runtime_executes_neutral_contained_task_without_lab_ownership() {
     let root = TempDir::new().expect("tempdir");
     let package = root.path().join("neutral-task.zip");
@@ -8255,6 +8366,13 @@ fn runtime_executes_neutral_contained_task_without_lab_ownership() {
             .count(),
         1
     );
+    assert!(semantic.iter().any(|fact| matches!(
+        fact,
+        TaskSemanticFact::TerminalCommitted {
+            scheduling_disposition: None,
+            ..
+        }
+    )));
     let evidence_frames = events
         .iter()
         .filter(|event| event.event_type == EventType::TaskEvidenceIndexed)
