@@ -39,6 +39,12 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+#[cfg(feature = "test-observation")]
+use crate::test_observation::{
+    ObservationOperation, ObservationOutcome, ObservationStage, ObservationThreadRole,
+    record_active,
+};
+
 const DEFAULT_RUNTIME_IO_TIMEOUT: Duration = Duration::from_secs(5);
 const DEFAULT_BACKEND_OPEN_TIMEOUT: Duration = Duration::from_secs(60);
 const MAX_RUNTIME_IO_TIMEOUT: Duration = Duration::from_secs(60);
@@ -377,20 +383,47 @@ impl RuntimeClient {
     }
 
     pub fn acquire_lease(&self, instance_alias: &str) -> RuntimeClientResult<LeaseToken> {
-        let holder = self
-            .connection("issue_lease_holder")?
-            .ids
-            .mint_holder_id()
-            .map_err(|_| {
-                RuntimeClientError::fatal("runtime_identifier_issue_failed", "acquire_lease")
-            })?;
-        match self.execute(
-            "acquire_lease",
-            RuntimeOperation::acquire_lease(instance_alias, holder),
-        )? {
-            RuntimeResult::LeaseGranted { token } => Ok(token),
-            _ => Err(self.unexpected_result("acquire_lease")),
-        }
+        #[cfg(feature = "test-observation")]
+        record_active(
+            ObservationStage::ClientAcquireStart,
+            ObservationOperation::AcquireLease,
+            ObservationThreadRole::Client,
+            ObservationOutcome::Started,
+            None,
+            None,
+            None,
+        );
+        let result = (|| {
+            let holder = self
+                .connection("issue_lease_holder")?
+                .ids
+                .mint_holder_id()
+                .map_err(|_| {
+                    RuntimeClientError::fatal("runtime_identifier_issue_failed", "acquire_lease")
+                })?;
+            match self.execute(
+                "acquire_lease",
+                RuntimeOperation::acquire_lease(instance_alias, holder),
+            )? {
+                RuntimeResult::LeaseGranted { token } => Ok(token),
+                _ => Err(self.unexpected_result("acquire_lease")),
+            }
+        })();
+        #[cfg(feature = "test-observation")]
+        record_active(
+            ObservationStage::ClientAcquireResult,
+            ObservationOperation::AcquireLease,
+            ObservationThreadRole::Client,
+            if result.is_ok() {
+                ObservationOutcome::Success
+            } else {
+                ObservationOutcome::Failure
+            },
+            None,
+            None,
+            result.as_ref().ok(),
+        );
+        result
     }
 
     pub fn queue_lease(
@@ -444,30 +477,82 @@ impl RuntimeClient {
     }
 
     pub fn renew_lease(&self, token: &LeaseToken) -> RuntimeClientResult<LeaseToken> {
-        match self.execute(
+        #[cfg(feature = "test-observation")]
+        record_active(
+            ObservationStage::ClientRenewStart,
+            ObservationOperation::RenewLease,
+            ObservationThreadRole::Client,
+            ObservationOutcome::Started,
+            None,
+            None,
+            Some(token),
+        );
+        let result = match self.execute(
             "renew_lease",
             RuntimeOperation::RenewLease {
                 token: token.clone(),
             },
-        )? {
-            RuntimeResult::LeaseRenewed { token } => Ok(token),
-            _ => Err(self.unexpected_result("renew_lease")),
-        }
+        ) {
+            Ok(RuntimeResult::LeaseRenewed { token }) => Ok(token),
+            Ok(_) => Err(self.unexpected_result("renew_lease")),
+            Err(error) => Err(error),
+        };
+        #[cfg(feature = "test-observation")]
+        record_active(
+            ObservationStage::ClientRenewResult,
+            ObservationOperation::RenewLease,
+            ObservationThreadRole::Client,
+            if result.is_ok() {
+                ObservationOutcome::Success
+            } else {
+                ObservationOutcome::Failure
+            },
+            None,
+            None,
+            result.as_ref().ok().or(Some(token)),
+        );
+        result
     }
 
     pub fn release_lease(&self, token: &LeaseToken) -> RuntimeClientResult<()> {
-        match self.execute(
+        #[cfg(feature = "test-observation")]
+        record_active(
+            ObservationStage::ClientReleaseStart,
+            ObservationOperation::ReleaseLease,
+            ObservationThreadRole::Client,
+            ObservationOutcome::Started,
+            None,
+            None,
+            Some(token),
+        );
+        let result = match self.execute(
             "release_lease",
             RuntimeOperation::ReleaseLease {
                 token: token.clone(),
             },
-        )? {
-            RuntimeResult::LeaseReleased {
+        ) {
+            Ok(RuntimeResult::LeaseReleased {
                 instance_id,
                 lease_id,
-            } if instance_id == token.instance_id() && lease_id == token.lease_id() => Ok(()),
-            _ => Err(self.unexpected_result("release_lease")),
-        }
+            }) if instance_id == token.instance_id() && lease_id == token.lease_id() => Ok(()),
+            Ok(_) => Err(self.unexpected_result("release_lease")),
+            Err(error) => Err(error),
+        };
+        #[cfg(feature = "test-observation")]
+        record_active(
+            ObservationStage::ClientReleaseResult,
+            ObservationOperation::ReleaseLease,
+            ObservationThreadRole::Client,
+            if result.is_ok() {
+                ObservationOutcome::Success
+            } else {
+                ObservationOutcome::Failure
+            },
+            None,
+            None,
+            Some(token),
+        );
+        result
     }
 
     pub fn observe_readonly(&self, instance_alias: &str) -> RuntimeClientResult<RuntimeFlowOutput> {
@@ -769,21 +854,49 @@ impl RuntimeClient {
     }
 
     pub fn input(&self, token: &LeaseToken, action: InputAction) -> RuntimeClientResult<()> {
-        let response_timeout = {
-            let connection = self.connection("runtime_input")?;
-            input_response_timeout(connection.io_timeout, &action)?
-        };
-        match self.execute_with_timeout(
-            "runtime_input",
-            RuntimeOperation::Input {
-                token: token.clone(),
-                action,
+        #[cfg(feature = "test-observation")]
+        record_active(
+            ObservationStage::ClientInputStart,
+            ObservationOperation::Input,
+            ObservationThreadRole::Client,
+            ObservationOutcome::Started,
+            None,
+            None,
+            Some(token),
+        );
+        let result = (|| {
+            let response_timeout = {
+                let connection = self.connection("runtime_input")?;
+                input_response_timeout(connection.io_timeout, &action)?
+            };
+            match self.execute_with_timeout(
+                "runtime_input",
+                RuntimeOperation::Input {
+                    token: token.clone(),
+                    action,
+                },
+                Some(response_timeout),
+            ) {
+                Ok(RuntimeResult::InputCommitted { .. }) => Ok(()),
+                Ok(_) => Err(self.unexpected_result("runtime_input")),
+                Err(error) => Err(error),
+            }
+        })();
+        #[cfg(feature = "test-observation")]
+        record_active(
+            ObservationStage::ClientInputResult,
+            ObservationOperation::Input,
+            ObservationThreadRole::Client,
+            if result.is_ok() {
+                ObservationOutcome::Success
+            } else {
+                ObservationOutcome::Failure
             },
-            Some(response_timeout),
-        )? {
-            RuntimeResult::InputCommitted { .. } => Ok(()),
-            _ => Err(self.unexpected_result("runtime_input")),
-        }
+            None,
+            None,
+            Some(token),
+        );
+        result
     }
 
     pub fn record_client_action(
@@ -1320,92 +1433,132 @@ impl RuntimeClient {
         request: RuntimeRequest,
         response_timeout: Option<Duration>,
     ) -> RuntimeClientResult<RuntimeReceipt> {
-        if let Some(error) = &connection.terminal_error {
-            return Err(error.clone());
-        }
-        let response_timeout = response_timeout.unwrap_or(match &operation {
-            RuntimeOperation::AcquireLease { .. } | RuntimeOperation::SafeReset { .. } => {
-                connection.backend_open_timeout
+        let result = (|| {
+            if let Some(error) = &connection.terminal_error {
+                return Err(error.clone());
             }
-            _ => connection.io_timeout,
-        });
-        let maximum_frame_bytes = connection.maximum_frame_bytes;
-        let receipt_deadline = match &operation {
-            RuntimeOperation::RunContainedTask { request, .. } => Some(ReceiptReadDeadline::after(
-                Duration::from_millis(request.response_deadline_ms()),
-                "runtime_receipt_timeout",
-            )),
-            _ => None,
-        };
-        if connection
-            .stream
-            .set_read_timeout(Some(response_timeout))
-            .is_err()
-        {
-            return Err(connection.latch(RuntimeClientError::fatal(
-                "runtime_read_timeout_failed",
-                operation_name,
-            )));
-        }
-        let exchange_result = exchange::<_, RuntimeReceipt>(
-            &mut connection.stream,
-            &request,
-            maximum_frame_bytes,
-            receipt_deadline,
-        );
-        if connection
-            .stream
-            .set_read_timeout(Some(connection.io_timeout))
-            .is_err()
-        {
-            return Err(connection.latch(RuntimeClientError::fatal(
-                "runtime_read_timeout_restore_failed",
-                operation_name,
-            )));
-        }
-        let receipt = match exchange_result {
-            Ok(receipt) => receipt,
-            Err(error)
-                if matches!(&operation, RuntimeOperation::RunContainedTask { .. })
-                    && error.code() == "runtime_receipt_timeout" =>
-            {
-                return Err(RuntimeClientError::fatal(
-                    "runtime_contained_task_response_timeout",
-                    operation_name,
-                )
-                .with_related(error));
-            }
-            Err(error) => return Err(connection.latch(error)),
-        };
-        if receipt.validate().is_err() {
-            return Err(connection.latch(RuntimeClientError::fatal(
-                "runtime_receipt_invalid",
-                operation_name,
-            )));
-        }
-        if receipt.request_id() != request.request_id()
-            || receipt.correlation_id() != request.correlation_id()
-        {
-            return Err(connection.latch(RuntimeClientError::fatal(
-                "runtime_receipt_identity_mismatch",
-                operation_name,
-            )));
-        }
-        if let Some(error) = receipt.error_projection() {
-            let error = RuntimeClientError::rejected(operation_name, error.clone());
-            return Err(if error.is_fatal() {
-                connection.latch(error)
-            } else {
-                error
+            let response_timeout = response_timeout.unwrap_or(match &operation {
+                RuntimeOperation::AcquireLease { .. } | RuntimeOperation::SafeReset { .. } => {
+                    connection.backend_open_timeout
+                }
+                _ => connection.io_timeout,
             });
-        }
-        if receipt.result().is_none() {
-            return Err(connection.latch(RuntimeClientError::fatal(
-                "runtime_result_missing",
-                operation_name,
-            )));
-        }
-        Ok(receipt)
+            let maximum_frame_bytes = connection.maximum_frame_bytes;
+            let receipt_deadline = match &operation {
+                RuntimeOperation::RunContainedTask { request, .. } => {
+                    Some(ReceiptReadDeadline::after(
+                        Duration::from_millis(request.response_deadline_ms()),
+                        "runtime_receipt_timeout",
+                    ))
+                }
+                _ => None,
+            };
+            if connection
+                .stream
+                .set_read_timeout(Some(response_timeout))
+                .is_err()
+            {
+                return Err(connection.latch(RuntimeClientError::fatal(
+                    "runtime_read_timeout_failed",
+                    operation_name,
+                )));
+            }
+            let exchange_result = exchange::<_, RuntimeReceipt>(
+                &mut connection.stream,
+                &request,
+                maximum_frame_bytes,
+                receipt_deadline,
+                Some(&request),
+            );
+            if connection
+                .stream
+                .set_read_timeout(Some(connection.io_timeout))
+                .is_err()
+            {
+                return Err(connection.latch(RuntimeClientError::fatal(
+                    "runtime_read_timeout_restore_failed",
+                    operation_name,
+                )));
+            }
+            let receipt = match exchange_result {
+                Ok(receipt) => receipt,
+                Err(error)
+                    if matches!(&operation, RuntimeOperation::RunContainedTask { .. })
+                        && error.code() == "runtime_receipt_timeout" =>
+                {
+                    return Err(RuntimeClientError::fatal(
+                        "runtime_contained_task_response_timeout",
+                        operation_name,
+                    )
+                    .with_related(error));
+                }
+                Err(error) => return Err(connection.latch(error)),
+            };
+            if receipt.validate().is_err() {
+                #[cfg(feature = "test-observation")]
+                record_active(
+                    ObservationStage::ReceiptValidationResult,
+                    ObservationOperation::Other,
+                    ObservationThreadRole::Client,
+                    ObservationOutcome::Failure,
+                    Some(&request),
+                    Some(&receipt),
+                    None,
+                );
+                return Err(connection.latch(RuntimeClientError::fatal(
+                    "runtime_receipt_invalid",
+                    operation_name,
+                )));
+            }
+            #[cfg(feature = "test-observation")]
+            record_active(
+                ObservationStage::ReceiptValidationResult,
+                ObservationOperation::Other,
+                ObservationThreadRole::Client,
+                ObservationOutcome::Success,
+                Some(&request),
+                Some(&receipt),
+                None,
+            );
+            if receipt.request_id() != request.request_id()
+                || receipt.correlation_id() != request.correlation_id()
+            {
+                return Err(connection.latch(RuntimeClientError::fatal(
+                    "runtime_receipt_identity_mismatch",
+                    operation_name,
+                )));
+            }
+            if let Some(error) = receipt.error_projection() {
+                let error = RuntimeClientError::rejected(operation_name, error.clone());
+                return Err(if error.is_fatal() {
+                    connection.latch(error)
+                } else {
+                    error
+                });
+            }
+            if receipt.result().is_none() {
+                return Err(connection.latch(RuntimeClientError::fatal(
+                    "runtime_result_missing",
+                    operation_name,
+                )));
+            }
+            Ok(receipt)
+        })();
+        #[cfg(feature = "test-observation")]
+        record_active(
+            ObservationStage::ClientTerminalResult,
+            ObservationOperation::Other,
+            ObservationThreadRole::Client,
+            if result.is_ok() {
+                ObservationOutcome::Success
+            } else {
+                ObservationOutcome::Failure
+            },
+            Some(&request),
+            result.as_ref().ok(),
+            None,
+        );
+        result
     }
 
     fn issue_correlation(
@@ -1857,7 +2010,7 @@ impl RuntimeConnection {
         operation: RuntimeOperation,
         correlation: IssuedCorrelationId,
     ) -> RuntimeClientResult<RuntimeRequest> {
-        RuntimeRequest::new(
+        let request = RuntimeRequest::new(
             self.ids.mint_request_id().map_err(|_| {
                 RuntimeClientError::fatal("runtime_identifier_issue_failed", operation_name)
             })?,
@@ -1868,7 +2021,18 @@ impl RuntimeConnection {
             unix_ms_now()?,
             operation,
         )
-        .map_err(|_| RuntimeClientError::fatal("runtime_request_invalid", operation_name))
+        .map_err(|_| RuntimeClientError::fatal("runtime_request_invalid", operation_name))?;
+        #[cfg(feature = "test-observation")]
+        record_active(
+            ObservationStage::ClientRequestCreated,
+            ObservationOperation::Other,
+            ObservationThreadRole::Client,
+            ObservationOutcome::Success,
+            Some(&request),
+            None,
+            None,
+        );
+        Ok(request)
     }
 }
 
