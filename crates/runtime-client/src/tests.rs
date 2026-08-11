@@ -30,13 +30,14 @@ use tempfile::TempDir;
 
 #[cfg(feature = "test-observation")]
 use crate::test_observation::{
-    ObservationOperation, ObservationOutcome, ObservationRecord, ObservationStage,
-    ObservationThreadRole, TestObservationCapture, TestObservationRecorder, record_active,
+    ObservationIdentities, ObservationOperation, ObservationOutcome, ObservationRecord,
+    ObservationStage, ObservationThreadRole, TestObservationCapture, TestObservationRecorder,
+    record_active,
 };
 #[cfg(feature = "test-observation")]
 use actingcommand_runtime_host::test_observation::{
-    HostTestObservation, HostTestObservationGuard, HostTestObservationOutcome,
-    HostTestObservationPoint,
+    HostTestObservation, HostTestObservationGuard, HostTestObservationOperation,
+    HostTestObservationOutcome, HostTestObservationPoint,
 };
 #[cfg(feature = "test-observation")]
 use std::collections::BTreeSet;
@@ -399,14 +400,28 @@ fn record_host_observation(recorder: &TestObservationRecorder, event: HostTestOb
         HostTestObservationOutcome::Closed => ObservationOutcome::Closed,
         HostTestObservationOutcome::Shutdown => ObservationOutcome::Shutdown,
     };
-    recorder.record(
+    let operation = match event.operation() {
+        HostTestObservationOperation::AcquireLease => ObservationOperation::AcquireLease,
+        HostTestObservationOperation::RenewLease => ObservationOperation::RenewLease,
+        HostTestObservationOperation::Input => ObservationOperation::Input,
+        HostTestObservationOperation::ReleaseLease => ObservationOperation::ReleaseLease,
+        HostTestObservationOperation::Connection => ObservationOperation::Connection,
+        HostTestObservationOperation::Other => ObservationOperation::Other,
+    };
+    let identities = event.identities();
+    recorder.record_sanitized(
         stage,
-        ObservationOperation::Connection,
+        operation,
         ObservationThreadRole::Host,
         outcome,
-        event.request_value(),
-        event.receipt_value(),
-        None,
+        ObservationIdentities {
+            request: identities.request(),
+            correlation: identities.correlation(),
+            instance: identities.instance(),
+            lease: identities.lease(),
+            holder: identities.holder(),
+            token: identities.token(),
+        },
     );
 }
 

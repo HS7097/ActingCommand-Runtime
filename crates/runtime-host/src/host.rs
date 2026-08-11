@@ -14125,14 +14125,14 @@ fn connection_boundary(
     };
     let cleanup = shared.cleanup_connection(connection_id, reason);
     #[cfg(feature = "test-observation")]
-    crate::test_observation::emit(crate::test_observation::HostTestObservation::connection(
+    crate::test_observation::emit_connection(
         crate::test_observation::HostTestObservationPoint::ConnectionCleanupResult,
         if cleanup.is_ok() {
             crate::test_observation::HostTestObservationOutcome::Success
         } else {
             crate::test_observation::HostTestObservationOutcome::Error
         },
-    ));
+    );
     record_failure(&mut failure, cleanup);
     if let Some(error) = failure {
         if error.is_fatal() {
@@ -14198,21 +14198,17 @@ fn connection_loop(
             Ok(FrameRead::Idle) => continue,
             Ok(FrameRead::Closed) => {
                 #[cfg(feature = "test-observation")]
-                crate::test_observation::emit(
-                    crate::test_observation::HostTestObservation::connection(
-                        crate::test_observation::HostTestObservationPoint::ConnectionExit,
-                        crate::test_observation::HostTestObservationOutcome::Closed,
-                    ),
+                crate::test_observation::emit_connection(
+                    crate::test_observation::HostTestObservationPoint::ConnectionExit,
+                    crate::test_observation::HostTestObservationOutcome::Closed,
                 );
                 return Ok(());
             }
             Err(error) => {
                 #[cfg(feature = "test-observation")]
-                crate::test_observation::emit(
-                    crate::test_observation::HostTestObservation::connection(
-                        crate::test_observation::HostTestObservationPoint::ConnectionExit,
-                        crate::test_observation::HostTestObservationOutcome::Error,
-                    ),
+                crate::test_observation::emit_connection(
+                    crate::test_observation::HostTestObservationPoint::ConnectionExit,
+                    crate::test_observation::HostTestObservationOutcome::Error,
                 );
                 return Err(error);
             }
@@ -14221,27 +14217,25 @@ fn connection_loop(
             Ok(request) => request,
             Err(_) => {
                 #[cfg(feature = "test-observation")]
-                crate::test_observation::emit(
-                    crate::test_observation::HostTestObservation::connection(
-                        crate::test_observation::HostTestObservationPoint::ConnectionExit,
-                        crate::test_observation::HostTestObservationOutcome::Error,
-                    ),
+                crate::test_observation::emit_connection(
+                    crate::test_observation::HostTestObservationPoint::ConnectionExit,
+                    crate::test_observation::HostTestObservationOutcome::Error,
                 );
                 return Err(protocol_error("runtime_request_decode_failed"));
             }
         };
         #[cfg(feature = "test-observation")]
-        crate::test_observation::emit(crate::test_observation::HostTestObservation::request(
+        crate::test_observation::emit_request(
             crate::test_observation::HostTestObservationPoint::FrameReceived,
             crate::test_observation::HostTestObservationOutcome::Success,
             &request,
-        ));
+        );
         #[cfg(feature = "test-observation")]
-        crate::test_observation::emit(crate::test_observation::HostTestObservation::request(
+        crate::test_observation::emit_request(
             crate::test_observation::HostTestObservationPoint::DispatchStart,
             crate::test_observation::HostTestObservationOutcome::Started,
             &request,
-        ));
+        );
         let receipt = match cache.get(&request) {
             Ok(Some(receipt)) => Ok(receipt),
             Ok(None) => shared
@@ -14254,80 +14248,68 @@ fn connection_loop(
         let receipt = match receipt {
             Ok(receipt) => {
                 #[cfg(feature = "test-observation")]
-                crate::test_observation::emit(
-                    crate::test_observation::HostTestObservation::receipt(
-                        crate::test_observation::HostTestObservationPoint::DispatchResult,
-                        crate::test_observation::HostTestObservationOutcome::Success,
-                        &request,
-                        &receipt,
-                    ),
+                crate::test_observation::emit_receipt(
+                    crate::test_observation::HostTestObservationPoint::DispatchResult,
+                    crate::test_observation::HostTestObservationOutcome::Success,
+                    &request,
+                    &receipt,
                 );
                 receipt
             }
             Err(error) => {
                 #[cfg(feature = "test-observation")]
-                crate::test_observation::emit(
-                    crate::test_observation::HostTestObservation::request(
-                        crate::test_observation::HostTestObservationPoint::DispatchResult,
-                        crate::test_observation::HostTestObservationOutcome::Error,
-                        &request,
-                    ),
+                crate::test_observation::emit_request(
+                    crate::test_observation::HostTestObservationPoint::DispatchResult,
+                    crate::test_observation::HostTestObservationOutcome::Error,
+                    &request,
                 );
                 #[cfg(feature = "test-observation")]
-                crate::test_observation::emit(
-                    crate::test_observation::HostTestObservation::connection(
-                        crate::test_observation::HostTestObservationPoint::ConnectionExit,
-                        crate::test_observation::HostTestObservationOutcome::Error,
-                    ),
+                crate::test_observation::emit_connection(
+                    crate::test_observation::HostTestObservationPoint::ConnectionExit,
+                    crate::test_observation::HostTestObservationOutcome::Error,
                 );
                 return Err(error);
             }
         };
         #[cfg(feature = "test-observation")]
-        crate::test_observation::emit(crate::test_observation::HostTestObservation::receipt(
+        crate::test_observation::emit_receipt(
             crate::test_observation::HostTestObservationPoint::ReceiptWriteStart,
             crate::test_observation::HostTestObservationOutcome::Started,
             &request,
             &receipt,
-        ));
+        );
         match write_frame(&mut stream, &receipt, maximum_frame_bytes) {
             Ok(()) => {
                 #[cfg(feature = "test-observation")]
-                crate::test_observation::emit(
-                    crate::test_observation::HostTestObservation::receipt(
-                        crate::test_observation::HostTestObservationPoint::ReceiptWriteResult,
-                        crate::test_observation::HostTestObservationOutcome::Success,
-                        &request,
-                        &receipt,
-                    ),
+                crate::test_observation::emit_receipt(
+                    crate::test_observation::HostTestObservationPoint::ReceiptWriteResult,
+                    crate::test_observation::HostTestObservationOutcome::Success,
+                    &request,
+                    &receipt,
                 );
             }
             Err(error) => {
                 #[cfg(feature = "test-observation")]
-                crate::test_observation::emit(
-                    crate::test_observation::HostTestObservation::receipt(
-                        crate::test_observation::HostTestObservationPoint::ReceiptWriteResult,
-                        crate::test_observation::HostTestObservationOutcome::Error,
-                        &request,
-                        &receipt,
-                    ),
+                crate::test_observation::emit_receipt(
+                    crate::test_observation::HostTestObservationPoint::ReceiptWriteResult,
+                    crate::test_observation::HostTestObservationOutcome::Error,
+                    &request,
+                    &receipt,
                 );
                 #[cfg(feature = "test-observation")]
-                crate::test_observation::emit(
-                    crate::test_observation::HostTestObservation::connection(
-                        crate::test_observation::HostTestObservationPoint::ConnectionExit,
-                        crate::test_observation::HostTestObservationOutcome::Error,
-                    ),
+                crate::test_observation::emit_connection(
+                    crate::test_observation::HostTestObservationPoint::ConnectionExit,
+                    crate::test_observation::HostTestObservationOutcome::Error,
                 );
                 return Err(error);
             }
         }
     }
     #[cfg(feature = "test-observation")]
-    crate::test_observation::emit(crate::test_observation::HostTestObservation::connection(
+    crate::test_observation::emit_connection(
         crate::test_observation::HostTestObservationPoint::ConnectionExit,
         crate::test_observation::HostTestObservationOutcome::Shutdown,
-    ));
+    );
     Ok(())
 }
 

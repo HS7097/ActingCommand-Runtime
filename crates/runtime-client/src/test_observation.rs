@@ -265,6 +265,20 @@ impl TestObservationRecorder {
         .unwrap_or_else(|error| panic!("test observation recorder failed: {error}"));
     }
 
+    #[cfg(test)]
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn record_sanitized(
+        &self,
+        stage: ObservationStage,
+        operation: ObservationOperation,
+        thread_role: ObservationThreadRole,
+        outcome: ObservationOutcome,
+        identities: ObservationIdentities,
+    ) {
+        self.try_record_sanitized(stage, operation, thread_role, outcome, identities)
+            .unwrap_or_else(|error| panic!("test observation recorder failed: {error}"));
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn try_record(
         &self,
@@ -282,29 +296,76 @@ impl TestObservationRecorder {
             .state
             .lock()
             .map_err(|_| "test_observation_recorder_lock_poisoned")?;
-        state.next_sequence = state
-            .next_sequence
-            .checked_add(1)
-            .ok_or("test_observation_sequence_overflow")?;
-        let sequence = state.next_sequence;
-        let elapsed_micros = u64::try_from(state.started.elapsed().as_micros())
-            .map_err(|_| "test_observation_elapsed_overflow")?;
         let operation = request
             .map(|request| operation_for(request.operation()))
             .unwrap_or(operation);
         let identities = state.identities.ordinals(request, receipt, token);
-        state.records.push(ObservationRecord {
-            sequence,
-            elapsed_micros,
+        push_record(
+            &mut state,
             stage,
             operation,
             thread_role,
             thread_name,
             outcome,
             identities,
-        });
-        Ok(())
+        )
     }
+
+    #[cfg(test)]
+    fn try_record_sanitized(
+        &self,
+        stage: ObservationStage,
+        operation: ObservationOperation,
+        thread_role: ObservationThreadRole,
+        outcome: ObservationOutcome,
+        identities: ObservationIdentities,
+    ) -> Result<(), &'static str> {
+        let current = thread::current();
+        let thread_name = current.name().unwrap_or("unnamed").to_owned();
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| "test_observation_recorder_lock_poisoned")?;
+        push_record(
+            &mut state,
+            stage,
+            operation,
+            thread_role,
+            thread_name,
+            outcome,
+            identities,
+        )
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn push_record(
+    state: &mut RecorderState,
+    stage: ObservationStage,
+    operation: ObservationOperation,
+    thread_role: ObservationThreadRole,
+    thread_name: String,
+    outcome: ObservationOutcome,
+    identities: ObservationIdentities,
+) -> Result<(), &'static str> {
+    state.next_sequence = state
+        .next_sequence
+        .checked_add(1)
+        .ok_or("test_observation_sequence_overflow")?;
+    let sequence = state.next_sequence;
+    let elapsed_micros = u64::try_from(state.started.elapsed().as_micros())
+        .map_err(|_| "test_observation_elapsed_overflow")?;
+    state.records.push(ObservationRecord {
+        sequence,
+        elapsed_micros,
+        stage,
+        operation,
+        thread_role,
+        thread_name,
+        outcome,
+        identities,
+    });
+    Ok(())
 }
 
 #[cfg(test)]
