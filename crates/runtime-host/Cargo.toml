@@ -8,6 +8,10 @@ license.workspace = true
 repository.workspace = true
 publish = false
 
+[features]
+default = []
+test-observation = []
+
 [dependencies]
 actingcommand-artifact-store = { workspace = true }
 actingcommand-contract = { workspace = true }

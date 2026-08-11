@@ -12,6 +12,9 @@ mod error;
 mod input;
 mod ipc;
 
+#[cfg(feature = "test-observation")]
+mod test_observation;
+
 pub use client::*;
 pub use error::*;
 pub use input::*;

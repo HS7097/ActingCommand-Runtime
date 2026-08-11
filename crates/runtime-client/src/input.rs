@@ -8,6 +8,12 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
+#[cfg(feature = "test-observation")]
+use crate::test_observation::{
+    ObservationOperation, ObservationOutcome, ObservationStage, ObservationThreadRole,
+    record_active,
+};
+
 pub const DEFAULT_RUNTIME_HEARTBEAT_INTERVAL: Duration = Duration::from_millis(2_500);
 pub const MAX_RUNTIME_HEARTBEAT_INTERVAL: Duration = Duration::from_millis(5_000);
 
@@ -106,7 +112,44 @@ impl RuntimeInputProxy {
                 "connect_runtime_input_proxy",
             ));
         }
-        let token = authority.acquire_lease(instance_alias)?;
+        #[cfg(feature = "test-observation")]
+        record_active(
+            ObservationStage::ProxyAcquireStart,
+            ObservationOperation::AcquireLease,
+            ObservationThreadRole::Client,
+            ObservationOutcome::Started,
+            None,
+            None,
+            None,
+        );
+        let token = match authority.acquire_lease(instance_alias) {
+            Ok(token) => {
+                #[cfg(feature = "test-observation")]
+                record_active(
+                    ObservationStage::ProxyAcquireResult,
+                    ObservationOperation::AcquireLease,
+                    ObservationThreadRole::Client,
+                    ObservationOutcome::Success,
+                    None,
+                    None,
+                    Some(&token),
+                );
+                token
+            }
+            Err(error) => {
+                #[cfg(feature = "test-observation")]
+                record_active(
+                    ObservationStage::ProxyAcquireResult,
+                    ObservationOperation::AcquireLease,
+                    ObservationThreadRole::Client,
+                    ObservationOutcome::Failure,
+                    None,
+                    None,
+                    None,
+                );
+                return Err(error);
+            }
+        };
         let state = Arc::new(Mutex::new(ProxyState {
             token,
             heartbeat_failure: None,
@@ -176,7 +219,32 @@ impl RuntimeInputProxy {
                 "proxy_input",
             ));
         }
-        self.authority.input(&state.token, action)
+        #[cfg(feature = "test-observation")]
+        record_active(
+            ObservationStage::ProxyInputStart,
+            ObservationOperation::Input,
+            ObservationThreadRole::Client,
+            ObservationOutcome::Started,
+            None,
+            None,
+            Some(&state.token),
+        );
+        let result = self.authority.input(&state.token, action);
+        #[cfg(feature = "test-observation")]
+        record_active(
+            ObservationStage::ProxyInputResult,
+            ObservationOperation::Input,
+            ObservationThreadRole::Client,
+            if result.is_ok() {
+                ObservationOutcome::Success
+            } else {
+                ObservationOutcome::Failure
+            },
+            None,
+            None,
+            Some(&state.token),
+        );
+        result
     }
 
     pub fn close(&mut self) -> RuntimeClientResult<()> {
@@ -189,34 +257,99 @@ impl RuntimeInputProxy {
         }
         self.closed = true;
         let mut failure = None;
-        if self.stop.take().is_some_and(|stop| stop.send(()).is_err()) {
-            merge_failure(
-                &mut failure,
-                RuntimeClientError::fatal(
-                    "runtime_input_proxy_heartbeat_stop_failed",
-                    "close_runtime_input_proxy",
-                ),
+        if let Some(stop) = self.stop.take() {
+            let result = stop.send(());
+            #[cfg(feature = "test-observation")]
+            record_active(
+                ObservationStage::ProxyStopSend,
+                ObservationOperation::Proxy,
+                ObservationThreadRole::Client,
+                if result.is_ok() {
+                    ObservationOutcome::Stop
+                } else {
+                    ObservationOutcome::Failure
+                },
+                None,
+                None,
+                None,
             );
+            if result.is_err() {
+                merge_failure(
+                    &mut failure,
+                    RuntimeClientError::fatal(
+                        "runtime_input_proxy_heartbeat_stop_failed",
+                        "close_runtime_input_proxy",
+                    ),
+                );
+            }
         }
-        if self
-            .heartbeat
-            .take()
-            .is_some_and(|heartbeat| heartbeat.join().is_err())
-        {
-            merge_failure(
-                &mut failure,
-                RuntimeClientError::fatal(
-                    "runtime_input_proxy_heartbeat_join_failed",
-                    "close_runtime_input_proxy",
-                ),
+        if let Some(heartbeat) = self.heartbeat.take() {
+            #[cfg(feature = "test-observation")]
+            record_active(
+                ObservationStage::HeartbeatJoinStart,
+                ObservationOperation::Proxy,
+                ObservationThreadRole::Client,
+                ObservationOutcome::Started,
+                None,
+                None,
+                None,
             );
+            let result = heartbeat.join();
+            #[cfg(feature = "test-observation")]
+            record_active(
+                ObservationStage::HeartbeatJoinResult,
+                ObservationOperation::Proxy,
+                ObservationThreadRole::Client,
+                if result.is_ok() {
+                    ObservationOutcome::Success
+                } else {
+                    ObservationOutcome::Failure
+                },
+                None,
+                None,
+                None,
+            );
+            if result.is_err() {
+                merge_failure(
+                    &mut failure,
+                    RuntimeClientError::fatal(
+                        "runtime_input_proxy_heartbeat_join_failed",
+                        "close_runtime_input_proxy",
+                    ),
+                );
+            }
         }
         match lock_proxy(&self.state) {
             Ok(state) => {
                 if let Some(error) = &state.heartbeat_failure {
                     merge_failure(&mut failure, error.clone());
                 }
-                if let Err(error) = self.authority.release_lease(&state.token) {
+                #[cfg(feature = "test-observation")]
+                record_active(
+                    ObservationStage::ProxyReleaseStart,
+                    ObservationOperation::ReleaseLease,
+                    ObservationThreadRole::Client,
+                    ObservationOutcome::Started,
+                    None,
+                    None,
+                    Some(&state.token),
+                );
+                let release = self.authority.release_lease(&state.token);
+                #[cfg(feature = "test-observation")]
+                record_active(
+                    ObservationStage::ProxyReleaseResult,
+                    ObservationOperation::ReleaseLease,
+                    ObservationThreadRole::Client,
+                    if release.is_ok() {
+                        ObservationOutcome::Success
+                    } else {
+                        ObservationOutcome::Failure
+                    },
+                    None,
+                    None,
+                    Some(&state.token),
+                );
+                if let Err(error) = release {
                     merge_failure(&mut failure, error);
                 }
             }
@@ -245,15 +378,82 @@ fn heartbeat_loop(
 ) {
     loop {
         match stop.recv_timeout(heartbeat_interval) {
-            Ok(()) | Err(RecvTimeoutError::Disconnected) => return,
+            Ok(()) => {
+                #[cfg(feature = "test-observation")]
+                record_active(
+                    ObservationStage::HeartbeatWaitResult,
+                    ObservationOperation::Proxy,
+                    ObservationThreadRole::Heartbeat,
+                    ObservationOutcome::Stop,
+                    None,
+                    None,
+                    None,
+                );
+                return;
+            }
+            Err(RecvTimeoutError::Disconnected) => {
+                #[cfg(feature = "test-observation")]
+                record_active(
+                    ObservationStage::HeartbeatWaitResult,
+                    ObservationOperation::Proxy,
+                    ObservationThreadRole::Heartbeat,
+                    ObservationOutcome::Closed,
+                    None,
+                    None,
+                    None,
+                );
+                return;
+            }
             Err(RecvTimeoutError::Timeout) => {
+                #[cfg(feature = "test-observation")]
+                record_active(
+                    ObservationStage::HeartbeatWaitResult,
+                    ObservationOperation::Proxy,
+                    ObservationThreadRole::Heartbeat,
+                    ObservationOutcome::Timeout,
+                    None,
+                    None,
+                    None,
+                );
                 let mut state = match state.lock() {
                     Ok(state) => state,
                     Err(_) => return,
                 };
+                #[cfg(feature = "test-observation")]
+                record_active(
+                    ObservationStage::HeartbeatRenewStart,
+                    ObservationOperation::RenewLease,
+                    ObservationThreadRole::Heartbeat,
+                    ObservationOutcome::Started,
+                    None,
+                    None,
+                    Some(&state.token),
+                );
                 match authority.renew_lease(&state.token) {
-                    Ok(token) => state.token = token,
+                    Ok(token) => {
+                        #[cfg(feature = "test-observation")]
+                        record_active(
+                            ObservationStage::HeartbeatRenewResult,
+                            ObservationOperation::RenewLease,
+                            ObservationThreadRole::Heartbeat,
+                            ObservationOutcome::Success,
+                            None,
+                            None,
+                            Some(&token),
+                        );
+                        state.token = token;
+                    }
                     Err(error) => {
+                        #[cfg(feature = "test-observation")]
+                        record_active(
+                            ObservationStage::HeartbeatRenewResult,
+                            ObservationOperation::RenewLease,
+                            ObservationThreadRole::Heartbeat,
+                            ObservationOutcome::Failure,
+                            None,
+                            None,
+                            Some(&state.token),
+                        );
                         state.heartbeat_failure = Some(error);
                         return;
                     }

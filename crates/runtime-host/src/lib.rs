@@ -29,6 +29,10 @@ mod provider;
 mod strategy;
 mod time;
 
+#[cfg(feature = "test-observation")]
+#[doc(hidden)]
+pub mod test_observation;
+
 pub use strategy::StrategicPlanPreparation;
 pub use time::{RuntimeClock, RuntimeClockSample, SystemRuntimeClock};
 

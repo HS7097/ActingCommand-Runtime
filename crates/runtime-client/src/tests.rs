@@ -28,6 +28,19 @@ use std::thread;
 use std::time::{Duration, Instant};
 use tempfile::TempDir;
 
+#[cfg(feature = "test-observation")]
+use crate::test_observation::{
+    ObservationOperation, ObservationOutcome, ObservationRecord, ObservationStage,
+    ObservationThreadRole, TestObservationCapture, TestObservationRecorder, record_active,
+};
+#[cfg(feature = "test-observation")]
+use actingcommand_runtime_host::test_observation::{
+    HostTestObservation, HostTestObservationGuard, HostTestObservationOutcome,
+    HostTestObservationPoint,
+};
+#[cfg(feature = "test-observation")]
+use std::collections::BTreeSet;
+
 const TEST_GOVERNANCE_CAPABILITY: &str = "runtime-client-governance-test-capability";
 
 #[derive(Default)]
@@ -50,10 +63,40 @@ struct FakeBackend {
 
 impl FakeBackend {
     fn input(&self) -> DeviceResult<()> {
+        #[cfg(feature = "test-observation")]
+        record_active(
+            ObservationStage::BackendInputStart,
+            ObservationOperation::Backend,
+            ObservationThreadRole::Backend,
+            ObservationOutcome::Started,
+            None,
+            None,
+            None,
+        );
         if self.state.fail_input.load(Ordering::Acquire) {
+            #[cfg(feature = "test-observation")]
+            record_active(
+                ObservationStage::BackendInputResult,
+                ObservationOperation::Backend,
+                ObservationThreadRole::Backend,
+                ObservationOutcome::Failure,
+                None,
+                None,
+                None,
+            );
             return Err(DeviceError::fatal("injected input failure"));
         }
         self.state.inputs.fetch_add(1, Ordering::AcqRel);
+        #[cfg(feature = "test-observation")]
+        record_active(
+            ObservationStage::BackendInputResult,
+            ObservationOperation::Backend,
+            ObservationThreadRole::Backend,
+            ObservationOutcome::Success,
+            None,
+            None,
+            None,
+        );
         Ok(())
     }
 }
@@ -64,8 +107,33 @@ impl InputBackend for FakeBackend {
     }
 
     fn long_tap(&mut self, _x: i32, _y: i32, duration_ms: u64) -> DeviceResult<()> {
+        #[cfg(feature = "test-observation")]
+        record_active(
+            ObservationStage::BackendLongInputStart,
+            ObservationOperation::Backend,
+            ObservationThreadRole::Backend,
+            ObservationOutcome::Started,
+            None,
+            None,
+            None,
+        );
         thread::sleep(Duration::from_millis(duration_ms));
-        self.input()
+        let result = self.input();
+        #[cfg(feature = "test-observation")]
+        record_active(
+            ObservationStage::BackendLongInputResult,
+            ObservationOperation::Backend,
+            ObservationThreadRole::Backend,
+            if result.is_ok() {
+                ObservationOutcome::Success
+            } else {
+                ObservationOutcome::Failure
+            },
+            None,
+            None,
+            None,
+        );
+        result
     }
 
     fn swipe(
@@ -96,6 +164,16 @@ impl InputBackend for FakeBackend {
             self.closed = true;
             self.state.closes.fetch_add(1, Ordering::AcqRel);
         }
+        #[cfg(feature = "test-observation")]
+        record_active(
+            ObservationStage::BackendClose,
+            ObservationOperation::Backend,
+            ObservationThreadRole::Backend,
+            ObservationOutcome::Closed,
+            None,
+            None,
+            None,
+        );
         Ok(())
     }
 }
@@ -162,12 +240,33 @@ impl ExecutionBackendProvider for FakeProvider {
     }
 
     fn open_input(&self, instance_alias: &str) -> DeviceResult<Box<dyn InputBackend>> {
+        #[cfg(feature = "test-observation")]
+        record_active(
+            ObservationStage::BackendOpenStart,
+            ObservationOperation::Backend,
+            ObservationThreadRole::Backend,
+            ObservationOutcome::Started,
+            None,
+            None,
+            None,
+        );
         assert_eq!(instance_alias, "node.a");
         self.state.opens.fetch_add(1, Ordering::AcqRel);
-        Ok(Box::new(FakeBackend {
+        let backend: Box<dyn InputBackend> = Box::new(FakeBackend {
             state: Arc::clone(&self.state),
             closed: false,
-        }))
+        });
+        #[cfg(feature = "test-observation")]
+        record_active(
+            ObservationStage::BackendOpenResult,
+            ObservationOperation::Backend,
+            ObservationThreadRole::Backend,
+            ObservationOutcome::Success,
+            None,
+            None,
+            None,
+        );
+        Ok(backend)
     }
 
     fn open_capture(&self, instance_alias: &str) -> DeviceResult<Box<dyn CaptureBackend>> {
@@ -271,6 +370,289 @@ fn client_with_timeout(root: &TempDir, io_timeout: Duration) -> RuntimeClient {
     .expect("runtime client")
 }
 
+#[cfg(feature = "test-observation")]
+fn start_test_observation() -> (TestObservationCapture, HostTestObservationGuard) {
+    let capture = TestObservationCapture::start().expect("start test observation");
+    let recorder = capture.recorder();
+    let host = actingcommand_runtime_host::test_observation::install(Arc::new(move |event| {
+        record_host_observation(&recorder, event);
+    }))
+    .expect("install host test observation");
+    (capture, host)
+}
+
+#[cfg(feature = "test-observation")]
+fn record_host_observation(recorder: &TestObservationRecorder, event: HostTestObservation) {
+    let stage = match event.point() {
+        HostTestObservationPoint::FrameReceived => ObservationStage::HostFrameReceived,
+        HostTestObservationPoint::DispatchStart => ObservationStage::HostDispatchStart,
+        HostTestObservationPoint::DispatchResult => ObservationStage::HostDispatchResult,
+        HostTestObservationPoint::ReceiptWriteStart => ObservationStage::HostReceiptWriteStart,
+        HostTestObservationPoint::ReceiptWriteResult => ObservationStage::HostReceiptWriteResult,
+        HostTestObservationPoint::ConnectionExit => ObservationStage::HostConnectionExit,
+        HostTestObservationPoint::ConnectionCleanupResult => ObservationStage::HostCleanupResult,
+    };
+    let outcome = match event.outcome() {
+        HostTestObservationOutcome::Started => ObservationOutcome::Started,
+        HostTestObservationOutcome::Success => ObservationOutcome::Success,
+        HostTestObservationOutcome::Error => ObservationOutcome::Failure,
+        HostTestObservationOutcome::Closed => ObservationOutcome::Closed,
+        HostTestObservationOutcome::Shutdown => ObservationOutcome::Shutdown,
+    };
+    recorder.record(
+        stage,
+        ObservationOperation::Connection,
+        ObservationThreadRole::Host,
+        outcome,
+        event.request_value(),
+        event.receipt_value(),
+        None,
+    );
+}
+
+#[cfg(feature = "test-observation")]
+#[derive(Clone, Copy)]
+enum ExpectedObservationPath {
+    HeartbeatProxy,
+    LongInput,
+}
+
+#[cfg(feature = "test-observation")]
+fn assert_test_observation_trace(records: &[ObservationRecord], expected: ExpectedObservationPath) {
+    assert!(!records.is_empty());
+    for (index, record) in records.iter().enumerate() {
+        assert_eq!(
+            record.sequence,
+            u64::try_from(index).expect("trace index fits u64") + 1
+        );
+        assert!(!record.thread_name.is_empty());
+    }
+    assert!(
+        records
+            .windows(2)
+            .all(|pair| pair[0].elapsed_micros <= pair[1].elapsed_micros)
+    );
+
+    for (start, result) in [
+        (
+            ObservationStage::ClientRequestWriteStart,
+            ObservationStage::ClientRequestWriteResult,
+        ),
+        (
+            ObservationStage::ReceiptHeaderWait,
+            ObservationStage::ReceiptHeaderResult,
+        ),
+        (
+            ObservationStage::ReceiptBodyWait,
+            ObservationStage::ReceiptBodyResult,
+        ),
+        (
+            ObservationStage::HostDispatchStart,
+            ObservationStage::HostDispatchResult,
+        ),
+        (
+            ObservationStage::HostReceiptWriteStart,
+            ObservationStage::HostReceiptWriteResult,
+        ),
+        (
+            ObservationStage::BackendOpenStart,
+            ObservationStage::BackendOpenResult,
+        ),
+    ] {
+        assert_before(records, start, result);
+    }
+    assert_before(
+        records,
+        ObservationStage::ClientRequestCreated,
+        ObservationStage::HostFrameReceived,
+    );
+    assert_before(
+        records,
+        ObservationStage::HostReceiptWriteStart,
+        ObservationStage::ReceiptHeaderResult,
+    );
+    assert_before(
+        records,
+        ObservationStage::ReceiptBodyResult,
+        ObservationStage::ReceiptValidationResult,
+    );
+    assert_before(
+        records,
+        ObservationStage::ReceiptValidationResult,
+        ObservationStage::ClientTerminalResult,
+    );
+    assert!(records.iter().any(|record| {
+        record.stage == ObservationStage::HostConnectionExit
+            && matches!(
+                record.outcome,
+                ObservationOutcome::Closed | ObservationOutcome::Shutdown
+            )
+    }));
+    assert!(records.iter().any(|record| {
+        record.stage == ObservationStage::HostCleanupResult
+            && record.outcome == ObservationOutcome::Success
+    }));
+    assert!(records.iter().any(|record| {
+        record.stage == ObservationStage::BackendClose
+            && record.outcome == ObservationOutcome::Closed
+    }));
+
+    let client_requests = records
+        .iter()
+        .filter(|record| record.stage == ObservationStage::ClientRequestCreated)
+        .map(|record| {
+            (
+                record
+                    .identities
+                    .request
+                    .expect("client request has request ordinal"),
+                record
+                    .identities
+                    .correlation
+                    .expect("client request has correlation ordinal"),
+            )
+        })
+        .collect::<Vec<_>>();
+    assert!(!client_requests.is_empty());
+    for (request, correlation) in client_requests {
+        for stage in [
+            ObservationStage::HostFrameReceived,
+            ObservationStage::HostDispatchResult,
+            ObservationStage::HostReceiptWriteResult,
+            ObservationStage::ReceiptValidationResult,
+        ] {
+            assert!(records.iter().any(|record| {
+                record.stage == stage
+                    && record.identities.request == Some(request)
+                    && record.identities.correlation == Some(correlation)
+            }));
+        }
+    }
+
+    for identity in [
+        |record: &ObservationRecord| record.identities.instance,
+        |record: &ObservationRecord| record.identities.lease,
+        |record: &ObservationRecord| record.identities.holder,
+    ] {
+        let ordinals = records
+            .iter()
+            .filter(|record| {
+                matches!(
+                    record.operation,
+                    ObservationOperation::AcquireLease
+                        | ObservationOperation::RenewLease
+                        | ObservationOperation::Input
+                        | ObservationOperation::ReleaseLease
+                )
+            })
+            .filter_map(identity)
+            .collect::<BTreeSet<_>>();
+        assert_eq!(
+            ordinals.len(),
+            1,
+            "lease-chain identity split: {ordinals:?}"
+        );
+    }
+
+    let token_lineage = records
+        .iter()
+        .filter_map(|record| record.identities.token)
+        .collect::<BTreeSet<_>>();
+    match expected {
+        ExpectedObservationPath::HeartbeatProxy => {
+            assert_before(
+                records,
+                ObservationStage::ProxyAcquireStart,
+                ObservationStage::ProxyAcquireResult,
+            );
+            assert!(records.iter().any(|record| {
+                record.stage == ObservationStage::HeartbeatWaitResult
+                    && record.outcome == ObservationOutcome::Timeout
+            }));
+            assert_before(
+                records,
+                ObservationStage::HeartbeatRenewStart,
+                ObservationStage::HeartbeatRenewResult,
+            );
+            assert_before(
+                records,
+                ObservationStage::ProxyInputStart,
+                ObservationStage::ProxyInputResult,
+            );
+            assert_before(
+                records,
+                ObservationStage::BackendInputStart,
+                ObservationStage::BackendInputResult,
+            );
+            assert_before(
+                records,
+                ObservationStage::ProxyStopSend,
+                ObservationStage::HeartbeatJoinStart,
+            );
+            assert_before(
+                records,
+                ObservationStage::HeartbeatJoinStart,
+                ObservationStage::HeartbeatJoinResult,
+            );
+            assert_before(
+                records,
+                ObservationStage::HeartbeatJoinResult,
+                ObservationStage::ProxyReleaseStart,
+            );
+            assert_before(
+                records,
+                ObservationStage::ProxyReleaseStart,
+                ObservationStage::ProxyReleaseResult,
+            );
+            assert!(token_lineage.len() >= 2, "renewal token lineage missing");
+        }
+        ExpectedObservationPath::LongInput => {
+            assert_before(
+                records,
+                ObservationStage::ClientAcquireStart,
+                ObservationStage::ClientAcquireResult,
+            );
+            assert_before(
+                records,
+                ObservationStage::ClientInputStart,
+                ObservationStage::BackendLongInputStart,
+            );
+            assert_before(
+                records,
+                ObservationStage::BackendLongInputStart,
+                ObservationStage::BackendLongInputResult,
+            );
+            assert_before(
+                records,
+                ObservationStage::BackendLongInputResult,
+                ObservationStage::ClientInputResult,
+            );
+            assert_before(
+                records,
+                ObservationStage::ClientReleaseStart,
+                ObservationStage::ClientReleaseResult,
+            );
+            assert_eq!(token_lineage.len(), 1, "unexpected token replacement");
+        }
+    }
+}
+
+#[cfg(feature = "test-observation")]
+fn assert_before(records: &[ObservationRecord], first: ObservationStage, second: ObservationStage) {
+    let first = records
+        .iter()
+        .position(|record| record.stage == first)
+        .unwrap_or_else(|| panic!("missing observation stage: {first:?}"));
+    let second = records
+        .iter()
+        .position(|record| record.stage == second)
+        .unwrap_or_else(|| panic!("missing observation stage: {second:?}"));
+    assert!(
+        first < second,
+        "observation order reversed: {first} >= {second}"
+    );
+}
+
 fn scripted_runtime(
     root: &TempDir,
     script: impl FnOnce(TcpListener, OwnerEpoch) + Send + 'static,
@@ -361,6 +743,7 @@ fn receipt_eof_error(deadline: Instant) -> RuntimeClientError {
         &"request",
         DEFAULT_RUNTIME_MAX_FRAME_BYTES,
         Some(ReceiptReadDeadline::at(deadline, "runtime_receipt_timeout")),
+        None,
     )
     .expect_err("peer EOF must fail the receipt exchange");
     server.join().expect("EOF runtime");
@@ -1258,6 +1641,8 @@ fn safe_reset_backend_failure_is_visible_and_releases_authority() {
 
 #[test]
 fn runtime_input_proxy_renews_before_short_lease_expiry() {
+    #[cfg(feature = "test-observation")]
+    let (observation, host_observation) = start_test_observation();
     let root = TempDir::new().expect("tempdir");
     let state = Arc::new(FakeState::default());
     let host = host(&root, Arc::clone(&state), 1_000);
@@ -1279,6 +1664,12 @@ fn runtime_input_proxy_renews_before_short_lease_expiry() {
     drop(client);
     host.close().expect("close host");
     assert_eq!(state.closes.load(Ordering::Acquire), 1);
+    #[cfg(feature = "test-observation")]
+    {
+        drop(host_observation);
+        let records = observation.finish().expect("seal test observation");
+        assert_test_observation_trace(&records, ExpectedObservationPath::HeartbeatProxy);
+    }
 }
 
 #[test]
@@ -1308,6 +1699,8 @@ fn dropping_runtime_input_proxy_releases_authority_but_keeps_the_daemon_session(
 
 #[test]
 fn long_input_extends_only_its_response_wait() {
+    #[cfg(feature = "test-observation")]
+    let (observation, host_observation) = start_test_observation();
     let root = TempDir::new().expect("tempdir");
     let state = Arc::new(FakeState::default());
     let host = host(&root, Arc::clone(&state), 5_000);
@@ -1328,6 +1721,12 @@ fn long_input_extends_only_its_response_wait() {
     client.release_lease(&token).expect("release");
     drop(client);
     host.close().expect("close host");
+    #[cfg(feature = "test-observation")]
+    {
+        drop(host_observation);
+        let records = observation.finish().expect("seal test observation");
+        assert_test_observation_trace(&records, ExpectedObservationPath::LongInput);
+    }
 }
 
 #[test]

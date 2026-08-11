@@ -6,6 +6,10 @@ license.workspace = true
 repository.workspace = true
 publish = false
 
+[features]
+default = []
+test-observation = ["actingcommand-runtime-host/test-observation"]
+
 [dependencies]
 actingcommand-contract = { workspace = true }
 actingcommand-policy = { workspace = true }
