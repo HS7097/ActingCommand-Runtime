@@ -4,7 +4,12 @@ use actingcommand_contract::{
     CorrelationId, HolderId, InstanceId, LeaseId, LeaseToken, RuntimeOperation, RuntimeReceipt,
     RuntimeRequest, RuntimeResult,
 };
+use std::cell::Cell;
 use std::fmt;
+use std::marker::PhantomData;
+use std::rc::Rc;
+#[cfg(test)]
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Instant;
@@ -236,6 +241,51 @@ struct RecorderState {
     records: Vec<ObservationRecord>,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) struct TestObservationOwner(u64);
+
+pub(crate) struct TestObservationOwnerScope {
+    previous: Option<TestObservationOwner>,
+    _not_send: PhantomData<Rc<()>>,
+}
+
+impl Drop for TestObservationOwnerScope {
+    fn drop(&mut self) {
+        CURRENT_OBSERVATION_OWNER.set(self.previous);
+    }
+}
+
+std::thread_local! {
+    static CURRENT_OBSERVATION_OWNER: Cell<Option<TestObservationOwner>> = const { Cell::new(None) };
+}
+
+#[cfg(test)]
+static NEXT_OBSERVATION_OWNER: AtomicU64 = AtomicU64::new(1);
+
+pub(crate) fn current_observation_owner() -> Option<TestObservationOwner> {
+    CURRENT_OBSERVATION_OWNER.get()
+}
+
+pub(crate) fn enter_observation_owner(
+    owner: Option<TestObservationOwner>,
+) -> TestObservationOwnerScope {
+    let previous = CURRENT_OBSERVATION_OWNER.replace(owner);
+    TestObservationOwnerScope {
+        previous,
+        _not_send: PhantomData,
+    }
+}
+
+#[cfg(test)]
+fn mint_observation_owner() -> Result<TestObservationOwner, &'static str> {
+    NEXT_OBSERVATION_OWNER
+        .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |next| {
+            next.checked_add(1)
+        })
+        .map(TestObservationOwner)
+        .map_err(|_| "test_observation_owner_overflow")
+}
+
 #[derive(Clone)]
 pub(crate) struct TestObservationRecorder {
     state: Arc<Mutex<RecorderState>>,
@@ -370,11 +420,18 @@ fn push_record(
 
 #[cfg(test)]
 static TEST_SERIAL: Mutex<()> = Mutex::new(());
-static ACTIVE_RECORDER: Mutex<Option<Arc<Mutex<RecorderState>>>> = Mutex::new(None);
+
+struct ActiveRecorder {
+    owner: TestObservationOwner,
+    state: Arc<Mutex<RecorderState>>,
+}
+
+static ACTIVE_RECORDER: Mutex<Option<ActiveRecorder>> = Mutex::new(None);
 
 #[cfg(test)]
 pub(crate) struct TestObservationCapture {
     serial: Option<MutexGuard<'static, ()>>,
+    owner_scope: Option<TestObservationOwnerScope>,
     recorder: TestObservationRecorder,
     finished: bool,
 }
@@ -385,6 +442,8 @@ impl TestObservationCapture {
         let serial = TEST_SERIAL
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let owner = mint_observation_owner()?;
+        let owner_scope = enter_observation_owner(Some(owner));
         let state = Arc::new(Mutex::new(RecorderState {
             started: Instant::now(),
             next_sequence: 0,
@@ -397,10 +456,14 @@ impl TestObservationCapture {
         if active.is_some() {
             return Err("test_observation_recorder_already_active");
         }
-        *active = Some(Arc::clone(&state));
+        *active = Some(ActiveRecorder {
+            owner,
+            state: Arc::clone(&state),
+        });
         drop(active);
         Ok(Self {
             serial: Some(serial),
+            owner_scope: Some(owner_scope),
             recorder: TestObservationRecorder { state },
             finished: false,
         })
@@ -421,12 +484,14 @@ impl TestObservationCapture {
                 let records = poisoned.into_inner().records.clone();
                 emit_trace(&records);
                 self.finished = true;
+                self.owner_scope.take();
                 self.serial.take();
                 return Err("test_observation_recorder_lock_poisoned");
             }
         };
         emit_trace(&records);
         self.finished = true;
+        self.owner_scope.take();
         self.serial.take();
         Ok(records)
     }
@@ -444,6 +509,8 @@ impl Drop for TestObservationCapture {
         };
         emit_trace(&records);
         let _ = clear_active(&self.recorder);
+        self.owner_scope.take();
+        self.serial.take();
         if !thread::panicking() {
             panic!("test observation capture dropped without a sealed trace");
         }
@@ -460,12 +527,16 @@ pub(crate) fn record_active(
     receipt: Option<&RuntimeReceipt>,
     token: Option<&LeaseToken>,
 ) {
+    let Some(owner) = current_observation_owner() else {
+        return;
+    };
     let recorder = ACTIVE_RECORDER
         .lock()
         .unwrap_or_else(|_| panic!("test observation active lock poisoned"))
         .as_ref()
-        .map(|state| TestObservationRecorder {
-            state: Arc::clone(state),
+        .filter(|active| active.owner == owner)
+        .map(|active| TestObservationRecorder {
+            state: Arc::clone(&active.state),
         });
     if let Some(recorder) = recorder {
         recorder.record(
@@ -488,7 +559,9 @@ fn clear_active(recorder: &TestObservationRecorder) -> Result<(), &'static str> 
     let Some(installed) = active.as_ref() else {
         return Err("test_observation_recorder_not_active");
     };
-    if !Arc::ptr_eq(installed, &recorder.state) {
+    if installed.owner != current_observation_owner().ok_or("test_observation_owner_not_active")?
+        || !Arc::ptr_eq(&installed.state, &recorder.state)
+    {
         return Err("test_observation_recorder_identity_mismatch");
     }
     *active = None;
@@ -548,12 +621,16 @@ mod tests {
         }));
         assert!(unwind.is_err());
 
+        let serial = TEST_SERIAL
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         assert!(
             ACTIVE_RECORDER
                 .lock()
                 .expect("active recorder lock")
                 .is_none()
         );
+        drop(serial);
         let capture = TestObservationCapture::start().expect("restart observation after unwind");
         capture.recorder().record(
             ObservationStage::ClientInputStart,
@@ -583,5 +660,46 @@ mod tests {
                 .expect_err("recorder failure must be visible"),
             "test_observation_recorder_lock_poisoned"
         );
+    }
+
+    #[test]
+    fn recorder_admits_only_the_exact_capture_owner() {
+        let capture = TestObservationCapture::start().expect("start observation");
+        let owner = current_observation_owner().expect("capture owner");
+
+        thread::spawn(|| {
+            record_active(
+                ObservationStage::ClientInputStart,
+                ObservationOperation::Input,
+                ObservationThreadRole::Client,
+                ObservationOutcome::Failure,
+                None,
+                None,
+                None,
+            );
+        })
+        .join()
+        .expect("join non-owner observation thread");
+
+        thread::spawn(move || {
+            let _owner_scope = enter_observation_owner(Some(owner));
+            record_active(
+                ObservationStage::ClientInputResult,
+                ObservationOperation::Input,
+                ObservationThreadRole::Client,
+                ObservationOutcome::Success,
+                None,
+                None,
+                None,
+            );
+        })
+        .join()
+        .expect("join owner observation thread");
+
+        let records = capture.finish().expect("seal observation");
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].sequence, 1);
+        assert_eq!(records[0].stage, ObservationStage::ClientInputResult);
+        assert_eq!(records[0].outcome, ObservationOutcome::Success);
     }
 }

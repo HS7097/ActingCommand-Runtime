@@ -31,8 +31,8 @@ use tempfile::TempDir;
 #[cfg(feature = "test-observation")]
 use crate::test_observation::{
     ObservationIdentities, ObservationOperation, ObservationOutcome, ObservationRecord,
-    ObservationStage, ObservationThreadRole, TestObservationCapture, TestObservationRecorder,
-    record_active,
+    ObservationStage, ObservationThreadRole, TestObservationCapture, TestObservationOwner,
+    TestObservationRecorder, current_observation_owner, enter_observation_owner, record_active,
 };
 #[cfg(feature = "test-observation")]
 use actingcommand_runtime_host::test_observation::{
@@ -55,6 +55,23 @@ struct FakeState {
     capture_closes: AtomicUsize,
     fail_capture: AtomicBool,
     invalid_capture: AtomicBool,
+    #[cfg(feature = "test-observation")]
+    observation_owner: Option<TestObservationOwner>,
+}
+
+impl FakeState {
+    #[cfg(feature = "test-observation")]
+    fn for_test_observation() -> Self {
+        Self {
+            observation_owner: current_observation_owner(),
+            ..Self::default()
+        }
+    }
+
+    #[cfg(not(feature = "test-observation"))]
+    fn for_test_observation() -> Self {
+        Self::default()
+    }
 }
 
 struct FakeBackend {
@@ -64,6 +81,8 @@ struct FakeBackend {
 
 impl FakeBackend {
     fn input(&self) -> DeviceResult<()> {
+        #[cfg(feature = "test-observation")]
+        let _observation_owner = enter_observation_owner(self.state.observation_owner);
         #[cfg(feature = "test-observation")]
         record_active(
             ObservationStage::BackendInputStart,
@@ -108,6 +127,8 @@ impl InputBackend for FakeBackend {
     }
 
     fn long_tap(&mut self, _x: i32, _y: i32, duration_ms: u64) -> DeviceResult<()> {
+        #[cfg(feature = "test-observation")]
+        let _observation_owner = enter_observation_owner(self.state.observation_owner);
         #[cfg(feature = "test-observation")]
         record_active(
             ObservationStage::BackendLongInputStart,
@@ -161,6 +182,8 @@ impl InputBackend for FakeBackend {
     }
 
     fn close(&mut self) -> DeviceResult<()> {
+        #[cfg(feature = "test-observation")]
+        let _observation_owner = enter_observation_owner(self.state.observation_owner);
         if !self.closed {
             self.closed = true;
             self.state.closes.fetch_add(1, Ordering::AcqRel);
@@ -241,6 +264,8 @@ impl ExecutionBackendProvider for FakeProvider {
     }
 
     fn open_input(&self, instance_alias: &str) -> DeviceResult<Box<dyn InputBackend>> {
+        #[cfg(feature = "test-observation")]
+        let _observation_owner = enter_observation_owner(self.state.observation_owner);
         #[cfg(feature = "test-observation")]
         record_active(
             ObservationStage::BackendOpenStart,
@@ -1659,7 +1684,7 @@ fn runtime_input_proxy_renews_before_short_lease_expiry() {
     #[cfg(feature = "test-observation")]
     let (observation, host_observation) = start_test_observation();
     let root = TempDir::new().expect("tempdir");
-    let state = Arc::new(FakeState::default());
+    let state = Arc::new(FakeState::for_test_observation());
     let host = host(&root, Arc::clone(&state), 1_000);
     let client = client(&root);
     let mut proxy = RuntimeInputProxy::connect_with_heartbeat(
@@ -1717,7 +1742,7 @@ fn long_input_extends_only_its_response_wait() {
     #[cfg(feature = "test-observation")]
     let (observation, host_observation) = start_test_observation();
     let root = TempDir::new().expect("tempdir");
-    let state = Arc::new(FakeState::default());
+    let state = Arc::new(FakeState::for_test_observation());
     let host = host(&root, Arc::clone(&state), 5_000);
     let client = client_with_timeout(&root, Duration::from_millis(1_000));
     let token = client.acquire_lease("node.a").expect("lease");

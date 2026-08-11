@@ -11,7 +11,7 @@ use std::time::Duration;
 #[cfg(feature = "test-observation")]
 use crate::test_observation::{
     ObservationOperation, ObservationOutcome, ObservationStage, ObservationThreadRole,
-    record_active,
+    current_observation_owner, enter_observation_owner, record_active,
 };
 
 pub const DEFAULT_RUNTIME_HEARTBEAT_INTERVAL: Duration = Duration::from_millis(2_500);
@@ -157,9 +157,13 @@ impl RuntimeInputProxy {
         let (stop, receiver) = mpsc::sync_channel(1);
         let thread_state = Arc::clone(&state);
         let thread_authority = authority.clone();
+        #[cfg(feature = "test-observation")]
+        let heartbeat_observation_owner = current_observation_owner();
         let heartbeat = thread::Builder::new()
             .name("actingcommand-runtime-heartbeat".to_string())
             .spawn(move || {
+                #[cfg(feature = "test-observation")]
+                let _observation_owner = enter_observation_owner(heartbeat_observation_owner);
                 let result = catch_unwind(AssertUnwindSafe(|| {
                     heartbeat_loop(
                         &thread_authority,

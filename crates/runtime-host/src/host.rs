@@ -631,10 +631,16 @@ impl RuntimeHost {
         let accept_shared = Arc::clone(&shared);
         let maximum_frame_bytes = config.maximum_frame_bytes;
         let io_timeout = config.io_timeout;
+        #[cfg(feature = "test-observation")]
+        let accept_observation_owner = crate::test_observation::current_observation_owner();
         let accept_thread = match thread::Builder::new()
             .name("actingcommand-runtime-ipc".to_string())
-            .spawn(move || accept_loop(listener, accept_shared, maximum_frame_bytes, io_timeout))
-        {
+            .spawn(move || {
+                #[cfg(feature = "test-observation")]
+                let _observation_owner =
+                    crate::test_observation::enter_observation_owner(accept_observation_owner);
+                accept_loop(listener, accept_shared, maximum_frame_bytes, io_timeout)
+            }) {
             Ok(thread) => thread,
             Err(_) => {
                 let original = RuntimeHostError::fatal(
@@ -14039,9 +14045,16 @@ fn accept_loop(
                     }
                 };
                 let connection_shared = Arc::clone(&shared);
+                #[cfg(feature = "test-observation")]
+                let connection_observation_owner =
+                    crate::test_observation::current_observation_owner();
                 let thread = thread::Builder::new()
                     .name("actingcommand-runtime-client".to_string())
                     .spawn(move || {
+                        #[cfg(feature = "test-observation")]
+                        let _observation_owner = crate::test_observation::enter_observation_owner(
+                            connection_observation_owner,
+                        );
                         connection_boundary(
                             stream,
                             connection_shared,

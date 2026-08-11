@@ -11,7 +11,12 @@ use actingcommand_contract::{
     CorrelationId, HolderId, InstanceId, LeaseId, LeaseToken, RuntimeOperation, RuntimeReceipt,
     RuntimeRequest, RuntimeResult,
 };
+use std::cell::Cell;
+use std::marker::PhantomData;
+use std::rc::Rc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
+use std::thread;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HostTestObservationPoint {
@@ -190,7 +195,51 @@ fn ordinal<T: Clone + PartialEq>(classes: &mut Vec<(T, u64)>, value: &T) -> u64 
 
 type ObservationSink = Arc<dyn Fn(HostTestObservation) + Send + Sync + 'static>;
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) struct HostTestObservationOwner(u64);
+
+pub(crate) struct HostTestObservationOwnerScope {
+    previous: Option<HostTestObservationOwner>,
+    _not_send: PhantomData<Rc<()>>,
+}
+
+impl Drop for HostTestObservationOwnerScope {
+    fn drop(&mut self) {
+        CURRENT_OBSERVATION_OWNER.set(self.previous);
+    }
+}
+
+std::thread_local! {
+    static CURRENT_OBSERVATION_OWNER: Cell<Option<HostTestObservationOwner>> = const { Cell::new(None) };
+}
+
+static NEXT_OBSERVATION_OWNER: AtomicU64 = AtomicU64::new(1);
+
+pub(crate) fn current_observation_owner() -> Option<HostTestObservationOwner> {
+    CURRENT_OBSERVATION_OWNER.get()
+}
+
+pub(crate) fn enter_observation_owner(
+    owner: Option<HostTestObservationOwner>,
+) -> HostTestObservationOwnerScope {
+    let previous = CURRENT_OBSERVATION_OWNER.replace(owner);
+    HostTestObservationOwnerScope {
+        previous,
+        _not_send: PhantomData,
+    }
+}
+
+fn mint_observation_owner() -> Result<HostTestObservationOwner, &'static str> {
+    NEXT_OBSERVATION_OWNER
+        .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |next| {
+            next.checked_add(1)
+        })
+        .map(HostTestObservationOwner)
+        .map_err(|_| "host_test_observation_owner_overflow")
+}
+
 struct ActiveObservation {
+    owner: HostTestObservationOwner,
     sink: ObservationSink,
     identities: IdentityClasses,
 }
@@ -199,7 +248,9 @@ static INSTALL_LOCK: Mutex<()> = Mutex::new(());
 static ACTIVE_OBSERVATION: OnceLock<Mutex<Option<ActiveObservation>>> = OnceLock::new();
 
 pub struct HostTestObservationGuard {
-    _serial: MutexGuard<'static, ()>,
+    serial: Option<MutexGuard<'static, ()>>,
+    owner_scope: Option<HostTestObservationOwnerScope>,
+    owner: HostTestObservationOwner,
 }
 
 pub fn install(sink: ObservationSink) -> Result<HostTestObservationGuard, &'static str> {
@@ -212,20 +263,46 @@ pub fn install(sink: ObservationSink) -> Result<HostTestObservationGuard, &'stat
     if active.is_some() {
         return Err("host_test_observation_sink_already_installed");
     }
+    let owner = mint_observation_owner()?;
+    let owner_scope = enter_observation_owner(Some(owner));
     *active = Some(ActiveObservation {
+        owner,
         sink,
         identities: IdentityClasses::default(),
     });
     drop(active);
-    Ok(HostTestObservationGuard { _serial: serial })
+    Ok(HostTestObservationGuard {
+        serial: Some(serial),
+        owner_scope: Some(owner_scope),
+        owner,
+    })
 }
 
 impl Drop for HostTestObservationGuard {
     fn drop(&mut self) {
         match active_observation().lock() {
-            Ok(mut active) => *active = None,
-            Err(poisoned) => *poisoned.into_inner() = None,
+            Ok(mut active) => {
+                if active
+                    .as_ref()
+                    .is_some_and(|active| active.owner == self.owner)
+                {
+                    *active = None;
+                } else if active.is_some() && !thread::panicking() {
+                    panic!("host test observation owner mismatch");
+                }
+            }
+            Err(poisoned) => {
+                let mut active = poisoned.into_inner();
+                if active
+                    .as_ref()
+                    .is_some_and(|active| active.owner == self.owner)
+                {
+                    *active = None;
+                }
+            }
         }
+        self.owner_scope.take();
+        self.serial.take();
     }
 }
 
@@ -259,6 +336,9 @@ fn emit_sanitized(
     request: Option<&RuntimeRequest>,
     receipt: Option<&RuntimeReceipt>,
 ) {
+    let Some(owner) = current_observation_owner() else {
+        return;
+    };
     let event = {
         let mut active = active_observation()
             .lock()
@@ -266,6 +346,9 @@ fn emit_sanitized(
         let Some(active) = active.as_mut() else {
             return;
         };
+        if active.owner != owner {
+            return;
+        }
         let operation = request
             .map(|request| operation_for(request.operation()))
             .unwrap_or(HostTestObservationOperation::Connection);
@@ -294,5 +377,43 @@ fn operation_for(operation: &RuntimeOperation) -> HostTestObservationOperation {
         RuntimeOperation::Input { .. } => HostTestObservationOperation::Input,
         RuntimeOperation::ReleaseLease { .. } => HostTestObservationOperation::ReleaseLease,
         _ => HostTestObservationOperation::Other,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sink_admits_only_the_exact_host_owner() {
+        let observed = Arc::new(AtomicU64::new(0));
+        let sink_observed = Arc::clone(&observed);
+        let guard = install(Arc::new(move |_| {
+            sink_observed.fetch_add(1, Ordering::AcqRel);
+        }))
+        .expect("install host observation");
+        let owner = current_observation_owner().expect("host observation owner");
+
+        thread::spawn(|| {
+            emit_connection(
+                HostTestObservationPoint::ConnectionExit,
+                HostTestObservationOutcome::Error,
+            );
+        })
+        .join()
+        .expect("join non-owner host thread");
+
+        thread::spawn(move || {
+            let _owner_scope = enter_observation_owner(Some(owner));
+            emit_connection(
+                HostTestObservationPoint::ConnectionExit,
+                HostTestObservationOutcome::Success,
+            );
+        })
+        .join()
+        .expect("join owner host thread");
+
+        assert_eq!(observed.load(Ordering::Acquire), 1);
+        drop(guard);
     }
 }
