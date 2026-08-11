@@ -8,7 +8,7 @@
 
 `cargo test --workspace` **全绿(48 个测试二进制 / 1703 用例,另 14 个文档测试)** · CI:GitHub Actions(windows-latest 单 job:fmt / clippy `-D warnings` / test)· 许可 `AGPL-3.0-only` · 本仓公开
 
-**当前成熟度**:调度仲裁、设备咽喉、全局账本与任务收容已成体系,并由上述用例与架构守卫把关;**识别面目前为模板匹配(NCC 族)与颜色判据**,OCR / 神经网络的 FFI 边界与两个源码态 provider 已就位,但**尚未接入运行时识别路径**,资源包词表也还不能声明 OCR/NN 目标(详见「识别面现状」)。
+**当前成熟度**:调度仲裁、设备咽喉、全局账本与任务收容已成体系,并由上述用例与架构守卫把关;识别面以**模板匹配(NCC 族)与颜色判据**为主,OCR / 神经网络的 provider 接线(v0.6)与 OCR 会话的执行设备绑定**已合入主线**,实机 CUDA 验证在收尾计划中;模型与原生运行库仍由操作者提供(详见「识别面现状」)。
 
 早期的 Python mock 与 Go 历史契约、以及 Go/Python 基准工具已迁出本仓(归档于 ActingCommand-Legacy-Runtime,**暂未公开**);仓内保留 Rust 基准工具 `benchmarks/rust` 与历史基准报告。
 
@@ -30,20 +30,20 @@
 
 术语以仓内 [CONTEXT.md](./CONTEXT.md) 为准(Runtime Host / Scheduler / Execution Kernel / Device Throat / DeviceProxy 等逐条定义)。
 
-## 📍 当前进度(2026-07-30)
+## 📍 当前进度(2026-08-11)
 
 | 阶段 | 当前状态 |
 |---|---|
-| **已在 `main` 可用** | 常驻 daemon、typed loopback IPC、调度准入与租约 fencing、收容任务执行、GlobalLedger、工件存储、资源包收容、设备后端、NCC 模板匹配与颜色判据、ActingLab 资源制作链路。 |
-| **源码已就位,尚未接入生产路径** | OCR / NN 的进程级 FFI 契约、PP-OCR provider 与 ONNXRuntime provider;模型与原生运行库仍由操作者提供。 |
-| **正在集成,不计入主线能力** | 调度策略目录、实例事实与报告、智能体调度边界及补强架构守卫正在 stacked PR 链中复核和合入。 |
-| **规划中** | UI / 智能体正式客户端;各游戏的识别、导航、操作与恢复数据继续由独立资源仓交付。 |
+| **里程碑(2026-08-10)** | **首次实机端到端闭环达成**:哈希封印资源包 → 常驻运行时 → 模拟器实机页面识别 → 收容任务执行 → 类型化调度结局(`no-op / no_designated_effect`)→ 全程入账;单次执行 3.4 秒,零人工输入。 |
+| **已在 `main` 可用** | 常驻 daemon、typed loopback IPC、调度准入与租约 fencing、收容任务执行(含任务级响应期限与类型化调度处置)、GlobalLedger、工件存储、资源包收容、设备后端、NCC 模板匹配与颜色判据、识别 provider 接线(v0.6)与逐页评估耗时证据、ActingLab 资源制作链路。 |
+| **正在进行** | 冻结元组上的全程序重验收与基线矩阵(收尾序列);首个游戏资源仓的任务链内容(邮件领取闭环种子已实机验证 no-op 分支)。 |
+| **尚未完成** | 实弹领取(claimed)分支的实机验证;OCR / NN 的实机 CUDA 验证;采集三后端矩阵(adb / droidcast_raw / nemu_ipc)正式覆盖;多任务链内容扩充;调度策略目录与智能体驾驶接口产品化;UI 正式客户端。 |
 
 ## 🗺 路线图
 
 以下均为目标态口径,按序推进,不承诺日期:
 
-1. **阶段一垂直闭环**——资源→离线→真机三段;当前正在真机实测最小闭环,β 判据为无人值守连续多日运行;
+1. **阶段一垂直闭环**——资源→离线→真机三段;真机最小闭环已于 2026-08-10 首次贯通(邮件任务链 no-op 分支,类型化结局入账);余下为实弹领取分支、OCR CUDA 与采集后端矩阵的实机覆盖,以及"随叫随跑"的可复演化;β 判据仍为无人值守连续多日运行;
 2. **智能体驾驶接口正式化**——Dispatcher 合同、机器可读命令目录、会话闸(凭证由环境承载,每条指令过闸校验);
 3. **MAA / MaaFramework 兼容**——MAA 资源格式作为种子导入源:导入一次,此后由自维护环接管维护;MaaFramework 第二执行后端蓝图已立(形态 A:MaaFW 作决策内核,设备 I/O 回注本运行时咽喉,租约与账本对每次操作依旧成立;PoC 判据通过后立项);
 4. **自动摸清与自动修复**——把自维护闭环图中 ② 与 ⑦ 两段虚线转为实线;
@@ -113,8 +113,8 @@
 ## 🔍 识别面现状
 
 - **可用**:模板匹配(NCC 族)与颜色判据,由 `recognition` / `recognition-pack` / `page-detector` 承担;
-- **已就位但未接线**:`vision-ffi` 定义了 OCR / NN 的进程级 JSON ABI,`providers/` 下两个 provider 是真实推理实现(经 `ort` 以 `load-dynamic` 方式动态加载 ONNX Runtime);
-- **尚不具备**:运行时识别路径不链接这些 provider(生产依赖图中无成员同时依赖 `recognition-pack` 与 `vision-ffi`),资源包词表也不能声明 OCR/NN 目标;
+- **已接线,待实机验证**:`vision-ffi` 的进程级 JSON ABI 与 `providers/` 下两个真实推理 provider(经 `ort` 以 `load-dynamic` 动态加载 ONNX Runtime)已按 v0.6 接入运行时识别路径,OCR 会话绑定显式执行设备;实机 CUDA 验证排定于收尾计划;
+- **仍在推进**:资源包词表对 OCR/NN 目标的声明面、以及识别 provider 的实机性能基线;
 - **不随仓分发**:ONNX Runtime 原生库与 OCR/NN 模型均不在本仓;本地冒烟需操作者自备,`apps/vision-provider-check` 提供自检入口。
 
 ## 🧭 设计原则
@@ -160,7 +160,7 @@ actingctl task-run --state-root <state-root> --instance <alias> \
 
 游戏数据(识别模板、导航图、操作与恢复声明)独立于运行时版本化。以下仓库**目前均为私有**,外部读者暂不可访问:
 
-- **ActingCommand-Resources-Arknights**——上游派生层源自 MAA;自有层现有:邮件领取任务链(闭环种子)、公招与全入口导航/操作集、角色/材料图鉴、识别与恢复声明、调度声明(CN 区服);
+- **ActingCommand-Resources-Arknights**——上游派生层源自 MAA;自有层现有:邮件领取任务链(闭环种子,2026-08-10 已实机跑通 no-op 分支)、公招与全入口导航/操作集、角色/材料图鉴、识别与恢复声明、调度声明(CN 区服);
 - **ActingCommand-Resources-AzurLane**——上游派生层源自 Alas;自有层现有:主界导航与全入口操作集、角色/装备全量图鉴模板(Git LFS)、识别与恢复声明;
 - **ActingCommand-Resources-BlueArchive**——上游派生层源自 BAAH / BAAS(坐标目录与校验区域);自有层现有:每日领取试点任务、全入口操作集、装备/材料图鉴、识别与恢复声明。
 

@@ -8,7 +8,7 @@
 
 `cargo test --workspace` **all green (48 test binaries / 1703 tests, plus 14 doc-tests)** · CI: GitHub Actions (single windows-latest job: fmt / clippy `-D warnings` / test) · License `AGPL-3.0-only` · This repository is public
 
-**Current maturity**: scheduling arbitration, the device throat, the global ledger and task containment are established and policed by the tests and architecture guards above; **recognition is currently template matching (NCC family) and color predicates**. The OCR / neural-network FFI boundary and two source-form providers are in place but **not yet wired into the runtime recognition path**, and resource-pack vocabulary cannot declare OCR/NN targets yet (see "Recognition status").
+**Current maturity**: scheduling arbitration, the device throat, the global ledger and task containment are established and policed by the tests and architecture guards above; recognition is primarily **template matching (NCC family) and color predicates**, while OCR / neural-network provider wiring (v0.6) and explicit execution-device binding for OCR sessions are **merged on `main`**, with on-device CUDA validation scheduled in the closing plan; operators still supply models and native runtime libraries (see "Recognition status").
 
 Early Python mocks and Go legacy contracts, together with the Go/Python benchmark tooling, moved out of this repository (archived in ActingCommand-Legacy-Runtime, **not yet public**); the Rust benchmark tool `benchmarks/rust` and historical benchmark reports remain here.
 
@@ -30,20 +30,20 @@ Solid paths represent capabilities that are merged into `main`. Dashed paths rep
 
 Terminology is defined in [CONTEXT.md](./CONTEXT.md) (Runtime Host / Scheduler / Execution Kernel / Device Throat / DeviceProxy and others, one entry each).
 
-## 📍 Current progress (2026-07-30)
+## 📍 Current progress (2026-08-11)
 
 | Stage | Current state |
 |---|---|
-| **Available on `main`** | Resident daemon, typed loopback IPC, scheduling admission and lease fencing, contained-task execution, GlobalLedger, artifact storage, pack containment, device backends, NCC template matching and color predicates, and the ActingLab resource-authoring path. |
-| **Source-ready, not production-wired** | Process-level OCR / NN FFI contracts, the PP-OCR provider, and the ONNXRuntime provider. Operators still supply models and native runtime libraries. |
-| **In integration, not a mainline capability** | Scheduling catalogs, instance facts and reports, the agent-dispatch boundary, and stronger architecture guards are being reviewed and integrated through a stacked pull-request chain. |
-| **Planned** | Production UI / agent clients. Game-specific recognition, navigation, operations, and recovery data continue to ship from separate resource repositories. |
+| **Milestone (2026-08-10)** | **First real-device end-to-end closed loop achieved**: hash-sealed resource pack → resident runtime → on-device page recognition on an emulator → contained-task execution → typed scheduling outcome (`no-op / no_designated_effect`) → fully on the ledger; single run in 3.4 s with zero manual input. |
+| **Available on `main`** | Resident daemon, typed loopback IPC, scheduling admission and lease fencing, contained-task execution (with task-level response deadlines and typed scheduling dispositions), GlobalLedger, artifact storage, pack containment, device backends, NCC template matching and color predicates, recognition provider wiring (v0.6) with per-page evaluation-duration evidence, and the ActingLab resource-authoring path. |
+| **In progress** | Whole-program revalidation and baseline matrices on the frozen tuple (closing sequence); task-chain content in the first game resource repository (the mail-collection seed loop has its no-op branch device-verified). |
+| **Not done yet** | Device verification of the live-claim (`claimed`) branch; on-device CUDA validation for OCR / NN; formal coverage of the three capture backends (adb / droidcast_raw / nemu_ipc); broader task-chain content; productization of scheduling catalogs and the agent-driving interface; production UI clients. |
 
 ## 🗺 Roadmap
 
 Target-state wording throughout, in order, no dates promised:
 
-1. **Phase-one vertical loop** — resources → offline → real machine; the minimal loop is being tested on real machines now, and the beta criterion is multi-day unattended operation;
+1. **Phase-one vertical loop** — resources → offline → real machine; the minimal on-device loop first closed on 2026-08-10 (mail task chain, no-op branch, typed outcome on the ledger); remaining work is the live-claim branch, OCR CUDA and capture-backend matrix coverage on device, and making the loop repeatable on demand; the beta criterion remains multi-day unattended operation;
 2. **Formal agent-driving interface** — dispatcher contracts, a machine-readable command catalog, and a session gate (environment-carried credentials, checked on every command);
 3. **MAA / MaaFramework compatibility** — MAA resource formats as a seed-import source: import once, then the self-maintaining loop takes over; a MaaFramework second-execution-backend blueprint is filed (form A: MaaFW as the decision kernel with device I/O routed back through this runtime's throat, so leases and the ledger still hold for every operation; a proof-of-concept gate precedes any implementation);
 4. **Auto-explore and auto-repair** — turning dashed segments ② and ⑦ of the self-maintaining loop solid;
@@ -113,8 +113,8 @@ A separate family of **nine completion-acceptance invariants** (deterministic re
 ## 🔍 Recognition status
 
 - **Available**: template matching (NCC family) and color predicates, provided by `recognition` / `recognition-pack` / `page-detector`;
-- **In place but unwired**: `vision-ffi` defines the process-level OCR / NN JSON ABI, and the two providers under `providers/` are real inference implementations (loading ONNX Runtime dynamically through `ort` with `load-dynamic`);
-- **Not yet available**: the runtime recognition path does not link these providers (no production member depends on both `recognition-pack` and `vision-ffi`), and resource-pack vocabulary cannot declare OCR/NN targets;
+- **Wired, awaiting device validation**: the process-level JSON ABI in `vision-ffi` and the two real inference providers under `providers/` (loading ONNX Runtime dynamically through `ort` with `load-dynamic`) are wired into the runtime recognition path as of v0.6, with OCR sessions bound to explicit execution devices; on-device CUDA validation is scheduled in the closing plan;
+- **Still in progress**: resource-pack vocabulary for declaring OCR/NN targets, and on-device performance baselines for the recognition providers;
 - **Not distributed here**: neither the ONNX Runtime native library nor OCR/NN models ship with this repository; local smoke runs require operator-supplied artifacts, and `apps/vision-provider-check` is the self-check entry point.
 
 ## 🧭 Design principles
@@ -161,7 +161,7 @@ Every `actingctl` command writes a single line of JSON to stdout, which suits sc
 
 Game data (recognition templates, navigation graphs, operation and recovery declarations) is versioned independently of the runtime. The repositories below are **currently private** and not reachable by outside readers:
 
-- **ActingCommand-Resources-Arknights** — upstream-derived layer from MAA; our layer currently ships the mail-collection task chain (the loop seed), recruitment plus full entry navigation/operations, character/material catalogs, recognition and recovery declarations, and scheduling declarations (CN server);
+- **ActingCommand-Resources-Arknights** — upstream-derived layer from MAA; our layer currently ships the mail-collection task chain (the loop seed — no-op branch device-verified on 2026-08-10), recruitment plus full entry navigation/operations, character/material catalogs, recognition and recovery declarations, and scheduling declarations (CN server);
 - **ActingCommand-Resources-AzurLane** — upstream-derived layer from Alas; our layer currently ships main-screen navigation with a full entry operation set, full character/equipment catalog templates (Git LFS), and recognition and recovery declarations;
 - **ActingCommand-Resources-BlueArchive** — upstream-derived layer from BAAH / BAAS (coordinate catalog and verification regions); our layer currently ships a daily-rewards pilot task, a full entry operation set, equipment/material catalogs, and recognition and recovery declarations.
 
