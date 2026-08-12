@@ -22,8 +22,8 @@ use actingcommand_scheduler::SchedulerConfig;
 use std::fs;
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::{Arc, Barrier};
 use std::thread;
 use std::time::{Duration, Instant};
 use tempfile::TempDir;
@@ -44,6 +44,20 @@ use std::collections::BTreeSet;
 
 const TEST_GOVERNANCE_CAPABILITY: &str = "runtime-client-governance-test-capability";
 
+struct CaptureGate {
+    entered: Barrier,
+    release: Barrier,
+}
+
+impl CaptureGate {
+    fn new() -> Self {
+        Self {
+            entered: Barrier::new(2),
+            release: Barrier::new(2),
+        }
+    }
+}
+
 #[derive(Default)]
 struct FakeState {
     opens: AtomicUsize,
@@ -55,6 +69,7 @@ struct FakeState {
     capture_closes: AtomicUsize,
     fail_capture: AtomicBool,
     invalid_capture: AtomicBool,
+    capture_gate: Option<Arc<CaptureGate>>,
     #[cfg(feature = "test-observation")]
     observation_owner: Option<TestObservationOwner>,
 }
@@ -220,6 +235,10 @@ struct FakeCapture {
 impl CaptureBackend for FakeCapture {
     fn capture(&mut self) -> DeviceResult<Frame> {
         self.state.captures.fetch_add(1, Ordering::AcqRel);
+        if let Some(gate) = &self.state.capture_gate {
+            gate.entered.wait();
+            gate.release.wait();
+        }
         if self.state.fail_capture.load(Ordering::Acquire) {
             return Err(DeviceError::fatal("injected capture failure"));
         }
@@ -744,6 +763,17 @@ fn write_scripted_result(stream: &mut TcpStream, request: &RuntimeRequest, resul
         .expect("receipt header");
     stream.write_all(&body).expect("receipt body");
     stream.flush().expect("flush receipt");
+}
+
+fn release_capture_after_io_budget(
+    gate: Arc<CaptureGate>,
+    io_timeout: Duration,
+) -> thread::JoinHandle<()> {
+    thread::spawn(move || {
+        gate.entered.wait();
+        thread::sleep(io_timeout + Duration::from_millis(100));
+        gate.release.wait();
+    })
 }
 
 fn respond_to_health(stream: &mut TcpStream, owner_epoch: OwnerEpoch) {
@@ -1522,6 +1552,166 @@ fn readonly_observation_returns_host_receipt_and_correlated_projection() {
     drop(client);
     host.close().expect("close host");
     assert_eq!(state.capture_closes.load(Ordering::Acquire), 1);
+}
+
+#[test]
+fn observe_readonly_preserves_delayed_host_capture_failure_beyond_io_timeout() {
+    let root = TempDir::new().expect("tempdir");
+    let io_timeout = Duration::from_millis(100);
+    let gate = Arc::new(CaptureGate::new());
+    let state = Arc::new(FakeState {
+        fail_capture: AtomicBool::new(true),
+        capture_gate: Some(Arc::clone(&gate)),
+        ..FakeState::default()
+    });
+    let host = host(&root, Arc::clone(&state), 1_000);
+    let client = RuntimeClient::connect(
+        RuntimeClientConfig::new(root.path(), EventActor::Cli, EventSource::Cli)
+            .with_io_timeout(io_timeout)
+            .with_backend_open_timeout(Duration::from_secs(2)),
+    )
+    .expect("runtime client");
+    let releaser = release_capture_after_io_budget(gate, io_timeout);
+
+    let result = client.observe_readonly("node.a");
+    releaser.join().expect("release delayed capture");
+    let error = result.expect_err("Host capture failure must remain typed");
+
+    assert_eq!(error.code(), "runtime_request_rejected", "{error:#?}");
+    assert_eq!(
+        error.projection().expect("typed Host failure").code,
+        RuntimeErrorCode::CaptureFailed
+    );
+    assert_eq!(state.capture_opens.load(Ordering::Acquire), 1);
+    assert_eq!(state.captures.load(Ordering::Acquire), 1);
+    assert_eq!(state.capture_closes.load(Ordering::Acquire), 1);
+    assert!(host.fatal_error().expect("runtime health").is_none());
+    drop(client);
+    host.close().expect("close host");
+}
+
+#[test]
+fn debug_observe_readonly_preserves_one_delayed_success_chain_beyond_io_timeout() {
+    let root = TempDir::new().expect("tempdir");
+    let io_timeout = Duration::from_millis(100);
+    let gate = Arc::new(CaptureGate::new());
+    let state = Arc::new(FakeState {
+        capture_gate: Some(Arc::clone(&gate)),
+        ..FakeState::default()
+    });
+    let host = host(&root, Arc::clone(&state), 1_000);
+    let client = RuntimeClient::connect(
+        RuntimeClientConfig::new(root.path(), EventActor::Lab, EventSource::Lab)
+            .with_io_timeout(io_timeout)
+            .with_backend_open_timeout(Duration::from_secs(2)),
+    )
+    .expect("Lab runtime client");
+    let session = client.begin_debug_session().expect("debug session");
+    let releaser = release_capture_after_io_budget(gate, io_timeout);
+
+    let result = session.observe_readonly("node.a");
+    releaser.join().expect("release delayed capture");
+    let receipt = result.expect("delayed Host observation receipt");
+
+    assert!(matches!(
+        receipt.result(),
+        Some(RuntimeResult::ReadonlyObservationCompleted { .. })
+    ));
+    assert_eq!(state.capture_opens.load(Ordering::Acquire), 1);
+    assert_eq!(state.captures.load(Ordering::Acquire), 1);
+    let events = session
+        .query_events(ProjectionProfile::Forensic)
+        .expect("debug observation events");
+    assert_eq!(
+        events
+            .iter()
+            .filter(|event| event.event_type == EventType::CaptureCompleted)
+            .count(),
+        1
+    );
+    assert_eq!(
+        events
+            .iter()
+            .filter(|event| event.event_type == EventType::RecognitionCompleted)
+            .count(),
+        1
+    );
+    drop(session);
+    drop(client);
+    host.close().expect("close host");
+    assert_eq!(state.capture_closes.load(Ordering::Acquire), 1);
+}
+
+#[test]
+fn observe_readonly_connection_close_before_receipt_remains_transport_failure() {
+    let root = TempDir::new().expect("tempdir");
+    let server = scripted_runtime(&root, |listener, owner_epoch| {
+        let (mut stream, _) = listener.accept().expect("accept client");
+        respond_to_health(&mut stream, owner_epoch);
+        let request = read_scripted_request(&mut stream);
+        assert!(matches!(
+            request.operation(),
+            RuntimeOperation::ObserveReadonly { .. }
+        ));
+    });
+    let client = RuntimeClient::connect(
+        RuntimeClientConfig::new(root.path(), EventActor::Cli, EventSource::Cli)
+            .with_io_timeout(Duration::from_millis(100))
+            .with_backend_open_timeout(Duration::from_secs(2)),
+    )
+    .expect("runtime client");
+
+    let error = client
+        .observe_readonly("node.a")
+        .expect_err("missing Host receipt must remain a transport failure");
+
+    assert_eq!(error.code(), "runtime_receipt_header_failed", "{error:#?}");
+    server.join().expect("scripted runtime");
+}
+
+#[test]
+fn receipt_timeout_selector_preserves_existing_operation_budgets() {
+    let io_timeout = Duration::from_millis(100);
+    let backend_open_timeout = Duration::from_secs(2);
+    let ids = IdentifierIssuer::new().expect("identifier issuer");
+    let holder_id = *ids.mint_holder_id().expect("holder id").transport();
+
+    assert_eq!(
+        receipt_response_timeout(
+            &RuntimeOperation::ObserveReadonly {
+                instance_alias: "node.a".to_string(),
+            },
+            io_timeout,
+            backend_open_timeout,
+        ),
+        backend_open_timeout
+    );
+    assert_eq!(
+        receipt_response_timeout(
+            &RuntimeOperation::AcquireLease {
+                instance_alias: "node.a".to_string(),
+                holder_id,
+            },
+            io_timeout,
+            backend_open_timeout,
+        ),
+        backend_open_timeout
+    );
+    assert_eq!(
+        receipt_response_timeout(
+            &RuntimeOperation::SafeReset {
+                instance_alias: "node.a".to_string(),
+                holder_id,
+            },
+            io_timeout,
+            backend_open_timeout,
+        ),
+        backend_open_timeout
+    );
+    assert_eq!(
+        receipt_response_timeout(&RuntimeOperation::Health, io_timeout, backend_open_timeout),
+        io_timeout
+    );
 }
 
 #[test]
