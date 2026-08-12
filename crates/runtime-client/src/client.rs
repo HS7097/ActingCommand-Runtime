@@ -1437,11 +1437,12 @@ impl RuntimeClient {
             if let Some(error) = &connection.terminal_error {
                 return Err(error.clone());
             }
-            let response_timeout = response_timeout.unwrap_or(match &operation {
-                RuntimeOperation::AcquireLease { .. } | RuntimeOperation::SafeReset { .. } => {
-                    connection.backend_open_timeout
-                }
-                _ => connection.io_timeout,
+            let response_timeout = response_timeout.unwrap_or_else(|| {
+                receipt_response_timeout(
+                    &operation,
+                    connection.io_timeout,
+                    connection.backend_open_timeout,
+                )
             });
             let maximum_frame_bytes = connection.maximum_frame_bytes;
             let receipt_deadline = match &operation {
@@ -2547,6 +2548,19 @@ fn connect_runtime_stream(
         .set_nodelay(true)
         .map_err(|_| RuntimeClientError::fatal("runtime_tcp_nodelay_failed", operation))?;
     Ok(stream)
+}
+
+pub(super) fn receipt_response_timeout(
+    operation: &RuntimeOperation,
+    io_timeout: Duration,
+    backend_open_timeout: Duration,
+) -> Duration {
+    match operation {
+        RuntimeOperation::AcquireLease { .. }
+        | RuntimeOperation::ObserveReadonly { .. }
+        | RuntimeOperation::SafeReset { .. } => backend_open_timeout,
+        _ => io_timeout,
+    }
 }
 
 fn contained_task_response_timeout(
