@@ -1509,6 +1509,117 @@ fn task_semantic_effect_intent_redacts_text_and_key_before_persistence() {
 }
 
 #[test]
+fn task_semantic_effect_intent_sampling_round_trips_and_legacy_payload_decodes() {
+    let sampling = InputSamplingEvidence::new(
+        77,
+        vec![InputSamplingRegion::new(10, 20, 30, 40).expect("sampling region")],
+    )
+    .expect("sampling evidence");
+    let sampled = sanitize(
+        TaskPayloadDraft::semantic_with_sampling(
+            TaskSemanticFact::EffectIntent {
+                step_index: 3,
+                operation_label: "collect".to_string(),
+                action: InputAction::Tap { x: 11, y: 22 },
+            },
+            sampling,
+            AuditInput::new(),
+        )
+        .into(),
+        1,
+    );
+    let sampled_json = serde_json::to_value(sampled.payload()).expect("sampled payload JSON");
+    let recovered: EventPayload =
+        serde_json::from_value(sampled_json).expect("sampled payload round trip");
+    let EventPayload::Task(TaskPayload::Semantic(payload)) = recovered else {
+        panic!("expected task semantic payload")
+    };
+    let sampling = payload.sampling().expect("sampling metadata");
+    assert_eq!(
+        sampling.algorithm(),
+        InputSamplingAlgorithm::Xorshift64UniformRectV1
+    );
+    assert_eq!(sampling.action_seed(), 77);
+    assert_eq!(sampling.source_regions()[0].x(), 10);
+    assert_eq!(sampling.source_regions()[0].height(), 40);
+
+    let legacy = sanitize(
+        TaskPayloadDraft::semantic(
+            TaskSemanticFact::EffectIntent {
+                step_index: 4,
+                operation_label: "legacy".to_string(),
+                action: InputAction::Tap { x: 1, y: 2 },
+            },
+            AuditInput::new(),
+        )
+        .into(),
+        2,
+    );
+    let legacy_json = serde_json::to_value(legacy.payload()).expect("legacy payload JSON");
+    assert!(!legacy_json.to_string().contains("sampling"));
+    let recovered: EventPayload =
+        serde_json::from_value(legacy_json).expect("legacy payload without sampling");
+    let EventPayload::Task(TaskPayload::Semantic(payload)) = recovered else {
+        panic!("expected legacy task semantic payload")
+    };
+    assert!(payload.sampling().is_none());
+}
+
+#[test]
+fn task_semantic_effect_intent_sampling_rejects_invalid_evidence() {
+    let invalid_region: InputSamplingEvidence = serde_json::from_value(serde_json::json!({
+        "algorithm": "xorshift64_uniform_rect_v1",
+        "action_seed": 1,
+        "source_regions": [{"x": 0, "y": 0, "width": 0, "height": 1}]
+    }))
+    .expect("invalid region shape remains syntactically typed");
+    let mismatch = InputSamplingEvidence::new(
+        2,
+        vec![InputSamplingRegion::new(10, 10, 2, 2).expect("sampling region")],
+    )
+    .expect("sampling evidence");
+
+    for (fact, sampling) in [
+        (
+            TaskSemanticFact::EffectIntent {
+                step_index: 1,
+                operation_label: "invalid-region".to_string(),
+                action: InputAction::Tap { x: 0, y: 0 },
+            },
+            invalid_region,
+        ),
+        (
+            TaskSemanticFact::EffectIntent {
+                step_index: 2,
+                operation_label: "mismatch".to_string(),
+                action: InputAction::Tap { x: 0, y: 0 },
+            },
+            mismatch.clone(),
+        ),
+        (TaskSemanticFact::RunStarted, mismatch),
+    ] {
+        let issuer = identifier_issuer();
+        EventDraft::new(
+            issuer.mint_event_id().expect("event id"),
+            1_752_147_200_000,
+            EventSeverity::Info,
+            origin(),
+            links(&issuer),
+            TaskPayloadDraft::semantic_with_sampling(fact, sampling, AuditInput::new()).into(),
+        )
+        .sanitize(&SpyFingerprinter::new())
+        .expect_err("invalid sampling evidence");
+    }
+
+    serde_json::from_value::<InputSamplingEvidence>(serde_json::json!({
+        "algorithm": "unknown_algorithm",
+        "action_seed": 1,
+        "source_regions": [{"x": 0, "y": 0, "width": 1, "height": 1}]
+    }))
+    .expect_err("unknown sampling algorithm");
+}
+
+#[test]
 fn task_semantic_payload_rejects_invalid_facts() {
     let invalid = [
         TaskSemanticFact::PackageAdmitted {
