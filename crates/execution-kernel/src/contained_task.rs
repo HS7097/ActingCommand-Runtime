@@ -9,7 +9,8 @@ use crate::{
     select_run_operation,
 };
 use actingcommand_contract::{
-    InputAction, SchedulingEffectCondition, SchedulingOutcomeDeclaration, TaskOutcome,
+    InputAction, InputSamplingEvidence, InputSamplingRegion, SchedulingEffectCondition,
+    SchedulingOutcomeDeclaration, TaskOutcome,
 };
 use actingcommand_device::{Frame, PixelFormat};
 use actingcommand_pack_containment::{ContainmentError, LoadedBundle};
@@ -120,6 +121,7 @@ pub enum ContainedTaskTrace {
         step_index: u32,
         operation_label: String,
         action: InputAction,
+        sampling: Option<InputSamplingEvidence>,
         guard: ContainedTaskGuardOutcome,
     },
     EffectCompleted {
@@ -152,6 +154,14 @@ pub trait ContainedTaskRuntime {
     type Error;
 
     fn capture(&mut self) -> Result<Frame, Self::Error>;
+
+    fn action_seed(
+        &mut self,
+        _step_index: u32,
+        _operation_label: &str,
+    ) -> Result<Option<u64>, Self::Error> {
+        Ok(None)
+    }
 
     fn input(&mut self, action: InputAction) -> Result<(), Self::Error>;
 
@@ -431,14 +441,20 @@ impl PreparedContainedTask {
                                 }
                             }
                         };
-                        let action = operation
-                            .click
-                            .input_action(&self.control.resolution, target.as_ref())?;
+                        let action_seed = runtime
+                            .action_seed(step_index, &operation_id)
+                            .map_err(ContainedTaskRunError::Boundary)?;
+                        let (action, sampling) = operation.click.input_action(
+                            &self.control.resolution,
+                            target.as_ref(),
+                            action_seed,
+                        )?;
                         runtime
                             .record(ContainedTaskTrace::EffectIntent {
                                 step_index,
                                 operation_label: operation_id.clone(),
                                 action: action.clone(),
+                                sampling,
                                 guard,
                             })
                             .map_err(ContainedTaskRunError::Boundary)?;
@@ -1696,12 +1712,16 @@ impl TaskClick {
         &self,
         resolution: &Resolution,
         target: Option<&TargetEvaluation>,
-    ) -> Result<InputAction, ContainedTaskError> {
-        let action = match self.kind.as_str() {
-            "point" => InputAction::Tap {
-                x: required(self.x)?,
-                y: required(self.y)?,
-            },
+        action_seed: Option<u64>,
+    ) -> Result<(InputAction, Option<InputSamplingEvidence>), ContainedTaskError> {
+        let (action, sampling) = match self.kind.as_str() {
+            "point" => (
+                InputAction::Tap {
+                    x: required(self.x)?,
+                    y: required(self.y)?,
+                },
+                None,
+            ),
             "rect" | "specific_rect" => {
                 let rect = ClickRect {
                     x: required(self.x)?,
@@ -1710,18 +1730,18 @@ impl TaskClick {
                     height: required(self.height)?,
                 };
                 rect.validate(resolution)?;
-                InputAction::Tap {
-                    x: rect.x + rect.width / 2,
-                    y: rect.y + rect.height / 2,
-                }
+                sampled_tap(rect, action_seed)?
             }
-            "long_press" | "long_tap" => InputAction::LongTap {
-                x: required(self.x)?,
-                y: required(self.y)?,
-                duration_ms: self
-                    .duration_ms
-                    .ok_or_else(|| ContainedTaskError::new("contained_task_operation_invalid"))?,
-            },
+            "long_press" | "long_tap" => (
+                InputAction::LongTap {
+                    x: required(self.x)?,
+                    y: required(self.y)?,
+                    duration_ms: self.duration_ms.ok_or_else(|| {
+                        ContainedTaskError::new("contained_task_operation_invalid")
+                    })?,
+                },
+                None,
+            ),
             "drag" => {
                 let from = self
                     .from_rect
@@ -1731,15 +1751,14 @@ impl TaskClick {
                     .ok_or_else(|| ContainedTaskError::new("contained_task_operation_invalid"))?;
                 from.validate(resolution)?;
                 to.validate(resolution)?;
-                InputAction::Swipe {
-                    x1: from.x + from.width / 2,
-                    y1: from.y + from.height / 2,
-                    x2: to.x + to.width / 2,
-                    y2: to.y + to.height / 2,
-                    duration_ms: self.duration_ms.ok_or_else(|| {
+                sampled_swipe(
+                    from,
+                    to,
+                    self.duration_ms.ok_or_else(|| {
                         ContainedTaskError::new("contained_task_operation_invalid")
                     })?,
-                }
+                    action_seed,
+                )?
             }
             "target" | "target_center" | "offset" => {
                 let target = target.ok_or_else(|| {
@@ -1773,9 +1792,16 @@ impl TaskClick {
                     };
                 }
                 rect.validate(resolution)?;
-                InputAction::Tap {
-                    x: rect.x + rect.width / 2,
-                    y: rect.y + rect.height / 2,
+                if self.kind == "target_center" {
+                    (
+                        InputAction::Tap {
+                            x: rect.x + rect.width / 2,
+                            y: rect.y + rect.height / 2,
+                        },
+                        None,
+                    )
+                } else {
+                    sampled_tap(rect, action_seed)?
                 }
             }
             _ => {
@@ -1801,7 +1827,7 @@ impl TaskClick {
                 ));
             }
         }
-        Ok(action)
+        Ok((action, sampling))
     }
 }
 
@@ -1836,6 +1862,81 @@ fn required<T: Copy>(value: Option<T>) -> Result<T, ContainedTaskError> {
     value.ok_or_else(|| ContainedTaskError::new("contained_task_operation_invalid"))
 }
 
+fn sampled_tap(
+    rect: ClickRect,
+    action_seed: Option<u64>,
+) -> Result<(InputAction, Option<InputSamplingEvidence>), ContainedTaskError> {
+    let Some(action_seed) = action_seed else {
+        return Ok((
+            InputAction::Tap {
+                x: rect.x + rect.width / 2,
+                y: rect.y + rect.height / 2,
+            },
+            None,
+        ));
+    };
+    let mut state = normalized_xorshift64_state(action_seed);
+    let (x, y) = rect.sample(&mut state)?;
+    let sampling = InputSamplingEvidence::new(action_seed, vec![rect.sampling_region()?])
+        .map_err(|_| ContainedTaskError::new("contained_task_sampling_invalid"))?;
+    Ok((InputAction::Tap { x, y }, Some(sampling)))
+}
+
+fn sampled_swipe(
+    from: ClickRect,
+    to: ClickRect,
+    duration_ms: u64,
+    action_seed: Option<u64>,
+) -> Result<(InputAction, Option<InputSamplingEvidence>), ContainedTaskError> {
+    let Some(action_seed) = action_seed else {
+        return Ok((
+            InputAction::Swipe {
+                x1: from.x + from.width / 2,
+                y1: from.y + from.height / 2,
+                x2: to.x + to.width / 2,
+                y2: to.y + to.height / 2,
+                duration_ms,
+            },
+            None,
+        ));
+    };
+    let mut state = normalized_xorshift64_state(action_seed);
+    let (x1, y1) = from.sample(&mut state)?;
+    let (x2, y2) = to.sample(&mut state)?;
+    let sampling = InputSamplingEvidence::new(
+        action_seed,
+        vec![from.sampling_region()?, to.sampling_region()?],
+    )
+    .map_err(|_| ContainedTaskError::new("contained_task_sampling_invalid"))?;
+    Ok((
+        InputAction::Swipe {
+            x1,
+            y1,
+            x2,
+            y2,
+            duration_ms,
+        },
+        Some(sampling),
+    ))
+}
+
+fn normalized_xorshift64_state(seed: u64) -> u64 {
+    if seed == 0 {
+        0x9e37_79b9_7f4a_7c15
+    } else {
+        seed
+    }
+}
+
+fn next_xorshift64(state: &mut u64) -> u64 {
+    let mut value = *state;
+    value ^= value << 13;
+    value ^= value >> 7;
+    value ^= value << 17;
+    *state = value;
+    value
+}
+
 #[derive(Debug, Clone, Copy, Deserialize)]
 struct ClickRect {
     x: i32,
@@ -1855,8 +1956,35 @@ impl ClickRect {
 
     fn validate(&self, resolution: &Resolution) -> Result<(), ContainedTaskError> {
         self.validate_shape()?;
+        let end_x = self
+            .x
+            .checked_add(self.width - 1)
+            .ok_or_else(|| ContainedTaskError::new("contained_task_operation_invalid"))?;
+        let end_y = self
+            .y
+            .checked_add(self.height - 1)
+            .ok_or_else(|| ContainedTaskError::new("contained_task_operation_invalid"))?;
         resolution.validate_point(self.x, self.y)?;
-        resolution.validate_point(self.x + self.width - 1, self.y + self.height - 1)
+        resolution.validate_point(end_x, end_y)
+    }
+
+    fn sampling_region(&self) -> Result<InputSamplingRegion, ContainedTaskError> {
+        InputSamplingRegion::new(self.x, self.y, self.width, self.height)
+            .map_err(|_| ContainedTaskError::new("contained_task_sampling_invalid"))
+    }
+
+    fn sample(&self, state: &mut u64) -> Result<(i32, i32), ContainedTaskError> {
+        self.validate_shape()?;
+        let x_offset = next_xorshift64(state) % self.width as u64;
+        let y_offset = next_xorshift64(state) % self.height as u64;
+        let x = i64::from(self.x) + x_offset as i64;
+        let y = i64::from(self.y) + y_offset as i64;
+        Ok((
+            i32::try_from(x)
+                .map_err(|_| ContainedTaskError::new("contained_task_sampling_invalid"))?,
+            i32::try_from(y)
+                .map_err(|_| ContainedTaskError::new("contained_task_sampling_invalid"))?,
+        ))
     }
 }
 
@@ -2922,6 +3050,311 @@ mod retry_wiring_tests {
             .expect("explicit policy");
         assert!(!policy.retryable());
         assert_eq!(policy.max_attempts(), 1);
+    }
+
+    #[test]
+    fn xorshift64_uniform_rect_v1_matches_fixed_vectors() {
+        for (seed, expected) in [
+            (
+                0,
+                [
+                    0xdc1b_77ae_0bf3_4dad,
+                    0x64f0_eeb9_026e_6076,
+                    0x7b07_ce91_e590_6136,
+                    0x305f_050c_368d_cc74,
+                ],
+            ),
+            (
+                1,
+                [
+                    0x0000_0000_4082_2041,
+                    0x1000_4106_0c01_1441,
+                    0x9b1e_842f_6e86_2629,
+                    0xf554_f503_555d_8025,
+                ],
+            ),
+            (
+                77,
+                [
+                    0x0000_0013_6613_b30d,
+                    0xd013_0cad_5c04_f72b,
+                    0xe422_98ab_316e_5405,
+                    0x94ae_7d49_a5c3_29ed,
+                ],
+            ),
+        ] {
+            let mut state = normalized_xorshift64_state(seed);
+            let actual = std::array::from_fn(|_| next_xorshift64(&mut state));
+            assert_eq!(actual, expected, "seed {seed}");
+        }
+    }
+
+    #[test]
+    fn region_bearing_clicks_sample_inside_their_half_open_regions() {
+        let resolution = Resolution {
+            width: 100,
+            height: 100,
+        };
+        for kind in ["rect", "specific_rect"] {
+            let click: TaskClick = serde_json::from_value(json!({
+                "kind": kind,
+                "x": 10,
+                "y": 20,
+                "width": 8,
+                "height": 6
+            }))
+            .expect("region click");
+            let (action, sampling) = click
+                .input_action(&resolution, None, Some(77))
+                .expect("sampled region click");
+            let InputAction::Tap { x, y } = action else {
+                panic!("expected sampled tap")
+            };
+            assert!((10..18).contains(&x));
+            assert!((20..26).contains(&y));
+            let sampling = sampling.expect("sampling evidence");
+            assert_eq!(sampling.action_seed(), 77);
+            assert_eq!(sampling.source_regions().len(), 1);
+        }
+
+        let target = TargetEvaluation {
+            id: "button".to_string(),
+            kind: TargetKind::Template,
+            passed: true,
+            template: Some(actingcommand_recognition_pack::TemplateEvaluation {
+                x: 30,
+                y: 40,
+                width: 10,
+                height: 8,
+                raw_score: 1.0,
+                score: 1.0,
+                threshold: 0.9,
+            }),
+            color: None,
+            ocr: None,
+            nn: None,
+            message: "matched".to_string(),
+        };
+        for click in [
+            serde_json::from_value::<TaskClick>(json!({
+                "kind": "target",
+                "target_id": "button"
+            }))
+            .expect("target click"),
+            serde_json::from_value::<TaskClick>(json!({
+                "kind": "offset",
+                "target_id": "button",
+                "offset": {"x": 2, "y": 1, "width": 4, "height": 3}
+            }))
+            .expect("offset click"),
+        ] {
+            let (action, sampling) = click
+                .input_action(&resolution, Some(&target), Some(1))
+                .expect("sampled target click");
+            let InputAction::Tap { x, y } = action else {
+                panic!("expected sampled target tap")
+            };
+            let region = sampling.expect("sampling evidence").source_regions()[0];
+            assert!((region.x()..region.x() + region.width()).contains(&x));
+            assert!((region.y()..region.y() + region.height()).contains(&y));
+        }
+    }
+
+    #[test]
+    fn drag_endpoints_use_one_seed_and_independent_region_samples() {
+        let resolution = Resolution {
+            width: 100,
+            height: 100,
+        };
+        let click: TaskClick = serde_json::from_value(json!({
+            "kind": "drag",
+            "from_rect": {"x": 1, "y": 2, "width": 10, "height": 11},
+            "to_rect": {"x": 50, "y": 60, "width": 12, "height": 13},
+            "duration_ms": 250
+        }))
+        .expect("drag click");
+        let (action, sampling) = click
+            .input_action(&resolution, None, Some(1))
+            .expect("sampled drag");
+        let InputAction::Swipe {
+            x1,
+            y1,
+            x2,
+            y2,
+            duration_ms,
+        } = action
+        else {
+            panic!("expected sampled swipe")
+        };
+        assert!((1..11).contains(&x1));
+        assert!((2..13).contains(&y1));
+        assert!((50..62).contains(&x2));
+        assert!((60..73).contains(&y2));
+        assert_eq!(duration_ms, 250);
+        let sampling = sampling.expect("sampling evidence");
+        assert_eq!(sampling.source_regions().len(), 2);
+        assert_ne!((x1 - 1, y1 - 2), (x2 - 50, y2 - 60));
+    }
+
+    #[test]
+    fn non_degenerate_regions_vary_while_explicit_semantics_stay_exact() {
+        let resolution = Resolution {
+            width: 100,
+            height: 100,
+        };
+        let rect: TaskClick = serde_json::from_value(json!({
+            "kind": "rect",
+            "x": 10,
+            "y": 20,
+            "width": 8,
+            "height": 6
+        }))
+        .expect("rect click");
+        let mut points = BTreeSet::new();
+        for seed in 1..=16 {
+            let (InputAction::Tap { x, y }, Some(_)) = rect
+                .input_action(&resolution, None, Some(seed))
+                .expect("sampled point")
+            else {
+                panic!("expected sampled tap")
+            };
+            assert!((10..18).contains(&x));
+            assert!((20..26).contains(&y));
+            points.insert((x, y));
+        }
+        assert!(points.len() > 1);
+
+        let point: TaskClick = serde_json::from_value(json!({
+            "kind": "point",
+            "x": 7,
+            "y": 9
+        }))
+        .expect("point click");
+        assert_eq!(
+            point
+                .input_action(&resolution, None, Some(77))
+                .expect("explicit point"),
+            (InputAction::Tap { x: 7, y: 9 }, None)
+        );
+        let long_tap: TaskClick = serde_json::from_value(json!({
+            "kind": "long_tap",
+            "x": 8,
+            "y": 10,
+            "duration_ms": 500
+        }))
+        .expect("long tap");
+        assert_eq!(
+            long_tap
+                .input_action(&resolution, None, Some(78))
+                .expect("explicit long tap"),
+            (
+                InputAction::LongTap {
+                    x: 8,
+                    y: 10,
+                    duration_ms: 500
+                },
+                None
+            )
+        );
+
+        let target = TargetEvaluation {
+            id: "button".to_string(),
+            kind: TargetKind::Template,
+            passed: true,
+            template: Some(actingcommand_recognition_pack::TemplateEvaluation {
+                x: 30,
+                y: 40,
+                width: 10,
+                height: 8,
+                raw_score: 1.0,
+                score: 1.0,
+                threshold: 0.9,
+            }),
+            color: None,
+            ocr: None,
+            nn: None,
+            message: "matched".to_string(),
+        };
+        let target_center: TaskClick = serde_json::from_value(json!({
+            "kind": "target_center",
+            "target_id": "button"
+        }))
+        .expect("target center");
+        assert_eq!(
+            target_center
+                .input_action(&resolution, Some(&target), Some(79))
+                .expect("explicit target center"),
+            (InputAction::Tap { x: 35, y: 44 }, None)
+        );
+    }
+
+    #[test]
+    fn effect_intent_persistence_failure_stops_before_sampled_input() {
+        struct FailingRuntime {
+            inner: ScriptedRuntime,
+        }
+
+        impl ContainedTaskRuntime for FailingRuntime {
+            type Error = &'static str;
+
+            fn capture(&mut self) -> Result<Frame, Self::Error> {
+                self.inner.capture()
+            }
+
+            fn action_seed(
+                &mut self,
+                _step_index: u32,
+                _operation_label: &str,
+            ) -> Result<Option<u64>, Self::Error> {
+                Ok(Some(77))
+            }
+
+            fn input(&mut self, action: InputAction) -> Result<(), Self::Error> {
+                self.inner.input(action)
+            }
+
+            fn record(&mut self, trace: ContainedTaskTrace) -> Result<(), Self::Error> {
+                if matches!(trace, ContainedTaskTrace::EffectIntent { .. }) {
+                    Err("injected effect-intent persistence failure")
+                } else {
+                    self.inner.record(trace)
+                }
+            }
+        }
+
+        let mut task = omitted_policy_task(false, false);
+        task.program.operations[0].click = serde_json::from_value(json!({
+            "kind": "rect",
+            "x": 0,
+            "y": 0,
+            "width": 2,
+            "height": 1
+        }))
+        .expect("region click");
+        let mut runtime = FailingRuntime {
+            inner: ScriptedRuntime::new("terminal"),
+        };
+        let error = task.run(&mut runtime).expect_err("persistence must fail");
+        assert!(matches!(
+            error,
+            ContainedTaskRunError::Boundary("injected effect-intent persistence failure")
+        ));
+        assert_eq!(runtime.inner.inputs, 0);
+    }
+
+    #[test]
+    fn invalid_sampling_region_fails_before_an_action_exists() {
+        let error = sampled_tap(
+            ClickRect {
+                x: 0,
+                y: 0,
+                width: 0,
+                height: 1,
+            },
+            Some(77),
+        )
+        .expect_err("invalid sampling region");
+        assert_eq!(error.code(), "contained_task_operation_invalid");
     }
 
     #[test]

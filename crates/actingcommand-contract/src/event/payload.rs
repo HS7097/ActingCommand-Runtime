@@ -1367,6 +1367,144 @@ pub enum TaskSemanticFact {
     },
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum InputSamplingAlgorithm {
+    Xorshift64UniformRectV1,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct InputSamplingRegion {
+    x: i32,
+    y: i32,
+    width: i32,
+    height: i32,
+}
+
+impl InputSamplingRegion {
+    pub fn new(x: i32, y: i32, width: i32, height: i32) -> Result<Self, SanitizationError> {
+        let value = Self {
+            x,
+            y,
+            width,
+            height,
+        };
+        value.validate()?;
+        Ok(value)
+    }
+
+    pub const fn x(&self) -> i32 {
+        self.x
+    }
+
+    pub const fn y(&self) -> i32 {
+        self.y
+    }
+
+    pub const fn width(&self) -> i32 {
+        self.width
+    }
+
+    pub const fn height(&self) -> i32 {
+        self.height
+    }
+
+    fn validate(&self) -> Result<(), SanitizationError> {
+        if self.x < 0
+            || self.y < 0
+            || self.width <= 0
+            || self.height <= 0
+            || self.x.checked_add(self.width).is_none()
+            || self.y.checked_add(self.height).is_none()
+        {
+            Err(SanitizationError::new(
+                "invalid_input_sampling_region",
+                "source_regions",
+            ))
+        } else {
+            Ok(())
+        }
+    }
+
+    fn contains(&self, x: i32, y: i32) -> bool {
+        let Some(end_x) = self.x.checked_add(self.width) else {
+            return false;
+        };
+        let Some(end_y) = self.y.checked_add(self.height) else {
+            return false;
+        };
+        x >= self.x && x < end_x && y >= self.y && y < end_y
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct InputSamplingEvidence {
+    algorithm: InputSamplingAlgorithm,
+    action_seed: u64,
+    source_regions: Vec<InputSamplingRegion>,
+}
+
+impl InputSamplingEvidence {
+    pub fn new(
+        action_seed: u64,
+        source_regions: Vec<InputSamplingRegion>,
+    ) -> Result<Self, SanitizationError> {
+        let value = Self {
+            algorithm: InputSamplingAlgorithm::Xorshift64UniformRectV1,
+            action_seed,
+            source_regions,
+        };
+        value.validate_regions()?;
+        Ok(value)
+    }
+
+    pub const fn algorithm(&self) -> InputSamplingAlgorithm {
+        self.algorithm
+    }
+
+    pub const fn action_seed(&self) -> u64 {
+        self.action_seed
+    }
+
+    pub fn source_regions(&self) -> &[InputSamplingRegion] {
+        &self.source_regions
+    }
+
+    fn validate_regions(&self) -> Result<(), SanitizationError> {
+        if !matches!(self.source_regions.len(), 1 | 2) {
+            return Err(SanitizationError::new(
+                "invalid_input_sampling_region",
+                "source_regions",
+            ));
+        }
+        for region in &self.source_regions {
+            region.validate()?;
+        }
+        Ok(())
+    }
+
+    fn validate(&self, action: &InputAction) -> Result<(), SanitizationError> {
+        self.validate_regions()?;
+        let valid = match (action, self.source_regions.as_slice()) {
+            (InputAction::Tap { x, y }, [region]) => region.contains(*x, *y),
+            (InputAction::Swipe { x1, y1, x2, y2, .. }, [from, to]) => {
+                from.contains(*x1, *y1) && to.contains(*x2, *y2)
+            }
+            _ => false,
+        };
+        if valid {
+            Ok(())
+        } else {
+            Err(SanitizationError::new(
+                "invalid_input_sampling_action",
+                "sampling",
+            ))
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SchedulingEffectCondition {
@@ -1705,6 +1843,8 @@ impl SchedulingOutcomeProjection {
 pub struct TaskSemanticPayload {
     action: EventAction,
     fact: TaskSemanticFact,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    sampling: Option<InputSamplingEvidence>,
     audit: SanitizedAudit,
 }
 
@@ -1715,6 +1855,10 @@ impl TaskSemanticPayload {
 
     pub const fn fact(&self) -> &TaskSemanticFact {
         &self.fact
+    }
+
+    pub const fn sampling(&self) -> Option<&InputSamplingEvidence> {
+        self.sampling.as_ref()
     }
 
     pub fn audit(&self) -> &SanitizedAudit {
@@ -1728,7 +1872,17 @@ impl TaskSemanticPayload {
                 "action",
             ));
         }
-        self.fact.validate()
+        self.fact.validate()?;
+        match (&self.fact, &self.sampling) {
+            (TaskSemanticFact::EffectIntent { action, .. }, Some(sampling)) => {
+                sampling.validate(action)
+            }
+            (TaskSemanticFact::EffectIntent { .. }, None) | (_, None) => Ok(()),
+            (_, Some(_)) => Err(SanitizationError::new(
+                "invalid_input_sampling_fact",
+                "sampling",
+            )),
+        }
     }
 }
 
@@ -3120,6 +3274,7 @@ struct AgentSessionDraft {
 
 struct TaskSemanticDraft {
     fact: TaskSemanticFact,
+    sampling: Option<InputSamplingEvidence>,
     audit: AuditInput,
 }
 
@@ -3131,11 +3286,14 @@ impl TaskSemanticDraft {
         let mut fact = self.fact;
         fact.validate()?;
         fact.redact_sensitive_input();
-        Ok(TaskSemanticPayload {
+        let payload = TaskSemanticPayload {
             action: EventAction::RuntimeTaskRun,
             fact,
+            sampling: self.sampling,
             audit: self.audit.sanitize(fingerprinter)?,
-        })
+        };
+        payload.validate()?;
+        Ok(payload)
     }
 }
 
@@ -4968,7 +5126,23 @@ impl TaskPayloadDraft {
     }
 
     pub fn semantic(fact: TaskSemanticFact, audit: AuditInput) -> Self {
-        Self(TaskDraftKind::Semantic(TaskSemanticDraft { fact, audit }))
+        Self(TaskDraftKind::Semantic(TaskSemanticDraft {
+            fact,
+            sampling: None,
+            audit,
+        }))
+    }
+
+    pub fn semantic_with_sampling(
+        fact: TaskSemanticFact,
+        sampling: InputSamplingEvidence,
+        audit: AuditInput,
+    ) -> Self {
+        Self(TaskDraftKind::Semantic(TaskSemanticDraft {
+            fact,
+            sampling: Some(sampling),
+            audit,
+        }))
     }
 }
 

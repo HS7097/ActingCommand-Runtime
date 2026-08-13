@@ -10369,6 +10369,17 @@ impl HostShared {
             .scheduling_outcome()
             .cloned()
             .map(|declaration| (prepared.game().to_owned(), declaration));
+        let sampling_run_seed = if scheduled {
+            Some(
+                contained_task_sampling_seed(&(
+                    "xorshift64_uniform_rect_v1/run",
+                    run_id.transport(),
+                ))
+                .map_err(RequestFailure::poison_without_terminal)?,
+            )
+        } else {
+            None
+        };
         let mut runtime = RuntimeContainedTask {
             host: self,
             request,
@@ -10382,6 +10393,8 @@ impl HostShared {
             last_frame_id: None,
             current_recognition_id: None,
             step_actions: BTreeMap::new(),
+            sampling_run_seed,
+            used_action_seeds: BTreeSet::new(),
             finalizing: None,
             capture_evidence: CaptureEvidenceAccumulator::default(),
         };
@@ -13292,6 +13305,8 @@ struct RuntimeContainedTask<'a> {
     last_frame_id: Option<IssuedFrameId>,
     current_recognition_id: Option<IssuedRecognitionId>,
     step_actions: BTreeMap<u32, (IssuedActionId, String)>,
+    sampling_run_seed: Option<u64>,
+    used_action_seeds: BTreeSet<u64>,
     finalizing: Option<TaskOutcome>,
     capture_evidence: CaptureEvidenceAccumulator,
 }
@@ -13474,6 +13489,35 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
                 })
             }
         }
+    }
+
+    fn action_seed(
+        &mut self,
+        step_index: u32,
+        operation_label: &str,
+    ) -> Result<Option<u64>, Self::Error> {
+        let Some(run_seed) = self.sampling_run_seed else {
+            return Ok(None);
+        };
+        self.ensure_active()?;
+        let action_id =
+            contained_task_step_action(&self.step_actions, step_index, operation_label)?;
+        let action_seed = contained_task_sampling_seed(&(
+            "xorshift64_uniform_rect_v1/action",
+            run_seed,
+            action_id.transport(),
+        ))
+        .map_err(RequestFailure::poison_without_terminal)?;
+        if !self.used_action_seeds.insert(action_seed) {
+            return Err(RequestFailure::poison_without_terminal(
+                RuntimeHostError::fatal(
+                    "contained_task_sampling_seed_reused",
+                    "derive_contained_task_action_seed",
+                    RuntimeErrorCode::RuntimeFatal,
+                ),
+            ));
+        }
+        Ok(Some(action_seed))
     }
 
     fn input(&mut self, action: InputAction) -> Result<(), Self::Error> {
@@ -13733,6 +13777,7 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
                 step_index,
                 operation_label,
                 action,
+                sampling,
                 guard: _,
             } => {
                 action.validate().map_err(|_| {
@@ -13744,17 +13789,21 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
                 })?;
                 let action_id =
                     contained_task_step_action(&self.step_actions, step_index, &operation_label)?;
+                let fact = TaskSemanticFact::EffectIntent {
+                    step_index,
+                    operation_label,
+                    action,
+                };
+                let payload = match sampling {
+                    Some(sampling) => {
+                        TaskPayloadDraft::semantic_with_sampling(fact, sampling, AuditInput::new())
+                    }
+                    None => TaskPayloadDraft::semantic(fact, AuditInput::new()),
+                };
                 self.append_task(
                     EventSeverity::Info,
                     self.links().with_action_id(action_id),
-                    TaskPayloadDraft::semantic(
-                        TaskSemanticFact::EffectIntent {
-                            step_index,
-                            operation_label,
-                            action,
-                        },
-                        AuditInput::new(),
-                    ),
+                    payload,
                 )
             }
             ContainedTaskTrace::EffectCompleted {
@@ -15081,6 +15130,20 @@ fn runtime_policy_seed(
         RuntimeHostError::fatal(
             "policy_seed_encode_failed",
             "derive_policy_seed",
+            RuntimeErrorCode::RuntimeFatal,
+        )
+    })?;
+    let digest = Sha256::digest(bytes);
+    let mut seed = [0_u8; 8];
+    seed.copy_from_slice(&digest[..8]);
+    Ok(u64::from_be_bytes(seed))
+}
+
+fn contained_task_sampling_seed<T: serde::Serialize>(value: &T) -> RuntimeHostResult<u64> {
+    let bytes = serde_json::to_vec(value).map_err(|_| {
+        RuntimeHostError::fatal(
+            "contained_task_sampling_seed_encode_failed",
+            "derive_contained_task_sampling_seed",
             RuntimeErrorCode::RuntimeFatal,
         )
     })?;

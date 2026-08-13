@@ -13,25 +13,25 @@ use actingcommand_contract::{
     ClientActionKind, ClientActionRecord, ClientActionValue, ContainedTaskRequest, CorrelationId,
     EffectDisposition, EventActor, EventPayload, EventQuery, EventSeverity, EventSource, EventType,
     FactContent, FactRecord, FactScope, FactTtlPolicy, FactTtlSource,
-    FactValue as ContractFactValue, IdentifierIssuer, InputAction, InstanceFactContext, InstanceId,
-    IssuedCorrelationId, LeaseId, LeasePriority, LeaseQueuePolicy, LeaseQueueStatus, LeaseToken,
-    MAX_RUNTIME_PLANNING_DOCUMENT_BYTES, MonitorDiagnosis, MonitorDisposition, MonitorObservation,
-    MonitorPayload, MonitorRecoveryCoordinationReason, MonitorRecoveryKind, OriginModule,
-    PerformanceControlLevel, PerformanceMonitorHealth, PinnedFrameReason, PolicyExecutionOutcome,
-    PolicyFailureClass, PolicyFailureDisposition, PolicyPayload, PolicyPlanningSignalEventData,
-    PolicyPlanningSignalKind, ProjectDecisionPageRequest, ProjectDecisionState,
-    ProjectInterfaceRequest, ProjectLedgerSnapshot, ProjectedArtifactReference, ProjectionPayload,
-    ProjectionProfile, ProposalClass, ProposalDisposition, ProposalDocument, ProposalKind,
-    ProposalPatchOperation, PublicEventPayload, RUNTIME_INFO_FILE, ReleasePayload,
-    ReleaseResourceVersion, ReleaseTransitionKind, ResourceAuthoringEvent, ResourceAuthoringPhase,
-    RunId, RuntimeCaptureBackend, RuntimeErrorCode, RuntimeEventQueryCursor,
-    RuntimeEventQueryPageRequest, RuntimeForwardProjectionRequest, RuntimeMonitorPolicy,
-    RuntimeOperation, RuntimePlanningDocument, RuntimePlanningDocumentKind, RuntimeReceipt,
-    RuntimeReceiptState, RuntimeReleaseSet, RuntimeRequest, RuntimeResult,
-    RuntimeStrategicReportRequest, SchedulingDisposition, SchedulingEffectEvidence,
-    SchedulingOutcomeDeclaration, SchedulingOutcomeIdentity, StatePayload, StateRecoveryAction,
-    StateValidationResult, TaskId, TaskOutcome, TaskPayload, TaskSemanticFact,
-    TaskTemplateInstantiation, TerminalEvent,
+    FactValue as ContractFactValue, IdentifierIssuer, InputAction, InputSamplingAlgorithm,
+    InstanceFactContext, InstanceId, IssuedCorrelationId, LeaseId, LeasePriority, LeaseQueuePolicy,
+    LeaseQueueStatus, LeaseToken, MAX_RUNTIME_PLANNING_DOCUMENT_BYTES, MonitorDiagnosis,
+    MonitorDisposition, MonitorObservation, MonitorPayload, MonitorRecoveryCoordinationReason,
+    MonitorRecoveryKind, OriginModule, PerformanceControlLevel, PerformanceMonitorHealth,
+    PinnedFrameReason, PolicyExecutionOutcome, PolicyFailureClass, PolicyFailureDisposition,
+    PolicyPayload, PolicyPlanningSignalEventData, PolicyPlanningSignalKind,
+    ProjectDecisionPageRequest, ProjectDecisionState, ProjectInterfaceRequest,
+    ProjectLedgerSnapshot, ProjectedArtifactReference, ProjectionPayload, ProjectionProfile,
+    ProposalClass, ProposalDisposition, ProposalDocument, ProposalKind, ProposalPatchOperation,
+    PublicEventPayload, RUNTIME_INFO_FILE, ReleasePayload, ReleaseResourceVersion,
+    ReleaseTransitionKind, ResourceAuthoringEvent, ResourceAuthoringPhase, RunId,
+    RuntimeCaptureBackend, RuntimeErrorCode, RuntimeEventQueryCursor, RuntimeEventQueryPageRequest,
+    RuntimeForwardProjectionRequest, RuntimeMonitorPolicy, RuntimeOperation,
+    RuntimePlanningDocument, RuntimePlanningDocumentKind, RuntimeReceipt, RuntimeReceiptState,
+    RuntimeReleaseSet, RuntimeRequest, RuntimeResult, RuntimeStrategicReportRequest,
+    SchedulingDisposition, SchedulingEffectEvidence, SchedulingOutcomeDeclaration,
+    SchedulingOutcomeIdentity, StatePayload, StateRecoveryAction, StateValidationResult, TaskId,
+    TaskOutcome, TaskPayload, TaskSemanticFact, TaskTemplateInstantiation, TerminalEvent,
 };
 use actingcommand_device::{
     CaptureBackend, CaptureBackendName, DeviceError, DeviceResult, Frame, InputBackend, PixelFormat,
@@ -145,6 +145,7 @@ struct FakeState {
     monitor_mode: AtomicUsize,
     application_count: AtomicUsize,
     fail_application: AtomicBool,
+    input_actions: std::sync::Mutex<Vec<InputAction>>,
 }
 
 struct FakeBackend {
@@ -159,7 +160,12 @@ struct FakeCapture {
 }
 
 impl FakeBackend {
-    fn input(&self) -> DeviceResult<()> {
+    fn input(&self, action: InputAction) -> DeviceResult<()> {
+        self.state
+            .input_actions
+            .lock()
+            .expect("fake input actions lock")
+            .push(action);
         self.state.input_started.store(true, Ordering::Release);
         while self.state.block_input.load(Ordering::Acquire) {
             thread::sleep(Duration::from_millis(5));
@@ -173,35 +179,38 @@ impl FakeBackend {
 }
 
 impl InputBackend for FakeBackend {
-    fn tap(&mut self, _x: i32, _y: i32) -> DeviceResult<()> {
-        self.input()
+    fn tap(&mut self, x: i32, y: i32) -> DeviceResult<()> {
+        self.input(InputAction::Tap { x, y })
     }
 
-    fn long_tap(&mut self, _x: i32, _y: i32, _duration_ms: u64) -> DeviceResult<()> {
-        self.input()
+    fn long_tap(&mut self, x: i32, y: i32, duration_ms: u64) -> DeviceResult<()> {
+        self.input(InputAction::LongTap { x, y, duration_ms })
     }
 
-    fn swipe(
-        &mut self,
-        _x1: i32,
-        _y1: i32,
-        _x2: i32,
-        _y2: i32,
-        _duration_ms: u64,
-    ) -> DeviceResult<()> {
-        self.input()
+    fn swipe(&mut self, x1: i32, y1: i32, x2: i32, y2: i32, duration_ms: u64) -> DeviceResult<()> {
+        self.input(InputAction::Swipe {
+            x1,
+            y1,
+            x2,
+            y2,
+            duration_ms,
+        })
     }
 
-    fn key(&mut self, _key: &str) -> DeviceResult<()> {
-        self.input()
+    fn key(&mut self, key: &str) -> DeviceResult<()> {
+        self.input(InputAction::Key {
+            key: key.to_string(),
+        })
     }
 
-    fn text(&mut self, _text: &str) -> DeviceResult<()> {
-        self.input()
+    fn text(&mut self, text: &str) -> DeviceResult<()> {
+        self.input(InputAction::Text {
+            text: text.to_string(),
+        })
     }
 
     fn reset(&mut self) -> DeviceResult<()> {
-        self.input()
+        self.input(InputAction::Reset)
     }
 
     fn close(&mut self) -> DeviceResult<()> {
@@ -2330,6 +2339,27 @@ fn neutral_contained_task_package() -> Vec<u8> {
     )
 }
 
+fn neutral_region_contained_task_package() -> Vec<u8> {
+    neutral_contained_task_package_with_task(
+        br#"{
+            "schema_version":"0.6",
+            "task_id":"task",
+            "game":"neutral",
+            "server_scope":["test"],
+            "coordinate_space":{"width":2,"height":1},
+            "entry_page":"home",
+            "target_page":"terminal",
+             "operations":[{
+                 "id":"open_terminal",
+                 "from":"home",
+                 "click":{"kind":"rect","x":0,"y":0,"width":2,"height":1},
+                 "unguarded_trusted_coordinate":true,
+                 "retryable":false
+             }]
+        }"#,
+    )
+}
+
 fn neutral_contained_task_package_with_execution_timeout(timeout_ms: u64) -> Vec<u8> {
     neutral_contained_task_package_with_task_and_timeout(
         br#"{
@@ -2441,6 +2471,35 @@ fn neutral_retrying_contained_task_package() -> Vec<u8> {
                  "from":"home",
                  "to":"terminal",
                  "click":{"kind":"point","x":1,"y":0},
+                 "guard":{
+                     "page_id":"home",
+                     "target_id":"guard/ready",
+                     "expected_rect":{"x":1,"y":0,"width":1,"height":1},
+                     "color_probe":"guard/ready"
+                 },
+                 "retryable":true,
+                 "max_attempts":6,
+                 "retry_interval_ms":1
+             }]
+        }"#,
+    )
+}
+
+fn neutral_region_retrying_contained_task_package() -> Vec<u8> {
+    neutral_contained_task_package_with_task(
+        br#"{
+            "schema_version":"0.6",
+            "task_id":"task",
+            "game":"neutral",
+            "server_scope":["test"],
+            "coordinate_space":{"width":2,"height":1},
+            "entry_page":"home",
+            "target_page":"terminal",
+             "operations":[{
+                 "id":"open_terminal",
+                 "from":"home",
+                 "to":"terminal",
+                 "click":{"kind":"rect","x":0,"y":0,"width":2,"height":1},
                  "guard":{
                      "page_id":"home",
                      "target_id":"guard/ready",
@@ -3254,7 +3313,7 @@ fn scheduled_policy_checkpoint_is_exact_thread_bound_one_shot_and_clock_independ
 #[test]
 fn scheduled_policy_run_reuses_one_request_receipt_for_one_effecting_run() {
     let root = TempDir::new().expect("tempdir");
-    let package = neutral_contained_task_package();
+    let package = neutral_region_contained_task_package();
     let package_path = root.path().join("scheduled-task.zip");
     fs::write(&package_path, &package).expect("write package");
     let package_sha256 = format!("{:x}", Sha256::digest(&package));
@@ -3390,6 +3449,36 @@ fn scheduled_policy_run_reuses_one_request_receipt_for_one_effecting_run() {
         granted.links.lease_id(),
         Some(&context_lease_id),
         "scheduled events must use the lease carried by the fenced policy context"
+    );
+    let (persisted_action, sampling) = events
+        .iter()
+        .find_map(|event| match &event.payload {
+            ProjectionPayload::Full(payload) => match payload.as_ref() {
+                EventPayload::Task(TaskPayload::Semantic(payload)) => match payload.fact() {
+                    TaskSemanticFact::EffectIntent { action, .. } => {
+                        Some((action, payload.sampling().expect("sampling evidence")))
+                    }
+                    _ => None,
+                },
+                _ => None,
+            },
+            _ => None,
+        })
+        .expect("durable sampled effect intent");
+    assert_eq!(
+        sampling.algorithm(),
+        InputSamplingAlgorithm::Xorshift64UniformRectV1
+    );
+    assert_eq!(sampling.source_regions().len(), 1);
+    assert_eq!(sampling.source_regions()[0].width(), 2);
+    assert_eq!(
+        state
+            .input_actions
+            .lock()
+            .expect("fake input actions lock")
+            .as_slice(),
+        std::slice::from_ref(persisted_action),
+        "the durable sampled action must equal the backend action"
     );
     assert_eq!(state.input_count.load(Ordering::Acquire), 1);
     drop(client);
@@ -5552,7 +5641,7 @@ fn scheduled_expired_lease_is_fenced_and_settled_on_the_original_run() {
 #[test]
 fn scheduled_failure_chain_retries_five_times_and_stops_on_sixth() {
     let root = TempDir::new().expect("tempdir");
-    let package = neutral_retrying_contained_task_package();
+    let package = neutral_region_retrying_contained_task_package();
     let package_path = root.path().join("scheduled-task.zip");
     fs::write(&package_path, &package).expect("write package");
     let package_sha256 = format!("{:x}", Sha256::digest(&package));
@@ -5639,6 +5728,35 @@ fn scheduled_failure_chain_retries_five_times_and_stops_on_sixth() {
             && attempt.links.run_id() == first_attempt.links.run_id()
             && attempt.links.lease_id() == first_attempt.links.lease_id()
     }));
+    let mut action_ids = BTreeSet::new();
+    let mut action_seeds = BTreeSet::new();
+    for attempt in &attempts {
+        assert!(
+            action_ids.insert(*attempt.links.action_id().expect("effect action id")),
+            "StepFinished must close each attempt before the next StepStarted mints an action id"
+        );
+        let ProjectionPayload::Full(payload) = &attempt.payload else {
+            panic!("expected full effect payload")
+        };
+        let EventPayload::Task(TaskPayload::Semantic(payload)) = payload.as_ref() else {
+            panic!("expected task semantic effect payload")
+        };
+        assert!(matches!(
+            payload.fact(),
+            TaskSemanticFact::EffectIntent { .. }
+        ));
+        assert!(
+            action_seeds.insert(
+                payload
+                    .sampling()
+                    .expect("sampled retry attempt")
+                    .action_seed()
+            ),
+            "every effect attempt must receive a distinct action seed"
+        );
+    }
+    assert_eq!(action_ids.len(), 6);
+    assert_eq!(action_seeds.len(), 6);
     let task_id = context.task_id();
     let run_id = context.run_id();
     let lease_id = context.lease_token().lease_id();
