@@ -10369,17 +10369,10 @@ impl HostShared {
             .scheduling_outcome()
             .cloned()
             .map(|declaration| (prepared.game().to_owned(), declaration));
-        let sampling_run_seed = if scheduled {
-            Some(
-                contained_task_sampling_seed(&(
-                    "xorshift64_uniform_rect_v1/run",
-                    run_id.transport(),
-                ))
+        let sampling_run_seed = Some(
+            contained_task_sampling_seed(&("xorshift64_uniform_rect_v1/run", run_id.transport()))
                 .map_err(RequestFailure::poison_without_terminal)?,
-            )
-        } else {
-            None
-        };
+        );
         let mut runtime = RuntimeContainedTask {
             host: self,
             request,
@@ -13496,9 +13489,8 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
         step_index: u32,
         operation_label: &str,
     ) -> Result<Option<u64>, Self::Error> {
-        let Some(run_seed) = self.sampling_run_seed else {
-            return Ok(None);
-        };
+        let run_seed = require_contained_task_sampling_run_seed(self.sampling_run_seed)
+            .map_err(RequestFailure::poison_without_terminal)?;
         self.ensure_active()?;
         let action_id =
             contained_task_step_action(&self.step_actions, step_index, operation_label)?;
@@ -15151,6 +15143,18 @@ fn contained_task_sampling_seed<T: serde::Serialize>(value: &T) -> RuntimeHostRe
     let mut seed = [0_u8; 8];
     seed.copy_from_slice(&digest[..8]);
     Ok(u64::from_be_bytes(seed))
+}
+
+pub(crate) fn require_contained_task_sampling_run_seed(
+    run_seed: Option<u64>,
+) -> RuntimeHostResult<u64> {
+    run_seed.ok_or_else(|| {
+        RuntimeHostError::fatal(
+            "contained_task_sampling_seed_missing",
+            "derive_contained_task_action_seed",
+            RuntimeErrorCode::RuntimeFatal,
+        )
+    })
 }
 
 fn policy_admission_request(code: &'static str, operation: &'static str) -> RuntimeHostError {
