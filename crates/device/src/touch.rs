@@ -805,9 +805,26 @@ impl AdbShellInputBackend {
 
     pub fn connect(&mut self) -> DeviceResult<DeviceInfo> {
         let adb = Adb::new(self.adb_config.clone());
-        let state = adb.ensure_device(&self.serial, self.target.connect)?;
-        let screen_size = adb.screen_size(&self.serial)?;
-        self.bounds = Some(touch_bounds_from_screen_size(&screen_size)?);
+        let serial = self.serial.clone();
+        let connect = self.target.connect;
+        self.connect_with_steps(
+            || adb.ensure_device(&serial, connect),
+            || adb.screen_size(&serial),
+        )
+    }
+
+    fn connect_with_steps(
+        &mut self,
+        ensure_device: impl FnOnce() -> DeviceResult<String>,
+        screen_size: impl FnOnce() -> DeviceResult<String>,
+    ) -> DeviceResult<DeviceInfo> {
+        let state = ensure_device()
+            .map_err(|error| adb_shell_input_connect_error("ensure_device", error))?;
+        let screen_size =
+            screen_size().map_err(|error| adb_shell_input_connect_error("screen_size", error))?;
+        let bounds = touch_bounds_from_screen_size(&screen_size)
+            .map_err(|error| adb_shell_input_connect_error("bounds_conversion", error))?;
+        self.bounds = Some(bounds);
         self.connected = true;
         Ok(DeviceInfo {
             serial: self.serial.clone(),
@@ -837,6 +854,16 @@ impl AdbShellInputBackend {
         self.bounds
             .ok_or_else(|| DeviceError::fatal("AdbShellInputBackend screen bounds are unavailable"))
     }
+}
+
+fn adb_shell_input_connect_error(operation: &'static str, error: DeviceError) -> DeviceError {
+    let severity = error.severity();
+    DeviceError::with_severity(
+        severity,
+        format!(
+            "adb shell input connect failed; child_operation={operation}; source_error={error}"
+        ),
+    )
 }
 
 impl InputBackend for AdbShellInputBackend {
@@ -963,8 +990,93 @@ fn validate_touch_coordinate(label: &str, value: i32, max: i32) -> DeviceResult<
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::DeviceErrorSeverity;
     use std::cell::RefCell;
     use std::rc::Rc;
+
+    fn adb_shell_input_test_backend() -> AdbShellInputBackend {
+        AdbShellInputBackend::new(AdbConfig::default(), DeviceTarget::default())
+    }
+
+    #[test]
+    fn adb_shell_input_connect_identifies_child_operation_and_preserves_device_error() {
+        let mut ensure_backend = adb_shell_input_test_backend();
+        let ensure_source = DeviceError::transient(
+            "adb -s neutral:16384 get-state failed with exit code 17\nstdout:\nstate-out\nstderr:\nstate-err",
+        );
+        let ensure_text = ensure_source.to_string();
+        let ensure_error = ensure_backend
+            .connect_with_steps(
+                || Err(ensure_source),
+                || -> DeviceResult<String> { panic!("screen size must not run") },
+            )
+            .expect_err("ensure device failure");
+        assert_eq!(ensure_error.severity(), DeviceErrorSeverity::Transient);
+        assert!(
+            ensure_error
+                .message()
+                .contains("child_operation=ensure_device")
+        );
+        assert!(ensure_error.message().contains(&ensure_text));
+
+        let mut screen_backend = adb_shell_input_test_backend();
+        let screen_source = DeviceError::transient(
+            "adb -s neutral:16384 shell wm size failed with exit code 18\nstdout:\nsize-out\nstderr:\nsize-err",
+        );
+        let screen_text = screen_source.to_string();
+        let screen_error = screen_backend
+            .connect_with_steps(|| Ok("device".to_string()), || Err(screen_source))
+            .expect_err("screen size failure");
+        assert_eq!(screen_error.severity(), DeviceErrorSeverity::Transient);
+        assert!(
+            screen_error
+                .message()
+                .contains("child_operation=screen_size")
+        );
+        assert!(screen_error.message().contains(&screen_text));
+
+        let invalid_screen_size = "unrecognized-size";
+        let bounds_source =
+            touch_bounds_from_screen_size(invalid_screen_size).expect_err("invalid bounds source");
+        let bounds_text = bounds_source.to_string();
+        let mut bounds_backend = adb_shell_input_test_backend();
+        let bounds_error = bounds_backend
+            .connect_with_steps(
+                || Ok("device".to_string()),
+                || Ok(invalid_screen_size.to_string()),
+            )
+            .expect_err("bounds conversion failure");
+        assert_eq!(bounds_error.severity(), DeviceErrorSeverity::Fatal);
+        assert!(
+            bounds_error
+                .message()
+                .contains("child_operation=bounds_conversion")
+        );
+        assert!(bounds_error.message().contains(&bounds_text));
+    }
+
+    #[test]
+    fn adb_shell_input_connect_success_keeps_existing_state_transition() {
+        let mut backend = adb_shell_input_test_backend();
+
+        let device = backend
+            .connect_with_steps(
+                || Ok("device".to_string()),
+                || Ok("Physical size: 1280x720".to_string()),
+            )
+            .expect("connect");
+
+        assert!(backend.connected);
+        assert_eq!(device.state, "device");
+        assert_eq!(device.screen_size, "Physical size: 1280x720");
+        assert_eq!(
+            backend.bounds,
+            Some(TouchBounds {
+                max_x: 1280,
+                max_y: 720
+            })
+        );
+    }
 
     #[derive(Clone)]
     struct FakeFactory {
