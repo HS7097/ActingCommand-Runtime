@@ -1,14 +1,15 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 use actingcommand_contract::{
-    AgentPayload, AgentSessionId, ApplicationLifecycleAction, EffectDisposition, EventActor,
-    EventPayload, EventQuery, EventSeverity, EventSource, EventType, FactScope, IdentifierIssuer,
-    InputPayload, InstanceId, MAX_RUNTIME_EVENT_QUERY_EVENTS, OriginModule, PolicyExecutionOutcome,
-    PolicyFailureClass, PolicyFailureDisposition, PolicyPayload, PolicyPlanningSignalEventData,
-    PolicyPlanningSignalKind, ProjectInterfaceRequest, ProjectedArtifactReference,
-    ProjectionPayload, ProjectionProfile, RUNTIME_INFO_FILE, RuntimeErrorCode,
-    RuntimeEventQueryPageRequest, RuntimeInfo, RuntimeOperation, RuntimeReceipt,
-    RuntimeReceiptState, RuntimeRequest, RuntimeResult, TaskPayload, TaskSemanticFact,
+    AgentPayload, AgentSessionId, ApplicationLifecycleAction, ContainedTaskRequest,
+    EffectDisposition, EventActor, EventPayload, EventQuery, EventSeverity, EventSource, EventType,
+    FactScope, IdentifierIssuer, InputPayload, InstanceId, MAX_RUNTIME_EVENT_QUERY_EVENTS,
+    OriginModule, PolicyExecutionOutcome, PolicyFailureClass, PolicyFailureDisposition,
+    PolicyPayload, PolicyPlanningSignalEventData, PolicyPlanningSignalKind,
+    ProjectInterfaceRequest, ProjectedArtifactReference, ProjectionPayload, ProjectionProfile,
+    RUNTIME_INFO_FILE, RuntimeErrorCode, RuntimeEventQueryPageRequest, RuntimeInfo,
+    RuntimeOperation, RuntimeReceipt, RuntimeReceiptState, RuntimeRequest, RuntimeResult,
+    TaskPayload, TaskSemanticFact,
 };
 use actingcommand_device::{
     CaptureBackend, CaptureBackendName, DeviceError, DeviceResult, Frame, InputBackend, PixelFormat,
@@ -295,6 +296,146 @@ fn actingd_accepts_explicit_device_registry_scheduling_without_opening_a_device(
     drop(client);
     child.0.kill().expect("kill actingd");
     child.0.wait().expect("wait actingd");
+}
+
+#[test]
+fn actingd_resident_input_open_failure_emits_one_private_diagnostic_without_client_detail() {
+    let root = TempDir::new().expect("tempdir");
+    let config_path = root.path().join("actingd.json");
+    let failing_adb = write_capture_then_fail_adb(root.path());
+    let package = neutral_contained_task_package();
+    let package_path = root.path().join("task.zip");
+    fs::write(&package_path, &package).expect("write contained task package");
+    let package_sha256 = format!("{:x}", Sha256::digest(&package));
+    write_config(&config_path, root.path(), instance_id(), false);
+    let mut config: Value =
+        serde_json::from_slice(&fs::read(&config_path).expect("read device-registry input config"))
+            .expect("decode device-registry input config");
+    config["instances"][0]["adb_path"] = json!(failing_adb);
+    config["instances"][0]["connect"] = json!(false);
+    config["instances"][0]["touch_backend"] = json!("adb_shell_input");
+    fs::write(
+        &config_path,
+        serde_json::to_vec_pretty(&config).expect("device-registry input config JSON"),
+    )
+    .expect("write device-registry input config");
+
+    let child = start_actingd(&config_path);
+    let mut child = ChildGuard(child);
+    wait_for_runtime_info(&mut child.0, root.path());
+    let client = connect(root.path());
+    let error = client
+        .run_contained_task(
+            INSTANCE_ALIAS,
+            ContainedTaskRequest::new(package_path.to_string_lossy().into_owned(), package_sha256)
+                .expect("contained task request"),
+        )
+        .expect_err("failing adb must reject formal contained task input");
+    assert_eq!(error.code(), "runtime_request_rejected");
+    assert_eq!(error.operation(), "run_contained_task");
+    let projection = error.projection().expect("typed Runtime projection");
+    assert_eq!(projection.code, RuntimeErrorCode::BackendOpenFailed);
+    assert!(projection.fatal);
+    let client_error = format!("{error:?} {error}");
+    for private_detail in [
+        "device_registry_input_open_failed",
+        "child_operation=ensure_device",
+        "synthetic-get-state-stdout",
+        "synthetic-get-state-stderr",
+    ] {
+        assert!(
+            !client_error.contains(private_detail),
+            "client-visible error leaked private detail {private_detail}: {client_error}"
+        );
+    }
+
+    drop(client);
+    if child.0.try_wait().expect("process state").is_none() {
+        child.0.kill().expect("kill actingd");
+        child.0.wait().expect("wait actingd");
+    }
+    let mut stderr = String::new();
+    child
+        .0
+        .stderr
+        .take()
+        .expect("actingd stderr pipe")
+        .read_to_string(&mut stderr)
+        .expect("read actingd stderr");
+    let records = stderr
+        .lines()
+        .filter(|line| line.contains("device_registry_input_open_failed"))
+        .collect::<Vec<_>>();
+    assert_eq!(records.len(), 1, "unexpected actingd stderr: {stderr}");
+    assert!(!stderr.contains("device_registry_input_open_succeeded"));
+    let payload = records[0]
+        .strip_prefix("ERROR actingd ")
+        .expect("private diagnostic prefix");
+    let payload = serde_json::from_str::<Value>(payload).expect("private diagnostic JSON");
+    assert_eq!(payload["diagnostic"], "device_registry_input_open_failed");
+    assert_eq!(payload["instance_alias"], INSTANCE_ALIAS);
+    assert_eq!(payload["requested_backend"], "adb_shell_input");
+    assert_eq!(payload["factory"], "AdbShellInputFactory");
+    let device_error = payload["device_error"].as_str().expect("device error");
+    for expected in [
+        "Fatal:",
+        "child_operation=ensure_device",
+        "get-state failed with",
+        "exit code: 17",
+        "stdout:",
+        "synthetic-get-state-stdout",
+        "stderr:",
+        "synthetic-get-state-stderr",
+    ] {
+        assert!(
+            device_error.contains(expected),
+            "missing {expected:?} in device error: {device_error}"
+        );
+    }
+}
+
+fn write_capture_then_fail_adb(root: &Path) -> PathBuf {
+    const HOME_PNG: &[u8] = &[
+        0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44,
+        0x52, 0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00, 0x01, 0x08, 0x02, 0x00, 0x00, 0x00, 0x7b,
+        0x40, 0xe8, 0xdd, 0x00, 0x00, 0x00, 0x0f, 0x49, 0x44, 0x41, 0x54, 0x78, 0x9c, 0x63, 0xf8,
+        0xcf, 0xc0, 0xc0, 0xf0, 0x9f, 0x01, 0x00, 0x07, 0xff, 0x01, 0xff, 0x01, 0x7f, 0x89, 0xa7,
+        0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4e, 0x44, 0xae, 0x42, 0x60, 0x82,
+    ];
+    let scene = root.join("home.png");
+    let first_get_state = root.join("first-get-state-completed");
+    fs::write(&scene, HOME_PNG).expect("write deterministic capture frame");
+
+    #[cfg(windows)]
+    {
+        let path = root.join("capture-then-fail-adb.cmd");
+        let script = format!(
+            "@echo off\r\nset args=%*\r\necho %args% | findstr /C:\"get-state\" >nul\r\nif %errorlevel%==0 goto get_state\r\necho %args% | findstr /C:\"exec-out screencap -p\" >nul\r\nif %errorlevel%==0 goto screencap\r\necho unexpected fake adb invocation: %args% 1>&2\r\nexit /b 19\r\n:get_state\r\nif not exist \"{}\" (\r\n  type nul > \"{}\"\r\n  echo device\r\n  exit /b 0\r\n)\r\necho synthetic-get-state-stdout\r\necho synthetic-get-state-stderr 1>&2\r\nexit /b 17\r\n:screencap\r\ntype \"{}\"\r\nexit /b 0\r\n",
+            first_get_state.display(),
+            first_get_state.display(),
+            scene.display(),
+        );
+        fs::write(&path, script).expect("write task-local fake adb");
+        path
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let path = root.join("capture-then-fail-adb");
+        let script = format!(
+            "#!/bin/sh\ncase \"$*\" in\n  *\"get-state\"*)\n    if [ ! -e \"{}\" ]; then : > \"{}\"; echo device; exit 0; fi\n    echo synthetic-get-state-stdout\n    echo synthetic-get-state-stderr >&2\n    exit 17\n    ;;\n  *\"exec-out screencap -p\"*) cat \"{}\"; exit 0 ;;\nesac\necho \"unexpected fake adb invocation: $*\" >&2\nexit 19\n",
+            first_get_state.display(),
+            first_get_state.display(),
+            scene.display(),
+        );
+        fs::write(&path, script).expect("write task-local fake adb");
+        let mut permissions = fs::metadata(&path)
+            .expect("fake adb metadata")
+            .permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(&path, permissions).expect("fake adb permissions");
+        path
+    }
 }
 
 #[test]
