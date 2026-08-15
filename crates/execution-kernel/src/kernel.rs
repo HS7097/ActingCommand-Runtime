@@ -50,11 +50,15 @@ impl ExecutionKernel {
     }
 
     pub fn input(&self, instance_alias: &str, action: InputAction) -> ExecutionKernelResult<()> {
-        self.session(instance_alias)?.input(action)
+        let session = self.session(instance_alias)?;
+        let result = session.input(action);
+        self.finish_session_operation(&session, result)
     }
 
     pub fn capture(&self, instance_alias: &str) -> ExecutionKernelResult<Frame> {
-        self.session(instance_alias)?.capture()
+        let session = self.session(instance_alias)?;
+        let result = session.capture();
+        self.finish_session_operation(&session, result)
     }
 
     pub fn control_application(
@@ -62,7 +66,9 @@ impl ExecutionKernel {
         instance_alias: &str,
         action: ApplicationLifecycleAction,
     ) -> ExecutionKernelResult<()> {
-        self.session(instance_alias)?.control_application(action)
+        let session = self.session(instance_alias)?;
+        let result = session.control_application(action);
+        self.finish_session_operation(&session, result)
     }
 
     pub fn observe_monitor(
@@ -127,6 +133,73 @@ impl ExecutionKernel {
             .sessions
             .insert(resolved.instance_id(), Arc::clone(&session));
         Ok(session)
+    }
+
+    fn finish_session_operation<T>(
+        &self,
+        session: &Arc<ExecutionSession>,
+        result: ExecutionKernelResult<T>,
+    ) -> ExecutionKernelResult<T> {
+        let error = match result {
+            Ok(value) => return Ok(value),
+            Err(error) => error,
+        };
+        match self.retire_failed_session(session) {
+            Ok(()) => Err(error),
+            Err(cleanup) => Err(ExecutionKernelError::merge(error, cleanup)),
+        }
+    }
+
+    fn retire_failed_session(
+        &self,
+        failed_session: &Arc<ExecutionSession>,
+    ) -> ExecutionKernelResult<()> {
+        let instance_id = failed_session.resolved().instance_id();
+        let mut state = self.lock_state()?;
+        let is_current = state
+            .sessions
+            .get(&instance_id)
+            .is_some_and(|session| Arc::ptr_eq(session, failed_session));
+        if is_current {
+            state.sessions.remove(&instance_id);
+        }
+        Ok(())
+    }
+
+    #[cfg(test)]
+    pub(crate) fn session_for_test(
+        &self,
+        instance_alias: &str,
+    ) -> ExecutionKernelResult<Arc<ExecutionSession>> {
+        self.session(instance_alias)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn retire_failed_session_for_test(
+        &self,
+        failed_session: &Arc<ExecutionSession>,
+    ) -> ExecutionKernelResult<()> {
+        self.retire_failed_session(failed_session)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn finish_failed_session_for_test(
+        &self,
+        failed_session: &Arc<ExecutionSession>,
+        primary: ExecutionKernelError,
+    ) -> ExecutionKernelResult<()> {
+        self.finish_session_operation(failed_session, Err(primary))
+    }
+
+    #[cfg(test)]
+    pub(crate) fn poison_state_for_test(&self) {
+        let _state = self.state.lock().expect("kernel state");
+        panic!("poison kernel state");
+    }
+
+    #[cfg(test)]
+    pub(crate) fn clear_state_poison_for_test(&self) {
+        self.state.clear_poison();
     }
 
     fn lock_state(&self) -> ExecutionKernelResult<MutexGuard<'_, KernelState>> {

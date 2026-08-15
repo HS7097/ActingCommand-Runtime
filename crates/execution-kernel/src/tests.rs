@@ -8,6 +8,7 @@ use actingcommand_device::{
     CaptureBackend, CaptureBackendName, DeviceError, DeviceResult, Frame, InputBackend, PixelFormat,
 };
 use std::collections::BTreeMap;
+use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::{Arc, Mutex};
 
 #[derive(Default)]
@@ -111,7 +112,10 @@ impl FakeInput {
     fn execute(&mut self) -> DeviceResult<()> {
         let mut state = self.state.lock().expect("state");
         state.input_calls += 1;
-        assert!(!state.panic_input, "private input panic detail");
+        if state.panic_input {
+            drop(state);
+            panic!("private input panic detail");
+        }
         if state.fail_input {
             Err(DeviceError::transient("private input failure detail"))
         } else {
@@ -296,7 +300,7 @@ fn instance_sessions_are_partitioned_and_identity_mismatch_is_fatal() {
 }
 
 #[test]
-fn input_failure_terminates_session_without_reopen_or_fallback() {
+fn input_failure_returns_original_error_then_later_input_uses_fresh_session() {
     let state = Arc::new(Mutex::new(FakeState {
         fail_input: true,
         ..FakeState::default()
@@ -312,21 +316,58 @@ fn input_failure_terminates_session_without_reopen_or_fallback() {
         let mut snapshot = state.lock().expect("state");
         snapshot.fail_input = false;
         assert_eq!(snapshot.input_opens, 1);
+        assert_eq!(snapshot.input_calls, 1);
         assert_eq!(snapshot.input_closes, 1);
     }
-    assert_eq!(
-        kernel
-            .input("node.a", InputAction::Reset)
-            .expect_err("terminal session cannot reopen")
-            .code(),
-        "execution_session_closed"
-    );
-    assert_eq!(state.lock().expect("state").input_opens, 1);
-    kernel.close().expect("close terminal kernel");
+    kernel
+        .input("node.a", InputAction::Reset)
+        .expect("separate input uses a fresh session");
+    let snapshot = state.lock().expect("state");
+    assert_eq!(snapshot.input_opens, 2);
+    assert_eq!(snapshot.input_calls, 2);
+    assert_eq!(snapshot.input_closes, 1);
+    drop(snapshot);
+    kernel.close().expect("close replacement session");
+    assert_eq!(state.lock().expect("state").input_closes, 2);
 }
 
 #[test]
-fn capture_failure_terminates_session_and_closes_open_input() {
+fn failed_input_open_is_retired_before_separate_capture() {
+    let state = Arc::new(Mutex::new(FakeState {
+        fail_input_open: true,
+        ..FakeState::default()
+    }));
+    let kernel = kernel(Arc::clone(&state), &[("node.a", instance(), "private-a")]);
+
+    let error = kernel
+        .input("node.a", InputAction::Reset)
+        .expect_err("input open failure");
+    assert_eq!(error.code(), "input_backend_open_failed");
+    assert!(error.is_fatal());
+    assert!(!format!("{error:?} {error}").contains("private input open detail"));
+    {
+        let mut snapshot = state.lock().expect("state");
+        assert_eq!(snapshot.input_opens, 1);
+        assert_eq!(snapshot.input_calls, 0);
+        assert_eq!(snapshot.capture_opens, 0);
+        snapshot.fail_input_open = false;
+    }
+
+    let frame = kernel
+        .capture("node.a")
+        .expect("separate capture uses a fresh session");
+    assert_eq!((frame.width, frame.height), (2, 1));
+    let snapshot = state.lock().expect("state");
+    assert_eq!(snapshot.input_opens, 1);
+    assert_eq!(snapshot.input_calls, 0);
+    assert_eq!(snapshot.capture_opens, 1);
+    assert_eq!(snapshot.capture_calls, 1);
+    drop(snapshot);
+    kernel.close().expect("close replacement session");
+}
+
+#[test]
+fn capture_failure_returns_original_error_then_later_capture_uses_fresh_session() {
     let state = Arc::new(Mutex::new(FakeState {
         fail_capture: true,
         ..FakeState::default()
@@ -338,16 +379,61 @@ fn capture_failure_terminates_session_and_closes_open_input() {
     let error = kernel.capture("node.a").expect_err("capture failure");
     assert_eq!(error.code(), "capture_backend_operation_failed");
     assert!(!error.is_fatal());
-    assert_eq!(state.lock().expect("state").input_closes, 1);
-    assert_eq!(
-        kernel
-            .capture("node.a")
-            .expect_err("terminal session")
-            .code(),
-        "execution_session_closed"
-    );
-    assert_eq!(state.lock().expect("state").capture_opens, 1);
-    kernel.close().expect("close");
+    {
+        let mut snapshot = state.lock().expect("state");
+        assert_eq!(snapshot.input_closes, 1);
+        assert_eq!(snapshot.capture_opens, 1);
+        assert_eq!(snapshot.capture_calls, 1);
+        snapshot.fail_capture = false;
+    }
+    let frame = kernel
+        .capture("node.a")
+        .expect("separate capture uses a fresh session");
+    assert_eq!((frame.width, frame.height), (2, 1));
+    let snapshot = state.lock().expect("state");
+    assert_eq!(snapshot.input_opens, 1);
+    assert_eq!(snapshot.input_closes, 1);
+    assert_eq!(snapshot.capture_opens, 2);
+    assert_eq!(snapshot.capture_calls, 2);
+    drop(snapshot);
+    kernel.close().expect("close replacement session");
+    assert_eq!(state.lock().expect("state").capture_closes, 2);
+}
+
+#[test]
+fn application_failure_returns_original_error_then_later_input_uses_fresh_session() {
+    let state = Arc::new(Mutex::new(FakeState {
+        fail_application: true,
+        ..FakeState::default()
+    }));
+    let kernel = kernel(Arc::clone(&state), &[("node.a", instance(), "private-a")]);
+    kernel
+        .input("node.a", InputAction::Reset)
+        .expect("open input");
+    kernel.capture("node.a").expect("open capture");
+
+    let error = kernel
+        .control_application("node.a", ApplicationLifecycleAction::Restart)
+        .expect_err("application failure");
+    assert_eq!(error.code(), "application_backend_operation_failed");
+    assert!(error.is_fatal());
+    {
+        let mut snapshot = state.lock().expect("state");
+        assert_eq!(snapshot.application_calls, 1);
+        assert_eq!(snapshot.application_observed_input_closes, 1);
+        assert_eq!(snapshot.application_observed_capture_closes, 1);
+        snapshot.fail_application = false;
+    }
+
+    kernel
+        .input("node.a", InputAction::Reset)
+        .expect("separate input uses a fresh session");
+    let snapshot = state.lock().expect("state");
+    assert_eq!(snapshot.application_calls, 1);
+    assert_eq!(snapshot.input_opens, 2);
+    assert_eq!(snapshot.input_calls, 2);
+    drop(snapshot);
+    kernel.close().expect("close replacement session");
 }
 
 #[test]
@@ -402,7 +488,7 @@ fn backend_open_and_close_failures_surface_without_private_details() {
 }
 
 #[test]
-fn backend_panic_is_caught_and_latched_terminal() {
+fn backend_panic_is_caught_then_later_input_uses_fresh_session() {
     let state = Arc::new(Mutex::new(FakeState {
         panic_input: true,
         ..FakeState::default()
@@ -415,14 +501,89 @@ fn backend_panic_is_caught_and_latched_terminal() {
     assert_eq!(error.secondary_code(), Some("execution_session_panicked"));
     assert!(error.is_fatal());
     assert!(!format!("{error:?} {error}").contains("private input panic detail"));
+    {
+        let mut snapshot = state.lock().expect("state");
+        assert_eq!(snapshot.input_opens, 1);
+        assert_eq!(snapshot.input_calls, 1);
+        snapshot.panic_input = false;
+    }
+    kernel
+        .input("node.a", InputAction::Reset)
+        .expect("separate input uses a fresh session");
+    let snapshot = state.lock().expect("state");
+    assert_eq!(snapshot.input_opens, 2);
+    assert_eq!(snapshot.input_calls, 2);
+    drop(snapshot);
+    kernel.close().expect("close replacement session");
+}
+
+#[test]
+fn stale_failed_session_cannot_evict_same_instance_replacement() {
+    let state = Arc::new(Mutex::new(FakeState {
+        fail_input: true,
+        ..FakeState::default()
+    }));
+    let kernel = kernel(Arc::clone(&state), &[("node.a", instance(), "private-a")]);
+    let failed = kernel.session_for_test("node.a").expect("failed session");
+
+    let error = kernel
+        .input("node.a", InputAction::Reset)
+        .expect_err("input failure");
+    assert_eq!(error.code(), "input_backend_operation_failed");
+    state.lock().expect("state").fail_input = false;
+
+    let replacement = kernel
+        .session_for_test("node.a")
+        .expect("replacement session");
+    assert!(!Arc::ptr_eq(&failed, &replacement));
+    kernel
+        .retire_failed_session_for_test(&failed)
+        .expect("stale retirement is a no-op");
+    let current = kernel.session_for_test("node.a").expect("current session");
+    assert!(Arc::ptr_eq(&replacement, &current));
+
+    kernel
+        .input("node.a", InputAction::Reset)
+        .expect("replacement remains usable");
+    let snapshot = state.lock().expect("state");
+    assert_eq!(snapshot.input_opens, 2);
+    assert_eq!(snapshot.input_calls, 2);
+    drop(snapshot);
+    kernel.close().expect("close replacement session");
+}
+
+#[test]
+fn kernel_retirement_failure_keeps_the_operation_error_primary_and_visible() {
+    let state = Arc::new(Mutex::new(FakeState {
+        fail_input: true,
+        ..FakeState::default()
+    }));
+    let kernel = kernel(Arc::clone(&state), &[("node.a", instance(), "private-a")]);
+    let failed = kernel.session_for_test("node.a").expect("failed session");
+    let primary = failed
+        .input(InputAction::Reset)
+        .expect_err("direct session failure");
+    assert_eq!(primary.code(), "input_backend_operation_failed");
+    assert_eq!(primary.secondary_code(), None);
+    let snapshot = state.lock().expect("state");
+    assert_eq!(snapshot.input_opens, 1);
+    assert_eq!(snapshot.input_calls, 1);
+    assert_eq!(snapshot.input_closes, 1);
+    drop(snapshot);
+
+    let poison = catch_unwind(AssertUnwindSafe(|| kernel.poison_state_for_test()));
+    assert!(poison.is_err());
+    let error = kernel
+        .finish_failed_session_for_test(&failed, primary)
+        .expect_err("retirement lock failure");
+    assert_eq!(error.code(), "input_backend_operation_failed");
     assert_eq!(
-        kernel
-            .input("node.a", InputAction::Reset)
-            .expect_err("panic session latched")
-            .code(),
-        "execution_session_closed"
+        error.secondary_code(),
+        Some("execution_kernel_state_poisoned")
     );
-    kernel.close().expect("close panic session");
+
+    kernel.clear_state_poison_for_test();
+    kernel.close().expect("close terminal session");
 }
 
 #[test]
