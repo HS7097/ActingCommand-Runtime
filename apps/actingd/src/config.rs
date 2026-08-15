@@ -182,6 +182,8 @@ pub(super) struct PolicyBootstrap {
 
 pub(super) struct ConfiguredExecutionBackendRegistry {
     devices: Option<ExecutionBackendRegistry>,
+    device_input_backends: BTreeMap<String, TouchBackendChoice>,
+    input_open_diagnostic_sink: Arc<dyn Fn(String) + Send + Sync>,
     fixtures: Option<FixtureExecutionBackendRegistry>,
     modes: BTreeMap<String, ScheduledExecutionMode>,
 }
@@ -201,6 +203,7 @@ enum ConfiguredInstanceBackend {
     Device {
         alias: String,
         instance_id: InstanceId,
+        input_backend: TouchBackendChoice,
         registration: Box<ExecutionBackendRegistration>,
     },
     Fixture {
@@ -646,6 +649,7 @@ impl InstanceConfig {
         .map(|registration| ConfiguredInstanceBackend::Device {
             alias,
             instance_id,
+            input_backend: requested,
             registration,
         })
         .map_err(|_| "instance_registration_invalid")
@@ -734,6 +738,7 @@ impl ConfiguredExecutionBackendRegistry {
             return Err("execution_registry_invalid");
         }
         let mut devices = Vec::new();
+        let mut device_input_backends = BTreeMap::new();
         let mut fixtures = BTreeMap::new();
         let mut modes = BTreeMap::new();
         let mut instance_ids = BTreeSet::new();
@@ -742,11 +747,13 @@ impl ConfiguredExecutionBackendRegistry {
                 ConfiguredInstanceBackend::Device {
                     alias,
                     instance_id,
+                    input_backend,
                     registration,
                 } => {
                     if modes
-                        .insert(alias, ScheduledExecutionMode::DeviceRegistry)
+                        .insert(alias.clone(), ScheduledExecutionMode::DeviceRegistry)
                         .is_some()
+                        || device_input_backends.insert(alias, input_backend).is_some()
                         || !instance_ids.insert(instance_id)
                     {
                         return Err("execution_registry_invalid");
@@ -779,6 +786,8 @@ impl ConfiguredExecutionBackendRegistry {
         });
         Ok(Self {
             devices,
+            device_input_backends,
+            input_open_diagnostic_sink: Arc::new(|record| eprintln!("{record}")),
             fixtures,
             modes,
         })
@@ -807,11 +816,23 @@ impl ExecutionBackendProvider for ConfiguredExecutionBackendRegistry {
 
     fn open_input(&self, instance_alias: &str) -> DeviceResult<Box<dyn InputBackend>> {
         match self.mode_for_alias(instance_alias) {
-            Some(ScheduledExecutionMode::DeviceRegistry) => self
-                .devices
-                .as_ref()
-                .ok_or_else(|| DeviceError::fatal("device registry is unavailable"))?
-                .open_input(instance_alias),
+            Some(ScheduledExecutionMode::DeviceRegistry) => {
+                let input_backend = self.device_input_backends.get(instance_alias).copied();
+                open_device_registry_input_with_diagnostic(
+                    instance_alias,
+                    input_backend,
+                    || {
+                        input_backend.ok_or_else(|| {
+                            DeviceError::fatal("device input backend context is unavailable")
+                        })?;
+                        self.devices
+                            .as_ref()
+                            .ok_or_else(|| DeviceError::fatal("device registry is unavailable"))?
+                            .open_input(instance_alias)
+                    },
+                    |record| (self.input_open_diagnostic_sink)(record),
+                )
+            }
             Some(ScheduledExecutionMode::FixtureSimulation) => self
                 .fixtures
                 .as_ref()
@@ -872,6 +893,57 @@ impl ExecutionBackendProvider for ConfiguredExecutionBackendRegistry {
                     .as_ref()
                     .and_then(ExecutionBackendProvider::vision_provider)
             })
+    }
+}
+
+fn open_device_registry_input_with_diagnostic<T>(
+    instance_alias: &str,
+    input_backend: Option<TouchBackendChoice>,
+    open: impl FnOnce() -> DeviceResult<T>,
+    emit: impl FnOnce(String),
+) -> DeviceResult<T> {
+    match open() {
+        Ok(value) => Ok(value),
+        Err(error) => {
+            emit(device_registry_input_open_diagnostic_record(
+                instance_alias,
+                input_backend,
+                &error,
+            ));
+            Err(error)
+        }
+    }
+}
+
+fn device_registry_input_open_diagnostic_record(
+    instance_alias: &str,
+    input_backend: Option<TouchBackendChoice>,
+    error: &DeviceError,
+) -> String {
+    let requested_backend = input_backend
+        .map(TouchBackendChoice::as_str)
+        .unwrap_or("unavailable");
+    let factory = input_backend
+        .map(touch_backend_factory_name)
+        .unwrap_or("unavailable");
+    format!(
+        "ERROR actingd {}",
+        serde_json::json!({
+            "diagnostic": "device_registry_input_open_failed",
+            "instance_alias": instance_alias,
+            "requested_backend": requested_backend,
+            "factory": factory,
+            "device_error": error.to_string(),
+        })
+    )
+}
+
+fn touch_backend_factory_name(choice: TouchBackendChoice) -> &'static str {
+    match choice {
+        TouchBackendChoice::Auto | TouchBackendChoice::AutoFastest => "TouchBackendFactorySet",
+        TouchBackendChoice::MaaTouch => "MaaTouchFactory",
+        TouchBackendChoice::Minitouch => "MinitouchFactory",
+        TouchBackendChoice::AdbShellInput => "AdbShellInputFactory",
     }
 }
 
@@ -1112,6 +1184,89 @@ mod tests {
     use tempfile::TempDir;
 
     #[test]
+    fn formal_device_registry_input_open_failure_emits_one_private_record() {
+        let root = TempDir::new().expect("tempdir");
+        let id = IdentifierIssuer::new()
+            .expect("issuer")
+            .mint_instance_id()
+            .expect("instance id");
+        let missing_adb = root.path().join("missing-adb.exe");
+        let value = json!({
+            "schema_version": CONFIG_SCHEMA_VERSION,
+            "state_root": root.path(),
+            "bind_host": "127.0.0.1",
+            "bind_port": 0,
+            "secret_fingerprint_salt": "0123456789abcdef",
+            "instances": [{
+                "alias": "neutral.device",
+                "instance_id": id.transport(),
+                "application_id": "neutral.application",
+                "adb_path": missing_adb,
+                "port": 16384,
+                "connect": false,
+                "touch_backend": "adb_shell_input",
+                "capture_backend": "adb"
+            }]
+        });
+        let config = serde_json::from_value::<ActingdConfigFile>(value).expect("typed config");
+        let mut assembly = config.assemble().expect("runtime assembly");
+        let records = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let sink_records = Arc::clone(&records);
+        assembly.registry.input_open_diagnostic_sink = Arc::new(move |record| {
+            sink_records
+                .lock()
+                .expect("diagnostic records")
+                .push(record);
+        });
+
+        let error = match ExecutionBackendProvider::open_input(&assembly.registry, "neutral.device")
+        {
+            Ok(_) => panic!("missing adb must fail input open"),
+            Err(error) => error,
+        };
+
+        let records = records.lock().expect("diagnostic records");
+        assert_eq!(records.len(), 1);
+        let record = &records[0];
+        assert!(!record.contains('\n'));
+        let payload = record
+            .strip_prefix("ERROR actingd ")
+            .expect("private diagnostic prefix");
+        let payload =
+            serde_json::from_str::<serde_json::Value>(payload).expect("private diagnostic json");
+        assert_eq!(payload["diagnostic"], "device_registry_input_open_failed");
+        assert_eq!(payload["instance_alias"], "neutral.device");
+        assert_eq!(payload["requested_backend"], "adb_shell_input");
+        assert_eq!(payload["factory"], "AdbShellInputFactory");
+        assert_eq!(payload["device_error"], error.to_string());
+        let device_error = payload["device_error"].as_str().expect("device error");
+        assert!(
+            device_error.contains("child_operation=ensure_device"),
+            "unexpected device error: {device_error}"
+        );
+        assert!(
+            device_error.contains("failed to spawn adb"),
+            "unexpected device error: {device_error}"
+        );
+    }
+
+    #[test]
+    fn device_registry_input_open_success_emits_no_diagnostic() {
+        let mut records = Vec::new();
+
+        let value = open_device_registry_input_with_diagnostic(
+            "neutral.device",
+            Some(TouchBackendChoice::AdbShellInput),
+            || Ok::<_, DeviceError>(7_u8),
+            |record| records.push(record),
+        )
+        .expect("device-registry open success");
+
+        assert_eq!(value, 7);
+        assert!(records.is_empty());
+    }
+
+    #[test]
     fn typed_config_builds_loopback_host_and_registry() {
         let root = TempDir::new().expect("tempdir");
         let id = IdentifierIssuer::new()
@@ -1138,6 +1293,10 @@ mod tests {
         let config = serde_json::from_value::<ActingdConfigFile>(value).expect("typed config");
         let assembly = config.assemble().expect("runtime assembly");
         assert_eq!(assembly.host.state_root(), root.path());
+        assert_eq!(
+            assembly.registry.device_input_backends.get("node.a"),
+            Some(&TouchBackendChoice::MaaTouch)
+        );
     }
 
     #[test]
