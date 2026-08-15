@@ -1380,13 +1380,13 @@ mod tests {
         }
     }
 
-    fn diagnostic_input_backend(
-        result: DeviceResult<()>,
-    ) -> (
-        DeviceRegistryInputDiagnosticBackend,
-        Arc<Mutex<Vec<&'static str>>>,
-        Arc<Mutex<Vec<String>>>,
-    ) {
+    struct DiagnosticInputBackendFixture {
+        backend: DeviceRegistryInputDiagnosticBackend,
+        calls: Arc<Mutex<Vec<&'static str>>>,
+        records: Arc<Mutex<Vec<String>>>,
+    }
+
+    fn diagnostic_input_backend(result: DeviceResult<()>) -> DiagnosticInputBackendFixture {
         let calls = Arc::new(Mutex::new(Vec::new()));
         let records = Arc::new(Mutex::new(Vec::new()));
         let sink_records = Arc::clone(&records);
@@ -1396,8 +1396,8 @@ mod tests {
                 .expect("diagnostic records")
                 .push(record);
         });
-        (
-            DeviceRegistryInputDiagnosticBackend::new(
+        DiagnosticInputBackendFixture {
+            backend: DeviceRegistryInputDiagnosticBackend::new(
                 Box::new(RecordingInputBackend {
                     result,
                     calls: Arc::clone(&calls),
@@ -1408,7 +1408,7 @@ mod tests {
             ),
             calls,
             records,
-        )
+        }
     }
 
     fn native_style_operation_error() -> DeviceError {
@@ -1423,7 +1423,11 @@ mod tests {
     fn device_registry_input_operation_failure_matrix_emits_one_exact_private_record() {
         for operation in TEST_INPUT_OPERATIONS {
             let original = native_style_operation_error();
-            let (mut backend, calls, records) = diagnostic_input_backend(Err(original.clone()));
+            let DiagnosticInputBackendFixture {
+                mut backend,
+                calls,
+                records,
+            } = diagnostic_input_backend(Err(original.clone()));
 
             let returned = operation
                 .invoke(&mut backend)
@@ -1462,7 +1466,11 @@ mod tests {
     #[test]
     fn device_registry_input_operation_success_matrix_emits_nothing() {
         for operation in TEST_INPUT_OPERATIONS {
-            let (mut backend, calls, records) = diagnostic_input_backend(Ok(()));
+            let DiagnosticInputBackendFixture {
+                mut backend,
+                calls,
+                records,
+            } = diagnostic_input_backend(Ok(()));
 
             operation
                 .invoke(&mut backend)
