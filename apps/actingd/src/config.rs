@@ -822,13 +822,20 @@ impl ExecutionBackendProvider for ConfiguredExecutionBackendRegistry {
                     instance_alias,
                     input_backend,
                     || {
-                        input_backend.ok_or_else(|| {
+                        let input_backend = input_backend.ok_or_else(|| {
                             DeviceError::fatal("device input backend context is unavailable")
                         })?;
-                        self.devices
+                        let backend = self
+                            .devices
                             .as_ref()
                             .ok_or_else(|| DeviceError::fatal("device registry is unavailable"))?
-                            .open_input(instance_alias)
+                            .open_input(instance_alias)?;
+                        Ok(Box::new(DeviceRegistryInputDiagnosticBackend::new(
+                            backend,
+                            instance_alias,
+                            input_backend,
+                            Arc::clone(&self.input_open_diagnostic_sink),
+                        )) as Box<dyn InputBackend>)
                     },
                     |record| (self.input_open_diagnostic_sink)(record),
                 )
@@ -896,6 +903,80 @@ impl ExecutionBackendProvider for ConfiguredExecutionBackendRegistry {
     }
 }
 
+struct DeviceRegistryInputDiagnosticBackend {
+    backend: Box<dyn InputBackend>,
+    instance_alias: String,
+    requested_backend: TouchBackendChoice,
+    diagnostic_sink: Arc<dyn Fn(String) + Send + Sync>,
+}
+
+impl DeviceRegistryInputDiagnosticBackend {
+    fn new(
+        backend: Box<dyn InputBackend>,
+        instance_alias: &str,
+        requested_backend: TouchBackendChoice,
+        diagnostic_sink: Arc<dyn Fn(String) + Send + Sync>,
+    ) -> Self {
+        Self {
+            backend,
+            instance_alias: instance_alias.to_owned(),
+            requested_backend,
+            diagnostic_sink,
+        }
+    }
+
+    fn run(
+        &mut self,
+        operation: &'static str,
+        execute: impl FnOnce(&mut dyn InputBackend) -> DeviceResult<()>,
+    ) -> DeviceResult<()> {
+        match execute(self.backend.as_mut()) {
+            Ok(()) => Ok(()),
+            Err(error) => {
+                (self.diagnostic_sink)(device_registry_input_operation_diagnostic_record(
+                    &self.instance_alias,
+                    self.requested_backend,
+                    operation,
+                    &error,
+                ));
+                Err(error)
+            }
+        }
+    }
+}
+
+impl InputBackend for DeviceRegistryInputDiagnosticBackend {
+    fn tap(&mut self, x: i32, y: i32) -> DeviceResult<()> {
+        self.run("tap", |backend| backend.tap(x, y))
+    }
+
+    fn long_tap(&mut self, x: i32, y: i32, duration_ms: u64) -> DeviceResult<()> {
+        self.run("long_tap", |backend| backend.long_tap(x, y, duration_ms))
+    }
+
+    fn swipe(&mut self, x1: i32, y1: i32, x2: i32, y2: i32, duration_ms: u64) -> DeviceResult<()> {
+        self.run("swipe", |backend| {
+            backend.swipe(x1, y1, x2, y2, duration_ms)
+        })
+    }
+
+    fn key(&mut self, key: &str) -> DeviceResult<()> {
+        self.run("key", |backend| backend.key(key))
+    }
+
+    fn text(&mut self, text: &str) -> DeviceResult<()> {
+        self.run("text", |backend| backend.text(text))
+    }
+
+    fn reset(&mut self) -> DeviceResult<()> {
+        self.run("reset", |backend| backend.reset())
+    }
+
+    fn close(&mut self) -> DeviceResult<()> {
+        self.run("close", |backend| backend.close())
+    }
+}
+
 fn open_device_registry_input_with_diagnostic<T>(
     instance_alias: &str,
     input_backend: Option<TouchBackendChoice>,
@@ -913,6 +994,25 @@ fn open_device_registry_input_with_diagnostic<T>(
             Err(error)
         }
     }
+}
+
+fn device_registry_input_operation_diagnostic_record(
+    instance_alias: &str,
+    requested_backend: TouchBackendChoice,
+    operation: &str,
+    error: &DeviceError,
+) -> String {
+    format!(
+        "ERROR actingd {}",
+        serde_json::json!({
+            "diagnostic": "device_registry_input_operation_failed",
+            "instance_alias": instance_alias,
+            "requested_backend": requested_backend.as_str(),
+            "factory": touch_backend_factory_name(requested_backend),
+            "operation": operation,
+            "device_error": error.to_string(),
+        })
+    )
 }
 
 fn device_registry_input_open_diagnostic_record(
@@ -1181,7 +1281,240 @@ mod tests {
     use super::*;
     use actingcommand_contract::IdentifierIssuer;
     use serde_json::json;
+    use std::sync::Mutex;
     use tempfile::TempDir;
+
+    #[derive(Debug, Clone, Copy)]
+    enum TestInputOperation {
+        Tap,
+        LongTap,
+        Swipe,
+        Key,
+        Text,
+        Reset,
+        Close,
+    }
+
+    const TEST_INPUT_OPERATIONS: [TestInputOperation; 7] = [
+        TestInputOperation::Tap,
+        TestInputOperation::LongTap,
+        TestInputOperation::Swipe,
+        TestInputOperation::Key,
+        TestInputOperation::Text,
+        TestInputOperation::Reset,
+        TestInputOperation::Close,
+    ];
+
+    impl TestInputOperation {
+        const fn name(self) -> &'static str {
+            match self {
+                Self::Tap => "tap",
+                Self::LongTap => "long_tap",
+                Self::Swipe => "swipe",
+                Self::Key => "key",
+                Self::Text => "text",
+                Self::Reset => "reset",
+                Self::Close => "close",
+            }
+        }
+
+        fn invoke(self, backend: &mut dyn InputBackend) -> DeviceResult<()> {
+            match self {
+                Self::Tap => backend.tap(10, 20),
+                Self::LongTap => backend.long_tap(10, 20, 30),
+                Self::Swipe => backend.swipe(10, 20, 30, 40, 50),
+                Self::Key => backend.key("KEYCODE_HOME"),
+                Self::Text => backend.text("neutral fixture"),
+                Self::Reset => backend.reset(),
+                Self::Close => backend.close(),
+            }
+        }
+    }
+
+    struct RecordingInputBackend {
+        result: DeviceResult<()>,
+        calls: Arc<Mutex<Vec<&'static str>>>,
+    }
+
+    impl RecordingInputBackend {
+        fn invoke(&self, operation: &'static str) -> DeviceResult<()> {
+            self.calls.lock().expect("input calls").push(operation);
+            self.result.clone()
+        }
+    }
+
+    impl InputBackend for RecordingInputBackend {
+        fn tap(&mut self, _x: i32, _y: i32) -> DeviceResult<()> {
+            self.invoke("tap")
+        }
+
+        fn long_tap(&mut self, _x: i32, _y: i32, _duration_ms: u64) -> DeviceResult<()> {
+            self.invoke("long_tap")
+        }
+
+        fn swipe(
+            &mut self,
+            _x1: i32,
+            _y1: i32,
+            _x2: i32,
+            _y2: i32,
+            _duration_ms: u64,
+        ) -> DeviceResult<()> {
+            self.invoke("swipe")
+        }
+
+        fn key(&mut self, _key: &str) -> DeviceResult<()> {
+            self.invoke("key")
+        }
+
+        fn text(&mut self, _text: &str) -> DeviceResult<()> {
+            self.invoke("text")
+        }
+
+        fn reset(&mut self) -> DeviceResult<()> {
+            self.invoke("reset")
+        }
+
+        fn close(&mut self) -> DeviceResult<()> {
+            self.invoke("close")
+        }
+    }
+
+    fn diagnostic_input_backend(
+        result: DeviceResult<()>,
+    ) -> (
+        DeviceRegistryInputDiagnosticBackend,
+        Arc<Mutex<Vec<&'static str>>>,
+        Arc<Mutex<Vec<String>>>,
+    ) {
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let records = Arc::new(Mutex::new(Vec::new()));
+        let sink_records = Arc::clone(&records);
+        let sink: Arc<dyn Fn(String) + Send + Sync> = Arc::new(move |record| {
+            sink_records
+                .lock()
+                .expect("diagnostic records")
+                .push(record);
+        });
+        (
+            DeviceRegistryInputDiagnosticBackend::new(
+                Box::new(RecordingInputBackend {
+                    result,
+                    calls: Arc::clone(&calls),
+                }),
+                "neutral.device",
+                TouchBackendChoice::AdbShellInput,
+                sink,
+            ),
+            calls,
+            records,
+        )
+    }
+
+    fn native_style_operation_error() -> DeviceError {
+        DeviceError::transient(
+            "command=\"adb -s 127.0.0.1:16384 shell input tap 10 20\" \
+             exit_status=Some(1) stdout=\"fixture stdout line 1\nfixture stdout line 2\" \
+             stderr=\"fixture stderr\"",
+        )
+    }
+
+    #[test]
+    fn device_registry_input_operation_failure_matrix_emits_one_exact_private_record() {
+        for operation in TEST_INPUT_OPERATIONS {
+            let original = native_style_operation_error();
+            let (mut backend, calls, records) = diagnostic_input_backend(Err(original.clone()));
+
+            let returned = operation
+                .invoke(&mut backend)
+                .expect_err("configured operation failure");
+
+            assert_eq!(returned, original);
+            assert_eq!(returned.severity(), original.severity());
+            assert_eq!(returned.message(), original.message());
+            assert_eq!(
+                returned.is_fallback_eligible(),
+                original.is_fallback_eligible()
+            );
+            assert_eq!(*calls.lock().expect("input calls"), [operation.name()]);
+            let records = records.lock().expect("diagnostic records");
+            assert_eq!(records.len(), 1);
+            assert!(!records[0].contains('\n'));
+            let payload = records[0]
+                .strip_prefix("ERROR actingd ")
+                .expect("private diagnostic prefix");
+            let payload = serde_json::from_str::<serde_json::Value>(payload)
+                .expect("private diagnostic json");
+            assert_eq!(
+                payload,
+                json!({
+                    "diagnostic": "device_registry_input_operation_failed",
+                    "instance_alias": "neutral.device",
+                    "requested_backend": "adb_shell_input",
+                    "factory": "AdbShellInputFactory",
+                    "operation": operation.name(),
+                    "device_error": original.to_string(),
+                })
+            );
+        }
+    }
+
+    #[test]
+    fn device_registry_input_operation_success_matrix_emits_nothing() {
+        for operation in TEST_INPUT_OPERATIONS {
+            let (mut backend, calls, records) = diagnostic_input_backend(Ok(()));
+
+            operation
+                .invoke(&mut backend)
+                .expect("configured operation success");
+
+            assert_eq!(*calls.lock().expect("input calls"), [operation.name()]);
+            assert!(records.lock().expect("diagnostic records").is_empty());
+        }
+    }
+
+    #[test]
+    fn fixture_input_operations_remain_unwrapped_and_emit_no_diagnostic() {
+        let id = IdentifierIssuer::new()
+            .expect("issuer")
+            .mint_instance_id()
+            .expect("instance id");
+        let value = json!({
+            "schema_version": CONFIG_SCHEMA_VERSION,
+            "state_root": "state",
+            "bind_host": "127.0.0.1",
+            "secret_fingerprint_salt": "0123456789abcdef",
+            "instances": [{
+                "alias": "neutral.fixture",
+                "instance_id": id.transport(),
+                "fixture_backend": {
+                    "frames": [{"width": 1, "height": 1, "rgb": [1, 2, 3]}],
+                    "max_inputs": 1
+                }
+            }]
+        });
+        let config = serde_json::from_value::<ActingdConfigFile>(value).expect("typed config");
+        let mut assembly = config.assemble().expect("runtime assembly");
+        let records = Arc::new(Mutex::new(Vec::new()));
+        let sink_records = Arc::clone(&records);
+        assembly.registry.input_open_diagnostic_sink = Arc::new(move |record| {
+            sink_records
+                .lock()
+                .expect("diagnostic records")
+                .push(record);
+        });
+
+        let mut backend =
+            ExecutionBackendProvider::open_input(&assembly.registry, "neutral.fixture")
+                .expect("fixture input");
+        backend.tap(10, 20).expect("fixture input within budget");
+        let error = backend
+            .tap(10, 20)
+            .expect_err("fixture input budget remains bounded");
+
+        assert_eq!(error, DeviceError::fatal("fixture input budget exhausted"));
+        assert!(records.lock().expect("diagnostic records").is_empty());
+    }
 
     #[test]
     fn formal_device_registry_input_open_failure_emits_one_private_record() {
