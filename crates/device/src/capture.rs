@@ -1544,14 +1544,14 @@ fn parse_screen_size(text: &str) -> DeviceResult<(u32, u32)> {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum DeviceRotation {
+pub(crate) enum DeviceRotation {
     R0,
     R90,
     R180,
     R270,
 }
 
-fn read_device_rotation(adb: &Adb, serial: &str) -> DeviceResult<DeviceRotation> {
+pub(crate) fn read_device_rotation(adb: &Adb, serial: &str) -> DeviceResult<DeviceRotation> {
     let output = adb.run(&["-s", serial, "shell", "dumpsys", "display"])?;
     if let Some(rotation) = parse_display_orientation(&output.stdout)? {
         return Ok(rotation);
@@ -1603,7 +1603,11 @@ fn droidcast_request_size(width: u32, height: u32, rotation: DeviceRotation) -> 
     }
 }
 
-fn display_size_from_natural(width: u32, height: u32, rotation: DeviceRotation) -> (u32, u32) {
+pub(crate) fn display_size_from_natural(
+    width: u32,
+    height: u32,
+    rotation: DeviceRotation,
+) -> (u32, u32) {
     match rotation {
         DeviceRotation::R90 | DeviceRotation::R270 => (height, width),
         DeviceRotation::R0 | DeviceRotation::R180 => (width, height),
@@ -2281,6 +2285,26 @@ mod tests {
             display_size_from_natural(720, 1280, DeviceRotation::R90),
             (1280, 720)
         );
+        assert_eq!(
+            display_size_from_natural(720, 1280, DeviceRotation::R270),
+            (1280, 720)
+        );
+        assert_eq!(
+            display_size_from_natural(720, 1280, DeviceRotation::R0),
+            (720, 1280)
+        );
+        assert_eq!(
+            display_size_from_natural(720, 1280, DeviceRotation::R180),
+            (720, 1280)
+        );
+        for invalid in ["", "4", "landscape"] {
+            let error = parse_device_rotation(invalid).expect_err("invalid rotation");
+            assert!(
+                error
+                    .message()
+                    .contains("failed to parse device user_rotation value")
+            );
+        }
         assert_eq!(droidcast_decode_size(720, 1280, 1280, 720), (720, 1280));
     }
 
