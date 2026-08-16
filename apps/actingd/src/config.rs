@@ -23,6 +23,7 @@ use actingcommand_vision_ffi::{
 use serde::Deserialize;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fs;
+use std::io::{self, Write};
 use std::net::{IpAddr, SocketAddr};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -787,7 +788,14 @@ impl ConfiguredExecutionBackendRegistry {
         Ok(Self {
             devices,
             device_input_backends,
-            input_open_diagnostic_sink: Arc::new(|record| eprintln!("{record}")),
+            input_open_diagnostic_sink: Arc::new(|record| {
+                let result = {
+                    let stderr = io::stderr();
+                    let mut stderr = stderr.lock();
+                    write_private_diagnostic_line(&mut stderr, &record)
+                };
+                result.expect("failed to write private diagnostic to stderr");
+            }),
             fixtures,
             modes,
         })
@@ -901,6 +909,12 @@ impl ExecutionBackendProvider for ConfiguredExecutionBackendRegistry {
                     .and_then(ExecutionBackendProvider::vision_provider)
             })
     }
+}
+
+fn write_private_diagnostic_line(writer: &mut impl Write, record: &str) -> io::Result<()> {
+    writer.write_all(record.as_bytes())?;
+    writer.write_all(b"\n")?;
+    writer.flush()
 }
 
 struct DeviceRegistryInputDiagnosticBackend {
@@ -1281,8 +1295,119 @@ mod tests {
     use super::*;
     use actingcommand_contract::IdentifierIssuer;
     use serde_json::json;
+    use std::io::Write;
     use std::sync::Mutex;
     use tempfile::TempDir;
+
+    #[derive(Debug, PartialEq, Eq)]
+    enum DiagnosticWriterEvent {
+        Write(Vec<u8>),
+        Flush,
+    }
+
+    #[derive(Default)]
+    struct RecordingDiagnosticWriter {
+        events: Vec<DiagnosticWriterEvent>,
+        fail_write_at: Option<usize>,
+        fail_flush: bool,
+        write_attempts: usize,
+    }
+
+    impl Write for RecordingDiagnosticWriter {
+        fn write(&mut self, buffer: &[u8]) -> std::io::Result<usize> {
+            let attempt = self.write_attempts;
+            self.write_attempts += 1;
+            if self.fail_write_at == Some(attempt) {
+                return Err(std::io::Error::other(format!(
+                    "diagnostic write failure at {attempt}"
+                )));
+            }
+            self.events
+                .push(DiagnosticWriterEvent::Write(buffer.to_vec()));
+            Ok(buffer.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            self.events.push(DiagnosticWriterEvent::Flush);
+            if self.fail_flush {
+                Err(std::io::Error::other("diagnostic flush failure"))
+            } else {
+                Ok(())
+            }
+        }
+    }
+
+    #[test]
+    fn private_diagnostic_writer_writes_record_terminator_and_flushes_once() {
+        let record = r#"ERROR actingd {"diagnostic":"fixture"}"#;
+        let mut writer = RecordingDiagnosticWriter::default();
+
+        write_private_diagnostic_line(&mut writer, record).expect("write private diagnostic");
+
+        assert_eq!(writer.write_attempts, 2);
+        assert_eq!(
+            writer.events,
+            [
+                DiagnosticWriterEvent::Write(record.as_bytes().to_vec()),
+                DiagnosticWriterEvent::Write(b"\n".to_vec()),
+                DiagnosticWriterEvent::Flush,
+            ]
+        );
+    }
+
+    #[test]
+    fn private_diagnostic_writer_propagates_write_errors() {
+        let record = r#"ERROR actingd {"diagnostic":"fixture"}"#;
+
+        for fail_write_at in [0, 1] {
+            let mut writer = RecordingDiagnosticWriter {
+                fail_write_at: Some(fail_write_at),
+                ..RecordingDiagnosticWriter::default()
+            };
+
+            let error = write_private_diagnostic_line(&mut writer, record)
+                .expect_err("write failure must remain loud");
+
+            assert_eq!(error.kind(), std::io::ErrorKind::Other);
+            assert_eq!(
+                error.to_string(),
+                format!("diagnostic write failure at {fail_write_at}")
+            );
+            assert_eq!(writer.write_attempts, fail_write_at + 1);
+            if fail_write_at == 0 {
+                assert!(writer.events.is_empty());
+            } else {
+                assert_eq!(
+                    writer.events,
+                    [DiagnosticWriterEvent::Write(record.as_bytes().to_vec())]
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn private_diagnostic_writer_propagates_flush_error() {
+        let record = r#"ERROR actingd {"diagnostic":"fixture"}"#;
+        let mut writer = RecordingDiagnosticWriter {
+            fail_flush: true,
+            ..RecordingDiagnosticWriter::default()
+        };
+
+        let error = write_private_diagnostic_line(&mut writer, record)
+            .expect_err("flush failure must remain loud");
+
+        assert_eq!(error.kind(), std::io::ErrorKind::Other);
+        assert_eq!(error.to_string(), "diagnostic flush failure");
+        assert_eq!(writer.write_attempts, 2);
+        assert_eq!(
+            writer.events,
+            [
+                DiagnosticWriterEvent::Write(record.as_bytes().to_vec()),
+                DiagnosticWriterEvent::Write(b"\n".to_vec()),
+                DiagnosticWriterEvent::Flush,
+            ]
+        );
+    }
 
     #[derive(Debug, Clone, Copy)]
     enum TestInputOperation {
