@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
+use crate::capture::{DeviceRotation, display_size_from_natural, read_device_rotation};
 use crate::{
     Adb, AdbConfig, DeviceError, DeviceInfo, DeviceResult, DeviceTarget, HandshakeInfo,
     InputBackend, MaaTouchBackend, MaaTouchConfig, MinitouchBackend, MinitouchConfig,
@@ -360,6 +361,9 @@ impl SelectedTouchBackend {
     }
 
     fn validate_action_points(&self, action: &str, points: &[(i32, i32)]) -> DeviceResult<()> {
+        if self.active.name == TouchBackendName::AdbShellInput {
+            return Ok(());
+        }
         let bounds = touch_bounds_for_backend(
             self.active.name,
             self.active.handshake.as_ref(),
@@ -810,6 +814,7 @@ impl AdbShellInputBackend {
         self.connect_with_steps(
             || adb.ensure_device(&serial, connect),
             || adb.screen_size(&serial),
+            || read_device_rotation(&adb, &serial),
         )
     }
 
@@ -817,13 +822,25 @@ impl AdbShellInputBackend {
         &mut self,
         ensure_device: impl FnOnce() -> DeviceResult<String>,
         screen_size: impl FnOnce() -> DeviceResult<String>,
+        device_rotation: impl FnOnce() -> DeviceResult<DeviceRotation>,
     ) -> DeviceResult<DeviceInfo> {
         let state = ensure_device()
             .map_err(|error| adb_shell_input_connect_error("ensure_device", error))?;
         let screen_size =
             screen_size().map_err(|error| adb_shell_input_connect_error("screen_size", error))?;
-        let bounds = touch_bounds_from_screen_size(&screen_size)
+        let natural_bounds = touch_bounds_from_screen_size(&screen_size)
             .map_err(|error| adb_shell_input_connect_error("bounds_conversion", error))?;
+        let rotation = device_rotation()
+            .map_err(|error| adb_shell_input_connect_error("device_rotation", error))?;
+        let (max_x, max_y) = display_size_from_natural(
+            natural_bounds.max_x as u32,
+            natural_bounds.max_y as u32,
+            rotation,
+        );
+        let bounds = TouchBounds {
+            max_x: max_x as i32,
+            max_y: max_y as i32,
+        };
         self.bounds = Some(bounds);
         self.connected = true;
         Ok(DeviceInfo {
@@ -854,6 +871,19 @@ impl AdbShellInputBackend {
         self.bounds
             .ok_or_else(|| DeviceError::fatal("AdbShellInputBackend screen bounds are unavailable"))
     }
+
+    fn tap_with_child(
+        &mut self,
+        x: i32,
+        y: i32,
+        child: impl FnOnce(i32, i32) -> DeviceResult<()>,
+    ) -> DeviceResult<()> {
+        let bounds = self.bounds()?;
+        validate_touch_coordinate("tap x", x, bounds.max_x)?;
+        validate_touch_coordinate("tap y", y, bounds.max_y)?;
+        self.ensure_connected()?;
+        child(x, y)
+    }
 }
 
 fn adb_shell_input_connect_error(operation: &'static str, error: DeviceError) -> DeviceError {
@@ -868,13 +898,13 @@ fn adb_shell_input_connect_error(operation: &'static str, error: DeviceError) ->
 
 impl InputBackend for AdbShellInputBackend {
     fn tap(&mut self, x: i32, y: i32) -> DeviceResult<()> {
-        let bounds = self.bounds()?;
-        validate_touch_coordinate("tap x", x, bounds.max_x)?;
-        validate_touch_coordinate("tap y", y, bounds.max_y)?;
-        self.ensure_connected()?;
-        let adb = Adb::new(self.adb_config.clone());
-        adb.shell_input_tap(&self.serial, x, y)?;
-        Ok(())
+        let adb_config = self.adb_config.clone();
+        let serial = self.serial.clone();
+        self.tap_with_child(x, y, move |x, y| {
+            Adb::new(adb_config)
+                .shell_input_tap(&serial, x, y)
+                .map(|_| ())
+        })
     }
 
     fn long_tap(&mut self, x: i32, y: i32, duration_ms: u64) -> DeviceResult<()> {
@@ -991,7 +1021,7 @@ fn validate_touch_coordinate(label: &str, value: i32, max: i32) -> DeviceResult<
 mod tests {
     use super::*;
     use crate::DeviceErrorSeverity;
-    use std::cell::RefCell;
+    use std::cell::{Cell, RefCell};
     use std::rc::Rc;
 
     fn adb_shell_input_test_backend() -> AdbShellInputBackend {
@@ -1009,6 +1039,7 @@ mod tests {
             .connect_with_steps(
                 || Err(ensure_source),
                 || -> DeviceResult<String> { panic!("screen size must not run") },
+                || -> DeviceResult<DeviceRotation> { panic!("rotation must not run") },
             )
             .expect_err("ensure device failure");
         assert_eq!(ensure_error.severity(), DeviceErrorSeverity::Transient);
@@ -1025,7 +1056,11 @@ mod tests {
         );
         let screen_text = screen_source.to_string();
         let screen_error = screen_backend
-            .connect_with_steps(|| Ok("device".to_string()), || Err(screen_source))
+            .connect_with_steps(
+                || Ok("device".to_string()),
+                || Err(screen_source),
+                || -> DeviceResult<DeviceRotation> { panic!("rotation must not run") },
+            )
             .expect_err("screen size failure");
         assert_eq!(screen_error.severity(), DeviceErrorSeverity::Transient);
         assert!(
@@ -1044,6 +1079,7 @@ mod tests {
             .connect_with_steps(
                 || Ok("device".to_string()),
                 || Ok(invalid_screen_size.to_string()),
+                || -> DeviceResult<DeviceRotation> { panic!("rotation must not run") },
             )
             .expect_err("bounds conversion failure");
         assert_eq!(bounds_error.severity(), DeviceErrorSeverity::Fatal);
@@ -1053,29 +1089,131 @@ mod tests {
                 .contains("child_operation=bounds_conversion")
         );
         assert!(bounds_error.message().contains(&bounds_text));
+
+        let mut rotation_backend = adb_shell_input_test_backend();
+        let rotation_source = DeviceError::transient(
+            "adb -s neutral:16384 shell dumpsys display failed with exit code 19",
+        );
+        let rotation_text = rotation_source.to_string();
+        let rotation_error = rotation_backend
+            .connect_with_steps(
+                || Ok("device".to_string()),
+                || Ok("Physical size: 720x1280".to_string()),
+                || Err(rotation_source),
+            )
+            .expect_err("rotation failure");
+        assert_eq!(rotation_error.severity(), DeviceErrorSeverity::Transient);
+        assert!(
+            rotation_error
+                .message()
+                .contains("child_operation=device_rotation")
+        );
+        assert!(rotation_error.message().contains(&rotation_text));
+        assert!(!rotation_backend.connected);
+        assert_eq!(rotation_backend.bounds, None);
+
+        let child_calls = Cell::new(0);
+        rotation_backend
+            .tap_with_child(10, 20, |_, _| {
+                child_calls.set(child_calls.get() + 1);
+                Ok(())
+            })
+            .expect_err("rotation failure must leave input closed");
+        assert_eq!(child_calls.get(), 0);
     }
 
     #[test]
-    fn adb_shell_input_connect_success_keeps_existing_state_transition() {
-        let mut backend = adb_shell_input_test_backend();
+    fn adb_shell_input_connect_uses_current_logical_orientation_bounds() {
+        for (rotation, expected_bounds) in [
+            (
+                DeviceRotation::R0,
+                TouchBounds {
+                    max_x: 720,
+                    max_y: 1280,
+                },
+            ),
+            (
+                DeviceRotation::R180,
+                TouchBounds {
+                    max_x: 720,
+                    max_y: 1280,
+                },
+            ),
+            (
+                DeviceRotation::R90,
+                TouchBounds {
+                    max_x: 1280,
+                    max_y: 720,
+                },
+            ),
+            (
+                DeviceRotation::R270,
+                TouchBounds {
+                    max_x: 1280,
+                    max_y: 720,
+                },
+            ),
+        ] {
+            let mut backend = adb_shell_input_test_backend();
+            let device = backend
+                .connect_with_steps(
+                    || Ok("device".to_string()),
+                    || Ok("Physical size: 720x1280".to_string()),
+                    || Ok(rotation),
+                )
+                .expect("connect");
 
-        let device = backend
+            assert!(backend.connected);
+            assert_eq!(device.state, "device");
+            assert_eq!(device.screen_size, "Physical size: 720x1280");
+            assert_eq!(backend.bounds, Some(expected_bounds));
+        }
+    }
+
+    #[test]
+    fn adb_shell_input_landscape_points_reach_one_child_and_out_of_range_reaches_none() {
+        for rotation in [DeviceRotation::R90, DeviceRotation::R270] {
+            for point in [(775, 691), (722, 615)] {
+                let mut backend = adb_shell_input_test_backend();
+                backend
+                    .connect_with_steps(
+                        || Ok("device".to_string()),
+                        || Ok("Physical size: 720x1280".to_string()),
+                        || Ok(rotation),
+                    )
+                    .expect("landscape connect");
+                let calls = RefCell::new(Vec::new());
+
+                backend
+                    .tap_with_child(point.0, point.1, |x, y| {
+                        calls.borrow_mut().push((x, y));
+                        Ok(())
+                    })
+                    .expect("landscape point");
+
+                assert_eq!(calls.borrow().as_slice(), &[point]);
+            }
+        }
+
+        let mut backend = adb_shell_input_test_backend();
+        backend
             .connect_with_steps(
                 || Ok("device".to_string()),
-                || Ok("Physical size: 1280x720".to_string()),
+                || Ok("Physical size: 720x1280".to_string()),
+                || Ok(DeviceRotation::R90),
             )
-            .expect("connect");
+            .expect("landscape connect");
+        let child_calls = Cell::new(0);
 
-        assert!(backend.connected);
-        assert_eq!(device.state, "device");
-        assert_eq!(device.screen_size, "Physical size: 1280x720");
-        assert_eq!(
-            backend.bounds,
-            Some(TouchBounds {
-                max_x: 1280,
-                max_y: 720
+        let error = backend
+            .tap_with_child(1281, 691, |_, _| {
+                child_calls.set(child_calls.get() + 1);
+                Ok(())
             })
-        );
+            .expect_err("out-of-range point");
+
+        assert!(error.message().contains("exceeds touch screen max 1280"));
+        assert_eq!(child_calls.get(), 0);
     }
 
     #[derive(Clone)]
@@ -1333,6 +1471,34 @@ mod tests {
         assert!(err.message().contains("exceeds touch screen max"));
         assert_eq!(selected.backend_name(), TouchBackendName::MaaTouch);
         assert_eq!(selected.diagnostics().attempts.len(), 1);
+    }
+
+    #[test]
+    fn selected_adb_shell_input_defers_stale_natural_bounds_to_concrete_backend() {
+        let actions = Rc::new(RefCell::new(vec![Ok(())]));
+        let mut selected = SelectedTouchBackend {
+            active: ConnectedTouchBackend {
+                name: TouchBackendName::AdbShellInput,
+                backend: Box::new(FakeBackend {
+                    action_result: Rc::clone(&actions),
+                    closed: false,
+                }),
+                device: DeviceInfo {
+                    serial: "fake".to_string(),
+                    state: "device".to_string(),
+                    screen_size: "Physical size: 720x1280".to_string(),
+                },
+                handshake: None,
+            },
+            remaining: Vec::new(),
+            diagnostics: TouchBackendDiagnostics::new(TouchBackendChoice::AdbShellInput),
+        };
+
+        selected
+            .tap(775, 691)
+            .expect("selected backend must defer adb bounds");
+
+        assert!(actions.borrow().is_empty());
     }
 
     #[test]
