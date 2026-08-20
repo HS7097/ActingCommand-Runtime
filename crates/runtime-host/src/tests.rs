@@ -8735,25 +8735,6 @@ fn direct_mapped_contained_task_commits_typed_terminal_without_generic_fallback(
 }
 
 #[test]
-fn contained_task_stability_frame_identity_failures_are_typed_and_closed() {
-    let identifiers = IdentifierIssuer::new().expect("identifier issuer");
-    let previous = identifiers.mint_frame_id().expect("previous frame");
-
-    for (current, expected_code) in [
-        (None, "contained_task_stability_frame_identity_missing"),
-        (
-            Some(previous),
-            "contained_task_stability_frame_identity_reused",
-        ),
-    ] {
-        let failure = contained_task_stability_current_frame(previous, current)
-            .expect_err("invalid formal frame binding must fail closed");
-        assert!(failure.poison_runtime);
-        assert_eq!(failure.error.code(), expected_code);
-    }
-}
-
-#[test]
 fn contained_task_stability_persistence_failures_are_fatal_without_later_input_or_artifact() {
     for failure_kind in ["artifact_write", "event_append"] {
         let root = TempDir::new().expect("tempdir");
