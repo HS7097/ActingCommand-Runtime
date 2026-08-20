@@ -8792,18 +8792,17 @@ fn contained_task_stability_persistence_failures_are_fatal_without_later_input_o
             2,
             "{failure_kind}"
         );
-        let events = projected_events(
-            &mut client,
-            EventQuery {
+        let events = host
+            .query_persisted_events_for_test(EventQuery {
                 correlation_id: Some(correlation_id),
                 ..EventQuery::default()
-            },
-        );
+            })
+            .expect("query persistence-failure events without a second IPC request");
         assert_eq!(
             events
                 .iter()
-                .filter(|event| event.event_type == EventType::ArtifactVerified)
-                .flat_map(|event| event.artifacts.iter())
+                .filter(|event| event.event_type() == EventType::ArtifactVerified)
+                .flat_map(|event| event.artifacts().iter())
                 .filter(|artifact| artifact.kind() == ArtifactKind::DiagnosticJson)
                 .count(),
             0,
@@ -9046,16 +9045,23 @@ fn contained_task_stability_max_steps_uses_the_last_comparison_without_duplicate
     assert_eq!(terminal["prior_consecutive_unchanged"], 1);
     assert_eq!(terminal["new_consecutive_unchanged"], 2);
     assert_eq!(terminal["terminal_reason"], "max_steps_reached");
-    for event_type in [EventType::TaskFailed, EventType::LeaseReleased] {
-        assert_eq!(
-            events
-                .iter()
-                .filter(|event| event.event_type == event_type)
-                .count(),
-            1,
-            "one authoritative {event_type:?}"
-        );
-    }
+    let task_failed = events
+        .iter()
+        .filter(|event| event.event_type == EventType::TaskFailed)
+        .collect::<Vec<_>>();
+    assert_eq!(task_failed.len(), 1, "one authoritative TaskFailed");
+    let lease_id = *task_failed[0]
+        .links
+        .lease_id()
+        .expect("failed task lease identity");
+    let releases = host
+        .query_persisted_events_for_test(EventQuery {
+            event_type: Some(EventType::LeaseReleased),
+            lease_id: Some(lease_id),
+            ..EventQuery::default()
+        })
+        .expect("query synthetic cleanup release by lease identity");
+    assert_eq!(releases.len(), 1, "one authoritative LeaseReleased");
     assert!(host.fatal_error().expect("runtime health").is_none());
     drop(client);
     host.close().expect("close host");
