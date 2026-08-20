@@ -110,6 +110,7 @@ pub fn prepare_package_build_task(
     if includes_recovery {
         task_ids.push("return_home".to_string());
     }
+    let outputs = build_task_outputs(&converter, &task_ids, includes_recovery)?;
     let entry_bundle = find_bundle(&converter, &task_id)?;
     let resolution = parse_resolution(resolution, entry_bundle)?;
     let package_id = package_id
@@ -118,7 +119,6 @@ pub fn prepare_package_build_task(
     validate_execution_mode(&execution_mode)?;
     let stability_termination =
         validate_entry_stability_termination(entry_bundle, &execution_mode, resolution)?;
-    let outputs = build_task_outputs(&converter, &task_ids, includes_recovery)?;
 
     Ok(PreparedPackageBuildTask {
         source,
@@ -354,14 +354,14 @@ impl PackageBuildCatalog {
             dry_run,
             env: _,
         } = request;
+        let task_ids = vec![task_id.clone()];
+        let mut outputs = self.converter.build_selected(&task_ids)?;
+        apply_environment_to_outputs(environment, &mut outputs)?;
         let bundle = find_bundle(&self.converter, &task_id)?;
         let resolution = parse_resolution(resolution, bundle)?;
         validate_execution_mode(&execution_mode)?;
         let stability_termination =
             validate_entry_stability_termination(bundle, &execution_mode, resolution)?;
-        let task_ids = vec![task_id.clone()];
-        let mut outputs = self.converter.build_selected(&task_ids)?;
-        apply_environment_to_outputs(environment, &mut outputs)?;
         let mut entries =
             PackageEntries::new(&self.resource_root, self.max_buffered_payload_bytes)?;
         entries.add_json(
