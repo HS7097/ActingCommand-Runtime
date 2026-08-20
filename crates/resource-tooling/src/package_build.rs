@@ -19,7 +19,7 @@ use actingcommand_pack_containment::{
     ContainmentError, ContainmentLimits, Sha256Hash, validate_recognition_metadata,
 };
 use actingcommand_recognition_pack::{AssetResolver, PackRect, RecognitionPackError};
-use serde::Deserialize;
+use serde::{Deserialize, Deserializer, Serialize};
 #[cfg(test)]
 use serde_json::json;
 use serde_json::{Map, Value};
@@ -40,6 +40,16 @@ const DANGEROUS_EXTENSIONS: &[&str] = &[
 const CONTROL_SCHEMA: &str = "Lab-1y.control.v1";
 const DEFAULT_TEMPLATE_THRESHOLD: f32 = 0.9;
 const DEFAULT_RECOVERY_TASK_ID: &str = "return_home";
+const MAX_STABILITY_TERMINATION_STEPS: u32 = 1_000;
+const MAX_CAPTURE_PIXEL_BYTES: usize = 4;
+
+fn deserialize_non_null_option<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
+where
+    D: Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    T::deserialize(deserializer).map(Some)
+}
 
 /// Deterministic package inputs prepared before Lab supplies resolved environment facts.
 pub struct PreparedPackageBuildTask {
@@ -54,6 +64,7 @@ pub struct PreparedPackageBuildTask {
     resolution: (u32, u32),
     package_id: String,
     execution_mode: String,
+    stability_termination: Option<StabilityTermination>,
     out: PathBuf,
     dry_run: bool,
     max_buffered_payload_bytes: usize,
@@ -99,13 +110,15 @@ pub fn prepare_package_build_task(
     if includes_recovery {
         task_ids.push("return_home".to_string());
     }
-    let outputs = build_task_outputs(&converter, &task_ids, includes_recovery)?;
     let entry_bundle = find_bundle(&converter, &task_id)?;
     let resolution = parse_resolution(resolution, entry_bundle)?;
     let package_id = package_id
         .unwrap_or_else(|| format!("{}.{}.{}", converter.game, converter.server, task_id));
     let execution_mode = execution_mode.unwrap_or_else(|| "navigable_route".to_string());
     validate_execution_mode(&execution_mode)?;
+    let stability_termination =
+        validate_entry_stability_termination(entry_bundle, &execution_mode, resolution)?;
+    let outputs = build_task_outputs(&converter, &task_ids, includes_recovery)?;
 
     Ok(PreparedPackageBuildTask {
         source,
@@ -119,6 +132,7 @@ pub fn prepare_package_build_task(
         resolution,
         package_id,
         execution_mode,
+        stability_termination,
         out,
         dry_run,
         max_buffered_payload_bytes,
@@ -179,7 +193,8 @@ impl PreparedPackageBuildTask {
                 &self.converter.server,
                 self.resolution,
                 &self.task_id,
-            ),
+                self.stability_termination.as_ref(),
+            )?,
         )?;
         add_resources_json(
             &mut entries,
@@ -339,12 +354,14 @@ impl PackageBuildCatalog {
             dry_run,
             env: _,
         } = request;
-        let task_ids = vec![task_id.clone()];
-        let mut outputs = self.converter.build_selected(&task_ids)?;
-        apply_environment_to_outputs(environment, &mut outputs)?;
         let bundle = find_bundle(&self.converter, &task_id)?;
         let resolution = parse_resolution(resolution, bundle)?;
         validate_execution_mode(&execution_mode)?;
+        let stability_termination =
+            validate_entry_stability_termination(bundle, &execution_mode, resolution)?;
+        let task_ids = vec![task_id.clone()];
+        let mut outputs = self.converter.build_selected(&task_ids)?;
+        apply_environment_to_outputs(environment, &mut outputs)?;
         let mut entries =
             PackageEntries::new(&self.resource_root, self.max_buffered_payload_bytes)?;
         entries.add_json(
@@ -356,7 +373,8 @@ impl PackageBuildCatalog {
                 &self.converter.server,
                 resolution,
                 &task_id,
-            ),
+                stability_termination.as_ref(),
+            )?,
         )?;
         add_resources_json(
             &mut entries,
@@ -399,6 +417,8 @@ impl PackageBuildCatalog {
         let entry_bundle = find_bundle(&self.converter, &entry_task_id)?;
         let resolution = parse_resolution(resolution, entry_bundle)?;
         validate_execution_mode(&execution_mode)?;
+        let stability_termination =
+            validate_entry_stability_termination(entry_bundle, &execution_mode, resolution)?;
         let mut outputs = self.converter.build_all()?;
         apply_environment_to_outputs(environment, &mut outputs)?;
         let task_ids = self.task_ids();
@@ -413,7 +433,8 @@ impl PackageBuildCatalog {
                 &self.converter.server,
                 resolution,
                 &entry_task_id,
-            ),
+                stability_termination.as_ref(),
+            )?,
         )?;
         add_resources_json(
             &mut entries,
@@ -530,8 +551,9 @@ fn control_json(
     server: &str,
     resolution: (u32, u32),
     entry_task_id: &str,
-) -> Value {
-    ordered_object([
+    stability_termination: Option<&StabilityTermination>,
+) -> CliOutcome<Value> {
+    let mut control = ordered_object([
         (
             "schema_version",
             Value::String("Lab-1y.control.v1".to_string()),
@@ -548,7 +570,25 @@ fn control_json(
             ]),
         ),
         ("entry_task_id", Value::String(entry_task_id.to_string())),
-    ])
+    ]);
+    if let Some(stability_termination) = stability_termination {
+        let object = control
+            .as_object_mut()
+            .expect("control_json always constructs an object");
+        object.insert(
+            "max_steps".to_string(),
+            Value::from(stability_termination.max_steps),
+        );
+        object.insert(
+            "stability_termination".to_string(),
+            serde_json::to_value(stability_termination).map_err(|error| {
+                CliError::package_invalid(format!(
+                    "failed to serialize stability_termination into control.json: {error}"
+                ))
+            })?,
+        );
+    }
+    Ok(control)
 }
 
 fn add_resources_json(
@@ -1685,6 +1725,221 @@ fn validate_manifest_entry_task_id(
     Ok(())
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct StabilityTermination {
+    region: StabilityTerminationRegion,
+    comparison: StabilityTerminationComparison,
+    consecutive_unchanged_threshold: u32,
+    max_steps: u32,
+}
+
+impl StabilityTermination {
+    fn validate(&self, resolution: (u32, u32)) -> CliOutcome<()> {
+        self.region.validate(resolution)?;
+        if self.max_steps < 2 || self.max_steps > MAX_STABILITY_TERMINATION_STEPS {
+            return Err(CliError::package_invalid(format!(
+                "stability_termination max_steps must be between 2 and {MAX_STABILITY_TERMINATION_STEPS}"
+            )));
+        }
+        if self.consecutive_unchanged_threshold == 0
+            || self.consecutive_unchanged_threshold >= self.max_steps
+        {
+            return Err(CliError::package_invalid(
+                "stability_termination consecutive_unchanged_threshold must be positive and less than max_steps",
+            ));
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct StabilityTerminationRegion {
+    x: u32,
+    y: u32,
+    width: u32,
+    height: u32,
+}
+
+impl StabilityTerminationRegion {
+    fn validate(self, resolution: (u32, u32)) -> CliOutcome<()> {
+        if self.width == 0 || self.height == 0 {
+            return Err(CliError::package_invalid(
+                "stability_termination region width and height must be non-zero",
+            ));
+        }
+        let end_x = self.x.checked_add(self.width).ok_or_else(|| {
+            CliError::package_invalid("stability_termination region x extent overflow")
+        })?;
+        let end_y = self.y.checked_add(self.height).ok_or_else(|| {
+            CliError::package_invalid("stability_termination region y extent overflow")
+        })?;
+        if end_x > resolution.0 || end_y > resolution.1 {
+            return Err(CliError::package_invalid(format!(
+                "stability_termination region ({},{}) {}x{} exceeds resolution {}x{}",
+                self.x, self.y, self.width, self.height, resolution.0, resolution.1
+            )));
+        }
+        validate_stability_crop_byte_layout(self, resolution)
+    }
+}
+
+fn validate_stability_crop_byte_layout(
+    region: StabilityTerminationRegion,
+    resolution: (u32, u32),
+) -> CliOutcome<()> {
+    let frame_width = usize::try_from(resolution.0).map_err(|_| {
+        CliError::package_invalid("stability_termination frame width exceeds platform limits")
+    })?;
+    let frame_height = usize::try_from(resolution.1).map_err(|_| {
+        CliError::package_invalid("stability_termination frame height exceeds platform limits")
+    })?;
+    let x = usize::try_from(region.x).map_err(|_| {
+        CliError::package_invalid("stability_termination region x exceeds platform limits")
+    })?;
+    let y = usize::try_from(region.y).map_err(|_| {
+        CliError::package_invalid("stability_termination region y exceeds platform limits")
+    })?;
+    let width = usize::try_from(region.width).map_err(|_| {
+        CliError::package_invalid("stability_termination region width exceeds platform limits")
+    })?;
+    let height = usize::try_from(region.height).map_err(|_| {
+        CliError::package_invalid("stability_termination region height exceeds platform limits")
+    })?;
+    let frame_stride = frame_width
+        .checked_mul(MAX_CAPTURE_PIXEL_BYTES)
+        .ok_or_else(|| {
+            CliError::package_invalid("stability_termination frame byte-stride overflow")
+        })?;
+    let frame_bytes = frame_stride.checked_mul(frame_height).ok_or_else(|| {
+        CliError::package_invalid("stability_termination frame byte-layout overflow")
+    })?;
+    let row_bytes = width.checked_mul(MAX_CAPTURE_PIXEL_BYTES).ok_or_else(|| {
+        CliError::package_invalid("stability_termination crop row byte-layout overflow")
+    })?;
+    let last_row = y.checked_add(height - 1).ok_or_else(|| {
+        CliError::package_invalid("stability_termination crop row offset overflow")
+    })?;
+    let last_row_start = last_row
+        .checked_mul(frame_stride)
+        .and_then(|offset| {
+            x.checked_mul(MAX_CAPTURE_PIXEL_BYTES)
+                .and_then(|x_offset| offset.checked_add(x_offset))
+        })
+        .ok_or_else(|| {
+            CliError::package_invalid("stability_termination crop byte offset overflow")
+        })?;
+    let crop_end = last_row_start.checked_add(row_bytes).ok_or_else(|| {
+        CliError::package_invalid("stability_termination crop byte extent overflow")
+    })?;
+    if crop_end > frame_bytes {
+        return Err(CliError::package_invalid(
+            "stability_termination crop byte extent exceeds frame layout",
+        ));
+    }
+    Ok(())
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct StabilityTerminationComparison {
+    mode: StabilityTerminationComparisonMode,
+    parameters: ExactPixelsV1Parameters,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum StabilityTerminationComparisonMode {
+    ExactPixelsV1,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+struct ExactPixelsV1Parameters {}
+
+impl<'de> Deserialize<'de> for ExactPixelsV1Parameters {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        struct EmptyObjectVisitor;
+
+        impl<'de> serde::de::Visitor<'de> for EmptyObjectVisitor {
+            type Value = ExactPixelsV1Parameters;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("an empty exact_pixels_v1 parameters object")
+            }
+
+            fn visit_map<M>(self, mut map: M) -> Result<Self::Value, M::Error>
+            where
+                M: serde::de::MapAccess<'de>,
+            {
+                if let Some(key) = map.next_key::<String>()? {
+                    let _: serde::de::IgnoredAny = map.next_value()?;
+                    return Err(serde::de::Error::unknown_field(&key, &[]));
+                }
+                Ok(ExactPixelsV1Parameters {})
+            }
+        }
+
+        deserializer.deserialize_map(EmptyObjectVisitor)
+    }
+}
+
+fn validate_entry_stability_termination(
+    bundle: &Bundle,
+    execution_mode: &str,
+    resolution: (u32, u32),
+) -> CliOutcome<Option<StabilityTermination>> {
+    let declaration = bundle
+        .data
+        .get("stability_termination")
+        .map(|value| {
+            serde_json::from_value::<StabilityTermination>(value.clone()).map_err(|error| {
+                CliError::package_invalid(format!(
+                    "task '{}' stability_termination is invalid: {error}",
+                    bundle.task_id
+                ))
+            })
+        })
+        .transpose()?;
+    match (execution_mode, declaration.as_ref()) {
+        ("in_page_guard", None) => {}
+        ("in_page_guard", Some(declaration)) => {
+            declaration.validate(resolution)?;
+            if bundle
+                .data
+                .get("target_page")
+                .is_some_and(|value| !value.is_null())
+            {
+                return Err(CliError::package_invalid(format!(
+                    "task '{}' in_page_guard stability_termination conflicts with target_page",
+                    bundle.task_id
+                )));
+            }
+            if bundle
+                .data
+                .get("scheduling_outcome")
+                .is_some_and(|value| !value.is_null())
+            {
+                return Err(CliError::package_invalid(format!(
+                    "task '{}' in_page_guard stability_termination conflicts with scheduling_outcome",
+                    bundle.task_id
+                )));
+            }
+        }
+        (_, Some(_)) => {
+            return Err(CliError::package_invalid(format!(
+                "task '{}' stability_termination is only valid for in_page_guard execution",
+                bundle.task_id
+            )));
+        }
+        (_, None) => {}
+    }
+    Ok(declaration)
+}
+
 #[allow(dead_code)]
 #[derive(Debug, Clone, Deserialize)]
 struct LabControl {
@@ -1703,6 +1958,8 @@ struct LabControl {
     step_timeout_ms: Option<u64>,
     #[serde(default)]
     max_steps: Option<usize>,
+    #[serde(default, deserialize_with = "deserialize_non_null_option")]
+    stability_termination: Option<StabilityTermination>,
     #[serde(default)]
     stop_on_error: Option<bool>,
     #[serde(default)]
@@ -1760,12 +2017,41 @@ impl LabControl {
                 "capture_interval_ms must be positive when provided",
             ));
         }
+        self.validate_stability_termination()?;
         if let Some(capture_backend) = &self.capture_backend {
             validate_capture_backend(capture_backend)?;
         }
         self.frame_store
             .validate()
             .map_err(CliError::package_invalid)
+    }
+
+    fn validate_stability_termination(&self) -> CliOutcome<()> {
+        match (
+            self.execution_mode.as_str(),
+            self.stability_termination.as_ref(),
+        ) {
+            ("in_page_guard", None) => Ok(()),
+            ("in_page_guard", Some(declaration)) => {
+                declaration.validate((self.resolution.width, self.resolution.height))?;
+                let declared_max_steps = usize::try_from(declaration.max_steps).map_err(|_| {
+                    CliError::package_invalid(
+                        "stability_termination max_steps exceeds platform limits",
+                    )
+                })?;
+                if self.max_steps != Some(declared_max_steps) {
+                    return Err(CliError::package_invalid(format!(
+                        "control max_steps {:?} does not match stability_termination max_steps {}",
+                        self.max_steps, declaration.max_steps
+                    )));
+                }
+                Ok(())
+            }
+            (_, Some(_)) => Err(CliError::package_invalid(
+                "control stability_termination is only valid for in_page_guard execution",
+            )),
+            (_, None) => Ok(()),
+        }
     }
 }
 
@@ -1794,6 +2080,10 @@ struct OperationBundle {
     entry_page: Option<String>,
     #[serde(default)]
     target_page: Option<PageDeclaration>,
+    #[serde(default)]
+    scheduling_outcome: Option<Value>,
+    #[serde(default, deserialize_with = "deserialize_non_null_option")]
+    stability_termination: Option<StabilityTermination>,
     #[serde(default)]
     error_pages: Vec<String>,
     #[serde(default)]
@@ -1858,6 +2148,7 @@ impl OperationBundle {
                 "operation bundle has no operations",
             ));
         }
+        self.validate_stability_termination(control)?;
         self.defaults.validate()?;
         if let Some(target_page) = &self.target_page {
             target_page.validate("operation bundle target_page")?;
@@ -1909,6 +2200,39 @@ impl OperationBundle {
             }
         }
         self.validate_recovery()
+    }
+
+    fn validate_stability_termination(&self, control: &LabControl) -> CliOutcome<()> {
+        if self.stability_termination != control.stability_termination {
+            return Err(CliError::package_invalid(
+                "task stability_termination does not exactly match control stability_termination",
+            ));
+        }
+        match (
+            control.execution_mode.as_str(),
+            self.stability_termination.as_ref(),
+        ) {
+            ("in_page_guard", Some(declaration)) => {
+                declaration
+                    .validate((self.coordinate_space.width, self.coordinate_space.height))?;
+                if self.target_page.is_some() {
+                    return Err(CliError::package_invalid(
+                        "in_page_guard stability_termination conflicts with target_page",
+                    ));
+                }
+                if self.scheduling_outcome.is_some() {
+                    return Err(CliError::package_invalid(
+                        "in_page_guard stability_termination conflicts with scheduling_outcome",
+                    ));
+                }
+                Ok(())
+            }
+            ("in_page_guard", None) => Ok(()),
+            (_, Some(_)) => Err(CliError::package_invalid(
+                "task stability_termination is only valid for in_page_guard execution",
+            )),
+            (_, None) => Ok(()),
+        }
     }
 
     fn validate_recovery(&self) -> CliOutcome<()> {
@@ -3284,7 +3608,9 @@ mod tests {
                     "cn",
                     (1280, 720),
                     "operator_task",
-                ),
+                    None,
+                )
+                .expect("control"),
             )
             .expect("control");
         entries
@@ -4016,6 +4342,392 @@ mod tests {
         assert_eq!(error.code, "package_invalid");
     }
 
+    #[test]
+    fn stability_termination_accepts_full_and_edge_aligned_regions() {
+        for region in [
+            json!({"x": 0, "y": 0, "width": 1280, "height": 720}),
+            json!({"x": 1279, "y": 719, "width": 1, "height": 1}),
+        ] {
+            let mut declaration = stability_termination_fixture();
+            declaration["region"] = region;
+            validate_stability_fixture(
+                "in_page_guard",
+                Some(declaration.clone()),
+                Some(declaration),
+                Some(json!(4)),
+                |_| {},
+                |_| {},
+            )
+            .expect("valid bounded stability termination");
+        }
+    }
+
+    #[test]
+    fn stability_termination_absence_preserves_existing_modes() {
+        validate_stability_fixture("in_page_guard", None, None, None, |_| {}, |_| {})
+            .expect("feature-absent in_page_guard remains valid");
+
+        validate_stability_fixture("navigable_route", None, None, None, |_| {}, |_| {})
+            .expect("legacy navigable route remains valid");
+
+        let declaration = stability_termination_fixture();
+        let wrong_mode = validate_stability_fixture(
+            "navigable_route",
+            Some(declaration.clone()),
+            Some(declaration),
+            Some(json!(4)),
+            |_| {},
+            |_| {},
+        )
+        .expect_err("other modes must not silently ignore stability termination");
+        assert_eq!(wrong_mode.code, "package_invalid");
+    }
+
+    #[test]
+    fn stability_termination_requires_every_typed_field() {
+        for path in [
+            "region",
+            "region.x",
+            "region.y",
+            "region.width",
+            "region.height",
+            "comparison",
+            "comparison.mode",
+            "comparison.parameters",
+            "consecutive_unchanged_threshold",
+            "max_steps",
+        ] {
+            let mut task = stability_termination_fixture();
+            let mut control = task.clone();
+            remove_json_path(&mut task, path);
+            remove_json_path(&mut control, path);
+            let error = validate_stability_fixture(
+                "in_page_guard",
+                Some(task),
+                Some(control),
+                Some(json!(4)),
+                |_| {},
+                |_| {},
+            )
+            .expect_err("missing stability field must fail");
+            assert_eq!(error.code, "package_invalid", "path={path}");
+        }
+    }
+
+    #[test]
+    fn stability_termination_rejects_malformed_unknown_and_unsupported_values() {
+        let cases = [
+            ("null declaration", "", json!(null)),
+            ("array declaration", "", json!([])),
+            ("null region", "region", json!(null)),
+            ("null comparison", "comparison", json!(null)),
+            ("negative x", "region.x", json!(-1)),
+            ("string width", "region.width", json!("1")),
+            (
+                "string threshold",
+                "consecutive_unchanged_threshold",
+                json!("2"),
+            ),
+            ("string max", "max_steps", json!("4")),
+            (
+                "unsupported mode",
+                "comparison.mode",
+                json!("perceptual_v1"),
+            ),
+            ("null parameters", "comparison.parameters", json!(null)),
+            ("array parameters", "comparison.parameters", json!([])),
+            (
+                "nonempty parameters",
+                "comparison.parameters",
+                json!({"tolerance": 0}),
+            ),
+        ];
+        for (label, path, replacement) in cases {
+            let mut task = stability_termination_fixture();
+            let mut control = task.clone();
+            if path.is_empty() {
+                task = replacement.clone();
+                control = replacement;
+            } else {
+                set_json_path(&mut task, path, replacement.clone());
+                set_json_path(&mut control, path, replacement);
+            }
+            let error = validate_stability_fixture(
+                "in_page_guard",
+                Some(task),
+                Some(control),
+                Some(json!(4)),
+                |_| {},
+                |_| {},
+            )
+            .expect_err("malformed stability declaration must fail");
+            assert_eq!(error.code, "package_invalid", "case={label}");
+        }
+
+        for (label, task, control) in [
+            ("task null only", Some(json!(null)), None),
+            ("control null only", None, Some(json!(null))),
+        ] {
+            let error = validate_stability_fixture(
+                "in_page_guard",
+                task,
+                control,
+                Some(json!(4)),
+                |_| {},
+                |_| {},
+            )
+            .expect_err("an explicit null declaration must not be treated as absence");
+            assert_eq!(error.code, "package_invalid", "case={label}");
+        }
+
+        for path in ["", "region", "comparison", "comparison.parameters"] {
+            let mut task = stability_termination_fixture();
+            let mut control = task.clone();
+            insert_unknown_json_field(&mut task, path);
+            insert_unknown_json_field(&mut control, path);
+            let error = validate_stability_fixture(
+                "in_page_guard",
+                Some(task),
+                Some(control),
+                Some(json!(4)),
+                |_| {},
+                |_| {},
+            )
+            .expect_err("unknown stability field must fail");
+            assert_eq!(error.code, "package_invalid", "path={path}");
+        }
+    }
+
+    #[test]
+    fn stability_termination_rejects_invalid_regions_and_checked_layout_overflow() {
+        for (label, region) in [
+            (
+                "zero width",
+                json!({"x": 0, "y": 0, "width": 0, "height": 1}),
+            ),
+            (
+                "zero height",
+                json!({"x": 0, "y": 0, "width": 1, "height": 0}),
+            ),
+            (
+                "x outside",
+                json!({"x": 1280, "y": 0, "width": 1, "height": 1}),
+            ),
+            (
+                "y outside",
+                json!({"x": 0, "y": 720, "width": 1, "height": 1}),
+            ),
+            (
+                "right outside",
+                json!({"x": 1279, "y": 0, "width": 2, "height": 1}),
+            ),
+            (
+                "bottom outside",
+                json!({"x": 0, "y": 719, "width": 1, "height": 2}),
+            ),
+            (
+                "checked x overflow",
+                json!({"x": u32::MAX, "y": 0, "width": 2, "height": 1}),
+            ),
+            (
+                "checked y overflow",
+                json!({"x": 0, "y": u32::MAX, "width": 1, "height": 2}),
+            ),
+        ] {
+            let mut task = stability_termination_fixture();
+            task["region"] = region;
+            let error = validate_stability_fixture(
+                "in_page_guard",
+                Some(task.clone()),
+                Some(task),
+                Some(json!(4)),
+                |_| {},
+                |_| {},
+            )
+            .expect_err("invalid region must fail before execution");
+            assert_eq!(error.code, "package_invalid", "case={label}");
+        }
+
+        let mut task = stability_termination_fixture();
+        task["region"] = json!({
+            "x": 0,
+            "y": 0,
+            "width": u32::MAX,
+            "height": u32::MAX
+        });
+        let error = validate_stability_fixture(
+            "in_page_guard",
+            Some(task.clone()),
+            Some(task),
+            Some(json!(4)),
+            |control| {
+                control["resolution"] = json!({"width": u32::MAX, "height": u32::MAX});
+            },
+            |operation| {
+                operation["coordinate_space"] = json!({"width": u32::MAX, "height": u32::MAX});
+            },
+        )
+        .expect_err("checked pixel-layout overflow must fail before execution");
+        assert_eq!(error.code, "package_invalid");
+    }
+
+    #[test]
+    fn stability_termination_rejects_threshold_and_hard_cap_bounds() {
+        for (label, threshold, max_steps) in [
+            ("zero threshold", 0, 4),
+            ("zero max", 1, 0),
+            ("one max", 1, 1),
+            ("max above limit", 1, 1001),
+            ("threshold equals max", 4, 4),
+            ("threshold above max", 5, 4),
+        ] {
+            let mut declaration = stability_termination_fixture();
+            declaration["consecutive_unchanged_threshold"] = json!(threshold);
+            declaration["max_steps"] = json!(max_steps);
+            let error = validate_stability_fixture(
+                "in_page_guard",
+                Some(declaration.clone()),
+                Some(declaration),
+                Some(json!(max_steps)),
+                |_| {},
+                |_| {},
+            )
+            .expect_err("invalid threshold/hard-cap relation must fail");
+            assert_eq!(error.code, "package_invalid", "case={label}");
+        }
+    }
+
+    #[test]
+    fn stability_termination_rejects_target_and_scheduling_conflicts() {
+        for field in ["target_page", "scheduling_outcome"] {
+            let declaration = stability_termination_fixture();
+            let error = validate_stability_fixture(
+                "in_page_guard",
+                Some(declaration.clone()),
+                Some(declaration),
+                Some(json!(4)),
+                |_| {},
+                |operation| {
+                    operation[field] = if field == "target_page" {
+                        json!("terminal")
+                    } else {
+                        json!({"designated_operation": null, "mappings": []})
+                    };
+                },
+            )
+            .expect_err("stability must remain the only normal terminal owner");
+            assert_eq!(error.code, "package_invalid", "field={field}");
+        }
+    }
+
+    #[test]
+    fn stability_termination_rejects_control_task_and_root_cap_tampering() {
+        let declaration = stability_termination_fixture();
+        for (label, task, control, root_max) in [
+            ("task only", Some(declaration.clone()), None, Some(json!(4))),
+            (
+                "control only",
+                None,
+                Some(declaration.clone()),
+                Some(json!(4)),
+            ),
+            (
+                "declaration mismatch",
+                Some(declaration.clone()),
+                Some({
+                    let mut changed = declaration.clone();
+                    changed["consecutive_unchanged_threshold"] = json!(1);
+                    changed
+                }),
+                Some(json!(4)),
+            ),
+            (
+                "missing root max",
+                Some(declaration.clone()),
+                Some(declaration.clone()),
+                None,
+            ),
+            (
+                "root max mismatch",
+                Some(declaration.clone()),
+                Some(declaration.clone()),
+                Some(json!(5)),
+            ),
+        ] {
+            let error = validate_stability_fixture(
+                "in_page_guard",
+                task,
+                control,
+                root_max,
+                |_| {},
+                |_| {},
+            )
+            .expect_err("task/control tampering must fail");
+            assert_eq!(error.code, "package_invalid", "case={label}");
+        }
+    }
+
+    #[test]
+    fn in_page_guard_build_preserves_declaration_and_projects_control() {
+        let temp = TempDir::new().expect("temp");
+        let repo = temp.path().join("repo");
+        write_fixture_repo(&repo);
+        let declaration = stability_termination_fixture();
+        update_fixture_operation(&repo, |operation| {
+            operation
+                .as_object_mut()
+                .expect("operation object")
+                .remove("target_page");
+            operation["stability_termination"] = declaration.clone();
+        });
+        let out = temp.path().join("stability.zip");
+        let mut request = build_task_request(repo, out.clone());
+        request.execution_mode = Some("in_page_guard".to_string());
+
+        build_task(request).expect("build in-page stability package");
+
+        let entries = read_zip_entries(&out);
+        let control: Value =
+            serde_json::from_slice(entries.get("control.json").expect("packaged control"))
+                .expect("control JSON");
+        let task: Value = serde_json::from_slice(
+            entries
+                .get("resources/operations/operator_task/task.json")
+                .expect("packaged task"),
+        )
+        .expect("task JSON");
+        assert_eq!(task["stability_termination"], declaration);
+        assert_eq!(control["stability_termination"], declaration);
+        assert_eq!(control["max_steps"], json!(4));
+    }
+
+    #[test]
+    fn in_page_guard_build_without_declaration_preserves_legacy_control() {
+        let temp = TempDir::new().expect("temp");
+        let repo = temp.path().join("repo");
+        write_fixture_repo(&repo);
+        let out = temp.path().join("missing-stability.zip");
+        let mut request = build_task_request(repo, out.clone());
+        request.execution_mode = Some("in_page_guard".to_string());
+
+        build_task(request).expect("feature-absent in_page_guard package");
+
+        let entries = read_zip_entries(&out);
+        let control: Value =
+            serde_json::from_slice(entries.get("control.json").expect("packaged control"))
+                .expect("control JSON");
+        let task: Value = serde_json::from_slice(
+            entries
+                .get("resources/operations/operator_task/task.json")
+                .expect("packaged task"),
+        )
+        .expect("task JSON");
+        assert!(control.get("stability_termination").is_none());
+        assert!(control.get("max_steps").is_none());
+        assert!(task.get("stability_termination").is_none());
+        assert_eq!(task["target_page"], json!("mall"));
+    }
+
     fn read_zip_entries(path: &Path) -> BTreeMap<String, Vec<u8>> {
         let mut package = open_published_package(path).unwrap();
         let mut zip = ZipArchive::new(package.file_mut()).unwrap();
@@ -4032,6 +4744,126 @@ mod tests {
         drop(zip);
         package.close().unwrap();
         entries
+    }
+
+    fn stability_termination_fixture() -> Value {
+        json!({
+            "region": {"x": 0, "y": 0, "width": 1280, "height": 720},
+            "comparison": {"mode": "exact_pixels_v1", "parameters": {}},
+            "consecutive_unchanged_threshold": 2,
+            "max_steps": 4
+        })
+    }
+
+    fn stability_operation_fixture(stability_termination: Option<Value>) -> Value {
+        let mut operation = json!({
+            "schema_version": "0.6",
+            "task_id": "operator_task",
+            "game": "arknights",
+            "server_scope": ["cn"],
+            "coordinate_space": {"width": 1280, "height": 720},
+            "operations": [{
+                "id": "scroll_once",
+                "purpose": "advance one bounded page",
+                "from": "operator",
+                "click": {"kind": "point", "x": 1, "y": 1},
+                "unguarded_trusted_coordinate": true
+            }]
+        });
+        if let Some(stability_termination) = stability_termination {
+            operation["stability_termination"] = stability_termination;
+        }
+        operation
+    }
+
+    fn stability_control_fixture(
+        execution_mode: &str,
+        stability_termination: Option<Value>,
+        max_steps: Option<Value>,
+    ) -> Value {
+        let mut control = json!({
+            "schema_version": CONTROL_SCHEMA,
+            "package_id": "arknights.cn.operator_task",
+            "execution_mode": execution_mode,
+            "game": "arknights",
+            "server": "cn",
+            "resolution": {"width": 1280, "height": 720},
+            "entry_task_id": "operator_task"
+        });
+        if let Some(stability_termination) = stability_termination {
+            control["stability_termination"] = stability_termination;
+        }
+        if let Some(max_steps) = max_steps {
+            control["max_steps"] = max_steps;
+        }
+        control
+    }
+
+    fn validate_stability_fixture(
+        execution_mode: &str,
+        task_stability: Option<Value>,
+        control_stability: Option<Value>,
+        control_max_steps: Option<Value>,
+        update_control: impl FnOnce(&mut Value),
+        update_operation: impl FnOnce(&mut Value),
+    ) -> CliOutcome<()> {
+        let mut control =
+            stability_control_fixture(execution_mode, control_stability, control_max_steps);
+        update_control(&mut control);
+        let control: LabControl = serde_json::from_value(control).map_err(|error| {
+            CliError::package_invalid(format!("failed to parse stability control: {error}"))
+        })?;
+        control.validate()?;
+
+        let mut operation = stability_operation_fixture(task_stability);
+        update_operation(&mut operation);
+        let operation: OperationBundle = serde_json::from_value(operation).map_err(|error| {
+            CliError::package_invalid(format!("failed to parse stability operation: {error}"))
+        })?;
+        operation.validate(&control, |_| Ok(true))
+    }
+
+    fn json_path_parent_mut<'a>(value: &'a mut Value, path: &str) -> (&'a mut Value, String) {
+        let (parent, leaf) = path.rsplit_once('.').unwrap_or(("", path));
+        let mut cursor = value;
+        if !parent.is_empty() {
+            for segment in parent.split('.') {
+                cursor = cursor.get_mut(segment).expect("fixture JSON path segment");
+            }
+        }
+        (cursor, leaf.to_string())
+    }
+
+    fn remove_json_path(value: &mut Value, path: &str) {
+        let (parent, leaf) = json_path_parent_mut(value, path);
+        parent
+            .as_object_mut()
+            .expect("fixture JSON object")
+            .remove(&leaf);
+    }
+
+    fn set_json_path(value: &mut Value, path: &str, replacement: Value) {
+        let (parent, leaf) = json_path_parent_mut(value, path);
+        parent
+            .as_object_mut()
+            .expect("fixture JSON object")
+            .insert(leaf, replacement);
+    }
+
+    fn insert_unknown_json_field(value: &mut Value, path: &str) {
+        let target = if path.is_empty() {
+            value
+        } else {
+            let mut cursor = value;
+            for segment in path.split('.') {
+                cursor = cursor.get_mut(segment).expect("fixture JSON path segment");
+            }
+            cursor
+        };
+        target
+            .as_object_mut()
+            .expect("fixture JSON object")
+            .insert("unsupported".to_string(), json!(true));
     }
 
     fn assert_published_file(path: &Path) {
@@ -4153,7 +4985,8 @@ mod tests {
             "cn",
             (1280, 720),
             "operator_task",
-        ))
+            None,
+        )?)
         .expect("fixture control");
         let bundle: OperationBundle = serde_json::from_value(task).map_err(|error| {
             CliError::package_invalid(format!(

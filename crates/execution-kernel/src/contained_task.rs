@@ -19,8 +19,7 @@ use actingcommand_recognition::{Scene, ScenePixelFormat};
 use actingcommand_recognition_pack::{
     RecognitionEvaluator, RecognitionPackErrorCode, TargetEvaluation, TargetKind, VisionProvider,
 };
-use serde::Deserialize;
-use serde::Serialize;
+use serde::{Deserialize, Deserializer, Serialize};
 use std::collections::{BTreeSet, VecDeque};
 use std::error::Error;
 use std::fmt;
@@ -37,6 +36,15 @@ const MAX_TASK_TIMEOUT_MS: u64 = 600_000;
 const MAX_STEP_TIMEOUT_MS: u64 = 60_000;
 const MAX_CAPTURE_INTERVAL_MS: u64 = 5_000;
 const MAX_STEPS: u32 = 1_000;
+const MAX_STABILITY_PIXEL_BYTES: usize = 4;
+
+fn deserialize_non_null_option<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
+where
+    D: Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    T::deserialize(deserializer).map(Some)
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ContainedTaskError {
@@ -89,6 +97,153 @@ impl<E> From<ContainedTaskError> for ContainedTaskRunError<E> {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct StabilityRegion {
+    pub x: u32,
+    pub y: u32,
+    pub width: u32,
+    pub height: u32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum StabilityComparisonMode {
+    ExactPixelsV1,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub struct StabilityComparisonParameters {}
+
+impl<'de> Deserialize<'de> for StabilityComparisonParameters {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        struct EmptyObjectVisitor;
+
+        impl<'de> serde::de::Visitor<'de> for EmptyObjectVisitor {
+            type Value = StabilityComparisonParameters;
+
+            fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+                formatter.write_str("an empty exact_pixels_v1 parameters object")
+            }
+
+            fn visit_map<M>(self, mut map: M) -> Result<Self::Value, M::Error>
+            where
+                M: serde::de::MapAccess<'de>,
+            {
+                if let Some(key) = map.next_key::<String>()? {
+                    let _: serde::de::IgnoredAny = map.next_value()?;
+                    return Err(serde::de::Error::unknown_field(&key, &[]));
+                }
+                Ok(StabilityComparisonParameters {})
+            }
+        }
+
+        deserializer.deserialize_map(EmptyObjectVisitor)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct StabilityComparisonDeclaration {
+    pub mode: StabilityComparisonMode,
+    pub parameters: StabilityComparisonParameters,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct StabilityTerminationDeclaration {
+    pub region: StabilityRegion,
+    pub comparison: StabilityComparisonDeclaration,
+    pub consecutive_unchanged_threshold: u32,
+    pub max_steps: u32,
+}
+
+impl StabilityTerminationDeclaration {
+    fn validate(
+        &self,
+        resolution: &Resolution,
+        root_max_steps: Option<u32>,
+    ) -> Result<(), ContainedTaskError> {
+        if root_max_steps != Some(self.max_steps)
+            || self.consecutive_unchanged_threshold == 0
+            || self.consecutive_unchanged_threshold >= self.max_steps
+            || self.max_steps > MAX_STEPS
+        {
+            return Err(ContainedTaskError::new("contained_task_control_invalid"));
+        }
+        self.region.validate(resolution)
+    }
+}
+
+impl StabilityRegion {
+    fn validate(&self, resolution: &Resolution) -> Result<(), ContainedTaskError> {
+        let Some(end_x) = self.x.checked_add(self.width) else {
+            return Err(ContainedTaskError::new("contained_task_control_invalid"));
+        };
+        let Some(end_y) = self.y.checked_add(self.height) else {
+            return Err(ContainedTaskError::new("contained_task_control_invalid"));
+        };
+        if self.width == 0
+            || self.height == 0
+            || end_x > resolution.width
+            || end_y > resolution.height
+        {
+            return Err(ContainedTaskError::new("contained_task_control_invalid"));
+        }
+        validate_stability_crop_byte_layout(*self, resolution)
+    }
+}
+
+fn validate_stability_crop_byte_layout(
+    region: StabilityRegion,
+    resolution: &Resolution,
+) -> Result<(), ContainedTaskError> {
+    let invalid = || ContainedTaskError::new("contained_task_control_invalid");
+    let frame_width = usize::try_from(resolution.width).map_err(|_| invalid())?;
+    let frame_height = usize::try_from(resolution.height).map_err(|_| invalid())?;
+    let x = usize::try_from(region.x).map_err(|_| invalid())?;
+    let y = usize::try_from(region.y).map_err(|_| invalid())?;
+    let width = usize::try_from(region.width).map_err(|_| invalid())?;
+    let height = usize::try_from(region.height).map_err(|_| invalid())?;
+    let frame_stride = frame_width
+        .checked_mul(MAX_STABILITY_PIXEL_BYTES)
+        .ok_or_else(invalid)?;
+    let frame_bytes = frame_stride.checked_mul(frame_height).ok_or_else(invalid)?;
+    let row_bytes = width
+        .checked_mul(MAX_STABILITY_PIXEL_BYTES)
+        .ok_or_else(invalid)?;
+    let last_row = y.checked_add(height - 1).ok_or_else(invalid)?;
+    let last_row_start = last_row
+        .checked_mul(frame_stride)
+        .and_then(|offset| {
+            x.checked_mul(MAX_STABILITY_PIXEL_BYTES)
+                .and_then(|x_offset| offset.checked_add(x_offset))
+        })
+        .ok_or_else(invalid)?;
+    let crop_end = last_row_start.checked_add(row_bytes).ok_or_else(invalid)?;
+    if crop_end > frame_bytes {
+        return Err(invalid());
+    }
+    Ok(())
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum StabilityComparisonResult {
+    Changed,
+    Unchanged,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum StabilityTerminalReason {
+    ConsecutiveUnchangedThresholdReached,
+    MaxStepsReached,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ContainedTaskTrace {
     PackageAdmitted {
@@ -132,6 +287,25 @@ pub enum ContainedTaskTrace {
         step_index: u32,
         operation_label: String,
         page_label: String,
+    },
+    StabilityBaseline {
+        step_index: u32,
+        operation_label: String,
+        declaration: StabilityTerminationDeclaration,
+    },
+    StabilityComparison {
+        step_index: u32,
+        operation_label: String,
+        declaration: StabilityTerminationDeclaration,
+        result: StabilityComparisonResult,
+        prior_consecutive_unchanged: u32,
+        new_consecutive_unchanged: u32,
+        terminal_reason: Option<StabilityTerminalReason>,
+    },
+    StabilityTerminal {
+        step_index: u32,
+        operation_label: String,
+        reason: StabilityTerminalReason,
     },
     Finalizing {
         outcome: TaskOutcome,
@@ -287,6 +461,10 @@ impl PreparedContainedTask {
         self.scheduling_outcome.as_ref()
     }
 
+    pub fn stability_termination(&self) -> Option<&StabilityTerminationDeclaration> {
+        self.control.stability_termination.as_ref()
+    }
+
     pub const fn entry_count(&self) -> usize {
         self.entry_count
     }
@@ -357,6 +535,7 @@ impl PreparedContainedTask {
         machine
             .observe_page(Some(observation.page_label.clone()))
             .map_err(|_| ContainedTaskError::new("contained_task_state_invalid"))?;
+        let mut stability_tracker = StabilityTracker::default();
 
         loop {
             if started.elapsed() > task_timeout {
@@ -471,21 +650,21 @@ impl PreparedContainedTask {
                         if destination_pages.is_empty() {
                             observation =
                                 self.capture_until_page(runtime, step_timeout, capture_interval)?;
-                            runtime
-                                .record(ContainedTaskTrace::StepFinished {
-                                    step_index,
-                                    operation_label: operation_id.clone(),
-                                    page_label: observation.page_label.clone(),
-                                })
-                                .map_err(ContainedTaskRunError::Boundary)?;
-                            machine
-                                .operation_succeeded(
-                                    &operation_id,
-                                    Some(observation.page_label.clone()),
-                                )
-                                .map_err(|_| {
-                                    ContainedTaskError::new("contained_task_state_invalid")
-                                })?;
+                            if let Some(reason) = self.complete_successful_step(
+                                runtime,
+                                &mut machine,
+                                &mut stability_tracker,
+                                step_index,
+                                &operation_id,
+                                &observation,
+                            )? {
+                                return Self::finish_stability_termination(
+                                    runtime,
+                                    &machine,
+                                    &observation,
+                                    reason,
+                                );
+                            }
                             break;
                         }
                         let confirmation_timeout = Duration::from_millis(
@@ -510,21 +689,21 @@ impl PreparedContainedTask {
                         )? {
                             PostconditionResolution::Reached(reached) => {
                                 observation = reached;
-                                runtime
-                                    .record(ContainedTaskTrace::StepFinished {
-                                        step_index,
-                                        operation_label: operation_id.clone(),
-                                        page_label: observation.page_label.clone(),
-                                    })
-                                    .map_err(ContainedTaskRunError::Boundary)?;
-                                machine
-                                    .operation_succeeded(
-                                        &operation_id,
-                                        Some(observation.page_label.clone()),
-                                    )
-                                    .map_err(|_| {
-                                        ContainedTaskError::new("contained_task_state_invalid")
-                                    })?;
+                                if let Some(reason) = self.complete_successful_step(
+                                    runtime,
+                                    &mut machine,
+                                    &mut stability_tracker,
+                                    step_index,
+                                    &operation_id,
+                                    &observation,
+                                )? {
+                                    return Self::finish_stability_termination(
+                                        runtime,
+                                        &machine,
+                                        &observation,
+                                        reason,
+                                    );
+                                }
                                 break;
                             }
                             PostconditionResolution::Failed {
@@ -580,23 +759,21 @@ impl PreparedContainedTask {
                                 )? {
                                     PostconditionResolution::Reached(reached) => {
                                         observation = reached;
-                                        runtime
-                                            .record(ContainedTaskTrace::StepFinished {
-                                                step_index,
-                                                operation_label: operation_id.clone(),
-                                                page_label: observation.page_label.clone(),
-                                            })
-                                            .map_err(ContainedTaskRunError::Boundary)?;
-                                        machine
-                                            .operation_succeeded(
-                                                &operation_id,
-                                                Some(observation.page_label.clone()),
-                                            )
-                                            .map_err(|_| {
-                                                ContainedTaskError::new(
-                                                    "contained_task_state_invalid",
-                                                )
-                                            })?;
+                                        if let Some(reason) = self.complete_successful_step(
+                                            runtime,
+                                            &mut machine,
+                                            &mut stability_tracker,
+                                            step_index,
+                                            &operation_id,
+                                            &observation,
+                                        )? {
+                                            return Self::finish_stability_termination(
+                                                runtime,
+                                                &machine,
+                                                &observation,
+                                                reason,
+                                            );
+                                        }
                                         break;
                                     }
                                     PostconditionResolution::Failed {
@@ -737,6 +914,104 @@ impl PreparedContainedTask {
         }
     }
 
+    fn complete_successful_step<R: ContainedTaskRuntime>(
+        &self,
+        runtime: &mut R,
+        machine: &mut RunStateMachine,
+        stability_tracker: &mut StabilityTracker,
+        step_index: u32,
+        operation_label: &str,
+        observation: &PageObservation,
+    ) -> Result<Option<StabilityTerminalReason>, ContainedTaskRunError<R::Error>> {
+        let terminal_reason = if let Some(declaration) = &self.control.stability_termination {
+            let sample = observation.stability_sample.clone().ok_or_else(|| {
+                ContainedTaskError::new("contained_task_stability_capture_invalid")
+            })?;
+            let transition = stability_tracker.propose(sample, declaration, step_index)?;
+            let (trace, terminal_reason) = match &transition {
+                StabilityTransition::Baseline { .. } => (
+                    ContainedTaskTrace::StabilityBaseline {
+                        step_index,
+                        operation_label: operation_label.to_string(),
+                        declaration: declaration.clone(),
+                    },
+                    None,
+                ),
+                StabilityTransition::Comparison {
+                    result,
+                    prior_consecutive_unchanged,
+                    new_consecutive_unchanged,
+                    terminal_reason,
+                    ..
+                } => (
+                    ContainedTaskTrace::StabilityComparison {
+                        step_index,
+                        operation_label: operation_label.to_string(),
+                        declaration: declaration.clone(),
+                        result: *result,
+                        prior_consecutive_unchanged: *prior_consecutive_unchanged,
+                        new_consecutive_unchanged: *new_consecutive_unchanged,
+                        terminal_reason: *terminal_reason,
+                    },
+                    *terminal_reason,
+                ),
+            };
+            runtime
+                .record(trace)
+                .map_err(ContainedTaskRunError::Boundary)?;
+            stability_tracker.commit(transition);
+            terminal_reason
+        } else {
+            None
+        };
+
+        runtime
+            .record(ContainedTaskTrace::StepFinished {
+                step_index,
+                operation_label: operation_label.to_string(),
+                page_label: observation.page_label.clone(),
+            })
+            .map_err(ContainedTaskRunError::Boundary)?;
+        machine
+            .operation_succeeded(operation_label, Some(observation.page_label.clone()))
+            .map_err(|_| ContainedTaskError::new("contained_task_state_invalid"))?;
+        if let Some(reason) = terminal_reason {
+            runtime
+                .record(ContainedTaskTrace::StabilityTerminal {
+                    step_index,
+                    operation_label: operation_label.to_string(),
+                    reason,
+                })
+                .map_err(ContainedTaskRunError::Boundary)?;
+        }
+        Ok(terminal_reason)
+    }
+
+    fn finish_stability_termination<R: ContainedTaskRuntime>(
+        runtime: &mut R,
+        machine: &RunStateMachine,
+        observation: &PageObservation,
+        reason: StabilityTerminalReason,
+    ) -> Result<ContainedTaskOutcome, ContainedTaskRunError<R::Error>> {
+        match reason {
+            StabilityTerminalReason::ConsecutiveUnchangedThresholdReached => {
+                runtime
+                    .record(ContainedTaskTrace::Finalizing {
+                        outcome: TaskOutcome::Success,
+                    })
+                    .map_err(ContainedTaskRunError::Boundary)?;
+                Ok(ContainedTaskOutcome {
+                    outcome: TaskOutcome::Success,
+                    final_page: Some(observation.page_label.clone()),
+                    executed_steps: machine.completed_steps(),
+                })
+            }
+            StabilityTerminalReason::MaxStepsReached => {
+                Err(ContainedTaskError::new("contained_task_requires_scheduler").into())
+            }
+        }
+    }
+
     fn finish_effect_attempt<R: ContainedTaskRuntime>(
         runtime: &mut R,
         step_index: u32,
@@ -779,6 +1054,12 @@ impl PreparedContainedTask {
     ) -> Result<Option<PageObservation>, ContainedTaskRunError<R::Error>> {
         let frame = runtime.capture().map_err(ContainedTaskRunError::Boundary)?;
         self.control.resolution.validate_frame(&frame)?;
+        let stability_sample = self
+            .control
+            .stability_termination
+            .as_ref()
+            .map(|declaration| stability_sample(&frame, declaration))
+            .transpose()?;
         runtime
             .record(ContainedTaskTrace::CaptureCompleted {
                 width: frame.width,
@@ -827,7 +1108,11 @@ impl PreparedContainedTask {
                 height: frame.height,
             })
             .map_err(ContainedTaskRunError::Boundary)?;
-        Ok(page.map(|page_label| PageObservation { page_label, scene }))
+        Ok(page.map(|page_label| PageObservation {
+            page_label,
+            scene,
+            stability_sample,
+        }))
     }
 
     fn await_postcondition<R: ContainedTaskRuntime>(
@@ -879,6 +1164,7 @@ impl PreparedContainedTask {
 struct PageObservation {
     page_label: String,
     scene: Scene,
+    stability_sample: Option<StabilityFrameSample>,
 }
 
 enum PostconditionResolution {
@@ -889,7 +1175,202 @@ enum PostconditionResolution {
     },
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct StabilityFrameSample {
+    width: u32,
+    height: u32,
+    pixel_format: PixelFormat,
+    pixels: Vec<u8>,
+}
+
+fn stability_sample(
+    frame: &Frame,
+    declaration: &StabilityTerminationDeclaration,
+) -> Result<StabilityFrameSample, ContainedTaskError> {
+    let bytes_per_pixel = match frame.pixel_format {
+        PixelFormat::Rgb8 => 3usize,
+        PixelFormat::Rgba8 => 4usize,
+    };
+    let frame_width = usize::try_from(frame.width)
+        .map_err(|_| ContainedTaskError::new("contained_task_stability_capture_invalid"))?;
+    let frame_height = usize::try_from(frame.height)
+        .map_err(|_| ContainedTaskError::new("contained_task_stability_capture_invalid"))?;
+    let expected_frame_len = frame_width
+        .checked_mul(frame_height)
+        .and_then(|pixels| pixels.checked_mul(bytes_per_pixel))
+        .ok_or_else(|| ContainedTaskError::new("contained_task_stability_capture_invalid"))?;
+    if frame.pixels.len() != expected_frame_len {
+        return Err(ContainedTaskError::new(
+            "contained_task_stability_capture_invalid",
+        ));
+    }
+
+    let region = declaration.region;
+    let end_x = region
+        .x
+        .checked_add(region.width)
+        .ok_or_else(|| ContainedTaskError::new("contained_task_stability_capture_invalid"))?;
+    let end_y = region
+        .y
+        .checked_add(region.height)
+        .ok_or_else(|| ContainedTaskError::new("contained_task_stability_capture_invalid"))?;
+    if region.width == 0 || region.height == 0 || end_x > frame.width || end_y > frame.height {
+        return Err(ContainedTaskError::new(
+            "contained_task_stability_capture_invalid",
+        ));
+    }
+
+    let x = usize::try_from(region.x)
+        .map_err(|_| ContainedTaskError::new("contained_task_stability_capture_invalid"))?;
+    let y = usize::try_from(region.y)
+        .map_err(|_| ContainedTaskError::new("contained_task_stability_capture_invalid"))?;
+    let width = usize::try_from(region.width)
+        .map_err(|_| ContainedTaskError::new("contained_task_stability_capture_invalid"))?;
+    let height = usize::try_from(region.height)
+        .map_err(|_| ContainedTaskError::new("contained_task_stability_capture_invalid"))?;
+    let row_bytes = width
+        .checked_mul(bytes_per_pixel)
+        .ok_or_else(|| ContainedTaskError::new("contained_task_stability_capture_invalid"))?;
+    let capacity = row_bytes
+        .checked_mul(height)
+        .ok_or_else(|| ContainedTaskError::new("contained_task_stability_capture_invalid"))?;
+    let mut pixels = Vec::with_capacity(capacity);
+    for row in y..y + height {
+        let start = row
+            .checked_mul(frame_width)
+            .and_then(|offset| offset.checked_add(x))
+            .and_then(|offset| offset.checked_mul(bytes_per_pixel))
+            .ok_or_else(|| ContainedTaskError::new("contained_task_stability_capture_invalid"))?;
+        let end = start
+            .checked_add(row_bytes)
+            .ok_or_else(|| ContainedTaskError::new("contained_task_stability_capture_invalid"))?;
+        pixels.extend_from_slice(
+            frame.pixels.get(start..end).ok_or_else(|| {
+                ContainedTaskError::new("contained_task_stability_capture_invalid")
+            })?,
+        );
+    }
+
+    Ok(StabilityFrameSample {
+        width: region.width,
+        height: region.height,
+        pixel_format: frame.pixel_format,
+        pixels,
+    })
+}
+
+fn compare_stability_samples(
+    previous: &StabilityFrameSample,
+    current: &StabilityFrameSample,
+    comparison: &StabilityComparisonDeclaration,
+) -> Result<StabilityComparisonResult, ContainedTaskError> {
+    if previous.width != current.width
+        || previous.height != current.height
+        || previous.pixel_format != current.pixel_format
+    {
+        return Err(ContainedTaskError::new(
+            "contained_task_stability_comparison_failed",
+        ));
+    }
+    match comparison.mode {
+        StabilityComparisonMode::ExactPixelsV1 => {
+            if previous.pixels == current.pixels {
+                Ok(StabilityComparisonResult::Unchanged)
+            } else {
+                Ok(StabilityComparisonResult::Changed)
+            }
+        }
+    }
+}
+
+#[derive(Debug, Default)]
+struct StabilityTracker {
+    previous: Option<StabilityFrameSample>,
+    consecutive_unchanged: u32,
+}
+
+enum StabilityTransition {
+    Baseline {
+        sample: StabilityFrameSample,
+    },
+    Comparison {
+        sample: StabilityFrameSample,
+        result: StabilityComparisonResult,
+        prior_consecutive_unchanged: u32,
+        new_consecutive_unchanged: u32,
+        terminal_reason: Option<StabilityTerminalReason>,
+    },
+}
+
+impl StabilityTracker {
+    fn propose(
+        &self,
+        sample: StabilityFrameSample,
+        declaration: &StabilityTerminationDeclaration,
+        step_index: u32,
+    ) -> Result<StabilityTransition, ContainedTaskError> {
+        let Some(previous) = self.previous.as_ref() else {
+            return Ok(StabilityTransition::Baseline { sample });
+        };
+        let result = compare_stability_samples(previous, &sample, &declaration.comparison)?;
+        let prior_consecutive_unchanged = self.consecutive_unchanged;
+        let new_consecutive_unchanged = match result {
+            StabilityComparisonResult::Changed => 0,
+            StabilityComparisonResult::Unchanged => {
+                prior_consecutive_unchanged.checked_add(1).ok_or_else(|| {
+                    ContainedTaskError::new("contained_task_stability_counter_overflow")
+                })?
+            }
+        };
+        if new_consecutive_unchanged > declaration.consecutive_unchanged_threshold {
+            return Err(ContainedTaskError::new(
+                "contained_task_stability_counter_invalid",
+            ));
+        }
+        let completed_steps = step_index
+            .checked_add(1)
+            .ok_or_else(|| ContainedTaskError::new("contained_task_stability_counter_overflow"))?;
+        if completed_steps > declaration.max_steps {
+            return Err(ContainedTaskError::new(
+                "contained_task_stability_counter_invalid",
+            ));
+        }
+        let terminal_reason =
+            if new_consecutive_unchanged == declaration.consecutive_unchanged_threshold {
+                Some(StabilityTerminalReason::ConsecutiveUnchangedThresholdReached)
+            } else if completed_steps == declaration.max_steps {
+                Some(StabilityTerminalReason::MaxStepsReached)
+            } else {
+                None
+            };
+        Ok(StabilityTransition::Comparison {
+            sample,
+            result,
+            prior_consecutive_unchanged,
+            new_consecutive_unchanged,
+            terminal_reason,
+        })
+    }
+
+    fn commit(&mut self, transition: StabilityTransition) {
+        match transition {
+            StabilityTransition::Baseline { sample } => {
+                self.previous = Some(sample);
+                self.consecutive_unchanged = 0;
+            }
+            StabilityTransition::Comparison {
+                sample,
+                new_consecutive_unchanged,
+                ..
+            } => {
+                self.previous = Some(sample);
+                self.consecutive_unchanged = new_consecutive_unchanged;
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone, Deserialize)]
 struct TaskControl {
     schema_version: String,
     package_id: String,
@@ -908,6 +1389,8 @@ struct TaskControl {
     max_steps: Option<u32>,
     #[serde(default)]
     stop_on_confirmation: Option<bool>,
+    #[serde(default, deserialize_with = "deserialize_non_null_option")]
+    stability_termination: Option<StabilityTerminationDeclaration>,
 }
 
 impl TaskControl {
@@ -933,6 +1416,18 @@ impl TaskControl {
             .is_some_and(|value| value == 0 || value > MAX_STEPS)
         {
             return Err(ContainedTaskError::new("contained_task_control_invalid"));
+        }
+        match (
+            self.execution_mode.as_str(),
+            self.stability_termination.as_ref(),
+        ) {
+            ("in_page_guard", Some(declaration)) => {
+                declaration.validate(&self.resolution, self.max_steps)?;
+            }
+            (_, Some(_)) => {
+                return Err(ContainedTaskError::new("contained_task_control_invalid"));
+            }
+            (_, None) => {}
         }
         Ok(())
     }
@@ -996,6 +1491,8 @@ struct TaskProgram {
     error_pages: Vec<String>,
     #[serde(default)]
     scheduling_outcome: Option<SchedulingOutcomeDeclaration>,
+    #[serde(default, deserialize_with = "deserialize_non_null_option")]
+    stability_termination: Option<StabilityTerminationDeclaration>,
     #[serde(default)]
     recovery: Option<TaskRecovery>,
     #[serde(default)]
@@ -1025,6 +1522,7 @@ impl TaskProgram {
         {
             return Err(ContainedTaskError::new("contained_task_program_invalid"));
         }
+        validate_stability_contract(control, self)?;
         let target_pages = self.target_pages()?;
         validate_page_references(&control.game, &target_pages, detector)?;
         validate_page_references(&control.game, &self.error_pages, detector)?;
@@ -1136,6 +1634,27 @@ impl TaskProgram {
             }
         }
         Ok(())
+    }
+}
+
+fn validate_stability_contract(
+    control: &TaskControl,
+    program: &TaskProgram,
+) -> Result<(), ContainedTaskError> {
+    match (
+        control.stability_termination.as_ref(),
+        program.stability_termination.as_ref(),
+    ) {
+        (Some(control_declaration), Some(program_declaration))
+            if control.execution_mode == "in_page_guard"
+                && control_declaration == program_declaration
+                && program.target_page.is_none()
+                && program.scheduling_outcome.is_none() =>
+        {
+            Ok(())
+        }
+        (None, None) => Ok(()),
+        _ => Err(ContainedTaskError::new("contained_task_program_invalid")),
     }
 }
 
@@ -2436,6 +2955,7 @@ mod retry_wiring_tests {
                 Vec::new()
             },
             scheduling_outcome: None,
+            stability_termination: None,
             recovery: None,
             defaults: TaskOperationDefaults::default(),
             operations: vec![task_operation],
@@ -3438,5 +3958,566 @@ mod retry_wiring_tests {
                     && trigger.attempts == 2
                     && trigger.recovery_task_id == "return_home"
         ));
+    }
+
+    fn stability_declaration(
+        region: StabilityRegion,
+        consecutive_unchanged_threshold: u32,
+        max_steps: u32,
+    ) -> StabilityTerminationDeclaration {
+        serde_json::from_value(json!({
+            "region": {
+                "x": region.x,
+                "y": region.y,
+                "width": region.width,
+                "height": region.height
+            },
+            "comparison": {
+                "mode": "exact_pixels_v1",
+                "parameters": {}
+            },
+            "consecutive_unchanged_threshold": consecutive_unchanged_threshold,
+            "max_steps": max_steps
+        }))
+        .expect("stability termination declaration")
+    }
+
+    fn stability_task(
+        consecutive_unchanged_threshold: u32,
+        max_steps: u32,
+    ) -> PreparedContainedTask {
+        let mut task = omitted_policy_task(false, false);
+        let declaration = stability_declaration(
+            StabilityRegion {
+                x: 1,
+                y: 0,
+                width: 1,
+                height: 1,
+            },
+            consecutive_unchanged_threshold,
+            max_steps,
+        );
+        task.control.execution_mode = "in_page_guard".to_string();
+        task.control.max_steps = Some(max_steps);
+        task.control.stability_termination = Some(declaration.clone());
+        task.program.target_page = None;
+        task.program.scheduling_outcome = None;
+        task.program.stability_termination = Some(declaration);
+        task.program.operations[0].to = None;
+        task.program.operations[0].guard = None;
+        task.program.operations[0].unguarded_trusted_coordinate = true;
+        task
+    }
+
+    fn stability_frame(sample: [u8; 3]) -> Frame {
+        Frame::from_pixels(
+            2,
+            1,
+            [[255, 0, 0], sample].concat(),
+            PixelFormat::Rgb8,
+            CaptureBackendName::FixtureSimulation,
+        )
+        .expect("stability fixture frame")
+    }
+
+    fn stability_runtime(frames: Vec<Frame>) -> ScriptedRuntime {
+        let last_frame = frames.last().expect("at least one frame").clone();
+        ScriptedRuntime {
+            frames: frames.into(),
+            last_frame,
+            captures: 0,
+            inputs: 0,
+            traces: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn stability_declaration_admission_is_exact_and_fail_closed() {
+        let mut control_json = json!({
+            "schema_version": CONTROL_SCHEMA,
+            "package_id": "neutral.test.task",
+            "execution_mode": "in_page_guard",
+            "game": "neutral",
+            "server": "test",
+            "resolution": {"width": 2, "height": 1},
+            "entry_task_id": "task"
+        });
+        assert!(
+            serde_json::from_value::<TaskControl>(control_json.clone()).is_ok(),
+            "an omitted control declaration must preserve legacy absence"
+        );
+        control_json["stability_termination"] = Value::Null;
+        assert!(
+            serde_json::from_value::<TaskControl>(control_json).is_err(),
+            "explicit null control declaration must fail closed"
+        );
+
+        let mut program_json = json!({
+            "schema_version": "0.6",
+            "task_id": "task",
+            "game": "neutral",
+            "coordinate_space": {"width": 2, "height": 1},
+            "operations": []
+        });
+        assert!(
+            serde_json::from_value::<TaskProgram>(program_json.clone()).is_ok(),
+            "an omitted task declaration must preserve legacy absence"
+        );
+        program_json["stability_termination"] = Value::Null;
+        assert!(
+            serde_json::from_value::<TaskProgram>(program_json).is_err(),
+            "explicit null task declaration must fail closed"
+        );
+
+        let declaration = stability_declaration(
+            StabilityRegion {
+                x: 1,
+                y: 0,
+                width: 1,
+                height: 1,
+            },
+            2,
+            4,
+        );
+        let mut active = control();
+        active.execution_mode = "in_page_guard".to_string();
+        active.max_steps = Some(4);
+        active.stability_termination = Some(declaration.clone());
+        active.validate().expect("valid stability control");
+
+        let mut task = stability_task(2, 4);
+        validate_stability_contract(&task.control, &task.program)
+            .expect("matching control and task declarations");
+
+        task.program
+            .stability_termination
+            .as_mut()
+            .expect("task declaration")
+            .max_steps = 5;
+        assert_eq!(
+            validate_stability_contract(&task.control, &task.program)
+                .expect_err("task declaration must exactly match control")
+                .code(),
+            "contained_task_program_invalid"
+        );
+
+        let mut missing = control();
+        missing.execution_mode = "in_page_guard".to_string();
+        missing.max_steps = Some(4);
+        missing
+            .validate()
+            .expect("feature absence preserves legacy in-page guard behavior");
+        let mut legacy_program = stability_task(2, 4);
+        legacy_program.control.stability_termination = None;
+        legacy_program.program.stability_termination = None;
+        legacy_program.program.target_page = Some(PageDeclaration::Singleton("home".to_string()));
+        validate_stability_contract(&legacy_program.control, &legacy_program.program)
+            .expect("matching absence preserves the legacy task contract");
+
+        for mode in ["recognize_only", "navigable_route"] {
+            let mut rejected = active.clone();
+            rejected.execution_mode = mode.to_string();
+            assert_eq!(
+                rejected
+                    .validate()
+                    .expect_err("other modes reject stability termination")
+                    .code(),
+                "contained_task_control_invalid"
+            );
+        }
+
+        for (threshold, nested_max, root_max) in
+            [(0, 4, 4), (4, 4, 4), (2, 1_001, 1_001), (2, 4, 5)]
+        {
+            let mut rejected = active.clone();
+            rejected.max_steps = Some(root_max);
+            let stability = rejected
+                .stability_termination
+                .as_mut()
+                .expect("stability declaration");
+            stability.consecutive_unchanged_threshold = threshold;
+            stability.max_steps = nested_max;
+            assert_eq!(
+                rejected
+                    .validate()
+                    .expect_err("invalid threshold or max-step relation")
+                    .code(),
+                "contained_task_control_invalid"
+            );
+        }
+
+        for region in [
+            StabilityRegion {
+                x: 0,
+                y: 0,
+                width: 0,
+                height: 1,
+            },
+            StabilityRegion {
+                x: u32::MAX,
+                y: 0,
+                width: 2,
+                height: 1,
+            },
+            StabilityRegion {
+                x: 1,
+                y: 0,
+                width: 2,
+                height: 1,
+            },
+        ] {
+            let mut rejected = active.clone();
+            rejected
+                .stability_termination
+                .as_mut()
+                .expect("stability declaration")
+                .region = region;
+            assert_eq!(
+                rejected
+                    .validate()
+                    .expect_err("invalid or unbounded crop")
+                    .code(),
+                "contained_task_control_invalid"
+            );
+        }
+
+        let mut byte_layout_overflow = active.clone();
+        byte_layout_overflow.resolution = Resolution {
+            width: u32::MAX,
+            height: u32::MAX,
+        };
+        let overflow_declaration = byte_layout_overflow
+            .stability_termination
+            .as_mut()
+            .expect("stability declaration");
+        overflow_declaration.region = StabilityRegion {
+            x: 0,
+            y: 0,
+            width: u32::MAX,
+            height: u32::MAX,
+        };
+        assert_eq!(
+            byte_layout_overflow
+                .validate()
+                .expect_err("checked four-byte frame layout must fit the platform")
+                .code(),
+            "contained_task_control_invalid"
+        );
+
+        let mut target_conflict = stability_task(2, 4);
+        target_conflict.program.target_page = Some(PageDeclaration::Singleton("home".to_string()));
+        assert_eq!(
+            validate_stability_contract(&target_conflict.control, &target_conflict.program)
+                .expect_err("stability rejects target-page terminal ownership")
+                .code(),
+            "contained_task_program_invalid"
+        );
+        let mut outcome_conflict = stability_task(2, 4);
+        outcome_conflict.program.scheduling_outcome = Some(scheduling_declaration(json!({
+            "designated_operation": "open_terminal",
+            "mappings": [{
+                "outcome_key": "effect-home",
+                "effect": "designated_effect_completed",
+                "terminal_pages": ["home"]
+            }]
+        })));
+        assert_eq!(
+            validate_stability_contract(&outcome_conflict.control, &outcome_conflict.program)
+                .expect_err("stability rejects scheduling terminal ownership")
+                .code(),
+            "contained_task_program_invalid"
+        );
+
+        assert!(
+            serde_json::from_value::<StabilityTerminationDeclaration>(json!({
+                "region": {"x": 1, "y": 0, "width": 1, "height": 1},
+                "comparison": {"mode": "exact_pixels_v1", "parameters": {"extra": true}},
+                "consecutive_unchanged_threshold": 2,
+                "max_steps": 4
+            }))
+            .is_err()
+        );
+        assert!(
+            serde_json::from_value::<StabilityTerminationDeclaration>(json!({
+                "region": {"x": 1, "y": 0, "width": 1, "height": 1, "extra": true},
+                "comparison": {"mode": "exact_pixels_v1", "parameters": {}},
+                "consecutive_unchanged_threshold": 2,
+                "max_steps": 4
+            }))
+            .is_err()
+        );
+        assert!(serde_json::from_value::<StabilityComparisonParameters>(json!({})).is_ok());
+        for invalid_parameters in [json!(null), json!([]), json!({"extra": true})] {
+            assert!(
+                serde_json::from_value::<StabilityComparisonParameters>(invalid_parameters)
+                    .is_err(),
+                "exact_pixels_v1 parameters must be exactly an empty object"
+            );
+        }
+    }
+
+    #[test]
+    fn exact_pixels_v1_compares_only_the_checked_declared_crop() {
+        let declaration = stability_declaration(
+            StabilityRegion {
+                x: 1,
+                y: 0,
+                width: 1,
+                height: 1,
+            },
+            2,
+            4,
+        );
+        let frame = |left: [u8; 3], center: [u8; 3], right: [u8; 3], format| {
+            Frame::from_pixels(
+                3,
+                1,
+                [left, center, right].concat(),
+                format,
+                CaptureBackendName::FixtureSimulation,
+            )
+            .expect("raw crop fixture")
+        };
+        let baseline = stability_sample(
+            &frame([1, 2, 3], [10, 11, 12], [4, 5, 6], PixelFormat::Rgb8),
+            &declaration,
+        )
+        .expect("baseline sample");
+        let outside_only = stability_sample(
+            &frame([8, 9, 10], [10, 11, 12], [11, 12, 13], PixelFormat::Rgb8),
+            &declaration,
+        )
+        .expect("outside-only change sample");
+        assert_eq!(
+            compare_stability_samples(&baseline, &outside_only, &declaration.comparison)
+                .expect("comparable crop"),
+            StabilityComparisonResult::Unchanged
+        );
+
+        let inside = stability_sample(
+            &frame([1, 2, 3], [10, 11, 13], [4, 5, 6], PixelFormat::Rgb8),
+            &declaration,
+        )
+        .expect("inside change sample");
+        assert_eq!(
+            compare_stability_samples(&baseline, &inside, &declaration.comparison)
+                .expect("comparable crop"),
+            StabilityComparisonResult::Changed
+        );
+
+        let other_format_frame = Frame::from_pixels(
+            3,
+            1,
+            [[1, 2, 3, 255], [10, 11, 12, 255], [4, 5, 6, 255]].concat(),
+            PixelFormat::Rgba8,
+            CaptureBackendName::FixtureSimulation,
+        )
+        .expect("other-format frame");
+        let other_format =
+            stability_sample(&other_format_frame, &declaration).expect("other-format sample");
+        assert_eq!(
+            compare_stability_samples(&baseline, &other_format, &declaration.comparison)
+                .expect_err("pixel-format drift fails closed")
+                .code(),
+            "contained_task_stability_comparison_failed"
+        );
+    }
+
+    #[test]
+    fn stability_resets_then_increments_and_stops_exactly_at_threshold() {
+        let task = stability_task(2, 6);
+        let mut runtime = stability_runtime(vec![
+            stability_frame([1, 1, 1]),
+            stability_frame([10, 10, 10]),
+            stability_frame([10, 10, 10]),
+            stability_frame([20, 20, 20]),
+            stability_frame([20, 20, 20]),
+            stability_frame([20, 20, 20]),
+        ]);
+
+        let outcome = task.run(&mut runtime).expect("stability terminal success");
+        assert_eq!(outcome.outcome, TaskOutcome::Success);
+        assert_eq!(outcome.executed_steps, 5);
+        assert_eq!(
+            runtime.inputs, 5,
+            "no input occurs after stability terminal"
+        );
+
+        let comparisons = runtime
+            .traces
+            .iter()
+            .filter_map(|trace| match trace {
+                ContainedTaskTrace::StabilityComparison {
+                    step_index,
+                    result,
+                    prior_consecutive_unchanged,
+                    new_consecutive_unchanged,
+                    terminal_reason,
+                    ..
+                } => Some((
+                    *step_index,
+                    *result,
+                    *prior_consecutive_unchanged,
+                    *new_consecutive_unchanged,
+                    *terminal_reason,
+                )),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            comparisons,
+            vec![
+                (1, StabilityComparisonResult::Unchanged, 0, 1, None),
+                (2, StabilityComparisonResult::Changed, 1, 0, None),
+                (3, StabilityComparisonResult::Unchanged, 0, 1, None),
+                (
+                    4,
+                    StabilityComparisonResult::Unchanged,
+                    1,
+                    2,
+                    Some(StabilityTerminalReason::ConsecutiveUnchangedThresholdReached)
+                ),
+            ]
+        );
+        assert!(matches!(
+            runtime.traces.iter().find(|trace| matches!(
+                trace,
+                ContainedTaskTrace::StabilityBaseline { step_index: 0, .. }
+            )),
+            Some(_)
+        ));
+
+        let terminal = runtime
+            .traces
+            .iter()
+            .position(|trace| {
+                matches!(
+                    trace,
+                    ContainedTaskTrace::StabilityTerminal {
+                        step_index: 4,
+                        reason: StabilityTerminalReason::ConsecutiveUnchangedThresholdReached,
+                        ..
+                    }
+                )
+            })
+            .expect("typed threshold terminal");
+        let final_step = runtime
+            .traces
+            .iter()
+            .position(|trace| {
+                matches!(
+                    trace,
+                    ContainedTaskTrace::StepFinished { step_index: 4, .. }
+                )
+            })
+            .expect("final step closure");
+        let finalizing = runtime
+            .traces
+            .iter()
+            .position(|trace| {
+                matches!(
+                    trace,
+                    ContainedTaskTrace::Finalizing {
+                        outcome: TaskOutcome::Success
+                    }
+                )
+            })
+            .expect("existing success finalization");
+        assert!(final_step < terminal && terminal < finalizing);
+    }
+
+    #[test]
+    fn stability_max_steps_emits_typed_terminal_and_existing_scheduler_error() {
+        let task = stability_task(2, 4);
+        let mut runtime = stability_runtime(vec![
+            stability_frame([1, 1, 1]),
+            stability_frame([10, 10, 10]),
+            stability_frame([20, 20, 20]),
+            stability_frame([30, 30, 30]),
+            stability_frame([40, 40, 40]),
+        ]);
+
+        let error = match task.run(&mut runtime).expect_err("hard max must stop") {
+            ContainedTaskRunError::Task(error) => error,
+            ContainedTaskRunError::Boundary(error) => {
+                panic!("unexpected fixture boundary error: {error}")
+            }
+        };
+        assert_eq!(error.code(), "contained_task_requires_scheduler");
+        assert_eq!(runtime.inputs, 4);
+        assert!(matches!(
+            runtime.traces.last(),
+            Some(ContainedTaskTrace::StabilityTerminal {
+                step_index: 3,
+                reason: StabilityTerminalReason::MaxStepsReached,
+                ..
+            })
+        ));
+        assert!(
+            !runtime
+                .traces
+                .iter()
+                .any(|trace| matches!(trace, ContainedTaskTrace::Finalizing { .. }))
+        );
+    }
+
+    #[test]
+    fn stability_trace_failure_stops_before_step_commit_or_later_input() {
+        struct FailingComparisonRuntime {
+            inner: ScriptedRuntime,
+        }
+
+        impl ContainedTaskRuntime for FailingComparisonRuntime {
+            type Error = &'static str;
+
+            fn capture(&mut self) -> Result<Frame, Self::Error> {
+                self.inner.capture()
+            }
+
+            fn input(&mut self, action: InputAction) -> Result<(), Self::Error> {
+                self.inner.input(action)
+            }
+
+            fn record(&mut self, trace: ContainedTaskTrace) -> Result<(), Self::Error> {
+                if matches!(trace, ContainedTaskTrace::StabilityComparison { .. }) {
+                    Err("injected stability comparison persistence failure")
+                } else {
+                    self.inner.record(trace)
+                }
+            }
+        }
+
+        let task = stability_task(2, 5);
+        let inner = stability_runtime(vec![
+            stability_frame([1, 1, 1]),
+            stability_frame([10, 10, 10]),
+            stability_frame([10, 10, 10]),
+            stability_frame([10, 10, 10]),
+        ]);
+        let mut runtime = FailingComparisonRuntime { inner };
+        assert!(matches!(
+            task.run(&mut runtime),
+            Err(ContainedTaskRunError::Boundary(
+                "injected stability comparison persistence failure"
+            ))
+        ));
+        assert_eq!(runtime.inner.inputs, 2);
+        assert_eq!(
+            runtime
+                .inner
+                .traces
+                .iter()
+                .filter(|trace| matches!(trace, ContainedTaskTrace::StepFinished { .. }))
+                .count(),
+            1,
+            "failed comparison evidence does not commit the second step"
+        );
+        assert!(
+            !runtime
+                .inner
+                .traces
+                .iter()
+                .any(|trace| matches!(trace, ContainedTaskTrace::StabilityTerminal { .. }))
+        );
     }
 }

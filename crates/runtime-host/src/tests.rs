@@ -141,6 +141,7 @@ struct FakeState {
     refuse_guard_capture: AtomicBool,
     transition_capture_after_input: AtomicBool,
     transition_capture_after_inputs: AtomicUsize,
+    stability_region_transition_after_inputs: AtomicUsize,
     transition_capture_after_capture: AtomicUsize,
     error_capture_after_input: AtomicBool,
     error_capture_after_capture: AtomicUsize,
@@ -274,8 +275,16 @@ impl CaptureBackend for FakeCapture {
         } else {
             [255, 0, 0]
         };
+        let stability_region_transition_after_inputs = self
+            .state
+            .stability_region_transition_after_inputs
+            .load(Ordering::Acquire);
         let guard = if self.state.refuse_guard_capture.load(Ordering::Acquire) {
             [1, 2, 3]
+        } else if stability_region_transition_after_inputs > 0
+            && input_count >= stability_region_transition_after_inputs
+        {
+            [0, 0, 255]
         } else {
             [0, 255, 0]
         };
@@ -2340,6 +2349,89 @@ fn neutral_contained_task_package() -> Vec<u8> {
              }]
         }"#,
     )
+}
+
+fn neutral_stability_contained_task_package(
+    consecutive_unchanged_threshold: u32,
+    max_steps: u32,
+) -> Vec<u8> {
+    let declaration = serde_json::json!({
+        "region": {"x": 1, "y": 0, "width": 1, "height": 1},
+        "comparison": {"mode": "exact_pixels_v1", "parameters": {}},
+        "consecutive_unchanged_threshold": consecutive_unchanged_threshold,
+        "max_steps": max_steps
+    });
+    let control = serde_json::to_vec(&serde_json::json!({
+        "schema_version": "Lab-1y.control.v1",
+        "package_id": "neutral.semantic.stability-task",
+        "execution_mode": "in_page_guard",
+        "game": "neutral",
+        "server": "test",
+        "resolution": {"width": 2, "height": 1},
+        "entry_task_id": "task",
+        "capture_interval_ms": 1,
+        "step_timeout_ms": 50,
+        "timeout_ms": 5_000,
+        "max_steps": max_steps,
+        "stability_termination": declaration.clone()
+    }))
+    .expect("stability control JSON");
+    let task = serde_json::to_vec(&serde_json::json!({
+        "schema_version": "0.6",
+        "task_id": "task",
+        "game": "neutral",
+        "server_scope": ["test"],
+        "coordinate_space": {"width": 2, "height": 1},
+        "entry_page": "home",
+        "stability_termination": declaration,
+        "operations": [{
+            "id": "repeat",
+            "from": "home",
+            "click": {"kind": "point", "x": 1, "y": 0},
+            "unguarded_trusted_coordinate": true,
+            "retryable": false
+        }]
+    }))
+    .expect("stability task JSON");
+    let recognition = br#"{
+        "schema_version":"0.3",
+        "game":"neutral",
+        "server":"test",
+        "coordinate_space":{"width":2,"height":1},
+        "defaults":{"color_max_distance":0.0},
+        "targets":[
+            {"type":"color","id":"page/home","region":{"x":0,"y":0,"width":1,"height":1},"expected":[255,0,0]},
+            {"type":"color","id":"page/terminal","region":{"x":0,"y":0,"width":1,"height":1},"expected":[0,0,255]},
+            {"type":"color","id":"page/error","region":{"x":0,"y":0,"width":1,"height":1},"expected":[255,255,0]}
+        ]
+    }"#;
+    let pages = br#"{
+        "schema_version":"0.3",
+        "pages":[
+            {"id":"neutral/home","required":["page/home"],"optional":[],"forbidden":[]},
+            {"id":"neutral/terminal","required":["page/terminal"],"optional":[],"forbidden":[]},
+            {"id":"neutral/error","required":["page/error"],"optional":[],"forbidden":[]}
+        ]
+    }"#;
+
+    let cursor = Cursor::new(Vec::new());
+    let mut zip = ZipWriter::new(cursor);
+    let options = FileOptions::default().compression_method(zip::CompressionMethod::Stored);
+    let files: [(&str, &[u8]); 5] = [
+        ("control.json", &control),
+        (
+            "resources/manifest.json",
+            br#"{"schema_version":"0.3","entry_task_id":"task"}"#,
+        ),
+        ("resources/operations/task/task.json", &task),
+        ("resources/recognition/neutral.test.pack.json", recognition),
+        ("resources/recognition/neutral.test.pages.json", pages),
+    ];
+    for (path, contents) in files {
+        zip.start_file(path, options).expect("stability zip entry");
+        zip.write_all(contents).expect("stability zip content");
+    }
+    zip.finish().expect("finish stability zip").into_inner()
 }
 
 fn expected_contained_task_sampling_seed<T: serde::Serialize>(value: &T) -> u64 {
@@ -8640,6 +8732,352 @@ fn direct_mapped_contained_task_commits_typed_terminal_without_generic_fallback(
         host.close()
             .unwrap_or_else(|error| panic!("{case}: close runtime host: {error}"));
     }
+}
+
+#[test]
+fn contained_task_stability_frame_identity_failures_are_typed_and_closed() {
+    let identifiers = IdentifierIssuer::new().expect("identifier issuer");
+    let previous = identifiers.mint_frame_id().expect("previous frame");
+
+    for (current, expected_code) in [
+        (None, "contained_task_stability_frame_identity_missing"),
+        (
+            Some(previous),
+            "contained_task_stability_frame_identity_reused",
+        ),
+    ] {
+        let failure = contained_task_stability_current_frame(previous, current)
+            .expect_err("invalid formal frame binding must fail closed");
+        assert!(failure.poison_runtime);
+        assert_eq!(failure.error.code(), expected_code);
+    }
+}
+
+#[test]
+fn contained_task_stability_persistence_failures_are_fatal_without_later_input_or_artifact() {
+    for failure_kind in ["artifact_write", "event_append"] {
+        let root = TempDir::new().expect("tempdir");
+        let package = root
+            .path()
+            .join(format!("neutral-stability-{failure_kind}-failure.zip"));
+        let bytes = neutral_stability_contained_task_package(2, 5);
+        fs::write(&package, &bytes).expect("write stability package");
+        let expected = actingcommand_pack_containment::Sha256Hash::digest(&bytes).to_string();
+        let state = Arc::new(FakeState::default());
+        let host = RuntimeHost::start(
+            config(&root),
+            Arc::new(FakeProvider::one(
+                "neutral.instance",
+                instance_id(),
+                Arc::clone(&state),
+            )),
+        )
+        .expect("runtime host");
+        match failure_kind {
+            "artifact_write" => host
+                .fail_next_contained_task_stability_persistence_for_test()
+                .expect("inject diagnostic persistence failure"),
+            "event_append" => host
+                .fail_next_contained_task_stability_event_append_for_test()
+                .expect("inject diagnostic event append failure"),
+            _ => unreachable!(),
+        }
+        let mut client = TestClient::connect(&host);
+        let correlation = client.ids.mint_correlation_id().expect("correlation");
+        let correlation_id = *correlation.transport();
+        let request = client.request_with_correlation(
+            correlation,
+            RuntimeOperation::run_contained_task(
+                "neutral.instance",
+                client.ids.mint_holder_id().expect("holder"),
+                ContainedTaskRequest::new(package.display().to_string(), expected)
+                    .expect("task request"),
+            ),
+        );
+
+        let failed = client.send(&request);
+
+        assert_eq!(
+            failed.state(),
+            RuntimeReceiptState::Failed,
+            "{failure_kind}"
+        );
+        assert!(failed.result().is_none(), "{failure_kind}");
+        let error = failed.error_projection().expect("fatal artifact error");
+        assert!(error.fatal, "{failure_kind}");
+        assert_eq!(error.code, RuntimeErrorCode::RuntimeFatal, "{failure_kind}");
+        assert_eq!(
+            state.input_count.load(Ordering::Acquire),
+            2,
+            "{failure_kind}"
+        );
+        let events = projected_events(
+            &mut client,
+            EventQuery {
+                correlation_id: Some(correlation_id),
+                ..EventQuery::default()
+            },
+        );
+        assert_eq!(
+            events
+                .iter()
+                .filter(|event| event.event_type == EventType::ArtifactVerified)
+                .flat_map(|event| event.artifacts.iter())
+                .filter(|artifact| artifact.kind() == ArtifactKind::DiagnosticJson)
+                .count(),
+            0,
+            "{failure_kind}"
+        );
+        assert_eq!(
+            host.fatal_error()
+                .expect("runtime fatal state")
+                .expect("fatal error")
+                .code(),
+            "artifact_store_failure",
+            "{failure_kind}"
+        );
+        drop(client);
+        assert_eq!(
+            host.close()
+                .expect_err("fatal host closes with failure")
+                .code(),
+            "artifact_store_failure",
+            "{failure_kind}"
+        );
+    }
+}
+
+#[test]
+fn contained_task_stability_persists_one_formally_bound_diagnostic_per_comparison() {
+    let root = TempDir::new().expect("tempdir");
+    let package = root.path().join("neutral-stability-task.zip");
+    let bytes = neutral_stability_contained_task_package(2, 6);
+    fs::write(&package, &bytes).expect("write stability package");
+    let expected = actingcommand_pack_containment::Sha256Hash::digest(&bytes).to_string();
+    let state = Arc::new(FakeState::default());
+    state
+        .stability_region_transition_after_inputs
+        .store(3, Ordering::Release);
+    let host = RuntimeHost::start(
+        config(&root),
+        Arc::new(FakeProvider::one(
+            "neutral.instance",
+            instance_id(),
+            Arc::clone(&state),
+        )),
+    )
+    .expect("runtime host");
+    let mut client = TestClient::connect(&host);
+    let correlation = client.ids.mint_correlation_id().expect("correlation");
+    let correlation_id = *correlation.transport();
+    let request = client.request_with_correlation(
+        correlation,
+        RuntimeOperation::run_contained_task(
+            "neutral.instance",
+            client.ids.mint_holder_id().expect("holder"),
+            ContainedTaskRequest::new(package.display().to_string(), expected)
+                .expect("task request"),
+        ),
+    );
+
+    let receipt = client.send(&request);
+    assert_eq!(receipt.state(), RuntimeReceiptState::Completed);
+    assert!(matches!(
+        receipt.result(),
+        Some(RuntimeResult::ContainedTaskCompleted {
+            outcome: TaskOutcome::Success,
+            executed_steps: 5,
+            ..
+        })
+    ));
+    assert_eq!(state.input_count.load(Ordering::Acquire), 5);
+    assert_eq!(state.capture_count.load(Ordering::Acquire), 6);
+
+    let events = projected_events(
+        &mut client,
+        EventQuery {
+            correlation_id: Some(correlation_id),
+            ..EventQuery::default()
+        },
+    );
+    let capture_frames = events
+        .iter()
+        .filter(|event| event.event_type == EventType::ArtifactVerified)
+        .flat_map(|event| event.artifacts.iter())
+        .filter(|artifact| artifact.kind() == ArtifactKind::CaptureFrame)
+        .collect::<Vec<_>>();
+    let comparisons = events
+        .iter()
+        .filter(|event| {
+            event.event_type == EventType::ArtifactVerified
+                && event
+                    .artifacts
+                    .iter()
+                    .any(|artifact| artifact.kind() == ArtifactKind::DiagnosticJson)
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(capture_frames.len(), 6);
+    assert_eq!(comparisons.len(), 4, "one artifact per comparison");
+
+    let expected_results = [
+        ("unchanged", 0, 1, None),
+        ("changed", 1, 0, None),
+        ("unchanged", 0, 1, None),
+        (
+            "unchanged",
+            1,
+            2,
+            Some("consecutive_unchanged_threshold_reached"),
+        ),
+    ];
+    for (index, (event, expected_result)) in comparisons.iter().zip(expected_results).enumerate() {
+        let [artifact] = event.artifacts.as_slice() else {
+            panic!("comparison must attach exactly one diagnostic artifact")
+        };
+        let document: serde_json::Value = serde_json::from_slice(
+            &read_projected_verified(root.path(), artifact).expect("verified stability diagnostic"),
+        )
+        .expect("stability diagnostic JSON");
+        let previous_frame = capture_frames[index + 1]
+            .frame_id()
+            .expect("previous formal frame");
+        let current_frame = capture_frames[index + 2]
+            .frame_id()
+            .expect("current formal frame");
+
+        assert_eq!(
+            document["schema_version"],
+            "actingcommand.runtime.contained-task-stability-comparison.v1"
+        );
+        assert_eq!(
+            document["task_id"],
+            serde_json::to_value(event.links.task_id()).unwrap()
+        );
+        assert_eq!(
+            document["run_id"],
+            serde_json::to_value(event.links.run_id()).unwrap()
+        );
+        assert_eq!(
+            document["action_id"],
+            serde_json::to_value(event.links.action_id()).unwrap()
+        );
+        assert_eq!(document["step_index"], u64::try_from(index + 1).unwrap());
+        assert_eq!(document["operation_label"], "repeat");
+        assert_eq!(
+            document["previous_frame_id"],
+            serde_json::to_value(previous_frame).unwrap()
+        );
+        assert_eq!(
+            document["current_frame_id"],
+            serde_json::to_value(current_frame).unwrap()
+        );
+        assert_eq!(artifact.frame_id(), Some(current_frame));
+        assert_eq!(event.links.frame_id(), Some(current_frame));
+        assert_eq!(artifact.run_id.as_ref(), event.links.run_id());
+        assert_eq!(
+            document["region"],
+            serde_json::json!({
+                "x": 1, "y": 0, "width": 1, "height": 1
+            })
+        );
+        assert_eq!(document["comparison_mode"], "exact_pixels_v1");
+        assert_eq!(document["comparison_parameters"], serde_json::json!({}));
+        assert_eq!(document["result"], expected_result.0);
+        assert_eq!(document["prior_consecutive_unchanged"], expected_result.1);
+        assert_eq!(document["new_consecutive_unchanged"], expected_result.2);
+        assert_eq!(document["consecutive_unchanged_threshold"], 2);
+        assert_eq!(
+            document["terminal_reason"],
+            serde_json::to_value(expected_result.3).unwrap()
+        );
+    }
+    for event_type in [EventType::TaskCompleted, EventType::LeaseReleased] {
+        assert_eq!(
+            events
+                .iter()
+                .filter(|event| event.event_type == event_type)
+                .count(),
+            1,
+            "one authoritative {event_type:?}"
+        );
+    }
+    drop(client);
+    host.close().expect("close host");
+}
+
+#[test]
+fn contained_task_stability_max_steps_uses_the_last_comparison_without_duplicate_artifact() {
+    let root = TempDir::new().expect("tempdir");
+    let package = root.path().join("neutral-stability-max-task.zip");
+    let bytes = neutral_stability_contained_task_package(3, 4);
+    fs::write(&package, &bytes).expect("write stability package");
+    let expected = actingcommand_pack_containment::Sha256Hash::digest(&bytes).to_string();
+    let state = Arc::new(FakeState::default());
+    state
+        .stability_region_transition_after_inputs
+        .store(2, Ordering::Release);
+    let host = RuntimeHost::start(
+        config(&root),
+        Arc::new(FakeProvider::one(
+            "neutral.instance",
+            instance_id(),
+            Arc::clone(&state),
+        )),
+    )
+    .expect("runtime host");
+    let mut client = TestClient::connect(&host);
+    let correlation = client.ids.mint_correlation_id().expect("correlation");
+    let correlation_id = *correlation.transport();
+    let request = client.request_with_correlation(
+        correlation,
+        RuntimeOperation::run_contained_task(
+            "neutral.instance",
+            client.ids.mint_holder_id().expect("holder"),
+            ContainedTaskRequest::new(package.display().to_string(), expected)
+                .expect("task request"),
+        ),
+    );
+
+    let receipt = client.send(&request);
+    assert_eq!(receipt.state(), RuntimeReceiptState::Failed);
+    assert_eq!(state.input_count.load(Ordering::Acquire), 4);
+    let events = projected_events(
+        &mut client,
+        EventQuery {
+            correlation_id: Some(correlation_id),
+            ..EventQuery::default()
+        },
+    );
+    let diagnostics = events
+        .iter()
+        .filter(|event| event.event_type == EventType::ArtifactVerified)
+        .flat_map(|event| event.artifacts.iter())
+        .filter(|artifact| artifact.kind() == ArtifactKind::DiagnosticJson)
+        .collect::<Vec<_>>();
+    assert_eq!(diagnostics.len(), 3, "terminal trace adds no artifact");
+    let terminal: serde_json::Value = serde_json::from_slice(
+        &read_projected_verified(root.path(), diagnostics.last().unwrap())
+            .expect("verified max-step diagnostic"),
+    )
+    .expect("max-step diagnostic JSON");
+    assert_eq!(terminal["step_index"], 3);
+    assert_eq!(terminal["result"], "unchanged");
+    assert_eq!(terminal["prior_consecutive_unchanged"], 1);
+    assert_eq!(terminal["new_consecutive_unchanged"], 2);
+    assert_eq!(terminal["terminal_reason"], "max_steps_reached");
+    for event_type in [EventType::TaskFailed, EventType::LeaseReleased] {
+        assert_eq!(
+            events
+                .iter()
+                .filter(|event| event.event_type == event_type)
+                .count(),
+            1,
+            "one authoritative {event_type:?}"
+        );
+    }
+    assert!(host.fatal_error().expect("runtime health").is_none());
+    drop(client);
+    host.close().expect("close host");
 }
 
 #[test]
