@@ -3849,6 +3849,26 @@ mod tests {
                 .recognition_unsupported_target_count,
             0
         );
+        let inspected = crate::package_validate::validate_package(crate::PackageValidateRequest {
+            zip_path: out.clone(),
+            include_entries: true,
+            expected_input_sha256: None,
+        })
+        .expect("official package validate/inspect path");
+        assert_eq!(inspected.status, "valid");
+        assert_eq!(inspected.recognition_pack_diagnostics.len(), 1);
+        assert_eq!(
+            inspected.recognition_pack_diagnostics[0].unsupported_target_count,
+            0
+        );
+        assert!(
+            inspected
+                .entries
+                .as_ref()
+                .unwrap()
+                .iter()
+                .any(|entry| entry == "resources/recognition/arknights.cn.pack.json")
+        );
         let entries = read_zip_entries(&out);
         let pack: Value = serde_json::from_slice(
             entries
