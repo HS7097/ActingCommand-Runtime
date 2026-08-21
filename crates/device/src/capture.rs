@@ -1825,7 +1825,7 @@ fn rgb565_to_rgb8(raw: &[u8], width: u32, height: u32) -> DeviceResult<Vec<u8>> 
         )));
     }
     let mut pixels = Vec::with_capacity(pixel_count * 3);
-    for chunk in raw.chunks_exact(2) {
+    for chunk in raw.as_chunks::<2>().0 {
         let value = u16::from_le_bytes([chunk[0], chunk[1]]);
         let r = ((u32::from((value >> 11) & 0x1f) * 255) / 31) as u8;
         let g = ((u32::from((value >> 5) & 0x3f) * 255) / 63) as u8;
