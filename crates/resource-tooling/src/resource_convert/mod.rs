@@ -4,10 +4,13 @@ use crate::{ResourceConvertRequest, ResourceConvertResponse, maa_task_graph};
 use actingcommand_contract::{
     LabError as CliError, LabResult as CliOutcome, SchedulingOutcomeDeclaration,
 };
+use actingcommand_pack_containment::validate_recognition_metadata;
+use actingcommand_recognition_pack::FsAssetResolver;
 use serde_json::{Map, Value, json};
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 const GENERATED_BY: &str = "actinglab resource convert";
 const CONVERTER_SCHEMA_VERSION: &str = "0.5";
@@ -460,7 +463,7 @@ impl OperationConverter {
 
     fn prune_page_rules_for_selected_build(&self, bundles: Vec<Bundle>) -> CliOutcome<Vec<Bundle>> {
         let available_pages = selected_available_page_ids(&self.game, &bundles)?;
-        let available_targets = selected_available_target_ids(&bundles);
+        let available_targets = selected_available_target_ids(&bundles)?;
         Ok(bundles
             .into_iter()
             .map(|mut bundle| {
@@ -763,8 +766,15 @@ impl OperationConverter {
                 add_first_target(&mut targets, &mut order, target_id, target);
             }
         }
+        for bundle in &self.bundles {
+            for declaration in ocr_target_declarations(bundle)? {
+                let target = ocr_target_to_pack(declaration)?;
+                let target_id = required_string(&target, "id")?;
+                add_ocr_target(&mut targets, &mut order, target_id, target)?;
+            }
+        }
         propagate_color_checks(&mut targets, &order);
-        Ok(ordered_object([
+        let pack = ordered_object([
             (
                 "schema_version",
                 Value::String(OUTPUT_SCHEMA_VERSION.to_string()),
@@ -789,7 +799,9 @@ impl OperationConverter {
                         .collect(),
                 ),
             ),
-        ]))
+        ]);
+        validate_generated_ocr_targets(&self.root, &pack)?;
+        Ok(pack)
     }
 
     fn build_pages(&self) -> CliOutcome<Value> {
@@ -1798,6 +1810,211 @@ fn color_target(id: &str, region: Value, expected: Value, click: Option<Value>) 
     Value::Object(target)
 }
 
+fn ocr_target_declarations(bundle: &Bundle) -> CliOutcome<&[Value]> {
+    let Some(value) = bundle.data.get("ocr_targets") else {
+        return Ok(&[]);
+    };
+    if bundle.data.get("schema_version").and_then(Value::as_str) != Some("0.6") {
+        return Err(CliError::package_invalid(format!(
+            "{}: ocr_targets requires schema_version '0.6'",
+            bundle.task_json_path().display()
+        )));
+    }
+    value.as_array().map(Vec::as_slice).ok_or_else(|| {
+        CliError::package_invalid(format!(
+            "{}: ocr_targets must be an array",
+            bundle.task_json_path().display()
+        ))
+    })
+}
+
+fn ocr_target_to_pack(source: &Value) -> CliOutcome<Value> {
+    let source = require_exact_object(
+        source,
+        &[
+            "id",
+            "region",
+            "languages",
+            "timeout_ms",
+            "match_mode",
+            "expected",
+            "case_sensitive",
+            "minimum_confidence",
+            "model_ref",
+            "model_sha256",
+            "click",
+        ],
+        "ocr_targets entry",
+    )?;
+    let id = source
+        .get("id")
+        .and_then(Value::as_str)
+        .ok_or_else(|| CliError::package_invalid("ocr_targets entry missing string field id"))?;
+    let mut target = ordered_map([
+        ("type", Value::String("ocr".to_string())),
+        ("id", Value::String(id.to_string())),
+        (
+            "region",
+            ocr_region_to_pack(required_map_field(source, "region")?)?,
+        ),
+        (
+            "languages",
+            required_map_field(source, "languages")?.clone(),
+        ),
+        (
+            "timeout_ms",
+            required_map_field(source, "timeout_ms")?.clone(),
+        ),
+        (
+            "match_mode",
+            required_map_field(source, "match_mode")?.clone(),
+        ),
+        ("expected", required_map_field(source, "expected")?.clone()),
+        (
+            "case_sensitive",
+            required_map_field(source, "case_sensitive")?.clone(),
+        ),
+        (
+            "minimum_confidence",
+            required_map_field(source, "minimum_confidence")?.clone(),
+        ),
+        (
+            "model_ref",
+            required_map_field(source, "model_ref")?.clone(),
+        ),
+        (
+            "model_sha256",
+            required_map_field(source, "model_sha256")?.clone(),
+        ),
+    ]);
+    if let Some(click) = source.get("click").filter(|value| !value.is_null()) {
+        target.insert(
+            "click".to_string(),
+            canonical_ocr_rect(click, "ocr_targets entry click")?,
+        );
+    }
+    Ok(Value::Object(target))
+}
+
+fn ocr_region_to_pack(region: &Value) -> CliOutcome<Value> {
+    let region = require_exact_object(region, &["mode", "rect"], "ocr_targets entry region")?;
+    let mode = region.get("mode").and_then(Value::as_str).ok_or_else(|| {
+        CliError::package_invalid("ocr_targets entry region missing string field mode")
+    })?;
+    match mode {
+        "full_frame" if region.len() == 1 => Ok(Value::String(FULL_FRAME_SENTINEL.to_string())),
+        "full_frame" => Err(CliError::package_invalid(
+            "ocr_targets entry full_frame region must not contain rect",
+        )),
+        "rect" if region.len() == 2 => canonical_ocr_rect(
+            required_map_field(region, "rect")?,
+            "ocr_targets entry region.rect",
+        ),
+        "rect" => Err(CliError::package_invalid(
+            "ocr_targets entry rect region requires exactly mode and rect",
+        )),
+        other => Err(CliError::package_invalid(format!(
+            "ocr_targets entry has unknown region mode '{other}'"
+        ))),
+    }
+}
+
+fn canonical_ocr_rect(value: &Value, label: &str) -> CliOutcome<Value> {
+    let rect = require_exact_object(value, &["x", "y", "width", "height"], label)?;
+    Ok(ordered_object([
+        ("x", required_map_field(rect, "x")?.clone()),
+        ("y", required_map_field(rect, "y")?.clone()),
+        ("width", required_map_field(rect, "width")?.clone()),
+        ("height", required_map_field(rect, "height")?.clone()),
+    ]))
+}
+
+fn require_exact_object<'a>(
+    value: &'a Value,
+    allowed: &[&str],
+    label: &str,
+) -> CliOutcome<&'a Map<String, Value>> {
+    let object = value
+        .as_object()
+        .ok_or_else(|| CliError::package_invalid(format!("{label} must be an object")))?;
+    if let Some(field) = object
+        .keys()
+        .find(|field| !allowed.contains(&field.as_str()))
+    {
+        return Err(CliError::package_invalid(format!(
+            "{label} contains unsupported field '{field}'"
+        )));
+    }
+    Ok(object)
+}
+
+fn required_map_field<'a>(object: &'a Map<String, Value>, field: &str) -> CliOutcome<&'a Value> {
+    object
+        .get(field)
+        .ok_or_else(|| CliError::package_invalid(format!("missing field {field}")))
+}
+
+fn add_ocr_target(
+    targets: &mut HashMap<String, Value>,
+    order: &mut Vec<String>,
+    id: String,
+    target: Value,
+) -> CliOutcome<()> {
+    if let Some(existing) = targets.get(&id) {
+        if existing == &target {
+            return Ok(());
+        }
+        return Err(CliError::package_invalid(format!(
+            "ocr target id '{id}' conflicts with an earlier recognition target"
+        )));
+    }
+    targets.insert(id.clone(), target);
+    order.push(id);
+    Ok(())
+}
+
+fn validate_generated_ocr_targets(root: &Path, pack: &Value) -> CliOutcome<()> {
+    let ocr_targets = array_field(pack, "targets")
+        .iter()
+        .filter(|target| target.get("type").and_then(Value::as_str) == Some("ocr"))
+        .cloned()
+        .collect::<Vec<_>>();
+    if ocr_targets.is_empty() {
+        return Ok(());
+    }
+    let validation_pack = ordered_object([
+        (
+            "schema_version",
+            Value::String(OUTPUT_SCHEMA_VERSION.to_string()),
+        ),
+        (
+            "coordinate_space",
+            required_field(pack, "coordinate_space")?.clone(),
+        ),
+        ("defaults", required_field(pack, "defaults")?.clone()),
+        ("targets", Value::Array(ocr_targets)),
+    ]);
+    let pack_json = serde_json::to_string(&validation_pack).map_err(|error| {
+        CliError::package_invalid(format!(
+            "failed to serialize generated OCR validation pack: {error}"
+        ))
+    })?;
+    let pages_json = r#"{"schema_version":"0.6","pages":[]}"#;
+    validate_recognition_metadata(
+        "recognition/generated-ocr.pack.json",
+        &pack_json,
+        "recognition/generated-ocr.pages.json",
+        pages_json,
+        Arc::new(FsAssetResolver::new(root.to_path_buf())),
+    )
+    .map_err(|error| {
+        CliError::package_invalid(format!(
+            "generated ocr_targets failed recognition validation: {error}"
+        ))
+    })?;
+    Ok(())
+}
+
 fn add_first_target(
     targets: &mut HashMap<String, Value>,
     order: &mut Vec<String>,
@@ -2138,7 +2355,7 @@ fn insert_selected_page_id(game: &str, page: &str, pages: &mut BTreeSet<String>)
     pages.insert(normalize_page_rule_id(game, page));
 }
 
-fn selected_available_target_ids(bundles: &[Bundle]) -> BTreeSet<String> {
+fn selected_available_target_ids(bundles: &[Bundle]) -> CliOutcome<BTreeSet<String>> {
     let mut targets = BTreeSet::new();
     for bundle in bundles {
         for anchor in array_field(&bundle.data, "anchors") {
@@ -2151,8 +2368,11 @@ fn selected_available_target_ids(bundles: &[Bundle]) -> BTreeSet<String> {
                 targets.insert(template_target_id(template));
             }
         }
+        for declaration in ocr_target_declarations(bundle)? {
+            targets.insert(required_string(declaration, "id")?);
+        }
     }
-    targets
+    Ok(targets)
 }
 
 fn prune_selected_page_rules(

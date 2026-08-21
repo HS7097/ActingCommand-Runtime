@@ -1019,6 +1019,296 @@ fn build_pack_includes_color_probe_targets() {
     );
 }
 
+fn valid_ocr_declaration(id: &str) -> Value {
+    json!({
+        "id": id,
+        "region": {
+            "mode": "rect",
+            "rect": {"x": 10, "y": 20, "width": 300, "height": 40}
+        },
+        "languages": ["en", "zh"],
+        "timeout_ms": 5_000,
+        "match_mode": "contains",
+        "expected": ["synthetic text"],
+        "case_sensitive": false,
+        "minimum_confidence": 0.8,
+        "model_ref": "PP-OCRv6_medium",
+        "model_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "click": {"x": 11, "y": 21, "width": 30, "height": 20}
+    })
+}
+
+fn ocr_test_converter(schema_version: &str, ocr_targets: Option<Value>) -> OperationConverter {
+    let mut data = json!({
+        "schema_version": schema_version,
+        "task_id": "ocr-check",
+        "anchors": [],
+        "operations": []
+    });
+    if let Some(ocr_targets) = ocr_targets {
+        data["ocr_targets"] = ocr_targets;
+    }
+    OperationConverter {
+        root: PathBuf::from("."),
+        game: "neutral".to_string(),
+        server: "test".to_string(),
+        locale: "en-US".to_string(),
+        coordinate_space: json!({"width":1280,"height":720}),
+        defaults: json!({"template_threshold":0.9,"color_max_distance":20.0}),
+        resource_ids: HashSet::new(),
+        bundles: vec![Bundle {
+            task_id: "ocr-check".to_string(),
+            dir: PathBuf::from("operations/ocr-check"),
+            data,
+        }],
+        existing_navigation: None,
+        maa_task_overlays: HashMap::new(),
+    }
+}
+
+#[test]
+fn build_pack_maps_schema_06_ocr_target_to_canonical_output() {
+    let pack = ocr_test_converter(
+        "0.6",
+        Some(json!([valid_ocr_declaration("ocr/synthetic-label")])),
+    )
+    .build_pack()
+    .expect("valid OCR declaration");
+
+    assert_eq!(
+        pack.pointer("/targets/0"),
+        Some(&json!({
+            "type": "ocr",
+            "id": "ocr/synthetic-label",
+            "region": {"x":10,"y":20,"width":300,"height":40},
+            "languages": ["en", "zh"],
+            "timeout_ms": 5_000,
+            "match_mode": "contains",
+            "expected": ["synthetic text"],
+            "case_sensitive": false,
+            "minimum_confidence": 0.8,
+            "model_ref": "PP-OCRv6_medium",
+            "model_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "click": {"x":11,"y":21,"width":30,"height":20}
+        }))
+    );
+}
+
+#[test]
+fn build_pack_without_ocr_targets_preserves_existing_output() {
+    let pack = ocr_test_converter("0.6", None)
+        .build_pack()
+        .expect("existing no-OCR output");
+    let serialized = serde_json::to_string_pretty(&pack).unwrap();
+
+    assert_eq!(
+        pack,
+        json!({
+            "schema_version": "0.6",
+            "converter_schema_version": "0.5",
+            "generated": true,
+            "generated_by": "actinglab resource convert",
+            "game": "neutral",
+            "server": "test",
+            "locale": "en-US",
+            "coordinate_space": {"width":1280,"height":720},
+            "defaults": {"template_threshold":0.9,"color_max_distance":20.0},
+            "targets": []
+        })
+    );
+    assert_eq!(
+        serialized,
+        concat!(
+            "{\n",
+            "  \"schema_version\": \"0.6\",\n",
+            "  \"converter_schema_version\": \"0.5\",\n",
+            "  \"generated\": true,\n",
+            "  \"generated_by\": \"actinglab resource convert\",\n",
+            "  \"game\": \"neutral\",\n",
+            "  \"server\": \"test\",\n",
+            "  \"locale\": \"en-US\",\n",
+            "  \"coordinate_space\": {\n",
+            "    \"width\": 1280,\n",
+            "    \"height\": 720\n",
+            "  },\n",
+            "  \"defaults\": {\n",
+            "    \"template_threshold\": 0.9,\n",
+            "    \"color_max_distance\": 20.0\n",
+            "  },\n",
+            "  \"targets\": []\n",
+            "}"
+        )
+    );
+}
+
+#[test]
+fn ocr_targets_reject_wrong_schema_container_and_entry_shape() {
+    for (label, converter) in [
+        (
+            "schema 0.5",
+            ocr_test_converter("0.5", Some(json!([valid_ocr_declaration("ocr/name")]))),
+        ),
+        ("non-array", ocr_test_converter("0.6", Some(json!({})))),
+        (
+            "non-object",
+            ocr_test_converter("0.6", Some(json!(["ocr/name"]))),
+        ),
+    ] {
+        converter
+            .build_pack()
+            .expect_err(&format!("{label} must fail closed"));
+    }
+
+    let mut declaration = valid_ocr_declaration("ocr/name");
+    declaration["unsupported"] = json!(true);
+    let error = ocr_test_converter("0.6", Some(json!([declaration])))
+        .build_pack()
+        .expect_err("unknown OCR field must fail closed");
+    assert!(error.message.contains("unsupported field 'unsupported'"));
+}
+
+#[test]
+fn ocr_targets_reject_invalid_existing_contract_fields() {
+    let mut cases = Vec::new();
+    let mut invalid = valid_ocr_declaration("ocr/invalid-region");
+    invalid["region"]["rect"]["width"] = json!(0);
+    cases.push(("region", invalid));
+    let mut invalid = valid_ocr_declaration("ocr/invalid-languages");
+    invalid["languages"] = json!([]);
+    cases.push(("languages", invalid));
+    let mut invalid = valid_ocr_declaration("ocr/invalid-expected");
+    invalid["expected"] = json!([]);
+    cases.push(("expected", invalid));
+    let mut invalid = valid_ocr_declaration("ocr/invalid-timeout");
+    invalid["timeout_ms"] = json!(0);
+    cases.push(("timeout", invalid));
+    let mut invalid = valid_ocr_declaration("ocr/invalid-match-mode");
+    invalid["match_mode"] = json!("regex");
+    cases.push(("match_mode", invalid));
+    let mut invalid = valid_ocr_declaration("ocr/invalid-confidence");
+    invalid["minimum_confidence"] = json!(1.1);
+    cases.push(("minimum_confidence", invalid));
+    let mut invalid = valid_ocr_declaration("ocr/invalid-model");
+    invalid["model_ref"] = json!("OtherModel");
+    cases.push(("model_ref", invalid));
+    let mut invalid = valid_ocr_declaration("ocr/invalid-hash");
+    invalid["model_sha256"] = json!("A");
+    cases.push(("model_sha256", invalid));
+    let mut invalid = valid_ocr_declaration("ocr/invalid-click");
+    invalid["click"]["height"] = json!(0);
+    cases.push(("click", invalid));
+
+    for (label, declaration) in cases {
+        ocr_test_converter("0.6", Some(json!([declaration])))
+            .build_pack()
+            .expect_err(&format!("invalid {label} must fail closed"));
+    }
+}
+
+#[test]
+fn ocr_target_duplicates_coalesce_only_when_identical() {
+    let declaration = valid_ocr_declaration("ocr/synthetic-label");
+    let pack = ocr_test_converter(
+        "0.6",
+        Some(json!([declaration.clone(), declaration.clone()])),
+    )
+    .build_pack()
+    .expect("identical duplicate follows first-target ownership");
+    assert_eq!(pack["targets"].as_array().unwrap().len(), 1);
+
+    let mut conflicting = declaration.clone();
+    conflicting["timeout_ms"] = json!(6_000);
+    let error = ocr_test_converter("0.6", Some(json!([declaration, conflicting])))
+        .build_pack()
+        .expect_err("incompatible duplicate must fail closed");
+    assert!(
+        error
+            .message
+            .contains("conflicts with an earlier recognition target")
+    );
+
+    let mut colliding = ocr_test_converter(
+        "0.6",
+        Some(json!([valid_ocr_declaration("ocr/synthetic-label")])),
+    );
+    colliding.bundles[0].data["color_probes"] = json!([{
+        "id": "ocr/synthetic-label",
+        "region": {"mode":"rect","rect":{"x":1,"y":2,"width":3,"height":4}},
+        "expected": [1, 2, 3]
+    }]);
+    colliding
+        .build_pack()
+        .expect_err("OCR ID collision with an existing target must fail closed");
+}
+
+#[test]
+fn selected_build_retains_required_ocr_target_closure() {
+    let root = tempfile::tempdir().expect("fixture root");
+    fs::create_dir_all(root.path().join("operations/selected/assets")).unwrap();
+    fs::create_dir_all(root.path().join("operations/unselected/assets")).unwrap();
+    fs::create_dir_all(root.path().join("recognition")).unwrap();
+    fs::write(
+        root.path().join("operations/resources.json"),
+        serde_json::to_vec(&json!({"resources":[]})).unwrap(),
+    )
+    .unwrap();
+    for (task_id, page, ocr_id) in [
+        ("selected", "selected-page", "ocr/selected"),
+        ("unselected", "unselected-page", "ocr/unselected"),
+    ] {
+        let task_dir = root.path().join("operations").join(task_id);
+        fs::write(task_dir.join("assets/PAGE.png"), b"fixture").unwrap();
+        let mut page_rules = Map::new();
+        page_rules.insert(
+            page.to_string(),
+            json!({
+                "required": [format!("page/{page}")],
+                "optional": [ocr_id]
+            }),
+        );
+        fs::write(
+            task_dir.join("task.json"),
+            serde_json::to_vec(&json!({
+                "schema_version": "0.6",
+                "task_id": task_id,
+                "game": "neutral",
+                "server_scope": ["test"],
+                "locale": "en-US",
+                "coordinate_space": {"width":1280,"height":720},
+                "defaults": {"template_threshold":0.9,"color_max_distance":20.0},
+                "anchors": [{
+                    "id": page,
+                    "template": "assets/PAGE.png",
+                    "region": {"mode":"rect","rect":{"x":1,"y":2,"width":3,"height":4}}
+                }],
+                "ocr_targets": [valid_ocr_declaration(ocr_id)],
+                "entry_page": page,
+                "target_page": page,
+                "page_rules": Value::Object(page_rules),
+                "operations": []
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+    }
+    let converter = OperationConverter::load(root.path(), None, None, None).unwrap();
+
+    let outputs = converter
+        .build_selected(&["selected".to_string()])
+        .expect("selected build with OCR closure");
+
+    let target_ids = array_field(&outputs.pack, "targets")
+        .iter()
+        .filter_map(|target| target.get("id").and_then(Value::as_str))
+        .collect::<Vec<_>>();
+    assert!(target_ids.contains(&"ocr/selected"));
+    assert!(!target_ids.contains(&"ocr/unselected"));
+    assert_eq!(
+        outputs.pages.pointer("/pages/0/optional"),
+        Some(&json!(["ocr/selected"]))
+    );
+}
+
 #[test]
 fn build_pack_includes_verify_template_targets() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));

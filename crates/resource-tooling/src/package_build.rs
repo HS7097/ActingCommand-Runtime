@@ -3809,6 +3809,104 @@ mod tests {
     }
 
     #[test]
+    fn build_task_package_consumes_canonical_ocr_converter_output() {
+        let ocr_id = "ocr/synthetic-label";
+        let expected_text = "synthetic text";
+        let temp = TempDir::new().expect("temp");
+        let repo = temp.path().join("repo");
+        write_fixture_repo(&repo);
+        update_fixture_operation(&repo, |task| {
+            task["schema_version"] = json!("0.6");
+            task["ocr_targets"] = json!([{
+                "id": ocr_id,
+                "region": {
+                    "mode": "rect",
+                    "rect": {"x": 20, "y": 30, "width": 200, "height": 40}
+                },
+                "languages": ["en"],
+                "timeout_ms": 5_000,
+                "match_mode": "contains",
+                "expected": [expected_text],
+                "case_sensitive": false,
+                "minimum_confidence": 0.8,
+                "model_ref": "PP-OCRv6_medium",
+                "model_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            }]);
+            let entry_page = task["entry_page"]
+                .as_str()
+                .expect("fixture entry page")
+                .to_string();
+            let required_target = task["operations"][0]["guard"]["target_id"]
+                .as_str()
+                .expect("fixture guard target")
+                .to_string();
+            task["page_rules"] = Value::Object(Map::from_iter([(
+                entry_page,
+                json!({"required": [required_target], "optional": [ocr_id]}),
+            )]));
+        });
+        let out = temp.path().join("ocr-task.zip");
+
+        let response = build_task(build_task_request(repo, out.clone()))
+            .expect("official package build and validation");
+
+        assert_eq!(
+            response
+                .validation
+                .resources
+                .recognition_unsupported_target_count,
+            0
+        );
+        let inspected = crate::package_validate::validate_package(crate::PackageValidateRequest {
+            zip_path: out.clone(),
+            include_entries: true,
+            expected_input_sha256: None,
+        })
+        .expect("official package validate/inspect path");
+        assert_eq!(inspected.status, "valid");
+        assert_eq!(inspected.recognition_pack_diagnostics.len(), 1);
+        let pack_path = &inspected.recognition_pack_diagnostics[0].path;
+        assert_eq!(
+            inspected.recognition_pack_diagnostics[0].unsupported_target_count,
+            0
+        );
+        assert!(
+            inspected
+                .entries
+                .as_ref()
+                .unwrap()
+                .iter()
+                .any(|entry| entry == pack_path)
+        );
+        let entries = read_zip_entries(&out);
+        let pack: Value =
+            serde_json::from_slice(entries.get(pack_path).expect("generated recognition pack"))
+                .expect("recognition pack JSON");
+        let target = pack["targets"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|target| target["id"] == ocr_id)
+            .expect("canonical OCR target");
+        assert_eq!(
+            target,
+            &json!({
+                "type": "ocr",
+                "id": ocr_id,
+                "region": {"x":20,"y":30,"width":200,"height":40},
+                "languages": ["en"],
+                "timeout_ms": 5_000,
+                "match_mode": "contains",
+                "expected": [expected_text],
+                "case_sensitive": false,
+                "minimum_confidence": 0.8,
+                "model_ref": "PP-OCRv6_medium",
+                "model_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            })
+        );
+    }
+
+    #[test]
     fn build_task_preserves_the_frozen_finite_page_set_shape() {
         let temp = TempDir::new().expect("temp");
         let repo = temp.path().join("repo");
