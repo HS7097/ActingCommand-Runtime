@@ -2163,6 +2163,19 @@ fn build_primitives_allows_explicit_trusted_unguarded_drag() {
         maa_task_overlays: HashMap::new(),
     };
 
+    let canonical_task = converter.canonical_task("open-menu-drag").unwrap();
+    assert_eq!(
+        canonical_task.pointer("/operations/0/click"),
+        Some(&json!({
+            "kind": "drag",
+            "duration_ms": 500,
+            "from_rect": {"x": 100, "y": 110, "width": 20, "height": 25},
+            "to_rect": {"x": 500, "y": 110, "width": 20, "height": 25}
+        }))
+    );
+    assert!(canonical_task.pointer("/operations/0/click/from").is_none());
+    assert!(canonical_task.pointer("/operations/0/click/to").is_none());
+
     let outputs = converter.build_all().unwrap();
     let primitive = outputs.primitives.pointer("/primitives/0").unwrap();
 
@@ -2173,6 +2186,53 @@ fn build_primitives_allows_explicit_trusted_unguarded_drag() {
             .and_then(Value::as_bool),
         Some(true)
     );
+    assert_eq!(
+        primitive.get("click"),
+        Some(&json!({
+            "kind": "drag",
+            "duration_ms": 500,
+            "from_rect": {"x": 100, "y": 110, "width": 20, "height": 25},
+            "to_rect": {"x": 500, "y": 110, "width": 20, "height": 25}
+        }))
+    );
+    assert!(primitive.pointer("/click/from").is_none());
+    assert!(primitive.pointer("/click/to").is_none());
+}
+
+#[test]
+fn source_drag_rejects_canonical_or_mixed_endpoint_spelling() {
+    for click in [
+        json!({
+            "kind": "drag",
+            "from_rect": {"x": 1, "y": 2, "width": 3, "height": 4},
+            "to_rect": {"x": 5, "y": 6, "width": 7, "height": 8},
+            "duration_ms": 500
+        }),
+        json!({
+            "kind": "drag",
+            "from": {"x": 1, "y": 2, "width": 3, "height": 4},
+            "to": {"x": 5, "y": 6, "width": 7, "height": 8},
+            "from_rect": {"x": 1, "y": 2, "width": 3, "height": 4},
+            "to_rect": {"x": 5, "y": 6, "width": 7, "height": 8},
+            "duration_ms": 500
+        }),
+    ] {
+        let operation = json!({"id": "drag", "click": click});
+        let mut errors = Vec::new();
+
+        validate_click_shape(
+            Path::new("operations/fixture/task.json"),
+            &operation,
+            &mut errors,
+        );
+
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.contains("source drag click must use from/to")),
+            "{errors:?}"
+        );
+    }
 }
 
 #[test]

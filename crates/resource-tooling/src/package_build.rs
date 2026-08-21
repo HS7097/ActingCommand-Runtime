@@ -2854,9 +2854,9 @@ struct OperationClick {
     width: Option<i32>,
     #[serde(default)]
     height: Option<i32>,
-    #[serde(default, rename = "from")]
+    #[serde(default)]
     from_rect: Option<PackRect>,
-    #[serde(default, rename = "to")]
+    #[serde(default)]
     to_rect: Option<PackRect>,
     #[serde(default)]
     duration_ms: Option<u64>,
@@ -3703,6 +3703,66 @@ mod tests {
     use std::io::Read;
     use tempfile::TempDir;
     use zip::ZipArchive;
+
+    #[test]
+    fn packaged_drag_validation_accepts_only_canonical_endpoints() {
+        let control: LabControl = serde_json::from_value(
+            control_json(
+                "neutral.test.fixture",
+                "navigable_route",
+                "neutral",
+                "test",
+                (100, 100),
+                "fixture",
+                None,
+            )
+            .expect("control JSON"),
+        )
+        .expect("control");
+        let canonical: OperationClick = serde_json::from_value(json!({
+            "kind": "drag",
+            "from_rect": {"x": 1, "y": 2, "width": 10, "height": 11},
+            "to_rect": {"x": 50, "y": 60, "width": 12, "height": 13},
+            "duration_ms": 250
+        }))
+        .expect("canonical drag");
+        canonical
+            .validate(&control)
+            .expect("canonical drag validates");
+
+        let legacy: OperationClick = serde_json::from_value(json!({
+            "kind": "drag",
+            "from": {"x": 1, "y": 2, "width": 10, "height": 11},
+            "to": {"x": 50, "y": 60, "width": 12, "height": 13},
+            "duration_ms": 250
+        }))
+        .expect("legacy-shaped drag parses without aliases");
+        let error = legacy
+            .validate(&control)
+            .expect_err("packaged source endpoint names must fail");
+        assert!(error.message.contains("drag click missing from rect"));
+    }
+
+    #[test]
+    fn build_task_accepts_source_drag_after_converter_canonicalization() {
+        let temp = TempDir::new().expect("temp");
+        let repo = temp.path().join("repo");
+        write_fixture_repo(&repo);
+        update_fixture_operation(&repo, |task| {
+            task["operations"][0]["click"] = json!({
+                "kind": "drag",
+                "from": {"x": 100, "y": 100, "width": 20, "height": 20},
+                "to": {"x": 200, "y": 100, "width": 20, "height": 20},
+                "duration_ms": 250
+            });
+        });
+        let out = temp.path().join("canonical-drag.zip");
+
+        build_task(build_task_request(repo, out.clone()))
+            .expect("official package build accepts converter-normalized drag");
+
+        assert_published_file(&out);
+    }
 
     #[test]
     fn generated_package_closes_hash_bound_post_admission_ocr_truth_entry() {
