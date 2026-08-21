@@ -5198,6 +5198,7 @@ mod tests {
             task["schema_version"] = json!("0.7");
             task["stability_termination"] = declaration.clone();
             task["operations"][0]["to"] = json!(admitted_page);
+            task["operations"][0]["post_delay_ms"] = json!(250);
             task["ocr_targets"] = json!([{
                 "id": "ocr/synthetic-stability",
                 "region": {
@@ -5256,6 +5257,7 @@ mod tests {
             .expect("task JSON");
         assert_eq!(control["stability_termination"], declaration);
         assert_eq!(task["stability_termination"], declaration);
+        assert_eq!(task["operations"][0]["post_delay_ms"], json!(250));
         assert_eq!(
             task["post_admission_ocr"]["outcome_key"],
             "comparison_recorded"

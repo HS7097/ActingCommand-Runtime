@@ -1033,6 +1033,7 @@ impl PreparedContainedTask {
                                 operation_label: operation_id.clone(),
                             })
                             .map_err(ContainedTaskRunError::Boundary)?;
+                        Self::wait_post_input_delay(operation, started, task_timeout)?;
                         let destination_pages = operation.destination_pages()?;
                         if destination_pages.is_empty() {
                             observation = self.capture_until_page(
@@ -1445,6 +1446,29 @@ impl PreparedContainedTask {
                 },
             })
             .map_err(ContainedTaskRunError::Boundary)
+    }
+
+    fn wait_post_input_delay(
+        operation: &TaskOperation,
+        started: Instant,
+        task_timeout: Duration,
+    ) -> Result<(), ContainedTaskError> {
+        let Some(delay_ms) = operation.post_delay_ms else {
+            return Ok(());
+        };
+        let delay = Duration::from_millis(delay_ms);
+        if task_timeout
+            .checked_sub(started.elapsed())
+            .is_none_or(|remaining| delay >= remaining)
+        {
+            return Err(ContainedTaskError::new("contained_task_timeout"));
+        }
+        thread::sleep(delay);
+        if started.elapsed() >= task_timeout {
+            Err(ContainedTaskError::new("contained_task_timeout"))
+        } else {
+            Ok(())
+        }
     }
 
     fn capture_until_page<R: ContainedTaskRuntime>(
@@ -2614,6 +2638,8 @@ struct TaskOperation {
     #[serde(default)]
     retry_interval_ms: Option<u64>,
     #[serde(default)]
+    post_delay_ms: Option<u64>,
+    #[serde(default)]
     guard: Option<OperationGuard>,
     #[serde(default)]
     unguarded_trusted_coordinate: bool,
@@ -2643,6 +2669,12 @@ impl TaskOperation {
             defaults,
             control.timeout_ms.unwrap_or(DEFAULT_TASK_TIMEOUT_MS),
         )?;
+        if self
+            .post_delay_ms
+            .is_some_and(|value| value == 0 || value > MAX_CAPTURE_INTERVAL_MS)
+        {
+            return Err(ContainedTaskError::new("contained_task_operation_invalid"));
+        }
         match (&self.guard, self.unguarded_trusted_coordinate) {
             (Some(_), true) | (None, false) => {
                 return Err(ContainedTaskError::new("contained_task_guard_missing"));
@@ -3685,6 +3717,7 @@ mod retry_wiring_tests {
     use serde_json::{Value, json};
     use std::collections::VecDeque;
     use std::path::PathBuf;
+    use std::time::Instant;
 
     fn control() -> TaskControl {
         serde_json::from_value(json!({
@@ -4266,6 +4299,44 @@ mod retry_wiring_tests {
         }
     }
 
+    struct TimingRuntime {
+        inner: ScriptedRuntime,
+        captures_at: Vec<Instant>,
+        effects_completed_at: Vec<Instant>,
+    }
+
+    impl TimingRuntime {
+        fn new(inner: ScriptedRuntime) -> Self {
+            Self {
+                inner,
+                captures_at: Vec::new(),
+                effects_completed_at: Vec::new(),
+            }
+        }
+    }
+
+    impl ContainedTaskRuntime for TimingRuntime {
+        type Error = &'static str;
+
+        fn capture(&mut self) -> Result<Frame, Self::Error> {
+            self.captures_at.push(Instant::now());
+            self.inner.capture()
+        }
+
+        fn input(&mut self, action: InputAction) -> Result<(), Self::Error> {
+            self.inner.input(action)
+        }
+
+        fn record(&mut self, trace: ContainedTaskTrace) -> Result<(), Self::Error> {
+            let effect_completed = matches!(&trace, ContainedTaskTrace::EffectCompleted { .. });
+            self.inner.record(trace)?;
+            if effect_completed {
+                self.effects_completed_at.push(Instant::now());
+            }
+            Ok(())
+        }
+    }
+
     fn run_omitted_policy(
         with_destination: bool,
         with_error_page: bool,
@@ -4351,6 +4422,176 @@ mod retry_wiring_tests {
         assert_eq!(outcome.final_page.as_deref(), Some("neutral/terminal"));
         assert_single_effect(&runtime);
         assert_closed_effect_attempts(&runtime, 1);
+    }
+
+    #[test]
+    fn post_delay_is_bounded_and_parse_overflow_fails_closed() {
+        let task_control = control();
+        let omitted = operation(json!({}), None);
+        assert_eq!(omitted.post_delay_ms, None);
+        omitted
+            .validate(&task_control, TaskOperationDefaults::default())
+            .expect("omitted post delay preserves existing admission");
+
+        for invalid in [0, MAX_CAPTURE_INTERVAL_MS + 1, u64::MAX] {
+            let mut operation = operation(json!({}), None);
+            operation.post_delay_ms = Some(invalid);
+            assert_eq!(
+                operation
+                    .validate(&task_control, TaskOperationDefaults::default())
+                    .expect_err("invalid post delay must fail admission")
+                    .code(),
+                "contained_task_operation_invalid"
+            );
+        }
+
+        assert!(
+            serde_json::from_str::<TaskOperation>(
+                r#"{
+                    "id":"open_terminal",
+                    "from":"home",
+                    "to":"terminal",
+                    "click":{"kind":"point","x":1,"y":0},
+                    "post_delay_ms":18446744073709551616,
+                    "unguarded_trusted_coordinate":true
+                }"#,
+            )
+            .is_err(),
+            "a value outside u64 must fail during admission parsing"
+        );
+    }
+
+    #[test]
+    fn post_delay_precedes_each_same_page_postcondition_capture() {
+        const DELAY_MS: u64 = 20;
+        let mut task = stability_task(1, 2);
+        task.control.timeout_ms = Some(500);
+        task.program.operations[0].to = Some(PageDeclaration::Singleton("home".to_string()));
+        task.program.operations[0].post_delay_ms = Some(DELAY_MS);
+        let inner = stability_runtime(vec![
+            stability_frame([10, 10, 10]),
+            stability_frame([10, 10, 10]),
+            stability_frame([10, 10, 10]),
+        ]);
+        let mut runtime = TimingRuntime::new(inner);
+
+        let outcome = task.run(&mut runtime).expect("same-page stability success");
+
+        assert_eq!(outcome.outcome, TaskOutcome::Success);
+        assert_eq!(runtime.inner.inputs, 2);
+        assert_eq!(runtime.effects_completed_at.len(), 2);
+        assert_eq!(runtime.captures_at.len(), 3);
+        for (effect_completed_at, capture_at) in runtime
+            .effects_completed_at
+            .iter()
+            .zip(runtime.captures_at.iter().skip(1))
+        {
+            assert!(
+                capture_at.duration_since(*effect_completed_at) >= Duration::from_millis(DELAY_MS),
+                "same-page capture occurred before its post-input delay"
+            );
+        }
+    }
+
+    #[test]
+    fn post_delay_applies_once_before_a_polling_postcondition() {
+        const DELAY_MS: u64 = 200;
+        let mut task = omitted_policy_task(true, false);
+        task.control.timeout_ms = Some(350);
+        task.control.step_timeout_ms = Some(40);
+        task.program.operations[0].post_delay_ms = Some(DELAY_MS);
+        let terminal = page_frame("terminal");
+        let inner = ScriptedRuntime {
+            frames: [page_frame("home"), unrecognized_frame(), terminal.clone()].into(),
+            last_frame: terminal,
+            captures: 0,
+            inputs: 0,
+            traces: Vec::new(),
+        };
+        let mut runtime = TimingRuntime::new(inner);
+
+        let outcome = task
+            .run(&mut runtime)
+            .expect("one post-input delay must leave time for bounded polling");
+
+        assert_eq!(outcome.final_page.as_deref(), Some("neutral/terminal"));
+        assert_eq!(runtime.inner.inputs, 1);
+        assert_eq!(runtime.effects_completed_at.len(), 1);
+        assert_eq!(runtime.captures_at.len(), 3);
+        assert!(
+            runtime.captures_at[1].duration_since(runtime.effects_completed_at[0])
+                >= Duration::from_millis(DELAY_MS)
+        );
+    }
+
+    #[test]
+    fn post_delay_timeout_and_failed_input_stop_before_post_capture() {
+        let mut timed_out = omitted_policy_task(true, false);
+        timed_out.control.timeout_ms = Some(20);
+        timed_out.program.operations[0].post_delay_ms = Some(50);
+        let mut timeout_runtime = ScriptedRuntime::new("terminal");
+        let timeout = match timed_out
+            .run(&mut timeout_runtime)
+            .expect_err("insufficient delay budget must fail")
+        {
+            ContainedTaskRunError::Task(error) => error,
+            ContainedTaskRunError::Boundary(error) => {
+                panic!("unexpected fixture boundary error: {error}")
+            }
+        };
+        assert_eq!(timeout.code(), "contained_task_timeout");
+        assert_eq!(timeout_runtime.inputs, 1);
+        assert_eq!(timeout_runtime.captures, 1);
+        assert_eq!(
+            timeout_runtime
+                .traces
+                .iter()
+                .filter(|trace| matches!(trace, ContainedTaskTrace::EffectCompleted { .. }))
+                .count(),
+            1
+        );
+
+        struct FailingInputRuntime {
+            inner: ScriptedRuntime,
+            input_attempts: usize,
+        }
+
+        impl ContainedTaskRuntime for FailingInputRuntime {
+            type Error = &'static str;
+
+            fn capture(&mut self) -> Result<Frame, Self::Error> {
+                self.inner.capture()
+            }
+
+            fn input(&mut self, _action: InputAction) -> Result<(), Self::Error> {
+                self.input_attempts += 1;
+                Err("injected input failure")
+            }
+
+            fn record(&mut self, trace: ContainedTaskTrace) -> Result<(), Self::Error> {
+                self.inner.record(trace)
+            }
+        }
+
+        let mut failed = omitted_policy_task(true, false);
+        failed.program.operations[0].post_delay_ms = Some(50);
+        let mut failed_runtime = FailingInputRuntime {
+            inner: ScriptedRuntime::new("terminal"),
+            input_attempts: 0,
+        };
+        assert!(matches!(
+            failed.run(&mut failed_runtime),
+            Err(ContainedTaskRunError::Boundary("injected input failure"))
+        ));
+        assert_eq!(failed_runtime.input_attempts, 1);
+        assert_eq!(failed_runtime.inner.captures, 1);
+        assert!(
+            !failed_runtime
+                .inner
+                .traces
+                .iter()
+                .any(|trace| matches!(trace, ContainedTaskTrace::EffectCompleted { .. }))
+        );
     }
 
     #[test]
