@@ -2313,7 +2313,23 @@ fn validate_stability_contract(
             if control.execution_mode == "in_page_guard"
                 && control_declaration == program_declaration
                 && program.target_page.is_none()
-                && program.scheduling_outcome.is_none() =>
+                && match (
+                    program.scheduling_outcome.as_ref(),
+                    program.post_admission_ocr.as_ref(),
+                ) {
+                    (None, None) => true,
+                    (Some(scheduling), Some(post_admission_ocr)) => {
+                        scheduling
+                            .mappings()
+                            .iter()
+                            .filter(|mapping| {
+                                mapping.outcome_key() == post_admission_ocr.outcome_key
+                            })
+                            .count()
+                            == 1
+                    }
+                    _ => false,
+                } =>
         {
             Ok(())
         }
@@ -3421,6 +3437,241 @@ mod post_admission_ocr_tests {
         assert_eq!(
             serde_json::to_vec(&first).expect("first report bytes"),
             serde_json::to_vec(&second).expect("second report bytes")
+        );
+    }
+
+    #[test]
+    fn stability_success_finishes_one_ocr_comparison_and_selects_the_owned_outcome() {
+        struct StabilityOcrRuntime {
+            frames: VecDeque<Frame>,
+            last_frame: Frame,
+            inputs: usize,
+            traces: Vec<ContainedTaskTrace>,
+        }
+
+        impl ContainedTaskRuntime for StabilityOcrRuntime {
+            type Error = &'static str;
+
+            fn capture(&mut self) -> Result<Frame, Self::Error> {
+                Ok(match self.frames.pop_front() {
+                    Some(frame) => frame,
+                    None => self.last_frame.clone(),
+                })
+            }
+
+            fn input(&mut self, _action: InputAction) -> Result<(), Self::Error> {
+                self.inputs += 1;
+                Ok(())
+            }
+
+            fn record(&mut self, trace: ContainedTaskTrace) -> Result<(), Self::Error> {
+                self.traces.push(trace);
+                Ok(())
+            }
+        }
+
+        let stability = serde_json::json!({
+            "region": {"x": 1, "y": 0, "width": 1, "height": 1},
+            "comparison": {"mode": "exact_pixels_v1", "parameters": {}},
+            "consecutive_unchanged_threshold": 2,
+            "max_steps": 4
+        });
+        let control: TaskControl = serde_json::from_value(serde_json::json!({
+            "schema_version": CONTROL_SCHEMA,
+            "package_id": "neutral.test.task",
+            "execution_mode": "in_page_guard",
+            "game": "neutral",
+            "server": "test",
+            "resolution": {"width": 2, "height": 1},
+            "entry_task_id": "task",
+            "max_steps": 4,
+            "stability_termination": stability.clone()
+        }))
+        .expect("stability control");
+        control.validate().expect("valid stability control");
+        let program: TaskProgram = serde_json::from_value(serde_json::json!({
+            "schema_version": "0.7",
+            "task_id": "task",
+            "game": "neutral",
+            "server_scope": ["test"],
+            "coordinate_space": {"width": 2, "height": 1},
+            "scheduling_outcome": {
+                "mappings": [{
+                    "outcome_key": "comparison_recorded",
+                    "effect": "no_designated_effect",
+                    "terminal_pages": ["home"]
+                }]
+            },
+            "post_admission_ocr": {
+                "page_id": "home",
+                "target_id": "fixture/ocr",
+                "truth_set": {"path": "truth.json", "sha256": "c".repeat(64)},
+                "normalization": "trim_lowercase_v1",
+                "comparison": "exact_set_v1",
+                "limits": {
+                    "max_frames": 2,
+                    "max_items": 500,
+                    "max_string_bytes": 64,
+                    "max_total_bytes": 1_000_000,
+                    "max_truth_entries": 500
+                },
+                "outcome_key": "comparison_recorded"
+            },
+            "stability_termination": stability,
+            "operations": [{
+                "id": "swipe_once",
+                "from": "home",
+                "to": "home",
+                "click": {"kind": "point", "x": 1, "y": 0},
+                "unguarded_trusted_coordinate": true
+            }]
+        }))
+        .expect("stability OCR program");
+        validate_stability_contract(&control, &program)
+            .expect("the OCR declaration owns its selected outcome");
+
+        let provider = Arc::new(EvidenceProvider {
+            observations: Mutex::new(VecDeque::from([
+                provider_observation("stability-invocation-1", &["synthetic truth".to_string()]),
+                provider_observation("stability-invocation-2", &["synthetic truth".to_string()]),
+            ])),
+            calls: AtomicU32::new(0),
+        });
+        let pack: RecognitionPack = serde_json::from_value(serde_json::json!({
+            "schema_version": "0.6",
+            "game": "neutral",
+            "server": "test",
+            "coordinate_space": {"width": 2, "height": 1},
+            "defaults": {"color_max_distance": 0.0},
+            "targets": [
+                {
+                    "type": "color",
+                    "id": "page/home",
+                    "region": {"x": 0, "y": 0, "width": 1, "height": 1},
+                    "expected": [255, 0, 0]
+                },
+                {
+                    "type": "ocr",
+                    "id": "fixture/ocr",
+                    "region": {"x": 0, "y": 0, "width": 1, "height": 1},
+                    "languages": ["en"],
+                    "timeout_ms": 1000,
+                    "match_mode": "exact",
+                    "expected": ["unused"],
+                    "case_sensitive": true,
+                    "minimum_confidence": 0.0,
+                    "model_ref": "PP-OCRv6_medium",
+                    "model_sha256": "a".repeat(64)
+                }
+            ]
+        }))
+        .expect("stability recognition pack");
+        let evaluator = RecognitionEvaluator::with_vision_provider(
+            pack,
+            Arc::new(FsAssetResolver::new(PathBuf::new())),
+            provider,
+        )
+        .expect("stability evaluator");
+        let page_set: PageSet = serde_json::from_value(serde_json::json!({
+            "schema_version": "0.3",
+            "pages": [{
+                "id": "neutral/home",
+                "required": ["page/home"],
+                "optional": [],
+                "forbidden": []
+            }]
+        }))
+        .expect("stability page set");
+        let detector = PageDetector::new(page_set).expect("stability page detector");
+        detector
+            .validate(&evaluator)
+            .expect("stability page detector targets");
+        let scheduling_outcome = program.scheduling_outcome.clone();
+        let mut post_admission_ocr = prepared(vec!["synthetic truth".to_string()]);
+        post_admission_ocr.declaration.page_id = "home".to_string();
+        let task = PreparedContainedTask {
+            control,
+            program,
+            evaluator,
+            detector,
+            scheduling_outcome,
+            post_admission_ocr: Some(post_admission_ocr),
+            package_sha256: "fixture-sha256".to_string(),
+            entry_count: 6,
+            task_count: 1,
+        };
+        let frame = |sample: [u8; 3]| {
+            Frame::from_pixels(
+                2,
+                1,
+                [[255, 0, 0], sample].concat(),
+                PixelFormat::Rgb8,
+                actingcommand_device::CaptureBackendName::FixtureSimulation,
+            )
+            .expect("stability frame")
+        };
+        let final_frame = frame([10, 10, 10]);
+        let mut runtime = StabilityOcrRuntime {
+            frames: VecDeque::from([
+                frame([1, 1, 1]),
+                final_frame.clone(),
+                final_frame.clone(),
+                final_frame.clone(),
+            ]),
+            last_frame: final_frame,
+            inputs: 0,
+            traces: Vec::new(),
+        };
+
+        let outcome = task
+            .run(&mut runtime)
+            .expect("stability success with OCR selection");
+
+        assert_eq!(outcome.outcome, TaskOutcome::Success);
+        assert_eq!(outcome.executed_steps, 3);
+        assert_eq!(outcome.final_page.as_deref(), Some("neutral/home"));
+        assert_eq!(
+            outcome.selected_scheduling_outcome.as_deref(),
+            Some("comparison_recorded")
+        );
+        assert_eq!(runtime.inputs, 3);
+        assert_eq!(
+            runtime
+                .traces
+                .iter()
+                .filter(|trace| matches!(
+                    trace,
+                    ContainedTaskTrace::PostAdmissionOcrObservation { .. }
+                ))
+                .count(),
+            2
+        );
+        assert_eq!(
+            runtime
+                .traces
+                .iter()
+                .filter(|trace| matches!(
+                    trace,
+                    ContainedTaskTrace::PostAdmissionOcrComparison { .. }
+                ))
+                .count(),
+            1
+        );
+        assert_eq!(
+            runtime
+                .traces
+                .iter()
+                .filter(|trace| matches!(trace, ContainedTaskTrace::StabilityTerminal { .. }))
+                .count(),
+            1
+        );
+        assert_eq!(
+            runtime
+                .traces
+                .iter()
+                .filter(|trace| matches!(trace, ContainedTaskTrace::Finalizing { .. }))
+                .count(),
+            1
         );
     }
 }
@@ -5125,10 +5376,9 @@ mod retry_wiring_tests {
         );
         let mut outcome_conflict = stability_task(2, 4);
         outcome_conflict.program.scheduling_outcome = Some(scheduling_declaration(json!({
-            "designated_operation": "open_terminal",
             "mappings": [{
-                "outcome_key": "effect-home",
-                "effect": "designated_effect_completed",
+                "outcome_key": "comparison_recorded",
+                "effect": "no_designated_effect",
                 "terminal_pages": ["home"]
             }]
         })));
@@ -5138,6 +5388,69 @@ mod retry_wiring_tests {
                 .code(),
             "contained_task_program_invalid"
         );
+
+        let post_admission_ocr = |outcome_key: &str| {
+            serde_json::from_value(serde_json::json!({
+                "page_id": "home",
+                "target_id": "fixture/ocr",
+                "truth_set": {"path": "truth.json", "sha256": "c".repeat(64)},
+                "normalization": "trim_lowercase_v1",
+                "comparison": "exact_set_v1",
+                "limits": {
+                    "max_frames": 2,
+                    "max_items": 16,
+                    "max_string_bytes": 64,
+                    "max_total_bytes": 4096,
+                    "max_truth_entries": 16
+                },
+                "outcome_key": outcome_key
+            }))
+            .expect("post-admission OCR declaration")
+        };
+        let scheduling_outcome = |outcome_keys: &[&str]| {
+            scheduling_declaration(serde_json::json!({
+                "mappings": outcome_keys
+                    .iter()
+                    .map(|outcome_key| serde_json::json!({
+                        "outcome_key": outcome_key,
+                        "effect": "no_designated_effect",
+                        "terminal_pages": ["home"]
+                    }))
+                    .collect::<Vec<_>>()
+            }))
+        };
+        let mut owned_outcome = stability_task(2, 4);
+        owned_outcome.program.schema_version = "0.7".to_string();
+        owned_outcome.program.scheduling_outcome =
+            Some(scheduling_outcome(&["comparison_recorded"]));
+        owned_outcome.program.post_admission_ocr = Some(post_admission_ocr("comparison_recorded"));
+        owned_outcome.program.operations[0].to =
+            Some(PageDeclaration::Singleton("home".to_string()));
+        validate_stability_contract(&owned_outcome.control, &owned_outcome.program)
+            .expect("one matching OCR-selected outcome owns stability completion");
+
+        for (case, mappings) in [
+            ("missing", Vec::new()),
+            (
+                "duplicate",
+                vec!["comparison_recorded", "comparison_recorded"],
+            ),
+            ("mismatch", vec!["other_result"]),
+        ] {
+            let mut rejected = stability_task(2, 4);
+            rejected.program.schema_version = "0.7".to_string();
+            rejected.program.scheduling_outcome = Some(scheduling_outcome(&mappings));
+            rejected.program.post_admission_ocr = Some(post_admission_ocr("comparison_recorded"));
+            rejected.program.operations[0].to =
+                Some(PageDeclaration::Singleton("home".to_string()));
+            assert_eq!(
+                validate_stability_contract(&rejected.control, &rejected.program)
+                    .expect_err("missing, duplicate, or mismatched ownership must fail closed")
+                    .code(),
+                "contained_task_program_invalid",
+                "case={case}"
+            );
+        }
 
         assert!(
             serde_json::from_value::<StabilityTerminationDeclaration>(json!({
