@@ -168,6 +168,11 @@ impl Containment {
         Self::with_limits(ContainmentLimits::default())
     }
 
+    /// Creates a package loader that validates vision metadata without providing inference.
+    pub fn for_metadata_validation() -> Self {
+        Self::with_vision_provider(Arc::new(MetadataValidationVisionProvider))
+    }
+
     pub fn with_limits(limits: ContainmentLimits) -> Self {
         Self {
             limits,
@@ -1707,6 +1712,24 @@ mod tests {
             error
                 .to_string()
                 .contains("no production vision provider was injected")
+        );
+
+        let mut metadata_validation = Containment::for_metadata_validation();
+        let metadata_bundle = metadata_validation
+            .load(&instance, &zip, &expected)
+            .expect("metadata validation admits the declared model without runtime capability");
+        let inference_error = metadata_bundle
+            .evaluator()
+            .expect("metadata evaluator")
+            .evaluate_target(
+                &Scene::from_pixels(1, 1, &[0, 0, 0], ScenePixelFormat::Rgb8).expect("scene"),
+                "home_text",
+            )
+            .expect_err("metadata validation must not provide OCR inference");
+        assert!(
+            inference_error
+                .to_string()
+                .contains("metadata validation does not provide runtime OCR inference")
         );
 
         let mut with_provider =

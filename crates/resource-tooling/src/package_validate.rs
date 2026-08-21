@@ -18,7 +18,7 @@ pub fn validate_package(request: PackageValidateRequest) -> LabResult<PackageVal
     let expected = request
         .expected_input_sha256
         .unwrap_or_else(|| Sha256Hash::digest(&bytes));
-    let mut containment = Containment::new();
+    let mut containment = Containment::for_metadata_validation();
     let bundle = containment
         .load(&instance, &bytes, &expected)
         .map_err(containment_package_error)?;
