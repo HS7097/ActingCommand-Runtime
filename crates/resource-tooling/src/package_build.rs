@@ -14,7 +14,9 @@ use crate::{
     PackageResolution, PackageSource, PackageTaskArchiveRequest,
     UnsupportedRecognitionTargetResponse,
 };
-use actingcommand_contract::{LabError as CliError, LabResult as CliOutcome};
+use actingcommand_contract::{
+    LabError as CliError, LabResult as CliOutcome, SchedulingOutcomeDeclaration,
+};
 use actingcommand_pack_containment::{
     ContainmentError, ContainmentLimits, Sha256Hash, validate_recognition_metadata,
 };
@@ -1406,6 +1408,7 @@ fn validate_generated_package(
             control.entry_task_id, relative
         )))
     })?;
+    validate_generated_post_admission_ocr(path, entries, &control, &operation_bundle)?;
 
     let stem = format!("{}.{}", control.game, control.server);
     let pack = format!("{resource_root}/recognition/{stem}.pack.json");
@@ -1460,6 +1463,98 @@ fn validate_generated_package(
             navigation,
         },
     })
+}
+
+fn validate_generated_post_admission_ocr(
+    archive_path: &Path,
+    entries: &PackageEntries,
+    control: &LabControl,
+    operation: &OperationBundle,
+) -> CliOutcome<()> {
+    let Some(declaration) = operation.post_admission_ocr.as_ref() else {
+        return Ok(());
+    };
+    let entry_path = format!(
+        "resources/operations/{}/{}",
+        control.entry_task_id, declaration.truth_set.path
+    );
+    let payload = entries.files.get(&entry_path).ok_or_else(|| {
+        CliError::package_invalid(format!(
+            "post_admission_ocr truth set is missing from generated package: {entry_path}"
+        ))
+    })?;
+    if payload.sha256() != declaration.truth_set.sha256 {
+        return Err(CliError::package_invalid(format!(
+            "post_admission_ocr truth set hash mismatch for {entry_path}"
+        )));
+    }
+    let file = File::open(archive_path).map_err(|error| {
+        CliError::package_invalid(format!(
+            "failed to open generated package {}: {error}",
+            archive_path.display()
+        ))
+    })?;
+    let mut archive = ZipArchive::new(file).map_err(|error| {
+        CliError::package_invalid(format!(
+            "failed to inspect generated package {}: {error}",
+            archive_path.display()
+        ))
+    })?;
+    let mut entry = archive.by_name(&entry_path).map_err(|error| {
+        CliError::package_invalid(format!(
+            "failed to read post_admission_ocr truth set {entry_path}: {error}"
+        ))
+    })?;
+    if entry.size() > declaration.limits.max_total_bytes {
+        return Err(CliError::package_invalid(
+            "post_admission_ocr truth set exceeds max_total_bytes",
+        ));
+    }
+    let capacity = usize::try_from(entry.size()).map_err(|_| {
+        CliError::package_invalid("post_admission_ocr truth set size does not fit in memory")
+    })?;
+    let mut bytes = Vec::with_capacity(capacity);
+    entry.read_to_end(&mut bytes).map_err(|error| {
+        CliError::package_invalid(format!(
+            "failed to read post_admission_ocr truth set {entry_path}: {error}"
+        ))
+    })?;
+    if format!("{:x}", Sha256::digest(&bytes)) != declaration.truth_set.sha256 {
+        return Err(CliError::package_invalid(
+            "post_admission_ocr truth set bytes do not match the declared SHA-256",
+        ));
+    }
+    let truth: PostAdmissionOcrPackageTruthSet =
+        serde_json::from_slice(&bytes).map_err(|error| {
+            CliError::package_invalid(format!(
+                "post_admission_ocr truth set is invalid JSON: {error}"
+            ))
+        })?;
+    if truth.schema_version != "actingcommand.ocr-truth-set.v1"
+        || truth.items.is_empty()
+        || u32::try_from(truth.items.len())
+            .map_or(true, |count| count > declaration.limits.max_truth_entries)
+    {
+        return Err(CliError::package_invalid(
+            "post_admission_ocr truth set schema or item count is invalid",
+        ));
+    }
+    let max_string_bytes = usize::try_from(declaration.limits.max_string_bytes)
+        .map_err(|_| CliError::package_invalid("post_admission_ocr string bound is invalid"))?;
+    let mut normalized = BTreeSet::new();
+    for item in truth.items {
+        let value = item.trim().to_lowercase();
+        if item.len() > max_string_bytes
+            || value.is_empty()
+            || value.len() > max_string_bytes
+            || !normalized.insert(value)
+        {
+            return Err(CliError::package_invalid(
+                "post_admission_ocr truth items are empty, oversized, or duplicated",
+            ));
+        }
+    }
+    Ok(())
 }
 
 fn validate_generated_archive(path: &Path, entries: &mut PackageEntries) -> CliOutcome<usize> {
@@ -2061,6 +2156,97 @@ struct Resolution {
     height: u32,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PostAdmissionOcrPackageTruthReference {
+    path: String,
+    sha256: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PostAdmissionOcrPackageLimits {
+    max_frames: u32,
+    max_items: u32,
+    max_string_bytes: u32,
+    max_total_bytes: u64,
+    max_truth_entries: u32,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PostAdmissionOcrPackageDeclaration {
+    page_id: String,
+    target_id: String,
+    truth_set: PostAdmissionOcrPackageTruthReference,
+    normalization: String,
+    comparison: String,
+    limits: PostAdmissionOcrPackageLimits,
+    outcome_key: String,
+}
+
+impl PostAdmissionOcrPackageDeclaration {
+    fn validate(&self, scheduling_outcome: Option<&Value>) -> CliOutcome<()> {
+        let limits = &self.limits;
+        if self.page_id.trim().is_empty()
+            || self.target_id.trim().is_empty()
+            || self.outcome_key.trim().is_empty()
+            || self.normalization != "trim_lowercase_v1"
+            || self.comparison != "exact_set_v1"
+            || !is_safe_package_relative_path(&self.truth_set.path)
+            || self.truth_set.sha256.len() != 64
+            || !self
+                .truth_set
+                .sha256
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+            || limits.max_frames == 0
+            || limits.max_frames > 256
+            || limits.max_items == 0
+            || limits.max_items > 4_096
+            || limits.max_string_bytes == 0
+            || limits.max_string_bytes > 4_096
+            || limits.max_total_bytes == 0
+            || limits.max_total_bytes > 4 * 1024 * 1024
+            || limits.max_truth_entries == 0
+            || limits.max_truth_entries > 4_096
+        {
+            return Err(CliError::package_invalid(
+                "post_admission_ocr declaration is invalid",
+            ));
+        }
+        let scheduling: SchedulingOutcomeDeclaration =
+            serde_json::from_value(scheduling_outcome.cloned().ok_or_else(|| {
+                CliError::package_invalid("post_admission_ocr requires scheduling_outcome")
+            })?)
+            .map_err(|_| {
+                CliError::package_invalid("post_admission_ocr scheduling_outcome is invalid")
+            })?;
+        scheduling.validate().map_err(|_| {
+            CliError::package_invalid("post_admission_ocr scheduling_outcome is invalid")
+        })?;
+        if scheduling
+            .mappings()
+            .iter()
+            .filter(|mapping| mapping.outcome_key() == self.outcome_key)
+            .count()
+            != 1
+        {
+            return Err(CliError::package_invalid(
+                "post_admission_ocr outcome_key is not one scheduling mapping",
+            ));
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PostAdmissionOcrPackageTruthSet {
+    schema_version: String,
+    items: Vec<String>,
+}
+
 #[allow(dead_code)]
 #[derive(Debug, Clone, Deserialize)]
 struct OperationBundle {
@@ -2083,6 +2269,8 @@ struct OperationBundle {
     #[serde(default)]
     scheduling_outcome: Option<Value>,
     #[serde(default, deserialize_with = "deserialize_non_null_option")]
+    post_admission_ocr: Option<PostAdmissionOcrPackageDeclaration>,
+    #[serde(default, deserialize_with = "deserialize_non_null_option")]
     stability_termination: Option<StabilityTermination>,
     #[serde(default)]
     error_pages: Vec<String>,
@@ -2103,9 +2291,14 @@ impl OperationBundle {
         control: &LabControl,
         mut operation_asset_exists: impl FnMut(&str) -> CliOutcome<bool>,
     ) -> CliOutcome<()> {
-        if !matches!(self.schema_version.as_str(), "0.3" | "0.4" | "0.5" | "0.6") {
+        let schema_valid = match self.schema_version.as_str() {
+            "0.3" | "0.4" | "0.5" | "0.6" => self.post_admission_ocr.is_none(),
+            "0.7" => self.post_admission_ocr.is_some(),
+            _ => false,
+        };
+        if !schema_valid {
             return Err(CliError::package_invalid(format!(
-                "unsupported operation schema_version '{}', expected one of 0.3, 0.4, 0.5, 0.6",
+                "unsupported operation schema_version '{}' or post_admission_ocr/schema mismatch",
                 self.schema_version
             )));
         }
@@ -2152,6 +2345,9 @@ impl OperationBundle {
         self.defaults.validate()?;
         if let Some(target_page) = &self.target_page {
             target_page.validate("operation bundle target_page")?;
+        }
+        if let Some(declaration) = &self.post_admission_ocr {
+            declaration.validate(self.scheduling_outcome.as_ref())?;
         }
         for anchor in &self.anchors {
             if anchor.id.trim().is_empty() {
@@ -3491,6 +3687,77 @@ mod tests {
     use std::io::Read;
     use tempfile::TempDir;
     use zip::ZipArchive;
+
+    #[test]
+    fn generated_package_closes_hash_bound_post_admission_ocr_truth_entry() {
+        let temp = TempDir::new().expect("temp");
+        let approved = temp.path().join("approved");
+        fs::create_dir_all(&approved).expect("approved root");
+        let truth = serde_json::to_vec(&json!({
+            "schema_version": "actingcommand.ocr-truth-set.v1",
+            "items": ["Alpha", "Beta"]
+        }))
+        .expect("truth bytes");
+        let truth_path = approved.join("truth.json");
+        fs::write(&truth_path, &truth).expect("truth file");
+        let truth_sha256 = hex_sha256(&truth);
+        let control: LabControl =
+            serde_json::from_value(stability_control_fixture("navigable_route", None, None))
+                .expect("control");
+        let mut operation = stability_operation_fixture(None);
+        operation["schema_version"] = json!("0.7");
+        operation["scheduling_outcome"] = json!({
+            "mappings": [{
+                "outcome_key": "comparison_recorded",
+                "effect": "no_designated_effect",
+                "terminal_pages": ["terminal"]
+            }]
+        });
+        operation["post_admission_ocr"] = json!({
+            "page_id": "terminal",
+            "target_id": "fixture/ocr",
+            "truth_set": {"path": "truth.json", "sha256": truth_sha256},
+            "normalization": "trim_lowercase_v1",
+            "comparison": "exact_set_v1",
+            "limits": {
+                "max_frames": 2,
+                "max_items": 16,
+                "max_string_bytes": 64,
+                "max_total_bytes": 4096,
+                "max_truth_entries": 16
+            },
+            "outcome_key": "comparison_recorded"
+        });
+        let operation: OperationBundle =
+            serde_json::from_value(operation).expect("operation bundle");
+        operation
+            .validate(&control, |_| Ok(true))
+            .expect("declaration validation");
+        let mut entries = PackageEntries::new(&approved, 4096).expect("entries");
+        let entry_path = format!("resources/operations/{}/truth.json", control.entry_task_id);
+        entries
+            .add_file(&truth_path, &entry_path)
+            .expect("truth package entry");
+        let archive_path = temp.path().join("fixture.zip");
+        write_zip(&archive_path, &mut entries).expect("fixture archive");
+
+        validate_generated_post_admission_ocr(&archive_path, &entries, &control, &operation)
+            .expect("generated truth closure");
+
+        let mut mismatch = operation.clone();
+        mismatch
+            .post_admission_ocr
+            .as_mut()
+            .expect("declaration")
+            .truth_set
+            .sha256 = "0".repeat(64);
+        assert!(
+            validate_generated_post_admission_ocr(&archive_path, &entries, &control, &mismatch,)
+                .expect_err("hash mismatch")
+                .message
+                .contains("hash mismatch")
+        );
+    }
 
     fn build_task(request: PackageBuildTaskRequest) -> CliOutcome<PackageBuildTaskResponse> {
         prepare_package_build_task(request)?.build(&AuthoringEnvironmentSnapshot::default())

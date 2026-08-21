@@ -312,6 +312,42 @@ pub struct OcrProviderResult {
     pub confidence: Option<f32>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum OcrExecutionProviderKind {
+    Cpu,
+    Cuda,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct OcrProviderExecutionEvidence {
+    pub invocation_id: String,
+    pub session_id: String,
+    pub session_generation: u64,
+    pub requested_provider: OcrExecutionProviderKind,
+    pub resolved_provider: OcrExecutionProviderKind,
+    pub requested_cuda_ordinal: Option<u32>,
+    pub requested_cuda_identity: Option<String>,
+    pub resolved_cuda_ordinal: Option<u32>,
+    pub resolved_cuda_identity: Option<String>,
+    pub provider_implementation: String,
+    pub provider_binary_sha256: String,
+    pub runtime_version: String,
+    pub model_ref: String,
+    pub model_sha256: String,
+    pub cpu_ep_registered: bool,
+    pub cpu_fallback_disabled: bool,
+    pub fallback_forbidden: bool,
+    pub fallback_observed: Option<bool>,
+    pub complete: bool,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct OcrProviderObservation {
+    pub result: OcrProviderResult,
+    pub execution: Option<OcrProviderExecutionEvidence>,
+}
+
 #[derive(Debug, Clone, Copy)]
 pub struct NnProviderRequest<'a> {
     pub frame: VisionProviderFrame<'a>,
@@ -394,6 +430,17 @@ pub trait VisionProvider: fmt::Debug + Send + Sync {
         &self,
         request: OcrProviderRequest<'_>,
     ) -> Result<OcrProviderResult, VisionProviderError>;
+
+    fn read_text_with_execution_evidence(
+        &self,
+        request: OcrProviderRequest<'_>,
+    ) -> Result<OcrProviderObservation, VisionProviderError> {
+        self.read_text(request)
+            .map(|result| OcrProviderObservation {
+                result,
+                execution: None,
+            })
+    }
 
     fn classify(
         &self,
@@ -497,6 +544,15 @@ pub struct OcrTextEvidence {
     pub text: String,
     pub rect: PackRect,
     pub confidence: Option<f32>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct OcrObservationEvaluation {
+    pub target_id: String,
+    pub text: String,
+    pub confidence: Option<f32>,
+    pub blocks: Vec<OcrTextEvidence>,
+    pub execution: OcrProviderExecutionEvidence,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -656,6 +712,69 @@ impl RecognitionEvaluator {
             RecognitionTarget::Ocr(target) => self.evaluate_ocr(scene, target),
             RecognitionTarget::Nn(target) => self.evaluate_nn(scene, target),
         }
+    }
+
+    pub fn evaluate_ocr_observation(
+        &self,
+        scene: &Scene,
+        target_id: &str,
+    ) -> RecognitionPackResult<OcrObservationEvaluation> {
+        self.validate_coordinate_space(scene)?;
+        let RecognitionTarget::Ocr(target) = self.target(target_id)? else {
+            return Err(RecognitionPackError::fatal(format!(
+                "post-admission OCR target '{target_id}' is not an OCR target"
+            )));
+        };
+        let provider = self.vision_provider.as_ref().ok_or_else(|| {
+            RecognitionPackError::fatal_with_code(
+                RecognitionPackErrorCode::VisionProviderMissing,
+                format!("ocr target '{}' has no injected vision provider", target.id),
+            )
+        })?;
+        let region = provider_region(scene, &target.id, &target.region)?;
+        let observation = provider
+            .read_text_with_execution_evidence(OcrProviderRequest {
+                frame: provider_frame(scene),
+                region,
+                languages: &target.languages,
+                timeout_ms: target.timeout_ms,
+                model_ref: &target.model_ref,
+                model_sha256: &target.model_sha256,
+            })
+            .map_err(|err| provider_error(&target.id, "ocr observation", err))?;
+        let execution = observation.execution.ok_or_else(|| {
+            RecognitionPackError::fatal_with_code(
+                RecognitionPackErrorCode::VisionProviderInvalidResponse,
+                format!(
+                    "ocr observation for target '{}' is missing execution evidence",
+                    target.id
+                ),
+            )
+        })?;
+        if execution.model_ref != target.model_ref
+            || execution.model_sha256 != target.model_sha256
+            || execution.requested_provider != execution.resolved_provider
+            || !execution.complete
+            || !execution.cpu_fallback_disabled
+            || !execution.fallback_forbidden
+            || execution.fallback_observed.is_some()
+        {
+            return Err(RecognitionPackError::fatal_with_code(
+                RecognitionPackErrorCode::VisionProviderInvalidResponse,
+                format!(
+                    "ocr observation execution evidence does not match target '{}'",
+                    target.id
+                ),
+            ));
+        }
+        let ocr = validate_ocr_result(observation.result, region)?;
+        Ok(OcrObservationEvaluation {
+            target_id: target.id.clone(),
+            text: ocr.text,
+            confidence: ocr.confidence,
+            blocks: ocr.blocks,
+            execution,
+        })
     }
 
     pub fn get_click_target(&self, target_id: &str) -> RecognitionPackResult<PackRect> {
@@ -2184,6 +2303,42 @@ mod tests {
                 .expect("contains")
                 .passed
         );
+    }
+
+    #[test]
+    fn post_admission_ocr_requires_execution_evidence_without_changing_normal_evaluation() {
+        let provider = Arc::new(TestVisionProvider {
+            ocr: Ok(OcrProviderResult {
+                text: "hello".to_string(),
+                blocks: vec![OcrProviderTextBlock {
+                    text: "hello".to_string(),
+                    rect: rect(0, 0, 2, 1),
+                    confidence: Some(1.0),
+                }],
+                confidence: Some(1.0),
+            }),
+            nn: Err(VisionProviderError::new(
+                VisionProviderErrorCode::Unavailable,
+                "unused",
+            )),
+        });
+        let evaluator = vision_evaluator(ocr_pack_json("exact", "hello", 0.0), provider);
+        let scene = Scene::from_rgb8(2, 1, &[0; 6]).expect("scene");
+
+        assert!(
+            evaluator
+                .evaluate_target(&scene, "ocr/page")
+                .expect("normal OCR compatibility path")
+                .passed
+        );
+        let error = evaluator
+            .evaluate_ocr_observation(&scene, "ocr/page")
+            .expect_err("attestation-free observation must fail closed");
+        assert_eq!(
+            error.code(),
+            RecognitionPackErrorCode::VisionProviderInvalidResponse
+        );
+        assert!(error.message().contains("missing execution evidence"));
     }
 
     #[test]

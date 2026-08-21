@@ -7,6 +7,7 @@ use actingcommand_contract::{
 use actingcommand_pack_containment::validate_recognition_metadata;
 use actingcommand_recognition_pack::FsAssetResolver;
 use serde_json::{Map, Value, json};
+use sha2::{Digest, Sha256};
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -483,6 +484,9 @@ impl OperationConverter {
         let declared_anchor_ids = self.declared_anchor_ids();
         let mut errors = Vec::new();
         for bundle in &self.bundles {
+            if let Err(error) = validate_post_admission_ocr_bundle(bundle) {
+                errors.push(error.message);
+            }
             match declared_terminal_page_ids(bundle) {
                 Ok(Some(target_pages)) => validate_declared_page_set(
                     &bundle.task_json_path(),
@@ -567,10 +571,10 @@ impl OperationConverter {
             }
             if !matches!(
                 bundle.data.get("schema_version").and_then(Value::as_str),
-                Some("0.3" | "0.4" | "0.5" | "0.6")
+                Some("0.3" | "0.4" | "0.5" | "0.6" | "0.7")
             ) {
                 errors.push(format!(
-                    "{}: unsupported schema_version, expected 0.3, 0.4, 0.5, or 0.6",
+                    "{}: unsupported schema_version, expected 0.3, 0.4, 0.5, 0.6, or 0.7",
                     bundle.task_json_path().display()
                 ));
             }
@@ -1814,9 +1818,12 @@ fn ocr_target_declarations(bundle: &Bundle) -> CliOutcome<&[Value]> {
     let Some(value) = bundle.data.get("ocr_targets") else {
         return Ok(&[]);
     };
-    if bundle.data.get("schema_version").and_then(Value::as_str) != Some("0.6") {
+    if !matches!(
+        bundle.data.get("schema_version").and_then(Value::as_str),
+        Some("0.6" | "0.7")
+    ) {
         return Err(CliError::package_invalid(format!(
-            "{}: ocr_targets requires schema_version '0.6'",
+            "{}: ocr_targets requires schema_version '0.6' or '0.7'",
             bundle.task_json_path().display()
         )));
     }
@@ -1946,6 +1953,220 @@ fn require_exact_object<'a>(
         )));
     }
     Ok(object)
+}
+
+fn validate_post_admission_ocr_bundle(bundle: &Bundle) -> CliOutcome<()> {
+    let schema = bundle
+        .data
+        .get("schema_version")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let declaration = bundle.data.get("post_admission_ocr");
+    match (schema, declaration) {
+        ("0.7", Some(Value::Null) | None) => {
+            return Err(CliError::package_invalid(format!(
+                "{}: schema 0.7 requires post_admission_ocr",
+                bundle.task_json_path().display()
+            )));
+        }
+        ("0.3" | "0.4" | "0.5" | "0.6", Some(_)) => {
+            return Err(CliError::package_invalid(format!(
+                "{}: post_admission_ocr requires schema_version '0.7'",
+                bundle.task_json_path().display()
+            )));
+        }
+        (_, None) => return Ok(()),
+        (_, Some(Value::Null)) => {
+            return Err(CliError::package_invalid(format!(
+                "{}: post_admission_ocr must not be null",
+                bundle.task_json_path().display()
+            )));
+        }
+        (_, Some(_)) => {}
+    }
+    let declaration = require_exact_object(
+        declaration.expect("matched declaration"),
+        &[
+            "page_id",
+            "target_id",
+            "truth_set",
+            "normalization",
+            "comparison",
+            "limits",
+            "outcome_key",
+        ],
+        "post_admission_ocr",
+    )?;
+    let required_string = |field: &str| -> CliOutcome<&str> {
+        declaration
+            .get(field)
+            .and_then(Value::as_str)
+            .filter(|value| !value.trim().is_empty())
+            .ok_or_else(|| {
+                CliError::package_invalid(format!(
+                    "post_admission_ocr.{field} must be a non-empty string"
+                ))
+            })
+    };
+    let page_id = required_string("page_id")?;
+    let target_id = required_string("target_id")?;
+    let outcome_key = required_string("outcome_key")?;
+    if required_string("normalization")? != "trim_lowercase_v1"
+        || required_string("comparison")? != "exact_set_v1"
+    {
+        return Err(CliError::package_invalid(
+            "post_admission_ocr uses an unsupported normalization or comparison",
+        ));
+    }
+    let truth = require_exact_object(
+        required_map_field(declaration, "truth_set")?,
+        &["path", "sha256"],
+        "post_admission_ocr.truth_set",
+    )?;
+    let truth_path = truth
+        .get("path")
+        .and_then(Value::as_str)
+        .filter(|path| safe_task_local_resource_path(path))
+        .ok_or_else(|| CliError::package_invalid("post_admission_ocr.truth_set.path is unsafe"))?;
+    let truth_sha256 = truth
+        .get("sha256")
+        .and_then(Value::as_str)
+        .filter(|value| {
+            value.len() == 64
+                && value
+                    .bytes()
+                    .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+        })
+        .ok_or_else(|| {
+            CliError::package_invalid(
+                "post_admission_ocr.truth_set.sha256 must be lowercase SHA-256",
+            )
+        })?;
+    let limits = require_exact_object(
+        required_map_field(declaration, "limits")?,
+        &[
+            "max_frames",
+            "max_items",
+            "max_string_bytes",
+            "max_total_bytes",
+            "max_truth_entries",
+        ],
+        "post_admission_ocr.limits",
+    )?;
+    let bounded = |field: &str, maximum: u64| -> CliOutcome<u64> {
+        limits
+            .get(field)
+            .and_then(Value::as_u64)
+            .filter(|value| *value > 0 && *value <= maximum)
+            .ok_or_else(|| {
+                CliError::package_invalid(format!(
+                    "post_admission_ocr.limits.{field} must be in 1..={maximum}"
+                ))
+            })
+    };
+    bounded("max_frames", 256)?;
+    bounded("max_items", 4_096)?;
+    let max_string_bytes = bounded("max_string_bytes", 4_096)?;
+    let max_total_bytes = bounded("max_total_bytes", 4 * 1024 * 1024)?;
+    let max_truth_entries = bounded("max_truth_entries", 4_096)?;
+    let declared_targets = ocr_target_declarations(bundle)?;
+    if declared_targets
+        .iter()
+        .filter(|target| target.get("id").and_then(Value::as_str) == Some(target_id))
+        .count()
+        != 1
+    {
+        return Err(CliError::package_invalid(format!(
+            "post_admission_ocr target_id '{target_id}' is not one declared OCR target"
+        )));
+    }
+    let scheduling: SchedulingOutcomeDeclaration =
+        serde_json::from_value(bundle.data.get("scheduling_outcome").cloned().ok_or_else(
+            || CliError::package_invalid("post_admission_ocr requires scheduling_outcome"),
+        )?)
+        .map_err(|_| {
+            CliError::package_invalid("post_admission_ocr scheduling_outcome is invalid")
+        })?;
+    scheduling.validate().map_err(|_| {
+        CliError::package_invalid("post_admission_ocr scheduling_outcome is invalid")
+    })?;
+    if scheduling
+        .mappings()
+        .iter()
+        .filter(|mapping| mapping.outcome_key() == outcome_key)
+        .count()
+        != 1
+    {
+        return Err(CliError::package_invalid(format!(
+            "post_admission_ocr outcome_key '{outcome_key}' is not one scheduling mapping"
+        )));
+    }
+    if page_id.trim().is_empty() {
+        return Err(CliError::package_invalid(
+            "post_admission_ocr page_id is invalid",
+        ));
+    }
+    let truth_bytes = fs::read(bundle.dir.join(truth_path)).map_err(|error| {
+        CliError::package_invalid(format!(
+            "failed to read post_admission_ocr truth set {}: {error}",
+            bundle.dir.join(truth_path).display()
+        ))
+    })?;
+    if u64::try_from(truth_bytes.len()).map_or(true, |size| size > max_total_bytes)
+        || format!("{:x}", Sha256::digest(&truth_bytes)) != truth_sha256
+    {
+        return Err(CliError::package_invalid(
+            "post_admission_ocr truth set size or SHA-256 does not match",
+        ));
+    }
+    let truth_json: Value = serde_json::from_slice(&truth_bytes).map_err(|error| {
+        CliError::package_invalid(format!(
+            "post_admission_ocr truth set is invalid JSON: {error}"
+        ))
+    })?;
+    let truth_object = require_exact_object(
+        &truth_json,
+        &["schema_version", "items"],
+        "post_admission_ocr truth set",
+    )?;
+    if truth_object.get("schema_version").and_then(Value::as_str)
+        != Some("actingcommand.ocr-truth-set.v1")
+    {
+        return Err(CliError::package_invalid(
+            "post_admission_ocr truth set schema_version is invalid",
+        ));
+    }
+    let items = truth_object
+        .get("items")
+        .and_then(Value::as_array)
+        .filter(|items| !items.is_empty() && items.len() as u64 <= max_truth_entries)
+        .ok_or_else(|| CliError::package_invalid("post_admission_ocr truth items are invalid"))?;
+    let mut normalized = BTreeSet::new();
+    for item in items {
+        let item = item.as_str().ok_or_else(|| {
+            CliError::package_invalid("post_admission_ocr truth items must be strings")
+        })?;
+        let value = item.trim().to_lowercase();
+        if item.len() as u64 > max_string_bytes
+            || value.is_empty()
+            || value.len() as u64 > max_string_bytes
+            || !normalized.insert(value)
+        {
+            return Err(CliError::package_invalid(
+                "post_admission_ocr truth items are empty, oversized, or duplicated",
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn safe_task_local_resource_path(path: &str) -> bool {
+    !path.is_empty()
+        && !path.starts_with(['/', '\\'])
+        && !path.contains(['\\', ':'])
+        && path
+            .split('/')
+            .all(|segment| !segment.is_empty() && segment != "." && segment != "..")
 }
 
 fn required_map_field<'a>(object: &'a Map<String, Value>, field: &str) -> CliOutcome<&'a Value> {

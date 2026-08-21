@@ -82,7 +82,8 @@ use actingcommand_contract::{
 use actingcommand_device::{CaptureBackendName, Frame};
 use actingcommand_execution_kernel::{
     ContainedTaskRunError, ContainedTaskRuntime, ContainedTaskTrace, ExecutionBackendProvenance,
-    ExecutionBackendProvider, ExecutionKernel, ExternalExpectedSha256, PreparedContainedTask,
+    ExecutionBackendProvider, ExecutionKernel, ExternalExpectedSha256,
+    PostAdmissionOcrComparisonReport, PostAdmissionOcrObservation, PreparedContainedTask,
     RecognitionVisionProvider, StabilityComparisonResult, StabilityTerminalReason,
     StabilityTerminationDeclaration, decide_monitor, page_anchor_matches,
 };
@@ -1382,6 +1383,7 @@ impl RuntimeHost {
                     failure_code,
                     failure_severity: None,
                     scheduling_outcome: None,
+                    selected_scheduling_outcome: None,
                     capture_summary: None,
                 },
             )
@@ -1438,6 +1440,7 @@ impl RuntimeHost {
         final_page: Option<String>,
         game: String,
         declaration: SchedulingOutcomeDeclaration,
+        selected_scheduling_outcome: Option<String>,
     ) -> Result<
         TerminalEvent,
         (
@@ -1463,6 +1466,7 @@ impl RuntimeHost {
                     failure_code: None,
                     failure_severity: None,
                     scheduling_outcome: Some((game, declaration)),
+                    selected_scheduling_outcome,
                     capture_summary: None,
                 },
             )
@@ -10395,6 +10399,7 @@ impl HostShared {
             .cloned()
             .map(|declaration| (prepared.game().to_owned(), declaration));
         let expected_stability_declaration = prepared.stability_termination().cloned();
+        let expects_post_admission_ocr = prepared.has_post_admission_ocr();
         let sampling_run_seed = Some(
             contained_task_sampling_seed(&("xorshift64_uniform_rect_v1/run", run_id.transport()))
                 .map_err(RequestFailure::poison_without_terminal)?,
@@ -10412,6 +10417,9 @@ impl HostShared {
             last_frame_id: None,
             expected_stability_declaration,
             stability: None,
+            expects_post_admission_ocr,
+            post_admission_ocr_observations: 0,
+            post_admission_ocr_comparison_recorded: false,
             current_recognition_id: None,
             step_actions: BTreeMap::new(),
             sampling_run_seed,
@@ -10473,6 +10481,7 @@ impl HostShared {
                             failure_code: Some(failure.error.code()),
                             failure_severity: scheduled.then_some(EventSeverity::Warning),
                             scheduling_outcome: None,
+                            selected_scheduling_outcome: None,
                             capture_summary: Some(capture_summary),
                         },
                     )?;
@@ -10550,6 +10559,7 @@ impl HostShared {
                             ),
                             failure_severity,
                             scheduling_outcome: None,
+                            selected_scheduling_outcome: None,
                             capture_summary: Some(capture_summary),
                         },
                     )?;
@@ -10607,6 +10617,7 @@ impl HostShared {
                         failure_code: Some(error.code()),
                         failure_severity,
                         scheduling_outcome: None,
+                        selected_scheduling_outcome: None,
                         capture_summary: Some(capture_summary),
                     },
                 )?;
@@ -10670,6 +10681,7 @@ impl HostShared {
                 failure_code: None,
                 failure_severity: None,
                 scheduling_outcome,
+                selected_scheduling_outcome: outcome.selected_scheduling_outcome,
                 capture_summary: Some(capture_summary),
             },
         )?;
@@ -11251,6 +11263,7 @@ impl HostShared {
             draft.final_page.as_deref(),
             draft.executed_steps,
             draft.scheduling_outcome.as_ref(),
+            draft.selected_scheduling_outcome.as_deref(),
         )?;
         let mut appended = Vec::with_capacity(3);
         if existing_summary.is_none()
@@ -13037,6 +13050,7 @@ struct ContainedTaskTerminalDraft {
     failure_code: Option<&'static str>,
     failure_severity: Option<EventSeverity>,
     scheduling_outcome: Option<(String, SchedulingOutcomeDeclaration)>,
+    selected_scheduling_outcome: Option<String>,
     capture_summary: Option<CapturePipelineSummary>,
 }
 
@@ -13326,6 +13340,9 @@ struct RuntimeContainedTask<'a> {
     last_frame_id: Option<IssuedFrameId>,
     expected_stability_declaration: Option<StabilityTerminationDeclaration>,
     stability: Option<RuntimeContainedTaskStability>,
+    expects_post_admission_ocr: bool,
+    post_admission_ocr_observations: u32,
+    post_admission_ocr_comparison_recorded: bool,
     current_recognition_id: Option<IssuedRecognitionId>,
     step_actions: BTreeMap<u32, (IssuedActionId, String)>,
     sampling_run_seed: Option<u64>,
@@ -13377,6 +13394,25 @@ struct RuntimeContainedTaskStabilityDiagnostic<'a> {
     new_consecutive_unchanged: u32,
     consecutive_unchanged_threshold: u32,
     terminal_reason: Option<StabilityTerminalReason>,
+}
+
+#[derive(serde::Serialize)]
+struct RuntimeContainedTaskOcrObservationDiagnostic<'a> {
+    schema_version: &'static str,
+    task_id: &'a TaskId,
+    run_id: &'a RunId,
+    frame_id: &'a FrameId,
+    frame_index: u32,
+    observation: &'a PostAdmissionOcrObservation,
+}
+
+#[derive(serde::Serialize)]
+struct RuntimeContainedTaskOcrComparisonDiagnostic<'a> {
+    schema_version: &'static str,
+    task_id: &'a TaskId,
+    run_id: &'a RunId,
+    final_frame_id: &'a FrameId,
+    report: &'a PostAdmissionOcrComparisonReport,
 }
 
 impl RuntimeContainedTask<'_> {
@@ -13454,6 +13490,143 @@ impl RuntimeContainedTask<'_> {
                 payload,
             )
             .map(|_| ())
+    }
+
+    fn persist_post_admission_ocr_diagnostic(
+        &self,
+        frame_id: IssuedFrameId,
+        bytes: &[u8],
+    ) -> Result<(), RequestFailure> {
+        let event_links = self.links().with_frame_id(frame_id);
+        let write_context = ArtifactWriteContext::new(
+            self.request
+                .task_artifact_links(self.run_id)
+                .with_frame_id(frame_id),
+            event_links,
+            unix_ms_now().map_err(RequestFailure::poison_without_terminal)?,
+        );
+        let mut sink = RuntimeArtifactEventSink {
+            ledger: &self.host.ledger,
+            events: &self.host.events,
+        };
+        self.host
+            .artifacts
+            .put(
+                ArtifactWriteRequest::new(
+                    ArtifactKind::DiagnosticJson,
+                    bytes,
+                    write_context,
+                    ArtifactIssuePolicy::new(
+                        ArtifactProducer::CapturePipeline,
+                        RetentionClass::DebugFull,
+                        ArtifactRedactionState::NotRequired,
+                    ),
+                ),
+                &mut sink,
+            )
+            .map(|_| ())
+            .map_err(|_| {
+                RequestFailure::poison_without_terminal(artifact_store_error(
+                    "persist_contained_task_post_admission_ocr",
+                ))
+            })
+    }
+
+    fn record_post_admission_ocr_observation(
+        &mut self,
+        frame_index: u32,
+        observation: PostAdmissionOcrObservation,
+    ) -> Result<(), RequestFailure> {
+        let frame_id = self.last_frame_id.ok_or_else(|| {
+            RequestFailure::poison_without_terminal(RuntimeHostError::fatal(
+                "contained_task_post_admission_ocr_frame_missing",
+                "run_contained_task",
+                RuntimeErrorCode::RuntimeFatal,
+            ))
+        })?;
+        if !self.expects_post_admission_ocr
+            || self.post_admission_ocr_comparison_recorded
+            || frame_index != self.post_admission_ocr_observations
+        {
+            return Err(RequestFailure::poison_without_terminal(
+                RuntimeHostError::fatal(
+                    "contained_task_post_admission_ocr_state_invalid",
+                    "run_contained_task",
+                    RuntimeErrorCode::RuntimeFatal,
+                ),
+            ));
+        }
+        let diagnostic = RuntimeContainedTaskOcrObservationDiagnostic {
+            schema_version: "actingcommand.runtime.post-admission-ocr-observation.v1",
+            task_id: self.task_id.transport(),
+            run_id: self.run_id.transport(),
+            frame_id: frame_id.transport(),
+            frame_index,
+            observation: &observation,
+        };
+        let bytes = serde_json::to_vec(&diagnostic).map_err(|_| {
+            RequestFailure::poison_without_terminal(RuntimeHostError::fatal(
+                "contained_task_post_admission_ocr_evidence_encode_failed",
+                "run_contained_task",
+                RuntimeErrorCode::RuntimeFatal,
+            ))
+        })?;
+        self.persist_post_admission_ocr_diagnostic(frame_id, &bytes)?;
+        self.post_admission_ocr_observations = self
+            .post_admission_ocr_observations
+            .checked_add(1)
+            .ok_or_else(|| {
+                RequestFailure::poison_without_terminal(RuntimeHostError::fatal(
+                    "contained_task_post_admission_ocr_count_overflow",
+                    "run_contained_task",
+                    RuntimeErrorCode::RuntimeFatal,
+                ))
+            })?;
+        Ok(())
+    }
+
+    fn record_post_admission_ocr_comparison(
+        &mut self,
+        report: PostAdmissionOcrComparisonReport,
+    ) -> Result<(), RequestFailure> {
+        let frame_id = self.last_frame_id.ok_or_else(|| {
+            RequestFailure::poison_without_terminal(RuntimeHostError::fatal(
+                "contained_task_post_admission_ocr_frame_missing",
+                "run_contained_task",
+                RuntimeErrorCode::RuntimeFatal,
+            ))
+        })?;
+        if !self.expects_post_admission_ocr
+            || self.post_admission_ocr_comparison_recorded
+            || self.post_admission_ocr_observations == 0
+            || report.frames_collected() != self.post_admission_ocr_observations
+            || report.outcome_key().trim().is_empty()
+        {
+            return Err(RequestFailure::poison_without_terminal(
+                RuntimeHostError::fatal(
+                    "contained_task_post_admission_ocr_comparison_invalid",
+                    "run_contained_task",
+                    RuntimeErrorCode::RuntimeFatal,
+                ),
+            ));
+        }
+        let diagnostic = RuntimeContainedTaskOcrComparisonDiagnostic {
+            schema_version: "actingcommand.runtime.post-admission-ocr-comparison-envelope.v1",
+            task_id: self.task_id.transport(),
+            run_id: self.run_id.transport(),
+            final_frame_id: frame_id.transport(),
+            report: &report,
+        };
+        let bytes = serde_json::to_vec(&diagnostic).map_err(|_| {
+            RequestFailure::poison_without_terminal(RuntimeHostError::fatal(
+                "contained_task_post_admission_ocr_evidence_encode_failed",
+                "run_contained_task",
+                RuntimeErrorCode::RuntimeFatal,
+            ))
+        })?;
+        self.persist_post_admission_ocr_diagnostic(frame_id, &bytes)?;
+        self.post_admission_ocr_comparison_recorded = true;
+        Ok(())
     }
 
     fn record_stability_baseline(
@@ -14220,6 +14393,13 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
                 operation_label,
                 reason,
             } => self.record_stability_terminal(step_index, operation_label, reason),
+            ContainedTaskTrace::PostAdmissionOcrObservation {
+                frame_index,
+                observation,
+            } => self.record_post_admission_ocr_observation(frame_index, observation),
+            ContainedTaskTrace::PostAdmissionOcrComparison { report } => {
+                self.record_post_admission_ocr_comparison(report)
+            }
             ContainedTaskTrace::Finalizing { outcome } => {
                 let stability_finalization_invalid = match (
                     self.expected_stability_declaration.as_ref(),
@@ -14233,9 +14413,17 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
                     }
                     _ => true,
                 };
+                let post_admission_ocr_finalization_invalid = if self.expects_post_admission_ocr {
+                    self.post_admission_ocr_observations == 0
+                        || !self.post_admission_ocr_comparison_recorded
+                } else {
+                    self.post_admission_ocr_observations != 0
+                        || self.post_admission_ocr_comparison_recorded
+                };
                 if self.finalizing.replace(outcome).is_some()
                     || !self.step_actions.is_empty()
                     || stability_finalization_invalid
+                    || post_admission_ocr_finalization_invalid
                 {
                     return Err(RequestFailure::poison_without_terminal(
                         RuntimeHostError::fatal(
@@ -15176,8 +15364,14 @@ fn select_scheduling_disposition(
     final_page: Option<&str>,
     executed_steps: u32,
     contract: Option<&(String, SchedulingOutcomeDeclaration)>,
+    selected_outcome_key: Option<&str>,
 ) -> Result<Option<SchedulingDisposition>, RequestFailure> {
     let Some((game, declaration)) = contract else {
+        if selected_outcome_key.is_some() {
+            return Err(scheduling_outcome_failure(
+                "contained_task_outcome_declaration_missing",
+            ));
+        }
         return Ok(None);
     };
     if outcome != TaskOutcome::Success {
@@ -15328,6 +15522,11 @@ fn select_scheduling_disposition(
             "contained_task_outcome_mapping_conflict"
         }));
     };
+    if selected_outcome_key.is_some_and(|selected| selected != mapping.outcome_key()) {
+        return Err(scheduling_outcome_failure(
+            "contained_task_outcome_comparison_conflict",
+        ));
+    }
     SchedulingDisposition::new(mapping.outcome_key(), effect)
         .map(Some)
         .map_err(|_| {

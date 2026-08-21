@@ -13,14 +13,15 @@ use actingcommand_contract::{
     SchedulingOutcomeDeclaration, TaskOutcome,
 };
 use actingcommand_device::{Frame, PixelFormat};
-use actingcommand_pack_containment::{ContainmentError, LoadedBundle};
-use actingcommand_page_detector::PageDetector;
+use actingcommand_pack_containment::{ContainmentError, LoadedBundle, Sha256Hash};
+use actingcommand_page_detector::{PageDetector, PageSet};
 use actingcommand_recognition::{Scene, ScenePixelFormat};
 use actingcommand_recognition_pack::{
-    RecognitionEvaluator, RecognitionPackErrorCode, TargetEvaluation, TargetKind, VisionProvider,
+    OcrProviderExecutionEvidence, OcrTextEvidence, RecognitionEvaluator, RecognitionPackErrorCode,
+    TargetEvaluation, TargetKind, VisionProvider,
 };
 use serde::{Deserialize, Deserializer, Serialize};
-use std::collections::{BTreeSet, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::error::Error;
 use std::fmt;
 use std::sync::Arc;
@@ -37,6 +38,12 @@ const MAX_STEP_TIMEOUT_MS: u64 = 60_000;
 const MAX_CAPTURE_INTERVAL_MS: u64 = 5_000;
 const MAX_STEPS: u32 = 1_000;
 const MAX_STABILITY_PIXEL_BYTES: usize = 4;
+const MAX_POST_ADMISSION_OCR_FRAMES: u32 = 256;
+const MAX_POST_ADMISSION_OCR_ITEMS: u32 = 4_096;
+const MAX_POST_ADMISSION_OCR_STRING_BYTES: u32 = 4_096;
+const MAX_POST_ADMISSION_OCR_TOTAL_BYTES: u64 = 4 * 1024 * 1024;
+const MAX_POST_ADMISSION_OCR_TRUTH_ENTRIES: u32 = 4_096;
+const POST_ADMISSION_OCR_TRUTH_SCHEMA: &str = "actingcommand.ocr-truth-set.v1";
 
 fn deserialize_non_null_option<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
 where
@@ -244,6 +251,363 @@ pub enum StabilityTerminalReason {
     MaxStepsReached,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PostAdmissionOcrNormalization {
+    TrimLowercaseV1,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PostAdmissionOcrComparisonMode {
+    ExactSetV1,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct PostAdmissionOcrObservation {
+    target_id: String,
+    text: String,
+    confidence: Option<f32>,
+    blocks: Vec<OcrTextEvidence>,
+    execution: OcrProviderExecutionEvidence,
+}
+
+// Observation confidences come only from the recognition owner's finite-score validation.
+impl Eq for PostAdmissionOcrObservation {}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct PostAdmissionOcrObservedValue {
+    value: String,
+    occurrences: u32,
+    confidences: Vec<Option<f32>>,
+}
+
+// Collected confidences inherit the same finite-score invariant as each observation.
+impl Eq for PostAdmissionOcrObservedValue {}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct PostAdmissionOcrDuplicateEvidence {
+    pub value: String,
+    pub occurrences: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct PostAdmissionOcrComparisonReport {
+    schema_version: &'static str,
+    target_id: String,
+    truth_set_path: String,
+    truth_set_sha256: String,
+    normalization: PostAdmissionOcrNormalization,
+    comparison: PostAdmissionOcrComparisonMode,
+    outcome_key: String,
+    frames_collected: u32,
+    items_collected: u32,
+    discarded_empty_items: u32,
+    total_observed_utf8_bytes: u64,
+    exact_match: bool,
+    truth: Vec<String>,
+    observed: Vec<PostAdmissionOcrObservedValue>,
+    missed: Vec<String>,
+    unexpected: Vec<String>,
+    duplicates: Vec<PostAdmissionOcrDuplicateEvidence>,
+}
+
+impl Eq for PostAdmissionOcrComparisonReport {}
+
+impl PostAdmissionOcrComparisonReport {
+    pub fn outcome_key(&self) -> &str {
+        &self.outcome_key
+    }
+
+    pub const fn frames_collected(&self) -> u32 {
+        self.frames_collected
+    }
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PostAdmissionOcrTruthReference {
+    path: String,
+    sha256: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PostAdmissionOcrLimits {
+    max_frames: u32,
+    max_items: u32,
+    max_string_bytes: u32,
+    max_total_bytes: u64,
+    max_truth_entries: u32,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PostAdmissionOcrDeclaration {
+    page_id: String,
+    target_id: String,
+    truth_set: PostAdmissionOcrTruthReference,
+    normalization: PostAdmissionOcrNormalization,
+    comparison: PostAdmissionOcrComparisonMode,
+    limits: PostAdmissionOcrLimits,
+    outcome_key: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PostAdmissionOcrTruthSet {
+    schema_version: String,
+    items: Vec<String>,
+}
+
+#[derive(Debug, Clone)]
+struct PreparedPostAdmissionOcr {
+    declaration: PostAdmissionOcrDeclaration,
+    truth: Vec<String>,
+}
+
+#[derive(Debug, Default)]
+struct PostAdmissionOcrObservedAggregate {
+    occurrences: u32,
+    confidences: Vec<Option<f32>>,
+}
+
+#[derive(Debug, Default)]
+struct PostAdmissionOcrCollector<'a> {
+    prepared: Option<&'a PreparedPostAdmissionOcr>,
+    frames_collected: u32,
+    items_collected: u32,
+    discarded_empty_items: u32,
+    total_observed_utf8_bytes: u64,
+    values: BTreeMap<String, PostAdmissionOcrObservedAggregate>,
+    invocation_ids: BTreeSet<String>,
+    stream_binding: Option<OcrProviderExecutionEvidence>,
+}
+
+impl<'a> PostAdmissionOcrCollector<'a> {
+    fn new(prepared: Option<&'a PreparedPostAdmissionOcr>) -> Self {
+        Self {
+            prepared,
+            ..Self::default()
+        }
+    }
+
+    fn observe(
+        &mut self,
+        game: &str,
+        evaluator: &RecognitionEvaluator,
+        page_label: &str,
+        scene: &Scene,
+    ) -> Result<Option<(u32, PostAdmissionOcrObservation)>, ContainedTaskError> {
+        let Some(prepared) = self.prepared else {
+            return Ok(None);
+        };
+        let declaration = &prepared.declaration;
+        if !crate::page_anchor_matches(game, page_label, &declaration.page_id)
+            || self.frames_collected >= declaration.limits.max_frames
+        {
+            return Ok(None);
+        }
+        let evaluated = evaluator
+            .evaluate_ocr_observation(scene, &declaration.target_id)
+            .map_err(|error| {
+                ContainedTaskError::with_detail(
+                    "contained_task_post_admission_ocr_failed",
+                    error.to_string(),
+                )
+            })?;
+        if evaluated.target_id != declaration.target_id
+            || !self
+                .invocation_ids
+                .insert(evaluated.execution.invocation_id.clone())
+            || self
+                .stream_binding
+                .as_ref()
+                .is_some_and(|binding| !same_ocr_stream_binding(binding, &evaluated.execution))
+        {
+            return Err(ContainedTaskError::new(
+                "contained_task_post_admission_ocr_evidence_mismatch",
+            ));
+        }
+        if self.stream_binding.is_none() {
+            self.stream_binding = Some(evaluated.execution.clone());
+        }
+        let block_count = u32::try_from(evaluated.blocks.len()).map_err(|_| {
+            ContainedTaskError::new("contained_task_post_admission_ocr_limit_exceeded")
+        })?;
+        let new_item_count = self
+            .items_collected
+            .checked_add(block_count)
+            .ok_or_else(|| {
+                ContainedTaskError::new("contained_task_post_admission_ocr_limit_exceeded")
+            })?;
+        if new_item_count > declaration.limits.max_items {
+            return Err(ContainedTaskError::new(
+                "contained_task_post_admission_ocr_limit_exceeded",
+            ));
+        }
+        let mut added_bytes = u64::try_from(evaluated.text.len()).map_err(|_| {
+            ContainedTaskError::new("contained_task_post_admission_ocr_limit_exceeded")
+        })?;
+        let max_string_bytes = usize::try_from(declaration.limits.max_string_bytes)
+            .map_err(|_| ContainedTaskError::new("contained_task_post_admission_ocr_invalid"))?;
+        let mut normalized = Vec::with_capacity(evaluated.blocks.len());
+        for block in &evaluated.blocks {
+            if block.text.len() > max_string_bytes {
+                return Err(ContainedTaskError::new(
+                    "contained_task_post_admission_ocr_limit_exceeded",
+                ));
+            }
+            added_bytes = added_bytes
+                .checked_add(u64::try_from(block.text.len()).map_err(|_| {
+                    ContainedTaskError::new("contained_task_post_admission_ocr_limit_exceeded")
+                })?)
+                .ok_or_else(|| {
+                    ContainedTaskError::new("contained_task_post_admission_ocr_limit_exceeded")
+                })?;
+            let value = normalize_post_admission_ocr(&block.text, declaration.normalization);
+            if value.len() > max_string_bytes {
+                return Err(ContainedTaskError::new(
+                    "contained_task_post_admission_ocr_limit_exceeded",
+                ));
+            }
+            normalized.push((value, block.confidence));
+        }
+        let new_total_bytes = self
+            .total_observed_utf8_bytes
+            .checked_add(added_bytes)
+            .ok_or_else(|| {
+                ContainedTaskError::new("contained_task_post_admission_ocr_limit_exceeded")
+            })?;
+        if new_total_bytes > declaration.limits.max_total_bytes {
+            return Err(ContainedTaskError::new(
+                "contained_task_post_admission_ocr_limit_exceeded",
+            ));
+        }
+        for (value, confidence) in normalized {
+            if value.is_empty() {
+                self.discarded_empty_items =
+                    self.discarded_empty_items.checked_add(1).ok_or_else(|| {
+                        ContainedTaskError::new("contained_task_post_admission_ocr_limit_exceeded")
+                    })?;
+                continue;
+            }
+            let aggregate = self.values.entry(value).or_default();
+            aggregate.occurrences = aggregate.occurrences.checked_add(1).ok_or_else(|| {
+                ContainedTaskError::new("contained_task_post_admission_ocr_limit_exceeded")
+            })?;
+            aggregate.confidences.push(confidence);
+        }
+        let frame_index = self.frames_collected;
+        self.frames_collected = self.frames_collected.checked_add(1).ok_or_else(|| {
+            ContainedTaskError::new("contained_task_post_admission_ocr_limit_exceeded")
+        })?;
+        self.items_collected = new_item_count;
+        self.total_observed_utf8_bytes = new_total_bytes;
+        Ok(Some((
+            frame_index,
+            PostAdmissionOcrObservation {
+                target_id: evaluated.target_id,
+                text: evaluated.text,
+                confidence: evaluated.confidence,
+                blocks: evaluated.blocks,
+                execution: evaluated.execution,
+            },
+        )))
+    }
+
+    fn finish(self) -> Result<Option<PostAdmissionOcrComparisonReport>, ContainedTaskError> {
+        let Some(prepared) = self.prepared else {
+            return Ok(None);
+        };
+        if self.frames_collected == 0 || self.stream_binding.is_none() {
+            return Err(ContainedTaskError::new(
+                "contained_task_post_admission_ocr_observation_missing",
+            ));
+        }
+        let observed_set = self.values.keys().cloned().collect::<BTreeSet<_>>();
+        let truth_set = prepared.truth.iter().cloned().collect::<BTreeSet<_>>();
+        let missed = truth_set
+            .difference(&observed_set)
+            .cloned()
+            .collect::<Vec<_>>();
+        let unexpected = observed_set
+            .difference(&truth_set)
+            .cloned()
+            .collect::<Vec<_>>();
+        let observed = self
+            .values
+            .iter()
+            .map(|(value, aggregate)| PostAdmissionOcrObservedValue {
+                value: value.clone(),
+                occurrences: aggregate.occurrences,
+                confidences: aggregate.confidences.clone(),
+            })
+            .collect::<Vec<_>>();
+        let duplicates = self
+            .values
+            .iter()
+            .filter(|(_, aggregate)| aggregate.occurrences > 1)
+            .map(|(value, aggregate)| PostAdmissionOcrDuplicateEvidence {
+                value: value.clone(),
+                occurrences: aggregate.occurrences,
+            })
+            .collect::<Vec<_>>();
+        Ok(Some(PostAdmissionOcrComparisonReport {
+            schema_version: "actingcommand.runtime.post-admission-ocr-comparison.v1",
+            target_id: prepared.declaration.target_id.clone(),
+            truth_set_path: prepared.declaration.truth_set.path.clone(),
+            truth_set_sha256: prepared.declaration.truth_set.sha256.clone(),
+            normalization: prepared.declaration.normalization,
+            comparison: prepared.declaration.comparison,
+            outcome_key: prepared.declaration.outcome_key.clone(),
+            frames_collected: self.frames_collected,
+            items_collected: self.items_collected,
+            discarded_empty_items: self.discarded_empty_items,
+            total_observed_utf8_bytes: self.total_observed_utf8_bytes,
+            exact_match: missed.is_empty() && unexpected.is_empty(),
+            truth: prepared.truth.clone(),
+            observed,
+            missed,
+            unexpected,
+            duplicates,
+        }))
+    }
+}
+
+fn normalize_post_admission_ocr(
+    value: &str,
+    normalization: PostAdmissionOcrNormalization,
+) -> String {
+    match normalization {
+        PostAdmissionOcrNormalization::TrimLowercaseV1 => value.trim().to_lowercase(),
+    }
+}
+
+fn same_ocr_stream_binding(
+    left: &OcrProviderExecutionEvidence,
+    right: &OcrProviderExecutionEvidence,
+) -> bool {
+    left.session_id == right.session_id
+        && left.session_generation == right.session_generation
+        && left.requested_provider == right.requested_provider
+        && left.resolved_provider == right.resolved_provider
+        && left.requested_cuda_ordinal == right.requested_cuda_ordinal
+        && left.requested_cuda_identity == right.requested_cuda_identity
+        && left.resolved_cuda_ordinal == right.resolved_cuda_ordinal
+        && left.resolved_cuda_identity == right.resolved_cuda_identity
+        && left.provider_implementation == right.provider_implementation
+        && left.provider_binary_sha256 == right.provider_binary_sha256
+        && left.runtime_version == right.runtime_version
+        && left.model_ref == right.model_ref
+        && left.model_sha256 == right.model_sha256
+        && left.cpu_ep_registered == right.cpu_ep_registered
+        && left.cpu_fallback_disabled == right.cpu_fallback_disabled
+        && left.fallback_forbidden == right.fallback_forbidden
+        && left.fallback_observed == right.fallback_observed
+        && left.complete == right.complete
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ContainedTaskTrace {
     PackageAdmitted {
@@ -307,6 +671,13 @@ pub enum ContainedTaskTrace {
         operation_label: String,
         reason: StabilityTerminalReason,
     },
+    PostAdmissionOcrObservation {
+        frame_index: u32,
+        observation: PostAdmissionOcrObservation,
+    },
+    PostAdmissionOcrComparison {
+        report: PostAdmissionOcrComparisonReport,
+    },
     Finalizing {
         outcome: TaskOutcome,
     },
@@ -347,6 +718,7 @@ pub struct ContainedTaskOutcome {
     pub outcome: TaskOutcome,
     pub final_page: Option<String>,
     pub executed_steps: u32,
+    pub selected_scheduling_outcome: Option<String>,
 }
 
 pub struct PreparedContainedTask {
@@ -355,6 +727,7 @@ pub struct PreparedContainedTask {
     evaluator: RecognitionEvaluator,
     detector: PageDetector,
     scheduling_outcome: Option<SchedulingOutcomeDeclaration>,
+    post_admission_ocr: Option<PreparedPostAdmissionOcr>,
     package_sha256: String,
     entry_count: usize,
     task_count: usize,
@@ -424,6 +797,8 @@ impl PreparedContainedTask {
             .validate(&evaluator)
             .map_err(|_| ContainedTaskError::new("contained_task_recognition_invalid"))?;
         program.validate(&control, &bundle, &detector)?;
+        let post_admission_ocr =
+            program.prepare_post_admission_ocr(&control, &bundle, &detector, &evaluator)?;
         let scheduling_outcome = program.scheduling_outcome.clone();
         Ok(Self {
             control,
@@ -431,6 +806,7 @@ impl PreparedContainedTask {
             evaluator,
             detector,
             scheduling_outcome,
+            post_admission_ocr,
             package_sha256,
             entry_count,
             task_count,
@@ -463,6 +839,10 @@ impl PreparedContainedTask {
 
     pub fn stability_termination(&self) -> Option<&StabilityTerminationDeclaration> {
         self.control.stability_termination.as_ref()
+    }
+
+    pub const fn has_post_admission_ocr(&self) -> bool {
+        self.post_admission_ocr.is_some()
     }
 
     pub const fn entry_count(&self) -> usize {
@@ -501,7 +881,9 @@ impl PreparedContainedTask {
         let task_timeout =
             Duration::from_millis(self.control.timeout_ms.unwrap_or(DEFAULT_TASK_TIMEOUT_MS));
         let started = Instant::now();
-        let mut observation = self.capture_until_page(runtime, step_timeout, capture_interval)?;
+        let mut ocr_collector = PostAdmissionOcrCollector::new(self.post_admission_ocr.as_ref());
+        let mut observation =
+            self.capture_until_page(runtime, &mut ocr_collector, step_timeout, capture_interval)?;
         if self.control.execution_mode == "recognize_only" {
             runtime
                 .record(ContainedTaskTrace::Finalizing {
@@ -512,6 +894,7 @@ impl PreparedContainedTask {
                 outcome: TaskOutcome::Success,
                 final_page: Some(observation.page_label),
                 executed_steps: 0,
+                selected_scheduling_outcome: None,
             });
         }
 
@@ -546,8 +929,12 @@ impl PreparedContainedTask {
                 .map_err(|_| ContainedTaskError::new("contained_task_state_invalid"))?
             {
                 RunDirective::AwaitPage => {
-                    observation =
-                        self.capture_until_page(runtime, step_timeout, capture_interval)?;
+                    observation = self.capture_until_page(
+                        runtime,
+                        &mut ocr_collector,
+                        step_timeout,
+                        capture_interval,
+                    )?;
                     machine
                         .observe_page(Some(observation.page_label.clone()))
                         .map_err(|_| ContainedTaskError::new("contained_task_state_invalid"))?;
@@ -648,8 +1035,12 @@ impl PreparedContainedTask {
                             .map_err(ContainedTaskRunError::Boundary)?;
                         let destination_pages = operation.destination_pages()?;
                         if destination_pages.is_empty() {
-                            observation =
-                                self.capture_until_page(runtime, step_timeout, capture_interval)?;
+                            observation = self.capture_until_page(
+                                runtime,
+                                &mut ocr_collector,
+                                step_timeout,
+                                capture_interval,
+                            )?;
                             if let Some(reason) = self.complete_successful_step(
                                 runtime,
                                 &mut machine,
@@ -658,8 +1049,9 @@ impl PreparedContainedTask {
                                 &operation_id,
                                 &observation,
                             )? {
-                                return Self::finish_stability_termination(
+                                return self.finish_stability_termination(
                                     runtime,
+                                    ocr_collector,
                                     &machine,
                                     &observation,
                                     reason,
@@ -683,6 +1075,7 @@ impl PreparedContainedTask {
                         );
                         let (failed_observation, hit_error_page) = match self.await_postcondition(
                             runtime,
+                            &mut ocr_collector,
                             operation,
                             confirmation_timeout,
                             confirmation_interval,
@@ -697,8 +1090,9 @@ impl PreparedContainedTask {
                                     &operation_id,
                                     &observation,
                                 )? {
-                                    return Self::finish_stability_termination(
+                                    return self.finish_stability_termination(
                                         runtime,
+                                        ocr_collector,
                                         &machine,
                                         &observation,
                                         reason,
@@ -753,6 +1147,7 @@ impl PreparedContainedTask {
                                 thread::sleep(delay);
                                 match self.await_postcondition(
                                     runtime,
+                                    &mut ocr_collector,
                                     operation,
                                     confirmation_timeout,
                                     confirmation_interval,
@@ -767,8 +1162,9 @@ impl PreparedContainedTask {
                                             &operation_id,
                                             &observation,
                                         )? {
-                                            return Self::finish_stability_termination(
+                                            return self.finish_stability_termination(
                                                 runtime,
+                                                ocr_collector,
                                                 &machine,
                                                 &observation,
                                                 reason,
@@ -894,16 +1290,12 @@ impl PreparedContainedTask {
                     return Err(ContainedTaskError::new("contained_task_state_invalid").into());
                 }
                 RunDirective::Terminal(RunTerminal::Completed { current_page }) => {
-                    runtime
-                        .record(ContainedTaskTrace::Finalizing {
-                            outcome: TaskOutcome::Success,
-                        })
-                        .map_err(ContainedTaskRunError::Boundary)?;
-                    return Ok(ContainedTaskOutcome {
-                        outcome: TaskOutcome::Success,
-                        final_page: current_page,
-                        executed_steps: machine.completed_steps(),
-                    });
+                    return Self::finish_success(
+                        runtime,
+                        ocr_collector,
+                        current_page,
+                        machine.completed_steps(),
+                    );
                 }
                 RunDirective::Terminal(
                     RunTerminal::SuccessorSuggested { .. } | RunTerminal::PausedNeedsHuman { .. },
@@ -988,28 +1380,53 @@ impl PreparedContainedTask {
     }
 
     fn finish_stability_termination<R: ContainedTaskRuntime>(
+        &self,
         runtime: &mut R,
+        ocr_collector: PostAdmissionOcrCollector<'_>,
         machine: &RunStateMachine,
         observation: &PageObservation,
         reason: StabilityTerminalReason,
     ) -> Result<ContainedTaskOutcome, ContainedTaskRunError<R::Error>> {
         match reason {
-            StabilityTerminalReason::ConsecutiveUnchangedThresholdReached => {
-                runtime
-                    .record(ContainedTaskTrace::Finalizing {
-                        outcome: TaskOutcome::Success,
-                    })
-                    .map_err(ContainedTaskRunError::Boundary)?;
-                Ok(ContainedTaskOutcome {
-                    outcome: TaskOutcome::Success,
-                    final_page: Some(observation.page_label.clone()),
-                    executed_steps: machine.completed_steps(),
-                })
-            }
+            StabilityTerminalReason::ConsecutiveUnchangedThresholdReached => Self::finish_success(
+                runtime,
+                ocr_collector,
+                Some(observation.page_label.clone()),
+                machine.completed_steps(),
+            ),
             StabilityTerminalReason::MaxStepsReached => {
                 Err(ContainedTaskError::new("contained_task_requires_scheduler").into())
             }
         }
+    }
+
+    fn finish_success<R: ContainedTaskRuntime>(
+        runtime: &mut R,
+        ocr_collector: PostAdmissionOcrCollector<'_>,
+        final_page: Option<String>,
+        executed_steps: u32,
+    ) -> Result<ContainedTaskOutcome, ContainedTaskRunError<R::Error>> {
+        let selected_scheduling_outcome = match ocr_collector.finish()? {
+            Some(report) => {
+                let outcome_key = report.outcome_key.clone();
+                runtime
+                    .record(ContainedTaskTrace::PostAdmissionOcrComparison { report })
+                    .map_err(ContainedTaskRunError::Boundary)?;
+                Some(outcome_key)
+            }
+            None => None,
+        };
+        runtime
+            .record(ContainedTaskTrace::Finalizing {
+                outcome: TaskOutcome::Success,
+            })
+            .map_err(ContainedTaskRunError::Boundary)?;
+        Ok(ContainedTaskOutcome {
+            outcome: TaskOutcome::Success,
+            final_page,
+            executed_steps,
+            selected_scheduling_outcome,
+        })
     }
 
     fn finish_effect_attempt<R: ContainedTaskRuntime>(
@@ -1033,12 +1450,13 @@ impl PreparedContainedTask {
     fn capture_until_page<R: ContainedTaskRuntime>(
         &self,
         runtime: &mut R,
+        ocr_collector: &mut PostAdmissionOcrCollector<'_>,
         timeout: Duration,
         interval: Duration,
     ) -> Result<PageObservation, ContainedTaskRunError<R::Error>> {
         let started = Instant::now();
         loop {
-            if let Some(observation) = self.capture_page(runtime)? {
+            if let Some(observation) = self.capture_page(runtime, ocr_collector)? {
                 return Ok(observation);
             }
             if started.elapsed() >= timeout {
@@ -1051,6 +1469,7 @@ impl PreparedContainedTask {
     fn capture_page<R: ContainedTaskRuntime>(
         &self,
         runtime: &mut R,
+        ocr_collector: &mut PostAdmissionOcrCollector<'_>,
     ) -> Result<Option<PageObservation>, ContainedTaskRunError<R::Error>> {
         let frame = runtime.capture().map_err(ContainedTaskRunError::Boundary)?;
         self.control.resolution.validate_frame(&frame)?;
@@ -1108,7 +1527,20 @@ impl PreparedContainedTask {
                 height: frame.height,
             })
             .map_err(ContainedTaskRunError::Boundary)?;
-        Ok(page.map(|page_label| PageObservation {
+        let Some(page_label) = page else {
+            return Ok(None);
+        };
+        if let Some((frame_index, observation)) =
+            ocr_collector.observe(&self.control.game, &self.evaluator, &page_label, &scene)?
+        {
+            runtime
+                .record(ContainedTaskTrace::PostAdmissionOcrObservation {
+                    frame_index,
+                    observation,
+                })
+                .map_err(ContainedTaskRunError::Boundary)?;
+        }
+        Ok(Some(PageObservation {
             page_label,
             scene,
             stability_sample,
@@ -1118,6 +1550,7 @@ impl PreparedContainedTask {
     fn await_postcondition<R: ContainedTaskRuntime>(
         &self,
         runtime: &mut R,
+        ocr_collector: &mut PostAdmissionOcrCollector<'_>,
         operation: &TaskOperation,
         timeout: Duration,
         interval: Duration,
@@ -1125,7 +1558,7 @@ impl PreparedContainedTask {
         let started = Instant::now();
         let mut last_observation = None;
         loop {
-            if let Some(observation) = self.capture_page(runtime)? {
+            if let Some(observation) = self.capture_page(runtime, ocr_collector)? {
                 let destination_matches =
                     operation.matching_destination_count(&self.control, &observation)?;
                 let hit_error_page = self
@@ -1492,6 +1925,8 @@ struct TaskProgram {
     #[serde(default)]
     scheduling_outcome: Option<SchedulingOutcomeDeclaration>,
     #[serde(default, deserialize_with = "deserialize_non_null_option")]
+    post_admission_ocr: Option<PostAdmissionOcrDeclaration>,
+    #[serde(default, deserialize_with = "deserialize_non_null_option")]
     stability_termination: Option<StabilityTerminationDeclaration>,
     #[serde(default)]
     recovery: Option<TaskRecovery>,
@@ -1507,7 +1942,12 @@ impl TaskProgram {
         bundle: &LoadedBundle,
         detector: &PageDetector,
     ) -> Result<(), ContainedTaskError> {
-        if !matches!(self.schema_version.as_str(), "0.3" | "0.4" | "0.5" | "0.6")
+        let schema_valid = match self.schema_version.as_str() {
+            "0.3" | "0.4" | "0.5" | "0.6" => self.post_admission_ocr.is_none(),
+            "0.7" => self.post_admission_ocr.is_some(),
+            _ => false,
+        };
+        if !schema_valid
             || self.task_id != control.entry_task_id
             || self.game != control.game
             || (!self.server_scope.is_empty()
@@ -1585,6 +2025,104 @@ impl TaskProgram {
         Ok(())
     }
 
+    fn prepare_post_admission_ocr(
+        &self,
+        control: &TaskControl,
+        bundle: &LoadedBundle,
+        detector: &PageDetector,
+        evaluator: &RecognitionEvaluator,
+    ) -> Result<Option<PreparedPostAdmissionOcr>, ContainedTaskError> {
+        let Some(declaration) = &self.post_admission_ocr else {
+            return Ok(None);
+        };
+        declaration.validate()?;
+        validate_page_references(
+            &control.game,
+            std::slice::from_ref(&declaration.page_id),
+            detector,
+        )?;
+        validate_post_admission_ocr_page_gate(control, bundle, evaluator, declaration)?;
+        if evaluator
+            .target_kind(&declaration.target_id)
+            .map_err(|_| ContainedTaskError::new("contained_task_post_admission_ocr_invalid"))?
+            != TargetKind::Ocr
+        {
+            return Err(ContainedTaskError::new(
+                "contained_task_post_admission_ocr_target_invalid",
+            ));
+        }
+        let scheduling = self.scheduling_outcome.as_ref().ok_or_else(|| {
+            ContainedTaskError::new("contained_task_post_admission_ocr_outcome_missing")
+        })?;
+        if scheduling
+            .mappings()
+            .iter()
+            .filter(|mapping| mapping.outcome_key() == declaration.outcome_key)
+            .count()
+            != 1
+        {
+            return Err(ContainedTaskError::new(
+                "contained_task_post_admission_ocr_outcome_invalid",
+            ));
+        }
+        let expected_hash = Sha256Hash::parse_hex(&declaration.truth_set.sha256).map_err(|_| {
+            ContainedTaskError::new("contained_task_post_admission_ocr_truth_invalid")
+        })?;
+        if expected_hash.to_string() != declaration.truth_set.sha256 {
+            return Err(ContainedTaskError::new(
+                "contained_task_post_admission_ocr_truth_invalid",
+            ));
+        }
+        let relative_path = format!("operations/{}/{}", self.task_id, declaration.truth_set.path);
+        let bytes = bundle.resource_entry(&relative_path).map_err(|_| {
+            ContainedTaskError::with_detail(
+                "contained_task_post_admission_ocr_truth_missing",
+                relative_path.clone(),
+            )
+        })?;
+        if Sha256Hash::digest(bytes) != expected_hash
+            || u64::try_from(bytes.len())
+                .map_or(true, |size| size > declaration.limits.max_total_bytes)
+        {
+            return Err(ContainedTaskError::with_detail(
+                "contained_task_post_admission_ocr_truth_mismatch",
+                relative_path,
+            ));
+        }
+        let truth: PostAdmissionOcrTruthSet = serde_json::from_slice(bytes).map_err(|_| {
+            ContainedTaskError::new("contained_task_post_admission_ocr_truth_invalid")
+        })?;
+        if truth.schema_version != POST_ADMISSION_OCR_TRUTH_SCHEMA
+            || truth.items.is_empty()
+            || u32::try_from(truth.items.len())
+                .map_or(true, |count| count > declaration.limits.max_truth_entries)
+        {
+            return Err(ContainedTaskError::new(
+                "contained_task_post_admission_ocr_truth_invalid",
+            ));
+        }
+        let max_string_bytes = usize::try_from(declaration.limits.max_string_bytes)
+            .map_err(|_| ContainedTaskError::new("contained_task_post_admission_ocr_invalid"))?;
+        let mut normalized = BTreeSet::new();
+        for item in truth.items {
+            if item.len() > max_string_bytes {
+                return Err(ContainedTaskError::new(
+                    "contained_task_post_admission_ocr_truth_invalid",
+                ));
+            }
+            let item = normalize_post_admission_ocr(&item, declaration.normalization);
+            if item.is_empty() || item.len() > max_string_bytes || !normalized.insert(item) {
+                return Err(ContainedTaskError::new(
+                    "contained_task_post_admission_ocr_truth_invalid",
+                ));
+            }
+        }
+        Ok(Some(PreparedPostAdmissionOcr {
+            declaration: declaration.clone(),
+            truth: normalized.into_iter().collect(),
+        }))
+    }
+
     fn target_pages(&self) -> Result<Vec<String>, ContainedTaskError> {
         self.target_page
             .as_ref()
@@ -1635,6 +2173,99 @@ impl TaskProgram {
         }
         Ok(())
     }
+}
+
+fn validate_post_admission_ocr_page_gate(
+    control: &TaskControl,
+    bundle: &LoadedBundle,
+    evaluator: &RecognitionEvaluator,
+    declaration: &PostAdmissionOcrDeclaration,
+) -> Result<(), ContainedTaskError> {
+    let pages_path = bundle.pages_path().ok_or_else(|| {
+        ContainedTaskError::new("contained_task_post_admission_ocr_page_gate_missing")
+    })?;
+    let pages: PageSet = serde_json::from_slice(bundle.entry(pages_path).ok_or_else(|| {
+        ContainedTaskError::new("contained_task_post_admission_ocr_page_gate_missing")
+    })?)
+    .map_err(|_| ContainedTaskError::new("contained_task_post_admission_ocr_page_gate_invalid"))?;
+    if pages.pages.iter().any(|page| {
+        page.required
+            .iter()
+            .chain(page.any_of.iter().flatten())
+            .chain(page.optional.iter())
+            .chain(page.forbidden.iter())
+            .any(|target| target == &declaration.target_id)
+    }) {
+        return Err(ContainedTaskError::new(
+            "contained_task_post_admission_ocr_target_in_page_gate",
+        ));
+    }
+    let matching = pages
+        .pages
+        .iter()
+        .filter(|page| crate::page_anchor_matches(&control.game, &page.id, &declaration.page_id))
+        .collect::<Vec<_>>();
+    let [page] = matching.as_slice() else {
+        return Err(ContainedTaskError::new(
+            "contained_task_post_admission_ocr_page_gate_invalid",
+        ));
+    };
+    let gate_targets = page
+        .required
+        .iter()
+        .chain(page.any_of.iter().flatten())
+        .chain(page.optional.iter())
+        .chain(page.forbidden.iter())
+        .collect::<Vec<_>>();
+    let positive_count = page.required.len() + page.any_of.iter().map(Vec::len).sum::<usize>();
+    if positive_count == 0
+        || gate_targets.iter().any(|target| {
+            !matches!(
+                evaluator.target_kind(target),
+                Ok(TargetKind::Template | TargetKind::Color)
+            )
+        })
+    {
+        return Err(ContainedTaskError::new(
+            "contained_task_post_admission_ocr_page_gate_invalid",
+        ));
+    }
+    Ok(())
+}
+
+impl PostAdmissionOcrDeclaration {
+    fn validate(&self) -> Result<(), ContainedTaskError> {
+        let limits = &self.limits;
+        if self.page_id.trim().is_empty()
+            || self.target_id.trim().is_empty()
+            || self.outcome_key.trim().is_empty()
+            || !safe_task_local_path(&self.truth_set.path)
+            || limits.max_frames == 0
+            || limits.max_frames > MAX_POST_ADMISSION_OCR_FRAMES
+            || limits.max_items == 0
+            || limits.max_items > MAX_POST_ADMISSION_OCR_ITEMS
+            || limits.max_string_bytes == 0
+            || limits.max_string_bytes > MAX_POST_ADMISSION_OCR_STRING_BYTES
+            || limits.max_total_bytes == 0
+            || limits.max_total_bytes > MAX_POST_ADMISSION_OCR_TOTAL_BYTES
+            || limits.max_truth_entries == 0
+            || limits.max_truth_entries > MAX_POST_ADMISSION_OCR_TRUTH_ENTRIES
+        {
+            return Err(ContainedTaskError::new(
+                "contained_task_post_admission_ocr_invalid",
+            ));
+        }
+        Ok(())
+    }
+}
+
+fn safe_task_local_path(path: &str) -> bool {
+    !path.is_empty()
+        && !path.starts_with(['/', '\\'])
+        && !path.contains(['\\', ':'])
+        && path
+            .split('/')
+            .all(|segment| !segment.is_empty() && segment != "." && segment != "..")
 }
 
 fn validate_stability_contract(
@@ -2517,6 +3148,251 @@ fn scene_from_frame(frame: &Frame) -> Result<Scene, ContainedTaskError> {
 }
 
 #[cfg(test)]
+mod post_admission_ocr_tests {
+    use super::*;
+    use actingcommand_recognition_pack::{
+        FsAssetResolver, NnProviderRequest, NnProviderResult, OcrExecutionProviderKind,
+        OcrProviderObservation, OcrProviderRequest, OcrProviderResult, OcrProviderTextBlock,
+        PackRect, RecognitionPack, VisionProviderError,
+    };
+    use std::collections::VecDeque;
+    use std::path::PathBuf;
+    use std::sync::atomic::{AtomicU32, Ordering};
+    use std::sync::{Arc, Mutex};
+
+    #[derive(Debug)]
+    struct EvidenceProvider {
+        observations: Mutex<VecDeque<OcrProviderObservation>>,
+        calls: AtomicU32,
+    }
+
+    impl VisionProvider for EvidenceProvider {
+        fn require_ocr_model(
+            &self,
+            model_ref: &str,
+            model_sha256: &str,
+        ) -> Result<(), VisionProviderError> {
+            assert_eq!(model_ref, "PP-OCRv6_medium");
+            assert_eq!(model_sha256, "a".repeat(64));
+            Ok(())
+        }
+
+        fn require_nn_model(
+            &self,
+            _model_ref: &str,
+            _model_sha256: &str,
+        ) -> Result<(), VisionProviderError> {
+            unreachable!("fixture exposes OCR only")
+        }
+
+        fn read_text(
+            &self,
+            _request: OcrProviderRequest<'_>,
+        ) -> Result<OcrProviderResult, VisionProviderError> {
+            unreachable!("post-admission path must request execution evidence")
+        }
+
+        fn read_text_with_execution_evidence(
+            &self,
+            _request: OcrProviderRequest<'_>,
+        ) -> Result<OcrProviderObservation, VisionProviderError> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            self.observations
+                .lock()
+                .expect("fixture provider lock")
+                .pop_front()
+                .ok_or_else(|| {
+                    VisionProviderError::new(
+                        actingcommand_recognition_pack::VisionProviderErrorCode::Internal,
+                        "fixture observation missing",
+                    )
+                })
+        }
+
+        fn classify(
+            &self,
+            _request: NnProviderRequest<'_>,
+        ) -> Result<NnProviderResult, VisionProviderError> {
+            unreachable!("fixture exposes OCR only")
+        }
+    }
+
+    fn execution(invocation_id: &str) -> OcrProviderExecutionEvidence {
+        OcrProviderExecutionEvidence {
+            invocation_id: invocation_id.to_string(),
+            session_id: "session-1".to_string(),
+            session_generation: 1,
+            requested_provider: OcrExecutionProviderKind::Cpu,
+            resolved_provider: OcrExecutionProviderKind::Cpu,
+            requested_cuda_ordinal: None,
+            requested_cuda_identity: None,
+            resolved_cuda_ordinal: None,
+            resolved_cuda_identity: None,
+            provider_implementation: "fixture-ocr".to_string(),
+            provider_binary_sha256: "b".repeat(64),
+            runtime_version: "fixture-runtime".to_string(),
+            model_ref: "PP-OCRv6_medium".to_string(),
+            model_sha256: "a".repeat(64),
+            cpu_ep_registered: true,
+            cpu_fallback_disabled: true,
+            fallback_forbidden: true,
+            fallback_observed: None,
+            complete: true,
+        }
+    }
+
+    fn provider_observation(invocation_id: &str, values: &[String]) -> OcrProviderObservation {
+        OcrProviderObservation {
+            result: OcrProviderResult {
+                text: values.join("\n"),
+                blocks: values
+                    .iter()
+                    .map(|value| OcrProviderTextBlock {
+                        text: value.clone(),
+                        rect: PackRect {
+                            x: 0,
+                            y: 0,
+                            width: 1,
+                            height: 1,
+                        },
+                        confidence: Some(0.9),
+                    })
+                    .collect(),
+                confidence: Some(0.9),
+            },
+            execution: Some(execution(invocation_id)),
+        }
+    }
+
+    fn evaluator(provider: Arc<EvidenceProvider>) -> RecognitionEvaluator {
+        let pack: RecognitionPack = serde_json::from_value(serde_json::json!({
+            "schema_version": "0.6",
+            "game": "neutral",
+            "server": "test",
+            "coordinate_space": {"width": 1, "height": 1},
+            "defaults": {"color_max_distance": 0.0},
+            "targets": [{
+                "type": "ocr",
+                "id": "fixture/ocr",
+                "region": {"x": 0, "y": 0, "width": 1, "height": 1},
+                "languages": ["en"],
+                "timeout_ms": 1000,
+                "match_mode": "exact",
+                "expected": ["unused"],
+                "case_sensitive": true,
+                "minimum_confidence": 0.0,
+                "model_ref": "PP-OCRv6_medium",
+                "model_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            }]
+        }))
+        .expect("fixture recognition pack");
+        RecognitionEvaluator::with_vision_provider(
+            pack,
+            Arc::new(FsAssetResolver::new(PathBuf::new())),
+            provider,
+        )
+        .expect("fixture evaluator")
+    }
+
+    fn prepared(truth: Vec<String>) -> PreparedPostAdmissionOcr {
+        PreparedPostAdmissionOcr {
+            declaration: PostAdmissionOcrDeclaration {
+                page_id: "target".to_string(),
+                target_id: "fixture/ocr".to_string(),
+                truth_set: PostAdmissionOcrTruthReference {
+                    path: "truth.json".to_string(),
+                    sha256: "c".repeat(64),
+                },
+                normalization: PostAdmissionOcrNormalization::TrimLowercaseV1,
+                comparison: PostAdmissionOcrComparisonMode::ExactSetV1,
+                limits: PostAdmissionOcrLimits {
+                    max_frames: 2,
+                    max_items: 500,
+                    max_string_bytes: 64,
+                    max_total_bytes: 1_000_000,
+                    max_truth_entries: 500,
+                },
+                outcome_key: "comparison_recorded".to_string(),
+            },
+            truth,
+        }
+    }
+
+    fn collect_422_name_report() -> (PostAdmissionOcrComparisonReport, u32) {
+        let truth = (0..422)
+            .map(|index| format!("name-{index:03}"))
+            .collect::<Vec<_>>();
+        let mut first = truth[..211].to_vec();
+        first[0] = format!("  {}  ", first[0].to_uppercase());
+        let mut second = truth[211..].to_vec();
+        second.push("NAME-000".to_string());
+        let provider = Arc::new(EvidenceProvider {
+            observations: Mutex::new(VecDeque::from([
+                provider_observation("invocation-1", &first),
+                provider_observation("invocation-2", &second),
+            ])),
+            calls: AtomicU32::new(0),
+        });
+        let evaluator = evaluator(Arc::clone(&provider));
+        let prepared = prepared(truth);
+        let scene = scene_from_frame(
+            &Frame::from_pixels(
+                1,
+                1,
+                vec![0, 0, 0],
+                PixelFormat::Rgb8,
+                actingcommand_device::CaptureBackendName::FixtureSimulation,
+            )
+            .expect("fixture frame"),
+        )
+        .expect("fixture scene");
+        let mut collector = PostAdmissionOcrCollector::new(Some(&prepared));
+        assert!(
+            collector
+                .observe("neutral", &evaluator, "neutral/other", &scene)
+                .expect("non-admitted page")
+                .is_none()
+        );
+        for frame_index in 0..2 {
+            let (observed_index, _) = collector
+                .observe("neutral", &evaluator, "neutral/target", &scene)
+                .expect("admitted OCR observation")
+                .expect("bounded observation");
+            assert_eq!(observed_index, frame_index);
+        }
+        let report = collector.finish().expect("comparison").expect("report");
+        (report, provider.calls.load(Ordering::SeqCst))
+    }
+
+    #[test]
+    fn post_admission_ocr_collects_one_bounded_stream_and_compares_422_names() {
+        let (first, calls) = collect_422_name_report();
+        let (second, repeated_calls) = collect_422_name_report();
+
+        assert_eq!(calls, 2, "non-admitted page must not invoke OCR");
+        assert_eq!(repeated_calls, 2);
+        assert_eq!(first.frames_collected, 2);
+        assert_eq!(first.items_collected, 423);
+        assert_eq!(first.truth.len(), 422);
+        assert_eq!(first.observed.len(), 422);
+        assert!(first.exact_match);
+        assert!(first.missed.is_empty());
+        assert!(first.unexpected.is_empty());
+        assert_eq!(
+            first.duplicates,
+            vec![PostAdmissionOcrDuplicateEvidence {
+                value: "name-000".to_string(),
+                occurrences: 2,
+            }]
+        );
+        assert_eq!(
+            serde_json::to_vec(&first).expect("first report bytes"),
+            serde_json::to_vec(&second).expect("second report bytes")
+        );
+    }
+}
+
+#[cfg(test)]
 mod retry_wiring_tests {
     use super::*;
     use actingcommand_device::CaptureBackendName;
@@ -2955,6 +3831,7 @@ mod retry_wiring_tests {
                 Vec::new()
             },
             scheduling_outcome: None,
+            post_admission_ocr: None,
             stability_termination: None,
             recovery: None,
             defaults: TaskOperationDefaults::default(),
@@ -3022,6 +3899,7 @@ mod retry_wiring_tests {
             evaluator,
             detector,
             scheduling_outcome: None,
+            post_admission_ocr: None,
             package_sha256: "fixture-sha256".to_string(),
             entry_count: 5,
             task_count: 1,

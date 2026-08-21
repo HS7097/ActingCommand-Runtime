@@ -3,8 +3,8 @@
 use crate::{
     CudaDeviceIdentity, CudaDeviceInventory, FastDeployPpocrArtifacts,
     FastDeployPpocrInvokeRequest, FastDeployPpocrInvokeResponse, NnClassificationResult, NnEngine,
-    NnInferenceRequest, OcrEngine, OcrInferenceRequest, OcrInferenceResult, OcrInvocationId,
-    OcrSessionBinding, OcrSessionId, OnnxExecutionProvider, OnnxRuntimeArtifacts,
+    NnInferenceRequest, OcrEngine, OcrInferenceOutput, OcrInferenceRequest, OcrInferenceResult,
+    OcrInvocationId, OcrSessionBinding, OcrSessionId, OnnxExecutionProvider, OnnxRuntimeArtifacts,
     OnnxRuntimeInvokeRequest, VisionFfiError, VisionFfiErrorCode, VisionFfiResult,
     VisionProviderArtifactManifest,
 };
@@ -650,6 +650,14 @@ pub fn validate_fastdeploy_ppocr_provider_abi(path: impl AsRef<OsStr>) -> Vision
 
 impl OcrEngine for FastDeployPpocrBackend {
     fn read_text(&mut self, request: OcrInferenceRequest) -> VisionFfiResult<OcrInferenceResult> {
+        self.read_text_with_attestation(request)
+            .map(|output| output.result)
+    }
+
+    fn read_text_with_attestation(
+        &mut self,
+        request: OcrInferenceRequest,
+    ) -> VisionFfiResult<OcrInferenceOutput> {
         request.validate()?;
         let validation_request = request.clone();
         let Some(artifacts) = &self.artifacts else {
@@ -689,7 +697,10 @@ impl OcrEngine for FastDeployPpocrBackend {
         )?;
         response.validate_against(&invocation_id, &session)?;
         response.result.validate(&validation_request)?;
-        Ok(response.result)
+        Ok(OcrInferenceOutput {
+            result: response.result,
+            execution_attestation: Some(response.attestation),
+        })
     }
 }
 
