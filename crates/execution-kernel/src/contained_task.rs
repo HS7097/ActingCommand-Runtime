@@ -2080,7 +2080,7 @@ impl TaskProgram {
                 relative_path.clone(),
             )
         })?;
-        if Sha256Hash::digest(bytes) != expected_hash
+        if manifest_entry_sha256(bundle, &relative_path)? != expected_hash
             || u64::try_from(bytes.len())
                 .map_or(true, |size| size > declaration.limits.max_total_bytes)
         {
@@ -2266,6 +2266,39 @@ fn safe_task_local_path(path: &str) -> bool {
         && path
             .split('/')
             .all(|segment| !segment.is_empty() && segment != "." && segment != "..")
+}
+
+fn manifest_entry_sha256(
+    bundle: &LoadedBundle,
+    relative_path: &str,
+) -> Result<Sha256Hash, ContainedTaskError> {
+    let files = bundle
+        .manifest()
+        .get("files")
+        .and_then(serde_json::Value::as_array)
+        .ok_or_else(|| {
+            ContainedTaskError::new("contained_task_post_admission_ocr_truth_invalid")
+        })?;
+    let matching = files
+        .iter()
+        .filter(|entry| {
+            entry.get("path").and_then(serde_json::Value::as_str) == Some(relative_path)
+        })
+        .collect::<Vec<_>>();
+    let [entry] = matching.as_slice() else {
+        return Err(ContainedTaskError::new(
+            "contained_task_post_admission_ocr_truth_invalid",
+        ));
+    };
+    entry
+        .get("sha256")
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| ContainedTaskError::new("contained_task_post_admission_ocr_truth_invalid"))
+        .and_then(|value| {
+            Sha256Hash::parse_hex(value).map_err(|_| {
+                ContainedTaskError::new("contained_task_post_admission_ocr_truth_invalid")
+            })
+        })
 }
 
 fn validate_stability_contract(
