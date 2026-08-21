@@ -41,7 +41,7 @@ use actingcommand_artifact_store::{
     capture_summary_record, read_projected_verified,
 };
 use actingcommand_contract::{
-    AgentPayloadDraft, AgentSessionContext, AgentSessionId, AgentSessionResponse,
+    ActionId, AgentPayloadDraft, AgentSessionContext, AgentSessionId, AgentSessionResponse,
     AgentSessionStatus, AgentWakeId, AgentWakeKind, AgentWakeTrigger, ApplicationLifecycleAction,
     ApplicationPayload, ApplicationPayloadDraft, ApprovalDecisionRecord, ApprovalPayload,
     ApprovalPayloadDraft, ArtifactIssuePolicy, ArtifactKind, ArtifactLinksDraft, ArtifactProducer,
@@ -52,7 +52,7 @@ use actingcommand_contract::{
     ContainedTaskCancellationStatus, ContainedTaskLeaseTerminal, ContainedTaskRequest,
     CorrelationId, DiagnosticCode, EffectDisposition, EventAction, EventActor, EventDraft, EventId,
     EventLinksDraft, EventPayload, EventQuery, EventSeverity, EventSource, EventType,
-    FactPayloadDraft, FactRecord, InputAction, InputPayload, InputPayloadDraft,
+    FactPayloadDraft, FactRecord, FrameId, InputAction, InputPayload, InputPayloadDraft,
     InstanceFactContext, InstanceFactSnapshot, InstanceId, IssuedActionId, IssuedFrameId,
     IssuedMonitorProbe, IssuedReadOnlyCaptureCapability, IssuedRecognitionId, IssuedRunId,
     IssuedTaskId, LeaseId, LeasePayloadDraft, LeaseQueuePolicy, LeaseToken,
@@ -83,7 +83,8 @@ use actingcommand_device::{CaptureBackendName, Frame};
 use actingcommand_execution_kernel::{
     ContainedTaskRunError, ContainedTaskRuntime, ContainedTaskTrace, ExecutionBackendProvenance,
     ExecutionBackendProvider, ExecutionKernel, ExternalExpectedSha256, PreparedContainedTask,
-    RecognitionVisionProvider, decide_monitor, page_anchor_matches,
+    RecognitionVisionProvider, StabilityComparisonResult, StabilityTerminalReason,
+    StabilityTerminationDeclaration, decide_monitor, page_anchor_matches,
 };
 use actingcommand_ledger::critical::{
     CatalogTransitionTarget, CriticalActionReport, CriticalEventPlan, CriticalExecutionError,
@@ -553,6 +554,8 @@ impl RuntimeHost {
             contained_runs: Mutex::new(BTreeMap::new()),
             #[cfg(test)]
             scheduling_terminal_append_failures: AtomicU64::new(0),
+            #[cfg(test)]
+            contained_task_stability_persistence_failures: AtomicU64::new(0),
             #[cfg(test)]
             policy_outcome_projection_failures: AtomicU64::new(0),
             #[cfg(test)]
@@ -1479,6 +1482,26 @@ impl RuntimeHost {
         self.shared_ref("inject_test_scheduling_terminal_append_failure")?
             .scheduling_terminal_append_failures
             .store(1, Ordering::Release);
+        Ok(())
+    }
+
+    #[cfg(test)]
+    pub(crate) fn fail_next_contained_task_stability_persistence_for_test(
+        &self,
+    ) -> RuntimeHostResult<()> {
+        self.shared_ref("inject_test_contained_task_stability_persistence_failure")?
+            .contained_task_stability_persistence_failures
+            .store(1, Ordering::Release);
+        Ok(())
+    }
+
+    #[cfg(test)]
+    pub(crate) fn fail_next_contained_task_stability_event_append_for_test(
+        &self,
+    ) -> RuntimeHostResult<()> {
+        self.shared_ref("inject_test_contained_task_stability_event_append_failure")?
+            .contained_task_stability_persistence_failures
+            .store(2, Ordering::Release);
         Ok(())
     }
 
@@ -2820,6 +2843,8 @@ struct HostShared {
     contained_runs: Mutex<BTreeMap<RequestId, Arc<ContainedRunControl>>>,
     #[cfg(test)]
     scheduling_terminal_append_failures: AtomicU64,
+    #[cfg(test)]
+    contained_task_stability_persistence_failures: AtomicU64,
     #[cfg(test)]
     policy_outcome_projection_failures: AtomicU64,
     #[cfg(test)]
@@ -10369,6 +10394,7 @@ impl HostShared {
             .scheduling_outcome()
             .cloned()
             .map(|declaration| (prepared.game().to_owned(), declaration));
+        let expected_stability_declaration = prepared.stability_termination().cloned();
         let sampling_run_seed = Some(
             contained_task_sampling_seed(&("xorshift64_uniform_rect_v1/run", run_id.transport()))
                 .map_err(RequestFailure::poison_without_terminal)?,
@@ -10384,6 +10410,8 @@ impl HostShared {
             execution_provenance,
             control: Arc::clone(&control),
             last_frame_id: None,
+            expected_stability_declaration,
+            stability: None,
             current_recognition_id: None,
             step_actions: BTreeMap::new(),
             sampling_run_seed,
@@ -13296,12 +13324,59 @@ struct RuntimeContainedTask<'a> {
     execution_provenance: ExecutionBackendProvenance,
     control: Arc<ContainedRunControl>,
     last_frame_id: Option<IssuedFrameId>,
+    expected_stability_declaration: Option<StabilityTerminationDeclaration>,
+    stability: Option<RuntimeContainedTaskStability>,
     current_recognition_id: Option<IssuedRecognitionId>,
     step_actions: BTreeMap<u32, (IssuedActionId, String)>,
     sampling_run_seed: Option<u64>,
     used_action_seeds: BTreeSet<u64>,
     finalizing: Option<TaskOutcome>,
     capture_evidence: CaptureEvidenceAccumulator,
+}
+
+struct RuntimeContainedTaskStability {
+    declaration: StabilityTerminationDeclaration,
+    previous_frame_id: IssuedFrameId,
+    last_step_index: u32,
+    consecutive_unchanged: u32,
+    pending_terminal: Option<RuntimeContainedTaskStabilityTerminal>,
+    terminal_recorded: bool,
+}
+
+struct RuntimeContainedTaskStabilityTerminal {
+    step_index: u32,
+    operation_label: String,
+    reason: StabilityTerminalReason,
+}
+
+struct RuntimeContainedTaskStabilityComparison {
+    step_index: u32,
+    operation_label: String,
+    declaration: StabilityTerminationDeclaration,
+    result: StabilityComparisonResult,
+    prior_consecutive_unchanged: u32,
+    new_consecutive_unchanged: u32,
+    terminal_reason: Option<StabilityTerminalReason>,
+}
+
+#[derive(serde::Serialize)]
+struct RuntimeContainedTaskStabilityDiagnostic<'a> {
+    schema_version: &'static str,
+    task_id: &'a TaskId,
+    run_id: &'a RunId,
+    action_id: &'a ActionId,
+    step_index: u32,
+    operation_label: &'a str,
+    previous_frame_id: &'a FrameId,
+    current_frame_id: &'a FrameId,
+    region: &'a actingcommand_execution_kernel::StabilityRegion,
+    comparison_mode: actingcommand_execution_kernel::StabilityComparisonMode,
+    comparison_parameters: &'a actingcommand_execution_kernel::StabilityComparisonParameters,
+    result: StabilityComparisonResult,
+    prior_consecutive_unchanged: u32,
+    new_consecutive_unchanged: u32,
+    consecutive_unchanged_threshold: u32,
+    terminal_reason: Option<StabilityTerminalReason>,
 }
 
 impl RuntimeContainedTask<'_> {
@@ -13379,6 +13454,281 @@ impl RuntimeContainedTask<'_> {
                 payload,
             )
             .map(|_| ())
+    }
+
+    fn record_stability_baseline(
+        &mut self,
+        step_index: u32,
+        operation_label: String,
+        declaration: StabilityTerminationDeclaration,
+    ) -> Result<(), RequestFailure> {
+        if self.stability.is_some()
+            || self.expected_stability_declaration.as_ref() != Some(&declaration)
+            || step_index != 0
+            || declaration.consecutive_unchanged_threshold == 0
+            || declaration.consecutive_unchanged_threshold >= declaration.max_steps
+            || declaration.region.width == 0
+            || declaration.region.height == 0
+            || declaration
+                .region
+                .x
+                .checked_add(declaration.region.width)
+                .is_none()
+            || declaration
+                .region
+                .y
+                .checked_add(declaration.region.height)
+                .is_none()
+        {
+            return Err(contained_task_stability_failure(
+                "contained_task_stability_baseline_invalid",
+            ));
+        }
+        contained_task_step_action(&self.step_actions, step_index, &operation_label)?;
+        let current_frame_id = self.last_frame_id.ok_or_else(|| {
+            contained_task_stability_failure("contained_task_stability_frame_identity_missing")
+        })?;
+        self.stability = Some(RuntimeContainedTaskStability {
+            declaration,
+            previous_frame_id: current_frame_id,
+            last_step_index: step_index,
+            consecutive_unchanged: 0,
+            pending_terminal: None,
+            terminal_recorded: false,
+        });
+        Ok(())
+    }
+
+    fn record_stability_comparison(
+        &mut self,
+        comparison: RuntimeContainedTaskStabilityComparison,
+    ) -> Result<(), RequestFailure> {
+        let RuntimeContainedTaskStabilityComparison {
+            step_index,
+            operation_label,
+            declaration,
+            result,
+            prior_consecutive_unchanged,
+            new_consecutive_unchanged,
+            terminal_reason,
+        } = comparison;
+        let action_id =
+            contained_task_step_action(&self.step_actions, step_index, &operation_label)?;
+        let state = self.stability.as_ref().ok_or_else(|| {
+            contained_task_stability_failure("contained_task_stability_baseline_missing")
+        })?;
+        let current_frame_id =
+            contained_task_stability_current_frame(state.previous_frame_id, self.last_frame_id)?;
+        let expected_step_index = state.last_step_index.checked_add(1).ok_or_else(|| {
+            contained_task_stability_failure("contained_task_stability_step_overflow")
+        })?;
+        if state.terminal_recorded
+            || state.pending_terminal.is_some()
+            || state.declaration != declaration
+            || step_index != expected_step_index
+            || prior_consecutive_unchanged != state.consecutive_unchanged
+        {
+            return Err(contained_task_stability_failure(
+                "contained_task_stability_comparison_invalid",
+            ));
+        }
+        let expected_count = match result {
+            StabilityComparisonResult::Changed => 0,
+            StabilityComparisonResult::Unchanged => {
+                prior_consecutive_unchanged.checked_add(1).ok_or_else(|| {
+                    contained_task_stability_failure("contained_task_stability_count_overflow")
+                })?
+            }
+        };
+        if new_consecutive_unchanged != expected_count
+            || new_consecutive_unchanged > declaration.consecutive_unchanged_threshold
+        {
+            return Err(contained_task_stability_failure(
+                "contained_task_stability_count_invalid",
+            ));
+        }
+        let completed_steps = step_index.checked_add(1).ok_or_else(|| {
+            contained_task_stability_failure("contained_task_stability_step_overflow")
+        })?;
+        if completed_steps > declaration.max_steps {
+            return Err(contained_task_stability_failure(
+                "contained_task_stability_step_invalid",
+            ));
+        }
+        let expected_terminal_reason =
+            if new_consecutive_unchanged == declaration.consecutive_unchanged_threshold {
+                Some(StabilityTerminalReason::ConsecutiveUnchangedThresholdReached)
+            } else if completed_steps == declaration.max_steps {
+                Some(StabilityTerminalReason::MaxStepsReached)
+            } else {
+                None
+            };
+        if terminal_reason != expected_terminal_reason {
+            return Err(contained_task_stability_failure(
+                "contained_task_stability_terminal_reason_invalid",
+            ));
+        }
+
+        let diagnostic = RuntimeContainedTaskStabilityDiagnostic {
+            schema_version: "actingcommand.runtime.contained-task-stability-comparison.v1",
+            task_id: self.task_id.transport(),
+            run_id: self.run_id.transport(),
+            action_id: action_id.transport(),
+            step_index,
+            operation_label: &operation_label,
+            previous_frame_id: state.previous_frame_id.transport(),
+            current_frame_id: current_frame_id.transport(),
+            region: &declaration.region,
+            comparison_mode: declaration.comparison.mode,
+            comparison_parameters: &declaration.comparison.parameters,
+            result,
+            prior_consecutive_unchanged,
+            new_consecutive_unchanged,
+            consecutive_unchanged_threshold: declaration.consecutive_unchanged_threshold,
+            terminal_reason,
+        };
+        let bytes = serde_json::to_vec(&diagnostic).map_err(|_| {
+            contained_task_stability_failure("contained_task_stability_evidence_encode_failed")
+        })?;
+        let event_links = self
+            .links()
+            .with_frame_id(current_frame_id)
+            .with_action_id(action_id);
+        let write_context = ArtifactWriteContext::new(
+            self.request
+                .task_artifact_links(self.run_id)
+                .with_frame_id(current_frame_id),
+            event_links,
+            unix_ms_now().map_err(RequestFailure::poison_without_terminal)?,
+        );
+        #[cfg(test)]
+        let persistence_failure = self
+            .host
+            .contained_task_stability_persistence_failures
+            .swap(0, Ordering::AcqRel);
+        #[cfg(test)]
+        if persistence_failure == 1 {
+            return Err(RequestFailure::poison_without_terminal(
+                artifact_store_error("persist_contained_task_stability_comparison"),
+            ));
+        }
+        let write_request = ArtifactWriteRequest::new(
+            ArtifactKind::DiagnosticJson,
+            &bytes,
+            write_context,
+            ArtifactIssuePolicy::new(
+                ArtifactProducer::CapturePipeline,
+                RetentionClass::DebugFull,
+                ArtifactRedactionState::NotRequired,
+            ),
+        );
+        #[cfg(test)]
+        let stored = if persistence_failure == 2 {
+            let mut sink = FailingContainedTaskStabilityEventSink;
+            self.host.artifacts.put(write_request, &mut sink)
+        } else {
+            let mut sink = RuntimeArtifactEventSink {
+                ledger: &self.host.ledger,
+                events: &self.host.events,
+            };
+            self.host.artifacts.put(write_request, &mut sink)
+        };
+        #[cfg(not(test))]
+        let stored = {
+            let mut sink = RuntimeArtifactEventSink {
+                ledger: &self.host.ledger,
+                events: &self.host.events,
+            };
+            self.host.artifacts.put(write_request, &mut sink)
+        };
+        stored.map_err(|_| {
+            RequestFailure::poison_without_terminal(artifact_store_error(
+                "persist_contained_task_stability_comparison",
+            ))
+        })?;
+
+        let state = self.stability.as_mut().ok_or_else(|| {
+            contained_task_stability_failure("contained_task_stability_state_missing")
+        })?;
+        state.previous_frame_id = current_frame_id;
+        state.last_step_index = step_index;
+        state.consecutive_unchanged = new_consecutive_unchanged;
+        state.pending_terminal =
+            terminal_reason.map(|reason| RuntimeContainedTaskStabilityTerminal {
+                step_index,
+                operation_label,
+                reason,
+            });
+        Ok(())
+    }
+
+    fn record_stability_terminal(
+        &mut self,
+        step_index: u32,
+        operation_label: String,
+        reason: StabilityTerminalReason,
+    ) -> Result<(), RequestFailure> {
+        let state = self.stability.as_mut().ok_or_else(|| {
+            contained_task_stability_failure("contained_task_stability_baseline_missing")
+        })?;
+        let pending = state.pending_terminal.as_ref().ok_or_else(|| {
+            contained_task_stability_failure("contained_task_stability_terminal_missing")
+        })?;
+        if state.terminal_recorded
+            || pending.step_index != step_index
+            || pending.operation_label != operation_label
+            || pending.reason != reason
+        {
+            return Err(contained_task_stability_failure(
+                "contained_task_stability_terminal_mismatch",
+            ));
+        }
+        state.pending_terminal = None;
+        state.terminal_recorded = true;
+        Ok(())
+    }
+}
+
+fn contained_task_stability_failure(code: &'static str) -> RequestFailure {
+    RequestFailure::poison_without_terminal(RuntimeHostError::fatal(
+        code,
+        "record_contained_task_stability",
+        RuntimeErrorCode::RuntimeFatal,
+    ))
+}
+
+fn contained_task_stability_current_frame(
+    previous_frame_id: IssuedFrameId,
+    current_frame_id: Option<IssuedFrameId>,
+) -> Result<IssuedFrameId, RequestFailure> {
+    let current_frame_id = current_frame_id.ok_or_else(|| {
+        contained_task_stability_failure("contained_task_stability_frame_identity_missing")
+    })?;
+    if current_frame_id == previous_frame_id {
+        return Err(contained_task_stability_failure(
+            "contained_task_stability_frame_identity_reused",
+        ));
+    }
+    Ok(current_frame_id)
+}
+
+#[cfg(test)]
+#[test]
+fn contained_task_stability_frame_identity_failures_are_typed_and_closed() {
+    let identifiers = actingcommand_contract::IdentifierIssuer::new().expect("identifier issuer");
+    let previous = identifiers.mint_frame_id().expect("previous frame");
+
+    for (current, expected_code) in [
+        (None, "contained_task_stability_frame_identity_missing"),
+        (
+            Some(previous),
+            "contained_task_stability_frame_identity_reused",
+        ),
+    ] {
+        let failure = contained_task_stability_current_frame(previous, current)
+            .expect_err("invalid formal frame binding must fail closed");
+        assert!(failure.poison_runtime);
+        assert_eq!(failure.error.code(), expected_code);
     }
 }
 
@@ -13843,8 +14193,50 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
                     ),
                 )
             }
+            ContainedTaskTrace::StabilityBaseline {
+                step_index,
+                operation_label,
+                declaration,
+            } => self.record_stability_baseline(step_index, operation_label, declaration),
+            ContainedTaskTrace::StabilityComparison {
+                step_index,
+                operation_label,
+                declaration,
+                result,
+                prior_consecutive_unchanged,
+                new_consecutive_unchanged,
+                terminal_reason,
+            } => self.record_stability_comparison(RuntimeContainedTaskStabilityComparison {
+                step_index,
+                operation_label,
+                declaration,
+                result,
+                prior_consecutive_unchanged,
+                new_consecutive_unchanged,
+                terminal_reason,
+            }),
+            ContainedTaskTrace::StabilityTerminal {
+                step_index,
+                operation_label,
+                reason,
+            } => self.record_stability_terminal(step_index, operation_label, reason),
             ContainedTaskTrace::Finalizing { outcome } => {
-                if self.finalizing.replace(outcome).is_some() || !self.step_actions.is_empty() {
+                let stability_finalization_invalid = match (
+                    self.expected_stability_declaration.as_ref(),
+                    self.stability.as_ref(),
+                ) {
+                    (None, None) => false,
+                    (Some(expected), Some(state)) => {
+                        &state.declaration != expected
+                            || !state.terminal_recorded
+                            || state.pending_terminal.is_some()
+                    }
+                    _ => true,
+                };
+                if self.finalizing.replace(outcome).is_some()
+                    || !self.step_actions.is_empty()
+                    || stability_finalization_invalid
+                {
                     return Err(RequestFailure::poison_without_terminal(
                         RuntimeHostError::fatal(
                             "contained_task_finalizing_state_invalid",
@@ -13887,6 +14279,20 @@ fn contained_task_step_action(
 struct RuntimeArtifactEventSink<'a> {
     ledger: &'a GlobalLedger,
     events: &'a RuntimeEvents,
+}
+
+#[cfg(test)]
+struct FailingContainedTaskStabilityEventSink;
+
+#[cfg(test)]
+impl ArtifactEventSink for FailingContainedTaskStabilityEventSink {
+    fn append(&mut self, _draft: EventDraft) -> ArtifactStoreResult<()> {
+        Err(ArtifactStoreError::fatal(
+            "contained_task_stability_event_append_injected_failure",
+            "append_contained_task_stability_artifact_event",
+            "injected test failure",
+        ))
+    }
 }
 
 impl ArtifactEventSink for RuntimeArtifactEventSink<'_> {
