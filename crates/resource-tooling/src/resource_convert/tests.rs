@@ -1029,7 +1029,7 @@ fn valid_ocr_declaration(id: &str) -> Value {
         "languages": ["en", "zh"],
         "timeout_ms": 5_000,
         "match_mode": "contains",
-        "expected": ["Amiya"],
+        "expected": ["synthetic text"],
         "case_sensitive": false,
         "minimum_confidence": 0.8,
         "model_ref": "PP-OCRv6_medium",
@@ -1070,7 +1070,7 @@ fn ocr_test_converter(schema_version: &str, ocr_targets: Option<Value>) -> Opera
 fn build_pack_maps_schema_06_ocr_target_to_canonical_output() {
     let pack = ocr_test_converter(
         "0.6",
-        Some(json!([valid_ocr_declaration("ocr/operator-name")])),
+        Some(json!([valid_ocr_declaration("ocr/synthetic-label")])),
     )
     .build_pack()
     .expect("valid OCR declaration");
@@ -1079,12 +1079,12 @@ fn build_pack_maps_schema_06_ocr_target_to_canonical_output() {
         pack.pointer("/targets/0"),
         Some(&json!({
             "type": "ocr",
-            "id": "ocr/operator-name",
+            "id": "ocr/synthetic-label",
             "region": {"x":10,"y":20,"width":300,"height":40},
             "languages": ["en", "zh"],
             "timeout_ms": 5_000,
             "match_mode": "contains",
-            "expected": ["Amiya"],
+            "expected": ["synthetic text"],
             "case_sensitive": false,
             "minimum_confidence": 0.8,
             "model_ref": "PP-OCRv6_medium",
@@ -1207,7 +1207,7 @@ fn ocr_targets_reject_invalid_existing_contract_fields() {
 
 #[test]
 fn ocr_target_duplicates_coalesce_only_when_identical() {
-    let declaration = valid_ocr_declaration("ocr/operator-name");
+    let declaration = valid_ocr_declaration("ocr/synthetic-label");
     let pack = ocr_test_converter(
         "0.6",
         Some(json!([declaration.clone(), declaration.clone()])),
@@ -1229,10 +1229,10 @@ fn ocr_target_duplicates_coalesce_only_when_identical() {
 
     let mut colliding = ocr_test_converter(
         "0.6",
-        Some(json!([valid_ocr_declaration("ocr/operator-name")])),
+        Some(json!([valid_ocr_declaration("ocr/synthetic-label")])),
     );
     colliding.bundles[0].data["color_probes"] = json!([{
-        "id": "ocr/operator-name",
+        "id": "ocr/synthetic-label",
         "region": {"mode":"rect","rect":{"x":1,"y":2,"width":3,"height":4}},
         "expected": [1, 2, 3]
     }]);
