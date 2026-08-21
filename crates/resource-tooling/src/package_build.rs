@@ -2013,15 +2013,31 @@ fn validate_entry_stability_termination(
                     bundle.task_id
                 )));
             }
-            if bundle
+            if let Some(scheduling_outcome) = bundle
                 .data
                 .get("scheduling_outcome")
-                .is_some_and(|value| !value.is_null())
+                .filter(|value| !value.is_null())
             {
-                return Err(CliError::package_invalid(format!(
-                    "task '{}' in_page_guard stability_termination conflicts with scheduling_outcome",
-                    bundle.task_id
-                )));
+                let post_admission_ocr: PostAdmissionOcrPackageDeclaration = bundle
+                    .data
+                    .get("post_admission_ocr")
+                    .filter(|value| !value.is_null())
+                    .cloned()
+                    .map(serde_json::from_value)
+                    .transpose()
+                    .map_err(|error| {
+                        CliError::package_invalid(format!(
+                            "task '{}' post_admission_ocr is invalid: {error}",
+                            bundle.task_id
+                        ))
+                    })?
+                    .ok_or_else(|| {
+                        CliError::package_invalid(format!(
+                            "task '{}' in_page_guard stability_termination conflicts with scheduling_outcome",
+                            bundle.task_id
+                        ))
+                    })?;
+                post_admission_ocr.validate(Some(scheduling_outcome))?;
             }
         }
         (_, Some(_)) => {
@@ -2416,7 +2432,7 @@ impl OperationBundle {
                         "in_page_guard stability_termination conflicts with target_page",
                     ));
                 }
-                if self.scheduling_outcome.is_some() {
+                if self.scheduling_outcome.is_some() && self.post_admission_ocr.is_none() {
                     return Err(CliError::package_invalid(
                         "in_page_guard stability_termination conflicts with scheduling_outcome",
                     ));
@@ -4980,8 +4996,93 @@ mod tests {
                     };
                 },
             )
-            .expect_err("stability must remain the only normal terminal owner");
+            .expect_err("target ownership or an unowned scheduling outcome must fail closed");
             assert_eq!(error.code, "package_invalid", "field={field}");
+        }
+    }
+
+    #[test]
+    fn stability_termination_accepts_only_the_post_admission_ocr_owned_outcome() {
+        let declaration = stability_termination_fixture();
+        let post_admission_ocr = |page_id: &str, outcome_key: &str| {
+            json!({
+                "page_id": page_id,
+                "target_id": "ocr/synthetic-stability",
+                "truth_set": {"path": "truth.json", "sha256": "a".repeat(64)},
+                "normalization": "trim_lowercase_v1",
+                "comparison": "exact_set_v1",
+                "limits": {
+                    "max_frames": 2,
+                    "max_items": 16,
+                    "max_string_bytes": 64,
+                    "max_total_bytes": 4096,
+                    "max_truth_entries": 16
+                },
+                "outcome_key": outcome_key
+            })
+        };
+        let scheduling_outcome = |page_id: &str, outcome_keys: &[&str]| {
+            json!({
+                "mappings": outcome_keys
+                    .iter()
+                    .map(|outcome_key| json!({
+                        "outcome_key": outcome_key,
+                        "effect": "no_designated_effect",
+                        "terminal_pages": [page_id]
+                    }))
+                    .collect::<Vec<_>>()
+            })
+        };
+
+        validate_stability_fixture(
+            "in_page_guard",
+            Some(declaration.clone()),
+            Some(declaration.clone()),
+            Some(json!(4)),
+            |_| {},
+            |operation| {
+                let admitted_page = operation["operations"][0]["from"]
+                    .as_str()
+                    .expect("fixture admitted page")
+                    .to_string();
+                operation["schema_version"] = json!("0.7");
+                operation["scheduling_outcome"] =
+                    scheduling_outcome(&admitted_page, &["comparison_recorded"]);
+                operation["post_admission_ocr"] =
+                    post_admission_ocr(&admitted_page, "comparison_recorded");
+                operation["operations"][0]["to"] = json!(admitted_page);
+            },
+        )
+        .expect("the OCR declaration owns its one mapped scheduling result");
+
+        for (case, mappings, selected) in [
+            ("missing", Vec::new(), "comparison_recorded"),
+            (
+                "duplicate",
+                vec!["comparison_recorded", "comparison_recorded"],
+                "comparison_recorded",
+            ),
+            ("mismatch", vec!["other_result"], "comparison_recorded"),
+        ] {
+            let error = validate_stability_fixture(
+                "in_page_guard",
+                Some(declaration.clone()),
+                Some(declaration.clone()),
+                Some(json!(4)),
+                |_| {},
+                |operation| {
+                    let admitted_page = operation["operations"][0]["from"]
+                        .as_str()
+                        .expect("fixture admitted page")
+                        .to_string();
+                    operation["schema_version"] = json!("0.7");
+                    operation["scheduling_outcome"] = scheduling_outcome(&admitted_page, &mappings);
+                    operation["post_admission_ocr"] = post_admission_ocr(&admitted_page, selected);
+                    operation["operations"][0]["to"] = json!(admitted_page);
+                },
+            )
+            .expect_err("missing, duplicate, or mismatched ownership must fail closed");
+            assert_eq!(error.code, "package_invalid", "case={case}");
         }
     }
 
@@ -5064,6 +5165,120 @@ mod tests {
         assert_eq!(task["stability_termination"], declaration);
         assert_eq!(control["stability_termination"], declaration);
         assert_eq!(control["max_steps"], json!(4));
+    }
+
+    #[test]
+    fn in_page_guard_build_accepts_post_admission_ocr_owned_stability_outcome() {
+        let temp = TempDir::new().expect("temp");
+        let repo = temp.path().join("repo");
+        write_fixture_repo(&repo);
+        let out = temp.path().join("ocr-stability.zip");
+        let mut request = build_task_request(repo.clone(), out.clone());
+        let task_id = request.task_id.clone();
+        let truth = serde_json::to_vec(&json!({
+            "schema_version": "actingcommand.ocr-truth-set.v1",
+            "items": ["synthetic truth"]
+        }))
+        .expect("truth bytes");
+        fs::write(
+            repo.join("operations").join(&task_id).join("truth.json"),
+            &truth,
+        )
+        .expect("truth fixture");
+        let truth_sha256 = hex_sha256(&truth);
+        let declaration = stability_termination_fixture();
+        update_fixture_operation(&repo, |task| {
+            let admitted_page = task["entry_page"]
+                .as_str()
+                .expect("fixture entry page")
+                .to_string();
+            task.as_object_mut()
+                .expect("task object")
+                .remove("target_page");
+            task["schema_version"] = json!("0.7");
+            task["stability_termination"] = declaration.clone();
+            task["operations"][0]["to"] = json!(admitted_page);
+            task["ocr_targets"] = json!([{
+                "id": "ocr/synthetic-stability",
+                "region": {
+                    "mode": "rect",
+                    "rect": {"x": 20, "y": 30, "width": 200, "height": 40}
+                },
+                "languages": ["en"],
+                "timeout_ms": 5_000,
+                "match_mode": "exact",
+                "expected": ["synthetic truth"],
+                "case_sensitive": false,
+                "minimum_confidence": 0.8,
+                "model_ref": "PP-OCRv6_medium",
+                "model_sha256": "a".repeat(64)
+            }]);
+            task["scheduling_outcome"] = json!({
+                "mappings": [{
+                    "outcome_key": "comparison_recorded",
+                    "effect": "no_designated_effect",
+                    "terminal_pages": [task["entry_page"].clone()]
+                }]
+            });
+            task["post_admission_ocr"] = json!({
+                "page_id": task["entry_page"].clone(),
+                "target_id": "ocr/synthetic-stability",
+                "truth_set": {"path": "truth.json", "sha256": truth_sha256},
+                "normalization": "trim_lowercase_v1",
+                "comparison": "exact_set_v1",
+                "limits": {
+                    "max_frames": 2,
+                    "max_items": 16,
+                    "max_string_bytes": 64,
+                    "max_total_bytes": 4096,
+                    "max_truth_entries": 16
+                },
+                "outcome_key": "comparison_recorded"
+            });
+        });
+        request.execution_mode = Some("in_page_guard".to_string());
+
+        let response = build_task(request).expect("official source and generated validation");
+        assert_eq!(response.validation.status, "valid");
+        let inspected = crate::package_validate::validate_package(crate::PackageValidateRequest {
+            zip_path: out.clone(),
+            include_entries: true,
+            expected_input_sha256: None,
+        })
+        .expect("official package validate/inspect path");
+        assert_eq!(inspected.status, "valid");
+        let entries = read_zip_entries(&out);
+        let control: Value =
+            serde_json::from_slice(entries.get("control.json").expect("packaged control"))
+                .expect("control JSON");
+        let task_path = format!("resources/operations/{task_id}/task.json");
+        let task: Value = serde_json::from_slice(entries.get(&task_path).expect("packaged task"))
+            .expect("task JSON");
+        assert_eq!(control["stability_termination"], declaration);
+        assert_eq!(task["stability_termination"], declaration);
+        assert_eq!(
+            task["post_admission_ocr"]["outcome_key"],
+            "comparison_recorded"
+        );
+        assert_eq!(
+            task["scheduling_outcome"]["mappings"][0]["outcome_key"],
+            "comparison_recorded"
+        );
+
+        update_fixture_operation(&repo, |task| {
+            task["schema_version"] = json!("0.6");
+            task.as_object_mut()
+                .expect("task object")
+                .remove("post_admission_ocr");
+        });
+        let unowned_out = temp.path().join("unowned-stability-outcome.zip");
+        let mut unowned_request = build_task_request(repo, unowned_out.clone());
+        unowned_request.execution_mode = Some("in_page_guard".to_string());
+        let error = build_task(unowned_request)
+            .expect_err("stability plus scheduling without OCR ownership must fail closed");
+        assert_eq!(error.code, "package_invalid");
+        assert!(error.message.contains("conflicts with scheduling_outcome"));
+        assert!(!unowned_out.exists());
     }
 
     #[test]
