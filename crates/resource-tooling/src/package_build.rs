@@ -3809,6 +3809,78 @@ mod tests {
     }
 
     #[test]
+    fn build_task_package_consumes_canonical_ocr_converter_output() {
+        let temp = TempDir::new().expect("temp");
+        let repo = temp.path().join("repo");
+        write_fixture_repo(&repo);
+        update_fixture_operation(&repo, |task| {
+            task["schema_version"] = json!("0.6");
+            task["ocr_targets"] = json!([{
+                "id": "ocr/operator-name",
+                "region": {
+                    "mode": "rect",
+                    "rect": {"x": 20, "y": 30, "width": 200, "height": 40}
+                },
+                "languages": ["en"],
+                "timeout_ms": 5_000,
+                "match_mode": "contains",
+                "expected": ["Amiya"],
+                "case_sensitive": false,
+                "minimum_confidence": 0.8,
+                "model_ref": "PP-OCRv6_medium",
+                "model_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            }]);
+            task["page_rules"] = json!({
+                "operator": {
+                    "required": ["page/operator_0"],
+                    "optional": ["ocr/operator-name"]
+                }
+            });
+        });
+        let out = temp.path().join("ocr-task.zip");
+
+        let response = build_task(build_task_request(repo, out.clone()))
+            .expect("official package build and validation");
+
+        assert_eq!(
+            response
+                .validation
+                .resources
+                .recognition_unsupported_target_count,
+            0
+        );
+        let entries = read_zip_entries(&out);
+        let pack: Value = serde_json::from_slice(
+            entries
+                .get("resources/recognition/arknights.cn.pack.json")
+                .expect("generated recognition pack"),
+        )
+        .expect("recognition pack JSON");
+        let target = pack["targets"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|target| target["id"] == "ocr/operator-name")
+            .expect("canonical OCR target");
+        assert_eq!(
+            target,
+            &json!({
+                "type": "ocr",
+                "id": "ocr/operator-name",
+                "region": {"x":20,"y":30,"width":200,"height":40},
+                "languages": ["en"],
+                "timeout_ms": 5_000,
+                "match_mode": "contains",
+                "expected": ["Amiya"],
+                "case_sensitive": false,
+                "minimum_confidence": 0.8,
+                "model_ref": "PP-OCRv6_medium",
+                "model_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            })
+        );
+    }
+
+    #[test]
     fn build_task_preserves_the_frozen_finite_page_set_shape() {
         let temp = TempDir::new().expect("temp");
         let repo = temp.path().join("repo");
