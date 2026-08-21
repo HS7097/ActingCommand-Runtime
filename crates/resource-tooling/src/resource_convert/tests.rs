@@ -1,6 +1,76 @@
 use super::*;
 
 #[test]
+fn schema_0_7_post_admission_ocr_validates_hash_bound_truth_and_closed_algorithms() {
+    let root = tempfile::tempdir().expect("temp dir");
+    let task_dir = root.path().join("operations/fixture_task");
+    fs::create_dir_all(&task_dir).expect("task dir");
+    let truth = serde_json::to_vec(&json!({
+        "schema_version": "actingcommand.ocr-truth-set.v1",
+        "items": ["Alpha", "Beta"]
+    }))
+    .expect("truth bytes");
+    fs::write(task_dir.join("truth.json"), &truth).expect("truth file");
+    let truth_sha256 = format!("{:x}", Sha256::digest(&truth));
+    let task = |schema_version: &str, normalization: &str, sha256: &str| Bundle {
+        task_id: "fixture_task".to_string(),
+        dir: task_dir.clone(),
+        data: json!({
+            "schema_version": schema_version,
+            "task_id": "fixture_task",
+            "game": "neutral",
+            "server_scope": ["test"],
+            "coordinate_space": {"width": 1, "height": 1},
+            "ocr_targets": [{"id": "fixture/ocr"}],
+            "scheduling_outcome": {
+                "mappings": [{
+                    "outcome_key": "comparison_recorded",
+                    "effect": "no_designated_effect",
+                    "terminal_pages": ["terminal"]
+                }]
+            },
+            "post_admission_ocr": {
+                "page_id": "admitted",
+                "target_id": "fixture/ocr",
+                "truth_set": {"path": "truth.json", "sha256": sha256},
+                "normalization": normalization,
+                "comparison": "exact_set_v1",
+                "limits": {
+                    "max_frames": 2,
+                    "max_items": 16,
+                    "max_string_bytes": 64,
+                    "max_total_bytes": 4096,
+                    "max_truth_entries": 16
+                },
+                "outcome_key": "comparison_recorded"
+            },
+            "operations": []
+        }),
+    };
+
+    validate_post_admission_ocr_bundle(&task("0.7", "trim_lowercase_v1", &truth_sha256))
+        .expect("schema 0.7 declaration");
+    assert!(
+        validate_post_admission_ocr_bundle(&task("0.6", "trim_lowercase_v1", &truth_sha256))
+            .expect_err("old schema cannot silently accept declaration")
+            .message
+            .contains("requires schema_version '0.7'")
+    );
+    assert!(
+        validate_post_admission_ocr_bundle(&task("0.7", "unknown", &truth_sha256))
+            .expect_err("unknown normalization")
+            .message
+            .contains("unsupported normalization")
+    );
+    assert!(
+        validate_post_admission_ocr_bundle(&task("0.7", "trim_lowercase_v1", &"0".repeat(64)))
+            .expect_err("truth hash mismatch")
+            .message
+            .contains("SHA-256")
+    );
+}
+
+#[test]
 fn derives_target_ids_like_python_converter() {
     assert_eq!(anchor_target_id("home"), "page/home");
     assert_eq!(

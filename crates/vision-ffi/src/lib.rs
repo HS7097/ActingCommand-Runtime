@@ -249,6 +249,12 @@ pub struct OcrInferenceResult {
     pub warnings: Vec<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct OcrInferenceOutput {
+    pub result: OcrInferenceResult,
+    pub execution_attestation: Option<OcrExecutionAttestation>,
+}
+
 impl OcrInferenceResult {
     pub fn validate(&self, request: &OcrInferenceRequest) -> VisionFfiResult<()> {
         if self.text.len() > MAX_OCR_TEXT_BYTES {
@@ -286,6 +292,16 @@ impl OcrInferenceResult {
 
 pub trait OcrEngine {
     fn read_text(&mut self, request: OcrInferenceRequest) -> VisionFfiResult<OcrInferenceResult>;
+
+    fn read_text_with_attestation(
+        &mut self,
+        request: OcrInferenceRequest,
+    ) -> VisionFfiResult<OcrInferenceOutput> {
+        self.read_text(request).map(|result| OcrInferenceOutput {
+            result,
+            execution_attestation: None,
+        })
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -967,9 +983,13 @@ mod tests {
             .expect("CPU test backend")
         };
 
-        let result = backend
-            .read_text(test_ocr_request())
+        let output = backend
+            .read_text_with_attestation(test_ocr_request())
             .expect("CPU-attested OCR result");
+        let result = output.result;
+        let attestation = output
+            .execution_attestation
+            .expect("validated execution attestation");
         let session = backend.session_for_test().expect("CPU session");
 
         assert_eq!(result.backend, VisionBackendKind::FastDeployPpocr);
@@ -979,6 +999,11 @@ mod tests {
         );
         assert!(session.key().requested_cuda_device().is_none());
         assert!(session.key().resolved_cuda_device().is_none());
+        assert_eq!(&attestation.session, session.as_ref());
+        assert_eq!(
+            attestation.resolved_execution_provider,
+            OnnxExecutionProvider::Cpu
+        );
     }
 
     #[test]

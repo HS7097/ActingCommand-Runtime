@@ -9953,6 +9953,7 @@ fn concurrent_mapped_terminals_commit_exactly_one_disposition() {
                     Some("neutral/terminal".to_owned()),
                     "neutral".to_owned(),
                     declaration,
+                    None,
                 )
             })
         })
@@ -10014,6 +10015,86 @@ fn concurrent_mapped_terminals_commit_exactly_one_disposition() {
 }
 
 #[test]
+fn comparison_selected_outcome_reuses_mapped_terminal_owner_and_conflicts_fail_closed() {
+    for (selected, expect_success) in [("comparison-recorded", true), ("different-result", false)] {
+        let root = TempDir::new().expect("tempdir");
+        let state = Arc::new(FakeState::default());
+        let host = host_with_state(&root, "neutral.instance", state);
+        let mut client = TestClient::connect(&host);
+        let (_, token) = client.acquire("neutral.instance");
+        let request = client.request(RuntimeOperation::Health);
+        let ids = IdentifierIssuer::new().expect("identifier issuer");
+        let task_id = ids.mint_task_id().expect("task id");
+        let run_id = ids.mint_run_id().expect("run id");
+        let declaration: SchedulingOutcomeDeclaration = serde_json::from_value(serde_json::json!({
+            "mappings": [{
+                "outcome_key": "comparison-recorded",
+                "effect": "no_designated_effect",
+                "terminal_pages": ["terminal"]
+            }]
+        }))
+        .expect("mapped terminal declaration");
+        host.append_contained_task_semantic_for_test(
+            &request,
+            &token,
+            task_id,
+            run_id,
+            TaskSemanticFact::RecognitionCompleted {
+                candidate_pages: vec!["neutral/terminal".to_owned()],
+                matched_page: Some("neutral/terminal".to_owned()),
+                frame_width: 2,
+                frame_height: 1,
+            },
+        )
+        .expect("same-run final observation");
+
+        let result = host.append_mapped_contained_task_terminal_for_test(
+            &request,
+            &token,
+            task_id,
+            run_id,
+            Some("neutral/terminal".to_owned()),
+            "neutral".to_owned(),
+            declaration,
+            Some(selected.to_owned()),
+        );
+        if expect_success {
+            result.expect("matching comparison result key");
+            let events = projected_events(
+                &mut client,
+                EventQuery {
+                    task_id: Some(*task_id.transport()),
+                    run_id: Some(*run_id.transport()),
+                    ..EventQuery::default()
+                },
+            );
+            assert!(
+                events
+                    .iter()
+                    .filter_map(projected_task_semantic_fact)
+                    .any(|fact| matches!(
+                        fact,
+                        TaskSemanticFact::TerminalCommitted {
+                            scheduling_disposition: Some(disposition),
+                            ..
+                        } if disposition.outcome_key() == "comparison-recorded"
+                    ))
+            );
+        } else {
+            let error = result.expect_err("comparison/page outcome conflict");
+            assert_eq!(error.0, "contained_task_outcome_comparison_conflict");
+        }
+        let release = client.request(RuntimeOperation::ReleaseLease { token });
+        assert_eq!(
+            client.send(&release).state(),
+            RuntimeReceiptState::Completed
+        );
+        drop(client);
+        host.close().expect("close runtime host");
+    }
+}
+
+#[test]
 fn mapped_terminal_requires_a_final_page_and_same_run_final_observation() {
     for (case, final_page, expected_code) in [
         (
@@ -10053,6 +10134,7 @@ fn mapped_terminal_requires_a_final_page_and_same_run_final_observation() {
                 final_page,
                 "neutral".to_owned(),
                 declaration,
+                None,
             )
             .expect_err("mapped terminal evidence must fail closed");
         assert_eq!(error.0, expected_code, "{case}");
