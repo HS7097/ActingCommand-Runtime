@@ -295,6 +295,7 @@ try {
     Assert-True -Condition ([long]$ort.archive.size -eq 280958859) -Message 'ONNX Runtime archive size is not frozen'
     Assert-True -Condition ($ort.archive.sha256 -ceq 'ef3337a0b8184eb8beec310f7c83bd50376b3eefc43aab84ac8e452f6987df0a') -Message 'ONNX Runtime archive SHA-256 is not frozen'
     Assert-True -Condition (@($ort.extract_allowlist).Count -eq 3) -Message 'ONNX Runtime extraction allowlist is not exact'
+    Assert-True -Condition ([long]$sourceManifest.components.'provider-v0.3'.max_runtime_total_bytes -eq 2684354560) -Message 'provider runtime byte bound is not exactly 2.5 GiB'
     Assert-True -Condition (@($sourceManifest.components.'provider-v0.3'.required_names.cpu).Count -gt 1) -Message 'CPU closure must cover multiple runtime DLLs'
     Assert-True -Condition (@($sourceManifest.components.'provider-v0.3'.required_names.cuda).Count -gt 2) -Message 'CUDA closure must cover multiple runtime DLLs'
     if (-not [string]::IsNullOrWhiteSpace($VisionProviderCheckExecutable)) {
