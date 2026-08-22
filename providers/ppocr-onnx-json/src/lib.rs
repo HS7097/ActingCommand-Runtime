@@ -14,12 +14,14 @@ use actingcommand_vision_ffi::{
     OnnxExecutionProvider, VisionBackendKind, VisionFfiOwnedBuffer, VisionFrame, VisionPixelFormat,
     VisionRect, enumerate_cuda_devices, onnxruntime_version_string,
 };
+use ort::logging::LogLevel;
 use ort::session::{RunOptions, Session};
 use ort::value::{Tensor, TensorElementType, ValueType};
 use std::collections::VecDeque;
+use std::ffi::OsStr;
 use std::path::Path;
 use std::slice;
-use std::sync::{Arc, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 const DEFAULT_REC_HEIGHT: usize = 48;
@@ -31,6 +33,12 @@ const DETECTION_THRESHOLD: f32 = 0.30;
 const DETECTION_MIN_AREA: usize = 4;
 const DETECTION_BOX_PADDING: i32 = 16;
 const MAX_DETECTED_TEXT_BOXES: usize = 64;
+const NODE_PLACEMENT_DIAGNOSTIC_ENV: &str = "ACTINGCOMMAND_PPOCR_NODE_PLACEMENT_DIAGNOSTIC";
+const NODE_PLACEMENT_DIAGNOSTIC_PREFIX: &str =
+    "ACTINGCOMMAND_PPOCR_NODE_PLACEMENT_DIAGNOSTIC_JSON=";
+const MAX_NODE_PLACEMENT_DIAGNOSTIC_NODES: usize = 4_096;
+const MAX_NODE_PLACEMENT_LOG_MESSAGE_BYTES: usize = 4_096;
+const CPU_EXECUTION_PROVIDER: &str = "CPUExecutionProvider";
 
 static ORT_RUNTIME: OrtRuntimeInitializer = OrtRuntimeInitializer::new();
 static RECOGNIZER_SESSIONS: OnceLock<ProviderSessionCache> = OnceLock::new();
@@ -80,6 +88,235 @@ impl ProviderSessionPlan {
             }
         }
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PpocrModelRole {
+    Recognizer,
+    Detector,
+}
+
+impl PpocrModelRole {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Recognizer => "recognizer",
+            Self::Detector => "detector",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+struct CpuAssignedNodeDiagnostic {
+    node_name: String,
+    operator_type: String,
+    domain: &'static str,
+    placement_reason: &'static str,
+    assigned_execution_provider: &'static str,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+struct NodePlacementDiagnostic {
+    record_type: &'static str,
+    model_role: &'static str,
+    diagnostic_scope: &'static str,
+    inference_executed: bool,
+    cpu_assigned_node_count: usize,
+    nodes: Vec<CpuAssignedNodeDiagnostic>,
+}
+
+#[derive(Debug, Default)]
+struct NodePlacementLogCapture {
+    saw_placement_header: bool,
+    saw_provider_summary: bool,
+    current_cpu_group: bool,
+    expected_cpu_nodes: Option<usize>,
+    cpu_nodes: Vec<CpuAssignedNodeDiagnostic>,
+    failure: Option<String>,
+}
+
+impl NodePlacementLogCapture {
+    fn record(&mut self, message: &str) {
+        if self.failure.is_some() {
+            return;
+        }
+        let message = message.trim();
+        if message == "Node placements" {
+            *self = Self {
+                saw_placement_header: true,
+                ..Self::default()
+            };
+            return;
+        }
+        if !self.saw_placement_header {
+            return;
+        }
+        if message.len() > MAX_NODE_PLACEMENT_LOG_MESSAGE_BYTES {
+            self.fail("ONNX Runtime node-placement log message exceeds the diagnostic bound");
+            return;
+        }
+
+        match parse_provider_summary(message, "All nodes placed on [") {
+            Ok(Some((provider, count))) => {
+                self.record_provider_summary(&provider, count, false);
+                return;
+            }
+            Ok(None) => {}
+            Err(err) => {
+                self.fail(err);
+                return;
+            }
+        }
+        match parse_provider_summary(message, "Node(s) placed on [") {
+            Ok(Some((provider, count))) => {
+                self.record_provider_summary(&provider, count, true);
+                return;
+            }
+            Ok(None) => {}
+            Err(err) => {
+                self.fail(err);
+                return;
+            }
+        }
+
+        if !self.current_cpu_group {
+            return;
+        }
+        let expected = self.expected_cpu_nodes.unwrap_or(0);
+        if self.cpu_nodes.len() >= expected {
+            self.current_cpu_group = false;
+            return;
+        }
+        match parse_node_placement(message) {
+            Ok(node) => self.cpu_nodes.push(node),
+            Err(err) => {
+                self.fail(err);
+                return;
+            }
+        }
+        if self.cpu_nodes.len() == expected {
+            self.current_cpu_group = false;
+        }
+    }
+
+    fn record_provider_summary(&mut self, provider: &str, count: usize, has_details: bool) {
+        if self.current_cpu_group && self.cpu_nodes.len() != self.expected_cpu_nodes.unwrap_or(0) {
+            self.fail("ONNX Runtime ended the CPU placement group before every node was recorded");
+            return;
+        }
+        self.saw_provider_summary = true;
+        if provider == CPU_EXECUTION_PROVIDER {
+            if count > MAX_NODE_PLACEMENT_DIAGNOSTIC_NODES {
+                self.fail("ONNX Runtime CPU-assigned node count exceeds the diagnostic bound");
+                return;
+            }
+            self.expected_cpu_nodes = Some(count);
+            self.current_cpu_group = has_details && count > 0;
+            if !has_details && count > 0 {
+                self.fail(
+                    "ONNX Runtime did not emit per-node details for the CPU-only placement group",
+                );
+            }
+        } else if self.expected_cpu_nodes.is_none() {
+            self.expected_cpu_nodes = Some(0);
+            self.current_cpu_group = false;
+        }
+    }
+
+    fn diagnostic(&self, role: PpocrModelRole) -> Result<NodePlacementDiagnostic, String> {
+        if let Some(failure) = &self.failure {
+            return Err(failure.clone());
+        }
+        if !self.saw_placement_header || !self.saw_provider_summary {
+            return Err(
+                "ONNX Runtime did not emit a complete verbose node-placement section".to_string(),
+            );
+        }
+        let expected = self.expected_cpu_nodes.unwrap_or(0);
+        if self.cpu_nodes.len() != expected {
+            return Err(format!(
+                "ONNX Runtime reported {expected} CPU-assigned nodes but emitted details for {}",
+                self.cpu_nodes.len()
+            ));
+        }
+        let mut nodes = self.cpu_nodes.clone();
+        nodes.sort_by(|left, right| {
+            left.node_name
+                .cmp(&right.node_name)
+                .then_with(|| left.operator_type.cmp(&right.operator_type))
+        });
+        Ok(NodePlacementDiagnostic {
+            record_type: "actingcommand.ppocr_node_placement_diagnostic.v1",
+            model_role: role.as_str(),
+            diagnostic_scope: "session_initialization_only",
+            inference_executed: false,
+            cpu_assigned_node_count: expected,
+            nodes,
+        })
+    }
+
+    fn fail(&mut self, message: impl Into<String>) {
+        if self.failure.is_none() {
+            self.failure = Some(message.into());
+        }
+        self.current_cpu_group = false;
+    }
+}
+
+fn parse_provider_summary(message: &str, prefix: &str) -> Result<Option<(String, usize)>, String> {
+    let Some(rest) = message.strip_prefix(prefix) else {
+        return Ok(None);
+    };
+    let Some((provider, count)) = rest.split_once("]. Number of nodes: ") else {
+        return Err("malformed ONNX Runtime node-placement provider summary".to_string());
+    };
+    if provider.is_empty() {
+        return Err("ONNX Runtime node-placement provider is empty".to_string());
+    }
+    let count = count.parse::<usize>().map_err(|err| {
+        format!("invalid ONNX Runtime node-placement provider count {count:?}: {err}")
+    })?;
+    Ok(Some((provider.to_string(), count)))
+}
+
+fn parse_node_placement(message: &str) -> Result<CpuAssignedNodeDiagnostic, String> {
+    let Some((operator_type, node_name)) = message.split_once(" (") else {
+        return Err("malformed ONNX Runtime CPU node-placement entry".to_string());
+    };
+    let Some(node_name) = node_name.strip_suffix(')') else {
+        return Err("malformed ONNX Runtime CPU node-placement entry".to_string());
+    };
+    if operator_type.is_empty() || node_name.is_empty() {
+        return Err(
+            "ONNX Runtime CPU node-placement entry has an empty operator or node name".to_string(),
+        );
+    }
+    Ok(CpuAssignedNodeDiagnostic {
+        node_name: node_name.to_string(),
+        operator_type: operator_type.to_string(),
+        domain: "unavailable",
+        placement_reason: "unavailable",
+        assigned_execution_provider: CPU_EXECUTION_PROVIDER,
+    })
+}
+
+fn node_placement_diagnostic_requested(
+    plan: &ProviderSessionPlan,
+    value: Option<&OsStr>,
+) -> Result<bool, String> {
+    let Some(value) = value else {
+        return Ok(false);
+    };
+    if value != OsStr::new("1") {
+        return Err(format!(
+            "{NODE_PLACEMENT_DIAGNOSTIC_ENV} must be exactly 1 when set"
+        ));
+    }
+    if plan.resolved_execution_provider != OnnxExecutionProvider::Cuda {
+        return Err(format!(
+            "{NODE_PLACEMENT_DIAGNOSTIC_ENV} is valid only for an explicit CUDA OCR session"
+        ));
+    }
+    Ok(true)
 }
 
 #[cfg(test)]
@@ -187,6 +424,7 @@ fn read_text_json(
         load_bound_ort_session(
             &envelope.artifacts.recognizer_model_path,
             expected_key.clone(),
+            PpocrModelRole::Recognizer,
         )
     })?;
     let inference_deadline = Instant::now()
@@ -200,6 +438,7 @@ fn read_text_json(
             load_bound_ort_session(
                 &envelope.artifacts.detector_model_path,
                 expected_key.clone(),
+                PpocrModelRole::Detector,
             )
         })?;
         let detected = {
@@ -362,9 +601,13 @@ fn detector_sessions() -> &'static ProviderSessionCache {
     DETECTOR_SESSIONS.get_or_init(ProviderSessionCache::new)
 }
 
-fn load_bound_ort_session(path: &Path, key: OcrSessionKey) -> Result<BoundOrtSession, String> {
+fn load_bound_ort_session(
+    path: &Path,
+    key: OcrSessionKey,
+    role: PpocrModelRole,
+) -> Result<BoundOrtSession, String> {
     let plan = ProviderSessionPlan::from_key(&key)?;
-    let session = load_ort_session(path, &plan)?;
+    let session = load_ort_session(path, &plan, role)?;
     Ok(BoundOrtSession { key, plan, session })
 }
 
@@ -379,23 +622,38 @@ fn require_bound_session_key(
     }
 }
 
-fn load_ort_session(path: &Path, plan: &ProviderSessionPlan) -> Result<Session, String> {
-    let mut builder = Session::builder()
-        .map_err(|err| format!("failed to create ONNXRuntime session builder: {err}"))?
-        .with_intra_threads(1)
-        .map_err(|err| format!("failed to configure ONNXRuntime intra threads: {err}"))?;
+fn load_ort_session(
+    path: &Path,
+    plan: &ProviderSessionPlan,
+    role: PpocrModelRole,
+) -> Result<Session, String> {
+    let diagnostic_requested = node_placement_diagnostic_requested(
+        plan,
+        std::env::var_os(NODE_PLACEMENT_DIAGNOSTIC_ENV).as_deref(),
+    )?;
     match plan.resolved_execution_provider {
-        OnnxExecutionProvider::Cpu => builder.commit_from_file(path).map_err(|err| {
-            format!(
-                "failed to load CPU-only PPOCR ONNX model {}: {err}",
-                path.display()
-            )
-        }),
+        OnnxExecutionProvider::Cpu => Session::builder()
+            .map_err(|err| format!("failed to create ONNXRuntime session builder: {err}"))?
+            .with_intra_threads(1)
+            .map_err(|err| format!("failed to configure ONNXRuntime intra threads: {err}"))?
+            .commit_from_file(path)
+            .map_err(|err| {
+                format!(
+                    "failed to load CPU-only PPOCR ONNX model {}: {err}",
+                    path.display()
+                )
+            }),
         OnnxExecutionProvider::Cuda => {
             let ordinal = plan.cuda_ordinal.ok_or_else(|| {
                 "CUDA OCR session plan is missing the resolved device ordinal".to_string()
             })?;
-            builder
+            if diagnostic_requested {
+                capture_cuda_node_placement(path, ordinal, role)?;
+            }
+            Session::builder()
+                .map_err(|err| format!("failed to create ONNXRuntime session builder: {err}"))?
+                .with_intra_threads(1)
+                .map_err(|err| format!("failed to configure ONNXRuntime intra threads: {err}"))?
                 .with_execution_providers([
                     ort::ep::CUDA::default()
                         .with_device_id(ordinal)
@@ -418,6 +676,65 @@ fn load_ort_session(path: &Path, plan: &ProviderSessionPlan) -> Result<Session, 
                 })
         }
     }
+}
+
+fn capture_cuda_node_placement(
+    path: &Path,
+    ordinal: i32,
+    role: PpocrModelRole,
+) -> Result<(), String> {
+    let capture = Arc::new(Mutex::new(NodePlacementLogCapture::default()));
+    let logger_capture = Arc::clone(&capture);
+    let shadow_session = Session::builder()
+        .map_err(|err| format!("failed to create ONNXRuntime diagnostic session builder: {err}"))?
+        .with_intra_threads(1)
+        .map_err(|err| format!("failed to configure ONNXRuntime diagnostic threads: {err}"))?
+        .with_logger(Arc::new(move |_, _, _, _, message| {
+            match logger_capture.lock() {
+                Ok(mut state) => state.record(message),
+                Err(poisoned) => poisoned
+                    .into_inner()
+                    .fail("PPOCR node-placement diagnostic mutex is poisoned"),
+            }
+        }))
+        .map_err(|err| {
+            format!("failed to configure bounded PPOCR node-placement diagnostic: {err}")
+        })?
+        .with_log_level(LogLevel::Verbose)
+        .map_err(|err| format!("failed to enable verbose PPOCR node-placement diagnostic: {err}"))?
+        .with_log_verbosity(0)
+        .map_err(|err| format!("failed to bound PPOCR node-placement diagnostic: {err}"))?
+        .with_execution_providers([
+            ort::ep::CUDA::default()
+                .with_device_id(ordinal)
+                .build()
+                .error_on_failure(),
+        ])
+        .map_err(|err| {
+            format!(
+                "failed to register diagnostic CUDA execution provider for device {ordinal}: {err}"
+            )
+        })?
+        .commit_from_file(path)
+        .map_err(|err| {
+            format!(
+                "failed to initialize zero-inference CUDA PPOCR placement diagnostic for {} on device {ordinal}: {err}",
+                path.display()
+            )
+        })?;
+    let diagnostic = match capture.lock() {
+        Ok(state) => state.diagnostic(role),
+        Err(poisoned) => {
+            let mut state = poisoned.into_inner();
+            state.fail("PPOCR node-placement diagnostic mutex is poisoned");
+            state.diagnostic(role)
+        }
+    }?;
+    let json = serde_json::to_string(&diagnostic)
+        .map_err(|err| format!("failed to serialize PPOCR node-placement diagnostic: {err}"))?;
+    eprintln!("{NODE_PLACEMENT_DIAGNOSTIC_PREFIX}{json}");
+    drop(shadow_session);
+    Ok(())
 }
 
 fn load_dictionary(path: &Path) -> Result<Vec<String>, String> {
@@ -1287,6 +1604,99 @@ mod tests {
         );
         assert!(!cuda.cpu_ep_registered);
         assert!(cuda.cpu_fallback_disabled);
+    }
+
+    #[test]
+    fn node_placement_diagnostic_is_explicit_and_cuda_only() {
+        let cpu = ProviderSessionPlan::from_key(&test_session_key(OnnxExecutionProvider::Cpu))
+            .expect("CPU plan");
+        let cuda = ProviderSessionPlan::from_key(&test_session_key(OnnxExecutionProvider::Cuda))
+            .expect("CUDA plan");
+
+        assert!(!node_placement_diagnostic_requested(&cuda, None).expect("disabled"));
+        assert!(
+            node_placement_diagnostic_requested(&cuda, Some(OsStr::new("1")))
+                .expect("explicit CUDA diagnostic")
+        );
+        let invalid = node_placement_diagnostic_requested(&cuda, Some(OsStr::new("true")))
+            .expect_err("non-canonical activation rejected");
+        assert!(invalid.contains("must be exactly 1"));
+        let cpu = node_placement_diagnostic_requested(&cpu, Some(OsStr::new("1")))
+            .expect_err("CPU diagnostic rejected");
+        assert!(cpu.contains("only for an explicit CUDA OCR session"));
+    }
+
+    #[test]
+    fn node_placement_diagnostic_records_exact_cpu_nodes_without_inference() {
+        let mut capture = NodePlacementLogCapture::default();
+        for message in [
+            "Node placements",
+            " Node(s) placed on [CUDAExecutionProvider]. Number of nodes: 2",
+            "  Conv (encoder.conv)",
+            "  Relu (encoder.relu)",
+            " Node(s) placed on [CPUExecutionProvider]. Number of nodes: 2",
+            "  Shape (shape_0)",
+            "  Gather (gather_0)",
+        ] {
+            capture.record(message);
+        }
+
+        let diagnostic = capture
+            .diagnostic(PpocrModelRole::Recognizer)
+            .expect("complete diagnostic");
+        assert_eq!(diagnostic.model_role, "recognizer");
+        assert_eq!(diagnostic.diagnostic_scope, "session_initialization_only");
+        assert!(!diagnostic.inference_executed);
+        assert_eq!(diagnostic.cpu_assigned_node_count, 2);
+        assert_eq!(diagnostic.nodes[0].node_name, "gather_0");
+        assert_eq!(diagnostic.nodes[0].operator_type, "Gather");
+        assert_eq!(diagnostic.nodes[1].node_name, "shape_0");
+        assert_eq!(diagnostic.nodes[1].operator_type, "Shape");
+        assert!(diagnostic.nodes.iter().all(|node| {
+            node.domain == "unavailable"
+                && node.placement_reason == "unavailable"
+                && node.assigned_execution_provider == CPU_EXECUTION_PROVIDER
+        }));
+
+        let json = serde_json::to_value(diagnostic).expect("diagnostic JSON");
+        assert_eq!(
+            json["record_type"],
+            "actingcommand.ppocr_node_placement_diagnostic.v1"
+        );
+        assert_eq!(json["nodes"].as_array().expect("nodes").len(), 2);
+    }
+
+    #[test]
+    fn node_placement_diagnostic_fails_closed_on_incomplete_cpu_group() {
+        let mut capture = NodePlacementLogCapture::default();
+        for message in [
+            "Node placements",
+            " Node(s) placed on [CPUExecutionProvider]. Number of nodes: 2",
+            "  Shape (shape_0)",
+        ] {
+            capture.record(message);
+        }
+
+        let err = capture
+            .diagnostic(PpocrModelRole::Recognizer)
+            .expect_err("incomplete diagnostic rejected");
+        assert!(err.contains("reported 2 CPU-assigned nodes but emitted details for 1"));
+    }
+
+    #[test]
+    fn node_placement_diagnostic_reports_all_cuda_without_cpu_nodes() {
+        let mut capture = NodePlacementLogCapture::default();
+        capture.record("Node placements");
+        capture.record(" All nodes placed on [CUDAExecutionProvider]. Number of nodes: 9");
+
+        let diagnostic = capture
+            .diagnostic(PpocrModelRole::Detector)
+            .expect("all-CUDA diagnostic");
+        assert_eq!(diagnostic.model_role, "detector");
+        assert_eq!(diagnostic.diagnostic_scope, "session_initialization_only");
+        assert!(!diagnostic.inference_executed);
+        assert_eq!(diagnostic.cpu_assigned_node_count, 0);
+        assert!(diagnostic.nodes.is_empty());
     }
 
     #[test]
