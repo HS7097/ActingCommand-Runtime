@@ -51,7 +51,8 @@ else {
     @(
         'actinglab.exe',
         'actingcommand-vision-provider-check.exe',
-        'actingcommand-device-test.exe'
+        'actingcommand-device-test.exe',
+        'ac_fastdeploy_ppocr.dll'
     )
 }
 

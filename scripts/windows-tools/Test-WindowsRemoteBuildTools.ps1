@@ -97,6 +97,7 @@ function New-ArtifactFixture {
         [Parameter(Mandatory)][string] $Root,
         [Parameter(Mandatory)][string] $Mode,
         [Parameter(Mandatory)][string] $ArtifactName,
+        [Parameter(Mandatory)][ValidateSet('Runtime', 'Tools')][string] $ArtifactKind,
         [Parameter(Mandatory)][string] $Repository,
         [Parameter(Mandatory)][string] $CommitSha,
         [Parameter(Mandatory)][string] $TreeSha,
@@ -105,10 +106,19 @@ function New-ArtifactFixture {
     )
     $directory = Join-Path $Root "artifacts/$Mode/$ArtifactName"
     New-Item -ItemType Directory -Path $directory -Force | Out-Null
-    $payloads = @(
-        @{ name = 'actingcommand-actingd.exe'; content = 'synthetic actingd payload' },
-        @{ name = 'actingctl.exe'; content = 'synthetic actingctl payload' }
-    )
+    $payloads = if ($ArtifactKind -ceq 'Runtime') {
+        @(
+            @{ name = 'actingcommand-actingd.exe'; content = 'synthetic actingd payload' },
+            @{ name = 'actingctl.exe'; content = 'synthetic actingctl payload' }
+        )
+    } else {
+        @(
+            @{ name = 'actinglab.exe'; content = 'synthetic actinglab payload' },
+            @{ name = 'actingcommand-vision-provider-check.exe'; content = 'synthetic provider-check payload' },
+            @{ name = 'actingcommand-device-test.exe'; content = 'synthetic device-test payload' },
+            @{ name = 'ac_fastdeploy_ppocr.dll'; content = 'synthetic nonempty provider payload' }
+        )
+    }
     $records = @()
     foreach ($payload in $payloads) {
         $path = Join-Path $directory $payload.name
@@ -135,7 +145,8 @@ function New-ArtifactFixture {
     }
     Write-Utf8NoBom -Path (Join-Path $directory 'BUILD-MANIFEST.json') -Text (($manifest | ConvertTo-Json -Depth 8) + "`n")
     if ($CorruptPayload) {
-        Add-Content -LiteralPath (Join-Path $directory 'actingctl.exe') -Value 'corrupt' -NoNewline
+        $corruptName = if ($ArtifactKind -ceq 'Runtime') { 'actingctl.exe' } else { 'ac_fastdeploy_ppocr.dll' }
+        Add-Content -LiteralPath (Join-Path $directory $corruptName) -Value 'corrupt' -NoNewline
     }
 }
 
@@ -150,7 +161,6 @@ $mode = $env:ACTINGCOMMAND_FAKE_GH_MODE
 $sourceSha = $env:ACTINGCOMMAND_FAKE_GH_SOURCE_SHA
 $treeSha = $env:ACTINGCOMMAND_FAKE_GH_TREE_SHA
 $repository = $env:ACTINGCOMMAND_FAKE_GH_REPOSITORY
-$artifactName = "actingcommand-runtime-$sourceSha"
 $scriptArgs = @($args)
 
 function Value-After([string] $Name) {
@@ -184,11 +194,13 @@ if ($args.Count -ge 2 -and $args[0] -ceq 'api') {
         exit 0
     }
     if ($endpoint -like '*/actions/runs/*/artifacts*') {
-        $artifactRecord = [pscustomobject][ordered]@{ name = $artifactName; expired = $false }
         [object[]]$artifacts = if ($mode -ceq 'missing-artifact') {
             @()
         } else {
-            @($artifactRecord)
+            @(
+                [pscustomobject][ordered]@{ name = "actingcommand-runtime-$sourceSha"; expired = $false },
+                [pscustomobject][ordered]@{ name = "actingcommand-tools-$sourceSha"; expired = $false }
+            )
         }
         [ordered]@{ total_count = [int]$artifacts.Count; artifacts = $artifacts } | ConvertTo-Json -Depth 4 -Compress
         exit 0
@@ -295,11 +307,13 @@ try {
     $repository = 'HS7097/ActingCommand-Runtime'
     $sourceSha = '0123456789abcdef0123456789abcdef01234567'
     $treeSha = '89abcdef0123456789abcdef0123456789abcdef'
-    $artifactName = "actingcommand-runtime-$sourceSha"
+    $runtimeArtifactName = "actingcommand-runtime-$sourceSha"
+    $toolsArtifactName = "actingcommand-tools-$sourceSha"
     Write-Utf8NoBom -Path (Join-Path $fixtureRoot 'Cargo.lock') -Text "fixture-lock`n"
     $lockSha = Get-Sha256 -Path (Join-Path $fixtureRoot 'Cargo.lock')
-    New-ArtifactFixture -Root $fixtureRoot -Mode 'success' -ArtifactName $artifactName -Repository $repository -CommitSha $sourceSha -TreeSha $treeSha -CargoLockSha256 $lockSha -CorruptPayload $false
-    New-ArtifactFixture -Root $fixtureRoot -Mode 'wrong-hash' -ArtifactName $artifactName -Repository $repository -CommitSha $sourceSha -TreeSha $treeSha -CargoLockSha256 $lockSha -CorruptPayload $true
+    New-ArtifactFixture -Root $fixtureRoot -Mode 'success' -ArtifactName $runtimeArtifactName -ArtifactKind Runtime -Repository $repository -CommitSha $sourceSha -TreeSha $treeSha -CargoLockSha256 $lockSha -CorruptPayload $false
+    New-ArtifactFixture -Root $fixtureRoot -Mode 'success' -ArtifactName $toolsArtifactName -ArtifactKind Tools -Repository $repository -CommitSha $sourceSha -TreeSha $treeSha -CargoLockSha256 $lockSha -CorruptPayload $false
+    New-ArtifactFixture -Root $fixtureRoot -Mode 'wrong-hash' -ArtifactName $runtimeArtifactName -ArtifactKind Runtime -Repository $repository -CommitSha $sourceSha -TreeSha $treeSha -CargoLockSha256 $lockSha -CorruptPayload $true
     $fakeGh = New-FakeGh -Root $fixtureRoot
     $env:ACTINGCOMMAND_FAKE_GH_ROOT = $fixtureRoot
     $env:ACTINGCOMMAND_FAKE_GH_SOURCE_SHA = $sourceSha
@@ -313,6 +327,16 @@ try {
     $positive = $positiveJson | ConvertFrom-Json -Depth 20
     Assert-True -Condition ($positive.status -ceq 'PASS') -Message 'positive artifact verification did not report PASS'
     Assert-True -Condition (Test-Path -LiteralPath (Join-Path $positiveOutput 'actingctl.exe') -PathType Leaf) -Message 'positive artifact payload was not published'
+    Complete-Case -Name $script:CurrentCase
+
+    $script:CurrentCase = 'artifact-tools-provider-positive-exact-selection'
+    $toolsOutput = Join-Path $testRootFull 'downloads/tools-positive'
+    $toolsJson = & $downloader -Repository $repository -SourceSha $sourceSha -ArtifactKind Tools -TaskRoot $testRootFull -OutputPath $toolsOutput -GhExecutable $fakeGh
+    $tools = $toolsJson | ConvertFrom-Json -Depth 20
+    Assert-True -Condition ($tools.status -ceq 'PASS') -Message 'Tools artifact verification did not report PASS'
+    Assert-True -Condition (@($tools.verified_files).Count -eq 4) -Message 'Tools artifact verifier did not freeze exactly four payloads'
+    $providerFixture = Get-Item -LiteralPath (Join-Path $toolsOutput 'ac_fastdeploy_ppocr.dll') -ErrorAction Stop
+    Assert-True -Condition ($providerFixture.Length -gt 0) -Message 'Tools artifact provider payload is missing or empty'
     Complete-Case -Name $script:CurrentCase
 
     Invoke-FailCase -Name 'artifact-wrong-sha' -MessagePattern 'found 0' -Action {
