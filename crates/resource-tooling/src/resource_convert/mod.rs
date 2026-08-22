@@ -1220,6 +1220,25 @@ impl OperationConverter {
             return Ok(click.clone());
         }
         let Some(rect_move) = self.operation_rect_move(bundle, operation)? else {
+            if click.get("kind").and_then(Value::as_str) == Some("drag") {
+                let mut canonical = click.as_object().cloned().ok_or_else(|| {
+                    CliError::package_invalid("operation drag click must be an object")
+                })?;
+                if canonical.contains_key("from_rect") || canonical.contains_key("to_rect") {
+                    return Err(CliError::package_invalid(
+                        "source drag click must use from/to, not from_rect/to_rect",
+                    ));
+                }
+                let from = canonical
+                    .remove("from")
+                    .ok_or_else(|| CliError::package_invalid("source drag click missing from"))?;
+                let to = canonical
+                    .remove("to")
+                    .ok_or_else(|| CliError::package_invalid("source drag click missing to"))?;
+                canonical.insert("from_rect".to_string(), from);
+                canonical.insert("to_rect".to_string(), to);
+                return Ok(Value::Object(canonical));
+            }
             return Ok(click.clone());
         };
         let target_id = guard
@@ -1607,6 +1626,15 @@ fn validate_click_shape(path: &Path, operation: &Value, errors: &mut Vec<String>
             }
         }
         Some("drag") => {
+            for canonical_key in ["from_rect", "to_rect"] {
+                if click.contains_key(canonical_key) {
+                    errors.push(format!(
+                        "{}: op {:?} source drag click must use from/to, not {canonical_key}",
+                        path.display(),
+                        operation.get("id").and_then(Value::as_str)
+                    ));
+                }
+            }
             require_click_keys(
                 path,
                 operation,
