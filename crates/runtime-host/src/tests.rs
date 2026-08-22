@@ -9414,6 +9414,10 @@ fn contained_task_stability_persists_one_formally_bound_diagnostic_per_compariso
     )
     .expect("runtime host");
     let mut client = TestClient::connect(&host);
+    client
+        .stream
+        .set_read_timeout(Some(Duration::from_secs(10)))
+        .expect("stability receipt timeout");
     let correlation = client.ids.mint_correlation_id().expect("correlation");
     let correlation_id = *correlation.transport();
     let request = client.request_with_correlation(
@@ -9572,6 +9576,10 @@ fn contained_task_stability_max_steps_uses_the_last_comparison_without_duplicate
     )
     .expect("runtime host");
     let mut client = TestClient::connect(&host);
+    client
+        .stream
+        .set_read_timeout(Some(Duration::from_secs(10)))
+        .expect("stability receipt timeout");
     let correlation = client.ids.mint_correlation_id().expect("correlation");
     let correlation_id = *correlation.transport();
     let request = client.request_with_correlation(
