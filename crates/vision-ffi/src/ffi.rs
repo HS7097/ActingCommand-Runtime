@@ -1374,6 +1374,78 @@ mod tests {
     }
 
     #[test]
+    fn parallel_conflicting_runtime_closures_admit_exactly_one_loader() {
+        let closure = Arc::new(Mutex::new(RuntimeLibraryClosureState::Uninitialized));
+        let selected = test_runtime_closure_paths();
+        let mut conflicting = selected.clone();
+        conflicting.swap(0, 1);
+        let dropped = Arc::new(AtomicUsize::new(0));
+        let losing_loader_calls = Arc::new(AtomicUsize::new(0));
+        let (winner_entered_tx, winner_entered_rx) = std::sync::mpsc::channel();
+        let (release_winner_tx, release_winner_rx) = std::sync::mpsc::channel();
+
+        let winner_closure = Arc::clone(&closure);
+        let winner_identity = selected.clone();
+        let winner_dropped = Arc::clone(&dropped);
+        let winner = std::thread::spawn(move || {
+            let mut first = true;
+            establish_runtime_library_closure_with(&winner_closure, &winner_identity, |path| {
+                if first {
+                    first = false;
+                    winner_entered_tx
+                        .send(())
+                        .expect("report winning loader entry");
+                    release_winner_rx.recv().expect("release winning loader");
+                }
+                Ok(TestRuntimeHandle {
+                    _path: path.to_path_buf(),
+                    dropped: Arc::clone(&winner_dropped),
+                })
+            })
+        });
+        winner_entered_rx
+            .recv()
+            .expect("winning loader holds closure lock");
+
+        let loser_closure = Arc::clone(&closure);
+        let loser_calls = Arc::clone(&losing_loader_calls);
+        let loser_dropped = Arc::clone(&dropped);
+        let (loser_started_tx, loser_started_rx) = std::sync::mpsc::channel();
+        let loser = std::thread::spawn(move || {
+            loser_started_tx.send(()).expect("report loser started");
+            establish_runtime_library_closure_with(&loser_closure, &conflicting, |path| {
+                loser_calls.fetch_add(1, Ordering::SeqCst);
+                Ok(TestRuntimeHandle {
+                    _path: path.to_path_buf(),
+                    dropped: Arc::clone(&loser_dropped),
+                })
+            })
+        });
+        loser_started_rx.recv().expect("loser attempted closure");
+        release_winner_tx.send(()).expect("complete winner");
+
+        winner
+            .join()
+            .expect("winner thread")
+            .expect("winning closure establishes");
+        let loser_error = loser
+            .join()
+            .expect("loser thread")
+            .expect_err("conflicting closure rejected");
+
+        assert_eq!(loser_error.code(), VisionFfiErrorCode::ProviderUnavailable);
+        assert_eq!(losing_loader_calls.load(Ordering::SeqCst), 0);
+        assert_eq!(dropped.load(Ordering::SeqCst), 0);
+        match &*closure.lock().expect("closure state") {
+            RuntimeLibraryClosureState::Ready { identity, _handles } => {
+                assert_eq!(identity, &selected);
+                assert_eq!(_handles.len(), selected.len());
+            }
+            _ => panic!("winning closure must remain ready"),
+        }
+    }
+
+    #[test]
     fn runtime_closure_partial_failure_is_permanent_and_retains_loaded_handles() {
         let closure = Mutex::new(RuntimeLibraryClosureState::Uninitialized);
         let paths = test_runtime_closure_paths();
