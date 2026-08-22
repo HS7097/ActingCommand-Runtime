@@ -15,7 +15,8 @@ MuMu/Nemu, model, provider, or Runtime binaries.
 - `actingcommand-runtime-<40-character-commit-sha>`: `actingcommand-actingd.exe`
   and `actingctl.exe`;
 - `actingcommand-tools-<40-character-commit-sha>`: `actinglab.exe`,
-  `actingcommand-vision-provider-check.exe`, and `actingcommand-device-test.exe`.
+  `actingcommand-vision-provider-check.exe`, `actingcommand-device-test.exe`, and
+  the existing PP-OCR cdylib staged as `ac_fastdeploy_ppocr.dll`.
 
 Each artifact contains a root `BUILD-MANIFEST.json`. The verifier independently
 resolves the commit tree and `Cargo.lock` bytes from GitHub, selects exactly one
@@ -50,11 +51,16 @@ on drive `D:`. Component selection is explicit:
   and the v3.7.0 dictionary. Because this script must not load a model/provider,
   the result is recorded as `PendingVerification` and fails before it can be used
   as a ready Runtime contract.
+- `onnxruntime-gpu-1.24.4` downloads the exact official ONNX Runtime v1.24.4
+  Windows GPU archive and extracts only `onnxruntime.dll`,
+  `onnxruntime_providers_shared.dll`, and `onnxruntime_providers_cuda.dll` under
+  fixed file-count and byte bounds. It does not infer or copy CUDA/cuDNN/driver
+  files from `PATH`, System32, or another cache.
 - `provider-v0.3` accepts an exact-hash caller manifest using
-  `actingcommand.vision_provider_artifacts.v0.3`. It rehashes and copies the
-  declared provider, single ONNX Runtime library, detector, recognizer, and
-  dictionary. It also remains `PendingVerification` without a permitted
-  functional provider check.
+  `actingcommand.vision_provider_artifacts.v0.3` plus an exact-hash private
+  `actingcommand.provider_runtime_dependencies.v1` manifest. It rehashes and
+  copies the canonical provider, detector, recognizer, dictionary, selected
+  `onnxruntime.dll`, and every declared companion DLL.
 - `mumu-nemu-installed` records metadata for one explicit installed root and
   `nx_device` version. Vendor files remain in place and are never copied or run.
 
@@ -76,13 +82,28 @@ pwsh -NoProfile -File scripts/windows-tools/Materialize-TaskToolCache.ps1 `
   -CudaDeviceOrdinal 0 `
   -CudaStableIdentity 'cuda-uuid:...' `
   -ProviderArtifactManifestPath D:\task\runtime-check\provider\artifacts.json `
-  -ProviderArtifactManifestSha256 <64-lowercase-hex>
+  -ProviderArtifactManifestSha256 <64-lowercase-hex> `
+  -ProviderDependencyManifestPath D:\task\runtime-check\provider\dependencies.json `
+  -ProviderDependencyManifestSha256 <64-lowercase-hex>
 ```
 
+The private dependency manifest must declare `backend`, `closure_complete: true`,
+`selected_core_path`, and a bounded `dependencies` array. Each dependency records
+`path`, `sha256`, `source`, `version`, `license_provenance_note`, and `kind` set to
+either `onnxruntime_archive` or `external_cuda`. The selected core occurs exactly
+once. CPU omits `cuda_device`; CUDA requires an ordinal, stable identity, all three
+pinned ONNX Runtime DLL names, and at least one explicit task-local external CUDA
+dependency record. Duplicate or case-colliding names, path escapes, reparse points,
+missing companions, undeclared fallback, hash mismatch, and count or byte overflow
+fail loud.
+
 Every published cache directory contains `PROVENANCE.json` with selected sources,
-versions, sizes, hashes, license notes, explicit backend, fallback state, execution
-state, and cleanup classification. A source archive is not evidence that its
-contents satisfy the Runtime ONNX/provider contract.
+versions, original paths, cache paths, sizes, hashes, license notes, explicit
+backend, fallback state, execution state, and cleanup classification. A clean
+`provider/vision-provider-artifacts.v0.3.json` is emitted with only existing public
+fields and rewritten task-cache paths. `Ready` means exact bytes were materialized;
+`functional_validation_performed` remains false and provider identity, DLL-load
+closure, selected device, accuracy, and performance remain Pending Verification.
 
 ## Cleanup
 

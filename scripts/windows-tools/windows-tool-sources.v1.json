@@ -2,7 +2,7 @@
   "schema_version": "actingcommand.windows_tool_sources.v1",
   "cache_layout": {
     "directory_name": "actingcommand-windows-tools-v1",
-    "max_total_download_bytes": 335544320,
+    "max_total_download_bytes": 536870912,
     "cleanup_classification": "task_local_reproducible_cache",
     "cleanup_timing": "remove_after_handoff_and_process_release; preserve provenance and hashes"
   },
@@ -26,11 +26,41 @@
       },
       "extract_relative_path": "platform-tools-37.0.1",
       "max_extract_bytes": 67108864,
+      "max_extract_file_count": 64,
       "required_files": [
         "platform-tools/adb.exe",
         "platform-tools/AdbWinApi.dll",
         "platform-tools/AdbWinUsbApi.dll",
         "platform-tools/source.properties"
+      ]
+    },
+    "onnxruntime-gpu-1.24.4": {
+      "kind": "download_zip",
+      "version": "v1.24.4",
+      "license": {
+        "id": "MIT",
+        "url": "https://github.com/microsoft/onnxruntime/blob/v1.24.4/LICENSE",
+        "redistribution": "task_local_cache_only"
+      },
+      "archive": {
+        "url": "https://github.com/microsoft/onnxruntime/releases/download/v1.24.4/onnxruntime-win-x64-gpu-1.24.4.zip",
+        "relative_path": "downloads/onnxruntime-win-x64-gpu-1.24.4.zip",
+        "size": 280958859,
+        "sha256": "ef3337a0b8184eb8beec310f7c83bd50376b3eefc43aab84ac8e452f6987df0a",
+        "hash_provenance": "sha256 independently computed from the exact official GitHub release asset"
+      },
+      "extract_relative_path": "onnxruntime-gpu-1.24.4",
+      "max_extract_bytes": 1073741824,
+      "max_extract_file_count": 3,
+      "extract_allowlist": [
+        "onnxruntime-win-x64-gpu-1.24.4/lib/onnxruntime.dll",
+        "onnxruntime-win-x64-gpu-1.24.4/lib/onnxruntime_providers_shared.dll",
+        "onnxruntime-win-x64-gpu-1.24.4/lib/onnxruntime_providers_cuda.dll"
+      ],
+      "required_files": [
+        "onnxruntime-win-x64-gpu-1.24.4/lib/onnxruntime.dll",
+        "onnxruntime-win-x64-gpu-1.24.4/lib/onnxruntime_providers_shared.dll",
+        "onnxruntime-win-x64-gpu-1.24.4/lib/onnxruntime_providers_cuda.dll"
       ]
     },
     "ppocrv6-medium-source": {
@@ -110,7 +140,29 @@
       "schema_version": "actingcommand.vision_provider_artifacts.v0.3",
       "allowed_backends": ["cpu", "cuda"],
       "strict_no_fallback_required": true,
-      "copy_scope": "provider and single ONNX Runtime library only; source manifest and hashes remain authoritative"
+      "dependency_manifest_schema": "actingcommand.provider_runtime_dependencies.v1",
+      "max_runtime_file_count": 64,
+      "max_runtime_total_bytes": 2147483648,
+      "selected_core_name": "onnxruntime.dll",
+      "onnxruntime_archive_component": "onnxruntime-gpu-1.24.4",
+      "onnxruntime_archive_names": [
+        "onnxruntime.dll",
+        "onnxruntime_providers_shared.dll",
+        "onnxruntime_providers_cuda.dll"
+      ],
+      "required_names": {
+        "cpu": [
+          "onnxruntime.dll",
+          "onnxruntime_providers_shared.dll"
+        ],
+        "cuda": [
+          "onnxruntime.dll",
+          "onnxruntime_providers_shared.dll",
+          "onnxruntime_providers_cuda.dll"
+        ]
+      },
+      "external_cuda_provenance_required": true,
+      "copy_scope": "canonical provider, models, selected core, bounded declared companions, and explicit external CUDA dependencies"
     },
     "mumu-nemu-installed": {
       "kind": "installed_metadata_only",
