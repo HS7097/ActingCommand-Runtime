@@ -1180,6 +1180,9 @@ fn resolve_vision_artifact_paths(
         for path in &mut artifacts.runtime_library_paths {
             resolve_relative_path(artifact_root, path);
         }
+        if let Some(path) = &mut artifacts.runtime_library_path {
+            resolve_relative_path(artifact_root, path);
+        }
         resolve_relative_path(artifact_root, &mut artifacts.detector_model_path);
         resolve_relative_path(artifact_root, &mut artifacts.recognizer_model_path);
         resolve_relative_path(artifact_root, &mut artifacts.dictionary_path);
@@ -1294,6 +1297,7 @@ const fn enabled() -> bool {
 mod tests {
     use super::*;
     use actingcommand_contract::IdentifierIssuer;
+    use actingcommand_vision_ffi::{FastDeployPpocrArtifacts, OnnxExecutionProvider};
     use serde_json::json;
     use std::io::Write;
     use std::sync::Mutex;
@@ -1936,6 +1940,125 @@ mod tests {
         assert_eq!(
             invalid.assemble().err(),
             Some("vision_provider_manifest_invalid")
+        );
+    }
+
+    fn absolute_artifact_root(label: &str) -> PathBuf {
+        #[cfg(windows)]
+        {
+            PathBuf::from(format!(r"C:\synthetic-artifact-root\{label}"))
+        }
+        #[cfg(not(windows))]
+        {
+            PathBuf::from(format!("/synthetic-artifact-root/{label}"))
+        }
+    }
+
+    fn fastdeploy_manifest(
+        runtime_library_paths: Vec<PathBuf>,
+        runtime_library_path: PathBuf,
+    ) -> VisionProviderArtifactManifest {
+        VisionProviderArtifactManifest {
+            schema_version: VISION_PROVIDER_ARTIFACTS_SCHEMA_VERSION.to_string(),
+            fastdeploy_ppocr: Some(FastDeployPpocrArtifacts {
+                provider_library_path: PathBuf::from("provider.dll"),
+                provider_library_sha256: None,
+                runtime_library_paths,
+                runtime_library_path: Some(runtime_library_path),
+                runtime_library_sha256: None,
+                detector_model_path: PathBuf::from("detector.onnx"),
+                recognizer_model_path: PathBuf::from("recognizer.onnx"),
+                dictionary_path: PathBuf::from("dictionary.txt"),
+                classifier_model_path: None,
+                model_ref: None,
+                model_sha256: None,
+                detector_model_sha256: None,
+                recognizer_model_sha256: None,
+                dictionary_sha256: None,
+                classifier_model_sha256: None,
+                execution_provider: Some(OnnxExecutionProvider::Cpu),
+                cuda_device: None,
+                strict_no_fallback: Some(true),
+                supported_languages: vec!["neutral".to_string()],
+                default_timeout_ms: 1_000,
+            }),
+            onnxruntime: None,
+        }
+    }
+
+    #[test]
+    fn fastdeploy_selected_runtime_identity_resolves_with_relative_closure() {
+        let artifact_root = absolute_artifact_root("relative");
+        let mut manifest = fastdeploy_manifest(
+            vec![
+                PathBuf::from("runtime/companion.dll"),
+                PathBuf::from("runtime/onnxruntime.dll"),
+            ],
+            PathBuf::from("runtime/onnxruntime.dll"),
+        );
+
+        resolve_vision_artifact_paths(&mut manifest, &artifact_root);
+
+        let artifacts = manifest.fastdeploy_ppocr.as_ref().expect("OCR artifacts");
+        assert_eq!(
+            artifacts.runtime_library_paths,
+            [
+                artifact_root.join("runtime/companion.dll"),
+                artifact_root.join("runtime/onnxruntime.dll"),
+            ]
+        );
+        assert_eq!(
+            artifacts
+                .onnxruntime_library_path()
+                .expect("selected runtime identity"),
+            artifact_root.join("runtime/onnxruntime.dll")
+        );
+    }
+
+    #[test]
+    fn fastdeploy_absolute_runtime_identity_and_closure_remain_unchanged() {
+        let artifact_root = absolute_artifact_root("unused");
+        let runtime_root = absolute_artifact_root("runtime");
+        let runtime_paths = vec![
+            runtime_root.join("companion.dll"),
+            runtime_root.join("onnxruntime.dll"),
+        ];
+        let selected = runtime_paths[1].clone();
+        let mut manifest = fastdeploy_manifest(runtime_paths.clone(), selected.clone());
+
+        resolve_vision_artifact_paths(&mut manifest, &artifact_root);
+
+        let artifacts = manifest.fastdeploy_ppocr.as_ref().expect("OCR artifacts");
+        assert_eq!(artifacts.runtime_library_paths, runtime_paths);
+        assert_eq!(artifacts.runtime_library_path.as_ref(), Some(&selected));
+        assert_eq!(
+            artifacts
+                .onnxruntime_library_path()
+                .expect("selected runtime identity"),
+            selected
+        );
+    }
+
+    #[test]
+    fn fastdeploy_runtime_identity_mismatch_remains_fail_closed() {
+        let artifact_root = absolute_artifact_root("mismatch");
+        let mut manifest = fastdeploy_manifest(
+            vec![PathBuf::from("runtime/companion.dll")],
+            PathBuf::from("runtime/onnxruntime.dll"),
+        );
+
+        resolve_vision_artifact_paths(&mut manifest, &artifact_root);
+
+        let error = manifest
+            .fastdeploy_ppocr
+            .as_ref()
+            .expect("OCR artifacts")
+            .onnxruntime_library_path()
+            .expect_err("selected runtime outside closure rejected");
+        assert!(
+            error
+                .message()
+                .contains("runtime_library_path must occur exactly once")
         );
     }
 
