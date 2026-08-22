@@ -3315,7 +3315,7 @@ mod post_admission_ocr_tests {
             model_ref: "PP-OCRv6_medium".to_string(),
             model_sha256: "a".repeat(64),
             cpu_ep_registered: true,
-            cpu_fallback_disabled: true,
+            cpu_fallback_disabled: false,
             fallback_forbidden: true,
             fallback_observed: None,
             complete: true,
@@ -3601,7 +3601,7 @@ mod post_admission_ocr_tests {
         let evaluator = RecognitionEvaluator::with_vision_provider(
             pack,
             Arc::new(FsAssetResolver::new(PathBuf::new())),
-            provider,
+            provider.clone(),
         )
         .expect("stability evaluator");
         let page_set: PageSet = serde_json::from_value(serde_json::json!({
@@ -3667,6 +3667,7 @@ mod post_admission_ocr_tests {
             Some("comparison_recorded")
         );
         assert_eq!(runtime.inputs, 3);
+        assert_eq!(provider.calls.load(Ordering::SeqCst), 2);
         assert_eq!(
             runtime
                 .traces

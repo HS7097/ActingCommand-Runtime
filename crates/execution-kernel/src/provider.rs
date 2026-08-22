@@ -759,7 +759,8 @@ mod tests {
             assert_eq!(evidence.requested_provider, evidence.resolved_provider);
             assert_eq!(evidence.requested_cuda_ordinal, cuda_ordinal);
             assert_eq!(evidence.resolved_cuda_ordinal, cuda_ordinal);
-            assert!(evidence.cpu_fallback_disabled);
+            assert_eq!(evidence.cpu_ep_registered, provider_name == "cpu");
+            assert_eq!(evidence.cpu_fallback_disabled, provider_name == "cuda");
             assert!(evidence.fallback_forbidden);
             assert_eq!(evidence.fallback_observed, None);
         }
@@ -990,7 +991,7 @@ mod tests {
             },
             "registered_execution_providers": [provider],
             "cpu_ep_registered": provider == "cpu",
-            "cpu_fallback_disabled": true,
+            "cpu_fallback_disabled": provider == "cuda",
             "fallback_policy": "forbidden",
             "fallback_observed": null,
             "complete": true
