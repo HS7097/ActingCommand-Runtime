@@ -2,11 +2,11 @@
 
 use actingcommand_vision_ffi::{
     CudaDeviceSelector, FastDeployPpocrArtifacts, FastDeployPpocrBackend, NnEngine,
-    NnInferenceRequest, OcrEngine, OcrInferenceRequest, OnnxExecutionProvider,
-    OnnxRuntimeArtifacts, OnnxRuntimeBackend, VisionFfiError, VisionFfiResult, VisionFrame,
-    VisionPixelFormat, VisionProviderArtifactManifest, VisionRect,
-    validate_fastdeploy_ppocr_provider_abi, validate_onnxruntime_provider_abi,
-    validate_runtime_library_loadable,
+    NnInferenceRequest, OcrEngine, OcrExecutionAttestation, OcrInferenceOutput,
+    OcrInferenceRequest, OnnxExecutionProvider, OnnxRuntimeArtifacts, OnnxRuntimeBackend,
+    VisionFfiError, VisionFfiErrorCode, VisionFfiResult, VisionFrame, VisionPixelFormat,
+    VisionProviderArtifactManifest, VisionRect, validate_fastdeploy_ppocr_provider_abi,
+    validate_onnxruntime_provider_abi, validate_runtime_library_loadable,
 };
 use image::ImageFormat;
 use serde::{Deserialize, Serialize};
@@ -101,6 +101,15 @@ struct InferenceSmokeReport<T> {
     backend: &'static str,
     frame: FrameReport,
     result: T,
+}
+
+#[derive(Debug, Serialize)]
+struct OcrSmokeReport<T> {
+    ok: bool,
+    backend: &'static str,
+    frame: FrameReport,
+    result: T,
+    execution_attestation: OcrExecutionAttestation,
 }
 
 #[derive(Debug, Serialize)]
@@ -524,9 +533,7 @@ fn build_report(options: &CheckOptions) -> VisionFfiResult<CheckReport> {
     })
 }
 
-fn run_ocr_smoke(
-    options: &CheckOptions,
-) -> VisionFfiResult<InferenceSmokeReport<serde_json::Value>> {
+fn run_ocr_smoke(options: &CheckOptions) -> VisionFfiResult<OcrSmokeReport<serde_json::Value>> {
     let CheckMode::OcrSmoke { frame, region } = &options.mode else {
         return Err(VisionFfiError::fatal(
             "vision-provider-check",
@@ -541,23 +548,38 @@ fn run_ocr_smoke(
         Some(region) => *region,
         None => VisionRect::full_frame(&vision_frame)?,
     };
-    let result = backend.read_text(OcrInferenceRequest {
+    let output = backend.read_text_with_attestation(OcrInferenceRequest {
         frame: vision_frame,
         region,
         languages: artifacts.supported_languages,
         timeout_ms: artifacts.default_timeout_ms,
     })?;
-    let result = serde_json::to_value(result).map_err(|err| {
+    build_ocr_smoke_report(frame_report, output)
+}
+
+fn build_ocr_smoke_report(
+    frame: FrameReport,
+    output: OcrInferenceOutput,
+) -> VisionFfiResult<OcrSmokeReport<serde_json::Value>> {
+    let execution_attestation = output.execution_attestation.ok_or_else(|| {
+        VisionFfiError::fatal_with_code(
+            VisionFfiErrorCode::InvalidResponse,
+            "vision-provider-check",
+            "OCR smoke response is missing the validated execution attestation",
+        )
+    })?;
+    let result = serde_json::to_value(output.result).map_err(|err| {
         VisionFfiError::fatal(
             "vision-provider-check",
             format!("failed to serialize OCR smoke result: {err}"),
         )
     })?;
-    Ok(InferenceSmokeReport {
+    Ok(OcrSmokeReport {
         ok: true,
         backend: "fastdeploy_ppocr",
-        frame: frame_report,
+        frame,
         result,
+        execution_attestation,
     })
 }
 
@@ -1673,6 +1695,49 @@ mod tests {
     }
 
     #[test]
+    fn ocr_smoke_report_preserves_result_and_exposes_typed_attestation() {
+        let report = build_ocr_smoke_report(
+            synthetic_frame_report(),
+            synthetic_ocr_output(Some(synthetic_ocr_attestation())),
+        )
+        .expect("attested OCR smoke report");
+        let json = serde_json::to_value(report).expect("serialize OCR smoke report");
+
+        assert_eq!(json["ok"], true);
+        assert_eq!(json["backend"], "fastdeploy_ppocr");
+        assert_eq!(json["frame"]["path"], "fixture.png");
+        assert_eq!(json["frame"]["width"], 2);
+        assert_eq!(json["frame"]["height"], 1);
+        assert_eq!(json["result"]["text"], "fixture text");
+        assert_eq!(
+            json["execution_attestation"]["schema_version"],
+            "actingcommand.ocr_execution_attestation.v1"
+        );
+        assert_eq!(
+            json["execution_attestation"]["session"]["key"]["requested_backend"],
+            "cpu"
+        );
+        assert_eq!(
+            json["execution_attestation"]["resolved_execution_provider"],
+            "cpu"
+        );
+        assert_eq!(json["execution_attestation"]["complete"], true);
+    }
+
+    #[test]
+    fn ocr_smoke_report_rejects_missing_attestation_before_success() {
+        let err = build_ocr_smoke_report(synthetic_frame_report(), synthetic_ocr_output(None))
+            .expect_err("missing execution attestation rejected");
+
+        assert_eq!(err.code(), VisionFfiErrorCode::InvalidResponse);
+        assert_eq!(err.module(), "vision-provider-check");
+        assert!(
+            err.message()
+                .contains("missing the validated execution attestation")
+        );
+    }
+
+    #[test]
     fn nn_smoke_requires_existing_artifacts_before_fake_success() {
         let root = temp_fixture_dir("nn-smoke-missing-files");
         let manifest = root.join("manifest.json");
@@ -2185,6 +2250,74 @@ mod tests {
         let _ = fs::remove_dir_all(&root);
         fs::create_dir_all(&root).expect("fixture root");
         root
+    }
+
+    fn synthetic_frame_report() -> FrameReport {
+        FrameReport {
+            path: "fixture.png".to_string(),
+            width: 2,
+            height: 1,
+            pixel_format: "rgb8",
+        }
+    }
+
+    fn synthetic_ocr_output(
+        execution_attestation: Option<OcrExecutionAttestation>,
+    ) -> OcrInferenceOutput {
+        OcrInferenceOutput {
+            result: actingcommand_vision_ffi::OcrInferenceResult {
+                text: "fixture text".to_string(),
+                blocks: Vec::new(),
+                confidence: Some(1.0),
+                backend: actingcommand_vision_ffi::VisionBackendKind::FastDeployPpocr,
+                warnings: Vec::new(),
+            },
+            execution_attestation,
+        }
+    }
+
+    fn synthetic_ocr_attestation() -> OcrExecutionAttestation {
+        serde_json::from_value(serde_json::json!({
+            "schema_version": "actingcommand.ocr_execution_attestation.v1",
+            "invocation_id": "ocr-invocation-0000000000000001",
+            "session": {
+                "session_id": "ocr-session-0000000000000001",
+                "generation": 1,
+                "key": {
+                    "provider_library_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                    "runtime_library_path": "onnxruntime.dll",
+                    "runtime_library_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+                    "onnxruntime_version": "1.24.4",
+                    "model_ref": "PP-OCRv6_medium",
+                    "model_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+                    "requested_backend": "cpu",
+                    "requested_cuda_device": null,
+                    "resolved_cuda_device": null,
+                    "provider_options_sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+                }
+            },
+            "resolved_execution_provider": "cpu",
+            "provider": {
+                "implementation": "actingcommand-ppocr-onnx-json",
+                "crate_version": "0.1.0",
+                "build_git_sha": null,
+                "binary_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            },
+            "runtime": {
+                "onnxruntime_version": "1.24.4",
+                "onnxruntime_build_info": "synthetic provider-check test",
+                "cuda_driver_version": null,
+                "cuda_runtime_version": null,
+                "cudnn_version": null
+            },
+            "registered_execution_providers": ["cpu"],
+            "cpu_ep_registered": true,
+            "cpu_fallback_disabled": false,
+            "fallback_policy": "forbidden",
+            "fallback_observed": null,
+            "complete": true
+        }))
+        .expect("typed synthetic OCR execution attestation")
     }
 
     fn write_artifact(path: &Path, bytes: &[u8]) {
