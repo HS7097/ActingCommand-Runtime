@@ -134,6 +134,8 @@ const MAX_REQUEST_CACHE_ENTRIES: usize = 4096;
 const MAX_TRUSTED_POLICY_DISPATCHES: usize = 16_384;
 const MAX_AUTHORITATIVE_POLICY_OUTCOMES: usize = 16_384;
 const MAX_MONITOR_PROBES_PER_TICK: usize = 16;
+const MAX_CONTAINED_TASK_OCR_FAILURE_DETAIL_BYTES: usize = 64 * 1024;
+const CONTAINED_TASK_POST_ADMISSION_OCR_FAILED: &str = "contained_task_post_admission_ocr_failed";
 const POLICY_CONNECTION_VALUE: u64 = u64::MAX;
 
 /// Runtime-owned policy inputs supplied by trusted host integrations.
@@ -557,6 +559,8 @@ impl RuntimeHost {
             scheduling_terminal_append_failures: AtomicU64::new(0),
             #[cfg(test)]
             contained_task_stability_persistence_failures: AtomicU64::new(0),
+            #[cfg(test)]
+            contained_task_ocr_failure_persistence_failures: AtomicU64::new(0),
             #[cfg(test)]
             policy_outcome_projection_failures: AtomicU64::new(0),
             #[cfg(test)]
@@ -1506,6 +1510,16 @@ impl RuntimeHost {
         self.shared_ref("inject_test_contained_task_stability_event_append_failure")?
             .contained_task_stability_persistence_failures
             .store(2, Ordering::Release);
+        Ok(())
+    }
+
+    #[cfg(test)]
+    pub(crate) fn fail_next_contained_task_ocr_failure_persistence_for_test(
+        &self,
+    ) -> RuntimeHostResult<()> {
+        self.shared_ref("inject_test_contained_task_ocr_failure_persistence")?
+            .contained_task_ocr_failure_persistence_failures
+            .store(1, Ordering::Release);
         Ok(())
     }
 
@@ -2849,6 +2863,8 @@ struct HostShared {
     scheduling_terminal_append_failures: AtomicU64,
     #[cfg(test)]
     contained_task_stability_persistence_failures: AtomicU64,
+    #[cfg(test)]
+    contained_task_ocr_failure_persistence_failures: AtomicU64,
     #[cfg(test)]
     policy_outcome_projection_failures: AtomicU64,
     #[cfg(test)]
@@ -10428,6 +10444,12 @@ impl HostShared {
             capture_evidence: CaptureEvidenceAccumulator::default(),
         };
         let execution = prepared.run(&mut runtime);
+        let post_admission_ocr_failure_diagnostic = match &execution {
+            Err(ContainedTaskRunError::Task(error)) => {
+                runtime.record_post_admission_ocr_failure(error.code(), error.detail())
+            }
+            _ => Ok(()),
+        };
         let finalizing = runtime.finalizing;
         let mut capture_evidence = std::mem::take(&mut runtime.capture_evidence);
         drop(runtime);
@@ -10634,6 +10656,12 @@ impl HostShared {
                     code: error.code(),
                     severity,
                 });
+                let failure = match post_admission_ocr_failure_diagnostic {
+                    Ok(()) => failure,
+                    Err(diagnostic_failure) => {
+                        failure.replace_with_poison(*diagnostic_failure.error)
+                    }
+                };
                 return Err(self.cleanup_composite_failure_with_run_links(
                     request,
                     token,
@@ -13415,6 +13443,22 @@ struct RuntimeContainedTaskOcrComparisonDiagnostic<'a> {
     report: &'a PostAdmissionOcrComparisonReport,
 }
 
+#[derive(serde::Serialize)]
+struct RuntimeContainedTaskOcrFailureDiagnostic<'a> {
+    schema_version: &'static str,
+    request_id: RequestId,
+    correlation_id: CorrelationId,
+    instance_id: InstanceId,
+    lease_id: LeaseId,
+    task_id: &'a TaskId,
+    run_id: &'a RunId,
+    frame_id: &'a FrameId,
+    failure_code: &'static str,
+    detail: &'a str,
+    detail_utf8_bytes: usize,
+    detail_sha256: String,
+}
+
 impl RuntimeContainedTask<'_> {
     fn ensure_active(&self) -> Result<(), RequestFailure> {
         let Some(reason) = self.control.cancellation_reason(
@@ -13530,6 +13574,73 @@ impl RuntimeContainedTask<'_> {
                     "persist_contained_task_post_admission_ocr",
                 ))
             })
+    }
+
+    fn record_post_admission_ocr_failure(
+        &self,
+        failure_code: &'static str,
+        detail: Option<&str>,
+    ) -> Result<(), RequestFailure> {
+        let Some(detail) = bounded_post_admission_ocr_failure_detail(failure_code, detail)
+            .map_err(RequestFailure::poison_without_terminal)?
+        else {
+            return Ok(());
+        };
+        let frame_id = self.last_frame_id.ok_or_else(|| {
+            RequestFailure::poison_without_terminal(RuntimeHostError::fatal(
+                "contained_task_post_admission_ocr_failure_frame_missing",
+                "run_contained_task",
+                RuntimeErrorCode::RuntimeFatal,
+            ))
+        })?;
+        let event_links = self.links();
+        let request_id = event_links.request_id().copied().ok_or_else(|| {
+            RequestFailure::poison_without_terminal(RuntimeHostError::fatal(
+                "contained_task_post_admission_ocr_failure_request_missing",
+                "run_contained_task",
+                RuntimeErrorCode::RuntimeFatal,
+            ))
+        })?;
+        let correlation_id = event_links.correlation_id().copied().ok_or_else(|| {
+            RequestFailure::poison_without_terminal(RuntimeHostError::fatal(
+                "contained_task_post_admission_ocr_failure_correlation_missing",
+                "run_contained_task",
+                RuntimeErrorCode::RuntimeFatal,
+            ))
+        })?;
+        let diagnostic = RuntimeContainedTaskOcrFailureDiagnostic {
+            schema_version: "actingcommand.runtime.post-admission-ocr-failure.v1",
+            request_id,
+            correlation_id,
+            instance_id: self.token.instance_id(),
+            lease_id: self.token.lease_id(),
+            task_id: self.task_id.transport(),
+            run_id: self.run_id.transport(),
+            frame_id: frame_id.transport(),
+            failure_code,
+            detail,
+            detail_utf8_bytes: detail.len(),
+            detail_sha256: format!("{:x}", Sha256::digest(detail.as_bytes())),
+        };
+        let bytes = serde_json::to_vec(&diagnostic).map_err(|_| {
+            RequestFailure::poison_without_terminal(RuntimeHostError::fatal(
+                "contained_task_post_admission_ocr_failure_evidence_encode_failed",
+                "run_contained_task",
+                RuntimeErrorCode::RuntimeFatal,
+            ))
+        })?;
+        #[cfg(test)]
+        if self
+            .host
+            .contained_task_ocr_failure_persistence_failures
+            .swap(0, Ordering::AcqRel)
+            == 1
+        {
+            return Err(RequestFailure::poison_without_terminal(
+                artifact_store_error("persist_contained_task_post_admission_ocr_failure"),
+            ));
+        }
+        self.persist_post_admission_ocr_diagnostic(frame_id, &bytes)
     }
 
     fn record_post_admission_ocr_observation(
@@ -13860,6 +13971,61 @@ impl RuntimeContainedTask<'_> {
         state.terminal_recorded = true;
         Ok(())
     }
+}
+
+fn bounded_post_admission_ocr_failure_detail<'a>(
+    failure_code: &str,
+    detail: Option<&'a str>,
+) -> RuntimeHostResult<Option<&'a str>> {
+    if failure_code != CONTAINED_TASK_POST_ADMISSION_OCR_FAILED {
+        return Ok(None);
+    }
+    let Some(detail) = detail else {
+        return Ok(None);
+    };
+    if detail.len() > MAX_CONTAINED_TASK_OCR_FAILURE_DETAIL_BYTES {
+        return Err(RuntimeHostError::fatal(
+            "contained_task_post_admission_ocr_failure_detail_too_large",
+            "persist_contained_task_post_admission_ocr_failure",
+            RuntimeErrorCode::RuntimeFatal,
+        ));
+    }
+    Ok(Some(detail))
+}
+
+#[cfg(test)]
+#[test]
+fn post_admission_ocr_failure_detail_gate_is_exact_and_bounded() {
+    assert_eq!(
+        bounded_post_admission_ocr_failure_detail("another_task_error", Some("detail"))
+            .expect("different error is ignored"),
+        None
+    );
+    assert_eq!(
+        bounded_post_admission_ocr_failure_detail(CONTAINED_TASK_POST_ADMISSION_OCR_FAILED, None,)
+            .expect("missing detail is ignored"),
+        None
+    );
+    assert_eq!(
+        bounded_post_admission_ocr_failure_detail(
+            CONTAINED_TASK_POST_ADMISSION_OCR_FAILED,
+            Some("complete detail"),
+        )
+        .expect("bounded detail"),
+        Some("complete detail")
+    );
+
+    let oversized = "x".repeat(MAX_CONTAINED_TASK_OCR_FAILURE_DETAIL_BYTES + 1);
+    let error = bounded_post_admission_ocr_failure_detail(
+        CONTAINED_TASK_POST_ADMISSION_OCR_FAILED,
+        Some(&oversized),
+    )
+    .expect_err("oversized detail must fail closed");
+    assert_eq!(
+        error.code(),
+        "contained_task_post_admission_ocr_failure_detail_too_large"
+    );
+    assert!(error.is_fatal());
 }
 
 fn contained_task_stability_failure(code: &'static str) -> RequestFailure {
