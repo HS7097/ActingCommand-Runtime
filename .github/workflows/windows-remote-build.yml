@@ -99,7 +99,7 @@ jobs:
             throw "rustup default failed with exit code $LASTEXITCODE"
           }
 
-      - name: Build five Windows executables
+      - name: Build Windows executables and PP-OCR provider
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
@@ -110,7 +110,32 @@ jobs:
             --bin actingcommand-vision-provider-check `
             --bin actingcommand-device-test
           if ($LASTEXITCODE -ne 0) {
-            throw "cargo build failed with exit code $LASTEXITCODE"
+            throw "executable cargo build failed with exit code $LASTEXITCODE"
+          }
+          & cargo build --locked --release --target x86_64-pc-windows-msvc `
+            --package actingcommand-ppocr-onnx-json-provider
+          if ($LASTEXITCODE -ne 0) {
+            throw "PP-OCR provider cargo build failed with exit code $LASTEXITCODE"
+          }
+
+      - name: Test Windows artifact tooling without provider execution
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $taskRoot = Join-Path $env:RUNNER_TEMP "actingcommand-windows-tools-$env:GITHUB_RUN_ATTEMPT"
+          $testRoot = Join-Path $taskRoot 'tests'
+          $processTemp = Join-Path $taskRoot 'process-temp'
+          New-Item -ItemType Directory -Path $taskRoot, $processTemp -Force | Out-Null
+          $env:TEMP = $processTemp
+          $env:TMP = $processTemp
+          & ./scripts/windows-tools/Test-WindowsRemoteBuildTools.ps1 `
+            -TaskRoot $taskRoot `
+            -TestRoot $testRoot `
+            -VisionProviderCheckExecutable (
+              Join-Path $PWD 'target\x86_64-pc-windows-msvc\release\actingcommand-vision-provider-check.exe'
+            )
+          if (-not $?) {
+            throw 'Windows artifact tooling tests failed'
           }
 
       - name: Stage exact-SHA artifacts and manifests
@@ -138,7 +163,8 @@ jobs:
           $toolFiles = @(
             'actinglab.exe',
             'actingcommand-vision-provider-check.exe',
-            'actingcommand-device-test.exe'
+            'actingcommand-device-test.exe',
+            'ac_fastdeploy_ppocr.dll'
           )
 
           function Copy-BuildFiles {
@@ -205,7 +231,21 @@ jobs:
           }
 
           Copy-BuildFiles -Names $runtimeFiles -Destination $runtimeDir
-          Copy-BuildFiles -Names $toolFiles -Destination $toolsDir
+          Copy-BuildFiles -Names @(
+            'actinglab.exe',
+            'actingcommand-vision-provider-check.exe',
+            'actingcommand-device-test.exe'
+          ) -Destination $toolsDir
+          $providerSource = Join-Path $buildDir 'actingcommand_ppocr_onnx_json_provider.dll'
+          if (-not (Test-Path -LiteralPath $providerSource -PathType Leaf)) {
+            throw "expected PP-OCR provider output is missing: $providerSource"
+          }
+          if ((Get-Item -LiteralPath $providerSource -ErrorAction Stop).Length -le 0) {
+            throw "expected PP-OCR provider output is empty: $providerSource"
+          }
+          Copy-Item -LiteralPath $providerSource -Destination (
+            Join-Path $toolsDir 'ac_fastdeploy_ppocr.dll'
+          )
           New-BuildManifest `
             -ArtifactName $runtimeArtifactName `
             -Directory $runtimeDir `
