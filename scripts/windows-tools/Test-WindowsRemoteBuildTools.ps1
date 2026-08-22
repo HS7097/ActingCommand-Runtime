@@ -362,6 +362,48 @@ try {
         & $downloader -Repository $repository -SourceSha $sourceSha -ArtifactKind Runtime -TaskRoot $testRootFull -OutputPath $positiveOutput -GhExecutable $fakeGh
     }
 
+    $script:CurrentCase = 'materializer-download-body-timeout-is-bounded'
+    $timeoutFixtureRoot = Join-Path $testRootFull 'download-timeout-fixture'
+    $timeoutSource = Join-Path $timeoutFixtureRoot 'stalled-body.bin'
+    Write-Utf8NoBom -Path $timeoutSource -Text (('bounded-stalled-body-fixture-' * 128) + "`n")
+    $timeoutSourceItem = Get-Item -LiteralPath $timeoutSource -ErrorAction Stop
+    $timeoutSourceHash = Get-Sha256 -Path $timeoutSource
+    $timeoutManifest = Get-Content -LiteralPath $sourcesManifest -Raw | ConvertFrom-Json -Depth 100
+    $timeoutArchive = $timeoutManifest.components.'platform-tools-37.0.1'.archive
+    $timeoutArchive.url = 'https://example.invalid/stalled-body.zip'
+    $timeoutArchive.size = [long]$timeoutSourceItem.Length
+    $timeoutArchive.sha256 = $timeoutSourceHash
+    $timeoutManifestPath = Join-Path $timeoutFixtureRoot 'windows-tool-sources.timeout.json'
+    [void](Write-JsonFixture -Path $timeoutManifestPath -Value $timeoutManifest)
+    $timeoutCache = Join-Path $testRootFull 'cache/download-timeout'
+    $timeoutMessage = $null
+    $timeoutUnexpectedSuccess = $false
+    $timeoutStopwatch = [Diagnostics.Stopwatch]::StartNew()
+    try {
+        & $materializer `
+            -TaskRoot $testRootFull `
+            -CacheRoot $timeoutCache `
+            -Component platform-tools-37.0.1 `
+            -SourcesManifestPath $timeoutManifestPath `
+            -AcceptAndroidSdkLicense `
+            -PrivateDownloadSourcePath $timeoutSource `
+            -PrivateDownloadDeadlineMilliseconds 150 `
+            -PrivateDownloadStallBody | Out-Null
+        $timeoutUnexpectedSuccess = $true
+    }
+    catch {
+        $timeoutMessage = $_.Exception.Message
+    }
+    finally {
+        $timeoutStopwatch.Stop()
+    }
+    Assert-True -Condition (-not $timeoutUnexpectedSuccess) -Message 'stalled body unexpectedly completed'
+    Assert-True -Condition ($timeoutMessage -match 'download timed out for https://example\.invalid/stalled-body\.zip after deadline 150ms') -Message "stalled body failed for the wrong reason: $timeoutMessage"
+    Assert-True -Condition ($timeoutStopwatch.ElapsedMilliseconds -ge 50 -and $timeoutStopwatch.ElapsedMilliseconds -le 3000) -Message "stalled body deadline was not bounded: elapsed_ms=$($timeoutStopwatch.ElapsedMilliseconds)"
+    $timeoutResidue = @(Get-ChildItem -LiteralPath $timeoutCache -Force -Recurse -ErrorAction Stop)
+    Assert-True -Condition ($timeoutResidue.Count -eq 0) -Message 'stalled body left a final publication or partial download'
+    Complete-Case -Name $script:CurrentCase
+
     $mumuRoot = Join-Path $testRootFull 'installed-mumu'
     $mumuVersion = 'fixture-version'
     $mumuShell = Join-Path $mumuRoot "nx_device/$mumuVersion/shell"
@@ -699,6 +741,7 @@ try {
         status = 'PASS'
         cases = $script:CaseCount
         downloaded_or_vendor_binaries_executed = $false
+        download_timeout_child_processes_started = 0
         live_github_requests = 0
         test_root_cleaned = $true
     } | ConvertTo-Json -Compress

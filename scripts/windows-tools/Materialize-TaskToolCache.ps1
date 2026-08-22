@@ -31,7 +31,16 @@ param(
 
     [string] $MumuInstallRoot,
 
-    [string] $MumuVersion
+    [string] $MumuVersion,
+
+    [Parameter(DontShow)]
+    [string] $PrivateDownloadSourcePath,
+
+    [Parameter(DontShow)]
+    [Nullable[int]] $PrivateDownloadDeadlineMilliseconds,
+
+    [Parameter(DontShow)]
+    [switch] $PrivateDownloadStallBody
 )
 
 Set-StrictMode -Version Latest
@@ -178,41 +187,92 @@ function Invoke-BoundedDownload {
         [Parameter(Mandatory)][string] $Destination,
         [Parameter(Mandatory)][string] $ControlledRoot,
         [Parameter(Mandatory)][long] $ExpectedSize,
-        [Parameter(Mandatory)][string] $ExpectedSha256
+        [Parameter(Mandatory)][string] $ExpectedSha256,
+        [TimeSpan] $Deadline = [TimeSpan]::FromMinutes(5),
+        [string] $PrivateSourcePath,
+        [switch] $PrivateStallBeforeBodyRead
     )
     if ($ExpectedSize -le 0) {
         Stop-Materialization "download size must be positive for $Url"
+    }
+    if ($Deadline -le [TimeSpan]::Zero -or $Deadline -gt [TimeSpan]::FromMinutes(5)) {
+        Stop-Materialization "download deadline must be positive and no greater than five minutes for $Url"
     }
     Assert-LowerSha256 -Value $ExpectedSha256 -Label "sha256 for $Url"
     $uri = [Uri]$Url
     if ($uri.Scheme -cne 'https') {
         Stop-Materialization "downloads require HTTPS: $Url"
     }
+    if (-not [string]::IsNullOrWhiteSpace($PrivateSourcePath) -and
+        $uri.Host -cne 'example.invalid') {
+        Stop-Materialization 'private download controls require the reserved example.invalid host'
+    }
     $parent = Split-Path -Parent $Destination
     New-Item -ItemType Directory -Path $parent -Force | Out-Null
-    $handler = [Net.Http.HttpClientHandler]::new()
-    $client = [Net.Http.HttpClient]::new($handler)
-    $client.Timeout = [TimeSpan]::FromMinutes(5)
+    if (Test-Path -LiteralPath $Destination) {
+        Stop-Materialization "refusing to replace an existing download destination: $Destination"
+    }
+    $partialPath = "$Destination.partial-$([Guid]::NewGuid().ToString('N'))"
+    $deadlineMilliseconds = [long][Math]::Ceiling($Deadline.TotalMilliseconds)
+    $cancellation = [Threading.CancellationTokenSource]::new($Deadline)
+    $handler = $null
+    $client = $null
     $response = $null
     $input = $null
     $output = $null
+    $published = $false
+    $actualHash = $null
     try {
-        $response = $client.GetAsync(
-            $uri,
-            [Net.Http.HttpCompletionOption]::ResponseHeadersRead
-        ).GetAwaiter().GetResult()
-        if (-not $response.IsSuccessStatusCode) {
-            Stop-Materialization "download failed for $Url with HTTP $([int]$response.StatusCode)"
+        if ([string]::IsNullOrWhiteSpace($PrivateSourcePath)) {
+            $handler = [Net.Http.HttpClientHandler]::new()
+            $client = [Net.Http.HttpClient]::new($handler)
+            $client.Timeout = [Threading.Timeout]::InfiniteTimeSpan
+            $response = $client.GetAsync(
+                $uri,
+                [Net.Http.HttpCompletionOption]::ResponseHeadersRead,
+                $cancellation.Token
+            ).GetAwaiter().GetResult()
+            if (-not $response.IsSuccessStatusCode) {
+                Stop-Materialization "download failed for $Url with HTTP $([int]$response.StatusCode)"
+            }
+            $declaredLength = $response.Content.Headers.ContentLength
+            if ($null -ne $declaredLength -and $declaredLength -ne $ExpectedSize) {
+                Stop-Materialization "Content-Length mismatch for ${Url}: expected=$ExpectedSize actual=$declaredLength"
+            }
+            $cancellation.Token.ThrowIfCancellationRequested()
+            $input = $response.Content.ReadAsStreamAsync().GetAwaiter().GetResult()
+            $cancellation.Token.ThrowIfCancellationRequested()
+        } else {
+            $source = Get-RegularFile -Path $PrivateSourcePath -Label 'private download source'
+            $sourceSize = (Get-Item -LiteralPath $source -ErrorAction Stop).Length
+            if ($sourceSize -ne $ExpectedSize) {
+                Stop-Materialization "private download source size mismatch for ${Url}: expected=$ExpectedSize actual=$sourceSize"
+            }
+            $input = [IO.FileStream]::new(
+                $source,
+                [IO.FileMode]::Open,
+                [IO.FileAccess]::Read,
+                [IO.FileShare]::Read
+            )
         }
-        $declaredLength = $response.Content.Headers.ContentLength
-        if ($null -ne $declaredLength -and $declaredLength -ne $ExpectedSize) {
-            Stop-Materialization "Content-Length mismatch for ${Url}: expected=$ExpectedSize actual=$declaredLength"
+        $output = [IO.File]::Open($partialPath, [IO.FileMode]::CreateNew, [IO.FileAccess]::Write)
+        if ($PrivateStallBeforeBodyRead.IsPresent) {
+            [Threading.Tasks.Task]::Delay(
+                [Threading.Timeout]::Infinite,
+                $cancellation.Token
+            ).GetAwaiter().GetResult()
         }
-        $input = $response.Content.ReadAsStream()
-        $output = [IO.File]::Open($Destination, [IO.FileMode]::CreateNew, [IO.FileAccess]::Write)
         $buffer = [byte[]]::new(65536)
         [long]$written = 0
-        while (($read = $input.Read($buffer, 0, $buffer.Length)) -gt 0) {
+        while ($true) {
+            $cancellation.Token.ThrowIfCancellationRequested()
+            $read = $input.ReadAsync(
+                $buffer,
+                0,
+                $buffer.Length,
+                $cancellation.Token
+            ).GetAwaiter().GetResult()
+            if ($read -eq 0) { break }
             $written = Add-BoundedInt64 -Left $written -Right ([long]$read) -Label 'download'
             if ($written -gt $ExpectedSize) {
                 Stop-Materialization "download exceeded its exact byte bound for $Url"
@@ -220,20 +280,36 @@ function Invoke-BoundedDownload {
             $output.Write($buffer, 0, $read)
         }
         $output.Flush($true)
+        $output.Dispose()
+        $output = $null
         if ($written -ne $ExpectedSize) {
             Stop-Materialization "download size mismatch for ${Url}: expected=$ExpectedSize actual=$written"
         }
+        $cancellation.Token.ThrowIfCancellationRequested()
+        $actualHash = Get-Sha256 -Path $partialPath
+        if ($actualHash -cne $ExpectedSha256) {
+            Stop-Materialization "SHA-256 mismatch for ${Url}: expected=$ExpectedSha256 actual=$actualHash"
+        }
+        $cancellation.Token.ThrowIfCancellationRequested()
+        Move-Item -LiteralPath $partialPath -Destination $Destination -ErrorAction Stop
+        $published = $true
+    }
+    catch [OperationCanceledException] {
+        throw [TimeoutException]::new(
+            "download timed out for $Url after deadline ${deadlineMilliseconds}ms",
+            $_.Exception
+        )
     }
     finally {
         if ($null -ne $output) { $output.Dispose() }
         if ($null -ne $input) { $input.Dispose() }
         if ($null -ne $response) { $response.Dispose() }
-        $client.Dispose()
-        $handler.Dispose()
-    }
-    $actualHash = Get-Sha256 -Path $Destination
-    if ($actualHash -cne $ExpectedSha256) {
-        Stop-Materialization "SHA-256 mismatch for ${Url}: expected=$ExpectedSha256 actual=$actualHash"
+        if ($null -ne $client) { $client.Dispose() }
+        if ($null -ne $handler) { $handler.Dispose() }
+        $cancellation.Dispose()
+        if (-not $published -and (Test-Path -LiteralPath $partialPath)) {
+            Remove-Item -LiteralPath $partialPath -Force -ErrorAction Stop
+        }
     }
     [ordered]@{
         url = $Url
@@ -852,6 +928,31 @@ if ($manifest.schema_version -cne 'actingcommand.windows_tool_sources.v1') {
     Stop-Materialization "unsupported source manifest schema_version: $($manifest.schema_version)"
 }
 $cacheRootFull = Assert-TaskCacheRoot -Path $CacheRoot -Boundary $TaskRoot
+$privateControlSelected = -not [string]::IsNullOrWhiteSpace($PrivateDownloadSourcePath) -or
+    $null -ne $PrivateDownloadDeadlineMilliseconds -or
+    $PrivateDownloadStallBody.IsPresent
+$downloadControl = @{ Deadline = [TimeSpan]::FromMinutes(5) }
+if ($privateControlSelected) {
+    if ([string]::IsNullOrWhiteSpace($PrivateDownloadSourcePath) -or
+        $null -eq $PrivateDownloadDeadlineMilliseconds -or
+        -not $PrivateDownloadStallBody.IsPresent) {
+        Stop-Materialization 'private download controls require source path, short deadline, and stalled-body mode together'
+    }
+    if ([int]$PrivateDownloadDeadlineMilliseconds -le 0 -or
+        [int]$PrivateDownloadDeadlineMilliseconds -gt 5000) {
+        Stop-Materialization 'private download deadline must be between 1 and 5000 milliseconds'
+    }
+    $privateSource = Get-RegularFile -Path $PrivateDownloadSourcePath -Label 'private download source'
+    if (-not (Test-PathWithin -Path $privateSource -Root $TaskRoot) -or
+        (Test-PathWithin -Path $privateSource -Root $cacheRootFull)) {
+        Stop-Materialization 'private download source must be task-local and outside CacheRoot'
+    }
+    $downloadControl = @{
+        Deadline = [TimeSpan]::FromMilliseconds([int]$PrivateDownloadDeadlineMilliseconds)
+        PrivateSourcePath = $privateSource
+        PrivateStallBeforeBodyRead = $true
+    }
+}
 $selected = @($Component | Sort-Object -Unique)
 if ($selected.Count -ne $Component.Count -or $selected.Count -eq 0) {
     Stop-Materialization 'Component must contain one or more unique component ids'
@@ -912,7 +1013,7 @@ try {
             'download_zip' {
                 $archive = $definition.archive
                 $archivePath = Get-SafeChildPath -Root $stageRoot -RelativePath ([string]$archive.relative_path) -Label "$id archive"
-                $downloadResult = Invoke-BoundedDownload -Url ([string]$archive.url) -Destination $archivePath -ControlledRoot $stageRoot -ExpectedSize ([long]$archive.size) -ExpectedSha256 ([string]$archive.sha256)
+                $downloadResult = Invoke-BoundedDownload -Url ([string]$archive.url) -Destination $archivePath -ControlledRoot $stageRoot -ExpectedSize ([long]$archive.size) -ExpectedSha256 ([string]$archive.sha256) @downloadControl
                 $extractRoot = Get-SafeChildPath -Root $stageRoot -RelativePath ([string]$definition.extract_relative_path) -Label "$id extraction root"
                 $allowlist = if ($null -eq $definition.PSObject.Properties['extract_allowlist']) {
                     @()
@@ -951,7 +1052,7 @@ try {
                 $artifacts = @()
                 foreach ($artifact in $definition.artifacts) {
                     $destination = Get-SafeChildPath -Root $stageRoot -RelativePath ([string]$artifact.relative_path) -Label "$id artifact"
-                    $downloadResult = Invoke-BoundedDownload -Url ([string]$artifact.url) -Destination $destination -ControlledRoot $stageRoot -ExpectedSize ([long]$artifact.size) -ExpectedSha256 ([string]$artifact.sha256)
+                    $downloadResult = Invoke-BoundedDownload -Url ([string]$artifact.url) -Destination $destination -ControlledRoot $stageRoot -ExpectedSize ([long]$artifact.size) -ExpectedSha256 ([string]$artifact.sha256) @downloadControl
                     $artifacts += [ordered]@{
                         source = [string]$downloadResult.url
                         version = [string]$definition.version
