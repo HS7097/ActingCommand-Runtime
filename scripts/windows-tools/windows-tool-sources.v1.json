@@ -142,7 +142,7 @@
       "strict_no_fallback_required": true,
       "dependency_manifest_schema": "actingcommand.provider_runtime_dependencies.v1",
       "max_runtime_file_count": 64,
-      "max_runtime_total_bytes": 2147483648,
+      "max_runtime_total_bytes": 2684354560,
       "selected_core_name": "onnxruntime.dll",
       "onnxruntime_archive_component": "onnxruntime-gpu-1.24.4",
       "onnxruntime_archive_names": [
