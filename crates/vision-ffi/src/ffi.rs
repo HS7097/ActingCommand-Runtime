@@ -16,6 +16,11 @@ use std::sync::{
     Arc,
     atomic::{AtomicU64, Ordering},
 };
+#[cfg(any(windows, test))]
+use std::{
+    path::{Path, PathBuf},
+    sync::Mutex,
+};
 
 const OCR_READ_TEXT_SYMBOL: &[u8] = b"ac_fastdeploy_ppocr_read_text_json\0";
 const NN_CLASSIFY_SYMBOL: &[u8] = b"ac_onnxruntime_classify_json\0";
@@ -27,6 +32,29 @@ const MAX_ONNXRUNTIME_VERSION_BYTES: usize = 256;
 
 static NEXT_OCR_SESSION_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 static NEXT_OCR_INVOCATION_SEQUENCE: AtomicU64 = AtomicU64::new(1);
+
+#[cfg(any(windows, test))]
+enum RuntimeLibraryClosureState<H> {
+    Uninitialized,
+    Ready {
+        identity: Vec<PathBuf>,
+        _handles: Vec<H>,
+    },
+    Poisoned {
+        identity: Vec<PathBuf>,
+        _handles: Vec<H>,
+        failed_path: PathBuf,
+        reason: String,
+    },
+}
+
+#[cfg(windows)]
+static PROCESS_RUNTIME_LIBRARY_CLOSURE: Mutex<RuntimeLibraryClosureState<Arc<Library>>> =
+    Mutex::new(RuntimeLibraryClosureState::Uninitialized);
+#[cfg(windows)]
+const PROCESS_RUNTIME_LIBRARY_LOAD_FLAGS: u32 =
+    libloading::os::windows::LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR
+        | libloading::os::windows::LOAD_LIBRARY_SEARCH_SYSTEM32;
 
 pub type VisionFfiInvokeJson = unsafe extern "C" fn(
     request_ptr: *const u8,
@@ -92,6 +120,7 @@ impl FastDeployPpocrBackend {
 
     pub fn from_artifacts(artifacts: FastDeployPpocrArtifacts) -> VisionFfiResult<Self> {
         artifacts.validate_ppocr_v6_execution_existing_files()?;
+        establish_process_runtime_library_closure(&artifacts.runtime_library_paths)?;
         let session = new_session_binding(&artifacts)?;
         let library = load_library("fastdeploy-ppocr", &artifacts.provider_library_path)?;
         let read_text_json = load_symbol(&library, "fastdeploy-ppocr", OCR_READ_TEXT_SYMBOL)?;
@@ -172,6 +201,21 @@ impl FastDeployPpocrBackend {
 
     pub fn reconfigure(&mut self, artifacts: FastDeployPpocrArtifacts) -> VisionFfiResult<()> {
         artifacts.validate_ppocr_v6_execution_existing_files()?;
+        #[cfg(windows)]
+        {
+            let current_artifacts = self.artifacts.as_ref().ok_or_else(|| {
+                VisionFfiError::fatal_with_code(
+                    VisionFfiErrorCode::InvalidRequest,
+                    "fastdeploy-ppocr",
+                    "unattested raw backend cannot be reconfigured as a production OCR session",
+                )
+            })?;
+            require_same_runtime_library_closure(
+                &current_artifacts.runtime_library_paths,
+                &artifacts.runtime_library_paths,
+            )?;
+            establish_process_runtime_library_closure(&artifacts.runtime_library_paths)?;
+        }
         let key = resolve_session_key(&artifacts)?;
         let current = self.session.as_ref().ok_or_else(|| {
             VisionFfiError::fatal_with_code(
@@ -220,6 +264,17 @@ impl FastDeployPpocrBackend {
         inventory: Option<CudaDeviceInventory>,
     ) -> VisionFfiResult<()> {
         artifacts.validate_ppocr_v6_execution()?;
+        let current_artifacts = self.artifacts.as_ref().ok_or_else(|| {
+            VisionFfiError::fatal_with_code(
+                VisionFfiErrorCode::InvalidRequest,
+                "fastdeploy-ppocr",
+                "unattested raw backend cannot be reconfigured as a production OCR session",
+            )
+        })?;
+        require_same_runtime_library_closure(
+            &current_artifacts.runtime_library_paths,
+            &artifacts.runtime_library_paths,
+        )?;
         let key = resolve_session_key_with(
             &artifacts,
             || inventory_result(inventory),
@@ -241,6 +296,141 @@ impl FastDeployPpocrBackend {
         self.session = Some(Arc::new(session));
         Ok(())
     }
+}
+
+#[cfg(any(windows, test))]
+fn require_same_runtime_library_closure(
+    current: &[PathBuf],
+    candidate: &[PathBuf],
+) -> VisionFfiResult<()> {
+    if current == candidate {
+        Ok(())
+    } else {
+        Err(VisionFfiError::fatal_with_code(
+            VisionFfiErrorCode::ProviderUnavailable,
+            "fastdeploy-ppocr",
+            "native OCR runtime-library closure cannot change in-process; restart is required",
+        ))
+    }
+}
+
+#[cfg(any(windows, test))]
+fn establish_runtime_library_closure_with<H, F>(
+    closure: &Mutex<RuntimeLibraryClosureState<H>>,
+    declared_paths: &[PathBuf],
+    mut load: F,
+) -> VisionFfiResult<()>
+where
+    F: FnMut(&Path) -> VisionFfiResult<H>,
+{
+    if declared_paths.is_empty() {
+        return Err(runtime_closure_error(
+            "native OCR runtime-library closure must not be empty",
+        ));
+    }
+    if let Some(path) = declared_paths.iter().find(|path| !path.is_absolute()) {
+        return Err(runtime_closure_error(format!(
+            "native OCR runtime-library closure path must be absolute: {}",
+            path.display()
+        )));
+    }
+
+    let identity = declared_paths.to_vec();
+    let mut closure = closure.lock().map_err(|_| {
+        runtime_closure_error(
+            "native OCR runtime-library closure state is poisoned; restart is required",
+        )
+    })?;
+    match &*closure {
+        RuntimeLibraryClosureState::Ready {
+            identity: current, ..
+        } => {
+            return require_same_runtime_library_closure(current, &identity);
+        }
+        RuntimeLibraryClosureState::Poisoned {
+            identity: failed_identity,
+            failed_path,
+            reason,
+            ..
+        } => {
+            return Err(runtime_closure_error(format!(
+                "native OCR runtime-library closure is permanently poisoned after failing to load {} from a {}-member closure: {reason}; restart is required",
+                failed_path.display(),
+                failed_identity.len()
+            )));
+        }
+        RuntimeLibraryClosureState::Uninitialized => {}
+    }
+
+    let mut handles = Vec::with_capacity(identity.len());
+    for path in &identity {
+        match load(path) {
+            Ok(handle) => handles.push(handle),
+            Err(error) => {
+                let reason = error.message().to_string();
+                *closure = RuntimeLibraryClosureState::Poisoned {
+                    identity: identity.clone(),
+                    _handles: handles,
+                    failed_path: path.clone(),
+                    reason: reason.clone(),
+                };
+                return Err(runtime_closure_error(format!(
+                    "failed to establish native OCR runtime-library closure at {}: {reason}; the process closure is permanently poisoned",
+                    path.display()
+                )));
+            }
+        }
+    }
+
+    *closure = RuntimeLibraryClosureState::Ready {
+        identity,
+        _handles: handles,
+    };
+    Ok(())
+}
+
+#[cfg(any(windows, test))]
+fn runtime_closure_error(message: impl Into<String>) -> VisionFfiError {
+    VisionFfiError::fatal_with_code(
+        VisionFfiErrorCode::ProviderUnavailable,
+        "fastdeploy-ppocr",
+        message,
+    )
+}
+
+#[cfg(windows)]
+fn establish_process_runtime_library_closure(declared_paths: &[PathBuf]) -> VisionFfiResult<()> {
+    establish_runtime_library_closure_with(
+        &PROCESS_RUNTIME_LIBRARY_CLOSURE,
+        declared_paths,
+        load_process_runtime_library,
+    )
+}
+
+#[cfg(not(windows))]
+fn establish_process_runtime_library_closure(
+    _declared_paths: &[std::path::PathBuf],
+) -> VisionFfiResult<()> {
+    Ok(())
+}
+
+#[cfg(windows)]
+fn load_process_runtime_library(path: &Path) -> VisionFfiResult<Arc<Library>> {
+    use libloading::os::windows::Library as WindowsLibrary;
+
+    // SAFETY: the validated absolute path names the admitted runtime closure member. The
+    // resulting handle is retained in PROCESS_RUNTIME_LIBRARY_CLOSURE for process lifetime.
+    let library = unsafe {
+        WindowsLibrary::load_with_flags(path, PROCESS_RUNTIME_LIBRARY_LOAD_FLAGS)
+    }
+    .map_err(|error| {
+        runtime_closure_error(format!(
+            "failed to load native OCR runtime library {} with LoadLibraryExW flags 0x{:08x}: {error}",
+            path.display(),
+            PROCESS_RUNTIME_LIBRARY_LOAD_FLAGS
+        ))
+    })?;
+    Ok(Arc::new(library.into()))
 }
 
 fn require_same_process_runtime(
@@ -1114,6 +1304,326 @@ mod tests {
         assert!(err.message().contains("failed to load FFI library"));
         let _ = std::fs::remove_file(path);
     }
+
+    #[test]
+    fn runtime_closure_loads_exact_paths_once_and_retains_all_handles() {
+        let closure = Mutex::new(RuntimeLibraryClosureState::Uninitialized);
+        let paths = test_runtime_closure_paths();
+        let dropped = Arc::new(AtomicUsize::new(0));
+        let mut loaded = Vec::new();
+
+        establish_runtime_library_closure_with(&closure, &paths, |path| {
+            loaded.push(path.to_path_buf());
+            Ok(TestRuntimeHandle {
+                _path: path.to_path_buf(),
+                dropped: Arc::clone(&dropped),
+            })
+        })
+        .expect("first exact closure establishes");
+
+        assert_eq!(loaded, paths);
+        assert_eq!(dropped.load(Ordering::SeqCst), 0);
+        match &*closure.lock().expect("closure state") {
+            RuntimeLibraryClosureState::Ready { identity, _handles } => {
+                assert_eq!(identity, &paths);
+                assert_eq!(_handles.len(), paths.len());
+            }
+            _ => panic!("closure must be ready"),
+        }
+
+        establish_runtime_library_closure_with(
+            &closure,
+            &paths,
+            |_| -> VisionFfiResult<TestRuntimeHandle> {
+                panic!("same exact closure must not load again")
+            },
+        )
+        .expect("same closure is idempotent");
+        assert_eq!(dropped.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn runtime_closure_rejects_conflicting_order_without_loading() {
+        let closure = Mutex::new(RuntimeLibraryClosureState::Uninitialized);
+        let paths = test_runtime_closure_paths();
+        establish_runtime_library_closure_with(&closure, &paths, |path| {
+            Ok(TestRuntimeHandle {
+                _path: path.to_path_buf(),
+                dropped: Arc::new(AtomicUsize::new(0)),
+            })
+        })
+        .expect("first closure establishes");
+
+        let mut conflicting = paths.clone();
+        conflicting.swap(0, 1);
+        let err = establish_runtime_library_closure_with(
+            &closure,
+            &conflicting,
+            |_| -> VisionFfiResult<TestRuntimeHandle> {
+                panic!("conflicting closure must not load")
+            },
+        )
+        .expect_err("different closure order must fail closed");
+
+        assert_eq!(err.code(), VisionFfiErrorCode::ProviderUnavailable);
+        assert!(err.message().contains("cannot change in-process"));
+        match &*closure.lock().expect("closure state") {
+            RuntimeLibraryClosureState::Ready { identity, .. } => assert_eq!(identity, &paths),
+            _ => panic!("original closure must remain ready"),
+        }
+    }
+
+    #[test]
+    fn parallel_conflicting_runtime_closures_admit_exactly_one_loader() {
+        let closure = Arc::new(Mutex::new(RuntimeLibraryClosureState::Uninitialized));
+        let selected = test_runtime_closure_paths();
+        let mut conflicting = selected.clone();
+        conflicting.swap(0, 1);
+        let dropped = Arc::new(AtomicUsize::new(0));
+        let losing_loader_calls = Arc::new(AtomicUsize::new(0));
+        let (winner_entered_tx, winner_entered_rx) = std::sync::mpsc::channel();
+        let (release_winner_tx, release_winner_rx) = std::sync::mpsc::channel();
+
+        let winner_closure = Arc::clone(&closure);
+        let winner_identity = selected.clone();
+        let winner_dropped = Arc::clone(&dropped);
+        let winner = std::thread::spawn(move || {
+            let mut first = true;
+            establish_runtime_library_closure_with(&winner_closure, &winner_identity, |path| {
+                if first {
+                    first = false;
+                    winner_entered_tx
+                        .send(())
+                        .expect("report winning loader entry");
+                    release_winner_rx.recv().expect("release winning loader");
+                }
+                Ok(TestRuntimeHandle {
+                    _path: path.to_path_buf(),
+                    dropped: Arc::clone(&winner_dropped),
+                })
+            })
+        });
+        winner_entered_rx
+            .recv()
+            .expect("winning loader holds closure lock");
+
+        let loser_closure = Arc::clone(&closure);
+        let loser_calls = Arc::clone(&losing_loader_calls);
+        let loser_dropped = Arc::clone(&dropped);
+        let (loser_started_tx, loser_started_rx) = std::sync::mpsc::channel();
+        let loser = std::thread::spawn(move || {
+            loser_started_tx.send(()).expect("report loser started");
+            establish_runtime_library_closure_with(&loser_closure, &conflicting, |path| {
+                loser_calls.fetch_add(1, Ordering::SeqCst);
+                Ok(TestRuntimeHandle {
+                    _path: path.to_path_buf(),
+                    dropped: Arc::clone(&loser_dropped),
+                })
+            })
+        });
+        loser_started_rx.recv().expect("loser attempted closure");
+        release_winner_tx.send(()).expect("complete winner");
+
+        winner
+            .join()
+            .expect("winner thread")
+            .expect("winning closure establishes");
+        let loser_error = loser
+            .join()
+            .expect("loser thread")
+            .expect_err("conflicting closure rejected");
+
+        assert_eq!(loser_error.code(), VisionFfiErrorCode::ProviderUnavailable);
+        assert_eq!(losing_loader_calls.load(Ordering::SeqCst), 0);
+        assert_eq!(dropped.load(Ordering::SeqCst), 0);
+        match &*closure.lock().expect("closure state") {
+            RuntimeLibraryClosureState::Ready { identity, _handles } => {
+                assert_eq!(identity, &selected);
+                assert_eq!(_handles.len(), selected.len());
+            }
+            _ => panic!("winning closure must remain ready"),
+        }
+    }
+
+    #[test]
+    fn runtime_closure_partial_failure_is_permanent_and_retains_loaded_handles() {
+        let closure = Mutex::new(RuntimeLibraryClosureState::Uninitialized);
+        let paths = test_runtime_closure_paths();
+        let dropped = Arc::new(AtomicUsize::new(0));
+        let mut attempts = Vec::new();
+
+        let err = establish_runtime_library_closure_with(&closure, &paths, |path| {
+            attempts.push(path.to_path_buf());
+            if attempts.len() == 2 {
+                return Err(runtime_closure_error("synthetic load failure"));
+            }
+            Ok(TestRuntimeHandle {
+                _path: path.to_path_buf(),
+                dropped: Arc::clone(&dropped),
+            })
+        })
+        .expect_err("partial closure load must fail");
+
+        assert_eq!(err.code(), VisionFfiErrorCode::ProviderUnavailable);
+        assert!(err.message().contains("permanently poisoned"));
+        assert_eq!(attempts, paths[..2]);
+        assert_eq!(dropped.load(Ordering::SeqCst), 0);
+        match &*closure.lock().expect("closure state") {
+            RuntimeLibraryClosureState::Poisoned {
+                identity,
+                _handles,
+                failed_path,
+                reason,
+            } => {
+                assert_eq!(identity, &paths);
+                assert_eq!(_handles.len(), 1);
+                assert_eq!(failed_path, &paths[1]);
+                assert!(reason.contains("synthetic load failure"));
+            }
+            _ => panic!("closure must remain poisoned"),
+        }
+
+        let retry = establish_runtime_library_closure_with(
+            &closure,
+            &paths,
+            |_| -> VisionFfiResult<TestRuntimeHandle> { panic!("poisoned closure must not retry") },
+        )
+        .expect_err("poisoned closure rejects every retry");
+        assert!(retry.message().contains("permanently poisoned"));
+        assert_eq!(dropped.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn reconfigure_rejects_changed_companion_closure_before_state_mutation() {
+        let inventory = test_cuda_inventory();
+        let artifacts = test_ppocr_artifacts(test_runtime_closure_paths());
+        let mut backend = unsafe {
+            FastDeployPpocrBackend::from_raw_functions_with_artifacts_and_inventory(
+                unreachable_ocr_invoke,
+                noop_free_buffer,
+                artifacts.clone(),
+                Some(inventory.clone()),
+            )
+        }
+        .expect("synthetic backend");
+        let session_before = backend.session_for_test().expect("session before");
+
+        let mut changed = artifacts.clone();
+        changed.runtime_library_paths[1] = absolute_test_path("different-cudnn64_9.dll");
+        let err = backend
+            .reconfigure_with_inventory_for_test(changed, Some(inventory))
+            .expect_err("changed companion closure rejected");
+
+        assert_eq!(err.code(), VisionFfiErrorCode::ProviderUnavailable);
+        assert!(err.message().contains("cannot change in-process"));
+        assert_eq!(backend.artifacts.as_ref(), Some(&artifacts));
+        let session_after = backend.session_for_test().expect("session after");
+        assert_eq!(session_after.session_id(), session_before.session_id());
+        assert_eq!(session_after.generation(), session_before.generation());
+        assert!(backend._library.is_none());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_runtime_closure_uses_only_released_loadlibraryex_flags() {
+        use libloading::os::windows::{
+            LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR, LOAD_LIBRARY_SEARCH_SYSTEM32,
+        };
+
+        assert_eq!(
+            PROCESS_RUNTIME_LIBRARY_LOAD_FLAGS,
+            LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_SYSTEM32
+        );
+    }
+
+    struct TestRuntimeHandle {
+        _path: PathBuf,
+        dropped: Arc<AtomicUsize>,
+    }
+
+    impl Drop for TestRuntimeHandle {
+        fn drop(&mut self) {
+            self.dropped.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+
+    fn test_runtime_closure_paths() -> Vec<PathBuf> {
+        vec![
+            absolute_test_path("onnxruntime.dll"),
+            absolute_test_path("cudnn64_9.dll"),
+            absolute_test_path("cudnn_ops64_9.dll"),
+        ]
+    }
+
+    fn absolute_test_path(name: &str) -> PathBuf {
+        #[cfg(windows)]
+        {
+            PathBuf::from(format!(r"C:\synthetic-runtime\{name}"))
+        }
+        #[cfg(not(windows))]
+        {
+            PathBuf::from(format!("/synthetic-runtime/{name}"))
+        }
+    }
+
+    fn test_ppocr_artifacts(runtime_library_paths: Vec<PathBuf>) -> FastDeployPpocrArtifacts {
+        let detector_hash = "a".repeat(64);
+        let recognizer_hash = "b".repeat(64);
+        let dictionary_hash = "c".repeat(64);
+        let model_hash = crate::ppocr_model_content_sha256(
+            &detector_hash,
+            &recognizer_hash,
+            &dictionary_hash,
+            None,
+        )
+        .expect("fixture model hash");
+        FastDeployPpocrArtifacts {
+            provider_library_path: absolute_test_path("ac_fastdeploy_ppocr.dll"),
+            provider_library_sha256: Some("e".repeat(64)),
+            runtime_library_path: Some(runtime_library_paths[0].clone()),
+            runtime_library_paths,
+            runtime_library_sha256: Some("d".repeat(64)),
+            detector_model_path: absolute_test_path("detector.onnx"),
+            recognizer_model_path: absolute_test_path("recognizer.onnx"),
+            dictionary_path: absolute_test_path("dictionary.txt"),
+            classifier_model_path: None,
+            model_ref: Some(crate::PPOCR_V6_MEDIUM_MODEL_REF.to_string()),
+            model_sha256: Some(model_hash),
+            detector_model_sha256: Some(detector_hash),
+            recognizer_model_sha256: Some(recognizer_hash),
+            dictionary_sha256: Some(dictionary_hash),
+            classifier_model_sha256: None,
+            execution_provider: Some(OnnxExecutionProvider::Cuda),
+            cuda_device: Some(crate::CudaDeviceSelector {
+                ordinal: 0,
+                expected_stable_identity: "cuda-uuid:11111111111111111111111111111111".to_string(),
+            }),
+            strict_no_fallback: Some(true),
+            supported_languages: vec!["en".to_string()],
+            default_timeout_ms: 1_000,
+        }
+    }
+
+    fn test_cuda_inventory() -> CudaDeviceInventory {
+        CudaDeviceInventory {
+            driver_version: 12_800,
+            devices: vec![CudaDeviceIdentity {
+                ordinal: 0,
+                stable_identity: "cuda-uuid:11111111111111111111111111111111".to_string(),
+                pci_bus_id: Some("0000:01:00.0".to_string()),
+            }],
+        }
+    }
+
+    unsafe extern "C" fn unreachable_ocr_invoke(
+        _request_ptr: *const u8,
+        _request_len: usize,
+        _response_out: *mut VisionFfiOwnedBuffer,
+    ) -> i32 {
+        panic!("synthetic reconfigure test must not invoke OCR")
+    }
+
+    unsafe extern "C" fn noop_free_buffer(_buffer: VisionFfiOwnedBuffer) {}
 
     unsafe extern "C" fn counting_noop_free_buffer(_buffer: VisionFfiOwnedBuffer) {
         FREE_CALLS.fetch_add(1, Ordering::SeqCst);
