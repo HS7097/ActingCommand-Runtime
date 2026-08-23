@@ -7901,6 +7901,65 @@ fn exact_lease_expiry_checkpoint_promotes_queue_once_and_replays() {
         .expire_lease_once_for_test(&mismatched_token)
         .expect_err("mismatched exact-lease identity must not consume the checkpoint");
     assert_eq!(mismatch.code(), "test_lease_expiry_token_identity_mismatch");
+    for (identity, mismatched_token) in [
+        (
+            "owner epoch",
+            LeaseToken::new(
+                *ids.mint_owner_epoch()
+                    .expect("mismatched owner epoch")
+                    .transport(),
+                expired_token.lease_id(),
+                expired_token.instance_id(),
+                expired_token.holder_id(),
+                expired_token.expires_at_monotonic_ms(),
+            )
+            .expect("mismatched owner-epoch token"),
+        ),
+        (
+            "lease",
+            LeaseToken::new(
+                expired_token.owner_epoch(),
+                *ids.mint_lease_id().expect("mismatched lease").transport(),
+                expired_token.instance_id(),
+                expired_token.holder_id(),
+                expired_token.expires_at_monotonic_ms(),
+            )
+            .expect("mismatched lease token"),
+        ),
+        (
+            "instance",
+            LeaseToken::new(
+                expired_token.owner_epoch(),
+                expired_token.lease_id(),
+                *ids.mint_instance_id()
+                    .expect("mismatched instance")
+                    .transport(),
+                expired_token.holder_id(),
+                expired_token.expires_at_monotonic_ms(),
+            )
+            .expect("mismatched instance token"),
+        ),
+        (
+            "expiry",
+            LeaseToken::new(
+                expired_token.owner_epoch(),
+                expired_token.lease_id(),
+                expired_token.instance_id(),
+                expired_token.holder_id(),
+                expired_token.expires_at_monotonic_ms() + 1,
+            )
+            .expect("mismatched expiry token"),
+        ),
+    ] {
+        let mismatch = host
+            .expire_lease_once_for_test(&mismatched_token)
+            .expect_err("mismatched exact-lease identity must not consume the checkpoint");
+        assert_eq!(
+            mismatch.code(),
+            "test_lease_expiry_token_identity_mismatch",
+            "{identity}"
+        );
+    }
     let terminal = host
         .expire_lease_once_for_test(&expired_token)
         .expect("expire exact queued-owner lease");
