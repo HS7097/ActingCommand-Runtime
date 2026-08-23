@@ -753,9 +753,8 @@ impl RecognitionEvaluator {
         })?;
         if execution.model_ref != target.model_ref
             || execution.model_sha256 != target.model_sha256
-            || execution.requested_provider != execution.resolved_provider
+            || !ocr_execution_provider_binding_is_valid(&execution)
             || !execution.complete
-            || !execution.cpu_fallback_disabled
             || !execution.fallback_forbidden
             || execution.fallback_observed.is_some()
         {
@@ -1781,6 +1780,28 @@ fn provider_error(
     )
 }
 
+fn ocr_execution_provider_binding_is_valid(execution: &OcrProviderExecutionEvidence) -> bool {
+    matches!(
+        (
+            execution.requested_provider,
+            execution.resolved_provider,
+            execution.cpu_ep_registered,
+            execution.cpu_fallback_disabled,
+        ),
+        (
+            OcrExecutionProviderKind::Cpu,
+            OcrExecutionProviderKind::Cpu,
+            true,
+            false,
+        ) | (
+            OcrExecutionProviderKind::Cuda,
+            OcrExecutionProviderKind::Cuda,
+            false,
+            true,
+        )
+    )
+}
+
 #[derive(Debug)]
 struct ValidatedOcrResult {
     text: String,
@@ -2270,6 +2291,7 @@ mod tests {
     fn schema_0_6_ocr_exact_and_contains_are_runtime_owned() {
         let scene = Scene::from_rgb8(2, 1, &[1, 2, 3, 4, 5, 6]).expect("scene");
         let provider = Arc::new(TestVisionProvider {
+            execution: None,
             ocr: Ok(OcrProviderResult {
                 text: "provider aggregate is not authoritative".to_string(),
                 blocks: vec![OcrProviderTextBlock {
@@ -2308,6 +2330,7 @@ mod tests {
     #[test]
     fn post_admission_ocr_requires_execution_evidence_without_changing_normal_evaluation() {
         let provider = Arc::new(TestVisionProvider {
+            execution: None,
             ocr: Ok(OcrProviderResult {
                 text: "hello".to_string(),
                 blocks: vec![OcrProviderTextBlock {
@@ -2342,6 +2365,81 @@ mod tests {
     }
 
     #[test]
+    fn post_admission_ocr_requires_provider_specific_execution_evidence() {
+        let scene = Scene::from_rgb8(2, 1, &[0; 6]).expect("scene");
+        for provider in [
+            OcrExecutionProviderKind::Cpu,
+            OcrExecutionProviderKind::Cuda,
+        ] {
+            let evaluator = observation_evaluator(execution_evidence(provider));
+            let evaluation = evaluator
+                .evaluate_ocr_observation(&scene, "ocr/page")
+                .expect("valid provider-specific execution evidence");
+            assert_eq!(evaluation.text, "hello");
+            assert_eq!(evaluation.execution.requested_provider, provider);
+            assert_eq!(evaluation.execution.resolved_provider, provider);
+        }
+
+        let valid_cpu = execution_evidence(OcrExecutionProviderKind::Cpu);
+        let valid_cuda = execution_evidence(OcrExecutionProviderKind::Cuda);
+        let mut invalid = Vec::new();
+
+        let mut cpu_fallback_disabled = valid_cpu.clone();
+        cpu_fallback_disabled.cpu_fallback_disabled = true;
+        invalid.push(("CPU fallback-disable inversion", cpu_fallback_disabled));
+
+        let mut cpu_ep_missing = valid_cpu.clone();
+        cpu_ep_missing.cpu_ep_registered = false;
+        invalid.push(("CPU EP missing", cpu_ep_missing));
+
+        let mut cuda_cpu_ep_registered = valid_cuda.clone();
+        cuda_cpu_ep_registered.cpu_ep_registered = true;
+        invalid.push(("CUDA registered CPU EP", cuda_cpu_ep_registered));
+
+        let mut cuda_fallback_enabled = valid_cuda.clone();
+        cuda_fallback_enabled.cpu_fallback_disabled = false;
+        invalid.push(("CUDA CPU fallback enabled", cuda_fallback_enabled));
+
+        let mut provider_mismatch = valid_cpu.clone();
+        provider_mismatch.resolved_provider = OcrExecutionProviderKind::Cuda;
+        invalid.push(("requested/resolved mismatch", provider_mismatch));
+
+        let mut model_mismatch = valid_cpu.clone();
+        model_mismatch.model_sha256 = "b".repeat(64);
+        invalid.push(("model mismatch", model_mismatch));
+
+        let mut incomplete = valid_cpu.clone();
+        incomplete.complete = false;
+        invalid.push(("incomplete evidence", incomplete));
+
+        let mut fallback_allowed = valid_cpu.clone();
+        fallback_allowed.fallback_forbidden = false;
+        invalid.push(("fallback allowed", fallback_allowed));
+
+        let mut fallback_observed = valid_cpu;
+        fallback_observed.fallback_observed = Some(true);
+        invalid.push(("fallback observed", fallback_observed));
+
+        for (label, execution) in invalid {
+            let error = observation_evaluator(execution)
+                .evaluate_ocr_observation(&scene, "ocr/page")
+                .expect_err(label);
+            assert_eq!(
+                error.code(),
+                RecognitionPackErrorCode::VisionProviderInvalidResponse,
+                "{label}"
+            );
+            assert!(
+                error
+                    .message()
+                    .contains("execution evidence does not match target"),
+                "{label}: {}",
+                error.message()
+            );
+        }
+    }
+
+    #[test]
     fn schema_0_6_vision_targets_require_provider_at_admission() {
         let pack =
             load_pack_from_json_str(&ocr_pack_json("exact", "hello", 0.0)).expect("pack parses");
@@ -2372,6 +2470,7 @@ mod tests {
             let evaluator = vision_evaluator(
                 ocr_pack_json("exact", "hello", 0.0),
                 Arc::new(TestVisionProvider {
+                    execution: None,
                     ocr: Ok(result),
                     nn: Err(VisionProviderError::new(
                         VisionProviderErrorCode::Unavailable,
@@ -2393,6 +2492,7 @@ mod tests {
     #[test]
     fn nn_label_selection_ignores_unknown_labels_and_sorts_deterministically() {
         let provider = Arc::new(TestVisionProvider {
+            execution: None,
             ocr: Err(VisionProviderError::new(
                 VisionProviderErrorCode::Unavailable,
                 "unused",
@@ -3085,6 +3185,7 @@ mod tests {
 
     #[derive(Debug)]
     struct TestVisionProvider {
+        execution: Option<OcrProviderExecutionEvidence>,
         ocr: Result<OcrProviderResult, VisionProviderError>,
         nn: Result<NnProviderResult, VisionProviderError>,
     }
@@ -3139,6 +3240,17 @@ mod tests {
             self.ocr.clone()
         }
 
+        fn read_text_with_execution_evidence(
+            &self,
+            request: OcrProviderRequest<'_>,
+        ) -> Result<OcrProviderObservation, VisionProviderError> {
+            self.read_text(request)
+                .map(|result| OcrProviderObservation {
+                    result,
+                    execution: self.execution.clone(),
+                })
+        }
+
         fn classify(
             &self,
             request: NnProviderRequest<'_>,
@@ -3161,6 +3273,53 @@ mod tests {
             provider,
         )
         .expect("vision evaluator")
+    }
+
+    fn execution_evidence(provider: OcrExecutionProviderKind) -> OcrProviderExecutionEvidence {
+        let cuda = provider == OcrExecutionProviderKind::Cuda;
+        OcrProviderExecutionEvidence {
+            invocation_id: "fixture-invocation".to_string(),
+            session_id: "fixture-session".to_string(),
+            session_generation: 1,
+            requested_provider: provider,
+            resolved_provider: provider,
+            requested_cuda_ordinal: cuda.then_some(0),
+            requested_cuda_identity: cuda.then(|| "fixture-cuda-0".to_string()),
+            resolved_cuda_ordinal: cuda.then_some(0),
+            resolved_cuda_identity: cuda.then(|| "fixture-cuda-0".to_string()),
+            provider_implementation: "fixture-ocr".to_string(),
+            provider_binary_sha256: "b".repeat(64),
+            runtime_version: "fixture-runtime".to_string(),
+            model_ref: PPOCR_V6_MEDIUM_MODEL_REF.to_string(),
+            model_sha256: "a".repeat(64),
+            cpu_ep_registered: !cuda,
+            cpu_fallback_disabled: cuda,
+            fallback_forbidden: true,
+            fallback_observed: None,
+            complete: true,
+        }
+    }
+
+    fn observation_evaluator(execution: OcrProviderExecutionEvidence) -> RecognitionEvaluator {
+        vision_evaluator(
+            ocr_pack_json("exact", "hello", 0.0),
+            Arc::new(TestVisionProvider {
+                execution: Some(execution),
+                ocr: Ok(OcrProviderResult {
+                    text: "hello".to_string(),
+                    blocks: vec![OcrProviderTextBlock {
+                        text: "hello".to_string(),
+                        rect: rect(0, 0, 2, 1),
+                        confidence: Some(1.0),
+                    }],
+                    confidence: Some(1.0),
+                }),
+                nn: Err(VisionProviderError::new(
+                    VisionProviderErrorCode::Unavailable,
+                    "unused",
+                )),
+            }),
+        )
     }
 
     fn ocr_pack_json(match_mode: &str, expected: &str, minimum_confidence: f32) -> String {
