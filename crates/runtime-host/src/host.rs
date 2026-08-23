@@ -549,6 +549,8 @@ impl RuntimeHost {
             contained_task_checkpoint_test_hook: Mutex::new(None),
             #[cfg(test)]
             lease_expiry_scan_test_gate: Mutex::new(()),
+            #[cfg(test)]
+            lease_expiry_test_checkpoints: Mutex::new(Vec::new()),
             trusted_policy_dispatches: Mutex::new(TrustedPolicyDispatchStore::default()),
             policy_dispatch_clocks: Mutex::new(policy_dispatch_clocks),
             policy_outcome_gate: Mutex::new(()),
@@ -1200,82 +1202,41 @@ impl RuntimeHost {
             &shared.lease_expiry_scan_test_gate,
             "serialize_test_lease_expiry_scan",
         )?;
-        let durable_terminal = || {
-            let through_sequence = shared
-                .ledger
-                .latest_sequence()
-                .map_err(|_| ledger_error("read_test_lease_expiry_position"))?;
-            let mut selected_terminal = None;
-            for event_type in [EventType::LeaseExpired, EventType::LeaseReleased] {
-                let events = shared
-                    .ledger
-                    .query_page(
-                        EventQuery {
-                            to_sequence: Some(through_sequence),
-                            event_type: Some(event_type),
-                            instance_id: Some(token.instance_id()),
-                            lease_id: Some(token.lease_id()),
-                            ..EventQuery::default()
-                        },
-                        0,
-                        through_sequence,
-                        2,
-                    )
-                    .map_err(|_| ledger_error("read_test_lease_expiry_terminal"))?;
-                let event = match events.as_slice() {
-                    [] => None,
-                    [event] => Some(terminal(event)),
-                    _ => {
-                        return Err(RuntimeHostError::fatal(
-                            "test_lease_expiry_terminal_not_unique",
-                            "expire_lease_once_for_test",
-                            RuntimeErrorCode::RuntimeFatal,
-                        ));
-                    }
-                };
-                // LeaseExpired is the exact scan result. LeaseReleased is the permitted fallback
-                // for an already-cleaned token and must not replace a durable expiry on replay.
-                selected_terminal = selected_terminal.or(event);
-            }
-            Ok(selected_terminal)
-        };
-        let active_token = || {
-            lock(&shared.scheduler, "read_test_lease_expiry_token").map(|scheduler| {
-                scheduler.active_tokens().into_iter().find(|active| {
-                    active.instance_id() == token.instance_id()
-                        && active.lease_id() == token.lease_id()
-                })
-            })
-        };
-
-        if let Some(terminal) = durable_terminal()? {
-            if active_token()?.is_some() {
-                return Err(RuntimeHostError::fatal(
-                    "test_lease_expiry_terminal_token_still_active",
-                    "expire_lease_once_for_test",
-                    RuntimeErrorCode::RuntimeFatal,
-                ));
-            }
+        if let Some(terminal) = shared.replay_lease_expiry_checkpoint_for_test(token)? {
             return Ok(terminal);
+        }
+        if shared
+            .durable_lease_expiry_terminal_for_test(token)?
+            .is_some()
+        {
+            return Err(RuntimeHostError::fatal(
+                "test_lease_expiry_checkpoint_missing",
+                "expire_lease_once_for_test",
+                RuntimeErrorCode::RuntimeFatal,
+            ));
         }
 
         let now = shared.monotonic_ms()?;
         let connection_id = {
             let scheduler = lock(&shared.scheduler, "scan_test_lease_expiry")?;
-            let active = scheduler
+            let mut candidates = scheduler
                 .active_tokens()
                 .into_iter()
-                .find(|active| {
-                    active.instance_id() == token.instance_id()
-                        && active.lease_id() == token.lease_id()
-                })
-                .ok_or_else(|| {
-                    RuntimeHostError::fatal(
-                        "test_lease_expiry_token_missing",
-                        "expire_lease_once_for_test",
-                        RuntimeErrorCode::RuntimeFatal,
-                    )
-                })?;
+                .filter(|active| lease_token_identity_match_count(active, token) >= 4);
+            let active = candidates.next().ok_or_else(|| {
+                RuntimeHostError::fatal(
+                    "test_lease_expiry_token_missing",
+                    "expire_lease_once_for_test",
+                    RuntimeErrorCode::RuntimeFatal,
+                )
+            })?;
+            if candidates.next().is_some() {
+                return Err(RuntimeHostError::fatal(
+                    "test_lease_expiry_token_candidate_not_unique",
+                    "expire_lease_once_for_test",
+                    RuntimeErrorCode::RuntimeFatal,
+                ));
+            }
             if active != *token {
                 return Err(RuntimeHostError::fatal(
                     "test_lease_expiry_token_identity_mismatch",
@@ -1302,21 +1263,7 @@ impl RuntimeHost {
         // This existing owner returns only after token cleanup, any queued transfer, persisted
         // scheduler state, and the durable lease terminal have all completed.
         shared.cleanup_token(token, connection_id, LeaseReleaseReason::Expired)?;
-        let terminal = durable_terminal()?.ok_or_else(|| {
-            RuntimeHostError::fatal(
-                "test_lease_expiry_terminal_missing",
-                "expire_lease_once_for_test",
-                RuntimeErrorCode::RuntimeFatal,
-            )
-        })?;
-        if active_token()?.is_some() {
-            return Err(RuntimeHostError::fatal(
-                "test_lease_expiry_token_cleanup_incomplete",
-                "expire_lease_once_for_test",
-                RuntimeErrorCode::RuntimeFatal,
-            ));
-        }
-        Ok(terminal)
+        shared.record_completed_lease_expiry_for_test(token)
     }
 
     #[cfg(test)]
@@ -1665,6 +1612,27 @@ struct QueueOperationTestHook {
     request_id: RequestId,
     snapshot_reached: Arc<Barrier>,
     resume: Arc<Barrier>,
+}
+
+#[cfg(test)]
+#[derive(Clone)]
+struct LeaseExpiryTestCheckpoint {
+    token: LeaseToken,
+    terminal: TerminalEvent,
+}
+
+#[cfg(test)]
+fn lease_token_identity_match_count(left: &LeaseToken, right: &LeaseToken) -> usize {
+    [
+        left.owner_epoch() == right.owner_epoch(),
+        left.lease_id() == right.lease_id(),
+        left.instance_id() == right.instance_id(),
+        left.holder_id() == right.holder_id(),
+        left.expires_at_monotonic_ms() == right.expires_at_monotonic_ms(),
+    ]
+    .into_iter()
+    .filter(|matches| *matches)
+    .count()
 }
 
 #[cfg(test)]
@@ -2852,6 +2820,8 @@ struct HostShared {
     contained_task_checkpoint_test_hook: Mutex<Option<ContainedTaskCheckpointTestHook>>,
     #[cfg(test)]
     lease_expiry_scan_test_gate: Mutex<()>,
+    #[cfg(test)]
+    lease_expiry_test_checkpoints: Mutex<Vec<LeaseExpiryTestCheckpoint>>,
     trusted_policy_dispatches: Mutex<TrustedPolicyDispatchStore>,
     policy_dispatch_clocks: Mutex<BTreeMap<String, PolicyDispatchClock>>,
     // Outcome preparation and completion form one idempotent Runtime-owned transition.
@@ -12481,6 +12451,175 @@ impl HostShared {
         Ok(())
     }
 
+    #[cfg(test)]
+    fn durable_lease_expiry_terminal_for_test(
+        &self,
+        token: &LeaseToken,
+    ) -> RuntimeHostResult<Option<TerminalEvent>> {
+        let through_sequence = self
+            .ledger
+            .latest_sequence()
+            .map_err(|_| ledger_error("read_test_lease_expiry_position"))?;
+        let mut selected_terminal = None;
+        for event_type in [EventType::LeaseExpired, EventType::LeaseReleased] {
+            let events = self
+                .ledger
+                .query_page(
+                    EventQuery {
+                        to_sequence: Some(through_sequence),
+                        event_type: Some(event_type),
+                        instance_id: Some(token.instance_id()),
+                        lease_id: Some(token.lease_id()),
+                        ..EventQuery::default()
+                    },
+                    0,
+                    through_sequence,
+                    2,
+                )
+                .map_err(|_| ledger_error("read_test_lease_expiry_terminal"))?;
+            let event = match events.as_slice() {
+                [] => None,
+                [event] => Some(terminal(event)),
+                _ => {
+                    return Err(RuntimeHostError::fatal(
+                        "test_lease_expiry_terminal_not_unique",
+                        "expire_lease_once_for_test",
+                        RuntimeErrorCode::RuntimeFatal,
+                    ));
+                }
+            };
+            // LeaseExpired is the exact scan result. LeaseReleased is the permitted fallback
+            // for an already-cleaned token and must not replace a durable expiry on replay.
+            selected_terminal = selected_terminal.or(event);
+        }
+        Ok(selected_terminal)
+    }
+
+    #[cfg(test)]
+    fn active_lease_token_for_test(
+        &self,
+        token: &LeaseToken,
+    ) -> RuntimeHostResult<Option<LeaseToken>> {
+        lock(&self.scheduler, "read_test_lease_expiry_token").map(|scheduler| {
+            scheduler.active_tokens().into_iter().find(|active| {
+                active.instance_id() == token.instance_id() && active.lease_id() == token.lease_id()
+            })
+        })
+    }
+
+    #[cfg(test)]
+    fn record_completed_lease_expiry_for_test(
+        &self,
+        token: &LeaseToken,
+    ) -> RuntimeHostResult<TerminalEvent> {
+        let terminal = self
+            .durable_lease_expiry_terminal_for_test(token)?
+            .ok_or_else(|| {
+                RuntimeHostError::fatal(
+                    "test_lease_expiry_terminal_missing",
+                    "expire_lease_once_for_test",
+                    RuntimeErrorCode::RuntimeFatal,
+                )
+            })?;
+        if self.active_lease_token_for_test(token)?.is_some() {
+            return Err(RuntimeHostError::fatal(
+                "test_lease_expiry_token_cleanup_incomplete",
+                "expire_lease_once_for_test",
+                RuntimeErrorCode::RuntimeFatal,
+            ));
+        }
+        let mut checkpoints = lock(
+            &self.lease_expiry_test_checkpoints,
+            "record_test_lease_expiry_checkpoint",
+        )?;
+        if checkpoints
+            .iter()
+            .any(|checkpoint| checkpoint.token == *token)
+        {
+            return Err(RuntimeHostError::fatal(
+                "test_lease_expiry_checkpoint_duplicate",
+                "expire_lease_once_for_test",
+                RuntimeErrorCode::RuntimeFatal,
+            ));
+        }
+        if checkpoints
+            .iter()
+            .any(|checkpoint| checkpoint.terminal == terminal)
+        {
+            return Err(RuntimeHostError::fatal(
+                "test_lease_expiry_checkpoint_inconsistent",
+                "expire_lease_once_for_test",
+                RuntimeErrorCode::RuntimeFatal,
+            ));
+        }
+        checkpoints.push(LeaseExpiryTestCheckpoint {
+            token: token.clone(),
+            terminal,
+        });
+        Ok(terminal)
+    }
+
+    #[cfg(test)]
+    fn replay_lease_expiry_checkpoint_for_test(
+        &self,
+        token: &LeaseToken,
+    ) -> RuntimeHostResult<Option<TerminalEvent>> {
+        let checkpoint = {
+            let checkpoints = lock(
+                &self.lease_expiry_test_checkpoints,
+                "read_test_lease_expiry_checkpoint",
+            )?;
+            let mut candidates = checkpoints.iter().filter(|checkpoint| {
+                lease_token_identity_match_count(&checkpoint.token, token) >= 4
+            });
+            let Some(checkpoint) = candidates.next() else {
+                return Ok(None);
+            };
+            if candidates.next().is_some() {
+                return Err(RuntimeHostError::fatal(
+                    "test_lease_expiry_checkpoint_duplicate",
+                    "expire_lease_once_for_test",
+                    RuntimeErrorCode::RuntimeFatal,
+                ));
+            }
+            if checkpoint.token != *token {
+                return Err(RuntimeHostError::fatal(
+                    "test_lease_expiry_token_identity_mismatch",
+                    "expire_lease_once_for_test",
+                    RuntimeErrorCode::RuntimeFatal,
+                ));
+            }
+            checkpoint.clone()
+        };
+        let durable_terminal = self
+            .durable_lease_expiry_terminal_for_test(&checkpoint.token)?
+            .ok_or_else(|| {
+                RuntimeHostError::fatal(
+                    "test_lease_expiry_checkpoint_missing",
+                    "expire_lease_once_for_test",
+                    RuntimeErrorCode::RuntimeFatal,
+                )
+            })?;
+        if durable_terminal != checkpoint.terminal {
+            return Err(RuntimeHostError::fatal(
+                "test_lease_expiry_checkpoint_inconsistent",
+                "expire_lease_once_for_test",
+                RuntimeErrorCode::RuntimeFatal,
+            ));
+        }
+        if self
+            .active_lease_token_for_test(&checkpoint.token)?
+            .is_some()
+        {
+            return Err(RuntimeHostError::fatal(
+                "test_lease_expiry_terminal_token_still_active",
+                "expire_lease_once_for_test",
+                RuntimeErrorCode::RuntimeFatal,
+            ));
+        }
+        Ok(Some(checkpoint.terminal))
+    }
+
     fn expire_due_leases(&self) -> RuntimeHostResult<()> {
         #[cfg(test)]
         let _scan = lock(
@@ -12503,6 +12642,8 @@ impl HostShared {
                 .connection_for_token(&token)
                 .map_err(|error| RuntimeHostError::scheduler("read_lease_connection", &error))?;
             self.cleanup_token(&token, connection_id, LeaseReleaseReason::Expired)?;
+            #[cfg(test)]
+            self.record_completed_lease_expiry_for_test(&token)?;
         }
         Ok(())
     }
