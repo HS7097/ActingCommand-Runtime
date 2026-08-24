@@ -638,32 +638,6 @@ impl RecognitionEvaluator {
         if !errors.is_empty() {
             return Err(RecognitionPackError::fatal(errors.join("; ")));
         }
-        if vision_provider.is_none()
-            && pack.targets.iter().any(|target| {
-                matches!(target, RecognitionTarget::Ocr(_) | RecognitionTarget::Nn(_))
-            })
-        {
-            return Err(RecognitionPackError::fatal_with_code(
-                RecognitionPackErrorCode::VisionProviderMissing,
-                "recognition pack requires OCR/NN vision capability, but no production vision provider was injected",
-            ));
-        }
-        if let Some(provider) = &vision_provider {
-            for target in &pack.targets {
-                let capability = match target {
-                    RecognitionTarget::Ocr(target) => provider
-                        .require_ocr_model(&target.model_ref, &target.model_sha256)
-                        .map_err(|error| provider_error(&target.id, "ocr admission", error)),
-                    RecognitionTarget::Nn(target) => provider
-                        .require_nn_model(&target.model_ref, &target.model_sha256)
-                        .map_err(|error| provider_error(&target.id, "nn admission", error)),
-                    RecognitionTarget::Template(_)
-                    | RecognitionTarget::Color(_)
-                    | RecognitionTarget::ClickOnly(_) => Ok(()),
-                };
-                capability?;
-            }
-        }
 
         let target_indexes = pack
             .targets
@@ -732,6 +706,9 @@ impl RecognitionEvaluator {
             )
         })?;
         let region = provider_region(scene, &target.id, &target.region)?;
+        provider
+            .require_ocr_model(&target.model_ref, &target.model_sha256)
+            .map_err(|error| provider_error(&target.id, "ocr admission", error))?;
         let observation = provider
             .read_text_with_execution_evidence(OcrProviderRequest {
                 frame: provider_frame(scene),
@@ -938,6 +915,9 @@ impl RecognitionEvaluator {
             )
         })?;
         let region = provider_region(scene, &target.id, &target.region)?;
+        provider
+            .require_ocr_model(&target.model_ref, &target.model_sha256)
+            .map_err(|error| provider_error(&target.id, "ocr admission", error))?;
         let result = provider
             .read_text(OcrProviderRequest {
                 frame: provider_frame(scene),
@@ -996,6 +976,9 @@ impl RecognitionEvaluator {
             )
         })?;
         let region = provider_region(scene, &target.id, &target.region)?;
+        provider
+            .require_nn_model(&target.model_ref, &target.model_sha256)
+            .map_err(|error| provider_error(&target.id, "nn admission", error))?;
         let result = provider
             .classify(NnProviderRequest {
                 frame: provider_frame(scene),
@@ -2029,7 +2012,7 @@ fn default_match_metric() -> RecognitionMatchMetric {
 mod tests {
     use super::*;
     use std::io;
-    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
     use std::time::{SystemTime, UNIX_EPOCH};
 
     static TEST_DIR_SEQUENCE: AtomicU64 = AtomicU64::new(0);
@@ -2440,13 +2423,101 @@ mod tests {
     }
 
     #[test]
-    fn schema_0_6_vision_targets_require_provider_at_admission() {
-        let pack =
-            load_pack_from_json_str(&ocr_pack_json("exact", "hello", 0.0)).expect("pack parses");
-        let err =
-            RecognitionEvaluator::new(PathBuf::new(), pack).expect_err("missing provider rejected");
+    fn mixed_vision_pack_constructs_and_non_vision_targets_evaluate_without_provider() {
+        let fixture = TemplateFixture::new();
+        let evaluator =
+            RecognitionEvaluator::new(fixture.dir.path.clone(), fixture.mixed_vision_pack())
+                .expect("mixed evaluator does not require an unselected vision provider");
+        let scene = fixture.scene_with_template();
 
-        assert_eq!(err.code(), RecognitionPackErrorCode::VisionProviderMissing);
+        assert!(
+            evaluator
+                .evaluate_target(&scene, "template")
+                .expect("template evaluation")
+                .passed
+        );
+        assert!(
+            evaluator
+                .evaluate_target(&scene, "color")
+                .expect("color evaluation")
+                .passed
+        );
+
+        for target_id in ["ocr/page", "nn/page"] {
+            let error = evaluator
+                .evaluate_target(&scene, target_id)
+                .expect_err("selected vision target requires a provider");
+            assert_eq!(
+                error.code(),
+                RecognitionPackErrorCode::VisionProviderMissing
+            );
+            assert!(error.message().contains(target_id), "{}", error.message());
+        }
+    }
+
+    #[test]
+    fn vision_model_requirements_are_selected_target_scoped() {
+        let fixture = TemplateFixture::new();
+        let provider = Arc::new(TrackingVisionProvider::new(false));
+        let evaluator = RecognitionEvaluator::with_vision_provider(
+            fixture.mixed_vision_pack(),
+            Arc::new(FsAssetResolver::new(fixture.dir.path.clone())),
+            provider.clone(),
+        )
+        .expect("mixed evaluator");
+        let scene = fixture.scene_with_template();
+
+        assert_eq!(provider.counts(), (0, 0, 0, 0));
+        evaluator
+            .evaluate_target(&scene, "template")
+            .expect("template evaluation");
+        evaluator
+            .evaluate_target(&scene, "color")
+            .expect("color evaluation");
+        assert_eq!(provider.counts(), (0, 0, 0, 0));
+
+        evaluator
+            .evaluate_target(&scene, "ocr/page")
+            .expect("ocr evaluation");
+        assert_eq!(provider.counts(), (1, 0, 1, 0));
+
+        evaluator
+            .evaluate_target(&scene, "nn/page")
+            .expect("nn evaluation");
+        assert_eq!(provider.counts(), (1, 1, 1, 1));
+    }
+
+    #[test]
+    fn vision_model_mismatch_prevents_inference() {
+        let fixture = TemplateFixture::new();
+        let provider = Arc::new(TrackingVisionProvider::new(true));
+        let evaluator = RecognitionEvaluator::with_vision_provider(
+            fixture.mixed_vision_pack(),
+            Arc::new(FsAssetResolver::new(fixture.dir.path.clone())),
+            provider.clone(),
+        )
+        .expect("mixed evaluator");
+        let scene = fixture.scene_with_template();
+
+        let ocr_error = evaluator
+            .evaluate_ocr_observation(&scene, "ocr/page")
+            .expect_err("OCR model mismatch is fail-closed");
+        assert_eq!(
+            ocr_error.code(),
+            RecognitionPackErrorCode::VisionProviderFailure
+        );
+        assert!(ocr_error.message().contains("ocr admission"));
+        assert_eq!(provider.counts(), (1, 0, 0, 0));
+
+        let nn_error = evaluator
+            .evaluate_target(&scene, "nn/page")
+            .expect_err("NN model mismatch is fail-closed");
+        assert_eq!(
+            nn_error.code(),
+            RecognitionPackErrorCode::VisionProviderFailure
+        );
+        assert!(nn_error.message().contains("nn admission"));
+        assert_eq!(provider.counts(), (1, 1, 0, 0));
     }
 
     #[test]
@@ -3172,6 +3243,61 @@ mod tests {
             RecognitionEvaluator::new(self.dir.path.clone(), pack).expect("evaluator")
         }
 
+        fn mixed_vision_pack(&self) -> RecognitionPack {
+            RecognitionPack {
+                schema_version: "0.6".to_string(),
+                coordinate_space: Some(PackCoordinateSpace {
+                    width: 64,
+                    height: 48,
+                }),
+                targets: vec![
+                    RecognitionTarget::Template(TemplateTarget {
+                        id: "template".to_string(),
+                        template_path: "templates/button.png".to_string(),
+                        region: PackRegion::Rect(rect(12, 10, 28, 24)),
+                        threshold: None,
+                        method: RecognitionMethod::Ncc,
+                        mask: None,
+                        rect_move: None,
+                        color_check: None,
+                        click: None,
+                    }),
+                    RecognitionTarget::Color(ColorTarget {
+                        id: "color".to_string(),
+                        region: rect(0, 0, 4, 4),
+                        expected: [30, 31, 32],
+                        click: None,
+                    }),
+                    RecognitionTarget::Ocr(OcrTarget {
+                        id: "ocr/page".to_string(),
+                        region: PackRegion::Rect(rect(0, 0, 2, 1)),
+                        languages: vec!["en".to_string()],
+                        timeout_ms: 1_000,
+                        match_mode: OcrMatchMode::Exact,
+                        expected: vec!["hello".to_string()],
+                        case_sensitive: false,
+                        minimum_confidence: 0.9,
+                        model_ref: PPOCR_V6_MEDIUM_MODEL_REF.to_string(),
+                        model_sha256: "a".repeat(64),
+                        click: None,
+                    }),
+                    RecognitionTarget::Nn(NnTarget {
+                        id: "nn/page".to_string(),
+                        region: PackRegion::Rect(rect(0, 0, 2, 1)),
+                        model_ref: "fixture-page-model".to_string(),
+                        model_sha256: "b".repeat(64),
+                        candidate_labels: vec!["home".to_string(), "settings".to_string()],
+                        minimum_score: 0.75,
+                        selection: NnSelectionMode::Label,
+                        expected_label: Some("home".to_string()),
+                        timeout_ms: 1_000,
+                        click: None,
+                    }),
+                ],
+                ..base_pack()
+            }
+        }
+
         fn scene_with_template(&self) -> Scene {
             let mut frame = blank_image(64, 48, [30, 31, 32]);
             paste(&mut frame, &self.template, 20, 15);
@@ -3262,6 +3388,107 @@ mod tests {
             );
             assert_eq!(request.frame.rgb8_pixels.len(), 6);
             self.nn.clone()
+        }
+    }
+
+    #[derive(Debug)]
+    struct TrackingVisionProvider {
+        reject_models: bool,
+        ocr_requirements: AtomicUsize,
+        nn_requirements: AtomicUsize,
+        ocr_inferences: AtomicUsize,
+        nn_inferences: AtomicUsize,
+    }
+
+    impl TrackingVisionProvider {
+        fn new(reject_models: bool) -> Self {
+            Self {
+                reject_models,
+                ocr_requirements: AtomicUsize::new(0),
+                nn_requirements: AtomicUsize::new(0),
+                ocr_inferences: AtomicUsize::new(0),
+                nn_inferences: AtomicUsize::new(0),
+            }
+        }
+
+        fn counts(&self) -> (usize, usize, usize, usize) {
+            (
+                self.ocr_requirements.load(Ordering::SeqCst),
+                self.nn_requirements.load(Ordering::SeqCst),
+                self.ocr_inferences.load(Ordering::SeqCst),
+                self.nn_inferences.load(Ordering::SeqCst),
+            )
+        }
+    }
+
+    impl VisionProvider for TrackingVisionProvider {
+        fn require_ocr_model(
+            &self,
+            model_ref: &str,
+            model_sha256: &str,
+        ) -> Result<(), VisionProviderError> {
+            self.ocr_requirements.fetch_add(1, Ordering::SeqCst);
+            if self.reject_models
+                || model_ref != PPOCR_V6_MEDIUM_MODEL_REF
+                || model_sha256
+                    != "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            {
+                Err(VisionProviderError::new(
+                    VisionProviderErrorCode::ModelMismatch,
+                    "OCR model mismatch",
+                ))
+            } else {
+                Ok(())
+            }
+        }
+
+        fn require_nn_model(
+            &self,
+            model_ref: &str,
+            model_sha256: &str,
+        ) -> Result<(), VisionProviderError> {
+            self.nn_requirements.fetch_add(1, Ordering::SeqCst);
+            if self.reject_models
+                || model_ref != "fixture-page-model"
+                || model_sha256
+                    != "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+            {
+                Err(VisionProviderError::new(
+                    VisionProviderErrorCode::ModelMismatch,
+                    "NN model mismatch",
+                ))
+            } else {
+                Ok(())
+            }
+        }
+
+        fn read_text(
+            &self,
+            _request: OcrProviderRequest<'_>,
+        ) -> Result<OcrProviderResult, VisionProviderError> {
+            self.ocr_inferences.fetch_add(1, Ordering::SeqCst);
+            Ok(OcrProviderResult {
+                text: "hello".to_string(),
+                blocks: vec![OcrProviderTextBlock {
+                    text: "hello".to_string(),
+                    rect: rect(0, 0, 2, 1),
+                    confidence: Some(1.0),
+                }],
+                confidence: Some(1.0),
+            })
+        }
+
+        fn classify(
+            &self,
+            _request: NnProviderRequest<'_>,
+        ) -> Result<NnProviderResult, VisionProviderError> {
+            self.nn_inferences.fetch_add(1, Ordering::SeqCst);
+            Ok(NnProviderResult {
+                labels: vec![NnProviderLabel {
+                    label: "home".to_string(),
+                    score: 0.9,
+                }],
+            })
         }
     }
 

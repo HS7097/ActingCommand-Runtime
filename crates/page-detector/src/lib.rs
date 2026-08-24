@@ -681,9 +681,10 @@ mod tests {
     use super::*;
     use actingcommand_recognition_pack::{
         ClickOnlyTarget, ColorTarget, FsAssetResolver, NnProviderLabel, NnProviderRequest,
-        NnProviderResult, OcrProviderRequest, OcrProviderResult, PackCoordinateSpace, PackRect,
-        PackRegion, RecognitionDefaults, RecognitionPack, RecognitionTarget, TemplateTarget,
-        VisionProvider, VisionProviderError, load_pack_from_json_str,
+        NnProviderResult, NnSelectionMode, NnTarget, OcrMatchMode, OcrProviderRequest,
+        OcrProviderResult, OcrTarget, PackCoordinateSpace, PackRect, PackRegion,
+        RecognitionDefaults, RecognitionPack, RecognitionTarget, TemplateTarget, VisionProvider,
+        VisionProviderError, load_pack_from_json_str,
     };
     use std::fs;
     use std::path::PathBuf;
@@ -812,6 +813,118 @@ mod tests {
                 ("fixture/popup", PageTargetRole::Forbidden, true),
             ]
         );
+    }
+
+    #[test]
+    fn template_only_page_in_mixed_vision_pack_does_not_require_provider() {
+        let root = temp_fixture_dir("template-page-with-unselected-vision");
+        fs::write(
+            root.join("anchor.png"),
+            encode_png(2, 2, |x, y| {
+                [
+                    (10 + x * 80) as u8,
+                    (20 + y * 70) as u8,
+                    (30 + (x + y) * 50) as u8,
+                ]
+            }),
+        )
+        .expect("write template");
+        let pack = RecognitionPack {
+            schema_version: "0.6".to_string(),
+            game: None,
+            server: None,
+            locale: None,
+            coordinate_space: Some(PackCoordinateSpace {
+                width: 4,
+                height: 4,
+            }),
+            defaults: RecognitionDefaults::default(),
+            targets: vec![
+                RecognitionTarget::Template(TemplateTarget {
+                    id: "fixture/template_anchor".to_string(),
+                    template_path: "anchor.png".to_string(),
+                    region: PackRegion::Rect(rect(0, 0, 2, 2)),
+                    threshold: Some(0.99),
+                    method: actingcommand_recognition_pack::RecognitionMethod::Ncc,
+                    mask: None,
+                    rect_move: None,
+                    color_check: None,
+                    click: None,
+                }),
+                RecognitionTarget::Ocr(OcrTarget {
+                    id: "fixture/unselected_ocr".to_string(),
+                    region: PackRegion::Keyword("full_frame".to_string()),
+                    languages: vec!["en".to_string()],
+                    timeout_ms: 1_000,
+                    match_mode: OcrMatchMode::Exact,
+                    expected: vec!["fixture".to_string()],
+                    case_sensitive: false,
+                    minimum_confidence: 0.9,
+                    model_ref: "PP-OCRv6_medium".to_string(),
+                    model_sha256: "a".repeat(64),
+                    click: None,
+                }),
+                RecognitionTarget::Nn(NnTarget {
+                    id: "fixture/unselected_nn".to_string(),
+                    region: PackRegion::Keyword("full_frame".to_string()),
+                    model_ref: "fixture-page-model".to_string(),
+                    model_sha256: "b".repeat(64),
+                    candidate_labels: vec!["fixture".to_string()],
+                    minimum_score: 0.9,
+                    selection: NnSelectionMode::Label,
+                    expected_label: Some("fixture".to_string()),
+                    timeout_ms: 1_000,
+                    click: None,
+                }),
+            ],
+        };
+        let evaluator = RecognitionEvaluator::new(root.clone(), pack)
+            .expect("mixed pack does not require provider at construction");
+        let detector = PageDetector::new(PageSet {
+            schema_version: "0.6".to_string(),
+            pages: vec![
+                PageDefinition {
+                    id: "fixture/template_page".to_string(),
+                    required: vec!["fixture/template_anchor".to_string()],
+                    any_of: Vec::new(),
+                    optional: Vec::new(),
+                    forbidden: Vec::new(),
+                },
+                PageDefinition {
+                    id: "fixture/ocr_page".to_string(),
+                    required: vec!["fixture/unselected_ocr".to_string()],
+                    any_of: Vec::new(),
+                    optional: Vec::new(),
+                    forbidden: Vec::new(),
+                },
+            ],
+        })
+        .expect("page detector");
+        detector.validate(&evaluator).expect("page references");
+        let scene = Scene::from_png(&encode_png(4, 4, |x, y| {
+            if x < 2 && y < 2 {
+                [
+                    (10 + x * 80) as u8,
+                    (20 + y * 70) as u8,
+                    (30 + (x + y) * 50) as u8,
+                ]
+            } else {
+                [1, 2, 3]
+            }
+        }))
+        .expect("scene");
+
+        assert!(
+            detector
+                .evaluate_page(&evaluator, &scene, "fixture/template_page")
+                .expect("template-only page")
+                .matched
+        );
+        let error = detector
+            .evaluate_page(&evaluator, &scene, "fixture/ocr_page")
+            .expect_err("selected OCR page requires provider");
+        assert_fatal_contains(error, "fixture/unselected_ocr");
+        let _ = fs::remove_dir_all(root);
     }
 
     #[test]
