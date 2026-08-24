@@ -80,8 +80,7 @@ fn run(arguments: Vec<OsString>) -> Result<Value, ActingctlError> {
             expected_sha256,
         } => {
             let package = std::fs::canonicalize(package).map_err(|_| ActingctlError::Package)?;
-            let request = ContainedTaskRequest::new(package.display().to_string(), expected_sha256)
-                .map_err(|_| ActingctlError::Usage)?;
+            let request = task_run_request(package.display().to_string(), expected_sha256)?;
             serde_json::to_value(
                 client
                     .run_contained_task(instance()?, request)
@@ -91,6 +90,17 @@ fn run(arguments: Vec<OsString>) -> Result<Value, ActingctlError> {
     }
     .map_err(|_| ActingctlError::Output)?;
     Ok(output)
+}
+
+fn task_run_request(
+    package_path: String,
+    expected_sha256: String,
+) -> Result<ContainedTaskRequest, ActingctlError> {
+    ContainedTaskRequest::new(package_path, expected_sha256)
+        .and_then(|request| {
+            request.with_response_deadline_ms(ContainedTaskRequest::MAX_RESPONSE_DEADLINE_MS)
+        })
+        .map_err(|_| ActingctlError::Usage)
 }
 
 fn write_output(output: &Value) -> Result<(), ActingctlError> {
@@ -354,5 +364,17 @@ mod tests {
         .map(OsString::from)
         .collect();
         assert!(Invocation::parse(args).is_ok());
+    }
+
+    #[test]
+    fn task_run_request_uses_maximum_bounded_response_deadline() {
+        let request = task_run_request("neutral-task.zip".to_string(), "0".repeat(64))
+            .expect("task-run request");
+
+        assert_eq!(
+            request.response_deadline_ms(),
+            ContainedTaskRequest::MAX_RESPONSE_DEADLINE_MS
+        );
+        assert_eq!(request.response_deadline_ms(), 600_000);
     }
 }
