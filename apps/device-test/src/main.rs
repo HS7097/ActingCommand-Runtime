@@ -2524,8 +2524,34 @@ mod tests {
     }
 
     #[test]
-    fn detect_page_scene_matches_synthetic_page() {
+    fn detect_page_scene_matches_synthetic_page_with_unselected_vision_target() {
         let fixture = write_page_fixture("detect-page-match", [24, 28, 36]);
+        let mut pack: serde_json::Value = serde_json::from_slice(
+            &fs::read(&fixture.pack).expect("read recognition pack fixture"),
+        )
+        .expect("parse recognition pack fixture");
+        pack["schema_version"] = serde_json::Value::String("0.6".to_string());
+        pack["targets"]
+            .as_array_mut()
+            .expect("targets")
+            .push(serde_json::json!({
+                "type": "ocr",
+                "id": "fixture/unselected_text",
+                "region": "full_frame",
+                "languages": ["en"],
+                "timeout_ms": 1000,
+                "match_mode": "exact",
+                "expected": ["fixture"],
+                "case_sensitive": false,
+                "minimum_confidence": 0.9,
+                "model_ref": "PP-OCRv6_medium",
+                "model_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            }));
+        fs::write(
+            &fixture.pack,
+            serde_json::to_vec(&pack).expect("serialize recognition pack fixture"),
+        )
+        .expect("write recognition pack fixture");
         let output = run_detect_page_command(
             MaaTouchValidationConfig::default(),
             &DetectPageOptions {

@@ -1670,7 +1670,7 @@ mod tests {
     }
 
     #[test]
-    fn schema_0_6_vision_package_requires_injected_runtime_capability() {
+    fn schema_0_6_vision_package_requires_runtime_capability_when_target_is_selected() {
         let task_id = "vision_task";
         let mut entries = lab_package_entries(task_id, [255, 0, 0]);
         let pack_path = "resources/recognition/neutral.test.pack.json";
@@ -1705,13 +1705,25 @@ mod tests {
         let instance = InstanceId::new("vision-instance").expect("instance");
         let mut no_provider = Containment::new();
 
-        let error = no_provider
+        let bundle = no_provider
             .load(&instance, &zip, &expected)
-            .expect_err("runtime admission without vision capability must fail");
+            .expect("runtime admission does not select a vision target");
+        let error = bundle
+            .evaluator()
+            .expect("evaluator")
+            .evaluate_target(
+                &Scene::from_pixels(1, 1, &[0, 0, 0], ScenePixelFormat::Rgb8).expect("scene"),
+                "home_text",
+            )
+            .expect_err("selected OCR target requires runtime capability");
+        assert_eq!(
+            error.code(),
+            RecognitionPackErrorCode::VisionProviderMissing
+        );
         assert!(
             error
-                .to_string()
-                .contains("no production vision provider was injected")
+                .message()
+                .contains("ocr target 'home_text' has no injected vision provider")
         );
 
         let mut metadata_validation = Containment::for_metadata_validation();
