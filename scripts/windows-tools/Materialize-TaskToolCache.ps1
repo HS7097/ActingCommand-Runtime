@@ -334,7 +334,7 @@ function Expand-BoundedZip {
     $allowed = [Collections.Generic.Dictionary[string, string]]::new(
         [StringComparer]::OrdinalIgnoreCase
     )
-    foreach ($allowedFile in @($AllowedFiles)) {
+    foreach ($allowedFile in $AllowedFiles) {
         $normalized = ([string]$allowedFile).Replace('\', '/')
         Get-SafeChildPath -Root $DestinationRoot -RelativePath $normalized -Label 'ZIP allowlist entry' | Out-Null
         if ($allowed.ContainsKey($normalized)) {
@@ -355,6 +355,12 @@ function Expand-BoundedZip {
             $unixType = (($entry.ExternalAttributes -shr 16) -band 0xF000)
             if ($unixType -eq 0xA000) {
                 Stop-Materialization "ZIP contains a symbolic link: $($entry.FullName)"
+            }
+            if ([string]::IsNullOrEmpty($entry.FullName)) {
+                if ([long]$entry.Length -ne 0) {
+                    Stop-Materialization 'ZIP unnamed root entry must be empty'
+                }
+                continue
             }
             $target = Get-SafeChildPath -Root $DestinationRoot -RelativePath $entry.FullName -Label 'ZIP entry'
             if ([string]::IsNullOrEmpty($entry.Name)) {
@@ -934,9 +940,8 @@ $privateControlSelected = -not [string]::IsNullOrWhiteSpace($PrivateDownloadSour
 $downloadControl = @{ Deadline = [TimeSpan]::FromMinutes(5) }
 if ($privateControlSelected) {
     if ([string]::IsNullOrWhiteSpace($PrivateDownloadSourcePath) -or
-        $null -eq $PrivateDownloadDeadlineMilliseconds -or
-        -not $PrivateDownloadStallBody.IsPresent) {
-        Stop-Materialization 'private download controls require source path, short deadline, and stalled-body mode together'
+        $null -eq $PrivateDownloadDeadlineMilliseconds) {
+        Stop-Materialization 'private download controls require source path and short deadline together'
     }
     if ([int]$PrivateDownloadDeadlineMilliseconds -le 0 -or
         [int]$PrivateDownloadDeadlineMilliseconds -gt 5000) {
@@ -950,7 +955,7 @@ if ($privateControlSelected) {
     $downloadControl = @{
         Deadline = [TimeSpan]::FromMilliseconds([int]$PrivateDownloadDeadlineMilliseconds)
         PrivateSourcePath = $privateSource
-        PrivateStallBeforeBodyRead = $true
+        PrivateStallBeforeBodyRead = $PrivateDownloadStallBody.IsPresent
     }
 }
 $selected = @($Component | Sort-Object -Unique)

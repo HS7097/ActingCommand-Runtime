@@ -92,6 +92,115 @@ function Write-JsonFixture {
     Get-Sha256 -Path $Path
 }
 
+function New-ZipFixture {
+    param(
+        [Parameter(Mandatory)][string] $Path,
+        [Parameter(Mandatory)][object[]] $Entries
+    )
+    Add-Type -AssemblyName System.IO.Compression.FileSystem
+    New-Item -ItemType Directory -Path (Split-Path -Parent $Path) -Force | Out-Null
+    $file = [IO.File]::Open($Path, [IO.FileMode]::CreateNew, [IO.FileAccess]::ReadWrite)
+    $archive = [IO.Compression.ZipArchive]::new(
+        $file,
+        [IO.Compression.ZipArchiveMode]::Create,
+        $false
+    )
+    try {
+        foreach ($specification in $Entries) {
+            $entry = $archive.CreateEntry(
+                [string]$specification.name,
+                [IO.Compression.CompressionLevel]::NoCompression
+            )
+            if ($null -ne $specification.PSObject.Properties['symlink'] -and
+                [bool]$specification.symlink) {
+                $entry.ExternalAttributes = -1577123840 # 0xA1FF0000: Unix symlink with 0777 mode.
+            }
+            if ($null -ne $specification.PSObject.Properties['content'] -and
+                $null -ne $specification.content) {
+                $bytes = [Text.Encoding]::UTF8.GetBytes([string]$specification.content)
+                $output = $entry.Open()
+                try {
+                    $output.Write($bytes, 0, $bytes.Length)
+                }
+                finally {
+                    $output.Dispose()
+                }
+            }
+        }
+    }
+    finally {
+        $archive.Dispose()
+        $file.Dispose()
+    }
+    Get-Item -LiteralPath $Path -ErrorAction Stop
+}
+
+function New-ZipFixtureManifest {
+    param(
+        [Parameter(Mandatory)][string] $SourcesManifestPath,
+        [Parameter(Mandatory)][string] $FixtureRoot,
+        [Parameter(Mandatory)][string] $Name,
+        [Parameter(Mandatory)][string] $ArchivePath,
+        [Parameter(Mandatory)][int] $MaximumFiles,
+        [Parameter(Mandatory)][long] $MaximumBytes,
+        [Parameter(Mandatory)][AllowEmptyCollection()][string[]] $RequiredFiles,
+        [string[]] $AllowedFiles
+    )
+    $manifest = Get-Content -LiteralPath $SourcesManifestPath -Raw | ConvertFrom-Json -Depth 100
+    $definition = $manifest.components.'platform-tools-37.0.1'
+    $archive = Get-Item -LiteralPath $ArchivePath -ErrorAction Stop
+    $definition.version = 'synthetic-zip-fixture-v1'
+    $definition.archive.url = "https://example.invalid/$Name.zip"
+    $definition.archive.relative_path = "downloads/$Name.zip"
+    $definition.archive.size = [long]$archive.Length
+    $definition.archive.sha256 = Get-Sha256 -Path $archive.FullName
+    $definition.extract_relative_path = "fixtures/$Name"
+    $definition.max_extract_file_count = $MaximumFiles
+    $definition.max_extract_bytes = $MaximumBytes
+    $definition.required_files = @($RequiredFiles)
+    if ($PSBoundParameters.ContainsKey('AllowedFiles')) {
+        $definition | Add-Member -NotePropertyName extract_allowlist -NotePropertyValue @($AllowedFiles) -Force
+    } else {
+        $definition.PSObject.Properties.Remove('extract_allowlist')
+    }
+    $manifest.cache_layout.directory_name = "windows-tools-$Name"
+    $manifestPath = Join-Path $FixtureRoot "$Name.manifest.json"
+    [void](Write-JsonFixture -Path $manifestPath -Value $manifest)
+    $manifestPath
+}
+
+function Invoke-ZipFixtureMaterializer {
+    param(
+        [Parameter(Mandatory)][string] $Name,
+        [Parameter(Mandatory)][string] $ArchivePath,
+        [Parameter(Mandatory)][int] $MaximumFiles,
+        [Parameter(Mandatory)][long] $MaximumBytes,
+        [Parameter(Mandatory)][AllowEmptyCollection()][string[]] $RequiredFiles,
+        [string[]] $AllowedFiles
+    )
+    $manifestArguments = @{
+        SourcesManifestPath = $sourcesManifest
+        FixtureRoot = $zipFixtureRoot
+        Name = $Name
+        ArchivePath = $ArchivePath
+        MaximumFiles = $MaximumFiles
+        MaximumBytes = $MaximumBytes
+        RequiredFiles = $RequiredFiles
+    }
+    if ($PSBoundParameters.ContainsKey('AllowedFiles')) {
+        $manifestArguments.AllowedFiles = $AllowedFiles
+    }
+    $fixtureManifest = New-ZipFixtureManifest @manifestArguments
+    & $materializer `
+        -TaskRoot $testRootFull `
+        -CacheRoot (Join-Path $testRootFull "cache/$Name") `
+        -Component platform-tools-37.0.1 `
+        -SourcesManifestPath $fixtureManifest `
+        -AcceptAndroidSdkLicense `
+        -PrivateDownloadSourcePath $ArchivePath `
+        -PrivateDownloadDeadlineMilliseconds 5000
+}
+
 function New-ArtifactFixture {
     param(
         [Parameter(Mandatory)][string] $Root,
@@ -361,6 +470,138 @@ try {
     }
     Invoke-FailCase -Name 'artifact-output-overwrite' -MessagePattern 'overwrite is prohibited' -Action {
         & $downloader -Repository $repository -SourceSha $sourceSha -ArtifactKind Runtime -TaskRoot $testRootFull -OutputPath $positiveOutput -GhExecutable $fakeGh
+    }
+
+    $zipFixtureRoot = Join-Path $testRootFull 'zip-fixtures'
+    New-Item -ItemType Directory -Path $zipFixtureRoot -Force | Out-Null
+
+    $script:CurrentCase = 'materializer-empty-zip-root-placeholder-positive'
+    $emptyRootArchive = Join-Path $zipFixtureRoot 'empty-root-positive.zip'
+    $emptyRootFixtureBase64 = 'UEsDBBQAAAAAANmVGF0AAAAAAAAAAAAAAAAAAAAAUEsDBBQAAAAAANmVGF0AAAAAAAAAAAAAAAAIAAAAcGF5bG9hZC9QSwMEFAAAAAAA2ZUYXeg6aiAMAAAADAAAABAAAABwYXlsb2FkL3Rvb2wuYmluZml4dHVyZS10b29sUEsDBBQAAAAAANmVGF1GZmPdDgAAAA4AAAASAAAAcGF5bG9hZC9jb25maWcudHh0Zml4dHVyZS1jb25maWdQSwECFAAUAAAAAADZlRhdAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAgAEAAAAAUEsBAhQAFAAAAAAA2ZUYXQAAAAAAAAAAAAAAAAgAAAAAAAAAAAAQAP1BHgAAAHBheWxvYWQvUEsBAhQAFAAAAAAA2ZUYXeg6aiAMAAAADAAAABAAAAAAAAAAAAAAAIABRAAAAHBheWxvYWQvdG9vbC5iaW5QSwECFAAUAAAAAADZlRhdRmZj3Q4AAAAOAAAAEgAAAAAAAAAAAAAAgAF+AAAAcGF5bG9hZC9jb25maWcudHh0UEsFBgAAAAAEAAQA4gAAALwAAAAAAA=='
+    [IO.File]::WriteAllBytes($emptyRootArchive, [Convert]::FromBase64String($emptyRootFixtureBase64))
+    $emptyRootResult = Invoke-ZipFixtureMaterializer `
+        -Name 'empty-root-positive' `
+        -ArchivePath $emptyRootArchive `
+        -MaximumFiles 2 `
+        -MaximumBytes 26 `
+        -RequiredFiles @('payload/tool.bin', 'payload/config.txt')
+    Assert-True -Condition ($emptyRootResult.state -ceq 'Ready') -Message 'empty ZIP root fixture was not Ready'
+    $emptyRootProvenance = Get-Content -LiteralPath $emptyRootResult.provenance_path -Raw | ConvertFrom-Json -Depth 100
+    $emptyRootComponent = $emptyRootProvenance.components.'platform-tools-37.0.1'
+    Assert-True -Condition ([long]$emptyRootComponent.extracted_bytes -eq 26) -Message 'empty ZIP root placeholder consumed byte budget'
+    Assert-True -Condition (@($emptyRootComponent.extracted_files).Count -eq 2) -Message 'empty ZIP root placeholder consumed file budget'
+    $emptyRootOutput = Join-Path $emptyRootResult.cache_root 'fixtures/empty-root-positive'
+    $emptyRootFiles = @(Get-ChildItem -LiteralPath $emptyRootOutput -Recurse -Force -File)
+    $emptyRootDirectories = @(Get-ChildItem -LiteralPath $emptyRootOutput -Recurse -Force -Directory)
+    Assert-True -Condition ($emptyRootFiles.Count -eq 2) -Message 'empty ZIP root placeholder created an output file'
+    Assert-True -Condition ($emptyRootDirectories.Count -eq 1 -and $emptyRootDirectories[0].Name -ceq 'payload') -Message 'empty ZIP root placeholder created an output directory'
+    Assert-True -Condition ((Get-Content -LiteralPath (Join-Path $emptyRootOutput 'payload/tool.bin') -Raw) -ceq 'fixture-tool') -Message 'declared ZIP tool payload changed'
+    Assert-True -Condition ((Get-Content -LiteralPath (Join-Path $emptyRootOutput 'payload/config.txt') -Raw) -ceq 'fixture-config') -Message 'declared ZIP config payload changed'
+    Complete-Case -Name $script:CurrentCase
+
+    $nonemptyUnnamedArchive = Join-Path $zipFixtureRoot 'nonempty-unnamed.zip'
+    [IO.File]::WriteAllBytes(
+        $nonemptyUnnamedArchive,
+        [Convert]::FromBase64String('UEsDBBQAAAAAAJqVGF2G1JN2CQAAAAkAAAAAAAAAbm90LWVtcHR5UEsBAhQAFAAAAAAAmpUYXYbUk3YJAAAACQAAAAAAAAAAAAAAAAAAAIABAAAAAFBLBQYAAAAAAQABAC4AAAAnAAAAAAA=')
+    )
+    Invoke-FailCase -Name 'materializer-nonempty-unnamed-zip-entry' -MessagePattern 'unnamed root entry must be empty' -Action {
+        Invoke-ZipFixtureMaterializer -Name 'nonempty-unnamed' -ArchivePath $nonemptyUnnamedArchive -MaximumFiles 1 -MaximumBytes 16 -RequiredFiles @() | Out-Null
+    }
+
+    $traversalDirectoryArchive = Join-Path $zipFixtureRoot 'traversal-directory.zip'
+    New-ZipFixture -Path $traversalDirectoryArchive -Entries @(
+        [pscustomobject]@{ name = '../escape/'; content = $null }
+    ) | Out-Null
+    Invoke-FailCase -Name 'materializer-zip-traversal-directory' -MessagePattern 'unsafe path segment|escapes its controlled root' -Action {
+        Invoke-ZipFixtureMaterializer -Name 'traversal-directory' -ArchivePath $traversalDirectoryArchive -MaximumFiles 1 -MaximumBytes 1 -RequiredFiles @() | Out-Null
+    }
+
+    $traversalFileArchive = Join-Path $zipFixtureRoot 'traversal-file.zip'
+    New-ZipFixture -Path $traversalFileArchive -Entries @(
+        [pscustomobject]@{ name = '../escape.txt'; content = 'x' }
+    ) | Out-Null
+    Invoke-FailCase -Name 'materializer-zip-traversal-file' -MessagePattern 'unsafe path segment|escapes its controlled root' -Action {
+        Invoke-ZipFixtureMaterializer -Name 'traversal-file' -ArchivePath $traversalFileArchive -MaximumFiles 1 -MaximumBytes 1 -RequiredFiles @() | Out-Null
+    }
+    Assert-True -Condition (-not (Test-Path -LiteralPath (Join-Path $testRootFull 'escape.txt'))) -Message 'traversal ZIP fixture wrote outside the extraction root'
+
+    $absolutePathArchive = Join-Path $zipFixtureRoot 'absolute-path.zip'
+    New-ZipFixture -Path $absolutePathArchive -Entries @(
+        [pscustomobject]@{ name = 'C:/outside.txt'; content = 'x' }
+    ) | Out-Null
+    Invoke-FailCase -Name 'materializer-zip-absolute-path' -MessagePattern 'non-empty relative path' -Action {
+        Invoke-ZipFixtureMaterializer -Name 'absolute-path' -ArchivePath $absolutePathArchive -MaximumFiles 1 -MaximumBytes 1 -RequiredFiles @() | Out-Null
+    }
+
+    $symlinkArchive = Join-Path $zipFixtureRoot 'symlink.zip'
+    New-ZipFixture -Path $symlinkArchive -Entries @(
+        [pscustomobject]@{ name = 'payload/link'; content = 'target'; symlink = $true }
+    ) | Out-Null
+    Invoke-FailCase -Name 'materializer-zip-symlink' -MessagePattern 'symbolic link' -Action {
+        Invoke-ZipFixtureMaterializer -Name 'symlink' -ArchivePath $symlinkArchive -MaximumFiles 1 -MaximumBytes 6 -RequiredFiles @() | Out-Null
+    }
+
+    $duplicateArchive = Join-Path $zipFixtureRoot 'duplicate.zip'
+    New-ZipFixture -Path $duplicateArchive -Entries @(
+        [pscustomobject]@{ name = 'payload/value.txt'; content = 'a' },
+        [pscustomobject]@{ name = 'payload/value.txt'; content = 'b' }
+    ) | Out-Null
+    Invoke-FailCase -Name 'materializer-zip-duplicate' -MessagePattern 'duplicate or case-colliding selected path' -Action {
+        Invoke-ZipFixtureMaterializer -Name 'duplicate' -ArchivePath $duplicateArchive -MaximumFiles 2 -MaximumBytes 2 -RequiredFiles @() | Out-Null
+    }
+
+    $caseCollisionArchive = Join-Path $zipFixtureRoot 'case-collision.zip'
+    New-ZipFixture -Path $caseCollisionArchive -Entries @(
+        [pscustomobject]@{ name = 'payload/Value.txt'; content = 'a' },
+        [pscustomobject]@{ name = 'payload/value.txt'; content = 'b' }
+    ) | Out-Null
+    Invoke-FailCase -Name 'materializer-zip-case-collision' -MessagePattern 'duplicate or case-colliding selected path' -Action {
+        Invoke-ZipFixtureMaterializer -Name 'case-collision' -ArchivePath $caseCollisionArchive -MaximumFiles 2 -MaximumBytes 2 -RequiredFiles @() | Out-Null
+    }
+
+    $allowlistArchive = Join-Path $zipFixtureRoot 'allowlist-positive.zip'
+    New-ZipFixture -Path $allowlistArchive -Entries @(
+        [pscustomobject]@{ name = 'payload/keep.txt'; content = 'keep' },
+        [pscustomobject]@{ name = 'payload/skip.txt'; content = 'skip' }
+    ) | Out-Null
+    $script:CurrentCase = 'materializer-zip-nonempty-allowlist-positive'
+    $allowlistResult = Invoke-ZipFixtureMaterializer `
+        -Name 'allowlist-positive' `
+        -ArchivePath $allowlistArchive `
+        -MaximumFiles 1 `
+        -MaximumBytes 4 `
+        -RequiredFiles @('payload/keep.txt') `
+        -AllowedFiles @('payload/keep.txt')
+    $allowlistOutput = Join-Path $allowlistResult.cache_root 'fixtures/allowlist-positive'
+    Assert-True -Condition (Test-Path -LiteralPath (Join-Path $allowlistOutput 'payload/keep.txt') -PathType Leaf) -Message 'allowlisted ZIP entry was not extracted'
+    Assert-True -Condition (-not (Test-Path -LiteralPath (Join-Path $allowlistOutput 'payload/skip.txt'))) -Message 'non-allowlisted ZIP entry was extracted'
+    $allowlistProvenance = Get-Content -LiteralPath $allowlistResult.provenance_path -Raw | ConvertFrom-Json -Depth 100
+    Assert-True -Condition (@($allowlistProvenance.components.'platform-tools-37.0.1'.extracted_files).Count -eq 1) -Message 'non-empty allowlist did not select exactly one entry'
+    Complete-Case -Name $script:CurrentCase
+
+    $missingAllowlistArchive = Join-Path $zipFixtureRoot 'missing-allowlist.zip'
+    New-ZipFixture -Path $missingAllowlistArchive -Entries @(
+        [pscustomobject]@{ name = 'payload/value.txt'; content = 'x' }
+    ) | Out-Null
+    Invoke-FailCase -Name 'materializer-zip-missing-allowlist' -MessagePattern 'missing allowlisted files' -Action {
+        Invoke-ZipFixtureMaterializer -Name 'missing-allowlist' -ArchivePath $missingAllowlistArchive -MaximumFiles 1 -MaximumBytes 1 -RequiredFiles @() -AllowedFiles @('payload/missing.txt') | Out-Null
+    }
+
+    $fileLimitArchive = Join-Path $zipFixtureRoot 'file-limit.zip'
+    New-ZipFixture -Path $fileLimitArchive -Entries @(
+        [pscustomobject]@{ name = 'payload/one.txt'; content = 'a' },
+        [pscustomobject]@{ name = 'payload/two.txt'; content = 'b' }
+    ) | Out-Null
+    Invoke-FailCase -Name 'materializer-zip-file-limit' -MessagePattern 'exceeds the bounded maximum of 1 files' -Action {
+        Invoke-ZipFixtureMaterializer -Name 'file-limit' -ArchivePath $fileLimitArchive -MaximumFiles 1 -MaximumBytes 2 -RequiredFiles @() | Out-Null
+    }
+
+    $byteLimitArchive = Join-Path $zipFixtureRoot 'byte-limit.zip'
+    New-ZipFixture -Path $byteLimitArchive -Entries @(
+        [pscustomobject]@{ name = 'payload/value.txt'; content = 'xx' }
+    ) | Out-Null
+    Invoke-FailCase -Name 'materializer-zip-byte-limit' -MessagePattern 'exceeds the bounded maximum of 1 bytes' -Action {
+        Invoke-ZipFixtureMaterializer -Name 'byte-limit' -ArchivePath $byteLimitArchive -MaximumFiles 1 -MaximumBytes 1 -RequiredFiles @() | Out-Null
     }
 
     $script:CurrentCase = 'materializer-download-body-timeout-is-bounded'
