@@ -8739,7 +8739,7 @@ fn application_lifecycle_is_denied_while_another_client_holds_the_instance() {
 }
 
 #[test]
-fn runtime_routes_vision_packages_only_through_the_injected_provider() {
+fn runtime_requires_vision_provider_only_after_selected_vision_target() {
     let bytes = neutral_vision_contained_task_package();
     let expected = actingcommand_pack_containment::Sha256Hash::digest(&bytes).to_string();
 
@@ -8764,12 +8764,15 @@ fn runtime_routes_vision_packages_only_through_the_injected_provider() {
             .expect("missing-provider task request"),
     ));
     let missing_receipt = missing_client.send(&missing_request);
-    assert_eq!(missing_receipt.state(), RuntimeReceiptState::Denied);
+    assert_eq!(missing_receipt.state(), RuntimeReceiptState::Failed);
     assert_eq!(
-        missing_receipt.error_projection().expect("denial").code,
-        RuntimeErrorCode::PackageInvalid
+        missing_receipt
+            .error_projection()
+            .expect("typed task failure")
+            .code,
+        RuntimeErrorCode::BackendOperationFailed
     );
-    assert_eq!(missing_state.capture_count.load(Ordering::Acquire), 0);
+    assert_eq!(missing_state.capture_count.load(Ordering::Acquire), 1);
     assert_eq!(missing_state.input_count.load(Ordering::Acquire), 0);
     drop(missing_client);
     missing_host.close().expect("close missing-provider host");
