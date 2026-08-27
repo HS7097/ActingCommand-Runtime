@@ -184,7 +184,9 @@ pub(super) struct PolicyBootstrap {
 pub(super) struct ConfiguredExecutionBackendRegistry {
     devices: Option<ExecutionBackendRegistry>,
     device_input_backends: BTreeMap<String, TouchBackendChoice>,
+    device_capture_backends: BTreeMap<String, CaptureBackendChoice>,
     input_open_diagnostic_sink: Arc<dyn Fn(String) + Send + Sync>,
+    capture_open_diagnostic_sink: Arc<dyn Fn(String) + Send + Sync>,
     fixtures: Option<FixtureExecutionBackendRegistry>,
     modes: BTreeMap<String, ScheduledExecutionMode>,
 }
@@ -205,6 +207,7 @@ enum ConfiguredInstanceBackend {
         alias: String,
         instance_id: InstanceId,
         input_backend: TouchBackendChoice,
+        capture_backend: CaptureBackendChoice,
         registration: Box<ExecutionBackendRegistration>,
     },
     Fixture {
@@ -651,6 +654,7 @@ impl InstanceConfig {
             alias,
             instance_id,
             input_backend: requested,
+            capture_backend: capture_requested,
             registration,
         })
         .map_err(|_| "instance_registration_invalid")
@@ -740,6 +744,7 @@ impl ConfiguredExecutionBackendRegistry {
         }
         let mut devices = Vec::new();
         let mut device_input_backends = BTreeMap::new();
+        let mut device_capture_backends = BTreeMap::new();
         let mut fixtures = BTreeMap::new();
         let mut modes = BTreeMap::new();
         let mut instance_ids = BTreeSet::new();
@@ -749,12 +754,18 @@ impl ConfiguredExecutionBackendRegistry {
                     alias,
                     instance_id,
                     input_backend,
+                    capture_backend,
                     registration,
                 } => {
                     if modes
                         .insert(alias.clone(), ScheduledExecutionMode::DeviceRegistry)
                         .is_some()
-                        || device_input_backends.insert(alias, input_backend).is_some()
+                        || device_input_backends
+                            .insert(alias.clone(), input_backend)
+                            .is_some()
+                        || device_capture_backends
+                            .insert(alias, capture_backend)
+                            .is_some()
                         || !instance_ids.insert(instance_id)
                     {
                         return Err("execution_registry_invalid");
@@ -785,17 +796,20 @@ impl ConfiguredExecutionBackendRegistry {
             instances: fixtures,
             vision_provider,
         });
+        let device_diagnostic_sink: Arc<dyn Fn(String) + Send + Sync> = Arc::new(|record| {
+            let result = {
+                let stderr = io::stderr();
+                let mut stderr = stderr.lock();
+                write_private_diagnostic_line(&mut stderr, &record)
+            };
+            result.expect("failed to write private diagnostic to stderr");
+        });
         Ok(Self {
             devices,
             device_input_backends,
-            input_open_diagnostic_sink: Arc::new(|record| {
-                let result = {
-                    let stderr = io::stderr();
-                    let mut stderr = stderr.lock();
-                    write_private_diagnostic_line(&mut stderr, &record)
-                };
-                result.expect("failed to write private diagnostic to stderr");
-            }),
+            device_capture_backends,
+            input_open_diagnostic_sink: Arc::clone(&device_diagnostic_sink),
+            capture_open_diagnostic_sink: device_diagnostic_sink,
             fixtures,
             modes,
         })
@@ -861,11 +875,23 @@ impl ExecutionBackendProvider for ConfiguredExecutionBackendRegistry {
 
     fn open_capture(&self, instance_alias: &str) -> DeviceResult<Box<dyn CaptureBackend>> {
         match self.mode_for_alias(instance_alias) {
-            Some(ScheduledExecutionMode::DeviceRegistry) => self
-                .devices
-                .as_ref()
-                .ok_or_else(|| DeviceError::fatal("device registry is unavailable"))?
-                .open_capture(instance_alias),
+            Some(ScheduledExecutionMode::DeviceRegistry) => {
+                let capture_backend = self.device_capture_backends.get(instance_alias).copied();
+                open_device_registry_capture_with_diagnostic(
+                    instance_alias,
+                    capture_backend,
+                    || {
+                        capture_backend.ok_or_else(|| {
+                            DeviceError::fatal("device capture backend context is unavailable")
+                        })?;
+                        self.devices
+                            .as_ref()
+                            .ok_or_else(|| DeviceError::fatal("device registry is unavailable"))?
+                            .open_capture(instance_alias)
+                    },
+                    |record| (self.capture_open_diagnostic_sink)(record),
+                )
+            }
             Some(ScheduledExecutionMode::FixtureSimulation) => self
                 .fixtures
                 .as_ref()
@@ -1010,6 +1036,25 @@ fn open_device_registry_input_with_diagnostic<T>(
     }
 }
 
+fn open_device_registry_capture_with_diagnostic<T>(
+    instance_alias: &str,
+    capture_backend: Option<CaptureBackendChoice>,
+    open: impl FnOnce() -> DeviceResult<T>,
+    emit: impl FnOnce(String),
+) -> DeviceResult<T> {
+    match open() {
+        Ok(value) => Ok(value),
+        Err(error) => {
+            emit(device_registry_capture_open_diagnostic_record(
+                instance_alias,
+                capture_backend,
+                &error,
+            ));
+            Err(error)
+        }
+    }
+}
+
 fn device_registry_input_operation_diagnostic_record(
     instance_alias: &str,
     requested_backend: TouchBackendChoice,
@@ -1050,6 +1095,43 @@ fn device_registry_input_open_diagnostic_record(
             "device_error": error.to_string(),
         })
     )
+}
+
+fn device_registry_capture_open_diagnostic_record(
+    instance_alias: &str,
+    capture_backend: Option<CaptureBackendChoice>,
+    error: &DeviceError,
+) -> String {
+    let requested_backend = capture_backend
+        .map(CaptureBackendChoice::as_str)
+        .unwrap_or("unavailable");
+    let factory = capture_backend
+        .map(capture_backend_factory_name)
+        .unwrap_or("unavailable");
+    format!(
+        "ERROR actingd {}",
+        serde_json::json!({
+            "diagnostic": "device_registry_capture_open_failed",
+            "instance_alias": instance_alias,
+            "requested_backend": requested_backend,
+            "factory": factory,
+            "device_error": {
+                "severity": format!("{:?}", error.severity()),
+                "text": error.message(),
+            },
+        })
+    )
+}
+
+fn capture_backend_factory_name(choice: CaptureBackendChoice) -> &'static str {
+    match choice {
+        CaptureBackendChoice::Auto | CaptureBackendChoice::AutoFastest => {
+            "CaptureBackendFactorySet"
+        }
+        CaptureBackendChoice::Adb => "ScreencapBackend",
+        CaptureBackendChoice::DroidcastRaw => "DroidcastRawBackend",
+        CaptureBackendChoice::NemuIpc => "NemuIpcBackend",
+    }
 }
 
 fn touch_backend_factory_name(choice: TouchBackendChoice) -> &'static str {
@@ -1737,6 +1819,60 @@ mod tests {
     }
 
     #[test]
+    fn device_registry_capture_open_failure_emits_one_complete_private_record() {
+        let original = DeviceError::transient("synthetic capture open failure");
+        let mut records = Vec::new();
+
+        let returned = open_device_registry_capture_with_diagnostic(
+            "neutral.device",
+            Some(CaptureBackendChoice::NemuIpc),
+            || Err::<u8, _>(original.clone()),
+            |record| records.push(record),
+        )
+        .expect_err("capture open failure");
+
+        assert_eq!(returned, original);
+        assert_eq!(returned.severity(), original.severity());
+        assert_eq!(returned.message(), original.message());
+        assert_eq!(records.len(), 1);
+        assert!(!records[0].contains('\n'));
+        let payload = records[0]
+            .strip_prefix("ERROR actingd ")
+            .expect("private diagnostic prefix");
+        let payload =
+            serde_json::from_str::<serde_json::Value>(payload).expect("private diagnostic json");
+        assert_eq!(
+            payload,
+            json!({
+                "diagnostic": "device_registry_capture_open_failed",
+                "instance_alias": "neutral.device",
+                "requested_backend": "nemu_ipc",
+                "factory": "NemuIpcBackend",
+                "device_error": {
+                    "severity": "Transient",
+                    "text": "synthetic capture open failure",
+                },
+            })
+        );
+    }
+
+    #[test]
+    fn device_registry_capture_open_success_emits_no_diagnostic() {
+        let mut records = Vec::new();
+
+        let value = open_device_registry_capture_with_diagnostic(
+            "neutral.device",
+            Some(CaptureBackendChoice::NemuIpc),
+            || Ok::<_, DeviceError>(7_u8),
+            |record| records.push(record),
+        )
+        .expect("device-registry capture open success");
+
+        assert_eq!(value, 7);
+        assert!(records.is_empty());
+    }
+
+    #[test]
     fn typed_config_builds_loopback_host_and_registry() {
         let root = TempDir::new().expect("tempdir");
         let id = IdentifierIssuer::new()
@@ -1766,6 +1902,10 @@ mod tests {
         assert_eq!(
             assembly.registry.device_input_backends.get("node.a"),
             Some(&TouchBackendChoice::MaaTouch)
+        );
+        assert_eq!(
+            assembly.registry.device_capture_backends.get("node.a"),
+            Some(&CaptureBackendChoice::Adb)
         );
     }
 

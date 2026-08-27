@@ -378,6 +378,15 @@ where
     {
         let configured_adb = (!config.adb_config.adb_path.trim().is_empty())
             .then(|| PathBuf::from(&config.adb_config.adb_path));
+        let explicit_capture_identity = config.requested == CaptureBackendChoice::NemuIpc
+            && configured_adb
+                .as_deref()
+                .is_some_and(|path| mumu_root_from_path(path).is_none());
+        if explicit_capture_identity && (explicit_root.is_none() || explicit_dll.is_none()) {
+            return Err(DeviceError::fatal(
+                "explicit Nemu IPC capture with a non-MuMu configured ADB requires both ACTINGCOMMAND_NEMU_FOLDER and ACTINGCOMMAND_NEMU_IPC_DLL",
+            ));
+        }
         config.nemu.mumu_identity_resolved = true;
         let generic_adb_for_auto = matches!(
             config.requested,
@@ -393,9 +402,16 @@ where
                 config.adb_config.adb_path
             ));
         } else {
-            match resolve_mumu(configured_adb, explicit_root, explicit_dll)? {
+            let resolver_adb = if explicit_capture_identity {
+                None
+            } else {
+                configured_adb
+            };
+            match resolve_mumu(resolver_adb, explicit_root, explicit_dll)? {
                 Some(paths) => {
-                    config.adb_config.adb_path = paths.adb_path.to_string_lossy().to_string();
+                    if !explicit_capture_identity {
+                        config.adb_config.adb_path = paths.adb_path.to_string_lossy().to_string();
+                    }
                     config.nemu.nemu_folder = Some(paths.installation.root);
                     config.nemu.dll_path = Some(paths.capture_dll_path);
                     config.nemu.mumu_identity_unavailable = None;
@@ -1886,7 +1902,7 @@ fn rgba_bottom_up_to_rgba(raw: &[u8], width: u32, height: u32) -> DeviceResult<V
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::cell::Cell;
+    use std::cell::{Cell, RefCell};
     use std::rc::Rc;
 
     struct FakeCaptureBackend {
@@ -2522,6 +2538,92 @@ mod tests {
         }
 
         let _ = fs::remove_dir_all(temp);
+    }
+
+    #[test]
+    fn explicit_nemu_capture_resolves_capture_identity_without_rewriting_generic_adb() {
+        let temp = std::env::temp_dir().join(format!(
+            "actingcommand-capture-explicit-identity-{}",
+            std::process::id()
+        ));
+        let generic_adb = temp.join("platform-tools/adb.exe");
+        let root = temp.join("MuMuPlayer");
+        let capture_adb = root.join("nx_device/17.0/shell/adb.exe");
+        let dll = root.join("nx_device/17.0/shell/sdk/external_renderer_ipc.dll");
+        let _ = fs::remove_dir_all(&temp);
+        for file in [&generic_adb, &capture_adb, &dll] {
+            fs::create_dir_all(file.parent().expect("parent")).expect("candidate parent");
+            fs::write(file, b"fixture").expect("candidate file");
+        }
+        let original_adb = generic_adb.display().to_string();
+        let config = CaptureBackendConfig::new(
+            AdbConfig {
+                adb_path: original_adb.clone(),
+                command_timeout: Duration::from_secs(1),
+            },
+            DeviceTarget::default(),
+        )
+        .with_requested(CaptureBackendChoice::NemuIpc);
+        let resolved_capture_adb = RefCell::new(None);
+
+        let prepared = prepare_capture_backend_config_with_resolver(
+            config,
+            Some(root.clone()),
+            Some(dll.clone()),
+            |configured_adb, explicit_root, explicit_dll| {
+                assert_eq!(configured_adb, None);
+                let paths =
+                    resolve_mumu_backend_paths(configured_adb, explicit_root, explicit_dll)?;
+                *resolved_capture_adb.borrow_mut() =
+                    paths.as_ref().map(|paths| paths.adb_path.clone());
+                Ok(paths)
+            },
+        )
+        .expect("complete capture identity");
+
+        assert_eq!(prepared.adb_config.adb_path, original_adb);
+        assert_eq!(
+            resolved_capture_adb.into_inner(),
+            Some(fs::canonicalize(capture_adb).expect("canonical capture ADB"))
+        );
+        assert_eq!(
+            prepared.nemu.nemu_folder,
+            Some(fs::canonicalize(root).expect("canonical root"))
+        );
+        assert_eq!(
+            prepared.nemu.dll_path,
+            Some(fs::canonicalize(dll).expect("canonical DLL"))
+        );
+        assert!(prepared.nemu.mumu_identity_resolved);
+        assert_eq!(prepared.nemu.mumu_identity_unavailable, None);
+        let _ = fs::remove_dir_all(temp);
+    }
+
+    #[test]
+    fn explicit_nemu_capture_rejects_incomplete_identity_before_resolution() {
+        let generic_adb = std::env::temp_dir().join("platform-tools/adb.exe");
+        for (root, dll) in [
+            (None, None),
+            (Some(PathBuf::from("explicit-root")), None),
+            (None, Some(PathBuf::from("explicit.dll"))),
+        ] {
+            let config = CaptureBackendConfig::new(
+                AdbConfig {
+                    adb_path: generic_adb.display().to_string(),
+                    command_timeout: Duration::from_secs(1),
+                },
+                DeviceTarget::default(),
+            )
+            .with_requested(CaptureBackendChoice::NemuIpc);
+
+            let error =
+                prepare_capture_backend_config_with_resolver(config, root, dll, |_, _, _| {
+                    panic!("incomplete explicit identity must not reach the resolver")
+                })
+                .expect_err("incomplete explicit identity");
+
+            assert!(error.message().contains("requires both"));
+        }
     }
 
     #[test]
