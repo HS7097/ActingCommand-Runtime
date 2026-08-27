@@ -813,6 +813,8 @@ try {
         $providerFiles.core,
         $providerFiles.shared
     )
+    # Task Contract: Workflow #240 / #240-IMP-v1 (comment 5443586230).
+    # Test class: authorized Defect regression with a preserved first red.
     $script:CurrentCase = 'materializer-provider-cpu-multi-dll-positive'
     $cpuResult = Invoke-ProviderMaterializer -Set $cpuSet -CacheName 'provider-cpu' -Backend cpu
     Assert-True -Condition ($cpuResult.state -ceq 'Ready') -Message 'CPU provider bytes were not Ready'
@@ -824,8 +826,28 @@ try {
     $cpuConfigPath = Join-Path $cpuResult.cache_root ([string]$cpuProvider.canonical_manifest.cache_path)
     $cpuConfig = Get-Content -LiteralPath $cpuConfigPath -Raw | ConvertFrom-Json -Depth 100
     Assert-True -Condition ($null -eq $cpuConfig.fastdeploy_ppocr.PSObject.Properties['cuda_device']) -Message 'CPU canonical configuration did not omit cuda_device'
-    Assert-True -Condition (@($cpuConfig.fastdeploy_ppocr.runtime_library_paths).Count -eq 2) -Message 'CPU canonical runtime list was incomplete'
-    Assert-True -Condition (@($cpuConfig.fastdeploy_ppocr.runtime_library_paths | Where-Object { $_ -ceq $cpuConfig.fastdeploy_ppocr.runtime_library_path }).Count -eq 1) -Message 'CPU selected core did not occur exactly once'
+    $cpuRuntimePaths = @($cpuConfig.fastdeploy_ppocr.runtime_library_paths | ForEach-Object { [string]$_ })
+    $cpuRuntimeRoot = [IO.Path]::GetFullPath((Join-Path $cpuResult.cache_root 'provider/runtime')).TrimEnd('\')
+    $cpuExpectedRuntimePaths = @(
+        [IO.Path]::GetFullPath((Join-Path $cpuRuntimeRoot 'onnxruntime.dll')),
+        [IO.Path]::GetFullPath((Join-Path $cpuRuntimeRoot 'onnxruntime_providers_shared.dll'))
+    )
+    $cpuExpectedRelativePaths = @(
+        'provider/runtime/onnxruntime.dll',
+        'provider/runtime/onnxruntime_providers_shared.dll'
+    )
+    Assert-True -Condition ($cpuRuntimePaths.Count -eq $cpuExpectedRuntimePaths.Count) -Message 'CPU canonical runtime list was incomplete'
+    for ($index = 0; $index -lt $cpuRuntimePaths.Count; $index++) {
+        Assert-True -Condition ([IO.Path]::IsPathFullyQualified($cpuRuntimePaths[$index])) -Message 'CPU canonical runtime path was not absolute'
+        Assert-True -Condition (Test-Path -LiteralPath $cpuRuntimePaths[$index] -PathType Leaf) -Message 'CPU canonical runtime path did not exist'
+        Assert-True -Condition ($cpuRuntimePaths[$index] -ceq $cpuExpectedRuntimePaths[$index]) -Message 'CPU canonical runtime path changed order or escaped the provider runtime directory'
+        $binding = @($cpuProvider.runtime_libraries)[$index]
+        Assert-True -Condition (-not [IO.Path]::IsPathFullyQualified([string]$binding.cache_path)) -Message 'CPU provenance cache_path became absolute'
+        Assert-True -Condition ([string]$binding.cache_path -ceq $cpuExpectedRelativePaths[$index]) -Message 'CPU provenance cache_path changed order or value'
+        Assert-True -Condition ([string]$binding.relative_path -ceq $cpuExpectedRelativePaths[$index]) -Message 'CPU provenance relative_path changed order or value'
+    }
+    Assert-True -Condition (@($cpuRuntimePaths | Where-Object { $_ -ceq $cpuConfig.fastdeploy_ppocr.runtime_library_path }).Count -eq 1) -Message 'CPU selected core did not occur exactly once'
+    Assert-True -Condition ([string]$cpuConfig.fastdeploy_ppocr.runtime_library_path -ceq $cpuExpectedRuntimePaths[0]) -Message 'CPU selected core was not the exact staged core path'
     if (-not [string]::IsNullOrWhiteSpace($VisionProviderCheckExecutable)) {
         & $VisionProviderCheckExecutable --manifest $cpuConfigPath --backend fastdeploy_ppocr | Out-Null
         Assert-True -Condition ($LASTEXITCODE -eq 0) -Message 'existing manifest parser rejected CPU canonical configuration'
@@ -838,6 +860,8 @@ try {
         $providerFiles.cuda,
         $providerFiles.external
     )
+    # Task Contract: Workflow #240 / #240-IMP-v1 (comment 5443586230).
+    # Test class: authorized Defect regression with a preserved first red.
     $script:CurrentCase = 'materializer-provider-cuda-multi-dll-positive'
     $cudaResult = Invoke-ProviderMaterializer -Set $cudaSet -CacheName 'provider-cuda' -Backend cuda -WithCudaSelector
     Assert-True -Condition ($cudaResult.state -ceq 'Ready') -Message 'CUDA provider bytes were not Ready'
@@ -847,6 +871,32 @@ try {
     Assert-True -Condition (@($cudaProvider.runtime_libraries | Where-Object { $_.kind -ceq 'external_cuda' }).Count -eq 1) -Message 'CUDA external dependency provenance was not preserved'
     $cudaConfigPath = Join-Path $cudaResult.cache_root ([string]$cudaProvider.canonical_manifest.cache_path)
     $cudaConfig = Get-Content -LiteralPath $cudaConfigPath -Raw | ConvertFrom-Json -Depth 100
+    $cudaRuntimePaths = @($cudaConfig.fastdeploy_ppocr.runtime_library_paths | ForEach-Object { [string]$_ })
+    $cudaRuntimeRoot = [IO.Path]::GetFullPath((Join-Path $cudaResult.cache_root 'provider/runtime')).TrimEnd('\')
+    $cudaExpectedRuntimePaths = @(
+        [IO.Path]::GetFullPath((Join-Path $cudaRuntimeRoot 'onnxruntime.dll')),
+        [IO.Path]::GetFullPath((Join-Path $cudaRuntimeRoot 'onnxruntime_providers_shared.dll')),
+        [IO.Path]::GetFullPath((Join-Path $cudaRuntimeRoot 'onnxruntime_providers_cuda.dll')),
+        [IO.Path]::GetFullPath((Join-Path $cudaRuntimeRoot 'cublas64_12.dll'))
+    )
+    $cudaExpectedRelativePaths = @(
+        'provider/runtime/onnxruntime.dll',
+        'provider/runtime/onnxruntime_providers_shared.dll',
+        'provider/runtime/onnxruntime_providers_cuda.dll',
+        'provider/runtime/cublas64_12.dll'
+    )
+    Assert-True -Condition ($cudaRuntimePaths.Count -eq $cudaExpectedRuntimePaths.Count) -Message 'CUDA canonical runtime list was incomplete'
+    for ($index = 0; $index -lt $cudaRuntimePaths.Count; $index++) {
+        Assert-True -Condition ([IO.Path]::IsPathFullyQualified($cudaRuntimePaths[$index])) -Message 'CUDA canonical runtime path was not absolute'
+        Assert-True -Condition (Test-Path -LiteralPath $cudaRuntimePaths[$index] -PathType Leaf) -Message 'CUDA canonical runtime path did not exist'
+        Assert-True -Condition ($cudaRuntimePaths[$index] -ceq $cudaExpectedRuntimePaths[$index]) -Message 'CUDA canonical runtime path changed order or escaped the provider runtime directory'
+        $binding = @($cudaProvider.runtime_libraries)[$index]
+        Assert-True -Condition (-not [IO.Path]::IsPathFullyQualified([string]$binding.cache_path)) -Message 'CUDA provenance cache_path became absolute'
+        Assert-True -Condition ([string]$binding.cache_path -ceq $cudaExpectedRelativePaths[$index]) -Message 'CUDA provenance cache_path changed order or value'
+        Assert-True -Condition ([string]$binding.relative_path -ceq $cudaExpectedRelativePaths[$index]) -Message 'CUDA provenance relative_path changed order or value'
+    }
+    Assert-True -Condition (@($cudaRuntimePaths | Where-Object { $_ -ceq $cudaConfig.fastdeploy_ppocr.runtime_library_path }).Count -eq 1) -Message 'CUDA selected core did not occur exactly once'
+    Assert-True -Condition ([string]$cudaConfig.fastdeploy_ppocr.runtime_library_path -ceq $cudaExpectedRuntimePaths[0]) -Message 'CUDA selected core was not the exact staged core path'
     Assert-True -Condition ($cudaConfig.fastdeploy_ppocr.cuda_device.ordinal -eq 0) -Message 'CUDA ordinal was not preserved'
     Assert-True -Condition ($cudaConfig.fastdeploy_ppocr.cuda_device.expected_stable_identity -ceq 'cuda-uuid:fixture') -Message 'CUDA stable identity was not preserved'
     if (-not [string]::IsNullOrWhiteSpace($VisionProviderCheckExecutable)) {
