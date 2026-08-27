@@ -327,9 +327,12 @@ impl OperationBundle {
         control: &LabControl,
         mut operation_asset_exists: impl FnMut(&str) -> CliOutcome<bool>,
     ) -> CliOutcome<()> {
-        if !matches!(self.schema_version.as_str(), "0.3" | "0.4" | "0.5" | "0.6") {
+        if !matches!(
+            self.schema_version.as_str(),
+            "0.3" | "0.4" | "0.5" | "0.6" | "0.7"
+        ) {
             return Err(CliError::package_invalid(format!(
-                "unsupported operation schema_version '{}', expected one of 0.3, 0.4, 0.5, 0.6",
+                "unsupported operation schema_version '{}', expected one of 0.3, 0.4, 0.5, 0.6, 0.7",
                 self.schema_version
             )));
         }

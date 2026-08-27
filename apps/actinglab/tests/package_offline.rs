@@ -92,6 +92,46 @@ fn package_dry_run_binds_inputs_and_writes_a_deterministic_offline_bundle() {
 }
 
 #[test]
+fn package_dry_run_admits_schema_0_7_through_the_formal_parser() {
+    let fixture = TestFixture::new(
+        PackageOptions {
+            operation_schema: "0.7",
+            post_admission_ocr: true,
+            ..PackageOptions::default()
+        },
+        home_frame(true),
+    );
+    let output = fixture.run(&[], "schema-0.7.zip");
+    assert_success(&output, "would_click");
+
+    let record = read_result_record(&fixture.temp.path().join("schema-0.7.zip"));
+    assert_eq!(record["executed"], false);
+    assert_eq!(record["production_global_ledger_written"], false);
+}
+
+#[test]
+fn package_dry_run_rejects_malformed_schema_0_7_in_the_formal_parser() {
+    let fixture = TestFixture::new(
+        PackageOptions {
+            operation_schema: "0.7",
+            post_admission_ocr: true,
+            malformed_post_admission_ocr: true,
+            ..PackageOptions::default()
+        },
+        home_frame(true),
+    );
+    let output = fixture.run(&[], "malformed-schema-0.7.zip");
+    assert_error_code(&output, "contained_task_program_invalid");
+    assert!(
+        !fixture
+            .temp
+            .path()
+            .join("malformed-schema-0.7.zip")
+            .exists()
+    );
+}
+
+#[test]
 fn package_dry_run_reports_complete_no_op_and_recovery_closure() {
     let complete = TestFixture::new(PackageOptions::default(), terminal_frame());
     assert_success(&complete.run(&[], "complete.zip"), "would_complete");
@@ -732,6 +772,9 @@ fn read_result_record(path: &Path) -> Value {
 #[derive(Clone, Copy)]
 struct PackageOptions {
     control_schema: &'static str,
+    operation_schema: &'static str,
+    post_admission_ocr: bool,
+    malformed_post_admission_ocr: bool,
     execution_mode: &'static str,
     click_kind: &'static str,
     include_guard: bool,
@@ -746,6 +789,9 @@ impl Default for PackageOptions {
     fn default() -> Self {
         Self {
             control_schema: "Lab-1y.control.v1",
+            operation_schema: "0.6",
+            post_admission_ocr: false,
+            malformed_post_admission_ocr: false,
             execution_mode: "navigable_route",
             click_kind: "point",
             include_guard: true,
@@ -759,6 +805,11 @@ impl Default for PackageOptions {
 }
 
 fn package(options: PackageOptions) -> Vec<u8> {
+    let recognition_schema = if options.post_admission_ocr {
+        "0.6"
+    } else {
+        "0.3"
+    };
     let control = json!({
         "schema_version": options.control_schema,
         "package_id": "neutral.semantic.task",
@@ -791,7 +842,7 @@ fn package(options: PackageOptions) -> Vec<u8> {
         operation["verify_template"] = json!("assets/missing.png");
     }
     let mut task = json!({
-        "schema_version": "0.6",
+        "schema_version": options.operation_schema,
         "task_id": "task",
         "game": "neutral",
         "server_scope": ["test"],
@@ -801,6 +852,66 @@ fn package(options: PackageOptions) -> Vec<u8> {
         "target_page": "terminal",
         "operations": [operation]
     });
+    let mut manifest = json!({"schema_version":"0.3","entry_task_id":"task"});
+    let mut recognition_targets = vec![
+        json!({"type":"color","id":"page/home","region":{"x":0,"y":0,"width":1,"height":1},"expected":[255,0,0]}),
+        json!({"type":"color","id":"page/terminal","region":{"x":0,"y":0,"width":1,"height":1},"expected":[0,0,255]}),
+        json!({"type":"color","id":"guard/ready","region":{"x":1,"y":0,"width":1,"height":1},"expected":[0,255,0]}),
+    ];
+    let mut truth = None;
+    if options.post_admission_ocr {
+        let truth_value = json!({
+            "schema_version": "actingcommand.ocr-truth-set.v1",
+            "items": ["synthetic truth"]
+        });
+        let mut truth_bytes = serde_json::to_vec(&truth_value).unwrap();
+        truth_bytes.push(b'\n');
+        let truth_sha256 = sha256_hex(&truth_bytes);
+        task["scheduling_outcome"] = json!({
+            "mappings": [{
+                "outcome_key": "comparison_recorded",
+                "effect": "no_designated_effect",
+                "terminal_pages": ["terminal"]
+            }]
+        });
+        task["post_admission_ocr"] = json!({
+            "page_id": "terminal",
+            "target_id": "fixture/ocr",
+            "truth_set": {"path": "truth.json", "sha256": truth_sha256},
+            "normalization": "trim_lowercase_v1",
+            "comparison": "exact_set_v1",
+            "limits": {
+                "max_frames": 2,
+                "max_items": 16,
+                "max_string_bytes": 64,
+                "max_total_bytes": 4096,
+                "max_truth_entries": 16
+            },
+            "outcome_key": "comparison_recorded"
+        });
+        if options.malformed_post_admission_ocr {
+            task["post_admission_ocr"]["unexpected"] = json!(true);
+        }
+        recognition_targets.push(json!({
+            "type": "ocr",
+            "id": "fixture/ocr",
+            "region": {"x":0,"y":0,"width":1,"height":1},
+            "languages": ["en"],
+            "timeout_ms": 1000,
+            "match_mode": "exact",
+            "expected": ["synthetic truth"],
+            "case_sensitive": false,
+            "minimum_confidence": 0.0,
+            "model_ref": "PP-OCRv6_medium",
+            "model_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        }));
+        manifest["files"] = json!([{
+            "path": "operations/task/truth.json",
+            "bytes": truth_bytes.len(),
+            "sha256": truth_sha256
+        }]);
+        truth = Some(truth_value);
+    }
     if options.recovery {
         task["recovery"] = json!({"kind": "return_home", "task_id": "return_home"});
     }
@@ -815,24 +926,17 @@ fn package(options: PackageOptions) -> Vec<u8> {
     }
     let mut entries = vec![
         ("control.json", control),
-        (
-            "resources/manifest.json",
-            json!({"schema_version":"0.3","entry_task_id":"task"}),
-        ),
+        ("resources/manifest.json", manifest),
         ("resources/operations/task/task.json", task),
         (
             "resources/recognition/neutral.test.pack.json",
             json!({
-                "schema_version": "0.3",
+                "schema_version": recognition_schema,
                 "game": "neutral",
                 "server": "test",
                 "coordinate_space": {"width": 2, "height": 1},
                 "defaults": {"color_max_distance": 0.0},
-                "targets": [
-                    {"type":"color","id":"page/home","region":{"x":0,"y":0,"width":1,"height":1},"expected":[255,0,0]},
-                    {"type":"color","id":"page/terminal","region":{"x":0,"y":0,"width":1,"height":1},"expected":[0,0,255]},
-                    {"type":"color","id":"guard/ready","region":{"x":1,"y":0,"width":1,"height":1},"expected":[0,255,0]}
-                ]
+                "targets": recognition_targets
             }),
         ),
         (
@@ -849,6 +953,9 @@ fn package(options: PackageOptions) -> Vec<u8> {
             }),
         ),
     ];
+    if let Some(truth) = truth {
+        entries.push(("resources/operations/task/truth.json", truth));
+    }
     if options.include_recovery_task {
         entries.push((
             "resources/operations/return_home/task.json",
