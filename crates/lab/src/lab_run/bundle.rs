@@ -990,9 +990,9 @@ struct OperationClick {
     width: Option<i32>,
     #[serde(default)]
     height: Option<i32>,
-    #[serde(default, rename = "from")]
+    #[serde(default, alias = "from")]
     from_rect: Option<PackRect>,
-    #[serde(default, rename = "to")]
+    #[serde(default, alias = "to")]
     to_rect: Option<PackRect>,
     #[serde(default)]
     duration_ms: Option<u64>,

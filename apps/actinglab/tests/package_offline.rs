@@ -4,6 +4,7 @@ use actingcommand_contract::{
     MAX_READONLY_OBSERVATION_ARTIFACT_BYTES, MAX_RUNTIME_CAPTURE_SEQUENCE_FRAMES,
 };
 use actingcommand_device::{CaptureBackendName, Frame, PixelFormat};
+use actingcommand_lab::{ExternalExpectedSha256, validate_lab_package_bytes};
 use actingcommand_pack_containment::DEFAULT_MAX_COMPRESSED_BYTES;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -97,6 +98,8 @@ fn package_dry_run_admits_schema_0_7_through_the_formal_parser() {
         PackageOptions {
             operation_schema: "0.7",
             post_admission_ocr: true,
+            click_kind: "rect",
+            drag_fields: DragFields::Canonical,
             ..PackageOptions::default()
         },
         home_frame(true),
@@ -107,6 +110,41 @@ fn package_dry_run_admits_schema_0_7_through_the_formal_parser() {
     let record = read_result_record(&fixture.temp.path().join("schema-0.7.zip"));
     assert_eq!(record["executed"], false);
     assert_eq!(record["production_global_ledger_written"], false);
+}
+
+#[test]
+fn package_adapter_accepts_legacy_drag_field_aliases() {
+    let bytes = package(PackageOptions {
+        operation_schema: "0.7",
+        post_admission_ocr: true,
+        click_kind: "rect",
+        drag_fields: DragFields::LegacyAliases,
+        ..PackageOptions::default()
+    });
+    let expected = ExternalExpectedSha256::parse_hex(&sha256_hex(&bytes)).unwrap();
+    let loaded = validate_lab_package_bytes("legacy-drag-aliases.zip", &bytes, expected).unwrap();
+    assert_eq!(loaded.task_count, 1);
+}
+
+#[test]
+fn package_dry_run_rejects_incomplete_or_ambiguous_canonical_drag_fields() {
+    for (name, drag_fields) in [
+        ("missing-from", DragFields::MissingFrom),
+        ("missing-to", DragFields::MissingTo),
+        ("canonical-and-aliases", DragFields::CanonicalAndAliases),
+    ] {
+        let fixture = TestFixture::new(
+            PackageOptions {
+                operation_schema: "0.7",
+                post_admission_ocr: true,
+                click_kind: "rect",
+                drag_fields,
+                ..PackageOptions::default()
+            },
+            home_frame(true),
+        );
+        assert_error_code(&fixture.run(&[], &format!("{name}.zip")), "package_invalid");
+    }
 }
 
 #[test]
@@ -783,6 +821,17 @@ struct PackageOptions {
     recovery: bool,
     include_recovery_task: bool,
     step_timeout_ms: u64,
+    drag_fields: DragFields,
+}
+
+#[derive(Clone, Copy)]
+enum DragFields {
+    None,
+    Canonical,
+    LegacyAliases,
+    MissingFrom,
+    MissingTo,
+    CanonicalAndAliases,
 }
 
 impl Default for PackageOptions {
@@ -800,6 +849,7 @@ impl Default for PackageOptions {
             recovery: false,
             include_recovery_task: false,
             step_timeout_ms: 10,
+            drag_fields: DragFields::None,
         }
     }
 }
@@ -830,6 +880,10 @@ fn package(options: PackageOptions) -> Vec<u8> {
         "to": "terminal",
         "click": {"kind": options.click_kind, "x": 1, "y": 0}
     });
+    if options.click_kind == "rect" {
+        operation["click"]["width"] = json!(1);
+        operation["click"]["height"] = json!(1);
+    }
     if options.include_guard {
         operation["guard"] = json!({
             "page_id": "home",
@@ -841,6 +895,41 @@ fn package(options: PackageOptions) -> Vec<u8> {
     if options.dangling_resource {
         operation["verify_template"] = json!("assets/missing.png");
     }
+    let mut operations = vec![operation];
+    if !matches!(options.drag_fields, DragFields::None) {
+        let mut click = json!({"kind": "drag", "duration_ms": 200});
+        match options.drag_fields {
+            DragFields::None => unreachable!(),
+            DragFields::Canonical => {
+                click["from_rect"] = json!({"x":1,"y":0,"width":1,"height":1});
+                click["to_rect"] = json!({"x":1,"y":0,"width":1,"height":1});
+            }
+            DragFields::LegacyAliases => {
+                click["from"] = json!({"x":1,"y":0,"width":1,"height":1});
+                click["to"] = json!({"x":1,"y":0,"width":1,"height":1});
+            }
+            DragFields::MissingFrom => {
+                click["to_rect"] = json!({"x":1,"y":0,"width":1,"height":1});
+            }
+            DragFields::MissingTo => {
+                click["from_rect"] = json!({"x":1,"y":0,"width":1,"height":1});
+            }
+            DragFields::CanonicalAndAliases => {
+                click["from_rect"] = json!({"x":1,"y":0,"width":1,"height":1});
+                click["to_rect"] = json!({"x":1,"y":0,"width":1,"height":1});
+                click["from"] = json!({"x":1,"y":0,"width":1,"height":1});
+                click["to"] = json!({"x":1,"y":0,"width":1,"height":1});
+            }
+        }
+        operations.push(json!({
+            "id": "drag_terminal",
+            "purpose": "exercise canonical drag fields",
+            "from": "terminal",
+            "to": "terminal",
+            "click": click,
+            "unguarded_trusted_coordinate": true
+        }));
+    }
     let mut task = json!({
         "schema_version": options.operation_schema,
         "task_id": "task",
@@ -850,7 +939,7 @@ fn package(options: PackageOptions) -> Vec<u8> {
         "coordinate_space": {"width": 2, "height": 1},
         "entry_page": "home",
         "target_page": "terminal",
-        "operations": [operation]
+        "operations": operations
     });
     let mut manifest = json!({"schema_version":"0.3","entry_task_id":"task"});
     let mut recognition_targets = vec![
