@@ -2540,6 +2540,8 @@ mod tests {
         let _ = fs::remove_dir_all(temp);
     }
 
+    // Task Contract: Workflow #239 / #239-IMP-v2 (comment 5442382418).
+    // Test class: authorized Defect regression with a preserved first red.
     #[test]
     fn explicit_nemu_capture_resolves_capture_identity_without_rewriting_generic_adb() {
         let temp = std::env::temp_dir().join(format!(
@@ -2599,6 +2601,8 @@ mod tests {
         let _ = fs::remove_dir_all(temp);
     }
 
+    // Task Contract: Workflow #239 / #239-IMP-v2 (comment 5442382418).
+    // Test class: specification criterion.
     #[test]
     fn explicit_nemu_capture_rejects_incomplete_identity_before_resolution() {
         let generic_adb = std::env::temp_dir().join("platform-tools/adb.exe");

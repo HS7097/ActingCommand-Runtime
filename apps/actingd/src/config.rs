@@ -1818,6 +1818,8 @@ mod tests {
         assert!(records.is_empty());
     }
 
+    // Task Contract: Workflow #239 / #239-IMP-v2 (comment 5442382418).
+    // Test class: authorized Defect regression with a preserved first red.
     #[test]
     fn device_registry_capture_open_failure_emits_one_complete_private_record() {
         let original = DeviceError::transient("synthetic capture open failure");
@@ -1856,6 +1858,8 @@ mod tests {
         );
     }
 
+    // Task Contract: Workflow #239 / #239-IMP-v2 (comment 5442382418).
+    // Test class: specification criterion.
     #[test]
     fn device_registry_capture_open_success_emits_no_diagnostic() {
         let mut records = Vec::new();
