@@ -466,6 +466,7 @@ function Resolve-ProviderFile {
 function Copy-ProviderArtifacts {
     param(
         [Parameter(Mandatory)][string] $StageRoot,
+        [Parameter(Mandatory)][string] $PublishedRoot,
         [Parameter(Mandatory)][string] $Backend,
         [Nullable[int]] $CudaOrdinal,
         [string] $CudaIdentity,
@@ -736,8 +737,8 @@ function Copy-ProviderArtifacts {
         New-Item -ItemType Directory -Path (Split-Path -Parent $copy[1]) -Force | Out-Null
         Copy-Item -LiteralPath $copy[0] -Destination $copy[1] -ErrorAction Stop
     }
-    $runtimeCachePaths = @()
-    $selectedRuntimeCachePath = $null
+    $runtimePublishedPaths = @()
+    $selectedRuntimePublishedPath = $null
     foreach ($binding in $runtimeBindings) {
         $runtimeDestination = Get-SafeChildPath -Root $StageRoot -RelativePath ("provider/runtime/" + [string]$binding.expected_name) -Label 'runtime destination'
         New-Item -ItemType Directory -Path (Split-Path -Parent $runtimeDestination) -Force | Out-Null
@@ -747,8 +748,12 @@ function Copy-ProviderArtifacts {
         if ((Get-Sha256 -Path $runtimeDestination) -cne [string]$binding.sha256) {
             Stop-Materialization "copied provider dependency hash mismatch for $($binding.expected_name)"
         }
-        $runtimeCachePaths += [string]$binding.cache_path
-        if ($binding.selected_core) { $selectedRuntimeCachePath = [string]$binding.cache_path }
+        $runtimePublishedPath = Get-SafeChildPath -Root $PublishedRoot -RelativePath ([string]$binding.cache_path) -Label 'published runtime path'
+        $runtimePublishedPaths += [string]$runtimePublishedPath
+        if ($binding.selected_core) { $selectedRuntimePublishedPath = [string]$runtimePublishedPath }
+    }
+    if (@($runtimePublishedPaths | Where-Object { $_ -ceq $selectedRuntimePublishedPath }).Count -ne 1) {
+        Stop-Materialization 'selected published ONNX Runtime core must occur exactly once in the runtime closure'
     }
 
     $providerCachePath = [IO.Path]::GetRelativePath($StageRoot, $providerDestination).Replace('\', '/')
@@ -758,8 +763,8 @@ function Copy-ProviderArtifacts {
     $canonicalOcr = [ordered]@{
         provider_library_path = $providerCachePath
         provider_library_sha256 = (Get-Sha256 -Path $providerDestination)
-        runtime_library_paths = $runtimeCachePaths
-        runtime_library_path = $selectedRuntimeCachePath
+        runtime_library_paths = $runtimePublishedPaths
+        runtime_library_path = $selectedRuntimePublishedPath
         runtime_library_sha256 = [string]$selectedBinding[0].sha256
         detector_model_path = $detectorCachePath
         recognizer_model_path = $recognizerCachePath
@@ -1007,6 +1012,25 @@ if ($declaredDownloadBytes -gt [long]$manifest.cache_layout.max_total_download_b
     Stop-Materialization 'selected components exceed the manifest total download bound'
 }
 
+$blockingPendingReasons = @()
+if ($selected -contains 'ppocrv6-medium-source') {
+    $blockingPendingReasons += [string]$componentTable['ppocrv6-medium-source'].compatibility.reason
+}
+if ($selected -contains 'ppocrv6-medium-onnx') {
+    $blockingPendingReasons += [string]$componentTable['ppocrv6-medium-onnx'].compatibility.reason
+}
+$functionalPendingReasons = @()
+if ($selected -contains 'provider-v0.3') {
+    $functionalPendingReasons += 'Provider/runtime/model bytes and canonical v0.3 binding are exact; provider identity, DLL-load closure, selected device, fallback behavior, accuracy, and performance require separately authorized live validation.'
+}
+$state = if ($blockingPendingReasons.Count -eq 0) { 'Ready' } else { 'PendingVerification' }
+$suffix = if ($state -ceq 'Ready') { 'ready' } else { 'pending-verification' }
+$finalLeaf = ([string]$manifest.cache_layout.directory_name) + '.' + $suffix
+$finalRoot = Join-Path $cacheRootFull $finalLeaf
+if (Test-Path -LiteralPath $finalRoot) {
+    Stop-Materialization "refusing to replace an existing cache directory: $finalRoot"
+}
+
 $stageRoot = Join-Path $cacheRootFull ('.stage-' + [Guid]::NewGuid().ToString('N'))
 $publishedRoot = $null
 New-Item -ItemType Directory -Path $stageRoot -ErrorAction Stop | Out-Null
@@ -1075,6 +1099,7 @@ try {
             'caller_supplied_provider_manifest' {
                 $componentResults[$id] = Copy-ProviderArtifacts `
                     -StageRoot $stageRoot `
+                    -PublishedRoot $finalRoot `
                     -Backend $OcrBackend `
                     -CudaOrdinal $CudaDeviceOrdinal `
                     -CudaIdentity $CudaStableIdentity `
@@ -1089,17 +1114,6 @@ try {
         }
     }
 
-    $blockingPendingReasons = @()
-    if ($selected -contains 'ppocrv6-medium-source') {
-        $blockingPendingReasons += [string]$componentTable['ppocrv6-medium-source'].compatibility.reason
-    }
-    if ($selected -contains 'ppocrv6-medium-onnx') {
-        $blockingPendingReasons += [string]$componentTable['ppocrv6-medium-onnx'].compatibility.reason
-    }
-    $functionalPendingReasons = @()
-    if ($selected -contains 'provider-v0.3') {
-        $functionalPendingReasons += 'Provider/runtime/model bytes and canonical v0.3 binding are exact; provider identity, DLL-load closure, selected device, fallback behavior, accuracy, and performance require separately authorized live validation.'
-    }
     $licenses = [ordered]@{}
     foreach ($id in $selected) {
         $definition = $componentTable[$id]
@@ -1107,7 +1121,6 @@ try {
             $licenses[$id] = $definition.license
         }
     }
-    $state = if ($blockingPendingReasons.Count -eq 0) { 'Ready' } else { 'PendingVerification' }
     $provenance = [ordered]@{
         schema_version = 'actingcommand.task_tool_cache_provenance.v1'
         state = $state
@@ -1144,12 +1157,6 @@ try {
         ($provenance | ConvertTo-Json -Depth 30) + "`n",
         [Text.UTF8Encoding]::new($false)
     )
-    $suffix = if ($state -ceq 'Ready') { 'ready' } else { 'pending-verification' }
-    $finalLeaf = ([string]$manifest.cache_layout.directory_name) + '.' + $suffix
-    $finalRoot = Join-Path $cacheRootFull $finalLeaf
-    if (Test-Path -LiteralPath $finalRoot) {
-        Stop-Materialization "refusing to replace an existing cache directory: $finalRoot"
-    }
     Move-Item -LiteralPath $stageRoot -Destination $finalRoot -ErrorAction Stop
     $publishedRoot = $finalRoot
     if ($state -ceq 'PendingVerification') {
