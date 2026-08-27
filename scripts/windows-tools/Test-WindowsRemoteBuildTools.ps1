@@ -813,7 +813,7 @@ try {
         $providerFiles.core,
         $providerFiles.shared
     )
-    # Task Contract: Workflow #240 / #240-IMP-v1 (comment 5443586230).
+    # Task Contract: Workflow #240 / #240-IMP-v2 (comment 5445007319).
     # Test class: authorized Defect regression with a preserved first red.
     $script:CurrentCase = 'materializer-provider-cpu-multi-dll-positive'
     $cpuResult = Invoke-ProviderMaterializer -Set $cpuSet -CacheName 'provider-cpu' -Backend cpu
@@ -826,6 +826,40 @@ try {
     $cpuConfigPath = Join-Path $cpuResult.cache_root ([string]$cpuProvider.canonical_manifest.cache_path)
     $cpuConfig = Get-Content -LiteralPath $cpuConfigPath -Raw | ConvertFrom-Json -Depth 100
     Assert-True -Condition ($null -eq $cpuConfig.fastdeploy_ppocr.PSObject.Properties['cuda_device']) -Message 'CPU canonical configuration did not omit cuda_device'
+    Assert-True -Condition ($null -eq $cpuConfig.fastdeploy_ppocr.classifier_model_path) -Message 'CPU canonical configuration did not preserve the absent classifier'
+    $cpuArtifactFields = @('provider_library_path', 'detector_model_path', 'recognizer_model_path', 'dictionary_path')
+    $cpuArtifactHashFields = @('provider_library_sha256', 'detector_model_sha256', 'recognizer_model_sha256', 'dictionary_sha256')
+    $cpuExpectedArtifactPaths = @(
+        [IO.Path]::GetFullPath((Join-Path $cpuResult.cache_root 'provider/provider/ac_fastdeploy_ppocr.dll')),
+        [IO.Path]::GetFullPath((Join-Path $cpuResult.cache_root 'provider/models/detector.onnx')),
+        [IO.Path]::GetFullPath((Join-Path $cpuResult.cache_root 'provider/models/recognizer.onnx')),
+        [IO.Path]::GetFullPath((Join-Path $cpuResult.cache_root 'provider/models/ppocrv6_dict.txt'))
+    )
+    $cpuExpectedArtifactRelativePaths = @(
+        'provider/provider/ac_fastdeploy_ppocr.dll',
+        'provider/models/detector.onnx',
+        'provider/models/recognizer.onnx',
+        'provider/models/ppocrv6_dict.txt'
+    )
+    $cpuArtifactBindings = @(
+        $cpuProvider.provider_library,
+        $cpuProvider.model_bundle.detector,
+        $cpuProvider.model_bundle.recognizer,
+        $cpuProvider.model_bundle.dictionary
+    )
+    for ($index = 0; $index -lt $cpuArtifactFields.Count; $index++) {
+        $artifactPath = [string]$cpuConfig.fastdeploy_ppocr.PSObject.Properties[$cpuArtifactFields[$index]].Value
+        $artifactHash = [string]$cpuConfig.fastdeploy_ppocr.PSObject.Properties[$cpuArtifactHashFields[$index]].Value
+        Assert-True -Condition ([IO.Path]::IsPathFullyQualified($artifactPath)) -Message 'CPU canonical artifact path was not absolute'
+        Assert-True -Condition (Test-Path -LiteralPath $artifactPath -PathType Leaf) -Message 'CPU canonical artifact path did not exist'
+        Assert-True -Condition ($artifactPath -ceq $cpuExpectedArtifactPaths[$index]) -Message 'CPU canonical artifact path escaped its exact Ready subdirectory or duplicated a path segment'
+        Assert-True -Condition ((Get-Sha256 $artifactPath) -ceq $artifactHash) -Message 'CPU canonical artifact path did not preserve its declared hash'
+        $binding = $cpuArtifactBindings[$index]
+        Assert-True -Condition (-not [IO.Path]::IsPathFullyQualified([string]$binding.cache_path)) -Message 'CPU artifact provenance cache_path became absolute'
+        Assert-True -Condition ([string]$binding.cache_path -ceq $cpuExpectedArtifactRelativePaths[$index]) -Message 'CPU artifact provenance cache_path changed value'
+        Assert-True -Condition ([string]$binding.relative_path -ceq $cpuExpectedArtifactRelativePaths[$index]) -Message 'CPU artifact provenance relative_path changed value'
+        Assert-True -Condition ([string]$binding.sha256 -ceq $artifactHash) -Message 'CPU artifact provenance hash changed value'
+    }
     $cpuRuntimePaths = @($cpuConfig.fastdeploy_ppocr.runtime_library_paths | ForEach-Object { [string]$_ })
     $cpuRuntimeRoot = [IO.Path]::GetFullPath((Join-Path $cpuResult.cache_root 'provider/runtime')).TrimEnd('\')
     $cpuExpectedRuntimePaths = @(
@@ -860,7 +894,7 @@ try {
         $providerFiles.cuda,
         $providerFiles.external
     )
-    # Task Contract: Workflow #240 / #240-IMP-v1 (comment 5443586230).
+    # Task Contract: Workflow #240 / #240-IMP-v2 (comment 5445007319).
     # Test class: authorized Defect regression with a preserved first red.
     $script:CurrentCase = 'materializer-provider-cuda-multi-dll-positive'
     $cudaResult = Invoke-ProviderMaterializer -Set $cudaSet -CacheName 'provider-cuda' -Backend cuda -WithCudaSelector
@@ -871,6 +905,40 @@ try {
     Assert-True -Condition (@($cudaProvider.runtime_libraries | Where-Object { $_.kind -ceq 'external_cuda' }).Count -eq 1) -Message 'CUDA external dependency provenance was not preserved'
     $cudaConfigPath = Join-Path $cudaResult.cache_root ([string]$cudaProvider.canonical_manifest.cache_path)
     $cudaConfig = Get-Content -LiteralPath $cudaConfigPath -Raw | ConvertFrom-Json -Depth 100
+    Assert-True -Condition ($null -eq $cudaConfig.fastdeploy_ppocr.classifier_model_path) -Message 'CUDA canonical configuration did not preserve the absent classifier'
+    $cudaArtifactFields = @('provider_library_path', 'detector_model_path', 'recognizer_model_path', 'dictionary_path')
+    $cudaArtifactHashFields = @('provider_library_sha256', 'detector_model_sha256', 'recognizer_model_sha256', 'dictionary_sha256')
+    $cudaExpectedArtifactPaths = @(
+        [IO.Path]::GetFullPath((Join-Path $cudaResult.cache_root 'provider/provider/ac_fastdeploy_ppocr.dll')),
+        [IO.Path]::GetFullPath((Join-Path $cudaResult.cache_root 'provider/models/detector.onnx')),
+        [IO.Path]::GetFullPath((Join-Path $cudaResult.cache_root 'provider/models/recognizer.onnx')),
+        [IO.Path]::GetFullPath((Join-Path $cudaResult.cache_root 'provider/models/ppocrv6_dict.txt'))
+    )
+    $cudaExpectedArtifactRelativePaths = @(
+        'provider/provider/ac_fastdeploy_ppocr.dll',
+        'provider/models/detector.onnx',
+        'provider/models/recognizer.onnx',
+        'provider/models/ppocrv6_dict.txt'
+    )
+    $cudaArtifactBindings = @(
+        $cudaProvider.provider_library,
+        $cudaProvider.model_bundle.detector,
+        $cudaProvider.model_bundle.recognizer,
+        $cudaProvider.model_bundle.dictionary
+    )
+    for ($index = 0; $index -lt $cudaArtifactFields.Count; $index++) {
+        $artifactPath = [string]$cudaConfig.fastdeploy_ppocr.PSObject.Properties[$cudaArtifactFields[$index]].Value
+        $artifactHash = [string]$cudaConfig.fastdeploy_ppocr.PSObject.Properties[$cudaArtifactHashFields[$index]].Value
+        Assert-True -Condition ([IO.Path]::IsPathFullyQualified($artifactPath)) -Message 'CUDA canonical artifact path was not absolute'
+        Assert-True -Condition (Test-Path -LiteralPath $artifactPath -PathType Leaf) -Message 'CUDA canonical artifact path did not exist'
+        Assert-True -Condition ($artifactPath -ceq $cudaExpectedArtifactPaths[$index]) -Message 'CUDA canonical artifact path escaped its exact Ready subdirectory or duplicated a path segment'
+        Assert-True -Condition ((Get-Sha256 $artifactPath) -ceq $artifactHash) -Message 'CUDA canonical artifact path did not preserve its declared hash'
+        $binding = $cudaArtifactBindings[$index]
+        Assert-True -Condition (-not [IO.Path]::IsPathFullyQualified([string]$binding.cache_path)) -Message 'CUDA artifact provenance cache_path became absolute'
+        Assert-True -Condition ([string]$binding.cache_path -ceq $cudaExpectedArtifactRelativePaths[$index]) -Message 'CUDA artifact provenance cache_path changed value'
+        Assert-True -Condition ([string]$binding.relative_path -ceq $cudaExpectedArtifactRelativePaths[$index]) -Message 'CUDA artifact provenance relative_path changed value'
+        Assert-True -Condition ([string]$binding.sha256 -ceq $artifactHash) -Message 'CUDA artifact provenance hash changed value'
+    }
     $cudaRuntimePaths = @($cudaConfig.fastdeploy_ppocr.runtime_library_paths | ForEach-Object { [string]$_ })
     $cudaRuntimeRoot = [IO.Path]::GetFullPath((Join-Path $cudaResult.cache_root 'provider/runtime')).TrimEnd('\')
     $cudaExpectedRuntimePaths = @(
