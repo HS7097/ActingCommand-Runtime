@@ -69,6 +69,7 @@ pub struct PreparedPackageBuildTask {
     package_id: String,
     execution_mode: String,
     task_timeout_ms: Option<u64>,
+    task_max_steps: Option<u32>,
     stability_termination: Option<StabilityTermination>,
     out: PathBuf,
     dry_run: bool,
@@ -125,6 +126,8 @@ pub fn prepare_package_build_task(
     let task_timeout_ms = validate_entry_task_timeout(entry_bundle)?;
     let stability_termination =
         validate_entry_stability_termination(entry_bundle, &execution_mode, resolution)?;
+    let task_max_steps =
+        validate_entry_task_max_steps(entry_bundle, stability_termination.as_ref())?;
 
     Ok(PreparedPackageBuildTask {
         source,
@@ -139,6 +142,7 @@ pub fn prepare_package_build_task(
         package_id,
         execution_mode,
         task_timeout_ms,
+        task_max_steps,
         stability_termination,
         out,
         dry_run,
@@ -202,6 +206,7 @@ impl PreparedPackageBuildTask {
                 &self.task_id,
                 ControlOptions {
                     timeout_ms: self.task_timeout_ms,
+                    max_steps: self.task_max_steps,
                     stability_termination: self.stability_termination.as_ref(),
                 },
             )?,
@@ -373,6 +378,7 @@ impl PackageBuildCatalog {
         let task_timeout_ms = validate_entry_task_timeout(bundle)?;
         let stability_termination =
             validate_entry_stability_termination(bundle, &execution_mode, resolution)?;
+        let task_max_steps = validate_entry_task_max_steps(bundle, stability_termination.as_ref())?;
         let mut entries =
             PackageEntries::new(&self.resource_root, self.max_buffered_payload_bytes)?;
         entries.add_json(
@@ -386,6 +392,7 @@ impl PackageBuildCatalog {
                 &task_id,
                 ControlOptions {
                     timeout_ms: task_timeout_ms,
+                    max_steps: task_max_steps,
                     stability_termination: stability_termination.as_ref(),
                 },
             )?,
@@ -434,6 +441,8 @@ impl PackageBuildCatalog {
         let task_timeout_ms = validate_entry_task_timeout(entry_bundle)?;
         let stability_termination =
             validate_entry_stability_termination(entry_bundle, &execution_mode, resolution)?;
+        let task_max_steps =
+            validate_entry_task_max_steps(entry_bundle, stability_termination.as_ref())?;
         let mut outputs = self.converter.build_all()?;
         apply_environment_to_outputs(environment, &mut outputs)?;
         let task_ids = self.task_ids();
@@ -450,6 +459,7 @@ impl PackageBuildCatalog {
                 &entry_task_id,
                 ControlOptions {
                     timeout_ms: task_timeout_ms,
+                    max_steps: task_max_steps,
                     stability_termination: stability_termination.as_ref(),
                 },
             )?,
@@ -565,6 +575,7 @@ fn validate_execution_mode(mode: &str) -> CliOutcome<()> {
 #[derive(Default)]
 struct ControlOptions<'a> {
     timeout_ms: Option<u64>,
+    max_steps: Option<u32>,
     stability_termination: Option<&'a StabilityTermination>,
 }
 
@@ -579,6 +590,7 @@ fn control_json(
 ) -> CliOutcome<Value> {
     let ControlOptions {
         timeout_ms,
+        max_steps,
         stability_termination,
     } = options;
     let mut control = ordered_object([
@@ -604,18 +616,40 @@ fn control_json(
             "timeout_ms must be in 1..={MAX_TASK_TIMEOUT_MS}"
         )));
     }
-    if timeout_ms.is_some() || stability_termination.is_some() {
+    let max_steps = match (max_steps, stability_termination) {
+        (Some(max_steps), Some(stability_termination)) => {
+            if max_steps != stability_termination.max_steps {
+                return Err(CliError::package_invalid(
+                    "max_steps must match stability_termination max_steps",
+                ));
+            }
+            Some(max_steps)
+        }
+        (Some(max_steps), None) => Some(max_steps),
+        (None, Some(stability_termination)) => Some(stability_termination.max_steps),
+        (None, None) => None,
+    };
+    if max_steps
+        .is_some_and(|max_steps| !(1..=MAX_STABILITY_TERMINATION_STEPS).contains(&max_steps))
+    {
+        return Err(CliError::package_invalid(format!(
+            "max_steps must be in 1..={MAX_STABILITY_TERMINATION_STEPS}"
+        )));
+    }
+    if let Some(stability_termination) = stability_termination {
+        stability_termination.validate(resolution)?;
+    }
+    if timeout_ms.is_some() || max_steps.is_some() || stability_termination.is_some() {
         let object = control
             .as_object_mut()
             .expect("control_json always constructs an object");
         if let Some(timeout_ms) = timeout_ms {
             object.insert("timeout_ms".to_string(), Value::from(timeout_ms));
         }
+        if let Some(max_steps) = max_steps {
+            object.insert("max_steps".to_string(), Value::from(max_steps));
+        }
         if let Some(stability_termination) = stability_termination {
-            object.insert(
-                "max_steps".to_string(),
-                Value::from(stability_termination.max_steps),
-            );
             object.insert(
                 "stability_termination".to_string(),
                 serde_json::to_value(stability_termination).map_err(|error| {
@@ -2040,6 +2074,38 @@ fn validate_entry_task_timeout(bundle: &Bundle) -> CliOutcome<Option<u64>> {
         })
 }
 
+fn validate_entry_task_max_steps(
+    bundle: &Bundle,
+    stability_termination: Option<&StabilityTermination>,
+) -> CliOutcome<Option<u32>> {
+    let Some(value) = bundle.data.get("max_steps") else {
+        return Ok(None);
+    };
+    if bundle.data.get("schema_version").and_then(Value::as_str) != Some("0.7") {
+        return Err(CliError::package_invalid(format!(
+            "task '{}' max_steps requires schema_version '0.7'",
+            bundle.task_id
+        )));
+    }
+    let max_steps = value
+        .as_u64()
+        .and_then(|value| u32::try_from(value).ok())
+        .filter(|value| (1..=MAX_STABILITY_TERMINATION_STEPS).contains(value))
+        .ok_or_else(|| {
+            CliError::package_invalid(format!(
+                "task '{}' max_steps must be an integer in 1..={MAX_STABILITY_TERMINATION_STEPS}",
+                bundle.task_id
+            ))
+        })?;
+    if stability_termination.is_some_and(|declaration| declaration.max_steps != max_steps) {
+        return Err(CliError::package_invalid(format!(
+            "task '{}' max_steps must match stability_termination max_steps",
+            bundle.task_id
+        )));
+    }
+    Ok(Some(max_steps))
+}
+
 fn validate_entry_stability_termination(
     bundle: &Bundle,
     execution_mode: &str,
@@ -2186,6 +2252,14 @@ impl LabControl {
                 "capture_interval_ms must be positive when provided",
             ));
         }
+        if self
+            .max_steps
+            .is_some_and(|value| value == 0 || value > MAX_STABILITY_TERMINATION_STEPS as usize)
+        {
+            return Err(CliError::package_invalid(format!(
+                "max_steps must be in 1..={MAX_STABILITY_TERMINATION_STEPS}"
+            )));
+        }
         self.validate_stability_termination()?;
         if let Some(capture_backend) = &self.capture_backend {
             validate_capture_backend(capture_backend)?;
@@ -2250,7 +2324,10 @@ struct PostAdmissionOcrPackageLimits {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct PostAdmissionOcrPackageDeclaration {
-    page_id: String,
+    #[serde(default, deserialize_with = "deserialize_non_null_option")]
+    page_id: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_non_null_option")]
+    page_ids: Option<Vec<String>>,
     #[serde(default, deserialize_with = "deserialize_non_null_option")]
     target_id: Option<String>,
     #[serde(default, deserialize_with = "deserialize_non_null_option")]
@@ -2263,6 +2340,28 @@ struct PostAdmissionOcrPackageDeclaration {
 }
 
 impl PostAdmissionOcrPackageDeclaration {
+    fn page_ids(&self) -> CliOutcome<Vec<&str>> {
+        match (&self.page_id, &self.page_ids) {
+            (Some(page_id), None) if !page_id.trim().is_empty() => Ok(vec![page_id.as_str()]),
+            (None, Some(page_ids)) if page_ids.len() == 2 => {
+                let mut unique = BTreeSet::new();
+                let mut ordered = Vec::with_capacity(page_ids.len());
+                for page_id in page_ids {
+                    if page_id.trim().is_empty() || !unique.insert(page_id.as_str()) {
+                        return Err(CliError::package_invalid(
+                            "post_admission_ocr page_ids must contain exactly two non-empty unique entries",
+                        ));
+                    }
+                    ordered.push(page_id.as_str());
+                }
+                Ok(ordered)
+            }
+            _ => Err(CliError::package_invalid(
+                "post_admission_ocr requires exactly one of page_id or page_ids",
+            )),
+        }
+    }
+
     fn target_ids(&self) -> CliOutcome<Vec<&str>> {
         match (&self.target_id, &self.target_ids) {
             (Some(target_id), None) if !target_id.trim().is_empty() => Ok(vec![target_id.as_str()]),
@@ -2289,9 +2388,9 @@ impl PostAdmissionOcrPackageDeclaration {
 
     fn validate(&self, scheduling_outcome: Option<&Value>) -> CliOutcome<()> {
         let limits = &self.limits;
+        self.page_ids()?;
         self.target_ids()?;
-        if self.page_id.trim().is_empty()
-            || self.outcome_key.trim().is_empty()
+        if self.outcome_key.trim().is_empty()
             || self.normalization != "trim_lowercase_v1"
             || self.comparison != "exact_set_v1"
             || !is_safe_package_relative_path(&self.truth_set.path)
@@ -2361,6 +2460,8 @@ struct OperationBundle {
     coordinate_space: Resolution,
     #[serde(default, deserialize_with = "deserialize_non_null_option")]
     timeout_ms: Option<u64>,
+    #[serde(default, deserialize_with = "deserialize_non_null_option")]
+    max_steps: Option<u32>,
     #[serde(default)]
     defaults: OperationDefaults,
     #[serde(default)]
@@ -2406,6 +2507,7 @@ impl OperationBundle {
             )));
         }
         self.validate_task_timeout(control)?;
+        self.validate_task_max_steps(control)?;
         if self.task_id != control.entry_task_id && self.task_id != "return_home" {
             return Err(CliError::package_invalid(format!(
                 "operation task_id '{}' does not match control entry_task_id '{}'",
@@ -2573,6 +2675,33 @@ impl OperationBundle {
             "0.3" | "0.4" | "0.5" | "0.6" if self.timeout_ms.is_none() => Ok(()),
             "0.3" | "0.4" | "0.5" | "0.6" => Err(CliError::package_invalid(
                 "operation timeout_ms requires schema_version '0.7'",
+            )),
+            _ => Ok(()),
+        }
+    }
+
+    fn validate_task_max_steps(&self, control: &LabControl) -> CliOutcome<()> {
+        match self.schema_version.as_str() {
+            "0.7" => {
+                let max_steps = self
+                    .max_steps
+                    .map(usize::try_from)
+                    .transpose()
+                    .map_err(|_| CliError::package_invalid("operation max_steps is invalid"))?;
+                if self
+                    .max_steps
+                    .is_some_and(|value| !(1..=MAX_STABILITY_TERMINATION_STEPS).contains(&value))
+                    || max_steps.is_some_and(|max_steps| control.max_steps != Some(max_steps))
+                {
+                    return Err(CliError::package_invalid(
+                        "operation max_steps is invalid or does not match control.json",
+                    ));
+                }
+                Ok(())
+            }
+            "0.3" | "0.4" | "0.5" | "0.6" if self.max_steps.is_none() => Ok(()),
+            "0.3" | "0.4" | "0.5" | "0.6" => Err(CliError::package_invalid(
+                "operation max_steps requires schema_version '0.7'",
             )),
             _ => Ok(()),
         }
@@ -3817,7 +3946,7 @@ mod tests {
     use zip::ZipArchive;
 
     #[test]
-    fn task_timeout_control_projection_is_bounded_and_byte_exact_when_absent() {
+    fn task_timeout_and_max_steps_projection_are_bounded_and_byte_exact_when_absent() {
         let absent = control_json(
             "neutral.test.fixture",
             "navigable_route",
@@ -3862,6 +3991,115 @@ mod tests {
             )
             .expect_err("out-of-range task timeout must fail closed");
         }
+
+        let bounded_steps = control_json(
+            "neutral.test.fixture",
+            "navigable_route",
+            "neutral",
+            "test",
+            (100, 100),
+            "fixture",
+            ControlOptions {
+                max_steps: Some(61),
+                ..ControlOptions::default()
+            },
+        )
+        .expect("bounded independent max steps");
+        assert_eq!(bounded_steps["max_steps"], json!(61));
+        for invalid in [0, 1_001] {
+            control_json(
+                "neutral.test.fixture",
+                "navigable_route",
+                "neutral",
+                "test",
+                (100, 100),
+                "fixture",
+                ControlOptions {
+                    max_steps: Some(invalid),
+                    ..ControlOptions::default()
+                },
+            )
+            .expect_err("out-of-range max steps must fail closed");
+        }
+
+        let stability: StabilityTermination =
+            serde_json::from_value(stability_termination_fixture()).expect("stability declaration");
+        control_json(
+            "neutral.test.fixture",
+            "in_page_guard",
+            "neutral",
+            "test",
+            (1280, 720),
+            "fixture",
+            ControlOptions {
+                max_steps: Some(stability.max_steps),
+                stability_termination: Some(&stability),
+                ..ControlOptions::default()
+            },
+        )
+        .expect("matching root and stability max steps");
+        control_json(
+            "neutral.test.fixture",
+            "in_page_guard",
+            "neutral",
+            "test",
+            (1280, 720),
+            "fixture",
+            ControlOptions {
+                max_steps: Some(stability.max_steps + 1),
+                stability_termination: Some(&stability),
+                ..ControlOptions::default()
+            },
+        )
+        .expect_err("mismatched root and stability max steps must fail closed");
+    }
+
+    #[test]
+    fn task_max_steps_source_is_integer_bounded_and_matches_stability() {
+        let bundle = |schema_version: &str, max_steps: Option<Value>| {
+            let mut data = json!({"schema_version": schema_version});
+            if let Some(max_steps) = max_steps {
+                data["max_steps"] = max_steps;
+            }
+            Bundle {
+                task_id: "fixture".to_string(),
+                dir: PathBuf::from("operations/fixture"),
+                data,
+            }
+        };
+
+        assert_eq!(
+            validate_entry_task_max_steps(&bundle("0.7", None), None).unwrap(),
+            None
+        );
+        for max_steps in [1_u32, 61, 1_000] {
+            assert_eq!(
+                validate_entry_task_max_steps(&bundle("0.7", Some(json!(max_steps))), None)
+                    .unwrap(),
+                Some(max_steps)
+            );
+        }
+        for invalid in [
+            json!(0),
+            json!(1_001),
+            json!(-1),
+            json!(1.5),
+            json!("61"),
+            Value::Null,
+        ] {
+            validate_entry_task_max_steps(&bundle("0.7", Some(invalid)), None)
+                .expect_err("invalid source max steps must fail closed");
+        }
+        validate_entry_task_max_steps(&bundle("0.6", Some(json!(61))), None)
+            .expect_err("source max steps requires schema 0.7");
+
+        let stability: StabilityTermination =
+            serde_json::from_value(stability_termination_fixture()).expect("stability declaration");
+        validate_entry_task_max_steps(
+            &bundle("0.7", Some(json!(stability.max_steps + 1))),
+            Some(&stability),
+        )
+        .expect_err("source and stability max steps must match");
     }
 
     #[test]
@@ -4427,6 +4665,20 @@ mod tests {
         update_fixture_operation(&repo, |task| {
             task["schema_version"] = json!("0.7");
             task["timeout_ms"] = json!(300_000);
+            task["max_steps"] = json!(61);
+            task["anchors"]
+                .as_array_mut()
+                .expect("fixture anchors")
+                .push(json!({
+                    "id": "operator_end",
+                    "template": "assets/PAGE_OPERATOR_1.png",
+                    "region": {
+                        "mode": "rect",
+                        "rect": {"x": 5, "y": 6, "width": 7, "height": 8}
+                    },
+                    "threshold": 0.8,
+                    "color_check": null
+                }));
             task["ocr_targets"] = Value::Array(
                 target_ids
                     .iter()
@@ -4465,7 +4717,7 @@ mod tests {
                 }]
             });
             task["post_admission_ocr"] = json!({
-                "page_id": "operator",
+                "page_ids": ["operator", "operator_end"],
                 "target_ids": target_ids.clone(),
                 "truth_set": {"path": "truth.json", "sha256": truth_sha256},
                 "normalization": "trim_lowercase_v1",
@@ -4515,7 +4767,14 @@ mod tests {
         )
         .expect("pack JSON");
         assert_eq!(control["timeout_ms"], json!(300_000));
+        assert_eq!(control["max_steps"], json!(61));
         assert_eq!(task["timeout_ms"], json!(300_000));
+        assert_eq!(task["max_steps"], json!(61));
+        assert_eq!(
+            task["post_admission_ocr"]["page_ids"],
+            json!(["operator", "operator_end"])
+        );
+        assert!(task["post_admission_ocr"].get("page_id").is_none());
         assert_eq!(task["post_admission_ocr"]["target_ids"], json!(target_ids));
         assert!(task["post_admission_ocr"].get("target_id").is_none());
         let generated_order = pack["targets"]
