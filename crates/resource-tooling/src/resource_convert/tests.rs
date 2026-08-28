@@ -70,6 +70,53 @@ fn schema_0_7_post_admission_ocr_validates_hash_bound_truth_and_closed_algorithm
     validate_post_admission_ocr_bundle(&sixteen_targets)
         .expect("schema 0.7 ordered sixteen-target declaration");
 
+    let mut two_pages = sixteen_targets.clone();
+    two_pages
+        .data
+        .get_mut("post_admission_ocr")
+        .and_then(Value::as_object_mut)
+        .expect("post-admission OCR object")
+        .remove("page_id");
+    two_pages.data["post_admission_ocr"]["page_ids"] = json!(["operator", "operator_end"]);
+    validate_post_admission_ocr_bundle(&two_pages)
+        .expect("schema 0.7 exact two-page OCR declaration");
+
+    let mut both_page_forms = two_pages.clone();
+    both_page_forms.data["post_admission_ocr"]["page_id"] = json!("operator");
+    assert!(
+        validate_post_admission_ocr_bundle(&both_page_forms)
+            .expect_err("both page forms must fail closed")
+            .message
+            .contains("exactly one")
+    );
+    let mut neither_page_form = two_pages.clone();
+    neither_page_form
+        .data
+        .get_mut("post_admission_ocr")
+        .and_then(Value::as_object_mut)
+        .expect("post-admission OCR object")
+        .remove("page_ids");
+    assert!(
+        validate_post_admission_ocr_bundle(&neither_page_form)
+            .expect_err("missing page form must fail closed")
+            .message
+            .contains("exactly one")
+    );
+    for invalid_page_ids in [
+        json!([]),
+        json!(["operator"]),
+        json!(["operator", "operator"]),
+        json!(["operator", "operator_end", "other"]),
+        json!(["operator", ""]),
+        json!(["operator", 7]),
+        Value::Null,
+    ] {
+        let mut invalid = two_pages.clone();
+        invalid.data["post_admission_ocr"]["page_ids"] = invalid_page_ids;
+        validate_post_admission_ocr_bundle(&invalid)
+            .expect_err("invalid exact two-page form must fail closed");
+    }
+
     let mut both_forms = sixteen_targets.clone();
     both_forms.data["post_admission_ocr"]["target_id"] = json!("fixture/ocr-00");
     assert!(
@@ -167,6 +214,68 @@ fn schema_0_7_task_timeout_is_optional_bounded_and_non_mutating() {
     }
     validate_task_timeout_bundle(&task("0.6", Some(json!(300_000))))
         .expect_err("task timeout requires schema 0.7");
+}
+
+#[test]
+fn schema_0_7_max_steps_is_optional_bounded_and_non_mutating() {
+    let task = |schema_version: &str, max_steps: Option<Value>| {
+        let mut data = json!({
+            "schema_version": schema_version,
+            "task_id": "fixture_task"
+        });
+        if let Some(max_steps) = max_steps {
+            data["max_steps"] = max_steps;
+        }
+        Bundle {
+            task_id: "fixture_task".to_string(),
+            dir: PathBuf::from("operations/fixture_task"),
+            data,
+        }
+    };
+
+    let absent = task("0.7", None);
+    let absent_bytes = serde_json::to_vec(&absent.data).expect("absent bytes");
+    assert_eq!(validate_task_max_steps_bundle(&absent).unwrap(), None);
+    assert_eq!(
+        serde_json::to_vec(&absent.data).expect("unchanged absent bytes"),
+        absent_bytes
+    );
+
+    for max_steps in [1_u32, 61, 1_000] {
+        let valid = task("0.7", Some(json!(max_steps)));
+        let original = serde_json::to_vec(&valid.data).expect("valid bytes");
+        assert_eq!(
+            validate_task_max_steps_bundle(&valid).unwrap(),
+            Some(max_steps)
+        );
+        assert_eq!(
+            serde_json::to_vec(&valid.data).expect("unchanged valid bytes"),
+            original
+        );
+    }
+
+    for invalid in [
+        json!(0),
+        json!(1_001),
+        json!(-1),
+        json!(1.5),
+        json!("61"),
+        Value::Null,
+    ] {
+        validate_task_max_steps_bundle(&task("0.7", Some(invalid)))
+            .expect_err("invalid max steps must fail closed");
+    }
+    validate_task_max_steps_bundle(&task("0.6", Some(json!(61))))
+        .expect_err("max steps requires schema 0.7");
+
+    let mut mismatch = task("0.7", Some(json!(61)));
+    mismatch.data["stability_termination"] = json!({"max_steps": 62});
+    assert!(
+        validate_task_max_steps_bundle(&mismatch)
+            .expect_err("root and stability max steps must match")
+            .message
+            .contains("must match")
+    );
 }
 
 #[test]
