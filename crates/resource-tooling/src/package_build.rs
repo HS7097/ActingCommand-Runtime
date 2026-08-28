@@ -15,7 +15,9 @@ use crate::{
     UnsupportedRecognitionTargetResponse,
 };
 use actingcommand_contract::{
-    LabError as CliError, LabResult as CliOutcome, SchedulingOutcomeDeclaration,
+    LabError as CliError, LabResult as CliOutcome, SEGMENTED_SWIPE_BRAKE_DISTANCE_PX,
+    SEGMENTED_SWIPE_BRAKE_DURATION_MS, SEGMENTED_SWIPE_CORNER_HOLD_MS,
+    SEGMENTED_SWIPE_HORIZONTAL_DURATION_MS, SchedulingOutcomeDeclaration,
 };
 use actingcommand_pack_containment::{
     ContainmentError, ContainmentLimits, Sha256Hash, validate_recognition_metadata,
@@ -1600,8 +1602,16 @@ fn validate_generated_post_admission_ocr(
                 "post_admission_ocr truth set is invalid JSON: {error}"
             ))
         })?;
-    if truth.schema_version != "actingcommand.ocr-truth-set.v1"
-        || truth.items.is_empty()
+    let schema_v2 = match (truth.schema_version.as_str(), truth.aliases.as_ref()) {
+        ("actingcommand.ocr-truth-set.v1", None) => false,
+        ("actingcommand.ocr-truth-set.v2", Some(_)) => true,
+        _ => {
+            return Err(CliError::package_invalid(
+                "post_admission_ocr truth set schema or aliases is invalid",
+            ));
+        }
+    };
+    if truth.items.is_empty()
         || u32::try_from(truth.items.len())
             .map_or(true, |count| count > declaration.limits.max_truth_entries)
     {
@@ -1622,6 +1632,33 @@ fn validate_generated_post_admission_ocr(
             return Err(CliError::package_invalid(
                 "post_admission_ocr truth items are empty, oversized, or duplicated",
             ));
+        }
+    }
+    if schema_v2 {
+        let aliases = truth.aliases.expect("schema v2 aliases are present");
+        if aliases.len() > 1_024 {
+            return Err(CliError::package_invalid(
+                "post_admission_ocr truth aliases exceed 1024 entries",
+            ));
+        }
+        let mut observed_aliases = BTreeMap::new();
+        for alias in aliases {
+            let observed = alias.observed.trim().to_lowercase();
+            let canonical = alias.canonical.trim().to_lowercase();
+            if alias.observed.len() > max_string_bytes
+                || alias.canonical.len() > max_string_bytes
+                || observed.is_empty()
+                || canonical.is_empty()
+                || observed.len() > max_string_bytes
+                || canonical.len() > max_string_bytes
+                || normalized.contains(&observed)
+                || !normalized.contains(&canonical)
+                || observed_aliases.insert(observed, canonical).is_some()
+            {
+                return Err(CliError::package_invalid(
+                    "post_admission_ocr truth aliases are empty, duplicated, conflicting, oversized, or noncanonical",
+                ));
+            }
         }
     }
     Ok(())
@@ -2445,6 +2482,15 @@ impl PostAdmissionOcrPackageDeclaration {
 struct PostAdmissionOcrPackageTruthSet {
     schema_version: String,
     items: Vec<String>,
+    #[serde(default)]
+    aliases: Option<Vec<PostAdmissionOcrPackageTruthAlias>>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PostAdmissionOcrPackageTruthAlias {
+    observed: String,
+    canonical: String,
 }
 
 #[allow(dead_code)]
@@ -2570,7 +2616,7 @@ impl OperationBundle {
         }
         let mut ids = BTreeSet::new();
         for operation in &self.operations {
-            operation.validate(control)?;
+            operation.validate(control, &self.schema_version)?;
             if !ids.insert(operation.id.clone()) {
                 return Err(CliError::package_invalid(format!(
                     "duplicate operation id '{}'",
@@ -2863,7 +2909,7 @@ struct Operation {
 }
 
 impl Operation {
-    fn validate(&self, control: &LabControl) -> CliOutcome<()> {
+    fn validate(&self, control: &LabControl, schema_version: &str) -> CliOutcome<()> {
         for (name, value) in [("id", &self.id), ("from", &self.from)] {
             if value.trim().is_empty() {
                 return Err(CliError::package_invalid(format!(
@@ -2871,7 +2917,7 @@ impl Operation {
                 )));
             }
         }
-        self.click.validate(control)?;
+        self.click.validate(control, schema_version)?;
         if matches!(
             self.click.kind.as_str(),
             "offset" | "target" | "target_center"
@@ -3100,15 +3146,27 @@ struct OperationClick {
     #[serde(default)]
     to_rect: Option<PackRect>,
     #[serde(default)]
+    corner_rect: Option<PackRect>,
+    #[serde(default)]
     duration_ms: Option<u64>,
+    #[serde(default)]
+    horizontal_duration_ms: Option<u64>,
+    #[serde(default)]
+    corner_hold_ms: Option<u64>,
+    #[serde(default)]
+    brake_distance_px: Option<i32>,
+    #[serde(default)]
+    brake_duration_ms: Option<u64>,
     #[serde(default)]
     offset: Option<PackRect>,
     #[serde(default)]
     target_id: Option<String>,
+    #[serde(flatten)]
+    extra: BTreeMap<String, Value>,
 }
 
 impl OperationClick {
-    fn validate(&self, control: &LabControl) -> CliOutcome<()> {
+    fn validate(&self, control: &LabControl, schema_version: &str) -> CliOutcome<()> {
         match self.kind.as_str() {
             "rect" | "specific_rect" => validate_click_rect(
                 self.required_rect()?,
@@ -3186,6 +3244,58 @@ impl OperationClick {
                 if self.duration_ms.unwrap_or(0) == 0 {
                     return Err(CliError::package_invalid(
                         "drag duration_ms must be positive",
+                    ));
+                }
+                Ok(())
+            }
+            "single_touch_drag_with_vertical_brake_v1" => {
+                if schema_version != "0.7"
+                    || self.x.is_some()
+                    || self.y.is_some()
+                    || self.width.is_some()
+                    || self.height.is_some()
+                    || self.duration_ms.is_some()
+                    || self.offset.is_some()
+                    || self.target_id.is_some()
+                    || self.to_rect.is_some()
+                    || !self.extra.is_empty()
+                    || self.horizontal_duration_ms != Some(SEGMENTED_SWIPE_HORIZONTAL_DURATION_MS)
+                    || self.corner_hold_ms != Some(SEGMENTED_SWIPE_CORNER_HOLD_MS)
+                    || self.brake_distance_px != Some(SEGMENTED_SWIPE_BRAKE_DISTANCE_PX)
+                    || self.brake_duration_ms != Some(SEGMENTED_SWIPE_BRAKE_DURATION_MS)
+                {
+                    return Err(CliError::package_invalid(
+                        "single_touch_drag_with_vertical_brake_v1 declaration is invalid",
+                    ));
+                }
+                let from = self.from_rect.ok_or_else(|| {
+                    CliError::package_invalid(
+                        "single_touch_drag_with_vertical_brake_v1 missing from_rect",
+                    )
+                })?;
+                let corner = self.corner_rect.ok_or_else(|| {
+                    CliError::package_invalid(
+                        "single_touch_drag_with_vertical_brake_v1 missing corner_rect",
+                    )
+                })?;
+                validate_click_rect(
+                    from,
+                    &control.resolution,
+                    control.allow_placeholder_coords.unwrap_or(false),
+                )?;
+                validate_click_rect(
+                    corner,
+                    &control.resolution,
+                    control.allow_placeholder_coords.unwrap_or(false),
+                )?;
+                let brake_distance = self.brake_distance_px.ok_or_else(|| {
+                    CliError::package_invalid(
+                        "single_touch_drag_with_vertical_brake_v1 missing brake_distance_px",
+                    )
+                })?;
+                if !(1..=256).contains(&brake_distance) || corner.y < brake_distance {
+                    return Err(CliError::package_invalid(
+                        "single_touch_drag_with_vertical_brake_v1 brake endpoint is out of bounds",
                     ));
                 }
                 Ok(())
@@ -4125,7 +4235,7 @@ mod tests {
         }))
         .expect("canonical drag");
         canonical
-            .validate(&control)
+            .validate(&control, "0.6")
             .expect("canonical drag validates");
 
         let legacy: OperationClick = serde_json::from_value(json!({
@@ -4136,7 +4246,7 @@ mod tests {
         }))
         .expect("legacy-shaped drag parses without aliases");
         let error = legacy
-            .validate(&control)
+            .validate(&control, "0.6")
             .expect_err("packaged source endpoint names must fail");
         assert!(error.message.contains("drag click missing from rect"));
     }

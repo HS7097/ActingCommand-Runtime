@@ -9,8 +9,10 @@ use crate::{
     select_run_operation,
 };
 use actingcommand_contract::{
-    InputAction, InputSamplingEvidence, InputSamplingRegion, SchedulingEffectCondition,
-    SchedulingOutcomeDeclaration, TaskOutcome,
+    InputAction, InputSamplingEvidence, InputSamplingRegion, SEGMENTED_SWIPE_BRAKE_DISTANCE_PX,
+    SEGMENTED_SWIPE_BRAKE_DURATION_MS, SEGMENTED_SWIPE_CORNER_HOLD_MS,
+    SEGMENTED_SWIPE_HORIZONTAL_DURATION_MS, SEGMENTED_SWIPE_SLOPE_IN, SEGMENTED_SWIPE_SLOPE_OUT,
+    SchedulingEffectCondition, SchedulingOutcomeDeclaration, TaskOutcome,
 };
 use actingcommand_device::{Frame, PixelFormat};
 use actingcommand_pack_containment::{ContainmentError, LoadedBundle, Sha256Hash};
@@ -44,7 +46,9 @@ const MAX_POST_ADMISSION_OCR_STRING_BYTES: u32 = 4_096;
 const MAX_POST_ADMISSION_OCR_TOTAL_BYTES: u64 = 4 * 1024 * 1024;
 const MAX_POST_ADMISSION_OCR_TRUTH_ENTRIES: u32 = 4_096;
 const MAX_POST_ADMISSION_OCR_TARGETS: usize = 32;
-const POST_ADMISSION_OCR_TRUTH_SCHEMA: &str = "actingcommand.ocr-truth-set.v1";
+const POST_ADMISSION_OCR_TRUTH_SCHEMA_V1: &str = "actingcommand.ocr-truth-set.v1";
+const POST_ADMISSION_OCR_TRUTH_SCHEMA_V2: &str = "actingcommand.ocr-truth-set.v2";
+const MAX_POST_ADMISSION_OCR_ALIASES: usize = 1_024;
 
 fn deserialize_non_null_option<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
 where
@@ -305,6 +309,29 @@ pub struct PostAdmissionOcrObservedValue {
 // Collected confidences inherit the same finite-score invariant as each observation.
 impl Eq for PostAdmissionOcrObservedValue {}
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PostAdmissionOcrMappingDisposition {
+    CanonicalExact,
+    AliasExact,
+    Unmatched,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct PostAdmissionOcrMappingEvidence {
+    frame_index: u32,
+    target_id: String,
+    raw_text: String,
+    normalized_text: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    canonical: Option<String>,
+    confidence: Option<f32>,
+    disposition: PostAdmissionOcrMappingDisposition,
+}
+
+// Mapping confidences inherit the recognition owner's finite-score invariant.
+impl Eq for PostAdmissionOcrMappingEvidence {}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct PostAdmissionOcrDuplicateEvidence {
     pub value: String,
@@ -330,6 +357,8 @@ pub struct PostAdmissionOcrComparisonReport {
     exact_match: bool,
     truth: Vec<String>,
     observed: Vec<PostAdmissionOcrObservedValue>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    mapping_evidence: Option<Vec<PostAdmissionOcrMappingEvidence>>,
     missed: Vec<String>,
     unexpected: Vec<String>,
     duplicates: Vec<PostAdmissionOcrDuplicateEvidence>,
@@ -387,6 +416,15 @@ struct PostAdmissionOcrDeclaration {
 struct PostAdmissionOcrTruthSet {
     schema_version: String,
     items: Vec<String>,
+    #[serde(default)]
+    aliases: Option<Vec<PostAdmissionOcrTruthAlias>>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PostAdmissionOcrTruthAlias {
+    observed: String,
+    canonical: String,
 }
 
 #[derive(Debug, Clone)]
@@ -395,6 +433,8 @@ struct PreparedPostAdmissionOcr {
     page_ids: Vec<String>,
     target_ids: Vec<String>,
     truth: Vec<String>,
+    aliases: BTreeMap<String, String>,
+    truth_schema_v2: bool,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -411,6 +451,7 @@ struct PostAdmissionOcrCollector<'a> {
     discarded_empty_items: u32,
     total_observed_utf8_bytes: u64,
     values: BTreeMap<String, PostAdmissionOcrObservedAggregate>,
+    mapping_evidence: Vec<PostAdmissionOcrMappingEvidence>,
     invocation_ids: BTreeSet<String>,
     stream_binding: Option<OcrProviderExecutionEvidence>,
 }
@@ -445,9 +486,11 @@ impl<'a> PostAdmissionOcrCollector<'a> {
         let mut invocation_ids = self.invocation_ids.clone();
         let mut stream_binding = self.stream_binding.clone();
         let mut values = self.values.clone();
+        let mut mapping_evidence = self.mapping_evidence.clone();
         let mut discarded_empty_items = self.discarded_empty_items;
         let mut new_item_count = self.items_collected;
         let mut added_bytes = 0_u64;
+        let frame_index = self.frames_collected;
         let max_string_bytes = usize::try_from(declaration.limits.max_string_bytes)
             .map_err(|_| ContainedTaskError::new("contained_task_post_admission_ocr_invalid"))?;
         let mut target_observations = Vec::with_capacity(prepared.target_ids.len());
@@ -519,7 +562,37 @@ impl<'a> PostAdmissionOcrCollector<'a> {
                         })?;
                     continue;
                 }
-                let aggregate = values.entry(value).or_default();
+                let aggregate_key = if prepared.truth_schema_v2 {
+                    let (canonical, disposition) = if prepared.truth.binary_search(&value).is_ok() {
+                        (
+                            Some(value.clone()),
+                            PostAdmissionOcrMappingDisposition::CanonicalExact,
+                        )
+                    } else if let Some(canonical) = prepared.aliases.get(&value) {
+                        (
+                            Some(canonical.clone()),
+                            PostAdmissionOcrMappingDisposition::AliasExact,
+                        )
+                    } else {
+                        (None, PostAdmissionOcrMappingDisposition::Unmatched)
+                    };
+                    mapping_evidence.push(PostAdmissionOcrMappingEvidence {
+                        frame_index,
+                        target_id: evaluated.target_id.clone(),
+                        raw_text: block.text.clone(),
+                        normalized_text: value,
+                        canonical: canonical.clone(),
+                        confidence: block.confidence,
+                        disposition,
+                    });
+                    let Some(canonical) = canonical else {
+                        continue;
+                    };
+                    canonical
+                } else {
+                    value
+                };
+                let aggregate = values.entry(aggregate_key).or_default();
                 aggregate.occurrences = aggregate.occurrences.checked_add(1).ok_or_else(|| {
                     ContainedTaskError::new("contained_task_post_admission_ocr_limit_exceeded")
                 })?;
@@ -544,13 +617,13 @@ impl<'a> PostAdmissionOcrCollector<'a> {
                 "contained_task_post_admission_ocr_limit_exceeded",
             ));
         }
-        let frame_index = self.frames_collected;
         let frames_collected = self.frames_collected.checked_add(1).ok_or_else(|| {
             ContainedTaskError::new("contained_task_post_admission_ocr_limit_exceeded")
         })?;
         self.invocation_ids = invocation_ids;
         self.stream_binding = stream_binding;
         self.values = values;
+        self.mapping_evidence = mapping_evidence;
         self.discarded_empty_items = discarded_empty_items;
         self.frames_collected = frames_collected;
         self.items_collected = new_item_count;
@@ -635,6 +708,7 @@ impl<'a> PostAdmissionOcrCollector<'a> {
             exact_match: missed.is_empty() && unexpected.is_empty(),
             truth: prepared.truth.clone(),
             observed,
+            mapping_evidence: prepared.truth_schema_v2.then_some(self.mapping_evidence),
             missed,
             unexpected,
             duplicates,
@@ -2095,7 +2169,7 @@ impl TaskProgram {
         }
         let mut operation_ids = BTreeSet::new();
         for operation in &self.operations {
-            operation.validate(control, self.defaults)?;
+            operation.validate(control, self.defaults, &self.schema_version)?;
             let destination_pages = operation.destination_pages()?;
             validate_page_references(&control.game, &destination_pages, detector)?;
             validate_page_set_overlap(
@@ -2219,8 +2293,16 @@ impl TaskProgram {
         let truth: PostAdmissionOcrTruthSet = serde_json::from_slice(bytes).map_err(|_| {
             ContainedTaskError::new("contained_task_post_admission_ocr_truth_invalid")
         })?;
-        if truth.schema_version != POST_ADMISSION_OCR_TRUTH_SCHEMA
-            || truth.items.is_empty()
+        let truth_schema_v2 = match truth.schema_version.as_str() {
+            POST_ADMISSION_OCR_TRUTH_SCHEMA_V1 if truth.aliases.is_none() => false,
+            POST_ADMISSION_OCR_TRUTH_SCHEMA_V2 if truth.aliases.is_some() => true,
+            _ => {
+                return Err(ContainedTaskError::new(
+                    "contained_task_post_admission_ocr_truth_invalid",
+                ));
+            }
+        };
+        if truth.items.is_empty()
             || u32::try_from(truth.items.len())
                 .map_or(true, |count| count > declaration.limits.max_truth_entries)
         {
@@ -2244,11 +2326,46 @@ impl TaskProgram {
                 ));
             }
         }
+        let mut aliases = BTreeMap::new();
+        if let Some(truth_aliases) = truth.aliases {
+            if truth_aliases.len() > MAX_POST_ADMISSION_OCR_ALIASES {
+                return Err(ContainedTaskError::new(
+                    "contained_task_post_admission_ocr_truth_invalid",
+                ));
+            }
+            for alias in truth_aliases {
+                if alias.observed.len() > max_string_bytes
+                    || alias.canonical.len() > max_string_bytes
+                {
+                    return Err(ContainedTaskError::new(
+                        "contained_task_post_admission_ocr_truth_invalid",
+                    ));
+                }
+                let observed =
+                    normalize_post_admission_ocr(&alias.observed, declaration.normalization);
+                let canonical =
+                    normalize_post_admission_ocr(&alias.canonical, declaration.normalization);
+                if observed.is_empty()
+                    || canonical.is_empty()
+                    || observed.len() > max_string_bytes
+                    || canonical.len() > max_string_bytes
+                    || normalized.contains(&observed)
+                    || !normalized.contains(&canonical)
+                    || aliases.insert(observed, canonical).is_some()
+                {
+                    return Err(ContainedTaskError::new(
+                        "contained_task_post_admission_ocr_truth_invalid",
+                    ));
+                }
+            }
+        }
         Ok(Some(PreparedPostAdmissionOcr {
             declaration: declaration.clone(),
             page_ids,
             target_ids,
             truth: normalized.into_iter().collect(),
+            aliases,
+            truth_schema_v2,
         }))
     }
 
@@ -2868,6 +2985,7 @@ impl TaskOperation {
         &self,
         control: &TaskControl,
         defaults: TaskOperationDefaults,
+        schema_version: &str,
     ) -> Result<(), ContainedTaskError> {
         if self.id.trim().is_empty() || self.from.trim().is_empty() {
             return Err(ContainedTaskError::new("contained_task_operation_invalid"));
@@ -2901,7 +3019,7 @@ impl TaskOperation {
             (None, true) => {}
         }
         self.click
-            .validate(&control.resolution, self.guard.as_ref())
+            .validate(&control.resolution, self.guard.as_ref(), schema_version)
     }
 
     fn retry_policy(
@@ -3093,6 +3211,18 @@ struct TaskClick {
     from_rect: Option<ClickRect>,
     #[serde(default)]
     to_rect: Option<ClickRect>,
+    #[serde(default)]
+    corner_rect: Option<ClickRect>,
+    #[serde(default)]
+    horizontal_duration_ms: Option<u64>,
+    #[serde(default)]
+    corner_hold_ms: Option<u64>,
+    #[serde(default)]
+    brake_distance_px: Option<i32>,
+    #[serde(default)]
+    brake_duration_ms: Option<u64>,
+    #[serde(flatten)]
+    extra: BTreeMap<String, serde_json::Value>,
 }
 
 impl TaskClick {
@@ -3100,6 +3230,7 @@ impl TaskClick {
         &self,
         resolution: &Resolution,
         guard: Option<&OperationGuard>,
+        schema_version: &str,
     ) -> Result<(), ContainedTaskError> {
         match self.kind.as_str() {
             "point" => {
@@ -3126,6 +3257,38 @@ impl TaskClick {
                     .ok_or_else(|| ContainedTaskError::new("contained_task_operation_invalid"))?
                     .validate(resolution)?;
                 if self.duration_ms == Some(0) || self.duration_ms.is_none() {
+                    return Err(ContainedTaskError::new("contained_task_operation_invalid"));
+                }
+            }
+            "single_touch_drag_with_vertical_brake_v1" => {
+                if schema_version != "0.7"
+                    || self.x.is_some()
+                    || self.y.is_some()
+                    || self.width.is_some()
+                    || self.height.is_some()
+                    || self.duration_ms.is_some()
+                    || self.target_id.is_some()
+                    || self.offset.is_some()
+                    || self.to_rect.is_some()
+                    || !self.extra.is_empty()
+                    || self.horizontal_duration_ms != Some(SEGMENTED_SWIPE_HORIZONTAL_DURATION_MS)
+                    || self.corner_hold_ms != Some(SEGMENTED_SWIPE_CORNER_HOLD_MS)
+                    || self.brake_distance_px != Some(SEGMENTED_SWIPE_BRAKE_DISTANCE_PX)
+                    || self.brake_duration_ms != Some(SEGMENTED_SWIPE_BRAKE_DURATION_MS)
+                {
+                    return Err(ContainedTaskError::new("contained_task_operation_invalid"));
+                }
+                self.from_rect
+                    .ok_or_else(|| ContainedTaskError::new("contained_task_operation_invalid"))?
+                    .validate(resolution)?;
+                let corner = self
+                    .corner_rect
+                    .ok_or_else(|| ContainedTaskError::new("contained_task_operation_invalid"))?;
+                corner.validate(resolution)?;
+                let brake_distance = self
+                    .brake_distance_px
+                    .ok_or_else(|| ContainedTaskError::new("contained_task_operation_invalid"))?;
+                if !(1..=256).contains(&brake_distance) || corner.y < brake_distance {
                     return Err(ContainedTaskError::new("contained_task_operation_invalid"));
                 }
             }
@@ -3209,6 +3372,31 @@ impl TaskClick {
                     action_seed,
                 )?
             }
+            "single_touch_drag_with_vertical_brake_v1" => {
+                let from = self
+                    .from_rect
+                    .ok_or_else(|| ContainedTaskError::new("contained_task_operation_invalid"))?;
+                let corner = self
+                    .corner_rect
+                    .ok_or_else(|| ContainedTaskError::new("contained_task_operation_invalid"))?;
+                sampled_segmented_swipe(
+                    from,
+                    corner,
+                    self.horizontal_duration_ms.ok_or_else(|| {
+                        ContainedTaskError::new("contained_task_operation_invalid")
+                    })?,
+                    self.corner_hold_ms.ok_or_else(|| {
+                        ContainedTaskError::new("contained_task_operation_invalid")
+                    })?,
+                    self.brake_distance_px.ok_or_else(|| {
+                        ContainedTaskError::new("contained_task_operation_invalid")
+                    })?,
+                    self.brake_duration_ms.ok_or_else(|| {
+                        ContainedTaskError::new("contained_task_operation_invalid")
+                    })?,
+                    action_seed,
+                )?
+            }
             "target" | "target_center" | "offset" => {
                 let target = target.ok_or_else(|| {
                     ContainedTaskError::new("contained_task_guard_target_missing")
@@ -3269,6 +3457,19 @@ impl TaskClick {
             InputAction::Swipe { x1, y1, x2, y2, .. } => {
                 resolution.validate_point(*x1, *y1)?;
                 resolution.validate_point(*x2, *y2)?;
+            }
+            InputAction::SingleTouchDragWithVerticalBrakeV1 {
+                x1,
+                y1,
+                x2,
+                y2,
+                x3,
+                y3,
+                ..
+            } => {
+                resolution.validate_point(*x1, *y1)?;
+                resolution.validate_point(*x2, *y2)?;
+                resolution.validate_point(*x3, *y3)?;
             }
             _ => {
                 return Err(ContainedTaskError::new(
@@ -3366,6 +3567,54 @@ fn sampled_swipe(
             duration_ms,
         },
         Some(sampling),
+    ))
+}
+
+fn sampled_segmented_swipe(
+    from: ClickRect,
+    corner: ClickRect,
+    horizontal_duration_ms: u64,
+    corner_hold_ms: u64,
+    brake_distance_px: i32,
+    brake_duration_ms: u64,
+    action_seed: Option<u64>,
+) -> Result<(InputAction, Option<InputSamplingEvidence>), ContainedTaskError> {
+    let ((x1, y1), (x2, y2), sampling) = if let Some(action_seed) = action_seed {
+        let mut state = normalized_xorshift64_state(action_seed);
+        let start = from.sample(&mut state)?;
+        let corner_point = corner.sample(&mut state)?;
+        let sampling = InputSamplingEvidence::new(
+            action_seed,
+            vec![from.sampling_region()?, corner.sampling_region()?],
+        )
+        .map_err(|_| ContainedTaskError::new("contained_task_sampling_invalid"))?;
+        (start, corner_point, Some(sampling))
+    } else {
+        (
+            (from.x + from.width / 2, from.y + from.height / 2),
+            (corner.x + corner.width / 2, corner.y + corner.height / 2),
+            None,
+        )
+    };
+    let y3 = y2
+        .checked_sub(brake_distance_px)
+        .ok_or_else(|| ContainedTaskError::new("contained_task_operation_invalid"))?;
+    Ok((
+        InputAction::SingleTouchDragWithVerticalBrakeV1 {
+            x1,
+            y1,
+            x2,
+            y2,
+            x3: x2,
+            y3,
+            horizontal_duration_ms,
+            corner_hold_ms,
+            brake_distance_px,
+            brake_duration_ms,
+            slope_in: SEGMENTED_SWIPE_SLOPE_IN,
+            slope_out: SEGMENTED_SWIPE_SLOPE_OUT,
+        },
+        sampling,
     ))
 }
 
@@ -3676,6 +3925,8 @@ mod post_admission_ocr_tests {
             page_ids: vec!["operator".to_string(), "operator_end".to_string()],
             target_ids,
             truth,
+            aliases: BTreeMap::new(),
+            truth_schema_v2: false,
         }
     }
 
@@ -3704,6 +3955,8 @@ mod post_admission_ocr_tests {
             page_ids: vec!["target".to_string()],
             target_ids: vec!["fixture/ocr".to_string()],
             truth,
+            aliases: BTreeMap::new(),
+            truth_schema_v2: false,
         }
     }
 
@@ -4991,7 +5244,7 @@ mod retry_wiring_tests {
             .expect("operation guard"),
         );
         task_operation
-            .validate(&control, TaskOperationDefaults::default())
+            .validate(&control, TaskOperationDefaults::default(), "0.6")
             .expect("valid omitted-policy operation");
         let program = TaskProgram {
             schema_version: "0.6".to_string(),
@@ -5335,7 +5588,7 @@ mod retry_wiring_tests {
         let omitted = operation(json!({}), None);
         assert_eq!(omitted.post_delay_ms, None);
         omitted
-            .validate(&task_control, TaskOperationDefaults::default())
+            .validate(&task_control, TaskOperationDefaults::default(), "0.6")
             .expect("omitted post delay preserves existing admission");
 
         for invalid in [0, MAX_CAPTURE_INTERVAL_MS + 1, u64::MAX] {
@@ -5343,7 +5596,7 @@ mod retry_wiring_tests {
             operation.post_delay_ms = Some(invalid);
             assert_eq!(
                 operation
-                    .validate(&task_control, TaskOperationDefaults::default())
+                    .validate(&task_control, TaskOperationDefaults::default(), "0.6")
                     .expect_err("invalid post delay must fail admission")
                     .code(),
                 "contained_task_operation_invalid"
@@ -5870,7 +6123,7 @@ mod retry_wiring_tests {
         .expect("non-retryable operation");
 
         operation
-            .validate(&control(), TaskOperationDefaults::default())
+            .validate(&control(), TaskOperationDefaults::default(), "0.6")
             .expect("explicitly non-retryable operation without to");
         let policy = operation
             .retry_policy(TaskOperationDefaults::default(), 100)

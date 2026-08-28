@@ -4,6 +4,7 @@ use crate::capture::{DeviceRotation, display_size_from_natural, read_device_rota
 use crate::{
     Adb, AdbConfig, DeviceError, DeviceInfo, DeviceResult, DeviceTarget, HandshakeInfo,
     InputBackend, MaaTouchBackend, MaaTouchConfig, MinitouchBackend, MinitouchConfig,
+    SegmentedSwipeAction,
 };
 use std::time::{Duration, Instant};
 
@@ -392,6 +393,35 @@ impl InputBackend for SelectedTouchBackend {
         self.run_touch_action("swipe", &[(x1, y1), (x2, y2)], |backend| {
             backend.swipe(x1, y1, x2, y2, duration_ms)
         })
+    }
+
+    fn supports_segmented_swipe(&self) -> bool {
+        self.active.backend.supports_segmented_swipe()
+    }
+
+    fn segmented_swipe(&mut self, action: SegmentedSwipeAction) -> DeviceResult<()> {
+        action.validate()?;
+        if !self.active.backend.supports_segmented_swipe() {
+            return Err(DeviceError::fatal(format!(
+                "touch backend {} does not support single_touch_drag_with_vertical_brake_v1",
+                self.active.name.as_str()
+            )));
+        }
+        self.validate_action_points("single_touch_drag_with_vertical_brake_v1", &action.points)?;
+        let started = Instant::now();
+        match self.active.backend.segmented_swipe(action) {
+            Ok(()) => Ok(()),
+            Err(err) => {
+                self.record_runtime_failure(
+                    "single_touch_drag_with_vertical_brake_v1",
+                    self.active.name,
+                    &err,
+                    started.elapsed().as_millis(),
+                    None,
+                );
+                Err(err)
+            }
+        }
     }
 
     fn key(&mut self, key: &str) -> DeviceResult<()> {

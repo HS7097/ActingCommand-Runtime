@@ -2606,6 +2606,17 @@ fn input_response_timeout(
         InputAction::LongTap { duration_ms, .. } | InputAction::Swipe { duration_ms, .. } => {
             *duration_ms
         }
+        InputAction::SingleTouchDragWithVerticalBrakeV1 {
+            horizontal_duration_ms,
+            corner_hold_ms,
+            brake_duration_ms,
+            ..
+        } => horizontal_duration_ms
+            .checked_add(*corner_hold_ms)
+            .and_then(|value| value.checked_add(*brake_duration_ms))
+            .ok_or_else(|| {
+                RuntimeClientError::fatal("runtime_input_timeout_overflow", "runtime_input")
+            })?,
         _ => 0,
     };
     io_timeout
