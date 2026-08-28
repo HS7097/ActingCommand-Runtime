@@ -20,8 +20,8 @@ fn schema_0_7_post_admission_ocr_validates_hash_bound_truth_and_closed_algorithm
             "task_id": "fixture_task",
             "game": "neutral",
             "server_scope": ["test"],
-            "coordinate_space": {"width": 1, "height": 1},
-            "ocr_targets": [{"id": "fixture/ocr"}],
+            "coordinate_space": {"width": 1280, "height": 720},
+            "ocr_targets": [valid_ocr_declaration("fixture/ocr")],
             "scheduling_outcome": {
                 "mappings": [{
                     "outcome_key": "comparison_recorded",
@@ -50,6 +50,52 @@ fn schema_0_7_post_admission_ocr_validates_hash_bound_truth_and_closed_algorithm
 
     validate_post_admission_ocr_bundle(&task("0.7", "trim_lowercase_v1", &truth_sha256))
         .expect("schema 0.7 declaration");
+    let mut sixteen_targets = task("0.7", "trim_lowercase_v1", &truth_sha256);
+    let ordered_target_ids = (0..16)
+        .map(|index| format!("fixture/ocr-{index:02}"))
+        .collect::<Vec<_>>();
+    sixteen_targets.data["ocr_targets"] = Value::Array(
+        ordered_target_ids
+            .iter()
+            .map(|target_id| valid_ocr_declaration(target_id))
+            .collect(),
+    );
+    sixteen_targets
+        .data
+        .get_mut("post_admission_ocr")
+        .and_then(Value::as_object_mut)
+        .expect("post-admission OCR object")
+        .remove("target_id");
+    sixteen_targets.data["post_admission_ocr"]["target_ids"] = json!(ordered_target_ids);
+    validate_post_admission_ocr_bundle(&sixteen_targets)
+        .expect("schema 0.7 ordered sixteen-target declaration");
+
+    let mut both_forms = sixteen_targets.clone();
+    both_forms.data["post_admission_ocr"]["target_id"] = json!("fixture/ocr-00");
+    assert!(
+        validate_post_admission_ocr_bundle(&both_forms)
+            .expect_err("both target forms must fail closed")
+            .message
+            .contains("exactly one")
+    );
+
+    let mut duplicate = sixteen_targets.clone();
+    duplicate.data["post_admission_ocr"]["target_ids"][1] = json!("fixture/ocr-00");
+    assert!(
+        validate_post_admission_ocr_bundle(&duplicate)
+            .expect_err("duplicate target IDs must fail closed")
+            .message
+            .contains("duplicate")
+    );
+
+    let mut off_page = sixteen_targets.clone();
+    off_page.data["ocr_targets"][0]["region"]["rect"]["width"] = json!(1281);
+    assert!(
+        validate_post_admission_ocr_bundle(&off_page)
+            .expect_err("out-of-bounds target must fail closed")
+            .message
+            .contains("page bounds")
+    );
     assert!(
         validate_post_admission_ocr_bundle(&task("0.6", "trim_lowercase_v1", &truth_sha256))
             .expect_err("old schema cannot silently accept declaration")
@@ -68,6 +114,59 @@ fn schema_0_7_post_admission_ocr_validates_hash_bound_truth_and_closed_algorithm
             .message
             .contains("SHA-256")
     );
+}
+
+#[test]
+fn schema_0_7_task_timeout_is_optional_bounded_and_non_mutating() {
+    let task = |schema_version: &str, timeout_ms: Option<Value>| {
+        let mut data = json!({
+            "schema_version": schema_version,
+            "task_id": "fixture_task"
+        });
+        if let Some(timeout_ms) = timeout_ms {
+            data["timeout_ms"] = timeout_ms;
+        }
+        Bundle {
+            task_id: "fixture_task".to_string(),
+            dir: PathBuf::from("operations/fixture_task"),
+            data,
+        }
+    };
+
+    let absent = task("0.7", None);
+    let absent_bytes = serde_json::to_vec(&absent.data).expect("absent bytes");
+    assert_eq!(validate_task_timeout_bundle(&absent).unwrap(), None);
+    assert_eq!(
+        serde_json::to_vec(&absent.data).expect("unchanged absent bytes"),
+        absent_bytes
+    );
+
+    for timeout_ms in [1_u64, 300_000, 600_000] {
+        let valid = task("0.7", Some(json!(timeout_ms)));
+        let original = serde_json::to_vec(&valid.data).expect("valid bytes");
+        assert_eq!(
+            validate_task_timeout_bundle(&valid).unwrap(),
+            Some(timeout_ms)
+        );
+        assert_eq!(
+            serde_json::to_vec(&valid.data).expect("unchanged valid bytes"),
+            original
+        );
+    }
+
+    for invalid in [
+        json!(0),
+        json!(600_001),
+        json!(-1),
+        json!(1.5),
+        json!("300000"),
+        Value::Null,
+    ] {
+        validate_task_timeout_bundle(&task("0.7", Some(invalid)))
+            .expect_err("invalid task timeout must fail closed");
+    }
+    validate_task_timeout_bundle(&task("0.6", Some(json!(300_000))))
+        .expect_err("task timeout requires schema 0.7");
 }
 
 #[test]
