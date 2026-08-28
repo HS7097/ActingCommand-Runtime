@@ -44,6 +44,8 @@ const DEFAULT_TEMPLATE_THRESHOLD: f32 = 0.9;
 const DEFAULT_RECOVERY_TASK_ID: &str = "return_home";
 const MAX_STABILITY_TERMINATION_STEPS: u32 = 1_000;
 const MAX_CAPTURE_PIXEL_BYTES: usize = 4;
+const MAX_TASK_TIMEOUT_MS: u64 = 600_000;
+const MAX_POST_ADMISSION_OCR_TARGETS: usize = 32;
 
 fn deserialize_non_null_option<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
 where
@@ -66,6 +68,7 @@ pub struct PreparedPackageBuildTask {
     resolution: (u32, u32),
     package_id: String,
     execution_mode: String,
+    task_timeout_ms: Option<u64>,
     stability_termination: Option<StabilityTermination>,
     out: PathBuf,
     dry_run: bool,
@@ -119,6 +122,7 @@ pub fn prepare_package_build_task(
         .unwrap_or_else(|| format!("{}.{}.{}", converter.game, converter.server, task_id));
     let execution_mode = execution_mode.unwrap_or_else(|| "navigable_route".to_string());
     validate_execution_mode(&execution_mode)?;
+    let task_timeout_ms = validate_entry_task_timeout(entry_bundle)?;
     let stability_termination =
         validate_entry_stability_termination(entry_bundle, &execution_mode, resolution)?;
 
@@ -134,6 +138,7 @@ pub fn prepare_package_build_task(
         resolution,
         package_id,
         execution_mode,
+        task_timeout_ms,
         stability_termination,
         out,
         dry_run,
@@ -195,7 +200,10 @@ impl PreparedPackageBuildTask {
                 &self.converter.server,
                 self.resolution,
                 &self.task_id,
-                self.stability_termination.as_ref(),
+                ControlOptions {
+                    timeout_ms: self.task_timeout_ms,
+                    stability_termination: self.stability_termination.as_ref(),
+                },
             )?,
         )?;
         add_resources_json(
@@ -362,6 +370,7 @@ impl PackageBuildCatalog {
         let bundle = find_bundle(&self.converter, &task_id)?;
         let resolution = parse_resolution(resolution, bundle)?;
         validate_execution_mode(&execution_mode)?;
+        let task_timeout_ms = validate_entry_task_timeout(bundle)?;
         let stability_termination =
             validate_entry_stability_termination(bundle, &execution_mode, resolution)?;
         let mut entries =
@@ -375,7 +384,10 @@ impl PackageBuildCatalog {
                 &self.converter.server,
                 resolution,
                 &task_id,
-                stability_termination.as_ref(),
+                ControlOptions {
+                    timeout_ms: task_timeout_ms,
+                    stability_termination: stability_termination.as_ref(),
+                },
             )?,
         )?;
         add_resources_json(
@@ -419,6 +431,7 @@ impl PackageBuildCatalog {
         let entry_bundle = find_bundle(&self.converter, &entry_task_id)?;
         let resolution = parse_resolution(resolution, entry_bundle)?;
         validate_execution_mode(&execution_mode)?;
+        let task_timeout_ms = validate_entry_task_timeout(entry_bundle)?;
         let stability_termination =
             validate_entry_stability_termination(entry_bundle, &execution_mode, resolution)?;
         let mut outputs = self.converter.build_all()?;
@@ -435,7 +448,10 @@ impl PackageBuildCatalog {
                 &self.converter.server,
                 resolution,
                 &entry_task_id,
-                stability_termination.as_ref(),
+                ControlOptions {
+                    timeout_ms: task_timeout_ms,
+                    stability_termination: stability_termination.as_ref(),
+                },
             )?,
         )?;
         add_resources_json(
@@ -546,6 +562,12 @@ fn validate_execution_mode(mode: &str) -> CliOutcome<()> {
     }
 }
 
+#[derive(Default)]
+struct ControlOptions<'a> {
+    timeout_ms: Option<u64>,
+    stability_termination: Option<&'a StabilityTermination>,
+}
+
 fn control_json(
     package_id: &str,
     execution_mode: &str,
@@ -553,8 +575,12 @@ fn control_json(
     server: &str,
     resolution: (u32, u32),
     entry_task_id: &str,
-    stability_termination: Option<&StabilityTermination>,
+    options: ControlOptions<'_>,
 ) -> CliOutcome<Value> {
+    let ControlOptions {
+        timeout_ms,
+        stability_termination,
+    } = options;
     let mut control = ordered_object([
         (
             "schema_version",
@@ -573,22 +599,32 @@ fn control_json(
         ),
         ("entry_task_id", Value::String(entry_task_id.to_string())),
     ]);
-    if let Some(stability_termination) = stability_termination {
+    if timeout_ms.is_some_and(|timeout_ms| !(1..=MAX_TASK_TIMEOUT_MS).contains(&timeout_ms)) {
+        return Err(CliError::package_invalid(format!(
+            "timeout_ms must be in 1..={MAX_TASK_TIMEOUT_MS}"
+        )));
+    }
+    if timeout_ms.is_some() || stability_termination.is_some() {
         let object = control
             .as_object_mut()
             .expect("control_json always constructs an object");
-        object.insert(
-            "max_steps".to_string(),
-            Value::from(stability_termination.max_steps),
-        );
-        object.insert(
-            "stability_termination".to_string(),
-            serde_json::to_value(stability_termination).map_err(|error| {
-                CliError::package_invalid(format!(
-                    "failed to serialize stability_termination into control.json: {error}"
-                ))
-            })?,
-        );
+        if let Some(timeout_ms) = timeout_ms {
+            object.insert("timeout_ms".to_string(), Value::from(timeout_ms));
+        }
+        if let Some(stability_termination) = stability_termination {
+            object.insert(
+                "max_steps".to_string(),
+                Value::from(stability_termination.max_steps),
+            );
+            object.insert(
+                "stability_termination".to_string(),
+                serde_json::to_value(stability_termination).map_err(|error| {
+                    CliError::package_invalid(format!(
+                        "failed to serialize stability_termination into control.json: {error}"
+                    ))
+                })?,
+            );
+        }
     }
     Ok(control)
 }
@@ -1982,6 +2018,28 @@ impl<'de> Deserialize<'de> for ExactPixelsV1Parameters {
     }
 }
 
+fn validate_entry_task_timeout(bundle: &Bundle) -> CliOutcome<Option<u64>> {
+    let Some(value) = bundle.data.get("timeout_ms") else {
+        return Ok(None);
+    };
+    if bundle.data.get("schema_version").and_then(Value::as_str) != Some("0.7") {
+        return Err(CliError::package_invalid(format!(
+            "task '{}' timeout_ms requires schema_version '0.7'",
+            bundle.task_id
+        )));
+    }
+    value
+        .as_u64()
+        .filter(|timeout_ms| (1..=MAX_TASK_TIMEOUT_MS).contains(timeout_ms))
+        .map(Some)
+        .ok_or_else(|| {
+            CliError::package_invalid(format!(
+                "task '{}' timeout_ms must be an integer in 1..={MAX_TASK_TIMEOUT_MS}",
+                bundle.task_id
+            ))
+        })
+}
+
 fn validate_entry_stability_termination(
     bundle: &Bundle,
     execution_mode: &str,
@@ -2193,7 +2251,10 @@ struct PostAdmissionOcrPackageLimits {
 #[serde(deny_unknown_fields)]
 struct PostAdmissionOcrPackageDeclaration {
     page_id: String,
-    target_id: String,
+    #[serde(default, deserialize_with = "deserialize_non_null_option")]
+    target_id: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_non_null_option")]
+    target_ids: Option<Vec<String>>,
     truth_set: PostAdmissionOcrPackageTruthReference,
     normalization: String,
     comparison: String,
@@ -2202,10 +2263,34 @@ struct PostAdmissionOcrPackageDeclaration {
 }
 
 impl PostAdmissionOcrPackageDeclaration {
+    fn target_ids(&self) -> CliOutcome<Vec<&str>> {
+        match (&self.target_id, &self.target_ids) {
+            (Some(target_id), None) if !target_id.trim().is_empty() => Ok(vec![target_id.as_str()]),
+            (None, Some(target_ids))
+                if !target_ids.is_empty() && target_ids.len() <= MAX_POST_ADMISSION_OCR_TARGETS =>
+            {
+                let mut unique = BTreeSet::new();
+                let mut ordered = Vec::with_capacity(target_ids.len());
+                for target_id in target_ids {
+                    if target_id.trim().is_empty() || !unique.insert(target_id.as_str()) {
+                        return Err(CliError::package_invalid(
+                            "post_admission_ocr target_ids must be non-empty and unique",
+                        ));
+                    }
+                    ordered.push(target_id.as_str());
+                }
+                Ok(ordered)
+            }
+            _ => Err(CliError::package_invalid(
+                "post_admission_ocr requires exactly one of target_id or target_ids",
+            )),
+        }
+    }
+
     fn validate(&self, scheduling_outcome: Option<&Value>) -> CliOutcome<()> {
         let limits = &self.limits;
+        self.target_ids()?;
         if self.page_id.trim().is_empty()
-            || self.target_id.trim().is_empty()
             || self.outcome_key.trim().is_empty()
             || self.normalization != "trim_lowercase_v1"
             || self.comparison != "exact_set_v1"
@@ -2274,6 +2359,8 @@ struct OperationBundle {
     #[serde(default)]
     goal: String,
     coordinate_space: Resolution,
+    #[serde(default, deserialize_with = "deserialize_non_null_option")]
+    timeout_ms: Option<u64>,
     #[serde(default)]
     defaults: OperationDefaults,
     #[serde(default)]
@@ -2318,6 +2405,7 @@ impl OperationBundle {
                 self.schema_version
             )));
         }
+        self.validate_task_timeout(control)?;
         if self.task_id != control.entry_task_id && self.task_id != "return_home" {
             return Err(CliError::package_invalid(format!(
                 "operation task_id '{}' does not match control entry_task_id '{}'",
@@ -2464,6 +2552,30 @@ impl OperationBundle {
             )));
         }
         Ok(())
+    }
+
+    fn validate_task_timeout(&self, control: &LabControl) -> CliOutcome<()> {
+        match self.schema_version.as_str() {
+            "0.7" => {
+                if self
+                    .timeout_ms
+                    .is_some_and(|timeout_ms| !(1..=MAX_TASK_TIMEOUT_MS).contains(&timeout_ms))
+                    || self
+                        .timeout_ms
+                        .is_some_and(|timeout_ms| control.timeout_ms != Some(timeout_ms))
+                {
+                    return Err(CliError::package_invalid(
+                        "operation timeout_ms is invalid or does not match control.json",
+                    ));
+                }
+                Ok(())
+            }
+            "0.3" | "0.4" | "0.5" | "0.6" if self.timeout_ms.is_none() => Ok(()),
+            "0.3" | "0.4" | "0.5" | "0.6" => Err(CliError::package_invalid(
+                "operation timeout_ms requires schema_version '0.7'",
+            )),
+            _ => Ok(()),
+        }
     }
 }
 
@@ -3705,6 +3817,54 @@ mod tests {
     use zip::ZipArchive;
 
     #[test]
+    fn task_timeout_control_projection_is_bounded_and_byte_exact_when_absent() {
+        let absent = control_json(
+            "neutral.test.fixture",
+            "navigable_route",
+            "neutral",
+            "test",
+            (100, 100),
+            "fixture",
+            ControlOptions::default(),
+        )
+        .expect("legacy control JSON");
+        assert_eq!(
+            serde_json::to_vec(&absent).expect("legacy control bytes"),
+            br#"{"schema_version":"Lab-1y.control.v1","package_id":"neutral.test.fixture","execution_mode":"navigable_route","game":"neutral","server":"test","resolution":{"width":100,"height":100},"entry_task_id":"fixture"}"#
+        );
+
+        let propagated = control_json(
+            "neutral.test.fixture",
+            "navigable_route",
+            "neutral",
+            "test",
+            (100, 100),
+            "fixture",
+            ControlOptions {
+                timeout_ms: Some(300_000),
+                ..ControlOptions::default()
+            },
+        )
+        .expect("bounded task timeout");
+        assert_eq!(propagated["timeout_ms"], json!(300_000));
+        for invalid in [0, 600_001] {
+            control_json(
+                "neutral.test.fixture",
+                "navigable_route",
+                "neutral",
+                "test",
+                (100, 100),
+                "fixture",
+                ControlOptions {
+                    timeout_ms: Some(invalid),
+                    ..ControlOptions::default()
+                },
+            )
+            .expect_err("out-of-range task timeout must fail closed");
+        }
+    }
+
+    #[test]
     fn packaged_drag_validation_accepts_only_canonical_endpoints() {
         let control: LabControl = serde_json::from_value(
             control_json(
@@ -3714,7 +3874,7 @@ mod tests {
                 "test",
                 (100, 100),
                 "fixture",
-                None,
+                ControlOptions::default(),
             )
             .expect("control JSON"),
         )
@@ -3951,7 +4111,7 @@ mod tests {
                     "cn",
                     (1280, 720),
                     "operator_task",
-                    None,
+                    ControlOptions::default(),
                 )
                 .expect("control"),
             )
@@ -4247,6 +4407,128 @@ mod tests {
                 "model_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
             })
         );
+    }
+
+    #[test]
+    fn build_task_projects_timeout_and_ordered_sixteen_target_ocr_deterministically() {
+        let temp = TempDir::new().expect("temp");
+        let repo = temp.path().join("repo");
+        write_fixture_repo(&repo);
+        let truth = serde_json::to_vec(&json!({
+            "schema_version": "actingcommand.ocr-truth-set.v1",
+            "items": ["synthetic operator"]
+        }))
+        .expect("truth bytes");
+        let truth_sha256 = hex_sha256(&truth);
+        fs::write(repo.join("operations/operator_task/truth.json"), &truth).expect("truth file");
+        let target_ids = (0..16)
+            .map(|index| format!("ocr/operator-name-{index:02}"))
+            .collect::<Vec<_>>();
+        update_fixture_operation(&repo, |task| {
+            task["schema_version"] = json!("0.7");
+            task["timeout_ms"] = json!(300_000);
+            task["ocr_targets"] = Value::Array(
+                target_ids
+                    .iter()
+                    .enumerate()
+                    .map(|(index, target_id)| {
+                        let column = index % 8;
+                        let row = index / 8;
+                        json!({
+                            "id": target_id,
+                            "region": {
+                                "mode": "rect",
+                                "rect": {
+                                    "x": 20 + column * 150,
+                                    "y": 30 + row * 70,
+                                    "width": 120,
+                                    "height": 40
+                                }
+                            },
+                            "languages": ["en", "zh"],
+                            "timeout_ms": 5_000,
+                            "match_mode": "contains",
+                            "expected": ["unused"],
+                            "case_sensitive": false,
+                            "minimum_confidence": 0.8,
+                            "model_ref": "PP-OCRv6_medium",
+                            "model_sha256": "a".repeat(64)
+                        })
+                    })
+                    .collect(),
+            );
+            task["scheduling_outcome"] = json!({
+                "mappings": [{
+                    "outcome_key": "comparison_recorded",
+                    "effect": "no_designated_effect",
+                    "terminal_pages": ["mall"]
+                }]
+            });
+            task["post_admission_ocr"] = json!({
+                "page_id": "operator",
+                "target_ids": target_ids.clone(),
+                "truth_set": {"path": "truth.json", "sha256": truth_sha256},
+                "normalization": "trim_lowercase_v1",
+                "comparison": "exact_set_v1",
+                "limits": {
+                    "max_frames": 61,
+                    "max_items": 4_096,
+                    "max_string_bytes": 256,
+                    "max_total_bytes": 1_048_576,
+                    "max_truth_entries": 512
+                },
+                "outcome_key": "comparison_recorded"
+            });
+        });
+        let out_a = temp.path().join("ordered-ocr-a.zip");
+        let out_b = temp.path().join("ordered-ocr-b.zip");
+
+        build_task(build_task_request(repo.clone(), out_a.clone()))
+            .expect("first official ordered OCR build");
+        build_task(build_task_request(repo, out_b.clone()))
+            .expect("second official ordered OCR build");
+
+        let bytes_a = open_published_package(&out_a)
+            .expect("first published package")
+            .read_all()
+            .expect("first package bytes");
+        let bytes_b = open_published_package(&out_b)
+            .expect("second published package")
+            .read_all()
+            .expect("second package bytes");
+        assert_eq!(bytes_a, bytes_b, "official builds must be byte-identical");
+
+        let entries = read_zip_entries(&out_a);
+        let control: Value =
+            serde_json::from_slice(entries.get("control.json").expect("generated control"))
+                .expect("control JSON");
+        let task: Value = serde_json::from_slice(
+            entries
+                .get("resources/operations/operator_task/task.json")
+                .expect("generated task"),
+        )
+        .expect("task JSON");
+        let pack: Value = serde_json::from_slice(
+            entries
+                .get("resources/recognition/arknights.cn.pack.json")
+                .expect("generated recognition pack"),
+        )
+        .expect("pack JSON");
+        assert_eq!(control["timeout_ms"], json!(300_000));
+        assert_eq!(task["timeout_ms"], json!(300_000));
+        assert_eq!(task["post_admission_ocr"]["target_ids"], json!(target_ids));
+        assert!(task["post_admission_ocr"].get("target_id").is_none());
+        let generated_order = pack["targets"]
+            .as_array()
+            .expect("recognition targets")
+            .iter()
+            .filter_map(|target| {
+                target["id"]
+                    .as_str()
+                    .filter(|target_id| target_id.starts_with("ocr/operator-name-"))
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(generated_order, target_ids);
     }
 
     #[test]
@@ -5627,7 +5909,7 @@ mod tests {
             "cn",
             (1280, 720),
             "operator_task",
-            None,
+            ControlOptions::default(),
         )?)
         .expect("fixture control");
         let bundle: OperationBundle = serde_json::from_value(task).map_err(|error| {
