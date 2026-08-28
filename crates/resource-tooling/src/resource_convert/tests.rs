@@ -2427,12 +2427,16 @@ fn source_drag_rejects_canonical_or_mixed_endpoint_spelling() {
     ] {
         let operation = json!({"id": "drag", "click": click});
         let mut errors = Vec::new();
+        let bundle = Bundle {
+            task_id: "fixture".to_string(),
+            dir: PathBuf::from("operations/fixture"),
+            data: json!({
+                "schema_version": "0.6",
+                "coordinate_space": {"width": 1280, "height": 720}
+            }),
+        };
 
-        validate_click_shape(
-            Path::new("operations/fixture/task.json"),
-            &operation,
-            &mut errors,
-        );
+        validate_click_shape(&bundle, &operation, &mut errors);
 
         assert!(
             errors

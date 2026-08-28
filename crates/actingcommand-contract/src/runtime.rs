@@ -42,6 +42,12 @@ pub const MAX_INSTANCE_ALIAS_BYTES: usize = 256;
 pub const MAX_INPUT_TEXT_BYTES: usize = 4096;
 pub const MAX_INPUT_KEY_BYTES: usize = 64;
 pub const MAX_INPUT_DURATION_MS: u64 = 60_000;
+pub const SEGMENTED_SWIPE_HORIZONTAL_DURATION_MS: u64 = 200;
+pub const SEGMENTED_SWIPE_CORNER_HOLD_MS: u64 = 150;
+pub const SEGMENTED_SWIPE_BRAKE_DISTANCE_PX: i32 = 100;
+pub const SEGMENTED_SWIPE_BRAKE_DURATION_MS: u64 = 200;
+pub const SEGMENTED_SWIPE_SLOPE_IN: u8 = 2;
+pub const SEGMENTED_SWIPE_SLOPE_OUT: u8 = 0;
 pub const MAX_LEASE_QUEUE_TIMEOUT_MS: u64 = 3_600_000;
 pub const MAX_READONLY_OBSERVATION_ARTIFACT_BYTES: u64 = 64 * 1024 * 1024;
 pub const MAX_RUNTIME_CAPTURE_SEQUENCE_FRAMES: u16 = 60;
@@ -527,6 +533,20 @@ pub enum InputAction {
         y2: i32,
         duration_ms: u64,
     },
+    SingleTouchDragWithVerticalBrakeV1 {
+        x1: i32,
+        y1: i32,
+        x2: i32,
+        y2: i32,
+        x3: i32,
+        y3: i32,
+        horizontal_duration_ms: u64,
+        corner_hold_ms: u64,
+        brake_distance_px: i32,
+        brake_duration_ms: u64,
+        slope_in: u8,
+        slope_out: u8,
+    },
     Key {
         key: String,
     },
@@ -555,6 +575,38 @@ impl InputAction {
                 validate_point(*x2, *y2)?;
                 validate_duration(*duration_ms)
             }
+            Self::SingleTouchDragWithVerticalBrakeV1 {
+                x1,
+                y1,
+                x2,
+                y2,
+                x3,
+                y3,
+                horizontal_duration_ms,
+                corner_hold_ms,
+                brake_distance_px,
+                brake_duration_ms,
+                slope_in,
+                slope_out,
+            } => {
+                validate_point(*x1, *y1)?;
+                validate_point(*x2, *y2)?;
+                validate_point(*x3, *y3)?;
+                if *horizontal_duration_ms != SEGMENTED_SWIPE_HORIZONTAL_DURATION_MS
+                    || *corner_hold_ms != SEGMENTED_SWIPE_CORNER_HOLD_MS
+                    || *brake_distance_px != SEGMENTED_SWIPE_BRAKE_DISTANCE_PX
+                    || *brake_duration_ms != SEGMENTED_SWIPE_BRAKE_DURATION_MS
+                    || *slope_in != SEGMENTED_SWIPE_SLOPE_IN
+                    || *slope_out != SEGMENTED_SWIPE_SLOPE_OUT
+                    || *x3 != *x2
+                    || y2.checked_sub(*brake_distance_px) != Some(*y3)
+                {
+                    return Err(RuntimeContractError::new(
+                        "invalid_segmented_swipe_contract",
+                    ));
+                }
+                Ok(())
+            }
             Self::Key { key } => validate_bounded_text(key, MAX_INPUT_KEY_BYTES, "invalid_key"),
             Self::Text { text } => {
                 validate_bounded_text(text, MAX_INPUT_TEXT_BYTES, "invalid_input_text")
@@ -572,6 +624,7 @@ impl InputAction {
             Self::Tap { .. } => crate::EventAction::InputTap,
             Self::LongTap { .. } => crate::EventAction::InputLongTap,
             Self::Swipe { .. } => crate::EventAction::InputSwipe,
+            Self::SingleTouchDragWithVerticalBrakeV1 { .. } => crate::EventAction::InputSwipe,
             Self::Key { .. } => crate::EventAction::InputKey,
             Self::Text { .. } => crate::EventAction::InputText,
             Self::Reset => crate::EventAction::InputReset,
@@ -585,6 +638,9 @@ impl fmt::Debug for InputAction {
             Self::Tap { .. } => "InputAction::Tap(<redacted-coordinates>)",
             Self::LongTap { .. } => "InputAction::LongTap(<redacted-coordinates>)",
             Self::Swipe { .. } => "InputAction::Swipe(<redacted-coordinates>)",
+            Self::SingleTouchDragWithVerticalBrakeV1 { .. } => {
+                "InputAction::SingleTouchDragWithVerticalBrakeV1(<redacted-coordinates>)"
+            }
             Self::Key { .. } => "InputAction::Key(<redacted-key>)",
             Self::Text { .. } => "InputAction::Text(<redacted-text>)",
             Self::Reset => "InputAction::Reset",

@@ -394,7 +394,7 @@ impl OperationBundle {
         }
         let mut ids = BTreeSet::new();
         for operation in &self.operations {
-            operation.validate(control)?;
+            operation.validate_for_schema(control, &self.schema_version)?;
             if !ids.insert(operation.id.clone()) {
                 return Err(CliError::package_invalid(format!(
                     "duplicate operation id '{}'",
@@ -618,7 +618,7 @@ struct Operation {
 }
 
 impl Operation {
-    fn validate(&self, control: &LabControl) -> CliOutcome<()> {
+    fn validate_for_schema(&self, control: &LabControl, schema_version: &str) -> CliOutcome<()> {
         for (name, value) in [("id", &self.id), ("from", &self.from)] {
             if value.trim().is_empty() {
                 return Err(CliError::package_invalid(format!(
@@ -626,7 +626,7 @@ impl Operation {
                 )));
             }
         }
-        self.click.validate(control)?;
+        self.click.validate_for_schema(control, schema_version)?;
         if matches!(
             self.click.kind.as_str(),
             "offset" | "target" | "target_center"
@@ -658,6 +658,11 @@ impl Operation {
         self.destination_pages()?;
         self.validate_flow()?;
         self.validate_guard(control)
+    }
+
+    #[cfg(test)]
+    fn validate(&self, control: &LabControl) -> CliOutcome<()> {
+        self.validate_for_schema(control, "0.6")
     }
 
     fn validate_flow(&self) -> CliOutcome<()> {
@@ -982,19 +987,19 @@ impl OperationGuard {
 #[derive(Debug, Clone, Deserialize)]
 struct OperationClick {
     kind: String,
-    #[serde(default)]
+    #[serde(default, alias = "corner_hold_ms")]
     x: Option<i32>,
-    #[serde(default)]
+    #[serde(default, alias = "brake_distance_px")]
     y: Option<i32>,
-    #[serde(default)]
+    #[serde(default, alias = "brake_duration_ms")]
     width: Option<i32>,
     #[serde(default)]
     height: Option<i32>,
     #[serde(default, alias = "from")]
     from_rect: Option<PackRect>,
-    #[serde(default, alias = "to")]
+    #[serde(default, alias = "to", alias = "corner_rect")]
     to_rect: Option<PackRect>,
-    #[serde(default)]
+    #[serde(default, alias = "horizontal_duration_ms")]
     duration_ms: Option<u64>,
     #[serde(default)]
     offset: Option<PackRect>,
@@ -1003,7 +1008,7 @@ struct OperationClick {
 }
 
 impl OperationClick {
-    fn validate(&self, control: &LabControl) -> CliOutcome<()> {
+    fn validate_for_schema(&self, control: &LabControl, schema_version: &str) -> CliOutcome<()> {
         match self.kind.as_str() {
             "rect" | "specific_rect" => {
                 let rect = self.required_rect()?;
@@ -1094,10 +1099,48 @@ impl OperationClick {
                 }
                 Ok(())
             }
+            "single_touch_drag_with_vertical_brake_v1" => {
+                if schema_version != "0.7"
+                    || self.x != Some(150)
+                    || self.y != Some(100)
+                    || self.width != Some(200)
+                    || self.height.is_some()
+                    || self.duration_ms != Some(200)
+                    || self.offset.is_some()
+                    || self.target_id.is_some()
+                {
+                    return Err(CliError::package_invalid(
+                        "single_touch_drag_with_vertical_brake_v1 declaration is invalid",
+                    ));
+                }
+                let from = self.from_rect.ok_or_else(|| {
+                    CliError::package_invalid(
+                        "single_touch_drag_with_vertical_brake_v1 missing from_rect",
+                    )
+                })?;
+                let corner = self.to_rect.ok_or_else(|| {
+                    CliError::package_invalid(
+                        "single_touch_drag_with_vertical_brake_v1 missing corner_rect",
+                    )
+                })?;
+                validate_click_rect(from, &control.resolution, false)?;
+                validate_click_rect(corner, &control.resolution, false)?;
+                if corner.y < 100 {
+                    return Err(CliError::package_invalid(
+                        "single_touch_drag_with_vertical_brake_v1 brake endpoint is out of bounds",
+                    ));
+                }
+                Ok(())
+            }
             other => Err(CliError::package_invalid(format!(
                 "unknown operation click kind '{other}'"
             ))),
         }
+    }
+
+    #[cfg(test)]
+    fn validate(&self, control: &LabControl) -> CliOutcome<()> {
+        self.validate_for_schema(control, "0.6")
     }
 
     fn input_action(
@@ -1216,6 +1259,38 @@ impl OperationClick {
                     duration_ms: self.duration_ms.unwrap_or(300),
                 })
             }
+            "single_touch_drag_with_vertical_brake_v1" => {
+                let from = self.from_rect.ok_or_else(|| {
+                    CliError::package_invalid(
+                        "single_touch_drag_with_vertical_brake_v1 missing from_rect",
+                    )
+                })?;
+                let corner = self.to_rect.ok_or_else(|| {
+                    CliError::package_invalid(
+                        "single_touch_drag_with_vertical_brake_v1 missing corner_rect",
+                    )
+                })?;
+                validate_click_rect(from, resolution, false)?;
+                validate_click_rect(corner, resolution, false)?;
+                let (from, corner) = actual_segmented_points(from, corner, seed);
+                Ok(LabInputAction::SingleTouchDragWithVerticalBrakeV1 {
+                    from,
+                    corner,
+                    end: ActualClickPoint {
+                        seed,
+                        algorithm: "derived_vertical_brake_v1",
+                        rect: corner.rect,
+                        x: corner.x,
+                        y: corner.y - 100,
+                    },
+                    horizontal_duration_ms: 200,
+                    corner_hold_ms: 150,
+                    brake_distance_px: 100,
+                    brake_duration_ms: 200,
+                    slope_in: 2,
+                    slope_out: 0,
+                })
+            }
             other => Err(CliError::package_invalid(format!(
                 "unknown operation click kind '{other}'"
             ))),
@@ -1316,6 +1391,17 @@ enum LabInputAction {
         to: ActualClickPoint,
         duration_ms: u64,
     },
+    SingleTouchDragWithVerticalBrakeV1 {
+        from: ActualClickPoint,
+        corner: ActualClickPoint,
+        end: ActualClickPoint,
+        horizontal_duration_ms: u64,
+        corner_hold_ms: u64,
+        brake_distance_px: i32,
+        brake_duration_ms: u64,
+        slope_in: u8,
+        slope_out: u8,
+    },
 }
 
 impl LabInputAction {
@@ -1334,6 +1420,28 @@ impl LabInputAction {
             LabInputAction::LongTap { point, duration_ms } => {
                 json!({"kind": "long_tap", "actual_click_point": point.to_json(), "duration_ms": duration_ms})
             }
+            LabInputAction::SingleTouchDragWithVerticalBrakeV1 {
+                from,
+                corner,
+                end,
+                horizontal_duration_ms,
+                corner_hold_ms,
+                brake_distance_px,
+                brake_duration_ms,
+                slope_in,
+                slope_out,
+            } => json!({
+                "kind": "single_touch_drag_with_vertical_brake_v1",
+                "from": from.to_json(),
+                "corner": corner.to_json(),
+                "end": end.to_json(),
+                "horizontal_duration_ms": horizontal_duration_ms,
+                "corner_hold_ms": corner_hold_ms,
+                "brake_distance_px": brake_distance_px,
+                "brake_duration_ms": brake_duration_ms,
+                "slope_in": slope_in,
+                "slope_out": slope_out
+            }),
         }
     }
 }
@@ -1373,6 +1481,26 @@ fn actual_click_point(rect: PackRect, seed: u64) -> ActualClickPoint {
         x: rect.x + x_offset as i32,
         y: rect.y + y_offset as i32,
     }
+}
+
+fn actual_segmented_points(
+    from: PackRect,
+    corner: PackRect,
+    seed: u64,
+) -> (ActualClickPoint, ActualClickPoint) {
+    let mut state = if seed == 0 {
+        0x9e37_79b9_7f4a_7c15
+    } else {
+        seed
+    };
+    let sample = |rect: PackRect, state: &mut u64| ActualClickPoint {
+        seed,
+        algorithm: "xorshift64_uniform_rect_v1",
+        rect,
+        x: rect.x + (next_u64(state) % rect.width as u64) as i32,
+        y: rect.y + (next_u64(state) % rect.height as u64) as i32,
+    };
+    (sample(from, &mut state), sample(corner, &mut state))
 }
 
 fn actual_explicit_point(rect: PackRect, seed: u64) -> ActualClickPoint {

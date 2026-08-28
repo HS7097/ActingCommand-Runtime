@@ -7,7 +7,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::{DeviceError, DeviceResult, InputBackend};
+use crate::{DeviceError, DeviceResult, InputBackend, SegmentedSwipeAction};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RecordedInputEvent {
@@ -39,6 +39,9 @@ pub enum RecordedInputAction {
         y2: i32,
         duration_ms: u64,
     },
+    SingleTouchDragWithVerticalBrakeV1 {
+        action: SegmentedSwipeAction,
+    },
     Key {
         key: String,
     },
@@ -54,6 +57,9 @@ impl RecordedInputAction {
             Self::Tap { .. } => "tap",
             Self::LongTap { .. } => "long_tap",
             Self::Swipe { .. } => "swipe",
+            Self::SingleTouchDragWithVerticalBrakeV1 { .. } => {
+                "single_touch_drag_with_vertical_brake_v1"
+            }
             Self::Key { .. } => "key",
             Self::Text { .. } => "text",
             Self::Reset => "reset",
@@ -71,6 +77,7 @@ impl RecordedInputAction {
                 y2,
                 duration_ms,
             } => backend.swipe(*x1, *y1, *x2, *y2, *duration_ms),
+            Self::SingleTouchDragWithVerticalBrakeV1 { action } => backend.segmented_swipe(*action),
             Self::Key { key } => backend.key(key),
             Self::Text { text } => backend.text(text),
             Self::Reset => backend.reset(),
@@ -201,6 +208,16 @@ impl<B: InputBackend> InputBackend for RecordingInputBackend<B> {
             y2,
             duration_ms,
         });
+        Ok(())
+    }
+
+    fn supports_segmented_swipe(&self) -> bool {
+        self.inner.supports_segmented_swipe()
+    }
+
+    fn segmented_swipe(&mut self, action: SegmentedSwipeAction) -> DeviceResult<()> {
+        self.inner.segmented_swipe(action)?;
+        self.record(RecordedInputAction::SingleTouchDragWithVerticalBrakeV1 { action });
         Ok(())
     }
 
