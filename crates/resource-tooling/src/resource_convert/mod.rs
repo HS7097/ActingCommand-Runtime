@@ -18,6 +18,7 @@ const CONVERTER_SCHEMA_VERSION: &str = "0.5";
 const OUTPUT_SCHEMA_VERSION: &str = "0.6";
 const FULL_FRAME_SENTINEL: &str = "full_frame";
 const MAX_TASK_TIMEOUT_MS: u64 = 600_000;
+const MAX_TASK_STEPS: u32 = 1_000;
 const MAX_POST_ADMISSION_OCR_TARGETS: usize = 32;
 
 pub fn resource_convert(request: ResourceConvertRequest) -> CliOutcome<ResourceConvertResponse> {
@@ -489,8 +490,25 @@ impl OperationConverter {
             if let Err(error) = validate_task_timeout_bundle(bundle) {
                 errors.push(error.message);
             }
+            if let Err(error) = validate_task_max_steps_bundle(bundle) {
+                errors.push(error.message);
+            }
             if let Err(error) = validate_post_admission_ocr_bundle(bundle) {
                 errors.push(error.message);
+            }
+            if let Some(declaration) = bundle
+                .data
+                .get("post_admission_ocr")
+                .and_then(Value::as_object)
+                && let Ok(page_ids) = post_admission_ocr_page_ids(declaration)
+            {
+                validate_declared_page_set(
+                    &bundle.task_json_path(),
+                    "post_admission_ocr page declaration",
+                    &page_ids.into_iter().map(str::to_owned).collect::<Vec<_>>(),
+                    &declared_anchor_ids,
+                    &mut errors,
+                );
             }
             match declared_terminal_page_ids(bundle) {
                 Ok(Some(target_pages)) => validate_declared_page_set(
@@ -2010,6 +2028,95 @@ fn validate_task_timeout_bundle(bundle: &Bundle) -> CliOutcome<Option<u64>> {
         })
 }
 
+fn validate_task_max_steps_bundle(bundle: &Bundle) -> CliOutcome<Option<u32>> {
+    let Some(value) = bundle.data.get("max_steps") else {
+        return Ok(None);
+    };
+    if bundle.data.get("schema_version").and_then(Value::as_str) != Some("0.7") {
+        return Err(CliError::package_invalid(format!(
+            "{}: max_steps requires schema_version '0.7'",
+            bundle.task_json_path().display()
+        )));
+    }
+    let max_steps = value
+        .as_u64()
+        .and_then(|value| u32::try_from(value).ok())
+        .filter(|value| (1..=MAX_TASK_STEPS).contains(value))
+        .ok_or_else(|| {
+            CliError::package_invalid(format!(
+                "{}: max_steps must be an integer in 1..={MAX_TASK_STEPS}",
+                bundle.task_json_path().display()
+            ))
+        })?;
+    if let Some(stability) = bundle
+        .data
+        .get("stability_termination")
+        .filter(|value| !value.is_null())
+    {
+        let stability_max_steps = stability
+            .get("max_steps")
+            .and_then(Value::as_u64)
+            .and_then(|value| u32::try_from(value).ok())
+            .ok_or_else(|| {
+                CliError::package_invalid(format!(
+                    "{}: stability_termination max_steps is invalid",
+                    bundle.task_json_path().display()
+                ))
+            })?;
+        if stability_max_steps != max_steps {
+            return Err(CliError::package_invalid(format!(
+                "{}: max_steps must match stability_termination max_steps",
+                bundle.task_json_path().display()
+            )));
+        }
+    }
+    Ok(Some(max_steps))
+}
+
+fn post_admission_ocr_page_ids(declaration: &Map<String, Value>) -> CliOutcome<Vec<&str>> {
+    match (declaration.get("page_id"), declaration.get("page_ids")) {
+        (Some(page_id), None) => page_id
+            .as_str()
+            .filter(|page_id| !page_id.trim().is_empty())
+            .map(|page_id| vec![page_id])
+            .ok_or_else(|| {
+                CliError::package_invalid("post_admission_ocr.page_id must be a non-empty string")
+            }),
+        (None, Some(page_ids)) => {
+            let page_ids = page_ids.as_array().ok_or_else(|| {
+                CliError::package_invalid("post_admission_ocr.page_ids must be an array")
+            })?;
+            if page_ids.len() != 2 {
+                return Err(CliError::package_invalid(
+                    "post_admission_ocr.page_ids must contain exactly two entries",
+                ));
+            }
+            let mut unique = BTreeSet::new();
+            let mut ordered = Vec::with_capacity(page_ids.len());
+            for page_id in page_ids {
+                let page_id = page_id
+                    .as_str()
+                    .filter(|page_id| !page_id.trim().is_empty())
+                    .ok_or_else(|| {
+                        CliError::package_invalid(
+                            "post_admission_ocr.page_ids entries must be non-empty strings",
+                        )
+                    })?;
+                if !unique.insert(page_id) {
+                    return Err(CliError::package_invalid(format!(
+                        "post_admission_ocr.page_ids contains duplicate '{page_id}'"
+                    )));
+                }
+                ordered.push(page_id);
+            }
+            Ok(ordered)
+        }
+        _ => Err(CliError::package_invalid(
+            "post_admission_ocr requires exactly one of page_id or page_ids",
+        )),
+    }
+}
+
 fn post_admission_ocr_target_ids(declaration: &Map<String, Value>) -> CliOutcome<Vec<&str>> {
     match (declaration.get("target_id"), declaration.get("target_ids")) {
         (Some(target_id), None) => target_id
@@ -2160,6 +2267,7 @@ fn validate_post_admission_ocr_bundle(bundle: &Bundle) -> CliOutcome<()> {
         declaration.expect("matched declaration"),
         &[
             "page_id",
+            "page_ids",
             "target_id",
             "target_ids",
             "truth_set",
@@ -2181,7 +2289,7 @@ fn validate_post_admission_ocr_bundle(bundle: &Bundle) -> CliOutcome<()> {
                 ))
             })
     };
-    let page_id = required_string("page_id")?;
+    post_admission_ocr_page_ids(declaration)?;
     let target_ids = post_admission_ocr_target_ids(declaration)?;
     let outcome_key = required_string("outcome_key")?;
     if required_string("normalization")? != "trim_lowercase_v1"
@@ -2275,11 +2383,6 @@ fn validate_post_admission_ocr_bundle(bundle: &Bundle) -> CliOutcome<()> {
         return Err(CliError::package_invalid(format!(
             "post_admission_ocr outcome_key '{outcome_key}' is not one scheduling mapping"
         )));
-    }
-    if page_id.trim().is_empty() {
-        return Err(CliError::package_invalid(
-            "post_admission_ocr page_id is invalid",
-        ));
     }
     let truth_bytes = fs::read(bundle.dir.join(truth_path)).map_err(|error| {
         CliError::package_invalid(format!(

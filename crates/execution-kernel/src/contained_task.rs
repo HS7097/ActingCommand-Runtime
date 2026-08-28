@@ -367,7 +367,10 @@ struct PostAdmissionOcrLimits {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct PostAdmissionOcrDeclaration {
-    page_id: String,
+    #[serde(default, deserialize_with = "deserialize_non_null_option")]
+    page_id: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_non_null_option")]
+    page_ids: Option<Vec<String>>,
     #[serde(default, deserialize_with = "deserialize_non_null_option")]
     target_id: Option<String>,
     #[serde(default, deserialize_with = "deserialize_non_null_option")]
@@ -389,6 +392,7 @@ struct PostAdmissionOcrTruthSet {
 #[derive(Debug, Clone)]
 struct PreparedPostAdmissionOcr {
     declaration: PostAdmissionOcrDeclaration,
+    page_ids: Vec<String>,
     target_ids: Vec<String>,
     truth: Vec<String>,
 }
@@ -430,7 +434,10 @@ impl<'a> PostAdmissionOcrCollector<'a> {
             return Ok(None);
         };
         let declaration = &prepared.declaration;
-        if !crate::page_anchor_matches(game, page_label, &declaration.page_id)
+        if !prepared
+            .page_ids
+            .iter()
+            .any(|page_id| crate::page_anchor_matches(game, page_label, page_id))
             || self.frames_collected >= declaration.limits.max_frames
         {
             return Ok(None);
@@ -2004,6 +2011,8 @@ struct TaskProgram {
     coordinate_space: Resolution,
     #[serde(default, deserialize_with = "deserialize_non_null_option")]
     timeout_ms: Option<u64>,
+    #[serde(default, deserialize_with = "deserialize_non_null_option")]
+    max_steps: Option<u32>,
     #[serde(default)]
     target_page: Option<PageDeclaration>,
     #[serde(default)]
@@ -2049,6 +2058,7 @@ impl TaskProgram {
             return Err(ContainedTaskError::new("contained_task_program_invalid"));
         }
         self.validate_task_timeout(control)?;
+        self.validate_task_max_steps(control)?;
         validate_stability_contract(control, self)?;
         let target_pages = self.target_pages()?;
         validate_page_references(&control.game, &target_pages, detector)?;
@@ -2127,6 +2137,21 @@ impl TaskProgram {
         }
     }
 
+    fn validate_task_max_steps(&self, control: &TaskControl) -> Result<(), ContainedTaskError> {
+        let valid = match self.schema_version.as_str() {
+            "0.3" | "0.4" | "0.5" | "0.6" => self.max_steps.is_none(),
+            "0.7" => self.max_steps.is_none_or(|max_steps| {
+                (1..=MAX_STEPS).contains(&max_steps) && control.max_steps == Some(max_steps)
+            }),
+            _ => false,
+        };
+        if valid {
+            Ok(())
+        } else {
+            Err(ContainedTaskError::new("contained_task_program_invalid"))
+        }
+    }
+
     fn prepare_post_admission_ocr(
         &self,
         control: &TaskControl,
@@ -2138,23 +2163,18 @@ impl TaskProgram {
             return Ok(None);
         };
         declaration.validate()?;
+        let page_ids = declaration
+            .page_ids()?
+            .into_iter()
+            .map(str::to_owned)
+            .collect::<Vec<_>>();
         let target_ids = declaration
             .target_ids()?
             .into_iter()
             .map(str::to_owned)
             .collect::<Vec<_>>();
-        validate_page_references(
-            &control.game,
-            std::slice::from_ref(&declaration.page_id),
-            detector,
-        )?;
-        validate_post_admission_ocr_page_gate(
-            control,
-            bundle,
-            evaluator,
-            declaration,
-            &target_ids,
-        )?;
+        validate_page_references(&control.game, &page_ids, detector)?;
+        validate_post_admission_ocr_page_gate(control, bundle, evaluator, &page_ids, &target_ids)?;
         for target_id in &target_ids {
             validate_post_admission_ocr_target(control, evaluator, target_id)?;
         }
@@ -2226,6 +2246,7 @@ impl TaskProgram {
         }
         Ok(Some(PreparedPostAdmissionOcr {
             declaration: declaration.clone(),
+            page_ids,
             target_ids,
             truth: normalized.into_iter().collect(),
         }))
@@ -2287,7 +2308,7 @@ fn validate_post_admission_ocr_page_gate(
     control: &TaskControl,
     bundle: &LoadedBundle,
     evaluator: &RecognitionEvaluator,
-    declaration: &PostAdmissionOcrDeclaration,
+    page_ids: &[String],
     target_ids: &[String],
 ) -> Result<(), ContainedTaskError> {
     let pages_path = bundle.pages_path().ok_or_else(|| {
@@ -2297,6 +2318,16 @@ fn validate_post_admission_ocr_page_gate(
         ContainedTaskError::new("contained_task_post_admission_ocr_page_gate_missing")
     })?)
     .map_err(|_| ContainedTaskError::new("contained_task_post_admission_ocr_page_gate_invalid"))?;
+    validate_post_admission_ocr_page_set(control, evaluator, &pages, page_ids, target_ids)
+}
+
+fn validate_post_admission_ocr_page_set(
+    control: &TaskControl,
+    evaluator: &RecognitionEvaluator,
+    pages: &PageSet,
+    page_ids: &[String],
+    target_ids: &[String],
+) -> Result<(), ContainedTaskError> {
     if pages.pages.iter().any(|page| {
         page.required
             .iter()
@@ -2309,35 +2340,37 @@ fn validate_post_admission_ocr_page_gate(
             "contained_task_post_admission_ocr_target_in_page_gate",
         ));
     }
-    let matching = pages
-        .pages
-        .iter()
-        .filter(|page| crate::page_anchor_matches(&control.game, &page.id, &declaration.page_id))
-        .collect::<Vec<_>>();
-    let [page] = matching.as_slice() else {
-        return Err(ContainedTaskError::new(
-            "contained_task_post_admission_ocr_page_gate_invalid",
-        ));
-    };
-    let gate_targets = page
-        .required
-        .iter()
-        .chain(page.any_of.iter().flatten())
-        .chain(page.optional.iter())
-        .chain(page.forbidden.iter())
-        .collect::<Vec<_>>();
-    let positive_count = page.required.len() + page.any_of.iter().map(Vec::len).sum::<usize>();
-    if positive_count == 0
-        || gate_targets.iter().any(|target| {
-            !matches!(
-                evaluator.target_kind(target),
-                Ok(TargetKind::Template | TargetKind::Color)
-            )
-        })
-    {
-        return Err(ContainedTaskError::new(
-            "contained_task_post_admission_ocr_page_gate_invalid",
-        ));
+    for page_id in page_ids {
+        let matching = pages
+            .pages
+            .iter()
+            .filter(|page| crate::page_anchor_matches(&control.game, &page.id, page_id))
+            .collect::<Vec<_>>();
+        let [page] = matching.as_slice() else {
+            return Err(ContainedTaskError::new(
+                "contained_task_post_admission_ocr_page_gate_invalid",
+            ));
+        };
+        let gate_targets = page
+            .required
+            .iter()
+            .chain(page.any_of.iter().flatten())
+            .chain(page.optional.iter())
+            .chain(page.forbidden.iter())
+            .collect::<Vec<_>>();
+        let positive_count = page.required.len() + page.any_of.iter().map(Vec::len).sum::<usize>();
+        if positive_count == 0
+            || gate_targets.iter().any(|target| {
+                !matches!(
+                    evaluator.target_kind(target),
+                    Ok(TargetKind::Template | TargetKind::Color)
+                )
+            })
+        {
+            return Err(ContainedTaskError::new(
+                "contained_task_post_admission_ocr_page_gate_invalid",
+            ));
+        }
     }
     Ok(())
 }
@@ -2397,6 +2430,28 @@ fn validate_post_admission_ocr_target(
 }
 
 impl PostAdmissionOcrDeclaration {
+    fn page_ids(&self) -> Result<Vec<&str>, ContainedTaskError> {
+        match (&self.page_id, &self.page_ids) {
+            (Some(page_id), None) if !page_id.trim().is_empty() => Ok(vec![page_id.as_str()]),
+            (None, Some(page_ids)) if page_ids.len() == 2 => {
+                let mut unique = BTreeSet::new();
+                let mut ordered = Vec::with_capacity(page_ids.len());
+                for page_id in page_ids {
+                    if page_id.trim().is_empty() || !unique.insert(page_id.as_str()) {
+                        return Err(ContainedTaskError::new(
+                            "contained_task_post_admission_ocr_invalid",
+                        ));
+                    }
+                    ordered.push(page_id.as_str());
+                }
+                Ok(ordered)
+            }
+            _ => Err(ContainedTaskError::new(
+                "contained_task_post_admission_ocr_invalid",
+            )),
+        }
+    }
+
     fn target_ids(&self) -> Result<Vec<&str>, ContainedTaskError> {
         match (&self.target_id, &self.target_ids) {
             (Some(target_id), None) if !target_id.trim().is_empty() => Ok(vec![target_id.as_str()]),
@@ -2423,9 +2478,9 @@ impl PostAdmissionOcrDeclaration {
 
     fn validate(&self) -> Result<(), ContainedTaskError> {
         let limits = &self.limits;
+        self.page_ids()?;
         self.target_ids()?;
-        if self.page_id.trim().is_empty()
-            || self.outcome_key.trim().is_empty()
+        if self.outcome_key.trim().is_empty()
             || !safe_task_local_path(&self.truth_set.path)
             || limits.max_frames == 0
             || limits.max_frames > MAX_POST_ADMISSION_OCR_FRAMES
@@ -3556,29 +3611,42 @@ mod post_admission_ocr_tests {
     }
 
     fn ordered_ocr_pack(target_ids: &[String], coordinate_width: u32) -> RecognitionPack {
+        let mut targets = vec![
+            serde_json::json!({
+                "type": "color",
+                "id": "page/operator",
+                "region": {"x": 0, "y": 0, "width": 1, "height": 1},
+                "expected": [1, 1, 1]
+            }),
+            serde_json::json!({
+                "type": "color",
+                "id": "page/operator_end",
+                "region": {"x": 1, "y": 0, "width": 1, "height": 1},
+                "expected": [2, 2, 2]
+            }),
+        ];
+        targets.extend(target_ids.iter().enumerate().map(|(index, target_id)| {
+            serde_json::json!({
+                "type": "ocr",
+                "id": target_id,
+                "region": {"x": index, "y": 0, "width": 1, "height": 1},
+                "languages": ["en"],
+                "timeout_ms": 1000,
+                "match_mode": "exact",
+                "expected": ["unused"],
+                "case_sensitive": true,
+                "minimum_confidence": 0.0,
+                "model_ref": "PP-OCRv6_medium",
+                "model_sha256": "a".repeat(64)
+            })
+        }));
         serde_json::from_value(serde_json::json!({
             "schema_version": "0.6",
             "game": "neutral",
             "server": "test",
             "coordinate_space": {"width": coordinate_width, "height": 1},
             "defaults": {"color_max_distance": 0.0},
-            "targets": target_ids
-                .iter()
-                .enumerate()
-                .map(|(index, target_id)| serde_json::json!({
-                    "type": "ocr",
-                    "id": target_id,
-                    "region": {"x": index, "y": 0, "width": 1, "height": 1},
-                    "languages": ["en"],
-                    "timeout_ms": 1000,
-                    "match_mode": "exact",
-                    "expected": ["unused"],
-                    "case_sensitive": true,
-                    "minimum_confidence": 0.0,
-                    "model_ref": "PP-OCRv6_medium",
-                    "model_sha256": "a".repeat(64)
-                }))
-                .collect::<Vec<_>>()
+            "targets": targets
         }))
         .expect("ordered OCR recognition pack")
     }
@@ -3586,7 +3654,8 @@ mod post_admission_ocr_tests {
     fn prepared_ordered(target_ids: Vec<String>, truth: Vec<String>) -> PreparedPostAdmissionOcr {
         PreparedPostAdmissionOcr {
             declaration: PostAdmissionOcrDeclaration {
-                page_id: "target".to_string(),
+                page_id: None,
+                page_ids: Some(vec!["operator".to_string(), "operator_end".to_string()]),
                 target_id: None,
                 target_ids: Some(target_ids.clone()),
                 truth_set: PostAdmissionOcrTruthReference {
@@ -3604,6 +3673,7 @@ mod post_admission_ocr_tests {
                 },
                 outcome_key: "comparison_recorded".to_string(),
             },
+            page_ids: vec!["operator".to_string(), "operator_end".to_string()],
             target_ids,
             truth,
         }
@@ -3612,7 +3682,8 @@ mod post_admission_ocr_tests {
     fn prepared(truth: Vec<String>) -> PreparedPostAdmissionOcr {
         PreparedPostAdmissionOcr {
             declaration: PostAdmissionOcrDeclaration {
-                page_id: "target".to_string(),
+                page_id: Some("target".to_string()),
+                page_ids: None,
                 target_id: Some("fixture/ocr".to_string()),
                 target_ids: None,
                 truth_set: PostAdmissionOcrTruthReference {
@@ -3630,6 +3701,7 @@ mod post_admission_ocr_tests {
                 },
                 outcome_key: "comparison_recorded".to_string(),
             },
+            page_ids: vec!["target".to_string()],
             target_ids: vec!["fixture/ocr".to_string()],
             truth,
         }
@@ -3727,26 +3799,24 @@ mod post_admission_ocr_tests {
     }
 
     #[test]
-    fn post_admission_ocr_evaluates_sixteen_targets_once_in_declaration_order() {
+    fn post_admission_ocr_evaluates_sixteen_targets_on_each_declared_page_in_order() {
         let target_ids = ordered_target_ids();
         let values = target_ids
             .iter()
             .enumerate()
             .map(|(index, _)| format!("operator-{index:02}"))
             .collect::<Vec<_>>();
+        let mut provider_observations = Vec::new();
+        for page_index in 0..2 {
+            for (target_index, value) in values.iter().enumerate() {
+                provider_observations.push(provider_observation(
+                    &format!("ordered-invocation-{page_index}-{target_index:02}"),
+                    std::slice::from_ref(value),
+                ));
+            }
+        }
         let provider = Arc::new(EvidenceProvider {
-            observations: Mutex::new(VecDeque::from(
-                values
-                    .iter()
-                    .enumerate()
-                    .map(|(index, value)| {
-                        provider_observation(
-                            &format!("ordered-invocation-{index:02}"),
-                            std::slice::from_ref(value),
-                        )
-                    })
-                    .collect::<Vec<_>>(),
-            )),
+            observations: Mutex::new(VecDeque::from(provider_observations)),
             requests: Mutex::new(Vec::new()),
             calls: AtomicU32::new(0),
         });
@@ -3770,25 +3840,36 @@ mod post_admission_ocr_tests {
         .expect("ordered fixture scene");
         let mut collector = PostAdmissionOcrCollector::new(Some(&prepared));
 
-        let (frame_index, observation) = collector
-            .observe("neutral", &evaluator, "neutral/target", &scene)
-            .expect("ordered observation")
-            .expect("admitted frame");
-
-        assert_eq!(frame_index, 0);
-        assert_eq!(provider.calls.load(Ordering::SeqCst), 16);
-        assert!(observation.target_id.is_none());
-        let observations = observation
-            .targets
-            .as_ref()
-            .expect("ordered target evidence");
-        assert_eq!(
-            observations
-                .iter()
-                .map(|observation| observation.target_id.as_str())
-                .collect::<Vec<_>>(),
-            target_ids.iter().map(String::as_str).collect::<Vec<_>>()
+        assert!(
+            collector
+                .observe("neutral", &evaluator, "neutral/other", &scene)
+                .expect("non-admitted page")
+                .is_none()
         );
+        assert_eq!(provider.calls.load(Ordering::SeqCst), 0);
+        for (frame_index, page_label) in ["neutral/operator", "neutral/operator_end"]
+            .into_iter()
+            .enumerate()
+        {
+            let (observed_frame_index, observation) = collector
+                .observe("neutral", &evaluator, page_label, &scene)
+                .expect("ordered observation")
+                .expect("admitted frame");
+            assert_eq!(observed_frame_index, frame_index as u32);
+            assert!(observation.target_id.is_none());
+            let observations = observation
+                .targets
+                .as_ref()
+                .expect("ordered target evidence");
+            assert_eq!(
+                observations
+                    .iter()
+                    .map(|observation| observation.target_id.as_str())
+                    .collect::<Vec<_>>(),
+                target_ids.iter().map(String::as_str).collect::<Vec<_>>()
+            );
+        }
+        assert_eq!(provider.calls.load(Ordering::SeqCst), 32);
         assert_eq!(
             provider
                 .requests
@@ -3797,11 +3878,11 @@ mod post_admission_ocr_tests {
                 .iter()
                 .map(|region| region.x)
                 .collect::<Vec<_>>(),
-            (0..16).collect::<Vec<_>>()
+            (0..16).chain(0..16).collect::<Vec<_>>()
         );
         let report = collector.finish().expect("comparison").expect("report");
-        assert_eq!(report.frames_collected, 1);
-        assert_eq!(report.items_collected, 16);
+        assert_eq!(report.frames_collected, 2);
+        assert_eq!(report.items_collected, 32);
         assert!(report.exact_match);
         assert!(report.target_id.is_none());
         assert_eq!(report.target_ids.as_ref(), Some(&target_ids));
@@ -3811,7 +3892,7 @@ mod post_admission_ocr_tests {
     }
 
     #[test]
-    fn post_admission_ocr_target_forms_types_and_bounds_fail_closed_before_provider_access() {
+    fn post_admission_ocr_page_and_target_forms_fail_closed_before_provider_access() {
         let target_ids = ordered_target_ids();
         let base = serde_json::json!({
             "page_id": "target",
@@ -3862,6 +3943,47 @@ mod post_admission_ocr_tests {
             );
         }
         assert!(declaration(json!({"target_ids": null})).is_err());
+
+        let page_declaration = |page_fields: Value| {
+            let mut value = base.clone();
+            value
+                .as_object_mut()
+                .expect("declaration object")
+                .remove("page_id");
+            value
+                .as_object_mut()
+                .expect("declaration object")
+                .extend(page_fields.as_object().expect("page fields").clone());
+            value["target_id"] = json!("fixture/ocr");
+            serde_json::from_value::<PostAdmissionOcrDeclaration>(value)
+        };
+        page_declaration(json!({"page_id": "target"}))
+            .expect("legacy page form")
+            .validate()
+            .expect("legacy page validation");
+        page_declaration(json!({"page_ids": ["operator", "operator_end"]}))
+            .expect("exact two-page form")
+            .validate()
+            .expect("exact two-page validation");
+        for invalid in [
+            json!({}),
+            json!({"page_id": "operator", "page_ids": ["operator", "operator_end"]}),
+            json!({"page_ids": []}),
+            json!({"page_ids": ["operator"]}),
+            json!({"page_ids": ["operator", "operator"]}),
+            json!({"page_ids": ["operator", "operator_end", "other"]}),
+            json!({"page_ids": ["operator", ""]}),
+        ] {
+            let declaration = page_declaration(invalid).expect("page form parses");
+            assert_eq!(
+                declaration
+                    .validate()
+                    .expect_err("invalid page form must fail closed")
+                    .code(),
+                "contained_task_post_admission_ocr_invalid"
+            );
+        }
+        assert!(page_declaration(json!({"page_ids": null})).is_err());
 
         let control: TaskControl = serde_json::from_value(json!({
             "schema_version": CONTROL_SCHEMA,
@@ -3928,6 +4050,108 @@ mod post_admission_ocr_tests {
                 .expect_err("non-OCR target must fail closed")
                 .code(),
             "contained_task_post_admission_ocr_target_invalid"
+        );
+    }
+
+    #[test]
+    fn post_admission_ocr_two_page_gates_are_unique_positive_and_non_ocr() {
+        let target_ids = ordered_target_ids();
+        let evaluator = RecognitionEvaluator::with_asset_resolver(
+            ordered_ocr_pack(&target_ids, 16),
+            Arc::new(FsAssetResolver::new(PathBuf::new())),
+        )
+        .expect("provider-free page-gate evaluator");
+        let control: TaskControl = serde_json::from_value(json!({
+            "schema_version": CONTROL_SCHEMA,
+            "package_id": "neutral.test.task",
+            "execution_mode": "navigable_route",
+            "game": "neutral",
+            "server": "test",
+            "resolution": {"width": 16, "height": 1},
+            "entry_task_id": "task"
+        }))
+        .expect("page-gate control");
+        let pages = |entries: Value| {
+            serde_json::from_value::<PageSet>(json!({
+                "schema_version": "0.3",
+                "pages": entries
+            }))
+            .expect("page set")
+        };
+        let good = pages(json!([
+            {"id": "neutral/operator", "required": ["page/operator"]},
+            {"id": "neutral/operator_end", "required": ["page/operator_end"]}
+        ]));
+        let page_ids = vec!["operator".to_string(), "operator_end".to_string()];
+        validate_page_references(
+            &control.game,
+            &page_ids,
+            &PageDetector::new(good.clone()).unwrap(),
+        )
+        .expect("each page resolves exactly once");
+        validate_post_admission_ocr_page_set(&control, &evaluator, &good, &page_ids, &target_ids)
+            .expect("two positive color-only page gates");
+
+        assert_eq!(
+            validate_post_admission_ocr_page_set(
+                &control,
+                &evaluator,
+                &good,
+                &["operator".to_string(), "missing".to_string()],
+                &target_ids,
+            )
+            .expect_err("unknown page must fail closed")
+            .code(),
+            "contained_task_post_admission_ocr_page_gate_invalid"
+        );
+        let duplicate = pages(json!([
+            {"id": "neutral/operator", "required": ["page/operator"]},
+            {"id": "neutral/operator", "required": ["page/operator"]},
+            {"id": "neutral/operator_end", "required": ["page/operator_end"]}
+        ]));
+        assert_eq!(
+            validate_post_admission_ocr_page_set(
+                &control,
+                &evaluator,
+                &duplicate,
+                &page_ids,
+                &target_ids,
+            )
+            .expect_err("duplicate page resolution must fail closed")
+            .code(),
+            "contained_task_post_admission_ocr_page_gate_invalid"
+        );
+        let empty_positive = pages(json!([
+            {"id": "neutral/operator", "required": []},
+            {"id": "neutral/operator_end", "required": ["page/operator_end"]}
+        ]));
+        assert_eq!(
+            validate_post_admission_ocr_page_set(
+                &control,
+                &evaluator,
+                &empty_positive,
+                &page_ids,
+                &target_ids,
+            )
+            .expect_err("each page requires a positive gate")
+            .code(),
+            "contained_task_post_admission_ocr_page_gate_invalid"
+        );
+        let ocr_gate = pages(json!([
+            {"id": "neutral/operator", "required": ["fixture/ocr-00"]},
+            {"id": "neutral/operator_end", "required": ["page/operator_end"]}
+        ]));
+        assert_eq!(
+            validate_post_admission_ocr_page_set(
+                &control,
+                &evaluator,
+                &ocr_gate,
+                &page_ids,
+                &target_ids,
+            )
+            .expect_err("selected OCR target must stay out of every page gate")
+            .code(),
+            "contained_task_post_admission_ocr_target_in_page_gate"
         );
     }
 
@@ -4012,6 +4236,95 @@ mod post_admission_ocr_tests {
                 "contained_task_control_invalid"
             );
         }
+    }
+
+    #[test]
+    fn schema_0_7_max_steps_exactly_matches_the_validated_control() {
+        let control = |max_steps: Option<u32>| {
+            let mut value = json!({
+                "schema_version": CONTROL_SCHEMA,
+                "package_id": "neutral.test.task",
+                "execution_mode": "navigable_route",
+                "game": "neutral",
+                "server": "test",
+                "resolution": {"width": 1, "height": 1},
+                "entry_task_id": "task"
+            });
+            if let Some(max_steps) = max_steps {
+                value["max_steps"] = json!(max_steps);
+            }
+            serde_json::from_value::<TaskControl>(value).expect("max-steps control")
+        };
+        let program = |schema_version: &str, max_steps: Option<Value>| {
+            let mut value = json!({
+                "schema_version": schema_version,
+                "task_id": "task",
+                "game": "neutral",
+                "coordinate_space": {"width": 1, "height": 1},
+                "operations": []
+            });
+            if schema_version == "0.7" {
+                value["post_admission_ocr"] = json!({
+                    "page_id": "target",
+                    "target_id": "fixture/ocr",
+                    "truth_set": {"path": "truth.json", "sha256": "c".repeat(64)},
+                    "normalization": "trim_lowercase_v1",
+                    "comparison": "exact_set_v1",
+                    "limits": {
+                        "max_frames": 1,
+                        "max_items": 1,
+                        "max_string_bytes": 64,
+                        "max_total_bytes": 4096,
+                        "max_truth_entries": 1
+                    },
+                    "outcome_key": "comparison_recorded"
+                });
+            }
+            if let Some(max_steps) = max_steps {
+                value["max_steps"] = max_steps;
+            }
+            serde_json::from_value::<TaskProgram>(value)
+        };
+
+        program("0.7", None)
+            .expect("absent max steps")
+            .validate_task_max_steps(&control(None))
+            .expect("absence preserves default behavior");
+        for max_steps in [1_u32, 61, 1_000] {
+            program("0.7", Some(json!(max_steps)))
+                .expect("bounded max steps")
+                .validate_task_max_steps(&control(Some(max_steps)))
+                .expect("matching bounded max steps");
+        }
+        assert_eq!(
+            program("0.7", Some(json!(61)))
+                .expect("mismatch program")
+                .validate_task_max_steps(&control(Some(62)))
+                .expect_err("max-steps mismatch must fail closed")
+                .code(),
+            "contained_task_program_invalid"
+        );
+        for invalid in [json!(-1), json!(1.5), json!("61"), Value::Null] {
+            assert!(program("0.7", Some(invalid)).is_err());
+        }
+        for invalid in [0, 1_001] {
+            assert_eq!(
+                program("0.7", Some(json!(invalid)))
+                    .expect("integer max steps")
+                    .validate_task_max_steps(&control(Some(invalid)))
+                    .expect_err("out-of-range max steps must fail closed")
+                    .code(),
+                "contained_task_program_invalid"
+            );
+        }
+        assert_eq!(
+            program("0.6", Some(json!(61)))
+                .expect("legacy max steps parses for explicit validation")
+                .validate_task_max_steps(&control(Some(61)))
+                .expect_err("legacy schema cannot declare max steps")
+                .code(),
+            "contained_task_program_invalid"
+        );
     }
 
     #[test]
@@ -4163,7 +4476,8 @@ mod post_admission_ocr_tests {
             .expect("stability page detector targets");
         let scheduling_outcome = program.scheduling_outcome.clone();
         let mut post_admission_ocr = prepared(vec!["synthetic truth".to_string()]);
-        post_admission_ocr.declaration.page_id = "home".to_string();
+        post_admission_ocr.declaration.page_id = Some("home".to_string());
+        post_admission_ocr.page_ids = vec!["home".to_string()];
         let task = PreparedContainedTask {
             control,
             program,
@@ -4686,6 +5000,7 @@ mod retry_wiring_tests {
             server_scope: vec!["test".to_string()],
             coordinate_space: control.resolution,
             timeout_ms: None,
+            max_steps: None,
             target_page: Some(PageDeclaration::Singleton("terminal".to_string())),
             error_pages: if with_error_page {
                 vec!["error".to_string()]
@@ -4842,6 +5157,51 @@ mod retry_wiring_tests {
             self.traces.push(trace);
             Ok(())
         }
+    }
+
+    #[test]
+    fn independent_max_steps_stops_the_no_end_path_at_61_instead_of_default_100() {
+        let run_to_scheduler =
+            |task: &PreparedContainedTask, runtime: &mut ScriptedRuntime| match task
+                .run(runtime)
+                .expect_err("no-end path must pause")
+            {
+                ContainedTaskRunError::Task(error) => error,
+                ContainedTaskRunError::Boundary(error) => {
+                    panic!("unexpected fixture boundary error: {error}")
+                }
+            };
+
+        let mut bounded = omitted_policy_task(false, false);
+        bounded.program.schema_version = "0.7".to_string();
+        bounded.program.max_steps = Some(61);
+        bounded.control.max_steps = Some(61);
+        bounded
+            .program
+            .validate_task_max_steps(&bounded.control)
+            .expect("exact source/control max-steps binding");
+        let mut bounded_runtime = ScriptedRuntime::new("home");
+        assert_eq!(
+            run_to_scheduler(&bounded, &mut bounded_runtime).code(),
+            "contained_task_requires_scheduler"
+        );
+        assert_eq!(bounded_runtime.inputs, 61);
+        assert_eq!(
+            bounded_runtime
+                .traces
+                .iter()
+                .filter(|trace| matches!(trace, ContainedTaskTrace::StepFinished { .. }))
+                .count(),
+            61
+        );
+
+        let default = omitted_policy_task(false, false);
+        let mut default_runtime = ScriptedRuntime::new("home");
+        assert_eq!(
+            run_to_scheduler(&default, &mut default_runtime).code(),
+            "contained_task_requires_scheduler"
+        );
+        assert_eq!(default_runtime.inputs, DEFAULT_MAX_STEPS as usize);
     }
 
     struct TimingRuntime {
