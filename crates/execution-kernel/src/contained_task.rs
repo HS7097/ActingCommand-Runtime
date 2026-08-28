@@ -17,8 +17,8 @@ use actingcommand_pack_containment::{ContainmentError, LoadedBundle, Sha256Hash}
 use actingcommand_page_detector::{PageDetector, PageSet};
 use actingcommand_recognition::{Scene, ScenePixelFormat};
 use actingcommand_recognition_pack::{
-    OcrProviderExecutionEvidence, OcrTextEvidence, RecognitionEvaluator, RecognitionPackErrorCode,
-    TargetEvaluation, TargetKind, VisionProvider,
+    OcrProviderExecutionEvidence, OcrTextEvidence, PackRegion, RecognitionEvaluator,
+    RecognitionPackErrorCode, RecognitionTarget, TargetEvaluation, TargetKind, VisionProvider,
 };
 use serde::{Deserialize, Deserializer, Serialize};
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
@@ -43,6 +43,7 @@ const MAX_POST_ADMISSION_OCR_ITEMS: u32 = 4_096;
 const MAX_POST_ADMISSION_OCR_STRING_BYTES: u32 = 4_096;
 const MAX_POST_ADMISSION_OCR_TOTAL_BYTES: u64 = 4 * 1024 * 1024;
 const MAX_POST_ADMISSION_OCR_TRUTH_ENTRIES: u32 = 4_096;
+const MAX_POST_ADMISSION_OCR_TARGETS: usize = 32;
 const POST_ADMISSION_OCR_TRUTH_SCHEMA: &str = "actingcommand.ocr-truth-set.v1";
 
 fn deserialize_non_null_option<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
@@ -265,6 +266,25 @@ pub enum PostAdmissionOcrComparisonMode {
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct PostAdmissionOcrObservation {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    target_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    text: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    confidence: Option<Option<f32>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    blocks: Option<Vec<OcrTextEvidence>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    execution: Option<OcrProviderExecutionEvidence>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    targets: Option<Vec<PostAdmissionOcrTargetObservation>>,
+}
+
+// Observation confidences come only from the recognition owner's finite-score validation.
+impl Eq for PostAdmissionOcrObservation {}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct PostAdmissionOcrTargetObservation {
     target_id: String,
     text: String,
     confidence: Option<f32>,
@@ -272,8 +292,8 @@ pub struct PostAdmissionOcrObservation {
     execution: OcrProviderExecutionEvidence,
 }
 
-// Observation confidences come only from the recognition owner's finite-score validation.
-impl Eq for PostAdmissionOcrObservation {}
+// Target confidences come only from the recognition owner's finite-score validation.
+impl Eq for PostAdmissionOcrTargetObservation {}
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct PostAdmissionOcrObservedValue {
@@ -294,7 +314,10 @@ pub struct PostAdmissionOcrDuplicateEvidence {
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct PostAdmissionOcrComparisonReport {
     schema_version: &'static str,
-    target_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    target_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    target_ids: Option<Vec<String>>,
     truth_set_path: String,
     truth_set_sha256: String,
     normalization: PostAdmissionOcrNormalization,
@@ -345,7 +368,10 @@ struct PostAdmissionOcrLimits {
 #[serde(deny_unknown_fields)]
 struct PostAdmissionOcrDeclaration {
     page_id: String,
-    target_id: String,
+    #[serde(default, deserialize_with = "deserialize_non_null_option")]
+    target_id: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_non_null_option")]
+    target_ids: Option<Vec<String>>,
     truth_set: PostAdmissionOcrTruthReference,
     normalization: PostAdmissionOcrNormalization,
     comparison: PostAdmissionOcrComparisonMode,
@@ -363,10 +389,11 @@ struct PostAdmissionOcrTruthSet {
 #[derive(Debug, Clone)]
 struct PreparedPostAdmissionOcr {
     declaration: PostAdmissionOcrDeclaration,
+    target_ids: Vec<String>,
     truth: Vec<String>,
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Clone, Default)]
 struct PostAdmissionOcrObservedAggregate {
     occurrences: u32,
     confidences: Vec<Option<f32>>,
@@ -408,70 +435,96 @@ impl<'a> PostAdmissionOcrCollector<'a> {
         {
             return Ok(None);
         }
-        let evaluated = evaluator
-            .evaluate_ocr_observation(scene, &declaration.target_id)
-            .map_err(|error| {
-                ContainedTaskError::with_detail(
-                    "contained_task_post_admission_ocr_failed",
-                    error.to_string(),
-                )
-            })?;
-        if evaluated.target_id != declaration.target_id
-            || !self
-                .invocation_ids
-                .insert(evaluated.execution.invocation_id.clone())
-            || self
-                .stream_binding
-                .as_ref()
-                .is_some_and(|binding| !same_ocr_stream_binding(binding, &evaluated.execution))
-        {
-            return Err(ContainedTaskError::new(
-                "contained_task_post_admission_ocr_evidence_mismatch",
-            ));
-        }
-        if self.stream_binding.is_none() {
-            self.stream_binding = Some(evaluated.execution.clone());
-        }
-        let block_count = u32::try_from(evaluated.blocks.len()).map_err(|_| {
-            ContainedTaskError::new("contained_task_post_admission_ocr_limit_exceeded")
-        })?;
-        let new_item_count = self
-            .items_collected
-            .checked_add(block_count)
-            .ok_or_else(|| {
-                ContainedTaskError::new("contained_task_post_admission_ocr_limit_exceeded")
-            })?;
-        if new_item_count > declaration.limits.max_items {
-            return Err(ContainedTaskError::new(
-                "contained_task_post_admission_ocr_limit_exceeded",
-            ));
-        }
-        let mut added_bytes = u64::try_from(evaluated.text.len()).map_err(|_| {
-            ContainedTaskError::new("contained_task_post_admission_ocr_limit_exceeded")
-        })?;
+        let mut invocation_ids = self.invocation_ids.clone();
+        let mut stream_binding = self.stream_binding.clone();
+        let mut values = self.values.clone();
+        let mut discarded_empty_items = self.discarded_empty_items;
+        let mut new_item_count = self.items_collected;
+        let mut added_bytes = 0_u64;
         let max_string_bytes = usize::try_from(declaration.limits.max_string_bytes)
             .map_err(|_| ContainedTaskError::new("contained_task_post_admission_ocr_invalid"))?;
-        let mut normalized = Vec::with_capacity(evaluated.blocks.len());
-        for block in &evaluated.blocks {
-            if block.text.len() > max_string_bytes {
+        let mut target_observations = Vec::with_capacity(prepared.target_ids.len());
+        for target_id in &prepared.target_ids {
+            let evaluated = evaluator
+                .evaluate_ocr_observation(scene, target_id)
+                .map_err(|error| {
+                    ContainedTaskError::with_detail(
+                        "contained_task_post_admission_ocr_failed",
+                        error.to_string(),
+                    )
+                })?;
+            if evaluated.target_id != *target_id
+                || !invocation_ids.insert(evaluated.execution.invocation_id.clone())
+                || stream_binding
+                    .as_ref()
+                    .is_some_and(|binding| !same_ocr_stream_binding(binding, &evaluated.execution))
+            {
+                return Err(ContainedTaskError::new(
+                    "contained_task_post_admission_ocr_evidence_mismatch",
+                ));
+            }
+            if stream_binding.is_none() {
+                stream_binding = Some(evaluated.execution.clone());
+            }
+            let block_count = u32::try_from(evaluated.blocks.len()).map_err(|_| {
+                ContainedTaskError::new("contained_task_post_admission_ocr_limit_exceeded")
+            })?;
+            new_item_count = new_item_count.checked_add(block_count).ok_or_else(|| {
+                ContainedTaskError::new("contained_task_post_admission_ocr_limit_exceeded")
+            })?;
+            if new_item_count > declaration.limits.max_items {
                 return Err(ContainedTaskError::new(
                     "contained_task_post_admission_ocr_limit_exceeded",
                 ));
             }
             added_bytes = added_bytes
-                .checked_add(u64::try_from(block.text.len()).map_err(|_| {
+                .checked_add(u64::try_from(evaluated.text.len()).map_err(|_| {
                     ContainedTaskError::new("contained_task_post_admission_ocr_limit_exceeded")
                 })?)
                 .ok_or_else(|| {
                     ContainedTaskError::new("contained_task_post_admission_ocr_limit_exceeded")
                 })?;
-            let value = normalize_post_admission_ocr(&block.text, declaration.normalization);
-            if value.len() > max_string_bytes {
-                return Err(ContainedTaskError::new(
-                    "contained_task_post_admission_ocr_limit_exceeded",
-                ));
+            for block in &evaluated.blocks {
+                if block.text.len() > max_string_bytes {
+                    return Err(ContainedTaskError::new(
+                        "contained_task_post_admission_ocr_limit_exceeded",
+                    ));
+                }
+                added_bytes = added_bytes
+                    .checked_add(u64::try_from(block.text.len()).map_err(|_| {
+                        ContainedTaskError::new("contained_task_post_admission_ocr_limit_exceeded")
+                    })?)
+                    .ok_or_else(|| {
+                        ContainedTaskError::new("contained_task_post_admission_ocr_limit_exceeded")
+                    })?;
+                let value = normalize_post_admission_ocr(&block.text, declaration.normalization);
+                if value.len() > max_string_bytes {
+                    return Err(ContainedTaskError::new(
+                        "contained_task_post_admission_ocr_limit_exceeded",
+                    ));
+                }
+                if value.is_empty() {
+                    discarded_empty_items =
+                        discarded_empty_items.checked_add(1).ok_or_else(|| {
+                            ContainedTaskError::new(
+                                "contained_task_post_admission_ocr_limit_exceeded",
+                            )
+                        })?;
+                    continue;
+                }
+                let aggregate = values.entry(value).or_default();
+                aggregate.occurrences = aggregate.occurrences.checked_add(1).ok_or_else(|| {
+                    ContainedTaskError::new("contained_task_post_admission_ocr_limit_exceeded")
+                })?;
+                aggregate.confidences.push(block.confidence);
             }
-            normalized.push((value, block.confidence));
+            target_observations.push(PostAdmissionOcrTargetObservation {
+                target_id: evaluated.target_id,
+                text: evaluated.text,
+                confidence: evaluated.confidence,
+                blocks: evaluated.blocks,
+                execution: evaluated.execution,
+            });
         }
         let new_total_bytes = self
             .total_observed_utf8_bytes
@@ -484,36 +537,42 @@ impl<'a> PostAdmissionOcrCollector<'a> {
                 "contained_task_post_admission_ocr_limit_exceeded",
             ));
         }
-        for (value, confidence) in normalized {
-            if value.is_empty() {
-                self.discarded_empty_items =
-                    self.discarded_empty_items.checked_add(1).ok_or_else(|| {
-                        ContainedTaskError::new("contained_task_post_admission_ocr_limit_exceeded")
-                    })?;
-                continue;
-            }
-            let aggregate = self.values.entry(value).or_default();
-            aggregate.occurrences = aggregate.occurrences.checked_add(1).ok_or_else(|| {
-                ContainedTaskError::new("contained_task_post_admission_ocr_limit_exceeded")
-            })?;
-            aggregate.confidences.push(confidence);
-        }
         let frame_index = self.frames_collected;
-        self.frames_collected = self.frames_collected.checked_add(1).ok_or_else(|| {
+        let frames_collected = self.frames_collected.checked_add(1).ok_or_else(|| {
             ContainedTaskError::new("contained_task_post_admission_ocr_limit_exceeded")
         })?;
+        self.invocation_ids = invocation_ids;
+        self.stream_binding = stream_binding;
+        self.values = values;
+        self.discarded_empty_items = discarded_empty_items;
+        self.frames_collected = frames_collected;
         self.items_collected = new_item_count;
         self.total_observed_utf8_bytes = new_total_bytes;
-        Ok(Some((
-            frame_index,
+        let observation = if declaration.target_id.is_some() {
+            let [observation] = target_observations.as_slice() else {
+                return Err(ContainedTaskError::new(
+                    "contained_task_post_admission_ocr_evidence_mismatch",
+                ));
+            };
             PostAdmissionOcrObservation {
-                target_id: evaluated.target_id,
-                text: evaluated.text,
-                confidence: evaluated.confidence,
-                blocks: evaluated.blocks,
-                execution: evaluated.execution,
-            },
-        )))
+                target_id: Some(observation.target_id.clone()),
+                text: Some(observation.text.clone()),
+                confidence: Some(observation.confidence),
+                blocks: Some(observation.blocks.clone()),
+                execution: Some(observation.execution.clone()),
+                targets: None,
+            }
+        } else {
+            PostAdmissionOcrObservation {
+                target_id: None,
+                text: None,
+                confidence: None,
+                blocks: None,
+                execution: None,
+                targets: Some(target_observations),
+            }
+        };
+        Ok(Some((frame_index, observation)))
     }
 
     fn finish(self) -> Result<Option<PostAdmissionOcrComparisonReport>, ContainedTaskError> {
@@ -556,6 +615,7 @@ impl<'a> PostAdmissionOcrCollector<'a> {
         Ok(Some(PostAdmissionOcrComparisonReport {
             schema_version: "actingcommand.runtime.post-admission-ocr-comparison.v1",
             target_id: prepared.declaration.target_id.clone(),
+            target_ids: prepared.declaration.target_ids.clone(),
             truth_set_path: prepared.declaration.truth_set.path.clone(),
             truth_set_sha256: prepared.declaration.truth_set.sha256.clone(),
             normalization: prepared.declaration.normalization,
@@ -1942,6 +2002,8 @@ struct TaskProgram {
     #[serde(default)]
     server_scope: Vec<String>,
     coordinate_space: Resolution,
+    #[serde(default, deserialize_with = "deserialize_non_null_option")]
+    timeout_ms: Option<u64>,
     #[serde(default)]
     target_page: Option<PageDeclaration>,
     #[serde(default)]
@@ -1986,6 +2048,7 @@ impl TaskProgram {
         {
             return Err(ContainedTaskError::new("contained_task_program_invalid"));
         }
+        self.validate_task_timeout(control)?;
         validate_stability_contract(control, self)?;
         let target_pages = self.target_pages()?;
         validate_page_references(&control.game, &target_pages, detector)?;
@@ -2049,6 +2112,21 @@ impl TaskProgram {
         Ok(())
     }
 
+    fn validate_task_timeout(&self, control: &TaskControl) -> Result<(), ContainedTaskError> {
+        let valid = match self.schema_version.as_str() {
+            "0.3" | "0.4" | "0.5" | "0.6" => self.timeout_ms.is_none(),
+            "0.7" => self
+                .timeout_ms
+                .is_none_or(|timeout_ms| control.timeout_ms == Some(timeout_ms)),
+            _ => false,
+        };
+        if valid {
+            Ok(())
+        } else {
+            Err(ContainedTaskError::new("contained_task_program_invalid"))
+        }
+    }
+
     fn prepare_post_admission_ocr(
         &self,
         control: &TaskControl,
@@ -2060,20 +2138,25 @@ impl TaskProgram {
             return Ok(None);
         };
         declaration.validate()?;
+        let target_ids = declaration
+            .target_ids()?
+            .into_iter()
+            .map(str::to_owned)
+            .collect::<Vec<_>>();
         validate_page_references(
             &control.game,
             std::slice::from_ref(&declaration.page_id),
             detector,
         )?;
-        validate_post_admission_ocr_page_gate(control, bundle, evaluator, declaration)?;
-        if evaluator
-            .target_kind(&declaration.target_id)
-            .map_err(|_| ContainedTaskError::new("contained_task_post_admission_ocr_invalid"))?
-            != TargetKind::Ocr
-        {
-            return Err(ContainedTaskError::new(
-                "contained_task_post_admission_ocr_target_invalid",
-            ));
+        validate_post_admission_ocr_page_gate(
+            control,
+            bundle,
+            evaluator,
+            declaration,
+            &target_ids,
+        )?;
+        for target_id in &target_ids {
+            validate_post_admission_ocr_target(control, evaluator, target_id)?;
         }
         let scheduling = self.scheduling_outcome.as_ref().ok_or_else(|| {
             ContainedTaskError::new("contained_task_post_admission_ocr_outcome_missing")
@@ -2143,6 +2226,7 @@ impl TaskProgram {
         }
         Ok(Some(PreparedPostAdmissionOcr {
             declaration: declaration.clone(),
+            target_ids,
             truth: normalized.into_iter().collect(),
         }))
     }
@@ -2204,6 +2288,7 @@ fn validate_post_admission_ocr_page_gate(
     bundle: &LoadedBundle,
     evaluator: &RecognitionEvaluator,
     declaration: &PostAdmissionOcrDeclaration,
+    target_ids: &[String],
 ) -> Result<(), ContainedTaskError> {
     let pages_path = bundle.pages_path().ok_or_else(|| {
         ContainedTaskError::new("contained_task_post_admission_ocr_page_gate_missing")
@@ -2218,7 +2303,7 @@ fn validate_post_admission_ocr_page_gate(
             .chain(page.any_of.iter().flatten())
             .chain(page.optional.iter())
             .chain(page.forbidden.iter())
-            .any(|target| target == &declaration.target_id)
+            .any(|target| target_ids.iter().any(|target_id| target == target_id))
     }) {
         return Err(ContainedTaskError::new(
             "contained_task_post_admission_ocr_target_in_page_gate",
@@ -2257,11 +2342,89 @@ fn validate_post_admission_ocr_page_gate(
     Ok(())
 }
 
+fn recognition_target_id(target: &RecognitionTarget) -> &str {
+    match target {
+        RecognitionTarget::Template(target) => &target.id,
+        RecognitionTarget::Color(target) => &target.id,
+        RecognitionTarget::ClickOnly(target) => &target.id,
+        RecognitionTarget::Ocr(target) => &target.id,
+        RecognitionTarget::Nn(target) => &target.id,
+    }
+}
+
+fn validate_post_admission_ocr_target(
+    control: &TaskControl,
+    evaluator: &RecognitionEvaluator,
+    target_id: &str,
+) -> Result<(), ContainedTaskError> {
+    let matching = evaluator
+        .pack()
+        .targets
+        .iter()
+        .filter(|target| recognition_target_id(target) == target_id)
+        .collect::<Vec<_>>();
+    let [RecognitionTarget::Ocr(target)] = matching.as_slice() else {
+        return Err(ContainedTaskError::new(
+            "contained_task_post_admission_ocr_target_invalid",
+        ));
+    };
+    match &target.region {
+        PackRegion::Keyword(value) if value == "full_frame" => Ok(()),
+        PackRegion::Rect(rect) => {
+            let x = i64::from(rect.x);
+            let y = i64::from(rect.y);
+            let width = i64::from(rect.width);
+            let height = i64::from(rect.height);
+            if x < 0
+                || y < 0
+                || width <= 0
+                || height <= 0
+                || x.checked_add(width)
+                    .is_none_or(|end| end > i64::from(control.resolution.width))
+                || y.checked_add(height)
+                    .is_none_or(|end| end > i64::from(control.resolution.height))
+            {
+                return Err(ContainedTaskError::new(
+                    "contained_task_post_admission_ocr_target_out_of_bounds",
+                ));
+            }
+            Ok(())
+        }
+        PackRegion::Keyword(_) => Err(ContainedTaskError::new(
+            "contained_task_post_admission_ocr_target_invalid",
+        )),
+    }
+}
+
 impl PostAdmissionOcrDeclaration {
+    fn target_ids(&self) -> Result<Vec<&str>, ContainedTaskError> {
+        match (&self.target_id, &self.target_ids) {
+            (Some(target_id), None) if !target_id.trim().is_empty() => Ok(vec![target_id.as_str()]),
+            (None, Some(target_ids))
+                if !target_ids.is_empty() && target_ids.len() <= MAX_POST_ADMISSION_OCR_TARGETS =>
+            {
+                let mut unique = BTreeSet::new();
+                let mut ordered = Vec::with_capacity(target_ids.len());
+                for target_id in target_ids {
+                    if target_id.trim().is_empty() || !unique.insert(target_id.as_str()) {
+                        return Err(ContainedTaskError::new(
+                            "contained_task_post_admission_ocr_invalid",
+                        ));
+                    }
+                    ordered.push(target_id.as_str());
+                }
+                Ok(ordered)
+            }
+            _ => Err(ContainedTaskError::new(
+                "contained_task_post_admission_ocr_invalid",
+            )),
+        }
+    }
+
     fn validate(&self) -> Result<(), ContainedTaskError> {
         let limits = &self.limits;
+        self.target_ids()?;
         if self.page_id.trim().is_empty()
-            || self.target_id.trim().is_empty()
             || self.outcome_key.trim().is_empty()
             || !safe_task_local_path(&self.truth_set.path)
             || limits.max_frames == 0
@@ -3236,6 +3399,7 @@ mod post_admission_ocr_tests {
         OcrProviderObservation, OcrProviderRequest, OcrProviderResult, OcrProviderTextBlock,
         PackRect, RecognitionPack, VisionProviderError,
     };
+    use serde_json::{Value, json};
     use std::collections::VecDeque;
     use std::path::PathBuf;
     use std::sync::atomic::{AtomicU32, Ordering};
@@ -3244,6 +3408,7 @@ mod post_admission_ocr_tests {
     #[derive(Debug)]
     struct EvidenceProvider {
         observations: Mutex<VecDeque<OcrProviderObservation>>,
+        requests: Mutex<Vec<PackRect>>,
         calls: AtomicU32,
     }
 
@@ -3275,10 +3440,15 @@ mod post_admission_ocr_tests {
 
         fn read_text_with_execution_evidence(
             &self,
-            _request: OcrProviderRequest<'_>,
+            request: OcrProviderRequest<'_>,
         ) -> Result<OcrProviderObservation, VisionProviderError> {
             self.calls.fetch_add(1, Ordering::SeqCst);
-            self.observations
+            self.requests
+                .lock()
+                .expect("fixture request lock")
+                .push(request.region);
+            let mut observation = self
+                .observations
                 .lock()
                 .expect("fixture provider lock")
                 .pop_front()
@@ -3287,7 +3457,11 @@ mod post_admission_ocr_tests {
                         actingcommand_recognition_pack::VisionProviderErrorCode::Internal,
                         "fixture observation missing",
                     )
-                })
+                })?;
+            for block in &mut observation.result.blocks {
+                block.rect = request.region;
+            }
+            Ok(observation)
         }
 
         fn classify(
@@ -3375,11 +3549,72 @@ mod post_admission_ocr_tests {
         .expect("fixture evaluator")
     }
 
+    fn ordered_target_ids() -> Vec<String> {
+        (0..16)
+            .map(|index| format!("fixture/ocr-{index:02}"))
+            .collect()
+    }
+
+    fn ordered_ocr_pack(target_ids: &[String], coordinate_width: u32) -> RecognitionPack {
+        serde_json::from_value(serde_json::json!({
+            "schema_version": "0.6",
+            "game": "neutral",
+            "server": "test",
+            "coordinate_space": {"width": coordinate_width, "height": 1},
+            "defaults": {"color_max_distance": 0.0},
+            "targets": target_ids
+                .iter()
+                .enumerate()
+                .map(|(index, target_id)| serde_json::json!({
+                    "type": "ocr",
+                    "id": target_id,
+                    "region": {"x": index, "y": 0, "width": 1, "height": 1},
+                    "languages": ["en"],
+                    "timeout_ms": 1000,
+                    "match_mode": "exact",
+                    "expected": ["unused"],
+                    "case_sensitive": true,
+                    "minimum_confidence": 0.0,
+                    "model_ref": "PP-OCRv6_medium",
+                    "model_sha256": "a".repeat(64)
+                }))
+                .collect::<Vec<_>>()
+        }))
+        .expect("ordered OCR recognition pack")
+    }
+
+    fn prepared_ordered(target_ids: Vec<String>, truth: Vec<String>) -> PreparedPostAdmissionOcr {
+        PreparedPostAdmissionOcr {
+            declaration: PostAdmissionOcrDeclaration {
+                page_id: "target".to_string(),
+                target_id: None,
+                target_ids: Some(target_ids.clone()),
+                truth_set: PostAdmissionOcrTruthReference {
+                    path: "truth.json".to_string(),
+                    sha256: "c".repeat(64),
+                },
+                normalization: PostAdmissionOcrNormalization::TrimLowercaseV1,
+                comparison: PostAdmissionOcrComparisonMode::ExactSetV1,
+                limits: PostAdmissionOcrLimits {
+                    max_frames: 2,
+                    max_items: 64,
+                    max_string_bytes: 64,
+                    max_total_bytes: 16_384,
+                    max_truth_entries: 64,
+                },
+                outcome_key: "comparison_recorded".to_string(),
+            },
+            target_ids,
+            truth,
+        }
+    }
+
     fn prepared(truth: Vec<String>) -> PreparedPostAdmissionOcr {
         PreparedPostAdmissionOcr {
             declaration: PostAdmissionOcrDeclaration {
                 page_id: "target".to_string(),
-                target_id: "fixture/ocr".to_string(),
+                target_id: Some("fixture/ocr".to_string()),
+                target_ids: None,
                 truth_set: PostAdmissionOcrTruthReference {
                     path: "truth.json".to_string(),
                     sha256: "c".repeat(64),
@@ -3395,6 +3630,7 @@ mod post_admission_ocr_tests {
                 },
                 outcome_key: "comparison_recorded".to_string(),
             },
+            target_ids: vec!["fixture/ocr".to_string()],
             truth,
         }
     }
@@ -3412,6 +3648,7 @@ mod post_admission_ocr_tests {
                 provider_observation("invocation-1", &first),
                 provider_observation("invocation-2", &second),
             ])),
+            requests: Mutex::new(Vec::new()),
             calls: AtomicU32::new(0),
         });
         let evaluator = evaluator(Arc::clone(&provider));
@@ -3435,11 +3672,19 @@ mod post_admission_ocr_tests {
                 .is_none()
         );
         for frame_index in 0..2 {
-            let (observed_index, _) = collector
+            let (observed_index, observation) = collector
                 .observe("neutral", &evaluator, "neutral/target", &scene)
                 .expect("admitted OCR observation")
                 .expect("bounded observation");
             assert_eq!(observed_index, frame_index);
+            assert_eq!(observation.target_id.as_deref(), Some("fixture/ocr"));
+            assert!(observation.targets.is_none());
+            assert!(
+                serde_json::to_value(&observation)
+                    .expect("legacy observation evidence")
+                    .get("targets")
+                    .is_none()
+            );
         }
         let report = collector.finish().expect("comparison").expect("report");
         (report, provider.calls.load(Ordering::SeqCst))
@@ -3452,6 +3697,15 @@ mod post_admission_ocr_tests {
 
         assert_eq!(calls, 2, "non-admitted page must not invoke OCR");
         assert_eq!(repeated_calls, 2);
+        assert_eq!(first.target_id.as_deref(), Some("fixture/ocr"));
+        assert!(first.target_ids.is_none());
+        assert!(
+            serde_json::to_value(&first)
+                .expect("legacy singleton evidence")
+                .get("target_ids")
+                .is_none(),
+            "legacy singleton serialization must not gain target_ids"
+        );
         assert_eq!(first.frames_collected, 2);
         assert_eq!(first.items_collected, 423);
         assert_eq!(first.truth.len(), 422);
@@ -3470,6 +3724,294 @@ mod post_admission_ocr_tests {
             serde_json::to_vec(&first).expect("first report bytes"),
             serde_json::to_vec(&second).expect("second report bytes")
         );
+    }
+
+    #[test]
+    fn post_admission_ocr_evaluates_sixteen_targets_once_in_declaration_order() {
+        let target_ids = ordered_target_ids();
+        let values = target_ids
+            .iter()
+            .enumerate()
+            .map(|(index, _)| format!("operator-{index:02}"))
+            .collect::<Vec<_>>();
+        let provider = Arc::new(EvidenceProvider {
+            observations: Mutex::new(VecDeque::from(
+                values
+                    .iter()
+                    .enumerate()
+                    .map(|(index, value)| {
+                        provider_observation(
+                            &format!("ordered-invocation-{index:02}"),
+                            std::slice::from_ref(value),
+                        )
+                    })
+                    .collect::<Vec<_>>(),
+            )),
+            requests: Mutex::new(Vec::new()),
+            calls: AtomicU32::new(0),
+        });
+        let evaluator = RecognitionEvaluator::with_vision_provider(
+            ordered_ocr_pack(&target_ids, 16),
+            Arc::new(FsAssetResolver::new(PathBuf::new())),
+            provider.clone(),
+        )
+        .expect("ordered evaluator");
+        let prepared = prepared_ordered(target_ids.clone(), values.clone());
+        let scene = scene_from_frame(
+            &Frame::from_pixels(
+                16,
+                1,
+                vec![0; 16 * 3],
+                PixelFormat::Rgb8,
+                actingcommand_device::CaptureBackendName::FixtureSimulation,
+            )
+            .expect("ordered fixture frame"),
+        )
+        .expect("ordered fixture scene");
+        let mut collector = PostAdmissionOcrCollector::new(Some(&prepared));
+
+        let (frame_index, observation) = collector
+            .observe("neutral", &evaluator, "neutral/target", &scene)
+            .expect("ordered observation")
+            .expect("admitted frame");
+
+        assert_eq!(frame_index, 0);
+        assert_eq!(provider.calls.load(Ordering::SeqCst), 16);
+        assert!(observation.target_id.is_none());
+        let observations = observation
+            .targets
+            .as_ref()
+            .expect("ordered target evidence");
+        assert_eq!(
+            observations
+                .iter()
+                .map(|observation| observation.target_id.as_str())
+                .collect::<Vec<_>>(),
+            target_ids.iter().map(String::as_str).collect::<Vec<_>>()
+        );
+        assert_eq!(
+            provider
+                .requests
+                .lock()
+                .expect("ordered requests")
+                .iter()
+                .map(|region| region.x)
+                .collect::<Vec<_>>(),
+            (0..16).collect::<Vec<_>>()
+        );
+        let report = collector.finish().expect("comparison").expect("report");
+        assert_eq!(report.frames_collected, 1);
+        assert_eq!(report.items_collected, 16);
+        assert!(report.exact_match);
+        assert!(report.target_id.is_none());
+        assert_eq!(report.target_ids.as_ref(), Some(&target_ids));
+        let serialized = serde_json::to_value(&report).expect("ordered report evidence");
+        assert!(serialized.get("target_id").is_none());
+        assert_eq!(serialized["target_ids"], json!(target_ids));
+    }
+
+    #[test]
+    fn post_admission_ocr_target_forms_types_and_bounds_fail_closed_before_provider_access() {
+        let target_ids = ordered_target_ids();
+        let base = serde_json::json!({
+            "page_id": "target",
+            "truth_set": {"path": "truth.json", "sha256": "c".repeat(64)},
+            "normalization": "trim_lowercase_v1",
+            "comparison": "exact_set_v1",
+            "limits": {
+                "max_frames": 2,
+                "max_items": 64,
+                "max_string_bytes": 64,
+                "max_total_bytes": 16_384,
+                "max_truth_entries": 64
+            },
+            "outcome_key": "comparison_recorded"
+        });
+        let declaration = |target_fields: Value| {
+            let mut value = base.clone();
+            value
+                .as_object_mut()
+                .expect("declaration object")
+                .extend(target_fields.as_object().expect("target fields").clone());
+            serde_json::from_value::<PostAdmissionOcrDeclaration>(value)
+        };
+
+        declaration(json!({"target_id": "fixture/ocr"}))
+            .expect("legacy target form")
+            .validate()
+            .expect("legacy target validation");
+        declaration(json!({"target_ids": target_ids.clone()}))
+            .expect("ordered target form")
+            .validate()
+            .expect("ordered target validation");
+        for invalid in [
+            json!({}),
+            json!({"target_id": "fixture/ocr", "target_ids": ["fixture/ocr"]}),
+            json!({"target_ids": []}),
+            json!({"target_ids": ["fixture/ocr", "fixture/ocr"]}),
+            json!({"target_ids": (0..33).map(|index| format!("ocr/{index}"))
+                .collect::<Vec<_>>() }),
+        ] {
+            let declaration = declaration(invalid).expect("target form parses");
+            assert_eq!(
+                declaration
+                    .validate()
+                    .expect_err("invalid target form must fail closed")
+                    .code(),
+                "contained_task_post_admission_ocr_invalid"
+            );
+        }
+        assert!(declaration(json!({"target_ids": null})).is_err());
+
+        let control: TaskControl = serde_json::from_value(json!({
+            "schema_version": CONTROL_SCHEMA,
+            "package_id": "neutral.test.task",
+            "execution_mode": "navigable_route",
+            "game": "neutral",
+            "server": "test",
+            "resolution": {"width": 16, "height": 1},
+            "entry_task_id": "task"
+        }))
+        .expect("target validation control");
+        let evaluator = RecognitionEvaluator::with_asset_resolver(
+            ordered_ocr_pack(&target_ids, 16),
+            Arc::new(FsAssetResolver::new(PathBuf::new())),
+        )
+        .expect("provider-free ordered evaluator");
+        for target_id in &target_ids {
+            validate_post_admission_ocr_target(&control, &evaluator, target_id)
+                .expect("in-bounds OCR target");
+        }
+        assert_eq!(
+            validate_post_admission_ocr_target(&control, &evaluator, "missing")
+                .expect_err("unknown target must fail closed")
+                .code(),
+            "contained_task_post_admission_ocr_target_invalid"
+        );
+
+        let mut off_page_ids = (0..17)
+            .map(|index| format!("fixture/off-page-{index:02}"))
+            .collect::<Vec<_>>();
+        off_page_ids[16] = "fixture/off-page".to_string();
+        let off_page = RecognitionEvaluator::with_asset_resolver(
+            ordered_ocr_pack(&off_page_ids, 17),
+            Arc::new(FsAssetResolver::new(PathBuf::new())),
+        )
+        .expect("off-page evaluator remains valid in its own coordinate space");
+        assert_eq!(
+            validate_post_admission_ocr_target(&control, &off_page, "fixture/off-page")
+                .expect_err("target outside admitted page bounds must fail closed")
+                .code(),
+            "contained_task_post_admission_ocr_target_out_of_bounds"
+        );
+
+        let non_ocr_pack: RecognitionPack = serde_json::from_value(json!({
+            "schema_version": "0.6",
+            "game": "neutral",
+            "server": "test",
+            "coordinate_space": {"width": 16, "height": 1},
+            "targets": [{
+                "type": "color",
+                "id": "fixture/not-ocr",
+                "region": {"x": 0, "y": 0, "width": 1, "height": 1},
+                "expected": [0, 0, 0]
+            }]
+        }))
+        .expect("non-OCR pack");
+        let non_ocr = RecognitionEvaluator::with_asset_resolver(
+            non_ocr_pack,
+            Arc::new(FsAssetResolver::new(PathBuf::new())),
+        )
+        .expect("non-OCR evaluator");
+        assert_eq!(
+            validate_post_admission_ocr_target(&control, &non_ocr, "fixture/not-ocr")
+                .expect_err("non-OCR target must fail closed")
+                .code(),
+            "contained_task_post_admission_ocr_target_invalid"
+        );
+    }
+
+    #[test]
+    fn schema_0_7_task_timeout_exactly_matches_the_validated_control() {
+        let control = |timeout_ms: Option<u64>| {
+            let mut value = json!({
+                "schema_version": CONTROL_SCHEMA,
+                "package_id": "neutral.test.task",
+                "execution_mode": "navigable_route",
+                "game": "neutral",
+                "server": "test",
+                "resolution": {"width": 1, "height": 1},
+                "entry_task_id": "task"
+            });
+            if let Some(timeout_ms) = timeout_ms {
+                value["timeout_ms"] = json!(timeout_ms);
+            }
+            serde_json::from_value::<TaskControl>(value).expect("task timeout control")
+        };
+        let program = |schema_version: &str, timeout_ms: Option<Value>| {
+            let mut value = json!({
+                "schema_version": schema_version,
+                "task_id": "task",
+                "game": "neutral",
+                "coordinate_space": {"width": 1, "height": 1},
+                "operations": []
+            });
+            if schema_version == "0.7" {
+                value["post_admission_ocr"] = json!({
+                    "page_id": "target",
+                    "target_id": "fixture/ocr",
+                    "truth_set": {"path": "truth.json", "sha256": "c".repeat(64)},
+                    "normalization": "trim_lowercase_v1",
+                    "comparison": "exact_set_v1",
+                    "limits": {
+                        "max_frames": 1,
+                        "max_items": 1,
+                        "max_string_bytes": 64,
+                        "max_total_bytes": 4096,
+                        "max_truth_entries": 1
+                    },
+                    "outcome_key": "comparison_recorded"
+                });
+            }
+            if let Some(timeout_ms) = timeout_ms {
+                value["timeout_ms"] = timeout_ms;
+            }
+            serde_json::from_value::<TaskProgram>(value)
+        };
+
+        let absent = program("0.7", None).expect("absent timeout program");
+        absent
+            .validate_task_timeout(&control(Some(5_000)))
+            .expect("absence preserves the existing control timeout");
+        let bounded = program("0.7", Some(json!(300_000))).expect("bounded timeout program");
+        bounded
+            .validate_task_timeout(&control(Some(300_000)))
+            .expect("matching bounded timeout");
+        assert_eq!(
+            bounded
+                .validate_task_timeout(&control(Some(299_999)))
+                .expect_err("timeout mismatch must fail closed")
+                .code(),
+            "contained_task_program_invalid"
+        );
+        assert!(program("0.7", Some(Value::Null)).is_err());
+        assert_eq!(
+            program("0.6", Some(json!(300_000)))
+                .expect("legacy timeout parses for explicit validation")
+                .validate_task_timeout(&control(None))
+                .expect_err("legacy schema cannot declare task timeout")
+                .code(),
+            "contained_task_program_invalid"
+        );
+        for invalid in [0, 600_001] {
+            assert_eq!(
+                control(Some(invalid))
+                    .validate()
+                    .expect_err("control timeout must remain bounded")
+                    .code(),
+                "contained_task_control_invalid"
+            );
+        }
     }
 
     #[test]
@@ -3567,6 +4109,7 @@ mod post_admission_ocr_tests {
                 provider_observation("stability-invocation-1", &["synthetic truth".to_string()]),
                 provider_observation("stability-invocation-2", &["synthetic truth".to_string()]),
             ])),
+            requests: Mutex::new(Vec::new()),
             calls: AtomicU32::new(0),
         });
         let pack: RecognitionPack = serde_json::from_value(serde_json::json!({
@@ -4142,6 +4685,7 @@ mod retry_wiring_tests {
             game: "neutral".to_string(),
             server_scope: vec!["test".to_string()],
             coordinate_space: control.resolution,
+            timeout_ms: None,
             target_page: Some(PageDeclaration::Singleton("terminal".to_string())),
             error_pages: if with_error_page {
                 vec!["error".to_string()]
