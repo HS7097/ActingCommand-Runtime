@@ -17,6 +17,8 @@ const GENERATED_BY: &str = "actinglab resource convert";
 const CONVERTER_SCHEMA_VERSION: &str = "0.5";
 const OUTPUT_SCHEMA_VERSION: &str = "0.6";
 const FULL_FRAME_SENTINEL: &str = "full_frame";
+const MAX_TASK_TIMEOUT_MS: u64 = 600_000;
+const MAX_POST_ADMISSION_OCR_TARGETS: usize = 32;
 
 pub fn resource_convert(request: ResourceConvertRequest) -> CliOutcome<ResourceConvertResponse> {
     let resource_root = resolve_resource_root(&request.repo);
@@ -484,6 +486,9 @@ impl OperationConverter {
         let declared_anchor_ids = self.declared_anchor_ids();
         let mut errors = Vec::new();
         for bundle in &self.bundles {
+            if let Err(error) = validate_task_timeout_bundle(bundle) {
+                errors.push(error.message);
+            }
             if let Err(error) = validate_post_admission_ocr_bundle(bundle) {
                 errors.push(error.message);
             }
@@ -1983,6 +1988,145 @@ fn require_exact_object<'a>(
     Ok(object)
 }
 
+fn validate_task_timeout_bundle(bundle: &Bundle) -> CliOutcome<Option<u64>> {
+    let Some(value) = bundle.data.get("timeout_ms") else {
+        return Ok(None);
+    };
+    if bundle.data.get("schema_version").and_then(Value::as_str) != Some("0.7") {
+        return Err(CliError::package_invalid(format!(
+            "{}: timeout_ms requires schema_version '0.7'",
+            bundle.task_json_path().display()
+        )));
+    }
+    value
+        .as_u64()
+        .filter(|timeout_ms| (1..=MAX_TASK_TIMEOUT_MS).contains(timeout_ms))
+        .map(Some)
+        .ok_or_else(|| {
+            CliError::package_invalid(format!(
+                "{}: timeout_ms must be an integer in 1..={MAX_TASK_TIMEOUT_MS}",
+                bundle.task_json_path().display()
+            ))
+        })
+}
+
+fn post_admission_ocr_target_ids(declaration: &Map<String, Value>) -> CliOutcome<Vec<&str>> {
+    match (declaration.get("target_id"), declaration.get("target_ids")) {
+        (Some(target_id), None) => target_id
+            .as_str()
+            .filter(|target_id| !target_id.trim().is_empty())
+            .map(|target_id| vec![target_id])
+            .ok_or_else(|| {
+                CliError::package_invalid("post_admission_ocr.target_id must be a non-empty string")
+            }),
+        (None, Some(target_ids)) => {
+            let target_ids = target_ids.as_array().ok_or_else(|| {
+                CliError::package_invalid("post_admission_ocr.target_ids must be an array")
+            })?;
+            if target_ids.is_empty() || target_ids.len() > MAX_POST_ADMISSION_OCR_TARGETS {
+                return Err(CliError::package_invalid(format!(
+                    "post_admission_ocr.target_ids must contain 1..={MAX_POST_ADMISSION_OCR_TARGETS} entries"
+                )));
+            }
+            let mut unique = BTreeSet::new();
+            let mut ordered = Vec::with_capacity(target_ids.len());
+            for target_id in target_ids {
+                let target_id = target_id
+                    .as_str()
+                    .filter(|target_id| !target_id.trim().is_empty())
+                    .ok_or_else(|| {
+                        CliError::package_invalid(
+                            "post_admission_ocr.target_ids entries must be non-empty strings",
+                        )
+                    })?;
+                if !unique.insert(target_id) {
+                    return Err(CliError::package_invalid(format!(
+                        "post_admission_ocr.target_ids contains duplicate '{target_id}'"
+                    )));
+                }
+                ordered.push(target_id);
+            }
+            Ok(ordered)
+        }
+        _ => Err(CliError::package_invalid(
+            "post_admission_ocr requires exactly one of target_id or target_ids",
+        )),
+    }
+}
+
+fn validate_post_admission_ocr_target_region(
+    bundle: &Bundle,
+    target_id: &str,
+    target: &Value,
+) -> CliOutcome<()> {
+    let region = require_exact_object(
+        required_map_field(
+            target.as_object().ok_or_else(|| {
+                CliError::package_invalid(format!(
+                    "post_admission_ocr target '{target_id}' must be an object"
+                ))
+            })?,
+            "region",
+        )?,
+        &["mode", "rect"],
+        "post_admission_ocr OCR target region",
+    )?;
+    let mode = region.get("mode").and_then(Value::as_str).ok_or_else(|| {
+        CliError::package_invalid(format!(
+            "post_admission_ocr target '{target_id}' region mode is invalid"
+        ))
+    })?;
+    if mode == "full_frame" && region.len() == 1 {
+        return Ok(());
+    }
+    if mode != "rect" || region.len() != 2 {
+        return Err(CliError::package_invalid(format!(
+            "post_admission_ocr target '{target_id}' region is invalid"
+        )));
+    }
+    let rect = require_exact_object(
+        required_map_field(region, "rect")?,
+        &["x", "y", "width", "height"],
+        "post_admission_ocr OCR target rect",
+    )?;
+    let coordinate_space = bundle
+        .data
+        .get("coordinate_space")
+        .and_then(Value::as_object)
+        .ok_or_else(|| CliError::package_invalid("task coordinate_space is invalid"))?;
+    let bounded = |object: &Map<String, Value>, field: &str| -> CliOutcome<u64> {
+        object.get(field).and_then(Value::as_u64).ok_or_else(|| {
+            CliError::package_invalid(format!(
+                "post_admission_ocr target '{target_id}' {field} must be a non-negative integer"
+            ))
+        })
+    };
+    let x = bounded(rect, "x")?;
+    let y = bounded(rect, "y")?;
+    let width = bounded(rect, "width")?;
+    let height = bounded(rect, "height")?;
+    let frame_width = coordinate_space
+        .get("width")
+        .and_then(Value::as_u64)
+        .filter(|value| *value > 0)
+        .ok_or_else(|| CliError::package_invalid("task coordinate_space width is invalid"))?;
+    let frame_height = coordinate_space
+        .get("height")
+        .and_then(Value::as_u64)
+        .filter(|value| *value > 0)
+        .ok_or_else(|| CliError::package_invalid("task coordinate_space height is invalid"))?;
+    if width == 0
+        || height == 0
+        || x.checked_add(width).is_none_or(|end| end > frame_width)
+        || y.checked_add(height).is_none_or(|end| end > frame_height)
+    {
+        return Err(CliError::package_invalid(format!(
+            "post_admission_ocr target '{target_id}' region exceeds the declared page bounds"
+        )));
+    }
+    Ok(())
+}
+
 fn validate_post_admission_ocr_bundle(bundle: &Bundle) -> CliOutcome<()> {
     let schema = bundle
         .data
@@ -2017,6 +2161,7 @@ fn validate_post_admission_ocr_bundle(bundle: &Bundle) -> CliOutcome<()> {
         &[
             "page_id",
             "target_id",
+            "target_ids",
             "truth_set",
             "normalization",
             "comparison",
@@ -2037,7 +2182,7 @@ fn validate_post_admission_ocr_bundle(bundle: &Bundle) -> CliOutcome<()> {
             })
     };
     let page_id = required_string("page_id")?;
-    let target_id = required_string("target_id")?;
+    let target_ids = post_admission_ocr_target_ids(declaration)?;
     let outcome_key = required_string("outcome_key")?;
     if required_string("normalization")? != "trim_lowercase_v1"
         || required_string("comparison")? != "exact_set_v1"
@@ -2098,15 +2243,17 @@ fn validate_post_admission_ocr_bundle(bundle: &Bundle) -> CliOutcome<()> {
     let max_total_bytes = bounded("max_total_bytes", 4 * 1024 * 1024)?;
     let max_truth_entries = bounded("max_truth_entries", 4_096)?;
     let declared_targets = ocr_target_declarations(bundle)?;
-    if declared_targets
-        .iter()
-        .filter(|target| target.get("id").and_then(Value::as_str) == Some(target_id))
-        .count()
-        != 1
-    {
-        return Err(CliError::package_invalid(format!(
-            "post_admission_ocr target_id '{target_id}' is not one declared OCR target"
-        )));
+    for target_id in target_ids {
+        let matching = declared_targets
+            .iter()
+            .filter(|target| target.get("id").and_then(Value::as_str) == Some(target_id))
+            .collect::<Vec<_>>();
+        let [target] = matching.as_slice() else {
+            return Err(CliError::package_invalid(format!(
+                "post_admission_ocr target '{target_id}' is not one declared OCR target"
+            )));
+        };
+        validate_post_admission_ocr_target_region(bundle, target_id, target)?;
     }
     let scheduling: SchedulingOutcomeDeclaration =
         serde_json::from_value(bundle.data.get("scheduling_outcome").cloned().ok_or_else(
