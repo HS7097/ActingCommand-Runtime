@@ -108,6 +108,7 @@ pub(super) fn run_dry_run(global: &GlobalOptions, flags: &FlagArgs) -> CliOutcom
             "result_zip": args.out.display().to_string(),
             "result_zip_sha256": bundle_sha256,
             "decision": record.simulation.decision,
+            "post_admission_ocr": record.simulation.post_admission_ocr,
             "production_global_ledger_written": false
         })));
     }
@@ -123,6 +124,7 @@ pub(super) fn run_dry_run(global: &GlobalOptions, flags: &FlagArgs) -> CliOutcom
         "result_zip_sha256": bundle_sha256,
         "decision": record.simulation.decision,
         "recognition": record.simulation.recognition,
+        "post_admission_ocr": record.simulation.post_admission_ocr,
         "production_global_ledger_written": false
     }))
 }
