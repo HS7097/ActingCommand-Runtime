@@ -6,7 +6,7 @@ use crate::{
 };
 use actingcommand_contract::{ApplicationLifecycleAction, InputAction};
 use actingcommand_device::{
-    CaptureBackend, DeviceResult, Frame, InputBackend, SegmentedSwipeAction,
+    CaptureBackend, DeviceError, DeviceResult, Frame, InputBackend, SegmentedSwipeAction,
 };
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::mpsc::{self, Receiver, SyncSender};
@@ -363,15 +363,22 @@ fn execute_action(backend: &mut dyn InputBackend, action: &InputAction) -> Devic
             brake_duration_ms,
             slope_in,
             slope_out,
-        } => backend.segmented_swipe(SegmentedSwipeAction {
-            points: [(*x1, *y1), (*x2, *y2), (*x3, *y3)],
-            horizontal_duration_ms: *horizontal_duration_ms,
-            corner_hold_ms: *corner_hold_ms,
-            brake_distance_px: *brake_distance_px,
-            brake_duration_ms: *brake_duration_ms,
-            slope_in: *slope_in,
-            slope_out: *slope_out,
-        }),
+        } => {
+            if !backend.supports_segmented_swipe() {
+                return Err(DeviceError::fatal(
+                    "selected input backend does not support single_touch_drag_with_vertical_brake_v1",
+                ));
+            }
+            backend.segmented_swipe(SegmentedSwipeAction {
+                points: [(*x1, *y1), (*x2, *y2), (*x3, *y3)],
+                horizontal_duration_ms: *horizontal_duration_ms,
+                corner_hold_ms: *corner_hold_ms,
+                brake_distance_px: *brake_distance_px,
+                brake_duration_ms: *brake_duration_ms,
+                slope_in: *slope_in,
+                slope_out: *slope_out,
+            })
+        }
         InputAction::Key { key } => backend.key(key),
         InputAction::Text { text } => backend.text(text),
         InputAction::Reset => backend.reset(),
