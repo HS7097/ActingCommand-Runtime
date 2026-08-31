@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 use crate::adb::{Adb, AdbConfig, stop_child};
+use crate::input::{SegmentedSwipeAction, SegmentedSwipeEvent, segmented_swipe_events};
 use crate::{DeviceError, DeviceInfo, DeviceResult, DeviceTarget, HandshakeInfo, InputBackend};
 use std::fs;
 use std::io::{BufRead, BufReader, Read, Write};
@@ -376,6 +377,57 @@ impl InputBackend for MinitouchBackend {
         self.write_and_flush(&format!(
             "m {TOUCH_ID} {end_x} {end_y} {pressure}\nc\nu {TOUCH_ID}\nc\n"
         ))?;
+        Ok(())
+    }
+
+    fn supports_segmented_swipe(&self) -> bool {
+        true
+    }
+
+    fn segmented_swipe(&mut self, action: SegmentedSwipeAction) -> DeviceResult<()> {
+        let pressure = self.minitouch_config.default_pressure;
+        self.validate_pressure(pressure)?;
+        let events = segmented_swipe_events(action)?
+            .into_iter()
+            .map(|event| match event {
+                SegmentedSwipeEvent::Down((x, y)) => self
+                    .map_and_validate("segmented swipe down", x, y)
+                    .map(SegmentedSwipeEvent::Down),
+                SegmentedSwipeEvent::Move {
+                    point: (x, y),
+                    delay_before_ms,
+                } => self
+                    .map_and_validate("segmented swipe move", x, y)
+                    .map(|point| SegmentedSwipeEvent::Move {
+                        point,
+                        delay_before_ms,
+                    }),
+                SegmentedSwipeEvent::Hold(duration_ms) => {
+                    Ok(SegmentedSwipeEvent::Hold(duration_ms))
+                }
+                SegmentedSwipeEvent::Up => Ok(SegmentedSwipeEvent::Up),
+            })
+            .collect::<DeviceResult<Vec<_>>>()?;
+        for event in events {
+            match event {
+                SegmentedSwipeEvent::Down((x, y)) => {
+                    self.write_and_flush(&format!("d {TOUCH_ID} {x} {y} {pressure}\nc\n"))?;
+                }
+                SegmentedSwipeEvent::Move {
+                    point: (x, y),
+                    delay_before_ms,
+                } => {
+                    thread::sleep(Duration::from_millis(delay_before_ms));
+                    self.write_and_flush(&format!("m {TOUCH_ID} {x} {y} {pressure}\nc\n"))?;
+                }
+                SegmentedSwipeEvent::Hold(duration_ms) => {
+                    thread::sleep(Duration::from_millis(duration_ms));
+                }
+                SegmentedSwipeEvent::Up => {
+                    self.write_and_flush(&format!("u {TOUCH_ID}\nc\n"))?;
+                }
+            }
+        }
         Ok(())
     }
 

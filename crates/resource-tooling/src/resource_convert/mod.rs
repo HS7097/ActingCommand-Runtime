@@ -8,7 +8,7 @@ use actingcommand_pack_containment::validate_recognition_metadata;
 use actingcommand_recognition_pack::FsAssetResolver;
 use serde_json::{Map, Value, json};
 use sha2::{Digest, Sha256};
-use std::collections::{BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -658,7 +658,7 @@ impl OperationConverter {
                     ),
                     Err(error) => errors.push(error.message),
                 }
-                validate_click_shape(&bundle.task_json_path(), operation, &mut errors);
+                validate_click_shape(bundle, operation, &mut errors);
                 if let Some(template) = operation.get("verify_template").and_then(Value::as_str) {
                     if is_env_template_ref(template) {
                         if let Err(error) = validate_env_template_ref(template) {
@@ -1262,6 +1262,22 @@ impl OperationConverter {
                 canonical.insert("to_rect".to_string(), to);
                 return Ok(Value::Object(canonical));
             }
+            if click.get("kind").and_then(Value::as_str)
+                == Some("single_touch_drag_with_vertical_brake_v1")
+            {
+                let mut canonical = click.as_object().cloned().ok_or_else(|| {
+                    CliError::package_invalid("segmented swipe click must be an object")
+                })?;
+                let from = canonical.remove("from").ok_or_else(|| {
+                    CliError::package_invalid("segmented swipe click missing from")
+                })?;
+                let corner = canonical.remove("corner").ok_or_else(|| {
+                    CliError::package_invalid("segmented swipe click missing corner")
+                })?;
+                canonical.insert("from_rect".to_string(), from);
+                canonical.insert("corner_rect".to_string(), corner);
+                return Ok(Value::Object(canonical));
+            }
             return Ok(click.clone());
         };
         let target_id = guard
@@ -1589,7 +1605,9 @@ fn resource_ids(resources: &Value) -> CliOutcome<HashSet<String>> {
     Ok(ids)
 }
 
-fn validate_click_shape(path: &Path, operation: &Value, errors: &mut Vec<String>) {
+fn validate_click_shape(bundle: &Bundle, operation: &Value, errors: &mut Vec<String>) {
+    let task_json_path = bundle.task_json_path();
+    let path = task_json_path.as_path();
     let Some(click) = operation.get("click").and_then(Value::as_object) else {
         errors.push(format!(
             "{}: op {:?} missing click object",
@@ -1685,12 +1703,107 @@ fn validate_click_shape(path: &Path, operation: &Value, errors: &mut Vec<String>
                 );
             }
         }
+        Some("single_touch_drag_with_vertical_brake_v1") => {
+            if let Err(error) = validate_segmented_swipe_source(bundle, click) {
+                errors.push(format!(
+                    "{}: op {:?} {error}",
+                    path.display(),
+                    operation.get("id").and_then(Value::as_str)
+                ));
+            }
+        }
         other => errors.push(format!(
             "{}: op {:?} unknown click kind {other:?}",
             path.display(),
             operation.get("id").and_then(Value::as_str)
         )),
     }
+}
+
+fn validate_segmented_swipe_source(bundle: &Bundle, click: &Map<String, Value>) -> CliOutcome<()> {
+    if bundle.data.get("schema_version").and_then(Value::as_str) != Some("0.7") {
+        return Err(CliError::package_invalid(
+            "single_touch_drag_with_vertical_brake_v1 requires schema_version '0.7'",
+        ));
+    }
+    require_exact_object(
+        &Value::Object(click.clone()),
+        &[
+            "kind",
+            "from",
+            "corner",
+            "horizontal_duration_ms",
+            "corner_hold_ms",
+            "brake_distance_px",
+            "brake_duration_ms",
+        ],
+        "single_touch_drag_with_vertical_brake_v1 click",
+    )?;
+    if click.get("horizontal_duration_ms").and_then(Value::as_u64) != Some(200)
+        || click.get("corner_hold_ms").and_then(Value::as_u64) != Some(150)
+        || click.get("brake_distance_px").and_then(Value::as_i64) != Some(100)
+        || click.get("brake_duration_ms").and_then(Value::as_u64) != Some(200)
+    {
+        return Err(CliError::package_invalid(
+            "single_touch_drag_with_vertical_brake_v1 requires durations 200/150/200 ms and brake_distance_px 100",
+        ));
+    }
+    let coordinate_space = bundle
+        .data
+        .get("coordinate_space")
+        .ok_or_else(|| CliError::package_invalid("task coordinate_space is missing"))?;
+    let frame_width = coordinate_space
+        .get("width")
+        .and_then(Value::as_i64)
+        .filter(|value| *value > 0)
+        .ok_or_else(|| CliError::package_invalid("task coordinate_space width is invalid"))?;
+    let frame_height = coordinate_space
+        .get("height")
+        .and_then(Value::as_i64)
+        .filter(|value| *value > 0)
+        .ok_or_else(|| CliError::package_invalid("task coordinate_space height is invalid"))?;
+    let mut corner_y = None;
+    for field in ["from", "corner"] {
+        let rect = require_exact_object(
+            click.get(field).ok_or_else(|| {
+                CliError::package_invalid(format!("segmented swipe click missing {field}"))
+            })?,
+            &["x", "y", "width", "height"],
+            &format!("segmented swipe click.{field}"),
+        )?;
+        let x = rect.get("x").and_then(Value::as_i64).ok_or_else(|| {
+            CliError::package_invalid(format!("segmented swipe click.{field}.x is invalid"))
+        })?;
+        let y = rect.get("y").and_then(Value::as_i64).ok_or_else(|| {
+            CliError::package_invalid(format!("segmented swipe click.{field}.y is invalid"))
+        })?;
+        let width = rect.get("width").and_then(Value::as_i64).ok_or_else(|| {
+            CliError::package_invalid(format!("segmented swipe click.{field}.width is invalid"))
+        })?;
+        let height = rect.get("height").and_then(Value::as_i64).ok_or_else(|| {
+            CliError::package_invalid(format!("segmented swipe click.{field}.height is invalid"))
+        })?;
+        if x < 0
+            || y < 0
+            || width <= 0
+            || height <= 0
+            || x.checked_add(width).is_none_or(|end| end > frame_width)
+            || y.checked_add(height).is_none_or(|end| end > frame_height)
+        {
+            return Err(CliError::package_invalid(format!(
+                "segmented swipe click.{field} is empty, overflowing, or out of bounds"
+            )));
+        }
+        if field == "corner" {
+            corner_y = Some(y);
+        }
+    }
+    if corner_y.is_none_or(|y| y < 100) {
+        return Err(CliError::package_invalid(
+            "segmented swipe corner cannot keep every derived brake endpoint in bounds",
+        ));
+    }
+    Ok(())
 }
 
 fn require_click_keys(
@@ -2404,16 +2517,21 @@ fn validate_post_admission_ocr_bundle(bundle: &Bundle) -> CliOutcome<()> {
     })?;
     let truth_object = require_exact_object(
         &truth_json,
-        &["schema_version", "items"],
+        &["schema_version", "items", "aliases"],
         "post_admission_ocr truth set",
     )?;
-    if truth_object.get("schema_version").and_then(Value::as_str)
-        != Some("actingcommand.ocr-truth-set.v1")
-    {
-        return Err(CliError::package_invalid(
-            "post_admission_ocr truth set schema_version is invalid",
-        ));
-    }
+    let schema_v2 = match (
+        truth_object.get("schema_version").and_then(Value::as_str),
+        truth_object.get("aliases"),
+    ) {
+        (Some("actingcommand.ocr-truth-set.v1"), None) => false,
+        (Some("actingcommand.ocr-truth-set.v2"), None | Some(Value::Array(_))) => true,
+        _ => {
+            return Err(CliError::package_invalid(
+                "post_admission_ocr truth set schema_version or aliases is invalid",
+            ));
+        }
+    };
     let items = truth_object
         .get("items")
         .and_then(Value::as_array)
@@ -2433,6 +2551,62 @@ fn validate_post_admission_ocr_bundle(bundle: &Bundle) -> CliOutcome<()> {
             return Err(CliError::package_invalid(
                 "post_admission_ocr truth items are empty, oversized, or duplicated",
             ));
+        }
+    }
+    if schema_v2 {
+        let aliases = truth_object
+            .get("aliases")
+            .map(|aliases| {
+                aliases
+                    .as_array()
+                    .filter(|aliases| aliases.len() <= 1_024)
+                    .ok_or_else(|| {
+                        CliError::package_invalid(
+                            "post_admission_ocr truth aliases must contain at most 1024 entries",
+                        )
+                    })
+            })
+            .transpose()?
+            .map(Vec::as_slice)
+            .unwrap_or_default();
+        let mut observed_aliases = BTreeMap::new();
+        for alias in aliases {
+            let alias = require_exact_object(
+                alias,
+                &["observed", "canonical"],
+                "post_admission_ocr truth alias",
+            )?;
+            let observed_raw = alias
+                .get("observed")
+                .and_then(Value::as_str)
+                .ok_or_else(|| {
+                    CliError::package_invalid("post_admission_ocr alias observed must be a string")
+                })?;
+            let canonical_raw =
+                alias
+                    .get("canonical")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| {
+                        CliError::package_invalid(
+                            "post_admission_ocr alias canonical must be a string",
+                        )
+                    })?;
+            let observed = observed_raw.trim().to_lowercase();
+            let canonical = canonical_raw.trim().to_lowercase();
+            if observed_raw.len() as u64 > max_string_bytes
+                || canonical_raw.len() as u64 > max_string_bytes
+                || observed.is_empty()
+                || canonical.is_empty()
+                || observed.len() as u64 > max_string_bytes
+                || canonical.len() as u64 > max_string_bytes
+                || normalized.contains(&observed)
+                || !normalized.contains(&canonical)
+                || observed_aliases.insert(observed, canonical).is_some()
+            {
+                return Err(CliError::package_invalid(
+                    "post_admission_ocr truth aliases are empty, duplicated, conflicting, oversized, or noncanonical",
+                ));
+            }
         }
     }
     Ok(())
@@ -3092,6 +3266,30 @@ fn click_to_navigation(click: &Value) -> CliOutcome<Value> {
             ("to", required_field(click, "to")?.clone()),
             ("duration_ms", required_field(click, "duration_ms")?.clone()),
         ])),
+        Some("single_touch_drag_with_vertical_brake_v1") => Ok(ordered_object([
+            (
+                "kind",
+                Value::String("single_touch_drag_with_vertical_brake_v1".to_string()),
+            ),
+            ("from_rect", required_field(click, "from")?.clone()),
+            ("corner_rect", required_field(click, "corner")?.clone()),
+            (
+                "horizontal_duration_ms",
+                required_field(click, "horizontal_duration_ms")?.clone(),
+            ),
+            (
+                "corner_hold_ms",
+                required_field(click, "corner_hold_ms")?.clone(),
+            ),
+            (
+                "brake_distance_px",
+                required_field(click, "brake_distance_px")?.clone(),
+            ),
+            (
+                "brake_duration_ms",
+                required_field(click, "brake_duration_ms")?.clone(),
+            ),
+        ])),
         other => Err(CliError::package_invalid(format!(
             "unknown click kind: {other:?}"
         ))),
@@ -3113,6 +3311,15 @@ fn click_to_guard_rect(click: &Value) -> CliOutcome<Value> {
             ("height", required_field(click, "height")?.clone()),
         ])),
         Some("drag") => {
+            let rect = required_field(click, "from")?;
+            Ok(ordered_object([
+                ("x", required_field(rect, "x")?.clone()),
+                ("y", required_field(rect, "y")?.clone()),
+                ("width", required_field(rect, "width")?.clone()),
+                ("height", required_field(rect, "height")?.clone()),
+            ]))
+        }
+        Some("single_touch_drag_with_vertical_brake_v1") => {
             let rect = required_field(click, "from")?;
             Ok(ordered_object([
                 ("x", required_field(rect, "x")?.clone()),

@@ -1213,6 +1213,50 @@ fn execute_operation_with_retries<L: LedgerSink>(
                 ctx.action_durations_ms
                     .push(action_started.elapsed().as_millis() as u64);
             }
+            LabInputAction::SingleTouchDragWithVerticalBrakeV1 {
+                from,
+                corner,
+                end,
+                horizontal_duration_ms,
+                corner_hold_ms,
+                brake_distance_px,
+                brake_duration_ms,
+                slope_in,
+                slope_out,
+            } => {
+                let action_started = Instant::now();
+                let detail = json!({
+                    "step_id": operation.id,
+                    "attempt": attempt,
+                    "action_id": action_id.as_str(),
+                    "from": from.to_json(),
+                    "corner": corner.to_json(),
+                    "end": end.to_json(),
+                    "horizontal_duration_ms": horizontal_duration_ms,
+                    "corner_hold_ms": corner_hold_ms,
+                    "brake_distance_px": brake_distance_px,
+                    "brake_duration_ms": brake_duration_ms,
+                    "slope_in": slope_in,
+                    "slope_out": slope_out
+                });
+                ctx.event("segmented_swipe_started", detail.clone())?;
+                if let Err(err) = backend.segmented_swipe(
+                    actingcommand_device::SegmentedSwipeAction {
+                        points: [(from.x, from.y), (corner.x, corner.y), (end.x, end.y)],
+                        horizontal_duration_ms: *horizontal_duration_ms,
+                        corner_hold_ms: *corner_hold_ms,
+                        brake_distance_px: *brake_distance_px,
+                        brake_duration_ms: *brake_duration_ms,
+                        slope_in: *slope_in,
+                        slope_out: *slope_out,
+                    },
+                ) {
+                    return close_backend_after_error(input, CliError::device(err.to_string()));
+                }
+                ctx.event("segmented_swipe_finished", detail)?;
+                ctx.action_durations_ms
+                    .push(action_started.elapsed().as_millis() as u64);
+            }
             LabInputAction::LongTap { point, duration_ms } => {
                 let action_started = Instant::now();
                 ctx.event(
@@ -1345,7 +1389,7 @@ fn execute_operation_with_retries<L: LedgerSink>(
             "retryable": flow.retryable,
             "flow": flow.to_json(),
             "click_count": if matches!(action, LabInputAction::Tap(_)) { 1 } else { 0 },
-            "drag_count": if matches!(action, LabInputAction::Drag { .. }) { 1 } else { 0 },
+            "drag_count": if matches!(action, LabInputAction::Drag { .. } | LabInputAction::SingleTouchDragWithVerticalBrakeV1 { .. }) { 1 } else { 0 },
             "long_tap_count": if matches!(action, LabInputAction::LongTap { .. }) { 1 } else { 0 },
             "actual_input": action.to_json(),
             "consumes": operation.consumes,

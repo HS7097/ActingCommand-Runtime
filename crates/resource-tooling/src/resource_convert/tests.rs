@@ -161,6 +161,16 @@ fn schema_0_7_post_admission_ocr_validates_hash_bound_truth_and_closed_algorithm
             .message
             .contains("SHA-256")
     );
+
+    let truth_v2_without_aliases = serde_json::to_vec(&json!({
+        "schema_version": "actingcommand.ocr-truth-set.v2",
+        "items": ["缄默德克萨斯"]
+    }))
+    .expect("v2 truth bytes");
+    fs::write(task_dir.join("truth.json"), &truth_v2_without_aliases).expect("v2 truth file");
+    let truth_v2_sha256 = format!("{:x}", Sha256::digest(&truth_v2_without_aliases));
+    validate_post_admission_ocr_bundle(&task("0.7", "trim_lowercase_v1", &truth_v2_sha256))
+        .expect("schema v2 accepts a canonical dictionary without aliases");
 }
 
 #[test]
@@ -2427,12 +2437,16 @@ fn source_drag_rejects_canonical_or_mixed_endpoint_spelling() {
     ] {
         let operation = json!({"id": "drag", "click": click});
         let mut errors = Vec::new();
+        let bundle = Bundle {
+            task_id: "fixture".to_string(),
+            dir: PathBuf::from("operations/fixture"),
+            data: json!({
+                "schema_version": "0.6",
+                "coordinate_space": {"width": 1280, "height": 720}
+            }),
+        };
 
-        validate_click_shape(
-            Path::new("operations/fixture/task.json"),
-            &operation,
-            &mut errors,
-        );
+        validate_click_shape(&bundle, &operation, &mut errors);
 
         assert!(
             errors

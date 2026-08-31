@@ -44,6 +44,7 @@
                 duration_ms: None,
                 offset: None,
                 target_id: None,
+                extra: BTreeMap::new(),
             },
             verify_template: verify_template.map(str::to_string),
             expect_after: None,

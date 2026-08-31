@@ -1492,6 +1492,24 @@ impl InputSamplingEvidence {
             (InputAction::Swipe { x1, y1, x2, y2, .. }, [from, to]) => {
                 from.contains(*x1, *y1) && to.contains(*x2, *y2)
             }
+            (
+                InputAction::SingleTouchDragWithVerticalBrakeV1 {
+                    x1,
+                    y1,
+                    x2,
+                    y2,
+                    x3,
+                    y3,
+                    brake_distance_px,
+                    ..
+                },
+                [from, corner],
+            ) => {
+                from.contains(*x1, *y1)
+                    && corner.contains(*x2, *y2)
+                    && *x3 == *x2
+                    && y2.checked_sub(*brake_distance_px) == Some(*y3)
+            }
             _ => false,
         };
         if valid {
@@ -1897,6 +1915,7 @@ impl TaskSemanticFact {
             InputAction::Tap { .. }
             | InputAction::LongTap { .. }
             | InputAction::Swipe { .. }
+            | InputAction::SingleTouchDragWithVerticalBrakeV1 { .. }
             | InputAction::Reset => {}
         }
     }
