@@ -37,6 +37,7 @@ const MAX_FIXTURE_FRAMES: usize = 32;
 const MAX_FIXTURE_FRAME_BYTES: usize = 16 * 1024 * 1024;
 const MAX_FIXTURE_RESIDENT_BYTES: usize = 32 * 1024 * 1024;
 const MAX_FIXTURE_INPUTS: u16 = 32;
+const MAX_PRIVATE_DEVICE_ERROR_DETAIL_BYTES: usize = 8 * 1024;
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -840,9 +841,15 @@ impl ExecutionBackendProvider for ConfiguredExecutionBackendRegistry {
         match self.mode_for_alias(instance_alias) {
             Some(ScheduledExecutionMode::DeviceRegistry) => {
                 let input_backend = self.device_input_backends.get(instance_alias).copied();
+                let audit_endpoint = self
+                    .devices
+                    .as_ref()
+                    .and_then(|devices| devices.resolve(instance_alias))
+                    .map(|instance| instance.audit_endpoint().to_owned());
                 open_device_registry_input_with_diagnostic(
                     instance_alias,
                     input_backend,
+                    audit_endpoint.as_deref(),
                     || {
                         let input_backend = input_backend.ok_or_else(|| {
                             DeviceError::fatal("device input backend context is unavailable")
@@ -856,6 +863,7 @@ impl ExecutionBackendProvider for ConfiguredExecutionBackendRegistry {
                             backend,
                             instance_alias,
                             input_backend,
+                            audit_endpoint.as_deref(),
                             Arc::clone(&self.input_open_diagnostic_sink),
                         )) as Box<dyn InputBackend>)
                     },
@@ -947,6 +955,7 @@ struct DeviceRegistryInputDiagnosticBackend {
     backend: Box<dyn InputBackend>,
     instance_alias: String,
     requested_backend: TouchBackendChoice,
+    audit_endpoint: Option<String>,
     diagnostic_sink: Arc<dyn Fn(String) + Send + Sync>,
 }
 
@@ -955,12 +964,14 @@ impl DeviceRegistryInputDiagnosticBackend {
         backend: Box<dyn InputBackend>,
         instance_alias: &str,
         requested_backend: TouchBackendChoice,
+        audit_endpoint: Option<&str>,
         diagnostic_sink: Arc<dyn Fn(String) + Send + Sync>,
     ) -> Self {
         Self {
             backend,
             instance_alias: instance_alias.to_owned(),
             requested_backend,
+            audit_endpoint: audit_endpoint.map(str::to_owned),
             diagnostic_sink,
         }
     }
@@ -978,6 +989,7 @@ impl DeviceRegistryInputDiagnosticBackend {
                     self.requested_backend,
                     operation,
                     &error,
+                    self.audit_endpoint.as_deref(),
                 ));
                 Err(error)
             }
@@ -1000,6 +1012,15 @@ impl InputBackend for DeviceRegistryInputDiagnosticBackend {
         })
     }
 
+    fn supports_segmented_swipe(&self) -> bool {
+        (self.diagnostic_sink)(device_registry_input_capability_diagnostic_record(
+            &self.instance_alias,
+            self.requested_backend,
+            self.backend.supports_segmented_swipe(),
+        ));
+        false
+    }
+
     fn key(&mut self, key: &str) -> DeviceResult<()> {
         self.run("key", |backend| backend.key(key))
     }
@@ -1020,6 +1041,7 @@ impl InputBackend for DeviceRegistryInputDiagnosticBackend {
 fn open_device_registry_input_with_diagnostic<T>(
     instance_alias: &str,
     input_backend: Option<TouchBackendChoice>,
+    audit_endpoint: Option<&str>,
     open: impl FnOnce() -> DeviceResult<T>,
     emit: impl FnOnce(String),
 ) -> DeviceResult<T> {
@@ -1030,6 +1052,7 @@ fn open_device_registry_input_with_diagnostic<T>(
                 instance_alias,
                 input_backend,
                 &error,
+                audit_endpoint,
             ));
             Err(error)
         }
@@ -1060,6 +1083,7 @@ fn device_registry_input_operation_diagnostic_record(
     requested_backend: TouchBackendChoice,
     operation: &str,
     error: &DeviceError,
+    audit_endpoint: Option<&str>,
 ) -> String {
     format!(
         "ERROR actingd {}",
@@ -1069,7 +1093,26 @@ fn device_registry_input_operation_diagnostic_record(
             "requested_backend": requested_backend.as_str(),
             "factory": touch_backend_factory_name(requested_backend),
             "operation": operation,
-            "device_error": error.to_string(),
+            "device_error": private_device_error(error, audit_endpoint),
+        })
+    )
+}
+
+fn device_registry_input_capability_diagnostic_record(
+    instance_alias: &str,
+    requested_backend: TouchBackendChoice,
+    backend_supports_segmented_swipe: bool,
+) -> String {
+    format!(
+        "ERROR actingd {}",
+        serde_json::json!({
+            "diagnostic": "device_registry_input_capability_unavailable",
+            "instance_alias": instance_alias,
+            "requested_backend": requested_backend.as_str(),
+            "factory": touch_backend_factory_name(requested_backend),
+            "operation": "single_touch_drag_with_vertical_brake_v1",
+            "wrapper_supports_segmented_swipe": false,
+            "backend_supports_segmented_swipe": backend_supports_segmented_swipe,
         })
     )
 }
@@ -1078,6 +1121,7 @@ fn device_registry_input_open_diagnostic_record(
     instance_alias: &str,
     input_backend: Option<TouchBackendChoice>,
     error: &DeviceError,
+    audit_endpoint: Option<&str>,
 ) -> String {
     let requested_backend = input_backend
         .map(TouchBackendChoice::as_str)
@@ -1092,9 +1136,37 @@ fn device_registry_input_open_diagnostic_record(
             "instance_alias": instance_alias,
             "requested_backend": requested_backend,
             "factory": factory,
-            "device_error": error.to_string(),
+            "device_error": private_device_error(error, audit_endpoint),
         })
     )
+}
+
+fn private_device_error(error: &DeviceError, audit_endpoint: Option<&str>) -> serde_json::Value {
+    let native_detail = error.message();
+    let detail_utf8_bytes = native_detail.len();
+    let detail = audit_endpoint
+        .filter(|endpoint| !endpoint.is_empty())
+        .map_or_else(
+            || native_detail.to_owned(),
+            |endpoint| native_detail.replace(endpoint, "[redacted]"),
+        );
+    let mut detail_end = detail.len().min(MAX_PRIVATE_DEVICE_ERROR_DETAIL_BYTES);
+    while !detail.is_char_boundary(detail_end) {
+        detail_end -= 1;
+    }
+    let diagnostic = error.diagnostic();
+    serde_json::json!({
+        "severity": format!("{:?}", error.severity()),
+        "category": diagnostic
+            .map(|value| value.category().as_str())
+            .unwrap_or("unclassified"),
+        "stage": diagnostic
+            .map(|value| value.stage())
+            .unwrap_or("unavailable"),
+        "detail": &detail[..detail_end],
+        "detail_utf8_bytes": detail_utf8_bytes,
+        "detail_truncated": detail_end != detail.len(),
+    })
 }
 
 fn device_registry_capture_open_diagnostic_record(
@@ -1379,6 +1451,7 @@ const fn enabled() -> bool {
 mod tests {
     use super::*;
     use actingcommand_contract::IdentifierIssuer;
+    use actingcommand_device::DeviceErrorCategory;
     use actingcommand_vision_ffi::{FastDeployPpocrArtifacts, OnnxExecutionProvider};
     use serde_json::json;
     use std::io::Write;
@@ -1545,6 +1618,7 @@ mod tests {
     struct RecordingInputBackend {
         result: DeviceResult<()>,
         calls: Arc<Mutex<Vec<&'static str>>>,
+        supports_segmented_swipe: bool,
     }
 
     impl RecordingInputBackend {
@@ -1574,6 +1648,10 @@ mod tests {
             self.invoke("swipe")
         }
 
+        fn supports_segmented_swipe(&self) -> bool {
+            self.supports_segmented_swipe
+        }
+
         fn key(&mut self, _key: &str) -> DeviceResult<()> {
             self.invoke("key")
         }
@@ -1598,6 +1676,14 @@ mod tests {
     }
 
     fn diagnostic_input_backend(result: DeviceResult<()>) -> DiagnosticInputBackendFixture {
+        diagnostic_input_backend_with(result, TouchBackendChoice::AdbShellInput, false)
+    }
+
+    fn diagnostic_input_backend_with(
+        result: DeviceResult<()>,
+        requested_backend: TouchBackendChoice,
+        supports_segmented_swipe: bool,
+    ) -> DiagnosticInputBackendFixture {
         let calls = Arc::new(Mutex::new(Vec::new()));
         let records = Arc::new(Mutex::new(Vec::new()));
         let sink_records = Arc::clone(&records);
@@ -1612,9 +1698,11 @@ mod tests {
                 Box::new(RecordingInputBackend {
                     result,
                     calls: Arc::clone(&calls),
+                    supports_segmented_swipe,
                 }),
                 "neutral.device",
-                TouchBackendChoice::AdbShellInput,
+                requested_backend,
+                Some("fixture.device:16384"),
                 sink,
             ),
             calls,
@@ -1668,9 +1756,141 @@ mod tests {
                     "requested_backend": "adb_shell_input",
                     "factory": "AdbShellInputFactory",
                     "operation": operation.name(),
-                    "device_error": original.to_string(),
+                    "device_error": {
+                        "severity": "Transient",
+                        "category": "unclassified",
+                        "stage": "unavailable",
+                        "detail": original.message(),
+                        "detail_utf8_bytes": original.message().len(),
+                        "detail_truncated": false,
+                    },
                 })
             );
+        }
+    }
+
+    // Test class: specification criterion.
+    #[test]
+    fn maatouch_write_failure_and_segmented_capability_emit_typed_private_diagnostics() {
+        let original = DeviceError::transient("Broken pipe (os error 232)")
+            .with_diagnostic(DeviceErrorCategory::CommandWrite, "maatouch.stdin.write");
+        let DiagnosticInputBackendFixture {
+            mut backend,
+            calls,
+            records,
+        } = diagnostic_input_backend_with(
+            Err(original.clone()),
+            TouchBackendChoice::MaaTouch,
+            true,
+        );
+
+        let returned = backend
+            .swipe(10, 20, 30, 40, 50)
+            .expect_err("controlled MaaTouch write failure");
+        assert_eq!(returned, original);
+        let _ = backend.supports_segmented_swipe();
+        assert_eq!(*calls.lock().expect("input calls"), ["swipe"]);
+
+        let records = records.lock().expect("diagnostic records");
+        assert_eq!(records.len(), 2);
+        let operation = records[0]
+            .strip_prefix("ERROR actingd ")
+            .expect("private diagnostic prefix");
+        let operation =
+            serde_json::from_str::<serde_json::Value>(operation).expect("operation diagnostic");
+        assert_eq!(
+            operation,
+            json!({
+                "diagnostic": "device_registry_input_operation_failed",
+                "instance_alias": "neutral.device",
+                "requested_backend": "maatouch",
+                "factory": "MaaTouchFactory",
+                "operation": "swipe",
+                "device_error": {
+                    "severity": "Transient",
+                    "category": "command_write",
+                    "stage": "maatouch.stdin.write",
+                    "detail": "Broken pipe (os error 232)",
+                    "detail_utf8_bytes": 26,
+                    "detail_truncated": false,
+                },
+            })
+        );
+        let capability = records[1]
+            .strip_prefix("ERROR actingd ")
+            .expect("private diagnostic prefix");
+        let capability =
+            serde_json::from_str::<serde_json::Value>(capability).expect("capability diagnostic");
+        assert_eq!(
+            capability,
+            json!({
+                "diagnostic": "device_registry_input_capability_unavailable",
+                "instance_alias": "neutral.device",
+                "requested_backend": "maatouch",
+                "factory": "MaaTouchFactory",
+                "operation": "single_touch_drag_with_vertical_brake_v1",
+                "wrapper_supports_segmented_swipe": false,
+                "backend_supports_segmented_swipe": true,
+            })
+        );
+
+        let oversized_detail = "雪".repeat(MAX_PRIVATE_DEVICE_ERROR_DETAIL_BYTES);
+        let bounded = private_device_error(&DeviceError::transient(&oversized_detail), None);
+        assert_eq!(
+            bounded["detail_utf8_bytes"],
+            oversized_detail.len(),
+            "original native detail length must remain attributable"
+        );
+        assert_eq!(bounded["detail_truncated"], true);
+        assert!(
+            bounded["detail"]
+                .as_str()
+                .expect("bounded UTF-8 detail")
+                .len()
+                <= MAX_PRIVATE_DEVICE_ERROR_DETAIL_BYTES
+        );
+    }
+
+    // Task Contract: Workflow #241 / #241-MAATOUCH-DIAGNOSTIC-PRIVACY-v3.
+    // Test class: authorized Defect regression with a preserved first red.
+    #[test]
+    fn private_device_error_redacts_configured_endpoint_forms() {
+        for endpoint in [
+            "198.51.100.42:16416",
+            "[2001:db8::42]:16416",
+            "device.example.test:16416",
+        ] {
+            let original_detail = format!(
+                "failed to open MaaTouch at {endpoint}: native connection refused for {endpoint}"
+            );
+            let original = DeviceError::transient(&original_detail)
+                .with_diagnostic(DeviceErrorCategory::BackendLaunch, "maatouch.process.spawn");
+            let record = device_registry_input_operation_diagnostic_record(
+                "neutral.device",
+                TouchBackendChoice::MaaTouch,
+                "swipe",
+                &original,
+                Some(endpoint),
+            );
+
+            assert!(!record.contains(endpoint), "endpoint leaked: {record}");
+            let payload = record
+                .strip_prefix("ERROR actingd ")
+                .expect("private diagnostic prefix");
+            let payload =
+                serde_json::from_str::<serde_json::Value>(payload).expect("private diagnostic");
+            assert_eq!(payload["device_error"]["severity"], "Transient");
+            assert_eq!(payload["device_error"]["category"], "backend_launch");
+            assert_eq!(payload["device_error"]["stage"], "maatouch.process.spawn");
+            assert_eq!(
+                payload["device_error"]["detail"],
+                "failed to open MaaTouch at [redacted]: native connection refused for [redacted]"
+            );
+            assert_eq!(
+                payload["device_error"]["detail_utf8_bytes"],
+                original_detail.len()
+            );
+            assert_eq!(payload["device_error"]["detail_truncated"], false);
         }
     }
 
@@ -1790,8 +2010,16 @@ mod tests {
         assert_eq!(payload["instance_alias"], "neutral.device");
         assert_eq!(payload["requested_backend"], "adb_shell_input");
         assert_eq!(payload["factory"], "AdbShellInputFactory");
-        assert_eq!(payload["device_error"], error.to_string());
-        let device_error = payload["device_error"].as_str().expect("device error");
+        assert_eq!(
+            payload["device_error"]["severity"],
+            format!("{:?}", error.severity())
+        );
+        assert_eq!(payload["device_error"]["category"], "unclassified");
+        assert_eq!(payload["device_error"]["stage"], "unavailable");
+        assert_eq!(payload["device_error"]["detail_truncated"], false);
+        let device_error = payload["device_error"]["detail"]
+            .as_str()
+            .expect("device error detail");
         assert!(
             device_error.contains("child_operation=ensure_device"),
             "unexpected device error: {device_error}"
@@ -1809,6 +2037,7 @@ mod tests {
         let value = open_device_registry_input_with_diagnostic(
             "neutral.device",
             Some(TouchBackendChoice::AdbShellInput),
+            Some("fixture.device:16384"),
             || Ok::<_, DeviceError>(7_u8),
             |record| records.push(record),
         )
