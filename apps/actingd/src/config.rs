@@ -841,9 +841,15 @@ impl ExecutionBackendProvider for ConfiguredExecutionBackendRegistry {
         match self.mode_for_alias(instance_alias) {
             Some(ScheduledExecutionMode::DeviceRegistry) => {
                 let input_backend = self.device_input_backends.get(instance_alias).copied();
+                let audit_endpoint = self
+                    .devices
+                    .as_ref()
+                    .and_then(|devices| devices.resolve(instance_alias))
+                    .map(|instance| instance.audit_endpoint().to_owned());
                 open_device_registry_input_with_diagnostic(
                     instance_alias,
                     input_backend,
+                    audit_endpoint.as_deref(),
                     || {
                         let input_backend = input_backend.ok_or_else(|| {
                             DeviceError::fatal("device input backend context is unavailable")
@@ -857,6 +863,7 @@ impl ExecutionBackendProvider for ConfiguredExecutionBackendRegistry {
                             backend,
                             instance_alias,
                             input_backend,
+                            audit_endpoint.as_deref(),
                             Arc::clone(&self.input_open_diagnostic_sink),
                         )) as Box<dyn InputBackend>)
                     },
@@ -948,6 +955,7 @@ struct DeviceRegistryInputDiagnosticBackend {
     backend: Box<dyn InputBackend>,
     instance_alias: String,
     requested_backend: TouchBackendChoice,
+    audit_endpoint: Option<String>,
     diagnostic_sink: Arc<dyn Fn(String) + Send + Sync>,
 }
 
@@ -956,12 +964,14 @@ impl DeviceRegistryInputDiagnosticBackend {
         backend: Box<dyn InputBackend>,
         instance_alias: &str,
         requested_backend: TouchBackendChoice,
+        audit_endpoint: Option<&str>,
         diagnostic_sink: Arc<dyn Fn(String) + Send + Sync>,
     ) -> Self {
         Self {
             backend,
             instance_alias: instance_alias.to_owned(),
             requested_backend,
+            audit_endpoint: audit_endpoint.map(str::to_owned),
             diagnostic_sink,
         }
     }
@@ -979,6 +989,7 @@ impl DeviceRegistryInputDiagnosticBackend {
                     self.requested_backend,
                     operation,
                     &error,
+                    self.audit_endpoint.as_deref(),
                 ));
                 Err(error)
             }
@@ -1030,6 +1041,7 @@ impl InputBackend for DeviceRegistryInputDiagnosticBackend {
 fn open_device_registry_input_with_diagnostic<T>(
     instance_alias: &str,
     input_backend: Option<TouchBackendChoice>,
+    audit_endpoint: Option<&str>,
     open: impl FnOnce() -> DeviceResult<T>,
     emit: impl FnOnce(String),
 ) -> DeviceResult<T> {
@@ -1040,6 +1052,7 @@ fn open_device_registry_input_with_diagnostic<T>(
                 instance_alias,
                 input_backend,
                 &error,
+                audit_endpoint,
             ));
             Err(error)
         }
@@ -1070,6 +1083,7 @@ fn device_registry_input_operation_diagnostic_record(
     requested_backend: TouchBackendChoice,
     operation: &str,
     error: &DeviceError,
+    audit_endpoint: Option<&str>,
 ) -> String {
     format!(
         "ERROR actingd {}",
@@ -1079,7 +1093,7 @@ fn device_registry_input_operation_diagnostic_record(
             "requested_backend": requested_backend.as_str(),
             "factory": touch_backend_factory_name(requested_backend),
             "operation": operation,
-            "device_error": private_device_error(error),
+            "device_error": private_device_error(error, audit_endpoint),
         })
     )
 }
@@ -1107,6 +1121,7 @@ fn device_registry_input_open_diagnostic_record(
     instance_alias: &str,
     input_backend: Option<TouchBackendChoice>,
     error: &DeviceError,
+    audit_endpoint: Option<&str>,
 ) -> String {
     let requested_backend = input_backend
         .map(TouchBackendChoice::as_str)
@@ -1121,15 +1136,21 @@ fn device_registry_input_open_diagnostic_record(
             "instance_alias": instance_alias,
             "requested_backend": requested_backend,
             "factory": factory,
-            "device_error": private_device_error(error),
+            "device_error": private_device_error(error, audit_endpoint),
         })
     )
 }
 
-fn private_device_error(error: &DeviceError) -> serde_json::Value {
-    let detail = error.message();
-    let detail_utf8_bytes = detail.len();
-    let mut detail_end = detail_utf8_bytes.min(MAX_PRIVATE_DEVICE_ERROR_DETAIL_BYTES);
+fn private_device_error(error: &DeviceError, audit_endpoint: Option<&str>) -> serde_json::Value {
+    let native_detail = error.message();
+    let detail_utf8_bytes = native_detail.len();
+    let detail = audit_endpoint
+        .filter(|endpoint| !endpoint.is_empty())
+        .map_or_else(
+            || native_detail.to_owned(),
+            |endpoint| native_detail.replace(endpoint, "[redacted]"),
+        );
+    let mut detail_end = detail.len().min(MAX_PRIVATE_DEVICE_ERROR_DETAIL_BYTES);
     while !detail.is_char_boundary(detail_end) {
         detail_end -= 1;
     }
@@ -1144,7 +1165,7 @@ fn private_device_error(error: &DeviceError) -> serde_json::Value {
             .unwrap_or("unavailable"),
         "detail": &detail[..detail_end],
         "detail_utf8_bytes": detail_utf8_bytes,
-        "detail_truncated": detail_end != detail_utf8_bytes,
+        "detail_truncated": detail_end != detail.len(),
     })
 }
 
@@ -1681,6 +1702,7 @@ mod tests {
                 }),
                 "neutral.device",
                 requested_backend,
+                Some("fixture.device:16384"),
                 sink,
             ),
             calls,
@@ -1813,7 +1835,7 @@ mod tests {
         );
 
         let oversized_detail = "雪".repeat(MAX_PRIVATE_DEVICE_ERROR_DETAIL_BYTES);
-        let bounded = private_device_error(&DeviceError::transient(&oversized_detail));
+        let bounded = private_device_error(&DeviceError::transient(&oversized_detail), None);
         assert_eq!(
             bounded["detail_utf8_bytes"],
             oversized_detail.len(),
@@ -1827,6 +1849,49 @@ mod tests {
                 .len()
                 <= MAX_PRIVATE_DEVICE_ERROR_DETAIL_BYTES
         );
+    }
+
+    // Task Contract: Workflow #241 / #241-MAATOUCH-DIAGNOSTIC-PRIVACY-v3.
+    // Test class: authorized Defect regression with a preserved first red.
+    #[test]
+    fn private_device_error_redacts_configured_endpoint_forms() {
+        for endpoint in [
+            "198.51.100.42:16416",
+            "[2001:db8::42]:16416",
+            "device.example.test:16416",
+        ] {
+            let original_detail = format!(
+                "failed to open MaaTouch at {endpoint}: native connection refused for {endpoint}"
+            );
+            let original = DeviceError::transient(&original_detail)
+                .with_diagnostic(DeviceErrorCategory::BackendLaunch, "maatouch.process.spawn");
+            let record = device_registry_input_operation_diagnostic_record(
+                "neutral.device",
+                TouchBackendChoice::MaaTouch,
+                "swipe",
+                &original,
+                Some(endpoint),
+            );
+
+            assert!(!record.contains(endpoint), "endpoint leaked: {record}");
+            let payload = record
+                .strip_prefix("ERROR actingd ")
+                .expect("private diagnostic prefix");
+            let payload =
+                serde_json::from_str::<serde_json::Value>(payload).expect("private diagnostic");
+            assert_eq!(payload["device_error"]["severity"], "Transient");
+            assert_eq!(payload["device_error"]["category"], "backend_launch");
+            assert_eq!(payload["device_error"]["stage"], "maatouch.process.spawn");
+            assert_eq!(
+                payload["device_error"]["detail"],
+                "failed to open MaaTouch at [redacted]: native connection refused for [redacted]"
+            );
+            assert_eq!(
+                payload["device_error"]["detail_utf8_bytes"],
+                original_detail.len()
+            );
+            assert_eq!(payload["device_error"]["detail_truncated"], false);
+        }
     }
 
     #[test]
@@ -1972,6 +2037,7 @@ mod tests {
         let value = open_device_registry_input_with_diagnostic(
             "neutral.device",
             Some(TouchBackendChoice::AdbShellInput),
+            Some("fixture.device:16384"),
             || Ok::<_, DeviceError>(7_u8),
             |record| records.push(record),
         )
