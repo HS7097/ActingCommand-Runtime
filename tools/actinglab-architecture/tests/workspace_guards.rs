@@ -594,6 +594,9 @@ fn c5_offline_package_simulation_reuses_the_contained_task_kernel_without_device
         .split("#[cfg(test)]")
         .next()
         .expect("offline execution adapter production source");
+    let contained_task =
+        fs::read_to_string(root.join("crates/execution-kernel/src/contained_task.rs"))
+            .expect("read production contained-task interpreter source");
     let lab_run = fs::read_to_string(root.join("apps/actinglab/src/lab_run.rs"))
         .expect("read production Lab run CLI source");
 
@@ -630,13 +633,23 @@ fn c5_offline_package_simulation_reuses_the_contained_task_kernel_without_device
         );
     }
     for required in [
-        "task.run(&mut runtime)",
+        "task.run_with_options(&mut runtime, ContainedTaskRunOptions::offline_simulation())",
         "OfflineBoundary::EffectIntercepted",
         "executed: false",
     ] {
         assert!(
             offline_kernel_production.contains(required),
             "offline adapter stopped delegating to the production contained-task kernel via {required}"
+        );
+    }
+    for required in [
+        "pub fn run<R: ContainedTaskRuntime>",
+        "self.run_with_options(runtime, ContainedTaskRunOptions::default())",
+        "pub(crate) fn run_with_options<R: ContainedTaskRuntime>",
+    ] {
+        assert!(
+            contained_task.contains(required),
+            "production and offline paths stopped sharing one contained-task interpreter via {required}"
         );
     }
     for forbidden in [

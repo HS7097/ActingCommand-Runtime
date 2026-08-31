@@ -54,6 +54,14 @@ fn package_dry_run_binds_inputs_and_writes_a_deterministic_offline_bundle() {
     assert_eq!(record["simulation"]["entry_count"], 6);
     assert_eq!(record["simulation"]["task_count"], 1);
     assert_eq!(record["simulation"]["capture_count"], 1);
+    assert_eq!(
+        record["simulation"]["post_admission_ocr"],
+        json!({
+            "declared": false,
+            "executed": false,
+            "pending_real_execution": false
+        })
+    );
     assert_eq!(record["loaded"]["validation"]["status"], "valid");
     assert_eq!(record["loaded"]["task_count"], 1);
     assert_eq!(record["loaded"]["entries"].as_array().unwrap().len(), 6);
@@ -110,6 +118,42 @@ fn package_dry_run_admits_schema_0_7_through_the_formal_parser() {
     let record = read_result_record(&fixture.temp.path().join("schema-0.7.zip"));
     assert_eq!(record["executed"], false);
     assert_eq!(record["production_global_ledger_written"], false);
+}
+
+#[test]
+fn package_dry_run_defers_declared_ocr_without_provider_and_reports_it_explicitly() {
+    let operator = TestFixture::new(
+        PackageOptions {
+            operation_schema: "0.7",
+            post_admission_ocr: true,
+            post_admission_ocr_page: "home",
+            ..PackageOptions::default()
+        },
+        home_frame(true),
+    );
+    let operator_output = operator.run(&[], "operator.result.zip");
+    assert_success(&operator_output, "would_click");
+    assert_eq!(
+        envelope_data(&operator_output)["decision"]["operation_label"],
+        "open_terminal"
+    );
+    assert_deferred_post_admission_ocr(&envelope_data(&operator_output)["post_admission_ocr"]);
+    let operator_record = read_result_record(&operator.temp.path().join("operator.result.zip"));
+    assert_deferred_post_admission_ocr(&operator_record["simulation"]["post_admission_ocr"]);
+
+    let terminal = TestFixture::new(
+        PackageOptions {
+            operation_schema: "0.7",
+            post_admission_ocr: true,
+            ..PackageOptions::default()
+        },
+        terminal_frame(),
+    );
+    let terminal_output = terminal.run(&[], "terminal.result.zip");
+    assert_success(&terminal_output, "would_complete");
+    assert_deferred_post_admission_ocr(&envelope_data(&terminal_output)["post_admission_ocr"]);
+    let terminal_record = read_result_record(&terminal.temp.path().join("terminal.result.zip"));
+    assert_deferred_post_admission_ocr(&terminal_record["simulation"]["post_admission_ocr"]);
 }
 
 #[test]
@@ -751,6 +795,17 @@ fn assert_success(output: &Output, decision_status: &str) {
     assert_eq!(envelope["data"]["production_global_ledger_written"], false);
 }
 
+fn assert_deferred_post_admission_ocr(status: &Value) {
+    assert_eq!(
+        status,
+        &json!({
+            "declared": true,
+            "executed": false,
+            "pending_real_execution": true
+        })
+    );
+}
+
 fn assert_failure(output: &Output) {
     assert!(
         !output.status.success(),
@@ -812,6 +867,7 @@ struct PackageOptions {
     control_schema: &'static str,
     operation_schema: &'static str,
     post_admission_ocr: bool,
+    post_admission_ocr_page: &'static str,
     malformed_post_admission_ocr: bool,
     execution_mode: &'static str,
     click_kind: &'static str,
@@ -840,6 +896,7 @@ impl Default for PackageOptions {
             control_schema: "Lab-1y.control.v1",
             operation_schema: "0.6",
             post_admission_ocr: false,
+            post_admission_ocr_page: "terminal",
             malformed_post_admission_ocr: false,
             execution_mode: "navigable_route",
             click_kind: "point",
@@ -964,7 +1021,7 @@ fn package(options: PackageOptions) -> Vec<u8> {
             }]
         });
         task["post_admission_ocr"] = json!({
-            "page_id": "terminal",
+            "page_id": options.post_admission_ocr_page,
             "target_id": "fixture/ocr",
             "truth_set": {"path": "truth.json", "sha256": truth_sha256},
             "normalization": "trim_lowercase_v1",
