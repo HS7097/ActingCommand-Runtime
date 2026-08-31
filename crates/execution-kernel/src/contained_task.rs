@@ -1126,6 +1126,26 @@ pub struct PreparedContainedTask {
     task_count: usize,
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) struct ContainedTaskRunOptions {
+    post_admission_ocr: PostAdmissionOcrExecution,
+}
+
+impl ContainedTaskRunOptions {
+    pub(crate) const fn offline_simulation() -> Self {
+        Self {
+            post_admission_ocr: PostAdmissionOcrExecution::DisabledForOfflineSimulation,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+enum PostAdmissionOcrExecution {
+    #[default]
+    Enabled,
+    DisabledForOfflineSimulation,
+}
+
 impl PreparedContainedTask {
     pub fn load(
         instance_label: &str,
@@ -1250,6 +1270,14 @@ impl PreparedContainedTask {
         &self,
         runtime: &mut R,
     ) -> Result<ContainedTaskOutcome, ContainedTaskRunError<R::Error>> {
+        self.run_with_options(runtime, ContainedTaskRunOptions::default())
+    }
+
+    pub(crate) fn run_with_options<R: ContainedTaskRuntime>(
+        &self,
+        runtime: &mut R,
+        options: ContainedTaskRunOptions,
+    ) -> Result<ContainedTaskOutcome, ContainedTaskRunError<R::Error>> {
         runtime
             .record(ContainedTaskTrace::PackageAdmitted {
                 task_label: self.task_label().to_string(),
@@ -1274,7 +1302,11 @@ impl PreparedContainedTask {
         let task_timeout =
             Duration::from_millis(self.control.timeout_ms.unwrap_or(DEFAULT_TASK_TIMEOUT_MS));
         let started = Instant::now();
-        let mut ocr_collector = PostAdmissionOcrCollector::new(self.post_admission_ocr.as_ref());
+        let post_admission_ocr = match options.post_admission_ocr {
+            PostAdmissionOcrExecution::Enabled => self.post_admission_ocr.as_ref(),
+            PostAdmissionOcrExecution::DisabledForOfflineSimulation => None,
+        };
+        let mut ocr_collector = PostAdmissionOcrCollector::new(post_admission_ocr);
         let mut observation =
             self.capture_until_page(runtime, &mut ocr_collector, step_timeout, capture_interval)?;
         if self.control.execution_mode == "recognize_only" {
@@ -4613,6 +4645,40 @@ mod post_admission_ocr_tests {
         let serialized = serde_json::to_value(&report).expect("ordered report evidence");
         assert!(serialized.get("target_id").is_none());
         assert_eq!(serialized["target_ids"], json!(target_ids));
+    }
+
+    #[test]
+    fn production_post_admission_ocr_without_provider_still_fails_loud() {
+        let target_ids = vec!["fixture/ocr-00".to_string()];
+        let evaluator = RecognitionEvaluator::with_asset_resolver(
+            ordered_ocr_pack(&target_ids, 2),
+            Arc::new(FsAssetResolver::new(PathBuf::new())),
+        )
+        .expect("provider-free evaluator");
+        let prepared = prepared_ordered(target_ids, vec!["operator-00".to_string()]);
+        let scene = scene_from_frame(
+            &Frame::from_pixels(
+                2,
+                1,
+                vec![0; 6],
+                PixelFormat::Rgb8,
+                actingcommand_device::CaptureBackendName::FixtureSimulation,
+            )
+            .expect("provider-free fixture frame"),
+        )
+        .expect("provider-free fixture scene");
+        let mut collector = PostAdmissionOcrCollector::new(Some(&prepared));
+
+        let error = collector
+            .observe("neutral", &evaluator, "neutral/operator", &scene)
+            .expect_err("production OCR must require its provider");
+
+        assert_eq!(error.code(), "contained_task_post_admission_ocr_failed");
+        assert!(
+            error
+                .detail()
+                .is_some_and(|detail| detail.contains("has no injected vision provider"))
+        );
     }
 
     #[test]
