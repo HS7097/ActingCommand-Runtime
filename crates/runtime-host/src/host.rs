@@ -2859,6 +2859,17 @@ struct RuntimeRunLinks {
     run_id: IssuedRunId,
 }
 
+#[derive(Clone, Copy)]
+struct RuntimeLeaseAcquisition<'request, 'payload> {
+    request: &'request ValidatedRuntimeRequest<'payload>,
+    request_id: RequestId,
+    instance_alias: &'request str,
+    holder_id: actingcommand_contract::HolderId,
+    connection_id: ConnectionId,
+    run_links: Option<RuntimeRunLinks>,
+    lease_ttl_ms: Option<u64>,
+}
+
 impl RuntimeRunLinks {
     const fn new(task_id: IssuedTaskId, run_id: IssuedRunId) -> Self {
         Self { task_id, run_id }
@@ -4189,14 +4200,15 @@ impl HostShared {
                         };
                     }
                 };
-                let admission = self.acquire_lease(
-                    &validated,
-                    request.request_id(),
-                    &intent.instance_id,
+                let admission = self.acquire_lease(RuntimeLeaseAcquisition {
+                    request: &validated,
+                    request_id: request.request_id(),
+                    instance_alias: &intent.instance_id,
                     holder_id,
                     connection_id,
-                    Some(run_links),
-                );
+                    run_links: Some(run_links),
+                    lease_ttl_ms: None,
+                });
                 match admission {
                     Ok(success) => match success.result {
                         RuntimeResult::LeaseGranted { token } => {
@@ -5172,14 +5184,15 @@ impl HostShared {
                 holder_id,
             } => {
                 self.require_physical_instance_alias(instance_alias)?;
-                self.acquire_lease(
-                    validated,
-                    request.request_id(),
+                self.acquire_lease(RuntimeLeaseAcquisition {
+                    request: validated,
+                    request_id: request.request_id(),
                     instance_alias,
-                    *holder_id,
+                    holder_id: *holder_id,
                     connection_id,
-                    None,
-                )
+                    run_links: None,
+                    lease_ttl_ms: None,
+                })
             }
             RuntimeOperation::QueueLease {
                 instance_alias,
@@ -7846,26 +7859,41 @@ impl HostShared {
 
     fn acquire_lease(
         &self,
-        request: &ValidatedRuntimeRequest<'_>,
-        request_id: RequestId,
-        instance_alias: &str,
-        holder_id: actingcommand_contract::HolderId,
-        connection_id: ConnectionId,
-        run_links: Option<RuntimeRunLinks>,
+        acquisition: RuntimeLeaseAcquisition<'_, '_>,
     ) -> Result<OperationSuccess, RequestFailure> {
+        let RuntimeLeaseAcquisition {
+            request,
+            request_id,
+            instance_alias,
+            holder_id,
+            connection_id,
+            run_links,
+            lease_ttl_ms,
+        } = acquisition;
         let resolved = self.resolve_instance(instance_alias)?;
         let instance_guard = self.instance_guard(resolved.instance_id())?;
         let _admission = lock(&instance_guard, "lock_instance_admission")?;
         self.expire_instance_if_due(resolved.instance_id())?;
         let preparation = {
             let mut scheduler = lock(&self.scheduler, "prepare_lease")?;
-            scheduler.prepare_acquire(
-                request_id,
-                resolved.instance_id(),
-                holder_id,
-                connection_id,
-                self.monotonic_ms()?,
-            )
+            let now_monotonic_ms = self.monotonic_ms()?;
+            match lease_ttl_ms {
+                Some(lease_ttl_ms) => scheduler.prepare_acquire_with_ttl(
+                    request_id,
+                    resolved.instance_id(),
+                    holder_id,
+                    connection_id,
+                    lease_ttl_ms,
+                    now_monotonic_ms,
+                ),
+                None => scheduler.prepare_acquire(
+                    request_id,
+                    resolved.instance_id(),
+                    holder_id,
+                    connection_id,
+                    now_monotonic_ms,
+                ),
+            }
         };
         let preparation = match preparation {
             Ok(preparation) => preparation,
@@ -9803,14 +9831,15 @@ impl HostShared {
             EventAction::InputReset,
             None,
         )?;
-        let acquired = self.acquire_lease(
+        let acquired = self.acquire_lease(RuntimeLeaseAcquisition {
             request,
-            original.request_id(),
+            request_id: original.request_id(),
             instance_alias,
             holder_id,
             connection_id,
-            None,
-        )?;
+            run_links: None,
+            lease_ttl_ms: None,
+        })?;
         let RuntimeResult::LeaseGranted { token } = acquired.result else {
             return Err(RequestFailure::poison_without_terminal(
                 RuntimeHostError::fatal(
@@ -9954,14 +9983,15 @@ impl HostShared {
             action.event_action(),
             None,
         )?;
-        let acquired = self.acquire_lease(
+        let acquired = self.acquire_lease(RuntimeLeaseAcquisition {
             request,
-            original.request_id(),
+            request_id: original.request_id(),
             instance_alias,
             holder_id,
             connection_id,
-            None,
-        )?;
+            run_links: None,
+            lease_ttl_ms: None,
+        })?;
         let RuntimeResult::LeaseGranted { token } = acquired.result else {
             return Err(RequestFailure::poison_without_terminal(
                 RuntimeHostError::fatal(
@@ -10058,14 +10088,16 @@ impl HostShared {
             .issuer()
             .mint_run_id()
             .map_err(|_| RequestFailure::poison_without_terminal(runtime_identifier_error()))?;
-        let acquired = self.acquire_lease(
+        let lease_ttl_ms = self.contained_task_lease_ttl(task_request)?;
+        let acquired = self.acquire_lease(RuntimeLeaseAcquisition {
             request,
-            original.request_id(),
+            request_id: original.request_id(),
             instance_alias,
             holder_id,
             connection_id,
-            None,
-        )?;
+            run_links: None,
+            lease_ttl_ms: Some(lease_ttl_ms),
+        })?;
         let RuntimeResult::LeaseGranted { token } = acquired.result else {
             return Err(RequestFailure::poison_without_terminal(
                 RuntimeHostError::fatal(
@@ -10143,6 +10175,25 @@ impl HostShared {
             ));
         }
         Ok(deadline)
+    }
+
+    fn contained_task_lease_ttl(
+        &self,
+        request: &ContainedTaskRequest,
+    ) -> Result<u64, RequestFailure> {
+        let reserve = lock(&self.scheduler, "read_contained_task_lease_ttl_config")?
+            .config()
+            .maximum_client_heartbeat_interval_ms;
+        request
+            .response_deadline_ms()
+            .checked_add(reserve)
+            .ok_or_else(|| {
+                RequestFailure::poison_without_terminal(RuntimeHostError::fatal(
+                    "contained_task_lease_ttl_overflow",
+                    "derive_contained_task_lease_ttl",
+                    RuntimeErrorCode::RuntimeFatal,
+                ))
+            })
     }
 
     fn run_scheduled_contained_task(

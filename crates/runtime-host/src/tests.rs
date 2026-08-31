@@ -58,7 +58,9 @@ use actingcommand_runtime_state::{
     RUNTIME_STATE_DATABASE_FILE, RUNTIME_STATE_INTEGRITY_KEY_FILE, ReleaseArtifactSources,
     RuntimeStateStore,
 };
-use actingcommand_scheduler::{ConnectionId, SchedulerConfig};
+use actingcommand_scheduler::{
+    ConnectionId, DEFAULT_LEASE_TTL_MS, DEFAULT_MAX_CLIENT_HEARTBEAT_INTERVAL_MS, SchedulerConfig,
+};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fs::{self, OpenOptions};
@@ -9920,11 +9922,15 @@ fn runtime_executes_neutral_contained_task_without_lab_ownership() {
     restarted.close().expect("close restarted host");
 }
 
+// Task Contract: Workflow #241 / direct contained-task lease deadline v1.
+// Test class: specification criterion.
 #[test]
-fn contained_task_over_five_seconds_completes_within_authoritative_deadline() {
+fn direct_contained_task_max_deadline_survives_past_default_lease_boundary() {
     let root = TempDir::new().expect("tempdir");
     let package = root.path().join("long-contained-task.zip");
-    let bytes = neutral_contained_task_package_with_execution_timeout(7_000);
+    let bytes = neutral_contained_task_package_with_execution_timeout(
+        ContainedTaskRequest::MAX_RESPONSE_DEADLINE_MS,
+    );
     fs::write(&package, &bytes).expect("write package");
     let expected = actingcommand_pack_containment::Sha256Hash::digest(&bytes).to_string();
     let state = Arc::new(FakeState::default());
@@ -9934,14 +9940,7 @@ fn contained_task_over_five_seconds_completes_within_authoritative_deadline() {
     let clock = Arc::new(ManualRuntimeClock::new(1_000, 0));
     let stable_instance_id = instance_id();
     let host = RuntimeHost::start(
-        config(&root)
-            .with_scheduler(SchedulerConfig {
-                maximum_client_heartbeat_interval_ms: 20,
-                takeover_cooldown_ms: 40,
-                lease_ttl_ms: 8_000,
-                ..SchedulerConfig::default()
-            })
-            .with_runtime_clock(clock.clone()),
+        config(&root).with_runtime_clock(clock.clone()),
         Arc::new(FakeProvider::one(
             "neutral.instance",
             stable_instance_id,
@@ -9957,17 +9956,19 @@ fn contained_task_over_five_seconds_completes_within_authoritative_deadline() {
             ids.mint_holder_id().expect("holder"),
             ContainedTaskRequest::new(package.display().to_string(), expected)
                 .expect("contained task request")
-                .with_response_deadline_ms(7_000)
+                .with_response_deadline_ms(ContainedTaskRequest::MAX_RESPONSE_DEADLINE_MS)
                 .expect("bounded response deadline"),
         ),
     );
+    let advance_past_default_lease_boundary =
+        DEFAULT_LEASE_TTL_MS - DEFAULT_MAX_CLIENT_HEARTBEAT_INTERVAL_MS + 1;
     let checkpoint_clock = Arc::clone(&clock);
     let checkpoint = host
         .run_at_contained_task_checkpoint_for_test(
             request.request_id(),
             stable_instance_id,
             None,
-            move |_| checkpoint_clock.advance(5_001),
+            move |_| checkpoint_clock.advance(advance_past_default_lease_boundary),
         )
         .expect("install authoritative deadline checkpoint");
 
@@ -9982,8 +9983,8 @@ fn contained_task_over_five_seconds_completes_within_authoritative_deadline() {
         }) => *deadline,
         result => panic!("unexpected long task result: {result:?}"),
     };
-    assert_eq!(deadline, 7_000);
-    assert_eq!(clock.monotonic_ms(), 5_001);
+    assert_eq!(deadline, ContainedTaskRequest::MAX_RESPONSE_DEADLINE_MS);
+    assert_eq!(clock.monotonic_ms(), advance_past_default_lease_boundary);
     assert_eq!(checkpoint.consumed(), 1);
     let checkpoint_identity = checkpoint
         .observed()
@@ -9998,6 +9999,13 @@ fn contained_task_over_five_seconds_completes_within_authoritative_deadline() {
             ..EventQuery::default()
         })
         .expect("long task events");
+    assert_eq!(
+        persisted
+            .iter()
+            .filter_map(|event| event.links().lease_id().copied())
+            .collect::<BTreeSet<_>>(),
+        BTreeSet::from([checkpoint_identity.lease_id()])
+    );
     for (event_type, expected_count) in [
         (EventType::TaskCompleted, 1),
         (EventType::TaskCancelled, 0),
