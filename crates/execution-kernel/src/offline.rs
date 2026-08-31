@@ -3,8 +3,8 @@
 //! Zero-device adapter for evaluating contained tasks against recorded frames.
 
 use crate::{
-    ContainedTaskGuardOutcome, ContainedTaskRunError, ContainedTaskRuntime, ContainedTaskTrace,
-    PreparedContainedTask,
+    ContainedTaskGuardOutcome, ContainedTaskRunError, ContainedTaskRunOptions,
+    ContainedTaskRuntime, ContainedTaskTrace, PreparedContainedTask,
 };
 use actingcommand_contract::InputAction;
 use actingcommand_device::Frame;
@@ -55,8 +55,16 @@ pub struct OfflineSimulationResult {
     pub entry_count: usize,
     pub task_count: usize,
     pub capture_count: usize,
+    pub post_admission_ocr: OfflinePostAdmissionOcrStatus,
     pub recognition: Vec<OfflineRecognitionResult>,
     pub decision: OfflineDecision,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub struct OfflinePostAdmissionOcrStatus {
+    pub declared: bool,
+    pub executed: bool,
+    pub pending_real_execution: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -114,7 +122,7 @@ pub fn simulate_contained_task(
             detail: None,
         }
     } else {
-        match task.run(&mut runtime) {
+        match task.run_with_options(&mut runtime, ContainedTaskRunOptions::offline_simulation()) {
             Ok(outcome)
                 if outcome.executed_steps == 0 && task.execution_mode() == "recognize_only" =>
             {
@@ -160,6 +168,7 @@ pub fn simulate_contained_task(
     let package_id = task.package_label().to_string();
     let package_sha256 = task.package_sha256().to_string();
     let task_id = task.task_label().to_string();
+    let post_admission_ocr_declared = task.has_post_admission_ocr();
     let decision_fingerprint = fingerprint_decision(
         &package_id,
         &package_sha256,
@@ -177,6 +186,11 @@ pub fn simulate_contained_task(
         entry_count: task.entry_count(),
         task_count: task.task_count(),
         capture_count: runtime.capture_count,
+        post_admission_ocr: OfflinePostAdmissionOcrStatus {
+            declared: post_admission_ocr_declared,
+            executed: false,
+            pending_real_execution: post_admission_ocr_declared,
+        },
         recognition: runtime.recognition,
         decision,
     })
