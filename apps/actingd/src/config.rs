@@ -4,7 +4,7 @@ use actingcommand_contract::{ApplicationLifecycleAction, ContainedTaskRequest, I
 use actingcommand_device::{
     AdbConfig, CaptureBackend, CaptureBackendChoice, CaptureBackendConfig, CaptureBackendName,
     DeviceError, DeviceResult, DeviceTarget, Frame, InputBackend, MaaTouchConfig, MinitouchConfig,
-    PixelFormat, TouchBackendChoice, TouchBackendConfig,
+    PixelFormat, SegmentedSwipeAction, TouchBackendChoice, TouchBackendConfig,
 };
 use actingcommand_policy::{
     CatalogDocumentSource, CatalogSources, EvaluationFacts, EvaluationResources, MAX_APPROVAL_REFS,
@@ -1013,12 +1013,19 @@ impl InputBackend for DeviceRegistryInputDiagnosticBackend {
     }
 
     fn supports_segmented_swipe(&self) -> bool {
-        (self.diagnostic_sink)(device_registry_input_capability_diagnostic_record(
-            &self.instance_alias,
-            self.requested_backend,
-            self.backend.supports_segmented_swipe(),
-        ));
-        false
+        let supported = self.backend.supports_segmented_swipe();
+        if !supported {
+            (self.diagnostic_sink)(device_registry_input_capability_diagnostic_record(
+                &self.instance_alias,
+                self.requested_backend,
+                supported,
+            ));
+        }
+        supported
+    }
+
+    fn segmented_swipe(&mut self, action: SegmentedSwipeAction) -> DeviceResult<()> {
+        self.run("segmented_swipe", |backend| backend.segmented_swipe(action))
     }
 
     fn key(&mut self, key: &str) -> DeviceResult<()> {
@@ -1618,6 +1625,7 @@ mod tests {
     struct RecordingInputBackend {
         result: DeviceResult<()>,
         calls: Arc<Mutex<Vec<&'static str>>>,
+        segmented_swipe_actions: Arc<Mutex<Vec<SegmentedSwipeAction>>>,
         supports_segmented_swipe: bool,
     }
 
@@ -1652,6 +1660,14 @@ mod tests {
             self.supports_segmented_swipe
         }
 
+        fn segmented_swipe(&mut self, action: SegmentedSwipeAction) -> DeviceResult<()> {
+            self.segmented_swipe_actions
+                .lock()
+                .expect("segmented swipe actions")
+                .push(action);
+            self.invoke("segmented_swipe")
+        }
+
         fn key(&mut self, _key: &str) -> DeviceResult<()> {
             self.invoke("key")
         }
@@ -1673,6 +1689,7 @@ mod tests {
         backend: DeviceRegistryInputDiagnosticBackend,
         calls: Arc<Mutex<Vec<&'static str>>>,
         records: Arc<Mutex<Vec<String>>>,
+        segmented_swipe_actions: Arc<Mutex<Vec<SegmentedSwipeAction>>>,
     }
 
     fn diagnostic_input_backend(result: DeviceResult<()>) -> DiagnosticInputBackendFixture {
@@ -1686,6 +1703,7 @@ mod tests {
     ) -> DiagnosticInputBackendFixture {
         let calls = Arc::new(Mutex::new(Vec::new()));
         let records = Arc::new(Mutex::new(Vec::new()));
+        let segmented_swipe_actions = Arc::new(Mutex::new(Vec::new()));
         let sink_records = Arc::clone(&records);
         let sink: Arc<dyn Fn(String) + Send + Sync> = Arc::new(move |record| {
             sink_records
@@ -1698,6 +1716,7 @@ mod tests {
                 Box::new(RecordingInputBackend {
                     result,
                     calls: Arc::clone(&calls),
+                    segmented_swipe_actions: Arc::clone(&segmented_swipe_actions),
                     supports_segmented_swipe,
                 }),
                 "neutral.device",
@@ -1707,6 +1726,19 @@ mod tests {
             ),
             calls,
             records,
+            segmented_swipe_actions,
+        }
+    }
+
+    fn test_segmented_swipe_action() -> SegmentedSwipeAction {
+        SegmentedSwipeAction {
+            points: [(1095, 355), (105, 357), (105, 257)],
+            horizontal_duration_ms: 200,
+            corner_hold_ms: 150,
+            brake_distance_px: 100,
+            brake_duration_ms: 200,
+            slope_in: 2,
+            slope_out: 0,
         }
     }
 
@@ -1726,6 +1758,7 @@ mod tests {
                 mut backend,
                 calls,
                 records,
+                ..
             } = diagnostic_input_backend(Err(original.clone()));
 
             let returned = operation
@@ -1771,13 +1804,14 @@ mod tests {
 
     // Test class: specification criterion.
     #[test]
-    fn maatouch_write_failure_and_segmented_capability_emit_typed_private_diagnostics() {
+    fn maatouch_write_failure_emits_typed_private_diagnostic() {
         let original = DeviceError::transient("Broken pipe (os error 232)")
             .with_diagnostic(DeviceErrorCategory::CommandWrite, "maatouch.stdin.write");
         let DiagnosticInputBackendFixture {
             mut backend,
             calls,
             records,
+            ..
         } = diagnostic_input_backend_with(
             Err(original.clone()),
             TouchBackendChoice::MaaTouch,
@@ -1788,11 +1822,10 @@ mod tests {
             .swipe(10, 20, 30, 40, 50)
             .expect_err("controlled MaaTouch write failure");
         assert_eq!(returned, original);
-        let _ = backend.supports_segmented_swipe();
         assert_eq!(*calls.lock().expect("input calls"), ["swipe"]);
 
         let records = records.lock().expect("diagnostic records");
-        assert_eq!(records.len(), 2);
+        assert_eq!(records.len(), 1);
         let operation = records[0]
             .strip_prefix("ERROR actingd ")
             .expect("private diagnostic prefix");
@@ -1816,24 +1849,6 @@ mod tests {
                 },
             })
         );
-        let capability = records[1]
-            .strip_prefix("ERROR actingd ")
-            .expect("private diagnostic prefix");
-        let capability =
-            serde_json::from_str::<serde_json::Value>(capability).expect("capability diagnostic");
-        assert_eq!(
-            capability,
-            json!({
-                "diagnostic": "device_registry_input_capability_unavailable",
-                "instance_alias": "neutral.device",
-                "requested_backend": "maatouch",
-                "factory": "MaaTouchFactory",
-                "operation": "single_touch_drag_with_vertical_brake_v1",
-                "wrapper_supports_segmented_swipe": false,
-                "backend_supports_segmented_swipe": true,
-            })
-        );
-
         let oversized_detail = "雪".repeat(MAX_PRIVATE_DEVICE_ERROR_DETAIL_BYTES);
         let bounded = private_device_error(&DeviceError::transient(&oversized_detail), None);
         assert_eq!(
@@ -1848,6 +1863,122 @@ mod tests {
                 .expect("bounded UTF-8 detail")
                 .len()
                 <= MAX_PRIVATE_DEVICE_ERROR_DETAIL_BYTES
+        );
+    }
+
+    // Task Contract: Workflow #241 / DeviceRegistry segmented swipe v2.
+    // Test class: specification criterion.
+    #[test]
+    fn device_registry_input_segmented_capability_matches_inner_backend() {
+        for supported in [false, true] {
+            let DiagnosticInputBackendFixture {
+                backend, records, ..
+            } = diagnostic_input_backend_with(Ok(()), TouchBackendChoice::MaaTouch, supported);
+
+            assert_eq!(backend.supports_segmented_swipe(), supported);
+            let records = records.lock().expect("diagnostic records");
+            if supported {
+                assert!(records.is_empty());
+            } else {
+                assert_eq!(records.len(), 1);
+                let payload = records[0]
+                    .strip_prefix("ERROR actingd ")
+                    .expect("private diagnostic prefix");
+                let payload = serde_json::from_str::<serde_json::Value>(payload)
+                    .expect("capability diagnostic");
+                assert_eq!(
+                    payload,
+                    json!({
+                        "diagnostic": "device_registry_input_capability_unavailable",
+                        "instance_alias": "neutral.device",
+                        "requested_backend": "maatouch",
+                        "factory": "MaaTouchFactory",
+                        "operation": "single_touch_drag_with_vertical_brake_v1",
+                        "wrapper_supports_segmented_swipe": false,
+                        "backend_supports_segmented_swipe": false,
+                    })
+                );
+            }
+        }
+    }
+
+    // Task Contract: Workflow #241 / DeviceRegistry segmented swipe v2.
+    // Test class: specification criterion.
+    #[test]
+    fn device_registry_input_segmented_swipe_forwards_exact_action() {
+        let action = test_segmented_swipe_action();
+        let DiagnosticInputBackendFixture {
+            mut backend,
+            calls,
+            records,
+            segmented_swipe_actions,
+        } = diagnostic_input_backend_with(Ok(()), TouchBackendChoice::MaaTouch, true);
+
+        backend
+            .segmented_swipe(action)
+            .expect("segmented swipe succeeds");
+
+        assert_eq!(*calls.lock().expect("input calls"), ["segmented_swipe"]);
+        assert_eq!(
+            *segmented_swipe_actions
+                .lock()
+                .expect("segmented swipe actions"),
+            [action]
+        );
+        assert!(records.lock().expect("diagnostic records").is_empty());
+    }
+
+    // Task Contract: Workflow #241 / DeviceRegistry segmented swipe v2.
+    // Test class: specification criterion.
+    #[test]
+    fn device_registry_input_segmented_swipe_failure_preserves_private_diagnostic() {
+        let action = test_segmented_swipe_action();
+        let original = DeviceError::transient(
+            "failed to write segmented swipe to fixture.device:16384: Broken pipe",
+        )
+        .with_diagnostic(DeviceErrorCategory::CommandWrite, "maatouch.stdin.write");
+        let DiagnosticInputBackendFixture {
+            mut backend,
+            calls,
+            records,
+            segmented_swipe_actions,
+        } = diagnostic_input_backend_with(
+            Err(original.clone()),
+            TouchBackendChoice::MaaTouch,
+            true,
+        );
+
+        let returned = backend
+            .segmented_swipe(action)
+            .expect_err("segmented swipe failure");
+
+        assert_eq!(returned, original);
+        assert_eq!(*calls.lock().expect("input calls"), ["segmented_swipe"]);
+        assert_eq!(
+            *segmented_swipe_actions
+                .lock()
+                .expect("segmented swipe actions"),
+            [action]
+        );
+        let records = records.lock().expect("diagnostic records");
+        assert_eq!(records.len(), 1);
+        assert!(!records[0].contains("fixture.device:16384"));
+        let payload = records[0]
+            .strip_prefix("ERROR actingd ")
+            .expect("private diagnostic prefix");
+        let payload =
+            serde_json::from_str::<serde_json::Value>(payload).expect("operation diagnostic");
+        assert_eq!(
+            payload["diagnostic"],
+            "device_registry_input_operation_failed"
+        );
+        assert_eq!(payload["operation"], "segmented_swipe");
+        assert_eq!(payload["device_error"]["severity"], "Transient");
+        assert_eq!(payload["device_error"]["category"], "command_write");
+        assert_eq!(payload["device_error"]["stage"], "maatouch.stdin.write");
+        assert_eq!(
+            payload["device_error"]["detail"],
+            "failed to write segmented swipe to [redacted]: Broken pipe"
         );
     }
 
@@ -1901,6 +2032,7 @@ mod tests {
                 mut backend,
                 calls,
                 records,
+                ..
             } = diagnostic_input_backend(Ok(()));
 
             operation
