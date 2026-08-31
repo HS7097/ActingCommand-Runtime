@@ -4196,6 +4196,7 @@ impl HostShared {
                     holder_id,
                     connection_id,
                     Some(run_links),
+                    None,
                 );
                 match admission {
                     Ok(success) => match success.result {
@@ -5178,6 +5179,7 @@ impl HostShared {
                     instance_alias,
                     *holder_id,
                     connection_id,
+                    None,
                     None,
                 )
             }
@@ -7852,6 +7854,7 @@ impl HostShared {
         holder_id: actingcommand_contract::HolderId,
         connection_id: ConnectionId,
         run_links: Option<RuntimeRunLinks>,
+        lease_ttl_ms: Option<u64>,
     ) -> Result<OperationSuccess, RequestFailure> {
         let resolved = self.resolve_instance(instance_alias)?;
         let instance_guard = self.instance_guard(resolved.instance_id())?;
@@ -7859,13 +7862,24 @@ impl HostShared {
         self.expire_instance_if_due(resolved.instance_id())?;
         let preparation = {
             let mut scheduler = lock(&self.scheduler, "prepare_lease")?;
-            scheduler.prepare_acquire(
-                request_id,
-                resolved.instance_id(),
-                holder_id,
-                connection_id,
-                self.monotonic_ms()?,
-            )
+            let now_monotonic_ms = self.monotonic_ms()?;
+            match lease_ttl_ms {
+                Some(lease_ttl_ms) => scheduler.prepare_acquire_with_ttl(
+                    request_id,
+                    resolved.instance_id(),
+                    holder_id,
+                    connection_id,
+                    lease_ttl_ms,
+                    now_monotonic_ms,
+                ),
+                None => scheduler.prepare_acquire(
+                    request_id,
+                    resolved.instance_id(),
+                    holder_id,
+                    connection_id,
+                    now_monotonic_ms,
+                ),
+            }
         };
         let preparation = match preparation {
             Ok(preparation) => preparation,
@@ -9810,6 +9824,7 @@ impl HostShared {
             holder_id,
             connection_id,
             None,
+            None,
         )?;
         let RuntimeResult::LeaseGranted { token } = acquired.result else {
             return Err(RequestFailure::poison_without_terminal(
@@ -9961,6 +9976,7 @@ impl HostShared {
             holder_id,
             connection_id,
             None,
+            None,
         )?;
         let RuntimeResult::LeaseGranted { token } = acquired.result else {
             return Err(RequestFailure::poison_without_terminal(
@@ -10058,6 +10074,7 @@ impl HostShared {
             .issuer()
             .mint_run_id()
             .map_err(|_| RequestFailure::poison_without_terminal(runtime_identifier_error()))?;
+        let lease_ttl_ms = self.contained_task_lease_ttl(task_request)?;
         let acquired = self.acquire_lease(
             request,
             original.request_id(),
@@ -10065,6 +10082,7 @@ impl HostShared {
             holder_id,
             connection_id,
             None,
+            Some(lease_ttl_ms),
         )?;
         let RuntimeResult::LeaseGranted { token } = acquired.result else {
             return Err(RequestFailure::poison_without_terminal(
@@ -10143,6 +10161,25 @@ impl HostShared {
             ));
         }
         Ok(deadline)
+    }
+
+    fn contained_task_lease_ttl(
+        &self,
+        request: &ContainedTaskRequest,
+    ) -> Result<u64, RequestFailure> {
+        let reserve = lock(&self.scheduler, "read_contained_task_lease_ttl_config")?
+            .config()
+            .maximum_client_heartbeat_interval_ms;
+        request
+            .response_deadline_ms()
+            .checked_add(reserve)
+            .ok_or_else(|| {
+                RequestFailure::poison_without_terminal(RuntimeHostError::fatal(
+                    "contained_task_lease_ttl_overflow",
+                    "derive_contained_task_lease_ttl",
+                    RuntimeErrorCode::RuntimeFatal,
+                ))
+            })
     }
 
     fn run_scheduled_contained_task(
