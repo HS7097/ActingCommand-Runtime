@@ -85,7 +85,7 @@ fn append_maa_2_0_segment(
     let denominator = i128::from(steps) * i128::from(steps);
     for step in 1..=steps {
         let elapsed_ms = duration_ms * step / steps;
-        let numerator = i128::from(step) * i128::from(step);
+        let numerator = i128::from(step) * (2 * i128::from(steps) - i128::from(step));
         let x = i128::from(start.0) + i128::from(end.0 - start.0) * numerator / denominator;
         let y = i128::from(start.1) + i128::from(end.1 - start.1) * numerator / denominator;
         events.push(SegmentedSwipeEvent::Move {
@@ -202,6 +202,17 @@ mod tests {
             events[events.len() - 2],
             SegmentedSwipeEvent::Move {
                 point: (105, 257),
+                delay_before_ms: 16,
+            }
+        );
+
+        let mut half_progress = Vec::new();
+        append_maa_2_0_segment(&mut half_progress, (0, 0), (100, 40), 32);
+        assert_eq!(half_progress.len(), 2);
+        assert_eq!(
+            half_progress[0],
+            SegmentedSwipeEvent::Move {
+                point: (75, 30),
                 delay_before_ms: 16,
             }
         );
