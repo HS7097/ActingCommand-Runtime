@@ -987,24 +987,36 @@ impl OperationGuard {
 #[derive(Debug, Clone, Deserialize)]
 struct OperationClick {
     kind: String,
-    #[serde(default, alias = "corner_hold_ms")]
+    #[serde(default)]
     x: Option<i32>,
-    #[serde(default, alias = "brake_distance_px")]
+    #[serde(default)]
     y: Option<i32>,
-    #[serde(default, alias = "brake_duration_ms")]
+    #[serde(default)]
     width: Option<i32>,
     #[serde(default)]
     height: Option<i32>,
     #[serde(default, alias = "from")]
     from_rect: Option<PackRect>,
-    #[serde(default, alias = "to", alias = "corner_rect")]
+    #[serde(default, alias = "to")]
     to_rect: Option<PackRect>,
-    #[serde(default, alias = "horizontal_duration_ms")]
+    #[serde(default)]
     duration_ms: Option<u64>,
     #[serde(default)]
     offset: Option<PackRect>,
     #[serde(default)]
     target_id: Option<String>,
+    #[serde(default, flatten)]
+    extra: BTreeMap<String, Value>,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SegmentedSwipeClickFields {
+    corner_rect: PackRect,
+    horizontal_duration_ms: u64,
+    corner_hold_ms: u64,
+    brake_distance_px: i32,
+    brake_duration_ms: u64,
 }
 
 impl OperationClick {
@@ -1100,14 +1112,20 @@ impl OperationClick {
                 Ok(())
             }
             "single_touch_drag_with_vertical_brake_v1" => {
+                let fields = self.segmented_swipe_fields()?;
                 if schema_version != "0.7"
-                    || self.x != Some(150)
-                    || self.y != Some(100)
-                    || self.width != Some(200)
+                    || self.x.is_some()
+                    || self.y.is_some()
+                    || self.width.is_some()
                     || self.height.is_some()
-                    || self.duration_ms != Some(200)
+                    || self.to_rect.is_some()
+                    || self.duration_ms.is_some()
                     || self.offset.is_some()
                     || self.target_id.is_some()
+                    || fields.horizontal_duration_ms != 200
+                    || fields.corner_hold_ms != 150
+                    || fields.brake_distance_px != 100
+                    || fields.brake_duration_ms != 200
                 {
                     return Err(CliError::package_invalid(
                         "single_touch_drag_with_vertical_brake_v1 declaration is invalid",
@@ -1118,14 +1136,10 @@ impl OperationClick {
                         "single_touch_drag_with_vertical_brake_v1 missing from_rect",
                     )
                 })?;
-                let corner = self.to_rect.ok_or_else(|| {
-                    CliError::package_invalid(
-                        "single_touch_drag_with_vertical_brake_v1 missing corner_rect",
-                    )
-                })?;
+                let corner = fields.corner_rect;
                 validate_click_rect(from, &control.resolution, false)?;
                 validate_click_rect(corner, &control.resolution, false)?;
-                if corner.y < 100 {
+                if corner.y < fields.brake_distance_px {
                     return Err(CliError::package_invalid(
                         "single_touch_drag_with_vertical_brake_v1 brake endpoint is out of bounds",
                     ));
@@ -1136,6 +1150,19 @@ impl OperationClick {
                 "unknown operation click kind '{other}'"
             ))),
         }
+    }
+
+    fn segmented_swipe_fields(&self) -> CliOutcome<SegmentedSwipeClickFields> {
+        serde_json::from_value(serde_json::to_value(&self.extra).map_err(|error| {
+            CliError::package_invalid(format!(
+                "single_touch_drag_with_vertical_brake_v1 fields are invalid: {error}"
+            ))
+        })?)
+        .map_err(|error| {
+            CliError::package_invalid(format!(
+                "single_touch_drag_with_vertical_brake_v1 fields are invalid: {error}"
+            ))
+        })
     }
 
     #[cfg(test)]
@@ -1260,19 +1287,21 @@ impl OperationClick {
                 })
             }
             "single_touch_drag_with_vertical_brake_v1" => {
+                let fields = self.segmented_swipe_fields()?;
                 let from = self.from_rect.ok_or_else(|| {
                     CliError::package_invalid(
                         "single_touch_drag_with_vertical_brake_v1 missing from_rect",
                     )
                 })?;
-                let corner = self.to_rect.ok_or_else(|| {
-                    CliError::package_invalid(
-                        "single_touch_drag_with_vertical_brake_v1 missing corner_rect",
-                    )
-                })?;
+                let corner = fields.corner_rect;
                 validate_click_rect(from, resolution, false)?;
                 validate_click_rect(corner, resolution, false)?;
                 let (from, corner) = actual_segmented_points(from, corner, seed);
+                let end_y = corner.y.checked_sub(fields.brake_distance_px).ok_or_else(|| {
+                    CliError::package_invalid(
+                        "single_touch_drag_with_vertical_brake_v1 brake endpoint is out of bounds",
+                    )
+                })?;
                 Ok(LabInputAction::SingleTouchDragWithVerticalBrakeV1 {
                     from,
                     corner,
@@ -1281,12 +1310,12 @@ impl OperationClick {
                         algorithm: "derived_vertical_brake_v1",
                         rect: corner.rect,
                         x: corner.x,
-                        y: corner.y - 100,
+                        y: end_y,
                     },
-                    horizontal_duration_ms: 200,
-                    corner_hold_ms: 150,
-                    brake_distance_px: 100,
-                    brake_duration_ms: 200,
+                    horizontal_duration_ms: fields.horizontal_duration_ms,
+                    corner_hold_ms: fields.corner_hold_ms,
+                    brake_distance_px: fields.brake_distance_px,
+                    brake_duration_ms: fields.brake_duration_ms,
                     slope_in: 2,
                     slope_out: 0,
                 })

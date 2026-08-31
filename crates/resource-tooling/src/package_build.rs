@@ -1604,7 +1604,7 @@ fn validate_generated_post_admission_ocr(
         })?;
     let schema_v2 = match (truth.schema_version.as_str(), truth.aliases.as_ref()) {
         ("actingcommand.ocr-truth-set.v1", None) => false,
-        ("actingcommand.ocr-truth-set.v2", Some(_)) => true,
+        ("actingcommand.ocr-truth-set.v2", _) => true,
         _ => {
             return Err(CliError::package_invalid(
                 "post_admission_ocr truth set schema or aliases is invalid",
@@ -1635,7 +1635,7 @@ fn validate_generated_post_admission_ocr(
         }
     }
     if schema_v2 {
-        let aliases = truth.aliases.expect("schema v2 aliases are present");
+        let aliases = truth.aliases.unwrap_or_default();
         if aliases.len() > 1_024 {
             return Err(CliError::package_invalid(
                 "post_admission_ocr truth aliases exceed 1024 entries",

@@ -2525,7 +2525,7 @@ fn validate_post_admission_ocr_bundle(bundle: &Bundle) -> CliOutcome<()> {
         truth_object.get("aliases"),
     ) {
         (Some("actingcommand.ocr-truth-set.v1"), None) => false,
-        (Some("actingcommand.ocr-truth-set.v2"), Some(Value::Array(_))) => true,
+        (Some("actingcommand.ocr-truth-set.v2"), None | Some(Value::Array(_))) => true,
         _ => {
             return Err(CliError::package_invalid(
                 "post_admission_ocr truth set schema_version or aliases is invalid",
@@ -2556,13 +2556,19 @@ fn validate_post_admission_ocr_bundle(bundle: &Bundle) -> CliOutcome<()> {
     if schema_v2 {
         let aliases = truth_object
             .get("aliases")
-            .and_then(Value::as_array)
-            .filter(|aliases| aliases.len() <= 1_024)
-            .ok_or_else(|| {
-                CliError::package_invalid(
-                    "post_admission_ocr truth aliases must contain at most 1024 entries",
-                )
-            })?;
+            .map(|aliases| {
+                aliases
+                    .as_array()
+                    .filter(|aliases| aliases.len() <= 1_024)
+                    .ok_or_else(|| {
+                        CliError::package_invalid(
+                            "post_admission_ocr truth aliases must contain at most 1024 entries",
+                        )
+                    })
+            })
+            .transpose()?
+            .map(Vec::as_slice)
+            .unwrap_or_default();
         let mut observed_aliases = BTreeMap::new();
         for alias in aliases {
             let alias = require_exact_object(

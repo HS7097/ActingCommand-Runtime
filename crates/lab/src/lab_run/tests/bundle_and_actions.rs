@@ -491,6 +491,7 @@
             duration_ms: None,
             offset: None,
             target_id: None,
+            extra: BTreeMap::new(),
         };
 
         let err = click.validate(&control).expect_err("fullscreen rejected");
@@ -554,6 +555,7 @@
                 height: 6,
             }),
             target_id: Some("target/button".to_string()),
+            extra: BTreeMap::new(),
         };
 
         let err = operation
@@ -595,6 +597,7 @@
                 height: 6,
             }),
             target_id: Some("target/button".to_string()),
+            extra: BTreeMap::new(),
         };
 
         operation.validate(&control).expect("offset valid");
@@ -658,6 +661,7 @@
                 height: 6,
             }),
             target_id: Some("target/button".to_string()),
+            extra: BTreeMap::new(),
         };
 
         operation.validate(&control).expect("offset valid");
@@ -713,6 +717,7 @@
                 height: 8,
             }),
             target_id: Some("target/button".to_string()),
+            extra: BTreeMap::new(),
         };
 
         operation.validate(&control).expect("target click valid");
@@ -777,6 +782,7 @@
                 height: 8,
             }),
             target_id: Some("target/button".to_string()),
+            extra: BTreeMap::new(),
         };
 
         operation.validate(&control).expect("target center valid");
@@ -827,6 +833,7 @@
             duration_ms: None,
             offset: None,
             target_id: Some("target/button".to_string()),
+            extra: BTreeMap::new(),
         };
 
         let err = operation
@@ -834,6 +841,78 @@
             .expect_err("target click requires template guard");
 
         assert!(err.message.contains("requires template guard metadata"));
+    }
+
+    #[test]
+    fn segmented_swipe_materializes_the_closed_three_point_action() {
+        let control = test_control();
+        let click_json = json!({
+            "kind": "single_touch_drag_with_vertical_brake_v1",
+            "from_rect": {"x": 1090, "y": 350, "width": 20, "height": 20},
+            "corner_rect": {"x": 100, "y": 350, "width": 20, "height": 20},
+            "horizontal_duration_ms": 200,
+            "corner_hold_ms": 150,
+            "brake_distance_px": 100,
+            "brake_duration_ms": 200
+        });
+        let click: OperationClick =
+            serde_json::from_value(click_json.clone()).expect("formal segmented swipe");
+        click
+            .validate_for_schema(&control, "0.7")
+            .expect("closed segmented swipe");
+        let action = click
+            .input_action(&control.resolution, 247, None, None)
+            .expect("materialized segmented swipe");
+
+        let LabInputAction::SingleTouchDragWithVerticalBrakeV1 {
+            from,
+            corner,
+            end,
+            horizontal_duration_ms,
+            corner_hold_ms,
+            brake_distance_px,
+            brake_duration_ms,
+            slope_in,
+            slope_out,
+        } = action
+        else {
+            panic!("expected segmented swipe");
+        };
+        assert_eq!(
+            from.rect,
+            PackRect {
+                x: 1090,
+                y: 350,
+                width: 20,
+                height: 20,
+            }
+        );
+        assert_eq!(
+            corner.rect,
+            PackRect {
+                x: 100,
+                y: 350,
+                width: 20,
+                height: 20,
+            }
+        );
+        assert_eq!(end.x, corner.x);
+        assert_eq!(end.y, corner.y - 100);
+        assert_eq!(horizontal_duration_ms, 200);
+        assert_eq!(corner_hold_ms, 150);
+        assert_eq!(brake_distance_px, 100);
+        assert_eq!(brake_duration_ms, 200);
+        assert_eq!((slope_in, slope_out), (2, 0));
+
+        for (field, value) in [("x", json!(150)), ("unexpected", json!(true))] {
+            let mut invalid = click_json.clone();
+            invalid[field] = value;
+            let invalid: OperationClick =
+                serde_json::from_value(invalid).expect("syntactically valid closed-form probe");
+            invalid
+                .validate_for_schema(&control, "0.7")
+                .expect_err("mixed or unknown segmented swipe fields must fail closed");
+        }
     }
 
     #[test]
@@ -874,6 +953,7 @@
             duration_ms: Some(500),
             offset: None,
             target_id: None,
+            extra: BTreeMap::new(),
         };
 
         operation.validate(&control).expect("guarded drag valid");
@@ -953,6 +1033,7 @@
             duration_ms: Some(500),
             offset: None,
             target_id: None,
+            extra: BTreeMap::new(),
         };
 
         operation.validate(&control).expect("guarded drag valid");
@@ -1000,6 +1081,7 @@
             duration_ms: Some(500),
             offset: None,
             target_id: None,
+            extra: BTreeMap::new(),
         };
 
         operation
@@ -1048,6 +1130,7 @@
             duration_ms: None,
             offset: None,
             target_id: None,
+            extra: BTreeMap::new(),
         };
 
         operation.validate(&control).expect("guarded rect valid");
@@ -1117,6 +1200,7 @@
                     duration_ms: None,
                     offset: None,
                     target_id: None,
+                    extra: BTreeMap::new(),
                 },
                 "point" => OperationClick {
                     kind: kind.to_string(),
@@ -1129,6 +1213,7 @@
                     duration_ms: None,
                     offset: None,
                     target_id: None,
+                    extra: BTreeMap::new(),
                 },
                 "long_press" => OperationClick {
                     kind: kind.to_string(),
@@ -1141,6 +1226,7 @@
                     duration_ms: Some(900),
                     offset: None,
                     target_id: None,
+                    extra: BTreeMap::new(),
                 },
                 _ => unreachable!(),
             };

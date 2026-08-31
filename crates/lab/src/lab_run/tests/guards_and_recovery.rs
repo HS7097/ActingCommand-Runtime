@@ -16,6 +16,7 @@
                 duration_ms: Some(800),
                 offset: None,
                 target_id: None,
+                extra: BTreeMap::new(),
             };
 
             operation
