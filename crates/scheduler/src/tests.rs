@@ -69,6 +69,95 @@ fn defaults_freeze_c3a_heartbeat_cooldown_and_ttl() {
     assert_eq!(config.max_queue_depth_per_instance, 64);
 }
 
+// Task Contract: Workflow #241 / direct contained-task lease deadline v1.
+// Test class: specification criterion.
+#[test]
+fn ordinary_acquire_keeps_the_default_lease_ttl() {
+    let issuer = ids();
+    let mut scheduler =
+        SeedScheduler::new(epoch(&issuer), SchedulerConfig::default(), [], 0).expect("scheduler");
+    let now_monotonic_ms = 37;
+    let token = scheduler
+        .acquire(
+            request(&issuer),
+            instance(&issuer),
+            holder(&issuer).1,
+            connection(1),
+            now_monotonic_ms,
+        )
+        .expect("ordinary acquire");
+
+    assert_eq!(
+        token.expires_at_monotonic_ms(),
+        now_monotonic_ms + DEFAULT_LEASE_TTL_MS
+    );
+}
+
+// Task Contract: Workflow #241 / direct contained-task lease deadline v1.
+// Test class: specification criterion.
+#[test]
+fn per_acquire_ttl_is_bounded_exact_and_overflow_closed() {
+    let issuer = ids();
+    let mut scheduler = SeedScheduler::new(epoch(&issuer), config(), [], 0).expect("scheduler");
+    let heartbeat_reserve_ms = scheduler.config().maximum_client_heartbeat_interval_ms;
+    let maximum_ttl_ms = ContainedTaskRequest::MAX_RESPONSE_DEADLINE_MS + heartbeat_reserve_ms;
+    let now_monotonic_ms = 42;
+    let preparation = scheduler
+        .prepare_acquire_with_ttl(
+            request(&issuer),
+            instance(&issuer),
+            holder(&issuer).1,
+            connection(1),
+            maximum_ttl_ms,
+            now_monotonic_ms,
+        )
+        .expect("bounded per-acquire ttl");
+    assert_eq!(
+        preparation.token().expires_at_monotonic_ms(),
+        now_monotonic_ms + maximum_ttl_ms
+    );
+
+    assert_eq!(
+        scheduler
+            .prepare_acquire_with_ttl(
+                request(&issuer),
+                instance(&issuer),
+                holder(&issuer).1,
+                connection(2),
+                heartbeat_reserve_ms,
+                now_monotonic_ms,
+            )
+            .expect_err("ttl must retain heartbeat reserve"),
+        SchedulerError::InvalidConfig
+    );
+    assert_eq!(
+        scheduler
+            .prepare_acquire_with_ttl(
+                request(&issuer),
+                instance(&issuer),
+                holder(&issuer).1,
+                connection(3),
+                maximum_ttl_ms + 1,
+                now_monotonic_ms,
+            )
+            .expect_err("ttl upper bound"),
+        SchedulerError::InvalidConfig
+    );
+    assert_eq!(
+        scheduler
+            .prepare_acquire_with_ttl(
+                request(&issuer),
+                instance(&issuer),
+                holder(&issuer).1,
+                connection(4),
+                maximum_ttl_ms,
+                u64::MAX - maximum_ttl_ms + 1,
+            )
+            .expect_err("expiry arithmetic overflow"),
+        SchedulerError::ExpiryOverflow
+    );
+}
+
 #[test]
 fn invalid_cooldown_relation_is_fatal() {
     let error = SchedulerConfig {
