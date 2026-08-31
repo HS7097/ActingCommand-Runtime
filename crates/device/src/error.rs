@@ -11,10 +11,58 @@ pub enum DeviceErrorSeverity {
     Fatal,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DeviceErrorCategory {
+    BackendLaunch,
+    Handshake,
+    ChildExit,
+    CommandWrite,
+    CommandFlush,
+    Protocol,
+    Response,
+    Native,
+}
+
+impl DeviceErrorCategory {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::BackendLaunch => "backend_launch",
+            Self::Handshake => "handshake",
+            Self::ChildExit => "child_exit",
+            Self::CommandWrite => "command_write",
+            Self::CommandFlush => "command_flush",
+            Self::Protocol => "protocol",
+            Self::Response => "response",
+            Self::Native => "native",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DeviceErrorDiagnostic {
+    category: DeviceErrorCategory,
+    stage: &'static str,
+}
+
+impl DeviceErrorDiagnostic {
+    pub const fn new(category: DeviceErrorCategory, stage: &'static str) -> Self {
+        Self { category, stage }
+    }
+
+    pub const fn category(self) -> DeviceErrorCategory {
+        self.category
+    }
+
+    pub const fn stage(self) -> &'static str {
+        self.stage
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DeviceError {
     severity: DeviceErrorSeverity,
     message: String,
+    diagnostic: Option<DeviceErrorDiagnostic>,
 }
 
 impl DeviceError {
@@ -22,6 +70,7 @@ impl DeviceError {
         Self {
             severity: DeviceErrorSeverity::Transient,
             message: message.into(),
+            diagnostic: None,
         }
     }
 
@@ -29,6 +78,7 @@ impl DeviceError {
         Self {
             severity: DeviceErrorSeverity::Fatal,
             message: message.into(),
+            diagnostic: None,
         }
     }
 
@@ -36,7 +86,28 @@ impl DeviceError {
         Self {
             severity,
             message: message.into(),
+            diagnostic: None,
         }
+    }
+
+    pub fn with_diagnostic(mut self, category: DeviceErrorCategory, stage: &'static str) -> Self {
+        self.diagnostic = Some(DeviceErrorDiagnostic::new(category, stage));
+        self
+    }
+
+    pub fn with_message(mut self, message: impl Into<String>) -> Self {
+        self.message = message.into();
+        self
+    }
+
+    pub fn with_severity_and_message(
+        mut self,
+        severity: DeviceErrorSeverity,
+        message: impl Into<String>,
+    ) -> Self {
+        self.severity = severity;
+        self.message = message.into();
+        self
     }
 
     pub fn is_fallback_eligible(&self) -> bool {
@@ -49,6 +120,10 @@ impl DeviceError {
 
     pub fn message(&self) -> &str {
         &self.message
+    }
+
+    pub const fn diagnostic(&self) -> Option<DeviceErrorDiagnostic> {
+        self.diagnostic
     }
 }
 
