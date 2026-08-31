@@ -2,7 +2,10 @@
 
 use crate::adb::{Adb, AdbConfig, stop_child};
 use crate::input::{SegmentedSwipeAction, SegmentedSwipeEvent, segmented_swipe_events};
-use crate::{DeviceError, DeviceInfo, DeviceResult, DeviceTarget, HandshakeInfo, InputBackend};
+use crate::{
+    DeviceError, DeviceErrorCategory, DeviceErrorSeverity, DeviceInfo, DeviceResult, DeviceTarget,
+    HandshakeInfo, InputBackend,
+};
 use std::fs;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::path::PathBuf;
@@ -116,12 +119,20 @@ impl MinitouchBackend {
             adb.push(&self.serial, &local, &self.minitouch_config.remote_path)
                 .map_err(|err| {
                     DeviceError::transient(format!("failed to push minitouch binary: {err}"))
+                        .with_diagnostic(
+                            DeviceErrorCategory::BackendLaunch,
+                            "minitouch.install.push",
+                        )
                 })?;
         }
 
         adb.chmod(&self.serial, &self.minitouch_config.remote_path, "755")
             .map_err(|err| {
                 DeviceError::transient(format!("failed to chmod minitouch binary: {err}"))
+                    .with_diagnostic(
+                        DeviceErrorCategory::BackendLaunch,
+                        "minitouch.install.chmod",
+                    )
             })?;
         Ok(())
     }
@@ -144,20 +155,30 @@ impl MinitouchBackend {
             .spawn()
             .map_err(|err| {
                 DeviceError::transient(format!("failed to start minitouch process: {err}"))
+                    .with_diagnostic(
+                        DeviceErrorCategory::BackendLaunch,
+                        "minitouch.process.spawn",
+                    )
             })?;
 
-        let stdout = child
-            .stdout
-            .take()
-            .ok_or_else(|| DeviceError::transient("failed to open minitouch stdout"))?;
-        let stderr = child
-            .stderr
-            .take()
-            .ok_or_else(|| DeviceError::transient("failed to open minitouch stderr"))?;
-        let stdin = child
-            .stdin
-            .take()
-            .ok_or_else(|| DeviceError::transient("failed to open minitouch stdin"))?;
+        let stdout = child.stdout.take().ok_or_else(|| {
+            DeviceError::transient("failed to open minitouch stdout").with_diagnostic(
+                DeviceErrorCategory::BackendLaunch,
+                "minitouch.process.stdout_open",
+            )
+        })?;
+        let stderr = child.stderr.take().ok_or_else(|| {
+            DeviceError::transient("failed to open minitouch stderr").with_diagnostic(
+                DeviceErrorCategory::BackendLaunch,
+                "minitouch.process.stderr_open",
+            )
+        })?;
+        let stdin = child.stdin.take().ok_or_else(|| {
+            DeviceError::transient("failed to open minitouch stdin").with_diagnostic(
+                DeviceErrorCategory::BackendLaunch,
+                "minitouch.process.stdin_open",
+            )
+        })?;
 
         self.stderr_text = Arc::new(Mutex::new(String::new()));
         self.stderr_thread = Some(spawn_minitouch_stderr_reader(
@@ -212,35 +233,54 @@ impl MinitouchBackend {
             Ok(result) => result.map_err(|err| self.with_stderr(err)),
             Err(mpsc::RecvTimeoutError::Timeout) => {
                 stop_child(child, self.minitouch_config.shutdown_timeout);
-                Err(self.with_stderr(DeviceError::transient(format!(
-                    "timed out after {:?} waiting for minitouch handshake",
-                    self.minitouch_config.handshake_timeout
-                ))))
+                Err(self.with_stderr(
+                    DeviceError::transient(format!(
+                        "timed out after {:?} waiting for minitouch handshake",
+                        self.minitouch_config.handshake_timeout
+                    ))
+                    .with_diagnostic(
+                        DeviceErrorCategory::Handshake,
+                        "minitouch.handshake.timeout",
+                    ),
+                ))
             }
             Err(err) => {
                 stop_child(child, self.minitouch_config.shutdown_timeout);
-                Err(self.with_stderr(DeviceError::transient(format!(
-                    "failed to receive minitouch handshake: {err}"
-                ))))
+                Err(self.with_stderr(
+                    DeviceError::transient(format!("failed to receive minitouch handshake: {err}"))
+                        .with_diagnostic(
+                            DeviceErrorCategory::Response,
+                            "minitouch.handshake.channel_receive",
+                        ),
+                ))
             }
         }
     }
 
     fn ensure_active(&mut self) -> DeviceResult<()> {
         if self.closed || self.child.is_none() || self.stdin.is_none() {
-            return Err(DeviceError::fatal("MinitouchBackend is not connected"));
+            return Err(
+                DeviceError::fatal("MinitouchBackend is not connected").with_diagnostic(
+                    DeviceErrorCategory::ChildExit,
+                    "minitouch.operation.inactive",
+                ),
+            );
         }
 
-        let child = self
-            .child
-            .as_mut()
-            .ok_or_else(|| DeviceError::transient("minitouch child process is missing"))?;
+        let child = self.child.as_mut().ok_or_else(|| {
+            DeviceError::transient("minitouch child process is missing")
+                .with_diagnostic(DeviceErrorCategory::ChildExit, "minitouch.process.missing")
+        })?;
         if let Some(status) = child.try_wait().map_err(|err| {
             DeviceError::transient(format!("failed to poll minitouch process status: {err}"))
+                .with_diagnostic(DeviceErrorCategory::ChildExit, "minitouch.process.poll")
         })? {
-            return Err(self.with_stderr(DeviceError::transient(format!(
-                "minitouch process exited unexpectedly with {status}"
-            ))));
+            return Err(self.with_stderr(
+                DeviceError::transient(format!(
+                    "minitouch process exited unexpectedly with {status}"
+                ))
+                .with_diagnostic(DeviceErrorCategory::ChildExit, "minitouch.process.exited"),
+            ));
         }
 
         Ok(())
@@ -280,15 +320,17 @@ impl MinitouchBackend {
 
     fn write_and_flush(&mut self, commands: &str) -> DeviceResult<()> {
         self.ensure_active()?;
-        let stdin = self
-            .stdin
-            .as_mut()
-            .ok_or_else(|| DeviceError::transient("minitouch stdin is missing"))?;
+        let stdin = self.stdin.as_mut().ok_or_else(|| {
+            DeviceError::transient("minitouch stdin is missing")
+                .with_diagnostic(DeviceErrorCategory::ChildExit, "minitouch.stdin.missing")
+        })?;
         stdin.write_all(commands.as_bytes()).map_err(|err| {
             DeviceError::transient(format!("failed to write minitouch command: {err}"))
+                .with_diagnostic(DeviceErrorCategory::CommandWrite, "minitouch.stdin.write")
         })?;
         stdin.flush().map_err(|err| {
             DeviceError::transient(format!("failed to flush minitouch command: {err}"))
+                .with_diagnostic(DeviceErrorCategory::CommandFlush, "minitouch.stdin.flush")
         })?;
         Ok(())
     }
@@ -302,10 +344,8 @@ impl MinitouchBackend {
         if stderr.is_empty() {
             err
         } else {
-            DeviceError::with_severity(
-                err.severity(),
-                format!("{}\nminitouch stderr:\n{stderr}", err.message()),
-            )
+            let message = format!("{}\nminitouch stderr:\n{stderr}", err.message());
+            err.with_message(message)
         }
     }
 
@@ -577,33 +617,57 @@ fn parse_minitouch_handshake(reader: &mut dyn BufRead) -> DeviceResult<Handshake
     let mut max = String::new();
     let mut pid = String::new();
     reader.read_line(&mut version).map_err(|err| {
-        DeviceError::transient(format!("failed to read minitouch version: {err}"))
+        DeviceError::transient(format!("failed to read minitouch version: {err}")).with_diagnostic(
+            DeviceErrorCategory::Response,
+            "minitouch.handshake.version_read",
+        )
     })?;
     reader.read_line(&mut max).map_err(|err| {
-        DeviceError::transient(format!("failed to read minitouch max line: {err}"))
+        DeviceError::transient(format!("failed to read minitouch max line: {err}")).with_diagnostic(
+            DeviceErrorCategory::Response,
+            "minitouch.handshake.max_read",
+        )
     })?;
-    reader
-        .read_line(&mut pid)
-        .map_err(|err| DeviceError::transient(format!("failed to read minitouch pid: {err}")))?;
+    reader.read_line(&mut pid).map_err(|err| {
+        DeviceError::transient(format!("failed to read minitouch pid: {err}")).with_diagnostic(
+            DeviceErrorCategory::Response,
+            "minitouch.handshake.pid_read",
+        )
+    })?;
 
     if !version.starts_with('v') {
-        return Err(DeviceError::transient(format!(
-            "invalid minitouch version line: {version:?}"
-        )));
+        return Err(
+            DeviceError::transient(format!("invalid minitouch version line: {version:?}"))
+                .with_diagnostic(
+                    DeviceErrorCategory::Protocol,
+                    "minitouch.handshake.version_parse",
+                ),
+        );
     }
-    let max_values = max
-        .strip_prefix('^')
-        .ok_or_else(|| DeviceError::transient(format!("invalid minitouch max line: {max:?}")))?;
+    let max_values = max.strip_prefix('^').ok_or_else(|| {
+        DeviceError::transient(format!("invalid minitouch max line: {max:?}")).with_diagnostic(
+            DeviceErrorCategory::Protocol,
+            "minitouch.handshake.max_parse",
+        )
+    })?;
     let parts = max_values.split_whitespace().collect::<Vec<_>>();
     if parts.len() != 4 {
         return Err(DeviceError::transient(format!(
             "invalid minitouch max line field count: {max:?}"
-        )));
+        ))
+        .with_diagnostic(
+            DeviceErrorCategory::Protocol,
+            "minitouch.handshake.max_shape",
+        ));
     }
 
     let parse_i32 = |label: &str, value: &str| {
         value.parse::<i32>().map_err(|err| {
             DeviceError::transient(format!("invalid minitouch {label} '{value}': {err}"))
+                .with_diagnostic(
+                    DeviceErrorCategory::Protocol,
+                    "minitouch.handshake.max_value_parse",
+                )
         })
     };
     let max_contacts = parse_i32("max_contacts", parts[0])?;
@@ -613,15 +677,29 @@ fn parse_minitouch_handshake(reader: &mut dyn BufRead) -> DeviceResult<Handshake
     if max_contacts <= 0 || max_x <= 0 || max_y <= 0 || max_pressure <= 0 {
         return Err(DeviceError::transient(format!(
             "minitouch handshake values must be positive: {max:?}"
-        )));
+        ))
+        .with_diagnostic(
+            DeviceErrorCategory::Protocol,
+            "minitouch.handshake.max_value_validate",
+        ));
     }
     let pid = pid
         .strip_prefix('$')
-        .ok_or_else(|| DeviceError::transient(format!("invalid minitouch pid line: {pid:?}")))?
+        .ok_or_else(|| {
+            DeviceError::transient(format!("invalid minitouch pid line: {pid:?}")).with_diagnostic(
+                DeviceErrorCategory::Protocol,
+                "minitouch.handshake.pid_parse",
+            )
+        })?
         .trim()
         .to_string();
     if pid.is_empty() {
-        return Err(DeviceError::transient("minitouch pid line is empty"));
+        return Err(
+            DeviceError::transient("minitouch pid line is empty").with_diagnostic(
+                DeviceErrorCategory::Protocol,
+                "minitouch.handshake.pid_validate",
+            ),
+        );
     }
 
     Ok(HandshakeInfo {
@@ -691,12 +769,20 @@ fn require_minitouch_file(path: &PathBuf) -> DeviceResult<()> {
             "minitouch local binary is unavailable at {}: {err}",
             path.display()
         ))
+        .with_diagnostic(
+            DeviceErrorCategory::BackendLaunch,
+            "minitouch.install.local_file_metadata",
+        )
     })?;
     if !metadata.is_file() {
         return Err(DeviceError::transient(format!(
             "minitouch local path is not a file: {}",
             path.display()
-        )));
+        ))
+        .with_diagnostic(
+            DeviceErrorCategory::BackendLaunch,
+            "minitouch.install.local_file_validate",
+        ));
     }
     Ok(())
 }
@@ -705,7 +791,11 @@ fn validate_default_pressure(default_pressure: i32, max_pressure: i32) -> Device
     if default_pressure <= 0 || default_pressure > max_pressure {
         return Err(DeviceError::fatal(format!(
             "minitouch default pressure {default_pressure} is outside device pressure range 1..={max_pressure}; adjust MinitouchConfig.default_pressure"
-        )));
+        ))
+        .with_diagnostic(
+            DeviceErrorCategory::Protocol,
+            "minitouch.handshake.pressure_validate",
+        ));
     }
     Ok(())
 }
@@ -760,9 +850,10 @@ fn combine_operation_and_close(
     match (operation, close) {
         (Ok(()), Ok(())) => Ok(()),
         (Err(err), Ok(())) | (Ok(()), Err(err)) => Err(err),
-        (Err(operation_err), Err(close_err)) => Err(DeviceError::fatal(format!(
-            "{operation_err}; close failed: {close_err}"
-        ))),
+        (Err(operation_err), Err(close_err)) => {
+            let message = format!("{operation_err}; close failed: {close_err}");
+            Err(operation_err.with_severity_and_message(DeviceErrorSeverity::Fatal, message))
+        }
     }
 }
 
