@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 use crate::adb::{Adb, AdbConfig, stop_child};
+use crate::input::{SegmentedSwipeAction, SegmentedSwipeEvent, segmented_swipe_events};
 use crate::{DeviceError, DeviceResult, InputBackend};
 use std::fs;
 use std::io::{BufRead, BufReader, Read, Write};
@@ -511,6 +512,45 @@ impl InputBackend for MaaTouchBackend {
         self.write_and_flush(&format!(
             "m {TOUCH_ID} {x2} {y2} {pressure}\nc\nu {TOUCH_ID}\nc\n"
         ))?;
+        Ok(())
+    }
+
+    fn supports_segmented_swipe(&self) -> bool {
+        true
+    }
+
+    fn segmented_swipe(&mut self, action: SegmentedSwipeAction) -> DeviceResult<()> {
+        let events = segmented_swipe_events(action)?;
+        let pressure = self.maatouch_config.default_pressure;
+        for event in &events {
+            match event {
+                SegmentedSwipeEvent::Down((x, y))
+                | SegmentedSwipeEvent::Move { point: (x, y), .. } => {
+                    self.validate_input(*x, *y, pressure)?;
+                }
+                SegmentedSwipeEvent::Hold(_) | SegmentedSwipeEvent::Up => {}
+            }
+        }
+        for event in events {
+            match event {
+                SegmentedSwipeEvent::Down((x, y)) => {
+                    self.write_and_flush(&format!("d {TOUCH_ID} {x} {y} {pressure}\nc\n"))?;
+                }
+                SegmentedSwipeEvent::Move {
+                    point: (x, y),
+                    delay_before_ms,
+                } => {
+                    thread::sleep(Duration::from_millis(delay_before_ms));
+                    self.write_and_flush(&format!("m {TOUCH_ID} {x} {y} {pressure}\nc\n"))?;
+                }
+                SegmentedSwipeEvent::Hold(duration_ms) => {
+                    thread::sleep(Duration::from_millis(duration_ms));
+                }
+                SegmentedSwipeEvent::Up => {
+                    self.write_and_flush(&format!("u {TOUCH_ID}\nc\n"))?;
+                }
+            }
+        }
         Ok(())
     }
 

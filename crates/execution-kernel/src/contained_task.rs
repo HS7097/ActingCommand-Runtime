@@ -9,8 +9,10 @@ use crate::{
     select_run_operation,
 };
 use actingcommand_contract::{
-    InputAction, InputSamplingEvidence, InputSamplingRegion, SchedulingEffectCondition,
-    SchedulingOutcomeDeclaration, TaskOutcome,
+    InputAction, InputSamplingEvidence, InputSamplingRegion, SEGMENTED_SWIPE_BRAKE_DISTANCE_PX,
+    SEGMENTED_SWIPE_BRAKE_DURATION_MS, SEGMENTED_SWIPE_CORNER_HOLD_MS,
+    SEGMENTED_SWIPE_HORIZONTAL_DURATION_MS, SEGMENTED_SWIPE_SLOPE_IN, SEGMENTED_SWIPE_SLOPE_OUT,
+    SchedulingEffectCondition, SchedulingOutcomeDeclaration, TaskOutcome,
 };
 use actingcommand_device::{Frame, PixelFormat};
 use actingcommand_pack_containment::{ContainmentError, LoadedBundle, Sha256Hash};
@@ -44,7 +46,19 @@ const MAX_POST_ADMISSION_OCR_STRING_BYTES: u32 = 4_096;
 const MAX_POST_ADMISSION_OCR_TOTAL_BYTES: u64 = 4 * 1024 * 1024;
 const MAX_POST_ADMISSION_OCR_TRUTH_ENTRIES: u32 = 4_096;
 const MAX_POST_ADMISSION_OCR_TARGETS: usize = 32;
-const POST_ADMISSION_OCR_TRUTH_SCHEMA: &str = "actingcommand.ocr-truth-set.v1";
+const POST_ADMISSION_OCR_TRUTH_SCHEMA_V1: &str = "actingcommand.ocr-truth-set.v1";
+const POST_ADMISSION_OCR_TRUTH_SCHEMA_V2: &str = "actingcommand.ocr-truth-set.v2";
+const POST_ADMISSION_OCR_COMPARISON_SCHEMA_V1: &str =
+    "actingcommand.runtime.post-admission-ocr-comparison.v1";
+const POST_ADMISSION_OCR_COMPARISON_SCHEMA_V2: &str =
+    "actingcommand.runtime.post-admission-ocr-comparison.v2";
+const MAX_POST_ADMISSION_OCR_ALIASES: usize = 1_024;
+const POST_ADMISSION_OCR_TOLERANT_PREDICATE: &str = "exactly_one_unicode_scalar_substitution_v1";
+const POST_ADMISSION_OCR_TOLERANT_MAX_SUBSTITUTIONS: u8 = 1;
+const POST_ADMISSION_OCR_MAX_RETRY_INDEX: u32 = 1;
+const MAX_POST_ADMISSION_OCR_TOLERANT_CANDIDATE_CHECKS: u64 = 4 * 1024 * 1024;
+const MAX_POST_ADMISSION_OCR_TOLERANT_SCALAR_COMPARISONS: u64 = 16 * 1024 * 1024;
+const MAX_POST_ADMISSION_OCR_CANDIDATE_WITNESSES: usize = 2;
 
 fn deserialize_non_null_option<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
 where
@@ -305,6 +319,53 @@ pub struct PostAdmissionOcrObservedValue {
 // Collected confidences inherit the same finite-score invariant as each observation.
 impl Eq for PostAdmissionOcrObservedValue {}
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PostAdmissionOcrMappingDisposition {
+    CanonicalExact,
+    AliasExact,
+    TolerantUnique,
+    RetryRequiredAbsent,
+    RetryRequiredAmbiguous,
+    UnmatchedAfterRetry,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct PostAdmissionOcrCandidateEvidence {
+    canonical: String,
+    differing_scalars: u8,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct PostAdmissionOcrMappingEvidence {
+    frame_index: u32,
+    retry_index: u32,
+    target_id: String,
+    raw_text: String,
+    normalized_text: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    canonical: Option<String>,
+    confidence: Option<f32>,
+    candidate_count: u32,
+    candidates: Vec<PostAdmissionOcrCandidateEvidence>,
+    disposition: PostAdmissionOcrMappingDisposition,
+}
+
+// Mapping confidences inherit the recognition owner's finite-score invariant.
+impl Eq for PostAdmissionOcrMappingEvidence {}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct PostAdmissionOcrClassificationContract {
+    predicate: &'static str,
+    max_substitutions: u8,
+    max_retry_index: u32,
+    max_candidate_checks: u64,
+    candidate_checks: u64,
+    max_scalar_comparisons: u64,
+    scalar_comparisons: u64,
+    max_candidate_witnesses: usize,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct PostAdmissionOcrDuplicateEvidence {
     pub value: String,
@@ -330,6 +391,10 @@ pub struct PostAdmissionOcrComparisonReport {
     exact_match: bool,
     truth: Vec<String>,
     observed: Vec<PostAdmissionOcrObservedValue>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    classification_contract: Option<PostAdmissionOcrClassificationContract>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    mapping_evidence: Option<Vec<PostAdmissionOcrMappingEvidence>>,
     missed: Vec<String>,
     unexpected: Vec<String>,
     duplicates: Vec<PostAdmissionOcrDuplicateEvidence>,
@@ -387,6 +452,15 @@ struct PostAdmissionOcrDeclaration {
 struct PostAdmissionOcrTruthSet {
     schema_version: String,
     items: Vec<String>,
+    #[serde(default)]
+    aliases: Option<Vec<PostAdmissionOcrTruthAlias>>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PostAdmissionOcrTruthAlias {
+    observed: String,
+    canonical: String,
 }
 
 #[derive(Debug, Clone)]
@@ -395,6 +469,9 @@ struct PreparedPostAdmissionOcr {
     page_ids: Vec<String>,
     target_ids: Vec<String>,
     truth: Vec<String>,
+    truth_scalar_lengths: Vec<usize>,
+    aliases: BTreeMap<String, String>,
+    truth_schema_v2: bool,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -411,6 +488,9 @@ struct PostAdmissionOcrCollector<'a> {
     discarded_empty_items: u32,
     total_observed_utf8_bytes: u64,
     values: BTreeMap<String, PostAdmissionOcrObservedAggregate>,
+    mapping_evidence: Vec<PostAdmissionOcrMappingEvidence>,
+    tolerant_candidate_checks: u64,
+    tolerant_scalar_comparisons: u64,
     invocation_ids: BTreeSet<String>,
     stream_binding: Option<OcrProviderExecutionEvidence>,
 }
@@ -445,86 +525,220 @@ impl<'a> PostAdmissionOcrCollector<'a> {
         let mut invocation_ids = self.invocation_ids.clone();
         let mut stream_binding = self.stream_binding.clone();
         let mut values = self.values.clone();
+        let mut mapping_evidence = self.mapping_evidence.clone();
+        let mut tolerant_candidate_checks = self.tolerant_candidate_checks;
+        let mut tolerant_scalar_comparisons = self.tolerant_scalar_comparisons;
         let mut discarded_empty_items = self.discarded_empty_items;
         let mut new_item_count = self.items_collected;
         let mut added_bytes = 0_u64;
+        let frame_index = self.frames_collected;
         let max_string_bytes = usize::try_from(declaration.limits.max_string_bytes)
             .map_err(|_| ContainedTaskError::new("contained_task_post_admission_ocr_invalid"))?;
         let mut target_observations = Vec::with_capacity(prepared.target_ids.len());
         for target_id in &prepared.target_ids {
-            let evaluated = evaluator
-                .evaluate_ocr_observation(scene, target_id)
-                .map_err(|error| {
-                    ContainedTaskError::with_detail(
-                        "contained_task_post_admission_ocr_failed",
-                        error.to_string(),
-                    )
-                })?;
-            if evaluated.target_id != *target_id
-                || !invocation_ids.insert(evaluated.execution.invocation_id.clone())
-                || stream_binding
-                    .as_ref()
-                    .is_some_and(|binding| !same_ocr_stream_binding(binding, &evaluated.execution))
-            {
-                return Err(ContainedTaskError::new(
-                    "contained_task_post_admission_ocr_evidence_mismatch",
-                ));
-            }
-            if stream_binding.is_none() {
-                stream_binding = Some(evaluated.execution.clone());
-            }
-            let block_count = u32::try_from(evaluated.blocks.len()).map_err(|_| {
-                ContainedTaskError::new("contained_task_post_admission_ocr_limit_exceeded")
-            })?;
-            new_item_count = new_item_count.checked_add(block_count).ok_or_else(|| {
-                ContainedTaskError::new("contained_task_post_admission_ocr_limit_exceeded")
-            })?;
-            if new_item_count > declaration.limits.max_items {
-                return Err(ContainedTaskError::new(
-                    "contained_task_post_admission_ocr_limit_exceeded",
-                ));
-            }
-            added_bytes = added_bytes
-                .checked_add(u64::try_from(evaluated.text.len()).map_err(|_| {
-                    ContainedTaskError::new("contained_task_post_admission_ocr_limit_exceeded")
-                })?)
-                .ok_or_else(|| {
+            let max_retry_index = if prepared.truth_schema_v2 {
+                POST_ADMISSION_OCR_MAX_RETRY_INDEX
+            } else {
+                0
+            };
+            let mut accepted_observation = None;
+            for retry_index in 0..=max_retry_index {
+                let evaluated = evaluator
+                    .evaluate_ocr_observation(scene, target_id)
+                    .map_err(|error| {
+                        ContainedTaskError::with_detail(
+                            "contained_task_post_admission_ocr_failed",
+                            error.to_string(),
+                        )
+                    })?;
+                if evaluated.target_id != *target_id
+                    || !invocation_ids.insert(evaluated.execution.invocation_id.clone())
+                    || stream_binding.as_ref().is_some_and(|binding| {
+                        !same_ocr_stream_binding(binding, &evaluated.execution)
+                    })
+                {
+                    return Err(ContainedTaskError::new(
+                        "contained_task_post_admission_ocr_evidence_mismatch",
+                    ));
+                }
+                if stream_binding.is_none() {
+                    stream_binding = Some(evaluated.execution.clone());
+                }
+                let block_count = u32::try_from(evaluated.blocks.len()).map_err(|_| {
                     ContainedTaskError::new("contained_task_post_admission_ocr_limit_exceeded")
                 })?;
-            for block in &evaluated.blocks {
-                if block.text.len() > max_string_bytes {
+                let evidence_item_count = if prepared.truth_schema_v2 && block_count == 0 {
+                    1
+                } else {
+                    block_count
+                };
+                new_item_count =
+                    new_item_count
+                        .checked_add(evidence_item_count)
+                        .ok_or_else(|| {
+                            ContainedTaskError::new(
+                                "contained_task_post_admission_ocr_limit_exceeded",
+                            )
+                        })?;
+                if new_item_count > declaration.limits.max_items {
                     return Err(ContainedTaskError::new(
                         "contained_task_post_admission_ocr_limit_exceeded",
                     ));
                 }
                 added_bytes = added_bytes
-                    .checked_add(u64::try_from(block.text.len()).map_err(|_| {
+                    .checked_add(u64::try_from(evaluated.text.len()).map_err(|_| {
                         ContainedTaskError::new("contained_task_post_admission_ocr_limit_exceeded")
                     })?)
                     .ok_or_else(|| {
                         ContainedTaskError::new("contained_task_post_admission_ocr_limit_exceeded")
                     })?;
-                let value = normalize_post_admission_ocr(&block.text, declaration.normalization);
-                if value.len() > max_string_bytes {
-                    return Err(ContainedTaskError::new(
-                        "contained_task_post_admission_ocr_limit_exceeded",
-                    ));
+                let mut retry_required = prepared.truth_schema_v2 && evaluated.blocks.is_empty();
+                let mut attempt_values = Vec::with_capacity(evaluated.blocks.len());
+                if prepared.truth_schema_v2 && evaluated.blocks.is_empty() {
+                    mapping_evidence.push(PostAdmissionOcrMappingEvidence {
+                        frame_index,
+                        retry_index,
+                        target_id: evaluated.target_id.clone(),
+                        raw_text: evaluated.text.clone(),
+                        normalized_text: normalize_post_admission_ocr(
+                            &evaluated.text,
+                            declaration.normalization,
+                        ),
+                        canonical: None,
+                        confidence: evaluated.confidence,
+                        candidate_count: 0,
+                        candidates: Vec::new(),
+                        disposition: unresolved_mapping_disposition(retry_index, 0),
+                    });
                 }
-                if value.is_empty() {
-                    discarded_empty_items =
-                        discarded_empty_items.checked_add(1).ok_or_else(|| {
+                for block in &evaluated.blocks {
+                    if block.text.len() > max_string_bytes {
+                        return Err(ContainedTaskError::new(
+                            "contained_task_post_admission_ocr_limit_exceeded",
+                        ));
+                    }
+                    added_bytes = added_bytes
+                        .checked_add(u64::try_from(block.text.len()).map_err(|_| {
+                            ContainedTaskError::new(
+                                "contained_task_post_admission_ocr_limit_exceeded",
+                            )
+                        })?)
+                        .ok_or_else(|| {
                             ContainedTaskError::new(
                                 "contained_task_post_admission_ocr_limit_exceeded",
                             )
                         })?;
-                    continue;
+                    let value =
+                        normalize_post_admission_ocr(&block.text, declaration.normalization);
+                    if value.len() > max_string_bytes {
+                        return Err(ContainedTaskError::new(
+                            "contained_task_post_admission_ocr_limit_exceeded",
+                        ));
+                    }
+                    if value.is_empty() {
+                        discarded_empty_items =
+                            discarded_empty_items.checked_add(1).ok_or_else(|| {
+                                ContainedTaskError::new(
+                                    "contained_task_post_admission_ocr_limit_exceeded",
+                                )
+                            })?;
+                        if prepared.truth_schema_v2 {
+                            retry_required = true;
+                            mapping_evidence.push(PostAdmissionOcrMappingEvidence {
+                                frame_index,
+                                retry_index,
+                                target_id: evaluated.target_id.clone(),
+                                raw_text: block.text.clone(),
+                                normalized_text: value,
+                                canonical: None,
+                                confidence: block.confidence,
+                                candidate_count: 0,
+                                candidates: Vec::new(),
+                                disposition: unresolved_mapping_disposition(retry_index, 0),
+                            });
+                        }
+                        continue;
+                    }
+                    if !prepared.truth_schema_v2 {
+                        attempt_values.push((value, block.confidence));
+                        continue;
+                    }
+                    let (canonical, disposition, candidate_count, candidates) =
+                        if prepared.truth.binary_search(&value).is_ok() {
+                            (
+                                Some(value.clone()),
+                                PostAdmissionOcrMappingDisposition::CanonicalExact,
+                                0,
+                                Vec::new(),
+                            )
+                        } else if let Some(canonical) = prepared.aliases.get(&value) {
+                            (
+                                Some(canonical.clone()),
+                                PostAdmissionOcrMappingDisposition::AliasExact,
+                                0,
+                                Vec::new(),
+                            )
+                        } else {
+                            let tolerant = tolerant_post_admission_ocr_candidates(
+                                &value,
+                                prepared,
+                                &mut tolerant_candidate_checks,
+                                &mut tolerant_scalar_comparisons,
+                            )?;
+                            if let Some(canonical) = tolerant.unique.clone() {
+                                (
+                                    Some(canonical),
+                                    PostAdmissionOcrMappingDisposition::TolerantUnique,
+                                    tolerant.count,
+                                    tolerant.witnesses,
+                                )
+                            } else {
+                                retry_required = true;
+                                (
+                                    None,
+                                    unresolved_mapping_disposition(retry_index, tolerant.count),
+                                    tolerant.count,
+                                    tolerant.witnesses,
+                                )
+                            }
+                        };
+                    mapping_evidence.push(PostAdmissionOcrMappingEvidence {
+                        frame_index,
+                        retry_index,
+                        target_id: evaluated.target_id.clone(),
+                        raw_text: block.text.clone(),
+                        normalized_text: value,
+                        canonical: canonical.clone(),
+                        confidence: block.confidence,
+                        candidate_count,
+                        candidates,
+                        disposition,
+                    });
+                    if let Some(canonical) = canonical {
+                        attempt_values.push((canonical, block.confidence));
+                    }
                 }
-                let aggregate = values.entry(value).or_default();
-                aggregate.occurrences = aggregate.occurrences.checked_add(1).ok_or_else(|| {
-                    ContainedTaskError::new("contained_task_post_admission_ocr_limit_exceeded")
-                })?;
-                aggregate.confidences.push(block.confidence);
+                let retry_exhausted = retry_index == max_retry_index;
+                if !retry_required || retry_exhausted {
+                    if !retry_required {
+                        for (aggregate_key, confidence) in attempt_values {
+                            let aggregate = values.entry(aggregate_key).or_default();
+                            aggregate.occurrences =
+                                aggregate.occurrences.checked_add(1).ok_or_else(|| {
+                                    ContainedTaskError::new(
+                                        "contained_task_post_admission_ocr_limit_exceeded",
+                                    )
+                                })?;
+                            aggregate.confidences.push(confidence);
+                        }
+                    }
+                    accepted_observation = Some(evaluated);
+                    break;
+                }
             }
+            let evaluated = accepted_observation.ok_or_else(|| {
+                ContainedTaskError::new("contained_task_post_admission_ocr_evidence_mismatch")
+            })?;
             target_observations.push(PostAdmissionOcrTargetObservation {
                 target_id: evaluated.target_id,
                 text: evaluated.text,
@@ -544,13 +758,15 @@ impl<'a> PostAdmissionOcrCollector<'a> {
                 "contained_task_post_admission_ocr_limit_exceeded",
             ));
         }
-        let frame_index = self.frames_collected;
         let frames_collected = self.frames_collected.checked_add(1).ok_or_else(|| {
             ContainedTaskError::new("contained_task_post_admission_ocr_limit_exceeded")
         })?;
         self.invocation_ids = invocation_ids;
         self.stream_binding = stream_binding;
         self.values = values;
+        self.mapping_evidence = mapping_evidence;
+        self.tolerant_candidate_checks = tolerant_candidate_checks;
+        self.tolerant_scalar_comparisons = tolerant_scalar_comparisons;
         self.discarded_empty_items = discarded_empty_items;
         self.frames_collected = frames_collected;
         self.items_collected = new_item_count;
@@ -620,7 +836,11 @@ impl<'a> PostAdmissionOcrCollector<'a> {
             })
             .collect::<Vec<_>>();
         Ok(Some(PostAdmissionOcrComparisonReport {
-            schema_version: "actingcommand.runtime.post-admission-ocr-comparison.v1",
+            schema_version: if prepared.truth_schema_v2 {
+                POST_ADMISSION_OCR_COMPARISON_SCHEMA_V2
+            } else {
+                POST_ADMISSION_OCR_COMPARISON_SCHEMA_V1
+            },
             target_id: prepared.declaration.target_id.clone(),
             target_ids: prepared.declaration.target_ids.clone(),
             truth_set_path: prepared.declaration.truth_set.path.clone(),
@@ -635,10 +855,116 @@ impl<'a> PostAdmissionOcrCollector<'a> {
             exact_match: missed.is_empty() && unexpected.is_empty(),
             truth: prepared.truth.clone(),
             observed,
+            classification_contract: prepared.truth_schema_v2.then_some(
+                PostAdmissionOcrClassificationContract {
+                    predicate: POST_ADMISSION_OCR_TOLERANT_PREDICATE,
+                    max_substitutions: POST_ADMISSION_OCR_TOLERANT_MAX_SUBSTITUTIONS,
+                    max_retry_index: POST_ADMISSION_OCR_MAX_RETRY_INDEX,
+                    max_candidate_checks: MAX_POST_ADMISSION_OCR_TOLERANT_CANDIDATE_CHECKS,
+                    candidate_checks: self.tolerant_candidate_checks,
+                    max_scalar_comparisons: MAX_POST_ADMISSION_OCR_TOLERANT_SCALAR_COMPARISONS,
+                    scalar_comparisons: self.tolerant_scalar_comparisons,
+                    max_candidate_witnesses: MAX_POST_ADMISSION_OCR_CANDIDATE_WITNESSES,
+                },
+            ),
+            mapping_evidence: prepared.truth_schema_v2.then_some(self.mapping_evidence),
             missed,
             unexpected,
             duplicates,
         }))
+    }
+}
+
+#[derive(Debug)]
+struct PostAdmissionOcrTolerantCandidates {
+    count: u32,
+    witnesses: Vec<PostAdmissionOcrCandidateEvidence>,
+    unique: Option<String>,
+}
+
+fn tolerant_post_admission_ocr_candidates(
+    observed: &str,
+    prepared: &PreparedPostAdmissionOcr,
+    candidate_checks: &mut u64,
+    scalar_comparisons: &mut u64,
+) -> Result<PostAdmissionOcrTolerantCandidates, ContainedTaskError> {
+    if prepared.truth.len() != prepared.truth_scalar_lengths.len() {
+        return Err(ContainedTaskError::new(
+            "contained_task_post_admission_ocr_truth_invalid",
+        ));
+    }
+    let observed_scalars = observed.chars().collect::<Vec<_>>();
+    let mut count = 0_u32;
+    let mut witnesses = Vec::with_capacity(MAX_POST_ADMISSION_OCR_CANDIDATE_WITNESSES);
+    let mut unique = None;
+    for (canonical, canonical_scalar_length) in prepared
+        .truth
+        .iter()
+        .zip(prepared.truth_scalar_lengths.iter())
+    {
+        *candidate_checks = candidate_checks.checked_add(1).ok_or_else(|| {
+            ContainedTaskError::new("contained_task_post_admission_ocr_candidate_work_exceeded")
+        })?;
+        if *candidate_checks > MAX_POST_ADMISSION_OCR_TOLERANT_CANDIDATE_CHECKS {
+            return Err(ContainedTaskError::new(
+                "contained_task_post_admission_ocr_candidate_work_exceeded",
+            ));
+        }
+        if *canonical_scalar_length != observed_scalars.len() {
+            continue;
+        }
+        let mut differing_scalars = 0_u8;
+        for (observed_scalar, canonical_scalar) in observed_scalars.iter().zip(canonical.chars()) {
+            *scalar_comparisons = scalar_comparisons.checked_add(1).ok_or_else(|| {
+                ContainedTaskError::new("contained_task_post_admission_ocr_candidate_work_exceeded")
+            })?;
+            if *scalar_comparisons > MAX_POST_ADMISSION_OCR_TOLERANT_SCALAR_COMPARISONS {
+                return Err(ContainedTaskError::new(
+                    "contained_task_post_admission_ocr_candidate_work_exceeded",
+                ));
+            }
+            if *observed_scalar != canonical_scalar {
+                differing_scalars = differing_scalars.saturating_add(1);
+                if differing_scalars > POST_ADMISSION_OCR_TOLERANT_MAX_SUBSTITUTIONS {
+                    break;
+                }
+            }
+        }
+        if differing_scalars != POST_ADMISSION_OCR_TOLERANT_MAX_SUBSTITUTIONS {
+            continue;
+        }
+        count = count.checked_add(1).ok_or_else(|| {
+            ContainedTaskError::new("contained_task_post_admission_ocr_candidate_work_exceeded")
+        })?;
+        if count == 1 {
+            unique = Some(canonical.clone());
+        } else {
+            unique = None;
+        }
+        if witnesses.len() < MAX_POST_ADMISSION_OCR_CANDIDATE_WITNESSES {
+            witnesses.push(PostAdmissionOcrCandidateEvidence {
+                canonical: canonical.clone(),
+                differing_scalars,
+            });
+        }
+    }
+    Ok(PostAdmissionOcrTolerantCandidates {
+        count,
+        witnesses,
+        unique,
+    })
+}
+
+fn unresolved_mapping_disposition(
+    retry_index: u32,
+    candidate_count: u32,
+) -> PostAdmissionOcrMappingDisposition {
+    if retry_index == POST_ADMISSION_OCR_MAX_RETRY_INDEX {
+        PostAdmissionOcrMappingDisposition::UnmatchedAfterRetry
+    } else if candidate_count == 0 {
+        PostAdmissionOcrMappingDisposition::RetryRequiredAbsent
+    } else {
+        PostAdmissionOcrMappingDisposition::RetryRequiredAmbiguous
     }
 }
 
@@ -2095,7 +2421,7 @@ impl TaskProgram {
         }
         let mut operation_ids = BTreeSet::new();
         for operation in &self.operations {
-            operation.validate(control, self.defaults)?;
+            operation.validate(control, self.defaults, &self.schema_version)?;
             let destination_pages = operation.destination_pages()?;
             validate_page_references(&control.game, &destination_pages, detector)?;
             validate_page_set_overlap(
@@ -2219,8 +2545,16 @@ impl TaskProgram {
         let truth: PostAdmissionOcrTruthSet = serde_json::from_slice(bytes).map_err(|_| {
             ContainedTaskError::new("contained_task_post_admission_ocr_truth_invalid")
         })?;
-        if truth.schema_version != POST_ADMISSION_OCR_TRUTH_SCHEMA
-            || truth.items.is_empty()
+        let truth_schema_v2 = match truth.schema_version.as_str() {
+            POST_ADMISSION_OCR_TRUTH_SCHEMA_V1 if truth.aliases.is_none() => false,
+            POST_ADMISSION_OCR_TRUTH_SCHEMA_V2 => true,
+            _ => {
+                return Err(ContainedTaskError::new(
+                    "contained_task_post_admission_ocr_truth_invalid",
+                ));
+            }
+        };
+        if truth.items.is_empty()
             || u32::try_from(truth.items.len())
                 .map_or(true, |count| count > declaration.limits.max_truth_entries)
         {
@@ -2244,11 +2578,49 @@ impl TaskProgram {
                 ));
             }
         }
+        let mut aliases = BTreeMap::new();
+        if let Some(truth_aliases) = truth.aliases {
+            if truth_aliases.len() > MAX_POST_ADMISSION_OCR_ALIASES {
+                return Err(ContainedTaskError::new(
+                    "contained_task_post_admission_ocr_truth_invalid",
+                ));
+            }
+            for alias in truth_aliases {
+                if alias.observed.len() > max_string_bytes
+                    || alias.canonical.len() > max_string_bytes
+                {
+                    return Err(ContainedTaskError::new(
+                        "contained_task_post_admission_ocr_truth_invalid",
+                    ));
+                }
+                let observed =
+                    normalize_post_admission_ocr(&alias.observed, declaration.normalization);
+                let canonical =
+                    normalize_post_admission_ocr(&alias.canonical, declaration.normalization);
+                if observed.is_empty()
+                    || canonical.is_empty()
+                    || observed.len() > max_string_bytes
+                    || canonical.len() > max_string_bytes
+                    || normalized.contains(&observed)
+                    || !normalized.contains(&canonical)
+                    || aliases.insert(observed, canonical).is_some()
+                {
+                    return Err(ContainedTaskError::new(
+                        "contained_task_post_admission_ocr_truth_invalid",
+                    ));
+                }
+            }
+        }
+        let truth = normalized.into_iter().collect::<Vec<_>>();
+        let truth_scalar_lengths = truth.iter().map(|item| item.chars().count()).collect();
         Ok(Some(PreparedPostAdmissionOcr {
             declaration: declaration.clone(),
             page_ids,
             target_ids,
-            truth: normalized.into_iter().collect(),
+            truth,
+            truth_scalar_lengths,
+            aliases,
+            truth_schema_v2,
         }))
     }
 
@@ -2868,6 +3240,7 @@ impl TaskOperation {
         &self,
         control: &TaskControl,
         defaults: TaskOperationDefaults,
+        schema_version: &str,
     ) -> Result<(), ContainedTaskError> {
         if self.id.trim().is_empty() || self.from.trim().is_empty() {
             return Err(ContainedTaskError::new("contained_task_operation_invalid"));
@@ -2901,7 +3274,7 @@ impl TaskOperation {
             (None, true) => {}
         }
         self.click
-            .validate(&control.resolution, self.guard.as_ref())
+            .validate(&control.resolution, self.guard.as_ref(), schema_version)
     }
 
     fn retry_policy(
@@ -3093,6 +3466,18 @@ struct TaskClick {
     from_rect: Option<ClickRect>,
     #[serde(default)]
     to_rect: Option<ClickRect>,
+    #[serde(default)]
+    corner_rect: Option<ClickRect>,
+    #[serde(default)]
+    horizontal_duration_ms: Option<u64>,
+    #[serde(default)]
+    corner_hold_ms: Option<u64>,
+    #[serde(default)]
+    brake_distance_px: Option<i32>,
+    #[serde(default)]
+    brake_duration_ms: Option<u64>,
+    #[serde(flatten)]
+    extra: BTreeMap<String, serde_json::Value>,
 }
 
 impl TaskClick {
@@ -3100,6 +3485,7 @@ impl TaskClick {
         &self,
         resolution: &Resolution,
         guard: Option<&OperationGuard>,
+        schema_version: &str,
     ) -> Result<(), ContainedTaskError> {
         match self.kind.as_str() {
             "point" => {
@@ -3126,6 +3512,38 @@ impl TaskClick {
                     .ok_or_else(|| ContainedTaskError::new("contained_task_operation_invalid"))?
                     .validate(resolution)?;
                 if self.duration_ms == Some(0) || self.duration_ms.is_none() {
+                    return Err(ContainedTaskError::new("contained_task_operation_invalid"));
+                }
+            }
+            "single_touch_drag_with_vertical_brake_v1" => {
+                if schema_version != "0.7"
+                    || self.x.is_some()
+                    || self.y.is_some()
+                    || self.width.is_some()
+                    || self.height.is_some()
+                    || self.duration_ms.is_some()
+                    || self.target_id.is_some()
+                    || self.offset.is_some()
+                    || self.to_rect.is_some()
+                    || !self.extra.is_empty()
+                    || self.horizontal_duration_ms != Some(SEGMENTED_SWIPE_HORIZONTAL_DURATION_MS)
+                    || self.corner_hold_ms != Some(SEGMENTED_SWIPE_CORNER_HOLD_MS)
+                    || self.brake_distance_px != Some(SEGMENTED_SWIPE_BRAKE_DISTANCE_PX)
+                    || self.brake_duration_ms != Some(SEGMENTED_SWIPE_BRAKE_DURATION_MS)
+                {
+                    return Err(ContainedTaskError::new("contained_task_operation_invalid"));
+                }
+                self.from_rect
+                    .ok_or_else(|| ContainedTaskError::new("contained_task_operation_invalid"))?
+                    .validate(resolution)?;
+                let corner = self
+                    .corner_rect
+                    .ok_or_else(|| ContainedTaskError::new("contained_task_operation_invalid"))?;
+                corner.validate(resolution)?;
+                let brake_distance = self
+                    .brake_distance_px
+                    .ok_or_else(|| ContainedTaskError::new("contained_task_operation_invalid"))?;
+                if !(1..=256).contains(&brake_distance) || corner.y < brake_distance {
                     return Err(ContainedTaskError::new("contained_task_operation_invalid"));
                 }
             }
@@ -3209,6 +3627,31 @@ impl TaskClick {
                     action_seed,
                 )?
             }
+            "single_touch_drag_with_vertical_brake_v1" => {
+                let from = self
+                    .from_rect
+                    .ok_or_else(|| ContainedTaskError::new("contained_task_operation_invalid"))?;
+                let corner = self
+                    .corner_rect
+                    .ok_or_else(|| ContainedTaskError::new("contained_task_operation_invalid"))?;
+                sampled_segmented_swipe(
+                    from,
+                    corner,
+                    self.horizontal_duration_ms.ok_or_else(|| {
+                        ContainedTaskError::new("contained_task_operation_invalid")
+                    })?,
+                    self.corner_hold_ms.ok_or_else(|| {
+                        ContainedTaskError::new("contained_task_operation_invalid")
+                    })?,
+                    self.brake_distance_px.ok_or_else(|| {
+                        ContainedTaskError::new("contained_task_operation_invalid")
+                    })?,
+                    self.brake_duration_ms.ok_or_else(|| {
+                        ContainedTaskError::new("contained_task_operation_invalid")
+                    })?,
+                    action_seed,
+                )?
+            }
             "target" | "target_center" | "offset" => {
                 let target = target.ok_or_else(|| {
                     ContainedTaskError::new("contained_task_guard_target_missing")
@@ -3269,6 +3712,19 @@ impl TaskClick {
             InputAction::Swipe { x1, y1, x2, y2, .. } => {
                 resolution.validate_point(*x1, *y1)?;
                 resolution.validate_point(*x2, *y2)?;
+            }
+            InputAction::SingleTouchDragWithVerticalBrakeV1 {
+                x1,
+                y1,
+                x2,
+                y2,
+                x3,
+                y3,
+                ..
+            } => {
+                resolution.validate_point(*x1, *y1)?;
+                resolution.validate_point(*x2, *y2)?;
+                resolution.validate_point(*x3, *y3)?;
             }
             _ => {
                 return Err(ContainedTaskError::new(
@@ -3366,6 +3822,54 @@ fn sampled_swipe(
             duration_ms,
         },
         Some(sampling),
+    ))
+}
+
+fn sampled_segmented_swipe(
+    from: ClickRect,
+    corner: ClickRect,
+    horizontal_duration_ms: u64,
+    corner_hold_ms: u64,
+    brake_distance_px: i32,
+    brake_duration_ms: u64,
+    action_seed: Option<u64>,
+) -> Result<(InputAction, Option<InputSamplingEvidence>), ContainedTaskError> {
+    let ((x1, y1), (x2, y2), sampling) = if let Some(action_seed) = action_seed {
+        let mut state = normalized_xorshift64_state(action_seed);
+        let start = from.sample(&mut state)?;
+        let corner_point = corner.sample(&mut state)?;
+        let sampling = InputSamplingEvidence::new(
+            action_seed,
+            vec![from.sampling_region()?, corner.sampling_region()?],
+        )
+        .map_err(|_| ContainedTaskError::new("contained_task_sampling_invalid"))?;
+        (start, corner_point, Some(sampling))
+    } else {
+        (
+            (from.x + from.width / 2, from.y + from.height / 2),
+            (corner.x + corner.width / 2, corner.y + corner.height / 2),
+            None,
+        )
+    };
+    let y3 = y2
+        .checked_sub(brake_distance_px)
+        .ok_or_else(|| ContainedTaskError::new("contained_task_operation_invalid"))?;
+    Ok((
+        InputAction::SingleTouchDragWithVerticalBrakeV1 {
+            x1,
+            y1,
+            x2,
+            y2,
+            x3: x2,
+            y3,
+            horizontal_duration_ms,
+            corner_hold_ms,
+            brake_distance_px,
+            brake_duration_ms,
+            slope_in: SEGMENTED_SWIPE_SLOPE_IN,
+            slope_out: SEGMENTED_SWIPE_SLOPE_OUT,
+        },
+        sampling,
     ))
 }
 
@@ -3604,6 +4108,20 @@ mod post_admission_ocr_tests {
         .expect("fixture evaluator")
     }
 
+    fn fixture_scene() -> Scene {
+        scene_from_frame(
+            &Frame::from_pixels(
+                1,
+                1,
+                vec![0, 0, 0],
+                PixelFormat::Rgb8,
+                actingcommand_device::CaptureBackendName::FixtureSimulation,
+            )
+            .expect("fixture frame"),
+        )
+        .expect("fixture scene")
+    }
+
     fn ordered_target_ids() -> Vec<String> {
         (0..16)
             .map(|index| format!("fixture/ocr-{index:02}"))
@@ -3675,7 +4193,10 @@ mod post_admission_ocr_tests {
             },
             page_ids: vec!["operator".to_string(), "operator_end".to_string()],
             target_ids,
+            truth_scalar_lengths: truth.iter().map(|item| item.chars().count()).collect(),
             truth,
+            aliases: BTreeMap::new(),
+            truth_schema_v2: false,
         }
     }
 
@@ -3703,8 +4224,205 @@ mod post_admission_ocr_tests {
             },
             page_ids: vec!["target".to_string()],
             target_ids: vec!["fixture/ocr".to_string()],
+            truth_scalar_lengths: truth.iter().map(|item| item.chars().count()).collect(),
             truth,
+            aliases: BTreeMap::new(),
+            truth_schema_v2: false,
         }
+    }
+
+    fn prepared_v2(truth: &[&str], aliases: &[(&str, &str)]) -> PreparedPostAdmissionOcr {
+        let mut truth = truth
+            .iter()
+            .map(|item| (*item).to_string())
+            .collect::<Vec<_>>();
+        truth.sort();
+        let mut prepared = prepared(truth);
+        prepared.aliases = aliases
+            .iter()
+            .map(|(observed, canonical)| ((*observed).to_string(), (*canonical).to_string()))
+            .collect();
+        prepared.truth_schema_v2 = true;
+        prepared
+    }
+
+    #[test]
+    fn truth_schema_v2_classifies_canonical_alias_and_unique_tolerant_values() {
+        let provider = Arc::new(EvidenceProvider {
+            observations: Mutex::new(VecDeque::from([provider_observation(
+                "v2-positive-1",
+                &[
+                    "alpha".to_string(),
+                    "a1pha".to_string(),
+                    "臧默德克萨斯".to_string(),
+                ],
+            )])),
+            requests: Mutex::new(Vec::new()),
+            calls: AtomicU32::new(0),
+        });
+        let evaluator = evaluator(Arc::clone(&provider));
+        let prepared = prepared_v2(&["alpha", "缄默德克萨斯"], &[("a1pha", "alpha")]);
+        let mut collector = PostAdmissionOcrCollector::new(Some(&prepared));
+
+        collector
+            .observe("neutral", &evaluator, "neutral/target", &fixture_scene())
+            .expect("v2 positive observation")
+            .expect("admitted v2 frame");
+        let report = collector.finish().expect("comparison").expect("report");
+
+        assert_eq!(provider.calls.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            report.schema_version,
+            POST_ADMISSION_OCR_COMPARISON_SCHEMA_V2
+        );
+        assert!(report.exact_match);
+        assert_eq!(
+            report
+                .observed
+                .iter()
+                .map(|observed| observed.value.as_str())
+                .collect::<Vec<_>>(),
+            vec!["alpha", "缄默德克萨斯"]
+        );
+        let mapping = report.mapping_evidence.as_ref().expect("v2 mapping facts");
+        assert_eq!(mapping.len(), 3);
+        let evidence = |raw_text: &str| {
+            mapping
+                .iter()
+                .find(|evidence| evidence.raw_text == raw_text)
+                .expect("mapping evidence for raw text")
+        };
+        assert_eq!(
+            evidence("alpha").disposition,
+            PostAdmissionOcrMappingDisposition::CanonicalExact
+        );
+        assert_eq!(
+            evidence("a1pha").disposition,
+            PostAdmissionOcrMappingDisposition::AliasExact
+        );
+        let tolerant = evidence("臧默德克萨斯");
+        assert_eq!(
+            tolerant.disposition,
+            PostAdmissionOcrMappingDisposition::TolerantUnique
+        );
+        assert_eq!(tolerant.canonical.as_deref(), Some("缄默德克萨斯"));
+        assert_eq!(tolerant.candidate_count, 1);
+        assert_eq!(
+            tolerant.candidates,
+            vec![PostAdmissionOcrCandidateEvidence {
+                canonical: "缄默德克萨斯".to_string(),
+                differing_scalars: 1,
+            }]
+        );
+        let contract = report
+            .classification_contract
+            .as_ref()
+            .expect("v2 classification contract");
+        assert_eq!(contract.predicate, POST_ADMISSION_OCR_TOLERANT_PREDICATE);
+        assert_eq!(contract.max_retry_index, 1);
+        assert!(contract.candidate_checks <= contract.max_candidate_checks);
+        assert!(contract.scalar_comparisons <= contract.max_scalar_comparisons);
+    }
+
+    #[test]
+    fn truth_schema_v2_retries_absent_result_on_the_same_roi_and_accepts_unique_retry() {
+        let provider = Arc::new(EvidenceProvider {
+            observations: Mutex::new(VecDeque::from([
+                provider_observation("v2-retry-1", &["zzzz".to_string()]),
+                provider_observation("v2-retry-2", &["abb".to_string()]),
+            ])),
+            requests: Mutex::new(Vec::new()),
+            calls: AtomicU32::new(0),
+        });
+        let evaluator = evaluator(Arc::clone(&provider));
+        let prepared = prepared_v2(&["abc"], &[]);
+        let mut collector = PostAdmissionOcrCollector::new(Some(&prepared));
+
+        collector
+            .observe("neutral", &evaluator, "neutral/target", &fixture_scene())
+            .expect("bounded retry observation")
+            .expect("admitted v2 frame");
+        let report = collector.finish().expect("comparison").expect("report");
+
+        assert_eq!(provider.calls.load(Ordering::SeqCst), 2);
+        assert_eq!(
+            *provider.requests.lock().expect("request evidence"),
+            vec![
+                PackRect {
+                    x: 0,
+                    y: 0,
+                    width: 1,
+                    height: 1,
+                },
+                PackRect {
+                    x: 0,
+                    y: 0,
+                    width: 1,
+                    height: 1,
+                },
+            ]
+        );
+        assert!(report.exact_match);
+        assert_eq!(report.observed[0].value, "abc");
+        let mapping = report
+            .mapping_evidence
+            .as_ref()
+            .expect("retry mapping facts");
+        assert_eq!(mapping.len(), 2);
+        assert_eq!(mapping[0].retry_index, 0);
+        assert_eq!(
+            mapping[0].disposition,
+            PostAdmissionOcrMappingDisposition::RetryRequiredAbsent
+        );
+        assert_eq!(mapping[1].retry_index, 1);
+        assert_eq!(
+            mapping[1].disposition,
+            PostAdmissionOcrMappingDisposition::TolerantUnique
+        );
+        assert_eq!(mapping[1].canonical.as_deref(), Some("abc"));
+    }
+
+    #[test]
+    fn truth_schema_v2_keeps_ambiguous_candidates_unmatched_after_one_retry() {
+        let provider = Arc::new(EvidenceProvider {
+            observations: Mutex::new(VecDeque::from([
+                provider_observation("v2-ambiguous-1", &["abx".to_string()]),
+                provider_observation("v2-ambiguous-2", &["aby".to_string()]),
+            ])),
+            requests: Mutex::new(Vec::new()),
+            calls: AtomicU32::new(0),
+        });
+        let evaluator = evaluator(Arc::clone(&provider));
+        let prepared = prepared_v2(&["abc", "abd"], &[]);
+        let mut collector = PostAdmissionOcrCollector::new(Some(&prepared));
+
+        collector
+            .observe("neutral", &evaluator, "neutral/target", &fixture_scene())
+            .expect("bounded ambiguous observation")
+            .expect("admitted v2 frame");
+        let report = collector.finish().expect("comparison").expect("report");
+
+        assert_eq!(provider.calls.load(Ordering::SeqCst), 2);
+        assert!(report.observed.is_empty());
+        assert_eq!(report.missed, vec!["abc", "abd"]);
+        let mapping = report
+            .mapping_evidence
+            .as_ref()
+            .expect("retry mapping facts");
+        assert_eq!(mapping.len(), 2);
+        assert_eq!(mapping[0].candidate_count, 2);
+        assert_eq!(mapping[0].candidates.len(), 2);
+        assert_eq!(
+            mapping[0].disposition,
+            PostAdmissionOcrMappingDisposition::RetryRequiredAmbiguous
+        );
+        assert_eq!(mapping[1].retry_index, 1);
+        assert_eq!(mapping[1].candidate_count, 2);
+        assert!(mapping[1].canonical.is_none());
+        assert_eq!(
+            mapping[1].disposition,
+            PostAdmissionOcrMappingDisposition::UnmatchedAfterRetry
+        );
     }
 
     fn collect_422_name_report() -> (PostAdmissionOcrComparisonReport, u32) {
@@ -3780,8 +4498,14 @@ mod post_admission_ocr_tests {
         );
         assert_eq!(first.frames_collected, 2);
         assert_eq!(first.items_collected, 423);
+        assert_eq!(
+            first.schema_version,
+            POST_ADMISSION_OCR_COMPARISON_SCHEMA_V1
+        );
         assert_eq!(first.truth.len(), 422);
         assert_eq!(first.observed.len(), 422);
+        assert!(first.classification_contract.is_none());
+        assert!(first.mapping_evidence.is_none());
         assert!(first.exact_match);
         assert!(first.missed.is_empty());
         assert!(first.unexpected.is_empty());
@@ -4991,7 +5715,7 @@ mod retry_wiring_tests {
             .expect("operation guard"),
         );
         task_operation
-            .validate(&control, TaskOperationDefaults::default())
+            .validate(&control, TaskOperationDefaults::default(), "0.6")
             .expect("valid omitted-policy operation");
         let program = TaskProgram {
             schema_version: "0.6".to_string(),
@@ -5335,7 +6059,7 @@ mod retry_wiring_tests {
         let omitted = operation(json!({}), None);
         assert_eq!(omitted.post_delay_ms, None);
         omitted
-            .validate(&task_control, TaskOperationDefaults::default())
+            .validate(&task_control, TaskOperationDefaults::default(), "0.6")
             .expect("omitted post delay preserves existing admission");
 
         for invalid in [0, MAX_CAPTURE_INTERVAL_MS + 1, u64::MAX] {
@@ -5343,7 +6067,7 @@ mod retry_wiring_tests {
             operation.post_delay_ms = Some(invalid);
             assert_eq!(
                 operation
-                    .validate(&task_control, TaskOperationDefaults::default())
+                    .validate(&task_control, TaskOperationDefaults::default(), "0.6")
                     .expect_err("invalid post delay must fail admission")
                     .code(),
                 "contained_task_operation_invalid"
@@ -5870,7 +6594,7 @@ mod retry_wiring_tests {
         .expect("non-retryable operation");
 
         operation
-            .validate(&control(), TaskOperationDefaults::default())
+            .validate(&control(), TaskOperationDefaults::default(), "0.6")
             .expect("explicitly non-retryable operation without to");
         let policy = operation
             .retry_policy(TaskOperationDefaults::default(), 100)
