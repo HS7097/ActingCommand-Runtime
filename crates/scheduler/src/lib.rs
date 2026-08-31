@@ -5,8 +5,9 @@
 #![forbid(unsafe_code)]
 
 use actingcommand_contract::{
-    HolderId, IdentifierIssuer, InstanceId, LeaseId, LeasePriority, LeaseQueueStatus, LeaseToken,
-    MAX_LEASE_QUEUE_TIMEOUT_MS, OwnerEpoch, RequestId, RuntimeErrorCode, RuntimeErrorProjection,
+    ContainedTaskRequest, HolderId, IdentifierIssuer, InstanceId, LeaseId, LeasePriority,
+    LeaseQueueStatus, LeaseToken, MAX_LEASE_QUEUE_TIMEOUT_MS, OwnerEpoch, RequestId,
+    RuntimeErrorCode, RuntimeErrorProjection,
 };
 use std::collections::BTreeMap;
 use std::error::Error;
@@ -654,12 +655,42 @@ impl SeedScheduler {
         connection_id: ConnectionId,
         now_monotonic_ms: u64,
     ) -> SchedulerResult<LeasePreparation> {
+        let lease_ttl_ms = self.config.lease_ttl_ms;
         self.prepare_acquire_with_priority(
             request_id,
             instance_id,
             holder_id,
             connection_id,
             LeasePriority::Normal,
+            lease_ttl_ms,
+            now_monotonic_ms,
+        )
+    }
+
+    pub fn prepare_acquire_with_ttl(
+        &mut self,
+        request_id: RequestId,
+        instance_id: InstanceId,
+        holder_id: HolderId,
+        connection_id: ConnectionId,
+        lease_ttl_ms: u64,
+        now_monotonic_ms: u64,
+    ) -> SchedulerResult<LeasePreparation> {
+        let maximum_lease_ttl_ms = ContainedTaskRequest::MAX_RESPONSE_DEADLINE_MS
+            .checked_add(self.config.maximum_client_heartbeat_interval_ms)
+            .ok_or(SchedulerError::ExpiryOverflow)?;
+        if lease_ttl_ms <= self.config.maximum_client_heartbeat_interval_ms
+            || lease_ttl_ms > maximum_lease_ttl_ms
+        {
+            return Err(SchedulerError::InvalidConfig);
+        }
+        self.prepare_acquire_with_priority(
+            request_id,
+            instance_id,
+            holder_id,
+            connection_id,
+            LeasePriority::Normal,
+            lease_ttl_ms,
             now_monotonic_ms,
         )
     }
@@ -671,6 +702,7 @@ impl SeedScheduler {
         holder_id: HolderId,
         connection_id: ConnectionId,
         priority: LeasePriority,
+        lease_ttl_ms: u64,
         now_monotonic_ms: u64,
     ) -> SchedulerResult<LeasePreparation> {
         {
@@ -698,7 +730,7 @@ impl SeedScheduler {
                 });
             }
         }
-        let expires_at_monotonic_ms = self.expiry_from(now_monotonic_ms)?;
+        let expires_at_monotonic_ms = self.expiry_from_ttl(now_monotonic_ms, lease_ttl_ms)?;
         let lease_id = *self
             .lease_issuer
             .mint_lease_id()
@@ -807,12 +839,14 @@ impl SeedScheduler {
             .and_then(|state| state.lease.as_ref())
             .is_some();
         if !has_active_lease {
+            let lease_ttl_ms = self.config.lease_ttl_ms;
             let preparation = self.prepare_acquire_with_priority(
                 request_id,
                 instance_id,
                 holder_id,
                 connection_id,
                 priority,
+                lease_ttl_ms,
                 now_monotonic_ms,
             )?;
             return Ok(QueueAdmissionOutcome {
@@ -1604,8 +1638,12 @@ impl SeedScheduler {
     }
 
     fn expiry_from(&self, now_monotonic_ms: u64) -> SchedulerResult<u64> {
+        self.expiry_from_ttl(now_monotonic_ms, self.config.lease_ttl_ms)
+    }
+
+    fn expiry_from_ttl(&self, now_monotonic_ms: u64, lease_ttl_ms: u64) -> SchedulerResult<u64> {
         now_monotonic_ms
-            .checked_add(self.config.lease_ttl_ms)
+            .checked_add(lease_ttl_ms)
             .ok_or(SchedulerError::ExpiryOverflow)
     }
 
