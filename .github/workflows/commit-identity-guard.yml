@@ -1,0 +1,58 @@
+name: commit-identity-guard
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  verify-author-identity:
+    name: verify commit author identity
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout full history
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Verify every commit author/committer email is a family identity
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          # Exact allowlist: the three HS7097 family accounts (numeric and legacy
+          # noreply forms), the registered ViW address, and GitHub's web committer.
+          ALLOW='^(103177863\+HS7097@users\.noreply\.github\.com|HS7097@users\.noreply\.github\.com|310586811\+HS7097ViW@users\.noreply\.github\.com|HS7097ViW@users\.noreply\.github\.com|306820463\+HS7097Agt@users\.noreply\.github\.com|HS7097Agt@users\.noreply\.github\.com|alice\.office\.7097@gmail\.com|noreply@github\.com)$'
+
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            RANGE="${{ github.event.pull_request.base.sha }}..${{ github.event.pull_request.head.sha }}"
+          else
+            BEFORE="${{ github.event.before }}"
+            if [ "$BEFORE" = "0000000000000000000000000000000000000000" ] || ! git cat-file -e "$BEFORE" 2>/dev/null; then
+              RANGE="${{ github.sha }} -1"
+            else
+              RANGE="$BEFORE..${{ github.sha }}"
+            fi
+          fi
+
+          echo "checking range: $RANGE"
+          bad=0
+          while IFS=$'\t' read -r sha ae ce; do
+            for mail in "$ae" "$ce"; do
+              if ! [[ "$mail" =~ $ALLOW ]]; then
+                echo "::error::commit $sha carries non-family identity: $mail"
+                bad=1
+              fi
+            done
+          done < <(git log --format=$'%H\t%ae\t%ce' $RANGE)
+
+          if [ "$bad" -ne 0 ]; then
+            echo "::error::commit identity guard failed: only HS7097-family identities may author or commit. Fix git user.email and amend before merge."
+            exit 1
+          fi
+          echo "all commit identities are family identities"
