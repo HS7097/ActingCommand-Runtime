@@ -5,7 +5,8 @@
 #![forbid(unsafe_code)]
 
 use actingcommand_contract::{
-    CaptureSequenceSpec, ContainedTaskRequest, EventActor, EventSource, RuntimeMonitorPolicy,
+    CaptureSequenceSpec, ContainedTaskRecoveryBinding, ContainedTaskRequest, EventActor,
+    EventSource, RuntimeMonitorPolicy,
 };
 use actingcommand_runtime_client::{RuntimeClient, RuntimeClientConfig};
 use serde_json::Value;
@@ -78,9 +79,23 @@ fn run(arguments: Vec<OsString>) -> Result<Value, ActingctlError> {
         Command::TaskRun {
             package,
             expected_sha256,
+            recovery_package,
+            recovery_expected_sha256,
         } => {
             let package = std::fs::canonicalize(package).map_err(|_| ActingctlError::Package)?;
-            let request = task_run_request(package.display().to_string(), expected_sha256)?;
+            let recovery = match (recovery_package, recovery_expected_sha256) {
+                (Some(package), Some(expected_sha256)) => Some((
+                    std::fs::canonicalize(package)
+                        .map_err(|_| ActingctlError::Package)?
+                        .display()
+                        .to_string(),
+                    expected_sha256,
+                )),
+                (None, None) => None,
+                _ => return Err(ActingctlError::Usage),
+            };
+            let request =
+                task_run_request(package.display().to_string(), expected_sha256, recovery)?;
             serde_json::to_value(
                 client
                     .run_contained_task(instance()?, request)
@@ -95,8 +110,15 @@ fn run(arguments: Vec<OsString>) -> Result<Value, ActingctlError> {
 fn task_run_request(
     package_path: String,
     expected_sha256: String,
+    recovery: Option<(String, String)>,
 ) -> Result<ContainedTaskRequest, ActingctlError> {
     ContainedTaskRequest::new(package_path, expected_sha256)
+        .and_then(|request| match recovery {
+            Some((package_path, expected_sha256)) => request.with_recovery(
+                ContainedTaskRecoveryBinding::new(package_path, expected_sha256)?,
+            ),
+            None => Ok(request),
+        })
         .and_then(|request| {
             request.with_response_deadline_ms(ContainedTaskRequest::MAX_RESPONSE_DEADLINE_MS)
         })
@@ -131,6 +153,8 @@ enum Command {
     TaskRun {
         package: PathBuf,
         expected_sha256: String,
+        recovery_package: Option<PathBuf>,
+        recovery_expected_sha256: Option<String>,
     },
 }
 
@@ -146,6 +170,8 @@ impl Invocation {
         let mut frame_count = None;
         let mut package = None;
         let mut expected_sha256 = None;
+        let mut recovery_package = None;
+        let mut recovery_expected_sha256 = None;
         let mut recovery_enabled = false;
         let mut index = 1;
         while index < arguments.len() {
@@ -171,6 +197,12 @@ impl Invocation {
                 }
                 "--expected-sha256" => {
                     expected_sha256 = Some(require_text(&arguments, &mut index)?);
+                }
+                "--recovery-package" => {
+                    recovery_package = Some(PathBuf::from(require_value(&arguments, &mut index)?));
+                }
+                "--recovery-expected-sha256" => {
+                    recovery_expected_sha256 = Some(require_text(&arguments, &mut index)?);
                 }
                 "--recover" => recovery_enabled = true,
                 _ => return Err(ActingctlError::Usage),
@@ -200,10 +232,17 @@ impl Invocation {
                 )
                 .map_err(|_| ActingctlError::Usage)?,
             },
-            "task-run" => Command::TaskRun {
-                package: package.ok_or(ActingctlError::Usage)?,
-                expected_sha256: expected_sha256.ok_or(ActingctlError::Usage)?,
-            },
+            "task-run" => {
+                if recovery_package.is_some() != recovery_expected_sha256.is_some() {
+                    return Err(ActingctlError::Usage);
+                }
+                Command::TaskRun {
+                    package: package.ok_or(ActingctlError::Usage)?,
+                    expected_sha256: expected_sha256.ok_or(ActingctlError::Usage)?,
+                    recovery_package,
+                    recovery_expected_sha256,
+                }
+            }
             _ => return Err(ActingctlError::Usage),
         };
         if command.requires_instance() != instance.is_some() {
@@ -264,7 +303,7 @@ impl fmt::Display for ActingctlError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Usage => formatter
-                .write_str("usage: actingctl <observe|reset|status|monitor-status|monitor-set|monitor-clear|stream|task-run> --state-root <path> [--instance <id>] [--package <zip> --expected-sha256 <hash>]"),
+                .write_str("usage: actingctl <observe|reset|status|monitor-status|monitor-set|monitor-clear|stream|task-run> --state-root <path> [--instance <id>] [--package <zip> --expected-sha256 <hash> [--recovery-package <zip> --recovery-expected-sha256 <hash>]]"),
             Self::Runtime(error) => error.fmt(formatter),
             Self::Package => formatter.write_str("failed to resolve contained task package"),
             Self::Output => formatter.write_str("failed to write JSON output"),
@@ -368,7 +407,7 @@ mod tests {
 
     #[test]
     fn task_run_request_uses_maximum_bounded_response_deadline() {
-        let request = task_run_request("neutral-task.zip".to_string(), "0".repeat(64))
+        let request = task_run_request("neutral-task.zip".to_string(), "0".repeat(64), None)
             .expect("task-run request");
 
         assert_eq!(
@@ -376,5 +415,63 @@ mod tests {
             ContainedTaskRequest::MAX_RESPONSE_DEADLINE_MS
         );
         assert_eq!(request.response_deadline_ms(), 600_000);
+    }
+
+    // Test class: specification criterion. Task Contract: https://github.com/HS7097/ActingCommand-Workflow/issues/241#issuecomment-5491623342
+    #[test]
+    fn task_run_recovery_binding_requires_the_exact_paired_flags() {
+        let complete = [
+            "task-run",
+            "--state-root",
+            "state",
+            "--instance",
+            "neutral.instance",
+            "--package",
+            "neutral-task.zip",
+            "--expected-sha256",
+            "0",
+            "--recovery-package",
+            "return-home.zip",
+            "--recovery-expected-sha256",
+            "1",
+        ]
+        .into_iter()
+        .map(OsString::from)
+        .collect();
+        assert!(Invocation::parse(complete).is_ok());
+
+        for incomplete in [
+            vec!["--recovery-package", "return-home.zip"],
+            vec!["--recovery-expected-sha256", "1"],
+        ] {
+            let mut args = vec![
+                "task-run",
+                "--state-root",
+                "state",
+                "--instance",
+                "neutral.instance",
+                "--package",
+                "neutral-task.zip",
+                "--expected-sha256",
+                "0",
+            ];
+            args.extend(incomplete);
+            assert!(Invocation::parse(args.into_iter().map(OsString::from).collect()).is_err());
+        }
+    }
+
+    // Test class: specification criterion. Task Contract: https://github.com/HS7097/ActingCommand-Workflow/issues/241#issuecomment-5491623342
+    #[test]
+    fn task_run_request_preserves_the_typed_recovery_identity() {
+        let request = task_run_request(
+            "neutral-task.zip".to_string(),
+            "0".repeat(64),
+            Some(("return-home.zip".to_string(), "1".repeat(64))),
+        )
+        .expect("task-run request");
+        let recovery = request.recovery().expect("typed recovery binding");
+
+        assert_eq!(recovery.package_path(), "return-home.zip");
+        assert_eq!(recovery.expected_sha256(), "1".repeat(64));
     }
 }

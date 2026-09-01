@@ -353,23 +353,27 @@ fn official_ocr_fixture(
     let comparison_artifact =
         persisted_ocr_diagnostic(root, ids, correlation_id, run_id, frame_one, &comparison);
     let mut events = Vec::new();
-    for (sequence, frame_id, artifact) in [
-        (1, frame_zero, observation_zero_artifact),
-        (2, frame_one, observation_one_artifact),
-        (3, frame_one, comparison_artifact),
+    for (frame_id, artifact) in [
+        (frame_zero, observation_zero_artifact),
+        (frame_one, observation_one_artifact),
+        (frame_one, comparison_artifact),
     ] {
-        let mut event = link_projected_task_event(
-            projected_task_event(ids, sequence),
-            correlation_id,
-            task_id,
-            run_id,
-            Some(frame_id),
-        );
-        event.artifacts.push(artifact);
-        events.push(event);
+        for event_type in [EventType::ArtifactCreated, EventType::ArtifactVerified] {
+            let sequence = u64::try_from(events.len() + 1).expect("event sequence");
+            let mut event = link_projected_task_event(
+                projected_task_event(ids, sequence),
+                correlation_id,
+                task_id,
+                run_id,
+                Some(frame_id),
+            );
+            event.event_type = event_type;
+            event.artifacts.push(artifact.clone());
+            events.push(event);
+        }
     }
     events.push(link_projected_task_event(
-        projected_terminal_task_event(ids, 4),
+        projected_terminal_task_event(ids, 7),
         correlation_id,
         task_id,
         run_id,
@@ -1400,15 +1404,20 @@ fn successful_multi_page_task_projects_complete_official_ocr_and_provider_facts(
 
         let mut ocr_events =
             official_ocr_fixture(&root_path, &ids, correlation_id, task_id, run_id);
-        let observation_one_sequence = u64::try_from(event_count - 2).expect("event sequence");
-        let comparison_sequence = u64::try_from(event_count - 1).expect("event sequence");
+        let observation_one_sequence = u64::try_from(event_count - 4).expect("event sequence");
+        let observation_one_verified_sequence =
+            u64::try_from(event_count - 3).expect("event sequence");
+        let comparison_sequence = u64::try_from(event_count - 2).expect("event sequence");
+        let comparison_verified_sequence = u64::try_from(event_count - 1).expect("event sequence");
         let terminal_sequence = u64::try_from(event_count).expect("event sequence");
-        ocr_events[1].sequence = observation_one_sequence;
-        ocr_events[2].sequence = comparison_sequence;
-        ocr_events[3].sequence = terminal_sequence;
-        let mut events = vec![ocr_events.remove(0)];
+        ocr_events[2].sequence = observation_one_sequence;
+        ocr_events[3].sequence = observation_one_verified_sequence;
+        ocr_events[4].sequence = comparison_sequence;
+        ocr_events[5].sequence = comparison_verified_sequence;
+        ocr_events[6].sequence = terminal_sequence;
+        let mut events = vec![ocr_events.remove(0), ocr_events.remove(0)];
         events.extend(
-            (2..observation_one_sequence).map(|sequence| projected_task_event(&ids, sequence)),
+            (3..observation_one_sequence).map(|sequence| projected_task_event(&ids, sequence)),
         );
         events.extend(ocr_events);
         assert_eq!(events.len(), event_count);
@@ -1462,6 +1471,13 @@ fn successful_multi_page_task_projects_complete_official_ocr_and_provider_facts(
         .official_ocr_projection()
         .expect("official OCR projection");
     assert_eq!(projection.observations().len(), 2);
+    assert!(
+        projection.comparison_artifact_created_sequence()
+            < projection.comparison_artifact_verified_sequence()
+    );
+    assert!(projection.observations().iter().all(|observation| {
+        observation.artifact_created_sequence() < observation.artifact_verified_sequence()
+    }));
     assert_eq!(
         projection
             .observations()
@@ -1535,8 +1551,9 @@ fn official_ocr_projection_rejects_cross_run_missing_malformed_duplicate_and_ove
         let mut events = official_ocr_fixture(root.path(), &ids, correlation_id, task_id, run_id);
         match case {
             Case::CrossRun => {
-                events[0].artifacts[0].run_id =
-                    Some(*ids.mint_run_id().expect("other run").transport());
+                let other_run = *ids.mint_run_id().expect("other run").transport();
+                events[0].artifacts[0].run_id = Some(other_run);
+                events[1].artifacts[0].run_id = Some(other_run);
             }
             Case::Missing => {
                 let object_key = events[0].artifacts[0].object_key().expect("artifact path");
@@ -1544,7 +1561,7 @@ fn official_ocr_projection_rejects_cross_run_missing_malformed_duplicate_and_ove
             }
             Case::Malformed => {
                 let frame_id = *events[0].artifacts[0].frame_id().expect("frame id");
-                events[0].artifacts[0] = persisted_ocr_diagnostic(
+                let malformed = persisted_ocr_diagnostic(
                     root.path(),
                     &ids,
                     correlation_id,
@@ -1552,6 +1569,8 @@ fn official_ocr_projection_rejects_cross_run_missing_malformed_duplicate_and_ove
                     frame_id,
                     &json!({"schema_version": OCR_OBSERVATION_SCHEMA}),
                 );
+                events[0].artifacts[0] = malformed.clone();
+                events[1].artifacts[0] = malformed;
             }
             Case::Duplicate => {
                 let duplicate = events[0].artifacts[0].clone();
@@ -1559,12 +1578,78 @@ fn official_ocr_projection_rejects_cross_run_missing_malformed_duplicate_and_ove
             }
             Case::OverLimit => {
                 events[0].artifacts[0].byte_count = MAX_OFFICIAL_OCR_ARTIFACT_BYTES + 1;
+                events[1].artifacts[0].byte_count = MAX_OFFICIAL_OCR_ARTIFACT_BYTES + 1;
             }
         }
         let error = resolve_official_ocr_projection(root.path(), &receipt, correlation_id, &events)
             .expect_err("invalid OCR evidence must fail loud");
         assert_eq!(error.code(), expected_code);
     }
+}
+
+// Test class: authorized Defect regression. Task Contract: https://github.com/HS7097/ActingCommand-Workflow/issues/241#issuecomment-5491623342
+#[test]
+fn official_ocr_projection_folds_matching_created_and_verified_lifecycle_facts() {
+    let root = TempDir::new().expect("tempdir");
+    let ids = IdentifierIssuer::new().expect("identifier issuer");
+    let run_id = *ids.mint_run_id().expect("run id").transport();
+    let task_id = *ids.mint_task_id().expect("task id").transport();
+    let (receipt, correlation_id) = contained_task_success_receipt(&ids, run_id, task_id);
+    let events = official_ocr_fixture(root.path(), &ids, correlation_id, task_id, run_id);
+
+    let projection =
+        resolve_official_ocr_projection(root.path(), &receipt, correlation_id, &events)
+            .expect("matching artifact lifecycle")
+            .expect("official OCR projection");
+
+    assert_eq!(projection.observations().len(), 2);
+    assert_eq!(
+        serde_json::to_value(&projection).expect("projection JSON")["schema_version"],
+        "actingcommand.runtime.official-ocr-projection.v2"
+    );
+    assert_eq!(
+        projection.comparison_artifact_created_event_id(),
+        events[4].event_id
+    );
+    assert_eq!(
+        projection.comparison_artifact_verified_event_id(),
+        events[5].event_id
+    );
+    assert_eq!(
+        projection.observations()[0].artifact_created_event_id(),
+        events[0].event_id
+    );
+    assert_eq!(
+        projection.observations()[0].artifact_verified_event_id(),
+        events[1].event_id
+    );
+    assert!(
+        projection.comparison_artifact_created_sequence()
+            < projection.comparison_artifact_verified_sequence()
+    );
+    assert!(projection.observations().iter().all(|observation| {
+        observation.artifact_created_sequence() < observation.artifact_verified_sequence()
+    }));
+}
+
+// Test class: authorized Defect regression. Task Contract: https://github.com/HS7097/ActingCommand-Workflow/issues/241#issuecomment-5491623342
+#[test]
+fn official_ocr_projection_rejects_conflicting_immutable_lifecycle_facts() {
+    let root = TempDir::new().expect("tempdir");
+    let ids = IdentifierIssuer::new().expect("identifier issuer");
+    let run_id = *ids.mint_run_id().expect("run id").transport();
+    let task_id = *ids.mint_task_id().expect("task id").transport();
+    let (receipt, correlation_id) = contained_task_success_receipt(&ids, run_id, task_id);
+    let mut events = official_ocr_fixture(root.path(), &ids, correlation_id, task_id, run_id);
+    events[1].artifacts[0].created_at_unix_ms = 2;
+
+    let error = resolve_official_ocr_projection(root.path(), &receipt, correlation_id, &events)
+        .expect_err("conflicting artifact lifecycle must fail loud");
+
+    assert_eq!(
+        error.code(),
+        "runtime_official_ocr_artifact_identity_conflict"
+    );
 }
 
 // Test class: authorized Defect regression. Task Contract: https://github.com/HS7097/ActingCommand-Workflow/issues/241#issuecomment-5489709622

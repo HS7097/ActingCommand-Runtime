@@ -113,6 +113,12 @@ pub enum ContainedTaskRunError<E> {
     Task(ContainedTaskError),
 }
 
+impl<E> ContainedTaskRunError<E> {
+    pub fn task(code: &'static str) -> Self {
+        Self::Task(ContainedTaskError::new(code))
+    }
+}
+
 impl<E> From<ContainedTaskError> for ContainedTaskRunError<E> {
     fn from(error: ContainedTaskError) -> Self {
         Self::Task(error)
@@ -1119,6 +1125,7 @@ pub struct PreparedContainedTask {
     program: TaskProgram,
     evaluator: RecognitionEvaluator,
     detector: PageDetector,
+    entry_page: Option<String>,
     scheduling_outcome: Option<SchedulingOutcomeDeclaration>,
     post_admission_ocr: Option<PreparedPostAdmissionOcr>,
     package_sha256: String,
@@ -1210,6 +1217,13 @@ impl PreparedContainedTask {
             .validate(&evaluator)
             .map_err(|_| ContainedTaskError::new("contained_task_recognition_invalid"))?;
         program.validate(&control, &bundle, &detector)?;
+        let entry_page = program
+            .entry_page
+            .as_deref()
+            .filter(|page| crate::canonical_page_anchor(&control.game, page) == "home")
+            .map(|page| resolve_page_reference(&control.game, page, &detector))
+            .transpose()?
+            .filter(|page| detector.page_uses_any_of(page));
         let post_admission_ocr =
             program.prepare_post_admission_ocr(&control, &bundle, &detector, &evaluator)?;
         let scheduling_outcome = program.scheduling_outcome.clone();
@@ -1218,6 +1232,7 @@ impl PreparedContainedTask {
             program,
             evaluator,
             detector,
+            entry_page,
             scheduling_outcome,
             post_admission_ocr,
             package_sha256,
@@ -1256,6 +1271,73 @@ impl PreparedContainedTask {
 
     pub const fn has_post_admission_ocr(&self) -> bool {
         self.post_admission_ocr.is_some()
+    }
+
+    pub fn required_home_entry_page(&self) -> Option<&str> {
+        self.entry_page.as_deref()
+    }
+
+    pub fn terminal_matches_required_home(&self, page: &str) -> bool {
+        self.required_home_entry_page()
+            .is_some_and(|required| crate::page_anchor_matches(&self.control.game, page, required))
+    }
+
+    pub const fn is_entry_recovery_compatible(&self) -> bool {
+        self.scheduling_outcome.is_none()
+            && self.control.stability_termination.is_none()
+            && self.post_admission_ocr.is_none()
+    }
+
+    pub fn maximum_executed_steps(&self) -> u32 {
+        if self.control.execution_mode == "recognize_only" {
+            0
+        } else {
+            self.control.max_steps.unwrap_or(DEFAULT_MAX_STEPS)
+        }
+    }
+
+    pub fn recognize_required_home<R: ContainedTaskRuntime>(
+        &self,
+        runtime: &mut R,
+    ) -> Result<bool, ContainedTaskRunError<R::Error>> {
+        let page = self
+            .required_home_entry_page()
+            .ok_or_else(|| ContainedTaskError::new("contained_task_home_entry_not_required"))?;
+        let frame = runtime.capture().map_err(ContainedTaskRunError::Boundary)?;
+        self.control.resolution.validate_frame(&frame)?;
+        runtime
+            .record(ContainedTaskTrace::CaptureCompleted {
+                width: frame.width,
+                height: frame.height,
+            })
+            .map_err(ContainedTaskRunError::Boundary)?;
+        let candidate_pages = vec![page.to_owned()];
+        runtime
+            .record(ContainedTaskTrace::RecognitionStarted {
+                candidate_pages: candidate_pages.clone(),
+                width: frame.width,
+                height: frame.height,
+            })
+            .map_err(ContainedTaskRunError::Boundary)?;
+        let matched = self
+            .detector
+            .evaluate_page(&self.evaluator, &scene_from_frame(&frame)?, page)
+            .map_err(|error| {
+                ContainedTaskError::with_detail(
+                    "contained_task_recognition_failed",
+                    error.to_string(),
+                )
+            })?
+            .matched;
+        runtime
+            .record(ContainedTaskTrace::RecognitionCompleted {
+                candidate_pages,
+                page_label: matched.then(|| page.to_owned()),
+                width: frame.width,
+                height: frame.height,
+            })
+            .map_err(ContainedTaskRunError::Boundary)?;
+        Ok(matched)
     }
 
     pub const fn entry_count(&self) -> usize {
@@ -2367,6 +2449,8 @@ struct TaskProgram {
     #[serde(default)]
     server_scope: Vec<String>,
     coordinate_space: Resolution,
+    #[serde(default)]
+    entry_page: Option<String>,
     #[serde(default, deserialize_with = "deserialize_non_null_option")]
     timeout_ms: Option<u64>,
     #[serde(default, deserialize_with = "deserialize_non_null_option")]
@@ -3158,6 +3242,28 @@ fn validate_page_references(
         }
     }
     Ok(())
+}
+
+fn resolve_page_reference(
+    game: &str,
+    page: &str,
+    detector: &PageDetector,
+) -> Result<String, ContainedTaskError> {
+    if page.trim().is_empty() {
+        return Err(ContainedTaskError::new("contained_task_page_set_invalid"));
+    }
+    let matches = detector
+        .page_ids()
+        .filter(|candidate| crate::page_anchor_matches(game, candidate, page))
+        .map(str::to_owned)
+        .collect::<Vec<_>>();
+    match matches.as_slice() {
+        [resolved] => Ok(resolved.clone()),
+        _ => Err(ContainedTaskError::with_detail(
+            "contained_task_page_set_invalid",
+            format!("page={page} detector_matches={}", matches.len()),
+        )),
+    }
 }
 
 fn validate_page_set_overlap(
@@ -5273,6 +5379,7 @@ mod post_admission_ocr_tests {
             program,
             evaluator,
             detector,
+            entry_page: None,
             scheduling_outcome,
             post_admission_ocr: Some(post_admission_ocr),
             package_sha256: "fixture-sha256".to_string(),
@@ -5789,6 +5896,7 @@ mod retry_wiring_tests {
             game: "neutral".to_string(),
             server_scope: vec!["test".to_string()],
             coordinate_space: control.resolution,
+            entry_page: None,
             timeout_ms: None,
             max_steps: None,
             target_page: Some(PageDeclaration::Singleton("terminal".to_string())),
@@ -5865,6 +5973,7 @@ mod retry_wiring_tests {
             program,
             evaluator,
             detector,
+            entry_page: None,
             scheduling_outcome: None,
             post_admission_ocr: None,
             package_sha256: "fixture-sha256".to_string(),
