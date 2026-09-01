@@ -4,34 +4,36 @@ use crate::ipc::{DEFAULT_RUNTIME_MAX_FRAME_BYTES, ReceiptReadDeadline, exchange}
 use crate::{RuntimeClientError, RuntimeClientResult};
 use actingcommand_contract::{
     ActionId, AgentSessionContext, AgentSessionId, AgentSessionResponse, AgentSessionStatus,
-    AgentWakeId, ApplicationLifecycleAction, ApprovalDecisionRecord, CaptureSequenceSpec,
-    CatalogProposal, ClientActionRecord, ContainedTaskCancellationReason,
-    ContainedTaskCancellationStatus, ContainedTaskRequest, CorrelationId, EffectDisposition,
-    EventActor, EventId, EventPayload, EventQuery, EventSource, EventType, FactScope,
-    IdentifierIssuer, InputAction, InputPayload, IssuedCorrelationId, LeaseQueuePolicy,
-    LeaseQueueStatus, LeaseToken, MAX_RUNTIME_EVENT_QUERY_EVENTS, OriginModule, OwnerEpoch,
-    PackageDebugRequest, PolicyExecutionOutcome, PolicyFailureClass, PolicyFailureDisposition,
-    PolicyPayload, ProjectDecisionPageCursor, ProjectDecisionPageRequest, ProjectInterfaceRequest,
+    AgentWakeId, ApplicationLifecycleAction, ApprovalDecisionRecord, ArtifactKind,
+    ArtifactProducer, ArtifactRedactionState, CaptureSequenceSpec, CatalogProposal,
+    ClientActionRecord, ContainedTaskCancellationReason, ContainedTaskCancellationStatus,
+    ContainedTaskRequest, CorrelationId, EffectDisposition, EventActor, EventId, EventPayload,
+    EventQuery, EventSource, EventType, FactScope, FrameId, IdentifierIssuer, InputAction,
+    InputPayload, IssuedCorrelationId, LeaseQueuePolicy, LeaseQueueStatus, LeaseToken,
+    MAX_RUNTIME_EVENT_QUERY_EVENTS, OriginModule, OwnerEpoch, PackageDebugRequest,
+    PolicyExecutionOutcome, PolicyFailureClass, PolicyFailureDisposition, PolicyPayload,
+    ProjectDecisionPageCursor, ProjectDecisionPageRequest, ProjectInterfaceRequest,
     ProjectLedgerSnapshot, ProjectedArtifactReference, ProjectedEvent, ProjectionPayload,
     ProjectionProfile, ProposalPreview, ProposalPromotion, RUNTIME_INFO_FILE, RequestId,
-    ResourceAuthoringEvent, RunId, RuntimeControlPlaneStatus, RuntimeDebugEvent, RuntimeErrorCode,
-    RuntimeEventBatch, RuntimeEventQueryPage, RuntimeEventQueryPageRequest,
+    ResourceAuthoringEvent, RetentionClass, RunId, RuntimeControlPlaneStatus, RuntimeDebugEvent,
+    RuntimeErrorCode, RuntimeEventBatch, RuntimeEventQueryPage, RuntimeEventQueryPageRequest,
     RuntimeEvidenceExportRequest, RuntimeForwardProjectionRequest, RuntimeInfo,
     RuntimeMaintenanceQuery, RuntimeMonitorInstanceStatus, RuntimeMonitorPolicy,
     RuntimeMonitorRegistryStatus, RuntimeOperation, RuntimePlanningDocument,
     RuntimePlanningDocumentKind, RuntimeReceipt, RuntimeRequest, RuntimeResult,
-    RuntimeStrategicReportRequest, RuntimeSubscriptionRequest, TaskPayload, TaskSemanticFact,
-    TerminalEvent,
+    RuntimeStrategicReportRequest, RuntimeSubscriptionRequest, TaskId, TaskOutcome, TaskPayload,
+    TaskSemanticFact, TerminalEvent,
 };
 use actingcommand_policy::{
     EvaluationFacts, EvaluationResources, EvaluationTime, ForwardProjection,
     ForwardProjectionConfig, MaintenanceAssessment, MaintenanceTrendPolicy, StrategicProjection,
     StrategicReport,
 };
-use serde::Serialize;
 use serde::de::DeserializeOwned;
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use std::collections::BTreeSet;
+use sha2::{Digest, Sha256};
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::fs;
 use std::net::{Shutdown, TcpStream};
@@ -56,6 +58,21 @@ const MAX_RUN_SUMMARY_RESIDENT_BYTES: usize = 64 * 1024 * 1024;
 const MAX_COMPLETE_EVENT_QUERY_EVENTS: usize = 16_384;
 const MAX_COMPLETE_EVENT_QUERY_PAGES: usize = 64;
 const MAX_COMPLETE_EVENT_QUERY_DURATION: Duration = Duration::from_secs(60);
+const MAX_OFFICIAL_OCR_ARTIFACTS: usize = 257;
+pub(crate) const MAX_OFFICIAL_OCR_ARTIFACT_BYTES: u64 = 32 * 1024 * 1024;
+const MAX_OFFICIAL_OCR_TOTAL_BYTES: u64 = 64 * 1024 * 1024;
+const MAX_OFFICIAL_OCR_PROJECTION_DURATION: Duration = Duration::from_secs(60);
+const MAX_OFFICIAL_OCR_FRAMES: u32 = 256;
+const MAX_OFFICIAL_OCR_ITEMS: usize = 4_096;
+const MAX_OFFICIAL_OCR_MAPPING_FACTS: usize = 16_384;
+const OFFICIAL_OCR_PROJECTION_SCHEMA: &str = "actingcommand.runtime.official-ocr-projection.v1";
+pub(crate) const OCR_OBSERVATION_SCHEMA: &str =
+    "actingcommand.runtime.post-admission-ocr-observation.v1";
+pub(crate) const OCR_COMPARISON_ENVELOPE_SCHEMA: &str =
+    "actingcommand.runtime.post-admission-ocr-comparison-envelope.v1";
+const OCR_COMPARISON_SCHEMA_V1: &str = "actingcommand.runtime.post-admission-ocr-comparison.v1";
+pub(crate) const OCR_COMPARISON_SCHEMA_V2: &str =
+    "actingcommand.runtime.post-admission-ocr-comparison.v2";
 
 /// Discovery, identity, framing, and timeout configuration for one local Runtime session.
 #[derive(Clone)]
@@ -144,6 +161,7 @@ struct RuntimeConnection {
 
 struct RuntimeClientShared {
     info: RuntimeInfo,
+    state_root: PathBuf,
     connection: Mutex<RuntimeConnection>,
 }
 
@@ -179,6 +197,219 @@ pub struct RuntimeDebugSession {
 pub struct RuntimeFlowOutput {
     receipt: RuntimeReceipt,
     events: Vec<ProjectedEvent>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    official_ocr_projection: Option<RuntimeOfficialOcrProjection>,
+}
+
+/// Authoritative OCR comparison and provider facts resolved from this run's durable artifacts.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct RuntimeOfficialOcrProjection {
+    schema_version: &'static str,
+    run_id: RunId,
+    task_id: TaskId,
+    comparison_artifact: ProjectedArtifactReference,
+    observations: Vec<RuntimeOfficialOcrObservation>,
+    summary: RuntimeOfficialOcrSummary,
+    provider_execution: RuntimeOfficialOcrProviderExecution,
+    comparison: RuntimeOfficialOcrComparison,
+}
+
+/// One durable OCR observation and its complete target coverage.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct RuntimeOfficialOcrObservation {
+    frame_id: FrameId,
+    frame_index: u32,
+    artifact: ProjectedArtifactReference,
+    target_ids: Vec<String>,
+}
+
+/// Stable human- and machine-readable index over the complete comparison payload.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct RuntimeOfficialOcrSummary {
+    unique_canonical_count: usize,
+    canonical_names: Vec<String>,
+    screen_coverage: Vec<RuntimeOfficialOcrScreenCoverage>,
+    duplicates: Vec<RuntimeOfficialOcrDuplicate>,
+    unmatched_raw_readings: Vec<RuntimeOfficialOcrUnmatchedReading>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct RuntimeOfficialOcrScreenCoverage {
+    frame_index: u32,
+    target_ids: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct RuntimeOfficialOcrDuplicate {
+    name: String,
+    occurrences: u32,
+}
+
+/// Complete authoritative comparison emitted by the execution owner.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RuntimeOfficialOcrComparison {
+    schema_version: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    target_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    target_ids: Option<Vec<String>>,
+    truth_set_path: String,
+    truth_set_sha256: String,
+    normalization: RuntimeOfficialOcrNormalization,
+    comparison: RuntimeOfficialOcrComparisonMode,
+    outcome_key: String,
+    frames_collected: u32,
+    items_collected: u32,
+    discarded_empty_items: u32,
+    total_observed_utf8_bytes: u64,
+    exact_match: bool,
+    truth: Vec<String>,
+    observed: Vec<RuntimeOfficialOcrObservedValue>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    classification_contract: Option<RuntimeOfficialOcrClassificationContract>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    mapping_evidence: Option<Vec<RuntimeOfficialOcrMappingEvidence>>,
+    missed: Vec<String>,
+    unexpected: Vec<String>,
+    duplicates: Vec<RuntimeOfficialOcrDuplicateEvidence>,
+}
+
+impl Eq for RuntimeOfficialOcrComparison {}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RuntimeOfficialOcrNormalization {
+    TrimLowercaseV1,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RuntimeOfficialOcrComparisonMode {
+    ExactSetV1,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RuntimeOfficialOcrObservedValue {
+    value: String,
+    occurrences: u32,
+    confidences: Vec<Option<f32>>,
+}
+
+impl Eq for RuntimeOfficialOcrObservedValue {}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RuntimeOfficialOcrClassificationContract {
+    predicate: String,
+    max_substitutions: u8,
+    max_retry_index: u32,
+    max_candidate_checks: u64,
+    candidate_checks: u64,
+    max_scalar_comparisons: u64,
+    scalar_comparisons: u64,
+    max_candidate_witnesses: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RuntimeOfficialOcrMappingEvidence {
+    frame_index: u32,
+    retry_index: u32,
+    target_id: String,
+    raw_text: String,
+    normalized_text: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    canonical: Option<String>,
+    confidence: Option<f32>,
+    candidate_count: u32,
+    candidates: Vec<RuntimeOfficialOcrCandidateEvidence>,
+    disposition: RuntimeOfficialOcrMappingDisposition,
+}
+
+impl Eq for RuntimeOfficialOcrMappingEvidence {}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RuntimeOfficialOcrCandidateEvidence {
+    canonical: String,
+    differing_scalars: u8,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RuntimeOfficialOcrMappingDisposition {
+    CanonicalExact,
+    AliasExact,
+    TolerantUnique,
+    RetryRequiredAbsent,
+    RetryRequiredAmbiguous,
+    UnmatchedAfterRetry,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RuntimeOfficialOcrDuplicateEvidence {
+    value: String,
+    occurrences: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct RuntimeOfficialOcrUnmatchedReading {
+    frame_index: u32,
+    retry_index: u32,
+    target_id: String,
+    raw_text: String,
+    normalized_text: String,
+    disposition: RuntimeOfficialOcrMappingDisposition,
+}
+
+/// Actual provider stream binding plus the persisted invocation witnesses for this run.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct RuntimeOfficialOcrProviderExecution {
+    requested_provider: RuntimeOfficialOcrProviderKind,
+    actual_provider: RuntimeOfficialOcrProviderKind,
+    requested_cuda_ordinal: Option<u32>,
+    requested_cuda_identity: Option<String>,
+    actual_cuda_ordinal: Option<u32>,
+    actual_cuda_identity: Option<String>,
+    provider_implementation: String,
+    provider_binary_sha256: String,
+    runtime_version: String,
+    model_ref: String,
+    model_sha256: String,
+    cpu_ep_registered: bool,
+    cpu_fallback_disabled: bool,
+    fallback_forbidden: bool,
+    fallback_observed: Option<bool>,
+    strict_no_fallback: bool,
+    complete: bool,
+    session_id: String,
+    session_generation: u64,
+    evidence: Vec<RuntimeOfficialOcrProviderEvidence>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct RuntimeOfficialOcrProviderEvidence {
+    frame_index: u32,
+    target_id: String,
+    invocation_id: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RuntimeOfficialOcrProviderKind {
+    Cpu,
+    Cuda,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -268,6 +499,58 @@ impl RuntimeFlowOutput {
     pub fn events(&self) -> &[ProjectedEvent] {
         &self.events
     }
+
+    pub const fn official_ocr_projection(&self) -> Option<&RuntimeOfficialOcrProjection> {
+        self.official_ocr_projection.as_ref()
+    }
+}
+
+impl RuntimeOfficialOcrProjection {
+    pub const fn run_id(&self) -> RunId {
+        self.run_id
+    }
+
+    pub const fn task_id(&self) -> TaskId {
+        self.task_id
+    }
+
+    pub const fn comparison_artifact(&self) -> &ProjectedArtifactReference {
+        &self.comparison_artifact
+    }
+
+    pub fn observations(&self) -> &[RuntimeOfficialOcrObservation] {
+        &self.observations
+    }
+
+    pub const fn summary(&self) -> &RuntimeOfficialOcrSummary {
+        &self.summary
+    }
+
+    pub const fn provider_execution(&self) -> &RuntimeOfficialOcrProviderExecution {
+        &self.provider_execution
+    }
+
+    pub const fn comparison(&self) -> &RuntimeOfficialOcrComparison {
+        &self.comparison
+    }
+}
+
+impl RuntimeOfficialOcrObservation {
+    pub const fn frame_id(&self) -> FrameId {
+        self.frame_id
+    }
+
+    pub const fn frame_index(&self) -> u32 {
+        self.frame_index
+    }
+
+    pub const fn artifact(&self) -> &ProjectedArtifactReference {
+        &self.artifact
+    }
+
+    pub fn target_ids(&self) -> &[String] {
+        &self.target_ids
+    }
 }
 
 impl RuntimeClient {
@@ -281,6 +564,7 @@ impl RuntimeClient {
         let client = Self {
             shared: Arc::new(RuntimeClientShared {
                 info,
+                state_root: config.state_root,
                 connection: Mutex::new(RuntimeConnection {
                     stream,
                     ids: IdentifierIssuer::new().map_err(|_| {
@@ -1721,7 +2005,25 @@ impl RuntimeClient {
                     error,
                 )
             })?;
-        Ok(RuntimeFlowOutput { receipt, events })
+        let official_ocr_projection = resolve_official_ocr_projection(
+            &self.shared.state_root,
+            &receipt,
+            correlation_id,
+            &events,
+        )
+        .map_err(|error| {
+            RuntimeClientError::after_commit(
+                "runtime_official_ocr_projection_failed_after_terminal",
+                "project_runtime_official_ocr",
+                receipt.clone(),
+                error,
+            )
+        })?;
+        Ok(RuntimeFlowOutput {
+            receipt,
+            events,
+            official_ocr_projection,
+        })
     }
 
     fn unexpected_result(&self, operation: &'static str) -> RuntimeClientError {
@@ -1741,6 +2043,646 @@ impl RuntimeClient {
             .lock()
             .map_err(|_| RuntimeClientError::fatal("runtime_connection_poisoned", operation))
     }
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct OcrObservationEnvelope {
+    schema_version: String,
+    task_id: TaskId,
+    run_id: RunId,
+    frame_id: FrameId,
+    frame_index: u32,
+    observation: Value,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct OcrComparisonEnvelope {
+    schema_version: String,
+    task_id: TaskId,
+    run_id: RunId,
+    final_frame_id: FrameId,
+    report: Value,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct OcrObservationPayload {
+    #[serde(default)]
+    target_id: Option<String>,
+    #[serde(default)]
+    text: Option<String>,
+    #[serde(default)]
+    confidence: Option<Value>,
+    #[serde(default)]
+    blocks: Option<Value>,
+    #[serde(default)]
+    execution: Option<OcrProviderEvidence>,
+    #[serde(default)]
+    targets: Option<Vec<OcrTargetObservationPayload>>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct OcrTargetObservationPayload {
+    target_id: String,
+    text: String,
+    confidence: Option<Value>,
+    blocks: Value,
+    execution: OcrProviderEvidence,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct OcrProviderEvidence {
+    invocation_id: String,
+    session_id: String,
+    session_generation: u64,
+    requested_provider: RuntimeOfficialOcrProviderKind,
+    resolved_provider: RuntimeOfficialOcrProviderKind,
+    requested_cuda_ordinal: Option<u32>,
+    requested_cuda_identity: Option<String>,
+    resolved_cuda_ordinal: Option<u32>,
+    resolved_cuda_identity: Option<String>,
+    provider_implementation: String,
+    provider_binary_sha256: String,
+    runtime_version: String,
+    model_ref: String,
+    model_sha256: String,
+    cpu_ep_registered: bool,
+    cpu_fallback_disabled: bool,
+    fallback_forbidden: bool,
+    fallback_observed: Option<bool>,
+    complete: bool,
+}
+
+pub(crate) fn resolve_official_ocr_projection(
+    state_root: &Path,
+    receipt: &RuntimeReceipt,
+    correlation_id: CorrelationId,
+    events: &[ProjectedEvent],
+) -> RuntimeClientResult<Option<RuntimeOfficialOcrProjection>> {
+    let Some(RuntimeResult::ContainedTaskCompleted {
+        run_id,
+        task_id,
+        outcome: TaskOutcome::Success,
+        ..
+    }) = receipt.result()
+    else {
+        return Ok(None);
+    };
+    let marker_expected = official_ocr_marker_expected(events, run_id, task_id)?;
+    let candidates = events
+        .iter()
+        .flat_map(|event| {
+            event
+                .artifacts
+                .iter()
+                .map(move |reference| (event, reference))
+        })
+        .filter(|(_, reference)| {
+            reference.kind == ArtifactKind::DiagnosticJson
+                && reference.producer == ArtifactProducer::CapturePipeline
+        })
+        .collect::<Vec<_>>();
+    if candidates.is_empty() {
+        return if marker_expected {
+            Err(official_ocr_error("runtime_official_ocr_evidence_missing"))
+        } else {
+            Ok(None)
+        };
+    }
+    if candidates.len() > MAX_COMPLETE_EVENT_QUERY_EVENTS {
+        return Err(official_ocr_limit_error());
+    }
+
+    let started = Instant::now();
+    let canonical_root = fs::canonicalize(state_root)
+        .map_err(|_| official_ocr_error("runtime_official_ocr_state_root_unavailable"))?;
+    let mut total_bytes = 0_u64;
+    let mut recognized_artifacts = 0_usize;
+    let mut object_keys = BTreeSet::new();
+    let mut observations = Vec::new();
+    let mut provider_evidence = Vec::new();
+    let mut comparison = None;
+
+    for (event, reference) in candidates {
+        check_official_ocr_duration(started)?;
+        reference
+            .validate()
+            .map_err(|_| official_ocr_error("runtime_official_ocr_artifact_invalid"))?;
+        if event.links.task_id() != Some(task_id)
+            || event.links.run_id() != Some(run_id)
+            || event.links.correlation_id() != Some(&correlation_id)
+            || reference.run_id.as_ref() != Some(run_id)
+            || reference.correlation_id.as_ref() != Some(&correlation_id)
+            || reference.retention_class != RetentionClass::DebugFull
+            || reference.redaction_state != ArtifactRedactionState::NotRequired
+        {
+            return Err(official_ocr_error(
+                "runtime_official_ocr_artifact_identity_mismatch",
+            ));
+        }
+        let object_key = reference
+            .object_key()
+            .ok_or_else(|| official_ocr_error("runtime_official_ocr_artifact_path_missing"))?;
+        if !object_keys.insert(object_key.to_owned()) {
+            return Err(official_ocr_error(
+                "runtime_official_ocr_artifact_duplicate",
+            ));
+        }
+        if reference.byte_count() > MAX_OFFICIAL_OCR_ARTIFACT_BYTES {
+            return Err(official_ocr_limit_error());
+        }
+        total_bytes = total_bytes
+            .checked_add(reference.byte_count())
+            .ok_or_else(official_ocr_limit_error)?;
+        if total_bytes > MAX_OFFICIAL_OCR_TOTAL_BYTES {
+            return Err(official_ocr_limit_error());
+        }
+        let path = state_root.join(object_key);
+        let canonical_path = fs::canonicalize(&path)
+            .map_err(|_| official_ocr_error("runtime_official_ocr_artifact_read_failed"))?;
+        if !canonical_path.starts_with(&canonical_root) {
+            return Err(official_ocr_error(
+                "runtime_official_ocr_artifact_path_invalid",
+            ));
+        }
+        let metadata = fs::metadata(&canonical_path)
+            .map_err(|_| official_ocr_error("runtime_official_ocr_artifact_read_failed"))?;
+        if !metadata.is_file() || metadata.len() != reference.byte_count() {
+            return Err(official_ocr_error(
+                "runtime_official_ocr_artifact_length_mismatch",
+            ));
+        }
+        let bytes = fs::read(&canonical_path)
+            .map_err(|_| official_ocr_error("runtime_official_ocr_artifact_read_failed"))?;
+        if canonical_sha256(&bytes) != reference.sha256() {
+            return Err(official_ocr_error(
+                "runtime_official_ocr_artifact_digest_mismatch",
+            ));
+        }
+        let value = serde_json::from_slice::<Value>(&bytes)
+            .map_err(|_| official_ocr_error("runtime_official_ocr_payload_malformed"))?;
+        match value.get("schema_version").and_then(Value::as_str) {
+            Some(OCR_OBSERVATION_SCHEMA) => {
+                recognized_artifacts = recognized_artifacts
+                    .checked_add(1)
+                    .ok_or_else(official_ocr_limit_error)?;
+                let envelope = serde_json::from_value::<OcrObservationEnvelope>(value)
+                    .map_err(|_| official_ocr_error("runtime_official_ocr_payload_malformed"))?;
+                if envelope.schema_version != OCR_OBSERVATION_SCHEMA
+                    || envelope.task_id != *task_id
+                    || envelope.run_id != *run_id
+                    || reference.frame_id() != Some(&envelope.frame_id)
+                    || event.links.frame_id() != Some(&envelope.frame_id)
+                {
+                    return Err(official_ocr_error(
+                        "runtime_official_ocr_payload_identity_mismatch",
+                    ));
+                }
+                let targets =
+                    parse_official_ocr_observation(envelope.frame_index, &envelope.observation)?;
+                let mut target_ids = targets
+                    .iter()
+                    .map(|(_, target_id, _)| target_id.clone())
+                    .collect::<Vec<_>>();
+                target_ids.sort();
+                provider_evidence.extend(targets);
+                observations.push(RuntimeOfficialOcrObservation {
+                    frame_id: envelope.frame_id,
+                    frame_index: envelope.frame_index,
+                    artifact: reference.clone(),
+                    target_ids,
+                });
+            }
+            Some(OCR_COMPARISON_ENVELOPE_SCHEMA) => {
+                recognized_artifacts = recognized_artifacts
+                    .checked_add(1)
+                    .ok_or_else(official_ocr_limit_error)?;
+                let envelope = serde_json::from_value::<OcrComparisonEnvelope>(value)
+                    .map_err(|_| official_ocr_error("runtime_official_ocr_payload_malformed"))?;
+                if envelope.schema_version != OCR_COMPARISON_ENVELOPE_SCHEMA
+                    || envelope.task_id != *task_id
+                    || envelope.run_id != *run_id
+                    || reference.frame_id() != Some(&envelope.final_frame_id)
+                    || event.links.frame_id() != Some(&envelope.final_frame_id)
+                {
+                    return Err(official_ocr_error(
+                        "runtime_official_ocr_payload_identity_mismatch",
+                    ));
+                }
+                if comparison
+                    .replace((reference.clone(), envelope.report))
+                    .is_some()
+                {
+                    return Err(official_ocr_error(
+                        "runtime_official_ocr_comparison_duplicate",
+                    ));
+                }
+            }
+            _ => {}
+        }
+    }
+    check_official_ocr_duration(started)?;
+    if recognized_artifacts == 0 {
+        return if marker_expected {
+            Err(official_ocr_error("runtime_official_ocr_evidence_missing"))
+        } else {
+            Ok(None)
+        };
+    }
+    if recognized_artifacts > MAX_OFFICIAL_OCR_ARTIFACTS {
+        return Err(official_ocr_limit_error());
+    }
+    let (comparison_artifact, comparison_value) =
+        comparison.ok_or_else(|| official_ocr_error("runtime_official_ocr_comparison_missing"))?;
+    if observations.is_empty() {
+        return Err(official_ocr_error(
+            "runtime_official_ocr_observation_missing",
+        ));
+    }
+    observations.sort_by_key(|observation| observation.frame_index);
+    for (expected, observation) in observations.iter().enumerate() {
+        if observation.frame_index
+            != u32::try_from(expected).map_err(|_| official_ocr_limit_error())?
+        {
+            return Err(official_ocr_error(
+                "runtime_official_ocr_observation_order_invalid",
+            ));
+        }
+    }
+    let (summary, report) = parse_official_ocr_comparison(&comparison_value, &observations)?;
+    let provider_execution = project_official_ocr_provider(provider_evidence)?;
+    Ok(Some(RuntimeOfficialOcrProjection {
+        schema_version: OFFICIAL_OCR_PROJECTION_SCHEMA,
+        run_id: *run_id,
+        task_id: *task_id,
+        comparison_artifact,
+        observations,
+        summary,
+        provider_execution,
+        comparison: report,
+    }))
+}
+
+fn official_ocr_marker_expected(
+    events: &[ProjectedEvent],
+    run_id: &RunId,
+    task_id: &TaskId,
+) -> RuntimeClientResult<bool> {
+    let mut expected = false;
+    for event in events.iter().filter(|event| {
+        event.event_type == EventType::TaskCompleted
+            && event.links.run_id() == Some(run_id)
+            && event.links.task_id() == Some(task_id)
+    }) {
+        let EventPayload::Task(TaskPayload::Semantic(payload)) = full_payload(event)? else {
+            return Err(official_ocr_error(
+                "runtime_official_ocr_terminal_payload_invalid",
+            ));
+        };
+        if let TaskSemanticFact::TerminalCommitted {
+            outcome: TaskOutcome::Success,
+            scheduling_disposition: Some(disposition),
+            ..
+        } = payload.fact()
+        {
+            expected |= disposition.outcome_key() == "comparison_recorded";
+        }
+    }
+    Ok(expected)
+}
+
+fn parse_official_ocr_observation(
+    frame_index: u32,
+    value: &Value,
+) -> RuntimeClientResult<Vec<(u32, String, OcrProviderEvidence)>> {
+    if frame_index >= MAX_OFFICIAL_OCR_FRAMES {
+        return Err(official_ocr_limit_error());
+    }
+    let payload = serde_json::from_value::<OcrObservationPayload>(value.clone())
+        .map_err(|_| official_ocr_error("runtime_official_ocr_observation_malformed"))?;
+    let direct_shape = payload.target_id.is_some()
+        || payload.text.is_some()
+        || payload.confidence.is_some()
+        || payload.blocks.is_some()
+        || payload.execution.is_some();
+    match (direct_shape, payload.targets) {
+        (true, None) => {
+            let target_id = payload
+                .target_id
+                .ok_or_else(|| official_ocr_error("runtime_official_ocr_observation_malformed"))?;
+            let execution = payload.execution.ok_or_else(|| {
+                official_ocr_error("runtime_official_ocr_provider_evidence_missing")
+            })?;
+            validate_official_ocr_target(&target_id, &execution)?;
+            Ok(vec![(frame_index, target_id, execution)])
+        }
+        (false, Some(targets)) if !targets.is_empty() && targets.len() <= 32 => {
+            let mut seen = BTreeSet::new();
+            targets
+                .into_iter()
+                .map(|target| {
+                    let _ = (&target.text, &target.confidence, &target.blocks);
+                    validate_official_ocr_target(&target.target_id, &target.execution)?;
+                    if !seen.insert(target.target_id.clone()) {
+                        return Err(official_ocr_error("runtime_official_ocr_target_duplicate"));
+                    }
+                    Ok((frame_index, target.target_id, target.execution))
+                })
+                .collect()
+        }
+        _ => Err(official_ocr_error(
+            "runtime_official_ocr_observation_malformed",
+        )),
+    }
+}
+
+fn validate_official_ocr_target(
+    target_id: &str,
+    evidence: &OcrProviderEvidence,
+) -> RuntimeClientResult<()> {
+    let provider_binding_valid = matches!(
+        (
+            evidence.requested_provider,
+            evidence.resolved_provider,
+            evidence.cpu_ep_registered,
+            evidence.cpu_fallback_disabled,
+        ),
+        (
+            RuntimeOfficialOcrProviderKind::Cpu,
+            RuntimeOfficialOcrProviderKind::Cpu,
+            true,
+            false,
+        ) | (
+            RuntimeOfficialOcrProviderKind::Cuda,
+            RuntimeOfficialOcrProviderKind::Cuda,
+            false,
+            true,
+        )
+    );
+    if target_id.trim().is_empty()
+        || evidence.invocation_id.trim().is_empty()
+        || evidence.session_id.trim().is_empty()
+        || evidence.provider_implementation.trim().is_empty()
+        || evidence.runtime_version.trim().is_empty()
+        || evidence.model_ref.trim().is_empty()
+        || !is_sha256_hex(&evidence.provider_binary_sha256)
+        || !is_sha256_hex(&evidence.model_sha256)
+        || !provider_binding_valid
+        || !evidence.complete
+        || !evidence.fallback_forbidden
+        || evidence.fallback_observed.is_some()
+    {
+        return Err(official_ocr_error(
+            "runtime_official_ocr_provider_evidence_invalid",
+        ));
+    }
+    Ok(())
+}
+
+fn parse_official_ocr_comparison(
+    value: &Value,
+    observations: &[RuntimeOfficialOcrObservation],
+) -> RuntimeClientResult<(RuntimeOfficialOcrSummary, RuntimeOfficialOcrComparison)> {
+    let report = serde_json::from_value::<RuntimeOfficialOcrComparison>(value.clone())
+        .map_err(|_| official_ocr_error("runtime_official_ocr_comparison_malformed"))?;
+    let schema_valid = match report.schema_version.as_str() {
+        OCR_COMPARISON_SCHEMA_V1 => {
+            report.mapping_evidence.is_none() && report.classification_contract.is_none()
+        }
+        OCR_COMPARISON_SCHEMA_V2 => {
+            report.mapping_evidence.is_some() && report.classification_contract.is_some()
+        }
+        _ => false,
+    };
+    if !schema_valid
+        || report.frames_collected == 0
+        || report.frames_collected > MAX_OFFICIAL_OCR_FRAMES
+        || usize::try_from(report.frames_collected).ok() != Some(observations.len())
+        || report.observed.len() > MAX_OFFICIAL_OCR_ITEMS
+        || report.truth.len() > MAX_OFFICIAL_OCR_ITEMS
+        || report.missed.len() > MAX_OFFICIAL_OCR_ITEMS
+        || report.unexpected.len() > MAX_OFFICIAL_OCR_ITEMS
+        || report.duplicates.len() > MAX_OFFICIAL_OCR_ITEMS
+        || report.outcome_key.trim().is_empty()
+        || report.truth_set_path.trim().is_empty()
+        || !is_sha256_hex(&report.truth_set_sha256)
+    {
+        return Err(official_ocr_error(
+            "runtime_official_ocr_comparison_invalid",
+        ));
+    }
+    let _ = (
+        &report.target_id,
+        &report.target_ids,
+        report.items_collected,
+        report.discarded_empty_items,
+        report.total_observed_utf8_bytes,
+        report.exact_match,
+        report.normalization,
+        report.comparison,
+    );
+
+    let mut canonical_names = Vec::with_capacity(report.observed.len());
+    let mut canonical_occurrences = BTreeMap::new();
+    for observed in &report.observed {
+        if observed.value.trim().is_empty()
+            || observed.occurrences == 0
+            || usize::try_from(observed.occurrences).ok() != Some(observed.confidences.len())
+            || canonical_names
+                .last()
+                .is_some_and(|prior| prior >= &observed.value)
+        {
+            return Err(official_ocr_error(
+                "runtime_official_ocr_comparison_invalid",
+            ));
+        }
+        canonical_names.push(observed.value.clone());
+        canonical_occurrences.insert(observed.value.clone(), observed.occurrences);
+    }
+    let expected_duplicates = canonical_occurrences
+        .iter()
+        .filter(|(_, occurrences)| **occurrences > 1)
+        .map(|(name, occurrences)| (name.clone(), *occurrences))
+        .collect::<Vec<_>>();
+    let duplicates = report
+        .duplicates
+        .iter()
+        .map(|duplicate| (duplicate.value.clone(), duplicate.occurrences))
+        .collect::<Vec<_>>();
+    if duplicates != expected_duplicates {
+        return Err(official_ocr_error(
+            "runtime_official_ocr_comparison_invalid",
+        ));
+    }
+
+    let mappings = report.mapping_evidence.as_deref().unwrap_or_default();
+    if mappings.len() > MAX_OFFICIAL_OCR_MAPPING_FACTS {
+        return Err(official_ocr_limit_error());
+    }
+    let mut unmatched_raw_readings = Vec::new();
+    for mapping in mappings {
+        if mapping.frame_index >= report.frames_collected
+            || mapping.retry_index > 1
+            || mapping.target_id.trim().is_empty()
+            || mapping
+                .canonical
+                .as_ref()
+                .is_some_and(|value| value.is_empty())
+        {
+            return Err(official_ocr_error(
+                "runtime_official_ocr_mapping_evidence_invalid",
+            ));
+        }
+        let _ = (
+            mapping.confidence,
+            mapping.candidate_count,
+            &mapping.candidates,
+        );
+        if mapping.disposition == RuntimeOfficialOcrMappingDisposition::UnmatchedAfterRetry
+            && mapping.canonical.is_none()
+        {
+            unmatched_raw_readings.push(RuntimeOfficialOcrUnmatchedReading {
+                frame_index: mapping.frame_index,
+                retry_index: mapping.retry_index,
+                target_id: mapping.target_id.clone(),
+                raw_text: mapping.raw_text.clone(),
+                normalized_text: mapping.normalized_text.clone(),
+                disposition: mapping.disposition,
+            });
+        }
+    }
+
+    let mut screen_coverage = Vec::with_capacity(observations.len());
+    for observation in observations {
+        screen_coverage.push(RuntimeOfficialOcrScreenCoverage {
+            frame_index: observation.frame_index,
+            target_ids: observation.target_ids.clone(),
+        });
+    }
+    Ok((
+        RuntimeOfficialOcrSummary {
+            unique_canonical_count: canonical_names.len(),
+            canonical_names,
+            screen_coverage,
+            duplicates: duplicates
+                .into_iter()
+                .map(|(name, occurrences)| RuntimeOfficialOcrDuplicate { name, occurrences })
+                .collect(),
+            unmatched_raw_readings,
+        },
+        report,
+    ))
+}
+
+fn project_official_ocr_provider(
+    mut records: Vec<(u32, String, OcrProviderEvidence)>,
+) -> RuntimeClientResult<RuntimeOfficialOcrProviderExecution> {
+    if records.is_empty() || records.len() > MAX_OFFICIAL_OCR_ITEMS {
+        return Err(official_ocr_error(
+            "runtime_official_ocr_provider_evidence_missing",
+        ));
+    }
+    records.sort_by(|left, right| {
+        (left.0, left.1.as_str(), left.2.invocation_id.as_str()).cmp(&(
+            right.0,
+            right.1.as_str(),
+            right.2.invocation_id.as_str(),
+        ))
+    });
+    let binding = records[0].2.clone();
+    let mut invocation_ids = BTreeSet::new();
+    let mut evidence = Vec::with_capacity(records.len());
+    for (frame_index, target_id, record) in records {
+        if !invocation_ids.insert(record.invocation_id.clone())
+            || !same_official_ocr_provider_binding(&binding, &record)
+        {
+            return Err(official_ocr_error(
+                "runtime_official_ocr_provider_evidence_mismatch",
+            ));
+        }
+        evidence.push(RuntimeOfficialOcrProviderEvidence {
+            frame_index,
+            target_id,
+            invocation_id: record.invocation_id,
+        });
+    }
+    Ok(RuntimeOfficialOcrProviderExecution {
+        requested_provider: binding.requested_provider,
+        actual_provider: binding.resolved_provider,
+        requested_cuda_ordinal: binding.requested_cuda_ordinal,
+        requested_cuda_identity: binding.requested_cuda_identity,
+        actual_cuda_ordinal: binding.resolved_cuda_ordinal,
+        actual_cuda_identity: binding.resolved_cuda_identity,
+        provider_implementation: binding.provider_implementation,
+        provider_binary_sha256: binding.provider_binary_sha256,
+        runtime_version: binding.runtime_version,
+        model_ref: binding.model_ref,
+        model_sha256: binding.model_sha256,
+        cpu_ep_registered: binding.cpu_ep_registered,
+        cpu_fallback_disabled: binding.cpu_fallback_disabled,
+        fallback_forbidden: binding.fallback_forbidden,
+        fallback_observed: binding.fallback_observed,
+        strict_no_fallback: binding.fallback_forbidden && binding.fallback_observed.is_none(),
+        complete: binding.complete,
+        session_id: binding.session_id,
+        session_generation: binding.session_generation,
+        evidence,
+    })
+}
+
+fn same_official_ocr_provider_binding(
+    left: &OcrProviderEvidence,
+    right: &OcrProviderEvidence,
+) -> bool {
+    left.session_id == right.session_id
+        && left.session_generation == right.session_generation
+        && left.requested_provider == right.requested_provider
+        && left.resolved_provider == right.resolved_provider
+        && left.requested_cuda_ordinal == right.requested_cuda_ordinal
+        && left.requested_cuda_identity == right.requested_cuda_identity
+        && left.resolved_cuda_ordinal == right.resolved_cuda_ordinal
+        && left.resolved_cuda_identity == right.resolved_cuda_identity
+        && left.provider_implementation == right.provider_implementation
+        && left.provider_binary_sha256 == right.provider_binary_sha256
+        && left.runtime_version == right.runtime_version
+        && left.model_ref == right.model_ref
+        && left.model_sha256 == right.model_sha256
+        && left.cpu_ep_registered == right.cpu_ep_registered
+        && left.cpu_fallback_disabled == right.cpu_fallback_disabled
+        && left.fallback_forbidden == right.fallback_forbidden
+        && left.fallback_observed == right.fallback_observed
+        && left.complete == right.complete
+}
+
+pub(crate) fn canonical_sha256(bytes: &[u8]) -> String {
+    format!("sha256:{:x}", Sha256::digest(bytes))
+}
+
+fn is_sha256_hex(value: &str) -> bool {
+    value.len() == 64
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
+}
+
+fn check_official_ocr_duration(started: Instant) -> RuntimeClientResult<()> {
+    if started.elapsed() > MAX_OFFICIAL_OCR_PROJECTION_DURATION {
+        Err(official_ocr_limit_error())
+    } else {
+        Ok(())
+    }
+}
+
+fn official_ocr_error(code: &'static str) -> RuntimeClientError {
+    RuntimeClientError::fatal(code, "project_runtime_official_ocr")
+}
+
+fn official_ocr_limit_error() -> RuntimeClientError {
+    official_ocr_error("runtime_official_ocr_projection_limit_exceeded")
 }
 
 fn encode_policy_document<T>(
