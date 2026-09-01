@@ -937,6 +937,7 @@ fn contained_task_can_outlive_the_general_five_second_exchange_timeout() {
     server.join().expect("scripted runtime");
 }
 
+// Test class: authorized Defect regression. Task Contract: https://github.com/HS7097/ActingCommand-Workflow/issues/241#issuecomment-5488296852
 #[test]
 fn successful_contained_task_returns_complete_ordered_projection_across_event_pages() {
     let root = TempDir::new().expect("tempdir");
