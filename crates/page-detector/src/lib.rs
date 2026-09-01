@@ -241,6 +241,12 @@ impl PageDetector {
         self.page_set.pages.iter().map(|page| page.id.as_str())
     }
 
+    pub fn page_uses_any_of(&self, page_id: &str) -> bool {
+        self.page_indexes
+            .get(page_id)
+            .is_some_and(|index| !self.page_set.pages[*index].any_of.is_empty())
+    }
+
     pub fn evaluate_page(
         &self,
         evaluator: &RecognitionEvaluator,

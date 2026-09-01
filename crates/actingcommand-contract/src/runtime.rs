@@ -1437,9 +1437,63 @@ impl fmt::Debug for PackageDebugRequest {
 
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+pub struct ContainedTaskRecoveryBinding {
+    package_path: String,
+    expected_sha256: String,
+}
+
+impl ContainedTaskRecoveryBinding {
+    pub fn new(
+        package_path: impl Into<String>,
+        expected_sha256: impl Into<String>,
+    ) -> RuntimeContractResult<Self> {
+        let binding = Self {
+            package_path: package_path.into(),
+            expected_sha256: expected_sha256.into(),
+        };
+        binding.validate()?;
+        Ok(binding)
+    }
+
+    pub fn validate(&self) -> RuntimeContractResult<()> {
+        if self.package_path.trim().is_empty()
+            || self.package_path.len() > MAX_CONTAINED_TASK_PATH_BYTES
+            || self.package_path.contains('\0')
+        {
+            return Err(RuntimeContractError::new(
+                "invalid_contained_task_recovery_path",
+            ));
+        }
+        validate_sha256_hex(&self.expected_sha256)
+            .map_err(|_| RuntimeContractError::new("invalid_contained_task_recovery_hash"))
+    }
+
+    pub fn package_path(&self) -> &str {
+        &self.package_path
+    }
+
+    pub fn expected_sha256(&self) -> &str {
+        &self.expected_sha256
+    }
+}
+
+impl fmt::Debug for ContainedTaskRecoveryBinding {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("ContainedTaskRecoveryBinding")
+            .field("package_path", &"<redacted-path>")
+            .field("expected_sha256", &"<redacted-hash>")
+            .finish()
+    }
+}
+
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ContainedTaskRequest {
     package_path: String,
     expected_sha256: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    recovery: Option<ContainedTaskRecoveryBinding>,
     #[serde(default = "default_contained_task_response_deadline_ms")]
     response_deadline_ms: u64,
 }
@@ -1459,6 +1513,7 @@ impl ContainedTaskRequest {
         let request = Self {
             package_path: package_path.into(),
             expected_sha256: expected_sha256.into(),
+            recovery: None,
             response_deadline_ms: Self::DEFAULT_RESPONSE_DEADLINE_MS,
         };
         request.validate()?;
@@ -1474,6 +1529,9 @@ impl ContainedTaskRequest {
         }
         validate_sha256_hex(&self.expected_sha256)
             .map_err(|_| RuntimeContractError::new("invalid_contained_task_hash"))?;
+        if let Some(recovery) = &self.recovery {
+            recovery.validate()?;
+        }
         if !(1..=Self::MAX_RESPONSE_DEADLINE_MS).contains(&self.response_deadline_ms) {
             return Err(RuntimeContractError::new(
                 "invalid_contained_task_response_deadline",
@@ -1490,6 +1548,10 @@ impl ContainedTaskRequest {
         &self.expected_sha256
     }
 
+    pub const fn recovery(&self) -> Option<&ContainedTaskRecoveryBinding> {
+        self.recovery.as_ref()
+    }
+
     pub const fn response_deadline_ms(&self) -> u64 {
         self.response_deadline_ms
     }
@@ -1502,6 +1564,15 @@ impl ContainedTaskRequest {
         self.validate()?;
         Ok(self)
     }
+
+    pub fn with_recovery(
+        mut self,
+        recovery: ContainedTaskRecoveryBinding,
+    ) -> RuntimeContractResult<Self> {
+        self.recovery = Some(recovery);
+        self.validate()?;
+        Ok(self)
+    }
 }
 
 impl fmt::Debug for ContainedTaskRequest {
@@ -1510,6 +1581,7 @@ impl fmt::Debug for ContainedTaskRequest {
             .debug_struct("ContainedTaskRequest")
             .field("package_path", &"<redacted-path>")
             .field("expected_sha256", &"<redacted-hash>")
+            .field("recovery", &self.recovery)
             .field("response_deadline_ms", &self.response_deadline_ms)
             .finish()
     }

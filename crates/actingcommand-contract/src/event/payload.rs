@@ -1301,6 +1301,20 @@ impl ReleaseTransitionPayload {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TaskEntryRecognitionPhase {
+    Initial,
+    PostRecovery,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TaskEntryTargetDisposition {
+    Started,
+    FailClosed,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum TaskSemanticFact {
@@ -1327,6 +1341,31 @@ pub enum TaskSemanticFact {
         matched_page: Option<String>,
         frame_width: u32,
         frame_height: u32,
+    },
+    EntryRecognition {
+        phase: TaskEntryRecognitionPhase,
+        required_page: String,
+        matched: bool,
+    },
+    EntryRecoveryDecision {
+        required: bool,
+    },
+    EntryRecoveryPackageAdmitted {
+        package_sha256: String,
+    },
+    EntryRecoveryCompleted {
+        package_sha256: String,
+        final_page: String,
+        executed_steps: u32,
+    },
+    EntryRecoveryFailed {
+        package_sha256: String,
+        failure_code: String,
+    },
+    EntryTargetDisposition {
+        disposition: TaskEntryTargetDisposition,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        failure_code: Option<String>,
     },
     StepStarted {
         step_index: u32,
@@ -1927,6 +1966,12 @@ impl TaskSemanticFact {
             Self::EvidenceIndexed { .. } => EventType::TaskEvidenceIndexed,
             Self::RecognitionStarted { .. } => EventType::TaskRecognitionStarted,
             Self::RecognitionCompleted { .. } => EventType::TaskRecognitionCompleted,
+            Self::EntryRecognition { .. }
+            | Self::EntryRecoveryDecision { .. }
+            | Self::EntryRecoveryPackageAdmitted { .. }
+            | Self::EntryRecoveryCompleted { .. }
+            | Self::EntryRecoveryFailed { .. }
+            | Self::EntryTargetDisposition { .. } => EventType::TaskEntryPreflight,
             Self::StepStarted { .. } => EventType::TaskStepStarted,
             Self::EffectIntent { .. } => EventType::TaskEffectIntent,
             Self::EffectCompleted { .. } => EventType::TaskEffectCompleted,
@@ -2006,6 +2051,49 @@ impl TaskSemanticFact {
                     }
                 }
             }
+            Self::EntryRecognition { required_page, .. } => {
+                validate_task_semantic_label(required_page, "required_page")?;
+            }
+            Self::EntryRecoveryDecision { .. } => {}
+            Self::EntryRecoveryPackageAdmitted { package_sha256 } => {
+                validate_task_package_sha256(package_sha256)?;
+            }
+            Self::EntryRecoveryCompleted {
+                package_sha256,
+                final_page,
+                executed_steps,
+            } => {
+                validate_task_package_sha256(package_sha256)?;
+                validate_task_semantic_label(final_page, "final_page")?;
+                if *executed_steps > 1_000 {
+                    return Err(SanitizationError::new(
+                        "invalid_task_entry_recovery",
+                        "executed_steps",
+                    ));
+                }
+            }
+            Self::EntryRecoveryFailed {
+                package_sha256,
+                failure_code,
+            } => {
+                validate_task_package_sha256(package_sha256)?;
+                validate_task_semantic_label(failure_code, "failure_code")?;
+            }
+            Self::EntryTargetDisposition {
+                disposition,
+                failure_code,
+            } => match (disposition, failure_code) {
+                (TaskEntryTargetDisposition::Started, None) => {}
+                (TaskEntryTargetDisposition::FailClosed, Some(code)) => {
+                    validate_task_semantic_label(code, "failure_code")?;
+                }
+                _ => {
+                    return Err(SanitizationError::new(
+                        "invalid_task_entry_disposition",
+                        "failure_code",
+                    ));
+                }
+            },
             Self::StepStarted {
                 step_index,
                 operation_label,
@@ -2101,7 +2189,12 @@ impl TaskSemanticFact {
                 outcome: TaskOutcome::Failure | TaskOutcome::Cancelled,
                 ..
             }
-            | Self::TerminalRejected { .. } => Some(DiagnosticCode::RuntimeDiagnostic),
+            | Self::TerminalRejected { .. }
+            | Self::EntryRecoveryFailed { .. }
+            | Self::EntryTargetDisposition {
+                disposition: TaskEntryTargetDisposition::FailClosed,
+                ..
+            } => Some(DiagnosticCode::RuntimeDiagnostic),
             _ => None,
         }
     }
@@ -2146,6 +2239,21 @@ fn validate_task_semantic_label(value: &str, field: &'static str) -> Result<(), 
         Err(SanitizationError::new("invalid_task_semantic_label", field))
     } else {
         Ok(())
+    }
+}
+
+fn validate_task_package_sha256(value: &str) -> Result<(), SanitizationError> {
+    if value.len() == 64
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
+    {
+        Ok(())
+    } else {
+        Err(SanitizationError::new(
+            "invalid_task_package_fingerprint",
+            "package_sha256",
+        ))
     }
 }
 
