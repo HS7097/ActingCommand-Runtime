@@ -8,6 +8,7 @@ use std::process::Command;
 
 const MUMU_BASE_ADB_PORT: u16 = 16_384;
 const MUMU_PORT_STEP: u16 = 32;
+const MAX_MUMU_PROCESS_DIAGNOSTICS: usize = 8;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DiscoveredDevice {
@@ -179,6 +180,153 @@ pub(crate) fn running_mumu_executable_paths() -> DeviceResult<Vec<PathBuf>> {
     paths.sort();
     paths.dedup();
     Ok(paths)
+}
+
+pub(crate) fn running_mumu_executable_for_target(
+    target_serial: &str,
+    explicit_instance_id: Option<i32>,
+) -> DeviceResult<PathBuf> {
+    let processes = system_processes()?;
+    running_mumu_executable_for_target_from_processes(
+        target_serial,
+        explicit_instance_id,
+        &processes,
+    )
+}
+
+fn running_mumu_executable_for_target_from_processes(
+    target_serial: &str,
+    explicit_instance_id: Option<i32>,
+    processes: &[DeviceDiscoveryProcess],
+) -> DeviceResult<PathBuf> {
+    let target_instance_id = target_mumu_instance_id(target_serial, explicit_instance_id)?;
+    let mut matches = Vec::new();
+    let mut observed = Vec::new();
+    let mut invalid = Vec::new();
+
+    for process in processes
+        .iter()
+        .filter(|process| is_mumu_device_process(process))
+    {
+        match mumu_instance_id(process) {
+            Ok(instance_id) => {
+                push_bounded_process_diagnostic(
+                    &mut observed,
+                    format!(
+                        "process_id={} instance_id={instance_id}",
+                        process.process_id
+                    ),
+                );
+                if instance_id == target_instance_id && matches.len() < 2 {
+                    matches.push(process);
+                }
+            }
+            Err(message) => push_bounded_process_diagnostic(
+                &mut invalid,
+                format!(
+                    "process_id={} invalid_topology={message}",
+                    process.process_id
+                ),
+            ),
+        }
+    }
+
+    if matches.len() > 1 {
+        let details = matches
+            .iter()
+            .map(|process| {
+                format!(
+                    "process_id={} executable={}",
+                    process.process_id,
+                    process
+                        .executable_path
+                        .as_deref()
+                        .map(|path| path.display().to_string())
+                        .unwrap_or_else(|| "<missing>".to_string())
+                )
+            })
+            .collect::<Vec<_>>();
+        return Err(DeviceError::fatal(format!(
+            "running MuMu process selection is ambiguous for target serial={target_serial} instance_id={target_instance_id}; matches: {}",
+            bounded_process_diagnostics(&details)
+        )));
+    }
+
+    if let Some(process) = matches.into_iter().next() {
+        let executable = process.executable_path.as_ref().ok_or_else(|| {
+            DeviceError::fatal(format!(
+                "running MuMu process has invalid topology for target serial={target_serial} instance_id={target_instance_id}: process_id={} has no executable path",
+                process.process_id
+            ))
+        })?;
+        return Ok(executable.clone());
+    }
+
+    let observed = bounded_process_diagnostics(&observed);
+    let invalid = bounded_process_diagnostics(&invalid);
+    Err(DeviceError::fatal(format!(
+        "no running MuMu process matches target serial={target_serial} instance_id={target_instance_id}; observed=[{observed}]; invalid=[{invalid}]"
+    )))
+}
+
+fn target_mumu_instance_id(
+    target_serial: &str,
+    explicit_instance_id: Option<i32>,
+) -> DeviceResult<u16> {
+    let serial_instance_id = mumu_instance_id_from_serial(target_serial);
+    let Some(explicit_instance_id) = explicit_instance_id else {
+        return serial_instance_id.ok_or_else(|| {
+            DeviceError::fatal(format!(
+                "MuMu target identity has invalid topology: cannot derive an instance id from serial {target_serial}"
+            ))
+        });
+    };
+    let explicit_instance_id = u16::try_from(explicit_instance_id).map_err(|_| {
+        DeviceError::fatal(format!(
+            "MuMu target identity has invalid explicit instance id {explicit_instance_id} for serial {target_serial}"
+        ))
+    })?;
+    if let Some(serial_instance_id) = serial_instance_id
+        && serial_instance_id != explicit_instance_id
+    {
+        return Err(DeviceError::fatal(format!(
+            "MuMu target identity conflicts: serial {target_serial} resolves to instance_id={serial_instance_id} but explicit instance_id={explicit_instance_id}"
+        )));
+    }
+    Ok(explicit_instance_id)
+}
+
+fn mumu_instance_id_from_serial(serial: &str) -> Option<u16> {
+    let (host, port) = serial.rsplit_once(':')?;
+    let host = host.trim_matches(['[', ']']);
+    if !host.eq_ignore_ascii_case("127.0.0.1")
+        && !host.eq_ignore_ascii_case("localhost")
+        && host != "::1"
+    {
+        return None;
+    }
+    let port = port.parse::<u16>().ok()?;
+    let offset = port.checked_sub(MUMU_BASE_ADB_PORT)?;
+    (offset % MUMU_PORT_STEP == 0).then_some(offset / MUMU_PORT_STEP)
+}
+
+fn bounded_process_diagnostics(entries: &[String]) -> String {
+    let mut rendered = entries
+        .iter()
+        .take(MAX_MUMU_PROCESS_DIAGNOSTICS)
+        .cloned()
+        .collect::<Vec<_>>()
+        .join(", ");
+    if entries.len() > MAX_MUMU_PROCESS_DIAGNOSTICS {
+        rendered.push_str(", ... additional entries omitted");
+    }
+    rendered
+}
+
+fn push_bounded_process_diagnostic(entries: &mut Vec<String>, entry: String) {
+    if entries.len() <= MAX_MUMU_PROCESS_DIAGNOSTICS {
+        entries.push(entry);
+    }
 }
 
 fn mumu_instance_port(instance_id: u16) -> Option<u16> {
@@ -532,6 +680,97 @@ mod tests {
                 .contains("invalid -v instance id")
         );
         let _ = fs::remove_dir_all(root);
+    }
+
+    // Task Contract: Workflow #256.
+    // Test class: authorized Defect regression.
+    #[test]
+    fn target_identity_selects_only_its_running_mumu_process() {
+        let first_root = temp_mumu_root("target-first");
+        let second_root = temp_mumu_root("target-second");
+        let first = first_root.join("nx_device/13.7/shell/MuMuNxDevice.exe");
+        let second = second_root.join("nx_device/13.7/shell/MuMuNxDevice.exe");
+        fs::write(&first, b"first").expect("first process executable");
+        fs::write(&second, b"second").expect("second process executable");
+        let processes = vec![
+            mumu_process(21, &first, &format!("{} -v 1", first.display())),
+            mumu_process(22, &second, &format!("{} -v 3", second.display())),
+        ];
+
+        let selected =
+            running_mumu_executable_for_target_from_processes("127.0.0.1:16480", None, &processes)
+                .expect("target process");
+
+        assert_eq!(selected, second);
+        let _ = fs::remove_dir_all(first_root);
+        let _ = fs::remove_dir_all(second_root);
+    }
+
+    // Task Contract: Workflow #256.
+    // Test class: specification criterion.
+    #[test]
+    fn target_identity_rejects_ambiguous_running_processes() {
+        let root = temp_mumu_root("target-ambiguous");
+        let executable = root.join("nx_device/13.7/shell/MuMuNxDevice.exe");
+        fs::write(&executable, b"process").expect("process executable");
+        let processes = vec![
+            mumu_process(31, &executable, &format!("{} -v 2", executable.display())),
+            mumu_process(32, &executable, &format!("{} -v 2", executable.display())),
+        ];
+
+        let err =
+            running_mumu_executable_for_target_from_processes("127.0.0.1:16448", None, &processes)
+                .expect_err("duplicate target identity must fail");
+
+        assert!(err.message().contains("ambiguous"));
+        assert!(err.message().contains("process_id=31"));
+        assert!(err.message().contains("process_id=32"));
+        let _ = fs::remove_dir_all(root);
+    }
+
+    // Task Contract: Workflow #256.
+    // Test class: specification criterion.
+    #[test]
+    fn target_identity_distinguishes_no_match_from_invalid_topology() {
+        let root = temp_mumu_root("target-no-match");
+        let executable = root.join("nx_device/13.7/shell/MuMuNxDevice.exe");
+        fs::write(&executable, b"process").expect("process executable");
+        let no_match = vec![mumu_process(
+            41,
+            &executable,
+            &format!("{} -v 4", executable.display()),
+        )];
+        let no_match_err =
+            running_mumu_executable_for_target_from_processes("127.0.0.1:16416", None, &no_match)
+                .expect_err("unmatched target must fail");
+        assert!(
+            no_match_err
+                .message()
+                .contains("no running MuMu process matches")
+        );
+        assert!(no_match_err.message().contains("instance_id=4"));
+
+        let invalid = vec![DeviceDiscoveryProcess {
+            process_id: 42,
+            name: "MuMuNxDevice.exe".to_string(),
+            executable_path: None,
+            command_line: Some("MuMuNxDevice.exe -v 1".to_string()),
+        }];
+        let invalid_err =
+            running_mumu_executable_for_target_from_processes("127.0.0.1:16416", None, &invalid)
+                .expect_err("missing executable topology must fail");
+        assert!(invalid_err.message().contains("invalid topology"));
+        assert!(invalid_err.message().contains("process_id=42"));
+        let _ = fs::remove_dir_all(root);
+    }
+
+    // Task Contract: Workflow #256.
+    // Test class: specification criterion.
+    #[test]
+    fn target_identity_rejects_conflicting_explicit_instance() {
+        let err = target_mumu_instance_id("127.0.0.1:16416", Some(2))
+            .expect_err("conflicting target identity must fail");
+        assert!(err.message().contains("target identity conflicts"));
     }
 
     #[test]

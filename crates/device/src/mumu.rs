@@ -269,6 +269,123 @@ pub(crate) fn resolve_mumu_backend_paths(
     }))
 }
 
+pub(crate) fn resolve_mumu_backend_paths_for_running_target(
+    configured_adb: PathBuf,
+    target_serial: &str,
+    explicit_instance_id: Option<i32>,
+    explicit_root: Option<PathBuf>,
+    explicit_dll: Option<PathBuf>,
+) -> DeviceResult<MumuBackendPaths> {
+    let executable =
+        crate::discovery::running_mumu_executable_for_target(target_serial, explicit_instance_id)?;
+    resolve_mumu_backend_paths_for_running_executable(
+        configured_adb,
+        executable,
+        explicit_root,
+        explicit_dll,
+    )
+}
+
+fn resolve_mumu_backend_paths_for_running_executable(
+    configured_adb: PathBuf,
+    running_executable: PathBuf,
+    explicit_root: Option<PathBuf>,
+    explicit_dll: Option<PathBuf>,
+) -> DeviceResult<MumuBackendPaths> {
+    let configured_adb = canonicalize_backend_file(&configured_adb, "configured ADB executable")?;
+    let running_executable =
+        canonicalize_backend_file(&running_executable, "selected running MuMu executable")?;
+    let running_root = mumu_root_from_path(&running_executable).ok_or_else(|| {
+        DeviceError::fatal(format!(
+            "selected running MuMu executable has invalid topology and does not identify an installation root: {}",
+            running_executable.display()
+        ))
+    })?;
+    let installation = explicit_installation(running_root, MumuInstallSource::RunningProcess)?;
+
+    if let Some(explicit_root) = explicit_root {
+        let explicit = explicit_installation(explicit_root, MumuInstallSource::ExplicitFolder)?;
+        ensure_same_install_root("configured MuMu root", &explicit.root, &installation)?;
+    }
+
+    let capture_dll_path = match explicit_dll {
+        Some(path) => {
+            let path = canonicalize_backend_file(&path, "configured Nemu IPC DLL")?;
+            if !path_is_within_mumu_root(&path, &installation.root) {
+                return Err(DeviceError::fatal(format!(
+                    "configured Nemu IPC DLL {} is outside selected MuMu installation root {}",
+                    path.display(),
+                    installation.root.display()
+                )));
+            }
+            let dll_root = mumu_root_from_capture_dll(&path).ok_or_else(|| {
+                DeviceError::fatal(format!(
+                    "configured Nemu IPC DLL has invalid topology under selected MuMu installation root {}: {}",
+                    installation.root.display(),
+                    path.display()
+                ))
+            })?;
+            ensure_same_install_root("configured Nemu IPC DLL", &dll_root, &installation)?;
+            path
+        }
+        None => {
+            let version_dir = mumu_version_dir_from_path(&running_executable).ok_or_else(|| {
+                DeviceError::fatal(format!(
+                    "selected running MuMu executable has invalid topology and no nx_device/<version> identity: {}",
+                    running_executable.display()
+                ))
+            })?;
+            resolve_existing_candidate(
+                &installation,
+                "Nemu capture DLL matching selected running MuMu version",
+                vec![
+                    version_dir
+                        .join("shell")
+                        .join("sdk")
+                        .join(NEMU_IPC_DLL_NAME),
+                ],
+            )?
+        }
+    };
+    ensure_running_mumu_version_matches(&running_executable, &capture_dll_path)?;
+
+    Ok(MumuBackendPaths {
+        installation,
+        adb_path: configured_adb,
+        capture_dll_path,
+    })
+}
+
+fn ensure_running_mumu_version_matches(
+    running_executable: &Path,
+    capture_dll_path: &Path,
+) -> DeviceResult<()> {
+    let running_version = mumu_version_dir_from_path(running_executable).ok_or_else(|| {
+        DeviceError::fatal(format!(
+            "selected running MuMu executable has invalid topology and no nx_device/<version> identity: {}",
+            running_executable.display()
+        ))
+    })?;
+    let dll_version = mumu_version_dir_from_path(capture_dll_path).ok_or_else(|| {
+        DeviceError::fatal(format!(
+            "selected running MuMu executable {} has version identity {}, but Nemu capture DLL {} has no matching nx_device/<version> identity",
+            running_executable.display(),
+            running_version.display(),
+            capture_dll_path.display()
+        ))
+    })?;
+    if path_key(&running_version) == path_key(&dll_version) {
+        return Ok(());
+    }
+    Err(DeviceError::fatal(format!(
+        "selected running MuMu executable {} has version identity {}, but Nemu capture DLL {} has different version identity {}; the selected process and capture DLL must use the same nx_device/<version>",
+        running_executable.display(),
+        running_version.display(),
+        capture_dll_path.display(),
+        dll_version.display()
+    )))
+}
+
 pub(crate) fn mumu_adb_candidates(root: &Path) -> DeviceResult<Vec<PathBuf>> {
     let mut candidates = vec![root.join("nx_main").join("adb.exe")];
     candidates.extend(
@@ -932,6 +1049,179 @@ mod tests {
 
         assert!(err.message().contains("not selected root"));
         assert!(err.message().contains(&selected.display().to_string()));
+    }
+
+    // Task Contract: Workflow #256.
+    // Test class: authorized Defect regression.
+    #[test]
+    fn running_target_paths_keep_generic_adb_and_select_process_version_dll() {
+        let temp = TempRoot::new("running-target");
+        let generic_adb = temp.path().join("platform-tools/adb.exe");
+        let root = temp.path().join("MuMuPlayer-Selected");
+        let executable = root.join("nx_device/18.2/shell/MuMuNxDevice.exe");
+        let dll = root.join("nx_device/18.2/shell/sdk/external_renderer_ipc.dll");
+        for file in [&generic_adb, &executable, &dll] {
+            fs::create_dir_all(file.parent().expect("parent")).expect("fixture parent");
+            fs::write(file, b"fixture").expect("fixture file");
+        }
+
+        let paths = resolve_mumu_backend_paths_for_running_executable(
+            generic_adb.clone(),
+            executable,
+            None,
+            None,
+        )
+        .expect("running target paths");
+
+        assert_eq!(paths.installation.source, MumuInstallSource::RunningProcess);
+        assert_eq!(
+            paths.installation.root,
+            fs::canonicalize(root).expect("canonical root")
+        );
+        assert_eq!(
+            paths.adb_path,
+            fs::canonicalize(generic_adb).expect("canonical generic ADB")
+        );
+        assert_eq!(
+            paths.capture_dll_path,
+            fs::canonicalize(dll).expect("canonical DLL")
+        );
+    }
+
+    // Task Contract: Workflow #256.
+    // Test class: specification criterion.
+    #[test]
+    fn running_target_paths_preserve_matching_partial_overrides() {
+        let temp = TempRoot::new("running-target-partial-overrides");
+        let generic_adb = temp.path().join("platform-tools/adb.exe");
+        let root = temp.path().join("MuMuPlayer-Selected");
+        let executable = root.join("nx_device/18.2/shell/MuMuNxDevice.exe");
+        let dll = root.join("nx_device/18.2/shell/sdk/external_renderer_ipc.dll");
+        for file in [&generic_adb, &executable, &dll] {
+            fs::create_dir_all(file.parent().expect("parent")).expect("fixture parent");
+            fs::write(file, b"fixture").expect("fixture file");
+        }
+
+        for (explicit_root, explicit_dll) in [(Some(root.clone()), None), (None, Some(dll.clone()))]
+        {
+            let paths = resolve_mumu_backend_paths_for_running_executable(
+                generic_adb.clone(),
+                executable.clone(),
+                explicit_root,
+                explicit_dll,
+            )
+            .expect("matching partial override");
+            assert_eq!(
+                paths.installation.root,
+                fs::canonicalize(&root).expect("canonical root")
+            );
+            assert_eq!(
+                paths.capture_dll_path,
+                fs::canonicalize(&dll).expect("canonical DLL")
+            );
+        }
+    }
+
+    // Task Contract: Workflow #256.
+    // Test class: specification criterion.
+    #[test]
+    fn running_target_paths_reject_explicit_root_mismatch() {
+        let temp = TempRoot::new("running-target-root-mismatch");
+        let generic_adb = temp.path().join("platform-tools/adb.exe");
+        let selected = temp.path().join("MuMuPlayer-Selected");
+        let other = temp.path().join("MuMuPlayer-Other");
+        let executable = selected.join("nx_device/18.2/shell/MuMuNxDevice.exe");
+        for file in [&generic_adb, &executable] {
+            fs::create_dir_all(file.parent().expect("parent")).expect("fixture parent");
+            fs::write(file, b"fixture").expect("fixture file");
+        }
+        fs::create_dir_all(&other).expect("other root");
+
+        let err = resolve_mumu_backend_paths_for_running_executable(
+            generic_adb,
+            executable,
+            Some(other),
+            None,
+        )
+        .expect_err("different explicit root must fail");
+
+        assert!(err.message().contains("configured MuMu root"));
+        assert!(err.message().contains("not selected root"));
+    }
+
+    // Task Contract: Workflow #256.
+    // Test class: specification criterion.
+    #[test]
+    fn running_target_paths_reject_dll_outside_selected_root() {
+        let temp = TempRoot::new("running-target-dll-root");
+        let generic_adb = temp.path().join("platform-tools/adb.exe");
+        let selected = temp.path().join("MuMuPlayer-Selected");
+        let other = temp.path().join("MuMuPlayer-Other");
+        let executable = selected.join("nx_device/18.2/shell/MuMuNxDevice.exe");
+        let dll = other.join("nx_device/18.2/shell/sdk/external_renderer_ipc.dll");
+        for file in [&generic_adb, &executable, &dll] {
+            fs::create_dir_all(file.parent().expect("parent")).expect("fixture parent");
+            fs::write(file, b"fixture").expect("fixture file");
+        }
+
+        let err = resolve_mumu_backend_paths_for_running_executable(
+            generic_adb,
+            executable,
+            None,
+            Some(dll),
+        )
+        .expect_err("DLL outside selected root must fail");
+
+        assert!(
+            err.message()
+                .contains("outside selected MuMu installation root")
+        );
+    }
+
+    // Task Contract: Workflow #256.
+    // Test class: specification criterion.
+    #[test]
+    fn running_target_paths_reject_different_dll_version() {
+        let temp = TempRoot::new("running-target-version");
+        let generic_adb = temp.path().join("platform-tools/adb.exe");
+        let root = temp.path().join("MuMuPlayer-Selected");
+        let executable = root.join("nx_device/18.2/shell/MuMuNxDevice.exe");
+        let dll = root.join("nx_device/17.9/shell/sdk/external_renderer_ipc.dll");
+        for file in [&generic_adb, &executable, &dll] {
+            fs::create_dir_all(file.parent().expect("parent")).expect("fixture parent");
+            fs::write(file, b"fixture").expect("fixture file");
+        }
+
+        let err = resolve_mumu_backend_paths_for_running_executable(
+            generic_adb,
+            executable,
+            None,
+            Some(dll),
+        )
+        .expect_err("different DLL version must fail");
+
+        assert!(err.message().contains("different version identity"));
+    }
+
+    // Task Contract: Workflow #256.
+    // Test class: specification criterion.
+    #[test]
+    fn running_target_paths_report_missing_same_version_dll() {
+        let temp = TempRoot::new("running-target-missing-dll");
+        let generic_adb = temp.path().join("platform-tools/adb.exe");
+        let root = temp.path().join("MuMuPlayer-Selected");
+        let executable = root.join("nx_device/18.2/shell/MuMuNxDevice.exe");
+        for file in [&generic_adb, &executable] {
+            fs::create_dir_all(file.parent().expect("parent")).expect("fixture parent");
+            fs::write(file, b"fixture").expect("fixture file");
+        }
+
+        let err =
+            resolve_mumu_backend_paths_for_running_executable(generic_adb, executable, None, None)
+                .expect_err("missing version DLL must fail");
+
+        assert!(err.message().contains("no candidate file exists"));
+        assert!(err.message().contains("selected running MuMu version"));
     }
 
     #[test]
