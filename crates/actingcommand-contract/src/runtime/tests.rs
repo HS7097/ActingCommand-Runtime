@@ -241,6 +241,28 @@ fn contained_task_deadline_defaults_for_legacy_requests_and_rejects_unbounded_va
     );
 }
 
+// Test class: specification criterion. Task Contract: https://github.com/HS7097/ActingCommand-Workflow/issues/241#issuecomment-5491623342
+#[test]
+fn contained_task_recovery_binding_is_optional_typed_and_hash_bound() {
+    let legacy = ContainedTaskRequest::new("C:/sealed/neutral-task.zip", "0".repeat(64))
+        .expect("legacy-shaped request");
+    assert!(legacy.recovery().is_none());
+
+    let request = legacy
+        .with_recovery(
+            ContainedTaskRecoveryBinding::new("C:/sealed/return-home.zip", "1".repeat(64))
+                .expect("recovery binding"),
+        )
+        .expect("request with recovery");
+    let recovery = request.recovery().expect("typed recovery binding");
+    assert_eq!(recovery.package_path(), "C:/sealed/return-home.zip");
+    assert_eq!(recovery.expected_sha256(), "1".repeat(64));
+    assert!(
+        ContainedTaskRecoveryBinding::new("C:/sealed/return-home.zip", "1".repeat(63)).is_err()
+    );
+    assert!(!format!("{request:?}").contains("return-home.zip"));
+}
+
 #[test]
 fn contained_task_cancellation_status_rejects_ambiguous_terminal_identity() {
     let ids = issuer();
