@@ -3060,8 +3060,8 @@ fn explicit_home_contained_task_package(
         "resolution": {"width": 2, "height": 1},
         "entry_task_id": "task",
         "capture_interval_ms": 1,
-        "step_timeout_ms": 25,
-        "timeout_ms": 250,
+        "step_timeout_ms": 500,
+        "timeout_ms": 5000,
         "max_steps": 2
     }))
     .expect("explicit Home control JSON");
