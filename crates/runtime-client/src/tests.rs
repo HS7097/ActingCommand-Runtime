@@ -1,19 +1,24 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 use super::*;
+use crate::client::{
+    MAX_OFFICIAL_OCR_ARTIFACT_BYTES, OCR_COMPARISON_ENVELOPE_SCHEMA, OCR_COMPARISON_SCHEMA_V2,
+    OCR_OBSERVATION_SCHEMA, canonical_sha256, resolve_official_ocr_projection,
+};
 use crate::ipc::{DEFAULT_RUNTIME_MAX_FRAME_BYTES, ReceiptReadDeadline, exchange};
 use actingcommand_contract::{
-    ApprovalDecisionRecord, ApprovalDisposition, ApprovalTarget, AuditInput, CaptureSequenceSpec,
-    ClientActionKind, ClientActionRecord, ContainedTaskRequest, EventActor, EventDraft,
-    EventLinksDraft, EventOrigin, EventQuery, EventSeverity, EventSource, EventType,
-    IdentifierIssuer, InputAction, InstanceId, LeasePriority, LeaseQueuePolicy,
-    MAX_RUNTIME_EVENT_QUERY_EVENTS, OriginModule, OwnerEpoch, ProjectedEvent, ProjectionPayload,
-    ProjectionProfile, RUNTIME_INFO_FILE, ResourceAuthoringEvent, ResourceAuthoringPhase,
+    ApprovalDecisionRecord, ApprovalDisposition, ApprovalTarget, ArtifactKind, ArtifactProducer,
+    ArtifactRedactionState, AuditInput, CaptureSequenceSpec, ClientActionKind, ClientActionRecord,
+    ContainedTaskRequest, CorrelationId, EventActor, EventDraft, EventLinksDraft, EventOrigin,
+    EventQuery, EventSeverity, EventSource, EventType, FrameId, IdentifierIssuer, InputAction,
+    InstanceId, LeasePriority, LeaseQueuePolicy, MAX_RUNTIME_EVENT_QUERY_EVENTS, OriginModule,
+    OwnerEpoch, ProjectedArtifactReference, ProjectedEvent, ProjectionPayload, ProjectionProfile,
+    RUNTIME_INFO_FILE, ResourceAuthoringEvent, ResourceAuthoringPhase, RetentionClass, RunId,
     RuntimeCaptureBackend, RuntimeDebugEvent, RuntimeDebugOperation, RuntimeErrorCode,
     RuntimeErrorProjection, RuntimeEventQueryCursor, RuntimeEventQueryPage, RuntimeInfo,
     RuntimeMonitorPolicy, RuntimeOperation, RuntimeReceipt, RuntimeReceiptState, RuntimeRequest,
     RuntimeResult, RuntimeSubscriptionRequest, SanitizationError, SecretField, SecretFingerprinter,
-    Sha256Fingerprint, SubscriptionCursor, TaskOutcome, TaskPayloadDraft, TaskSemanticFact,
+    Sha256Fingerprint, SubscriptionCursor, TaskId, TaskOutcome, TaskPayloadDraft, TaskSemanticFact,
     TerminalEvent,
 };
 use actingcommand_device::{
@@ -23,9 +28,11 @@ use actingcommand_runtime_host::{
     ExecutionBackendProvider, ResolvedExecutionInstance, RuntimeHost, RuntimeHostConfig,
 };
 use actingcommand_scheduler::SchedulerConfig;
+use serde_json::{Value, json};
 use std::fs;
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
+use std::path::Path;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Barrier};
 use std::thread;
@@ -89,6 +96,286 @@ fn projected_task_event(issuer: &IdentifierIssuer, sequence: u64) -> ProjectedEv
         payload: ProjectionPayload::Full(Box::new(sanitized.payload().clone())),
         artifacts: Vec::new(),
     }
+}
+
+fn projected_terminal_task_event(issuer: &IdentifierIssuer, sequence: u64) -> ProjectedEvent {
+    let disposition = actingcommand_contract::SchedulingDisposition::new(
+        "comparison_recorded",
+        actingcommand_contract::SchedulingEffectEvidence::NoDesignatedEffect,
+    )
+    .expect("scheduling disposition");
+    let sanitized = EventDraft::new(
+        issuer.mint_event_id().expect("event id"),
+        sequence,
+        EventSeverity::Info,
+        EventOrigin::new(
+            EventSource::Runtime,
+            OriginModule::Runtime,
+            EventActor::Runtime,
+        ),
+        EventLinksDraft::default(),
+        TaskPayloadDraft::semantic(
+            TaskSemanticFact::TerminalCommitted {
+                outcome: TaskOutcome::Success,
+                final_page: Some("fixture/final".to_owned()),
+                executed_steps: 1,
+                failure_code: None,
+                scheduling_disposition: Some(disposition),
+            },
+            AuditInput::new(),
+        )
+        .into(),
+    )
+    .sanitize(&RejectProjectionSecrets)
+    .expect("sanitize terminal projection fixture");
+    ProjectedEvent {
+        schema_version: sanitized.schema_version().to_owned(),
+        sequence,
+        event_id: *sanitized.event_id(),
+        timestamp_unix_ms: sanitized.timestamp_unix_ms(),
+        event_type: sanitized.event_type(),
+        severity: sanitized.severity(),
+        sensitivity: sanitized.sensitivity(),
+        origin: sanitized.origin().clone(),
+        links: sanitized.links().clone(),
+        payload_schema: sanitized.payload_schema().to_owned(),
+        payload: ProjectionPayload::Full(Box::new(sanitized.payload().clone())),
+        artifacts: Vec::new(),
+    }
+}
+
+fn link_projected_task_event(
+    event: ProjectedEvent,
+    correlation_id: CorrelationId,
+    task_id: TaskId,
+    run_id: RunId,
+    frame_id: Option<FrameId>,
+) -> ProjectedEvent {
+    let mut value = serde_json::to_value(event).expect("encode linked event");
+    value["links"] = json!({
+        "correlation_id": correlation_id,
+        "task_id": task_id,
+        "run_id": run_id,
+        "frame_id": frame_id,
+    });
+    serde_json::from_value(value).expect("decode linked event")
+}
+
+fn persisted_ocr_diagnostic(
+    root: &Path,
+    ids: &IdentifierIssuer,
+    correlation_id: CorrelationId,
+    run_id: RunId,
+    frame_id: FrameId,
+    value: &Value,
+) -> ProjectedArtifactReference {
+    let bytes = serde_json::to_vec(value).expect("encode OCR diagnostic");
+    let sha256 = canonical_sha256(&bytes);
+    let artifact_id = *ids.mint_artifact_id().expect("artifact id").transport();
+    let artifact_id_text = serde_json::to_value(artifact_id)
+        .expect("encode artifact id")
+        .as_str()
+        .expect("artifact id text")
+        .to_owned();
+    let object_key = format!("artifacts/{}/{}.json", &sha256[7..9], artifact_id_text);
+    let path = root.join(&object_key);
+    fs::create_dir_all(path.parent().expect("artifact parent")).expect("create artifact parent");
+    fs::write(&path, &bytes).expect("write OCR diagnostic");
+    ProjectedArtifactReference {
+        artifact_id,
+        kind: ArtifactKind::DiagnosticJson,
+        run_id: Some(run_id),
+        frame_id: Some(frame_id),
+        correlation_id: Some(correlation_id),
+        object_key: Some(object_key),
+        media_type: ArtifactKind::DiagnosticJson.media_type(),
+        byte_count: u64::try_from(bytes.len()).expect("diagnostic length"),
+        sha256,
+        created_at_unix_ms: 1,
+        producer: ArtifactProducer::CapturePipeline,
+        retention_class: RetentionClass::DebugFull,
+        redaction_state: ArtifactRedactionState::NotRequired,
+    }
+}
+
+fn ocr_provider_fixture(invocation_id: &str) -> Value {
+    json!({
+        "invocation_id": invocation_id,
+        "session_id": "session.fixture",
+        "session_generation": 7,
+        "requested_provider": "cpu",
+        "resolved_provider": "cpu",
+        "requested_cuda_ordinal": null,
+        "requested_cuda_identity": null,
+        "resolved_cuda_ordinal": null,
+        "resolved_cuda_identity": null,
+        "provider_implementation": "fixture.cpu",
+        "provider_binary_sha256": "1".repeat(64),
+        "runtime_version": "fixture-runtime-1",
+        "model_ref": "fixture-model",
+        "model_sha256": "2".repeat(64),
+        "cpu_ep_registered": true,
+        "cpu_fallback_disabled": false,
+        "fallback_forbidden": true,
+        "fallback_observed": null,
+        "complete": true
+    })
+}
+
+fn official_ocr_fixture(
+    root: &Path,
+    ids: &IdentifierIssuer,
+    correlation_id: CorrelationId,
+    task_id: TaskId,
+    run_id: RunId,
+) -> Vec<ProjectedEvent> {
+    let frame_zero = *ids.mint_frame_id().expect("frame zero").transport();
+    let frame_one = *ids.mint_frame_id().expect("frame one").transport();
+    let observation_zero = json!({
+        "schema_version": OCR_OBSERVATION_SCHEMA,
+        "task_id": task_id,
+        "run_id": run_id,
+        "frame_id": frame_zero,
+        "frame_index": 0,
+        "observation": {
+            "targets": [
+                {
+                    "target_id": "screen.left",
+                    "text": "Amiya",
+                    "confidence": 0.99,
+                    "blocks": [],
+                    "execution": ocr_provider_fixture("invocation.0.left")
+                },
+                {
+                    "target_id": "screen.right",
+                    "text": "Kal'tsit",
+                    "confidence": 0.98,
+                    "blocks": [],
+                    "execution": ocr_provider_fixture("invocation.0.right")
+                }
+            ]
+        }
+    });
+    let observation_one = json!({
+        "schema_version": OCR_OBSERVATION_SCHEMA,
+        "task_id": task_id,
+        "run_id": run_id,
+        "frame_id": frame_one,
+        "frame_index": 1,
+        "observation": {
+            "target_id": "screen.left",
+            "text": "Amiya",
+            "confidence": 0.97,
+            "blocks": [],
+            "execution": ocr_provider_fixture("invocation.1.left")
+        }
+    });
+    let comparison = json!({
+        "schema_version": OCR_COMPARISON_ENVELOPE_SCHEMA,
+        "task_id": task_id,
+        "run_id": run_id,
+        "final_frame_id": frame_one,
+        "report": {
+            "schema_version": OCR_COMPARISON_SCHEMA_V2,
+            "target_ids": ["screen.left", "screen.right"],
+            "truth_set_path": "fixture/truth.json",
+            "truth_set_sha256": "3".repeat(64),
+            "normalization": "trim_lowercase_v1",
+            "comparison": "exact_set_v1",
+            "outcome_key": "comparison_recorded",
+            "frames_collected": 2,
+            "items_collected": 4,
+            "discarded_empty_items": 0,
+            "total_observed_utf8_bytes": 22,
+            "exact_match": false,
+            "truth": ["amiya", "kaltsit"],
+            "observed": [
+                {"value": "amiya", "occurrences": 2, "confidences": [0.99, 0.97]},
+                {"value": "kaltsit", "occurrences": 1, "confidences": [0.98]}
+            ],
+            "classification_contract": {
+                "predicate": "exactly_one_unicode_scalar_substitution_v1",
+                "max_substitutions": 1,
+                "max_retry_index": 1,
+                "max_candidate_checks": 4194304,
+                "candidate_checks": 3,
+                "max_scalar_comparisons": 16777216,
+                "scalar_comparisons": 12,
+                "max_candidate_witnesses": 2
+            },
+            "mapping_evidence": [
+                {
+                    "frame_index": 0,
+                    "retry_index": 0,
+                    "target_id": "screen.left",
+                    "raw_text": "Amiya",
+                    "normalized_text": "amiya",
+                    "canonical": "amiya",
+                    "confidence": 0.99,
+                    "candidate_count": 0,
+                    "candidates": [],
+                    "disposition": "canonical_exact"
+                },
+                {
+                    "frame_index": 0,
+                    "retry_index": 1,
+                    "target_id": "screen.right",
+                    "raw_text": "unmatched raw",
+                    "normalized_text": "unmatched raw",
+                    "canonical": null,
+                    "confidence": 0.5,
+                    "candidate_count": 0,
+                    "candidates": [],
+                    "disposition": "unmatched_after_retry"
+                }
+            ],
+            "missed": [],
+            "unexpected": [],
+            "duplicates": [{"value": "amiya", "occurrences": 2}]
+        }
+    });
+    let observation_zero_artifact = persisted_ocr_diagnostic(
+        root,
+        ids,
+        correlation_id,
+        run_id,
+        frame_zero,
+        &observation_zero,
+    );
+    let observation_one_artifact = persisted_ocr_diagnostic(
+        root,
+        ids,
+        correlation_id,
+        run_id,
+        frame_one,
+        &observation_one,
+    );
+    let comparison_artifact =
+        persisted_ocr_diagnostic(root, ids, correlation_id, run_id, frame_one, &comparison);
+    let mut events = Vec::new();
+    for (sequence, frame_id, artifact) in [
+        (1, frame_zero, observation_zero_artifact),
+        (2, frame_one, observation_one_artifact),
+        (3, frame_one, comparison_artifact),
+    ] {
+        let mut event = link_projected_task_event(
+            projected_task_event(ids, sequence),
+            correlation_id,
+            task_id,
+            run_id,
+            Some(frame_id),
+        );
+        event.artifacts.push(artifact);
+        events.push(event);
+    }
+    events.push(link_projected_task_event(
+        projected_terminal_task_event(ids, 4),
+        correlation_id,
+        task_id,
+        run_id,
+        None,
+    ));
+    events
 }
 
 struct CaptureGate {
@@ -844,6 +1131,45 @@ fn contained_task_request() -> ContainedTaskRequest {
         .expect("contained task request")
 }
 
+fn contained_task_success_receipt(
+    ids: &IdentifierIssuer,
+    run_id: RunId,
+    task_id: TaskId,
+) -> (RuntimeReceipt, CorrelationId) {
+    let request_id = ids.mint_request_id().expect("request id");
+    let correlation_id = ids.mint_correlation_id().expect("correlation id");
+    let request = RuntimeRequest::new(
+        request_id,
+        correlation_id,
+        None,
+        EventActor::Cli,
+        EventSource::Cli,
+        1,
+        RuntimeOperation::run_contained_task(
+            "node.a",
+            ids.mint_holder_id().expect("holder id"),
+            contained_task_request(),
+        ),
+    )
+    .expect("contained task runtime request");
+    let receipt = RuntimeReceipt::success(
+        &request,
+        RuntimeReceiptState::Completed,
+        None,
+        RuntimeResult::ContainedTaskCompleted {
+            run_id,
+            task_id,
+            task_request_id: request.request_id(),
+            response_deadline_monotonic_ms: Some(60_000),
+            outcome: TaskOutcome::Success,
+            final_page: Some("fixture/final".to_owned()),
+            executed_steps: 1,
+        },
+    )
+    .expect("contained task success receipt");
+    (receipt, *correlation_id.transport())
+}
+
 fn receipt_eof_error(deadline: Instant) -> RuntimeClientError {
     let listener = TcpListener::bind("127.0.0.1:0").expect("bind EOF runtime");
     let address = listener.local_addr().expect("EOF runtime address");
@@ -1041,6 +1367,227 @@ fn successful_contained_task_returns_complete_ordered_projection_across_event_pa
     );
     drop(client);
     server.join().expect("scripted runtime");
+}
+
+// Test class: authorized Defect regression. Task Contract: https://github.com/HS7097/ActingCommand-Workflow/issues/241#issuecomment-5489709622
+#[test]
+fn successful_multi_page_task_projects_complete_official_ocr_and_provider_facts() {
+    let root = TempDir::new().expect("tempdir");
+    let root_path = root.path().to_path_buf();
+    let event_count = usize::from(MAX_RUNTIME_EVENT_QUERY_EVENTS) + 4;
+    let server = scripted_runtime(&root, move |listener, owner_epoch| {
+        let (mut stream, _) = listener.accept().expect("accept client");
+        respond_to_health(&mut stream, owner_epoch);
+
+        let task_request = read_scripted_request(&mut stream);
+        let correlation_id = task_request.correlation_id();
+        let ids = IdentifierIssuer::new().expect("identifier issuer");
+        let run_id = *ids.mint_run_id().expect("run id").transport();
+        let task_id = *ids.mint_task_id().expect("task id").transport();
+        write_scripted_result(
+            &mut stream,
+            &task_request,
+            RuntimeResult::ContainedTaskCompleted {
+                run_id,
+                task_id,
+                task_request_id: task_request.request_id(),
+                response_deadline_monotonic_ms: Some(60_000),
+                outcome: TaskOutcome::Success,
+                final_page: Some("fixture/final".to_owned()),
+                executed_steps: 1,
+            },
+        );
+
+        let mut ocr_events =
+            official_ocr_fixture(&root_path, &ids, correlation_id, task_id, run_id);
+        let observation_one_sequence = u64::try_from(event_count - 2).expect("event sequence");
+        let comparison_sequence = u64::try_from(event_count - 1).expect("event sequence");
+        let terminal_sequence = u64::try_from(event_count).expect("event sequence");
+        ocr_events[1].sequence = observation_one_sequence;
+        ocr_events[2].sequence = comparison_sequence;
+        ocr_events[3].sequence = terminal_sequence;
+        let mut events = vec![ocr_events.remove(0)];
+        events.extend(
+            (2..observation_one_sequence).map(|sequence| projected_task_event(&ids, sequence)),
+        );
+        events.extend(ocr_events);
+        assert_eq!(events.len(), event_count);
+
+        let snapshot = u64::try_from(events.len()).expect("snapshot position");
+        let mut offset = 0_usize;
+        while offset < events.len() {
+            let query_request = read_scripted_request(&mut stream);
+            let RuntimeOperation::QueryEvents {
+                query,
+                profile,
+                page,
+            } = query_request.operation()
+            else {
+                panic!("expected event query after task terminal")
+            };
+            assert_eq!(query.correlation_id, Some(correlation_id));
+            assert_eq!(*profile, ProjectionProfile::Forensic);
+            let end = offset
+                .checked_add(usize::from(page.limit()))
+                .expect("page end")
+                .min(events.len());
+            let has_more = end < events.len();
+            let next_cursor = has_more.then(|| {
+                RuntimeEventQueryCursor::new(snapshot, events[end - 1].sequence, query, *profile)
+                    .expect("event cursor")
+            });
+            let page = RuntimeEventQueryPage::new(
+                events[offset..end].to_vec(),
+                snapshot,
+                page.limit(),
+                has_more,
+                next_cursor,
+            )
+            .expect("event page");
+            write_scripted_result(
+                &mut stream,
+                &query_request,
+                RuntimeResult::EventPage { page },
+            );
+            offset = end;
+        }
+    });
+    let client = client(&root);
+
+    let output = client
+        .run_contained_task("node.a", contained_task_request())
+        .expect("official OCR projection");
+    assert_eq!(output.events().len(), event_count);
+    let projection = output
+        .official_ocr_projection()
+        .expect("official OCR projection");
+    assert_eq!(projection.observations().len(), 2);
+    assert_eq!(
+        projection
+            .observations()
+            .iter()
+            .map(RuntimeOfficialOcrObservation::frame_index)
+            .collect::<Vec<_>>(),
+        vec![0, 1]
+    );
+    let summary = serde_json::to_value(projection.summary()).expect("serialize OCR summary");
+    assert_eq!(summary["unique_canonical_count"], 2);
+    assert_eq!(summary["canonical_names"], json!(["amiya", "kaltsit"]));
+    assert_eq!(summary["screen_coverage"].as_array().unwrap().len(), 2);
+    assert_eq!(summary["duplicates"].as_array().unwrap().len(), 1);
+    assert_eq!(
+        summary["unmatched_raw_readings"][0]["raw_text"],
+        "unmatched raw"
+    );
+    let provider = serde_json::to_value(projection.provider_execution())
+        .expect("serialize provider execution");
+    assert_eq!(provider["actual_provider"], "cpu");
+    assert_eq!(provider["cpu_ep_registered"], true);
+    assert_eq!(provider["cpu_fallback_disabled"], false);
+    assert_eq!(provider["strict_no_fallback"], true);
+    assert_eq!(provider["evidence"].as_array().unwrap().len(), 3);
+    let comparison =
+        serde_json::to_value(projection.comparison()).expect("serialize OCR comparison");
+    assert_eq!(
+        comparison["mapping_evidence"]
+            .as_array()
+            .expect("mapping evidence")
+            .len(),
+        2
+    );
+    let stdout = serde_json::to_value(&output).expect("serialize official stdout");
+    assert_eq!(
+        stdout["official_ocr_projection"]["provider_execution"]["model_ref"],
+        "fixture-model"
+    );
+    drop(client);
+    server.join().expect("scripted runtime");
+}
+
+// Test class: authorized Defect regression. Task Contract: https://github.com/HS7097/ActingCommand-Workflow/issues/241#issuecomment-5489709622
+#[test]
+fn official_ocr_projection_rejects_cross_run_missing_malformed_duplicate_and_overlimit_facts() {
+    enum Case {
+        CrossRun,
+        Missing,
+        Malformed,
+        Duplicate,
+        OverLimit,
+    }
+    for (case, expected_code) in [
+        (
+            Case::CrossRun,
+            "runtime_official_ocr_artifact_identity_mismatch",
+        ),
+        (Case::Missing, "runtime_official_ocr_artifact_read_failed"),
+        (Case::Malformed, "runtime_official_ocr_payload_malformed"),
+        (Case::Duplicate, "runtime_official_ocr_artifact_duplicate"),
+        (
+            Case::OverLimit,
+            "runtime_official_ocr_projection_limit_exceeded",
+        ),
+    ] {
+        let root = TempDir::new().expect("tempdir");
+        let ids = IdentifierIssuer::new().expect("identifier issuer");
+        let run_id = *ids.mint_run_id().expect("run id").transport();
+        let task_id = *ids.mint_task_id().expect("task id").transport();
+        let (receipt, correlation_id) = contained_task_success_receipt(&ids, run_id, task_id);
+        let mut events = official_ocr_fixture(root.path(), &ids, correlation_id, task_id, run_id);
+        match case {
+            Case::CrossRun => {
+                events[0].artifacts[0].run_id =
+                    Some(*ids.mint_run_id().expect("other run").transport());
+            }
+            Case::Missing => {
+                let object_key = events[0].artifacts[0].object_key().expect("artifact path");
+                fs::remove_file(root.path().join(object_key)).expect("remove fixture artifact");
+            }
+            Case::Malformed => {
+                let frame_id = *events[0].artifacts[0].frame_id().expect("frame id");
+                events[0].artifacts[0] = persisted_ocr_diagnostic(
+                    root.path(),
+                    &ids,
+                    correlation_id,
+                    run_id,
+                    frame_id,
+                    &json!({"schema_version": OCR_OBSERVATION_SCHEMA}),
+                );
+            }
+            Case::Duplicate => {
+                let duplicate = events[0].artifacts[0].clone();
+                events[0].artifacts.push(duplicate);
+            }
+            Case::OverLimit => {
+                events[0].artifacts[0].byte_count = MAX_OFFICIAL_OCR_ARTIFACT_BYTES + 1;
+            }
+        }
+        let error = resolve_official_ocr_projection(root.path(), &receipt, correlation_id, &events)
+            .expect_err("invalid OCR evidence must fail loud");
+        assert_eq!(error.code(), expected_code);
+    }
+}
+
+// Test class: authorized Defect regression. Task Contract: https://github.com/HS7097/ActingCommand-Workflow/issues/241#issuecomment-5489709622
+#[test]
+fn successful_non_ocr_task_preserves_the_existing_flow_shape() {
+    let root = TempDir::new().expect("tempdir");
+    let ids = IdentifierIssuer::new().expect("identifier issuer");
+    let run_id = *ids.mint_run_id().expect("run id").transport();
+    let task_id = *ids.mint_task_id().expect("task id").transport();
+    let (receipt, correlation_id) = contained_task_success_receipt(&ids, run_id, task_id);
+    let events = vec![link_projected_task_event(
+        projected_task_event(&ids, 1),
+        correlation_id,
+        task_id,
+        run_id,
+        None,
+    )];
+
+    assert_eq!(
+        resolve_official_ocr_projection(root.path(), &receipt, correlation_id, &events)
+            .expect("non-OCR compatibility"),
+        None
+    );
 }
 
 #[test]

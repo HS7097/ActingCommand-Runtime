@@ -15,6 +15,7 @@ actingcommand-contract = { workspace = true }
 actingcommand-policy = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+sha2 = { workspace = true }
 
 [dev-dependencies]
 actingcommand-device = { workspace = true }
