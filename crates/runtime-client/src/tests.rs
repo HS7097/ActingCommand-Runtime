@@ -3,14 +3,18 @@
 use super::*;
 use crate::ipc::{DEFAULT_RUNTIME_MAX_FRAME_BYTES, ReceiptReadDeadline, exchange};
 use actingcommand_contract::{
-    ApprovalDecisionRecord, ApprovalDisposition, ApprovalTarget, CaptureSequenceSpec,
-    ClientActionKind, ClientActionRecord, ContainedTaskRequest, EventActor, EventQuery,
-    EventSource, EventType, IdentifierIssuer, InputAction, InstanceId, LeasePriority,
-    LeaseQueuePolicy, OwnerEpoch, ProjectionProfile, RUNTIME_INFO_FILE, ResourceAuthoringEvent,
-    ResourceAuthoringPhase, RuntimeCaptureBackend, RuntimeDebugEvent, RuntimeDebugOperation,
-    RuntimeErrorCode, RuntimeErrorProjection, RuntimeEventQueryPage, RuntimeInfo,
+    ApprovalDecisionRecord, ApprovalDisposition, ApprovalTarget, AuditInput, CaptureSequenceSpec,
+    ClientActionKind, ClientActionRecord, ContainedTaskRequest, EventActor, EventDraft,
+    EventLinksDraft, EventOrigin, EventQuery, EventSeverity, EventSource, EventType,
+    IdentifierIssuer, InputAction, InstanceId, LeasePriority, LeaseQueuePolicy,
+    MAX_RUNTIME_EVENT_QUERY_EVENTS, OriginModule, OwnerEpoch, ProjectedEvent, ProjectionPayload,
+    ProjectionProfile, RUNTIME_INFO_FILE, ResourceAuthoringEvent, ResourceAuthoringPhase,
+    RuntimeCaptureBackend, RuntimeDebugEvent, RuntimeDebugOperation, RuntimeErrorCode,
+    RuntimeErrorProjection, RuntimeEventQueryCursor, RuntimeEventQueryPage, RuntimeInfo,
     RuntimeMonitorPolicy, RuntimeOperation, RuntimeReceipt, RuntimeReceiptState, RuntimeRequest,
-    RuntimeResult, RuntimeSubscriptionRequest, SubscriptionCursor, TaskOutcome, TerminalEvent,
+    RuntimeResult, RuntimeSubscriptionRequest, SanitizationError, SecretField, SecretFingerprinter,
+    Sha256Fingerprint, SubscriptionCursor, TaskOutcome, TaskPayloadDraft, TaskSemanticFact,
+    TerminalEvent,
 };
 use actingcommand_device::{
     CaptureBackend, CaptureBackendName, DeviceError, DeviceResult, Frame, InputBackend, PixelFormat,
@@ -43,6 +47,49 @@ use actingcommand_runtime_host::test_observation::{
 use std::collections::BTreeSet;
 
 const TEST_GOVERNANCE_CAPABILITY: &str = "runtime-client-governance-test-capability";
+
+struct RejectProjectionSecrets;
+
+impl SecretFingerprinter for RejectProjectionSecrets {
+    fn fingerprint(
+        &self,
+        _field: SecretField,
+        _original: &str,
+    ) -> Result<Sha256Fingerprint, SanitizationError> {
+        panic!("projection fixture does not contain secrets")
+    }
+}
+
+fn projected_task_event(issuer: &IdentifierIssuer, sequence: u64) -> ProjectedEvent {
+    let sanitized = EventDraft::new(
+        issuer.mint_event_id().expect("event id"),
+        sequence,
+        EventSeverity::Info,
+        EventOrigin::new(
+            EventSource::Runtime,
+            OriginModule::Runtime,
+            EventActor::Runtime,
+        ),
+        EventLinksDraft::default(),
+        TaskPayloadDraft::semantic(TaskSemanticFact::RunStarted, AuditInput::new()).into(),
+    )
+    .sanitize(&RejectProjectionSecrets)
+    .expect("sanitize projection fixture");
+    ProjectedEvent {
+        schema_version: sanitized.schema_version().to_owned(),
+        sequence,
+        event_id: *sanitized.event_id(),
+        timestamp_unix_ms: sanitized.timestamp_unix_ms(),
+        event_type: sanitized.event_type(),
+        severity: sanitized.severity(),
+        sensitivity: sanitized.sensitivity(),
+        origin: sanitized.origin().clone(),
+        links: sanitized.links().clone(),
+        payload_schema: sanitized.payload_schema().to_owned(),
+        payload: ProjectionPayload::Full(Box::new(sanitized.payload().clone())),
+        artifacts: Vec::new(),
+    }
+}
 
 struct CaptureGate {
     entered: Barrier,
@@ -887,6 +934,111 @@ fn contained_task_can_outlive_the_general_five_second_exchange_timeout() {
         output.receipt().result(),
         Some(RuntimeResult::ContainedTaskCompleted { .. })
     ));
+    server.join().expect("scripted runtime");
+}
+
+#[test]
+fn successful_contained_task_returns_complete_ordered_projection_across_event_pages() {
+    let root = TempDir::new().expect("tempdir");
+    let event_count = usize::from(MAX_RUNTIME_EVENT_QUERY_EVENTS) + 17;
+    let server = scripted_runtime(&root, move |listener, owner_epoch| {
+        let (mut stream, _) = listener.accept().expect("accept client");
+        respond_to_health(&mut stream, owner_epoch);
+
+        let task_request = read_scripted_request(&mut stream);
+        assert!(matches!(
+            task_request.operation(),
+            RuntimeOperation::RunContainedTask { .. }
+        ));
+        let correlation_id = task_request.correlation_id();
+        let ids = IdentifierIssuer::new().expect("identifier issuer");
+        write_scripted_result(
+            &mut stream,
+            &task_request,
+            RuntimeResult::ContainedTaskCompleted {
+                run_id: *ids.mint_run_id().expect("run id").transport(),
+                task_id: *ids.mint_task_id().expect("task id").transport(),
+                task_request_id: task_request.request_id(),
+                response_deadline_monotonic_ms: Some(60_000),
+                outcome: TaskOutcome::Success,
+                final_page: Some("fixture/final".to_owned()),
+                executed_steps: 1,
+            },
+        );
+
+        let events = (1..=u64::try_from(event_count).expect("event count"))
+            .map(|sequence| projected_task_event(&ids, sequence))
+            .collect::<Vec<_>>();
+        let snapshot = u64::try_from(events.len()).expect("snapshot position");
+        let mut offset = 0_usize;
+        while offset < events.len() {
+            let query_request = read_scripted_request(&mut stream);
+            let RuntimeOperation::QueryEvents {
+                query,
+                profile,
+                page,
+            } = query_request.operation()
+            else {
+                panic!("expected event query after task terminal")
+            };
+            assert_eq!(query.correlation_id, Some(correlation_id));
+            assert_eq!(*profile, ProjectionProfile::Forensic);
+            assert_eq!(
+                page.cursor().map(RuntimeEventQueryCursor::after_sequence),
+                (offset > 0).then_some(u64::try_from(offset).expect("cursor offset"))
+            );
+            let end = offset
+                .checked_add(usize::from(page.limit()))
+                .expect("page end")
+                .min(events.len());
+            let has_more = end < events.len();
+            let next_cursor = has_more.then(|| {
+                RuntimeEventQueryCursor::new(
+                    snapshot,
+                    u64::try_from(end).expect("cursor sequence"),
+                    query,
+                    *profile,
+                )
+                .expect("event cursor")
+            });
+            let page = RuntimeEventQueryPage::new(
+                events[offset..end].to_vec(),
+                snapshot,
+                page.limit(),
+                has_more,
+                next_cursor,
+            )
+            .expect("event page");
+            write_scripted_result(
+                &mut stream,
+                &query_request,
+                RuntimeResult::EventPage { page },
+            );
+            offset = end;
+        }
+    });
+    let client = client(&root);
+
+    let output = client
+        .run_contained_task("node.a", contained_task_request())
+        .expect("successful task projection");
+    assert!(matches!(
+        output.receipt().result(),
+        Some(RuntimeResult::ContainedTaskCompleted {
+            outcome: TaskOutcome::Success,
+            ..
+        })
+    ));
+    assert_eq!(output.events().len(), event_count);
+    assert_eq!(
+        output
+            .events()
+            .iter()
+            .map(|event| event.sequence)
+            .collect::<Vec<_>>(),
+        (1..=u64::try_from(event_count).expect("event count")).collect::<Vec<_>>()
+    );
+    drop(client);
     server.join().expect("scripted runtime");
 }
 

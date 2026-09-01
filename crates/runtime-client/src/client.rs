@@ -37,7 +37,7 @@ use std::fs;
 use std::net::{Shutdown, TcpStream};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 #[cfg(feature = "test-observation")]
 use crate::test_observation::{
@@ -53,6 +53,9 @@ const MAX_RUNTIME_INFO_BYTES: u64 = 64 * 1024;
 const MAX_RUN_SUMMARY_EVENTS: usize = 16_384;
 const MAX_RUN_SUMMARY_PAGES: usize = 64;
 const MAX_RUN_SUMMARY_RESIDENT_BYTES: usize = 64 * 1024 * 1024;
+const MAX_COMPLETE_EVENT_QUERY_EVENTS: usize = 16_384;
+const MAX_COMPLETE_EVENT_QUERY_PAGES: usize = 64;
+const MAX_COMPLETE_EVENT_QUERY_DURATION: Duration = Duration::from_secs(60);
 
 /// Discovery, identity, framing, and timeout configuration for one local Runtime session.
 #[derive(Clone)]
@@ -1178,15 +1181,110 @@ impl RuntimeClient {
         query: EventQuery,
         profile: ProjectionProfile,
     ) -> RuntimeClientResult<Vec<ProjectedEvent>> {
-        let page =
-            self.query_event_page(query, profile, RuntimeEventQueryPageRequest::default())?;
-        if page.has_more() {
-            return Err(RuntimeClientError::fatal(
-                "runtime_event_query_requires_pagination",
-                "query_runtime_events",
-            ));
+        let deadline = Instant::now()
+            .checked_add(MAX_COMPLETE_EVENT_QUERY_DURATION)
+            .ok_or_else(|| {
+                RuntimeClientError::fatal(
+                    "runtime_event_query_time_limit_invalid",
+                    "query_runtime_events",
+                )
+            })?;
+        let io_timeout = self.connection("query_runtime_events")?.io_timeout;
+        let mut events = Vec::new();
+        let mut event_ids = BTreeSet::<EventId>::new();
+        let mut cursor = None;
+        let mut snapshot_ledger_position = None;
+        let mut last_sequence = 0_u64;
+        for _ in 0..MAX_COMPLETE_EVENT_QUERY_PAGES {
+            let remaining = deadline
+                .checked_duration_since(Instant::now())
+                .ok_or_else(|| {
+                    RuntimeClientError::fatal(
+                        "runtime_event_query_time_limit_exceeded",
+                        "query_runtime_events",
+                    )
+                })?;
+            if remaining.is_zero() {
+                return Err(RuntimeClientError::fatal(
+                    "runtime_event_query_time_limit_exceeded",
+                    "query_runtime_events",
+                ));
+            }
+            let request =
+                RuntimeEventQueryPageRequest::new(MAX_RUNTIME_EVENT_QUERY_EVENTS, cursor.clone())
+                    .map_err(|_| {
+                    RuntimeClientError::fatal(
+                        "runtime_event_query_page_request_invalid",
+                        "query_runtime_events",
+                    )
+                })?;
+            let page = self.query_event_page_with_timeout(
+                query.clone(),
+                profile,
+                request,
+                Some(io_timeout.min(remaining)),
+            )?;
+            if Instant::now() >= deadline {
+                return Err(RuntimeClientError::fatal(
+                    "runtime_event_query_time_limit_exceeded",
+                    "query_runtime_events",
+                ));
+            }
+            match snapshot_ledger_position {
+                Some(expected) if expected != page.snapshot_ledger_position() => {
+                    return Err(RuntimeClientError::fatal(
+                        "runtime_event_query_pagination_invalid",
+                        "query_runtime_events",
+                    ));
+                }
+                None => snapshot_ledger_position = Some(page.snapshot_ledger_position()),
+                Some(_) => {}
+            }
+            for event in page.events() {
+                if event.sequence <= last_sequence || !event_ids.insert(event.event_id) {
+                    return Err(RuntimeClientError::fatal(
+                        "runtime_event_query_pagination_invalid",
+                        "query_runtime_events",
+                    ));
+                }
+                if events.len() == MAX_COMPLETE_EVENT_QUERY_EVENTS {
+                    return Err(RuntimeClientError::fatal(
+                        "runtime_event_query_event_limit_exceeded",
+                        "query_runtime_events",
+                    ));
+                }
+                last_sequence = event.sequence;
+                events.push(event.clone());
+            }
+            if !page.has_more() {
+                return Ok(events);
+            }
+            if events.len() == MAX_COMPLETE_EVENT_QUERY_EVENTS {
+                return Err(RuntimeClientError::fatal(
+                    "runtime_event_query_event_limit_exceeded",
+                    "query_runtime_events",
+                ));
+            }
+            let next = page.next_cursor().cloned().ok_or_else(|| {
+                RuntimeClientError::fatal(
+                    "runtime_event_query_pagination_invalid",
+                    "query_runtime_events",
+                )
+            })?;
+            let previous_sequence = cursor.as_ref().map_or(0, |value| value.after_sequence());
+            if next.after_sequence() != last_sequence || next.after_sequence() <= previous_sequence
+            {
+                return Err(RuntimeClientError::fatal(
+                    "runtime_event_query_pagination_invalid",
+                    "query_runtime_events",
+                ));
+            }
+            cursor = Some(next);
         }
-        Ok(page.events().to_vec())
+        Err(RuntimeClientError::fatal(
+            "runtime_event_query_page_limit_exceeded",
+            "query_runtime_events",
+        ))
     }
 
     /// Projects one completed scheduler/policy/contained-task run from authoritative ledger links.
@@ -1286,13 +1384,24 @@ impl RuntimeClient {
         profile: ProjectionProfile,
         page: RuntimeEventQueryPageRequest,
     ) -> RuntimeClientResult<RuntimeEventQueryPage> {
-        match self.execute(
+        self.query_event_page_with_timeout(query, profile, page, None)
+    }
+
+    fn query_event_page_with_timeout(
+        &self,
+        query: EventQuery,
+        profile: ProjectionProfile,
+        page: RuntimeEventQueryPageRequest,
+        response_timeout: Option<Duration>,
+    ) -> RuntimeClientResult<RuntimeEventQueryPage> {
+        match self.execute_with_timeout(
             "query_runtime_events",
             RuntimeOperation::QueryEvents {
                 query,
                 profile,
                 page,
             },
+            response_timeout,
         )? {
             RuntimeResult::EventPage { page } => Ok(page),
             _ => Err(self.unexpected_result("query_runtime_events")),
