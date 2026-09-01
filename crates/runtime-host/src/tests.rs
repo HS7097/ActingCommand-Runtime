@@ -594,6 +594,12 @@ impl TestClient {
         }
     }
 
+    fn set_receipt_read_timeout(&self) {
+        self.stream
+            .set_read_timeout(Some(Duration::from_secs(10)))
+            .expect("receipt timeout");
+    }
+
     fn request(&self, operation: RuntimeOperation) -> RuntimeRequest {
         let correlation_id = self.ids.mint_correlation_id().expect("correlation id");
         self.request_with_correlation(correlation_id, operation)
@@ -3997,6 +4003,7 @@ fn explicit_home_entry_mismatch_fails_before_target_input() {
     )
     .expect("runtime host");
     let mut client = TestClient::connect(&host);
+    client.set_receipt_read_timeout();
     let correlation = client.ids.mint_correlation_id().expect("correlation");
     let correlation_id = *correlation.transport();
     let request = client.request_with_correlation(
@@ -4071,6 +4078,7 @@ fn explicit_home_entry_already_home_starts_target_once_without_recovery() {
     )
     .expect("runtime host");
     let mut client = TestClient::connect(&host);
+    client.set_receipt_read_timeout();
     let correlation = client.ids.mint_correlation_id().expect("correlation");
     let correlation_id = *correlation.transport();
     let request = client.request_with_correlation(
@@ -4150,6 +4158,7 @@ fn explicit_home_entry_runs_one_bound_recovery_then_starts_target() {
     )
     .expect("runtime host");
     let mut client = TestClient::connect(&host);
+    client.set_receipt_read_timeout();
     let correlation = client.ids.mint_correlation_id().expect("correlation");
     let correlation_id = *correlation.transport();
     let task_request = ContainedTaskRequest::new(
@@ -4272,6 +4281,7 @@ fn explicit_home_entry_recovery_failure_and_persistent_non_home_fail_closed() {
         )
         .expect("runtime host");
         let mut client = TestClient::connect(&host);
+        client.set_receipt_read_timeout();
         let correlation = client.ids.mint_correlation_id().expect("correlation");
         let correlation_id = *correlation.transport();
         let task_request = ContainedTaskRequest::new(
@@ -4391,6 +4401,7 @@ fn non_home_start_task_preserves_behavior_and_ignores_recovery_binding() {
     )
     .expect("runtime host");
     let mut client = TestClient::connect(&host);
+    client.set_receipt_read_timeout();
     let correlation = client.ids.mint_correlation_id().expect("correlation");
     let correlation_id = *correlation.transport();
     let task_request = ContainedTaskRequest::new(
