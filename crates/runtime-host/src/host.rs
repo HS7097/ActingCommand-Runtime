@@ -76,13 +76,14 @@ use actingcommand_contract::{
     RuntimeRequest, RuntimeResult, RuntimeStrategicPlanResult, RuntimeSubscriptionRequest,
     SchedulerPayloadDraft, SchedulingDisposition, SchedulingEffectCondition,
     SchedulingEffectEvidence, SchedulingOutcomeDeclaration, SchedulingOutcomeIdentity,
-    SchedulingOutcomeProjection, StatePayload, StatePayloadDraft, TaskId, TaskOutcome, TaskPayload,
-    TaskPayloadDraft, TaskSemanticFact, TerminalEvent, ValidatedRuntimeRequest,
+    SchedulingOutcomeProjection, StatePayload, StatePayloadDraft, TaskEntryRecognitionPhase,
+    TaskEntryTargetDisposition, TaskId, TaskOutcome, TaskPayload, TaskPayloadDraft,
+    TaskSemanticFact, TerminalEvent, ValidatedRuntimeRequest,
 };
 use actingcommand_device::{CaptureBackendName, Frame};
 use actingcommand_execution_kernel::{
-    ContainedTaskRunError, ContainedTaskRuntime, ContainedTaskTrace, ExecutionBackendProvenance,
-    ExecutionBackendProvider, ExecutionKernel, ExternalExpectedSha256,
+    ContainedTaskOutcome, ContainedTaskRunError, ContainedTaskRuntime, ContainedTaskTrace,
+    ExecutionBackendProvenance, ExecutionBackendProvider, ExecutionKernel, ExternalExpectedSha256,
     PostAdmissionOcrComparisonReport, PostAdmissionOcrObservation, PreparedContainedTask,
     RecognitionVisionProvider, StabilityComparisonResult, StabilityTerminalReason,
     StabilityTerminationDeclaration, decide_monitor, page_anchor_matches,
@@ -10123,6 +10124,7 @@ impl HostShared {
             instance_alias,
             connection_id,
             prepared,
+            task_request,
             token,
             task_id,
             run_id,
@@ -10405,6 +10407,7 @@ impl HostShared {
             instance_alias,
             connection_id,
             prepared,
+            task_request,
             token.clone(),
             context.issued_task_id(),
             context.issued_run_id(),
@@ -10415,7 +10418,7 @@ impl HostShared {
         Ok((task_request_message, success))
     }
 
-    #[allow(clippy::too_many_arguments)]
+    #[allow(clippy::too_many_arguments, clippy::let_and_return)]
     fn execute_contained_task_with_lease(
         &self,
         original: &RuntimeRequest,
@@ -10423,6 +10426,7 @@ impl HostShared {
         instance_alias: &str,
         connection_id: ConnectionId,
         prepared: PreparedContainedTask,
+        task_request: &ContainedTaskRequest,
         token: LeaseToken,
         task_id: IssuedTaskId,
         run_id: IssuedRunId,
@@ -10459,12 +10463,24 @@ impl HostShared {
             post_admission_ocr_comparison_recorded: false,
             current_recognition_id: None,
             step_actions: BTreeMap::new(),
+            step_index_offset: 0,
+            completed_entry_recovery_steps: 0,
             sampling_run_seed,
             used_action_seeds: BTreeSet::new(),
             finalizing: None,
             capture_evidence: CaptureEvidenceAccumulator::default(),
         };
-        let execution = prepared.run(&mut runtime);
+        let execution = if prepared.required_home_entry_page().is_some() {
+            self.run_preflighted_contained_task(
+                instance_alias,
+                task_request,
+                &prepared,
+                &mut runtime,
+            )
+        } else {
+            let execution = prepared.run(&mut runtime);
+            execution
+        };
         let post_admission_ocr_failure_diagnostic = match &execution {
             Err(ContainedTaskRunError::Task(error)) => {
                 runtime.record_post_admission_ocr_failure(error.code(), error.detail())
@@ -10472,6 +10488,7 @@ impl HostShared {
             _ => Ok(()),
         };
         let finalizing = runtime.finalizing;
+        let completed_entry_recovery_steps = runtime.completed_entry_recovery_steps;
         let mut capture_evidence = std::mem::take(&mut runtime.capture_evidence);
         drop(runtime);
         let outcome = match execution {
@@ -10520,7 +10537,7 @@ impl HostShared {
                             outcome: terminal_outcome,
                             intent_already_recorded: finalizing.is_some(),
                             final_page: None,
-                            executed_steps: 0,
+                            executed_steps: completed_entry_recovery_steps,
                             failure_code: Some(failure.error.code()),
                             failure_severity: scheduled.then_some(EventSeverity::Warning),
                             scheduling_outcome: None,
@@ -10594,7 +10611,7 @@ impl HostShared {
                             outcome: TaskOutcome::Failure,
                             intent_already_recorded: finalizing.is_some(),
                             final_page: None,
-                            executed_steps: 0,
+                            executed_steps: completed_entry_recovery_steps,
                             failure_code: Some(
                                 task_failure
                                     .map(|evidence| evidence.code)
@@ -10656,7 +10673,7 @@ impl HostShared {
                         outcome: TaskOutcome::Failure,
                         intent_already_recorded: finalizing.is_some(),
                         final_page: None,
-                        executed_steps: 0,
+                        executed_steps: completed_entry_recovery_steps,
                         failure_code: Some(error.code()),
                         failure_severity,
                         scheduling_outcome: None,
@@ -10764,6 +10781,170 @@ impl HostShared {
         }
     }
 
+    fn run_preflighted_contained_task(
+        &self,
+        instance_alias: &str,
+        task_request: &ContainedTaskRequest,
+        prepared: &PreparedContainedTask,
+        runtime: &mut RuntimeContainedTask<'_>,
+    ) -> Result<ContainedTaskOutcome, ContainedTaskRunError<RequestFailure>> {
+        let Some(required_home) = prepared.required_home_entry_page().map(str::to_owned) else {
+            return prepared.run(runtime);
+        };
+
+        let initial_home = prepared.recognize_required_home(runtime)?;
+        runtime
+            .record_entry_fact(TaskSemanticFact::EntryRecognition {
+                phase: TaskEntryRecognitionPhase::Initial,
+                required_page: required_home.clone(),
+                matched: initial_home,
+            })
+            .map_err(ContainedTaskRunError::Boundary)?;
+        runtime
+            .record_entry_fact(TaskSemanticFact::EntryRecoveryDecision {
+                required: !initial_home,
+            })
+            .map_err(ContainedTaskRunError::Boundary)?;
+        if initial_home {
+            runtime
+                .record_entry_fact(TaskSemanticFact::EntryTargetDisposition {
+                    disposition: TaskEntryTargetDisposition::Started,
+                    failure_code: None,
+                })
+                .map_err(ContainedTaskRunError::Boundary)?;
+            return prepared.run(runtime);
+        }
+
+        let Some(binding) = task_request.recovery() else {
+            return fail_contained_task_entry(
+                runtime,
+                "contained_task_home_recovery_binding_missing",
+            );
+        };
+        let recovery_request =
+            ContainedTaskRequest::new(binding.package_path(), binding.expected_sha256()).map_err(
+                |_| ContainedTaskRunError::task("contained_task_home_recovery_binding_invalid"),
+            )?;
+        let recovery = match prepare_contained_task(
+            instance_alias,
+            &recovery_request,
+            self.execution.vision_provider(),
+        ) {
+            Ok(recovery) => recovery,
+            Err(failure) => {
+                let code = failure.error.code();
+                runtime
+                    .record_entry_fact(TaskSemanticFact::EntryRecoveryFailed {
+                        package_sha256: binding.expected_sha256().to_owned(),
+                        failure_code: code.to_owned(),
+                    })
+                    .map_err(ContainedTaskRunError::Boundary)?;
+                return fail_contained_task_entry(runtime, code);
+            }
+        };
+        if !recovery.is_entry_recovery_compatible() {
+            return fail_contained_task_entry(
+                runtime,
+                "contained_task_home_recovery_package_incompatible",
+            );
+        }
+        let recovery_sha256 = recovery.package_sha256().to_owned();
+        runtime
+            .record_entry_fact(TaskSemanticFact::EntryRecoveryPackageAdmitted {
+                package_sha256: recovery_sha256.clone(),
+            })
+            .map_err(ContainedTaskRunError::Boundary)?;
+        let recovery_execution = {
+            let mut recovery_runtime = EntryRecoveryRuntime { inner: runtime };
+            recovery.run(&mut recovery_runtime)
+        };
+        let recovery_outcome = match recovery_execution {
+            Ok(outcome) => outcome,
+            Err(ContainedTaskRunError::Task(error)) => {
+                runtime
+                    .record_entry_fact(TaskSemanticFact::EntryRecoveryFailed {
+                        package_sha256: recovery_sha256,
+                        failure_code: error.code().to_owned(),
+                    })
+                    .map_err(ContainedTaskRunError::Boundary)?;
+                return fail_contained_task_entry(runtime, error.code());
+            }
+            Err(ContainedTaskRunError::Boundary(failure)) => {
+                let code = failure.error.code();
+                runtime
+                    .record_entry_fact(TaskSemanticFact::EntryRecoveryFailed {
+                        package_sha256: recovery_sha256,
+                        failure_code: code.to_owned(),
+                    })
+                    .map_err(ContainedTaskRunError::Boundary)?;
+                runtime
+                    .record_entry_fact(TaskSemanticFact::EntryTargetDisposition {
+                        disposition: TaskEntryTargetDisposition::FailClosed,
+                        failure_code: Some(code.to_owned()),
+                    })
+                    .map_err(ContainedTaskRunError::Boundary)?;
+                return Err(ContainedTaskRunError::Boundary(failure));
+            }
+        };
+        runtime.completed_entry_recovery_steps = recovery_outcome.executed_steps;
+        let Some(final_page) = recovery_outcome.final_page.clone() else {
+            return fail_contained_task_entry(
+                runtime,
+                "contained_task_home_recovery_final_page_missing",
+            );
+        };
+        runtime
+            .record_entry_fact(TaskSemanticFact::EntryRecoveryCompleted {
+                package_sha256: recovery_sha256,
+                final_page: final_page.clone(),
+                executed_steps: recovery_outcome.executed_steps,
+            })
+            .map_err(ContainedTaskRunError::Boundary)?;
+        if !prepared.terminal_matches_required_home(&final_page) {
+            return fail_contained_task_entry(
+                runtime,
+                "contained_task_home_recovery_terminal_non_home",
+            );
+        }
+
+        let post_recovery_home = prepared.recognize_required_home(runtime)?;
+        runtime
+            .record_entry_fact(TaskSemanticFact::EntryRecognition {
+                phase: TaskEntryRecognitionPhase::PostRecovery,
+                required_page: required_home,
+                matched: post_recovery_home,
+            })
+            .map_err(ContainedTaskRunError::Boundary)?;
+        if !post_recovery_home {
+            return fail_contained_task_entry(
+                runtime,
+                "contained_task_home_recovery_persistently_non_home",
+            );
+        }
+        if recovery_outcome
+            .executed_steps
+            .checked_add(prepared.maximum_executed_steps())
+            .is_none_or(|maximum| maximum > 1_000)
+        {
+            return fail_contained_task_entry(runtime, "contained_task_home_recovery_step_limit");
+        }
+        runtime.step_index_offset = recovery_outcome.executed_steps;
+        runtime
+            .record_entry_fact(TaskSemanticFact::EntryTargetDisposition {
+                disposition: TaskEntryTargetDisposition::Started,
+                failure_code: None,
+            })
+            .map_err(ContainedTaskRunError::Boundary)?;
+        let mut outcome = prepared.run(runtime)?;
+        outcome.executed_steps = outcome
+            .executed_steps
+            .checked_add(recovery_outcome.executed_steps)
+            .ok_or_else(|| {
+                ContainedTaskRunError::task("contained_task_home_recovery_step_limit")
+            })?;
+        Ok(outcome)
+    }
+
     fn recover_contained_task(
         &self,
         request: &RuntimeRequest,
@@ -10832,6 +11013,27 @@ impl HostShared {
         if packages.len() != 1 || packages[0].1 != task_request.expected_sha256() {
             return Err(contained_task_replay_denied(
                 "contained_task_request_package_reused",
+            ));
+        }
+        let recovery_packages = semantic
+            .iter()
+            .filter_map(|(_, fact)| match fact {
+                TaskSemanticFact::EntryRecoveryPackageAdmitted { package_sha256 } => {
+                    Some(package_sha256.as_str())
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        if recovery_packages.len() > 1
+            || recovery_packages.first().is_some_and(|recorded| {
+                task_request
+                    .recovery()
+                    .map(|binding| binding.expected_sha256())
+                    != Some(*recorded)
+            })
+        {
+            return Err(contained_task_replay_denied(
+                "contained_task_request_recovery_reused",
             ));
         }
         let package_event = packages[0].0;
@@ -13565,10 +13767,62 @@ struct RuntimeContainedTask<'a> {
     post_admission_ocr_comparison_recorded: bool,
     current_recognition_id: Option<IssuedRecognitionId>,
     step_actions: BTreeMap<u32, (IssuedActionId, String)>,
+    step_index_offset: u32,
+    completed_entry_recovery_steps: u32,
     sampling_run_seed: Option<u64>,
     used_action_seeds: BTreeSet<u64>,
     finalizing: Option<TaskOutcome>,
     capture_evidence: CaptureEvidenceAccumulator,
+}
+
+struct EntryRecoveryRuntime<'a, 'host> {
+    inner: &'a mut RuntimeContainedTask<'host>,
+}
+
+impl ContainedTaskRuntime for EntryRecoveryRuntime<'_, '_> {
+    type Error = RequestFailure;
+
+    fn capture(&mut self) -> Result<Frame, Self::Error> {
+        self.inner.capture()
+    }
+
+    fn action_seed(
+        &mut self,
+        step_index: u32,
+        operation_label: &str,
+    ) -> Result<Option<u64>, Self::Error> {
+        self.inner.action_seed(step_index, operation_label)
+    }
+
+    fn input(&mut self, action: InputAction) -> Result<(), Self::Error> {
+        self.inner.input(action)
+    }
+
+    fn record(&mut self, trace: ContainedTaskTrace) -> Result<(), Self::Error> {
+        if matches!(
+            &trace,
+            ContainedTaskTrace::PackageAdmitted { .. }
+                | ContainedTaskTrace::RunStarted
+                | ContainedTaskTrace::Finalizing { .. }
+        ) {
+            Ok(())
+        } else {
+            self.inner.record(trace)
+        }
+    }
+}
+
+fn fail_contained_task_entry(
+    runtime: &RuntimeContainedTask<'_>,
+    code: &'static str,
+) -> Result<ContainedTaskOutcome, ContainedTaskRunError<RequestFailure>> {
+    runtime
+        .record_entry_fact(TaskSemanticFact::EntryTargetDisposition {
+            disposition: TaskEntryTargetDisposition::FailClosed,
+            failure_code: Some(code.to_owned()),
+        })
+        .map_err(ContainedTaskRunError::Boundary)?;
+    Err(ContainedTaskRunError::task(code))
 }
 
 struct RuntimeContainedTaskStability {
@@ -13726,6 +13980,121 @@ impl RuntimeContainedTask<'_> {
                 payload,
             )
             .map(|_| ())
+    }
+
+    fn record_entry_fact(&self, fact: TaskSemanticFact) -> Result<(), RequestFailure> {
+        self.ensure_active()?;
+        let severity = if matches!(
+            &fact,
+            TaskSemanticFact::EntryRecoveryFailed { .. }
+                | TaskSemanticFact::EntryTargetDisposition {
+                    disposition: TaskEntryTargetDisposition::FailClosed,
+                    ..
+                }
+        ) {
+            EventSeverity::Warning
+        } else {
+            EventSeverity::Info
+        };
+        self.append_task(
+            severity,
+            self.links(),
+            TaskPayloadDraft::semantic(fact, AuditInput::new()),
+        )
+    }
+
+    fn absolute_step_index(&self, step_index: u32) -> Result<u32, RequestFailure> {
+        self.step_index_offset
+            .checked_add(step_index)
+            .ok_or_else(|| {
+                RequestFailure::poison_without_terminal(RuntimeHostError::fatal(
+                    "contained_task_step_index_overflow",
+                    "run_contained_task",
+                    RuntimeErrorCode::RuntimeFatal,
+                ))
+            })
+    }
+
+    fn offset_trace(
+        &self,
+        trace: ContainedTaskTrace,
+    ) -> Result<ContainedTaskTrace, RequestFailure> {
+        Ok(match trace {
+            ContainedTaskTrace::StepStarted {
+                step_index,
+                operation_label,
+                from_page,
+            } => ContainedTaskTrace::StepStarted {
+                step_index: self.absolute_step_index(step_index)?,
+                operation_label,
+                from_page,
+            },
+            ContainedTaskTrace::EffectIntent {
+                step_index,
+                operation_label,
+                action,
+                sampling,
+                guard,
+            } => ContainedTaskTrace::EffectIntent {
+                step_index: self.absolute_step_index(step_index)?,
+                operation_label,
+                action,
+                sampling,
+                guard,
+            },
+            ContainedTaskTrace::EffectCompleted {
+                step_index,
+                operation_label,
+            } => ContainedTaskTrace::EffectCompleted {
+                step_index: self.absolute_step_index(step_index)?,
+                operation_label,
+            },
+            ContainedTaskTrace::StepFinished {
+                step_index,
+                operation_label,
+                page_label,
+            } => ContainedTaskTrace::StepFinished {
+                step_index: self.absolute_step_index(step_index)?,
+                operation_label,
+                page_label,
+            },
+            ContainedTaskTrace::StabilityBaseline {
+                step_index,
+                operation_label,
+                declaration,
+            } => ContainedTaskTrace::StabilityBaseline {
+                step_index: self.absolute_step_index(step_index)?,
+                operation_label,
+                declaration,
+            },
+            ContainedTaskTrace::StabilityComparison {
+                step_index,
+                operation_label,
+                declaration,
+                result,
+                prior_consecutive_unchanged,
+                new_consecutive_unchanged,
+                terminal_reason,
+            } => ContainedTaskTrace::StabilityComparison {
+                step_index: self.absolute_step_index(step_index)?,
+                operation_label,
+                declaration,
+                result,
+                prior_consecutive_unchanged,
+                new_consecutive_unchanged,
+                terminal_reason,
+            },
+            ContainedTaskTrace::StabilityTerminal {
+                step_index,
+                operation_label,
+                reason,
+            } => ContainedTaskTrace::StabilityTerminal {
+                step_index: self.absolute_step_index(step_index)?,
+                operation_label,
+                reason,
+            },
+            trace => trace,
+        })
     }
 
     fn persist_post_admission_ocr_diagnostic(
@@ -13940,7 +14309,7 @@ impl RuntimeContainedTask<'_> {
     ) -> Result<(), RequestFailure> {
         if self.stability.is_some()
             || self.expected_stability_declaration.as_ref() != Some(&declaration)
-            || step_index != 0
+            || step_index != self.step_index_offset
             || declaration.consecutive_unchanged_threshold == 0
             || declaration.consecutive_unchanged_threshold >= declaration.max_steps
             || declaration.region.width == 0
@@ -14023,9 +14392,12 @@ impl RuntimeContainedTask<'_> {
                 "contained_task_stability_count_invalid",
             ));
         }
-        let completed_steps = step_index.checked_add(1).ok_or_else(|| {
-            contained_task_stability_failure("contained_task_stability_step_overflow")
-        })?;
+        let completed_steps = step_index
+            .checked_sub(self.step_index_offset)
+            .and_then(|relative| relative.checked_add(1))
+            .ok_or_else(|| {
+                contained_task_stability_failure("contained_task_stability_step_overflow")
+            })?;
         if completed_steps > declaration.max_steps {
             return Err(contained_task_stability_failure(
                 "contained_task_stability_step_invalid",
@@ -14373,6 +14745,7 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
         let run_seed = require_contained_task_sampling_run_seed(self.sampling_run_seed)
             .map_err(RequestFailure::poison_without_terminal)?;
         self.ensure_active()?;
+        let step_index = self.absolute_step_index(step_index)?;
         let action_id =
             contained_task_step_action(&self.step_actions, step_index, operation_label)?;
         let action_seed = contained_task_sampling_seed(&(
@@ -14421,6 +14794,7 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
         if !matches!(&trace, ContainedTaskTrace::PackageAdmitted { .. }) {
             self.ensure_active()?;
         }
+        let trace = self.offset_trace(trace)?;
         match trace {
             ContainedTaskTrace::PackageAdmitted {
                 task_label,

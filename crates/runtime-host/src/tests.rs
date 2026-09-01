@@ -10,27 +10,28 @@ use actingcommand_contract::{
     AgentSessionResponse, AgentWakeKind, ApplicationLifecycleAction, ApprovalDecisionRecord,
     ApprovalDisposition, ApprovalTarget, ArtifactKind, AuthoritativeSchedulingOutcome,
     CapturePayload, CaptureSequenceSpec, CatalogDeclarationPatch, CatalogPayload, CatalogProposal,
-    ClientActionKind, ClientActionRecord, ClientActionValue, ContainedTaskRequest, CorrelationId,
-    EffectDisposition, EventActor, EventPayload, EventQuery, EventSeverity, EventSource, EventType,
-    FactContent, FactRecord, FactScope, FactTtlPolicy, FactTtlSource,
-    FactValue as ContractFactValue, IdentifierIssuer, InputAction, InputSamplingAlgorithm,
-    InstanceFactContext, InstanceId, IssuedCorrelationId, LeaseId, LeasePriority, LeaseQueuePolicy,
-    LeaseQueueStatus, LeaseToken, MAX_RUNTIME_PLANNING_DOCUMENT_BYTES, MonitorDiagnosis,
-    MonitorDisposition, MonitorObservation, MonitorPayload, MonitorRecoveryCoordinationReason,
-    MonitorRecoveryKind, OriginModule, PerformanceControlLevel, PerformanceMonitorHealth,
-    PinnedFrameReason, PolicyExecutionOutcome, PolicyFailureClass, PolicyFailureDisposition,
-    PolicyPayload, PolicyPlanningSignalEventData, PolicyPlanningSignalKind,
-    ProjectDecisionPageRequest, ProjectDecisionState, ProjectInterfaceRequest,
-    ProjectLedgerSnapshot, ProjectedArtifactReference, ProjectionPayload, ProjectionProfile,
-    ProposalClass, ProposalDisposition, ProposalDocument, ProposalKind, ProposalPatchOperation,
-    PublicEventPayload, RUNTIME_INFO_FILE, ReleasePayload, ReleaseResourceVersion,
-    ReleaseTransitionKind, ResourceAuthoringEvent, ResourceAuthoringPhase, RunId,
-    RuntimeCaptureBackend, RuntimeErrorCode, RuntimeEventQueryCursor, RuntimeEventQueryPageRequest,
-    RuntimeForwardProjectionRequest, RuntimeMonitorPolicy, RuntimeOperation,
-    RuntimePlanningDocument, RuntimePlanningDocumentKind, RuntimeReceipt, RuntimeReceiptState,
-    RuntimeReleaseSet, RuntimeRequest, RuntimeResult, RuntimeStrategicReportRequest,
-    SchedulingDisposition, SchedulingEffectEvidence, SchedulingOutcomeDeclaration,
-    SchedulingOutcomeIdentity, StatePayload, StateRecoveryAction, StateValidationResult, TaskId,
+    ClientActionKind, ClientActionRecord, ClientActionValue, ContainedTaskRecoveryBinding,
+    ContainedTaskRequest, CorrelationId, EffectDisposition, EventActor, EventPayload, EventQuery,
+    EventSeverity, EventSource, EventType, FactContent, FactRecord, FactScope, FactTtlPolicy,
+    FactTtlSource, FactValue as ContractFactValue, IdentifierIssuer, InputAction,
+    InputSamplingAlgorithm, InstanceFactContext, InstanceId, IssuedCorrelationId, LeaseId,
+    LeasePriority, LeaseQueuePolicy, LeaseQueueStatus, LeaseToken,
+    MAX_RUNTIME_PLANNING_DOCUMENT_BYTES, MonitorDiagnosis, MonitorDisposition, MonitorObservation,
+    MonitorPayload, MonitorRecoveryCoordinationReason, MonitorRecoveryKind, OriginModule,
+    PerformanceControlLevel, PerformanceMonitorHealth, PinnedFrameReason, PolicyExecutionOutcome,
+    PolicyFailureClass, PolicyFailureDisposition, PolicyPayload, PolicyPlanningSignalEventData,
+    PolicyPlanningSignalKind, ProjectDecisionPageRequest, ProjectDecisionState,
+    ProjectInterfaceRequest, ProjectLedgerSnapshot, ProjectedArtifactReference, ProjectedEvent,
+    ProjectionPayload, ProjectionProfile, ProposalClass, ProposalDisposition, ProposalDocument,
+    ProposalKind, ProposalPatchOperation, PublicEventPayload, RUNTIME_INFO_FILE, ReleasePayload,
+    ReleaseResourceVersion, ReleaseTransitionKind, ResourceAuthoringEvent, ResourceAuthoringPhase,
+    RunId, RuntimeCaptureBackend, RuntimeErrorCode, RuntimeEventQueryCursor,
+    RuntimeEventQueryPageRequest, RuntimeForwardProjectionRequest, RuntimeMonitorPolicy,
+    RuntimeOperation, RuntimePlanningDocument, RuntimePlanningDocumentKind, RuntimeReceipt,
+    RuntimeReceiptState, RuntimeReleaseSet, RuntimeRequest, RuntimeResult,
+    RuntimeStrategicReportRequest, SchedulingDisposition, SchedulingEffectEvidence,
+    SchedulingOutcomeDeclaration, SchedulingOutcomeIdentity, StatePayload, StateRecoveryAction,
+    StateValidationResult, TaskEntryRecognitionPhase, TaskEntryTargetDisposition, TaskId,
     TaskOutcome, TaskPayload, TaskSemanticFact, TaskTemplateInstantiation, TerminalEvent,
 };
 use actingcommand_device::{
@@ -2360,6 +2361,26 @@ fn neutral_contained_task_package() -> Vec<u8> {
     )
 }
 
+fn neutral_non_home_start_contained_task_package() -> Vec<u8> {
+    neutral_contained_task_package_with_task(
+        br#"{
+            "schema_version":"0.6",
+            "task_id":"task",
+            "game":"neutral",
+            "server_scope":["test"],
+            "coordinate_space":{"width":2,"height":1},
+            "target_page":"terminal",
+             "operations":[{
+                 "id":"open_terminal",
+                 "from":"home",
+                 "click":{"kind":"point","x":1,"y":0},
+                 "unguarded_trusted_coordinate":true,
+                 "retryable":false
+             }]
+        }"#,
+    )
+}
+
 fn neutral_stability_contained_task_package(
     consecutive_unchanged_threshold: u32,
     max_steps: u32,
@@ -2971,6 +2992,102 @@ fn neutral_non_retryable_destination_package(with_error_page: bool) -> Vec<u8> {
 
 fn neutral_contained_task_package_with_task(task: &[u8]) -> Vec<u8> {
     neutral_contained_task_package_with_task_and_timeout(task, 5_000)
+}
+
+fn explicit_home_contained_task_package(
+    package_id: &str,
+    home_color: [u8; 3],
+    other_color: [u8; 3],
+) -> Vec<u8> {
+    let task = serde_json::to_vec(&serde_json::json!({
+        "schema_version": "0.6",
+        "task_id": "task",
+        "game": "fixture01",
+        "server_scope": ["test"],
+        "coordinate_space": {"width": 2, "height": 1},
+        "entry_page": "home",
+        "target_page": "home",
+        "operations": [{
+            "id": "return_home",
+            "from": "other",
+            "to": "home",
+            "click": {"kind": "point", "x": 1, "y": 0},
+            "unguarded_trusted_coordinate": true,
+            "retryable": false
+        }]
+    }))
+    .expect("explicit Home task JSON");
+    let recognition = serde_json::to_vec(&serde_json::json!({
+        "schema_version": "0.3",
+        "game": "fixture01",
+        "server": "test",
+        "coordinate_space": {"width": 2, "height": 1},
+        "defaults": {"color_max_distance": 0.0},
+        "targets": [
+            {"type": "color", "id": "page/home", "region": {"x": 0, "y": 0, "width": 1, "height": 1}, "expected": home_color},
+            {"type": "color", "id": "page/other", "region": {"x": 0, "y": 0, "width": 1, "height": 1}, "expected": other_color},
+            {"type": "color", "id": "home/green_anchor", "region": {"x": 1, "y": 0, "width": 1, "height": 1}, "expected": [0, 255, 0]},
+            {"type": "color", "id": "home/alternate_anchor", "region": {"x": 1, "y": 0, "width": 1, "height": 1}, "expected": [255, 255, 255]}
+        ]
+    }))
+    .expect("explicit Home recognition JSON");
+    let pages = serde_json::to_vec(&serde_json::json!({
+        "schema_version": "0.3",
+        "pages": [
+            {
+                "id": "fixture01/home",
+                "required": ["page/home"],
+                "any_of": [["home/green_anchor", "home/alternate_anchor"]],
+                "optional": [],
+                "forbidden": []
+            },
+            {
+                "id": "fixture01/other",
+                "required": ["page/other"],
+                "any_of": [],
+                "optional": [],
+                "forbidden": []
+            }
+        ]
+    }))
+    .expect("explicit Home pages JSON");
+    let control = serde_json::to_vec(&serde_json::json!({
+        "schema_version": "Lab-1y.control.v1",
+        "package_id": package_id,
+        "execution_mode": "navigable_route",
+        "game": "fixture01",
+        "server": "test",
+        "resolution": {"width": 2, "height": 1},
+        "entry_task_id": "task",
+        "capture_interval_ms": 1,
+        "step_timeout_ms": 25,
+        "timeout_ms": 250,
+        "max_steps": 2
+    }))
+    .expect("explicit Home control JSON");
+    let cursor = Cursor::new(Vec::new());
+    let mut zip = ZipWriter::new(cursor);
+    let options = FileOptions::default().compression_method(zip::CompressionMethod::Stored);
+    for (path, contents) in [
+        ("control.json", control.as_slice()),
+        (
+            "resources/manifest.json",
+            br#"{"schema_version":"0.3","entry_task_id":"task"}"#.as_slice(),
+        ),
+        ("resources/operations/task/task.json", task.as_slice()),
+        (
+            "resources/recognition/fixture01.test.pack.json",
+            recognition.as_slice(),
+        ),
+        (
+            "resources/recognition/fixture01.test.pages.json",
+            pages.as_slice(),
+        ),
+    ] {
+        zip.start_file(path, options).expect("zip entry");
+        zip.write_all(contents).expect("zip content");
+    }
+    zip.finish().expect("finish zip").into_inner()
 }
 
 fn neutral_contained_task_package_with_task_and_timeout(task: &[u8], timeout_ms: u64) -> Vec<u8> {
@@ -3841,6 +3958,472 @@ fn direct_runtime_run_derives_sampling_seed_from_issued_run_identity() {
         "the direct durable sampled action must equal the backend action"
     );
     assert_eq!(state.input_count.load(Ordering::Acquire), 1);
+    drop(client);
+    host.close().expect("close runtime host");
+}
+
+fn entry_preflight_facts(events: &[ProjectedEvent]) -> Vec<&TaskSemanticFact> {
+    events
+        .iter()
+        .filter_map(|event| match &event.payload {
+            ProjectionPayload::Full(payload) => match payload.as_ref() {
+                EventPayload::Task(TaskPayload::Semantic(payload))
+                    if event.event_type == EventType::TaskEntryPreflight =>
+                {
+                    Some(payload.fact())
+                }
+                _ => None,
+            },
+            _ => None,
+        })
+        .collect()
+}
+
+// Test class: authorized Defect regression. Task Contract: https://github.com/HS7097/ActingCommand-Workflow/issues/241#issuecomment-5491623342
+#[test]
+fn explicit_home_entry_mismatch_fails_before_target_input() {
+    let root = TempDir::new().expect("tempdir");
+    let target = explicit_home_contained_task_package("fixture01.target", [0, 0, 255], [255, 0, 0]);
+    let target_path = root.path().join("fixture01-target.zip");
+    fs::write(&target_path, &target).expect("write target package");
+    let state = Arc::new(FakeState::default());
+    let host = RuntimeHost::start(
+        config(&root),
+        Arc::new(FakeProvider::one(
+            "fixture01.instance",
+            instance_id(),
+            Arc::clone(&state),
+        )),
+    )
+    .expect("runtime host");
+    let mut client = TestClient::connect(&host);
+    let correlation = client.ids.mint_correlation_id().expect("correlation");
+    let correlation_id = *correlation.transport();
+    let request = client.request_with_correlation(
+        correlation,
+        RuntimeOperation::run_contained_task(
+            "fixture01.instance",
+            client.ids.mint_holder_id().expect("holder"),
+            ContainedTaskRequest::new(
+                target_path.display().to_string(),
+                format!("{:x}", Sha256::digest(&target)),
+            )
+            .expect("target request"),
+        ),
+    );
+
+    let receipt = client.send(&request);
+    assert_eq!(receipt.state(), RuntimeReceiptState::Failed);
+    assert_eq!(state.input_count.load(Ordering::Acquire), 0);
+    let events = projected_events(
+        &mut client,
+        EventQuery {
+            correlation_id: Some(correlation_id),
+            ..EventQuery::default()
+        },
+    );
+    let facts = entry_preflight_facts(&events);
+    assert!(facts.iter().any(|fact| matches!(
+        fact,
+        TaskSemanticFact::EntryRecognition {
+            phase: TaskEntryRecognitionPhase::Initial,
+            matched: false,
+            ..
+        }
+    )));
+    assert!(facts.iter().any(|fact| matches!(
+        fact,
+        TaskSemanticFact::EntryTargetDisposition {
+            disposition: TaskEntryTargetDisposition::FailClosed,
+            failure_code: Some(code),
+        } if code == "contained_task_home_recovery_binding_missing"
+    )));
+    assert_eq!(
+        events
+            .iter()
+            .filter(|event| event.event_type == EventType::TaskRequested)
+            .count(),
+        0,
+        "the target package must not start before Home"
+    );
+    drop(client);
+    host.close().expect("close runtime host");
+}
+
+// Test class: specification criterion. Task Contract: https://github.com/HS7097/ActingCommand-Workflow/issues/241#issuecomment-5491623342
+#[test]
+fn explicit_home_entry_already_home_starts_target_once_without_recovery() {
+    let root = TempDir::new().expect("tempdir");
+    let target = explicit_home_contained_task_package("fixture01.target", [0, 0, 255], [255, 0, 0]);
+    let target_path = root.path().join("fixture01-target.zip");
+    fs::write(&target_path, &target).expect("write target package");
+    let state = Arc::new(FakeState::default());
+    state
+        .transition_capture_after_capture
+        .store(1, Ordering::Release);
+    let host = RuntimeHost::start(
+        config(&root),
+        Arc::new(FakeProvider::one(
+            "fixture01.instance",
+            instance_id(),
+            Arc::clone(&state),
+        )),
+    )
+    .expect("runtime host");
+    let mut client = TestClient::connect(&host);
+    let correlation = client.ids.mint_correlation_id().expect("correlation");
+    let correlation_id = *correlation.transport();
+    let request = client.request_with_correlation(
+        correlation,
+        RuntimeOperation::run_contained_task(
+            "fixture01.instance",
+            client.ids.mint_holder_id().expect("holder"),
+            ContainedTaskRequest::new(
+                target_path.display().to_string(),
+                format!("{:x}", Sha256::digest(&target)),
+            )
+            .expect("target request"),
+        ),
+    );
+
+    let receipt = client.send(&request);
+    assert_eq!(receipt.state(), RuntimeReceiptState::Completed);
+    assert_eq!(state.input_count.load(Ordering::Acquire), 0);
+    let events = projected_events(
+        &mut client,
+        EventQuery {
+            correlation_id: Some(correlation_id),
+            ..EventQuery::default()
+        },
+    );
+    let facts = entry_preflight_facts(&events);
+    assert!(facts.iter().any(|fact| matches!(
+        fact,
+        TaskSemanticFact::EntryRecoveryDecision { required: false }
+    )));
+    assert!(facts.iter().any(|fact| matches!(
+        fact,
+        TaskSemanticFact::EntryTargetDisposition {
+            disposition: TaskEntryTargetDisposition::Started,
+            failure_code: None,
+        }
+    )));
+    assert_eq!(
+        events
+            .iter()
+            .filter(|event| event.event_type == EventType::TaskRequested)
+            .count(),
+        1
+    );
+    assert!(
+        !facts
+            .iter()
+            .any(|fact| matches!(fact, TaskSemanticFact::EntryRecoveryPackageAdmitted { .. }))
+    );
+    drop(client);
+    host.close().expect("close runtime host");
+}
+
+// Test class: specification criterion. Task Contract: https://github.com/HS7097/ActingCommand-Workflow/issues/241#issuecomment-5491623342
+#[test]
+fn explicit_home_entry_runs_one_bound_recovery_then_starts_target() {
+    let root = TempDir::new().expect("tempdir");
+    let target = explicit_home_contained_task_package("fixture01.target", [0, 0, 255], [255, 0, 0]);
+    let recovery =
+        explicit_home_contained_task_package("fixture01.return-home", [0, 0, 255], [255, 0, 0]);
+    let target_path = root.path().join("fixture01-target.zip");
+    let recovery_path = root.path().join("return-home.zip");
+    fs::write(&target_path, &target).expect("write target package");
+    fs::write(&recovery_path, &recovery).expect("write recovery package");
+    let recovery_sha256 = format!("{:x}", Sha256::digest(&recovery));
+    let state = Arc::new(FakeState::default());
+    state
+        .transition_capture_after_input
+        .store(true, Ordering::Release);
+    let host = RuntimeHost::start(
+        config(&root),
+        Arc::new(FakeProvider::one(
+            "fixture01.instance",
+            instance_id(),
+            Arc::clone(&state),
+        )),
+    )
+    .expect("runtime host");
+    let mut client = TestClient::connect(&host);
+    let correlation = client.ids.mint_correlation_id().expect("correlation");
+    let correlation_id = *correlation.transport();
+    let task_request = ContainedTaskRequest::new(
+        target_path.display().to_string(),
+        format!("{:x}", Sha256::digest(&target)),
+    )
+    .and_then(|request| {
+        request.with_recovery(ContainedTaskRecoveryBinding::new(
+            recovery_path.display().to_string(),
+            recovery_sha256.clone(),
+        )?)
+    })
+    .expect("target request with recovery");
+    let request = client.request_with_correlation(
+        correlation,
+        RuntimeOperation::run_contained_task(
+            "fixture01.instance",
+            client.ids.mint_holder_id().expect("holder"),
+            task_request,
+        ),
+    );
+
+    let receipt = client.send(&request);
+    assert_eq!(receipt.state(), RuntimeReceiptState::Completed);
+    assert!(matches!(
+        receipt.result(),
+        Some(RuntimeResult::ContainedTaskCompleted {
+            outcome: TaskOutcome::Success,
+            executed_steps: 1,
+            ..
+        })
+    ));
+    assert_eq!(state.input_count.load(Ordering::Acquire), 1);
+    let events = projected_events(
+        &mut client,
+        EventQuery {
+            correlation_id: Some(correlation_id),
+            ..EventQuery::default()
+        },
+    );
+    let facts = entry_preflight_facts(&events);
+    assert!(facts.iter().any(|fact| matches!(
+        fact,
+        TaskSemanticFact::EntryRecoveryPackageAdmitted { package_sha256 }
+            if package_sha256 == &recovery_sha256
+    )));
+    assert!(facts.iter().any(|fact| matches!(
+        fact,
+        TaskSemanticFact::EntryRecoveryCompleted {
+            package_sha256,
+            final_page,
+            executed_steps: 1,
+        } if package_sha256 == &recovery_sha256 && final_page == "fixture01/home"
+    )));
+    assert!(facts.iter().any(|fact| matches!(
+        fact,
+        TaskSemanticFact::EntryRecognition {
+            phase: TaskEntryRecognitionPhase::PostRecovery,
+            matched: true,
+            ..
+        }
+    )));
+    assert_eq!(
+        events
+            .iter()
+            .filter(|event| event.event_type == EventType::TaskRequested)
+            .count(),
+        1,
+        "recovery must not create a parallel task owner"
+    );
+    drop(client);
+    host.close().expect("close runtime host");
+}
+
+// Test class: specification criterion. Task Contract: https://github.com/HS7097/ActingCommand-Workflow/issues/241#issuecomment-5491623342
+#[test]
+fn explicit_home_entry_recovery_failure_and_persistent_non_home_fail_closed() {
+    for (case, target_home, recovery_home, recovery_other, expected_code, expected_inputs) in [
+        (
+            "recovery-failure",
+            [0, 0, 255],
+            [255, 255, 0],
+            [0, 0, 255],
+            "contained_task_page_unknown",
+            0,
+        ),
+        (
+            "persistent-non-home",
+            [255, 255, 0],
+            [0, 0, 255],
+            [255, 0, 0],
+            "contained_task_home_recovery_persistently_non_home",
+            1,
+        ),
+    ] {
+        let root = TempDir::new().expect("tempdir");
+        let target =
+            explicit_home_contained_task_package("fixture01.target", target_home, [255, 0, 0]);
+        let recovery = explicit_home_contained_task_package(
+            "fixture01.return-home",
+            recovery_home,
+            recovery_other,
+        );
+        let target_path = root.path().join("fixture01-target.zip");
+        let recovery_path = root.path().join("return-home.zip");
+        fs::write(&target_path, &target).expect("write target package");
+        fs::write(&recovery_path, &recovery).expect("write recovery package");
+        let recovery_sha256 = format!("{:x}", Sha256::digest(&recovery));
+        let state = Arc::new(FakeState::default());
+        state
+            .transition_capture_after_input
+            .store(true, Ordering::Release);
+        let host = RuntimeHost::start(
+            config(&root),
+            Arc::new(FakeProvider::one(
+                "fixture01.instance",
+                instance_id(),
+                Arc::clone(&state),
+            )),
+        )
+        .expect("runtime host");
+        let mut client = TestClient::connect(&host);
+        let correlation = client.ids.mint_correlation_id().expect("correlation");
+        let correlation_id = *correlation.transport();
+        let task_request = ContainedTaskRequest::new(
+            target_path.display().to_string(),
+            format!("{:x}", Sha256::digest(&target)),
+        )
+        .and_then(|request| {
+            request.with_recovery(ContainedTaskRecoveryBinding::new(
+                recovery_path.display().to_string(),
+                recovery_sha256.clone(),
+            )?)
+        })
+        .expect("target request with recovery");
+        let request = client.request_with_correlation(
+            correlation,
+            RuntimeOperation::run_contained_task(
+                "fixture01.instance",
+                client.ids.mint_holder_id().expect("holder"),
+                task_request,
+            ),
+        );
+
+        let receipt = client.send(&request);
+        assert_eq!(receipt.state(), RuntimeReceiptState::Failed, "{case}");
+        assert_eq!(
+            state.input_count.load(Ordering::Acquire),
+            expected_inputs,
+            "{case}"
+        );
+        let events = projected_events(
+            &mut client,
+            EventQuery {
+                correlation_id: Some(correlation_id),
+                ..EventQuery::default()
+            },
+        );
+        let facts = entry_preflight_facts(&events);
+        assert!(
+            facts.iter().any(|fact| matches!(
+                fact,
+                TaskSemanticFact::EntryTargetDisposition {
+                    disposition: TaskEntryTargetDisposition::FailClosed,
+                    failure_code: Some(code),
+                } if code == expected_code
+            )),
+            "{case}"
+        );
+        if case == "recovery-failure" {
+            assert!(facts.iter().any(|fact| matches!(
+                fact,
+                TaskSemanticFact::EntryRecoveryFailed {
+                    package_sha256,
+                    failure_code,
+                } if package_sha256 == &recovery_sha256 && failure_code == expected_code
+            )));
+        } else {
+            assert!(facts.iter().any(|fact| matches!(
+                fact,
+                TaskSemanticFact::EntryRecoveryCompleted {
+                    executed_steps: 1,
+                    ..
+                }
+            )));
+            assert!(facts.iter().any(|fact| matches!(
+                fact,
+                TaskSemanticFact::EntryRecognition {
+                    phase: TaskEntryRecognitionPhase::PostRecovery,
+                    matched: false,
+                    ..
+                }
+            )));
+            let terminal = events
+                .iter()
+                .filter_map(projected_task_semantic_fact)
+                .find(|fact| matches!(fact, TaskSemanticFact::TerminalCommitted { .. }))
+                .expect("persistent non-Home terminal");
+            assert!(matches!(
+                terminal,
+                TaskSemanticFact::TerminalCommitted {
+                    outcome: TaskOutcome::Failure,
+                    executed_steps: 1,
+                    ..
+                }
+            ));
+        }
+        assert_eq!(
+            events
+                .iter()
+                .filter(|event| event.event_type == EventType::TaskRequested)
+                .count(),
+            0,
+            "{case}: target package must not start"
+        );
+        drop(client);
+        host.close().expect("close runtime host");
+    }
+}
+
+// Test class: specification criterion. Task Contract: https://github.com/HS7097/ActingCommand-Workflow/issues/241#issuecomment-5491623342
+#[test]
+fn non_home_start_task_preserves_behavior_and_ignores_recovery_binding() {
+    let root = TempDir::new().expect("tempdir");
+    let target = neutral_non_home_start_contained_task_package();
+    let target_path = root.path().join("neutral-target.zip");
+    fs::write(&target_path, &target).expect("write neutral package");
+    let state = Arc::new(FakeState::default());
+    state
+        .transition_capture_after_input
+        .store(true, Ordering::Release);
+    let host = RuntimeHost::start(
+        config(&root),
+        Arc::new(FakeProvider::one(
+            "neutral.instance",
+            instance_id(),
+            Arc::clone(&state),
+        )),
+    )
+    .expect("runtime host");
+    let mut client = TestClient::connect(&host);
+    let correlation = client.ids.mint_correlation_id().expect("correlation");
+    let correlation_id = *correlation.transport();
+    let task_request = ContainedTaskRequest::new(
+        target_path.display().to_string(),
+        format!("{:x}", Sha256::digest(&target)),
+    )
+    .and_then(|request| {
+        request.with_recovery(ContainedTaskRecoveryBinding::new(
+            root.path().join("unused.zip").display().to_string(),
+            "9".repeat(64),
+        )?)
+    })
+    .expect("neutral request with unused recovery binding");
+    let request = client.request_with_correlation(
+        correlation,
+        RuntimeOperation::run_contained_task(
+            "neutral.instance",
+            client.ids.mint_holder_id().expect("holder"),
+            task_request,
+        ),
+    );
+
+    let receipt = client.send(&request);
+    assert_eq!(receipt.state(), RuntimeReceiptState::Completed);
+    assert_eq!(state.input_count.load(Ordering::Acquire), 1);
+    let events = projected_events(
+        &mut client,
+        EventQuery {
+            correlation_id: Some(correlation_id),
+            ..EventQuery::default()
+        },
+    );
+    assert!(entry_preflight_facts(&events).is_empty());
     drop(client);
     host.close().expect("close runtime host");
 }

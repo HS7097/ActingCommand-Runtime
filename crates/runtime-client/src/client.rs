@@ -65,7 +65,7 @@ const MAX_OFFICIAL_OCR_PROJECTION_DURATION: Duration = Duration::from_secs(60);
 const MAX_OFFICIAL_OCR_FRAMES: u32 = 256;
 const MAX_OFFICIAL_OCR_ITEMS: usize = 4_096;
 const MAX_OFFICIAL_OCR_MAPPING_FACTS: usize = 16_384;
-const OFFICIAL_OCR_PROJECTION_SCHEMA: &str = "actingcommand.runtime.official-ocr-projection.v1";
+const OFFICIAL_OCR_PROJECTION_SCHEMA: &str = "actingcommand.runtime.official-ocr-projection.v2";
 pub(crate) const OCR_OBSERVATION_SCHEMA: &str =
     "actingcommand.runtime.post-admission-ocr-observation.v1";
 pub(crate) const OCR_COMPARISON_ENVELOPE_SCHEMA: &str =
@@ -209,6 +209,10 @@ pub struct RuntimeOfficialOcrProjection {
     run_id: RunId,
     task_id: TaskId,
     comparison_artifact: ProjectedArtifactReference,
+    comparison_artifact_created_event_id: EventId,
+    comparison_artifact_created_sequence: u64,
+    comparison_artifact_verified_event_id: EventId,
+    comparison_artifact_verified_sequence: u64,
     observations: Vec<RuntimeOfficialOcrObservation>,
     summary: RuntimeOfficialOcrSummary,
     provider_execution: RuntimeOfficialOcrProviderExecution,
@@ -222,6 +226,10 @@ pub struct RuntimeOfficialOcrObservation {
     frame_id: FrameId,
     frame_index: u32,
     artifact: ProjectedArtifactReference,
+    artifact_created_event_id: EventId,
+    artifact_created_sequence: u64,
+    artifact_verified_event_id: EventId,
+    artifact_verified_sequence: u64,
     target_ids: Vec<String>,
 }
 
@@ -518,6 +526,22 @@ impl RuntimeOfficialOcrProjection {
         &self.comparison_artifact
     }
 
+    pub const fn comparison_artifact_created_sequence(&self) -> u64 {
+        self.comparison_artifact_created_sequence
+    }
+
+    pub const fn comparison_artifact_created_event_id(&self) -> EventId {
+        self.comparison_artifact_created_event_id
+    }
+
+    pub const fn comparison_artifact_verified_sequence(&self) -> u64 {
+        self.comparison_artifact_verified_sequence
+    }
+
+    pub const fn comparison_artifact_verified_event_id(&self) -> EventId {
+        self.comparison_artifact_verified_event_id
+    }
+
     pub fn observations(&self) -> &[RuntimeOfficialOcrObservation] {
         &self.observations
     }
@@ -546,6 +570,22 @@ impl RuntimeOfficialOcrObservation {
 
     pub const fn artifact(&self) -> &ProjectedArtifactReference {
         &self.artifact
+    }
+
+    pub const fn artifact_created_sequence(&self) -> u64 {
+        self.artifact_created_sequence
+    }
+
+    pub const fn artifact_created_event_id(&self) -> EventId {
+        self.artifact_created_event_id
+    }
+
+    pub const fn artifact_verified_sequence(&self) -> u64 {
+        self.artifact_verified_sequence
+    }
+
+    pub const fn artifact_verified_event_id(&self) -> EventId {
+        self.artifact_verified_event_id
     }
 
     pub fn target_ids(&self) -> &[String] {
@@ -2135,6 +2175,12 @@ pub(crate) fn resolve_official_ocr_projection(
     let marker_expected = official_ocr_marker_expected(events, run_id, task_id)?;
     let candidates = events
         .iter()
+        .filter(|event| {
+            matches!(
+                event.event_type,
+                EventType::ArtifactCreated | EventType::ArtifactVerified
+            )
+        })
         .flat_map(|event| {
             event
                 .artifacts
@@ -2162,7 +2208,7 @@ pub(crate) fn resolve_official_ocr_projection(
         .map_err(|_| official_ocr_error("runtime_official_ocr_state_root_unavailable"))?;
     let mut total_bytes = 0_u64;
     let mut recognized_artifacts = 0_usize;
-    let mut object_keys = BTreeSet::new();
+    let mut lifecycle = BTreeMap::new();
     let mut observations = Vec::new();
     let mut provider_evidence = Vec::new();
     let mut comparison = None;
@@ -2175,6 +2221,7 @@ pub(crate) fn resolve_official_ocr_projection(
         if event.links.task_id() != Some(task_id)
             || event.links.run_id() != Some(run_id)
             || event.links.correlation_id() != Some(&correlation_id)
+            || event.links.frame_id() != reference.frame_id()
             || reference.run_id.as_ref() != Some(run_id)
             || reference.correlation_id.as_ref() != Some(&correlation_id)
             || reference.retention_class != RetentionClass::DebugFull
@@ -2184,14 +2231,56 @@ pub(crate) fn resolve_official_ocr_projection(
                 "runtime_official_ocr_artifact_identity_mismatch",
             ));
         }
-        let object_key = reference
-            .object_key()
-            .ok_or_else(|| official_ocr_error("runtime_official_ocr_artifact_path_missing"))?;
-        if !object_keys.insert(object_key.to_owned()) {
+        let entry = lifecycle
+            .entry(reference.artifact_id)
+            .or_insert((reference, None, None));
+        if entry.0 != reference {
+            return Err(official_ocr_error(
+                "runtime_official_ocr_artifact_identity_conflict",
+            ));
+        }
+        let sequence = match event.event_type {
+            EventType::ArtifactCreated => &mut entry.1,
+            EventType::ArtifactVerified => &mut entry.2,
+            _ => unreachable!("candidate event type is filtered above"),
+        };
+        if sequence.replace((event.sequence, event.event_id)).is_some() {
             return Err(official_ocr_error(
                 "runtime_official_ocr_artifact_duplicate",
             ));
         }
+    }
+
+    let logical_artifacts = lifecycle
+        .into_values()
+        .map(|(reference, created, verified)| {
+            let (created_sequence, created_event_id) = created.ok_or_else(|| {
+                official_ocr_error("runtime_official_ocr_artifact_lifecycle_incomplete")
+            })?;
+            let (verified_sequence, verified_event_id) = verified.ok_or_else(|| {
+                official_ocr_error("runtime_official_ocr_artifact_lifecycle_incomplete")
+            })?;
+            if created_sequence >= verified_sequence {
+                return Err(official_ocr_error(
+                    "runtime_official_ocr_artifact_lifecycle_invalid",
+                ));
+            }
+            Ok((
+                reference,
+                created_sequence,
+                created_event_id,
+                verified_sequence,
+                verified_event_id,
+            ))
+        })
+        .collect::<RuntimeClientResult<Vec<_>>>()?;
+    for (reference, created_sequence, created_event_id, verified_sequence, verified_event_id) in
+        logical_artifacts
+    {
+        check_official_ocr_duration(started)?;
+        let object_key = reference
+            .object_key()
+            .ok_or_else(|| official_ocr_error("runtime_official_ocr_artifact_path_missing"))?;
         if reference.byte_count() > MAX_OFFICIAL_OCR_ARTIFACT_BYTES {
             return Err(official_ocr_limit_error());
         }
@@ -2236,7 +2325,6 @@ pub(crate) fn resolve_official_ocr_projection(
                     || envelope.task_id != *task_id
                     || envelope.run_id != *run_id
                     || reference.frame_id() != Some(&envelope.frame_id)
-                    || event.links.frame_id() != Some(&envelope.frame_id)
                 {
                     return Err(official_ocr_error(
                         "runtime_official_ocr_payload_identity_mismatch",
@@ -2254,6 +2342,10 @@ pub(crate) fn resolve_official_ocr_projection(
                     frame_id: envelope.frame_id,
                     frame_index: envelope.frame_index,
                     artifact: reference.clone(),
+                    artifact_created_event_id: created_event_id,
+                    artifact_created_sequence: created_sequence,
+                    artifact_verified_event_id: verified_event_id,
+                    artifact_verified_sequence: verified_sequence,
                     target_ids,
                 });
             }
@@ -2267,14 +2359,20 @@ pub(crate) fn resolve_official_ocr_projection(
                     || envelope.task_id != *task_id
                     || envelope.run_id != *run_id
                     || reference.frame_id() != Some(&envelope.final_frame_id)
-                    || event.links.frame_id() != Some(&envelope.final_frame_id)
                 {
                     return Err(official_ocr_error(
                         "runtime_official_ocr_payload_identity_mismatch",
                     ));
                 }
                 if comparison
-                    .replace((reference.clone(), envelope.report))
+                    .replace((
+                        reference.clone(),
+                        created_sequence,
+                        created_event_id,
+                        verified_sequence,
+                        verified_event_id,
+                        envelope.report,
+                    ))
                     .is_some()
                 {
                     return Err(official_ocr_error(
@@ -2296,8 +2394,14 @@ pub(crate) fn resolve_official_ocr_projection(
     if recognized_artifacts > MAX_OFFICIAL_OCR_ARTIFACTS {
         return Err(official_ocr_limit_error());
     }
-    let (comparison_artifact, comparison_value) =
-        comparison.ok_or_else(|| official_ocr_error("runtime_official_ocr_comparison_missing"))?;
+    let (
+        comparison_artifact,
+        comparison_artifact_created_sequence,
+        comparison_artifact_created_event_id,
+        comparison_artifact_verified_sequence,
+        comparison_artifact_verified_event_id,
+        comparison_value,
+    ) = comparison.ok_or_else(|| official_ocr_error("runtime_official_ocr_comparison_missing"))?;
     if observations.is_empty() {
         return Err(official_ocr_error(
             "runtime_official_ocr_observation_missing",
@@ -2320,6 +2424,10 @@ pub(crate) fn resolve_official_ocr_projection(
         run_id: *run_id,
         task_id: *task_id,
         comparison_artifact,
+        comparison_artifact_created_event_id,
+        comparison_artifact_created_sequence,
+        comparison_artifact_verified_event_id,
+        comparison_artifact_verified_sequence,
         observations,
         summary,
         provider_execution,
