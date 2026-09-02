@@ -8,14 +8,24 @@ license.workspace = true
 repository.workspace = true
 publish = false
 
+[features]
+default = ["capture"]
+capture = [
+    "dep:actingcommand-device",
+    "dep:serde",
+    "dep:serde_json",
+    "dep:time",
+    "dep:zip",
+]
+
 [dependencies]
 actingcommand-contract = { workspace = true }
-actingcommand-device = { workspace = true }
-serde = { workspace = true }
-serde_json = { workspace = true }
+actingcommand-device = { workspace = true, optional = true }
+serde = { workspace = true, optional = true }
+serde_json = { workspace = true, optional = true }
 sha2 = { workspace = true }
-time = { workspace = true }
-zip = { workspace = true }
+time = { workspace = true, optional = true }
+zip = { workspace = true, optional = true }
 
 [dev-dependencies]
 actingcommand-ledger = { workspace = true }

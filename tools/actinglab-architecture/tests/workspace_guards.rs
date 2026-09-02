@@ -29,6 +29,7 @@ fn semantic_caller_row(path: &str, line: &str) -> String {
 const GENERIC_RUNTIME_OWNED_ROOTS: &[&str] = &[
     "apps/actingctl",
     "apps/actingd",
+    "apps/ledger-forensics",
     "benchmarks/workloads",
     "contracts",
     "crates/actingcommand-contract",
@@ -37,6 +38,7 @@ const GENERIC_RUNTIME_OWNED_ROOTS: &[&str] = &[
     "crates/execution-kernel",
     "crates/host-metrics",
     "crates/ledger",
+    "crates/ledger-forensics",
     "crates/onnx-provider-support",
     "crates/pack-containment",
     "crates/page-detector",
@@ -1054,6 +1056,138 @@ fn c2_artifact_store_authority_and_dependency_boundary_are_narrow() {
         .expect("read artifact store");
     assert!(host.contains("GlobalLedger::open_with_artifact_verifier"));
     assert!(store.contains("pub fn verify_recovery_reference"));
+}
+
+#[test]
+fn forensic_leaf_dependency_boundary_is_narrow_and_production_free() {
+    let root = workspace_root();
+    let leaf_manifest = root.join("crates/ledger-forensics/Cargo.toml");
+    let app_manifest = root.join("apps/ledger-forensics/Cargo.toml");
+    assert!(
+        leaf_manifest.is_file(),
+        "forensic leaf manifest is absent from the workspace"
+    );
+    assert!(
+        app_manifest.is_file(),
+        "actingledger application manifest is absent from the workspace"
+    );
+
+    let metadata: serde_json::Value =
+        serde_json::from_str(&workspace_metadata()).expect("parse cargo metadata");
+    let packages = metadata["packages"].as_array().expect("metadata packages");
+    let leaf = packages
+        .iter()
+        .find(|package| package["name"] == "actingcommand-ledger-forensics")
+        .expect("forensic leaf package");
+    let app = packages
+        .iter()
+        .find(|package| package["name"] == "actingledger")
+        .expect("actingledger package");
+
+    let internal_dependencies = |package: &serde_json::Value| {
+        let mut names = package["dependencies"]
+            .as_array()
+            .expect("package dependencies")
+            .iter()
+            .filter(|dependency| dependency["kind"].is_null())
+            .filter_map(|dependency| dependency["name"].as_str())
+            .filter(|name| name.starts_with("actingcommand-") || *name == "actingledger")
+            .map(str::to_owned)
+            .collect::<Vec<_>>();
+        names.sort_unstable();
+        names
+    };
+    assert_eq!(
+        internal_dependencies(leaf),
+        vec![
+            "actingcommand-artifact-store".to_owned(),
+            "actingcommand-ledger".to_owned()
+        ],
+        "forensic leaf internal dependency boundary changed"
+    );
+    assert_eq!(
+        internal_dependencies(app),
+        vec!["actingcommand-ledger-forensics".to_owned()],
+        "actingledger must depend on only the forensic leaf among internal packages"
+    );
+
+    let artifact_dependency = leaf["dependencies"]
+        .as_array()
+        .expect("leaf dependencies")
+        .iter()
+        .find(|dependency| {
+            dependency["kind"].is_null() && dependency["name"] == "actingcommand-artifact-store"
+        })
+        .expect("forensic leaf artifact-store dependency");
+    assert_eq!(
+        artifact_dependency["uses_default_features"],
+        serde_json::Value::Bool(false),
+        "forensic leaf must disable artifact-store default capture features"
+    );
+
+    let cargo = std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
+    let output = Command::new(cargo)
+        .args([
+            "tree",
+            "-p",
+            "actingcommand-ledger-forensics",
+            "--edges",
+            "normal",
+            "--prefix",
+            "none",
+        ])
+        .current_dir(&root)
+        .output()
+        .expect("run cargo tree for forensic leaf");
+    assert!(
+        output.status.success(),
+        "cargo tree for forensic leaf failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let dependency_tree = String::from_utf8(output.stdout).expect("cargo tree must emit UTF-8");
+    for forbidden in [
+        "actingcommand-runtime-host",
+        "actingcommand-runtime-client",
+        "actingcommand-device",
+        "actingcommand-scheduler",
+    ] {
+        assert!(
+            !dependency_tree
+                .lines()
+                .any(|line| line.starts_with(forbidden)),
+            "forensic leaf normal dependency closure reaches {forbidden}"
+        );
+    }
+
+    let production_dependants = packages
+        .iter()
+        .filter(|package| package["name"] != "actingledger")
+        .filter(|package| {
+            package["dependencies"]
+                .as_array()
+                .expect("package dependencies")
+                .iter()
+                .any(|dependency| {
+                    dependency["kind"].is_null()
+                        && dependency["name"] == "actingcommand-ledger-forensics"
+                })
+        })
+        .filter_map(|package| package["name"].as_str())
+        .collect::<Vec<_>>();
+    assert!(
+        production_dependants.is_empty(),
+        "production packages depend on forensic leaf: {}",
+        production_dependants.join(", ")
+    );
+
+    let source = fs::read_to_string(root.join("apps/ledger-forensics/src/main.rs"))
+        .expect("read apps/ledger-forensics/src/main.rs");
+    let baseline = fs::read_to_string(root.join("ratchet/ledger_forensics_main_rs_lines.txt"))
+        .expect("read ratchet/ledger_forensics_main_rs_lines.txt")
+        .trim()
+        .parse::<usize>()
+        .expect("ledger_forensics_main_rs_lines.txt must contain one integer");
+    validate_line_ratchet(baseline, source.lines().count()).unwrap();
 }
 
 #[test]

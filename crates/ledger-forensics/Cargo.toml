@@ -1,0 +1,19 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+
+[package]
+name = "actingcommand-ledger-forensics"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+actingcommand-artifact-store = { path = "../artifact-store", default-features = false }
+actingcommand-ledger = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+[dev-dependencies]
+actingcommand-contract = { workspace = true }
+tempfile = "3"

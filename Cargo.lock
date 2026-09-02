@@ -188,6 +188,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "actingcommand-ledger-forensics"
+version = "0.1.0"
+dependencies = [
+ "actingcommand-artifact-store",
+ "actingcommand-contract",
+ "actingcommand-ledger",
+ "serde",
+ "serde_json",
+ "tempfile",
+]
+
+[[package]]
 name = "actingcommand-onnx-provider-support"
 version = "0.1.0"
 dependencies = [
@@ -365,6 +377,17 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
+]
+
+[[package]]
+name = "actingledger"
+version = "0.1.0"
+dependencies = [
+ "actingcommand-contract",
+ "actingcommand-ledger",
+ "actingcommand-ledger-forensics",
+ "serde_json",
+ "tempfile",
 ]
 
 [[package]]
