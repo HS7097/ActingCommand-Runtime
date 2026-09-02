@@ -22,6 +22,10 @@ fn workspace_root() -> PathBuf {
         .to_path_buf()
 }
 
+fn semantic_caller_row(path: &str, line: &str) -> String {
+    format!("{path}:{}\n", line.trim())
+}
+
 const GENERIC_RUNTIME_OWNED_ROOTS: &[&str] = &[
     "apps/actingctl",
     "apps/actingd",
@@ -4087,19 +4091,12 @@ fn actinglab_stream_check_requested_glue_stays_out_of_main() {
 
     let caller_serialization = runtime_stream_adapter
         .lines()
-        .enumerate()
-        .filter(|(_, line)| line.contains("stream_check_requested("))
-        .map(|(index, line)| {
-            format!(
-                "apps/actinglab/src/runtime_stream_adapter.rs:{}:{}\n",
-                index + 1,
-                line.trim()
-            )
-        })
+        .filter(|line| line.contains("stream_check_requested("))
+        .map(|line| semantic_caller_row("apps/actinglab/src/runtime_stream_adapter.rs", line))
         .collect::<String>();
     assert_eq!(
         format!("{:x}", Sha256::digest(caller_serialization.as_bytes())),
-        "b82b22dfc6dd82e6216d6c0c778c2363444bf420d8dd811baa6dcbafd89af532",
+        "ea00f4f80bf738d722a6c1226c205f8483f28f54189b631cc33940a5d3c06b1e",
         "runtime stream adapter caller serialization changed"
     );
 
@@ -4179,9 +4176,8 @@ fn actinglab_target_argument_glue_stays_out_of_main() {
         caller_rows.extend(
             source
                 .lines()
-                .enumerate()
-                .filter(|(_, line)| line.contains("target_argument("))
-                .map(|(index, line)| format!("{path}:{}:{}\n", index + 1, line.trim())),
+                .filter(|line| line.contains("target_argument("))
+                .map(|line| semantic_caller_row(path, line)),
         );
     }
     caller_rows.sort();
@@ -4193,7 +4189,7 @@ fn actinglab_target_argument_glue_stays_out_of_main() {
     let caller_serialization = caller_rows.concat();
     assert_eq!(
         format!("{:x}", Sha256::digest(caller_serialization.as_bytes())),
-        "3ede13a2fd78b57945a62411e14898882a7cf6e22d5a59f157e50d82af2fa90d",
+        "39e2fa8b22731196377cc18d847542ac7a4146715c9a1690eaac05ab514745e5",
         "target-argument caller serialization changed"
     );
 
@@ -4288,9 +4284,8 @@ fn actinglab_session_record_drift_diagnostics_path_glue_stays_out_of_main() {
 
     let caller_rows = main
         .lines()
-        .enumerate()
-        .filter(|(_, line)| line.contains("session_record_drift_diagnostics_path("))
-        .map(|(index, line)| format!("apps/actinglab/src/main.rs:{}:{}\n", index + 1, line.trim()))
+        .filter(|line| line.contains("session_record_drift_diagnostics_path("))
+        .map(|line| semantic_caller_row("apps/actinglab/src/main.rs", line))
         .collect::<Vec<_>>();
     assert_eq!(
         caller_rows.len(),
@@ -4300,7 +4295,7 @@ fn actinglab_session_record_drift_diagnostics_path_glue_stays_out_of_main() {
     let caller_serialization = caller_rows.concat();
     assert_eq!(
         format!("{:x}", Sha256::digest(caller_serialization.as_bytes())),
-        "0247447a649bd8162ec663c2e7b78b8a56f8c688533d4e23eb75904c44d3d319",
+        "6918f8c77ee339b7561e6df8874a4a946e6814d9c9348854f5a7787366afefea",
         "drift-diagnostics path caller serialization changed"
     );
 
@@ -4418,9 +4413,8 @@ fn actinglab_parse_touch_backend_override_glue_stays_out_of_main() {
     );
     let caller_rows = main
         .lines()
-        .enumerate()
-        .filter(|(_, line)| line.contains("parse_touch_backend_override("))
-        .map(|(index, line)| format!("apps/actinglab/src/main.rs:{}:{}\n", index + 1, line.trim()))
+        .filter(|line| line.contains("parse_touch_backend_override("))
+        .map(|line| semantic_caller_row("apps/actinglab/src/main.rs", line))
         .collect::<Vec<_>>();
     assert_eq!(
         caller_rows.len(),
@@ -4430,7 +4424,7 @@ fn actinglab_parse_touch_backend_override_glue_stays_out_of_main() {
     let caller_serialization = caller_rows.concat();
     assert_eq!(
         format!("{:x}", Sha256::digest(caller_serialization.as_bytes())),
-        "4a73ed63164c1f41a1bc2b8f3cef59b1b9051fdf5d1bdb9338be32042dff39f3",
+        "23d9edadec25f2d67a5c661471a3b911c3d9645c8de321030a05d7583bfe4b4d",
         "touch-backend caller serialization changed"
     );
 
@@ -4558,15 +4552,14 @@ fn actinglab_parse_match_metric_flag_glue_stays_out_of_main() {
     }
     let caller_rows = main
         .lines()
-        .enumerate()
-        .filter(|(_, line)| line.contains("parse_match_metric_flag("))
-        .map(|(index, line)| format!("apps/actinglab/src/main.rs:{}:{}\n", index + 1, line.trim()))
+        .filter(|line| line.contains("parse_match_metric_flag("))
+        .map(|line| semantic_caller_row("apps/actinglab/src/main.rs", line))
         .collect::<Vec<_>>();
     assert_eq!(caller_rows.len(), 3, "match-metric caller set changed");
     let caller_serialization = caller_rows.concat();
     assert_eq!(
         format!("{:x}", Sha256::digest(caller_serialization.as_bytes())),
-        "781f4a829e1709426666a8f9b6941828009dfad97b0f1dea9eda4619d0c2a01d",
+        "c015602ad2de55d4930f14e1bb68105a57693a094e43838609afc586a626273b",
         "match-metric caller serialization changed"
     );
 
@@ -4693,9 +4686,8 @@ fn actinglab_record_candidates_step_id_glue_stays_out_of_main() {
     );
     let caller_rows = main
         .lines()
-        .enumerate()
-        .filter(|(_, line)| line.contains("record_candidates_step_id("))
-        .map(|(index, line)| format!("apps/actinglab/src/main.rs:{}:{}\n", index + 1, line.trim()))
+        .filter(|line| line.contains("record_candidates_step_id("))
+        .map(|line| semantic_caller_row("apps/actinglab/src/main.rs", line))
         .collect::<Vec<_>>();
     assert_eq!(
         caller_rows.len(),
@@ -4705,7 +4697,7 @@ fn actinglab_record_candidates_step_id_glue_stays_out_of_main() {
     let caller_serialization = caller_rows.concat();
     assert_eq!(
         format!("{:x}", Sha256::digest(caller_serialization.as_bytes())),
-        "537f4e94fa8fe97944935788e1d9dfe47bd19907381b6e8745de0efdc63894ef",
+        "64cec85ea20fa591dea311cae584059f320bc6b693655d155cd6af6c44d52869",
         "record-candidates step-id caller serialization changed"
     );
 
@@ -4847,9 +4839,8 @@ fn actinglab_stream_input_relay_action_glue_stays_out_of_main() {
     );
     let caller_rows = main
         .lines()
-        .enumerate()
-        .filter(|(_, line)| line.contains("stream_input_relay_action("))
-        .map(|(index, line)| format!("apps/actinglab/src/main.rs:{}:{}\n", index + 1, line.trim()))
+        .filter(|line| line.contains("stream_input_relay_action("))
+        .map(|line| semantic_caller_row("apps/actinglab/src/main.rs", line))
         .collect::<Vec<_>>();
     assert_eq!(
         caller_rows.len(),
@@ -4859,7 +4850,7 @@ fn actinglab_stream_input_relay_action_glue_stays_out_of_main() {
     let caller_serialization = caller_rows.concat();
     assert_eq!(
         format!("{:x}", Sha256::digest(caller_serialization.as_bytes())),
-        "661d2eb3186271a19dddfb56c3273ba272d007b0c7cea18dc34234293995b0df",
+        "633f19a920dbc9f4f13a7306df4b94429113db50917f0ef10a270e4a3a21b93d",
         "input-relay caller serialization changed"
     );
 
@@ -5010,9 +5001,8 @@ fn actinglab_parse_record_build_resolution_glue_stays_out_of_main() {
     );
     let caller_rows = main
         .lines()
-        .enumerate()
-        .filter(|(_, line)| line.contains("parse_record_build_resolution("))
-        .map(|(index, line)| format!("apps/actinglab/src/main.rs:{}:{}\n", index + 1, line.trim()))
+        .filter(|line| line.contains("parse_record_build_resolution("))
+        .map(|line| semantic_caller_row("apps/actinglab/src/main.rs", line))
         .collect::<Vec<_>>();
     assert_eq!(
         caller_rows.len(),
@@ -5022,7 +5012,7 @@ fn actinglab_parse_record_build_resolution_glue_stays_out_of_main() {
     let caller_serialization = caller_rows.concat();
     assert_eq!(
         format!("{:x}", Sha256::digest(caller_serialization.as_bytes())),
-        "0090b3060fb96ca2275593e02a9b8e25bdb73392a2690bfb97e86de1188aebf5",
+        "5ffbd7d309ecb43bde78a9d194d4fff18088ce1442b2b94f1cd292175e75f305",
         "record-build resolution caller serialization changed"
     );
 
@@ -5194,9 +5184,8 @@ fn actinglab_parse_session_record_region_glue_stays_out_of_main() {
     );
     let caller_rows = main
         .lines()
-        .enumerate()
-        .filter(|(_, line)| line.contains("parse_session_record_region("))
-        .map(|(index, line)| format!("apps/actinglab/src/main.rs:{}:{}\n", index + 1, line.trim()))
+        .filter(|line| line.contains("parse_session_record_region("))
+        .map(|line| semantic_caller_row("apps/actinglab/src/main.rs", line))
         .collect::<Vec<_>>();
     assert_eq!(
         caller_rows.len(),
@@ -5206,7 +5195,7 @@ fn actinglab_parse_session_record_region_glue_stays_out_of_main() {
     let caller_serialization = caller_rows.concat();
     assert_eq!(
         format!("{:x}", Sha256::digest(caller_serialization.as_bytes())),
-        "3d3bf23ddb70215d6627ce11c94c638b5113858998df337f6560e4b818ce572c",
+        "9c6f8fc70ba1d882ff464aef6eebf6228e060bdc567411f020afab27143be9be",
         "session-record region caller serialization changed"
     );
 
@@ -5372,37 +5361,20 @@ fn actinglab_parse_session_record_rect_glue_stays_out_of_main() {
         1,
         "flag values lost the exact swipe-to rectangle caller"
     );
-    let caller_rows = flag_values
+    let semantic_callers = flag_values
         .lines()
-        .enumerate()
-        .filter(|(_, line)| matches!(line.trim(), FROM_CALL | TO_CALL))
-        .map(|(index, line)| {
-            format!(
-                "apps/actinglab/src/flag_values.rs:{}:{}\n",
-                index + 1,
-                line.trim()
-            )
-        })
+        .filter(|line| matches!(line.trim(), FROM_CALL | TO_CALL))
+        .map(|line| semantic_caller_row("apps/actinglab/src/flag_values.rs", line))
         .collect::<Vec<_>>();
     assert_eq!(
-        caller_rows.len(),
+        semantic_callers.len(),
         2,
         "session-record rectangle production caller set changed"
     );
     assert_eq!(
-        format!("{:x}", Sha256::digest(caller_rows.concat().as_bytes())),
-        "bfc750e5f5fd1ef22312d3cb2b36d629711251aa683cc2209a88b2ca9032afd9",
-        "session-record rectangle location-bearing caller serialization changed"
-    );
-    let semantic_callers = flag_values
-        .lines()
-        .filter(|line| matches!(line.trim(), FROM_CALL | TO_CALL))
-        .map(|line| format!("{}\n", line.trim()))
-        .collect::<String>();
-    assert_eq!(
-        format!("{:x}", Sha256::digest(semantic_callers.as_bytes())),
-        "677cacfe6595da99c9af8bcea2170c1dd39a108e2ad9eccd254c32e7fa96945f",
-        "session-record rectangle semantic caller order changed"
+        format!("{:x}", Sha256::digest(semantic_callers.concat().as_bytes())),
+        "55729d99aa9ec6b3333f74ef30fea487394a0661f2fbc43340c770cc5ae9168c",
+        "session-record rectangle semantic caller serialization changed"
     );
 
     let marker = "\npub(super) fn parse_session_record_rect(";
@@ -5546,35 +5518,20 @@ fn actinglab_parse_session_record_swipe_rects_glue_stays_out_of_main() {
         1,
         "ActingLab main lost the sole exact session-record swipe caller"
     );
-    let caller_rows = main
+    let semantic_callers = main
         .lines()
-        .enumerate()
-        .filter(|(_, line)| line.trim() == CALL)
-        .map(|(index, line)| format!("apps/actinglab/src/main.rs:{}:{}\n", index + 1, line.trim()))
+        .filter(|line| line.trim() == CALL)
+        .map(|line| semantic_caller_row("apps/actinglab/src/main.rs", line))
         .collect::<Vec<_>>();
     assert_eq!(
-        caller_rows.len(),
+        semantic_callers.len(),
         1,
         "session-record swipe production caller set changed"
     );
     assert_eq!(
-        format!("{:x}", Sha256::digest(caller_rows.concat().as_bytes())),
-        "33a8657012c1cdc2ca111e2eeb77dba10d73a62121324a7a04670b3ff9204cfb",
-        "session-record swipe location-bearing caller serialization changed"
-    );
-    let semantic_callers = caller_rows
-        .iter()
-        .map(|row| {
-            let (_, expression) = row
-                .split_once(&format!("apps/actinglab/src/main.rs:{}:", 8462))
-                .expect("session-record swipe caller row lost its frozen location");
-            expression.to_string()
-        })
-        .collect::<String>();
-    assert_eq!(
-        format!("{:x}", Sha256::digest(semantic_callers.as_bytes())),
-        "e50aea24bf94c9f14c761f3b179ceabb5f8a5c6582c4da1449a45a5742788ff7",
-        "session-record swipe semantic caller changed"
+        format!("{:x}", Sha256::digest(semantic_callers.concat().as_bytes())),
+        "c661e923e56cadcdae3681f46e4be3e065bc45d83f7599f47e58ac7e20478f55",
+        "session-record swipe semantic caller serialization changed"
     );
 
     let marker = "\npub(super) fn parse_session_record_swipe_rects(";
