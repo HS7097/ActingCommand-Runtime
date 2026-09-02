@@ -441,6 +441,29 @@ pub fn read_projected_verified(
     Ok(bytes)
 }
 
+pub fn verify_projected_read_only(
+    root: impl AsRef<Path>,
+    reference: &ProjectedArtifactReference,
+) -> ArtifactStoreResult<VerifiedArtifactReference> {
+    let bytes = read_projected_verified(root, reference)?;
+    ArtifactStoreIssuer::new()
+        .map_err(|error| {
+            ArtifactStoreError::fatal(
+                "artifact_issuer_failed",
+                "verify_projected_read_only",
+                error.to_string(),
+            )
+        })?
+        .verify_existing(reference.clone(), &bytes)
+        .map_err(|error| {
+            ArtifactStoreError::fatal(
+                "artifact_verify_failed",
+                "verify_projected_read_only",
+                error.to_string(),
+            )
+        })
+}
+
 fn safe_object_path(root: &Path, object_key: &str) -> ArtifactStoreResult<PathBuf> {
     let relative = Path::new(object_key);
     if relative.is_absolute()
