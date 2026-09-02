@@ -18,7 +18,9 @@ use crate::{
     PerformanceMonitorStateEventData, PerformancePressureEventData, PerformancePressureRecord,
     PerformanceStutterEventData, PerformanceSummaryEventData, ProjectedArtifactReference,
     ReleaseTransitionData, ReleaseTransitionKind, RequestId, RunId, RuntimeReleaseSet,
-    StateMigrationData, TaskId, validate_fact_invalidation, validate_performance_control,
+    SEGMENTED_SWIPE_BRAKE_DISTANCE_PX, SEGMENTED_SWIPE_BRAKE_DURATION_MS,
+    SEGMENTED_SWIPE_CORNER_HOLD_MS, SEGMENTED_SWIPE_HORIZONTAL_DURATION_MS, StateMigrationData,
+    TaskId, validate_fact_invalidation, validate_performance_control,
     validate_performance_monitor_state, validate_performance_stutter, validate_performance_summary,
 };
 use serde::de;
@@ -39,6 +41,9 @@ pub const LEASE_PAYLOAD_SCHEMA: &str = "actingcommand.payload.lease.v3";
 pub const TASK_PAYLOAD_SCHEMA: &str = "actingcommand.payload.task.v3";
 pub const APPLICATION_PAYLOAD_SCHEMA: &str = "actingcommand.payload.application.v1";
 pub const INPUT_PAYLOAD_SCHEMA: &str = "actingcommand.payload.input.v2";
+pub const INPUT_EXECUTION_PLAN_VERSION: &str = "actingcommand.input.execution_plan.v1";
+pub const INPUT_EXECUTION_PLAN_PROFILE_MAA_2_0: &str = "maa_2_0";
+pub const MAX_INPUT_EXECUTION_PLAN_EVENTS: usize = 123;
 pub const CAPTURE_PAYLOAD_SCHEMA: &str = "actingcommand.payload.capture.v1";
 pub const RECOGNITION_PAYLOAD_SCHEMA: &str = "actingcommand.payload.recognition.v1";
 pub const ARTIFACT_PAYLOAD_SCHEMA: &str = "actingcommand.payload.artifact.v1";
@@ -255,6 +260,215 @@ pub enum EffectDisposition {
 pub struct ObservationPayload {
     action: EventAction,
     audit: SanitizedAudit,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum InputExecutionPlanEvent {
+    Down {
+        x: i32,
+        y: i32,
+    },
+    Move {
+        x: i32,
+        y: i32,
+        delay_before_ms: u64,
+    },
+    Hold {
+        duration_ms: u64,
+    },
+    Up,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct InputExecutionPlanRecord {
+    version: String,
+    profile: String,
+    declared_sensitivity: Sensitivity,
+    events: Vec<InputExecutionPlanEvent>,
+}
+
+impl InputExecutionPlanRecord {
+    pub fn new(events: Vec<InputExecutionPlanEvent>) -> Result<Self, SanitizationError> {
+        let record = Self {
+            version: INPUT_EXECUTION_PLAN_VERSION.to_string(),
+            profile: INPUT_EXECUTION_PLAN_PROFILE_MAA_2_0.to_string(),
+            declared_sensitivity: Sensitivity::Internal,
+            events,
+        };
+        record.validate()?;
+        Ok(record)
+    }
+
+    pub fn version(&self) -> &str {
+        &self.version
+    }
+
+    pub fn profile(&self) -> &str {
+        &self.profile
+    }
+
+    pub const fn declared_sensitivity(&self) -> Sensitivity {
+        self.declared_sensitivity
+    }
+
+    pub fn events(&self) -> &[InputExecutionPlanEvent] {
+        &self.events
+    }
+
+    fn validate(&self) -> Result<(), SanitizationError> {
+        if self.version != INPUT_EXECUTION_PLAN_VERSION
+            || self.profile != INPUT_EXECUTION_PLAN_PROFILE_MAA_2_0
+            || self.declared_sensitivity != Sensitivity::Internal
+            || self.events.len() > MAX_INPUT_EXECUTION_PLAN_EVENTS
+            || !matches!(
+                self.events.first(),
+                Some(InputExecutionPlanEvent::Down { .. })
+            )
+            || !matches!(self.events.last(), Some(InputExecutionPlanEvent::Up))
+        {
+            return Err(SanitizationError::new(
+                "invalid_input_execution_plan",
+                "execution_plan",
+            ));
+        }
+
+        let holds = self
+            .events
+            .iter()
+            .enumerate()
+            .filter_map(|(index, event)| match event {
+                InputExecutionPlanEvent::Hold {
+                    duration_ms: SEGMENTED_SWIPE_CORNER_HOLD_MS,
+                } => Some(index),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        if holds.len() != 1 {
+            return Err(SanitizationError::new(
+                "invalid_input_execution_plan",
+                "events",
+            ));
+        }
+        let hold_index = holds[0];
+        if hold_index <= 1 || hold_index + 2 >= self.events.len() {
+            return Err(SanitizationError::new(
+                "invalid_input_execution_plan",
+                "events",
+            ));
+        }
+
+        let validate_moves = |events: &[InputExecutionPlanEvent], expected_duration_ms| {
+            let mut duration_ms = 0_u64;
+            for event in events {
+                let InputExecutionPlanEvent::Move {
+                    x,
+                    y,
+                    delay_before_ms,
+                } = event
+                else {
+                    return Err(SanitizationError::new(
+                        "invalid_input_execution_plan",
+                        "events",
+                    ));
+                };
+                if *x < 0 || *y < 0 || *delay_before_ms == 0 {
+                    return Err(SanitizationError::new(
+                        "invalid_input_execution_plan",
+                        "events",
+                    ));
+                }
+                duration_ms = duration_ms.checked_add(*delay_before_ms).ok_or_else(|| {
+                    SanitizationError::new("invalid_input_execution_plan", "events")
+                })?;
+            }
+            if duration_ms != expected_duration_ms {
+                return Err(SanitizationError::new(
+                    "invalid_input_execution_plan",
+                    "events",
+                ));
+            }
+            Ok(())
+        };
+        validate_moves(
+            &self.events[1..hold_index],
+            SEGMENTED_SWIPE_HORIZONTAL_DURATION_MS,
+        )?;
+        validate_moves(
+            &self.events[hold_index + 1..self.events.len() - 1],
+            SEGMENTED_SWIPE_BRAKE_DURATION_MS,
+        )?;
+
+        let InputExecutionPlanEvent::Down { x, y } = self.events[0] else {
+            unreachable!();
+        };
+        if x < 0 || y < 0 {
+            return Err(SanitizationError::new(
+                "invalid_input_execution_plan",
+                "events",
+            ));
+        }
+        let InputExecutionPlanEvent::Move {
+            x: corner_x,
+            y: corner_y,
+            ..
+        } = self.events[hold_index - 1]
+        else {
+            unreachable!();
+        };
+        let InputExecutionPlanEvent::Move {
+            x: end_x, y: end_y, ..
+        } = self.events[self.events.len() - 2]
+        else {
+            unreachable!();
+        };
+        if end_x != corner_x
+            || corner_y.checked_sub(SEGMENTED_SWIPE_BRAKE_DISTANCE_PX) != Some(end_y)
+        {
+            return Err(SanitizationError::new(
+                "invalid_input_execution_plan",
+                "events",
+            ));
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct InputIntentPayload {
+    action: EventAction,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    execution_plan: Option<InputExecutionPlanRecord>,
+    audit: SanitizedAudit,
+}
+
+impl InputIntentPayload {
+    pub const fn action(&self) -> EventAction {
+        self.action
+    }
+
+    pub const fn execution_plan(&self) -> Option<&InputExecutionPlanRecord> {
+        self.execution_plan.as_ref()
+    }
+
+    pub fn audit(&self) -> &SanitizedAudit {
+        &self.audit
+    }
+
+    fn validate(&self) -> Result<(), SanitizationError> {
+        if let Some(execution_plan) = &self.execution_plan {
+            if self.action != EventAction::InputSwipe {
+                return Err(SanitizationError::new(
+                    "invalid_input_execution_plan",
+                    "action",
+                ));
+            }
+            execution_plan.validate()?;
+        }
+        Ok(())
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -2745,6 +2959,24 @@ impl PayloadDetail for ObservationPayload {
     }
 }
 
+impl PayloadDetail for InputIntentPayload {
+    fn action(&self) -> EventAction {
+        self.action
+    }
+
+    fn diagnostic_code(&self) -> Option<DiagnosticCode> {
+        None
+    }
+
+    fn effect_disposition(&self) -> Option<EffectDisposition> {
+        None
+    }
+
+    fn audit(&self) -> &SanitizedAudit {
+        &self.audit
+    }
+}
+
 impl PayloadDetail for DiagnosticPayload {
     fn action(&self) -> EventAction {
         self.action
@@ -3158,6 +3390,12 @@ impl PayloadDetail for RecoveryPayload {
 
 struct ObservationDraft {
     action: EventAction,
+    audit: AuditInput,
+}
+
+struct InputIntentDraft {
+    action: EventAction,
+    execution_plan: Option<InputExecutionPlanRecord>,
     audit: AuditInput,
 }
 
@@ -4532,6 +4770,40 @@ impl ObservationDraft {
     }
 }
 
+impl InputIntentDraft {
+    fn new(
+        action: EventAction,
+        execution_plan: Option<InputExecutionPlanRecord>,
+        audit: AuditInput,
+    ) -> Self {
+        Self {
+            action,
+            execution_plan,
+            audit,
+        }
+    }
+
+    fn sanitize(
+        self,
+        fingerprinter: &dyn SecretFingerprinter,
+    ) -> Result<InputIntentPayload, SanitizationError> {
+        if self.execution_plan.is_some() && self.action != EventAction::InputSwipe {
+            return Err(SanitizationError::new(
+                "invalid_input_execution_plan",
+                "action",
+            ));
+        }
+        if let Some(execution_plan) = &self.execution_plan {
+            execution_plan.validate()?;
+        }
+        Ok(InputIntentPayload {
+            action: self.action,
+            execution_plan: self.execution_plan,
+            audit: self.audit.sanitize(fingerprinter)?,
+        })
+    }
+}
+
 impl DiagnosticDraft {
     fn new(action: EventAction, diagnostic_code: DiagnosticCode, audit: AuditInput) -> Self {
         Self {
@@ -5274,7 +5546,7 @@ impl TaskPayloadDraft {
 }
 
 enum InputDraftKind {
-    Intent(ObservationDraft),
+    Intent(InputIntentDraft),
     Committed(OutcomeDraft),
     Completed(ObservationDraft),
     Failed(DiagnosticOutcomeDraft),
@@ -5284,7 +5556,21 @@ pub struct InputPayloadDraft(InputDraftKind);
 
 impl InputPayloadDraft {
     pub fn intent(action: EventAction, audit: AuditInput) -> Self {
-        Self(InputDraftKind::Intent(ObservationDraft::new(action, audit)))
+        Self(InputDraftKind::Intent(InputIntentDraft::new(
+            action, None, audit,
+        )))
+    }
+
+    pub fn intent_with_execution_plan(
+        action: EventAction,
+        execution_plan: InputExecutionPlanRecord,
+        audit: AuditInput,
+    ) -> Self {
+        Self(InputDraftKind::Intent(InputIntentDraft::new(
+            action,
+            Some(execution_plan),
+            audit,
+        )))
     }
 
     pub fn committed(action: EventAction, effect: EffectDisposition, audit: AuditInput) -> Self {
@@ -6325,7 +6611,7 @@ pub enum ApplicationPayload {
     deny_unknown_fields
 )]
 pub enum InputPayload {
-    Intent(ObservationPayload),
+    Intent(InputIntentPayload),
     Committed(OutcomePayload),
     Completed(ObservationPayload),
     Failed(DiagnosticOutcomePayload),
@@ -7023,6 +7309,11 @@ impl EventPayload {
         if matches!(self, Self::Capture(CapturePayload::SummaryCommitted(_))) {
             sensitivity = sensitivity.max(Sensitivity::Internal);
         }
+        if let Self::Input(InputPayload::Intent(intent)) = self
+            && let Some(execution_plan) = intent.execution_plan()
+        {
+            sensitivity = sensitivity.max(execution_plan.declared_sensitivity());
+        }
         if let Self::Fact(payload) = self {
             sensitivity = sensitivity.max(fact_sensitivity(payload));
         }
@@ -7094,6 +7385,9 @@ impl EventPayload {
         }
         if let Self::Agent(value) = self {
             validate_agent_payload(value)?;
+        }
+        if let Self::Input(InputPayload::Intent(intent)) = self {
+            intent.validate()?;
         }
         match self {
             Self::Task(TaskPayload::Semantic(value)) if value.validate().is_err() => {
