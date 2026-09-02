@@ -4,7 +4,7 @@ use actingcommand_contract::{ApplicationLifecycleAction, ContainedTaskRequest, I
 use actingcommand_device::{
     AdbConfig, CaptureBackend, CaptureBackendChoice, CaptureBackendConfig, CaptureBackendName,
     DeviceError, DeviceResult, DeviceTarget, Frame, InputBackend, MaaTouchConfig, MinitouchConfig,
-    PixelFormat, SegmentedSwipeAction, TouchBackendChoice, TouchBackendConfig,
+    PixelFormat, PreparedSegmentedSwipePlan, TouchBackendChoice, TouchBackendConfig,
 };
 use actingcommand_policy::{
     CatalogDocumentSource, CatalogSources, EvaluationFacts, EvaluationResources, MAX_APPROVAL_REFS,
@@ -1024,8 +1024,10 @@ impl InputBackend for DeviceRegistryInputDiagnosticBackend {
         supported
     }
 
-    fn segmented_swipe(&mut self, action: SegmentedSwipeAction) -> DeviceResult<()> {
-        self.run("segmented_swipe", |backend| backend.segmented_swipe(action))
+    fn segmented_swipe_prepared(&mut self, plan: &PreparedSegmentedSwipePlan) -> DeviceResult<()> {
+        self.run("segmented_swipe", |backend| {
+            backend.segmented_swipe_prepared(plan)
+        })
     }
 
     fn key(&mut self, key: &str) -> DeviceResult<()> {
@@ -1458,7 +1460,7 @@ const fn enabled() -> bool {
 mod tests {
     use super::*;
     use actingcommand_contract::IdentifierIssuer;
-    use actingcommand_device::DeviceErrorCategory;
+    use actingcommand_device::{DeviceErrorCategory, SegmentedSwipeAction};
     use actingcommand_vision_ffi::{FastDeployPpocrArtifacts, OnnxExecutionProvider};
     use serde_json::json;
     use std::io::Write;
@@ -1660,11 +1662,14 @@ mod tests {
             self.supports_segmented_swipe
         }
 
-        fn segmented_swipe(&mut self, action: SegmentedSwipeAction) -> DeviceResult<()> {
+        fn segmented_swipe_prepared(
+            &mut self,
+            plan: &PreparedSegmentedSwipePlan,
+        ) -> DeviceResult<()> {
             self.segmented_swipe_actions
                 .lock()
                 .expect("segmented swipe actions")
-                .push(action);
+                .push(plan.action());
             self.invoke("segmented_swipe")
         }
 
