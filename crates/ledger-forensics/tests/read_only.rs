@@ -1,14 +1,22 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
+use actingcommand_artifact_store::{
+    ArtifactEventSink, ArtifactStoreError, ArtifactStoreResult, ArtifactWriteContext,
+    CapturePipelineCounts, CapturePipelineSummary, EvidenceExportDocuments, EvidenceExportIdentity,
+    EvidenceExportRequest, EvidenceExporter, EvidenceJsonDocument, EvidencePackage,
+    PackageVerification, capture_summary_record, verify_evidence_archive,
+};
 use actingcommand_contract::{
-    AuditInput, CommandPayloadDraft, DiagnosticCode, EffectDisposition, EventAction, EventActor,
-    EventDraft, EventLinksDraft, EventOrigin, EventPayloadDraft, EventSeverity, EventSource,
-    IdentifierIssuer, IssuedEventId, OriginModule, SanitizedEventDraft,
+    ArtifactLinksDraft, ArtifactRedactionState, AuditInput, CapturePayloadDraft,
+    CommandPayloadDraft, DiagnosticCode, EffectDisposition, EventAction, EventActor, EventDraft,
+    EventLinksDraft, EventOrigin, EventPayloadDraft, EventQuery, EventSeverity, EventSource,
+    EventType, EvidenceCompleteness, IdentifierIssuer, IssuedEventId, OriginModule,
+    ProjectionProfile, RetentionClass, SanitizedEventDraft, TaskOutcome, TaskPayloadDraft,
 };
 use actingcommand_ledger::{GlobalLedger, GlobalLedgerConfig, Sha256SecretFingerprinter};
 use actingcommand_ledger_forensics::{
-    ForensicCommand, ForensicEventFilter, ForensicEventsRequest, ForensicOutput, ForensicReport,
-    ForensicRequest, WriterObservationReport, run,
+    ForensicCommand, ForensicEventFilter, ForensicEventsRequest, ForensicOutput,
+    ForensicReplayRequest, ForensicReport, ForensicRequest, WriterObservationReport, replay, run,
 };
 use std::collections::BTreeMap;
 use std::fs::{self, OpenOptions};
@@ -411,6 +419,225 @@ fn filters_events_by_persisted_fields_with_stable_cursor() {
         )
         .is_err()
     );
+}
+
+#[test]
+fn replays_a_sealed_archive_through_the_canonical_verifier() {
+    struct LedgerSink<'a> {
+        ledger: &'a GlobalLedger,
+    }
+
+    impl ArtifactEventSink for LedgerSink<'_> {
+        fn append(&mut self, draft: EventDraft) -> ArtifactStoreResult<()> {
+            let event = draft
+                .sanitize(
+                    &Sha256SecretFingerprinter::new(b"forensic-replay-sink")
+                        .expect("fingerprinter"),
+                )
+                .map_err(|error| {
+                    ArtifactStoreError::fatal(
+                        "event_sanitize_failed",
+                        "append_replay_fixture_event",
+                        error.to_string(),
+                    )
+                })?;
+            self.ledger.append(event).map(|_| ()).map_err(|error| {
+                ArtifactStoreError::fatal(
+                    error.code(),
+                    "append_replay_fixture_event",
+                    error.to_string(),
+                )
+            })
+        }
+    }
+
+    let temp = tempfile::tempdir().expect("tempdir");
+    let identifiers = IdentifierIssuer::new().expect("identifiers");
+    let run_id = identifiers.mint_run_id().expect("run id");
+    let correlation_id = identifiers.mint_correlation_id().expect("correlation id");
+    let links = EventLinksDraft::default()
+        .with_run_id(run_id)
+        .with_correlation_id(correlation_id);
+    let pipeline = CapturePipelineSummary {
+        counts: CapturePipelineCounts {
+            captured: 0,
+            deduplicated: 0,
+            dropped: 0,
+            persisted: 0,
+        },
+        evidence_completeness: EvidenceCompleteness::Complete,
+        pinned: Vec::new(),
+        frames: Vec::new(),
+    };
+    let ledger = GlobalLedger::open(GlobalLedgerConfig::new(
+        temp.path().join("fixture-ledger"),
+        "replay-fixture",
+    ))
+    .expect("open fixture ledger");
+    ledger
+        .append(
+            EventDraft::new(
+                identifiers.mint_event_id().expect("summary event id"),
+                1_752_147_200_000,
+                EventSeverity::Info,
+                EventOrigin::new(
+                    EventSource::Runtime,
+                    OriginModule::CapturePipeline,
+                    EventActor::Runtime,
+                ),
+                links.clone(),
+                CapturePayloadDraft::summary_committed(
+                    capture_summary_record(&pipeline).expect("capture summary"),
+                    AuditInput::new(),
+                )
+                .into(),
+            )
+            .sanitize(
+                &Sha256SecretFingerprinter::new(b"forensic-replay-fixture").expect("fingerprinter"),
+            )
+            .expect("sanitize summary"),
+        )
+        .expect("append summary");
+    ledger
+        .append(
+            EventDraft::new(
+                identifiers.mint_event_id().expect("terminal event id"),
+                1_752_147_200_100,
+                EventSeverity::Info,
+                EventOrigin::new(
+                    EventSource::System,
+                    OriginModule::ProcessTest,
+                    EventActor::System,
+                ),
+                links.clone(),
+                TaskPayloadDraft::completed(
+                    EventAction::CriticalTest,
+                    EffectDisposition::Performed,
+                    AuditInput::new(),
+                )
+                .into(),
+            )
+            .sanitize(
+                &Sha256SecretFingerprinter::new(b"forensic-replay-fixture").expect("fingerprinter"),
+            )
+            .expect("sanitize terminal"),
+        )
+        .expect("append terminal");
+    let events = ledger
+        .project(
+            EventQuery {
+                correlation_id: Some(*correlation_id.transport()),
+                ..EventQuery::default()
+            },
+            ProjectionProfile::Forensic,
+        )
+        .expect("project fixture events");
+    let terminal_receipt = events
+        .iter()
+        .find(|event| event.event_type == EventType::TaskCompleted)
+        .cloned()
+        .expect("terminal receipt");
+    let archive = temp.path().join("sealed-evidence.zip");
+    let artifact_root = temp.path().join("artifacts");
+    let documents = EvidenceExportDocuments::new(
+        EvidenceJsonDocument::from_serializable(&serde_json::json!({ "status": "result" }))
+            .expect("result document"),
+        EvidenceJsonDocument::from_serializable(&serde_json::json!({ "status": "diagnostics" }))
+            .expect("diagnostics document"),
+        "forensic replay fixture",
+    )
+    .expect("documents");
+    let request = EvidenceExportRequest {
+        output_path: archive.clone(),
+        identity: EvidenceExportIdentity {
+            run_id: *run_id.transport(),
+            correlation_id: *correlation_id.transport(),
+            package: EvidencePackage::new(
+                "sealed-package.zip",
+                "b".repeat(64),
+                PackageVerification::Passed,
+            )
+            .expect("package"),
+            task_outcome: TaskOutcome::Success,
+            terminal_receipt,
+            projection_profile: ProjectionProfile::Forensic,
+            retention_class: RetentionClass::DebugFull,
+            archive_redaction_state: ArtifactRedactionState::NotRequired,
+        },
+        events,
+        source_capture_summary_sequence: 1,
+        pipeline,
+        documents,
+        archive_context: ArtifactWriteContext::new(
+            ArtifactLinksDraft::default()
+                .with_run_id(run_id)
+                .with_correlation_id(correlation_id),
+            links,
+            1_752_147_200_200,
+        ),
+    };
+    let mut exporter = EvidenceExporter::open(&artifact_root).expect("exporter");
+    let receipt = exporter
+        .export(request, &mut LedgerSink { ledger: &ledger })
+        .expect("sealed export");
+    ledger.close().expect("close fixture ledger");
+    let expected =
+        verify_evidence_archive(&archive, receipt.zip_sha256()).expect("canonical verification");
+    let archive_bytes = fs::read(&archive).expect("archive bytes");
+    let before = tree_bytes(temp.path());
+
+    let first = replay(ForensicReplayRequest::new(
+        &archive,
+        receipt.zip_sha256().to_owned(),
+    ))
+    .expect("first replay");
+    let second = replay(ForensicReplayRequest::new(
+        &archive,
+        receipt.zip_sha256().to_owned(),
+    ))
+    .expect("second replay");
+    assert_eq!(first, second);
+    match first {
+        ForensicOutput::Machine(ForensicReport::Replay(report)) => {
+            assert_eq!(
+                report.verifier,
+                "actingcommand_artifact_store::verify_evidence_archive"
+            );
+            assert_eq!(report.zip_byte_count, expected.zip_byte_count);
+            assert_eq!(report.zip_sha256, expected.zip_sha256);
+            assert_eq!(report.manifest_sha256, expected.manifest_sha256);
+            assert_eq!(report.manifest, expected.manifest);
+        }
+        output => panic!("unexpected replay output: {output:?}"),
+    }
+    assert_eq!(
+        fs::read(&archive).expect("archive after replay"),
+        archive_bytes
+    );
+    assert_eq!(tree_bytes(temp.path()), before);
+
+    let mismatch = replay(ForensicReplayRequest::new(&archive, "0".repeat(64)))
+        .expect_err("external hash mismatch");
+    assert_eq!(mismatch.code(), "evidence_archive_hash_mismatch");
+    assert_eq!(
+        fs::read(&archive).expect("archive after mismatch"),
+        archive_bytes
+    );
+    assert_eq!(tree_bytes(temp.path()), before);
+
+    let corrupt = temp.path().join("corrupt-evidence.zip");
+    let mut corrupt_bytes = archive_bytes.clone();
+    corrupt_bytes[0] ^= 0xff;
+    fs::write(&corrupt, &corrupt_bytes).expect("write corrupt archive");
+    let corrupt_before = tree_bytes(temp.path());
+    assert!(
+        replay(ForensicReplayRequest::new(
+            &corrupt,
+            receipt.zip_sha256().to_owned(),
+        ))
+        .is_err()
+    );
+    assert_eq!(tree_bytes(temp.path()), corrupt_before);
 }
 
 fn event(links: EventLinksDraft) -> SanitizedEventDraft {

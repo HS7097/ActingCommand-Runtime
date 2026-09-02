@@ -9,9 +9,14 @@ use std::io::Write;
 use std::path::PathBuf;
 
 use actingcommand_ledger_forensics::{
-    ForensicCommand, ForensicEventFilter, ForensicEventsRequest, ForensicOutput, ForensicRequest,
-    MAX_FORENSIC_EVENTS,
+    ForensicCommand, ForensicEventFilter, ForensicEventsRequest, ForensicOutput,
+    ForensicReplayRequest, ForensicRequest, MAX_FORENSIC_EVENTS,
 };
+
+enum CliRequest {
+    StateRoot(ForensicRequest),
+    Replay(ForensicReplayRequest),
+}
 
 #[derive(Debug)]
 pub struct CliError {
@@ -51,9 +56,11 @@ where
     I: IntoIterator<Item = OsString>,
     W: Write,
 {
-    let request = parse_args(args)?;
-    let report = actingcommand_ledger_forensics::run(request)
-        .map_err(|error| CliError::new(error.code(), error.operation(), error.to_string()))?;
+    let report = match parse_args(args)? {
+        CliRequest::StateRoot(request) => actingcommand_ledger_forensics::run(request),
+        CliRequest::Replay(request) => actingcommand_ledger_forensics::replay(request),
+    }
+    .map_err(|error| CliError::new(error.code(), error.operation(), error.to_string()))?;
     match report {
         ForensicOutput::Machine(report) => {
             serde_json::to_writer(&mut *output, &report).map_err(serialization_error)?;
@@ -73,12 +80,22 @@ pub fn run_env() -> Result<(), CliError> {
     run(std::env::args_os().skip(1), &mut std::io::stdout().lock())
 }
 
-fn parse_args<I>(args: I) -> Result<ForensicRequest, CliError>
+fn parse_args<I>(args: I) -> Result<CliRequest, CliError>
 where
     I: IntoIterator<Item = OsString>,
 {
     let mut args = args.into_iter();
-    require_utf8(args.next(), "--state-root")?;
+    let entry = args
+        .next()
+        .ok_or_else(|| invalid_arguments("missing command or --state-root"))?
+        .into_string()
+        .map_err(|_| invalid_arguments("command or --state-root is not valid UTF-8"))?;
+    if entry == "replay" {
+        return parse_replay(args);
+    }
+    if entry != "--state-root" {
+        return Err(invalid_arguments("expected replay or --state-root"));
+    }
     let state_root = PathBuf::from(
         args.next()
             .ok_or_else(|| invalid_arguments("missing state root"))?,
@@ -89,7 +106,7 @@ where
     let command = require_utf8(args.next(), "command")?;
     let command = match command.as_str() {
         "open" => ForensicCommand::Open,
-        "events" => return parse_events(state_root, args),
+        "events" => return parse_events(state_root, args).map(CliRequest::StateRoot),
         "chain" => {
             require_utf8(args.next(), "--req")?;
             let request_id = require_utf8(args.next(), "request id")?;
@@ -108,7 +125,43 @@ where
             "unexpected argument or unsupported filter",
         ));
     }
-    Ok(ForensicRequest::new(state_root, command))
+    Ok(CliRequest::StateRoot(ForensicRequest::new(
+        state_root, command,
+    )))
+}
+
+fn parse_replay<I>(mut args: I) -> Result<CliRequest, CliError>
+where
+    I: Iterator<Item = OsString>,
+{
+    let mut zip_path = None;
+    let mut expected_sha256 = None;
+    while let Some(option) = args.next() {
+        let option = option
+            .into_string()
+            .map_err(|_| invalid_arguments("replay option is not valid UTF-8"))?;
+        match option.as_str() {
+            "--zip" if zip_path.is_none() => {
+                zip_path = Some(PathBuf::from(next_value(&mut args, "--zip")?));
+            }
+            "--expected-sha256" if expected_sha256.is_none() => {
+                expected_sha256 = Some(next_value(&mut args, "--expected-sha256")?);
+            }
+            "--zip" | "--expected-sha256" => {
+                return Err(invalid_arguments(format!(
+                    "duplicate replay option {option}"
+                )));
+            }
+            _ => return Err(invalid_arguments(format!("unknown replay option {option}"))),
+        }
+    }
+    let zip_path = zip_path.ok_or_else(|| invalid_arguments("missing --zip"))?;
+    let expected_sha256 =
+        expected_sha256.ok_or_else(|| invalid_arguments("missing --expected-sha256"))?;
+    Ok(CliRequest::Replay(ForensicReplayRequest::new(
+        zip_path,
+        expected_sha256,
+    )))
 }
 
 fn parse_events<I>(state_root: PathBuf, mut args: I) -> Result<ForensicRequest, CliError>

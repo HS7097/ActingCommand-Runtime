@@ -11,12 +11,11 @@ publish = false
 [features]
 default = ["capture"]
 capture = [
+    "evidence-archive",
     "dep:actingcommand-device",
-    "dep:serde",
-    "dep:serde_json",
     "dep:time",
-    "dep:zip",
 ]
+evidence-archive = ["dep:serde", "dep:serde_json", "dep:zip"]
 
 [dependencies]
 actingcommand-contract = { workspace = true }

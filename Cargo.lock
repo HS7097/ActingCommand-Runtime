@@ -383,6 +383,7 @@ dependencies = [
 name = "actingledger"
 version = "0.1.0"
 dependencies = [
+ "actingcommand-artifact-store",
  "actingcommand-contract",
  "actingcommand-ledger",
  "actingcommand-ledger-forensics",

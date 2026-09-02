@@ -1,13 +1,24 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
+use actingcommand_artifact_store::{
+    ArtifactEventSink, ArtifactStoreError, ArtifactStoreResult, ArtifactWriteContext,
+    CapturePipelineCounts, CapturePipelineSummary, EvidenceExportDocuments, EvidenceExportIdentity,
+    EvidenceExportRequest, EvidenceExporter, EvidenceJsonDocument, EvidencePackage,
+    PackageVerification, capture_summary_record, verify_evidence_archive,
+};
 use actingcommand_contract::{
-    AuditInput, CommandPayloadDraft, DiagnosticCode, EffectDisposition, EventAction, EventActor,
-    EventDraft, EventLinksDraft, EventOrigin, EventSeverity, EventSource, IdentifierIssuer,
-    OriginModule,
+    ArtifactLinksDraft, ArtifactRedactionState, AuditInput, CapturePayloadDraft,
+    CommandPayloadDraft, DiagnosticCode, EffectDisposition, EventAction, EventActor, EventDraft,
+    EventLinksDraft, EventOrigin, EventQuery, EventSeverity, EventSource, EventType,
+    EvidenceCompleteness, IdentifierIssuer, OriginModule, ProjectionProfile, RetentionClass,
+    TaskOutcome, TaskPayloadDraft,
 };
 use actingcommand_ledger::{GlobalLedger, GlobalLedgerConfig, Sha256SecretFingerprinter};
+use std::collections::BTreeMap;
 use std::ffi::OsString;
+use std::fs;
 use std::io::{self, Write};
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 #[test]
@@ -255,6 +266,372 @@ fn events_cli_parses_bounded_filters_and_reports_next_cursor() {
                 .contains("invalid_arguments"),
             "unexpected invalid-command error: {output:?}"
         );
+    }
+}
+
+#[test]
+fn replay_cli_requires_the_external_receipt_and_reports_verified_manifest() {
+    struct LedgerSink<'a> {
+        ledger: &'a GlobalLedger,
+    }
+
+    impl ArtifactEventSink for LedgerSink<'_> {
+        fn append(&mut self, draft: EventDraft) -> ArtifactStoreResult<()> {
+            let event = draft
+                .sanitize(
+                    &Sha256SecretFingerprinter::new(b"replay-cli-sink").expect("fingerprinter"),
+                )
+                .map_err(|error| {
+                    ArtifactStoreError::fatal(
+                        "event_sanitize_failed",
+                        "append_replay_cli_fixture_event",
+                        error.to_string(),
+                    )
+                })?;
+            self.ledger.append(event).map(|_| ()).map_err(|error| {
+                ArtifactStoreError::fatal(
+                    error.code(),
+                    "append_replay_cli_fixture_event",
+                    error.to_string(),
+                )
+            })
+        }
+    }
+
+    fn snapshot(root: &Path) -> BTreeMap<PathBuf, Vec<u8>> {
+        fn collect(root: &Path, path: &Path, files: &mut BTreeMap<PathBuf, Vec<u8>>) {
+            let mut entries = fs::read_dir(path)
+                .expect("read snapshot directory")
+                .map(|entry| entry.expect("snapshot entry").path())
+                .collect::<Vec<_>>();
+            entries.sort();
+            for entry in entries {
+                if entry.is_dir() {
+                    collect(root, &entry, files);
+                } else {
+                    files.insert(
+                        entry
+                            .strip_prefix(root)
+                            .expect("relative path")
+                            .to_path_buf(),
+                        fs::read(&entry).expect("snapshot bytes"),
+                    );
+                }
+            }
+        }
+
+        let mut files = BTreeMap::new();
+        collect(root, root, &mut files);
+        files
+    }
+
+    let temp = tempfile::tempdir().expect("tempdir");
+    let identifiers = IdentifierIssuer::new().expect("identifiers");
+    let run_id = identifiers.mint_run_id().expect("run id");
+    let correlation_id = identifiers.mint_correlation_id().expect("correlation id");
+    let links = EventLinksDraft::default()
+        .with_run_id(run_id)
+        .with_correlation_id(correlation_id);
+    let pipeline = CapturePipelineSummary {
+        counts: CapturePipelineCounts {
+            captured: 0,
+            deduplicated: 0,
+            dropped: 0,
+            persisted: 0,
+        },
+        evidence_completeness: EvidenceCompleteness::Complete,
+        pinned: Vec::new(),
+        frames: Vec::new(),
+    };
+    let ledger = GlobalLedger::open(GlobalLedgerConfig::new(
+        temp.path().join("fixture-ledger"),
+        "replay-cli-fixture",
+    ))
+    .expect("open fixture ledger");
+    ledger
+        .append(
+            EventDraft::new(
+                identifiers.mint_event_id().expect("summary event id"),
+                1_752_147_200_000,
+                EventSeverity::Info,
+                EventOrigin::new(
+                    EventSource::Runtime,
+                    OriginModule::CapturePipeline,
+                    EventActor::Runtime,
+                ),
+                links.clone(),
+                CapturePayloadDraft::summary_committed(
+                    capture_summary_record(&pipeline).expect("capture summary"),
+                    AuditInput::new(),
+                )
+                .into(),
+            )
+            .sanitize(
+                &Sha256SecretFingerprinter::new(b"replay-cli-fixture").expect("fingerprinter"),
+            )
+            .expect("sanitize summary"),
+        )
+        .expect("append summary");
+    ledger
+        .append(
+            EventDraft::new(
+                identifiers.mint_event_id().expect("terminal event id"),
+                1_752_147_200_100,
+                EventSeverity::Info,
+                EventOrigin::new(
+                    EventSource::System,
+                    OriginModule::ProcessTest,
+                    EventActor::System,
+                ),
+                links.clone(),
+                TaskPayloadDraft::completed(
+                    EventAction::CriticalTest,
+                    EffectDisposition::Performed,
+                    AuditInput::new(),
+                )
+                .into(),
+            )
+            .sanitize(
+                &Sha256SecretFingerprinter::new(b"replay-cli-fixture").expect("fingerprinter"),
+            )
+            .expect("sanitize terminal"),
+        )
+        .expect("append terminal");
+    let events = ledger
+        .project(
+            EventQuery {
+                correlation_id: Some(*correlation_id.transport()),
+                ..EventQuery::default()
+            },
+            ProjectionProfile::Forensic,
+        )
+        .expect("project fixture events");
+    let terminal_receipt = events
+        .iter()
+        .find(|event| event.event_type == EventType::TaskCompleted)
+        .cloned()
+        .expect("terminal receipt");
+    let archive = temp.path().join("sealed-evidence.zip");
+    let request = EvidenceExportRequest {
+        output_path: archive.clone(),
+        identity: EvidenceExportIdentity {
+            run_id: *run_id.transport(),
+            correlation_id: *correlation_id.transport(),
+            package: EvidencePackage::new(
+                "sealed-package.zip",
+                "b".repeat(64),
+                PackageVerification::Passed,
+            )
+            .expect("package"),
+            task_outcome: TaskOutcome::Success,
+            terminal_receipt,
+            projection_profile: ProjectionProfile::Forensic,
+            retention_class: RetentionClass::DebugFull,
+            archive_redaction_state: ArtifactRedactionState::NotRequired,
+        },
+        events,
+        source_capture_summary_sequence: 1,
+        pipeline,
+        documents: EvidenceExportDocuments::new(
+            EvidenceJsonDocument::from_serializable(&serde_json::json!({ "status": "result" }))
+                .expect("result document"),
+            EvidenceJsonDocument::from_serializable(
+                &serde_json::json!({ "status": "diagnostics" }),
+            )
+            .expect("diagnostics document"),
+            "forensic replay CLI fixture",
+        )
+        .expect("documents"),
+        archive_context: ArtifactWriteContext::new(
+            ArtifactLinksDraft::default()
+                .with_run_id(run_id)
+                .with_correlation_id(correlation_id),
+            links,
+            1_752_147_200_200,
+        ),
+    };
+    let mut exporter = EvidenceExporter::open(temp.path().join("artifacts")).expect("exporter");
+    let receipt = exporter
+        .export(request, &mut LedgerSink { ledger: &ledger })
+        .expect("sealed export");
+    ledger.close().expect("close fixture ledger");
+    let expected =
+        verify_evidence_archive(&archive, receipt.zip_sha256()).expect("canonical verification");
+    let archive_bytes = fs::read(&archive).expect("archive bytes");
+    let before = snapshot(temp.path());
+    let binary = env!("CARGO_BIN_EXE_actingledger");
+
+    let invoke_replay = || {
+        Command::new(binary)
+            .arg("replay")
+            .arg("--zip")
+            .arg(&archive)
+            .arg("--expected-sha256")
+            .arg(receipt.zip_sha256())
+            .output()
+            .expect("run replay")
+    };
+    let first = invoke_replay();
+    let second = invoke_replay();
+    assert!(first.status.success(), "replay failed: {first:?}");
+    assert_eq!(first.stdout, second.stdout);
+    assert!(first.stderr.is_empty());
+    assert!(second.stderr.is_empty());
+    let report: serde_json::Value = serde_json::from_slice(&first.stdout).expect("replay JSON");
+    assert_eq!(report["command"], "replay");
+    assert_eq!(
+        report["data"]["verifier"],
+        "actingcommand_artifact_store::verify_evidence_archive"
+    );
+    assert_eq!(report["data"]["zip_byte_count"], expected.zip_byte_count);
+    assert_eq!(report["data"]["zip_sha256"], expected.zip_sha256);
+    assert_eq!(report["data"]["manifest_sha256"], expected.manifest_sha256);
+    assert_eq!(
+        report["data"]["manifest"],
+        serde_json::to_value(&expected.manifest).expect("manifest JSON")
+    );
+    assert_eq!(
+        fs::read(&archive).expect("archive after replay"),
+        archive_bytes
+    );
+    assert_eq!(snapshot(temp.path()), before);
+
+    let invalid_commands = [
+        vec!["replay"],
+        vec!["replay", "--zip", archive.to_str().expect("archive path")],
+        vec![
+            "replay",
+            "--zip",
+            archive.to_str().expect("archive path"),
+            "--zip",
+            archive.to_str().expect("archive path"),
+            "--expected-sha256",
+            receipt.zip_sha256(),
+        ],
+        vec![
+            "replay",
+            "--zip",
+            archive.to_str().expect("archive path"),
+            "--expected-sha256",
+            receipt.zip_sha256(),
+            "--expected-sha256",
+            receipt.zip_sha256(),
+        ],
+        vec!["replay", "--unknown", "value"],
+        vec![
+            "replay",
+            "--state-root",
+            temp.path().to_str().expect("temp path"),
+            "--zip",
+            archive.to_str().expect("archive path"),
+            "--expected-sha256",
+            receipt.zip_sha256(),
+        ],
+    ];
+    for command in invalid_commands {
+        let output = Command::new(binary)
+            .args(command)
+            .output()
+            .expect("run invalid replay");
+        assert!(
+            !output.status.success(),
+            "invalid replay passed: {output:?}"
+        );
+        assert!(output.stdout.is_empty());
+        assert!(
+            std::str::from_utf8(&output.stderr)
+                .expect("UTF-8 stderr")
+                .contains("invalid_arguments")
+        );
+    }
+
+    let missing = temp.path().join("missing.zip");
+    let malformed = Command::new(binary)
+        .arg("replay")
+        .arg("--zip")
+        .arg(&missing)
+        .arg("--expected-sha256")
+        .arg("not-a-sha256")
+        .output()
+        .expect("run malformed replay");
+    assert!(!malformed.status.success());
+    assert!(malformed.stdout.is_empty());
+    let malformed_error = std::str::from_utf8(&malformed.stderr).expect("malformed stderr");
+    assert!(malformed_error.contains("sha256_invalid"));
+    assert!(!malformed_error.contains("evidence_archive_read_failed"));
+
+    let absent = Command::new(binary)
+        .arg("replay")
+        .arg("--zip")
+        .arg(&missing)
+        .arg("--expected-sha256")
+        .arg(receipt.zip_sha256())
+        .output()
+        .expect("run absent replay");
+    assert!(!absent.status.success());
+    assert!(absent.stdout.is_empty());
+    assert!(
+        std::str::from_utf8(&absent.stderr)
+            .expect("absent stderr")
+            .contains("evidence_archive_read_failed")
+    );
+
+    let mismatch = Command::new(binary)
+        .arg("replay")
+        .arg("--zip")
+        .arg(&archive)
+        .arg("--expected-sha256")
+        .arg("0".repeat(64))
+        .output()
+        .expect("run mismatched replay");
+    assert!(!mismatch.status.success());
+    assert!(mismatch.stdout.is_empty());
+    assert!(
+        std::str::from_utf8(&mismatch.stderr)
+            .expect("mismatch stderr")
+            .contains("evidence_archive_hash_mismatch")
+    );
+
+    let corrupt = temp.path().join("corrupt.zip");
+    fs::write(&corrupt, b"not a ZIP archive").expect("write corrupt archive");
+    let corrupt_output = Command::new(binary)
+        .arg("replay")
+        .arg("--zip")
+        .arg(&corrupt)
+        .arg("--expected-sha256")
+        .arg("0".repeat(64))
+        .output()
+        .expect("run corrupt replay");
+    assert!(!corrupt_output.status.success());
+    assert!(corrupt_output.stdout.is_empty());
+    assert!(
+        std::str::from_utf8(&corrupt_output.stderr)
+            .expect("corrupt stderr")
+            .contains("evidence_archive_invalid")
+    );
+    assert_eq!(
+        fs::read(&archive).expect("final archive bytes"),
+        archive_bytes
+    );
+    assert!(!temp.path().join("sealed-evidence").exists());
+
+    #[cfg(windows)]
+    {
+        use std::os::windows::ffi::OsStringExt;
+
+        let invalid_utf8 = OsString::from_wide(&[0xd800]);
+        let error = actingledger::run(
+            [
+                OsString::from("replay"),
+                OsString::from("--zip"),
+                invalid_utf8,
+                OsString::from("--expected-sha256"),
+                OsString::from(receipt.zip_sha256()),
+            ],
+            &mut Vec::new(),
+        )
+        .expect_err("non-UTF-8 replay path");
+        assert_eq!(error.code(), "invalid_arguments");
     }
 }
 

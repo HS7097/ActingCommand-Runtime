@@ -17,6 +17,7 @@ actingcommand-ledger-forensics = { workspace = true }
 serde_json = { workspace = true }
 
 [dev-dependencies]
+actingcommand-artifact-store = { path = "../../crates/artifact-store", features = ["capture"] }
 actingcommand-contract = { workspace = true }
 actingcommand-ledger = { workspace = true }
 tempfile = "3"
