@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
+use super::commands::command_cap;
 use super::contained_resources::finish_package_use;
-use super::{CliError, CliOutcome, FlagArgs, command_cap, runtime_state_root};
+use super::{CliError, CliOutcome, FlagArgs, runtime_state_root};
 use actingcommand_artifact_store::verify_evidence_archive;
 use actingcommand_contract::{
     CorrelationId, EventActor, EventQuery, EventSource, PackageDebugRequest, ProjectionProfile,
