@@ -7,6 +7,7 @@ use crate::{
     ActivityProfile, CompiledCatalog, GoalTarget, LoadProfile, MetricRef, PredicateSpec,
     ScopeSelector, TaskSpec,
 };
+use actingcommand_contract::MAX_STRATEGIC_WEIGHT_MILLI;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
@@ -837,8 +838,13 @@ fn instantiate_catalog_declarations(
         .map(|(index, task)| (task.id.clone(), format!("strategy.task.{suffix}.{index}")))
         .collect::<BTreeMap<_, _>>();
     let computed_weight = u32::from(template.strategic_weight_milli)
-        .saturating_add(calculated.urgency_milli.unwrap_or(0).min(10_000))
-        .min(10_000) as u16;
+        .saturating_add(
+            calculated
+                .urgency_milli
+                .unwrap_or(0)
+                .min(u32::from(MAX_STRATEGIC_WEIGHT_MILLI)),
+        )
+        .min(u32::from(MAX_STRATEGIC_WEIGHT_MILLI)) as u16;
     let mut tasks = Vec::with_capacity(task_templates.len());
     for task in task_templates {
         let mut task = task.clone();
@@ -1093,7 +1099,7 @@ fn validate_template(template: &StrategicTemplate) -> StrategyResult<()> {
         || template.match_bands.is_empty()
         || template.minimum_urgency_milli > template.maximum_urgency_milli
         || template.maximum_urgency_milli > MAX_URGENCY_MILLI
-        || template.strategic_weight_milli > 10_000
+        || template.strategic_weight_milli > MAX_STRATEGIC_WEIGHT_MILLI
         || template.match_bands.iter().any(|band| {
             !matches!(
                 band,

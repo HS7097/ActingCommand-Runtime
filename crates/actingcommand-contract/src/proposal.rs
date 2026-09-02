@@ -3,8 +3,8 @@
 //! Typed declaration proposal boundary for Runtime-controlled catalog promotion.
 
 use crate::{
-    ApprovalTarget, ArtifactId, ArtifactKind, ArtifactRedactionState, ProjectedArtifactReference,
-    SanitizationError,
+    ApprovalTarget, ArtifactId, ArtifactKind, ArtifactRedactionState, MAX_STRATEGIC_WEIGHT_MILLI,
+    ProjectedArtifactReference, SanitizationError,
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -152,7 +152,7 @@ impl TaskTemplateInstantiation {
         if self.template_task_id == self.new_task_id
             || self
                 .strategic_weight_milli
-                .is_some_and(|value| value > 10_000)
+                .is_some_and(|value| value > MAX_STRATEGIC_WEIGHT_MILLI)
         {
             return Err(invalid(
                 "invalid_template_instantiation",

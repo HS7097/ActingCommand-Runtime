@@ -4,7 +4,7 @@ use crate::capture::{DeviceRotation, display_size_from_natural, read_device_rota
 use crate::{
     Adb, AdbConfig, DeviceError, DeviceInfo, DeviceResult, DeviceTarget, HandshakeInfo,
     InputBackend, MaaTouchBackend, MaaTouchConfig, MinitouchBackend, MinitouchConfig,
-    SegmentedSwipeAction,
+    PreparedSegmentedSwipePlan,
 };
 use std::time::{Duration, Instant};
 
@@ -399,7 +399,8 @@ impl InputBackend for SelectedTouchBackend {
         self.active.backend.supports_segmented_swipe()
     }
 
-    fn segmented_swipe(&mut self, action: SegmentedSwipeAction) -> DeviceResult<()> {
+    fn segmented_swipe_prepared(&mut self, plan: &PreparedSegmentedSwipePlan) -> DeviceResult<()> {
+        let action = plan.action();
         action.validate()?;
         if !self.active.backend.supports_segmented_swipe() {
             return Err(DeviceError::fatal(format!(
@@ -409,7 +410,7 @@ impl InputBackend for SelectedTouchBackend {
         }
         self.validate_action_points("single_touch_drag_with_vertical_brake_v1", &action.points)?;
         let started = Instant::now();
-        match self.active.backend.segmented_swipe(action) {
+        match self.active.backend.segmented_swipe_prepared(plan) {
             Ok(()) => Ok(()),
             Err(err) => {
                 self.record_runtime_failure(
