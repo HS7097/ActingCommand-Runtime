@@ -104,7 +104,9 @@ fn device_diagnostic_detail(error: &DeviceError) -> Option<Box<DiagnosticDetailD
         diagnostic.stage(),
         context.backend(),
         context.operation(),
-        error.message(),
+        error
+            .diagnostic_message()
+            .unwrap_or_else(|| error.message()),
         match context.declared_sensitivity() {
             DeviceErrorSensitivity::Public => Sensitivity::Public,
             DeviceErrorSensitivity::Internal => Sensitivity::Internal,
