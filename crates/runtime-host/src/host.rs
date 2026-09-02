@@ -2975,7 +2975,7 @@ struct ActionFailure {
     release_after: bool,
     destructive_started: bool,
     transfer_after: bool,
-    task_failure: Option<TaskFailureEvidence>,
+    task_failure: Option<Box<TaskFailureEvidence>>,
 }
 
 impl HostShared {
@@ -7778,18 +7778,28 @@ impl HostShared {
             DiagnosticCode::RecognitionFailed
         };
         if capture_failed {
+            let payload = match error.diagnostic_detail().cloned() {
+                Some(detail) => CapturePayloadDraft::failed_with_detail(
+                    EventAction::CaptureObserve,
+                    diagnostic,
+                    EffectDisposition::NotPerformed,
+                    detail,
+                    AuditInput::new(),
+                ),
+                None => CapturePayloadDraft::failed(
+                    EventAction::CaptureObserve,
+                    diagnostic,
+                    EffectDisposition::NotPerformed,
+                    AuditInput::new(),
+                ),
+            };
             self.append_event_raw(
                 EventSeverity::Error,
                 EventSource::Device,
                 OriginModule::Capture,
                 EventActor::Runtime,
                 links.clone(),
-                CapturePayloadDraft::failed(
-                    EventAction::CaptureObserve,
-                    diagnostic,
-                    EffectDisposition::NotPerformed,
-                    AuditInput::new(),
-                ),
+                payload,
             )?;
         }
         self.append_event_raw(
@@ -9583,18 +9593,29 @@ impl HostShared {
         let frame = match self.execution.capture(instance_alias) {
             Ok(frame) => frame,
             Err(error) => {
+                let runtime_error = RuntimeHostError::execution("execute_capture_backend", &error);
+                let payload = match runtime_error.diagnostic_detail().cloned() {
+                    Some(detail) => CapturePayloadDraft::failed_with_detail(
+                        EventAction::CaptureObserve,
+                        DiagnosticCode::CaptureFailed,
+                        EffectDisposition::NotPerformed,
+                        detail,
+                        AuditInput::new(),
+                    ),
+                    None => CapturePayloadDraft::failed(
+                        EventAction::CaptureObserve,
+                        DiagnosticCode::CaptureFailed,
+                        EffectDisposition::NotPerformed,
+                        AuditInput::new(),
+                    ),
+                };
                 self.append_event(
                     EventSeverity::Error,
                     EventSource::Device,
                     OriginModule::Capture,
                     EventActor::Runtime,
                     links.clone(),
-                    CapturePayloadDraft::failed(
-                        EventAction::CaptureObserve,
-                        DiagnosticCode::CaptureFailed,
-                        EffectDisposition::NotPerformed,
-                        AuditInput::new(),
-                    ),
+                    payload,
                 )?;
                 let event = self.append_event(
                     EventSeverity::Error,
@@ -9610,7 +9631,7 @@ impl HostShared {
                     ),
                 )?;
                 return Err(RequestFailure::request(
-                    RuntimeHostError::execution("execute_capture_backend", &error),
+                    runtime_error,
                     RuntimeReceiptState::Failed,
                     Some(terminal(&event)),
                 ));
@@ -12012,6 +12033,19 @@ impl HostShared {
                     .map_err(|_| actingcommand_contract::SanitizationError::fingerprinter_failure())
             },
             |error, effect| {
+                let audit = execution_audit(execution_provenance, &endpoint);
+                let payload = match error.error.diagnostic_detail().cloned() {
+                    Some(detail) => InputPayloadDraft::failed_with_detail(
+                        event_action,
+                        error.diagnostic,
+                        effect,
+                        detail,
+                        audit,
+                    ),
+                    None => {
+                        InputPayloadDraft::failed(event_action, error.diagnostic, effect, audit)
+                    }
+                };
                 self.events
                     .draft(
                         EventSeverity::Error,
@@ -12019,12 +12053,7 @@ impl HostShared {
                         module,
                         EventActor::Runtime,
                         failure_links,
-                        InputPayloadDraft::failed(
-                            event_action,
-                            error.diagnostic,
-                            effect,
-                            execution_audit(execution_provenance, &endpoint),
-                        ),
+                        payload,
                     )
                     .map_err(|_| actingcommand_contract::SanitizationError::fingerprinter_failure())
             },
@@ -12052,7 +12081,7 @@ impl HostShared {
                     terminal: Some(terminal(&outcome)),
                     error: Box::new(error.error),
                     poison_runtime: error.poison_runtime,
-                    task_failure: error.task_failure,
+                    task_failure: error.task_failure.map(|evidence| *evidence),
                 };
                 if release_after
                     && run_links.is_none()
@@ -14729,18 +14758,28 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
             Err(error) => {
                 let runtime_error =
                     RuntimeHostError::execution("run_contained_task_capture", &error);
+                let payload = match runtime_error.diagnostic_detail().cloned() {
+                    Some(detail) => CapturePayloadDraft::failed_with_detail(
+                        EventAction::CaptureObserve,
+                        DiagnosticCode::CaptureFailed,
+                        EffectDisposition::NotPerformed,
+                        detail,
+                        AuditInput::new(),
+                    ),
+                    None => CapturePayloadDraft::failed(
+                        EventAction::CaptureObserve,
+                        DiagnosticCode::CaptureFailed,
+                        EffectDisposition::NotPerformed,
+                        AuditInput::new(),
+                    ),
+                };
                 let failed = self.host.append_event(
                     EventSeverity::Error,
                     source,
                     module,
                     EventActor::Runtime,
                     links,
-                    CapturePayloadDraft::failed(
-                        EventAction::CaptureObserve,
-                        DiagnosticCode::CaptureFailed,
-                        EffectDisposition::NotPerformed,
-                        AuditInput::new(),
-                    ),
+                    payload,
                 )?;
                 Err(RequestFailure {
                     state: RuntimeReceiptState::Failed,
@@ -15374,14 +15413,14 @@ impl ActionFailure {
     }
 
     fn backend(error: RuntimeHostError) -> Self {
-        let task_failure = Some(TaskFailureEvidence {
+        let task_failure = Some(Box::new(TaskFailureEvidence {
             code: error.code(),
             severity: if error.is_fatal() {
                 EventSeverity::Fatal
             } else {
                 EventSeverity::Warning
             },
-        });
+        }));
         Self {
             diagnostic: DiagnosticCode::BackendOperationFailed,
             effect: EffectDisposition::Indeterminate,
