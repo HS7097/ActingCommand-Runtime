@@ -64,7 +64,8 @@ use std::process::Command;
 use std::process::ExitCode;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::thread;
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant};
+use unix_time::current_unix_ms;
 use user_config_keys::{config_get, config_set};
 use user_config_store::{config_path, read_user_config, write_user_config};
 use zip::{ZipWriter, write::FileOptions};
@@ -99,6 +100,7 @@ mod runtime_stream_adapter;
 mod safe_file_stem;
 mod sha256;
 mod state_roots;
+mod unix_time;
 mod user_config_keys;
 mod user_config_store;
 mod zip_error;
@@ -9732,15 +9734,6 @@ fn ensure_path_within(
         ));
     }
     Ok(resolved)
-}
-
-fn current_unix_ms() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis()
-        .try_into()
-        .unwrap_or(u64::MAX)
 }
 
 fn read_json_file<T>(path: &Path) -> CliOutcome<Option<T>>

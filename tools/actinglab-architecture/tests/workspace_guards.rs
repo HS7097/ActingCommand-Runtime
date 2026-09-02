@@ -3295,6 +3295,124 @@ fn actinglab_state_roots_glue_stays_out_of_main() {
 }
 
 #[test]
+fn actinglab_unix_time_glue_stays_out_of_main() {
+    let root = workspace_root();
+    let main =
+        fs::read_to_string(root.join("apps/actinglab/src/main.rs")).expect("read ActingLab main");
+    let unix_time = fs::read_to_string(root.join("apps/actinglab/src/unix_time.rs"))
+        .expect("read ActingLab Unix time module");
+
+    const ROOT_DECLARATION: &str = "mod unix_time;";
+    const ROOT_IMPORT: &str = "use unix_time::current_unix_ms;";
+    let declarations = main
+        .lines()
+        .filter(|line| line.contains("mod unix_time;"))
+        .collect::<Vec<_>>();
+    let imports = main
+        .lines()
+        .filter(|line| line.contains("unix_time::"))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        declarations,
+        vec![ROOT_DECLARATION],
+        "ActingLab main lost the one private Unix time module declaration"
+    );
+    assert_eq!(
+        imports,
+        vec![ROOT_IMPORT],
+        "ActingLab main lost the one private Unix time import"
+    );
+
+    const DEFINITION: &str = "fn current_unix_ms() -> u64 {";
+    assert!(
+        unix_time.contains(DEFINITION),
+        "Unix time module lost owner definition"
+    );
+    assert!(
+        !main.contains(DEFINITION),
+        "ActingLab main regained Unix time owner definition"
+    );
+
+    assert_eq!(
+        unix_time.matches("pub(super) ").count(),
+        1,
+        "Unix time owner visibility changed"
+    );
+    for line in unix_time.lines() {
+        let trimmed = line.trim_start();
+        assert!(
+            !trimmed.starts_with("pub ") && !trimmed.starts_with("pub(crate) "),
+            "Unix time owner exposed broader visibility: {line}"
+        );
+    }
+
+    const CHILD_IMPORTS: &str = "use std::time::{SystemTime, UNIX_EPOCH};\n\n";
+    let raw_owner = unix_time
+        .strip_prefix(CHILD_IMPORTS)
+        .expect("Unix time module imports changed");
+    let normalized_owner = format!("{}\n", raw_owner.replacen("pub(super) ", "", 1));
+    assert_eq!(
+        normalized_owner.lines().count(),
+        9,
+        "Unix time owner line count changed"
+    );
+    assert_eq!(
+        normalized_owner.len(),
+        190,
+        "Unix time owner byte count changed"
+    );
+    assert_eq!(
+        format!("{:x}", Sha256::digest(normalized_owner.as_bytes())),
+        "af8521650cc385ab755dc9937460b7246143c5e55ce75ff37223e8e334e78cf2",
+        "Unix time owner body changed"
+    );
+
+    let caller_files = [
+        ("apps/actinglab/src/env_detection.rs", 1_usize),
+        ("apps/actinglab/src/main.rs", 17_usize),
+        ("apps/actinglab/src/runtime_session_adapter.rs", 1_usize),
+        ("apps/actinglab/src/runtime_stream_adapter.rs", 1_usize),
+    ];
+    let mut caller_closure = String::new();
+    let mut call_count = 0;
+    for (path, expected_calls) in caller_files {
+        let source = fs::read_to_string(root.join(path)).expect("read Unix time caller");
+        let calls = source
+            .lines()
+            .filter(|line| line.contains("current_unix_ms()"))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            calls.len(),
+            expected_calls,
+            "Unix time caller count changed in {path}"
+        );
+        if path != "apps/actinglab/src/main.rs" {
+            let root_import = source
+                .split_once(";\n")
+                .map(|(prefix, _)| prefix)
+                .expect("Unix time child import is missing");
+            assert!(
+                root_import.contains("use super::{") && root_import.contains("current_unix_ms"),
+                "Unix time child import changed in {path}"
+            );
+        }
+        call_count += calls.len();
+        for line in calls {
+            caller_closure.push_str(path);
+            caller_closure.push(':');
+            caller_closure.push_str(line.trim());
+            caller_closure.push('\n');
+        }
+    }
+    assert_eq!(call_count, 20, "Unix time caller closure changed");
+    assert_eq!(
+        format!("{:x}", Sha256::digest(caller_closure.as_bytes())),
+        "4439d79913c18139087e796db816788d505e08397545d443ada01f7e8fa35622",
+        "Unix time caller source changed"
+    );
+}
+
+#[test]
 fn actinglab_flag_values_glue_stays_out_of_main() {
     let root = workspace_root();
     let main =
@@ -4182,7 +4300,7 @@ fn actinglab_session_record_drift_diagnostics_path_glue_stays_out_of_main() {
     let caller_serialization = caller_rows.concat();
     assert_eq!(
         format!("{:x}", Sha256::digest(caller_serialization.as_bytes())),
-        "495d3676e6bbf2e7427bd03a4976100a7760c9d7dc61d20ce06e3e0ea7b6584c",
+        "0247447a649bd8162ec663c2e7b78b8a56f8c688533d4e23eb75904c44d3d319",
         "drift-diagnostics path caller serialization changed"
     );
 
@@ -4230,7 +4348,7 @@ fn actinglab_session_record_drift_diagnostics_path_glue_stays_out_of_main() {
         .trim()
         .parse::<usize>()
         .expect("ratchet/main_rs_lines.txt must contain one integer");
-    assert_eq!(ratchet, 20_565, "drift-diagnostics path ratchet changed");
+    assert_eq!(ratchet, 20_558, "drift-diagnostics path ratchet changed");
     assert_eq!(
         main.lines().count(),
         ratchet,
@@ -4313,7 +4431,7 @@ fn actinglab_parse_touch_backend_override_glue_stays_out_of_main() {
     let caller_serialization = caller_rows.concat();
     assert_eq!(
         format!("{:x}", Sha256::digest(caller_serialization.as_bytes())),
-        "6e4bebb6d2069f27119b822c8863d755061c399c39f934db7681b970c210e653",
+        "4a73ed63164c1f41a1bc2b8f3cef59b1b9051fdf5d1bdb9338be32042dff39f3",
         "touch-backend caller serialization changed"
     );
 
@@ -4370,7 +4488,7 @@ fn actinglab_parse_touch_backend_override_glue_stays_out_of_main() {
         .trim()
         .parse::<usize>()
         .expect("ratchet/main_rs_lines.txt must contain one integer");
-    assert_eq!(ratchet, 20_565, "touch-backend ratchet changed");
+    assert_eq!(ratchet, 20_558, "touch-backend ratchet changed");
     assert_eq!(
         main.lines().count(),
         ratchet,
@@ -4450,7 +4568,7 @@ fn actinglab_parse_match_metric_flag_glue_stays_out_of_main() {
     let caller_serialization = caller_rows.concat();
     assert_eq!(
         format!("{:x}", Sha256::digest(caller_serialization.as_bytes())),
-        "d2baa078b31f4e7fcaf7e3d959ab69e35b326d16c83d983629fd266de4437c50",
+        "781f4a829e1709426666a8f9b6941828009dfad97b0f1dea9eda4619d0c2a01d",
         "match-metric caller serialization changed"
     );
 
@@ -4518,7 +4636,7 @@ fn actinglab_parse_match_metric_flag_glue_stays_out_of_main() {
         .trim()
         .parse::<usize>()
         .expect("ratchet/main_rs_lines.txt must contain one integer");
-    assert_eq!(ratchet, 20_565, "match-metric ratchet changed");
+    assert_eq!(ratchet, 20_558, "match-metric ratchet changed");
     assert_eq!(
         main.lines().count(),
         ratchet,
@@ -4590,7 +4708,7 @@ fn actinglab_record_candidates_step_id_glue_stays_out_of_main() {
     let caller_serialization = caller_rows.concat();
     assert_eq!(
         format!("{:x}", Sha256::digest(caller_serialization.as_bytes())),
-        "661b52c5180a2b5f7c7975aa50332191546c220b7310192cde87d66033a13b3d",
+        "537f4e94fa8fe97944935788e1d9dfe47bd19907381b6e8745de0efdc63894ef",
         "record-candidates step-id caller serialization changed"
     );
 
@@ -4665,7 +4783,7 @@ fn actinglab_record_candidates_step_id_glue_stays_out_of_main() {
         .trim()
         .parse::<usize>()
         .expect("ratchet/main_rs_lines.txt must contain one integer");
-    assert_eq!(ratchet, 20_565, "record-candidates step-id ratchet changed");
+    assert_eq!(ratchet, 20_558, "record-candidates step-id ratchet changed");
     assert_eq!(
         main.lines().count(),
         ratchet,
@@ -4745,7 +4863,7 @@ fn actinglab_stream_input_relay_action_glue_stays_out_of_main() {
     let caller_serialization = caller_rows.concat();
     assert_eq!(
         format!("{:x}", Sha256::digest(caller_serialization.as_bytes())),
-        "af8cec0419d905468ba53211277aa050b8ac3a57eba5aaa0caf7f144224633a5",
+        "661d2eb3186271a19dddfb56c3273ba272d007b0c7cea18dc34234293995b0df",
         "input-relay caller serialization changed"
     );
 
@@ -4827,7 +4945,7 @@ fn actinglab_stream_input_relay_action_glue_stays_out_of_main() {
         .trim()
         .parse::<usize>()
         .expect("ratchet/main_rs_lines.txt must contain one integer");
-    assert_eq!(ratchet, 20_565, "input-relay ratchet changed");
+    assert_eq!(ratchet, 20_558, "input-relay ratchet changed");
     assert_eq!(
         main.lines().count(),
         ratchet,
@@ -4909,7 +5027,7 @@ fn actinglab_parse_record_build_resolution_glue_stays_out_of_main() {
     let caller_serialization = caller_rows.concat();
     assert_eq!(
         format!("{:x}", Sha256::digest(caller_serialization.as_bytes())),
-        "4b7cc71822169ca16732291715528bb7fe5e59a97232edd27f8efa3abdf43f66",
+        "0090b3060fb96ca2275593e02a9b8e25bdb73392a2690bfb97e86de1188aebf5",
         "record-build resolution caller serialization changed"
     );
 
@@ -4988,7 +5106,7 @@ fn actinglab_parse_record_build_resolution_glue_stays_out_of_main() {
         .trim()
         .parse::<usize>()
         .expect("ratchet/main_rs_lines.txt must contain one integer");
-    assert_eq!(ratchet, 20_565, "record-build resolution ratchet changed");
+    assert_eq!(ratchet, 20_558, "record-build resolution ratchet changed");
     assert_eq!(
         main.lines().count(),
         ratchet,
@@ -5094,7 +5212,7 @@ fn actinglab_parse_session_record_region_glue_stays_out_of_main() {
     let caller_serialization = caller_rows.concat();
     assert_eq!(
         format!("{:x}", Sha256::digest(caller_serialization.as_bytes())),
-        "55815335d133ad3124397a09f180946952744f22f88e9d561463ee23c3e80d8c",
+        "3d3bf23ddb70215d6627ce11c94c638b5113858998df337f6560e4b818ce572c",
         "session-record region caller serialization changed"
     );
 
@@ -5172,7 +5290,7 @@ fn actinglab_parse_session_record_region_glue_stays_out_of_main() {
         .trim()
         .parse::<usize>()
         .expect("ratchet/main_rs_lines.txt must contain one integer");
-    assert_eq!(ratchet, 20_565, "session-record region ratchet changed");
+    assert_eq!(ratchet, 20_558, "session-record region ratchet changed");
     assert_eq!(
         main.lines().count(),
         ratchet,
@@ -5366,7 +5484,7 @@ fn actinglab_parse_session_record_rect_glue_stays_out_of_main() {
         .trim()
         .parse::<usize>()
         .expect("ratchet/main_rs_lines.txt must contain one integer");
-    assert_eq!(ratchet, 20_565, "session-record rectangle ratchet changed");
+    assert_eq!(ratchet, 20_558, "session-record rectangle ratchet changed");
     assert_eq!(
         main.lines().count(),
         ratchet,
@@ -5449,14 +5567,14 @@ fn actinglab_parse_session_record_swipe_rects_glue_stays_out_of_main() {
     );
     assert_eq!(
         format!("{:x}", Sha256::digest(caller_rows.concat().as_bytes())),
-        "bb850ae7ce0086d92f7133dacec3af38cea491cc5d5fec7d341bc1f993f6ea28",
+        "33a8657012c1cdc2ca111e2eeb77dba10d73a62121324a7a04670b3ff9204cfb",
         "session-record swipe location-bearing caller serialization changed"
     );
     let semantic_callers = caller_rows
         .iter()
         .map(|row| {
             let (_, expression) = row
-                .split_once(&format!("apps/actinglab/src/main.rs:{}:", 8460))
+                .split_once(&format!("apps/actinglab/src/main.rs:{}:", 8462))
                 .expect("session-record swipe caller row lost its frozen location");
             expression.to_string()
         })
@@ -5533,7 +5651,7 @@ fn actinglab_parse_session_record_swipe_rects_glue_stays_out_of_main() {
         .trim()
         .parse::<usize>()
         .expect("ratchet/main_rs_lines.txt must contain one integer");
-    assert_eq!(ratchet, 20_565, "session-record swipe ratchet changed");
+    assert_eq!(ratchet, 20_558, "session-record swipe ratchet changed");
     assert_eq!(
         main.lines().count(),
         ratchet,
