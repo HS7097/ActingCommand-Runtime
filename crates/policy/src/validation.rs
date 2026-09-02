@@ -2,6 +2,8 @@
 
 use std::collections::HashSet;
 
+use actingcommand_contract::MAX_STRATEGIC_WEIGHT_MILLI;
+
 use crate::source::SourceMap;
 use crate::{
     ActivityProfile, CatalogBundle, CatalogDiagnostic, CatalogDiagnosticCode, ClockSchedule,
@@ -378,11 +380,11 @@ fn validate_task(
         descriptor,
         diagnostics,
     );
-    if task.strategic_weight_milli > 10_000 {
+    if task.strategic_weight_milli > MAX_STRATEGIC_WEIGHT_MILLI {
         diagnostics.push(map.diagnostic(
             CatalogDiagnosticCode::LimitExceeded,
             format!("{path}/strategic_weight_milli"),
-            "strategic weight exceeds 10000",
+            format!("strategic weight exceeds {MAX_STRATEGIC_WEIGHT_MILLI}"),
             descriptor,
         ));
     }
@@ -416,12 +418,12 @@ fn validate_task(
             ));
         }
         if let Some(weight) = override_spec.strategic_weight_milli.0
-            && weight > 10_000
+            && weight > MAX_STRATEGIC_WEIGHT_MILLI
         {
             diagnostics.push(map.diagnostic(
                 CatalogDiagnosticCode::LimitExceeded,
                 format!("{override_path}/strategic_weight_milli"),
-                "override strategic weight exceeds 10000",
+                format!("override strategic weight exceeds {MAX_STRATEGIC_WEIGHT_MILLI}"),
                 descriptor,
             ));
         }
@@ -1202,11 +1204,11 @@ fn validate_activity_profile(
                 descriptor,
             ));
         }
-        if goal.strategic_weight_milli > 10_000 {
+        if goal.strategic_weight_milli > MAX_STRATEGIC_WEIGHT_MILLI {
             diagnostics.push(map.diagnostic(
                 CatalogDiagnosticCode::LimitExceeded,
                 format!("{goal_path}/strategic_weight_milli"),
-                "goal strategic weight exceeds 10000",
+                format!("goal strategic weight exceeds {MAX_STRATEGIC_WEIGHT_MILLI}"),
                 descriptor,
             ));
         }
