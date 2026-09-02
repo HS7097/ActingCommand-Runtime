@@ -28,10 +28,99 @@ pub enum ForensicCommand {
     Export,
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+pub struct ForensicEventFilter {
+    pub origin_module: Option<String>,
+    pub diagnostic_code: Option<String>,
+    pub severity: Option<String>,
+    pub correlation_id: Option<String>,
+}
+
+impl ForensicEventFilter {
+    pub fn new(
+        origin_module: Option<String>,
+        diagnostic_code: Option<String>,
+        severity: Option<String>,
+        correlation_id: Option<String>,
+    ) -> ForensicResult<Self> {
+        if origin_module
+            .as_deref()
+            .is_some_and(|value| !valid_origin_module(value))
+            || diagnostic_code
+                .as_deref()
+                .is_some_and(|value| !valid_diagnostic_code(value))
+            || severity
+                .as_deref()
+                .is_some_and(|value| !valid_severity(value))
+            || correlation_id
+                .as_deref()
+                .is_some_and(|value| !valid_correlation_id(value))
+        {
+            return Err(ForensicError::new(
+                "invalid_event_filter",
+                "validate_event_filter",
+                "event filter contains an unknown enum or invalid token",
+            ));
+        }
+        Ok(Self {
+            origin_module,
+            diagnostic_code,
+            severity,
+            correlation_id,
+        })
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ForensicEventsRequest {
+    filter: ForensicEventFilter,
+    after_sequence: u64,
+    through_sequence: Option<u64>,
+    limit: usize,
+}
+
+impl ForensicEventsRequest {
+    pub fn new(
+        filter: ForensicEventFilter,
+        after_sequence: u64,
+        through_sequence: Option<u64>,
+        limit: usize,
+    ) -> ForensicResult<Self> {
+        if limit == 0
+            || limit > MAX_FORENSIC_EVENTS
+            || through_sequence.is_some_and(|through| after_sequence > through)
+        {
+            return Err(ForensicError::new(
+                "invalid_event_page",
+                "validate_event_page",
+                "event page limit or sequence boundary is invalid",
+            ));
+        }
+        Ok(Self {
+            filter,
+            after_sequence,
+            through_sequence,
+            limit,
+        })
+    }
+}
+
+impl Default for ForensicEventsRequest {
+    fn default() -> Self {
+        Self {
+            filter: ForensicEventFilter::default(),
+            after_sequence: 0,
+            through_sequence: None,
+            limit: MAX_FORENSIC_EVENTS,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ForensicRequest {
     pub state_root: PathBuf,
     pub command: ForensicCommand,
+    events: ForensicEventsRequest,
 }
 
 impl ForensicRequest {
@@ -39,6 +128,15 @@ impl ForensicRequest {
         Self {
             state_root: state_root.as_ref().to_path_buf(),
             command,
+            events: ForensicEventsRequest::default(),
+        }
+    }
+
+    pub fn events(state_root: impl AsRef<Path>, events: ForensicEventsRequest) -> Self {
+        Self {
+            state_root: state_root.as_ref().to_path_buf(),
+            command: ForensicCommand::Events,
+            events,
         }
     }
 }
@@ -103,9 +201,13 @@ pub struct OpenReport {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct EventsReport {
+    pub filter: ForensicEventFilter,
+    pub after_sequence: u64,
     pub through_sequence: u64,
     pub limit: usize,
     pub events: Vec<PersistedEvent>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub next_after_sequence: Option<u64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -201,20 +303,9 @@ pub fn run(request: ForensicRequest) -> ForensicResult<ForensicOutput> {
         ForensicCommand::Open => Ok(ForensicOutput::Machine(ForensicReport::Open(open_report(
             &snapshot,
         )))),
-        ForensicCommand::Events => {
-            let query = serde_json::from_value(json!({})).map_err(query_error)?;
-            let through_sequence = snapshot.latest_sequence();
-            let events = snapshot
-                .query_page(&query, 0, through_sequence, MAX_FORENSIC_EVENTS)
-                .map_err(map_ledger_error)?;
-            Ok(ForensicOutput::Machine(ForensicReport::Events(
-                EventsReport {
-                    through_sequence,
-                    limit: MAX_FORENSIC_EVENTS,
-                    events,
-                },
-            )))
-        }
+        ForensicCommand::Events => Ok(ForensicOutput::Machine(ForensicReport::Events(
+            events_report(&snapshot, request.events)?,
+        ))),
         ForensicCommand::Chain { request_id } => {
             let query =
                 serde_json::from_value(json!({ "request_id": request_id })).map_err(query_error)?;
@@ -242,6 +333,148 @@ pub fn run(request: ForensicRequest) -> ForensicResult<ForensicOutput> {
         ))),
         ForensicCommand::Export => Ok(ForensicOutput::Human(render_export(&snapshot)?)),
     }
+}
+
+fn events_report(
+    snapshot: &GlobalLedgerReadOnly,
+    request: ForensicEventsRequest,
+) -> ForensicResult<EventsReport> {
+    let through_sequence = request
+        .through_sequence
+        .unwrap_or_else(|| snapshot.latest_sequence());
+    if request.after_sequence > through_sequence {
+        return Err(ForensicError::new(
+            "invalid_event_page",
+            "validate_event_page",
+            "after sequence exceeds the frozen through sequence",
+        ));
+    }
+    let mut events = Vec::with_capacity(request.limit);
+    let mut has_more = false;
+    for event in snapshot.events() {
+        if event.sequence() <= request.after_sequence || event.sequence() > through_sequence {
+            continue;
+        }
+        if !event_matches_filter(event, &request.filter)? {
+            continue;
+        }
+        if events.len() == request.limit {
+            has_more = true;
+            break;
+        }
+        events.push(event.clone());
+    }
+    let next_after_sequence = has_more.then(|| {
+        events
+            .last()
+            .expect("a full positive-limit page has a final event")
+            .sequence()
+    });
+    Ok(EventsReport {
+        filter: request.filter,
+        after_sequence: request.after_sequence,
+        through_sequence,
+        limit: request.limit,
+        events,
+        next_after_sequence,
+    })
+}
+
+fn event_matches_filter(
+    event: &PersistedEvent,
+    filter: &ForensicEventFilter,
+) -> ForensicResult<bool> {
+    if filter
+        .origin_module
+        .as_deref()
+        .is_some_and(|value| event.origin().module().as_str() != value)
+        || filter.diagnostic_code.as_deref().is_some_and(|value| {
+            event.payload().diagnostic_code().map(|code| code.as_str()) != Some(value)
+        })
+        || filter
+            .severity
+            .as_deref()
+            .is_some_and(|value| event.severity().as_str() != value)
+    {
+        return Ok(false);
+    }
+    let Some(expected) = filter.correlation_id.as_deref() else {
+        return Ok(true);
+    };
+    let actual = event
+        .links()
+        .correlation_id()
+        .map(serde_json::to_value)
+        .transpose()
+        .map_err(serialization_error)?;
+    Ok(actual.as_ref().and_then(serde_json::Value::as_str) == Some(expected))
+}
+
+fn valid_origin_module(value: &str) -> bool {
+    matches!(
+        value,
+        "actingctl"
+            | "actinglab"
+            | "runtime"
+            | "scheduler"
+            | "policy"
+            | "device-proxy"
+            | "capture"
+            | "capture-pipeline"
+            | "recognition"
+            | "resource-tooling"
+            | "artifact-store"
+            | "evidence-exporter"
+            | "global-ledger"
+            | "performance-monitor"
+            | "fact-store"
+            | "governance"
+            | "agent-dispatcher"
+            | "process-test"
+    )
+}
+
+fn valid_diagnostic_code(value: &str) -> bool {
+    matches!(
+        value,
+        "runtime.diagnostic"
+            | "runtime.owner_conflict"
+            | "runtime.protocol_invalid"
+            | "lease.busy"
+            | "lease.cooldown"
+            | "lease.expired"
+            | "lease.fencing_denied"
+            | "lease.queue_cancelled"
+            | "lease.queue_expired"
+            | "lease.queue_disconnected"
+            | "backend.open_failed"
+            | "backend.operation_failed"
+            | "capture.failed"
+            | "artifact.write_failed"
+            | "artifact.verify_failed"
+            | "artifact.export_failed"
+            | "artifact.pinned_frame_missing"
+            | "recognition.failed"
+            | "input.failed"
+            | "application.failed"
+            | "command.rejected"
+            | "policy.rejected"
+            | "catalog.transition_failed"
+            | "release.transition_failed"
+    )
+}
+
+fn valid_severity(value: &str) -> bool {
+    matches!(value, "debug" | "info" | "warning" | "error" | "fatal")
+}
+
+fn valid_correlation_id(value: &str) -> bool {
+    value.strip_prefix("correlation_").is_some_and(|hex| {
+        hex.len() == 32
+            && hex
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
+    })
 }
 
 fn open_report(snapshot: &GlobalLedgerReadOnly) -> OpenReport {
