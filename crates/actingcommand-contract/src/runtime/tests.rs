@@ -1228,6 +1228,106 @@ fn agent_dispatcher_operations_require_agent_adapter_origin() {
 }
 
 #[test]
+fn publish_fact_requires_v2_agent_adapter_request() {
+    let record = crate::FactRecord {
+        scope: crate::FactScope::Server {
+            server_id: "fixture-server-a".to_owned(),
+        },
+        key: "env.ui_theme".to_owned(),
+        content: crate::FactContent::Inline {
+            value: crate::FactValue::String("Neutral".to_owned()),
+        },
+        observed_at_unix_ms: 1,
+        expires_at_unix_ms: None,
+        ttl_policy: None,
+        confidence_milli: 1_000,
+        source_detector: "detector.fixture".to_owned(),
+        source_snapshot_id: "snapshot:publish-fact".to_owned(),
+        schema_version: "fact.v1".to_owned(),
+        resource_bundle_hash: "a".repeat(64),
+        invalidate_on: Vec::new(),
+    };
+    let operation = RuntimeOperation::PublishFact {
+        record: record.clone(),
+    };
+    assert_eq!(
+        format!("{operation:?}"),
+        "RuntimeOperation::PublishFact(<typed-fact>)"
+    );
+    assert!(!format!("{operation:?}").contains(&record.source_snapshot_id));
+
+    let ids = issuer();
+    let request = RuntimeRequest::new(
+        ids.mint_request_id().expect("request"),
+        ids.mint_correlation_id().expect("correlation"),
+        None,
+        EventActor::Agent,
+        EventSource::Adapter,
+        1,
+        operation.clone(),
+    )
+    .expect("agent fact publication request");
+    let encoded = serde_json::to_value(&request).expect("fact publication request JSON");
+    assert_eq!(
+        encoded["schema_version"],
+        "actingcommand.runtime.request.v2"
+    );
+    assert_eq!(encoded["operation"]["operation"], "publish_fact");
+    assert_eq!(encoded["operation"]["record"]["key"], "env.ui_theme");
+
+    let mut v1 = encoded;
+    v1["schema_version"] = serde_json::json!("actingcommand.runtime.request.v1");
+    let v1: RuntimeRequest = serde_json::from_value(v1).expect("v1 request wire shape");
+    assert_eq!(
+        v1.validate().expect_err("v1 must fail loud").code(),
+        "unsupported_request_schema"
+    );
+
+    for (actor, source) in [
+        (EventActor::Cli, EventSource::Cli),
+        (EventActor::User, EventSource::Ui),
+        (EventActor::Lab, EventSource::Lab),
+    ] {
+        let ids = issuer();
+        assert_eq!(
+            RuntimeRequest::new(
+                ids.mint_request_id().expect("request"),
+                ids.mint_correlation_id().expect("correlation"),
+                None,
+                actor,
+                source,
+                1,
+                operation.clone(),
+            )
+            .expect_err("only Agent/Adapter may publish facts")
+            .code(),
+            "invalid_agent_dispatcher_origin"
+        );
+    }
+
+    let mut invalid_record = record;
+    invalid_record.key = "unsupported".to_owned();
+    assert_eq!(
+        RuntimeOperation::PublishFact {
+            record: invalid_record
+        }
+        .validate()
+        .expect_err("FactRecord validation must be delegated")
+        .code(),
+        "invalid_fact_key"
+    );
+
+    let event_id = *issuer().mint_event_id().expect("event id").transport();
+    let result = RuntimeResult::FactPublished { event_id };
+    let result_json = serde_json::to_value(&result).expect("fact publication result JSON");
+    assert_eq!(result_json["kind"], "fact_published");
+    assert_eq!(
+        serde_json::from_value::<RuntimeResult>(result_json).expect("fact publication result"),
+        result
+    );
+}
+
+#[test]
 fn planning_document_is_bounded_content_addressed_and_typed() {
     let document = RuntimePlanningDocument::encode(
         RuntimePlanningDocumentKind::EvaluationTime,

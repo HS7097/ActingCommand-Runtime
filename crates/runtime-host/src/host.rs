@@ -5290,6 +5290,20 @@ impl HostShared {
                 ExecutionBackendProvenance::PhysicalDevice,
                 None,
             ),
+            RuntimeOperation::PublishFact { record } => {
+                let event_id = self.publish_fact(record.clone()).map_err(|error| {
+                    if error.is_fatal() {
+                        RequestFailure::poison_without_terminal(error)
+                    } else {
+                        RequestFailure::request(error, RuntimeReceiptState::Denied, None)
+                    }
+                })?;
+                Ok(OperationSuccess {
+                    state: RuntimeReceiptState::Completed,
+                    terminal: None,
+                    result: RuntimeResult::FactPublished { event_id },
+                })
+            }
             RuntimeOperation::QueryEvents {
                 query,
                 profile,

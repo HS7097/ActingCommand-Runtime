@@ -17,7 +17,7 @@ use crate::{
     AgentWakeId, ApprovalDecisionRecord, ApprovalDisposition, ArtifactKind, ArtifactLinksDraft,
     ArtifactMediaType, ArtifactRedactionState, CatalogProposal, CausationId, ClientActionRecord,
     CorrelationId, EffectDisposition, EventActor, EventId, EventLinksDraft, EventQuery,
-    EventSource, EventType, EvidenceCompleteness, FactScope, FrameId, HolderId,
+    EventSource, EventType, EvidenceCompleteness, FactRecord, FactScope, FrameId, HolderId,
     IdentifierIssuanceError, IdentifierIssuer, InstanceId, IssuedCausationId, IssuedCorrelationId,
     IssuedFrameId, IssuedHolderId, IssuedRecognitionId, IssuedRequestId, IssuedRunId, IssuedTaskId,
     LeaseId, OwnerEpoch, ProjectInterfaceRequest, ProjectInterfaceResponse,
@@ -34,7 +34,7 @@ use std::error::Error;
 use std::fmt;
 use std::net::{IpAddr, SocketAddr};
 
-pub const RUNTIME_REQUEST_SCHEMA_VERSION: &str = "actingcommand.runtime.request.v1";
+pub const RUNTIME_REQUEST_SCHEMA_VERSION: &str = "actingcommand.runtime.request.v2";
 pub const RUNTIME_RECEIPT_SCHEMA_VERSION: &str = "actingcommand.runtime.receipt.v1";
 pub const RUNTIME_INFO_SCHEMA_VERSION: &str = "actingcommand.runtime.info.v1";
 pub const RUNTIME_INFO_FILE: &str = "runtime-info.json";
@@ -2291,6 +2291,9 @@ pub enum RuntimeOperation {
         token: LeaseToken,
         action: InputAction,
     },
+    PublishFact {
+        record: FactRecord,
+    },
     QueryEvents {
         query: EventQuery,
         profile: ProjectionProfile,
@@ -2420,6 +2423,9 @@ impl RuntimeOperation {
             Self::RecordClientAction { action } => action
                 .validate()
                 .map_err(|_| RuntimeContractError::new("invalid_client_action")),
+            Self::PublishFact { record } => record
+                .validate()
+                .map_err(|error| RuntimeContractError::new(error.code())),
             Self::AuthenticateGovernance { capability } => {
                 if !(MIN_GOVERNANCE_CAPABILITY_BYTES..=MAX_GOVERNANCE_CAPABILITY_BYTES)
                     .contains(&capability.len())
@@ -2545,6 +2551,7 @@ impl fmt::Debug for RuntimeOperation {
             }
             Self::RunContainedTask { .. } => "RuntimeOperation::RunContainedTask(<redacted>)",
             Self::Input { .. } => "RuntimeOperation::Input(<redacted>)",
+            Self::PublishFact { .. } => "RuntimeOperation::PublishFact(<typed-fact>)",
             Self::QueryEvents { .. } => "RuntimeOperation::QueryEvents(<typed-query>)",
             Self::SubscribeEvents { .. } => "RuntimeOperation::SubscribeEvents(<typed-query>)",
             Self::DebugPackage { .. } => "RuntimeOperation::DebugPackage(<redacted>)",
@@ -2672,6 +2679,7 @@ impl RuntimeRequest {
                 | RuntimeOperation::ResumeAgentSession { .. }
                 | RuntimeOperation::AgentSessionStatus { .. }
                 | RuntimeOperation::RecordAgentResponse { .. }
+                | RuntimeOperation::PublishFact { .. }
                 | RuntimeOperation::PrepareStrategicReport { .. }
                 | RuntimeOperation::ProjectPolicyForward { .. }
                 | RuntimeOperation::AssessPredictiveMaintenance { .. }
@@ -3110,6 +3118,9 @@ pub enum RuntimeResult {
     },
     InputCommitted {
         action_id: ActionId,
+    },
+    FactPublished {
+        event_id: EventId,
     },
     EventPage {
         page: RuntimeEventQueryPage,
