@@ -29,7 +29,7 @@ pub(super) fn run_runtime_debug(subcommand: &str, args: &[String]) -> CliOutcome
 pub(super) fn capabilities() -> [Value; 6] {
     [
         command_cap("lab status", ["running_runtime"], "available"),
-        command_cap("lab receipt", ["offline"], "available"),
+        command_cap("lab receipt", ["running_runtime"], "available"),
         command_cap("lab debug-package", ["running_runtime"], "available"),
         command_cap("lab watch", ["running_runtime"], "available"),
         command_cap("lab export-evidence", ["running_runtime"], "available"),
