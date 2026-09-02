@@ -3,7 +3,13 @@
 //! Recoverable single-writer storage for the global Runtime event ledger.
 
 mod projection;
+mod read_only;
 mod storage;
+
+pub use read_only::{
+    GlobalLedgerCorruptTail, GlobalLedgerReadOnly, GlobalLedgerReadOnlyConfig,
+    GlobalLedgerRepairRecord, GlobalLedgerWriterMetadata, GlobalLedgerWriterMetadataObservation,
+};
 
 use crate::PersistedEvent;
 use actingcommand_contract::{
@@ -515,6 +521,16 @@ impl fmt::Debug for GlobalLedger {
 impl GlobalLedger {
     pub fn open(config: GlobalLedgerConfig) -> GlobalLedgerResult<Self> {
         Self::open_with_store(config, SegmentStore::open)
+    }
+
+    pub fn open_read_only<F>(
+        config: GlobalLedgerReadOnlyConfig,
+        verify_artifact: F,
+    ) -> GlobalLedgerResult<GlobalLedgerReadOnly>
+    where
+        F: FnMut(&ProjectedArtifactReference) -> Option<VerifiedArtifactReference>,
+    {
+        GlobalLedgerReadOnly::open(config, verify_artifact)
     }
 
     pub fn open_with_artifact_verifier<F>(
@@ -1180,6 +1196,9 @@ mod tests;
 
 #[cfg(test)]
 mod recovery_tests;
+
+#[cfg(test)]
+mod read_only_tests;
 
 #[cfg(test)]
 #[path = "global/v2_tests.rs"]
