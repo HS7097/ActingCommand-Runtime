@@ -1243,6 +1243,15 @@ fn strategy_policy_sources(version: u64) -> CatalogSources {
         serde_json::from_slice(&sources.tasks.bytes).expect("strategy task fixture");
     tasks["tasks"][0]["scope"] = game_scope.clone();
     tasks["tasks"][0]["trigger"]["predicates"][1]["scope"] = game_scope.clone();
+    tasks["tasks"][0]["produces"][0]["amount"] = serde_json::json!(10);
+    tasks["tasks"][0]["next_run_clamp_ms"] = serde_json::json!(1_000);
+    tasks["tasks"][0]["expected_duration_ms"] = serde_json::json!(1_000);
+    tasks["tasks"][0]["cooldown_ms"] = serde_json::json!(0);
+    tasks["tasks"][0]["loop_budget"] = serde_json::json!({
+        "daily_limit": 10,
+        "window_iteration_limit": 5,
+        "max_runtime_ms": 60_000
+    });
     sources.tasks.bytes = serde_json::to_vec_pretty(&tasks).expect("strategy task bytes");
     let mut pools: serde_json::Value =
         serde_json::from_slice(&sources.pools.bytes).expect("strategy pool fixture");
@@ -1269,21 +1278,22 @@ fn large_strategy_policy_sources(version: u64) -> CatalogSources {
 fn strategy_report(
     base: &CatalogGeneration,
     evidence: &ProjectedArtifactReference,
-    as_of_ledger_position: u64,
+    facts: &EvaluationFacts,
 ) -> StrategicReport {
     strategy_report_with_assessments(
         base,
         evidence,
-        as_of_ledger_position,
+        facts.ledger_position,
+        &facts.fact_snapshot_id,
         vec![
             StrategicInstanceAssessment {
                 goal_id: "goal.primary".to_owned(),
                 instance_id: "fixture-instance-a".to_owned(),
                 game_id: "fixture-game-a".to_owned(),
-                fact_snapshot_id: "snapshot:strategy-a".to_owned(),
-                current_projection: Some(50),
-                production_rate_per_hour: Some(100),
-                target: 100,
+                fact_snapshot_id: facts.fact_snapshot_id.clone(),
+                current_projection: Some(10),
+                production_rate_per_hour: Some(50),
+                target: 50,
                 deadline_unix_ms: POLICY_NOW_UNIX_MS + 3_600_000,
                 available: true,
                 capability_ids: vec!["operation.observe".to_owned()],
@@ -1292,9 +1302,9 @@ fn strategy_report(
                 goal_id: "goal.primary".to_owned(),
                 instance_id: "fixture-instance-b".to_owned(),
                 game_id: "fixture-game-a".to_owned(),
-                fact_snapshot_id: "snapshot:strategy-b".to_owned(),
-                current_projection: Some(0),
-                production_rate_per_hour: Some(10),
+                fact_snapshot_id: facts.fact_snapshot_id.clone(),
+                current_projection: Some(10),
+                production_rate_per_hour: Some(50),
                 target: 100,
                 deadline_unix_ms: POLICY_NOW_UNIX_MS + 3_600_000,
                 available: true,
@@ -1308,8 +1318,12 @@ fn strategy_report_with_assessments(
     base: &CatalogGeneration,
     evidence: &ProjectedArtifactReference,
     as_of_ledger_position: u64,
-    assessments: Vec<StrategicInstanceAssessment>,
+    fact_snapshot_id: &str,
+    mut assessments: Vec<StrategicInstanceAssessment>,
 ) -> StrategicReport {
+    for assessment in &mut assessments {
+        assessment.fact_snapshot_id = fact_snapshot_id.to_owned();
+    }
     let max_active = u16::try_from(assessments.len()).expect("bounded assessment count");
     let artifact_id = serde_json::to_value(evidence.artifact_id)
         .expect("artifact id JSON")
@@ -1332,8 +1346,8 @@ fn strategy_report_with_assessments(
         vec![StrategicGoal {
             goal_id: "goal.primary".to_owned(),
             goal_version: 1,
-            metric: MetricRef::Fact {
-                fact_key: "resource.primary".to_owned(),
+            metric: MetricRef::Pool {
+                pool_id: "fixture-pool-a".to_owned(),
             },
             templates: vec![StrategicTemplate {
                 template_id: "template.primary".to_owned(),
@@ -1531,6 +1545,33 @@ fn verified_artifact_sequence(host: &RuntimeHost, reference: &ProjectedArtifactR
     .find(|event| event.artifacts.iter().any(|artifact| artifact == reference))
     .expect("artifact verification event")
     .sequence
+}
+
+fn strategic_frozen_identity(
+    host: &RuntimeHost,
+    facts: &EvaluationFacts,
+    resources: &EvaluationResources,
+) -> (u64, String) {
+    let cycle = host
+        .evaluate_policy_cycle_with_test_inputs(
+            facts,
+            resources,
+            EvaluationTime {
+                unix_ms: POLICY_NOW_UNIX_MS,
+                monotonic_ms: POLICY_NOW_UNIX_MS,
+            },
+            268,
+            PolicyTrigger::FactsChanged,
+        )
+        .expect("authoritative strategy identity");
+    let intent = cycle
+        .evaluation
+        .expect("strategy identity evaluation")
+        .dispatch_intents
+        .into_iter()
+        .next()
+        .expect("strategy identity intent");
+    (intent.input_ledger_position, intent.fact_snapshot_id)
 }
 
 fn policy_facts() -> EvaluationFacts {
@@ -16798,12 +16839,41 @@ fn planning_ipc_rejects_oversized_forward_projection_without_poisoning_runtime()
 #[test]
 fn strategic_planning_overrun_does_not_publish_report_or_poison_runtime() {
     let root = TempDir::new().expect("tempdir");
+    let aliases = (0..29)
+        .map(|index| format!("fixture-instance-{index:02}"))
+        .collect::<Vec<_>>();
+    let mut input_facts = policy_facts();
+    input_facts.outcomes.clear();
+    input_facts.instances = aliases
+        .iter()
+        .map(|alias| InstanceSnapshot {
+            instance_id: alias.clone(),
+            server_id: "fixture-server-a".to_owned(),
+            game_id: "fixture-game-a".to_owned(),
+            host_id: "fixture-host-a".to_owned(),
+            available: true,
+            capability_operation_ids: vec!["operation.observe".to_owned()],
+            preferred_task_ids: Vec::new(),
+        })
+        .collect();
+    let large_yield_points = (0..128)
+        .map(|index| format!("checkpoint.{index:03}.{}", "x".repeat(108)))
+        .collect::<Vec<_>>();
+    let state = Arc::new(FakeState::default());
     let host = RuntimeHost::start(
-        config(&root),
-        Arc::new(FakeProvider::one(
-            POLICY_INSTANCE_ALIAS,
-            instance_id(),
-            Arc::new(FakeState::default()),
+        config(&root)
+            .with_policy_inputs(PolicyInputSnapshot::new(
+                input_facts.clone(),
+                policy_resources(),
+            ))
+            .with_procedure_manifest(procedure_manifest_with_primary(
+                b"fixture procedure observe package v1",
+                large_yield_points,
+            )),
+        Arc::new(FakeProvider::from_entries(
+            aliases
+                .iter()
+                .map(|alias| (alias.clone(), instance_id(), Arc::clone(&state))),
         )),
     )
     .expect("runtime host");
@@ -16815,14 +16885,21 @@ fn strategic_planning_overrun_does_not_publish_report_or_poison_runtime() {
     let evidence = host
         .store_test_report(b"synthetic oversized strategy evidence")
         .expect("strategy evidence");
-    let assessments = (0..29)
-        .map(|index| StrategicInstanceAssessment {
+    let resources = policy_resources();
+    let (ledger_position, fact_snapshot_id) =
+        strategic_frozen_identity(&host, &input_facts, &resources);
+    let mut facts = input_facts;
+    facts.ledger_position = ledger_position;
+    facts.fact_snapshot_id = fact_snapshot_id;
+    let assessments = aliases
+        .iter()
+        .map(|alias| StrategicInstanceAssessment {
             goal_id: "goal.primary".to_owned(),
-            instance_id: format!("fixture-instance-{index:02}"),
+            instance_id: alias.clone(),
             game_id: "fixture-game-a".to_owned(),
-            fact_snapshot_id: format!("snapshot:strategy-{index:02}"),
-            current_projection: Some(0),
-            production_rate_per_hour: Some(10),
+            fact_snapshot_id: facts.fact_snapshot_id.clone(),
+            current_projection: Some(10),
+            production_rate_per_hour: Some(50),
             target: 100,
             deadline_unix_ms: POLICY_NOW_UNIX_MS + 3_600_000,
             available: true,
@@ -16832,14 +16909,16 @@ fn strategic_planning_overrun_does_not_publish_report_or_poison_runtime() {
     let report = strategy_report_with_assessments(
         &base,
         &evidence,
-        verified_artifact_sequence(&host, &evidence),
+        facts.ledger_position,
+        &facts.fact_snapshot_id,
         assessments,
     );
     let report_document =
         RuntimePlanningDocument::encode(RuntimePlanningDocumentKind::StrategicReport, &report)
             .expect("bounded strategic report input");
-    let projection = actingcommand_policy::project_strategic_report(&compiled, &report)
-        .expect("derived strategic projection");
+    let projection =
+        actingcommand_policy::project_strategic_report(&compiled, &report, &facts, &resources)
+            .expect("derived strategic projection");
     assert!(
         serde_json::to_vec(&projection)
             .expect("strategic projection bytes")
@@ -16911,15 +16990,276 @@ fn planning_ipc_rejects_invalid_typed_documents_without_poisoning_runtime() {
 }
 
 #[test]
-fn strategic_report_is_local_deterministic_and_promotes_only_after_approval() {
+fn strategic_report_uses_authoritative_policy_projection() {
     let root = TempDir::new().expect("tempdir");
-    let fake_state = Arc::new(FakeState::default());
+    let state = Arc::new(FakeState::default());
     let host = RuntimeHost::start(
         config(&root),
         Arc::new(FakeProvider::one(
             POLICY_INSTANCE_ALIAS,
             instance_id(),
-            Arc::clone(&fake_state),
+            Arc::clone(&state),
+        )),
+    )
+    .expect("runtime host");
+    let base = host
+        .activate_policy_catalog(&strategy_policy_sources(1))
+        .expect("strategy base catalog");
+    let evidence = host
+        .store_test_report(b"synthetic authoritative strategy evidence")
+        .expect("strategy evidence");
+    let mut client = TestClient::connect(&host);
+    let publish = client.agent_request(RuntimeOperation::PublishFact {
+        record: stored_fact(
+            FactScope::Instance {
+                instance_id: POLICY_INSTANCE_ALIAS.to_owned(),
+            },
+            "resource.primary",
+            ContractFactValue::Integer(60),
+            "snapshot:authoritative-strategy",
+            Vec::new(),
+        ),
+    });
+    assert_eq!(
+        client.send(&publish).state(),
+        RuntimeReceiptState::Completed
+    );
+    let (ledger_position, fact_snapshot_id) =
+        strategic_frozen_identity(&host, &policy_facts(), &policy_resources());
+    let artifact_id = serde_json::to_value(evidence.artifact_id)
+        .expect("artifact id JSON")
+        .as_str()
+        .expect("artifact id string")
+        .to_owned();
+    let template = |template_id: &str| StrategicTemplate {
+        template_id: template_id.to_owned(),
+        task_template_ids: vec!["fixture.observe".to_owned()],
+        activity_profile_template_id: "fixture-activity-game".to_owned(),
+        eligibility: PredicateSpec::Fact {
+            scope: ScopeSelector::Game {
+                game_id: "fixture-game-a".to_owned(),
+            },
+            fact_key: "feature.enabled".to_owned(),
+            comparison: Comparison::Eq,
+            value: FactValue::Boolean(true),
+            max_age_ms: Some(60_000),
+        },
+        match_bands: vec![
+            StrategicBand::Actionable,
+            StrategicBand::InfeasibleBestEffort,
+        ],
+        minimum_urgency_milli: 0,
+        maximum_urgency_milli: 1_000_000,
+        strategic_weight_milli: 500,
+        load_profile: LoadProfile::Weighted {
+            cpu_milli: 200,
+            gpu_milli: 100,
+            io_milli: 300,
+        },
+        risk_class: "standard".to_owned(),
+        budget_class: "bounded".to_owned(),
+    };
+    let make_report = |fact_check| {
+        StrategicReport::new(
+            "fixture-game-a",
+            base.catalog_hash(),
+            base.catalog_version(),
+            base.catalog_version() + 1,
+            ledger_position,
+            POLICY_NOW_UNIX_MS,
+            format!("sha256:{}", "d".repeat(64)),
+            format!("sha256:{}", "e".repeat(64)),
+            vec![StrategicEvidencePointer {
+                artifact_id: artifact_id.clone(),
+                sha256: evidence.sha256.clone(),
+            }],
+            vec![
+                StrategicGoal {
+                    goal_id: "goal.fact".to_owned(),
+                    goal_version: 1,
+                    metric: MetricRef::Fact {
+                        fact_key: "resource.primary".to_owned(),
+                    },
+                    templates: vec![template("template.fact")],
+                    outlier_policy: OutlierPolicy {
+                        metric: OutlierMetric::Shortfall,
+                        mad_multiplier_milli: 2_000,
+                        top_n: 1,
+                    },
+                },
+                StrategicGoal {
+                    goal_id: "goal.pool".to_owned(),
+                    goal_version: 1,
+                    metric: MetricRef::Pool {
+                        pool_id: "fixture-pool-a".to_owned(),
+                    },
+                    templates: vec![template("template.pool")],
+                    outlier_policy: OutlierPolicy {
+                        metric: OutlierMetric::Shortfall,
+                        mad_multiplier_milli: 2_000,
+                        top_n: 1,
+                    },
+                },
+            ],
+            vec![
+                StrategicInstanceAssessment {
+                    goal_id: "goal.fact".to_owned(),
+                    instance_id: POLICY_INSTANCE_ALIAS.to_owned(),
+                    game_id: "fixture-game-a".to_owned(),
+                    fact_snapshot_id: fact_snapshot_id.clone(),
+                    current_projection: fact_check,
+                    production_rate_per_hour: None,
+                    target: 50,
+                    deadline_unix_ms: POLICY_NOW_UNIX_MS + 3_600_000,
+                    available: true,
+                    capability_ids: vec!["operation.observe".to_owned()],
+                },
+                StrategicInstanceAssessment {
+                    goal_id: "goal.pool".to_owned(),
+                    instance_id: POLICY_INSTANCE_ALIAS.to_owned(),
+                    game_id: "fixture-game-a".to_owned(),
+                    fact_snapshot_id: fact_snapshot_id.clone(),
+                    current_projection: None,
+                    production_rate_per_hour: None,
+                    target: 40,
+                    deadline_unix_ms: POLICY_NOW_UNIX_MS + 3_600_000,
+                    available: true,
+                    capability_ids: vec!["operation.observe".to_owned()],
+                },
+            ],
+            CohortBudgets {
+                max_active: 2,
+                max_prompt: 1,
+            },
+        )
+        .expect("strategic report")
+    };
+
+    let mismatched = make_report(Some(61));
+    let mismatched_document =
+        RuntimePlanningDocument::encode(RuntimePlanningDocumentKind::StrategicReport, &mismatched)
+            .expect("mismatched report document");
+    let mismatched_request =
+        RuntimeStrategicReportRequest::new(mismatched_document, vec![evidence.clone()])
+            .expect("mismatched report request");
+    let mismatched_request = client.agent_request(RuntimeOperation::PrepareStrategicReport {
+        request: Box::new(mismatched_request),
+    });
+    assert_eq!(
+        client.send(&mismatched_request).state(),
+        RuntimeReceiptState::Denied
+    );
+
+    let report = make_report(None);
+    let document =
+        RuntimePlanningDocument::encode(RuntimePlanningDocumentKind::StrategicReport, &report)
+            .expect("strategy report document");
+    let transport = RuntimeStrategicReportRequest::new(document, vec![evidence.clone()])
+        .expect("strategy report request");
+    let first_request = client.agent_request(RuntimeOperation::PrepareStrategicReport {
+        request: Box::new(transport.clone()),
+    });
+    let first_receipt = client.send(&first_request);
+    assert_eq!(first_receipt.state(), RuntimeReceiptState::Completed);
+    let RuntimeResult::StrategicPlanPrepared { plan: first_plan } =
+        first_receipt.result().expect("first strategic plan result")
+    else {
+        panic!("expected first strategic plan result")
+    };
+    let first_plan = first_plan.as_ref().clone();
+    let second_request = client.agent_request(RuntimeOperation::PrepareStrategicReport {
+        request: Box::new(transport),
+    });
+    let second_receipt = client.send(&second_request);
+    assert_eq!(second_receipt.state(), RuntimeReceiptState::Completed);
+    let RuntimeResult::StrategicPlanPrepared { plan: second_plan } = second_receipt
+        .result()
+        .expect("second strategic plan result")
+    else {
+        panic!("expected second strategic plan result")
+    };
+    assert_eq!(
+        serde_json::to_vec(&first_plan).expect("first result bytes"),
+        serde_json::to_vec(second_plan).expect("second result bytes")
+    );
+    let (_, projection, _, _) = first_plan.into_parts();
+    let projection: actingcommand_policy::StrategicProjection = projection
+        .decode(RuntimePlanningDocumentKind::StrategicProjection)
+        .expect("strategic projection");
+    let fact = projection
+        .instances
+        .iter()
+        .find(|instance| instance.goal_id == "goal.fact")
+        .expect("fact projection");
+    assert_eq!(fact.band, StrategicBand::NoPressure);
+    assert_eq!(fact.shortfall, Some(0));
+    assert_eq!(fact.capacity, Some(0));
+    assert_eq!(fact.urgency_milli, Some(0));
+    let pool = projection
+        .instances
+        .iter()
+        .find(|instance| instance.goal_id == "goal.pool")
+        .expect("pool projection");
+    assert_eq!(pool.band, StrategicBand::Actionable);
+    assert_eq!(pool.shortfall, Some(30));
+    assert_eq!(pool.capacity, Some(50));
+    assert_eq!(pool.urgency_milli, Some(600));
+    assert_eq!(
+        projected_events(
+            &mut client,
+            EventQuery {
+                event_type: Some(EventType::FactPublished),
+                ..EventQuery::default()
+            }
+        )
+        .len(),
+        1
+    );
+    assert!(
+        projected_events(
+            &mut client,
+            EventQuery {
+                event_type: Some(EventType::PolicyPlanningSignalObserved),
+                ..EventQuery::default()
+            }
+        )
+        .is_empty()
+    );
+    assert_eq!(state.open_count.load(Ordering::SeqCst), 0);
+    assert_eq!(state.capture_open_count.load(Ordering::SeqCst), 0);
+    assert_eq!(state.input_count.load(Ordering::SeqCst), 0);
+
+    drop(client);
+    host.close().expect("close runtime");
+}
+
+#[test]
+fn strategic_report_is_local_deterministic_and_promotes_only_after_approval() {
+    let root = TempDir::new().expect("tempdir");
+    let fake_state = Arc::new(FakeState::default());
+    let aliases = [
+        POLICY_INSTANCE_ALIAS.to_owned(),
+        POLICY_INSTANCE_ALIAS_B.to_owned(),
+    ];
+    let mut input_facts = policy_facts();
+    input_facts.instances.push(InstanceSnapshot {
+        instance_id: POLICY_INSTANCE_ALIAS_B.to_owned(),
+        server_id: "fixture-server-b".to_owned(),
+        game_id: "fixture-game-a".to_owned(),
+        host_id: "fixture-host-a".to_owned(),
+        available: true,
+        capability_operation_ids: vec!["operation.observe".to_owned()],
+        preferred_task_ids: Vec::new(),
+    });
+    let host = RuntimeHost::start(
+        config(&root).with_policy_inputs(PolicyInputSnapshot::new(
+            input_facts.clone(),
+            policy_resources(),
+        )),
+        Arc::new(FakeProvider::from_entries(
+            aliases
+                .into_iter()
+                .map(|alias| (alias, instance_id(), Arc::clone(&fake_state))),
         )),
     )
     .expect("runtime host");
@@ -16929,11 +17269,12 @@ fn strategic_report_is_local_deterministic_and_promotes_only_after_approval() {
     let evidence = host
         .store_test_report(b"synthetic pinned strategy evidence")
         .expect("strategy evidence");
-    let report = strategy_report(
-        &base,
-        &evidence,
-        verified_artifact_sequence(&host, &evidence),
-    );
+    let (ledger_position, fact_snapshot_id) =
+        strategic_frozen_identity(&host, &input_facts, &policy_resources());
+    let mut facts = input_facts;
+    facts.ledger_position = ledger_position;
+    facts.fact_snapshot_id = fact_snapshot_id;
+    let report = strategy_report(&base, &evidence, &facts);
 
     let first = host
         .prepare_strategic_report(&report, std::slice::from_ref(&evidence))
@@ -17067,8 +17408,20 @@ fn strategic_report_rejects_unverified_evidence_without_artifact_or_catalog_chan
         .store_test_report(b"synthetic pinned strategy evidence")
         .expect("strategy evidence");
     let evidence_sequence = verified_artifact_sequence(&host, &evidence);
-    let report = strategy_report(&base, &evidence, evidence_sequence);
-    let stale_report = strategy_report(&base, &evidence, evidence_sequence - 1);
+    let base_facts = policy_facts();
+    let (ledger_position, fact_snapshot_id) =
+        strategic_frozen_identity(&host, &base_facts, &policy_resources());
+    let mut facts = base_facts;
+    facts.ledger_position = ledger_position;
+    facts.fact_snapshot_id = fact_snapshot_id;
+    let report = strategy_report(&base, &evidence, &facts);
+    let stale_report = strategy_report_with_assessments(
+        &base,
+        &evidence,
+        evidence_sequence - 1,
+        &facts.fact_snapshot_id,
+        report.assessments().to_vec(),
+    );
     let error = host
         .prepare_strategic_report(&stale_report, std::slice::from_ref(&evidence))
         .expect_err("evidence newer than the report as-of position must fail");

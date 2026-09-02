@@ -3558,6 +3558,7 @@ impl HostShared {
             let (facts, resources) = self.project_authoritative_policy_inputs_under_gate(
                 "evaluate_policy_cycle",
                 &outcome_keys,
+                None,
             )?;
             (outcome_keys, facts, resources)
         };
@@ -3616,23 +3617,38 @@ impl HostShared {
         &self,
         operation: &'static str,
         outcome_keys: &PolicyOutcomeKeySnapshot,
+        as_of_ledger_position: Option<u64>,
     ) -> RuntimeHostResult<(EvaluationFacts, EvaluationResources)> {
         self.synchronize_fact_store_under_gate()?;
         let inputs = lock(&self.policy_inputs, "read_policy_inputs")?
             .clone()
             .ok_or_else(|| policy_admission_request("policy_inputs_unconfigured", operation))?;
         self.validate_policy_input_authority(&inputs, operation)?;
-        let ledger_position = self
+        let latest_ledger_position = self
             .ledger
             .latest_sequence()
             .map_err(|_| ledger_error("read_policy_fact_position"))?;
+        let ledger_position = match as_of_ledger_position {
+            Some(position) if position == 0 || position > latest_ledger_position => {
+                return Err(policy_admission_request(
+                    "policy_input_position_unavailable",
+                    operation,
+                ));
+            }
+            Some(position) => position,
+            None => latest_ledger_position,
+        };
         #[cfg(test)]
-        let ledger_position = match self
-            .policy_outcome_projection_position_override
-            .swap(0, Ordering::AcqRel)
-        {
-            0 => ledger_position,
-            injected => injected,
+        let ledger_position = if as_of_ledger_position.is_none() {
+            match self
+                .policy_outcome_projection_position_override
+                .swap(0, Ordering::AcqRel)
+            {
+                0 => ledger_position,
+                injected => injected,
+            }
+        } else {
+            ledger_position
         };
         let mut base_facts = inputs.facts().clone();
         let authoritative_outcomes = lock(
@@ -4109,6 +4125,7 @@ impl HostShared {
             let (current_facts, _) = self.project_authoritative_policy_inputs_under_gate(
                 "admit_policy_dispatch",
                 &outcome_keys,
+                None,
             )?;
             (outcome_keys, current_facts, fact_gate)
         };
@@ -6928,11 +6945,21 @@ impl HostShared {
                 )
             })?;
             self.verify_strategic_evidence(report, evidence)?;
-            let ledger_position = self
-                .ledger
-                .latest_sequence()
-                .map_err(|_| ledger_error("prepare_strategic_report"))?;
-            if report.as_of_ledger_position() > ledger_position {
+            let (facts, resources) = {
+                let _outcome_gate = lock(
+                    &self.policy_outcome_gate,
+                    "snapshot_strategic_outcome_state",
+                )?;
+                let outcome_keys =
+                    lock(&self.policy, "read_strategic_outcome_keys")?.outcome_key_snapshot()?;
+                let _fact_gate = lock(&self.fact_write_gate, "project_strategic_facts")?;
+                self.project_authoritative_policy_inputs_under_gate(
+                    "prepare_strategic_report",
+                    &outcome_keys,
+                    Some(report.as_of_ledger_position()),
+                )?
+            };
+            if report.as_of_ledger_position() > facts.ledger_position {
                 return Err(RuntimeHostError::request(
                     "strategic_report_position_unavailable",
                     "prepare_strategic_report",
@@ -6949,13 +6976,15 @@ impl HostShared {
                     )
                 })?;
             let projection =
-                project_strategic_report(loaded.compiled(), report).map_err(|error| {
-                    RuntimeHostError::request(
-                        error.code(),
-                        "prepare_strategic_report",
-                        RuntimeErrorCode::InvalidRequest,
-                    )
-                })?;
+                project_strategic_report(loaded.compiled(), report, &facts, &resources).map_err(
+                    |error| {
+                        RuntimeHostError::request(
+                            error.code(),
+                            "prepare_strategic_report",
+                            RuntimeErrorCode::InvalidRequest,
+                        )
+                    },
+                )?;
             let projection_document = encode_planning_document(
                 RuntimePlanningDocumentKind::StrategicProjection,
                 &projection,
