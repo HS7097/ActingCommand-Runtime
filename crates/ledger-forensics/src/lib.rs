@@ -167,7 +167,7 @@ pub enum ForensicReport {
     Chain(ChainReport),
     Tail(TailReport),
     Repairs(RepairsReport),
-    Replay(ReplayReport),
+    Replay(Box<ReplayReport>),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -373,7 +373,7 @@ pub fn replay(request: ForensicReplayRequest) -> ForensicResult<ForensicOutput> 
     }
     let verification = verify_evidence_archive(&request.zip_path, &request.expected_sha256)
         .map_err(map_artifact_store_error)?;
-    Ok(ForensicOutput::Machine(ForensicReport::Replay(
+    Ok(ForensicOutput::Machine(ForensicReport::Replay(Box::new(
         ReplayReport {
             verifier: EVIDENCE_ARCHIVE_VERIFIER,
             zip_byte_count: verification.zip_byte_count,
@@ -381,7 +381,7 @@ pub fn replay(request: ForensicReplayRequest) -> ForensicResult<ForensicOutput> 
             manifest_sha256: verification.manifest_sha256,
             manifest: verification.manifest,
         },
-    )))
+    ))))
 }
 
 fn events_report(
