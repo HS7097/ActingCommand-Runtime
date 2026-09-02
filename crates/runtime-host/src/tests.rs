@@ -17121,7 +17121,7 @@ fn strategic_report_uses_authoritative_policy_projection() {
                     fact_snapshot_id: fact_snapshot_id.clone(),
                     current_projection: None,
                     production_rate_per_hour: None,
-                    target: 40,
+                    target: 70,
                     deadline_unix_ms: POLICY_NOW_UNIX_MS + 3_600_000,
                     available: true,
                     capability_ids: vec!["operation.observe".to_owned()],
@@ -17200,10 +17200,10 @@ fn strategic_report_uses_authoritative_policy_projection() {
         .iter()
         .find(|instance| instance.goal_id == "goal.pool")
         .expect("pool projection");
-    assert_eq!(pool.band, StrategicBand::Actionable);
-    assert_eq!(pool.shortfall, Some(30));
+    assert_eq!(pool.band, StrategicBand::InfeasibleBestEffort);
+    assert_eq!(pool.shortfall, Some(60));
     assert_eq!(pool.capacity, Some(50));
-    assert_eq!(pool.urgency_milli, Some(600));
+    assert_eq!(pool.urgency_milli, Some(1_200));
     assert_eq!(
         projected_events(
             &mut client,
@@ -17215,16 +17215,172 @@ fn strategic_report_uses_authoritative_policy_projection() {
         .len(),
         1
     );
-    assert!(
-        projected_events(
-            &mut client,
-            EventQuery {
-                event_type: Some(EventType::PolicyPlanningSignalObserved),
-                ..EventQuery::default()
-            }
-        )
-        .is_empty()
+    let signal_events = projected_events(
+        &mut client,
+        EventQuery {
+            event_type: Some(EventType::PolicyPlanningSignalObserved),
+            ..EventQuery::default()
+        },
     );
+    assert_eq!(signal_events.len(), 1);
+    let ProjectionPayload::Full(payload) = &signal_events[0].payload else {
+        panic!("expected full planning signal payload")
+    };
+    let EventPayload::Policy(PolicyPayload::PlanningSignalObserved(signal)) = payload.as_ref()
+    else {
+        panic!("expected planning signal payload")
+    };
+    assert_eq!(signal.kind(), PolicyPlanningSignalKind::FeasibilityRed);
+    assert_eq!(signal.instance_id(), POLICY_INSTANCE_ALIAS);
+    assert_eq!(signal.task_id(), None);
+    assert_eq!(signal.fact_code(), "strategic.feasibility_red");
+    assert_eq!(signal.observed_at_unix_ms(), POLICY_NOW_UNIX_MS);
+    assert_eq!(signal.detection_budget(), None);
+    assert!(signal.signal_id().starts_with("signal:strategic:"));
+    assert_eq!(signal.signal_id().len(), 81);
+    assert_eq!(state.open_count.load(Ordering::SeqCst), 0);
+    assert_eq!(state.capture_open_count.load(Ordering::SeqCst), 0);
+    assert_eq!(state.input_count.load(Ordering::SeqCst), 0);
+
+    drop(client);
+    host.close().expect("close runtime");
+}
+
+#[test]
+fn strategic_report_records_timeline_reached_once() {
+    let root = TempDir::new().expect("tempdir");
+    let state = Arc::new(FakeState::default());
+    let host = RuntimeHost::start(
+        config(&root),
+        Arc::new(FakeProvider::one(
+            POLICY_INSTANCE_ALIAS,
+            instance_id(),
+            Arc::clone(&state),
+        )),
+    )
+    .expect("runtime host");
+    let base = host
+        .activate_policy_catalog(&strategy_policy_sources(1))
+        .expect("strategy base catalog");
+    let evidence = host
+        .store_test_report(b"synthetic timeline strategy evidence")
+        .expect("strategy evidence");
+    let input_facts = policy_facts();
+    let resources = policy_resources();
+    let (ledger_position, fact_snapshot_id) =
+        strategic_frozen_identity(&host, &input_facts, &resources);
+    let report = strategy_report_with_assessments(
+        &base,
+        &evidence,
+        ledger_position,
+        &fact_snapshot_id,
+        vec![StrategicInstanceAssessment {
+            goal_id: "goal.primary".to_owned(),
+            instance_id: POLICY_INSTANCE_ALIAS.to_owned(),
+            game_id: "fixture-game-a".to_owned(),
+            fact_snapshot_id: fact_snapshot_id.clone(),
+            current_projection: Some(10),
+            production_rate_per_hour: Some(50),
+            target: 100,
+            deadline_unix_ms: POLICY_NOW_UNIX_MS,
+            available: true,
+            capability_ids: vec!["operation.observe".to_owned()],
+        }],
+    );
+    let document =
+        RuntimePlanningDocument::encode(RuntimePlanningDocumentKind::StrategicReport, &report)
+            .expect("strategy report document");
+    let transport = RuntimeStrategicReportRequest::new(document, vec![evidence])
+        .expect("strategy report request");
+    let mut client = TestClient::connect(&host);
+    let first_request = client.agent_request(RuntimeOperation::PrepareStrategicReport {
+        request: Box::new(transport.clone()),
+    });
+    let first_receipt = client.send(&first_request);
+    assert_eq!(first_receipt.state(), RuntimeReceiptState::Completed);
+    let RuntimeResult::StrategicPlanPrepared { plan: first_plan } =
+        first_receipt.result().expect("first strategic plan result")
+    else {
+        panic!("expected first strategic plan result")
+    };
+    let first_plan = first_plan.as_ref().clone();
+    let second_request = client.agent_request(RuntimeOperation::PrepareStrategicReport {
+        request: Box::new(transport),
+    });
+    let second_receipt = client.send(&second_request);
+    assert_eq!(second_receipt.state(), RuntimeReceiptState::Completed);
+    let RuntimeResult::StrategicPlanPrepared { plan: second_plan } = second_receipt
+        .result()
+        .expect("second strategic plan result")
+    else {
+        panic!("expected second strategic plan result")
+    };
+    assert_eq!(
+        serde_json::to_vec(&first_plan).expect("first result bytes"),
+        serde_json::to_vec(second_plan).expect("second result bytes")
+    );
+
+    let report_reference = first_plan.clone().into_parts().0;
+    let artifact_sequence = projected_events(
+        &mut client,
+        EventQuery {
+            event_type: Some(EventType::ArtifactVerified),
+            ..EventQuery::default()
+        },
+    )
+    .into_iter()
+    .find(|event| {
+        event
+            .artifacts
+            .iter()
+            .any(|artifact| artifact == &report_reference)
+    })
+    .expect("strategic report commit event")
+    .sequence;
+    let signal_events = projected_events(
+        &mut client,
+        EventQuery {
+            event_type: Some(EventType::PolicyPlanningSignalObserved),
+            ..EventQuery::default()
+        },
+    );
+    assert_eq!(signal_events.len(), 2);
+    assert!(artifact_sequence < signal_events[0].sequence);
+    let signals = signal_events
+        .iter()
+        .map(|event| {
+            let ProjectionPayload::Full(payload) = &event.payload else {
+                panic!("expected full planning signal payload")
+            };
+            let EventPayload::Policy(PolicyPayload::PlanningSignalObserved(signal)) =
+                payload.as_ref()
+            else {
+                panic!("expected planning signal payload")
+            };
+            signal
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        signals
+            .iter()
+            .map(|signal| signal.kind())
+            .collect::<Vec<_>>(),
+        vec![
+            PolicyPlanningSignalKind::FeasibilityRed,
+            PolicyPlanningSignalKind::TimelineReached,
+        ]
+    );
+    assert_eq!(signals[0].fact_code(), "strategic.feasibility_red");
+    assert_eq!(signals[1].fact_code(), "strategic.timeline_reached");
+    assert_ne!(signals[0].signal_id(), signals[1].signal_id());
+    assert!(signals.iter().all(|signal| {
+        signal.signal_id().starts_with("signal:strategic:")
+            && signal.signal_id().len() == 81
+            && signal.instance_id() == POLICY_INSTANCE_ALIAS
+            && signal.task_id().is_none()
+            && signal.observed_at_unix_ms() == POLICY_NOW_UNIX_MS
+            && signal.detection_budget().is_none()
+    }));
     assert_eq!(state.open_count.load(Ordering::SeqCst), 0);
     assert_eq!(state.capture_open_count.load(Ordering::SeqCst), 0);
     assert_eq!(state.input_count.load(Ordering::SeqCst), 0);

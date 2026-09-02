@@ -104,8 +104,9 @@ use actingcommand_pack_containment::{
 use actingcommand_policy::{
     CatalogSources, DecisionReasonChain, DispatchIntent, EvaluationFacts, EvaluationResources,
     EvaluationTime, FactValue as PolicyFactValue, ForwardProjection, ForwardProjectionConfig,
-    MaintenanceAssessment, MaintenanceTrendPolicy, ObservedOutcome, StrategicEvidencePointer,
-    StrategicReport, assess_predictive_maintenance, project_forward, project_strategic_report,
+    MaintenanceAssessment, MaintenanceTrendPolicy, ObservedOutcome, StrategicBand,
+    StrategicEvidencePointer, StrategicProjection, StrategicReport, assess_predictive_maintenance,
+    project_forward, project_strategic_report,
 };
 use actingcommand_runtime_state::{ReleaseArtifactSources, RuntimeStateStore};
 use actingcommand_scheduler::{
@@ -7020,6 +7021,7 @@ impl HostShared {
             if let Some(prepared_artifact) = prepared_artifact {
                 self.commit_strategic_report(prepared_artifact, &bytes, preparation.report())?;
             }
+            self.record_strategic_planning_signals(report, preparation.projection())?;
             Ok(output)
         })();
         if let Err(error) = &result
@@ -7028,6 +7030,56 @@ impl HostShared {
             self.fatal.mark(error.clone())?;
         }
         result
+    }
+
+    fn record_strategic_planning_signals(
+        &self,
+        report: &StrategicReport,
+        projection: &StrategicProjection,
+    ) -> RuntimeHostResult<()> {
+        let mut signals = Vec::new();
+        for instance in &projection.instances {
+            if instance.band == StrategicBand::InfeasibleBestEffort {
+                signals.push((
+                    instance.goal_id.as_str(),
+                    instance.instance_id.as_str(),
+                    actingcommand_contract::PolicyPlanningSignalKind::FeasibilityRed,
+                    "strategic.feasibility_red",
+                ));
+            }
+            if instance.shortfall.is_some_and(|shortfall| shortfall > 0)
+                && instance.deadline_unix_ms <= report.as_of_unix_ms()
+            {
+                signals.push((
+                    instance.goal_id.as_str(),
+                    instance.instance_id.as_str(),
+                    actingcommand_contract::PolicyPlanningSignalKind::TimelineReached,
+                    "strategic.timeline_reached",
+                ));
+            }
+        }
+        signals.sort_by(|left, right| (left.0, left.1, left.2).cmp(&(right.0, right.1, right.2)));
+        for (goal_id, instance_id, kind, fact_code) in signals {
+            let identity =
+                serde_json::to_vec(&(report.report_id(), goal_id, instance_id, kind.as_str()))
+                    .map_err(|_| {
+                        RuntimeHostError::fatal(
+                            "strategic_signal_identity_encode_failed",
+                            "prepare_strategic_report",
+                            RuntimeErrorCode::RuntimeFatal,
+                        )
+                    })?;
+            self.record_policy_planning_signal(PolicyPlanningSignalEventData {
+                signal_id: format!("signal:strategic:{:x}", Sha256::digest(identity)),
+                instance_id: instance_id.to_owned(),
+                task_id: None,
+                kind,
+                fact_code: fact_code.to_owned(),
+                observed_at_unix_ms: report.as_of_unix_ms(),
+                detection_budget: None,
+            })?;
+        }
+        Ok(())
     }
 
     fn verify_strategic_evidence(
