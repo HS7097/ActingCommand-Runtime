@@ -30,9 +30,20 @@ fn open_read_only_is_byte_identical_and_does_not_contend_with_writer() {
     assert_eq!(snapshot.events(), &[first]);
     assert!(snapshot.corrupt_tail().is_none());
     assert!(snapshot.repairs().is_empty());
-    if let Some(owner) = snapshot.writer_metadata() {
-        assert_eq!(owner.owner_id(), "active-writer");
-        assert!(owner.active());
+    #[cfg(windows)]
+    match snapshot.writer_metadata() {
+        GlobalLedgerWriterMetadataObservation::Locked { byte_count } => {
+            assert!(*byte_count > 0);
+        }
+        observation => panic!("expected locked writer metadata, got {observation:?}"),
+    }
+    #[cfg(not(windows))]
+    match snapshot.writer_metadata() {
+        GlobalLedgerWriterMetadataObservation::Readable(owner) => {
+            assert_eq!(owner.owner_id(), "active-writer");
+            assert!(owner.active());
+        }
+        observation => panic!("expected readable writer metadata, got {observation:?}"),
     }
     ledger
         .append(event(EventLinksDraft::default()))

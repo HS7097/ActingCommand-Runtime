@@ -91,6 +91,29 @@ impl From<WriterMetadata> for GlobalLedgerWriterMetadata {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub enum GlobalLedgerWriterMetadataObservation {
+    Absent,
+    Readable(GlobalLedgerWriterMetadata),
+    Locked { byte_count: u64 },
+}
+
+impl GlobalLedgerWriterMetadataObservation {
+    pub const fn readable(&self) -> Option<&GlobalLedgerWriterMetadata> {
+        match self {
+            Self::Readable(metadata) => Some(metadata),
+            Self::Absent | Self::Locked { .. } => None,
+        }
+    }
+
+    pub const fn locked_byte_count(&self) -> Option<u64> {
+        match self {
+            Self::Locked { byte_count } => Some(*byte_count),
+            Self::Absent | Self::Readable(_) => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GlobalLedgerRepairRecord {
     schema_version: String,
     repair_id: String,
@@ -148,7 +171,7 @@ pub struct GlobalLedgerCorruptTail {
 pub struct GlobalLedgerReadOnly {
     events: Vec<PersistedEvent>,
     indexes: EventIndexes,
-    writer_metadata: Option<GlobalLedgerWriterMetadata>,
+    writer_metadata: GlobalLedgerWriterMetadataObservation,
     listed_through_segment: Option<u64>,
     repairs: Vec<GlobalLedgerRepairRecord>,
     corrupt_tail: Option<GlobalLedgerCorruptTail>,
@@ -256,8 +279,8 @@ impl GlobalLedgerReadOnly {
         self.events.last().map_or(0, PersistedEvent::sequence)
     }
 
-    pub fn writer_metadata(&self) -> Option<&GlobalLedgerWriterMetadata> {
-        self.writer_metadata.as_ref()
+    pub const fn writer_metadata(&self) -> &GlobalLedgerWriterMetadataObservation {
+        &self.writer_metadata
     }
 
     pub const fn listed_through_segment(&self) -> Option<u64> {
@@ -309,11 +332,13 @@ fn read_segment_snapshots(
     Ok(snapshots)
 }
 
-fn read_writer_metadata(root: &Path) -> GlobalLedgerResult<Option<GlobalLedgerWriterMetadata>> {
+fn read_writer_metadata(root: &Path) -> GlobalLedgerResult<GlobalLedgerWriterMetadataObservation> {
     let path = root.join("writer.lock");
     let mut file = match File::open(path) {
         Ok(file) => file,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(GlobalLedgerWriterMetadataObservation::Absent);
+        }
         Err(error) => {
             return Err(GlobalLedgerError::io(
                 "ledger_io",
@@ -322,10 +347,22 @@ fn read_writer_metadata(root: &Path) -> GlobalLedgerResult<Option<GlobalLedgerWr
             ));
         }
     };
-    let mut bytes = Vec::new();
-    if let Err(error) = file.read_to_end(&mut bytes) {
+    let byte_count = file
+        .metadata()
+        .map_err(|error| {
+            GlobalLedgerError::io("ledger_io", "stat_read_only_writer_metadata", &error)
+        })?
+        .len();
+    let capacity = usize::try_from(byte_count).map_err(|_| {
+        GlobalLedgerError::fatal(
+            "malformed_owner_metadata",
+            "bound_read_only_writer_metadata",
+        )
+    })?;
+    let mut bytes = Vec::with_capacity(capacity);
+    if let Err(error) = file.by_ref().take(byte_count).read_to_end(&mut bytes) {
         if writer_metadata_is_locked(&error) {
-            return Ok(None);
+            return Ok(GlobalLedgerWriterMetadataObservation::Locked { byte_count });
         }
         return Err(GlobalLedgerError::io(
             "ledger_io",
@@ -361,7 +398,9 @@ fn read_writer_metadata(root: &Path) -> GlobalLedgerResult<Option<GlobalLedgerWr
         }
         metadata = Some(parse_writer_metadata(record)?.into());
     }
-    Ok(metadata)
+    Ok(GlobalLedgerWriterMetadataObservation::Readable(
+        metadata.expect("non-empty metadata contains at least one record"),
+    ))
 }
 
 fn writer_metadata_is_locked(error: &std::io::Error) -> bool {

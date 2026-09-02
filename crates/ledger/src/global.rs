@@ -8,7 +8,7 @@ mod storage;
 
 pub use read_only::{
     GlobalLedgerCorruptTail, GlobalLedgerReadOnly, GlobalLedgerReadOnlyConfig,
-    GlobalLedgerRepairRecord, GlobalLedgerWriterMetadata,
+    GlobalLedgerRepairRecord, GlobalLedgerWriterMetadata, GlobalLedgerWriterMetadataObservation,
 };
 
 use crate::PersistedEvent;
