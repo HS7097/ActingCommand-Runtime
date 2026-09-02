@@ -45,13 +45,13 @@ use actingcommand_execution_kernel::{
 };
 use actingcommand_ledger::{GlobalLedger, GlobalLedgerConfig, PersistedEvent};
 use actingcommand_policy::{
-    CatalogDocumentSource, CatalogSources, CohortBudgets, Comparison, DecisionReasonChain,
-    DispatchIntent, EvaluationFacts, EvaluationResources, EvaluationTime, FactValue,
-    ForwardProjectionConfig, HostResourceSnapshot, InstanceSnapshot, LoadProfile,
+    ActivityDocument, CatalogDocumentSource, CatalogSources, CohortBudgets, Comparison,
+    DecisionReasonChain, DispatchIntent, EvaluationFacts, EvaluationResources, EvaluationTime,
+    FactValue, ForwardProjectionConfig, HostResourceSnapshot, InstanceSnapshot, LoadProfile,
     MaintenanceDisposition, MaintenanceTrendPolicy, MetricRef, ObservedFact, ObservedOutcome,
     OutlierMetric, OutlierPolicy, PoolValueSnapshot, PredicateSpec, ScopeSelector, StrategicBand,
     StrategicEvidencePointer, StrategicGoal, StrategicInstanceAssessment, StrategicReport,
-    StrategicTemplate,
+    StrategicTemplate, TasksDocument, compile_catalog,
 };
 use actingcommand_recognition_pack::{
     NnProviderRequest, NnProviderResult, OcrProviderRequest, OcrProviderResult, VisionProvider,
@@ -17419,15 +17419,16 @@ fn strategic_report_is_local_deterministic_and_promotes_only_after_approval() {
         )),
     )
     .expect("runtime host");
+    let base_sources = strategy_policy_sources(1);
     let base = host
-        .activate_policy_catalog(&strategy_policy_sources(1))
+        .activate_policy_catalog(&base_sources)
         .expect("strategy base catalog");
     let evidence = host
         .store_test_report(b"synthetic pinned strategy evidence")
         .expect("strategy evidence");
     let (ledger_position, fact_snapshot_id) =
         strategic_frozen_identity(&host, &input_facts, &policy_resources());
-    let mut facts = input_facts;
+    let mut facts = input_facts.clone();
     facts.ledger_position = ledger_position;
     facts.fact_snapshot_id = fact_snapshot_id;
     let report = strategy_report(&base, &evidence, &facts);
@@ -17465,6 +17466,11 @@ fn strategic_report_is_local_deterministic_and_promotes_only_after_approval() {
             .all(|profile| matches!(profile.scope, ScopeSelector::Instance { .. }))
     );
     let proposal = first.proposal().expect("mechanical catalog proposal");
+    let (_, first_target_sources) =
+        crate::proposal::prepare_proposal(&base, &base_sources, proposal)
+            .expect("first proposal preparation")
+            .into_ready()
+            .expect("first proposal sources");
     assert_eq!(proposal.class(), ProposalClass::B);
     assert_eq!(proposal.report_refs(), [first.report().clone()]);
     assert_eq!(
@@ -17538,6 +17544,246 @@ fn strategic_report_is_local_deterministic_and_promotes_only_after_approval() {
             .catalog_version(),
         2
     );
+
+    let successor_base = host
+        .active_policy_catalog()
+        .expect("successor base catalog")
+        .expect("successor base");
+    let successor_evidence = host
+        .store_test_report(b"synthetic successor strategy evidence")
+        .expect("successor strategy evidence");
+    let successor_resources = policy_resources();
+    let (successor_position, successor_snapshot) =
+        strategic_frozen_identity(&host, &input_facts, &successor_resources);
+    let successor_report = strategy_report_with_assessments(
+        &successor_base,
+        &successor_evidence,
+        successor_position,
+        &successor_snapshot,
+        vec![StrategicInstanceAssessment {
+            goal_id: "goal.primary".to_owned(),
+            instance_id: POLICY_INSTANCE_ALIAS.to_owned(),
+            game_id: "fixture-game-a".to_owned(),
+            fact_snapshot_id: successor_snapshot.clone(),
+            current_projection: Some(10),
+            production_rate_per_hour: Some(100),
+            target: 60,
+            deadline_unix_ms: POLICY_NOW_UNIX_MS + 3_600_000,
+            available: true,
+            capability_ids: vec!["operation.observe".to_owned()],
+        }],
+    );
+    let successor_first = host
+        .prepare_strategic_report(&successor_report, std::slice::from_ref(&successor_evidence))
+        .expect("successor strategy preparation");
+    let successor_second = host
+        .prepare_strategic_report(&successor_report, std::slice::from_ref(&successor_evidence))
+        .expect("replayed successor strategy preparation");
+    assert_eq!(successor_first, successor_second);
+    let successor_proposal = successor_first
+        .proposal()
+        .expect("successor catalog proposal");
+    assert_eq!(
+        successor_proposal.report_refs(),
+        [successor_first.report().clone()]
+    );
+    let ProposalKind::CatalogDiff { patches } = successor_proposal.proposal() else {
+        panic!("expected successor catalog diff")
+    };
+    let removal_patches = patches
+        .iter()
+        .filter(|patch| patch.operation() == ProposalPatchOperation::Remove)
+        .collect::<Vec<_>>();
+    assert_eq!(removal_patches.len(), 2);
+
+    let first_tasks: TasksDocument =
+        serde_json::from_slice(&first_target_sources.tasks.bytes).expect("first target tasks");
+    let first_activity: ActivityDocument =
+        serde_json::from_slice(&first_target_sources.activity.bytes)
+            .expect("first target activity");
+    let prior_task_index = first_tasks
+        .tasks
+        .iter()
+        .position(|task| {
+            task.id.starts_with("strategy.task.")
+                && matches!(
+                    &task.scope,
+                    ScopeSelector::Instance { instance_id }
+                        if instance_id == POLICY_INSTANCE_ALIAS
+                )
+        })
+        .expect("prior affected task index");
+    let prior_profile_index = first_activity
+        .profiles
+        .iter()
+        .position(|profile| {
+            profile.id.starts_with("strategy.profile.")
+                && matches!(
+                    &profile.scope,
+                    ScopeSelector::Instance { instance_id }
+                        if instance_id == POLICY_INSTANCE_ALIAS
+                )
+        })
+        .expect("prior affected profile index");
+    let prior_task_path = format!("/tasks/{prior_task_index}");
+    let prior_profile_path = format!("/profiles/{prior_profile_index}");
+    assert_eq!(
+        removal_patches
+            .iter()
+            .map(|patch| (patch.document(), patch.path()))
+            .collect::<Vec<_>>(),
+        vec![
+            (ProposalDocument::Tasks, prior_task_path.as_str()),
+            (ProposalDocument::Activity, prior_profile_path.as_str()),
+        ]
+    );
+    let (_, successor_target_sources) = crate::proposal::prepare_proposal(
+        &successor_base,
+        &first_target_sources,
+        successor_proposal,
+    )
+    .expect("successor proposal preparation")
+    .into_ready()
+    .expect("successor proposal sources");
+    let successor_compiled =
+        compile_catalog(&successor_target_sources).expect("successor target catalog");
+
+    let request = client.agent_request(RuntimeOperation::PromoteProposal {
+        proposal: Box::new(successor_proposal.clone()),
+    });
+    assert_eq!(client.send(&request).state(), RuntimeReceiptState::Denied);
+    record_target_approval(
+        &mut client,
+        "approval:strategy-successor",
+        successor_first
+            .preview()
+            .expect("successor preview")
+            .approval_target()
+            .expect("successor approval target"),
+    );
+    let request = client.agent_request(RuntimeOperation::PromoteProposal {
+        proposal: Box::new(successor_proposal.clone()),
+    });
+    assert_eq!(
+        client.send(&request).state(),
+        RuntimeReceiptState::Completed
+    );
+    let promoted = host
+        .active_policy_catalog()
+        .expect("promoted successor catalog")
+        .expect("promoted successor");
+    assert_eq!(promoted.catalog_version(), 3);
+    assert_eq!(promoted.catalog_hash(), successor_compiled.catalog_hash());
+
+    let successor_tasks: TasksDocument =
+        serde_json::from_slice(&successor_target_sources.tasks.bytes).expect("successor tasks");
+    let successor_activity: ActivityDocument =
+        serde_json::from_slice(&successor_target_sources.activity.bytes)
+            .expect("successor activity");
+    let mut affected_task_ids = successor_tasks
+        .tasks
+        .iter()
+        .filter(|task| {
+            task.id.starts_with("strategy.task.")
+                && matches!(
+                    &task.scope,
+                    ScopeSelector::Instance { instance_id }
+                        if instance_id == POLICY_INSTANCE_ALIAS
+                )
+        })
+        .map(|task| task.id.clone())
+        .collect::<Vec<_>>();
+    affected_task_ids.sort();
+    let mut expected_task_ids = successor_first
+        .projection()
+        .additions
+        .tasks
+        .iter()
+        .map(|task| task.id.clone())
+        .collect::<Vec<_>>();
+    expected_task_ids.sort();
+    assert_eq!(affected_task_ids, expected_task_ids);
+    let mut affected_profile_ids = successor_activity
+        .profiles
+        .iter()
+        .filter(|profile| {
+            profile.id.starts_with("strategy.profile.")
+                && matches!(
+                    &profile.scope,
+                    ScopeSelector::Instance { instance_id }
+                        if instance_id == POLICY_INSTANCE_ALIAS
+                )
+        })
+        .map(|profile| profile.id.clone())
+        .collect::<Vec<_>>();
+    affected_profile_ids.sort();
+    let mut expected_profile_ids = successor_first
+        .projection()
+        .additions
+        .activity_profiles
+        .iter()
+        .map(|profile| profile.id.clone())
+        .collect::<Vec<_>>();
+    expected_profile_ids.sort();
+    assert_eq!(affected_profile_ids, expected_profile_ids);
+    assert!(
+        successor_tasks
+            .tasks
+            .iter()
+            .any(|task| task.id == "fixture.observe")
+    );
+    assert!(
+        successor_activity
+            .profiles
+            .iter()
+            .any(|profile| profile.id == "fixture-activity-game")
+    );
+    for task in first.projection().additions.tasks.iter().filter(|task| {
+        matches!(
+            &task.scope,
+            ScopeSelector::Instance { instance_id }
+                if instance_id == POLICY_INSTANCE_ALIAS_B
+        )
+    }) {
+        assert!(
+            successor_tasks
+                .tasks
+                .iter()
+                .any(|current| current.id == task.id)
+        );
+    }
+    for profile in first
+        .projection()
+        .additions
+        .activity_profiles
+        .iter()
+        .filter(|profile| {
+            matches!(
+                &profile.scope,
+                ScopeSelector::Instance { instance_id }
+                    if instance_id == POLICY_INSTANCE_ALIAS_B
+            )
+        })
+    {
+        assert!(
+            successor_activity
+                .profiles
+                .iter()
+                .any(|current| current.id == profile.id)
+        );
+    }
+    let strategy_artifacts = projected_events(
+        &mut client,
+        EventQuery {
+            event_type: Some(EventType::ArtifactVerified),
+            ..EventQuery::default()
+        },
+    )
+    .into_iter()
+    .flat_map(|event| event.artifacts)
+    .filter(|artifact| artifact.kind() == ArtifactKind::StrategyReport)
+    .count();
+    assert_eq!(strategy_artifacts, 2);
     assert_eq!(fake_state.open_count.load(Ordering::SeqCst), 0);
     assert_eq!(fake_state.capture_open_count.load(Ordering::SeqCst), 0);
     assert_eq!(fake_state.input_count.load(Ordering::SeqCst), 0);
