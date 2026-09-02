@@ -30,7 +30,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 const WRITER_SCHEMA_VERSION: &str = "actingcommand.ledger-writer.v2";
 const REPAIR_SCHEMA_VERSION: &str = "actingcommand.ledger-repair.v1";
 const REPAIR_JOURNAL_FILE: &str = "repair-journal.jsonl";
-const LINE_TYPE: &str = "event";
+pub(super) const LINE_TYPE: &str = "event";
 
 type ArtifactVerifier<'a> =
     dyn FnMut(&ProjectedArtifactReference) -> Option<VerifiedArtifactReference> + 'a;
@@ -1316,9 +1316,9 @@ fn same_dispatch_definition(
 
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-struct StoredLine {
-    line_type: String,
-    event: StoredEventRecord,
+pub(super) struct StoredLine {
+    pub(super) line_type: String,
+    pub(super) event: StoredEventRecord,
 }
 
 struct RecoveryState {
@@ -1451,13 +1451,24 @@ struct RepairProgress {
     completed: bool,
 }
 
+pub(super) struct RepairRecordSnapshot {
+    pub(super) schema_version: String,
+    pub(super) repair_id: String,
+    pub(super) completed: bool,
+    pub(super) segment_index: u64,
+    pub(super) original_len: u64,
+    pub(super) repaired_len: u64,
+    pub(super) tail_sha256: String,
+    pub(super) quarantine_key: String,
+}
+
 #[derive(Default)]
-struct RepairJournal {
+pub(super) struct RepairJournal {
     repairs: BTreeMap<String, RepairProgress>,
 }
 
 impl RepairJournal {
-    fn load(root: &Path) -> GlobalLedgerResult<Self> {
+    pub(super) fn load(root: &Path) -> GlobalLedgerResult<Self> {
         let path = root.join(REPAIR_JOURNAL_FILE);
         let bytes = match fs::read(path) {
             Ok(bytes) => bytes,
@@ -1511,6 +1522,22 @@ impl RepairJournal {
             }
         }
         Ok(journal)
+    }
+
+    pub(super) fn snapshots(&self) -> Vec<RepairRecordSnapshot> {
+        self.repairs
+            .values()
+            .map(|progress| RepairRecordSnapshot {
+                schema_version: progress.prepared.schema_version.clone(),
+                repair_id: progress.prepared.repair_id.clone(),
+                completed: progress.completed,
+                segment_index: progress.prepared.segment_index,
+                original_len: progress.prepared.original_len,
+                repaired_len: progress.prepared.repaired_len,
+                tail_sha256: progress.prepared.tail_sha256.clone(),
+                quarantine_key: progress.prepared.quarantine_key.clone(),
+            })
+            .collect()
     }
 
     fn apply(&mut self, record: TailRepairRecord) -> GlobalLedgerResult<()> {
@@ -2002,7 +2029,7 @@ fn quarantine_key(repair_id: &str) -> GlobalLedgerResult<String> {
     Ok(format!("quarantine/{digest}.bin"))
 }
 
-fn complete_record_len(bytes: &[u8]) -> usize {
+pub(super) fn complete_record_len(bytes: &[u8]) -> usize {
     bytes
         .iter()
         .rposition(|byte| *byte == b'\n')
@@ -2033,7 +2060,7 @@ fn repair_test_barrier(_stage: &str) -> GlobalLedgerResult<()> {
     Ok(())
 }
 
-fn list_segments(segments_dir: &Path) -> GlobalLedgerResult<Vec<(u64, PathBuf)>> {
+pub(super) fn list_segments(segments_dir: &Path) -> GlobalLedgerResult<Vec<(u64, PathBuf)>> {
     let mut segments = Vec::new();
     for entry in fs::read_dir(segments_dir)
         .map_err(|error| GlobalLedgerError::io("ledger_io", "list_segments", &error))?
@@ -2071,13 +2098,13 @@ fn segment_path(segments_dir: &Path, index: u64) -> PathBuf {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-struct WriterMetadata {
-    schema_version: String,
-    owner_id: String,
-    pid: u32,
-    active: bool,
-    started_at_unix_ms: u64,
-    closed_at_unix_ms: Option<u64>,
+pub(super) struct WriterMetadata {
+    pub(super) schema_version: String,
+    pub(super) owner_id: String,
+    pub(super) pid: u32,
+    pub(super) active: bool,
+    pub(super) started_at_unix_ms: u64,
+    pub(super) closed_at_unix_ms: Option<u64>,
 }
 
 struct WriterOwnership {
@@ -2217,7 +2244,7 @@ fn read_writer_metadata(
     Ok(metadata)
 }
 
-fn parse_writer_metadata(record: &[u8]) -> GlobalLedgerResult<WriterMetadata> {
+pub(super) fn parse_writer_metadata(record: &[u8]) -> GlobalLedgerResult<WriterMetadata> {
     let unique = serde_json::from_slice::<UniqueJsonValue>(record).map_err(|error| {
         GlobalLedgerError::json("malformed_owner_metadata", "parse_writer_metadata", &error)
     })?;
@@ -2297,7 +2324,7 @@ fn increment_sequence(sequence: u64) -> GlobalLedgerResult<u64> {
         .ok_or_else(|| GlobalLedgerError::fatal("sequence_exhausted", "increment_sequence"))
 }
 
-struct UniqueJsonValue(Value);
+pub(super) struct UniqueJsonValue(pub(super) Value);
 
 impl<'de> Deserialize<'de> for UniqueJsonValue {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>

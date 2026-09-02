@@ -6,6 +6,7 @@ use actingcommand_artifact_store::{
     EvidenceExportIdentity, EvidenceExportRequest, EvidenceExporter, EvidenceJsonDocument,
     EvidencePackage, FrameStoreConfig, FrameStoreFrameInput, MemorySample, MemorySampleSource,
     PackageVerification, RecognitionState, capture_summary_record, verify_evidence_archive,
+    verify_projected_read_only,
 };
 use actingcommand_contract::{
     ArtifactKind, ArtifactLinksDraft, ArtifactRedactionState, AuditInput, CapturePayloadDraft,
@@ -17,9 +18,10 @@ use actingcommand_contract::{
     TaskPayloadDraft,
 };
 use actingcommand_device::{CaptureBackendName, Frame, PixelFormat};
-use actingcommand_ledger::{GlobalLedger, GlobalLedgerConfig};
+use actingcommand_ledger::{GlobalLedger, GlobalLedgerConfig, GlobalLedgerReadOnlyConfig};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
+use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -292,6 +294,112 @@ fn corrupted_frame_artifact_cannot_publish_archive_and_is_ledger_visible() {
     );
 
     ledger.close().expect("close ledger");
+}
+
+#[test]
+fn read_only_global_ledger_verifies_artifacts_without_mutation() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let ledger_root = temp.path().join("ledger");
+    let artifact_root = temp.path().join("artifacts");
+    let ledger = open_ledger(temp.path(), "read-only-artifact-writer");
+    let identity = sealed_identity();
+    let summary = {
+        let mut sink = GlobalLedgerSink::new(&ledger);
+        let summary = run_capture_pipeline(&artifact_root, temp.path(), identity, &mut sink);
+        append_capture_summary(&mut sink, identity, &summary);
+        summary
+    };
+    let expected = ledger.query(EventQuery::default()).expect("writer query");
+    ledger.close().expect("close ledger");
+    let artifact_path = artifact_root.join(
+        summary
+            .frames
+            .first()
+            .expect("source frame")
+            .artifact
+            .object_key(),
+    );
+    let artifact_bytes = fs::read(&artifact_path).expect("read source artifact");
+    let baseline = tree_bytes(temp.path());
+
+    let snapshot =
+        GlobalLedger::open_read_only(GlobalLedgerReadOnlyConfig::new(&ledger_root), |reference| {
+            verify_projected_read_only(&artifact_root, reference).ok()
+        })
+        .expect("open verified read-only snapshot");
+
+    assert_eq!(snapshot.events(), expected);
+    assert!(snapshot.corrupt_tail().is_none());
+    assert!(
+        snapshot
+            .events()
+            .iter()
+            .any(|event| !event.artifacts().is_empty())
+    );
+    assert_eq!(tree_bytes(temp.path()), baseline);
+
+    fs::remove_file(&artifact_path).expect("remove artifact for missing-reference case");
+    let missing_tree = tree_bytes(temp.path());
+    let missing =
+        GlobalLedger::open_read_only(GlobalLedgerReadOnlyConfig::new(&ledger_root), |reference| {
+            verify_projected_read_only(&artifact_root, reference).ok()
+        })
+        .expect("open missing-artifact snapshot");
+    assert_eq!(
+        missing.corrupt_tail().expect("missing artifact tail").code,
+        "artifact_store_verification_failed"
+    );
+    assert_eq!(tree_bytes(temp.path()), missing_tree);
+    fs::write(&artifact_path, &artifact_bytes).expect("restore missing artifact");
+
+    fs::write(&artifact_path, b"tampered artifact").expect("tamper artifact");
+    let tampered_tree = tree_bytes(temp.path());
+    let tampered =
+        GlobalLedger::open_read_only(GlobalLedgerReadOnlyConfig::new(&ledger_root), |reference| {
+            verify_projected_read_only(&artifact_root, reference).ok()
+        })
+        .expect("open tampered-artifact snapshot");
+    assert_eq!(
+        tampered
+            .corrupt_tail()
+            .expect("tampered artifact tail")
+            .code,
+        "artifact_store_verification_failed"
+    );
+    assert_eq!(tree_bytes(temp.path()), tampered_tree);
+    fs::write(&artifact_path, &artifact_bytes).expect("restore tampered artifact");
+
+    let object_key = summary
+        .frames
+        .first()
+        .expect("source frame")
+        .artifact
+        .object_key();
+    let needle = format!("\"object_key\":\"{object_key}\"");
+    let (segment_path, segment_bytes) = segment_with(&ledger_root, needle.as_bytes());
+    let segment_text = String::from_utf8(segment_bytes.clone()).expect("UTF-8 ledger segment");
+    let unsafe_text = segment_text.replacen(&needle, "\"object_key\":\"../escape\"", 1);
+    assert_ne!(
+        unsafe_text, segment_text,
+        "artifact reference must be replaced"
+    );
+    fs::write(&segment_path, unsafe_text).expect("write unsafe projected reference");
+    let unsafe_tree = tree_bytes(temp.path());
+    let unsafe_reference =
+        GlobalLedger::open_read_only(GlobalLedgerReadOnlyConfig::new(&ledger_root), |reference| {
+            verify_projected_read_only(&artifact_root, reference).ok()
+        })
+        .expect("open unsafe-reference snapshot");
+    assert_eq!(
+        unsafe_reference
+            .corrupt_tail()
+            .expect("unsafe reference tail")
+            .code,
+        "artifact_store_verification_failed"
+    );
+    assert_eq!(tree_bytes(temp.path()), unsafe_tree);
+    fs::write(segment_path, segment_bytes).expect("restore ledger segment");
+    assert_eq!(tree_bytes(temp.path()), baseline);
 }
 
 fn open_ledger(root: &Path, owner: &str) -> GlobalLedger {
@@ -575,4 +683,49 @@ fn export_request(
 fn sha256_file(path: &Path) -> String {
     let digest = Sha256::digest(fs::read(path).expect("read archive"));
     format!("sha256:{digest:x}")
+}
+
+fn segment_with(root: &Path, needle: &[u8]) -> (PathBuf, Vec<u8>) {
+    let mut segments = fs::read_dir(root.join("segments"))
+        .expect("read segments")
+        .map(|entry| entry.expect("segment entry").path())
+        .collect::<Vec<_>>();
+    segments.sort();
+    segments
+        .into_iter()
+        .find_map(|path| {
+            let bytes = fs::read(&path).expect("read segment");
+            bytes
+                .windows(needle.len())
+                .any(|window| window == needle)
+                .then_some((path, bytes))
+        })
+        .expect("segment containing artifact reference")
+}
+
+fn tree_bytes(root: &Path) -> BTreeMap<PathBuf, Vec<u8>> {
+    fn collect(root: &Path, path: &Path, entries: &mut BTreeMap<PathBuf, Vec<u8>>) {
+        let mut children = fs::read_dir(path)
+            .expect("read tree")
+            .map(|entry| entry.expect("tree entry").path())
+            .collect::<Vec<_>>();
+        children.sort();
+        for child in children {
+            if child.is_dir() {
+                collect(root, &child, entries);
+            } else {
+                entries.insert(
+                    child
+                        .strip_prefix(root)
+                        .expect("relative path")
+                        .to_path_buf(),
+                    fs::read(child).expect("read tree file"),
+                );
+            }
+        }
+    }
+
+    let mut entries = BTreeMap::new();
+    collect(root, root, &mut entries);
+    entries
 }

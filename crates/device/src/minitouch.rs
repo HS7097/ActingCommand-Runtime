@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 use crate::adb::{Adb, AdbConfig, stop_child};
-use crate::input::{SegmentedSwipeAction, SegmentedSwipeEvent, segmented_swipe_events};
+use crate::input::{PreparedSegmentedSwipePlan, SegmentedSwipeEvent};
 use crate::{
     DeviceError, DeviceErrorCategory, DeviceErrorSeverity, DeviceInfo, DeviceResult, DeviceTarget,
     HandshakeInfo, InputBackend,
@@ -424,26 +424,27 @@ impl InputBackend for MinitouchBackend {
         true
     }
 
-    fn segmented_swipe(&mut self, action: SegmentedSwipeAction) -> DeviceResult<()> {
+    fn segmented_swipe_prepared(&mut self, plan: &PreparedSegmentedSwipePlan) -> DeviceResult<()> {
         let pressure = self.minitouch_config.default_pressure;
         self.validate_pressure(pressure)?;
-        let events = segmented_swipe_events(action)?
-            .into_iter()
+        let events = plan
+            .events()
+            .iter()
             .map(|event| match event {
                 SegmentedSwipeEvent::Down((x, y)) => self
-                    .map_and_validate("segmented swipe down", x, y)
+                    .map_and_validate("segmented swipe down", *x, *y)
                     .map(SegmentedSwipeEvent::Down),
                 SegmentedSwipeEvent::Move {
                     point: (x, y),
                     delay_before_ms,
                 } => self
-                    .map_and_validate("segmented swipe move", x, y)
+                    .map_and_validate("segmented swipe move", *x, *y)
                     .map(|point| SegmentedSwipeEvent::Move {
                         point,
-                        delay_before_ms,
+                        delay_before_ms: *delay_before_ms,
                     }),
                 SegmentedSwipeEvent::Hold(duration_ms) => {
-                    Ok(SegmentedSwipeEvent::Hold(duration_ms))
+                    Ok(SegmentedSwipeEvent::Hold(*duration_ms))
                 }
                 SegmentedSwipeEvent::Up => Ok(SegmentedSwipeEvent::Up),
             })
