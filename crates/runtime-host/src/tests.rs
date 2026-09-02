@@ -13,9 +13,10 @@ use actingcommand_contract::{
     ClientActionKind, ClientActionRecord, ClientActionValue, ContainedTaskRecoveryBinding,
     ContainedTaskRequest, CorrelationId, EffectDisposition, EventActor, EventPayload, EventQuery,
     EventSeverity, EventSource, EventType, FactContent, FactRecord, FactScope, FactTtlPolicy,
-    FactTtlSource, FactValue as ContractFactValue, IdentifierIssuer, InputAction,
-    InputSamplingAlgorithm, InstanceFactContext, InstanceId, IssuedCorrelationId, LeaseId,
-    LeasePriority, LeaseQueuePolicy, LeaseQueueStatus, LeaseToken,
+    FactTtlSource, FactValue as ContractFactValue, INPUT_EXECUTION_PLAN_PROFILE_MAA_2_0,
+    INPUT_EXECUTION_PLAN_VERSION, IdentifierIssuer, InputAction, InputExecutionPlanEvent,
+    InputPayload, InputSamplingAlgorithm, InstanceFactContext, InstanceId, IssuedCorrelationId,
+    LeaseId, LeasePriority, LeaseQueuePolicy, LeaseQueueStatus, LeaseToken,
     MAX_RUNTIME_PLANNING_DOCUMENT_BYTES, MonitorDiagnosis, MonitorDisposition, MonitorObservation,
     MonitorPayload, MonitorRecoveryCoordinationReason, MonitorRecoveryKind, OriginModule,
     PerformanceControlLevel, PerformanceMonitorHealth, PinnedFrameReason, PolicyExecutionOutcome,
@@ -35,7 +36,8 @@ use actingcommand_contract::{
     TaskOutcome, TaskPayload, TaskSemanticFact, TaskTemplateInstantiation, TerminalEvent,
 };
 use actingcommand_device::{
-    CaptureBackend, CaptureBackendName, DeviceError, DeviceResult, Frame, InputBackend, PixelFormat,
+    CaptureBackend, CaptureBackendName, DeviceError, DeviceResult, Frame, InputBackend,
+    PixelFormat, PreparedSegmentedSwipePlan, SegmentedSwipeEvent,
 };
 use actingcommand_execution_kernel::{
     ContainedTaskRunError, ContainedTaskRuntime, ContainedTaskTrace, ExecutionBackendProvenance,
@@ -153,6 +155,7 @@ struct FakeState {
     application_count: AtomicUsize,
     fail_application: AtomicBool,
     input_actions: std::sync::Mutex<Vec<InputAction>>,
+    segmented_swipe_plans: std::sync::Mutex<Vec<PreparedSegmentedSwipePlan>>,
 }
 
 struct FakeBackend {
@@ -173,6 +176,10 @@ impl FakeBackend {
             .lock()
             .expect("fake input actions lock")
             .push(action);
+        self.complete_input()
+    }
+
+    fn complete_input(&self) -> DeviceResult<()> {
         self.state.input_started.store(true, Ordering::Release);
         while self.state.block_input.load(Ordering::Acquire) {
             thread::sleep(Duration::from_millis(5));
@@ -202,6 +209,19 @@ impl InputBackend for FakeBackend {
             y2,
             duration_ms,
         })
+    }
+
+    fn supports_segmented_swipe(&self) -> bool {
+        true
+    }
+
+    fn segmented_swipe_prepared(&mut self, plan: &PreparedSegmentedSwipePlan) -> DeviceResult<()> {
+        self.state
+            .segmented_swipe_plans
+            .lock()
+            .expect("fake segmented swipe plans lock")
+            .push(plan.clone());
+        self.complete_input()
     }
 
     fn key(&mut self, key: &str) -> DeviceResult<()> {
@@ -11697,6 +11717,137 @@ fn typed_ipc_routes_input_once_and_correlates_ledger_events() {
     drop(client);
     host.close().expect("close host");
     assert_eq!(state.close_count.load(Ordering::Acquire), 1);
+}
+
+#[test]
+fn segmented_swipe_intent_records_the_exact_prepared_plan_before_input() {
+    let root = TempDir::new().expect("tempdir");
+    let state = Arc::new(FakeState::default());
+    state.block_input.store(true, Ordering::Release);
+    let host = host_with_state(&root, "node.a", Arc::clone(&state));
+    let mut client = TestClient::connect(&host);
+    let (_, token) = client.acquire("node.a");
+    let request = client.request(RuntimeOperation::Input {
+        token,
+        action: InputAction::SingleTouchDragWithVerticalBrakeV1 {
+            x1: 1091,
+            y1: 355,
+            x2: 119,
+            y2: 363,
+            x3: 119,
+            y3: 263,
+            horizontal_duration_ms: 200,
+            corner_hold_ms: 150,
+            brake_distance_px: 100,
+            brake_duration_ms: 200,
+            slope_in: 2,
+            slope_out: 0,
+        },
+    });
+    let request_id = request.request_id();
+    let input_thread = thread::spawn(move || {
+        let receipt = client.send(&request);
+        (client, receipt)
+    });
+    wait_until(Duration::from_secs(2), || {
+        state.input_started.load(Ordering::Acquire)
+    });
+
+    let intent_events = host
+        .query_persisted_events_for_test(EventQuery {
+            request_id: Some(request_id),
+            event_type: Some(EventType::InputIntent),
+            ..EventQuery::default()
+        })
+        .expect("query durable input intent while backend is blocked");
+    assert_eq!(intent_events.len(), 1);
+    assert!(
+        host.query_persisted_events_for_test(EventQuery {
+            request_id: Some(request_id),
+            event_type: Some(EventType::InputCommitted),
+            ..EventQuery::default()
+        })
+        .expect("query input outcome while backend is blocked")
+        .is_empty()
+    );
+    let EventPayload::Input(InputPayload::Intent(intent)) = intent_events[0].payload() else {
+        panic!("typed input intent")
+    };
+    let recorded_plan = intent
+        .execution_plan()
+        .expect("durable prepared plan")
+        .clone();
+    assert_eq!(recorded_plan.version(), INPUT_EXECUTION_PLAN_VERSION);
+    assert_eq!(
+        recorded_plan.profile(),
+        INPUT_EXECUTION_PLAN_PROFILE_MAA_2_0
+    );
+
+    let consumed_plan = state
+        .segmented_swipe_plans
+        .lock()
+        .expect("fake segmented swipe plans lock")
+        .first()
+        .cloned()
+        .expect("backend consumed prepared plan");
+    assert_eq!(recorded_plan.events().len(), consumed_plan.events().len());
+    for (recorded, consumed) in recorded_plan.events().iter().zip(consumed_plan.events()) {
+        match (recorded, consumed) {
+            (
+                InputExecutionPlanEvent::Down {
+                    x: recorded_x,
+                    y: recorded_y,
+                },
+                SegmentedSwipeEvent::Down((consumed_x, consumed_y)),
+            ) => assert_eq!((*recorded_x, *recorded_y), (*consumed_x, *consumed_y)),
+            (
+                InputExecutionPlanEvent::Move {
+                    x: recorded_x,
+                    y: recorded_y,
+                    delay_before_ms: recorded_delay,
+                },
+                SegmentedSwipeEvent::Move {
+                    point: (consumed_x, consumed_y),
+                    delay_before_ms: consumed_delay,
+                },
+            ) => assert_eq!(
+                (*recorded_x, *recorded_y, *recorded_delay),
+                (*consumed_x, *consumed_y, *consumed_delay)
+            ),
+            (
+                InputExecutionPlanEvent::Hold {
+                    duration_ms: recorded_duration,
+                },
+                SegmentedSwipeEvent::Hold(consumed_duration),
+            ) => assert_eq!(*recorded_duration, *consumed_duration),
+            (InputExecutionPlanEvent::Up, SegmentedSwipeEvent::Up) => {}
+            _ => panic!("ledger and backend prepared plans differ"),
+        }
+    }
+
+    state.block_input.store(false, Ordering::Release);
+    let (client, receipt) = input_thread.join().expect("input thread");
+    assert_eq!(receipt.state(), RuntimeReceiptState::Completed);
+    assert_eq!(state.input_count.load(Ordering::Acquire), 1);
+    let events = host
+        .query_persisted_events_for_test(EventQuery {
+            request_id: Some(request_id),
+            ..EventQuery::default()
+        })
+        .expect("query complete input sequence");
+    assert_eq!(
+        events
+            .iter()
+            .map(PersistedEvent::event_type)
+            .collect::<Vec<_>>(),
+        vec![
+            EventType::SchedulerAdmitted,
+            EventType::InputIntent,
+            EventType::InputCommitted,
+        ]
+    );
+    drop(client);
+    host.close().expect("close host");
 }
 
 #[test]

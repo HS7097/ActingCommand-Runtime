@@ -1,10 +1,17 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 use actingcommand_device::{DeviceError, DeviceErrorSeverity};
+use std::convert::Infallible;
 use std::error::Error;
 use std::fmt;
 
 pub type ExecutionKernelResult<T> = Result<T, ExecutionKernelError>;
+
+impl From<Infallible> for ExecutionKernelError {
+    fn from(value: Infallible) -> Self {
+        match value {}
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExecutionKernelError {

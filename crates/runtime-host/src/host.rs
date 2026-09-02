@@ -52,41 +52,42 @@ use actingcommand_contract::{
     ContainedTaskCancellationStatus, ContainedTaskLeaseTerminal, ContainedTaskRequest,
     CorrelationId, DiagnosticCode, EffectDisposition, EventAction, EventActor, EventDraft, EventId,
     EventLinksDraft, EventPayload, EventQuery, EventSeverity, EventSource, EventType,
-    FactPayloadDraft, FactRecord, FrameId, InputAction, InputPayload, InputPayloadDraft,
-    InstanceFactContext, InstanceFactSnapshot, InstanceId, IssuedActionId, IssuedFrameId,
-    IssuedMonitorProbe, IssuedReadOnlyCaptureCapability, IssuedRecognitionId, IssuedRunId,
-    IssuedTaskId, LeaseId, LeasePayloadDraft, LeaseQueuePolicy, LeaseToken,
-    MAX_GOVERNANCE_CAPABILITY_BYTES, MAX_INSTANCE_ALIAS_BYTES, MIN_GOVERNANCE_CAPABILITY_BYTES,
-    MonitorPayloadDraft, MonitorRecoveryCoordinationReason, OriginModule, PackageDebugLayout,
-    PackageDebugRequest, PackageDebugSummary, PerformanceContext, PerformancePayloadDraft,
-    PinnedFrameReason, PolicyDispatchEventData, PolicyExecutionEventData, PolicyExecutionOutcome,
-    PolicyFailureClass, PolicyPayload, PolicyPayloadDraft, PolicyPlanningSignalEventData,
-    PolicyReasonRecord, ProjectDecisionPageRequest, ProjectInterfaceRequest,
-    ProjectedArtifactReference, ProjectionPayload, ProposalClass, ProposalPromotion,
-    RUNTIME_INFO_FILE, ReadonlyObservation, RecognitionPayloadDraft, RecognitionVerdict,
-    ReleasePayload, ReleasePayloadDraft, ReleaseTransitionKind, RequestId, ResourceAuthoringEvent,
-    ResourceAuthoringPayloadDraft, ResourceAuthoringPhase, RetentionClass, RunId,
-    RuntimeCaptureBackend, RuntimeContractError, RuntimeControlPlaneStatus, RuntimeDebugEvent,
-    RuntimeDebugOperation, RuntimeDebugPhase, RuntimeErrorCode, RuntimeErrorProjection,
-    RuntimeEventBatch, RuntimeEventQueryCursor, RuntimeEventQueryPage,
-    RuntimeEventQueryPageRequest, RuntimeEvidenceExportRequest, RuntimeEvidenceExportSummary,
-    RuntimeEvidenceScreenshotCounts, RuntimeInfo, RuntimeInstanceStatus, RuntimeMaintenanceQuery,
-    RuntimeMonitorPolicy, RuntimeOperation, RuntimePayloadDraft, RuntimePlanningDocument,
-    RuntimePlanningDocumentKind, RuntimeReceipt, RuntimeReceiptState, RuntimeReleaseSet,
-    RuntimeRequest, RuntimeResult, RuntimeStrategicPlanResult, RuntimeSubscriptionRequest,
-    SchedulerPayloadDraft, SchedulingDisposition, SchedulingEffectCondition,
-    SchedulingEffectEvidence, SchedulingOutcomeDeclaration, SchedulingOutcomeIdentity,
-    SchedulingOutcomeProjection, StatePayload, StatePayloadDraft, TaskEntryRecognitionPhase,
-    TaskEntryTargetDisposition, TaskId, TaskOutcome, TaskPayload, TaskPayloadDraft,
-    TaskSemanticFact, TerminalEvent, ValidatedRuntimeRequest,
+    FactPayloadDraft, FactRecord, FrameId, InputAction, InputExecutionPlanEvent,
+    InputExecutionPlanRecord, InputPayload, InputPayloadDraft, InstanceFactContext,
+    InstanceFactSnapshot, InstanceId, IssuedActionId, IssuedFrameId, IssuedMonitorProbe,
+    IssuedReadOnlyCaptureCapability, IssuedRecognitionId, IssuedRunId, IssuedTaskId, LeaseId,
+    LeasePayloadDraft, LeaseQueuePolicy, LeaseToken, MAX_GOVERNANCE_CAPABILITY_BYTES,
+    MAX_INSTANCE_ALIAS_BYTES, MIN_GOVERNANCE_CAPABILITY_BYTES, MonitorPayloadDraft,
+    MonitorRecoveryCoordinationReason, OriginModule, PackageDebugLayout, PackageDebugRequest,
+    PackageDebugSummary, PerformanceContext, PerformancePayloadDraft, PinnedFrameReason,
+    PolicyDispatchEventData, PolicyExecutionEventData, PolicyExecutionOutcome, PolicyFailureClass,
+    PolicyPayload, PolicyPayloadDraft, PolicyPlanningSignalEventData, PolicyReasonRecord,
+    ProjectDecisionPageRequest, ProjectInterfaceRequest, ProjectedArtifactReference,
+    ProjectionPayload, ProposalClass, ProposalPromotion, RUNTIME_INFO_FILE, ReadonlyObservation,
+    RecognitionPayloadDraft, RecognitionVerdict, ReleasePayload, ReleasePayloadDraft,
+    ReleaseTransitionKind, RequestId, ResourceAuthoringEvent, ResourceAuthoringPayloadDraft,
+    ResourceAuthoringPhase, RetentionClass, RunId, RuntimeCaptureBackend, RuntimeContractError,
+    RuntimeControlPlaneStatus, RuntimeDebugEvent, RuntimeDebugOperation, RuntimeDebugPhase,
+    RuntimeErrorCode, RuntimeErrorProjection, RuntimeEventBatch, RuntimeEventQueryCursor,
+    RuntimeEventQueryPage, RuntimeEventQueryPageRequest, RuntimeEvidenceExportRequest,
+    RuntimeEvidenceExportSummary, RuntimeEvidenceScreenshotCounts, RuntimeInfo,
+    RuntimeInstanceStatus, RuntimeMaintenanceQuery, RuntimeMonitorPolicy, RuntimeOperation,
+    RuntimePayloadDraft, RuntimePlanningDocument, RuntimePlanningDocumentKind, RuntimeReceipt,
+    RuntimeReceiptState, RuntimeReleaseSet, RuntimeRequest, RuntimeResult,
+    RuntimeStrategicPlanResult, RuntimeSubscriptionRequest, SchedulerPayloadDraft,
+    SchedulingDisposition, SchedulingEffectCondition, SchedulingEffectEvidence,
+    SchedulingOutcomeDeclaration, SchedulingOutcomeIdentity, SchedulingOutcomeProjection,
+    StatePayload, StatePayloadDraft, TaskEntryRecognitionPhase, TaskEntryTargetDisposition, TaskId,
+    TaskOutcome, TaskPayload, TaskPayloadDraft, TaskSemanticFact, TerminalEvent,
+    ValidatedRuntimeRequest,
 };
-use actingcommand_device::{CaptureBackendName, Frame};
+use actingcommand_device::{CaptureBackendName, Frame, SegmentedSwipeEvent};
 use actingcommand_execution_kernel::{
     ContainedTaskOutcome, ContainedTaskRunError, ContainedTaskRuntime, ContainedTaskTrace,
     ExecutionBackendProvenance, ExecutionBackendProvider, ExecutionKernel, ExternalExpectedSha256,
     PostAdmissionOcrComparisonReport, PostAdmissionOcrObservation, PreparedContainedTask,
-    RecognitionVisionProvider, StabilityComparisonResult, StabilityTerminalReason,
-    StabilityTerminationDeclaration, decide_monitor, page_anchor_matches,
+    PreparedInputAction, RecognitionVisionProvider, StabilityComparisonResult,
+    StabilityTerminalReason, StabilityTerminationDeclaration, decide_monitor, page_anchor_matches,
 };
 use actingcommand_ledger::critical::{
     CatalogTransitionTarget, CriticalActionReport, CriticalEventPlan, CriticalExecutionError,
@@ -11888,6 +11889,17 @@ impl HostShared {
                 ),
             )?);
         }
+        let prepared_action = self
+            .execution
+            .prepare_input(action.clone())
+            .map_err(|error| {
+                RequestFailure::poison_without_terminal(RuntimeHostError::execution(
+                    "prepare_input",
+                    &error,
+                ))
+            })?;
+        let execution_plan = input_execution_plan_record(&prepared_action)
+            .map_err(RequestFailure::poison_without_terminal)?;
         self.append_scheduler_admitted_for_token(request, token, resolved.audit_endpoint())?;
         let action_id = self
             .events
@@ -11917,6 +11929,17 @@ impl HostShared {
             ),
         };
         let event_action = action.event_action();
+        let intent_payload = match execution_plan {
+            Some(execution_plan) => InputPayloadDraft::intent_with_execution_plan(
+                event_action,
+                execution_plan,
+                execution_audit(execution_provenance, resolved.audit_endpoint()),
+            ),
+            None => InputPayloadDraft::intent(
+                event_action,
+                execution_audit(execution_provenance, resolved.audit_endpoint()),
+            ),
+        };
         let intent = self
             .events
             .draft(
@@ -11925,10 +11948,7 @@ impl HostShared {
                 module,
                 EventActor::Runtime,
                 links.clone(),
-                InputPayloadDraft::intent(
-                    event_action,
-                    execution_audit(execution_provenance, resolved.audit_endpoint()),
-                ),
+                intent_payload,
             )
             .and_then(|draft| self.events.sanitize(draft))
             .map_err(RequestFailure::poison_without_terminal)?;
@@ -11938,7 +11958,7 @@ impl HostShared {
         let instance_alias = resolved.instance_alias.clone();
         let outcome_links = links.clone();
         let failure_links = links;
-        let action_for_worker = action.clone();
+        let action_for_worker = prepared_action;
         let result = execute_critical(
             &self.ledger,
             self.events.fingerprinter(),
@@ -16715,6 +16735,42 @@ fn audit_endpoint(endpoint: &str) -> AuditInput {
     } else {
         AuditInput::new().with_device_endpoint(endpoint)
     }
+}
+
+fn input_execution_plan_record(
+    prepared_action: &PreparedInputAction,
+) -> RuntimeHostResult<Option<InputExecutionPlanRecord>> {
+    let Some(plan) = prepared_action.segmented_swipe_plan() else {
+        return Ok(None);
+    };
+    let events = plan
+        .events()
+        .iter()
+        .map(|event| match event {
+            SegmentedSwipeEvent::Down((x, y)) => InputExecutionPlanEvent::Down { x: *x, y: *y },
+            SegmentedSwipeEvent::Move {
+                point: (x, y),
+                delay_before_ms,
+            } => InputExecutionPlanEvent::Move {
+                x: *x,
+                y: *y,
+                delay_before_ms: *delay_before_ms,
+            },
+            SegmentedSwipeEvent::Hold(duration_ms) => InputExecutionPlanEvent::Hold {
+                duration_ms: *duration_ms,
+            },
+            SegmentedSwipeEvent::Up => InputExecutionPlanEvent::Up,
+        })
+        .collect();
+    InputExecutionPlanRecord::new(events)
+        .map(Some)
+        .map_err(|_| {
+            RuntimeHostError::fatal(
+                "input_execution_plan_invalid",
+                "prepare_input_execution_plan",
+                RuntimeErrorCode::RuntimeFatal,
+            )
+        })
 }
 
 fn execution_audit(provenance: ExecutionBackendProvenance, endpoint: &str) -> AuditInput {
