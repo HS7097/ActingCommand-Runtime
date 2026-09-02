@@ -11978,7 +11978,10 @@ impl HostShared {
                         effect: EffectDisposition::NotPerformed,
                     };
                 }
-                match self.execution.input(&instance_alias, action_for_worker) {
+                match self
+                    .execution
+                    .input_prepared(&instance_alias, action_for_worker)
+                {
                     Ok(()) => CriticalActionReport::Succeeded {
                         value: (),
                         effect: success_effect,

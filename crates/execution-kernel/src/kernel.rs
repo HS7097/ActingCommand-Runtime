@@ -53,14 +53,18 @@ impl ExecutionKernel {
         action.try_into()
     }
 
-    pub fn input<A>(&self, instance_alias: &str, action: A) -> ExecutionKernelResult<()>
-    where
-        A: TryInto<PreparedInputAction>,
-        ExecutionKernelError: From<A::Error>,
-    {
-        let action = action.try_into().map_err(ExecutionKernelError::from)?;
+    pub fn input(&self, instance_alias: &str, action: InputAction) -> ExecutionKernelResult<()> {
+        let action = self.prepare_input(action)?;
+        self.input_prepared(instance_alias, action)
+    }
+
+    pub fn input_prepared(
+        &self,
+        instance_alias: &str,
+        action: PreparedInputAction,
+    ) -> ExecutionKernelResult<()> {
         let session = self.session(instance_alias)?;
-        let result = session.input(action);
+        let result = session.input_prepared(action);
         self.finish_session_operation(&session, result)
     }
 

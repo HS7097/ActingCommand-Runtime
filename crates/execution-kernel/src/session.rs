@@ -125,7 +125,11 @@ impl ExecutionSession {
         &self.resolved
     }
 
-    pub fn input(&self, action: PreparedInputAction) -> ExecutionKernelResult<()> {
+    pub fn input(&self, action: InputAction) -> ExecutionKernelResult<()> {
+        self.input_prepared(action.try_into()?)
+    }
+
+    pub(crate) fn input_prepared(&self, action: PreparedInputAction) -> ExecutionKernelResult<()> {
         let mut state = self.lock_state("execution_session_state_poisoned")?;
         ensure_open(&state)?;
         let (response, receiver) = mpsc::sync_channel(1);
