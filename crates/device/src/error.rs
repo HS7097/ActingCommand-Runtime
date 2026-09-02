@@ -39,8 +39,12 @@ pub enum DeviceErrorDiagnosticMessage {
     AdbShellInputDeviceStateUnavailable,
     AdbShellInputBoundsUnavailableOrInvalid,
     AdbShellInputRotationUnavailable,
+    DeviceRegistryCaptureOpenFailed,
     DeviceRegistryInputOpenFailed,
     DeviceRegistryInputOperationFailed,
+    NemuCaptureIdentityUncoordinated,
+    NemuInstallationResolveFailed,
+    NemuTargetResolveFailed,
     SegmentedSwipeCapabilityUnsupported,
 }
 
@@ -61,8 +65,12 @@ impl DeviceErrorDiagnosticMessage {
                 "adb shell input bounds are unavailable or invalid"
             }
             Self::AdbShellInputRotationUnavailable => "adb shell input rotation is unavailable",
+            Self::DeviceRegistryCaptureOpenFailed => "device registry capture open failed",
             Self::DeviceRegistryInputOpenFailed => "device registry input open failed",
             Self::DeviceRegistryInputOperationFailed => "device registry input operation failed",
+            Self::NemuCaptureIdentityUncoordinated => "Nemu capture identity is not coordinated",
+            Self::NemuInstallationResolveFailed => "MuMu installation resolution failed",
+            Self::NemuTargetResolveFailed => "Nemu running target resolution failed",
             Self::SegmentedSwipeCapabilityUnsupported => {
                 "selected input backend does not support segmented swipe"
             }
