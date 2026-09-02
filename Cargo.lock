@@ -234,6 +234,7 @@ dependencies = [
 name = "actingcommand-policy"
 version = "0.1.0"
 dependencies = [
+ "actingcommand-contract",
  "serde",
  "serde_json",
  "sha2",
