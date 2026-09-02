@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 use crate::adb::{Adb, AdbConfig, stop_child};
-use crate::input::{SegmentedSwipeAction, SegmentedSwipeEvent, segmented_swipe_events};
+use crate::input::{PreparedSegmentedSwipePlan, SegmentedSwipeEvent};
 use crate::{DeviceError, DeviceErrorCategory, DeviceErrorSeverity, DeviceResult, InputBackend};
 use std::fs;
 use std::io::{BufRead, BufReader, Read, Write};
@@ -547,10 +547,9 @@ impl InputBackend for MaaTouchBackend {
         true
     }
 
-    fn segmented_swipe(&mut self, action: SegmentedSwipeAction) -> DeviceResult<()> {
-        let events = segmented_swipe_events(action)?;
+    fn segmented_swipe_prepared(&mut self, plan: &PreparedSegmentedSwipePlan) -> DeviceResult<()> {
         let pressure = self.maatouch_config.default_pressure;
-        for event in &events {
+        for event in plan.events() {
             match event {
                 SegmentedSwipeEvent::Down((x, y))
                 | SegmentedSwipeEvent::Move { point: (x, y), .. } => {
@@ -559,7 +558,7 @@ impl InputBackend for MaaTouchBackend {
                 SegmentedSwipeEvent::Hold(_) | SegmentedSwipeEvent::Up => {}
             }
         }
-        for event in events {
+        for event in plan.events() {
             match event {
                 SegmentedSwipeEvent::Down((x, y)) => {
                     self.write_and_flush(&format!("d {TOUCH_ID} {x} {y} {pressure}\nc\n"))?;
@@ -568,11 +567,11 @@ impl InputBackend for MaaTouchBackend {
                     point: (x, y),
                     delay_before_ms,
                 } => {
-                    thread::sleep(Duration::from_millis(delay_before_ms));
+                    thread::sleep(Duration::from_millis(*delay_before_ms));
                     self.write_and_flush(&format!("m {TOUCH_ID} {x} {y} {pressure}\nc\n"))?;
                 }
                 SegmentedSwipeEvent::Hold(duration_ms) => {
-                    thread::sleep(Duration::from_millis(duration_ms));
+                    thread::sleep(Duration::from_millis(*duration_ms));
                 }
                 SegmentedSwipeEvent::Up => {
                     self.write_and_flush(&format!("u {TOUCH_ID}\nc\n"))?;
