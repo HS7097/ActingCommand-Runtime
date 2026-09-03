@@ -34,7 +34,7 @@ const MAX_MAA_JSON_FILE_BYTES: u64 = 67_108_864;
 const MAX_MAA_AGGREGATE_JSON_BYTES: u64 = 1_073_741_824;
 const MAX_MAA_RAW_TASKS: usize = 65_536;
 
-const CORE_STRING_FIELDS: [&str; 3] = ["Doc", "algorithm", "action"];
+const CORE_STRING_FIELDS: [&str; 2] = ["algorithm", "action"];
 const GEOMETRY_FIELDS: [&str; 3] = ["roi", "rectMove", "specificRect"];
 
 const ALGORITHM_SPECIFIC_FIELDS: [&str; 18] = [
@@ -1465,6 +1465,19 @@ fn validate_core_typed_fields(task_id: &str, task: &Map<String, Value>) -> CliOu
     {
         return Err(malformed_core_field(task_id, "baseTask", "a string"));
     }
+    if let Some(value) = task.get("Doc") {
+        let valid = value.is_string()
+            || value
+                .as_array()
+                .is_some_and(|items| items.iter().all(Value::is_string));
+        if !valid {
+            return Err(malformed_core_field(
+                task_id,
+                "Doc",
+                "a string or string array",
+            ));
+        }
+    }
     for field in CORE_STRING_FIELDS {
         if let Some(value) = task.get(field)
             && !value.is_string()
@@ -2467,9 +2480,41 @@ mod tests {
 
     #[test]
     fn malformed_core_typed_fields_fail_loudly() {
+        let assert_doc_array = |value: Value, expected: &[&str]| {
+            let graph = compile_maa_task_graph_from_value(json!({
+                "NeutralTask": {"Doc": value}
+            }))
+            .unwrap();
+            let facts = graph.task_facts("NeutralTask").unwrap();
+            let doc = facts.doc.as_ref().expect("declared Doc fact");
+            assert_eq!(doc.source_task_id, "NeutralTask");
+            assert_eq!(doc.origin, MaaFactOrigin::Declared);
+            assert!(!doc.source_json_path.is_empty());
+            assert_eq!(doc.source_file_sha256.len(), 64);
+            let MaaFactValue::Array { items } = &doc.value else {
+                panic!("Doc fact must remain an array");
+            };
+            assert_eq!(items.len(), expected.len());
+            for (item, expected) in items.iter().zip(expected) {
+                assert_eq!(
+                    item.value,
+                    MaaFactValue::String {
+                        value: (*expected).to_string()
+                    }
+                );
+                assert_eq!(item.source_task_id, doc.source_task_id);
+                assert_eq!(item.source_json_path, doc.source_json_path);
+                assert_eq!(item.source_file_sha256, doc.source_file_sha256);
+                assert_eq!(item.origin, doc.origin);
+                assert_eq!(item.contributing_sources, doc.contributing_sources);
+            }
+        };
+        assert_doc_array(json!(["primary", "secondary"]), &["primary", "secondary"]);
+        assert_doc_array(json!([]), &[]);
+
         let malformed = [
             ("baseTask", json!({"A": {"baseTask": 7}})),
-            ("Doc", json!({"A": {"Doc": []}})),
+            ("Doc", json!({"A": {"Doc": ["valid", 7]}})),
             ("algorithm", json!({"A": {"algorithm": false}})),
             ("action", json!({"A": {"action": 2}})),
             ("template", json!({"A": {"template": {}}})),
