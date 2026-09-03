@@ -49,9 +49,32 @@ struct ChildGuard(Child);
 
 impl Drop for ChildGuard {
     fn drop(&mut self) {
-        if self.0.try_wait().ok().flatten().is_none() {
-            let _kill_result = self.0.kill();
-            let _wait_result = self.0.wait();
+        let reporting_failure = thread::panicking();
+        let released = match self.0.try_wait() {
+            Ok(Some(status)) => Ok(status),
+            Ok(None) => self.0.kill().and_then(|()| self.0.wait()),
+            Err(error) => Err(error),
+        };
+        if !reporting_failure {
+            return;
+        }
+        if let Err(error) = released {
+            eprintln!("ERROR failed to release actingd after test failure: {error}");
+            return;
+        }
+        let Some(pipe) = self.0.stderr.as_mut() else {
+            eprintln!("ERROR actingd stderr unavailable after test failure");
+            return;
+        };
+        let mut stderr = String::new();
+        match pipe.read_to_string(&mut stderr) {
+            Ok(_) if !stderr.is_empty() => {
+                eprintln!("actingd stderr after test failure:\n{stderr}");
+            }
+            Ok(_) => {}
+            Err(error) => {
+                eprintln!("ERROR failed to read actingd stderr after test failure: {error}");
+            }
         }
     }
 }
