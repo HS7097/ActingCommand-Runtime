@@ -34,7 +34,7 @@ use std::error::Error;
 use std::fmt;
 use std::net::{IpAddr, SocketAddr};
 
-pub const RUNTIME_REQUEST_SCHEMA_VERSION: &str = "actingcommand.runtime.request.v2";
+pub const RUNTIME_REQUEST_SCHEMA_VERSION: &str = "actingcommand.runtime.request.v3";
 pub const RUNTIME_RECEIPT_SCHEMA_VERSION: &str = "actingcommand.runtime.receipt.v1";
 pub const RUNTIME_INFO_SCHEMA_VERSION: &str = "actingcommand.runtime.info.v1";
 pub const RUNTIME_INFO_FILE: &str = "runtime-info.json";
@@ -240,6 +240,51 @@ impl RuntimeStrategicReportRequest {
 
     pub fn evidence(&self) -> &[ProjectedArtifactReference] {
         &self.evidence
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RuntimePolicyInputIdentity {
+    ledger_position: u64,
+    fact_snapshot_id: String,
+}
+
+impl RuntimePolicyInputIdentity {
+    pub fn new(
+        ledger_position: u64,
+        fact_snapshot_id: impl Into<String>,
+    ) -> RuntimeContractResult<Self> {
+        let identity = Self {
+            ledger_position,
+            fact_snapshot_id: fact_snapshot_id.into(),
+        };
+        identity.validate()?;
+        Ok(identity)
+    }
+
+    pub fn validate(&self) -> RuntimeContractResult<()> {
+        let valid_snapshot_id = self
+            .fact_snapshot_id
+            .strip_prefix("snapshot:policy-fact:")
+            .is_some_and(|digest| {
+                digest.len() == 64
+                    && digest
+                        .bytes()
+                        .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+            });
+        if self.ledger_position == 0 || !valid_snapshot_id {
+            return Err(RuntimeContractError::new("invalid_policy_input_identity"));
+        }
+        Ok(())
+    }
+
+    pub const fn ledger_position(&self) -> u64 {
+        self.ledger_position
+    }
+
+    pub fn fact_snapshot_id(&self) -> &str {
+        &self.fact_snapshot_id
     }
 }
 
@@ -2234,6 +2279,9 @@ pub enum RuntimeOperation {
     ProjectInterface {
         request: ProjectInterfaceRequest,
     },
+    ProjectPolicyInputIdentity {
+        as_of_ledger_position: u64,
+    },
     MonitorStatus,
     ConfigureMonitor {
         instance_alias: String,
@@ -2415,6 +2463,14 @@ impl RuntimeOperation {
             Self::ProjectInterface { request } => request
                 .validate()
                 .map_err(|_| RuntimeContractError::new("invalid_project_interface_request")),
+            Self::ProjectPolicyInputIdentity {
+                as_of_ledger_position,
+            } => {
+                if *as_of_ledger_position == 0 {
+                    return Err(RuntimeContractError::new("invalid_policy_input_position"));
+                }
+                Ok(())
+            }
             Self::SubscribeEvents { request } => request.validate(),
             Self::DebugPackage { request } => request.validate(),
             Self::ExportEvidence { request } => request.validate(),
@@ -2528,6 +2584,9 @@ impl fmt::Debug for RuntimeOperation {
             Self::Status => "RuntimeOperation::Status",
             Self::ProjectInterface { .. } => {
                 "RuntimeOperation::ProjectInterface(<version-negotiation>)"
+            }
+            Self::ProjectPolicyInputIdentity { .. } => {
+                "RuntimeOperation::ProjectPolicyInputIdentity(<ledger-position>)"
             }
             Self::MonitorStatus => "RuntimeOperation::MonitorStatus",
             Self::ConfigureMonitor { .. } => "RuntimeOperation::ConfigureMonitor(<redacted>)",
@@ -2680,6 +2739,7 @@ impl RuntimeRequest {
                 | RuntimeOperation::AgentSessionStatus { .. }
                 | RuntimeOperation::RecordAgentResponse { .. }
                 | RuntimeOperation::PublishFact { .. }
+                | RuntimeOperation::ProjectPolicyInputIdentity { .. }
                 | RuntimeOperation::PrepareStrategicReport { .. }
                 | RuntimeOperation::ProjectPolicyForward { .. }
                 | RuntimeOperation::AssessPredictiveMaintenance { .. }
@@ -3050,6 +3110,9 @@ pub enum RuntimeResult {
     ProjectInterface {
         response: Box<ProjectInterfaceResponse>,
     },
+    PolicyInputIdentityProjected {
+        identity: RuntimePolicyInputIdentity,
+    },
     MonitorStatus {
         status: RuntimeMonitorRegistryStatus,
     },
@@ -3256,6 +3319,9 @@ impl RuntimeReceipt {
             Some(RuntimeResult::ProjectInterface { response }) => response
                 .validate()
                 .map_err(|_| RuntimeContractError::new("invalid_project_interface_response"))?,
+            Some(RuntimeResult::PolicyInputIdentityProjected { identity }) => {
+                identity.validate()?
+            }
             Some(RuntimeResult::MonitorStatus { status }) => status
                 .validate()
                 .map_err(|_| RuntimeContractError::new("invalid_runtime_monitor_status"))?,
