@@ -21,6 +21,7 @@ const MAX_VISION_STRING_BYTES: usize = 4_096;
 const MAX_OCR_TEXT_BYTES: usize = 64 * 1024;
 const MAX_OCR_BLOCKS: usize = 1_024;
 const MAX_VISION_RESULTS: usize = 1_024;
+const MAX_TEMPLATE_REGION_EVALUATIONS: usize = 64;
 const PPOCR_V6_MEDIUM_MODEL_REF: &str = "PP-OCRv6_medium";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -168,7 +169,7 @@ pub enum RecognitionMask {
     Bitmap { path: String },
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum RecognitionMatchMetric {
     CcorrNormed,
@@ -516,6 +517,25 @@ pub struct TemplateEvaluation {
     pub threshold: f32,
 }
 
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct TemplateRegionEvaluationBatch {
+    pub target_id: String,
+    pub rows: Vec<TemplateRegionEvaluationRow>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Serialize)]
+pub struct TemplateRegionEvaluationRow {
+    pub index: usize,
+    pub requested_region: PackRect,
+    pub metric: RecognitionMatchMetric,
+    pub matched_rect: PackRect,
+    pub raw_score: f32,
+    pub normalized_score: f32,
+    pub threshold: f32,
+    pub passed: bool,
+    pub selected: bool,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UnsupportedRecognitionTarget {
     pub id: String,
@@ -686,6 +706,120 @@ impl RecognitionEvaluator {
             RecognitionTarget::Ocr(target) => self.evaluate_ocr(scene, target),
             RecognitionTarget::Nn(target) => self.evaluate_nn(scene, target),
         }
+    }
+
+    pub fn evaluate_template_regions(
+        &self,
+        scene: &Scene,
+        target_id: &str,
+        regions: &[PackRect],
+    ) -> RecognitionPackResult<TemplateRegionEvaluationBatch> {
+        self.validate_coordinate_space(scene)?;
+        let RecognitionTarget::Template(target) = self.target(target_id)? else {
+            return Err(RecognitionPackError::fatal(format!(
+                "recognition target '{target_id}' is not a template target"
+            )));
+        };
+        if let Some(reason) = unsupported_template_reason(target) {
+            return Err(RecognitionPackError::fatal(format!(
+                "template target '{}' uses unsupported recognition semantics: {reason}",
+                target.id
+            )));
+        }
+        if !(1..=MAX_TEMPLATE_REGION_EVALUATIONS).contains(&regions.len()) {
+            return Err(RecognitionPackError::fatal(format!(
+                "template target '{}' region batch must contain 1..={MAX_TEMPLATE_REGION_EVALUATIONS} regions, got {}",
+                target.id,
+                regions.len()
+            )));
+        }
+
+        let scene_bounds = PackRect {
+            x: 0,
+            y: 0,
+            width: i32::try_from(scene.width())
+                .map_err(|_| RecognitionPackError::fatal("scene width exceeds i32 range"))?,
+            height: i32::try_from(scene.height())
+                .map_err(|_| RecognitionPackError::fatal("scene height exceeds i32 range"))?,
+        };
+        for (index, region) in regions.iter().enumerate() {
+            if !rect_is_within(*region, scene_bounds) {
+                return Err(RecognitionPackError::fatal(format!(
+                    "template target '{}' region[{index}] must be nonempty and within scene bounds",
+                    target.id
+                )));
+            }
+            if let Some(first_index) = regions[..index]
+                .iter()
+                .position(|candidate| candidate == region)
+            {
+                return Err(RecognitionPackError::fatal(format!(
+                    "template target '{}' region[{index}] duplicates region[{first_index}]",
+                    target.id
+                )));
+            }
+        }
+
+        let template_png = self
+            .asset_resolver
+            .read_asset(&target.template_path)
+            .map_err(|err| {
+                RecognitionPackError::fatal(format!(
+                    "failed to read template '{}' for target '{}': {}",
+                    target.template_path,
+                    target.id,
+                    err.message()
+                ))
+            })?;
+        let metric = self.pack.defaults.match_metric;
+        let threshold = target
+            .threshold
+            .unwrap_or(self.pack.defaults.template_threshold);
+        let mut rows = Vec::with_capacity(regions.len());
+        for (index, requested_region) in regions.iter().copied().enumerate() {
+            let matched = scene
+                .match_template_with_metric(
+                    &template_png,
+                    Some(requested_region.into()),
+                    metric.as_match_metric(),
+                )
+                .map_err(|err| primitive_error(&target.id, err))?;
+            rows.push(TemplateRegionEvaluationRow {
+                index,
+                requested_region,
+                metric,
+                matched_rect: PackRect {
+                    x: matched.x,
+                    y: matched.y,
+                    width: matched.width,
+                    height: matched.height,
+                },
+                raw_score: matched.raw_score,
+                normalized_score: matched.score,
+                threshold,
+                passed: matched.score >= threshold,
+                selected: false,
+            });
+        }
+
+        let mut selected_index: Option<usize> = None;
+        for index in 0..rows.len() {
+            if rows[index].passed
+                && selected_index.is_none_or(|selected| {
+                    rows[index].normalized_score > rows[selected].normalized_score
+                })
+            {
+                selected_index = Some(index);
+            }
+        }
+        if let Some(index) = selected_index {
+            rows[index].selected = true;
+        }
+
+        Ok(TemplateRegionEvaluationBatch {
+            target_id: target.id.clone(),
+            rows,
+        })
     }
 
     pub fn evaluate_ocr_observation(
@@ -2707,6 +2841,133 @@ mod tests {
         assert!(template.raw_score >= 0.99);
         assert!((0.0..=1.0).contains(&template.score));
         assert_eq!((template.width, template.height), (8, 6));
+    }
+
+    #[test]
+    fn template_region_evaluation_returns_ordered_rows_and_selected_winner() {
+        let fixture = TemplateFixture::new();
+        let evaluator = fixture.template_evaluator_with_defaults(
+            RecognitionDefaults {
+                template_threshold: 0.90,
+                match_metric: RecognitionMatchMetric::CcoeffNormed,
+                ..RecognitionDefaults::default()
+            },
+            None,
+        );
+        let scene = fixture.scene_with_template();
+        let regions = [rect(0, 0, 16, 16), rect(12, 10, 28, 24)];
+
+        let batch = evaluator
+            .evaluate_template_regions(&scene, "template", &regions)
+            .expect("region evaluation");
+
+        assert_eq!(batch.target_id, "template");
+        assert_eq!(batch.rows.len(), 2);
+        let first = &batch.rows[0];
+        assert_eq!(first.index, 0);
+        assert_eq!(first.requested_region, regions[0]);
+        assert_eq!(first.metric, RecognitionMatchMetric::CcoeffNormed);
+        assert!(first.raw_score.is_finite());
+        assert!((0.0..=1.0).contains(&first.normalized_score));
+        assert_eq!(first.threshold, 0.90);
+        assert!(!first.passed);
+        assert!(!first.selected);
+
+        let winner = &batch.rows[1];
+        assert_eq!(winner.index, 1);
+        assert_eq!(winner.requested_region, regions[1]);
+        assert_eq!(winner.metric, RecognitionMatchMetric::CcoeffNormed);
+        assert_eq!(winner.matched_rect, rect(20, 15, 8, 6));
+        assert!(winner.raw_score >= 0.99);
+        assert!(winner.normalized_score >= 0.99);
+        assert_eq!(winner.threshold, 0.90);
+        assert!(winner.passed);
+        assert!(winner.selected);
+
+        let stored = serde_json::to_value(&batch).expect("serialized region evaluation");
+        assert_eq!(stored["target_id"], "template");
+        assert_eq!(stored["rows"][1]["index"], 1);
+        assert_eq!(stored["rows"][1]["metric"], "ccoeff_normed");
+        assert_eq!(stored["rows"][1]["requested_region"]["x"], 12);
+        assert_eq!(stored["rows"][1]["matched_rect"]["x"], 20);
+        assert_eq!(stored["rows"][1]["selected"], true);
+    }
+
+    #[test]
+    fn template_region_evaluation_uses_lowest_index_tie_and_selects_none_when_all_fail() {
+        let fixture = TemplateFixture::new();
+        let evaluator = fixture.template_evaluator(0.90);
+        let scene = fixture.scene_with_template();
+        let tied_regions = [rect(12, 10, 28, 24), rect(18, 13, 16, 12)];
+
+        let tied = evaluator
+            .evaluate_template_regions(&scene, "template", &tied_regions)
+            .expect("tied region evaluation");
+
+        assert!(tied.rows.iter().all(|row| row.passed));
+        assert_eq!(tied.rows[0].normalized_score, tied.rows[1].normalized_score);
+        assert!(tied.rows[0].selected);
+        assert!(!tied.rows[1].selected);
+
+        let none_evaluator = fixture.template_evaluator(1.0);
+        let failed = none_evaluator
+            .evaluate_template_regions(
+                &fixture.blank_scene(),
+                "template",
+                &[rect(0, 0, 16, 16), rect(16, 0, 16, 16)],
+            )
+            .expect("below-threshold region evaluation");
+        assert!(failed.rows.iter().all(|row| !row.passed));
+        assert!(failed.rows.iter().all(|row| !row.selected));
+    }
+
+    #[test]
+    fn template_region_evaluation_rejects_invalid_batch_without_partial_result() {
+        let fixture = TemplateFixture::new();
+        let evaluator = fixture.template_evaluator(0.90);
+        let scene = fixture.scene_with_template();
+
+        assert_fatal_contains(
+            evaluator
+                .evaluate_template_regions(&scene, "template", &[])
+                .expect_err("empty batch rejected"),
+            "1..=64",
+        );
+        assert_fatal_contains(
+            evaluator
+                .evaluate_template_regions(&scene, "template", &vec![rect(0, 0, 8, 6); 65])
+                .expect_err("oversized batch rejected"),
+            "1..=64",
+        );
+        assert_fatal_contains(
+            evaluator
+                .evaluate_template_regions(
+                    &scene,
+                    "template",
+                    &[rect(12, 10, 28, 24), rect(12, 10, 28, 24)],
+                )
+                .expect_err("duplicate region rejected"),
+            "duplicates region[0]",
+        );
+        assert_fatal_contains(
+            evaluator
+                .evaluate_template_regions(
+                    &scene,
+                    "template",
+                    &[rect(12, 10, 28, 24), rect(60, 40, 8, 8)],
+                )
+                .expect_err("out-of-bounds region rejected"),
+            "region[1] must be nonempty and within scene bounds",
+        );
+
+        let non_template = RecognitionEvaluator::new(fixture.dir.path.clone(), click_pack())
+            .expect("non-template evaluator");
+        assert_fatal_contains(
+            non_template
+                .evaluate_template_regions(&red_scene(), "tap", &[rect(0, 0, 8, 8)])
+                .expect_err("non-template target rejected"),
+            "is not a template target",
+        );
     }
 
     #[test]

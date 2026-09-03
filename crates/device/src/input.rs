@@ -88,6 +88,22 @@ pub fn prepare_segmented_swipe(
     Ok(PreparedSegmentedSwipePlan { action, events })
 }
 
+pub fn segmented_swipe_capability_error() -> DeviceError {
+    DeviceError::fatal("selected input backend does not support segmented swipe")
+        .with_diagnostic(
+            crate::DeviceErrorCategory::Protocol,
+            "input.segmented_swipe.capability",
+        )
+        .with_diagnostic_context(
+            "input_backend",
+            "segmented_swipe",
+            crate::DeviceErrorSensitivity::Internal,
+        )
+        .with_diagnostic_message(
+            crate::DeviceErrorDiagnosticMessage::SegmentedSwipeCapabilityUnsupported,
+        )
+}
+
 fn append_maa_2_0_segment(
     events: &mut Vec<SegmentedSwipeEvent>,
     start: (i32, i32),

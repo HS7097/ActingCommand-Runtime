@@ -7,7 +7,7 @@ use crate::{
 use actingcommand_contract::{ApplicationLifecycleAction, InputAction};
 use actingcommand_device::{
     CaptureBackend, DeviceError, DeviceResult, Frame, InputBackend, PreparedSegmentedSwipePlan,
-    SegmentedSwipeAction, prepare_segmented_swipe,
+    SegmentedSwipeAction, prepare_segmented_swipe, segmented_swipe_capability_error,
 };
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::mpsc::{self, Receiver, SyncSender};
@@ -412,9 +412,7 @@ fn execute_action(
         }) => backend.swipe(*x1, *y1, *x2, *y2, *duration_ms),
         PreparedInputAction::SegmentedSwipe(plan) => {
             if !backend.supports_segmented_swipe() {
-                return Err(DeviceError::fatal(
-                    "selected input backend does not support single_touch_drag_with_vertical_brake_v1",
-                ));
+                return Err(segmented_swipe_capability_error());
             }
             backend.segmented_swipe_prepared(plan)
         }

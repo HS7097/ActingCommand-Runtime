@@ -2,9 +2,9 @@
 
 use crate::capture::{DeviceRotation, display_size_from_natural, read_device_rotation};
 use crate::{
-    Adb, AdbConfig, DeviceError, DeviceInfo, DeviceResult, DeviceTarget, HandshakeInfo,
-    InputBackend, MaaTouchBackend, MaaTouchConfig, MinitouchBackend, MinitouchConfig,
-    PreparedSegmentedSwipePlan,
+    Adb, AdbConfig, DeviceError, DeviceErrorCategory, DeviceErrorDiagnosticMessage,
+    DeviceErrorSensitivity, DeviceInfo, DeviceResult, DeviceTarget, HandshakeInfo, InputBackend,
+    MaaTouchBackend, MaaTouchConfig, MinitouchBackend, MinitouchConfig, PreparedSegmentedSwipePlan,
 };
 use std::time::{Duration, Instant};
 
@@ -855,14 +855,46 @@ impl AdbShellInputBackend {
         screen_size: impl FnOnce() -> DeviceResult<String>,
         device_rotation: impl FnOnce() -> DeviceResult<DeviceRotation>,
     ) -> DeviceResult<DeviceInfo> {
-        let state = ensure_device()
-            .map_err(|error| adb_shell_input_connect_error("ensure_device", error))?;
-        let screen_size =
-            screen_size().map_err(|error| adb_shell_input_connect_error("screen_size", error))?;
-        let natural_bounds = touch_bounds_from_screen_size(&screen_size)
-            .map_err(|error| adb_shell_input_connect_error("bounds_conversion", error))?;
-        let rotation = device_rotation()
-            .map_err(|error| adb_shell_input_connect_error("device_rotation", error))?;
+        let state = ensure_device().map_err(|error| {
+            adb_shell_input_connect_error(
+                error,
+                DeviceErrorCategory::Native,
+                "adb.ensure_device.get_state",
+                "ensure_device",
+                "ensure_device",
+                DeviceErrorDiagnosticMessage::AdbShellInputDeviceStateUnavailable,
+            )
+        })?;
+        let screen_size = screen_size().map_err(|error| {
+            adb_shell_input_connect_error(
+                error,
+                DeviceErrorCategory::Protocol,
+                "adb.input.bounds_validate",
+                "screen_size",
+                "bounds_validate",
+                DeviceErrorDiagnosticMessage::AdbShellInputBoundsUnavailableOrInvalid,
+            )
+        })?;
+        let natural_bounds = touch_bounds_from_screen_size(&screen_size).map_err(|error| {
+            adb_shell_input_connect_error(
+                error,
+                DeviceErrorCategory::Protocol,
+                "adb.input.bounds_validate",
+                "bounds_conversion",
+                "bounds_validate",
+                DeviceErrorDiagnosticMessage::AdbShellInputBoundsUnavailableOrInvalid,
+            )
+        })?;
+        let rotation = device_rotation().map_err(|error| {
+            adb_shell_input_connect_error(
+                error,
+                DeviceErrorCategory::Protocol,
+                "adb.input.rotation.resolve",
+                "device_rotation",
+                "rotation_resolve",
+                DeviceErrorDiagnosticMessage::AdbShellInputRotationUnavailable,
+            )
+        })?;
         let (max_x, max_y) = display_size_from_natural(
             natural_bounds.max_x as u32,
             natural_bounds.max_y as u32,
@@ -917,14 +949,35 @@ impl AdbShellInputBackend {
     }
 }
 
-fn adb_shell_input_connect_error(operation: &'static str, error: DeviceError) -> DeviceError {
+fn adb_shell_input_connect_error(
+    error: DeviceError,
+    category: DeviceErrorCategory,
+    stage: &'static str,
+    child_operation: &'static str,
+    operation: &'static str,
+    diagnostic_message: DeviceErrorDiagnosticMessage,
+) -> DeviceError {
     let severity = error.severity();
-    DeviceError::with_severity(
-        severity,
-        format!(
-            "adb shell input connect failed; child_operation={operation}; source_error={error}"
-        ),
-    )
+    let source_error = error.to_string();
+    let producer_message = error.diagnostic_message().is_some();
+    let error = error
+        .with_severity_and_message(
+            severity,
+            format!(
+                "adb shell input connect failed; child_operation={child_operation}; source_error={source_error}"
+            ),
+        )
+        .with_diagnostic_if_absent(category, stage)
+        .with_diagnostic_context_if_absent(
+            "adb_shell_input",
+            operation,
+            DeviceErrorSensitivity::Internal,
+        );
+    if producer_message {
+        error
+    } else {
+        error.with_diagnostic_message(diagnostic_message)
+    }
 }
 
 impl InputBackend for AdbShellInputBackend {
@@ -1051,7 +1104,7 @@ fn validate_touch_coordinate(label: &str, value: i32, max: i32) -> DeviceResult<
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::DeviceErrorSeverity;
+    use crate::{DeviceErrorCategory, DeviceErrorSensitivity, DeviceErrorSeverity};
     use std::cell::{Cell, RefCell};
     use std::rc::Rc;
 
@@ -1065,7 +1118,6 @@ mod tests {
         let ensure_source = DeviceError::transient(
             "adb -s neutral:16384 get-state failed with exit code 17\nstdout:\nstate-out\nstderr:\nstate-err",
         );
-        let ensure_text = ensure_source.to_string();
         let ensure_error = ensure_backend
             .connect_with_steps(
                 || Err(ensure_source),
@@ -1079,13 +1131,28 @@ mod tests {
                 .message()
                 .contains("child_operation=ensure_device")
         );
-        assert!(ensure_error.message().contains(&ensure_text));
+        assert!(ensure_error.message().contains("state-out"));
+        assert_eq!(
+            ensure_error.diagnostic_message(),
+            Some("adb shell input device state is unavailable")
+        );
+        let ensure_diagnostic = ensure_error.diagnostic().expect("state diagnostic");
+        assert_eq!(ensure_diagnostic.category(), DeviceErrorCategory::Native);
+        assert_eq!(ensure_diagnostic.stage(), "adb.ensure_device.get_state");
+        let ensure_context = ensure_error
+            .diagnostic_context()
+            .expect("state diagnostic context");
+        assert_eq!(ensure_context.backend(), "adb_shell_input");
+        assert_eq!(ensure_context.operation(), "ensure_device");
+        assert_eq!(
+            ensure_context.declared_sensitivity(),
+            DeviceErrorSensitivity::Internal
+        );
 
         let mut screen_backend = adb_shell_input_test_backend();
         let screen_source = DeviceError::transient(
             "adb -s neutral:16384 shell wm size failed with exit code 18\nstdout:\nsize-out\nstderr:\nsize-err",
         );
-        let screen_text = screen_source.to_string();
         let screen_error = screen_backend
             .connect_with_steps(
                 || Ok("device".to_string()),
@@ -1099,12 +1166,25 @@ mod tests {
                 .message()
                 .contains("child_operation=screen_size")
         );
-        assert!(screen_error.message().contains(&screen_text));
+        assert!(screen_error.message().contains("size-out"));
+        assert_eq!(
+            screen_error.diagnostic_message(),
+            Some("adb shell input bounds are unavailable or invalid")
+        );
+        let screen_diagnostic = screen_error.diagnostic().expect("size diagnostic");
+        assert_eq!(screen_diagnostic.category(), DeviceErrorCategory::Protocol);
+        assert_eq!(screen_diagnostic.stage(), "adb.input.bounds_validate");
+        let screen_context = screen_error
+            .diagnostic_context()
+            .expect("size diagnostic context");
+        assert_eq!(screen_context.backend(), "adb_shell_input");
+        assert_eq!(screen_context.operation(), "bounds_validate");
+        assert_eq!(
+            screen_context.declared_sensitivity(),
+            DeviceErrorSensitivity::Internal
+        );
 
         let invalid_screen_size = "unrecognized-size";
-        let bounds_source =
-            touch_bounds_from_screen_size(invalid_screen_size).expect_err("invalid bounds source");
-        let bounds_text = bounds_source.to_string();
         let mut bounds_backend = adb_shell_input_test_backend();
         let bounds_error = bounds_backend
             .connect_with_steps(
@@ -1119,13 +1199,28 @@ mod tests {
                 .message()
                 .contains("child_operation=bounds_conversion")
         );
-        assert!(bounds_error.message().contains(&bounds_text));
+        assert!(bounds_error.message().contains(invalid_screen_size));
+        assert_eq!(
+            bounds_error.diagnostic_message(),
+            Some("adb shell input bounds are unavailable or invalid")
+        );
+        let bounds_diagnostic = bounds_error.diagnostic().expect("bounds diagnostic");
+        assert_eq!(bounds_diagnostic.category(), DeviceErrorCategory::Protocol);
+        assert_eq!(bounds_diagnostic.stage(), "adb.input.bounds_validate");
+        let bounds_context = bounds_error
+            .diagnostic_context()
+            .expect("bounds diagnostic context");
+        assert_eq!(bounds_context.backend(), "adb_shell_input");
+        assert_eq!(bounds_context.operation(), "bounds_validate");
+        assert_eq!(
+            bounds_context.declared_sensitivity(),
+            DeviceErrorSensitivity::Internal
+        );
 
         let mut rotation_backend = adb_shell_input_test_backend();
         let rotation_source = DeviceError::transient(
             "adb -s neutral:16384 shell dumpsys display failed with exit code 19",
         );
-        let rotation_text = rotation_source.to_string();
         let rotation_error = rotation_backend
             .connect_with_steps(
                 || Ok("device".to_string()),
@@ -1139,7 +1234,26 @@ mod tests {
                 .message()
                 .contains("child_operation=device_rotation")
         );
-        assert!(rotation_error.message().contains(&rotation_text));
+        assert!(rotation_error.message().contains("neutral:16384"));
+        assert_eq!(
+            rotation_error.diagnostic_message(),
+            Some("adb shell input rotation is unavailable")
+        );
+        let rotation_diagnostic = rotation_error.diagnostic().expect("rotation diagnostic");
+        assert_eq!(
+            rotation_diagnostic.category(),
+            DeviceErrorCategory::Protocol
+        );
+        assert_eq!(rotation_diagnostic.stage(), "adb.input.rotation.resolve");
+        let rotation_context = rotation_error
+            .diagnostic_context()
+            .expect("rotation diagnostic context");
+        assert_eq!(rotation_context.backend(), "adb_shell_input");
+        assert_eq!(rotation_context.operation(), "rotation_resolve");
+        assert_eq!(
+            rotation_context.declared_sensitivity(),
+            DeviceErrorSensitivity::Internal
+        );
         assert!(!rotation_backend.connected);
         assert_eq!(rotation_backend.bounds, None);
 
