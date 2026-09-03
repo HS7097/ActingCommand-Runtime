@@ -23,6 +23,14 @@ pub enum DeviceErrorCategory {
     Native,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DeviceErrorSensitivity {
+    Public,
+    Internal,
+    Sensitive,
+    Secret,
+}
+
 impl DeviceErrorCategory {
     pub const fn as_str(self) -> &'static str {
         match self {
@@ -59,10 +67,32 @@ impl DeviceErrorDiagnostic {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DeviceErrorContext {
+    backend: String,
+    operation: String,
+    declared_sensitivity: DeviceErrorSensitivity,
+}
+
+impl DeviceErrorContext {
+    pub fn backend(&self) -> &str {
+        &self.backend
+    }
+
+    pub fn operation(&self) -> &str {
+        &self.operation
+    }
+
+    pub const fn declared_sensitivity(&self) -> DeviceErrorSensitivity {
+        self.declared_sensitivity
+    }
+}
+
+#[derive(Debug, Clone)]
 pub struct DeviceError {
     severity: DeviceErrorSeverity,
     message: String,
     diagnostic: Option<DeviceErrorDiagnostic>,
+    context: Option<DeviceErrorContext>,
 }
 
 impl DeviceError {
@@ -71,6 +101,7 @@ impl DeviceError {
             severity: DeviceErrorSeverity::Transient,
             message: message.into(),
             diagnostic: None,
+            context: None,
         }
     }
 
@@ -79,6 +110,7 @@ impl DeviceError {
             severity: DeviceErrorSeverity::Fatal,
             message: message.into(),
             diagnostic: None,
+            context: None,
         }
     }
 
@@ -87,11 +119,26 @@ impl DeviceError {
             severity,
             message: message.into(),
             diagnostic: None,
+            context: None,
         }
     }
 
     pub fn with_diagnostic(mut self, category: DeviceErrorCategory, stage: &'static str) -> Self {
         self.diagnostic = Some(DeviceErrorDiagnostic::new(category, stage));
+        self
+    }
+
+    pub fn with_diagnostic_context(
+        mut self,
+        backend: impl Into<String>,
+        operation: impl Into<String>,
+        declared_sensitivity: DeviceErrorSensitivity,
+    ) -> Self {
+        self.context = Some(DeviceErrorContext {
+            backend: backend.into(),
+            operation: operation.into(),
+            declared_sensitivity,
+        });
         self
     }
 
@@ -125,7 +172,21 @@ impl DeviceError {
     pub const fn diagnostic(&self) -> Option<DeviceErrorDiagnostic> {
         self.diagnostic
     }
+
+    pub const fn diagnostic_context(&self) -> Option<&DeviceErrorContext> {
+        self.context.as_ref()
+    }
 }
+
+impl PartialEq for DeviceError {
+    fn eq(&self, other: &Self) -> bool {
+        self.severity == other.severity
+            && self.message == other.message
+            && self.diagnostic == other.diagnostic
+    }
+}
+
+impl Eq for DeviceError {}
 
 impl fmt::Display for DeviceError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {

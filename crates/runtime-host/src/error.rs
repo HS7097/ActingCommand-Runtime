@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
-use actingcommand_contract::{RuntimeErrorCode, RuntimeErrorProjection};
+use actingcommand_contract::{DiagnosticDetailDraft, RuntimeErrorCode, RuntimeErrorProjection};
 use actingcommand_execution_kernel::ExecutionKernelError;
 use actingcommand_runtime_state::RuntimeStateError;
 use actingcommand_scheduler::SchedulerError;
@@ -16,6 +16,7 @@ pub struct RuntimeHostError {
     code: &'static str,
     operation: &'static str,
     projection: RuntimeErrorProjection,
+    diagnostic_detail: Option<Box<DiagnosticDetailDraft>>,
 }
 
 impl RuntimeHostError {
@@ -35,6 +36,10 @@ impl RuntimeHostError {
         &self.projection
     }
 
+    pub(crate) fn diagnostic_detail(&self) -> Option<&DiagnosticDetailDraft> {
+        self.diagnostic_detail.as_deref()
+    }
+
     pub(crate) const fn fatal(
         code: &'static str,
         operation: &'static str,
@@ -44,6 +49,7 @@ impl RuntimeHostError {
             code,
             operation,
             projection: RuntimeErrorProjection::new(runtime_code, true),
+            diagnostic_detail: None,
         }
     }
 
@@ -56,6 +62,7 @@ impl RuntimeHostError {
             code,
             operation,
             projection: RuntimeErrorProjection::new(runtime_code, false),
+            diagnostic_detail: None,
         }
     }
 
@@ -68,6 +75,7 @@ impl RuntimeHostError {
             code,
             operation,
             projection,
+            diagnostic_detail: None,
         }
     }
 
@@ -87,11 +95,12 @@ impl RuntimeHostError {
             }
             _ => RuntimeErrorCode::RuntimeFatal,
         };
-        Self::with_projection(
-            error.code(),
+        Self {
+            code: error.code(),
             operation,
-            RuntimeErrorProjection::new(runtime_code, error.is_fatal()),
-        )
+            projection: RuntimeErrorProjection::new(runtime_code, error.is_fatal()),
+            diagnostic_detail: error.diagnostic_detail().cloned().map(Box::new),
+        }
     }
 
     pub(crate) const fn state(error: &RuntimeStateError) -> Self {
