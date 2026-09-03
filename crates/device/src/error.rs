@@ -126,7 +126,7 @@ impl DeviceErrorContext {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct DeviceError {
     severity: DeviceErrorSeverity,
     message: String,
@@ -255,6 +255,17 @@ impl DeviceError {
     pub fn diagnostic_message(&self) -> Option<&str> {
         self.diagnostic_message
             .map(DeviceErrorDiagnosticMessage::as_str)
+    }
+}
+
+impl fmt::Debug for DeviceError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("DeviceError")
+            .field("severity", &self.severity)
+            .field("message", &self.message)
+            .field("diagnostic", &self.diagnostic)
+            .field("context", &self.context)
+            .finish()
     }
 }
 
