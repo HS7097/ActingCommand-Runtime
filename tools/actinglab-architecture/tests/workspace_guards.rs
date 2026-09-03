@@ -588,6 +588,8 @@ fn c5_offline_package_simulation_reuses_the_contained_task_kernel_without_device
     let root = workspace_root();
     let main = fs::read_to_string(root.join("apps/actinglab/src/main.rs"))
         .expect("read ActingLab CLI source");
+    let capabilities = fs::read_to_string(root.join("apps/actinglab/src/commands/capabilities.rs"))
+        .expect("read ActingLab capability source");
     let package_cli = fs::read_to_string(root.join("apps/actinglab/src/package_cli.rs"))
         .expect("read package CLI router source");
     let offline_cli = fs::read_to_string(root.join("apps/actinglab/src/package_offline.rs"))
@@ -604,12 +606,15 @@ fn c5_offline_package_simulation_reuses_the_contained_task_kernel_without_device
     let lab_run = fs::read_to_string(root.join("apps/actinglab/src/lab_run.rs"))
         .expect("read production Lab run CLI source");
 
-    for required in [
-        "\"dry-run\" => package_cli::run_offline(global, &flags)",
-        "package_cli::offline_capability()",
+    for (source, required) in [
+        (
+            &main,
+            "\"dry-run\" => package_cli::run_offline(global, &flags)",
+        ),
+        (&capabilities, "package_cli::offline_capability()"),
     ] {
         assert!(
-            main.contains(required),
+            source.contains(required),
             "ActingLab lost offline package route or capability {required}"
         );
     }
