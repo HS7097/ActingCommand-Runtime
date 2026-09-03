@@ -1840,8 +1840,7 @@ fn connect(state_root: &Path) -> RuntimeClient {
 
 fn connect_agent(state_root: &Path) -> RuntimeClient {
     RuntimeClient::connect(
-        RuntimeClientConfig::new(state_root, EventActor::Agent, EventSource::Adapter)
-            .with_io_timeout(Duration::from_millis(500)),
+        RuntimeClientConfig::new(state_root, EventActor::Agent, EventSource::Adapter),
     )
     .expect("connect agent runtime")
 }
