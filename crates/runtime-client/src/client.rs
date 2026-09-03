@@ -8,8 +8,8 @@ use actingcommand_contract::{
     ArtifactProducer, ArtifactRedactionState, CaptureSequenceSpec, CatalogProposal,
     ClientActionRecord, ContainedTaskCancellationReason, ContainedTaskCancellationStatus,
     ContainedTaskRequest, CorrelationId, EffectDisposition, EventActor, EventId, EventPayload,
-    EventQuery, EventSource, EventType, FactScope, FrameId, IdentifierIssuer, InputAction,
-    InputPayload, IssuedCorrelationId, LeaseQueuePolicy, LeaseQueueStatus, LeaseToken,
+    EventQuery, EventSource, EventType, FactRecord, FactScope, FrameId, IdentifierIssuer,
+    InputAction, InputPayload, IssuedCorrelationId, LeaseQueuePolicy, LeaseQueueStatus, LeaseToken,
     MAX_RUNTIME_EVENT_QUERY_EVENTS, OriginModule, OwnerEpoch, PackageDebugRequest,
     PolicyExecutionOutcome, PolicyFailureClass, PolicyFailureDisposition, PolicyPayload,
     ProjectDecisionPageCursor, ProjectDecisionPageRequest, ProjectInterfaceRequest,
@@ -647,6 +647,13 @@ impl RuntimeClient {
         match self.execute("runtime_status", RuntimeOperation::Status)? {
             RuntimeResult::Status { status } => Ok(status),
             _ => Err(self.unexpected_result("runtime_status")),
+        }
+    }
+
+    pub fn publish_fact(&self, record: FactRecord) -> RuntimeClientResult<EventId> {
+        match self.execute("publish_fact", RuntimeOperation::PublishFact { record })? {
+            RuntimeResult::FactPublished { event_id } => Ok(event_id),
+            _ => Err(self.unexpected_result("publish_fact")),
         }
     }
 

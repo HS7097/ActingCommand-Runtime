@@ -12821,6 +12821,100 @@ fn runtime_fact_store_shares_server_facts_invalidates_and_recovers_from_ledger()
 }
 
 #[test]
+fn agent_adapter_publish_fact_uses_authoritative_fact_owner_once() {
+    let root = TempDir::new().expect("tempdir");
+    let state = Arc::new(FakeState::default());
+    let host = RuntimeHost::start(
+        config(&root),
+        Arc::new(FakeProvider::one(
+            POLICY_INSTANCE_ALIAS,
+            instance_id(),
+            Arc::clone(&state),
+        )),
+    )
+    .expect("runtime host");
+    let record = stored_fact(
+        FactScope::Server {
+            server_id: "fixture-server-a".to_owned(),
+        },
+        "env.ui_theme",
+        ContractFactValue::String("Neutral".to_owned()),
+        "snapshot:agent-adapter-publish",
+        Vec::new(),
+    );
+    let mut client = TestClient::connect(&host);
+
+    let first_request = client.agent_request(RuntimeOperation::PublishFact {
+        record: record.clone(),
+    });
+    let first_receipt = client.send(&first_request);
+    assert_eq!(first_receipt.state(), RuntimeReceiptState::Completed);
+    let RuntimeResult::FactPublished { event_id } =
+        first_receipt.result().expect("fact publication result")
+    else {
+        panic!("expected fact publication result")
+    };
+    let published_event_id = *event_id;
+    let first_events = projected_events(
+        &mut client,
+        EventQuery {
+            event_type: Some(EventType::FactPublished),
+            ..EventQuery::default()
+        },
+    );
+    assert_eq!(first_events.len(), 1);
+    assert_eq!(first_events[0].event_id, published_event_id);
+
+    let duplicate = client.agent_request(RuntimeOperation::PublishFact {
+        record: record.clone(),
+    });
+    let duplicate_receipt = client.send(&duplicate);
+    assert!(matches!(
+        duplicate_receipt.result(),
+        Some(RuntimeResult::FactPublished { event_id }) if *event_id == published_event_id
+    ));
+    assert_eq!(
+        projected_events(
+            &mut client,
+            EventQuery {
+                event_type: Some(EventType::FactPublished),
+                ..EventQuery::default()
+            }
+        )
+        .len(),
+        1
+    );
+
+    let invalid = client.agent_request(RuntimeOperation::PublishFact { record });
+    let mut invalid = serde_json::to_value(invalid).expect("fact publication request JSON");
+    invalid["operation"]["record"]["key"] = serde_json::json!("unsupported");
+    let invalid: RuntimeRequest =
+        serde_json::from_value(invalid).expect("invalid record transport shape");
+    let invalid_receipt = client.send(&invalid);
+    assert_eq!(invalid_receipt.state(), RuntimeReceiptState::Denied);
+    assert_eq!(
+        projected_events(
+            &mut client,
+            EventQuery {
+                event_type: Some(EventType::FactPublished),
+                ..EventQuery::default()
+            }
+        )
+        .len(),
+        1
+    );
+    assert!(host.fatal_error().expect("runtime health").is_none());
+    let health = client.request(RuntimeOperation::Health);
+    assert_eq!(client.send(&health).state(), RuntimeReceiptState::Completed);
+    assert_eq!(state.open_count.load(Ordering::SeqCst), 0);
+    assert_eq!(state.capture_open_count.load(Ordering::SeqCst), 0);
+    assert_eq!(state.input_count.load(Ordering::SeqCst), 0);
+
+    drop(client);
+    host.close().expect("close host");
+}
+
+#[test]
 fn information_planning_signals_are_queryable_and_subscription_pages_are_lossless() {
     let root = TempDir::new().expect("tempdir");
     let host = host_with_state(&root, POLICY_INSTANCE_ALIAS, Arc::new(FakeState::default()));
