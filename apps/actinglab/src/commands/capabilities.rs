@@ -1,5 +1,10 @@
-use crate::{package_cli, runtime_debug};
+use crate::{
+    CliError, CliOutcome, GlobalOptions, REQUIRE_SESSION_DAEMON_ENV,
+    TRUSTED_REMOTE_CLIENT_CERT_ENV, TRUSTED_REMOTE_TOKEN_ENV, effective_resource_root,
+    exit_code_table, find_files, lab2_cli, package_cli, read_user_config, runtime_debug,
+};
 use serde_json::{Value, json};
+use std::{fs, path::Path};
 
 pub(crate) fn command_capabilities() -> Vec<Value> {
     let mut commands = vec![
@@ -470,4 +475,135 @@ where
         "needs": needs.into_iter().map(Into::into).collect::<Vec<String>>(),
         "status": status
     })
+}
+
+pub(crate) fn run_capabilities(global: &GlobalOptions) -> CliOutcome<Value> {
+    let config = read_user_config()?;
+    let root = effective_resource_root(global, &config);
+    let discovered = match root {
+        Some(root) if root.is_dir() => discover_recognition_packs(&root)?,
+        _ => Vec::new(),
+    };
+    let recognition_match_policy = discovered
+        .iter()
+        .map(|pack| {
+            json!({
+                "game": pack.get("game"),
+                "server": pack.get("server"),
+                "locale": pack.get("locale"),
+                "match_metric": pack.get("match_metric")
+            })
+        })
+        .collect::<Vec<_>>();
+    Ok(json!({
+        "commands": command_capabilities(),
+        "session_layer": session_layer_capability_contract(),
+        "exit_codes": exit_code_table(),
+        "recognition_match_policy": recognition_match_policy,
+        "capture_backends": [
+            {"id": "adb", "backend": "adb_screencap", "external_tool": false},
+            {"id": "droidcast_raw", "backend": "droidcast_raw", "external_tool_env": "ACTINGCOMMAND_DROIDCAST_RAW_APK"},
+            {"id": "nemu_ipc", "backend": "nemu_ipc", "external_tool_env": "ACTINGCOMMAND_NEMU_FOLDER or ACTINGCOMMAND_NEMU_IPC_DLL"},
+            {"id": "auto", "fallback_allowed": true, "diagnostics_required": true},
+            {"id": "auto-fastest", "probe_all_backends": true, "diagnostics_required": true}
+        ],
+        "lab2_cli": lab2_cli::capability_summary(&config),
+        "discovered_recognition_packs": discovered
+    }))
+}
+
+pub(crate) fn session_layer_capability_contract() -> Value {
+    json!({
+        "schema_version": "session.capabilities.v0.1",
+        "resident_daemon": {
+            "request_command": "session request capabilities",
+            "bootstrap_command": "session bootstrap",
+            "throat_policy_command": "session throat-policy",
+            "capture_policy_command": "session capture-policy",
+            "self_heal_policy_command": "session self-heal-policy",
+            "self_heal_plan_command": "session self-heal-plan [--trigger <kind>] [--to <page>]",
+            "phase_c_plan_command": "session phase-c-plan [--endpoint <url>] [--trigger <kind>] [--to <page>]",
+            "status_command": "session status --diagnostics",
+            "readiness_command": "session readiness",
+            "validation_plan_command": "session validation-plan",
+            "status_instance_registry_field": "diagnostics.instances",
+            "monitor_policy_command": "session monitor-policy status",
+            "journal_command": "session journal"
+        },
+        "access_channels": [
+            {
+                "id": "local_cli",
+                "status": "available",
+                "encryption_required": false,
+                "reason": "local operator command surface"
+            },
+            {
+                "id": "trusted_remote",
+                "status": "reserved",
+                "encryption_required": true,
+                "authentication_required": true,
+                "plan_command": "session transport plan [--endpoint <url>]",
+                "preflight_command": "session transport check --endpoint <url>",
+                "auth_env": {
+                    "token": TRUSTED_REMOTE_TOKEN_ENV,
+                    "client_certificate": TRUSTED_REMOTE_CLIENT_CERT_ENV
+                },
+                "blocked_without_auth_code": "trusted_remote_auth_required",
+                "blocked_without_encryption_code": "trusted_remote_transport_blocked",
+                "reason": "future UI/API channel must be authenticated and encrypted"
+            }
+        ],
+        "request_classes": {
+            "read_only": {
+                "requires_lease": false,
+                "examples": ["status", "queue", "journal", "capabilities", "devices", "session bootstrap", "session throat-policy", "session capture-policy", "session record-policy", "session self-heal-policy", "session self-heal-plan", "session phase-c-plan", "session transport plan", "session transport check", "session connect-plan", "session stream-plan", "session submit-plan", "session validation-plan", "session instance registry", "capture", "stream", "session recover --stale-capture", "session record step --capture", "session record step --current-frame", "session monitor-policy status"],
+                "device_affecting_examples": ["capture", "stream", "session record step --capture", "session record step --current-frame"]
+            },
+            "daemon_state": {
+                "requires_lease": false,
+                "recovery_policy_requires_matching_lease": true,
+                "recovery_policy_defers_without_matching_lease": true,
+                "examples": ["session monitor-policy set", "session monitor-policy clear", "session record start", "session record step --frame <png>", "session record amend", "session record build-task", "session record promote"]
+            },
+            "control": {
+                "requires_lease": true,
+                "examples": ["tap", "swipe", "long-tap", "key", "text", "stream --input-relay", "stream --input-event <action,args>", "stream --relay-event <action,args>", "session app launch", "session app stop", "session app force-stop", "session app restart", "session instance app launch", "session instance app stop", "session instance app force-stop", "session instance app restart", "tap-target", "navigate", "recover except --stale-capture"]
+            }
+        },
+        "safety": {
+            "session_layer_only_throat": true,
+            "strict_session_throat_flag": "--require-session",
+            "strict_session_throat_env": REQUIRE_SESSION_DAEMON_ENV,
+            "strict_session_throat_failure_code": "session_daemon_required",
+            "ui_must_not_directly_touch_adb_or_device": true,
+            "control_requests_require_matching_lease": true,
+            "severe_errors_fail_loud": true
+        }
+    })
+}
+
+fn discover_recognition_packs(root: &Path) -> CliOutcome<Vec<Value>> {
+    let packs = find_files(root, |path| {
+        path.file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| name.ends_with(".pack.json"))
+    })?;
+    let mut discovered = Vec::new();
+    for pack in packs {
+        let text = fs::read_to_string(&pack)
+            .map_err(|err| CliError::usage(format!("failed to read {}: {err}", pack.display())))?;
+        let value: Value = serde_json::from_str(&text)
+            .map_err(|err| CliError::usage(format!("failed to parse {}: {err}", pack.display())))?;
+        discovered.push(json!({
+            "path": pack.display().to_string(),
+            "game": value.get("game").and_then(Value::as_str),
+            "server": value.get("server").and_then(Value::as_str),
+            "locale": value.get("locale").and_then(Value::as_str),
+            "match_metric": value
+                .get("defaults")
+                .and_then(|defaults| defaults.get("match_metric"))
+                .and_then(Value::as_str)
+        }));
+    }
+    Ok(discovered)
 }
