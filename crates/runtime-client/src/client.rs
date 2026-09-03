@@ -8,8 +8,8 @@ use actingcommand_contract::{
     ArtifactProducer, ArtifactRedactionState, CaptureSequenceSpec, CatalogProposal,
     ClientActionRecord, ContainedTaskCancellationReason, ContainedTaskCancellationStatus,
     ContainedTaskRequest, CorrelationId, EffectDisposition, EventActor, EventId, EventPayload,
-    EventQuery, EventSource, EventType, FactScope, FrameId, IdentifierIssuer, InputAction,
-    InputPayload, IssuedCorrelationId, LeaseQueuePolicy, LeaseQueueStatus, LeaseToken,
+    EventQuery, EventSource, EventType, FactRecord, FactScope, FrameId, IdentifierIssuer,
+    InputAction, InputPayload, IssuedCorrelationId, LeaseQueuePolicy, LeaseQueueStatus, LeaseToken,
     MAX_RUNTIME_EVENT_QUERY_EVENTS, OriginModule, OwnerEpoch, PackageDebugRequest,
     PolicyExecutionOutcome, PolicyFailureClass, PolicyFailureDisposition, PolicyPayload,
     ProjectDecisionPageCursor, ProjectDecisionPageRequest, ProjectInterfaceRequest,
@@ -20,9 +20,9 @@ use actingcommand_contract::{
     RuntimeEvidenceExportRequest, RuntimeForwardProjectionRequest, RuntimeInfo,
     RuntimeMaintenanceQuery, RuntimeMonitorInstanceStatus, RuntimeMonitorPolicy,
     RuntimeMonitorRegistryStatus, RuntimeOperation, RuntimePlanningDocument,
-    RuntimePlanningDocumentKind, RuntimeReceipt, RuntimeRequest, RuntimeResult,
-    RuntimeStrategicReportRequest, RuntimeSubscriptionRequest, TaskId, TaskOutcome, TaskPayload,
-    TaskSemanticFact, TerminalEvent,
+    RuntimePlanningDocumentKind, RuntimePolicyInputIdentity, RuntimeReceipt, RuntimeRequest,
+    RuntimeResult, RuntimeStrategicReportRequest, RuntimeSubscriptionRequest, TaskId, TaskOutcome,
+    TaskPayload, TaskSemanticFact, TerminalEvent,
 };
 use actingcommand_policy::{
     EvaluationFacts, EvaluationResources, EvaluationTime, ForwardProjection,
@@ -647,6 +647,13 @@ impl RuntimeClient {
         match self.execute("runtime_status", RuntimeOperation::Status)? {
             RuntimeResult::Status { status } => Ok(status),
             _ => Err(self.unexpected_result("runtime_status")),
+        }
+    }
+
+    pub fn publish_fact(&self, record: FactRecord) -> RuntimeClientResult<EventId> {
+        match self.execute("publish_fact", RuntimeOperation::PublishFact { record })? {
+            RuntimeResult::FactPublished { event_id } => Ok(event_id),
+            _ => Err(self.unexpected_result("publish_fact")),
         }
     }
 
@@ -1385,6 +1392,21 @@ impl RuntimeClient {
                 })
             }
             _ => Err(self.unexpected_result("prepare_strategic_report")),
+        }
+    }
+
+    pub fn project_policy_input_identity(
+        &self,
+        as_of_ledger_position: u64,
+    ) -> RuntimeClientResult<RuntimePolicyInputIdentity> {
+        match self.execute(
+            "project_policy_input_identity",
+            RuntimeOperation::ProjectPolicyInputIdentity {
+                as_of_ledger_position,
+            },
+        )? {
+            RuntimeResult::PolicyInputIdentityProjected { identity } => Ok(identity),
+            _ => Err(self.unexpected_result("project_policy_input_identity")),
         }
     }
 

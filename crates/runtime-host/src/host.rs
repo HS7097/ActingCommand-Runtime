@@ -72,14 +72,14 @@ use actingcommand_contract::{
     RuntimeEventQueryPage, RuntimeEventQueryPageRequest, RuntimeEvidenceExportRequest,
     RuntimeEvidenceExportSummary, RuntimeEvidenceScreenshotCounts, RuntimeInfo,
     RuntimeInstanceStatus, RuntimeMaintenanceQuery, RuntimeMonitorPolicy, RuntimeOperation,
-    RuntimePayloadDraft, RuntimePlanningDocument, RuntimePlanningDocumentKind, RuntimeReceipt,
-    RuntimeReceiptState, RuntimeReleaseSet, RuntimeRequest, RuntimeResult,
-    RuntimeStrategicPlanResult, RuntimeSubscriptionRequest, SchedulerPayloadDraft,
-    SchedulingDisposition, SchedulingEffectCondition, SchedulingEffectEvidence,
-    SchedulingOutcomeDeclaration, SchedulingOutcomeIdentity, SchedulingOutcomeProjection,
-    StatePayload, StatePayloadDraft, TaskEntryRecognitionPhase, TaskEntryTargetDisposition, TaskId,
-    TaskOutcome, TaskPayload, TaskPayloadDraft, TaskSemanticFact, TerminalEvent,
-    ValidatedRuntimeRequest,
+    RuntimePayloadDraft, RuntimePlanningDocument, RuntimePlanningDocumentKind,
+    RuntimePolicyInputIdentity, RuntimeReceipt, RuntimeReceiptState, RuntimeReleaseSet,
+    RuntimeRequest, RuntimeResult, RuntimeStrategicPlanResult, RuntimeSubscriptionRequest,
+    SchedulerPayloadDraft, SchedulingDisposition, SchedulingEffectCondition,
+    SchedulingEffectEvidence, SchedulingOutcomeDeclaration, SchedulingOutcomeIdentity,
+    SchedulingOutcomeProjection, StatePayload, StatePayloadDraft, TaskEntryRecognitionPhase,
+    TaskEntryTargetDisposition, TaskId, TaskOutcome, TaskPayload, TaskPayloadDraft,
+    TaskSemanticFact, TerminalEvent, ValidatedRuntimeRequest,
 };
 use actingcommand_device::{CaptureBackendName, Frame, SegmentedSwipeEvent};
 use actingcommand_execution_kernel::{
@@ -104,8 +104,9 @@ use actingcommand_pack_containment::{
 use actingcommand_policy::{
     CatalogSources, DecisionReasonChain, DispatchIntent, EvaluationFacts, EvaluationResources,
     EvaluationTime, FactValue as PolicyFactValue, ForwardProjection, ForwardProjectionConfig,
-    MaintenanceAssessment, MaintenanceTrendPolicy, ObservedOutcome, StrategicEvidencePointer,
-    StrategicReport, assess_predictive_maintenance, project_forward, project_strategic_report,
+    MaintenanceAssessment, MaintenanceTrendPolicy, ObservedOutcome, StrategicBand,
+    StrategicEvidencePointer, StrategicProjection, StrategicReport, assess_predictive_maintenance,
+    project_forward, project_strategic_report,
 };
 use actingcommand_runtime_state::{ReleaseArtifactSources, RuntimeStateStore};
 use actingcommand_scheduler::{
@@ -3558,6 +3559,7 @@ impl HostShared {
             let (facts, resources) = self.project_authoritative_policy_inputs_under_gate(
                 "evaluate_policy_cycle",
                 &outcome_keys,
+                None,
             )?;
             (outcome_keys, facts, resources)
         };
@@ -3616,23 +3618,38 @@ impl HostShared {
         &self,
         operation: &'static str,
         outcome_keys: &PolicyOutcomeKeySnapshot,
+        as_of_ledger_position: Option<u64>,
     ) -> RuntimeHostResult<(EvaluationFacts, EvaluationResources)> {
         self.synchronize_fact_store_under_gate()?;
         let inputs = lock(&self.policy_inputs, "read_policy_inputs")?
             .clone()
             .ok_or_else(|| policy_admission_request("policy_inputs_unconfigured", operation))?;
         self.validate_policy_input_authority(&inputs, operation)?;
-        let ledger_position = self
+        let latest_ledger_position = self
             .ledger
             .latest_sequence()
             .map_err(|_| ledger_error("read_policy_fact_position"))?;
+        let ledger_position = match as_of_ledger_position {
+            Some(position) if position == 0 || position > latest_ledger_position => {
+                return Err(policy_admission_request(
+                    "policy_input_position_unavailable",
+                    operation,
+                ));
+            }
+            Some(position) => position,
+            None => latest_ledger_position,
+        };
         #[cfg(test)]
-        let ledger_position = match self
-            .policy_outcome_projection_position_override
-            .swap(0, Ordering::AcqRel)
-        {
-            0 => ledger_position,
-            injected => injected,
+        let ledger_position = if as_of_ledger_position.is_none() {
+            match self
+                .policy_outcome_projection_position_override
+                .swap(0, Ordering::AcqRel)
+            {
+                0 => ledger_position,
+                injected => injected,
+            }
+        } else {
+            ledger_position
         };
         let mut base_facts = inputs.facts().clone();
         let authoritative_outcomes = lock(
@@ -4109,6 +4126,7 @@ impl HostShared {
             let (current_facts, _) = self.project_authoritative_policy_inputs_under_gate(
                 "admit_policy_dispatch",
                 &outcome_keys,
+                None,
             )?;
             (outcome_keys, current_facts, fact_gate)
         };
@@ -5169,6 +5187,9 @@ impl HostShared {
             }),
             RuntimeOperation::Status => self.control_plane_status(),
             RuntimeOperation::ProjectInterface { request } => self.project_interface(request),
+            RuntimeOperation::ProjectPolicyInputIdentity {
+                as_of_ledger_position,
+            } => self.project_policy_input_identity(*as_of_ledger_position),
             RuntimeOperation::MonitorStatus => self.monitor_status(),
             RuntimeOperation::ConfigureMonitor {
                 instance_alias,
@@ -5290,6 +5311,20 @@ impl HostShared {
                 ExecutionBackendProvenance::PhysicalDevice,
                 None,
             ),
+            RuntimeOperation::PublishFact { record } => {
+                let event_id = self.publish_fact(record.clone()).map_err(|error| {
+                    if error.is_fatal() {
+                        RequestFailure::poison_without_terminal(error)
+                    } else {
+                        RequestFailure::request(error, RuntimeReceiptState::Denied, None)
+                    }
+                })?;
+                Ok(OperationSuccess {
+                    state: RuntimeReceiptState::Completed,
+                    terminal: None,
+                    result: RuntimeResult::FactPublished { event_id },
+                })
+            }
             RuntimeOperation::QueryEvents {
                 query,
                 profile,
@@ -6635,6 +6670,48 @@ impl HostShared {
         })
     }
 
+    fn project_policy_input_identity(
+        &self,
+        as_of_ledger_position: u64,
+    ) -> Result<OperationSuccess, RequestFailure> {
+        let identity = (|| {
+            if as_of_ledger_position == 0 {
+                return Err(RuntimeHostError::request(
+                    "policy_input_position_unavailable",
+                    "project_policy_input_identity",
+                    RuntimeErrorCode::InvalidRequest,
+                ));
+            }
+            let _outcome_gate = lock(
+                &self.policy_outcome_gate,
+                "snapshot_policy_input_identity_outcome_state",
+            )?;
+            let outcome_keys = lock(&self.policy, "read_policy_input_identity_outcome_keys")?
+                .outcome_key_snapshot()?;
+            let _fact_gate = lock(&self.fact_write_gate, "project_policy_input_identity_facts")?;
+            let (facts, _) = self.project_authoritative_policy_inputs_under_gate(
+                "project_policy_input_identity",
+                &outcome_keys,
+                Some(as_of_ledger_position),
+            )?;
+            RuntimePolicyInputIdentity::new(facts.ledger_position, facts.fact_snapshot_id).map_err(
+                |_| {
+                    RuntimeHostError::fatal(
+                        "policy_input_identity_invalid",
+                        "project_policy_input_identity",
+                        RuntimeErrorCode::RuntimeFatal,
+                    )
+                },
+            )
+        })()
+        .map_err(planning_request_failure)?;
+        Ok(OperationSuccess {
+            state: RuntimeReceiptState::Completed,
+            terminal: None,
+            result: RuntimeResult::PolicyInputIdentityProjected { identity },
+        })
+    }
+
     fn project_policy_forward_ipc(
         &self,
         facts: &RuntimePlanningDocument,
@@ -6914,11 +6991,21 @@ impl HostShared {
                 )
             })?;
             self.verify_strategic_evidence(report, evidence)?;
-            let ledger_position = self
-                .ledger
-                .latest_sequence()
-                .map_err(|_| ledger_error("prepare_strategic_report"))?;
-            if report.as_of_ledger_position() > ledger_position {
+            let (facts, resources) = {
+                let _outcome_gate = lock(
+                    &self.policy_outcome_gate,
+                    "snapshot_strategic_outcome_state",
+                )?;
+                let outcome_keys =
+                    lock(&self.policy, "read_strategic_outcome_keys")?.outcome_key_snapshot()?;
+                let _fact_gate = lock(&self.fact_write_gate, "project_strategic_facts")?;
+                self.project_authoritative_policy_inputs_under_gate(
+                    "prepare_strategic_report",
+                    &outcome_keys,
+                    Some(report.as_of_ledger_position()),
+                )?
+            };
+            if report.as_of_ledger_position() > facts.ledger_position {
                 return Err(RuntimeHostError::request(
                     "strategic_report_position_unavailable",
                     "prepare_strategic_report",
@@ -6935,13 +7022,15 @@ impl HostShared {
                     )
                 })?;
             let projection =
-                project_strategic_report(loaded.compiled(), report).map_err(|error| {
-                    RuntimeHostError::request(
-                        error.code(),
-                        "prepare_strategic_report",
-                        RuntimeErrorCode::InvalidRequest,
-                    )
-                })?;
+                project_strategic_report(loaded.compiled(), report, &facts, &resources).map_err(
+                    |error| {
+                        RuntimeHostError::request(
+                            error.code(),
+                            "prepare_strategic_report",
+                            RuntimeErrorCode::InvalidRequest,
+                        )
+                    },
+                )?;
             let projection_document = encode_planning_document(
                 RuntimePlanningDocumentKind::StrategicProjection,
                 &projection,
@@ -6956,7 +7045,8 @@ impl HostShared {
             })?;
             let (report_reference, prepared_artifact) =
                 self.prepare_or_reuse_strategic_report(&bytes)?;
-            let proposal = build_strategy_proposal(&projection, report_reference.clone())?;
+            let proposal =
+                build_strategy_proposal(&projection, loaded.sources(), report_reference.clone())?;
             let preview = proposal
                 .as_ref()
                 .map(|proposal| {
@@ -6977,6 +7067,7 @@ impl HostShared {
             if let Some(prepared_artifact) = prepared_artifact {
                 self.commit_strategic_report(prepared_artifact, &bytes, preparation.report())?;
             }
+            self.record_strategic_planning_signals(report, preparation.projection())?;
             Ok(output)
         })();
         if let Err(error) = &result
@@ -6985,6 +7076,56 @@ impl HostShared {
             self.fatal.mark(error.clone())?;
         }
         result
+    }
+
+    fn record_strategic_planning_signals(
+        &self,
+        report: &StrategicReport,
+        projection: &StrategicProjection,
+    ) -> RuntimeHostResult<()> {
+        let mut signals = Vec::new();
+        for instance in &projection.instances {
+            if instance.band == StrategicBand::InfeasibleBestEffort {
+                signals.push((
+                    instance.goal_id.as_str(),
+                    instance.instance_id.as_str(),
+                    actingcommand_contract::PolicyPlanningSignalKind::FeasibilityRed,
+                    "strategic.feasibility_red",
+                ));
+            }
+            if instance.shortfall.is_some_and(|shortfall| shortfall > 0)
+                && instance.deadline_unix_ms <= report.as_of_unix_ms()
+            {
+                signals.push((
+                    instance.goal_id.as_str(),
+                    instance.instance_id.as_str(),
+                    actingcommand_contract::PolicyPlanningSignalKind::TimelineReached,
+                    "strategic.timeline_reached",
+                ));
+            }
+        }
+        signals.sort_by(|left, right| (left.0, left.1, left.2).cmp(&(right.0, right.1, right.2)));
+        for (goal_id, instance_id, kind, fact_code) in signals {
+            let identity =
+                serde_json::to_vec(&(report.report_id(), goal_id, instance_id, kind.as_str()))
+                    .map_err(|_| {
+                        RuntimeHostError::fatal(
+                            "strategic_signal_identity_encode_failed",
+                            "prepare_strategic_report",
+                            RuntimeErrorCode::RuntimeFatal,
+                        )
+                    })?;
+            self.record_policy_planning_signal(PolicyPlanningSignalEventData {
+                signal_id: format!("signal:strategic:{:x}", Sha256::digest(identity)),
+                instance_id: instance_id.to_owned(),
+                task_id: None,
+                kind,
+                fact_code: fact_code.to_owned(),
+                observed_at_unix_ms: report.as_of_unix_ms(),
+                detection_budget: None,
+            })?;
+        }
+        Ok(())
     }
 
     fn verify_strategic_evidence(
