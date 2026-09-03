@@ -3,8 +3,9 @@
 use actingcommand_contract::{ApplicationLifecycleAction, ContainedTaskRequest, InstanceId};
 use actingcommand_device::{
     AdbConfig, CaptureBackend, CaptureBackendChoice, CaptureBackendConfig, CaptureBackendName,
-    DeviceError, DeviceResult, DeviceTarget, Frame, InputBackend, MaaTouchConfig, MinitouchConfig,
-    PixelFormat, PreparedSegmentedSwipePlan, TouchBackendChoice, TouchBackendConfig,
+    DeviceError, DeviceErrorSensitivity, DeviceResult, DeviceTarget, Frame, InputBackend,
+    MaaTouchConfig, MinitouchConfig, PixelFormat, PreparedSegmentedSwipePlan, TouchBackendChoice,
+    TouchBackendConfig,
 };
 use actingcommand_policy::{
     CatalogDocumentSource, CatalogSources, EvaluationFacts, EvaluationResources, MAX_APPROVAL_REFS,
@@ -984,6 +985,11 @@ impl DeviceRegistryInputDiagnosticBackend {
         match execute(self.backend.as_mut()) {
             Ok(()) => Ok(()),
             Err(error) => {
+                let error = error.with_diagnostic_context(
+                    self.requested_backend.as_str(),
+                    operation,
+                    DeviceErrorSensitivity::Sensitive,
+                );
                 (self.diagnostic_sink)(device_registry_input_operation_diagnostic_record(
                     &self.instance_alias,
                     self.requested_backend,
@@ -1057,6 +1063,13 @@ fn open_device_registry_input_with_diagnostic<T>(
     match open() {
         Ok(value) => Ok(value),
         Err(error) => {
+            let error = error.with_diagnostic_context(
+                input_backend
+                    .map(TouchBackendChoice::as_str)
+                    .unwrap_or("unavailable"),
+                "open_input",
+                DeviceErrorSensitivity::Sensitive,
+            );
             emit(device_registry_input_open_diagnostic_record(
                 instance_alias,
                 input_backend,
@@ -1077,6 +1090,13 @@ fn open_device_registry_capture_with_diagnostic<T>(
     match open() {
         Ok(value) => Ok(value),
         Err(error) => {
+            let error = error.with_diagnostic_context(
+                capture_backend
+                    .map(CaptureBackendChoice::as_str)
+                    .unwrap_or("unavailable"),
+                "open_capture",
+                DeviceErrorSensitivity::Sensitive,
+            );
             emit(device_registry_capture_open_diagnostic_record(
                 instance_alias,
                 capture_backend,
