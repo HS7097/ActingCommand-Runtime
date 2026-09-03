@@ -17024,8 +17024,22 @@ fn strategic_report_uses_authoritative_policy_projection() {
         client.send(&publish).state(),
         RuntimeReceiptState::Completed
     );
-    let (ledger_position, fact_snapshot_id) =
-        strategic_frozen_identity(&host, &policy_facts(), &policy_resources());
+    let as_of_ledger_position =
+        project_snapshot(&host, ProjectInterfaceRequest::current()).ledger_position;
+    let identity_request = client.agent_request(RuntimeOperation::ProjectPolicyInputIdentity {
+        as_of_ledger_position,
+    });
+    let identity_receipt = client.send(&identity_request);
+    assert_eq!(identity_receipt.state(), RuntimeReceiptState::Completed);
+    let RuntimeResult::PolicyInputIdentityProjected { identity } = identity_receipt
+        .result()
+        .expect("policy input identity result")
+    else {
+        panic!("expected policy input identity result")
+    };
+    assert_eq!(identity.ledger_position(), as_of_ledger_position);
+    let ledger_position = identity.ledger_position();
+    let fact_snapshot_id = identity.fact_snapshot_id().to_owned();
     let artifact_id = serde_json::to_value(evidence.artifact_id)
         .expect("artifact id JSON")
         .as_str()
