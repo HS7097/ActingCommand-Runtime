@@ -1649,7 +1649,7 @@ fn fact_kind(value: &FactValue) -> &'static str {
     }
 }
 
-fn scope_matches_instance(scope: &ScopeSelector, instance: &InstanceSnapshot) -> bool {
+pub(crate) fn scope_matches_instance(scope: &ScopeSelector, instance: &InstanceSnapshot) -> bool {
     match scope {
         ScopeSelector::Instance { instance_id } => instance_id == &instance.instance_id,
         ScopeSelector::Server { server_id } => server_id == &instance.server_id,
