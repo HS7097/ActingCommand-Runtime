@@ -1686,13 +1686,58 @@ fn actingd_exposes_typed_planning_capabilities_to_a_separate_client_process() {
     let config_path = root.path().join("actingd.json");
     let instance_id = instance_id();
     let (base, evidence, evidence_sequence) = seed_planning_state(root.path(), instance_id);
-    let report = strategic_report(&base, &evidence, evidence_sequence);
     write_config(&config_path, root.path(), instance_id, false);
+    let policy_root = root.path().join("policy");
+    fs::create_dir_all(&policy_root).expect("create strategic policy directory");
+    let sources = strategy_policy_sources(1);
+    for (name, source) in [
+        ("tasks.json", sources.tasks),
+        ("pools.json", sources.pools),
+        ("activity.json", sources.activity),
+        ("timeline.json", sources.timeline),
+    ] {
+        fs::write(policy_root.join(name), source.bytes).expect("write strategic policy document");
+    }
+    let mut config: Value =
+        serde_json::from_slice(&fs::read(&config_path).expect("read strategic daemon config"))
+            .expect("strategic daemon config JSON");
+    config["governance_capability"] = json!("actingd-policy-bootstrap-capability");
+    config["policy"] = json!({
+        "facts": configured_policy_facts(unix_ms_now()),
+        "resources": configured_policy_resources(unix_ms_now()),
+        "catalog": {
+            "tasks": "policy/tasks.json",
+            "pools": "policy/pools.json",
+            "activity": "policy/activity.json",
+            "timeline": "policy/timeline.json"
+        },
+        "catalog_approval_ids": ["approval:fixture-a"],
+        "procedure_manifest": [{
+            "procedure_ref": "procedure.observe",
+            "package_digest": format!("sha256:{}", "c".repeat(64)),
+            "operation_id": "operation.observe",
+            "yield_points": ["after_observation"]
+        }]
+    });
+    fs::write(
+        &config_path,
+        serde_json::to_vec_pretty(&config).expect("strategic daemon config bytes"),
+    )
+    .expect("write strategic daemon config");
 
     let child = start_actingd(&config_path);
     let mut child = ChildGuard(child);
     wait_for_runtime_info(&mut child.0, root.path());
     let client = connect_agent(root.path());
+    let identity = client
+        .project_policy_input_identity(evidence_sequence)
+        .expect("project policy input identity through daemon IPC");
+    let report = strategic_report(
+        &base,
+        &evidence,
+        identity.ledger_position(),
+        identity.fact_snapshot_id(),
+    );
 
     let plan = client
         .prepare_strategic_report(&report, vec![evidence])
@@ -2594,6 +2639,7 @@ fn strategic_report(
     base: &CatalogGeneration,
     evidence: &ProjectedArtifactReference,
     as_of_ledger_position: u64,
+    fact_snapshot_id: &str,
 ) -> StrategicReport {
     let artifact_id = serde_json::to_value(evidence.artifact_id)
         .expect("artifact id JSON")
@@ -2654,9 +2700,9 @@ fn strategic_report(
             goal_id: "goal.primary".to_owned(),
             instance_id: INSTANCE_ALIAS.to_owned(),
             game_id: "fixture-game-a".to_owned(),
-            fact_snapshot_id: "snapshot:strategy-a".to_owned(),
-            current_projection: Some(50),
-            production_rate_per_hour: Some(100),
+            fact_snapshot_id: fact_snapshot_id.to_owned(),
+            current_projection: None,
+            production_rate_per_hour: None,
             target: 100,
             deadline_unix_ms: POLICY_NOW_UNIX_MS + 3_600_000,
             available: true,
