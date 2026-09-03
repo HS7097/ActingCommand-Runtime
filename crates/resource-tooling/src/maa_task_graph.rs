@@ -8,10 +8,15 @@
 
 use crate::JsonDocument;
 use actingcommand_contract::{LabError as CliError, LabResult as CliOutcome};
-use serde_json::{Map, Value, json};
+use serde::Serialize;
+#[cfg(test)]
+use serde_json::json;
+use serde_json::{Map, Value};
+use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::io::Read;
+use std::path::{Component, Path, PathBuf};
 
 const LIST_FIELDS: [&str; 5] = [
     "sub",
@@ -23,6 +28,14 @@ const LIST_FIELDS: [&str; 5] = [
 
 // Exact cycle detection cannot catch @-composition names that grow every step.
 const MAX_MAA_EXPANSION_DEPTH: usize = 64;
+const MAX_MAA_DIRECTORY_DEPTH: usize = 32;
+const MAX_MAA_JSON_FILES: usize = 16_384;
+const MAX_MAA_JSON_FILE_BYTES: u64 = 67_108_864;
+const MAX_MAA_AGGREGATE_JSON_BYTES: u64 = 1_073_741_824;
+const MAX_MAA_RAW_TASKS: usize = 65_536;
+
+const CORE_STRING_FIELDS: [&str; 3] = ["Doc", "algorithm", "action"];
+const GEOMETRY_FIELDS: [&str; 3] = ["roi", "rectMove", "specificRect"];
 
 const ALGORITHM_SPECIFIC_FIELDS: [&str; 18] = [
     "template", // AsstTypes.h MatchTaskInfo::templ_names / FeatureMatchTaskInfo::templ_names; TaskData.cpp:830 consumes the same key.
@@ -45,9 +58,142 @@ const ALGORITHM_SPECIFIC_FIELDS: [&str; 18] = [
     "detector", // AsstTypes.h FeatureMatchTaskInfo::detector.
 ];
 
+const RECOGNITION_FIELDS: [&str; 18] = [
+    "threshold",
+    "templThreshold",
+    "maskRange",
+    "colorScales",
+    "colorWithClose",
+    "pureColor",
+    "method",
+    "text",
+    "ocrReplace",
+    "fullMatch",
+    "replaceFull",
+    "isAscii",
+    "withoutDet",
+    "useRaw",
+    "binThreshold",
+    "count",
+    "ratio",
+    "detector",
+];
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MaaFactOrigin {
+    Declared,
+    Inherited,
+    Composed,
+    MaaDefaulted,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+pub struct MaaFactSource {
+    pub source_task_id: String,
+    pub source_json_path: String,
+    pub source_file_sha256: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct MaaFact {
+    #[serde(flatten)]
+    pub value: MaaFactValue,
+    pub source_task_id: String,
+    pub source_json_path: String,
+    pub source_file_sha256: String,
+    pub origin: MaaFactOrigin,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub contributing_sources: Vec<MaaFactSource>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum MaaFactValue {
+    Null,
+    Boolean { value: bool },
+    Integer { value: i64 },
+    Unsigned { value: u64 },
+    Number { value: f64 },
+    String { value: String },
+    Array { items: Vec<MaaFact> },
+    Object { fields: BTreeMap<String, MaaFact> },
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct MaaTaskFacts {
+    pub task_id: MaaFact,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub doc: Option<MaaFact>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub algorithm: Option<MaaFact>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub action: Option<MaaFact>,
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub geometry: BTreeMap<String, MaaFact>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub template: Option<MaaFact>,
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub recognition_parameters: BTreeMap<String, MaaFact>,
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub topology: BTreeMap<String, Vec<MaaFact>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct MaaFactTrace {
+    origin: MaaFactOrigin,
+    primary: MaaFactSource,
+    contributors: Vec<MaaFactSource>,
+}
+
+impl MaaFactTrace {
+    fn declared(primary: MaaFactSource) -> Self {
+        Self {
+            origin: MaaFactOrigin::Declared,
+            primary,
+            contributors: Vec::new(),
+        }
+    }
+
+    fn with_origin(mut self, origin: MaaFactOrigin) -> Self {
+        self.origin = origin;
+        self
+    }
+
+    fn with_contributor(mut self, source: MaaFactSource) -> Self {
+        if source != self.primary && !self.contributors.contains(&source) {
+            self.contributors.push(source);
+        }
+        self
+    }
+
+    fn composed_with(mut self, other: &Self) -> Self {
+        self.origin = MaaFactOrigin::Composed;
+        self = self.with_contributor(other.primary.clone());
+        for source in &other.contributors {
+            self = self.with_contributor(source.clone());
+        }
+        self
+    }
+}
+
+#[derive(Debug, Clone)]
+struct MaaTaskProvenance {
+    task: MaaFactTrace,
+    fields: BTreeMap<String, MaaFactTrace>,
+    list_items: BTreeMap<String, Vec<MaaFactTrace>>,
+}
+
+#[derive(Debug, Clone)]
+struct TracedMaaTask {
+    data: Map<String, Value>,
+    provenance: MaaTaskProvenance,
+}
+
 #[derive(Debug, Clone)]
 pub struct MaaTaskGraph {
     tasks: BTreeMap<String, Value>,
+    provenance: BTreeMap<String, MaaTaskProvenance>,
     stats: MaaTaskGraphStats,
 }
 
@@ -73,6 +219,18 @@ impl MaaTaskGraph {
             })
     }
 
+    pub fn task_facts(&self, task_id: &str) -> CliOutcome<MaaTaskFacts> {
+        let task = self.tasks.get(task_id).ok_or_else(|| {
+            CliError::package_invalid(format!("compiled MAA task '{task_id}' was not found"))
+        })?;
+        let provenance = self.provenance.get(task_id).ok_or_else(|| {
+            CliError::package_invalid(format!(
+                "compiled MAA task '{task_id}' has no exact fact provenance"
+            ))
+        })?;
+        build_task_facts(task_id, task, provenance)
+    }
+
     pub(crate) fn tasks(&self) -> &BTreeMap<String, Value> {
         &self.tasks
     }
@@ -90,23 +248,29 @@ pub struct MaaTaskGraphStats {
 }
 
 pub fn compile_maa_task_graph(tasks_root: &Path) -> CliOutcome<MaaTaskGraph> {
-    let mut files = collect_maa_task_files(tasks_root)?;
+    compile_maa_task_graph_with_limits(tasks_root, MaaIntakeLimits::PRODUCTION)
+}
+
+fn compile_maa_task_graph_with_limits(
+    tasks_root: &Path,
+    limits: MaaIntakeLimits,
+) -> CliOutcome<MaaTaskGraph> {
+    let mut files = collect_maa_task_files(tasks_root, limits)?;
     if files.is_empty() {
-        return Err(CliError::package_invalid(format!(
-            "no MAA task JSON files found under {}",
-            tasks_root.display()
-        )));
+        return Err(CliError::package_invalid(
+            "no MAA task JSON files found under the selected root",
+        ));
     }
-    files.sort();
+    files.sort_by(|left, right| left.source_json_path.cmp(&right.source_json_path));
     if let Some(index) = files
         .iter()
-        .position(|path| path.file_name().and_then(|name| name.to_str()) == Some("tasks.json"))
+        .position(|file| file.path.file_name().and_then(|name| name.to_str()) == Some("tasks.json"))
     {
         let root_tasks = files.remove(index);
         files.insert(0, root_tasks);
     }
 
-    let mut registry = MaaRawTaskRegistry::default();
+    let mut registry = MaaRawTaskRegistry::with_limit(limits.max_raw_tasks);
     for file in &files {
         registry.load_file(file)?;
     }
@@ -121,80 +285,187 @@ fn compile_maa_task_graph_from_value(root: Value) -> CliOutcome<MaaTaskGraph> {
     MaaTaskCompiler::new(registry, 1).compile_all()
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 struct MaaRawTaskRegistry {
     tasks: BTreeMap<String, RawMaaTask>,
+    max_raw_tasks: usize,
 }
 
 #[derive(Debug, Clone)]
 struct RawMaaTask {
     task_id: String,
     data: Map<String, Value>,
-    source: String,
+    provenance: MaaTaskProvenance,
+}
+
+impl Default for MaaRawTaskRegistry {
+    fn default() -> Self {
+        Self::with_limit(MAX_MAA_RAW_TASKS)
+    }
 }
 
 impl MaaRawTaskRegistry {
-    fn load_file(&mut self, path: &Path) -> CliOutcome<()> {
-        let text = fs::read_to_string(path).map_err(|err| {
-            CliError::package_invalid(format!(
-                "failed to read MAA task file {}: {err}",
-                path.display()
-            ))
-        })?;
-        let value = serde_json::from_str::<Value>(&text).map_err(|err| {
-            CliError::package_invalid(format!(
-                "failed to parse MAA task file {}: {err}",
-                path.display()
-            ))
-        })?;
-        self.load_value(&path.display().to_string(), value)
+    fn with_limit(max_raw_tasks: usize) -> Self {
+        Self {
+            tasks: BTreeMap::new(),
+            max_raw_tasks,
+        }
     }
 
+    fn load_file(&mut self, file: &MaaTaskFile) -> CliOutcome<()> {
+        let handle = fs::File::open(&file.path).map_err(|err| {
+            CliError::package_invalid(format!(
+                "failed to read MAA task file {}: {err}",
+                file.source_json_path
+            ))
+        })?;
+        let read_limit = file
+            .byte_len
+            .checked_add(1)
+            .ok_or_else(|| CliError::package_invalid("MAA task file read limit overflow"))?;
+        let mut bytes = Vec::with_capacity(file.byte_len as usize);
+        handle
+            .take(read_limit)
+            .read_to_end(&mut bytes)
+            .map_err(|err| {
+                CliError::package_invalid(format!(
+                    "failed to read MAA task file {}: {err}",
+                    file.source_json_path
+                ))
+            })?;
+        if bytes.len() as u64 != file.byte_len {
+            return Err(CliError::package_invalid(format!(
+                "MAA task file {} changed size during intake",
+                file.source_json_path
+            )));
+        }
+        let value = serde_json::from_slice::<Value>(&bytes).map_err(|err| {
+            CliError::package_invalid(format!(
+                "failed to parse MAA task file {}: {err}",
+                file.source_json_path
+            ))
+        })?;
+        self.load_value_with_source(
+            &file.source_json_path,
+            &format!("{:x}", Sha256::digest(&bytes)),
+            value,
+        )
+    }
+
+    #[cfg(test)]
     fn load_value(&mut self, source: &str, value: Value) -> CliOutcome<()> {
+        let bytes = serde_json::to_vec(&value).map_err(|err| {
+            CliError::package_invalid(format!("failed to encode MAA task source {source}: {err}"))
+        })?;
+        self.load_value_with_source(source, &format!("{:x}", Sha256::digest(bytes)), value)
+    }
+
+    fn load_value_with_source(
+        &mut self,
+        source_json_path: &str,
+        source_file_sha256: &str,
+        value: Value,
+    ) -> CliOutcome<()> {
         let object = value.as_object().ok_or_else(|| {
-            CliError::package_invalid(format!("MAA task source {source} must be a JSON object"))
+            CliError::package_invalid(format!(
+                "MAA task source {source_json_path} must be a JSON object"
+            ))
         })?;
         for (task_id, task_value) in object {
             let data = task_value.as_object().cloned().ok_or_else(|| {
                 CliError::package_invalid(format!(
-                    "MAA task '{task_id}' in {source} must be a JSON object"
+                    "MAA task '{task_id}' in {source_json_path} must be a JSON object"
                 ))
             })?;
+            validate_core_typed_fields(task_id, &data)?;
+            let source = MaaFactSource {
+                source_task_id: task_id.clone(),
+                source_json_path: source_json_path.to_string(),
+                source_file_sha256: source_file_sha256.to_string(),
+            };
+            let declared = MaaFactTrace::declared(source);
+            let fields = data
+                .keys()
+                .map(|field| (field.clone(), declared.clone()))
+                .collect();
+            let list_items = LIST_FIELDS
+                .into_iter()
+                .filter_map(|field| {
+                    data.get(field)
+                        .and_then(task_list_expressions)
+                        .map(|items| {
+                            (
+                                field.to_string(),
+                                items.into_iter().map(|_| declared.clone()).collect(),
+                            )
+                        })
+                })
+                .collect();
             self.insert_task(RawMaaTask {
                 task_id: task_id.clone(),
                 data,
-                source: source.to_string(),
-            });
+                provenance: MaaTaskProvenance {
+                    task: declared,
+                    fields,
+                    list_items,
+                },
+            })?;
         }
         Ok(())
     }
 
-    fn insert_task(&mut self, task: RawMaaTask) {
+    fn insert_task(&mut self, task: RawMaaTask) -> CliOutcome<()> {
         let Some(existing) = self.tasks.get(&task.task_id) else {
+            if self.tasks.len() >= self.max_raw_tasks {
+                return Err(CliError::package_invalid(format!(
+                    "MAA raw task count exceeds {}",
+                    self.max_raw_tasks
+                )));
+            }
             self.tasks.insert(task.task_id.clone(), task);
-            return;
+            return Ok(());
         };
         if task.data.contains_key("baseTask") {
             self.tasks.insert(task.task_id.clone(), task);
-            return;
+            return Ok(());
         }
         let mut inherited = existing.data.clone();
         merge_object(&mut inherited, &task.data);
+        let mut fields = existing.provenance.fields.clone();
+        fields.extend(task.provenance.fields.clone());
+        let mut list_items = existing.provenance.list_items.clone();
+        for field in task.data.keys() {
+            list_items.remove(field);
+        }
+        list_items.extend(task.provenance.list_items.clone());
+        let mut task_trace = task
+            .provenance
+            .task
+            .clone()
+            .with_contributor(existing.provenance.task.primary.clone());
+        for source in &existing.provenance.task.contributors {
+            task_trace = task_trace.with_contributor(source.clone());
+        }
         self.tasks.insert(
             task.task_id.clone(),
             RawMaaTask {
                 task_id: task.task_id,
                 data: inherited,
-                source: task.source,
+                provenance: MaaTaskProvenance {
+                    task: task_trace,
+                    fields,
+                    list_items,
+                },
             },
         );
+        Ok(())
     }
 }
 
 struct MaaTaskCompiler {
     raw: BTreeMap<String, RawMaaTask>,
-    materialized: HashMap<String, Value>,
-    expanded: HashMap<String, Value>,
+    materialized: HashMap<String, TracedMaaTask>,
+    expanded: HashMap<String, TracedMaaTask>,
     stats: MaaTaskGraphStats,
 }
 
@@ -221,26 +492,43 @@ impl MaaTaskCompiler {
         let referenced = self
             .expanded
             .values()
-            .flat_map(task_references)
+            .flat_map(|task| task_references(&task.data))
             .filter(|task_id| task_id != "Stop" && !self.expanded.contains_key(task_id))
             .collect::<BTreeSet<_>>();
         for task_id in referenced {
             self.expand_task(&task_id, &mut Vec::new())?;
         }
         let mut tasks = BTreeMap::new();
+        let mut provenance = BTreeMap::new();
         for (task_id, task) in self.expanded {
-            tasks.insert(task_id, task);
+            tasks.insert(task_id.clone(), Value::Object(task.data));
+            provenance.insert(task_id, task.provenance);
         }
         self.stats.compiled_tasks = tasks.len();
         Ok(MaaTaskGraph {
             tasks,
+            provenance,
             stats: self.stats,
         })
     }
 
-    fn expand_task(&mut self, task_id: &str, stack: &mut Vec<String>) -> CliOutcome<Value> {
+    fn expand_task(&mut self, task_id: &str, stack: &mut Vec<String>) -> CliOutcome<TracedMaaTask> {
         if task_id == "Stop" {
-            return Ok(json!({"task_id": "Stop", "algorithm": "Stop"}));
+            let trace = MaaFactTrace::declared(MaaFactSource {
+                source_task_id: "Stop".to_string(),
+                source_json_path: "synthetic/Stop.json".to_string(),
+                source_file_sha256: "0".repeat(64),
+            })
+            .with_origin(MaaFactOrigin::Composed);
+            let mut task = empty_traced_task(trace.clone());
+            task.data
+                .insert("task_id".to_string(), Value::String("Stop".to_string()));
+            task.data
+                .insert("algorithm".to_string(), Value::String("Stop".to_string()));
+            task.provenance
+                .fields
+                .insert("algorithm".to_string(), trace);
+            return Ok(task);
         }
         if let Some(task) = self.expanded.get(task_id) {
             return Ok(task.clone());
@@ -262,7 +550,7 @@ impl MaaTaskCompiler {
         let mut task = self.materialize_task(task_id, &mut Vec::new())?;
         stack.push(task_id.to_string());
         for field in LIST_FIELDS {
-            let Some(value) = task.get(field).cloned() else {
+            let Some(value) = task.data.get(field).cloned() else {
                 continue;
             };
             let expressions = task_list_expressions(&value).ok_or_else(|| {
@@ -270,21 +558,42 @@ impl MaaTaskCompiler {
                     "MAA task '{task_id}' field '{field}' must be a string or string array"
                 ))
             })?;
-            let expanded = self.expand_expression_list(task_id, field, &expressions, stack)?;
-            task.as_object_mut()
-                .expect("materialized task is object")
-                .insert(
-                    field.to_string(),
-                    Value::Array(expanded.into_iter().map(Value::String).collect()),
-                );
+            let traces = task
+                .provenance
+                .list_items
+                .get(field)
+                .cloned()
+                .ok_or_else(|| missing_fact_provenance(task_id, field))?;
+            if traces.len() != expressions.len() {
+                return Err(missing_fact_provenance(task_id, field));
+            }
+            let inputs = expressions.into_iter().zip(traces).collect::<Vec<_>>();
+            let expanded = self.expand_expression_list(task_id, field, &inputs, stack)?;
+            task.data.insert(
+                field.to_string(),
+                Value::Array(
+                    expanded
+                        .iter()
+                        .map(|item| Value::String(item.task_id.clone()))
+                        .collect(),
+                ),
+            );
+            task.provenance.list_items.insert(
+                field.to_string(),
+                expanded.into_iter().map(|item| item.trace).collect(),
+            );
         }
         stack.pop();
-        self.validate_task_references(task_id, &task)?;
+        self.validate_task_references(task_id, &task.data)?;
         self.expanded.insert(task_id.to_string(), task.clone());
         Ok(task)
     }
 
-    fn materialize_task(&mut self, task_id: &str, stack: &mut Vec<String>) -> CliOutcome<Value> {
+    fn materialize_task(
+        &mut self,
+        task_id: &str,
+        stack: &mut Vec<String>,
+    ) -> CliOutcome<TracedMaaTask> {
         validate_at_component_limit(task_id)?;
         if let Some(task) = self.materialized.get(task_id) {
             return Ok(task.clone());
@@ -316,47 +625,69 @@ impl MaaTaskCompiler {
             Some(raw) => {
                 let base_task = raw.data.get("baseTask").and_then(Value::as_str);
                 let mut base = match base_task {
-                    Some("#none") => Map::new(),
+                    Some("#none") => empty_traced_task(raw.provenance.task.clone()),
                     Some(base_id) => {
                         self.stats.base_task_derivations += 1;
-                        value_object(self.materialize_task(base_id, stack)?, base_id)?
+                        mark_task_origin(
+                            self.materialize_task(base_id, stack)?,
+                            MaaFactOrigin::Inherited,
+                            Some(raw.provenance.task.clone()),
+                        )
                     }
                     None => match split {
                         Some((prefix, base_id)) => {
                             self.stats.explicit_at_tasks += 1;
-                            let base =
-                                value_object(self.materialize_task(base_id, stack)?, base_id)?;
+                            let base = mark_task_origin(
+                                self.materialize_task(base_id, stack)?,
+                                MaaFactOrigin::Composed,
+                                Some(raw.provenance.task.clone()),
+                            );
                             rebase_task_list_defaults(base, prefix)
                         }
-                        None => Map::new(),
+                        None => empty_traced_task(raw.provenance.task.clone()),
                     },
                 };
-                filter_algorithm_specific_inheritance(&mut base, &raw.data);
-                merge_object(&mut base, &raw.data);
-                base.remove("baseTask");
+                filter_algorithm_specific_inheritance(&mut base.data, &raw.data);
+                retain_existing_field_provenance(&mut base);
+                merge_traced_task(&mut base, &raw);
+                base.data.remove("baseTask");
+                base.provenance.fields.remove("baseTask");
+                base.provenance.list_items.remove("baseTask");
                 // MAA task-schema.md lines 217 and 232-233: a derived
                 // template-matching task defaults template to its own task name.
                 let should_default_template = (is_explicit_at || base_task.is_some())
                     && !raw.data.contains_key("template")
-                    && looks_like_template_task(&base);
+                    && looks_like_template_task(&base.data);
                 if should_default_template {
-                    base.insert(
+                    base.data.insert(
                         "template".to_string(),
                         Value::String(default_template_name(task_id)),
                     );
+                    base.provenance.fields.insert(
+                        "template".to_string(),
+                        raw.provenance
+                            .task
+                            .clone()
+                            .with_origin(MaaFactOrigin::MaaDefaulted),
+                    );
                 }
+                base.provenance.task = raw.provenance.task;
                 base
             }
             None => {
                 let (prefix, base_id) = split.expect("checked split");
                 self.stats.implicit_at_tasks += 1;
-                let base = value_object(self.materialize_task(base_id, stack)?, base_id)?;
+                let base = mark_task_origin(
+                    self.materialize_task(base_id, stack)?,
+                    MaaFactOrigin::Composed,
+                    None,
+                );
                 rebase_task_list_defaults(base, prefix)
             }
         };
         stack.pop();
-        task.insert("task_id".to_string(), Value::String(task_id.to_string()));
-        let task = Value::Object(task);
+        task.data
+            .insert("task_id".to_string(), Value::String(task_id.to_string()));
         self.materialized.insert(task_id.to_string(), task.clone());
         Ok(task)
     }
@@ -365,18 +696,23 @@ impl MaaTaskCompiler {
         &mut self,
         task_id: &str,
         field: &str,
-        expressions: &[String],
+        expressions: &[(String, MaaFactTrace)],
         stack: &mut Vec<String>,
-    ) -> CliOutcome<Vec<String>> {
+    ) -> CliOutcome<Vec<ResolvedTaskRef>> {
         let mut out = Vec::new();
-        for expression in expressions {
-            let mut parser = MaaExpressionParser::new(self, task_id, field, expression, stack);
-            merge_unique(&mut out, parser.parse()?);
+        for (expression, trace) in expressions {
+            let mut parser =
+                MaaExpressionParser::new(self, task_id, field, expression, trace.clone(), stack);
+            merge_unique_refs(&mut out, parser.parse()?);
         }
         Ok(out)
     }
 
-    fn validate_task_references(&mut self, owner: &str, task: &Value) -> CliOutcome<()> {
+    fn validate_task_references(
+        &mut self,
+        owner: &str,
+        task: &Map<String, Value>,
+    ) -> CliOutcome<()> {
         let mut errors = Vec::new();
         for field in LIST_FIELDS {
             for target in
@@ -440,24 +776,55 @@ impl MaaTaskCompiler {
     fn expand_virtual_field(
         &mut self,
         context_task: &str,
-        left: &[String],
+        left: &[ResolvedTaskRef],
         sharp_type: &str,
+        expression_trace: &MaaFactTrace,
         stack: &mut Vec<String>,
-    ) -> CliOutcome<Vec<String>> {
+    ) -> CliOutcome<Vec<ResolvedTaskRef>> {
         self.stats.virtual_references += 1;
         match sharp_type {
             "none" => Ok(Vec::new()),
-            "self" => Ok(vec![context_task.to_string()]),
+            "self" => Ok(vec![ResolvedTaskRef {
+                task_id: context_task.to_string(),
+                trace: expression_trace
+                    .clone()
+                    .with_origin(MaaFactOrigin::Composed),
+            }]),
             // MAA task-schema.md lines 245-248: bare #back is skipped;
             // non-bare X#back returns X.
-            "back" => Ok(left.to_vec()),
+            "back" => Ok(left
+                .iter()
+                .cloned()
+                .map(|mut item| {
+                    item.trace.origin = MaaFactOrigin::Composed;
+                    item
+                })
+                .collect()),
             "next" | "sub" | "on_error_next" | "exceeded_next" | "reduce_other_times" => {
                 let field = sharp_field_name(sharp_type);
                 let mut out = Vec::new();
-                for task_id in left {
-                    let task = self.expand_task(task_id, stack)?;
-                    let value = task.get(field).cloned().unwrap_or(Value::Null);
-                    merge_unique(&mut out, task_list_expressions(&value).unwrap_or_default());
+                for left_item in left {
+                    let task = self.expand_task(&left_item.task_id, stack)?;
+                    let value = task.data.get(field).cloned().unwrap_or(Value::Null);
+                    let values = task_list_expressions(&value).unwrap_or_default();
+                    let traces = task
+                        .provenance
+                        .list_items
+                        .get(field)
+                        .cloned()
+                        .unwrap_or_default();
+                    if values.len() != traces.len() {
+                        return Err(missing_fact_provenance(&left_item.task_id, field));
+                    }
+                    let resolved = values
+                        .into_iter()
+                        .zip(traces)
+                        .map(|(task_id, trace)| ResolvedTaskRef {
+                            task_id,
+                            trace: left_item.trace.clone().composed_with(&trace),
+                        })
+                        .collect();
+                    merge_unique_refs(&mut out, resolved);
                 }
                 Ok(out)
             }
@@ -468,12 +835,19 @@ impl MaaTaskCompiler {
     }
 }
 
+#[derive(Debug, Clone)]
+struct ResolvedTaskRef {
+    task_id: String,
+    trace: MaaFactTrace,
+}
+
 struct MaaExpressionParser<'a> {
     compiler: &'a mut MaaTaskCompiler,
     stack: &'a mut Vec<String>,
     context_task: &'a str,
     field: &'a str,
     input: &'a str,
+    expression_trace: MaaFactTrace,
     chars: Vec<char>,
     pos: usize,
 }
@@ -484,6 +858,7 @@ impl<'a> MaaExpressionParser<'a> {
         context_task: &'a str,
         field: &'a str,
         input: &'a str,
+        expression_trace: MaaFactTrace,
         stack: &'a mut Vec<String>,
     ) -> Self {
         Self {
@@ -492,12 +867,13 @@ impl<'a> MaaExpressionParser<'a> {
             context_task,
             field,
             input,
+            expression_trace,
             chars: input.chars().collect(),
             pos: 0,
         }
     }
 
-    fn parse(&mut self) -> CliOutcome<Vec<String>> {
+    fn parse(&mut self) -> CliOutcome<Vec<ResolvedTaskRef>> {
         let result = self.parse_union_diff()?;
         self.skip_ws();
         if self.pos != self.chars.len() {
@@ -506,49 +882,55 @@ impl<'a> MaaExpressionParser<'a> {
         Ok(result)
     }
 
-    fn parse_union_diff(&mut self) -> CliOutcome<Vec<String>> {
+    fn parse_union_diff(&mut self) -> CliOutcome<Vec<ResolvedTaskRef>> {
         let mut left = self.parse_repeat()?;
         loop {
             self.skip_ws();
             if self.consume('+') {
-                let right = self.parse_repeat()?;
-                merge_unique(&mut left, right);
+                mark_refs_composed(&mut left);
+                let mut right = self.parse_repeat()?;
+                mark_refs_composed(&mut right);
+                merge_unique_refs(&mut left, right);
             } else if self.consume('^') {
+                mark_refs_composed(&mut left);
                 let right = self.parse_repeat()?;
-                let banned = right.into_iter().collect::<HashSet<_>>();
-                left.retain(|item| !banned.contains(item));
+                let banned = right
+                    .into_iter()
+                    .map(|item| item.task_id)
+                    .collect::<HashSet<_>>();
+                left.retain(|item| !banned.contains(&item.task_id));
             } else {
                 return Ok(left);
             }
         }
     }
 
-    fn parse_repeat(&mut self) -> CliOutcome<Vec<String>> {
+    fn parse_repeat(&mut self) -> CliOutcome<Vec<ResolvedTaskRef>> {
         let mut value = self.parse_at_sharp()?;
         self.skip_ws();
         if self.consume('*') {
-            let count = self.parse_usize()?;
-            let original = value.clone();
-            for _ in 1..count {
-                value.extend(original.clone());
-            }
+            self.parse_usize()?;
+            // Repetition cannot change the normalized de-duplicated task list.
+            // Mark the surviving values as composed without allocating repeats.
+            mark_refs_composed(&mut value);
         }
         Ok(value)
     }
 
-    fn parse_at_sharp(&mut self) -> CliOutcome<Vec<String>> {
+    fn parse_at_sharp(&mut self) -> CliOutcome<Vec<ResolvedTaskRef>> {
         let mut left = self.parse_unary()?;
         loop {
             self.skip_ws();
             if self.consume('@') {
                 let right = self.parse_unary()?;
-                left = combine_at_tasks(&left, &right);
+                left = combine_at_task_refs(&left, &right);
             } else if self.consume('#') {
                 let sharp_type = self.parse_ident()?;
                 left = self.compiler.expand_virtual_field(
                     self.context_task,
                     &left,
                     &sharp_type,
+                    &self.expression_trace,
                     self.stack,
                 )?;
             } else {
@@ -557,7 +939,7 @@ impl<'a> MaaExpressionParser<'a> {
         }
     }
 
-    fn parse_unary(&mut self) -> CliOutcome<Vec<String>> {
+    fn parse_unary(&mut self) -> CliOutcome<Vec<ResolvedTaskRef>> {
         self.skip_ws();
         if self.consume('(') {
             let value = self.parse_union_diff()?;
@@ -573,6 +955,7 @@ impl<'a> MaaExpressionParser<'a> {
                 self.context_task,
                 &[],
                 &sharp_type,
+                &self.expression_trace,
                 self.stack,
             );
         }
@@ -580,7 +963,10 @@ impl<'a> MaaExpressionParser<'a> {
         if ident.is_empty() {
             return Err(self.error("expected task id"));
         }
-        Ok(vec![ident])
+        Ok(vec![ResolvedTaskRef {
+            task_id: ident,
+            trace: self.expression_trace.clone(),
+        }])
     }
 
     fn parse_ident(&mut self) -> CliOutcome<String> {
@@ -650,48 +1036,178 @@ impl<'a> MaaExpressionParser<'a> {
     }
 }
 
-fn collect_maa_task_files(root: &Path) -> CliOutcome<Vec<PathBuf>> {
+#[derive(Debug, Clone, Copy)]
+struct MaaIntakeLimits {
+    max_directory_depth: usize,
+    max_json_files: usize,
+    max_json_file_bytes: u64,
+    max_aggregate_json_bytes: u64,
+    max_raw_tasks: usize,
+}
+
+impl MaaIntakeLimits {
+    const PRODUCTION: Self = Self {
+        max_directory_depth: MAX_MAA_DIRECTORY_DEPTH,
+        max_json_files: MAX_MAA_JSON_FILES,
+        max_json_file_bytes: MAX_MAA_JSON_FILE_BYTES,
+        max_aggregate_json_bytes: MAX_MAA_AGGREGATE_JSON_BYTES,
+        max_raw_tasks: MAX_MAA_RAW_TASKS,
+    };
+}
+
+#[derive(Debug, Clone)]
+struct MaaTaskFile {
+    path: PathBuf,
+    source_json_path: String,
+    byte_len: u64,
+}
+
+fn collect_maa_task_files(root: &Path, limits: MaaIntakeLimits) -> CliOutcome<Vec<MaaTaskFile>> {
+    let root_metadata = fs::symlink_metadata(root).map_err(|err| {
+        CliError::package_invalid(format!("failed to inspect MAA task root: {err}"))
+    })?;
+    if root_metadata.file_type().is_symlink() {
+        return Err(CliError::package_invalid(
+            "MAA task root must not be a symbolic link",
+        ));
+    }
+    if !root_metadata.is_dir() {
+        return Err(CliError::package_invalid(
+            "MAA task root must be a directory",
+        ));
+    }
     let mut files = Vec::new();
-    collect_maa_task_files_inner(root, &mut files)?;
+    let mut aggregate_bytes = 0u64;
+    collect_maa_task_files_inner(root, root, 0, limits, &mut aggregate_bytes, &mut files)?;
     Ok(files)
 }
 
-fn collect_maa_task_files_inner(root: &Path, files: &mut Vec<PathBuf>) -> CliOutcome<()> {
-    let entries = fs::read_dir(root).map_err(|err| {
+fn collect_maa_task_files_inner(
+    task_root: &Path,
+    directory: &Path,
+    depth: usize,
+    limits: MaaIntakeLimits,
+    aggregate_bytes: &mut u64,
+    files: &mut Vec<MaaTaskFile>,
+) -> CliOutcome<()> {
+    let entries = fs::read_dir(directory).map_err(|err| {
         CliError::package_invalid(format!(
-            "failed to read MAA task directory {}: {err}",
-            root.display()
+            "failed to read MAA task directory at depth {depth}: {err}"
         ))
     })?;
     for entry in entries {
         let entry = entry.map_err(|err| {
             CliError::package_invalid(format!(
-                "failed to read MAA task directory {}: {err}",
-                root.display()
+                "failed to read MAA task directory entry at depth {depth}: {err}"
             ))
         })?;
         let path = entry.path();
-        if path.is_dir() {
-            collect_maa_task_files_inner(&path, files)?;
-        } else if path.extension().and_then(|ext| ext.to_str()) == Some("json") {
-            files.push(path);
+        let file_type = entry.file_type().map_err(|err| {
+            CliError::package_invalid(format!(
+                "failed to inspect MAA task directory entry at depth {depth}: {err}"
+            ))
+        })?;
+        if file_type.is_symlink() {
+            let relative = normalized_source_json_path(task_root, &path)?;
+            return Err(CliError::package_invalid(format!(
+                "MAA task intake encountered symbolic link: {relative}"
+            )));
+        }
+        if file_type.is_dir() {
+            let next_depth = depth
+                .checked_add(1)
+                .ok_or_else(|| CliError::package_invalid("MAA task directory depth overflow"))?;
+            if next_depth > limits.max_directory_depth {
+                return Err(CliError::package_invalid(format!(
+                    "MAA task directory depth exceeds {}",
+                    limits.max_directory_depth
+                )));
+            }
+            collect_maa_task_files_inner(
+                task_root,
+                &path,
+                next_depth,
+                limits,
+                aggregate_bytes,
+                files,
+            )?;
+        } else if file_type.is_file()
+            && path.extension().and_then(|ext| ext.to_str()) == Some("json")
+        {
+            if files.len() >= limits.max_json_files {
+                return Err(CliError::package_invalid(format!(
+                    "MAA JSON file count exceeds {}",
+                    limits.max_json_files
+                )));
+            }
+            let source_json_path = normalized_source_json_path(task_root, &path)?;
+            let byte_len = entry
+                .metadata()
+                .map_err(|err| {
+                    CliError::package_invalid(format!(
+                        "failed to inspect MAA task file {source_json_path}: {err}"
+                    ))
+                })?
+                .len();
+            if byte_len > limits.max_json_file_bytes {
+                return Err(CliError::package_invalid(format!(
+                    "MAA JSON file bytes exceed {}: {source_json_path}",
+                    limits.max_json_file_bytes
+                )));
+            }
+            *aggregate_bytes = aggregate_bytes.checked_add(byte_len).ok_or_else(|| {
+                CliError::package_invalid("MAA aggregate JSON byte count overflow")
+            })?;
+            if *aggregate_bytes > limits.max_aggregate_json_bytes {
+                return Err(CliError::package_invalid(format!(
+                    "MAA aggregate JSON bytes exceed {}",
+                    limits.max_aggregate_json_bytes
+                )));
+            }
+            files.push(MaaTaskFile {
+                path,
+                source_json_path,
+                byte_len,
+            });
         }
     }
     Ok(())
 }
 
+fn normalized_source_json_path(root: &Path, path: &Path) -> CliOutcome<String> {
+    let relative = path.strip_prefix(root).map_err(|_| {
+        CliError::package_invalid("MAA source path is outside the selected task root")
+    })?;
+    let mut segments = Vec::new();
+    for component in relative.components() {
+        let Component::Normal(segment) = component else {
+            return Err(CliError::package_invalid(
+                "MAA source path cannot be represented as a normalized relative path",
+            ));
+        };
+        let segment = segment
+            .to_str()
+            .ok_or_else(|| CliError::package_invalid("MAA source path is not valid UTF-8"))?;
+        if segment.is_empty()
+            || matches!(segment, "." | "..")
+            || segment.contains('/')
+            || segment.contains('\\')
+        {
+            return Err(CliError::package_invalid(
+                "MAA source path contains an invalid segment",
+            ));
+        }
+        segments.push(segment);
+    }
+    if segments.is_empty() {
+        return Err(CliError::package_invalid("MAA source JSON path is empty"));
+    }
+    Ok(segments.join("/"))
+}
+
 fn merge_object(base: &mut Map<String, Value>, child: &Map<String, Value>) {
     for (key, value) in child {
         base.insert(key.clone(), value.clone());
-    }
-}
-
-fn value_object(value: Value, task_id: &str) -> CliOutcome<Map<String, Value>> {
-    match value {
-        Value::Object(object) => Ok(object),
-        _ => Err(CliError::package_invalid(format!(
-            "MAA task '{task_id}' did not materialize as an object"
-        ))),
     }
 }
 
@@ -726,17 +1242,17 @@ fn truncated_task_name(task_id: &str) -> String {
     format!("{prefix}...")
 }
 
-fn rebase_task_list_defaults(mut base: Map<String, Value>, prefix: &str) -> Map<String, Value> {
+fn rebase_task_list_defaults(mut base: TracedMaaTask, prefix: &str) -> TracedMaaTask {
     // MAA task-schema.md lines 221-234: @ tasks rebase list-field defaults
     // by prefixing task references; non-list defaults follow separate rules.
     for field in LIST_FIELDS {
-        let Some(value) = base.get(field).cloned() else {
+        let Some(value) = base.data.get(field).cloned() else {
             continue;
         };
         let Some(expressions) = task_list_expressions(&value) else {
             continue;
         };
-        base.insert(
+        base.data.insert(
             field.to_string(),
             Value::Array(
                 expressions
@@ -745,6 +1261,11 @@ fn rebase_task_list_defaults(mut base: Map<String, Value>, prefix: &str) -> Map<
                     .collect(),
             ),
         );
+        if let Some(traces) = base.provenance.list_items.get_mut(field) {
+            for trace in traces {
+                trace.origin = MaaFactOrigin::Composed;
+            }
+        }
     }
     base
 }
@@ -801,7 +1322,7 @@ fn task_list_expressions(value: &Value) -> Option<Vec<String>> {
     }
 }
 
-fn task_references(task: &Value) -> Vec<String> {
+fn task_references(task: &Map<String, Value>) -> Vec<String> {
     LIST_FIELDS
         .into_iter()
         .flat_map(|field| {
@@ -821,23 +1342,341 @@ fn sharp_field_name(sharp_type: &str) -> &str {
     }
 }
 
-fn merge_unique(out: &mut Vec<String>, values: Vec<String>) {
-    let mut seen = out.iter().cloned().collect::<BTreeSet<_>>();
+fn merge_unique_refs(out: &mut Vec<ResolvedTaskRef>, values: Vec<ResolvedTaskRef>) {
     for value in values {
-        if seen.insert(value.clone()) {
+        if let Some(existing) = out.iter_mut().find(|item| item.task_id == value.task_id) {
+            existing.trace = existing.trace.clone().composed_with(&value.trace);
+        } else {
             out.push(value);
         }
     }
 }
 
-fn combine_at_tasks(left: &[String], right: &[String]) -> Vec<String> {
+fn mark_refs_composed(values: &mut [ResolvedTaskRef]) {
+    for value in values {
+        value.trace.origin = MaaFactOrigin::Composed;
+    }
+}
+
+fn combine_at_task_refs(
+    left: &[ResolvedTaskRef],
+    right: &[ResolvedTaskRef],
+) -> Vec<ResolvedTaskRef> {
     let mut out = Vec::new();
     for lhs in left {
         for rhs in right {
-            out.push(format!("{lhs}@{rhs}"));
+            out.push(ResolvedTaskRef {
+                task_id: format!("{}@{}", lhs.task_id, rhs.task_id),
+                trace: lhs.trace.clone().composed_with(&rhs.trace),
+            });
         }
     }
     out
+}
+
+fn empty_traced_task(task_trace: MaaFactTrace) -> TracedMaaTask {
+    TracedMaaTask {
+        data: Map::new(),
+        provenance: MaaTaskProvenance {
+            task: task_trace,
+            fields: BTreeMap::new(),
+            list_items: BTreeMap::new(),
+        },
+    }
+}
+
+fn mark_task_origin(
+    mut task: TracedMaaTask,
+    origin: MaaFactOrigin,
+    contributor: Option<MaaFactTrace>,
+) -> TracedMaaTask {
+    task.provenance.task.origin = origin;
+    if let Some(contributor) = contributor.as_ref() {
+        task.provenance.task = task
+            .provenance
+            .task
+            .clone()
+            .with_contributor(contributor.primary.clone());
+        for source in &contributor.contributors {
+            task.provenance.task = task
+                .provenance
+                .task
+                .clone()
+                .with_contributor(source.clone());
+        }
+    }
+    for trace in task.provenance.fields.values_mut() {
+        trace.origin = origin;
+        if let Some(contributor) = contributor.as_ref() {
+            *trace = trace.clone().with_contributor(contributor.primary.clone());
+            for source in &contributor.contributors {
+                *trace = trace.clone().with_contributor(source.clone());
+            }
+        }
+    }
+    for traces in task.provenance.list_items.values_mut() {
+        for trace in traces {
+            trace.origin = origin;
+            if let Some(contributor) = contributor.as_ref() {
+                *trace = trace.clone().with_contributor(contributor.primary.clone());
+                for source in &contributor.contributors {
+                    *trace = trace.clone().with_contributor(source.clone());
+                }
+            }
+        }
+    }
+    task
+}
+
+fn retain_existing_field_provenance(task: &mut TracedMaaTask) {
+    task.provenance
+        .fields
+        .retain(|field, _| task.data.contains_key(field));
+    task.provenance
+        .list_items
+        .retain(|field, _| task.data.contains_key(field));
+}
+
+fn merge_traced_task(base: &mut TracedMaaTask, child: &RawMaaTask) {
+    for (field, value) in &child.data {
+        base.data.insert(field.clone(), value.clone());
+        if let Some(trace) = child.provenance.fields.get(field) {
+            base.provenance.fields.insert(field.clone(), trace.clone());
+        }
+        base.provenance.list_items.remove(field);
+        if let Some(traces) = child.provenance.list_items.get(field) {
+            base.provenance
+                .list_items
+                .insert(field.clone(), traces.clone());
+        }
+    }
+}
+
+fn validate_core_typed_fields(task_id: &str, task: &Map<String, Value>) -> CliOutcome<()> {
+    if let Some(value) = task.get("baseTask")
+        && !value.is_string()
+    {
+        return Err(malformed_core_field(task_id, "baseTask", "a string"));
+    }
+    for field in CORE_STRING_FIELDS {
+        if let Some(value) = task.get(field)
+            && !value.is_string()
+        {
+            return Err(malformed_core_field(task_id, field, "a string"));
+        }
+    }
+    if let Some(value) = task.get("template") {
+        let valid = value.is_string()
+            || value
+                .as_array()
+                .is_some_and(|items| items.iter().all(Value::is_string));
+        if !valid {
+            return Err(malformed_core_field(
+                task_id,
+                "template",
+                "a string or string array",
+            ));
+        }
+    }
+    for field in GEOMETRY_FIELDS {
+        if let Some(value) = task.get(field) {
+            validate_geometry_field(task_id, field, value)?;
+        }
+    }
+    Ok(())
+}
+
+fn validate_geometry_field(task_id: &str, field: &str, value: &Value) -> CliOutcome<()> {
+    let valid = match value {
+        Value::Array(values) => values.len() == 4 && values.iter().all(Value::is_i64),
+        Value::Object(object) => {
+            let width = object.get("width").or_else(|| object.get("w"));
+            let height = object.get("height").or_else(|| object.get("h"));
+            object.get("x").is_some_and(Value::is_i64)
+                && object.get("y").is_some_and(Value::is_i64)
+                && width.is_some_and(Value::is_i64)
+                && height.is_some_and(Value::is_i64)
+        }
+        _ => false,
+    };
+    if valid {
+        Ok(())
+    } else {
+        Err(malformed_core_field(
+            task_id,
+            field,
+            "four integer coordinates",
+        ))
+    }
+}
+
+fn malformed_core_field(task_id: &str, field: &str, expected: &str) -> CliError {
+    CliError::package_invalid(format!(
+        "MAA task '{task_id}' core field '{field}' must be {expected}"
+    ))
+}
+
+fn missing_fact_provenance(task_id: &str, field: &str) -> CliError {
+    CliError::package_invalid(format!(
+        "MAA task '{task_id}' field '{field}' has no exact fact provenance"
+    ))
+}
+
+fn build_task_facts(
+    task_id: &str,
+    task: &Value,
+    provenance: &MaaTaskProvenance,
+) -> CliOutcome<MaaTaskFacts> {
+    let object = task.as_object().ok_or_else(|| {
+        CliError::package_invalid(format!("compiled MAA task '{task_id}' is not an object"))
+    })?;
+    let task_id_fact = build_fact(&Value::String(task_id.to_string()), &provenance.task)?;
+    let doc = optional_field_fact(task_id, object, provenance, "Doc")?;
+    let algorithm = optional_field_fact(task_id, object, provenance, "algorithm")?;
+    let action = optional_field_fact(task_id, object, provenance, "action")?;
+    let template = optional_field_fact(task_id, object, provenance, "template")?;
+
+    let mut geometry = BTreeMap::new();
+    for field in GEOMETRY_FIELDS {
+        if let Some(fact) = optional_field_fact(task_id, object, provenance, field)? {
+            geometry.insert(field.to_string(), fact);
+        }
+    }
+
+    let mut recognition_parameters = BTreeMap::new();
+    for field in RECOGNITION_FIELDS {
+        if let Some(fact) = optional_field_fact(task_id, object, provenance, field)? {
+            recognition_parameters.insert(field.to_string(), fact);
+        }
+    }
+
+    let mut topology = BTreeMap::new();
+    for field in LIST_FIELDS {
+        let Some(value) = object.get(field) else {
+            continue;
+        };
+        let values = task_list_expressions(value).ok_or_else(|| {
+            CliError::package_invalid(format!(
+                "MAA task '{task_id}' field '{field}' must be a string or string array"
+            ))
+        })?;
+        if values.is_empty() {
+            continue;
+        }
+        let traces = provenance
+            .list_items
+            .get(field)
+            .ok_or_else(|| missing_fact_provenance(task_id, field))?;
+        if values.len() != traces.len() {
+            return Err(missing_fact_provenance(task_id, field));
+        }
+        let facts = values
+            .into_iter()
+            .zip(traces)
+            .map(|(value, trace)| build_fact(&Value::String(value), trace))
+            .collect::<CliOutcome<Vec<_>>>()?;
+        topology.insert(field.to_string(), facts);
+    }
+
+    Ok(MaaTaskFacts {
+        task_id: task_id_fact,
+        doc,
+        algorithm,
+        action,
+        geometry,
+        template,
+        recognition_parameters,
+        topology,
+    })
+}
+
+fn optional_field_fact(
+    task_id: &str,
+    task: &Map<String, Value>,
+    provenance: &MaaTaskProvenance,
+    field: &str,
+) -> CliOutcome<Option<MaaFact>> {
+    let Some(value) = task.get(field) else {
+        return Ok(None);
+    };
+    let trace = provenance
+        .fields
+        .get(field)
+        .ok_or_else(|| missing_fact_provenance(task_id, field))?;
+    build_fact(value, trace).map(Some)
+}
+
+fn build_fact(value: &Value, trace: &MaaFactTrace) -> CliOutcome<MaaFact> {
+    validate_fact_trace(trace)?;
+    let typed = match value {
+        Value::Null => MaaFactValue::Null,
+        Value::Bool(value) => MaaFactValue::Boolean { value: *value },
+        Value::Number(value) => {
+            if let Some(value) = value.as_i64() {
+                MaaFactValue::Integer { value }
+            } else if let Some(value) = value.as_u64() {
+                MaaFactValue::Unsigned { value }
+            } else {
+                MaaFactValue::Number {
+                    value: value.as_f64().ok_or_else(|| {
+                        CliError::package_invalid("MAA numeric fact cannot be represented exactly")
+                    })?,
+                }
+            }
+        }
+        Value::String(value) => MaaFactValue::String {
+            value: value.clone(),
+        },
+        Value::Array(values) => MaaFactValue::Array {
+            items: values
+                .iter()
+                .map(|value| build_fact(value, trace))
+                .collect::<CliOutcome<Vec<_>>>()?,
+        },
+        Value::Object(values) => MaaFactValue::Object {
+            fields: values
+                .iter()
+                .map(|(field, value)| Ok((field.clone(), build_fact(value, trace)?)))
+                .collect::<CliOutcome<BTreeMap<_, _>>>()?,
+        },
+    };
+    Ok(MaaFact {
+        value: typed,
+        source_task_id: trace.primary.source_task_id.clone(),
+        source_json_path: trace.primary.source_json_path.clone(),
+        source_file_sha256: trace.primary.source_file_sha256.clone(),
+        origin: trace.origin,
+        contributing_sources: trace.contributors.clone(),
+    })
+}
+
+fn validate_fact_trace(trace: &MaaFactTrace) -> CliOutcome<()> {
+    validate_fact_source(&trace.primary)?;
+    for source in &trace.contributors {
+        validate_fact_source(source)?;
+    }
+    Ok(())
+}
+
+fn validate_fact_source(source: &MaaFactSource) -> CliOutcome<()> {
+    let path = &source.source_json_path;
+    let path_valid = !path.is_empty()
+        && !path.contains('\\')
+        && !Path::new(path).is_absolute()
+        && path
+            .split('/')
+            .all(|segment| !segment.is_empty() && !matches!(segment, "." | ".."));
+    let hash_valid = source.source_file_sha256.len() == 64
+        && source
+            .source_file_sha256
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte));
+    if source.source_task_id.is_empty() || !path_valid || !hash_valid {
+        return Err(CliError::package_invalid(
+            "MAA fact source path, hash, or task identity cannot be represented exactly",
+        ));
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -1474,6 +2313,165 @@ mod tests {
         .unwrap_err();
 
         assert!(err.message.contains("unresolved references"));
+    }
+
+    #[test]
+    fn typed_facts_preserve_inherited_composed_and_maa_defaulted_origins() {
+        let temp = tempfile::TempDir::new().unwrap();
+        fs::write(
+            temp.path().join("tasks.json"),
+            serde_json::to_vec(&json!({
+                "Base": {
+                    "algorithm": "MatchTemplate",
+                    "template": "Base.png",
+                    "next": ["N", "#self"]
+                },
+                "N": {"next": []},
+                "P": {"next": []},
+                "P@N": {"next": []},
+                "Child": {"baseTask": "Base", "action": "ClickSelf"},
+                "P@Base": {}
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+
+        let graph = compile_maa_task_graph(temp.path()).unwrap();
+        let inherited = graph.task_facts("Child").unwrap();
+        assert_eq!(
+            inherited.algorithm.as_ref().unwrap().origin,
+            MaaFactOrigin::Inherited
+        );
+        assert_eq!(
+            inherited.action.as_ref().unwrap().origin,
+            MaaFactOrigin::Declared
+        );
+        assert_eq!(
+            inherited.template.as_ref().unwrap().origin,
+            MaaFactOrigin::MaaDefaulted
+        );
+        assert_eq!(
+            inherited.topology["next"][0].origin,
+            MaaFactOrigin::Inherited
+        );
+        assert_eq!(
+            inherited.topology["next"][1].origin,
+            MaaFactOrigin::Composed
+        );
+
+        let composed = graph.task_facts("P@Base").unwrap();
+        assert_eq!(
+            composed.template.as_ref().unwrap().origin,
+            MaaFactOrigin::MaaDefaulted
+        );
+        assert!(
+            composed.topology["next"]
+                .iter()
+                .all(|fact| fact.origin == MaaFactOrigin::Composed)
+        );
+    }
+
+    #[test]
+    fn bounded_intake_rejects_root_symlink_depth_files_bytes_and_task_limits() {
+        let root_file = tempfile::NamedTempFile::new().unwrap();
+        let err = compile_maa_task_graph(root_file.path()).unwrap_err();
+        assert!(err.message.contains("must be a directory"));
+
+        #[cfg(unix)]
+        {
+            let root = tempfile::TempDir::new().unwrap();
+            let target = tempfile::TempDir::new().unwrap();
+            std::os::unix::fs::symlink(target.path(), root.path().join("linked")).unwrap();
+            let err = compile_maa_task_graph(root.path()).unwrap_err();
+            assert!(err.message.contains("symbolic link"));
+        }
+
+        let depth_root = tempfile::TempDir::new().unwrap();
+        fs::create_dir_all(depth_root.path().join("one/two")).unwrap();
+        let err = compile_maa_task_graph_with_limits(
+            depth_root.path(),
+            MaaIntakeLimits {
+                max_directory_depth: 1,
+                ..MaaIntakeLimits::PRODUCTION
+            },
+        )
+        .unwrap_err();
+        assert!(err.message.contains("directory depth exceeds 1"));
+
+        let count_root = tempfile::TempDir::new().unwrap();
+        fs::write(count_root.path().join("a.json"), b"{}").unwrap();
+        fs::write(count_root.path().join("b.json"), b"{}").unwrap();
+        let err = compile_maa_task_graph_with_limits(
+            count_root.path(),
+            MaaIntakeLimits {
+                max_json_files: 1,
+                ..MaaIntakeLimits::PRODUCTION
+            },
+        )
+        .unwrap_err();
+        assert!(err.message.contains("JSON file count exceeds 1"));
+
+        let file_bytes_root = tempfile::TempDir::new().unwrap();
+        fs::write(file_bytes_root.path().join("tasks.json"), b"{}").unwrap();
+        let err = compile_maa_task_graph_with_limits(
+            file_bytes_root.path(),
+            MaaIntakeLimits {
+                max_json_file_bytes: 1,
+                ..MaaIntakeLimits::PRODUCTION
+            },
+        )
+        .unwrap_err();
+        assert!(err.message.contains("JSON file bytes exceed 1"));
+
+        let aggregate_root = tempfile::TempDir::new().unwrap();
+        fs::write(aggregate_root.path().join("a.json"), b"{}").unwrap();
+        fs::write(aggregate_root.path().join("b.json"), b"{}").unwrap();
+        let err = compile_maa_task_graph_with_limits(
+            aggregate_root.path(),
+            MaaIntakeLimits {
+                max_aggregate_json_bytes: 3,
+                ..MaaIntakeLimits::PRODUCTION
+            },
+        )
+        .unwrap_err();
+        assert!(err.message.contains("aggregate JSON bytes exceed 3"));
+
+        let task_root = tempfile::TempDir::new().unwrap();
+        fs::write(
+            task_root.path().join("tasks.json"),
+            serde_json::to_vec(&json!({"A": {}, "B": {}})).unwrap(),
+        )
+        .unwrap();
+        let err = compile_maa_task_graph_with_limits(
+            task_root.path(),
+            MaaIntakeLimits {
+                max_raw_tasks: 1,
+                ..MaaIntakeLimits::PRODUCTION
+            },
+        )
+        .unwrap_err();
+        assert!(err.message.contains("raw task count exceeds 1"));
+    }
+
+    #[test]
+    fn malformed_core_typed_fields_fail_loudly() {
+        let malformed = [
+            ("baseTask", json!({"A": {"baseTask": 7}})),
+            ("Doc", json!({"A": {"Doc": []}})),
+            ("algorithm", json!({"A": {"algorithm": false}})),
+            ("action", json!({"A": {"action": 2}})),
+            ("template", json!({"A": {"template": {}}})),
+            ("roi", json!({"A": {"roi": [0, 1, 2]}})),
+            ("rectMove", json!({"A": {"rectMove": [0, 1, 2, "3"]}})),
+        ];
+        for (field, value) in malformed {
+            let err = compile_maa_task_graph_from_value(value).unwrap_err();
+            assert!(
+                err.message.contains(field),
+                "field={field}, error={}",
+                err.message
+            );
+        }
     }
 
     fn at_chain_name(components: usize) -> String {
