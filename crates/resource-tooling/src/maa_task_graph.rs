@@ -33,6 +33,8 @@ const MAX_MAA_JSON_FILES: usize = 16_384;
 const MAX_MAA_JSON_FILE_BYTES: u64 = 67_108_864;
 const MAX_MAA_AGGREGATE_JSON_BYTES: u64 = 1_073_741_824;
 const MAX_MAA_RAW_TASKS: usize = 65_536;
+const MAX_MAA_TASK_FACT_SELECTIONS: usize = 256;
+const MAX_MAA_TASK_FACT_SELECTION_UTF8_BYTES: usize = 65_536;
 
 const CORE_STRING_FIELDS: [&str; 2] = ["algorithm", "action"];
 const GEOMETRY_FIELDS: [&str; 3] = ["roi", "rectMove", "specificRect"];
@@ -229,6 +231,36 @@ impl MaaTaskGraph {
             ))
         })?;
         build_task_facts(task_id, task, provenance)
+    }
+
+    pub fn task_facts_many(&self, task_ids: &[String]) -> CliOutcome<Vec<MaaTaskFacts>> {
+        if task_ids.is_empty() || task_ids.len() > MAX_MAA_TASK_FACT_SELECTIONS {
+            return Err(CliError::usage(format!(
+                "MAA task facts selection requires 1..={MAX_MAA_TASK_FACT_SELECTIONS} task IDs"
+            )));
+        }
+        let selection_bytes = task_ids
+            .iter()
+            .try_fold(0usize, |total, task_id| total.checked_add(task_id.len()));
+        if selection_bytes.is_none_or(|bytes| bytes > MAX_MAA_TASK_FACT_SELECTION_UTF8_BYTES) {
+            return Err(CliError::usage(format!(
+                "MAA task facts selection UTF-8 bytes exceed {MAX_MAA_TASK_FACT_SELECTION_UTF8_BYTES}"
+            )));
+        }
+
+        let mut ordered = task_ids.to_vec();
+        ordered.sort();
+        if let Some(duplicate) = ordered.windows(2).find(|pair| pair[0] == pair[1]) {
+            return Err(CliError::usage(format!(
+                "MAA task facts selection contains duplicate task ID '{}'",
+                duplicate[0]
+            )));
+        }
+
+        ordered
+            .iter()
+            .map(|task_id| self.task_facts(task_id))
+            .collect()
     }
 
     pub(crate) fn tasks(&self) -> &BTreeMap<String, Value> {
@@ -2388,6 +2420,30 @@ mod tests {
             composed.topology["next"]
                 .iter()
                 .all(|fact| fact.origin == MaaFactOrigin::Composed)
+        );
+    }
+
+    #[test]
+    fn multi_task_facts_are_sorted_and_preserve_exact_existing_facts() {
+        let graph = compile_maa_task_graph_from_value(json!({
+            "Base": {
+                "algorithm": "MatchTemplate",
+                "template": "Base.png",
+                "next": ["Stop"]
+            },
+            "Child": {"baseTask": "Base", "action": "ClickSelf"}
+        }))
+        .unwrap();
+        let selected = graph
+            .task_facts_many(&["Child".to_string(), "Base".to_string()])
+            .unwrap();
+
+        assert_eq!(
+            selected,
+            vec![
+                graph.task_facts("Base").unwrap(),
+                graph.task_facts("Child").unwrap()
+            ]
         );
     }
 
