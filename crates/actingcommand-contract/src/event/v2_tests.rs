@@ -841,6 +841,146 @@ fn sanitize_error(payload: EventPayloadDraft) -> SanitizationError {
 }
 
 #[test]
+fn input_intent_execution_plan_is_bounded_and_backward_compatible() {
+    let exact_events = vec![
+        InputExecutionPlanEvent::Down { x: 0, y: 200 },
+        InputExecutionPlanEvent::Move {
+            x: 75,
+            y: 200,
+            delay_before_ms: 100,
+        },
+        InputExecutionPlanEvent::Move {
+            x: 100,
+            y: 200,
+            delay_before_ms: 100,
+        },
+        InputExecutionPlanEvent::Hold { duration_ms: 150 },
+        InputExecutionPlanEvent::Move {
+            x: 100,
+            y: 125,
+            delay_before_ms: 100,
+        },
+        InputExecutionPlanEvent::Move {
+            x: 100,
+            y: 100,
+            delay_before_ms: 100,
+        },
+        InputExecutionPlanEvent::Up,
+    ];
+    let plan = InputExecutionPlanRecord::new(exact_events.clone()).expect("exact Maa 2/0 plan");
+    let event = sanitize(
+        InputPayloadDraft::intent_with_execution_plan(
+            EventAction::InputSwipe,
+            plan,
+            AuditInput::new(),
+        )
+        .into(),
+        90,
+    );
+
+    assert_eq!(event.schema_version(), GLOBAL_EVENT_SCHEMA_VERSION);
+    assert_eq!(event.payload().sensitivity(), Sensitivity::Internal);
+    let EventPayload::Input(InputPayload::Intent(intent)) = event.payload() else {
+        panic!("typed input intent")
+    };
+    let recorded = intent.execution_plan().expect("execution plan");
+    assert_eq!(recorded.version(), INPUT_EXECUTION_PLAN_VERSION);
+    assert_eq!(recorded.profile(), INPUT_EXECUTION_PLAN_PROFILE_MAA_2_0);
+    assert_eq!(recorded.declared_sensitivity(), Sensitivity::Internal);
+    assert_eq!(recorded.events(), exact_events);
+    assert!(matches!(
+        recorded.events()[1],
+        InputExecutionPlanEvent::Move { x: 75, .. }
+    ));
+
+    let encoded = serde_json::to_string(event.payload()).expect("serialize plan payload");
+    let decoded: EventPayload = serde_json::from_str(&encoded).expect("deserialize plan payload");
+    decoded.validate().expect("validate plan payload");
+    let valid_value = serde_json::to_value(event.payload()).expect("plan payload value");
+    let mut invalid_profile = valid_value.clone();
+    invalid_profile["payload"]["data"]["execution_plan"]["profile"] =
+        serde_json::json!("t_squared");
+    serde_json::from_value::<EventPayload>(invalid_profile)
+        .expect("closed typed payload")
+        .validate()
+        .expect_err("unknown profile rejected");
+    let mut invalid_sensitivity = valid_value;
+    invalid_sensitivity["payload"]["data"]["execution_plan"]["declared_sensitivity"] =
+        serde_json::json!("public");
+    serde_json::from_value::<EventPayload>(invalid_sensitivity)
+        .expect("closed typed payload")
+        .validate()
+        .expect_err("non-internal plan rejected");
+
+    let old_payload = sanitize(
+        InputPayloadDraft::intent(EventAction::InputSwipe, AuditInput::new()).into(),
+        91,
+    );
+    let old_json =
+        serde_json::to_string(old_payload.payload()).expect("serialize old input intent");
+    assert!(!old_json.contains("execution_plan"));
+    let old_round_trip: EventPayload =
+        serde_json::from_str(&old_json).expect("deserialize old input intent");
+    let EventPayload::Input(InputPayload::Intent(old_intent)) = old_round_trip else {
+        panic!("old typed input intent")
+    };
+    assert!(old_intent.execution_plan().is_none());
+
+    let mut maximum = Vec::with_capacity(MAX_INPUT_EXECUTION_PLAN_EVENTS);
+    maximum.push(InputExecutionPlanEvent::Down { x: 0, y: 200 });
+    for index in 0..60 {
+        maximum.push(InputExecutionPlanEvent::Move {
+            x: 100,
+            y: 200,
+            delay_before_ms: if index == 59 { 23 } else { 3 },
+        });
+    }
+    maximum.push(InputExecutionPlanEvent::Hold { duration_ms: 150 });
+    for index in 0..60 {
+        maximum.push(InputExecutionPlanEvent::Move {
+            x: 100,
+            y: 100,
+            delay_before_ms: if index == 59 { 23 } else { 3 },
+        });
+    }
+    maximum.push(InputExecutionPlanEvent::Up);
+    assert_eq!(maximum.len(), MAX_INPUT_EXECUTION_PLAN_EVENTS);
+    InputExecutionPlanRecord::new(maximum.clone()).expect("maximum bounded plan");
+    maximum.insert(
+        maximum.len() - 1,
+        InputExecutionPlanEvent::Move {
+            x: 100,
+            y: 100,
+            delay_before_ms: 1,
+        },
+    );
+    assert!(InputExecutionPlanRecord::new(maximum).is_err());
+
+    assert!(
+        serde_json::from_value::<InputExecutionPlanEvent>(serde_json::json!({
+            "kind": "unknown"
+        }))
+        .is_err()
+    );
+    let invalid_order = vec![
+        InputExecutionPlanEvent::Down { x: 0, y: 200 },
+        InputExecutionPlanEvent::Hold { duration_ms: 150 },
+        InputExecutionPlanEvent::Move {
+            x: 100,
+            y: 200,
+            delay_before_ms: 200,
+        },
+        InputExecutionPlanEvent::Move {
+            x: 100,
+            y: 100,
+            delay_before_ms: 200,
+        },
+        InputExecutionPlanEvent::Up,
+    ];
+    assert!(InputExecutionPlanRecord::new(invalid_order).is_err());
+}
+
+#[test]
 fn producer_cannot_select_redaction_policy() {
     let sanitized = sanitize(
         CommandPayloadDraft::received(EventAction::RuntimeStart, audit_all()).into(),

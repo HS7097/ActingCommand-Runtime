@@ -3507,7 +3507,8 @@ fn actinglab_unix_time_glue_stays_out_of_main() {
 
     let caller_files = [
         ("apps/actinglab/src/env_detection.rs", 1_usize),
-        ("apps/actinglab/src/main.rs", 17_usize),
+        ("apps/actinglab/src/main.rs", 16_usize),
+        ("apps/actinglab/src/tests/session_record.rs", 1_usize),
         ("apps/actinglab/src/runtime_session_adapter.rs", 1_usize),
         ("apps/actinglab/src/runtime_stream_adapter.rs", 1_usize),
     ];
@@ -3524,7 +3525,9 @@ fn actinglab_unix_time_glue_stays_out_of_main() {
             expected_calls,
             "Unix time caller count changed in {path}"
         );
-        if path != "apps/actinglab/src/main.rs" {
+        if path != "apps/actinglab/src/main.rs"
+            && path != "apps/actinglab/src/tests/session_record.rs"
+        {
             let root_import = source
                 .split_once(";\n")
                 .map(|(prefix, _)| prefix)
@@ -3545,7 +3548,7 @@ fn actinglab_unix_time_glue_stays_out_of_main() {
     assert_eq!(call_count, 20, "Unix time caller closure changed");
     assert_eq!(
         format!("{:x}", Sha256::digest(caller_closure.as_bytes())),
-        "4439d79913c18139087e796db816788d505e08397545d443ada01f7e8fa35622",
+        "deb2351efe8036b14c7ef2979206337bac09ac6ea7858b83993bbaae71fed904",
         "Unix time caller source changed"
     );
 }
