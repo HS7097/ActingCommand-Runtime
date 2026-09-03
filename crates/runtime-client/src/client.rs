@@ -20,9 +20,9 @@ use actingcommand_contract::{
     RuntimeEvidenceExportRequest, RuntimeForwardProjectionRequest, RuntimeInfo,
     RuntimeMaintenanceQuery, RuntimeMonitorInstanceStatus, RuntimeMonitorPolicy,
     RuntimeMonitorRegistryStatus, RuntimeOperation, RuntimePlanningDocument,
-    RuntimePlanningDocumentKind, RuntimeReceipt, RuntimeRequest, RuntimeResult,
-    RuntimeStrategicReportRequest, RuntimeSubscriptionRequest, TaskId, TaskOutcome, TaskPayload,
-    TaskSemanticFact, TerminalEvent,
+    RuntimePlanningDocumentKind, RuntimePolicyInputIdentity, RuntimeReceipt, RuntimeRequest,
+    RuntimeResult, RuntimeStrategicReportRequest, RuntimeSubscriptionRequest, TaskId, TaskOutcome,
+    TaskPayload, TaskSemanticFact, TerminalEvent,
 };
 use actingcommand_policy::{
     EvaluationFacts, EvaluationResources, EvaluationTime, ForwardProjection,
@@ -1392,6 +1392,21 @@ impl RuntimeClient {
                 })
             }
             _ => Err(self.unexpected_result("prepare_strategic_report")),
+        }
+    }
+
+    pub fn project_policy_input_identity(
+        &self,
+        as_of_ledger_position: u64,
+    ) -> RuntimeClientResult<RuntimePolicyInputIdentity> {
+        match self.execute(
+            "project_policy_input_identity",
+            RuntimeOperation::ProjectPolicyInputIdentity {
+                as_of_ledger_position,
+            },
+        )? {
+            RuntimeResult::PolicyInputIdentityProjected { identity } => Ok(identity),
+            _ => Err(self.unexpected_result("project_policy_input_identity")),
         }
     }
 

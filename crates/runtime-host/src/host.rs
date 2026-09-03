@@ -72,14 +72,14 @@ use actingcommand_contract::{
     RuntimeEventQueryPage, RuntimeEventQueryPageRequest, RuntimeEvidenceExportRequest,
     RuntimeEvidenceExportSummary, RuntimeEvidenceScreenshotCounts, RuntimeInfo,
     RuntimeInstanceStatus, RuntimeMaintenanceQuery, RuntimeMonitorPolicy, RuntimeOperation,
-    RuntimePayloadDraft, RuntimePlanningDocument, RuntimePlanningDocumentKind, RuntimeReceipt,
-    RuntimeReceiptState, RuntimeReleaseSet, RuntimeRequest, RuntimeResult,
-    RuntimeStrategicPlanResult, RuntimeSubscriptionRequest, SchedulerPayloadDraft,
-    SchedulingDisposition, SchedulingEffectCondition, SchedulingEffectEvidence,
-    SchedulingOutcomeDeclaration, SchedulingOutcomeIdentity, SchedulingOutcomeProjection,
-    StatePayload, StatePayloadDraft, TaskEntryRecognitionPhase, TaskEntryTargetDisposition, TaskId,
-    TaskOutcome, TaskPayload, TaskPayloadDraft, TaskSemanticFact, TerminalEvent,
-    ValidatedRuntimeRequest,
+    RuntimePayloadDraft, RuntimePlanningDocument, RuntimePlanningDocumentKind,
+    RuntimePolicyInputIdentity, RuntimeReceipt, RuntimeReceiptState, RuntimeReleaseSet,
+    RuntimeRequest, RuntimeResult, RuntimeStrategicPlanResult, RuntimeSubscriptionRequest,
+    SchedulerPayloadDraft, SchedulingDisposition, SchedulingEffectCondition,
+    SchedulingEffectEvidence, SchedulingOutcomeDeclaration, SchedulingOutcomeIdentity,
+    SchedulingOutcomeProjection, StatePayload, StatePayloadDraft, TaskEntryRecognitionPhase,
+    TaskEntryTargetDisposition, TaskId, TaskOutcome, TaskPayload, TaskPayloadDraft,
+    TaskSemanticFact, TerminalEvent, ValidatedRuntimeRequest,
 };
 use actingcommand_device::{CaptureBackendName, Frame, SegmentedSwipeEvent};
 use actingcommand_execution_kernel::{
@@ -5187,6 +5187,9 @@ impl HostShared {
             }),
             RuntimeOperation::Status => self.control_plane_status(),
             RuntimeOperation::ProjectInterface { request } => self.project_interface(request),
+            RuntimeOperation::ProjectPolicyInputIdentity {
+                as_of_ledger_position,
+            } => self.project_policy_input_identity(*as_of_ledger_position),
             RuntimeOperation::MonitorStatus => self.monitor_status(),
             RuntimeOperation::ConfigureMonitor {
                 instance_alias,
@@ -6664,6 +6667,48 @@ impl HostShared {
             result: RuntimeResult::StrategicPlanPrepared {
                 plan: Box::new(plan),
             },
+        })
+    }
+
+    fn project_policy_input_identity(
+        &self,
+        as_of_ledger_position: u64,
+    ) -> Result<OperationSuccess, RequestFailure> {
+        let identity = (|| {
+            if as_of_ledger_position == 0 {
+                return Err(RuntimeHostError::request(
+                    "policy_input_position_unavailable",
+                    "project_policy_input_identity",
+                    RuntimeErrorCode::InvalidRequest,
+                ));
+            }
+            let _outcome_gate = lock(
+                &self.policy_outcome_gate,
+                "snapshot_policy_input_identity_outcome_state",
+            )?;
+            let outcome_keys = lock(&self.policy, "read_policy_input_identity_outcome_keys")?
+                .outcome_key_snapshot()?;
+            let _fact_gate = lock(&self.fact_write_gate, "project_policy_input_identity_facts")?;
+            let (facts, _) = self.project_authoritative_policy_inputs_under_gate(
+                "project_policy_input_identity",
+                &outcome_keys,
+                Some(as_of_ledger_position),
+            )?;
+            RuntimePolicyInputIdentity::new(facts.ledger_position, facts.fact_snapshot_id).map_err(
+                |_| {
+                    RuntimeHostError::fatal(
+                        "policy_input_identity_invalid",
+                        "project_policy_input_identity",
+                        RuntimeErrorCode::RuntimeFatal,
+                    )
+                },
+            )
+        })()
+        .map_err(planning_request_failure)?;
+        Ok(OperationSuccess {
+            state: RuntimeReceiptState::Completed,
+            terminal: None,
+            result: RuntimeResult::PolicyInputIdentityProjected { identity },
         })
     }
 
