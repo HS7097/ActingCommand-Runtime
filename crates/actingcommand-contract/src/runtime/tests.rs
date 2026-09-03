@@ -1228,7 +1228,7 @@ fn agent_dispatcher_operations_require_agent_adapter_origin() {
 }
 
 #[test]
-fn publish_fact_requires_v2_agent_adapter_request() {
+fn publish_fact_and_policy_input_identity_require_v3_agent_adapter_request() {
     let record = crate::FactRecord {
         scope: crate::FactScope::Server {
             server_id: "fixture-server-a".to_owned(),
@@ -1270,17 +1270,64 @@ fn publish_fact_requires_v2_agent_adapter_request() {
     let encoded = serde_json::to_value(&request).expect("fact publication request JSON");
     assert_eq!(
         encoded["schema_version"],
-        "actingcommand.runtime.request.v2"
+        "actingcommand.runtime.request.v3"
     );
     assert_eq!(encoded["operation"]["operation"], "publish_fact");
     assert_eq!(encoded["operation"]["record"]["key"], "env.ui_theme");
 
-    let mut v1 = encoded;
-    v1["schema_version"] = serde_json::json!("actingcommand.runtime.request.v1");
-    let v1: RuntimeRequest = serde_json::from_value(v1).expect("v1 request wire shape");
+    for version in [
+        "actingcommand.runtime.request.v1",
+        "actingcommand.runtime.request.v2",
+    ] {
+        let mut older = encoded.clone();
+        older["schema_version"] = serde_json::json!(version);
+        let older: RuntimeRequest =
+            serde_json::from_value(older).expect("older request wire shape");
+        assert_eq!(
+            older
+                .validate()
+                .expect_err("older schema must fail loud")
+                .code(),
+            "unsupported_request_schema"
+        );
+    }
+
+    let identity_operation = RuntimeOperation::ProjectPolicyInputIdentity {
+        as_of_ledger_position: 17,
+    };
     assert_eq!(
-        v1.validate().expect_err("v1 must fail loud").code(),
-        "unsupported_request_schema"
+        format!("{identity_operation:?}"),
+        "RuntimeOperation::ProjectPolicyInputIdentity(<ledger-position>)"
+    );
+    let identity_request = RuntimeRequest::new(
+        ids.mint_request_id().expect("identity request"),
+        ids.mint_correlation_id().expect("identity correlation"),
+        None,
+        EventActor::Agent,
+        EventSource::Adapter,
+        1,
+        identity_operation.clone(),
+    )
+    .expect("agent policy input identity request");
+    let identity_json =
+        serde_json::to_value(&identity_request).expect("policy input identity request JSON");
+    assert_eq!(
+        identity_json["schema_version"],
+        RUNTIME_REQUEST_SCHEMA_VERSION
+    );
+    assert_eq!(
+        identity_json["operation"]["operation"],
+        "project_policy_input_identity"
+    );
+    assert_eq!(identity_json["operation"]["as_of_ledger_position"], 17);
+    assert_eq!(
+        RuntimeOperation::ProjectPolicyInputIdentity {
+            as_of_ledger_position: 0,
+        }
+        .validate()
+        .expect_err("zero policy input position must fail loud")
+        .code(),
+        "invalid_policy_input_position"
     );
 
     for (actor, source) in [
@@ -1300,6 +1347,21 @@ fn publish_fact_requires_v2_agent_adapter_request() {
                 operation.clone(),
             )
             .expect_err("only Agent/Adapter may publish facts")
+            .code(),
+            "invalid_agent_dispatcher_origin"
+        );
+        let ids = issuer();
+        assert_eq!(
+            RuntimeRequest::new(
+                ids.mint_request_id().expect("identity request"),
+                ids.mint_correlation_id().expect("identity correlation"),
+                None,
+                actor,
+                source,
+                1,
+                identity_operation.clone(),
+            )
+            .expect_err("only Agent/Adapter may project policy input identity")
             .code(),
             "invalid_agent_dispatcher_origin"
         );
@@ -1323,6 +1385,24 @@ fn publish_fact_requires_v2_agent_adapter_request() {
     assert_eq!(result_json["kind"], "fact_published");
     assert_eq!(
         serde_json::from_value::<RuntimeResult>(result_json).expect("fact publication result"),
+        result
+    );
+
+    let identity =
+        RuntimePolicyInputIdentity::new(17, format!("snapshot:policy-fact:{}", "a".repeat(64)))
+            .expect("policy input identity");
+    let result = RuntimeResult::PolicyInputIdentityProjected {
+        identity: identity.clone(),
+    };
+    let result_json = serde_json::to_value(&result).expect("policy input identity result JSON");
+    assert_eq!(result_json["kind"], "policy_input_identity_projected");
+    assert_eq!(result_json["identity"]["ledger_position"], 17);
+    assert_eq!(
+        result_json["identity"]["fact_snapshot_id"],
+        identity.fact_snapshot_id()
+    );
+    assert_eq!(
+        serde_json::from_value::<RuntimeResult>(result_json).expect("policy input identity result"),
         result
     );
 }
