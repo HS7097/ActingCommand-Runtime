@@ -51,9 +51,24 @@ impl Drop for ChildGuard {
     fn drop(&mut self) {
         let reporting_failure = thread::panicking();
         let released = match self.0.try_wait() {
-            Ok(Some(status)) => Ok(status),
-            Ok(None) => self.0.kill().and_then(|()| self.0.wait()),
-            Err(error) => Err(error),
+            Ok(Some(status)) => {
+                if reporting_failure {
+                    eprintln!("actingd child state before cleanup: exited ({status})");
+                }
+                Ok(status)
+            }
+            Ok(None) => {
+                if reporting_failure {
+                    eprintln!("actingd child state before cleanup: running");
+                }
+                self.0.kill().and_then(|()| self.0.wait())
+            }
+            Err(error) => {
+                if reporting_failure {
+                    eprintln!("actingd child state before cleanup: probe-error ({error})");
+                }
+                self.0.kill().and_then(|()| self.0.wait())
+            }
         };
         if !reporting_failure {
             return;
@@ -71,7 +86,9 @@ impl Drop for ChildGuard {
             Ok(_) if !stderr.is_empty() => {
                 eprintln!("actingd stderr after test failure:\n{stderr}");
             }
-            Ok(_) => {}
+            Ok(_) => {
+                eprintln!("actingd stderr after test failure:\n<empty>");
+            }
             Err(error) => {
                 eprintln!("ERROR failed to read actingd stderr after test failure: {error}");
             }
