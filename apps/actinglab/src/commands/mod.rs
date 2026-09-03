@@ -1,3 +1,3 @@
-mod capabilities;
+pub(super) mod capabilities;
 
-pub(crate) use capabilities::{command_cap, command_capabilities};
+pub(crate) use capabilities::command_capabilities;
