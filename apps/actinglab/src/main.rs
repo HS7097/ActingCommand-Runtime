@@ -4,7 +4,7 @@
 
 use actingcommand_contract::{
     ApplicationLifecycleAction, CLI_SCHEMA_VERSION, EventActor, EventSource, LabError as CliError,
-    LabErrorClass as ErrorKind, LedgerProjection,
+    LabErrorClass as ErrorKind,
 };
 use actingcommand_device::{
     AdbPathSource, CaptureBackendChoice, CaptureBackendName, Frame, InputBackend, PixelFormat,
@@ -12,8 +12,8 @@ use actingcommand_device::{
     vendor_stdio_session_diagnostic,
 };
 use actingcommand_lab::{
-    InstanceConfig, PackageValidationResponse, SemanticLedgerContext, SemanticRequestContext,
-    UserConfig, derive_absolute_coordinate_rect_from_match, project_semantic_payload,
+    InstanceConfig, PackageValidationResponse, SemanticLedgerContext, UserConfig,
+    derive_absolute_coordinate_rect_from_match,
 };
 #[cfg(test)]
 use actingcommand_ledger::{
@@ -33,6 +33,7 @@ use cli_result::CliResult;
 #[cfg(test)]
 use commands::session_layer_capability_contract;
 use commands::{command_capabilities, run_capabilities};
+use commands::{finish_semantic_result_with_ledger, semantic_ledger_context};
 use device_runtime_config::{DeviceRuntimeConfig, device_config, effective_capture_backend_choice};
 use flag_args::FlagArgs;
 #[rustfmt::skip] use flag_values::{
@@ -3698,22 +3699,6 @@ fn run_locate(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
     }))
 }
 
-fn semantic_ledger_context(
-    command: &'static str,
-    global: &GlobalOptions,
-    args: &[String],
-) -> SemanticLedgerContext {
-    SemanticLedgerContext::new(SemanticRequestContext {
-        command: command.to_string(),
-        instance: global
-            .instance
-            .clone()
-            .unwrap_or_else(|| "default".to_string()),
-        arguments: args.to_vec(),
-        dry_run: global.dry_run,
-    })
-}
-
 fn env_resolved_json(values: &[env_detection::ResolvedEnvValue]) -> Value {
     Value::Array(
         values
@@ -3794,64 +3779,6 @@ fn record_env_resolved(
         "keys": env_resolved_json(values)
     }))?;
     Ok(())
-}
-
-fn finish_semantic_result_with_ledger(
-    global: &GlobalOptions,
-    ctx: SemanticLedgerContext,
-    result: CliOutcome<Value>,
-) -> CliOutcome<Value> {
-    match result {
-        Ok(payload) => finish_semantic_payload_with_ledger(global, ctx, payload),
-        Err(error) => return_semantic_error_with_ledger(global, ctx, error),
-    }
-}
-
-fn finish_semantic_payload_with_ledger(
-    _global: &GlobalOptions,
-    mut ctx: SemanticLedgerContext,
-    mut payload: Value,
-) -> CliOutcome<Value> {
-    if let Some(object) = payload.as_object_mut() {
-        object
-            .entry("req_id")
-            .or_insert_with(|| json!(ctx.req_id.clone()));
-        object
-            .entry("instance")
-            .or_insert_with(|| json!(ctx.instance.clone()));
-    }
-    let records = ctx.take_records();
-    payload["trace_record_count"] = json!(records.len());
-    project_semantic_payload(
-        payload,
-        LedgerProjection::skipped("isolated_offline_projection"),
-    )
-}
-
-fn return_semantic_error_with_ledger(
-    _global: &GlobalOptions,
-    mut ctx: SemanticLedgerContext,
-    error: CliError,
-) -> CliOutcome<Value> {
-    let mut payload = json!({
-        "req_id": ctx.req_id.clone(),
-        "instance": ctx.instance.clone(),
-        "command": ctx.command.clone(),
-        "error": error.code.clone(),
-        "state": "failed",
-        "blocked_error": {
-            "code": error.code.clone(),
-            "message": error.message.clone(),
-            "blocked_by": error.blocked_by.clone()
-        },
-        "details": error.details.clone().unwrap_or(Value::Null)
-    });
-    payload["trace_record_count"] = json!(ctx.take_records().len());
-    payload = project_semantic_payload(
-        payload,
-        LedgerProjection::skipped("isolated_offline_projection"),
-    )?;
-    Err(error.with_details(payload))
 }
 
 fn run_tap_target(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
