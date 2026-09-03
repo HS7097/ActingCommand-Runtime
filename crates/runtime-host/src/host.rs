@@ -7045,7 +7045,8 @@ impl HostShared {
             })?;
             let (report_reference, prepared_artifact) =
                 self.prepare_or_reuse_strategic_report(&bytes)?;
-            let proposal = build_strategy_proposal(&projection, report_reference.clone())?;
+            let proposal =
+                build_strategy_proposal(&projection, loaded.sources(), report_reference.clone())?;
             let preview = proposal
                 .as_ref()
                 .map(|proposal| {
