@@ -36,7 +36,10 @@ pub use env_detection::*;
 pub use lab_run::{target_evaluations_stable_for_wait, validate_lab_package_bytes};
 pub use lab_run_api::*;
 pub use ledger_port::*;
-pub use maa_task_graph::{MaaTaskGraph, MaaTaskGraphStats, compile_maa_task_graph};
+pub use maa_task_graph::{
+    MaaFact, MaaFactOrigin, MaaFactSource, MaaFactValue, MaaTaskFacts, MaaTaskGraph,
+    MaaTaskGraphStats, compile_maa_task_graph,
+};
 pub use package_api::*;
 pub use package_build::PackageBuildCatalog;
 pub use ports::*;
