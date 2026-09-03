@@ -709,7 +709,7 @@ fn help_data() -> Value {
                 "--maa-tasks <dir>"
             ],
             "resource compile-maa": [
-                "--maa-tasks <dir>"
+                "--maa-tasks <dir>", "--task <id>", "--facts"
             ],
             "session record build-task": [
                 "--locale <locale>"
