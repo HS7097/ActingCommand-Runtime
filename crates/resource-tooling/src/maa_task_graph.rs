@@ -1066,11 +1066,10 @@ fn collect_maa_task_files(root: &Path, limits: MaaIntakeLimits) -> CliOutcome<Ve
     let root_metadata = fs::symlink_metadata(root).map_err(|err| {
         CliError::package_invalid(format!("failed to inspect MAA task root: {err}"))
     })?;
-    if root_metadata.file_type().is_symlink() {
-        return Err(CliError::package_invalid(
-            "MAA task root must not be a symbolic link",
-        ));
-    }
+    reject_symbolic_link(
+        root_metadata.file_type().is_symlink(),
+        "the selected task root",
+    )?;
     if !root_metadata.is_dir() {
         return Err(CliError::package_invalid(
             "MAA task root must be a directory",
@@ -1109,9 +1108,7 @@ fn collect_maa_task_files_inner(
         })?;
         if file_type.is_symlink() {
             let relative = normalized_source_json_path(task_root, &path)?;
-            return Err(CliError::package_invalid(format!(
-                "MAA task intake encountered symbolic link: {relative}"
-            )));
+            reject_symbolic_link(true, &relative)?;
         }
         if file_type.is_dir() {
             let next_depth = depth
@@ -1203,6 +1200,16 @@ fn normalized_source_json_path(root: &Path, path: &Path) -> CliOutcome<String> {
         return Err(CliError::package_invalid("MAA source JSON path is empty"));
     }
     Ok(segments.join("/"))
+}
+
+fn reject_symbolic_link(is_symbolic_link: bool, relative_path: &str) -> CliOutcome<()> {
+    if is_symbolic_link {
+        Err(CliError::package_invalid(format!(
+            "MAA task intake encountered symbolic link: {relative_path}"
+        )))
+    } else {
+        Ok(())
+    }
 }
 
 fn merge_object(base: &mut Map<String, Value>, child: &Map<String, Value>) {
@@ -2383,6 +2390,11 @@ mod tests {
             let target = tempfile::TempDir::new().unwrap();
             std::os::unix::fs::symlink(target.path(), root.path().join("linked")).unwrap();
             let err = compile_maa_task_graph(root.path()).unwrap_err();
+            assert!(err.message.contains("symbolic link"));
+        }
+        #[cfg(windows)]
+        {
+            let err = reject_symbolic_link(true, "linked").unwrap_err();
             assert!(err.message.contains("symbolic link"));
         }
 
