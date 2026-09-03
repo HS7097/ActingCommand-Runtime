@@ -2584,6 +2584,11 @@ fn help_lists_required_external_authoring_metadata() {
         Some("--maa-tasks <dir>")
     );
     assert_eq!(
+        help.pointer("/command_options/resource compile-maa/1")
+            .and_then(Value::as_str),
+        Some("--task <id> (repeatable with --facts)")
+    );
+    assert_eq!(
         help.pointer("/command_options/session record build-task/0")
             .and_then(Value::as_str),
         Some("--locale <locale>")
