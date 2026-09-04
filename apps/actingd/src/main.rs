@@ -18,6 +18,7 @@ use actingcommand_runtime_client::{RuntimeClient, RuntimeClientConfig, RuntimeCl
 use actingcommand_runtime_host::{
     PolicyAdmissionContext, PolicyCadence, PolicyCycle, PolicyDispatchAdmission,
     PolicyRecomputeKind, PolicyRunContext, PolicyTrigger, RuntimeHost, RuntimeHostError,
+    RuntimeLifecycleFailure, RuntimeLifecycleFailureStage,
 };
 use config::{PolicyBootstrap, RuntimeAssembly, ScheduledExecutionMode};
 use std::collections::{BTreeMap, BTreeSet};
@@ -62,7 +63,13 @@ fn run(arguments: Vec<std::ffi::OsString>) -> Result<(), ActingdError> {
     let initial_policy_cycle = match initial_policy_cycle {
         Ok(cycle) => cycle,
         Err(error) => {
-            return match host.close() {
+            let recorded = error.record_lifecycle_failure(
+                &host,
+                RuntimeLifecycleFailureStage::PolicyInitialization,
+            );
+            let closed = host.close();
+            recorded?;
+            return match closed {
                 Ok(()) => Err(error),
                 Err(close_error) => Err(ActingdError::runtime(close_error)),
             };
@@ -348,31 +355,46 @@ fn monitor_policy(
     let host = Arc::new(host);
     let policy = Arc::new(policy);
     let control = Arc::new(PolicyDriverControl::default());
-    let client = RuntimeClient::connect(
-        RuntimeClientConfig::new(&policy.state_root, EventActor::Agent, EventSource::Adapter)
-            .with_io_timeout(POLICY_CLIENT_IO_TIMEOUT),
-    )
-    .map_err(ActingdError::client)?;
-    let initial_page = client
-        .query_event_page(
-            EventQuery::default(),
-            ProjectionProfile::Concise,
-            RuntimeEventQueryPageRequest::new(1, None)
-                .map_err(|_| ActingdError::process("policy_subscription_cursor_invalid"))?,
+    let setup = (|| {
+        let client = RuntimeClient::connect(
+            RuntimeClientConfig::new(&policy.state_root, EventActor::Agent, EventSource::Adapter)
+                .with_io_timeout(POLICY_CLIENT_IO_TIMEOUT),
         )
         .map_err(ActingdError::client)?;
-    let mut cursor = SubscriptionCursor {
-        after_sequence: initial_page.snapshot_ledger_position(),
+        let initial_page = client
+            .query_event_page(
+                EventQuery::default(),
+                ProjectionProfile::Concise,
+                RuntimeEventQueryPageRequest::new(1, None)
+                    .map_err(|_| ActingdError::process("policy_subscription_cursor_invalid"))?,
+            )
+            .map_err(ActingdError::client)?;
+        let cursor = SubscriptionCursor {
+            after_sequence: initial_page.snapshot_ledger_position(),
+        };
+        let driver = thread::Builder::new()
+            .name("actingd-policy-driver".to_string())
+            .spawn({
+                let host = Arc::clone(&host);
+                let policy = Arc::clone(&policy);
+                let control = Arc::clone(&control);
+                move || drive_policy(host, policy, control, initial_cycle)
+            })
+            .map_err(|_| ActingdError::process("policy_driver_spawn_failed"))?;
+        Ok((client, cursor, driver))
+    })();
+    let (client, mut cursor, driver) = match setup {
+        Ok(setup) => setup,
+        Err(error) => {
+            let error: ActingdError = error;
+            let recorded =
+                error.record_lifecycle_failure(&host, RuntimeLifecycleFailureStage::PolicyMonitor);
+            let closed = close_policy_host(host);
+            recorded?;
+            closed?;
+            return Err(error);
+        }
     };
-    let driver = thread::Builder::new()
-        .name("actingd-policy-driver".to_string())
-        .spawn({
-            let host = Arc::clone(&host);
-            let policy = Arc::clone(&policy);
-            let control = Arc::clone(&control);
-            move || drive_policy(host, policy, control, initial_cycle)
-        })
-        .map_err(|_| ActingdError::process("policy_driver_spawn_failed"))?;
 
     let monitor_result = loop {
         if driver.is_finished() {
@@ -407,6 +429,12 @@ fn monitor_policy(
         }
     };
 
+    let recorded = match &monitor_result {
+        Err(error) => {
+            error.record_lifecycle_failure(&host, RuntimeLifecycleFailureStage::PolicyMonitor)
+        }
+        Ok(()) => Ok(()),
+    };
     let shutdown_result = control.shutdown();
     let driver_result = match driver.join() {
         Ok(result) => result,
@@ -415,14 +443,28 @@ fn monitor_policy(
     drop(client);
     drop(policy);
     drop(control);
-    let close_result = match Arc::try_unwrap(host) {
+    let close_result = close_policy_host(host);
+    let result = if close_result.as_ref().err().is_some_and(|error| {
+        error
+            .runtime
+            .as_ref()
+            .is_some_and(|error| error.operation() == "append_runtime_lifecycle_observed")
+    }) {
+        close_result
+    } else {
+        combine_monitor_results(monitor_result, shutdown_result, driver_result, close_result)
+    };
+    recorded.and(result)
+}
+
+fn close_policy_host(host: Arc<RuntimeHost>) -> Result<(), ActingdError> {
+    match Arc::try_unwrap(host) {
         Ok(host) => host.close().map_err(ActingdError::runtime),
         Err(host) => {
             drop(host);
             Err(ActingdError::process("policy_driver_reference_leaked"))
         }
-    };
-    combine_monitor_results(monitor_result, shutdown_result, driver_result, close_result)
+    }
 }
 
 fn combine_monitor_results(
@@ -1109,6 +1151,27 @@ struct ActingdError {
 }
 
 impl ActingdError {
+    fn record_lifecycle_failure(
+        &self,
+        host: &RuntimeHost,
+        stage: RuntimeLifecycleFailureStage,
+    ) -> Result<(), ActingdError> {
+        let failure = if let Some(error) = &self.runtime {
+            RuntimeLifecycleFailure::Host(error)
+        } else if let Some(error) = &self.client {
+            RuntimeLifecycleFailure::Client {
+                code: error.code(),
+                operation: error.operation(),
+                fatal: error.is_fatal(),
+                runtime_code: error.projection().map(|projection| projection.code),
+            }
+        } else {
+            RuntimeLifecycleFailure::Process { code: self.code }
+        };
+        host.record_lifecycle_failure(stage, failure)
+            .map_err(ActingdError::runtime)
+    }
+
     const fn config(code: &'static str) -> Self {
         Self {
             code,

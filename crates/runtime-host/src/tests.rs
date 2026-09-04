@@ -14146,6 +14146,84 @@ fn accelerated_48h_replay_consumes_runtime_owned_counts_and_runtime_budget() {
 }
 
 #[test]
+fn detection_planning_closed_activity_window_remains_nonfatal() {
+    let root = TempDir::new().expect("tempdir");
+    let host = RuntimeHost::start(
+        config(&root),
+        Arc::new(FakeProvider::one(
+            POLICY_INSTANCE_ALIAS,
+            instance_id(),
+            Arc::new(FakeState::default()),
+        )),
+    )
+    .expect("detection runtime host");
+    host.activate_policy_catalog(&detection_policy_sources(1))
+        .expect("activate detection catalog");
+
+    for (now_unix_ms, window_open, snapshot_id) in [
+        (
+            POLICY_NOW_UNIX_MS - 5 * 3_600_000,
+            false,
+            "snapshot:detection-closed",
+        ),
+        (POLICY_NOW_UNIX_MS, true, "snapshot:detection-open"),
+    ] {
+        let mut facts = detection_policy_facts(false, snapshot_id);
+        for fact in &mut facts.facts {
+            fact.observed_at_unix_ms = now_unix_ms;
+            fact.expires_at_unix_ms = Some(now_unix_ms + 60_000);
+        }
+        for outcome in &mut facts.outcomes {
+            outcome.observed_at_unix_ms = now_unix_ms;
+        }
+        let mut resources = policy_resources();
+        for pool in &mut resources.pools {
+            pool.observed_at_unix_ms = now_unix_ms;
+        }
+        let cycle = host
+            .evaluate_policy_cycle_with_test_inputs(
+                &facts,
+                &resources,
+                EvaluationTime {
+                    unix_ms: now_unix_ms,
+                    monotonic_ms: now_unix_ms,
+                },
+                1,
+                PolicyTrigger::FactsChanged,
+            )
+            .expect("activity eligibility must not terminate detection evaluation");
+        assert!(cycle.pending_dispatch_intents.is_empty());
+        assert!(
+            cycle
+                .evaluation
+                .as_ref()
+                .expect("full detection evaluation")
+                .decisions
+                .iter()
+                .any(|decision| {
+                    decision.task_id == "fixture.detect"
+                        && decision
+                            .detection_suggestions
+                            .iter()
+                            .any(|suggestion| suggestion.fact_key == "detection.required")
+                })
+        );
+        if window_open {
+            assert_eq!(cycle.detection_planning_signals.len(), 1);
+            let signal = &cycle.detection_planning_signals[0];
+            assert_eq!(signal.kind, PolicyPlanningSignalKind::DetectionReserved);
+            let budget = signal.detection_budget.as_ref().expect("detection budget");
+            assert_eq!(budget.dispatch_used, 1);
+            assert_eq!(budget.runtime_reserved_ms, 10_000);
+        } else {
+            assert!(cycle.detection_planning_signals.is_empty());
+        }
+        assert!(host.fatal_error().expect("runtime fatal state").is_none());
+    }
+    host.close().expect("close detection runtime");
+}
+
+#[test]
 fn detection_quota_is_persistent_informational_and_never_starves_ordinary_work() {
     let root = TempDir::new().expect("tempdir");
     let registered_id = instance_id();
