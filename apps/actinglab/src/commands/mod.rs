@@ -1,4 +1,5 @@
 pub(super) mod capabilities;
+pub(super) mod device_commands;
 pub(super) mod environment_report;
 pub(super) mod path_io;
 pub(super) mod semantic_ledger;
@@ -6,6 +7,17 @@ pub(super) mod semantic_ledger;
 #[cfg(test)]
 pub(crate) use capabilities::session_layer_capability_contract;
 pub(crate) use capabilities::{command_capabilities, run_capabilities};
+pub(crate) use device_commands::{
+    CaptureFreshProbeReport, CaptureFreshProbeStatus, CaptureFreshnessExpectation,
+    StreamInputRelayAction, capture_diagnosis_recovery_json, capture_for_command,
+    capture_fresh_probe_report, capture_fresh_probe_report_json, open_cli_runtime_input_proxy,
+    reject_legacy_session_routing, run_capture, run_direct_input, run_direct_touch,
+    run_stream_input_relay, run_touch_probe,
+};
+#[cfg(test)]
+pub(crate) use device_commands::{
+    DirectInputCommand, DirectTouchCommand, classify_capture_freshness, instance_health_status,
+};
 #[cfg(test)]
 pub(crate) use environment_report::env_needs_detection_json;
 pub(crate) use environment_report::{
