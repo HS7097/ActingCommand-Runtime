@@ -28,6 +28,10 @@ use actingcommand_recognition_pack::{
 };
 use actingcommand_resource_tooling::{canonical_game, canonical_server};
 use actingcommand_runtime_client::{RuntimeClient, RuntimeClientConfig};
+use cli_information::{
+    help_data, run_config, run_devices, run_doctor, run_list, run_paths, run_schema, run_status,
+    version_data,
+};
 use cli_parse::parse_invocation;
 #[cfg(test)]
 use cli_result::CliErrorExitCode;
@@ -97,8 +101,7 @@ use instance_resolution::{resolve_instance_id, resolve_instance_id_for_flags};
 #[cfg(test)]
 use runtime_endpoint::RuntimeEndpointChannel;
 use runtime_endpoint::{
-    runtime_endpoint_check, runtime_endpoint_policy, runtime_endpoint_policy_json,
-    runtime_tcp_available,
+    runtime_endpoint_policy, runtime_endpoint_policy_json, runtime_tcp_available,
 };
 use safe_file_stem::safe_file_stem;
 use serde_json::{Value, json};
@@ -125,11 +128,13 @@ use std::time::Duration;
 #[cfg(test)]
 use std::time::Instant;
 use unix_time::current_unix_ms;
-use user_config_keys::{config_get, config_set};
-use user_config_store::{config_path, read_user_config, write_user_config};
+use user_config_store::read_user_config;
+#[cfg(test)]
+use user_config_store::write_user_config;
 use zip::{ZipWriter, write::FileOptions};
 use zip_error::{zip_io_error, zip_write_error};
 
+mod cli_information;
 mod cli_parse;
 mod cli_result;
 mod commands;
@@ -314,239 +319,6 @@ fn execute(invocation: &Invocation) -> CliOutcome<Value> {
 }
 
 use cli_result::human_summary;
-fn help_data() -> Value {
-    json!({
-        "usage": "actinglab [global-options] <command> [args]",
-        "global_options": [
-            "--json",
-            "--run-root <path>",
-            "--instance <id>",
-            "--instances <id,id,...>",
-            "--profile <name>",
-            "--resource-root <path>",
-            "--game <game>",
-            "--server <server>",
-            "--runtime-endpoint <url>",
-            "--capture-backend <auto|auto-fastest|adb|droidcast_raw|nemu_ipc>",
-            "--backend <auto|auto-fastest|adb|droidcast_raw|nemu_ipc> (alias of --capture-backend)",
-            "--touch-backend <auto|auto-fastest|maatouch|minitouch|adb_shell_input>",
-            "--require-session",
-            "--dry-run",
-            "--verbose",
-            "--quiet",
-            "--version"
-        ],
-        "command_options": {
-            "resource convert": [
-                "--operations <dir>",
-                "--out <dir>",
-                "--maa-tasks <dir>"
-            ],
-            "resource compile-maa": [
-                "--maa-tasks <dir>", "--task <id> (repeatable with --facts)", "--facts"
-            ],
-            "session record build-task": [
-                "--locale <locale>"
-            ]
-        },
-        "compatibility_notes": {
-            "recognize --target": "target output includes width, height, matched_rect, and the shared evaluation object"
-        },
-        "commands": command_capabilities()
-    })
-}
-
-fn version_data() -> Value {
-    json!({
-        "name": "actinglab",
-        "cli_version": env!("CARGO_PKG_VERSION"),
-        "runtime_version": RUNTIME_VERSION,
-        "schema_version": SCHEMA_VERSION
-    })
-}
-
-fn run_paths(global: &GlobalOptions) -> CliOutcome<Value> {
-    let config = read_user_config()?;
-    let adb = resolved_adb_json(&config);
-    Ok(json!({
-        "config_path": config_path()?.display().to_string(),
-        "run_root": global.run_root.as_ref().map(|path| path_string(path)).or(config.run_root),
-        "resource_root": global.resource_root.as_ref().map(|path| path_string(path)).or(config.resource_root),
-        "runtime_endpoint": global.runtime_endpoint.clone().or(config.runtime_endpoint),
-        "adb": adb
-    }))
-}
-
-fn run_config(sub: &str, args: &[String]) -> CliOutcome<Value> {
-    match sub {
-        "get" => {
-            let config = read_user_config()?;
-            if args.is_empty() {
-                serde_json::to_value(config)
-                    .map_err(|err| CliError::usage(format!("failed to serialize config: {err}")))
-            } else {
-                let key = &args[0];
-                Ok(json!({
-                    "key": key,
-                    "value": config_get(&config, key)?
-                }))
-            }
-        }
-        "set" => {
-            if args.len() < 2 {
-                return Err(CliError::usage("config set requires <key> <value>"));
-            }
-            let mut config = read_user_config()?;
-            config_set(&mut config, &args[0], &args[1])?;
-            write_user_config(&config)?;
-            Ok(json!({
-                "config_path": config_path()?.display().to_string(),
-                "key": args[0],
-                "value": args[1]
-            }))
-        }
-        _ => Err(CliError::usage(format!("unknown config command: {sub}"))),
-    }
-}
-
-fn run_doctor(global: &GlobalOptions) -> CliOutcome<Value> {
-    let config = read_user_config()?;
-    let adb_resolution = resolve_adb_path(config.adb_path.as_deref());
-    let runtime_endpoint = effective_runtime_endpoint(global, &config);
-    let resource_root = effective_resource_root(global, &config);
-    let run_root = effective_run_root(global, &config);
-    let mut checks = Vec::new();
-
-    checks.push(json!({
-        "name": "config",
-        "ok": config_path()?.exists(),
-        "path": config_path()?.display().to_string()
-    }));
-    let mut adb_check = resolved_adb_json_from(adb_resolution);
-    adb_check["name"] = json!("adb");
-    checks.push(adb_check);
-    let runtime_endpoint_check = runtime_endpoint
-        .as_ref()
-        .map(|endpoint| runtime_endpoint_check(endpoint));
-    checks.push(json!({
-        "name": "runtime_endpoint",
-        "ok": runtime_endpoint_check.as_ref().and_then(|check| check.get("ok")).and_then(Value::as_bool).unwrap_or(false),
-        "endpoint": runtime_endpoint,
-        "policy": runtime_endpoint_check
-    }));
-    checks.push(json!({
-        "name": "resource_root",
-        "ok": resource_root.as_ref().map(|path| path.is_dir()).unwrap_or(false),
-        "path": resource_root.as_ref().map(|path| path_string(path))
-    }));
-    checks.push(json!({
-        "name": "run_root",
-        "ok": run_root.as_ref().and_then(|path| path.parent()).map(|path| path.exists()).unwrap_or(false),
-        "path": run_root.as_ref().map(|path| path_string(path))
-    }));
-    Ok(json!({
-        "checks": checks,
-        "note": "doctor is diagnostic; runtime/device unavailability is reported without blocking offline commands"
-    }))
-}
-
-fn run_status(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
-    let flags = FlagArgs::parse(args)?;
-    reject_legacy_session_routing(&flags)?;
-    require_runtime(global).map(|data| {
-        json!({
-            "state": "running",
-            "runtime": data,
-        })
-    })
-}
-
-fn run_devices(_global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
-    let flags = FlagArgs::parse(args)?;
-    reject_legacy_session_routing(&flags)?;
-    flags.expect_positionals("devices", 0)?;
-    Err(CliError::not_implemented(
-        "actinglab_device_authority_retired",
-        "direct ADB device discovery was retired from ActingLab; query the resident Runtime",
-    ))
-}
-
-fn run_schema(args: &[String]) -> CliOutcome<Value> {
-    let kind = if args.is_empty() {
-        "all".to_string()
-    } else {
-        args.join(" ")
-    };
-    let data = match kind.as_str() {
-        "task" => json!({
-            "schema_version": "0.1",
-            "required": ["schema_version", "id", "steps"],
-            "step_action_types": ["complete", "click"]
-        }),
-        "control" => json!({
-            "schema_version": "Lab-1y.control.v1",
-            "execution_modes": ["navigable_route", "recognize_only", "in_page_guard"],
-            "capture_backend": ["auto", "auto-fastest", "adb", "droidcast_raw", "nemu_ipc"],
-            "touch_backend": ["auto", "auto-fastest", "maatouch", "minitouch", "adb_shell_input"],
-            "frame_store": {
-                "similarity_threshold": "default 0.95; CLI --similarity-threshold overrides control",
-                "tier1_ratio": "warning watermark; CLI --tier1-ratio",
-                "tier2_ratio": "temp-disk spill watermark; CLI --tier2-ratio",
-                "tier3_ratio": "alarm watermark; CLI --tier3-ratio",
-                "hysteresis_ratio": "release margin for active watermarks; CLI --hysteresis-ratio",
-                "max_mem_bytes": "optional lab frame-store cap; CLI --max-mem-bytes",
-                "os_reserve_bytes": "physical-memory reserve left for the OS; CLI --os-reserve-bytes",
-                "flush_workspace_reserve_bytes": "required byte gap between tier2 and tier3; CLI --flush-workspace-reserve-bytes",
-                "tier3_mode": "synchronous graceful partial-output failure; no runtime pause/resume wait is performed in this CLI"
-            },
-            "rules": [
-                "CLI capture backend overrides control capture_backend",
-                "CLI frame-store flags override control frame_store values",
-                "trusted_execution is provenance and does not block semantic actions",
-                "unresolved or placeholder coordinates are not executable"
-            ]
-        }),
-        "pack" => json!({
-            "schema_version": ["0.1", "0.3", "0.4", "0.5"],
-            "default_match_metric": "ccorr_normed",
-            "supported_match_metric": ["ccorr_normed", "ccoeff_normed"]
-        }),
-        "package" => json!({
-            "schema_version": "0.2",
-            "required_paths": ["<module>/manifest.json", "<module>/operations/<task_id>/task.json"],
-            "security": ["no zip-slip", "no executable scripts", "hashes verified when declared"]
-        }),
-        "ledger" => json!({
-            "schema_version": "actingcommand.ledger.query.v0.1",
-            "commands": ["show", "events", "receipts", "diagnose", "evidence"],
-            "filters": ["--run-id", "--req-id", "--instance-id"],
-            "read_only": true,
-            "device_io": false
-        }),
-        "all" => json!({
-            "schemas": ["task", "control", "pack", "package", "ledger", "observe", "do", "ensure", "wait", "lab receipt"]
-        }),
-        other => lab2_cli::command_schema(other)
-            .ok_or_else(|| CliError::usage(format!("unknown schema kind: {other}")))?,
-    };
-    Ok(data)
-}
-
-fn run_list(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
-    let kind = args.first().map(String::as_str).unwrap_or("commands");
-    match kind {
-        "commands" => Ok(json!({ "commands": command_capabilities() })),
-        "targets" | "pages" | "tasks" | "bundles" | "controls" => {
-            let config = read_user_config()?;
-            let root = effective_resource_root(global, &config).ok_or_else(|| {
-                CliError::usage("list requires --resource-root or config resource_root")
-            })?;
-            list_resource_kind(&root, kind)
-        }
-        other => Err(CliError::usage(format!("unknown list kind: {other}"))),
-    }
-}
-
 fn run_ledger(sub: &str, _global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
     let _ = FlagArgs::parse(args)?;
     match sub {
