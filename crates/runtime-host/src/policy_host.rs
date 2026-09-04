@@ -2184,7 +2184,15 @@ fn preview_detection_planning_signals(
             {
                 continue;
             }
-            let (_, window_id) = active_activity_window(profile, now_unix_ms)?;
+            let (_, window_id) = match active_activity_window(profile, now_unix_ms) {
+                Ok(window) => window,
+                Err(error)
+                    if !error.is_fatal() && error.code() == "policy_activity_window_closed" =>
+                {
+                    continue;
+                }
+                Err(error) => return Err(error),
+            };
             staged.ensure_loaded(store, instance_id, &window_id)?;
             let (kind, budget) =
                 match staged.preview(profile, catalog.catalog_hash(), instance_id, now_unix_ms) {
