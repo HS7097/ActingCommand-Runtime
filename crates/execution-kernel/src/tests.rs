@@ -32,6 +32,52 @@ struct FakeState {
     panic_capture: bool,
 }
 
+#[test]
+fn kernel_close_preserves_each_failed_instance() {
+    let state = Arc::new(Mutex::new(FakeState {
+        fail_close: true,
+        ..FakeState::default()
+    }));
+    let first = instance();
+    let second = instance();
+    let kernel = kernel(
+        Arc::clone(&state),
+        &[
+            ("node.a", first, "private-a"),
+            ("node.b", second, "private-b"),
+        ],
+    );
+    kernel
+        .input("node.a", InputAction::Reset)
+        .expect("first input");
+    kernel
+        .input("node.b", InputAction::Reset)
+        .expect("second input");
+    let mut error = kernel.close().expect_err("two close failures");
+    assert_eq!(error.code(), "input_backend_close_failed");
+    assert!(error.is_fatal());
+    assert_eq!(error.secondary_code(), None);
+    let outcomes = error.take_closed_sessions();
+    assert_eq!(outcomes.len(), 2);
+    assert!(outcomes.iter().any(|(id, _)| *id == first));
+    assert!(outcomes.iter().any(|(id, _)| *id == second));
+    assert!(
+        outcomes
+            .iter()
+            .all(|(_, result)| result.code() == error.code())
+    );
+    assert!(!Arc::ptr_eq(
+        outcomes[0].1.recorded_event(),
+        outcomes[1].1.recorded_event()
+    ));
+    assert!(error.take_closed_sessions().is_empty());
+    kernel.close().expect("already drained");
+    drop(kernel);
+    let state = state.lock().expect("state");
+    assert_eq!(state.input_calls, 2);
+    assert_eq!(state.input_closes, 2);
+}
+
 struct FakeProvider {
     state: Arc<Mutex<FakeState>>,
     instances: BTreeMap<String, ResolvedExecutionInstance>,

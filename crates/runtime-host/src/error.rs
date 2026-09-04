@@ -1,26 +1,47 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 use actingcommand_contract::{
-    CleanupCauseDraft, DiagnosticDetailDraft, RuntimeErrorCode, RuntimeErrorProjection,
+    CleanupCauseDraft, DiagnosticDetailDraft, EventId, InstanceId, RuntimeErrorCode,
+    RuntimeErrorProjection,
 };
-use actingcommand_execution_kernel::ExecutionKernelError;
+use actingcommand_execution_kernel::{ExecutionKernelError, ExecutionLifecycleCause};
 use actingcommand_runtime_state::RuntimeStateError;
 use actingcommand_scheduler::SchedulerError;
 use std::error::Error;
 use std::fmt;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 
 pub type RuntimeHostResult<T> = Result<T, RuntimeHostError>;
 
-#[derive(Clone, PartialEq, Eq)]
+#[derive(Clone)]
 pub struct RuntimeHostError {
     code: &'static str,
     operation: &'static str,
     projection: RuntimeErrorProjection,
+    pub(crate) lifecycle: Box<RuntimeHostFailureContext>,
+}
+
+#[derive(Clone, Default)]
+pub(crate) struct RuntimeHostFailureContext {
     diagnostic_detail: Option<Box<DiagnosticDetailDraft>>,
     cleanup_cause: Option<Box<CleanupCauseDraft>>,
+    pub(crate) recorded_event: Arc<OnceLock<EventId>>,
+    pub(crate) causes: Vec<ExecutionLifecycleCause>,
+    pub(crate) instance_id: Option<InstanceId>,
+    pub(crate) native_detail: Option<Box<actingcommand_contract::LifecycleNativeDetail>>,
 }
+
+impl PartialEq for RuntimeHostError {
+    fn eq(&self, other: &Self) -> bool {
+        self.code == other.code
+            && self.operation == other.operation
+            && self.projection == other.projection
+            && self.lifecycle.diagnostic_detail == other.lifecycle.diagnostic_detail
+            && self.lifecycle.cleanup_cause == other.lifecycle.cleanup_cause
+    }
+}
+impl Eq for RuntimeHostError {}
 
 impl RuntimeHostError {
     pub const fn code(&self) -> &'static str {
@@ -40,14 +61,14 @@ impl RuntimeHostError {
     }
 
     pub(crate) fn diagnostic_detail(&self) -> Option<&DiagnosticDetailDraft> {
-        self.diagnostic_detail.as_deref()
+        self.lifecycle.diagnostic_detail.as_deref()
     }
 
     pub(crate) fn cleanup_cause(&self) -> Option<&CleanupCauseDraft> {
-        self.cleanup_cause.as_deref()
+        self.lifecycle.cleanup_cause.as_deref()
     }
 
-    pub(crate) const fn fatal(
+    pub(crate) fn fatal(
         code: &'static str,
         operation: &'static str,
         runtime_code: RuntimeErrorCode,
@@ -56,12 +77,11 @@ impl RuntimeHostError {
             code,
             operation,
             projection: RuntimeErrorProjection::new(runtime_code, true),
-            diagnostic_detail: None,
-            cleanup_cause: None,
+            lifecycle: Box::default(),
         }
     }
 
-    pub(crate) const fn request(
+    pub(crate) fn request(
         code: &'static str,
         operation: &'static str,
         runtime_code: RuntimeErrorCode,
@@ -70,12 +90,11 @@ impl RuntimeHostError {
             code,
             operation,
             projection: RuntimeErrorProjection::new(runtime_code, false),
-            diagnostic_detail: None,
-            cleanup_cause: None,
+            lifecycle: Box::default(),
         }
     }
 
-    pub(crate) const fn with_projection(
+    pub(crate) fn with_projection(
         code: &'static str,
         operation: &'static str,
         projection: RuntimeErrorProjection,
@@ -84,8 +103,7 @@ impl RuntimeHostError {
             code,
             operation,
             projection,
-            diagnostic_detail: None,
-            cleanup_cause: None,
+            lifecycle: Box::default(),
         }
     }
 
@@ -109,12 +127,18 @@ impl RuntimeHostError {
             code: error.code(),
             operation,
             projection: RuntimeErrorProjection::new(runtime_code, error.is_fatal()),
-            diagnostic_detail: error.diagnostic_detail().cloned().map(Box::new),
-            cleanup_cause: error.cleanup_cause().cloned().map(Box::new),
+            lifecycle: Box::new(RuntimeHostFailureContext {
+                diagnostic_detail: error.diagnostic_detail().cloned().map(Box::new),
+                cleanup_cause: error.cleanup_cause().cloned().map(Box::new),
+                recorded_event: Arc::clone(error.recorded_event()),
+                causes: error.lifecycle_causes().to_vec(),
+                instance_id: error.instance_id(),
+                native_detail: None,
+            }),
         }
     }
 
-    pub(crate) const fn state(error: &RuntimeStateError) -> Self {
+    pub(crate) fn state(error: &RuntimeStateError) -> Self {
         if error.is_fatal() {
             Self::fatal(
                 error.code(),
@@ -128,6 +152,17 @@ impl RuntimeHostError {
                 RuntimeErrorCode::InvalidRequest,
             )
         }
+    }
+
+    pub(crate) fn with_native_detail(mut self, detail: String) -> Self {
+        let mut end = detail.len().min(1024);
+        while !detail.is_char_boundary(end) {
+            end -= 1;
+        }
+        self.lifecycle.native_detail = Some(Box::new(
+            actingcommand_contract::LifecycleNativeDetail::new(&detail[..end], end < detail.len()),
+        ));
+        self
     }
 }
 

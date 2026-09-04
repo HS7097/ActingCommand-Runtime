@@ -816,6 +816,400 @@ fn validate_diagnostic_detail_token(
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LifecycleFailurePhase {
+    Reset,
+    ChildStop,
+    StderrReaderJoin,
+    UnexpectedStderr,
+    Retirement,
+}
+
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LifecycleNativeDetail {
+    text: String,
+    truncated: bool,
+    declared_sensitivity: Sensitivity,
+}
+
+impl std::fmt::Debug for LifecycleNativeDetail {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("LifecycleNativeDetail")
+            .field("truncated", &self.truncated)
+            .field("declared_sensitivity", &self.declared_sensitivity)
+            .finish_non_exhaustive()
+    }
+}
+
+impl LifecycleNativeDetail {
+    pub fn new(text: impl Into<String>, truncated: bool) -> Self {
+        Self {
+            text: text.into(),
+            truncated,
+            declared_sensitivity: Sensitivity::Sensitive,
+        }
+    }
+
+    pub fn text(&self) -> &str {
+        &self.text
+    }
+    pub const fn truncated(&self) -> bool {
+        self.truncated
+    }
+
+    fn validate(&self) -> Result<(), SanitizationError> {
+        let lower = self.text.to_ascii_lowercase();
+        if self.text.is_empty()
+            || self.text.len() > MAX_DIAGNOSTIC_DETAIL_MESSAGE_BYTES
+            || self
+                .text
+                .chars()
+                .any(|c| c.is_control() && !matches!(c, '\n' | '\r' | '\t'))
+            || self.declared_sensitivity < Sensitivity::Sensitive
+            || [
+                "authorization:",
+                "bearer ",
+                "password=",
+                "password:",
+                "secret=",
+                "secret:",
+                "token=",
+                "token:",
+            ]
+            .iter()
+            .any(|marker| lower.contains(marker))
+        {
+            return Err(SanitizationError::new(
+                "invalid_lifecycle_native_detail",
+                "native_detail",
+            ));
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LifecycleCauseDraft {
+    phase: LifecycleFailurePhase,
+    source: String,
+    code: String,
+    severity: CleanupCauseSeverity,
+    detail: Option<DiagnosticDetailDraft>,
+    native_detail: Option<LifecycleNativeDetail>,
+}
+
+impl LifecycleCauseDraft {
+    pub fn new(
+        phase: LifecycleFailurePhase,
+        source: impl Into<String>,
+        code: impl Into<String>,
+        severity: CleanupCauseSeverity,
+    ) -> Self {
+        Self {
+            phase,
+            source: source.into(),
+            code: code.into(),
+            severity,
+            detail: None,
+            native_detail: None,
+        }
+    }
+    pub fn with_detail(mut self, detail: Option<DiagnosticDetailDraft>) -> Self {
+        self.detail = detail;
+        self
+    }
+    pub fn with_native_detail(mut self, detail: LifecycleNativeDetail) -> Self {
+        self.native_detail = Some(detail);
+        self
+    }
+    pub const fn severity(&self) -> CleanupCauseSeverity {
+        self.severity
+    }
+    pub const fn phase(&self) -> LifecycleFailurePhase {
+        self.phase
+    }
+    fn sanitize(self) -> Result<LifecycleCauseRecord, SanitizationError> {
+        let record = LifecycleCauseRecord {
+            phase: self.phase,
+            source: self.source,
+            code: self.code,
+            severity: self.severity,
+            detail: self
+                .detail
+                .map(DiagnosticDetailDraft::sanitize)
+                .transpose()?,
+            native_detail: self.native_detail,
+        };
+        record.validate()?;
+        Ok(record)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LifecycleCauseRecord {
+    phase: LifecycleFailurePhase,
+    source: String,
+    code: String,
+    severity: CleanupCauseSeverity,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    detail: Option<DiagnosticDetailRecord>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    native_detail: Option<LifecycleNativeDetail>,
+}
+
+impl LifecycleCauseRecord {
+    pub const fn phase(&self) -> LifecycleFailurePhase {
+        self.phase
+    }
+    pub fn source(&self) -> &str {
+        &self.source
+    }
+    pub fn code(&self) -> &str {
+        &self.code
+    }
+    pub const fn severity(&self) -> CleanupCauseSeverity {
+        self.severity
+    }
+    pub const fn detail(&self) -> Option<&DiagnosticDetailRecord> {
+        self.detail.as_ref()
+    }
+    pub const fn native_detail(&self) -> Option<&LifecycleNativeDetail> {
+        self.native_detail.as_ref()
+    }
+    fn validate(&self) -> Result<(), SanitizationError> {
+        validate_diagnostic_detail_token(&self.source, "lifecycle_source")?;
+        validate_diagnostic_detail_token(&self.code, "lifecycle_code")?;
+        if let Some(detail) = &self.detail {
+            detail.validate()?;
+        }
+        if let Some(detail) = &self.native_detail {
+            detail.validate()?;
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RuntimeLifecycleFailureDraft {
+    record: RuntimeLifecycleFailureRecord,
+    primary_detail: Option<DiagnosticDetailDraft>,
+    cleanup_cause: Option<CleanupCauseDraft>,
+    cause: Option<LifecycleCauseDraft>,
+}
+
+impl RuntimeLifecycleFailureDraft {
+    pub fn new(
+        owner_epoch: OwnerEpoch,
+        stage: impl Into<String>,
+        source: impl Into<String>,
+        code: impl Into<String>,
+    ) -> Self {
+        Self {
+            record: RuntimeLifecycleFailureRecord {
+                owner_epoch,
+                stage: stage.into(),
+                source: source.into(),
+                code: code.into(),
+                operation: None,
+                fatal: None,
+                runtime_code: None,
+                entered_event_id: None,
+                instance_id: None,
+                primary_detail: None,
+                cleanup_cause: None,
+                cause: None,
+                native_detail: None,
+            },
+            primary_detail: None,
+            cleanup_cause: None,
+            cause: None,
+        }
+    }
+    pub fn with_operation(mut self, operation: Option<&str>) -> Self {
+        self.record.operation = operation.map(str::to_owned);
+        self
+    }
+    pub fn with_projection(
+        mut self,
+        fatal: Option<bool>,
+        code: Option<crate::RuntimeErrorCode>,
+    ) -> Self {
+        self.record.fatal = fatal;
+        self.record.runtime_code = code;
+        self
+    }
+    pub fn with_entered_event_id(mut self, id: Option<EventId>) -> Self {
+        self.record.entered_event_id = id;
+        self
+    }
+    pub fn with_instance_id(mut self, id: Option<InstanceId>) -> Self {
+        self.record.instance_id = id;
+        self
+    }
+    pub fn with_primary_detail(mut self, detail: Option<DiagnosticDetailDraft>) -> Self {
+        self.primary_detail = detail;
+        self
+    }
+    pub fn with_native_detail(mut self, detail: Option<LifecycleNativeDetail>) -> Self {
+        self.record.native_detail = detail;
+        self
+    }
+    pub fn with_cleanup_cause(mut self, cause: Option<CleanupCauseDraft>) -> Self {
+        self.cleanup_cause = cause;
+        self
+    }
+    pub fn with_cause(mut self, cause: Option<LifecycleCauseDraft>) -> Self {
+        self.cause = cause;
+        self
+    }
+    fn sanitize(mut self) -> Result<RuntimeLifecycleFailureRecord, SanitizationError> {
+        self.record.primary_detail = self
+            .primary_detail
+            .map(DiagnosticDetailDraft::sanitize)
+            .transpose()?;
+        self.record.cleanup_cause = self
+            .cleanup_cause
+            .map(CleanupCauseDraft::sanitize)
+            .transpose()?;
+        self.record.cause = self.cause.map(LifecycleCauseDraft::sanitize).transpose()?;
+        self.record.validate()?;
+        Ok(self.record)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RuntimeLifecycleFailureRecord {
+    owner_epoch: OwnerEpoch,
+    stage: String,
+    source: String,
+    code: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    operation: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    fatal: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    runtime_code: Option<crate::RuntimeErrorCode>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    entered_event_id: Option<EventId>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    instance_id: Option<InstanceId>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    primary_detail: Option<DiagnosticDetailRecord>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    native_detail: Option<LifecycleNativeDetail>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    cleanup_cause: Option<CleanupCauseRecord>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    cause: Option<LifecycleCauseRecord>,
+}
+
+impl RuntimeLifecycleFailureRecord {
+    pub const fn owner_epoch(&self) -> OwnerEpoch {
+        self.owner_epoch
+    }
+    pub fn stage(&self) -> &str {
+        &self.stage
+    }
+    pub fn source(&self) -> &str {
+        &self.source
+    }
+    pub fn code(&self) -> &str {
+        &self.code
+    }
+    pub fn operation(&self) -> Option<&str> {
+        self.operation.as_deref()
+    }
+    pub const fn fatal(&self) -> Option<bool> {
+        self.fatal
+    }
+    pub const fn runtime_code(&self) -> Option<crate::RuntimeErrorCode> {
+        self.runtime_code
+    }
+    pub const fn entered_event_id(&self) -> Option<EventId> {
+        self.entered_event_id
+    }
+    pub const fn instance_id(&self) -> Option<InstanceId> {
+        self.instance_id
+    }
+    pub const fn primary_detail(&self) -> Option<&DiagnosticDetailRecord> {
+        self.primary_detail.as_ref()
+    }
+    pub const fn native_detail(&self) -> Option<&LifecycleNativeDetail> {
+        self.native_detail.as_ref()
+    }
+    pub const fn cleanup_cause(&self) -> Option<&CleanupCauseRecord> {
+        self.cleanup_cause.as_ref()
+    }
+    pub const fn cause(&self) -> Option<&LifecycleCauseRecord> {
+        self.cause.as_ref()
+    }
+    fn validate(&self) -> Result<(), SanitizationError> {
+        validate_diagnostic_detail_stage(&self.stage)?;
+        validate_diagnostic_detail_token(&self.source, "lifecycle_source")?;
+        validate_diagnostic_detail_token(&self.code, "lifecycle_code")?;
+        if let Some(operation) = &self.operation {
+            validate_diagnostic_detail_token(operation, "lifecycle_operation")?;
+        }
+        if let Some(detail) = &self.primary_detail {
+            detail.validate()?;
+        }
+        if let Some(detail) = &self.native_detail {
+            detail.validate()?;
+        }
+        if let Some(cause) = &self.cleanup_cause {
+            cause.validate()?;
+        }
+        if let Some(cause) = &self.cause {
+            cause.validate()?;
+        }
+        Ok(())
+    }
+    fn sensitivity(&self) -> Sensitivity {
+        let mut sensitivity = Sensitivity::Internal;
+        if let Some(native) = &self.native_detail {
+            sensitivity = sensitivity.max(native.declared_sensitivity);
+        }
+        for detail in [
+            self.primary_detail.as_ref(),
+            self.cleanup_cause
+                .as_ref()
+                .and_then(CleanupCauseRecord::detail),
+            self.cause.as_ref().and_then(LifecycleCauseRecord::detail),
+        ]
+        .into_iter()
+        .flatten()
+        {
+            sensitivity = sensitivity.max(detail.declared_sensitivity());
+        }
+        if let Some(native) = self
+            .cause
+            .as_ref()
+            .and_then(LifecycleCauseRecord::native_detail)
+        {
+            sensitivity = sensitivity.max(native.declared_sensitivity);
+        }
+        sensitivity
+    }
+    fn public_summary(&self) -> Self {
+        let mut result = self.clone();
+        result.primary_detail = None;
+        result.native_detail = None;
+        if let Some(cause) = &mut result.cleanup_cause {
+            cause.detail = None;
+        }
+        if let Some(cause) = &mut result.cause {
+            cause.detail = None;
+            cause.native_detail = None;
+        }
+        result
+    }
+}
+
 fn validate_diagnostic_detail_stage(value: &str) -> Result<(), SanitizationError> {
     let segments = value.split('.').collect::<Vec<_>>();
     if value.len() > MAX_DIAGNOSTIC_DETAIL_TOKEN_BYTES
@@ -904,6 +1298,8 @@ pub struct DiagnosticOutcomePayload {
     detail: Option<DiagnosticDetailRecord>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     cleanup_cause: Option<Box<CleanupCauseRecord>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    lifecycle_failure: Option<Box<RuntimeLifecycleFailureRecord>>,
     audit: SanitizedAudit,
 }
 
@@ -2975,6 +3371,10 @@ trait PayloadDetail {
     fn cleanup_cause(&self) -> Option<&CleanupCauseRecord> {
         None
     }
+
+    fn lifecycle_failure(&self) -> Option<&RuntimeLifecycleFailureRecord> {
+        None
+    }
 }
 
 macro_rules! common_detail_accessors {
@@ -3188,6 +3588,9 @@ impl OutcomePayload {
 }
 
 impl DiagnosticOutcomePayload {
+    pub fn lifecycle_failure(&self) -> Option<&RuntimeLifecycleFailureRecord> {
+        self.lifecycle_failure.as_deref()
+    }
     pub const fn diagnostic_code(&self) -> DiagnosticCode {
         self.diagnostic_code
     }
@@ -3472,6 +3875,9 @@ impl PayloadDetail for OutcomePayload {
 }
 
 impl PayloadDetail for DiagnosticOutcomePayload {
+    fn lifecycle_failure(&self) -> Option<&RuntimeLifecycleFailureRecord> {
+        self.lifecycle_failure.as_deref()
+    }
     fn action(&self) -> EventAction {
         self.action
     }
@@ -3883,6 +4289,7 @@ struct DiagnosticOutcomeDraft {
     effect_disposition: EffectDisposition,
     detail: Option<DiagnosticDetailDraft>,
     cleanup_cause: Option<Box<CleanupCauseDraft>>,
+    lifecycle_failure: Option<Box<RuntimeLifecycleFailureDraft>>,
     audit: AuditInput,
 }
 
@@ -5327,6 +5734,7 @@ impl DiagnosticOutcomeDraft {
             effect_disposition,
             detail: None,
             cleanup_cause: None,
+            lifecycle_failure: None,
             audit,
         }
     }
@@ -5344,6 +5752,7 @@ impl DiagnosticOutcomeDraft {
             effect_disposition,
             detail: Some(detail),
             cleanup_cause: None,
+            lifecycle_failure: None,
             audit,
         }
     }
@@ -5362,6 +5771,7 @@ impl DiagnosticOutcomeDraft {
             effect_disposition,
             detail,
             cleanup_cause: cleanup_cause.map(Box::new),
+            lifecycle_failure: None,
             audit,
         }
     }
@@ -5381,6 +5791,10 @@ impl DiagnosticOutcomeDraft {
             cleanup_cause: self
                 .cleanup_cause
                 .map(|cause| cause.sanitize().map(Box::new))
+                .transpose()?,
+            lifecycle_failure: self
+                .lifecycle_failure
+                .map(|failure| failure.sanitize().map(Box::new))
                 .transpose()?,
             audit: self.audit.sanitize(fingerprinter)?,
         })
@@ -5704,6 +6118,23 @@ impl RuntimeLifecycleDraft {
 pub struct RuntimePayloadDraft(RuntimeDraftKind);
 
 impl RuntimePayloadDraft {
+    pub fn failed_with_lifecycle(
+        diagnostic_code: DiagnosticCode,
+        effect: EffectDisposition,
+        detail: DiagnosticDetailDraft,
+        lifecycle: RuntimeLifecycleFailureDraft,
+        audit: AuditInput,
+    ) -> Self {
+        let mut outcome = DiagnosticOutcomeDraft::new_with_detail(
+            EventAction::RuntimeAction,
+            diagnostic_code,
+            effect,
+            detail,
+            audit,
+        );
+        outcome.lifecycle_failure = Some(Box::new(lifecycle));
+        Self(RuntimeDraftKind::Failed(outcome))
+    }
     pub fn lifecycle_observed(
         owner_epoch: OwnerEpoch,
         phase: RuntimeLifecyclePhase,
@@ -7938,6 +8369,9 @@ impl EventPayload {
     pub fn sensitivity(&self) -> Sensitivity {
         let detail = self.family_payload().detail();
         let mut sensitivity = detail.audit().sensitivity();
+        if let Some(lifecycle) = detail.lifecycle_failure() {
+            sensitivity = sensitivity.max(lifecycle.sensitivity());
+        }
         if detail.diagnostic_code().is_some() {
             sensitivity = sensitivity.max(Sensitivity::Internal);
         }
@@ -7989,6 +8423,15 @@ impl EventPayload {
 
     pub fn validate(&self) -> Result<(), SanitizationError> {
         let detail = self.family_payload().detail();
+        if let Some(lifecycle) = detail.lifecycle_failure() {
+            if self.event_type() != EventType::RuntimeFailed {
+                return Err(SanitizationError::new(
+                    "invalid_lifecycle_failure_owner",
+                    "lifecycle_failure",
+                ));
+            }
+            lifecycle.validate()?;
+        }
         detail.audit().validate()?;
         if let Some(diagnostic_detail) = detail.diagnostic_detail() {
             diagnostic_detail.validate()?;
@@ -8176,6 +8619,9 @@ impl EventPayload {
             event_type,
             action: detail.action(),
             effect_disposition: detail.effect_disposition(),
+            lifecycle_failure: detail
+                .lifecycle_failure()
+                .map(|failure| Box::new(failure.public_summary())),
             cleanup_cause: detail.cleanup_cause().map(|cause| {
                 Box::new(CleanupCauseRecord {
                     code: cause.code.clone(),
@@ -8587,6 +9033,8 @@ pub struct PublicPayload {
     effect_disposition: Option<EffectDisposition>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     cleanup_cause: Option<Box<CleanupCauseRecord>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    lifecycle_failure: Option<Box<RuntimeLifecycleFailureRecord>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     segment_index: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -8724,6 +9172,9 @@ pub struct PublicPayload {
 }
 
 impl PublicPayload {
+    pub fn lifecycle_failure(&self) -> Option<&RuntimeLifecycleFailureRecord> {
+        self.lifecycle_failure.as_deref()
+    }
     pub fn cleanup_cause(&self) -> Option<&CleanupCauseRecord> {
         self.cleanup_cause.as_deref()
     }

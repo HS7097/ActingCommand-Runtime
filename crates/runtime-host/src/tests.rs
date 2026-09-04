@@ -1007,6 +1007,123 @@ fn host_with_state(root: &TempDir, alias: &str, state: Arc<FakeState>) -> Runtim
     .expect("runtime host")
 }
 
+#[test]
+fn shutdown_records_lifecycle_failures_before_writer_close() {
+    let root = TempDir::new().expect("tempdir");
+    let first = instance_id();
+    let second = instance_id();
+    let successful = instance_id();
+    let states = [
+        Arc::new(FakeState::default()),
+        Arc::new(FakeState::default()),
+        Arc::new(FakeState::default()),
+    ];
+    for state in &states[..2] {
+        *state.close_error.lock().expect("close error") = Some(
+            DeviceError::aggregate_close(
+                "maatouch",
+                [
+                    Some(DeviceError::transient("reset native detail")),
+                    Some(DeviceError::fatal("child stop detail")),
+                    Some(DeviceError::fatal("reader join detail")),
+                    Some(DeviceError::fatal("stderr C:\\private\\backend.log")),
+                ],
+            )
+            .expect_err("phase failures"),
+        );
+    }
+    let provider = FakeProvider::from_entries([
+        ("node.a".to_owned(), first, Arc::clone(&states[0])),
+        ("node.b".to_owned(), second, Arc::clone(&states[1])),
+        ("node.c".to_owned(), successful, Arc::clone(&states[2])),
+    ]);
+    let host = RuntimeHost::start(config(&root), Arc::new(provider)).expect("host");
+    let mut client = TestClient::connect(&host);
+    for alias in ["node.a", "node.b", "node.c"] {
+        let (_, token) = client.acquire(alias);
+        let request = client.request(RuntimeOperation::Input {
+            token,
+            action: InputAction::Reset,
+        });
+        assert_eq!(
+            client.send(&request).state(),
+            RuntimeReceiptState::Completed
+        );
+    }
+    drop(client);
+    let error = host.close().expect_err("failed session drain");
+    assert_eq!(error.code(), "input_backend_close_failed");
+    assert!(error.is_fatal());
+    for state in &states {
+        assert_eq!(state.close_count.load(Ordering::Acquire), 1);
+    }
+    let ledger = GlobalLedger::open_read_only(
+        actingcommand_ledger::GlobalLedgerReadOnlyConfig::new(root.path().join("ledger")),
+        |_| None,
+    )
+    .expect("authoritative read-only ledger");
+    assert!(ledger.corrupt_tail().is_none());
+    let events = ledger.query(&EventQuery::default());
+    let failures = events
+        .iter()
+        .filter(|event| event.event_type() == EventType::RuntimeFailed)
+        .collect::<Vec<_>>();
+    assert_eq!(
+        failures.len(),
+        8,
+        "four actual phases for each failed instance"
+    );
+    for instance in [first, second] {
+        let actual = failures
+            .iter()
+            .filter_map(|event| {
+                let EventPayload::Runtime(actingcommand_contract::RuntimePayload::Failed(payload)) =
+                    event.payload()
+                else {
+                    panic!("runtime failure");
+                };
+                let failure = payload.lifecycle_failure().expect("typed lifecycle");
+                (failure.instance_id() == Some(instance)).then_some((event, failure))
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(actual.len(), 4);
+        for (event, failure) in actual {
+            assert_eq!(failure.stage(), "runtime.lifecycle.session_close");
+            assert_eq!(
+                event.links(),
+                &actingcommand_contract::EventLinks::default()
+            );
+            assert!(failure.entered_event_id().is_none());
+            assert!(failure.cause().expect("phase").native_detail().is_some());
+            let public = serde_json::to_string(&event.payload().public_projection())
+                .expect("public projection");
+            assert!(!public.contains("native detail"));
+            assert!(!public.contains("private"));
+        }
+    }
+    assert_eq!(
+        events
+            .iter()
+            .filter(|event| event.event_type() == EventType::InputCommitted)
+            .count(),
+        3
+    );
+    let releases = events
+        .iter()
+        .filter(|event| event.event_type() == EventType::LeaseReleased)
+        .collect::<Vec<_>>();
+    assert_eq!(releases.len(), 3);
+    assert!(
+        releases
+            .iter()
+            .all(|event| event.sequence() < failures[0].sequence())
+    );
+    assert!(events.iter().any(
+        |event| event.event_type() == EventType::RuntimeLifecycleObserved
+            && event.sequence() < failures[0].sequence()
+    ));
+}
+
 const POLICY_INSTANCE_ALIAS: &str = "fixture-instance-a";
 const POLICY_INSTANCE_ALIAS_B: &str = "fixture-instance-b";
 const POLICY_NOW_UNIX_MS: u64 = 1_699_963_200_000;

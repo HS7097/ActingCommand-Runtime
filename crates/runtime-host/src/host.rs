@@ -125,7 +125,7 @@ use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::{Path, PathBuf};
 #[cfg(test)]
 use std::sync::Barrier;
-use std::sync::atomic::{AtomicU8, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
@@ -148,6 +148,16 @@ pub enum RuntimeLifecycleFailureStage {
     PolicyMonitor,
     PolicyForward,
     StrategicReport,
+    SessionClose,
+    OperationCleanup,
+    ConnectionCleanup,
+    ShutdownJoin,
+    InfoFileRemoval,
+    RetainedReference,
+    HostClose,
+    PolicyDriver,
+    PolicyControl,
+    PolicyBootstrap,
 }
 
 impl RuntimeLifecycleFailureStage {
@@ -157,6 +167,16 @@ impl RuntimeLifecycleFailureStage {
             Self::PolicyMonitor => "runtime.lifecycle.policy_monitor",
             Self::PolicyForward => "runtime.lifecycle.policy_forward",
             Self::StrategicReport => "runtime.lifecycle.strategic_report",
+            Self::SessionClose => "runtime.lifecycle.session_close",
+            Self::OperationCleanup => "runtime.lifecycle.operation_cleanup",
+            Self::ConnectionCleanup => "runtime.lifecycle.connection_cleanup",
+            Self::ShutdownJoin => "runtime.lifecycle.shutdown_join",
+            Self::InfoFileRemoval => "runtime.lifecycle.info_file_removal",
+            Self::RetainedReference => "runtime.lifecycle.retained_reference",
+            Self::HostClose => "runtime.lifecycle.host_close",
+            Self::PolicyDriver => "runtime.lifecycle.policy_driver",
+            Self::PolicyControl => "runtime.lifecycle.policy_control",
+            Self::PolicyBootstrap => "runtime.lifecycle.policy_bootstrap",
         }
     }
 }
@@ -555,6 +575,7 @@ impl RuntimeHost {
             governance_capability_sha256: config.governance_capability_sha256,
             governance_connections: Mutex::new(BTreeSet::new()),
             fact_write_gate: Mutex::new(()),
+            lifecycle_append_failed: AtomicBool::new(false),
             detection_write_gate: Mutex::new(()),
             state_write_gate: Mutex::new(()),
             agent_write_gate: Mutex::new(()),
@@ -1570,37 +1591,44 @@ impl RuntimeHost {
                 EventLinksDraft::default(),
             )
             .err();
-        record_failure(
+        shared.record_lifecycle_result(
+            RuntimeLifecycleFailureStage::ShutdownJoin,
             &mut failure,
             join_runtime_thread(self.accept_thread.take(), "join_runtime_accept"),
         );
-        record_failure(
+        shared.record_lifecycle_result(
+            RuntimeLifecycleFailureStage::ShutdownJoin,
             &mut failure,
             join_runtime_thread(self.sweep_thread.take(), "join_runtime_sweeper"),
         );
-        record_failure(
+        shared.record_lifecycle_result(
+            RuntimeLifecycleFailureStage::ShutdownJoin,
             &mut failure,
             join_runtime_thread(self.monitor_thread.take(), "join_runtime_monitor"),
         );
-        record_failure(
+        shared.record_lifecycle_result(
+            RuntimeLifecycleFailureStage::ShutdownJoin,
             &mut failure,
             join_runtime_thread(self.performance_thread.take(), "join_runtime_performance"),
         );
         if let Err(error) = fs::remove_file(&self.info_path)
             && error.kind() != std::io::ErrorKind::NotFound
         {
-            record_failure(
+            shared.record_lifecycle_result(
+                RuntimeLifecycleFailureStage::InfoFileRemoval,
                 &mut failure,
                 Err(RuntimeHostError::fatal(
                     "runtime_info_remove_failed",
                     "close_runtime_host",
                     RuntimeErrorCode::RuntimeFatal,
-                )),
+                )
+                .with_native_detail(error.to_string())),
             );
         }
         match Arc::try_unwrap(shared) {
             Ok(shared) => record_failure(&mut failure, shared.close()),
-            Err(_) => record_failure(
+            Err(shared) => shared.record_lifecycle_result(
+                RuntimeLifecycleFailureStage::RetainedReference,
                 &mut failure,
                 Err(RuntimeHostError::fatal(
                     "runtime_reference_leaked",
@@ -2837,6 +2865,7 @@ struct HostShared {
     governance_connections: Mutex<BTreeSet<ConnectionId>>,
     // Ledger append and fact projection commit are one ordered Runtime-owned transition.
     fact_write_gate: Mutex<()>,
+    lifecycle_append_failed: AtomicBool,
     // Detection quota preview, ledger append, and replay-state commit are one ordered transition.
     detection_write_gate: Mutex<()>,
     // State and release pointer changes are serialized with their ledger facts.
@@ -8021,7 +8050,7 @@ impl HostShared {
                 error.cleanup_cause().cloned(),
                 AuditInput::new(),
             );
-            self.append_event_raw(
+            let failed = self.append_event_raw(
                 EventSeverity::Error,
                 EventSource::Device,
                 OriginModule::Capture,
@@ -8029,6 +8058,7 @@ impl HostShared {
                 links.clone(),
                 payload,
             )?;
+            self.record_required_failure(&error, &failed, links.clone())?;
         }
         self.append_event_raw(
             EventSeverity::Error,
@@ -9830,7 +9860,7 @@ impl HostShared {
                     runtime_error.cleanup_cause().cloned(),
                     AuditInput::new(),
                 );
-                self.append_event(
+                let failed = self.append_event(
                     EventSeverity::Error,
                     EventSource::Device,
                     OriginModule::Capture,
@@ -9838,6 +9868,7 @@ impl HostShared {
                     links.clone(),
                     payload,
                 )?;
+                self.record_required_failure(&runtime_error, &failed, links.clone())?;
                 let event = self.append_event(
                     EventSeverity::Error,
                     EventSource::Runtime,
@@ -10867,6 +10898,13 @@ impl HostShared {
                         },
                     )?;
                     failure.terminal = Some(terminal(&event));
+                    if task_failure.is_none_or(|evidence| evidence.code == failure.error.code()) {
+                        let _ = failure
+                            .error
+                            .lifecycle
+                            .recorded_event
+                            .set(*event.event_id());
+                    }
                 }
                 return Err(self.cleanup_composite_failure_with_run_links(
                     request,
@@ -10937,6 +10975,11 @@ impl HostShared {
                     code: error.code(),
                     severity,
                 });
+                let _ = failure
+                    .error
+                    .lifecycle
+                    .recorded_event
+                    .set(*event.event_id());
                 let failure = match post_admission_ocr_failure_diagnostic {
                     Ok(()) => failure,
                     Err(diagnostic_failure) => {
@@ -12199,6 +12242,7 @@ impl HostShared {
         let endpoint = resolved.audit_endpoint.clone();
         let instance_alias = resolved.instance_alias.clone();
         let outcome_links = links.clone();
+        let lifecycle_links = links.clone();
         let failure_links = links;
         let action_for_worker = prepared_action;
         let result = execute_critical(
@@ -12286,6 +12330,7 @@ impl HostShared {
                 })
             }
             Err(CriticalExecutionError::Action { error, outcome, .. }) => {
+                self.record_required_failure(&error.error, &outcome, lifecycle_links)?;
                 if error.destructive_started {
                     self.finish_destructive_input(token, connection_id)?;
                 }
@@ -12455,6 +12500,16 @@ impl HostShared {
                 })
             }
             Err(CriticalExecutionError::Action { error, outcome, .. }) => {
+                self.record_required_failure(
+                    &error.error,
+                    &outcome,
+                    self.events.request_links(
+                        request,
+                        Some(token.instance_id()),
+                        Some(token.lease_id()),
+                        Some(action_id),
+                    ),
+                )?;
                 if error.destructive_started {
                     self.finish_destructive_input(token, connection_id)?;
                 }
@@ -12910,7 +12965,12 @@ impl HostShared {
         );
         match result {
             Ok(_) => Ok(()),
-            Err(CriticalExecutionError::Action { error, .. }) => {
+            Err(CriticalExecutionError::Action { error, outcome, .. }) => {
+                let _ = error
+                    .error
+                    .lifecycle
+                    .recorded_event
+                    .set(*outcome.event_id());
                 if error.poison_runtime {
                     self.fatal.mark(error.error.clone())?;
                 }
@@ -13246,7 +13306,8 @@ impl HostShared {
             lock(&self.scheduler, "list_connection_leases")?.tokens_for_connection(connection_id);
         let mut failure = None;
         for token in tokens {
-            record_failure(
+            self.record_lifecycle_result(
+                RuntimeLifecycleFailureStage::ConnectionCleanup,
                 &mut failure,
                 self.cleanup_token(&token, connection_id, reason),
             );
@@ -13255,7 +13316,18 @@ impl HostShared {
     }
 
     fn close(self) -> RuntimeHostResult<()> {
-        let tokens = lock(&self.scheduler, "list_runtime_leases")?.active_tokens();
+        let tokens = match lock(&self.scheduler, "list_runtime_leases") {
+            Ok(scheduler) => scheduler.active_tokens(),
+            Err(error) => {
+                self.append_lifecycle_failure(
+                    RuntimeLifecycleFailureStage::HostClose,
+                    RuntimeLifecycleFailure::Host(&error),
+                    EventLinksDraft::default(),
+                    None,
+                )?;
+                return Err(error);
+            }
+        };
         let mut failure = None;
         for token in tokens {
             let connection_id =
@@ -13265,28 +13337,78 @@ impl HostShared {
                     })
                 });
             match connection_id {
-                Ok(connection_id) => record_failure(
+                Ok(connection_id) => self.record_lifecycle_result(
+                    RuntimeLifecycleFailureStage::ConnectionCleanup,
                     &mut failure,
                     self.cleanup_token(&token, connection_id, LeaseReleaseReason::HostShutdown),
                 ),
-                Err(error) => record_failure(&mut failure, Err(error)),
+                Err(error) => self.record_lifecycle_result(
+                    RuntimeLifecycleFailureStage::ConnectionCleanup,
+                    &mut failure,
+                    Err(error),
+                ),
             }
         }
-        record_failure(
-            &mut failure,
-            self.execution
-                .close()
-                .map_err(|error| RuntimeHostError::execution("close_execution_kernel", &error)),
-        );
-        let HostShared {
-            owner,
-            ledger,
-            fatal,
-            ..
-        } = self;
-        if let Some(error) = fatal.current()? {
-            record_failure(&mut failure, Err(error));
+        if let Err(mut error) = self.execution.close() {
+            let closed_sessions = error.take_closed_sessions();
+            if closed_sessions.is_empty() {
+                self.record_lifecycle_result(
+                    RuntimeLifecycleFailureStage::SessionClose,
+                    &mut failure,
+                    Err(RuntimeHostError::execution(
+                        "close_execution_kernel",
+                        &error,
+                    )),
+                );
+            } else {
+                for (instance_id, session_error) in closed_sessions {
+                    let mut session_error =
+                        RuntimeHostError::execution("close_execution_kernel", &session_error);
+                    session_error.lifecycle.instance_id = Some(instance_id);
+                    if !failure.as_ref().is_some_and(|error| {
+                        error.projection().code == RuntimeErrorCode::LedgerFailure
+                    }) && let Err(append_error) = self.append_lifecycle_failure(
+                        RuntimeLifecycleFailureStage::SessionClose,
+                        RuntimeLifecycleFailure::Host(&session_error),
+                        EventLinksDraft::default(),
+                        None,
+                    ) {
+                        failure = Some(append_error);
+                    }
+                }
+                if !failure
+                    .as_ref()
+                    .is_some_and(|error| error.projection().code == RuntimeErrorCode::LedgerFailure)
+                {
+                    // Session facts are separate; the returned error retains the kernel's reduction.
+                    record_failure(
+                        &mut failure,
+                        Err(RuntimeHostError::execution(
+                            "close_execution_kernel",
+                            &error,
+                        )),
+                    );
+                }
+            }
         }
+        match self.fatal.current() {
+            Ok(Some(error)) => self.record_lifecycle_result(
+                RuntimeLifecycleFailureStage::HostClose,
+                &mut failure,
+                Err(error),
+            ),
+            Ok(None) => {}
+            Err(error) => {
+                self.append_lifecycle_failure(
+                    RuntimeLifecycleFailureStage::HostClose,
+                    RuntimeLifecycleFailure::Host(&error),
+                    EventLinksDraft::default(),
+                    None,
+                )?;
+                return Err(error);
+            }
+        }
+        let HostShared { owner, ledger, .. } = self;
         if ledger.close().is_err() {
             record_failure(&mut failure, Err(ledger_error("close_global_ledger")));
         }
@@ -13594,6 +13716,28 @@ impl HostShared {
         links: EventLinksDraft,
         entered_event_id: Option<EventId>,
     ) -> RuntimeHostResult<()> {
+        let host_error = match &failure {
+            RuntimeLifecycleFailure::Host(error) => Some(*error),
+            _ => None,
+        };
+        if let Some(error) = host_error
+            && error.lifecycle.recorded_event.get().is_some()
+            && error
+                .lifecycle
+                .causes
+                .iter()
+                .all(|cause| cause.recorded_event.get().is_some())
+        {
+            return Ok(());
+        }
+        if self.lifecycle_append_failed.load(Ordering::Acquire) {
+            return Err(ledger_error("append_runtime_lifecycle_failure"));
+        }
+        if let Some(error) = host_error
+            && error.projection().code == RuntimeErrorCode::LedgerFailure
+        {
+            return Err(error.clone());
+        }
         let (origin, code, operation, fatal, runtime_code) = match failure {
             RuntimeLifecycleFailure::Host(error) => (
                 "runtime_host",
@@ -13626,36 +13770,143 @@ impl HostShared {
             "entered_event_id": entered_event_id,
         }))
         .map_err(|_| ledger_error("encode_runtime_lifecycle_failure"))?;
-        self.append_event_raw(
-            if fatal == Some(true) {
-                EventSeverity::Fatal
-            } else {
-                EventSeverity::Error
-            },
-            EventSource::Runtime,
-            OriginModule::Runtime,
-            EventActor::Runtime,
+        let gate = lock(&self.fact_write_gate, "append_runtime_lifecycle_failure")?;
+        let mut persisted = Vec::new();
+        let mut emit = |cause: Option<&actingcommand_contract::LifecycleCauseDraft>, reference| {
+            let lifecycle = actingcommand_contract::RuntimeLifecycleFailureDraft::new(
+                self.owner_epoch,
+                stage.as_str(),
+                origin,
+                code,
+            )
+            .with_operation(operation)
+            .with_projection(fatal, runtime_code)
+            .with_entered_event_id(reference)
+            .with_instance_id(host_error.and_then(|error| error.lifecycle.instance_id))
+            .with_primary_detail(host_error.and_then(|error| error.diagnostic_detail().cloned()))
+            .with_native_detail(
+                host_error.and_then(|error| error.lifecycle.native_detail.as_deref().cloned()),
+            )
+            .with_cleanup_cause(host_error.and_then(|error| error.cleanup_cause().cloned()))
+            .with_cause(cause.cloned());
+            let cause_fatal = cause.map_or(fatal == Some(true), |cause| {
+                cause.severity() == actingcommand_contract::CleanupCauseSeverity::Fatal
+            });
+            let event = self
+                .append_event_under_fact_gate(
+                    if cause_fatal {
+                        EventSeverity::Fatal
+                    } else {
+                        EventSeverity::Error
+                    },
+                    EventSource::Runtime,
+                    OriginModule::Runtime,
+                    EventActor::Runtime,
+                    links.clone(),
+                    RuntimePayloadDraft::failed_with_lifecycle(
+                        if runtime_code == Some(RuntimeErrorCode::ProtocolInvalid) {
+                            DiagnosticCode::RuntimeProtocolInvalid
+                        } else {
+                            DiagnosticCode::RuntimeDiagnostic
+                        },
+                        EffectDisposition::Indeterminate,
+                        DiagnosticDetailDraft::new(
+                            "runtime_lifecycle",
+                            stage.as_str(),
+                            origin,
+                            operation.unwrap_or("actingd_process"),
+                            message.clone(),
+                            Sensitivity::Internal,
+                        ),
+                        lifecycle,
+                        AuditInput::new(),
+                    ),
+                )
+                .map_err(|_| {
+                    self.lifecycle_append_failed.store(true, Ordering::Release);
+                    ledger_error("append_runtime_lifecycle_failure")
+                })?;
+            let id = *event.event_id();
+            persisted.push(event);
+            Ok::<_, RuntimeHostError>(id)
+        };
+        if let Some(error) = host_error {
+            let phase_close = error.code() == "input_backend_close_failed"
+                && error.lifecycle.causes.iter().any(|cause| {
+                    cause.cause.phase() != actingcommand_contract::LifecycleFailurePhase::Retirement
+                });
+            if error.lifecycle.recorded_event.get().is_none() && !phase_close {
+                let id = emit(None, entered_event_id)?;
+                let _ = error.lifecycle.recorded_event.set(id);
+            }
+            let reference =
+                entered_event_id.or_else(|| error.lifecycle.recorded_event.get().copied());
+            for cause in &error.lifecycle.causes {
+                if cause.recorded_event.get().is_none() {
+                    let id = emit(Some(&cause.cause), reference)?;
+                    let _ = cause.recorded_event.set(id);
+                }
+            }
+            if phase_close
+                && let Some(id) = error
+                    .lifecycle
+                    .causes
+                    .first()
+                    .and_then(|cause| cause.recorded_event.get())
+            {
+                let _ = error.lifecycle.recorded_event.set(*id);
+            }
+        } else {
+            emit(None, entered_event_id)?;
+        }
+        if !persisted.is_empty() {
+            self.synchronize_fact_store_under_gate()?;
+        }
+        drop(gate);
+        for event in persisted {
+            self.observe_pipeline_event(&event)?;
+        }
+        Ok(())
+    }
+
+    fn record_lifecycle_result(
+        &self,
+        stage: RuntimeLifecycleFailureStage,
+        slot: &mut Option<RuntimeHostError>,
+        result: RuntimeHostResult<()>,
+    ) {
+        if let Err(error) = result {
+            let writer_failed = slot.as_ref().is_some_and(|failure| {
+                failure.projection().code == RuntimeErrorCode::LedgerFailure
+            });
+            if !writer_failed
+                && let Err(append_error) = self.append_lifecycle_failure(
+                    stage,
+                    RuntimeLifecycleFailure::Host(&error),
+                    EventLinksDraft::default(),
+                    None,
+                )
+            {
+                *slot = Some(append_error);
+                return;
+            }
+            record_failure(slot, Err(error));
+        }
+    }
+
+    fn record_required_failure(
+        &self,
+        error: &RuntimeHostError,
+        outcome: &PersistedEvent,
+        links: EventLinksDraft,
+    ) -> RuntimeHostResult<()> {
+        let _ = error.lifecycle.recorded_event.set(*outcome.event_id());
+        self.append_lifecycle_failure(
+            RuntimeLifecycleFailureStage::OperationCleanup,
+            RuntimeLifecycleFailure::Host(error),
             links,
-            RuntimePayloadDraft::failed(
-                if runtime_code == Some(RuntimeErrorCode::ProtocolInvalid) {
-                    DiagnosticCode::RuntimeProtocolInvalid
-                } else {
-                    DiagnosticCode::RuntimeDiagnostic
-                },
-                EffectDisposition::Indeterminate,
-                DiagnosticDetailDraft::new(
-                    "runtime_lifecycle",
-                    stage.as_str(),
-                    origin,
-                    operation.unwrap_or("actingd_process"),
-                    message,
-                    Sensitivity::Internal,
-                ),
-                AuditInput::new(),
-            ),
+            Some(*outcome.event_id()),
         )
-        .map(|_| ())
-        .map_err(|_| ledger_error("append_runtime_lifecycle_failure"))
     }
 
     fn append_connection_failure(
@@ -13664,6 +13915,16 @@ impl HostShared {
         stage: ConnectionFailureStage,
         error: &RuntimeHostError,
     ) -> RuntimeHostResult<()> {
+        if error.lifecycle.recorded_event.get().is_some()
+            || error.projection().code == RuntimeErrorCode::LedgerFailure
+        {
+            return self.append_lifecycle_failure(
+                RuntimeLifecycleFailureStage::ConnectionCleanup,
+                RuntimeLifecycleFailure::Host(error),
+                context.links.clone(),
+                None,
+            );
+        }
         let diagnostic = if error.projection().code == RuntimeErrorCode::ProtocolInvalid {
             DiagnosticCode::RuntimeProtocolInvalid
         } else {
@@ -13699,8 +13960,8 @@ impl HostShared {
                 AuditInput::new(),
             ),
         )
-        .map(|_| ())
         .map_err(|_| ledger_error("append_runtime_connection_failure"))
+        .and_then(|event| self.record_required_failure(error, &event, context.links.clone()))
     }
 
     fn append_event_raw(
@@ -13730,14 +13991,17 @@ impl HostShared {
         links: EventLinksDraft,
         payload: impl Into<actingcommand_contract::EventPayloadDraft>,
     ) -> RuntimeHostResult<PersistedEvent> {
+        if self.lifecycle_append_failed.load(Ordering::Acquire) {
+            return Err(ledger_error("append_runtime_event"));
+        }
         let draft = self
             .events
             .draft(severity, source, module, actor, links, payload)?;
         let draft = self.events.sanitize(draft)?;
-        let event = self
-            .ledger
-            .append(draft)
-            .map_err(|_| ledger_error("append_runtime_event"))?;
+        let event = self.ledger.append(draft).map_err(|_| {
+            self.lifecycle_append_failed.store(true, Ordering::Release);
+            ledger_error("append_runtime_event")
+        })?;
         Ok(event)
     }
 
@@ -15121,9 +15385,11 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
                     source,
                     module,
                     EventActor::Runtime,
-                    links,
+                    links.clone(),
                     payload,
                 )?;
+                self.host
+                    .record_required_failure(&runtime_error, &failed, links)?;
                 Err(RequestFailure {
                     state: RuntimeReceiptState::Failed,
                     terminal: Some(terminal(&failed)),
@@ -15868,13 +16134,26 @@ fn accept_loop(
     }
     for connection in connections {
         let result = connection.join().map_err(|_| {
-            RuntimeHostError::fatal(
+            let error = RuntimeHostError::fatal(
                 "runtime_connection_panicked",
                 "join_runtime_connection",
                 RuntimeErrorCode::RuntimeFatal,
-            )
+            );
+            shared
+                .append_lifecycle_failure(
+                    RuntimeLifecycleFailureStage::ShutdownJoin,
+                    RuntimeLifecycleFailure::Host(&error),
+                    EventLinksDraft::default(),
+                    None,
+                )
+                .err()
+                .unwrap_or(error)
         })?;
-        record_failure(&mut failure, result);
+        shared.record_lifecycle_result(
+            RuntimeLifecycleFailureStage::ShutdownJoin,
+            &mut failure,
+            result,
+        );
     }
     failure.map_or(Ok(()), Err)
 }
@@ -15979,7 +16258,11 @@ fn connection_boundary(
             crate::test_observation::HostTestObservationOutcome::Error
         },
     );
-    record_failure(&mut failure, cleanup);
+    shared.record_lifecycle_result(
+        RuntimeLifecycleFailureStage::ConnectionCleanup,
+        &mut failure,
+        cleanup,
+    );
     if let Some(error) = failure {
         if error.is_fatal() {
             shared.fatal.mark(error.clone())?;
@@ -16015,9 +16298,13 @@ fn reap_finished_connections(
         if let Err(error) = &result
             && error.is_fatal()
         {
-            record_failure(failure, shared.fatal.mark(error.clone()));
+            shared.record_lifecycle_result(
+                RuntimeLifecycleFailureStage::ShutdownJoin,
+                failure,
+                shared.fatal.mark(error.clone()),
+            );
         }
-        record_failure(failure, result);
+        shared.record_lifecycle_result(RuntimeLifecycleFailureStage::ShutdownJoin, failure, result);
     }
 }
 
@@ -17280,30 +17567,40 @@ fn failed_start_cleanup(
     performance_thread: Option<JoinHandle<RuntimeHostResult<()>>>,
 ) -> RuntimeHostResult<()> {
     shared.fatal.request_shutdown();
-    let mut failure = join_runtime_thread(sweep_thread, "join_runtime_sweeper").err();
-    record_failure(
+    let mut failure = None;
+    shared.record_lifecycle_result(
+        RuntimeLifecycleFailureStage::ShutdownJoin,
+        &mut failure,
+        join_runtime_thread(sweep_thread, "join_runtime_sweeper"),
+    );
+    shared.record_lifecycle_result(
+        RuntimeLifecycleFailureStage::ShutdownJoin,
         &mut failure,
         join_runtime_thread(monitor_thread, "join_runtime_monitor"),
     );
-    record_failure(
+    shared.record_lifecycle_result(
+        RuntimeLifecycleFailureStage::ShutdownJoin,
         &mut failure,
         join_runtime_thread(performance_thread, "join_runtime_performance"),
     );
     if let Err(error) = fs::remove_file(info_path)
         && error.kind() != std::io::ErrorKind::NotFound
     {
-        record_failure(
+        shared.record_lifecycle_result(
+            RuntimeLifecycleFailureStage::InfoFileRemoval,
             &mut failure,
             Err(RuntimeHostError::fatal(
                 "runtime_info_remove_failed",
                 "abort_runtime_start",
                 RuntimeErrorCode::RuntimeFatal,
-            )),
+            )
+            .with_native_detail(error.to_string())),
         );
     }
     match Arc::try_unwrap(shared) {
         Ok(shared) => record_failure(&mut failure, shared.close()),
-        Err(_) => record_failure(
+        Err(shared) => shared.record_lifecycle_result(
+            RuntimeLifecycleFailureStage::RetainedReference,
             &mut failure,
             Err(RuntimeHostError::fatal(
                 "runtime_reference_leaked",

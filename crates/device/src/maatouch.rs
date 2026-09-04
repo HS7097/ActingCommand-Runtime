@@ -484,21 +484,21 @@ impl MaaTouchBackend {
         Ok(())
     }
 
-    fn shutdown(&mut self) -> Vec<DeviceError> {
-        let mut errors = Vec::new();
+    fn shutdown(&mut self) -> [Option<DeviceError>; 2] {
+        let mut errors = [None, None];
         self.stdin.take();
 
         if let Some(mut child) = self.child.take()
             && !stop_child(&mut child, self.maatouch_config.shutdown_timeout)
         {
-            errors.push(DeviceError::fatal(format!(
+            errors[0] = Some(DeviceError::fatal(format!(
                 "MaaTouch process did not exit within {:?}",
                 self.maatouch_config.shutdown_timeout
             )));
         }
 
         if let Err(err) = self.join_stderr_thread() {
-            errors.push(err);
+            errors[1] = Some(err);
         }
 
         self.closed = true;
@@ -600,33 +600,22 @@ impl InputBackend for MaaTouchBackend {
             return Ok(());
         }
 
-        let mut errors = Vec::new();
-        if let Err(err) = self.reset() {
-            errors.push(err);
-        }
-        errors.extend(self.shutdown());
+        let reset = self.reset().err();
+        let [child_stop, stderr_join] = self.shutdown();
 
         let stderr = self
             .stderr_text
             .lock()
             .map(|value| value.trim().to_string())
             .unwrap_or_default();
-        if !stderr.is_empty() && stderr != "Killed" {
-            errors.push(DeviceError::fatal(format!("MaaTouch stderr:\n{stderr}")));
-        }
+        let unexpected_stderr = (!stderr.is_empty() && stderr != "Killed")
+            .then(|| DeviceError::fatal(format!("MaaTouch stderr:\n{stderr}")));
 
         self.closed = true;
-        if errors.is_empty() {
-            Ok(())
-        } else {
-            Err(DeviceError::fatal(
-                errors
-                    .into_iter()
-                    .map(|err| err.to_string())
-                    .collect::<Vec<_>>()
-                    .join("; "),
-            ))
-        }
+        DeviceError::aggregate_close(
+            "maatouch",
+            [reset, child_stop, stderr_join, unexpected_stderr],
+        )
     }
 }
 
@@ -911,6 +900,67 @@ fn validate_maatouch_line_token<'a>(name: &str, value: &'a str) -> DeviceResult<
 mod tests {
     use super::*;
     use std::io::Cursor;
+
+    #[test]
+    fn device_close_failures_preserve_phase_causes() {
+        use crate::{DeviceClosePhase, DeviceErrorSeverity};
+        for backend in ["maatouch", "minitouch"] {
+            let messages = [
+                "reset native cause",
+                "child stop cause",
+                "reader join cause",
+                "stderr cause",
+            ];
+            let phases = [
+                Some(DeviceError::transient(messages[0])),
+                Some(DeviceError::fatal(messages[1])),
+                Some(DeviceError::fatal(messages[2])),
+                Some(DeviceError::fatal(messages[3])),
+            ];
+            let expected = phases
+                .iter()
+                .flatten()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+                .join("; ");
+            let error = DeviceError::aggregate_close(backend, phases).expect_err("failed close");
+            assert_eq!(error.message(), expected);
+            assert_eq!(error.severity(), DeviceErrorSeverity::Fatal);
+            assert_eq!(error.close_causes().len(), 4);
+            assert_eq!(
+                error
+                    .close_causes()
+                    .iter()
+                    .map(|cause| cause.phase)
+                    .collect::<Vec<_>>(),
+                [
+                    DeviceClosePhase::Reset,
+                    DeviceClosePhase::ChildStop,
+                    DeviceClosePhase::StderrReaderJoin,
+                    DeviceClosePhase::UnexpectedStderr
+                ]
+            );
+            assert_eq!(
+                error.close_causes()[0].severity,
+                DeviceErrorSeverity::Transient
+            );
+            for (cause, message) in error.close_causes().iter().zip(messages) {
+                assert_eq!(cause.backend, backend);
+                assert_eq!(cause.detail, message);
+                assert!(!cause.detail_truncated);
+            }
+            DeviceError::aggregate_close(backend, [None, None, None, None])
+                .expect("successful close");
+            let long = DeviceError::aggregate_close(
+                backend,
+                [None, None, None, Some(DeviceError::fatal("界".repeat(400)))],
+            )
+            .expect_err("long stderr");
+            assert_eq!(long.close_causes().len(), 1);
+            assert_eq!(long.close_causes()[0].detail.len(), 1023);
+            assert!(long.close_causes()[0].detail_truncated);
+        }
+    }
 
     #[test]
     fn target_defaults_to_host_port_serial() {

@@ -13,6 +13,23 @@ pub enum DeviceErrorSeverity {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DeviceClosePhase {
+    Reset,
+    ChildStop,
+    StderrReaderJoin,
+    UnexpectedStderr,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DeviceCloseCause {
+    pub phase: DeviceClosePhase,
+    pub backend: &'static str,
+    pub severity: DeviceErrorSeverity,
+    pub detail: String,
+    pub detail_truncated: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DeviceErrorCategory {
     BackendLaunch,
     Handshake,
@@ -147,8 +164,9 @@ pub struct DeviceError {
     severity: DeviceErrorSeverity,
     message: String,
     diagnostic: Option<DeviceErrorDiagnostic>,
-    context: Option<DeviceErrorContext>,
+    context: Option<Box<DeviceErrorContext>>,
     diagnostic_message: Option<Box<StoredDiagnosticMessage>>,
+    close_causes: Box<[DeviceCloseCause]>,
 }
 
 impl DeviceError {
@@ -159,6 +177,7 @@ impl DeviceError {
             diagnostic: None,
             context: None,
             diagnostic_message: None,
+            close_causes: Box::default(),
         }
     }
 
@@ -169,6 +188,7 @@ impl DeviceError {
             diagnostic: None,
             context: None,
             diagnostic_message: None,
+            close_causes: Box::default(),
         }
     }
 
@@ -179,12 +199,52 @@ impl DeviceError {
             diagnostic: None,
             context: None,
             diagnostic_message: None,
+            close_causes: Box::default(),
         }
     }
 
     pub fn with_diagnostic(mut self, category: DeviceErrorCategory, stage: &'static str) -> Self {
         self.diagnostic = Some(DeviceErrorDiagnostic::new(category, stage));
         self
+    }
+
+    pub fn close_causes(&self) -> &[DeviceCloseCause] {
+        &self.close_causes
+    }
+
+    pub fn aggregate_close(backend: &'static str, phases: [Option<Self>; 4]) -> DeviceResult<()> {
+        let mut messages = Vec::new();
+        let mut causes = Vec::new();
+        for (phase, error) in [
+            DeviceClosePhase::Reset,
+            DeviceClosePhase::ChildStop,
+            DeviceClosePhase::StderrReaderJoin,
+            DeviceClosePhase::UnexpectedStderr,
+        ]
+        .into_iter()
+        .zip(phases)
+        {
+            if let Some(error) = error {
+                messages.push(error.to_string());
+                let mut end = error.message.len().min(1024);
+                while !error.message.is_char_boundary(end) {
+                    end -= 1;
+                }
+                causes.push(DeviceCloseCause {
+                    phase,
+                    backend,
+                    severity: error.severity,
+                    detail: error.message[..end].to_owned(),
+                    detail_truncated: end < error.message.len(),
+                });
+            }
+        }
+        if causes.is_empty() {
+            return Ok(());
+        }
+        let mut error = Self::fatal(messages.join("; "));
+        error.close_causes = causes.into_boxed_slice();
+        Err(error)
     }
 
     pub fn with_diagnostic_if_absent(
@@ -204,11 +264,11 @@ impl DeviceError {
         operation: impl Into<String>,
         declared_sensitivity: DeviceErrorSensitivity,
     ) -> Self {
-        self.context = Some(DeviceErrorContext {
+        self.context = Some(Box::new(DeviceErrorContext {
             backend: backend.into(),
             operation: operation.into(),
             declared_sensitivity,
-        });
+        }));
         self
     }
 
@@ -219,11 +279,11 @@ impl DeviceError {
         declared_sensitivity: DeviceErrorSensitivity,
     ) -> Self {
         if self.context.is_none() {
-            self.context = Some(DeviceErrorContext {
+            self.context = Some(Box::new(DeviceErrorContext {
                 backend: backend.into(),
                 operation: operation.into(),
                 declared_sensitivity,
-            });
+            }));
         }
         self
     }
@@ -323,8 +383,8 @@ impl DeviceError {
         self.diagnostic
     }
 
-    pub const fn diagnostic_context(&self) -> Option<&DeviceErrorContext> {
-        self.context.as_ref()
+    pub fn diagnostic_context(&self) -> Option<&DeviceErrorContext> {
+        self.context.as_deref()
     }
 
     pub fn diagnostic_message(&self) -> Option<&str> {
