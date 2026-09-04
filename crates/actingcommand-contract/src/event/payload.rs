@@ -8421,6 +8421,10 @@ impl EventPayload {
         self.family_payload().detail().effect_disposition()
     }
 
+    pub fn diagnostic_code(&self) -> Option<DiagnosticCode> {
+        self.family_payload().detail().diagnostic_code()
+    }
+
     pub fn validate(&self) -> Result<(), SanitizationError> {
         let detail = self.family_payload().detail();
         if let Some(lifecycle) = detail.lifecycle_failure() {

@@ -1722,6 +1722,78 @@ fn write_synthetic_maa_convert_fixture() -> (tempfile::TempDir, PathBuf) {
         .unwrap(),
     )
     .unwrap();
+
+    let facts_tasks = (0..64)
+        .map(|index| {
+            let task_id = format!("SyntheticTask{index:02}");
+            json!({
+                "task_id": {
+                    "kind": "string",
+                    "value": task_id,
+                    "source_task_id": task_id,
+                    "source_json_path": "synthetic/tasks.json",
+                    "source_file_sha256": "0".repeat(64),
+                    "origin": "declared"
+                }
+            })
+        })
+        .collect::<Vec<_>>();
+    let facts = json!({
+        "schema_version": "0.2",
+        "cli_version": "0.1.0",
+        "runtime_version": "0.1.0",
+        "ok": true,
+        "command": "resource compile-maa",
+        "data": {
+            "schema_version": "actingcommand.maa-task-facts-set.v1",
+            "tasks": facts_tasks
+        }
+    });
+    let facts_bytes = serde_json::to_vec_pretty(&facts).unwrap();
+    let facts_sha256 = format!("{:x}", Sha256::digest(&facts_bytes));
+    let facts_dir = root.path().join("upstream-sync");
+    fs::create_dir_all(&facts_dir).unwrap();
+    fs::write(facts_dir.join("maa.tasks.json"), facts_bytes).unwrap();
+
+    let mappings = (0..64)
+        .map(|index| {
+            let (product_heading, page_id) = match index % 3 {
+                0 => ("warehouse", "arknights/depot"),
+                1 => ("home_sanity", "arknights/home"),
+                _ => ("stage_proxy_settlement", "arknights/terminal"),
+            };
+            let role = match index % 5 {
+                0 => "page_anchor",
+                1 => "page_transition",
+                2 => "page_operation",
+                3 => "observation",
+                _ => "topology",
+            };
+            json!({
+                "source_task_id": format!("SyntheticTask{index:02}"),
+                "product_heading": product_heading,
+                "page_id": page_id,
+                "role": role
+            })
+        })
+        .collect::<Vec<_>>();
+    let mapping_dir = root.path().join("tasks");
+    fs::create_dir_all(&mapping_dir).unwrap();
+    fs::write(
+        mapping_dir.join("maa-semantic-mapping.json"),
+        serde_json::to_vec_pretty(&json!({
+            "schema_version": "actingcommand.maa-semantic-mapping.v1",
+            "facts_container": {
+                "path": "ours/upstream-sync/maa.tasks.json",
+                "sha256": facts_sha256,
+                "data_schema_version": "actingcommand.maa-task-facts-set.v1",
+                "task_count": 64
+            },
+            "mappings": mappings
+        }))
+        .unwrap(),
+    )
+    .unwrap();
     (root, maa_dir)
 }
 
@@ -1831,6 +1903,225 @@ fn resource_convert_accepts_explicit_maa_tasks_mode() {
     assert_eq!(summary.source_mode.as_deref(), Some("maa_tasks"));
     assert_eq!(summary.maa_compiled_tasks, Some(3));
     assert_eq!(summary.targets, 2);
+}
+
+// Task Contract: Workflow #269 / #269-A2B-MAPPING-ADMISSION-IMPLEMENT-v2
+// (comment 5533851835). Test class: specification criterion.
+#[test]
+fn resource_convert_strictly_admits_maa_semantic_mapping_before_outputs() {
+    for (task_count, use_overlay) in [(64, true), (1, false), (0, false), (0, true)] {
+        let (root, maa_dir) = write_synthetic_maa_convert_fixture();
+        let mapping_path = root.path().join("tasks/maa-semantic-mapping.json");
+        let facts_path = root.path().join("upstream-sync/maa.tasks.json");
+        if task_count == 0 {
+            fs::remove_file(&mapping_path).expect("remove mapping");
+            fs::remove_file(&facts_path).expect("remove facts");
+        } else if task_count != 64 {
+            let mut facts: Value =
+                serde_json::from_slice(&fs::read(&facts_path).expect("facts bytes"))
+                    .expect("facts JSON");
+            facts["data"]["tasks"]
+                .as_array_mut()
+                .unwrap()
+                .truncate(task_count);
+            let facts_bytes = serde_json::to_vec_pretty(&facts).expect("serialize facts");
+            fs::write(&facts_path, &facts_bytes).expect("write facts");
+            let mut mapping: Value =
+                serde_json::from_slice(&fs::read(&mapping_path).expect("mapping bytes"))
+                    .expect("mapping JSON");
+            mapping["facts_container"]["task_count"] = json!(task_count);
+            mapping["facts_container"]["sha256"] =
+                json!(format!("{:x}", Sha256::digest(&facts_bytes)));
+            mapping["mappings"]
+                .as_array_mut()
+                .unwrap()
+                .truncate(task_count);
+            mapping["mappings"][0]["product_heading"] = json!("external_heading");
+            fs::write(
+                &mapping_path,
+                serde_json::to_vec_pretty(&mapping).expect("serialize mapping"),
+            )
+            .expect("write mapping");
+        }
+        let summary = resource_convert(ResourceConvertRequest {
+            repo: root.path().to_path_buf(),
+            game: None,
+            server: None,
+            locale: None,
+            maa_tasks_root: use_overlay.then_some(maa_dir),
+            dry_run: task_count != 0,
+        })
+        .expect("valid resource conversion");
+        assert_eq!(summary.maa_semantic_mappings, task_count);
+        assert_eq!(
+            serde_json::to_value(&summary)
+                .expect("serialized response")
+                .get("maa_semantic_mappings")
+                .and_then(Value::as_u64),
+            Some(task_count as u64)
+        );
+    }
+
+    #[derive(Clone, Copy, Debug)]
+    enum InvalidCase {
+        MissingMapping,
+        MissingContainer,
+        HashMismatch,
+        MappingSchemaMismatch,
+        DataSchemaMismatch,
+        TaskCountMismatch,
+        ZeroTaskCount,
+        ExcessTaskCount,
+        ActualTaskCountMismatch,
+        MissingTask,
+        DuplicateTask,
+        UnknownTask,
+        OrderMismatch,
+        MalformedHeading,
+        UnknownRole,
+        MalformedPageId,
+        RowKeyExpansion,
+    }
+
+    let cases = [
+        (InvalidCase::MissingMapping, "maa-semantic-mapping.json"),
+        (InvalidCase::MissingContainer, "maa.tasks.json"),
+        (InvalidCase::HashMismatch, "SHA-256"),
+        (InvalidCase::MappingSchemaMismatch, "mapping schema"),
+        (InvalidCase::DataSchemaMismatch, "facts data schema"),
+        (InvalidCase::TaskCountMismatch, "task_count"),
+        (InvalidCase::ZeroTaskCount, "task_count must be within"),
+        (InvalidCase::ExcessTaskCount, "task_count must be within"),
+        (InvalidCase::ActualTaskCountMismatch, "actual task count"),
+        (InvalidCase::MissingTask, "mapping row count"),
+        (InvalidCase::DuplicateTask, "duplicate source_task_id"),
+        (InvalidCase::UnknownTask, "unknown source_task_id"),
+        (InvalidCase::OrderMismatch, "ordinal order"),
+        (InvalidCase::MalformedHeading, "invalid product_heading"),
+        (InvalidCase::UnknownRole, "unknown role"),
+        (InvalidCase::MalformedPageId, "invalid page_id"),
+        (InvalidCase::RowKeyExpansion, "unknown field"),
+    ];
+
+    for (case, expected_message) in cases {
+        let (root, _maa_dir) = write_synthetic_maa_convert_fixture();
+        let mapping_path = root.path().join("tasks/maa-semantic-mapping.json");
+        let facts_path = root.path().join("upstream-sync/maa.tasks.json");
+        let mut mapping: Value =
+            serde_json::from_slice(&fs::read(&mapping_path).expect("mapping bytes"))
+                .expect("mapping JSON");
+        let mut facts: Value = serde_json::from_slice(&fs::read(&facts_path).expect("facts bytes"))
+            .expect("facts JSON");
+        let mut write_mapping = true;
+        let mut write_facts = true;
+
+        match case {
+            InvalidCase::MissingMapping => {
+                fs::remove_file(&mapping_path).expect("remove mapping");
+                write_mapping = false;
+            }
+            InvalidCase::MissingContainer => {
+                fs::remove_file(&facts_path).expect("remove facts");
+                write_facts = false;
+            }
+            InvalidCase::HashMismatch => {
+                mapping["facts_container"]["sha256"] = json!("0".repeat(64));
+            }
+            InvalidCase::MappingSchemaMismatch => {
+                mapping["schema_version"] = json!("actingcommand.maa-semantic-mapping.v2");
+            }
+            InvalidCase::DataSchemaMismatch => {
+                facts["data"]["schema_version"] = json!("actingcommand.maa-task-facts-set.v2");
+            }
+            InvalidCase::TaskCountMismatch => {
+                mapping["facts_container"]["task_count"] = json!(63);
+            }
+            InvalidCase::ZeroTaskCount => {
+                mapping["facts_container"]["task_count"] = json!(0);
+            }
+            InvalidCase::ExcessTaskCount => {
+                mapping["facts_container"]["task_count"] =
+                    json!(maa_task_graph::MAX_MAA_TASK_FACT_SELECTIONS + 1);
+            }
+            InvalidCase::ActualTaskCountMismatch => {
+                facts["data"]["tasks"].as_array_mut().unwrap().pop();
+            }
+            InvalidCase::MissingTask => {
+                mapping["mappings"].as_array_mut().unwrap().pop();
+            }
+            InvalidCase::DuplicateTask => {
+                mapping["mappings"][63]["source_task_id"] = json!("SyntheticTask00");
+            }
+            InvalidCase::UnknownTask => {
+                mapping["mappings"][63]["source_task_id"] = json!("SyntheticTaskUnknown");
+            }
+            InvalidCase::OrderMismatch => {
+                mapping["mappings"].as_array_mut().unwrap().swap(0, 1);
+            }
+            InvalidCase::MalformedHeading => {
+                mapping["mappings"][0]["product_heading"] = json!("invalid/heading");
+            }
+            InvalidCase::UnknownRole => {
+                mapping["mappings"][0]["role"] = json!("unknown");
+            }
+            InvalidCase::MalformedPageId => {
+                mapping["mappings"][0]["page_id"] = json!("arknights");
+            }
+            InvalidCase::RowKeyExpansion => {
+                mapping["mappings"][0]
+                    .as_object_mut()
+                    .unwrap()
+                    .insert("extra".to_string(), json!(true));
+            }
+        }
+
+        if write_facts {
+            let facts_bytes = serde_json::to_vec_pretty(&facts).expect("serialize facts");
+            fs::write(&facts_path, &facts_bytes).expect("write facts");
+            if matches!(
+                case,
+                InvalidCase::DataSchemaMismatch | InvalidCase::ActualTaskCountMismatch
+            ) {
+                mapping["facts_container"]["sha256"] =
+                    json!(format!("{:x}", Sha256::digest(&facts_bytes)));
+            }
+        }
+        if write_mapping {
+            fs::write(
+                &mapping_path,
+                serde_json::to_vec_pretty(&mapping).expect("serialize mapping"),
+            )
+            .expect("write mapping");
+        }
+
+        let error = resource_convert(ResourceConvertRequest {
+            repo: root.path().to_path_buf(),
+            game: None,
+            server: None,
+            locale: None,
+            maa_tasks_root: Some(root.path().join("missing-maa-tasks")),
+            dry_run: false,
+        })
+        .expect_err("invalid semantic mapping must fail");
+        assert_eq!(error.code, "package_invalid", "case {case:?}");
+        assert!(
+            error.message.contains(expected_message),
+            "case {case:?}: expected {expected_message:?} in {:?}",
+            error.message
+        );
+        for output in [
+            "recognition/arknights.cn.pack.json",
+            "recognition/arknights.cn.pages.json",
+            "navigation/arknights.cn.navigation.json",
+            "operations/operations.index.json",
+            "operations/operations.primitives.json",
+        ] {
+            assert!(
+                !root.path().join(output).exists(),
+                "case {case:?} wrote {output}"
+            );
+        }
+    }
 }
 
 #[test]

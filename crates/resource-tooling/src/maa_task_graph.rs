@@ -33,7 +33,7 @@ const MAX_MAA_JSON_FILES: usize = 16_384;
 const MAX_MAA_JSON_FILE_BYTES: u64 = 67_108_864;
 const MAX_MAA_AGGREGATE_JSON_BYTES: u64 = 1_073_741_824;
 const MAX_MAA_RAW_TASKS: usize = 65_536;
-const MAX_MAA_TASK_FACT_SELECTIONS: usize = 256;
+pub(crate) const MAX_MAA_TASK_FACT_SELECTIONS: usize = 256;
 const MAX_MAA_TASK_FACT_SELECTION_UTF8_BYTES: usize = 65_536;
 
 const CORE_STRING_FIELDS: [&str; 2] = ["algorithm", "action"];

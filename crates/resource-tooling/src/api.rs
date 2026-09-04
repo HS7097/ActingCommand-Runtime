@@ -200,6 +200,7 @@ pub struct ResourceConvertResponse {
     pub server: String,
     pub locale: String,
     pub dry_run: bool,
+    pub maa_semantic_mappings: usize,
     pub bundles: usize,
     pub targets: usize,
     pub pages: usize,
