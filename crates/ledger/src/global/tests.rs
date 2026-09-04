@@ -18,6 +18,7 @@ use actingcommand_contract::{
     TaskSemanticFact,
 };
 use serde_json::Value;
+use sha2::{Digest, Sha256};
 use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -2181,6 +2182,13 @@ fn ui_projection_exposes_sanitized_state_without_secret_fields() {
 
 #[test]
 fn ui_projection_hides_forensic_fields_while_lab_retains_them() {
+    const MACHINE_PATH: &str = r"C:\private\folder\capture trace (α).json";
+    const BASENAME: &str = "capture trace (α).json";
+    let machine_audit = format!(
+        "basename:{}|sha256:{:x}",
+        serde_json::to_string(BASENAME).expect("canonical basename JSON"),
+        Sha256::digest(MACHINE_PATH.as_bytes())
+    );
     let temp = TempDir::new().expect("temp");
     let ledger = GlobalLedger::open(config(&temp, "writer-one")).expect("ledger");
     let persisted = ledger
@@ -2190,7 +2198,7 @@ fn ui_projection_hides_forensic_fields_while_lab_retains_them() {
             AuditInput::new()
                 .with_account("secret-value")
                 .with_authentication("authentication-value")
-                .with_machine_path("internal-value"),
+                .with_machine_path(MACHINE_PATH),
         ))
         .expect("append");
 
@@ -2198,7 +2206,9 @@ fn ui_projection_hides_forensic_fields_while_lab_retains_them() {
         .project(EventQuery::default(), ProjectionProfile::Ui)
         .expect("UI project");
     let ui_payload = serde_json::to_string(&ui[0].payload).expect("UI payload");
-    assert!(!ui_payload.contains("internal-value"));
+    assert!(!ui_payload.contains(MACHINE_PATH));
+    assert!(!ui_payload.contains(BASENAME));
+    assert!(!ui_payload.contains(&machine_audit));
     assert!(!ui_payload.contains("sha256:"));
     assert!(!ui_payload.contains("authentication_redacted"));
 
@@ -2206,15 +2216,23 @@ fn ui_projection_hides_forensic_fields_while_lab_retains_them() {
         .project(EventQuery::default(), ProjectionProfile::Normal)
         .expect("Normal project");
     assert_eq!(normal[0].payload, ui[0].payload);
+    let normal_payload = serde_json::to_string(&normal[0].payload).expect("Normal payload");
+    assert!(!normal_payload.contains(MACHINE_PATH));
+    assert!(!normal_payload.contains(BASENAME));
+    assert!(!normal_payload.contains(&machine_audit));
 
     let lab = ledger
         .project(EventQuery::default(), ProjectionProfile::Lab)
         .expect("Lab project");
     let lab_payload = serde_json::to_string(&lab[0].payload).expect("Lab payload");
-    assert!(!lab_payload.contains("internal-value"));
-    assert!(lab_payload.contains("[redacted]"));
+    assert!(!lab_payload.contains(MACHINE_PATH));
     assert!(lab_payload.contains("sha256:"));
     assert!(lab_payload.contains("authentication_redacted"));
+    let lab_value = serde_json::to_value(&lab[0].payload).expect("Lab payload value");
+    assert_eq!(
+        lab_value["payload"]["payload"]["data"]["audit"]["machine_path"],
+        machine_audit
+    );
     assert_eq!(lab[0].schema_version, persisted.schema_version());
     assert_eq!(lab[0].sensitivity, persisted.sensitivity());
 }

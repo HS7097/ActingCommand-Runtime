@@ -14,6 +14,7 @@ use crate::{
     ReleaseResourceVersion, ReleaseTransitionData, ReleaseTransitionKind, RuntimeReleaseSet,
     StateMigrationData, StateRecoveryAction, StateTransitionStatus, StateValidationResult,
 };
+use sha2::{Digest, Sha256};
 use std::sync::Mutex;
 
 struct SpyFingerprinter {
@@ -1212,8 +1213,126 @@ fn producer_cannot_select_redaction_policy() {
 }
 
 #[test]
+fn machine_path_audit_retains_basename_and_full_path_sha256_without_parent_path() {
+    let cases = [
+        (
+            r#"C:\Users\Alice\private\報告 "final" #1.json"#,
+            r#"報告 "final" #1.json"#,
+            "Users",
+        ),
+        (
+            "/srv/private/reports/runtime state.json",
+            "runtime state.json",
+            "reports",
+        ),
+    ];
+
+    for (index, (machine_path, basename, parent_fragment)) in cases.into_iter().enumerate() {
+        let sanitized = sanitize(
+            CommandPayloadDraft::received(
+                EventAction::RuntimeStart,
+                AuditInput::new().with_machine_path(machine_path),
+            )
+            .into(),
+            index as u64 + 1,
+        );
+        let payload = serde_json::to_value(sanitized.payload()).expect("payload value");
+        let stored = payload["payload"]["data"]["audit"]["machine_path"]
+            .as_str()
+            .expect("stored machine path audit");
+        let expected = format!(
+            "basename:{}|sha256:{:x}",
+            serde_json::to_string(basename).expect("canonical basename JSON"),
+            Sha256::digest(machine_path.as_bytes())
+        );
+
+        assert_eq!(stored, expected);
+        assert!(!stored.contains(machine_path));
+        assert!(!stored.contains(parent_fragment));
+        assert!(!stored.contains("[redacted]"));
+        assert!(!format!("{:?}", sanitized.payload()).contains(machine_path));
+    }
+
+    for invalid in [
+        String::new(),
+        "C:\\private\\".to_string(),
+        "/private/".to_string(),
+        ".".to_string(),
+        "..".to_string(),
+        "/private/.".to_string(),
+        "C:\\private\\..".to_string(),
+        format!("/private/{}", "x".repeat(256)),
+        "/private/control\u{0001}".to_string(),
+    ] {
+        let error = sanitize_error(
+            CommandPayloadDraft::received(
+                EventAction::RuntimeStart,
+                AuditInput::new().with_machine_path(invalid),
+            )
+            .into(),
+        );
+        assert_eq!(error.code(), "invalid_machine_path");
+    }
+
+    let sanitized = sanitize(
+        CommandPayloadDraft::received(
+            EventAction::RuntimeStart,
+            AuditInput::new().with_machine_path("parent/legacy.json"),
+        )
+        .into(),
+        3,
+    );
+    let mut legacy = serde_json::to_value(sanitized.payload()).expect("legacy payload value");
+    legacy["payload"]["data"]["audit"]["machine_path"] = serde_json::json!("[redacted]");
+    let legacy = serde_json::from_value::<EventPayload>(legacy).expect("decode legacy audit");
+    legacy.validate().expect("validate legacy redacted audit");
+
+    let mut noncanonical =
+        serde_json::to_value(sanitized.payload()).expect("noncanonical payload value");
+    noncanonical["payload"]["data"]["audit"]["machine_path"] =
+        serde_json::json!("basename:\"legacy.json\"|sha256:ABCDEF");
+    let noncanonical =
+        serde_json::from_value::<EventPayload>(noncanonical).expect("decode typed audit");
+    assert_eq!(
+        noncanonical
+            .validate()
+            .expect_err("reject noncanonical stored audit")
+            .code(),
+        "invalid_sanitized_payload"
+    );
+}
+
+#[test]
 fn all_runtime_secret_classes_follow_schema_owned_policy_independently() {
+    fn collect_machine_paths<'a>(value: &'a serde_json::Value, found: &mut Vec<&'a str>) {
+        match value {
+            serde_json::Value::Object(fields) => {
+                for (key, value) in fields {
+                    if key == "machine_path"
+                        && let Some(value) = value.as_str()
+                    {
+                        found.push(value);
+                    }
+                    collect_machine_paths(value, found);
+                }
+            }
+            serde_json::Value::Array(values) => {
+                for value in values {
+                    collect_machine_paths(value, found);
+                }
+            }
+            _ => {}
+        }
+    }
+
     type AuditBuilder = fn(&str) -> AuditInput;
+    const MACHINE_PATH: &str = r"C:\Users\Alice\private\runtime.json";
+    let machine_basename = "runtime.json";
+    let machine_audit = format!(
+        "basename:{}|sha256:{:x}",
+        serde_json::to_string(machine_basename).expect("canonical basename JSON"),
+        Sha256::digest(MACHINE_PATH.as_bytes())
+    );
     let cases: [(&str, AuditBuilder); 4] = [
         ("account-secret-c1@example.invalid", |value| {
             AuditInput::new().with_account(value)
@@ -1221,7 +1340,7 @@ fn all_runtime_secret_classes_follow_schema_owned_policy_independently() {
         ("authentication-secret-c1", |value| {
             AuditInput::new().with_authentication(value)
         }),
-        (r"C:\Users\Alice\private\runtime.json", |value| {
+        (MACHINE_PATH, |value| {
             AuditInput::new().with_machine_path(value)
         }),
         ("127.0.0.1:16384", |value| {
@@ -1246,6 +1365,17 @@ fn all_runtime_secret_classes_follow_schema_owned_policy_independently() {
                 assert!(json.contains(&format!("sha256:{}", "a".repeat(64))));
             } else {
                 assert!(spy.seen().is_empty());
+            }
+            if secret == MACHINE_PATH {
+                let full =
+                    serde_json::to_value(sanitized.payload()).expect("full sanitized payload");
+                let mut stored_machine_paths = Vec::new();
+                collect_machine_paths(&full, &mut stored_machine_paths);
+                assert_eq!(stored_machine_paths, [machine_audit.as_str()]);
+                let public = serde_json::to_string(&sanitized.payload().public_projection())
+                    .expect("public payload");
+                assert!(!public.contains(machine_basename));
+                assert!(!public.contains(&machine_audit));
             }
         }
     }
