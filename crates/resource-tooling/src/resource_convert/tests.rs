@@ -1905,28 +1905,62 @@ fn resource_convert_accepts_explicit_maa_tasks_mode() {
     assert_eq!(summary.targets, 2);
 }
 
-// Task Contract: Workflow #269 / #269-A2B-MAPPING-ADMISSION-IMPLEMENT-v1
-// (comment 5533732052). Test class: specification criterion.
+// Task Contract: Workflow #269 / #269-A2B-MAPPING-ADMISSION-IMPLEMENT-v2
+// (comment 5533851835). Test class: specification criterion.
 #[test]
 fn resource_convert_strictly_admits_maa_semantic_mapping_before_outputs() {
-    let (root, maa_dir) = write_synthetic_maa_convert_fixture();
-    let summary = resource_convert(ResourceConvertRequest {
-        repo: root.path().to_path_buf(),
-        game: None,
-        server: None,
-        locale: None,
-        maa_tasks_root: Some(maa_dir),
-        dry_run: true,
-    })
-    .expect("valid semantic mapping");
-    assert_eq!(summary.maa_semantic_mappings, 64);
-    assert_eq!(
-        serde_json::to_value(&summary)
-            .expect("serialized response")
-            .get("maa_semantic_mappings")
-            .and_then(Value::as_u64),
-        Some(64)
-    );
+    for (task_count, use_overlay) in [(64, true), (1, false), (0, false), (0, true)] {
+        let (root, maa_dir) = write_synthetic_maa_convert_fixture();
+        let mapping_path = root.path().join("tasks/maa-semantic-mapping.json");
+        let facts_path = root.path().join("upstream-sync/maa.tasks.json");
+        if task_count == 0 {
+            fs::remove_file(&mapping_path).expect("remove mapping");
+            fs::remove_file(&facts_path).expect("remove facts");
+        } else if task_count != 64 {
+            let mut facts: Value =
+                serde_json::from_slice(&fs::read(&facts_path).expect("facts bytes"))
+                    .expect("facts JSON");
+            facts["data"]["tasks"]
+                .as_array_mut()
+                .unwrap()
+                .truncate(task_count);
+            let facts_bytes = serde_json::to_vec_pretty(&facts).expect("serialize facts");
+            fs::write(&facts_path, &facts_bytes).expect("write facts");
+            let mut mapping: Value =
+                serde_json::from_slice(&fs::read(&mapping_path).expect("mapping bytes"))
+                    .expect("mapping JSON");
+            mapping["facts_container"]["task_count"] = json!(task_count);
+            mapping["facts_container"]["sha256"] =
+                json!(format!("{:x}", Sha256::digest(&facts_bytes)));
+            mapping["mappings"]
+                .as_array_mut()
+                .unwrap()
+                .truncate(task_count);
+            mapping["mappings"][0]["product_heading"] = json!("external_heading");
+            fs::write(
+                &mapping_path,
+                serde_json::to_vec_pretty(&mapping).expect("serialize mapping"),
+            )
+            .expect("write mapping");
+        }
+        let summary = resource_convert(ResourceConvertRequest {
+            repo: root.path().to_path_buf(),
+            game: None,
+            server: None,
+            locale: None,
+            maa_tasks_root: use_overlay.then_some(maa_dir),
+            dry_run: task_count != 0,
+        })
+        .expect("valid resource conversion");
+        assert_eq!(summary.maa_semantic_mappings, task_count);
+        assert_eq!(
+            serde_json::to_value(&summary)
+                .expect("serialized response")
+                .get("maa_semantic_mappings")
+                .and_then(Value::as_u64),
+            Some(task_count as u64)
+        );
+    }
 
     #[derive(Clone, Copy, Debug)]
     enum InvalidCase {
@@ -1936,11 +1970,14 @@ fn resource_convert_strictly_admits_maa_semantic_mapping_before_outputs() {
         MappingSchemaMismatch,
         DataSchemaMismatch,
         TaskCountMismatch,
+        ZeroTaskCount,
+        ExcessTaskCount,
+        ActualTaskCountMismatch,
         MissingTask,
         DuplicateTask,
         UnknownTask,
         OrderMismatch,
-        UnknownHeading,
+        MalformedHeading,
         UnknownRole,
         MalformedPageId,
         RowKeyExpansion,
@@ -1953,11 +1990,14 @@ fn resource_convert_strictly_admits_maa_semantic_mapping_before_outputs() {
         (InvalidCase::MappingSchemaMismatch, "mapping schema"),
         (InvalidCase::DataSchemaMismatch, "facts data schema"),
         (InvalidCase::TaskCountMismatch, "task_count"),
-        (InvalidCase::MissingTask, "exactly 64 mapping rows"),
+        (InvalidCase::ZeroTaskCount, "task_count must be within"),
+        (InvalidCase::ExcessTaskCount, "task_count must be within"),
+        (InvalidCase::ActualTaskCountMismatch, "actual task count"),
+        (InvalidCase::MissingTask, "mapping row count"),
         (InvalidCase::DuplicateTask, "duplicate source_task_id"),
         (InvalidCase::UnknownTask, "unknown source_task_id"),
         (InvalidCase::OrderMismatch, "ordinal order"),
-        (InvalidCase::UnknownHeading, "unknown product_heading"),
+        (InvalidCase::MalformedHeading, "invalid product_heading"),
         (InvalidCase::UnknownRole, "unknown role"),
         (InvalidCase::MalformedPageId, "invalid page_id"),
         (InvalidCase::RowKeyExpansion, "unknown field"),
@@ -1996,6 +2036,16 @@ fn resource_convert_strictly_admits_maa_semantic_mapping_before_outputs() {
             InvalidCase::TaskCountMismatch => {
                 mapping["facts_container"]["task_count"] = json!(63);
             }
+            InvalidCase::ZeroTaskCount => {
+                mapping["facts_container"]["task_count"] = json!(0);
+            }
+            InvalidCase::ExcessTaskCount => {
+                mapping["facts_container"]["task_count"] =
+                    json!(maa_task_graph::MAX_MAA_TASK_FACT_SELECTIONS + 1);
+            }
+            InvalidCase::ActualTaskCountMismatch => {
+                facts["data"]["tasks"].as_array_mut().unwrap().pop();
+            }
             InvalidCase::MissingTask => {
                 mapping["mappings"].as_array_mut().unwrap().pop();
             }
@@ -2008,8 +2058,8 @@ fn resource_convert_strictly_admits_maa_semantic_mapping_before_outputs() {
             InvalidCase::OrderMismatch => {
                 mapping["mappings"].as_array_mut().unwrap().swap(0, 1);
             }
-            InvalidCase::UnknownHeading => {
-                mapping["mappings"][0]["product_heading"] = json!("unknown");
+            InvalidCase::MalformedHeading => {
+                mapping["mappings"][0]["product_heading"] = json!("invalid/heading");
             }
             InvalidCase::UnknownRole => {
                 mapping["mappings"][0]["role"] = json!("unknown");
@@ -2028,7 +2078,10 @@ fn resource_convert_strictly_admits_maa_semantic_mapping_before_outputs() {
         if write_facts {
             let facts_bytes = serde_json::to_vec_pretty(&facts).expect("serialize facts");
             fs::write(&facts_path, &facts_bytes).expect("write facts");
-            if matches!(case, InvalidCase::DataSchemaMismatch) {
+            if matches!(
+                case,
+                InvalidCase::DataSchemaMismatch | InvalidCase::ActualTaskCountMismatch
+            ) {
                 mapping["facts_container"]["sha256"] =
                     json!(format!("{:x}", Sha256::digest(&facts_bytes)));
             }

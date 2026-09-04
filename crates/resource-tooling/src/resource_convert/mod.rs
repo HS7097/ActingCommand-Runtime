@@ -26,8 +26,6 @@ const MAA_TASK_FACTS_PATH: &str = "upstream-sync/maa.tasks.json";
 const MAA_TASK_FACTS_DECLARED_PATH: &str = "ours/upstream-sync/maa.tasks.json";
 const MAA_SEMANTIC_MAPPING_SCHEMA: &str = "actingcommand.maa-semantic-mapping.v1";
 const MAA_TASK_FACTS_SCHEMA: &str = "actingcommand.maa-task-facts-set.v1";
-const MAA_SEMANTIC_MAPPING_COUNT: usize = 64;
-const MAA_PRODUCT_HEADINGS: [&str; 3] = ["warehouse", "home_sanity", "stage_proxy_settlement"];
 const MAA_SEMANTIC_ROLES: [&str; 5] = [
     "page_anchor",
     "page_transition",
@@ -161,12 +159,33 @@ pub fn resource_convert(request: ResourceConvertRequest) -> CliOutcome<ResourceC
 
 fn admit_maa_semantic_mapping(root: &Path, game: &str) -> CliOutcome<usize> {
     let mapping_path = root.join(MAA_SEMANTIC_MAPPING_PATH);
-    let mapping_bytes = fs::read(&mapping_path).map_err(|error| {
-        CliError::package_invalid(format!(
+    let facts_path = root.join(MAA_TASK_FACTS_PATH);
+    let read_source = |path: &Path| match fs::read(path) {
+        Ok(bytes) => Ok(Some(bytes)),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(CliError::package_invalid(format!(
             "failed to read {}: {error}",
-            mapping_path.display()
-        ))
-    })?;
+            path.display()
+        ))),
+    };
+    let mapping_bytes = read_source(&mapping_path)?;
+    let facts_bytes = read_source(&facts_path)?;
+    let (mapping_bytes, facts_bytes) = match (mapping_bytes, facts_bytes) {
+        (None, None) => return Ok(0),
+        (Some(mapping_bytes), Some(facts_bytes)) => (mapping_bytes, facts_bytes),
+        (None, Some(_)) => {
+            return Err(CliError::package_invalid(format!(
+                "canonical MAA pair requires {}",
+                mapping_path.display()
+            )));
+        }
+        (Some(_), None) => {
+            return Err(CliError::package_invalid(format!(
+                "canonical MAA pair requires {}",
+                facts_path.display()
+            )));
+        }
+    };
     let mapping: MaaSemanticMappingDocument =
         serde_json::from_slice(&mapping_bytes).map_err(|error| {
             CliError::package_invalid(format!(
@@ -192,24 +211,22 @@ fn admit_maa_semantic_mapping(root: &Path, game: &str) -> CliOutcome<usize> {
             mapping_path.display()
         )));
     }
-    if mapping.facts_container.task_count != MAA_SEMANTIC_MAPPING_COUNT {
+    let task_count = mapping.facts_container.task_count;
+    if task_count == 0 || task_count > maa_task_graph::MAX_MAA_TASK_FACT_SELECTIONS {
         return Err(CliError::package_invalid(format!(
-            "{}: facts_container.task_count must be {MAA_SEMANTIC_MAPPING_COUNT}",
-            mapping_path.display()
+            "{}: facts_container.task_count must be within 1..={}",
+            mapping_path.display(),
+            maa_task_graph::MAX_MAA_TASK_FACT_SELECTIONS
         )));
     }
-    if mapping.mappings.len() != MAA_SEMANTIC_MAPPING_COUNT {
+    if mapping.mappings.len() != task_count {
         return Err(CliError::package_invalid(format!(
-            "{}: expected exactly {MAA_SEMANTIC_MAPPING_COUNT} mapping rows, found {}",
+            "{}: mapping row count {} does not match facts_container.task_count {task_count}",
             mapping_path.display(),
             mapping.mappings.len()
         )));
     }
 
-    let facts_path = root.join(MAA_TASK_FACTS_PATH);
-    let facts_bytes = fs::read(&facts_path).map_err(|error| {
-        CliError::package_invalid(format!("failed to read {}: {error}", facts_path.display()))
-    })?;
     let actual_sha256 = format!("{:x}", Sha256::digest(&facts_bytes));
     if actual_sha256 != mapping.facts_container.sha256 {
         return Err(CliError::package_invalid(format!(
@@ -270,9 +287,11 @@ fn admit_maa_semantic_mapping(root: &Path, game: &str) -> CliOutcome<usize> {
                 row.source_task_id
             )));
         }
-        if !MAA_PRODUCT_HEADINGS.contains(&row.product_heading.as_str()) {
+        if !canonical_resource_identifier("mapping product heading", &row.product_heading)
+            .is_ok_and(|value| value == row.product_heading)
+        {
             return Err(CliError::package_invalid(format!(
-                "{}: unknown product_heading '{}'",
+                "{}: invalid product_heading '{}'",
                 mapping_path.display(),
                 row.product_heading
             )));
