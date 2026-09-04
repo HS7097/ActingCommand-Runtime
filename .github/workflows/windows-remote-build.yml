@@ -107,6 +107,7 @@ jobs:
             --bin actingcommand-actingd `
             --bin actingctl `
             --bin actinglab `
+            --bin actingledger `
             --bin actingcommand-vision-provider-check `
             --bin actingcommand-device-test
           if ($LASTEXITCODE -ne 0) {
@@ -162,6 +163,7 @@ jobs:
           $runtimeFiles = @('actingcommand-actingd.exe', 'actingctl.exe')
           $toolFiles = @(
             'actinglab.exe',
+            'actingledger.exe',
             'actingcommand-vision-provider-check.exe',
             'actingcommand-device-test.exe',
             'ac_fastdeploy_ppocr.dll'
@@ -233,6 +235,7 @@ jobs:
           Copy-BuildFiles -Names $runtimeFiles -Destination $runtimeDir
           Copy-BuildFiles -Names @(
             'actinglab.exe',
+            'actingledger.exe',
             'actingcommand-vision-provider-check.exe',
             'actingcommand-device-test.exe'
           ) -Destination $toolsDir
