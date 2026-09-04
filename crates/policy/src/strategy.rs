@@ -3,10 +3,12 @@
 //! Pure strategic-report projection into existing scheduling declarations.
 
 use crate::canonical::canonical_serialized;
+use crate::evaluator::scope_matches_instance;
 use crate::{
-    ActivityProfile, CompiledCatalog, GoalTarget, LoadProfile, MetricRef, PredicateSpec,
-    ScopeSelector, TaskSpec,
+    ActivityProfile, CompiledCatalog, EvaluationFacts, EvaluationResources, FactValue, GoalTarget,
+    InstanceSnapshot, LoadProfile, MetricRef, PredicateSpec, ScopeSelector, TaskSpec,
 };
+use actingcommand_contract::MAX_STRATEGIC_WEIGHT_MILLI;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
@@ -500,6 +502,8 @@ pub struct StrategicProjection {
 pub fn project_strategic_report(
     catalog: &CompiledCatalog,
     report: &StrategicReport,
+    facts: &EvaluationFacts,
+    resources: &EvaluationResources,
 ) -> StrategyResult<StrategicProjection> {
     report.validate()?;
     if report.catalog_hash() != catalog.catalog_hash()
@@ -507,6 +511,11 @@ pub fn project_strategic_report(
     {
         return Err(StrategyError::mismatch(
             "report does not target the supplied catalog generation",
+        ));
+    }
+    if report.as_of_ledger_position() != facts.ledger_position {
+        return Err(StrategyError::invalid(
+            "report ledger position does not match the frozen facts",
         ));
     }
     let goals = report
@@ -524,7 +533,34 @@ pub fn project_strategic_report(
         let goal = goals
             .get(assessment.goal_id.as_str())
             .ok_or_else(|| StrategyError::invalid("assessment references an unknown goal"))?;
-        let calculated = calculate_assessment(report.as_of_unix_ms(), assessment)?;
+        if assessment.fact_snapshot_id != facts.fact_snapshot_id {
+            return Err(StrategyError::invalid(
+                "assessment fact snapshot does not match the frozen facts",
+            ));
+        }
+        let instance = resolve_assessment_instance(assessment, facts)?;
+        if instance.game_id != report.game_id() {
+            return Err(StrategyError::invalid(
+                "assessment instance is outside the report game",
+            ));
+        }
+        let current = resolve_metric_current(
+            &goal.metric,
+            assessment,
+            instance,
+            facts,
+            resources,
+            report.as_of_unix_ms(),
+        )?;
+        let production_rate = catalog_production_rate(catalog, &goal.metric, instance)?;
+        require_optional_check("current projection", assessment.current_projection, current)?;
+        require_optional_check(
+            "production rate",
+            assessment.production_rate_per_hour,
+            production_rate,
+        )?;
+        let calculated =
+            calculate_assessment(report.as_of_unix_ms(), assessment, current, production_rate)?;
         let template = select_template(goal, &calculated)?;
         let disposition = match calculated.band {
             StrategicBand::NeedsDetection => PlanningDisposition::NeedsDetection,
@@ -647,6 +683,8 @@ struct CalculatedAssessment {
 fn calculate_assessment(
     as_of_unix_ms: u64,
     assessment: &StrategicInstanceAssessment,
+    current: Option<i64>,
+    production_rate: Option<u64>,
 ) -> StrategyResult<CalculatedAssessment> {
     if !assessment.available {
         return Ok(CalculatedAssessment {
@@ -656,10 +694,7 @@ fn calculate_assessment(
             band: StrategicBand::Blocked,
         });
     }
-    let (Some(current), Some(rate)) = (
-        assessment.current_projection,
-        assessment.production_rate_per_hour,
-    ) else {
+    let Some(current) = current else {
         return Ok(CalculatedAssessment {
             shortfall: None,
             capacity: None,
@@ -678,6 +713,14 @@ fn calculate_assessment(
     }
     let shortfall = u64::try_from(shortfall_i128)
         .map_err(|_| StrategyError::overflow("shortfall exceeds u64"))?;
+    let Some(rate) = production_rate else {
+        return Ok(CalculatedAssessment {
+            shortfall: Some(shortfall),
+            capacity: None,
+            urgency_milli: None,
+            band: StrategicBand::NeedsDetection,
+        });
+    };
     let remaining_ms = assessment.deadline_unix_ms.saturating_sub(as_of_unix_ms);
     let capacity = u128::from(rate)
         .checked_mul(u128::from(remaining_ms))
@@ -705,6 +748,172 @@ fn calculate_assessment(
             StrategicBand::InfeasibleBestEffort
         },
     })
+}
+
+fn resolve_assessment_instance<'a>(
+    assessment: &StrategicInstanceAssessment,
+    facts: &'a EvaluationFacts,
+) -> StrategyResult<&'a InstanceSnapshot> {
+    let mut matches = facts
+        .instances
+        .iter()
+        .filter(|instance| instance.instance_id == assessment.instance_id);
+    let instance = matches
+        .next()
+        .ok_or_else(|| StrategyError::invalid("assessment instance is missing"))?;
+    if matches.next().is_some() {
+        return Err(StrategyError::invalid("assessment instance is duplicated"));
+    }
+    Ok(instance)
+}
+
+fn resolve_metric_current(
+    metric: &MetricRef,
+    assessment: &StrategicInstanceAssessment,
+    instance: &InstanceSnapshot,
+    facts: &EvaluationFacts,
+    resources: &EvaluationResources,
+    as_of_unix_ms: u64,
+) -> StrategyResult<Option<i64>> {
+    match metric {
+        MetricRef::Fact { fact_key } => {
+            let mut matches = facts.facts.iter().filter(|fact| {
+                fact.fact_key == *fact_key && scope_matches_instance(&fact.scope, instance)
+            });
+            let Some(fact) = matches.next() else {
+                return Ok(None);
+            };
+            if matches.next().is_some() {
+                return Err(StrategyError::invalid("strategic fact input is duplicated"));
+            }
+            if fact
+                .expires_at_unix_ms
+                .is_some_and(|expires| as_of_unix_ms > expires)
+            {
+                return Ok(None);
+            }
+            Ok(match &fact.value {
+                FactValue::Integer(value) => Some(*value),
+                _ => None,
+            })
+        }
+        MetricRef::Pool { pool_id } => {
+            let mut matches = resources
+                .pools
+                .iter()
+                .filter(|pool| pool.pool_id == *pool_id);
+            let Some(pool) = matches.next() else {
+                return Ok(None);
+            };
+            if matches.next().is_some() {
+                return Err(StrategyError::invalid("strategic pool input is duplicated"));
+            }
+            i64::try_from(pool.value)
+                .map(Some)
+                .map_err(|_| StrategyError::overflow("strategic pool value exceeds i64"))
+        }
+        MetricRef::Outcome {
+            task_id,
+            outcome_key,
+        } => {
+            let mut matches = facts.outcomes.iter().filter(|outcome| {
+                outcome.instance_id == assessment.instance_id
+                    && outcome.task_id == *task_id
+                    && outcome.outcome_key == *outcome_key
+            });
+            let Some(outcome) = matches.next() else {
+                return Ok(None);
+            };
+            if matches.next().is_some() {
+                return Err(StrategyError::invalid(
+                    "strategic outcome input is duplicated",
+                ));
+            }
+            Ok(match &outcome.value {
+                FactValue::Integer(value) => Some(*value),
+                _ => None,
+            })
+        }
+    }
+}
+
+fn catalog_production_rate(
+    catalog: &CompiledCatalog,
+    metric: &MetricRef,
+    instance: &InstanceSnapshot,
+) -> StrategyResult<Option<u64>> {
+    let MetricRef::Pool { pool_id } = metric else {
+        return Ok(None);
+    };
+    let mut total = 0_u64;
+    for task in &catalog.catalog().tasks.tasks {
+        if !scope_matches_instance(&task.scope, instance)
+            || !instance
+                .capability_operation_ids
+                .iter()
+                .any(|operation| operation == &task.entrypoint.operation_id)
+            || task
+                .instance_overrides
+                .iter()
+                .find(|candidate| candidate.instance_id == instance.instance_id)
+                .and_then(|override_spec| override_spec.enabled.0)
+                .is_some_and(|enabled| !enabled)
+        {
+            continue;
+        }
+        if !task
+            .produces
+            .iter()
+            .any(|effect| effect.pool_id == *pool_id)
+        {
+            continue;
+        }
+        let duration_with_cooldown = task
+            .expected_duration_ms
+            .checked_add(task.cooldown_ms)
+            .ok_or_else(|| StrategyError::overflow("task cycle addition overflow"))?;
+        let task_cycle = task.next_run_clamp_ms.max(duration_with_cooldown);
+        if task.expected_duration_ms == 0 || task_cycle == 0 {
+            return Err(StrategyError::invalid(
+                "catalog production task has a zero duration",
+            ));
+        }
+        let executions = [
+            u64::from(task.loop_budget.daily_limit),
+            u64::from(task.loop_budget.window_iteration_limit),
+            task.loop_budget.max_runtime_ms / task.expected_duration_ms,
+            RATE_PERIOD_MS / task_cycle,
+        ]
+        .into_iter()
+        .min()
+        .expect("four production bounds are present");
+        for effect in task
+            .produces
+            .iter()
+            .filter(|effect| effect.pool_id == *pool_id)
+        {
+            let contribution = effect.amount.checked_mul(executions).ok_or_else(|| {
+                StrategyError::overflow("catalog production contribution overflow")
+            })?;
+            total = total
+                .checked_add(contribution)
+                .ok_or_else(|| StrategyError::overflow("catalog production rate overflow"))?;
+        }
+    }
+    Ok(Some(total))
+}
+
+fn require_optional_check<T: Copy + PartialEq>(
+    label: &str,
+    reported: Option<T>,
+    derived: Option<T>,
+) -> StrategyResult<()> {
+    if reported.is_some_and(|reported| Some(reported) != derived) {
+        return Err(StrategyError::invalid(format!(
+            "reported {label} does not match the derived value"
+        )));
+    }
+    Ok(())
 }
 
 fn select_template<'a>(
@@ -837,8 +1046,13 @@ fn instantiate_catalog_declarations(
         .map(|(index, task)| (task.id.clone(), format!("strategy.task.{suffix}.{index}")))
         .collect::<BTreeMap<_, _>>();
     let computed_weight = u32::from(template.strategic_weight_milli)
-        .saturating_add(calculated.urgency_milli.unwrap_or(0).min(10_000))
-        .min(10_000) as u16;
+        .saturating_add(
+            calculated
+                .urgency_milli
+                .unwrap_or(0)
+                .min(u32::from(MAX_STRATEGIC_WEIGHT_MILLI)),
+        )
+        .min(u32::from(MAX_STRATEGIC_WEIGHT_MILLI)) as u16;
     let mut tasks = Vec::with_capacity(task_templates.len());
     for task in task_templates {
         let mut task = task.clone();
@@ -1093,7 +1307,7 @@ fn validate_template(template: &StrategicTemplate) -> StrategyResult<()> {
         || template.match_bands.is_empty()
         || template.minimum_urgency_milli > template.maximum_urgency_milli
         || template.maximum_urgency_milli > MAX_URGENCY_MILLI
-        || template.strategic_weight_milli > 10_000
+        || template.strategic_weight_milli > MAX_STRATEGIC_WEIGHT_MILLI
         || template.match_bands.iter().any(|band| {
             !matches!(
                 band,
@@ -1376,8 +1590,8 @@ mod tests {
         CatalogDocumentSource::new(uri, serde_json::to_vec(&value).expect("fixture JSON"))
     }
 
-    fn catalog() -> CompiledCatalog {
-        compile_catalog(&CatalogSources {
+    fn catalog_sources() -> CatalogSources {
+        CatalogSources {
             tasks: source(
                 "tasks.json",
                 serde_json::json!({
@@ -1391,7 +1605,14 @@ mod tests {
                         "priority": 10,
                         "trigger": {"kind": "clock", "schedule": {"kind": "interval", "clock_source": {"kind": "local"}, "every_ms": 60000, "anchor_ms": 1}},
                         "feedback_stop": {"kind": "outcome", "task_id": "template.observe", "outcome_key": "completed", "comparison": "eq", "value": {"type": "boolean", "value": true}},
-                        "consumes": [], "produces": [],
+                        "consumes": [],
+                        "produces": [{
+                            "pool_id": "fixture-pool",
+                            "direction": "produce",
+                            "amount": 10,
+                            "observation_source": "scan_verified",
+                            "confidence_milli": 1000
+                        }],
                         "on_failure": {"action": "continue", "retry_limit": 1, "retry_backoff_ms": 1000, "escalation_threshold": 2},
                         "sensitive": false, "next_run_clamp_ms": 1000, "yield_points": ["safe"],
                         "expected_duration_ms": 1000, "cooldown_ms": 0, "load_profile": {"kind": "light"},
@@ -1405,7 +1626,14 @@ mod tests {
                 serde_json::json!({
                     "schema_version": "actingcommand.scheduling.v1",
                     "catalog": {"catalog_id": "fixture-catalog", "catalog_version": 1, "approval_refs": ["approval:fixture"]},
-                    "pools": []
+                    "pools": [{
+                        "id": "fixture-pool",
+                        "scope": {"kind": "game", "game_id": "fixture-game"},
+                        "capacity": 1000000,
+                        "projection": {"amount": 1, "per_ms": 1000},
+                        "observation": {"kind": "fact", "fact_key": "resource.current"},
+                        "group_delay": {"minimum_delay_ms": 1000, "maximum_delay_ms": 2000}
+                    }]
                 }),
             ),
             activity: source(
@@ -1432,8 +1660,20 @@ mod tests {
                     "events": []
                 }),
             ),
-        })
-        .expect("fixture catalog")
+        }
+    }
+
+    fn catalog() -> CompiledCatalog {
+        compile_catalog(&catalog_sources()).expect("fixture catalog")
+    }
+
+    fn catalog_with_tasks(tasks: Vec<serde_json::Value>) -> CompiledCatalog {
+        let mut sources = catalog_sources();
+        let mut document: serde_json::Value =
+            serde_json::from_slice(&sources.tasks.bytes).expect("task document");
+        document["tasks"] = serde_json::Value::Array(tasks);
+        sources.tasks.bytes = serde_json::to_vec(&document).expect("task document bytes");
+        compile_catalog(&sources).expect("custom fixture catalog")
     }
 
     fn template(maximum_urgency_milli: u32) -> StrategicTemplate {
@@ -1468,15 +1708,22 @@ mod tests {
         current: Option<i64>,
         rate: Option<u64>,
     ) -> StrategicInstanceAssessment {
+        let target = current
+            .and_then(|value| 100_i64.checked_sub(value))
+            .expect("bounded fixture target");
+        let remaining_ms = rate
+            .and_then(|value| value.checked_mul(RATE_PERIOD_MS))
+            .and_then(|value| value.checked_div(50))
+            .expect("bounded fixture deadline");
         StrategicInstanceAssessment {
             goal_id: "goal.primary".to_owned(),
             instance_id: instance.to_owned(),
             game_id: "fixture-game".to_owned(),
-            fact_snapshot_id: format!("snapshot.{instance}"),
-            current_projection: current,
-            production_rate_per_hour: rate,
-            target: 100,
-            deadline_unix_ms: 4_600_000,
+            fact_snapshot_id: "snapshot.frozen".to_owned(),
+            current_projection: Some(0),
+            production_rate_per_hour: Some(50),
+            target,
+            deadline_unix_ms: 1_000_000 + remaining_ms,
             available: true,
             capability_ids: vec!["operation.observe".to_owned()],
         }
@@ -1502,8 +1749,8 @@ mod tests {
             vec![StrategicGoal {
                 goal_id: "goal.primary".to_owned(),
                 goal_version: 1,
-                metric: MetricRef::Fact {
-                    fact_key: "resource.current".to_owned(),
+                metric: MetricRef::Pool {
+                    pool_id: "fixture-pool".to_owned(),
                 },
                 templates: vec![template(MAX_URGENCY_MILLI)],
                 outlier_policy: OutlierPolicy {
@@ -1521,6 +1768,51 @@ mod tests {
         .expect("strategy report")
     }
 
+    fn frozen_inputs(report: &StrategicReport) -> (EvaluationFacts, EvaluationResources) {
+        let instances = report
+            .assessments()
+            .iter()
+            .map(|assessment| {
+                (
+                    assessment.instance_id.clone(),
+                    InstanceSnapshot {
+                        instance_id: assessment.instance_id.clone(),
+                        server_id: format!("server.{}", assessment.instance_id),
+                        game_id: assessment.game_id.clone(),
+                        host_id: format!("host.{}", assessment.instance_id),
+                        available: assessment.available,
+                        capability_operation_ids: assessment.capability_ids.clone(),
+                        preferred_task_ids: Vec::new(),
+                    },
+                )
+            })
+            .collect::<BTreeMap<_, _>>()
+            .into_values()
+            .collect();
+        (
+            EvaluationFacts {
+                ledger_position: report.as_of_ledger_position(),
+                fact_snapshot_id: "snapshot.frozen".to_owned(),
+                facts: Vec::new(),
+                outcomes: Vec::new(),
+                tasks: Vec::new(),
+                instances,
+            },
+            EvaluationResources {
+                pools: vec![crate::PoolValueSnapshot {
+                    pool_id: "fixture-pool".to_owned(),
+                    value: 0,
+                    observed_at_unix_ms: report.as_of_unix_ms(),
+                }],
+                hosts: Vec::new(),
+            },
+        )
+    }
+
+    fn refresh_report_identity(report: &mut StrategicReport) {
+        report.report_id = report_identity(report).expect("report identity");
+    }
+
     #[test]
     fn projection_is_deterministic_and_mechanical() {
         let catalog = catalog();
@@ -1531,8 +1823,11 @@ mod tests {
                 assessment("instance-b", Some(0), Some(10)),
             ],
         );
-        let first = project_strategic_report(&catalog, &report).expect("first projection");
-        let second = project_strategic_report(&catalog, &report).expect("second projection");
+        let (facts, resources) = frozen_inputs(&report);
+        let first = project_strategic_report(&catalog, &report, &facts, &resources)
+            .expect("first projection");
+        let second = project_strategic_report(&catalog, &report, &facts, &resources)
+            .expect("second projection");
         assert_eq!(first, second);
         assert_eq!(first.instances[0].band, StrategicBand::Actionable);
         assert_eq!(first.instances[1].band, StrategicBand::InfeasibleBestEffort);
@@ -1548,6 +1843,346 @@ mod tests {
     }
 
     #[test]
+    fn metric_refs_are_derived_from_frozen_inputs_and_report_values_are_only_checks() {
+        let catalog = catalog();
+        let mut report = report(
+            &catalog,
+            vec![assessment("instance-a", Some(50), Some(100))],
+        );
+        report.goals[0].metric = MetricRef::Fact {
+            fact_key: "resource.current".to_owned(),
+        };
+        report.assessments[0].current_projection = Some(60);
+        report.assessments[0].production_rate_per_hour = None;
+        report.assessments[0].target = 100;
+        report.assessments[0].deadline_unix_ms = report.as_of_unix_ms + RATE_PERIOD_MS;
+        refresh_report_identity(&mut report);
+        let (mut facts, mut resources) = frozen_inputs(&report);
+        facts.facts.push(crate::ObservedFact {
+            scope: ScopeSelector::Server {
+                server_id: "server.instance-a".to_owned(),
+            },
+            fact_key: "resource.current".to_owned(),
+            value: FactValue::Integer(60),
+            observed_at_unix_ms: report.as_of_unix_ms(),
+            expires_at_unix_ms: Some(report.as_of_unix_ms() + 1),
+            confidence_milli: 1_000,
+        });
+        let projection =
+            project_strategic_report(&catalog, &report, &facts, &resources).expect("projection");
+        assert_eq!(projection.instances[0].shortfall, Some(40));
+        assert_eq!(projection.instances[0].capacity, None);
+        assert_eq!(projection.instances[0].band, StrategicBand::NeedsDetection);
+
+        let mut no_pressure = report.clone();
+        no_pressure.assessments[0].target = 50;
+        refresh_report_identity(&mut no_pressure);
+        let projection = project_strategic_report(&catalog, &no_pressure, &facts, &resources)
+            .expect("no-pressure projection");
+        assert_eq!(projection.instances[0].shortfall, Some(0));
+        assert_eq!(projection.instances[0].capacity, Some(0));
+        assert_eq!(projection.instances[0].urgency_milli, Some(0));
+        assert_eq!(projection.instances[0].band, StrategicBand::NoPressure);
+
+        let mut mismatch = report.clone();
+        mismatch.assessments[0].current_projection = Some(61);
+        refresh_report_identity(&mut mismatch);
+        assert_eq!(
+            project_strategic_report(&catalog, &mismatch, &facts, &resources)
+                .expect_err("reported current is only an equality check")
+                .code(),
+            "strategy_report_invalid"
+        );
+        let mut rate_claim = report.clone();
+        rate_claim.assessments[0].production_rate_per_hour = Some(1);
+        refresh_report_identity(&mut rate_claim);
+        assert_eq!(
+            project_strategic_report(&catalog, &rate_claim, &facts, &resources)
+                .expect_err("a fact metric has no catalog rate")
+                .code(),
+            "strategy_report_invalid"
+        );
+
+        let mut wrong_snapshot = report.clone();
+        wrong_snapshot.assessments[0].fact_snapshot_id = "snapshot.other".to_owned();
+        refresh_report_identity(&mut wrong_snapshot);
+        assert!(project_strategic_report(&catalog, &wrong_snapshot, &facts, &resources).is_err());
+        let mut wrong_position = facts.clone();
+        wrong_position.ledger_position += 1;
+        assert!(project_strategic_report(&catalog, &report, &wrong_position, &resources).is_err());
+        let mut duplicate_instance = facts.clone();
+        duplicate_instance
+            .instances
+            .push(facts.instances[0].clone());
+        assert!(
+            project_strategic_report(&catalog, &report, &duplicate_instance, &resources).is_err()
+        );
+
+        let mut duplicate_fact = facts.clone();
+        duplicate_fact.facts.push(facts.facts[0].clone());
+        assert!(project_strategic_report(&catalog, &report, &duplicate_fact, &resources).is_err());
+        for fact_value in [None, Some(FactValue::String("60".to_owned()))] {
+            let mut unknown_facts = facts.clone();
+            match fact_value {
+                None => unknown_facts.facts.clear(),
+                Some(value) => unknown_facts.facts[0].value = value,
+            }
+            let mut unknown_report = report.clone();
+            unknown_report.assessments[0].current_projection = None;
+            refresh_report_identity(&mut unknown_report);
+            let projection =
+                project_strategic_report(&catalog, &unknown_report, &unknown_facts, &resources)
+                    .expect("unknown metric projection");
+            assert_eq!(projection.instances[0].band, StrategicBand::NeedsDetection);
+            assert_eq!(projection.instances[0].shortfall, None);
+        }
+        let mut expired_facts = facts.clone();
+        expired_facts.facts[0].expires_at_unix_ms = Some(report.as_of_unix_ms() - 1);
+        let mut expired_report = report.clone();
+        expired_report.assessments[0].current_projection = None;
+        refresh_report_identity(&mut expired_report);
+        assert_eq!(
+            project_strategic_report(&catalog, &expired_report, &expired_facts, &resources)
+                .expect("expired metric projection")
+                .instances[0]
+                .band,
+            StrategicBand::NeedsDetection
+        );
+
+        resources.pools[0].value = 23;
+        let instance = &facts.instances[0];
+        assert_eq!(
+            resolve_metric_current(
+                &MetricRef::Pool {
+                    pool_id: "fixture-pool".to_owned()
+                },
+                &report.assessments[0],
+                instance,
+                &facts,
+                &resources,
+                report.as_of_unix_ms(),
+            )
+            .expect("pool metric"),
+            Some(23)
+        );
+        let mut duplicate_pool = resources.clone();
+        duplicate_pool.pools.push(resources.pools[0].clone());
+        assert!(
+            resolve_metric_current(
+                &MetricRef::Pool {
+                    pool_id: "fixture-pool".to_owned()
+                },
+                &report.assessments[0],
+                instance,
+                &facts,
+                &duplicate_pool,
+                report.as_of_unix_ms(),
+            )
+            .is_err()
+        );
+        let mut overflow_pool = resources.clone();
+        overflow_pool.pools[0].value = u64::MAX;
+        assert_eq!(
+            resolve_metric_current(
+                &MetricRef::Pool {
+                    pool_id: "fixture-pool".to_owned()
+                },
+                &report.assessments[0],
+                instance,
+                &facts,
+                &overflow_pool,
+                report.as_of_unix_ms(),
+            )
+            .expect_err("pool conversion must be checked")
+            .code(),
+            "strategy_numeric_overflow"
+        );
+
+        let outcome_metric = MetricRef::Outcome {
+            task_id: "template.observe".to_owned(),
+            outcome_key: "completed".to_owned(),
+        };
+        facts.outcomes.push(crate::ObservedOutcome {
+            task_id: "template.observe".to_owned(),
+            instance_id: "instance-a".to_owned(),
+            outcome_key: "completed".to_owned(),
+            value: FactValue::Integer(31),
+            observed_at_unix_ms: report.as_of_unix_ms(),
+        });
+        assert_eq!(
+            resolve_metric_current(
+                &outcome_metric,
+                &report.assessments[0],
+                instance,
+                &facts,
+                &resources,
+                report.as_of_unix_ms(),
+            )
+            .expect("outcome metric"),
+            Some(31)
+        );
+        let mut duplicate_outcome = facts.clone();
+        duplicate_outcome.outcomes.push(facts.outcomes[0].clone());
+        assert!(
+            resolve_metric_current(
+                &outcome_metric,
+                &report.assessments[0],
+                instance,
+                &duplicate_outcome,
+                &resources,
+                report.as_of_unix_ms(),
+            )
+            .is_err()
+        );
+        facts.outcomes[0].value = FactValue::Boolean(true);
+        assert_eq!(
+            resolve_metric_current(
+                &outcome_metric,
+                &report.assessments[0],
+                instance,
+                &facts,
+                &resources,
+                report.as_of_unix_ms(),
+            )
+            .expect("non-integer outcome"),
+            None
+        );
+    }
+
+    #[test]
+    fn catalog_production_rate_is_bounded_and_deterministic() {
+        let base_task = {
+            let sources = catalog_sources();
+            let document: serde_json::Value =
+                serde_json::from_slice(&sources.tasks.bytes).expect("task document");
+            document["tasks"][0].clone()
+        };
+        let task = |id: &str,
+                    amount: u64,
+                    daily_limit: u32,
+                    window_iteration_limit: u32,
+                    max_runtime_ms: u64,
+                    expected_duration_ms: u64,
+                    next_run_clamp_ms: u64| {
+            let mut task = base_task.clone();
+            task["id"] = serde_json::json!(id);
+            task["feedback_stop"]["task_id"] = serde_json::json!(id);
+            task["produces"][0]["amount"] = serde_json::json!(amount);
+            task["loop_budget"] = serde_json::json!({
+                "daily_limit": daily_limit,
+                "window_iteration_limit": window_iteration_limit,
+                "max_runtime_ms": max_runtime_ms
+            });
+            task["expected_duration_ms"] = serde_json::json!(expected_duration_ms);
+            task["next_run_clamp_ms"] = serde_json::json!(next_run_clamp_ms);
+            task["cooldown_ms"] = serde_json::json!(0);
+            task
+        };
+        let mut excluded_scope = task("producer.scope", 10_000, 10, 10, 10_000, 1_000, 1_000);
+        excluded_scope["scope"] = serde_json::json!({"kind": "game", "game_id": "other-game"});
+        let mut excluded_capability =
+            task("producer.capability", 10_000, 10, 10, 10_000, 1_000, 1_000);
+        excluded_capability["entrypoint"]["operation_id"] =
+            serde_json::json!("operation.unavailable");
+        let mut excluded_override = task("producer.override", 10_000, 10, 10, 10_000, 1_000, 1_000);
+        excluded_override["instance_overrides"] = serde_json::json!([{
+            "instance_id": "instance-a",
+            "enabled": false,
+            "priority": null,
+            "strategic_weight_milli": null,
+            "load_profile": null
+        }]);
+        let catalog = catalog_with_tasks(vec![
+            task("producer.daily", 1, 1, 10, 10_000, 1_000, 1_000),
+            task("producer.window", 10, 10, 2, 10_000, 1_000, 1_000),
+            task("producer.runtime", 100, 10, 10, 3_000, 1_000, 1_000),
+            task("producer.cycle", 1_000, 100, 100, 100_000, 1_000, 1_200_000),
+            excluded_scope,
+            excluded_capability,
+            excluded_override,
+        ]);
+        let report = report(
+            &catalog,
+            vec![assessment("instance-a", Some(50), Some(100))],
+        );
+        let (facts, _) = frozen_inputs(&report);
+        let instance = &facts.instances[0];
+        let metric = MetricRef::Pool {
+            pool_id: "fixture-pool".to_owned(),
+        };
+        assert_eq!(
+            catalog_production_rate(&catalog, &metric, instance).expect("first rate"),
+            Some(3_321)
+        );
+        assert_eq!(
+            catalog_production_rate(&catalog, &metric, instance).expect("second rate"),
+            Some(3_321)
+        );
+        assert_eq!(
+            catalog_production_rate(
+                &catalog,
+                &MetricRef::Fact {
+                    fact_key: "resource.current".to_owned()
+                },
+                instance,
+            )
+            .expect("fact rate"),
+            None
+        );
+        assert_eq!(
+            catalog_production_rate(
+                &catalog,
+                &MetricRef::Outcome {
+                    task_id: "producer.daily".to_owned(),
+                    outcome_key: "completed".to_owned()
+                },
+                instance,
+            )
+            .expect("outcome rate"),
+            None
+        );
+
+        let mut no_producer = base_task.clone();
+        no_producer["produces"] = serde_json::json!([]);
+        let no_producer = catalog_with_tasks(vec![no_producer]);
+        assert_eq!(
+            catalog_production_rate(&no_producer, &metric, instance).expect("no-producer rate"),
+            Some(0)
+        );
+
+        let overflow_amount = 9_007_199_254_740_991_u64;
+        let overflow_tasks = (0..3)
+            .map(|index| {
+                task(
+                    &format!("producer.overflow-{index}"),
+                    overflow_amount,
+                    1_000,
+                    1_000,
+                    1_000,
+                    1,
+                    1,
+                )
+            })
+            .collect::<Vec<_>>();
+        let mut sources = catalog_sources();
+        let mut tasks_document: serde_json::Value =
+            serde_json::from_slice(&sources.tasks.bytes).expect("overflow task document");
+        tasks_document["tasks"] = serde_json::Value::Array(overflow_tasks);
+        sources.tasks.bytes = serde_json::to_vec(&tasks_document).expect("overflow task bytes");
+        let mut pools_document: serde_json::Value =
+            serde_json::from_slice(&sources.pools.bytes).expect("overflow pool document");
+        pools_document["pools"][0]["capacity"] = serde_json::json!(overflow_amount);
+        sources.pools.bytes = serde_json::to_vec(&pools_document).expect("overflow pool bytes");
+        let overflow_catalog = compile_catalog(&sources).expect("overflow catalog");
+        assert_eq!(
+            catalog_production_rate(&overflow_catalog, &metric, instance)
+                .expect_err("production sum must be checked")
+                .code(),
+            "strategy_numeric_overflow"
+        );
+    }
+
+    #[test]
     fn missing_template_enters_planning_without_stopping_other_instances() {
         let catalog = catalog();
         let mut report = report(
@@ -1559,7 +2194,9 @@ mod tests {
         );
         report.goals[0].templates[0].maximum_urgency_milli = 1_000;
         report.report_id = report_identity(&report).expect("report identity");
-        let projection = project_strategic_report(&catalog, &report).expect("projection");
+        let (facts, resources) = frozen_inputs(&report);
+        let projection =
+            project_strategic_report(&catalog, &report, &facts, &resources).expect("projection");
         assert_eq!(projection.additions.tasks.len(), 1);
         assert_eq!(projection.planning_lane.len(), 1);
         assert_eq!(projection.planning_lane[0].instance_id, "instance-b");
@@ -1576,7 +2213,9 @@ mod tests {
                 assessment("instance-c", Some(-900), Some(100)),
             ],
         );
-        let projection = project_strategic_report(&catalog, &report).expect("projection");
+        let (facts, resources) = frozen_inputs(&report);
+        let projection =
+            project_strategic_report(&catalog, &report, &facts, &resources).expect("projection");
         assert_eq!(projection.outliers.len(), 1);
         assert_eq!(projection.outliers[0].instance_id, "instance-c");
         assert_eq!(
@@ -1621,7 +2260,9 @@ mod tests {
             baseline.cohort_budgets().clone(),
         )
         .expect("two-goal report");
-        let projection = project_strategic_report(&catalog, &report).expect("projection");
+        let (facts, resources) = frozen_inputs(&report);
+        let projection =
+            project_strategic_report(&catalog, &report, &facts, &resources).expect("projection");
         assert_eq!(projection.cohorts.len(), 2);
         assert_eq!(projection.additions.activity_profiles.len(), 1);
         assert_eq!(projection.additions.activity_profiles[0].goals.len(), 2);

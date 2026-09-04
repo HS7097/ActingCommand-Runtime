@@ -607,6 +607,16 @@ mod tests {
             Some(Err(DeviceError::fatal("raw connect failure"))),
         );
 
+        let debug = format!("{error:?}");
+        assert_eq!(
+            debug,
+            format!(
+                "DeviceError {{ severity: Fatal, message: {:?}, diagnostic: Some(DeviceErrorDiagnostic {{ category: Native, stage: \"adb.ensure_device.get_state\" }}), context: None }}",
+                error.message()
+            )
+        );
+        assert!(!debug.contains("diagnostic_message"));
+        assert!(!debug.contains("AdbDeviceStateConnectFailed"));
         assert!(error.message().contains("private-device"));
         assert!(error.message().contains("raw device state failure"));
         assert!(error.message().contains("raw connect failure"));

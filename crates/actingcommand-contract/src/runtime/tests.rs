@@ -1228,6 +1228,186 @@ fn agent_dispatcher_operations_require_agent_adapter_origin() {
 }
 
 #[test]
+fn publish_fact_and_policy_input_identity_require_v3_agent_adapter_request() {
+    let record = crate::FactRecord {
+        scope: crate::FactScope::Server {
+            server_id: "fixture-server-a".to_owned(),
+        },
+        key: "env.ui_theme".to_owned(),
+        content: crate::FactContent::Inline {
+            value: crate::FactValue::String("Neutral".to_owned()),
+        },
+        observed_at_unix_ms: 1,
+        expires_at_unix_ms: None,
+        ttl_policy: None,
+        confidence_milli: 1_000,
+        source_detector: "detector.fixture".to_owned(),
+        source_snapshot_id: "snapshot:publish-fact".to_owned(),
+        schema_version: "fact.v1".to_owned(),
+        resource_bundle_hash: "a".repeat(64),
+        invalidate_on: Vec::new(),
+    };
+    let operation = RuntimeOperation::PublishFact {
+        record: record.clone(),
+    };
+    assert_eq!(
+        format!("{operation:?}"),
+        "RuntimeOperation::PublishFact(<typed-fact>)"
+    );
+    assert!(!format!("{operation:?}").contains(&record.source_snapshot_id));
+
+    let ids = issuer();
+    let request = RuntimeRequest::new(
+        ids.mint_request_id().expect("request"),
+        ids.mint_correlation_id().expect("correlation"),
+        None,
+        EventActor::Agent,
+        EventSource::Adapter,
+        1,
+        operation.clone(),
+    )
+    .expect("agent fact publication request");
+    let encoded = serde_json::to_value(&request).expect("fact publication request JSON");
+    assert_eq!(
+        encoded["schema_version"],
+        "actingcommand.runtime.request.v3"
+    );
+    assert_eq!(encoded["operation"]["operation"], "publish_fact");
+    assert_eq!(encoded["operation"]["record"]["key"], "env.ui_theme");
+
+    for version in [
+        "actingcommand.runtime.request.v1",
+        "actingcommand.runtime.request.v2",
+    ] {
+        let mut older = encoded.clone();
+        older["schema_version"] = serde_json::json!(version);
+        let older: RuntimeRequest =
+            serde_json::from_value(older).expect("older request wire shape");
+        assert_eq!(
+            older
+                .validate()
+                .expect_err("older schema must fail loud")
+                .code(),
+            "unsupported_request_schema"
+        );
+    }
+
+    let identity_operation = RuntimeOperation::ProjectPolicyInputIdentity {
+        as_of_ledger_position: 17,
+    };
+    assert_eq!(
+        format!("{identity_operation:?}"),
+        "RuntimeOperation::ProjectPolicyInputIdentity(<ledger-position>)"
+    );
+    let identity_request = RuntimeRequest::new(
+        ids.mint_request_id().expect("identity request"),
+        ids.mint_correlation_id().expect("identity correlation"),
+        None,
+        EventActor::Agent,
+        EventSource::Adapter,
+        1,
+        identity_operation.clone(),
+    )
+    .expect("agent policy input identity request");
+    let identity_json =
+        serde_json::to_value(&identity_request).expect("policy input identity request JSON");
+    assert_eq!(
+        identity_json["schema_version"],
+        RUNTIME_REQUEST_SCHEMA_VERSION
+    );
+    assert_eq!(
+        identity_json["operation"]["operation"],
+        "project_policy_input_identity"
+    );
+    assert_eq!(identity_json["operation"]["as_of_ledger_position"], 17);
+    assert_eq!(
+        RuntimeOperation::ProjectPolicyInputIdentity {
+            as_of_ledger_position: 0,
+        }
+        .validate()
+        .expect_err("zero policy input position must fail loud")
+        .code(),
+        "invalid_policy_input_position"
+    );
+
+    for (actor, source) in [
+        (EventActor::Cli, EventSource::Cli),
+        (EventActor::User, EventSource::Ui),
+        (EventActor::Lab, EventSource::Lab),
+    ] {
+        let ids = issuer();
+        assert_eq!(
+            RuntimeRequest::new(
+                ids.mint_request_id().expect("request"),
+                ids.mint_correlation_id().expect("correlation"),
+                None,
+                actor,
+                source,
+                1,
+                operation.clone(),
+            )
+            .expect_err("only Agent/Adapter may publish facts")
+            .code(),
+            "invalid_agent_dispatcher_origin"
+        );
+        let ids = issuer();
+        assert_eq!(
+            RuntimeRequest::new(
+                ids.mint_request_id().expect("identity request"),
+                ids.mint_correlation_id().expect("identity correlation"),
+                None,
+                actor,
+                source,
+                1,
+                identity_operation.clone(),
+            )
+            .expect_err("only Agent/Adapter may project policy input identity")
+            .code(),
+            "invalid_agent_dispatcher_origin"
+        );
+    }
+
+    let mut invalid_record = record;
+    invalid_record.key = "unsupported".to_owned();
+    assert_eq!(
+        RuntimeOperation::PublishFact {
+            record: invalid_record
+        }
+        .validate()
+        .expect_err("FactRecord validation must be delegated")
+        .code(),
+        "invalid_fact_key"
+    );
+
+    let event_id = *issuer().mint_event_id().expect("event id").transport();
+    let result = RuntimeResult::FactPublished { event_id };
+    let result_json = serde_json::to_value(&result).expect("fact publication result JSON");
+    assert_eq!(result_json["kind"], "fact_published");
+    assert_eq!(
+        serde_json::from_value::<RuntimeResult>(result_json).expect("fact publication result"),
+        result
+    );
+
+    let identity =
+        RuntimePolicyInputIdentity::new(17, format!("snapshot:policy-fact:{}", "a".repeat(64)))
+            .expect("policy input identity");
+    let result = RuntimeResult::PolicyInputIdentityProjected {
+        identity: identity.clone(),
+    };
+    let result_json = serde_json::to_value(&result).expect("policy input identity result JSON");
+    assert_eq!(result_json["kind"], "policy_input_identity_projected");
+    assert_eq!(result_json["identity"]["ledger_position"], 17);
+    assert_eq!(
+        result_json["identity"]["fact_snapshot_id"],
+        identity.fact_snapshot_id()
+    );
+    assert_eq!(
+        serde_json::from_value::<RuntimeResult>(result_json).expect("policy input identity result"),
+        result
+    );
+}
+
+#[test]
 fn planning_document_is_bounded_content_addressed_and_typed() {
     let document = RuntimePlanningDocument::encode(
         RuntimePlanningDocumentKind::EvaluationTime,
@@ -1543,7 +1723,7 @@ fn resource_authoring_event_revalidates_deserialized_fields_and_receipt_phase() 
 #[test]
 fn c3a_runtime_and_lease_renewal_events_are_typed() {
     let ids = issuer();
-    let cases: [(EventPayloadDraft, EventType); 3] = [
+    let cases: [(EventPayloadDraft, EventType); 4] = [
         (
             RuntimePayloadDraft::started(crate::EventAction::RuntimeStart, AuditInput::new())
                 .into(),
@@ -1553,6 +1733,23 @@ fn c3a_runtime_and_lease_renewal_events_are_typed() {
             RuntimePayloadDraft::takeover(crate::EventAction::RuntimeTakeover, AuditInput::new())
                 .into(),
             EventType::RuntimeTakeover,
+        ),
+        (
+            RuntimePayloadDraft::failed(
+                crate::DiagnosticCode::RuntimeProtocolInvalid,
+                EffectDisposition::Indeterminate,
+                crate::DiagnosticDetailDraft::new(
+                    "runtime_connection",
+                    "runtime.ipc.receipt_write",
+                    "local_ipc",
+                    "runtime_local_ipc",
+                    "host_code=runtime_frame_write_failed fatal=false connection_id=1 request_decoded=true",
+                    crate::Sensitivity::Internal,
+                ),
+                AuditInput::new(),
+            )
+            .into(),
+            EventType::RuntimeFailed,
         ),
         (
             LeasePayloadDraft::renewed(
@@ -1581,5 +1778,138 @@ fn c3a_runtime_and_lease_renewal_events_are_typed() {
         .expect("sanitize typed event");
         assert_eq!(draft.event_type(), expected);
         serde_json::to_string(&draft).expect("serialize typed event");
+        if expected == EventType::RuntimeFailed {
+            assert_eq!(draft.payload().sensitivity(), crate::Sensitivity::Internal);
+            let crate::EventPayload::Runtime(crate::RuntimePayload::Failed(outcome)) =
+                draft.payload()
+            else {
+                panic!("typed runtime failure")
+            };
+            assert_eq!(outcome.action(), crate::EventAction::RuntimeAction);
+            assert_eq!(
+                outcome.diagnostic_code(),
+                crate::DiagnosticCode::RuntimeProtocolInvalid
+            );
+            assert_eq!(
+                outcome.effect_disposition(),
+                EffectDisposition::Indeterminate
+            );
+            let detail = outcome.detail().expect("runtime failure detail");
+            assert_eq!(detail.category(), "runtime_connection");
+            assert_eq!(detail.stage(), "runtime.ipc.receipt_write");
+            assert_eq!(detail.backend(), "local_ipc");
+            assert_eq!(detail.operation(), "runtime_local_ipc");
+            assert_eq!(detail.declared_sensitivity(), crate::Sensitivity::Internal);
+            assert_eq!(
+                detail.message(),
+                "host_code=runtime_frame_write_failed fatal=false connection_id=1 request_decoded=true"
+            );
+            let stored = serde_json::to_value(draft.payload()).expect("runtime failure JSON");
+            let restored: crate::EventPayload =
+                serde_json::from_value(stored).expect("runtime failure round trip");
+            assert_eq!(&restored, draft.payload());
+            let public = serde_json::to_string(&draft.payload().public_projection())
+                .expect("runtime failure public projection");
+            assert!(public.contains("runtime.failed"));
+            assert!(!public.contains("runtime_connection"));
+            assert!(!public.contains(detail.message()));
+        }
+    }
+
+    let owner_epoch = *ids.mint_owner_epoch().expect("owner epoch").transport();
+    let forward_entered = ids.mint_event_id().expect("forward entered event");
+    let strategic_entered = ids.mint_event_id().expect("strategic entered event");
+    let causation = ids.mint_causation_id().expect("causation");
+    let request = RuntimeRequest::new(
+        ids.mint_request_id().expect("request id"),
+        ids.mint_correlation_id().expect("correlation id"),
+        Some(causation),
+        EventActor::Cli,
+        EventSource::Cli,
+        1,
+        RuntimeOperation::Health,
+    )
+    .expect("runtime request");
+    let validated = request.validate().expect("validated request");
+    for phase in [
+        crate::RuntimeLifecyclePhase::PolicyForwardEntered,
+        crate::RuntimeLifecyclePhase::PolicyForwardReturned {
+            entered_event_id: *forward_entered.transport(),
+        },
+        crate::RuntimeLifecyclePhase::StrategicReportEntered,
+        crate::RuntimeLifecyclePhase::StrategicReportReturned {
+            entered_event_id: *strategic_entered.transport(),
+        },
+        crate::RuntimeLifecyclePhase::ShutdownRequested,
+    ] {
+        let event_id = match phase {
+            crate::RuntimeLifecyclePhase::PolicyForwardEntered => forward_entered,
+            crate::RuntimeLifecyclePhase::StrategicReportEntered => strategic_entered,
+            _ => ids.mint_event_id().expect("lifecycle event"),
+        };
+        let shutdown = phase == crate::RuntimeLifecyclePhase::ShutdownRequested;
+        let draft = EventDraft::new(
+            event_id,
+            1,
+            EventSeverity::Info,
+            EventOrigin::new(
+                EventSource::Runtime,
+                OriginModule::Runtime,
+                EventActor::Runtime,
+            ),
+            if shutdown {
+                EventLinksDraft::default()
+            } else {
+                validated.event_links(None, None, None)
+            },
+            RuntimePayloadDraft::lifecycle_observed(owner_epoch, phase, AuditInput::new()).into(),
+        )
+        .sanitize(&RejectSecrets)
+        .expect("sanitize lifecycle event");
+        assert_eq!(draft.event_type(), EventType::RuntimeLifecycleObserved);
+        assert_eq!(draft.event_type().family(), crate::EventFamily::Runtime);
+        assert_eq!(draft.payload().schema(), crate::RUNTIME_PAYLOAD_SCHEMA);
+        assert_eq!(draft.payload().sensitivity(), crate::Sensitivity::Internal);
+        assert_eq!(draft.payload().action(), crate::EventAction::RuntimeAction);
+        draft.payload().validate().expect("valid lifecycle payload");
+        if shutdown {
+            assert_eq!(draft.links(), &crate::EventLinks::default());
+        } else {
+            assert_eq!(draft.links().request_id(), Some(&request.request_id()));
+            assert_eq!(
+                draft.links().correlation_id(),
+                Some(&request.correlation_id())
+            );
+            assert_eq!(draft.links().causation_id(), Some(causation.transport()));
+        }
+        let crate::EventPayload::Runtime(crate::RuntimePayload::LifecycleObserved(payload)) =
+            draft.payload()
+        else {
+            panic!("typed lifecycle payload")
+        };
+        assert_eq!(payload.owner_epoch(), owner_epoch);
+        assert_eq!(payload.phase(), phase);
+        let wire = serde_json::to_value(&draft).expect("lifecycle event JSON");
+        assert_eq!(wire["event_type"], "runtime.lifecycle_observed");
+        assert_eq!(wire["severity"], "info");
+        let restored: crate::EventPayload =
+            serde_json::from_value(wire["payload"].clone()).expect("lifecycle round trip");
+        assert_eq!(&restored, draft.payload());
+        match phase {
+            crate::RuntimeLifecyclePhase::PolicyForwardReturned { entered_event_id }
+            | crate::RuntimeLifecyclePhase::StrategicReportReturned { entered_event_id } => {
+                assert_eq!(
+                    wire["payload"]["payload"]["data"]["phase"]["entered_event_id"],
+                    serde_json::to_value(entered_event_id).expect("entered id JSON"),
+                );
+            }
+            _ => {}
+        }
+        let public = serde_json::to_string(&draft.payload().public_projection())
+            .expect("lifecycle public projection");
+        assert!(public.contains("runtime.lifecycle_observed"));
+        assert!(!public.contains("owner_epoch"));
+        assert!(!public.contains("phase"));
+        assert!(!public.contains("entered_event_id"));
     }
 }

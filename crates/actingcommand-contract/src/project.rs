@@ -34,6 +34,7 @@ pub const PROJECT_INTERFACE_SUPPORTED_VERSIONS: &[&str] = &[
 pub const MAX_PROJECT_INTERFACE_RESPONSE_BYTES: usize = 768 * 1024;
 pub const DEFAULT_PROJECT_DECISION_PAGE_SIZE: u16 = 128;
 pub const MAX_PROJECT_DECISION_PAGE_SIZE: u16 = 512;
+pub const MAX_STRATEGIC_WEIGHT_MILLI: u16 = 10_000;
 
 const MAX_ACCEPTED_VERSIONS: usize = 8;
 const MAX_PROJECT_INSTANCES: usize = 4_096;
@@ -998,7 +999,7 @@ fn validate_goals(goals: &[ProjectGoalView]) -> ProjectInterfaceResult<()> {
         goal.scope.validate()?;
         goal.metric.validate()?;
         if goal.deadline_unix_ms == 0
-            || goal.strategic_weight_milli > 1_000
+            || goal.strategic_weight_milli > MAX_STRATEGIC_WEIGHT_MILLI
             || !identities.insert((goal.activity_profile_id.as_str(), goal.goal_id.as_str()))
         {
             return Err(ProjectInterfaceError::new("project_goal_invalid"));
@@ -1271,7 +1272,8 @@ mod tests {
 
     #[test]
     fn current_contract_round_trips_neutral_data() {
-        let (snapshot, current) = current_response_parts();
+        let (mut snapshot, current) = current_response_parts();
+        snapshot.goals[0].strategic_weight_milli = MAX_STRATEGIC_WEIGHT_MILLI;
         let response = ProjectInterfaceResponse::new_current(
             ProjectInterfaceRequest::current()
                 .negotiate()
