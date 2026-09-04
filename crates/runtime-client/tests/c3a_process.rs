@@ -79,12 +79,20 @@ impl InputBackend for FileBackend {
         self.record("reset")
     }
 
-    fn close(&mut self) -> DeviceResult<()> {
+    fn close_once(
+        &mut self,
+        _authority: actingcommand_device::DeviceCloseAuthority,
+    ) -> DeviceResult<actingcommand_device::DeviceResourceCloseOutcome> {
         if self.closed {
-            return Ok(());
+            return Ok(actingcommand_device::DeviceResourceCloseOutcome::confirmed(
+                0,
+            ));
         }
         self.closed = true;
-        self.record("close")
+        self.record("close")?;
+        Ok(actingcommand_device::DeviceResourceCloseOutcome::confirmed(
+            1,
+        ))
     }
 }
 
@@ -104,6 +112,14 @@ impl CaptureBackend for FileCapture {
             PixelFormat::Rgba8,
             CaptureBackendName::AdbScreencap,
         )
+    }
+    fn close_once(
+        &mut self,
+        _authority: actingcommand_device::DeviceCloseAuthority,
+    ) -> DeviceResult<actingcommand_device::DeviceResourceCloseOutcome> {
+        Ok(actingcommand_device::DeviceResourceCloseOutcome::confirmed(
+            0,
+        ))
     }
 }
 

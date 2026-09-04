@@ -977,13 +977,13 @@ impl DeviceRegistryInputDiagnosticBackend {
         }
     }
 
-    fn run(
+    fn run<T>(
         &mut self,
         operation: &'static str,
-        execute: impl FnOnce(&mut dyn InputBackend) -> DeviceResult<()>,
-    ) -> DeviceResult<()> {
+        execute: impl FnOnce(&mut dyn InputBackend) -> DeviceResult<T>,
+    ) -> DeviceResult<T> {
         match execute(self.backend.as_mut()) {
-            Ok(()) => Ok(()),
+            Ok(value) => Ok(value),
             Err(error) => {
                 (self.diagnostic_sink)(device_registry_input_operation_diagnostic_record(
                     &self.instance_alias,
@@ -1062,8 +1062,11 @@ impl InputBackend for DeviceRegistryInputDiagnosticBackend {
         self.run("reset", |backend| backend.reset())
     }
 
-    fn close(&mut self) -> DeviceResult<()> {
-        self.run("close", |backend| backend.close())
+    fn close_once(
+        &mut self,
+        authority: actingcommand_device::DeviceCloseAuthority,
+    ) -> DeviceResult<actingcommand_device::DeviceResourceCloseOutcome> {
+        self.run("close", |backend| backend.close_once(authority))
     }
 }
 
@@ -1444,6 +1447,15 @@ impl CaptureBackend for FixtureCaptureBackend {
             .pop_front()
             .ok_or_else(|| DeviceError::fatal("fixture capture exhausted"))
     }
+
+    fn close_once(
+        &mut self,
+        _authority: actingcommand_device::DeviceCloseAuthority,
+    ) -> DeviceResult<actingcommand_device::DeviceResourceCloseOutcome> {
+        Ok(actingcommand_device::DeviceResourceCloseOutcome::confirmed(
+            0,
+        ))
+    }
 }
 
 struct FixtureInputBackend {
@@ -1493,9 +1505,15 @@ impl InputBackend for FixtureInputBackend {
         self.consume()
     }
 
-    fn close(&mut self) -> DeviceResult<()> {
+    fn close_once(
+        &mut self,
+        _authority: actingcommand_device::DeviceCloseAuthority,
+    ) -> DeviceResult<actingcommand_device::DeviceResourceCloseOutcome> {
+        let resource_count = u16::from(!self.closed);
         self.closed = true;
-        Ok(())
+        Ok(actingcommand_device::DeviceResourceCloseOutcome::confirmed(
+            resource_count,
+        ))
     }
 }
 
@@ -1748,8 +1766,14 @@ mod tests {
             self.invoke("reset")
         }
 
-        fn close(&mut self) -> DeviceResult<()> {
-            self.invoke("close")
+        fn close_once(
+            &mut self,
+            _authority: actingcommand_device::DeviceCloseAuthority,
+        ) -> DeviceResult<actingcommand_device::DeviceResourceCloseOutcome> {
+            self.invoke("close")?;
+            Ok(actingcommand_device::DeviceResourceCloseOutcome::confirmed(
+                1,
+            ))
         }
     }
 

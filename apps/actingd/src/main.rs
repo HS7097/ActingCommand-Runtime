@@ -1908,6 +1908,14 @@ mod tests {
             self.count.fetch_add(1, Ordering::SeqCst);
             Ok(frame)
         }
+        fn close_once(
+            &mut self,
+            _authority: actingcommand_device::DeviceCloseAuthority,
+        ) -> DeviceResult<actingcommand_device::DeviceResourceCloseOutcome> {
+            Ok(actingcommand_device::DeviceResourceCloseOutcome::confirmed(
+                0,
+            ))
+        }
     }
 
     struct RecordingInput {
@@ -1958,8 +1966,13 @@ mod tests {
             Ok(())
         }
 
-        fn close(&mut self) -> DeviceResult<()> {
-            Ok(())
+        fn close_once(
+            &mut self,
+            _authority: actingcommand_device::DeviceCloseAuthority,
+        ) -> DeviceResult<actingcommand_device::DeviceResourceCloseOutcome> {
+            Ok(actingcommand_device::DeviceResourceCloseOutcome::confirmed(
+                0,
+            ))
         }
     }
 

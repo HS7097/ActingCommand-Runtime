@@ -3,7 +3,8 @@
 use crate::adb::{Adb, AdbConfig, stop_child};
 use crate::input::{PreparedSegmentedSwipePlan, SegmentedSwipeEvent};
 use crate::{
-    DeviceError, DeviceErrorCategory, DeviceErrorSeverity, DeviceInfo, DeviceResult, DeviceTarget,
+    DeviceCloseAuthority, DeviceError, DeviceErrorCategory, DeviceErrorSeverity, DeviceInfo,
+    DeviceResourceCloseOutcome, DeviceResourceQuiescence, DeviceResult, DeviceTarget,
     HandshakeInfo, InputBackend,
 };
 use std::fs;
@@ -68,6 +69,7 @@ pub struct MinitouchBackend {
     stderr_text: Arc<Mutex<String>>,
     stderr_thread: Option<JoinHandle<()>>,
     closed: bool,
+    close_result: Option<DeviceResult<DeviceResourceCloseOutcome>>,
 }
 
 impl MinitouchBackend {
@@ -89,6 +91,7 @@ impl MinitouchBackend {
             stderr_text: Arc::new(Mutex::new(String::new())),
             stderr_thread: None,
             closed: true,
+            close_result: Some(Ok(DeviceResourceCloseOutcome::confirmed(0))),
         }
     }
 
@@ -189,25 +192,34 @@ impl MinitouchBackend {
         let handshake = match self.read_handshake(stdout, &mut child) {
             Ok(handshake) => handshake,
             Err(err) => {
-                stop_child(&mut child, self.minitouch_config.shutdown_timeout);
+                let stop_result = self.stop_unowned_child(child);
                 let join_result = self.join_stderr_thread();
-                return combine_operation_and_close(Err(err), join_result);
+                return combine_operation_and_close(
+                    combine_operation_and_close(Err(err), stop_result),
+                    join_result,
+                );
             }
         };
         if let Err(err) = validate_default_pressure(
             self.minitouch_config.default_pressure,
             handshake.max_pressure,
         ) {
-            stop_child(&mut child, self.minitouch_config.shutdown_timeout);
+            let stop_result = self.stop_unowned_child(child);
             let join_result = self.join_stderr_thread();
-            return combine_operation_and_close(Err(self.with_stderr(err)), join_result);
+            return combine_operation_and_close(
+                combine_operation_and_close(Err(self.with_stderr(err)), stop_result),
+                join_result,
+            );
         }
         let screen_bounds = match screen_bounds_from_device(device) {
             Ok(bounds) => bounds,
             Err(err) => {
-                stop_child(&mut child, self.minitouch_config.shutdown_timeout);
+                let stop_result = self.stop_unowned_child(child);
                 let join_result = self.join_stderr_thread();
-                return combine_operation_and_close(Err(self.with_stderr(err)), join_result);
+                return combine_operation_and_close(
+                    combine_operation_and_close(Err(self.with_stderr(err)), stop_result),
+                    join_result,
+                );
             }
         };
         self.coordinate_mapper = Some(MinitouchCoordinateMapper::new(screen_bounds, &handshake));
@@ -215,13 +227,14 @@ impl MinitouchBackend {
         self.stdin = Some(stdin);
         self.handshake_info = Some(handshake);
         self.closed = false;
+        self.close_result = None;
         Ok(())
     }
 
     pub fn read_handshake<R: Read + Send + 'static>(
         &self,
         stdout: R,
-        child: &mut Child,
+        _child: &mut Child,
     ) -> DeviceResult<HandshakeInfo> {
         let (tx, rx) = mpsc::channel();
         thread::spawn(move || {
@@ -231,29 +244,23 @@ impl MinitouchBackend {
 
         match rx.recv_timeout(self.minitouch_config.handshake_timeout) {
             Ok(result) => result.map_err(|err| self.with_stderr(err)),
-            Err(mpsc::RecvTimeoutError::Timeout) => {
-                stop_child(child, self.minitouch_config.shutdown_timeout);
-                Err(self.with_stderr(
-                    DeviceError::transient(format!(
-                        "timed out after {:?} waiting for minitouch handshake",
-                        self.minitouch_config.handshake_timeout
-                    ))
+            Err(mpsc::RecvTimeoutError::Timeout) => Err(self.with_stderr(
+                DeviceError::transient(format!(
+                    "timed out after {:?} waiting for minitouch handshake",
+                    self.minitouch_config.handshake_timeout
+                ))
+                .with_diagnostic(
+                    DeviceErrorCategory::Handshake,
+                    "minitouch.handshake.timeout",
+                ),
+            )),
+            Err(err) => Err(self.with_stderr(
+                DeviceError::transient(format!("failed to receive minitouch handshake: {err}"))
                     .with_diagnostic(
-                        DeviceErrorCategory::Handshake,
-                        "minitouch.handshake.timeout",
+                        DeviceErrorCategory::Response,
+                        "minitouch.handshake.channel_receive",
                     ),
-                ))
-            }
-            Err(err) => {
-                stop_child(child, self.minitouch_config.shutdown_timeout);
-                Err(self.with_stderr(
-                    DeviceError::transient(format!("failed to receive minitouch handshake: {err}"))
-                        .with_diagnostic(
-                            DeviceErrorCategory::Response,
-                            "minitouch.handshake.channel_receive",
-                        ),
-                ))
-            }
+            )),
         }
     }
 
@@ -358,17 +365,40 @@ impl MinitouchBackend {
         Ok(())
     }
 
+    fn stop_unowned_child(&self, mut child: Child) -> DeviceResult<()> {
+        match stop_child(
+            &mut child,
+            self.minitouch_config.shutdown_timeout,
+            "minitouch",
+        ) {
+            Ok(_) => Ok(()),
+            Err(error) => {
+                if error.resource_quiescence() == Some(DeviceResourceQuiescence::Unconfirmed) {
+                    std::mem::forget(child);
+                }
+                Err(error)
+            }
+        }
+    }
+
     fn shutdown(&mut self) -> [Option<DeviceError>; 2] {
         let mut errors = [None, None];
         self.stdin.take();
 
-        if let Some(mut child) = self.child.take()
-            && !stop_child(&mut child, self.minitouch_config.shutdown_timeout)
-        {
-            errors[0] = Some(DeviceError::fatal(format!(
-                "minitouch process did not exit within {:?}",
-                self.minitouch_config.shutdown_timeout
-            )));
+        if let Some(mut child) = self.child.take() {
+            match stop_child(
+                &mut child,
+                self.minitouch_config.shutdown_timeout,
+                "minitouch",
+            ) {
+                Ok(_) => {}
+                Err(error) => {
+                    if error.resource_quiescence() == Some(DeviceResourceQuiescence::Unconfirmed) {
+                        self.child = Some(child);
+                    }
+                    errors[0] = Some(error);
+                }
+            }
         }
 
         if let Err(err) = self.join_stderr_thread() {
@@ -488,9 +518,15 @@ impl InputBackend for MinitouchBackend {
         self.write_and_flush("r\nc\n")
     }
 
-    fn close(&mut self) -> DeviceResult<()> {
+    fn close_once(
+        &mut self,
+        _authority: DeviceCloseAuthority,
+    ) -> DeviceResult<DeviceResourceCloseOutcome> {
+        if let Some(result) = &self.close_result {
+            return result.clone();
+        }
         if self.closed {
-            return Ok(());
+            return Ok(DeviceResourceCloseOutcome::confirmed(0));
         }
 
         let reset = self.reset().err();
@@ -505,17 +541,28 @@ impl InputBackend for MinitouchBackend {
             .then(|| DeviceError::fatal(format!("minitouch stderr:\n{stderr}")));
 
         self.closed = true;
-        DeviceError::aggregate_close(
+        let result = DeviceError::aggregate_close(
             "minitouch",
             [reset, child_stop, stderr_join, unexpected_stderr],
         )
+        .map(|()| DeviceResourceCloseOutcome::confirmed(3));
+        self.close_result = Some(result.clone());
+        result
     }
 }
 
 impl Drop for MinitouchBackend {
     fn drop(&mut self) {
-        if !self.closed {
-            let _ = self.shutdown();
+        if self.close_result.is_none()
+            && let Err(error) = self.close_once(DeviceCloseAuthority::LocalOnly)
+            && !thread::panicking()
+        {
+            if error.resource_quiescence() == Some(DeviceResourceQuiescence::Unconfirmed)
+                && let Some(child) = self.child.take()
+            {
+                std::mem::forget(child);
+            }
+            panic!("{error}");
         }
     }
 }
@@ -842,7 +889,9 @@ fn combine_operation_and_close(
         (Err(err), Ok(())) | (Ok(()), Err(err)) => Err(err),
         (Err(operation_err), Err(close_err)) => {
             let message = format!("{operation_err}; close failed: {close_err}");
-            Err(operation_err.with_severity_and_message(DeviceErrorSeverity::Fatal, message))
+            Err(operation_err
+                .with_severity_and_message(DeviceErrorSeverity::Fatal, message)
+                .merge_resource_cleanup(close_err))
         }
     }
 }

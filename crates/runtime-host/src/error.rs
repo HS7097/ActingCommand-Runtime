@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 use actingcommand_contract::{
-    CleanupCauseDraft, DiagnosticDetailDraft, EventId, InstanceId, RuntimeErrorCode,
-    RuntimeErrorProjection,
+    CleanupCauseDraft, DiagnosticDetailDraft, EventId, InstanceId, ResourceQuiescence,
+    RuntimeErrorCode, RuntimeErrorProjection,
 };
 use actingcommand_execution_kernel::{ExecutionKernelError, ExecutionLifecycleCause};
 use actingcommand_runtime_state::RuntimeStateError;
@@ -30,6 +30,7 @@ pub(crate) struct RuntimeHostFailureContext {
     pub(crate) causes: Vec<ExecutionLifecycleCause>,
     pub(crate) instance_id: Option<InstanceId>,
     pub(crate) native_detail: Option<Box<actingcommand_contract::LifecycleNativeDetail>>,
+    pub(crate) resource_quiescence: Option<ResourceQuiescence>,
 }
 
 impl PartialEq for RuntimeHostError {
@@ -134,6 +135,7 @@ impl RuntimeHostError {
                 causes: error.lifecycle_causes().to_vec(),
                 instance_id: error.instance_id(),
                 native_detail: None,
+                resource_quiescence: error.resource_quiescence(),
             }),
         }
     }

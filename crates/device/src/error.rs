@@ -20,6 +20,152 @@ pub enum DeviceClosePhase {
     UnexpectedStderr,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DeviceCloseAuthority {
+    LocalOnly,
+    FencedDeviceWrite,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DeviceResourceQuiescence {
+    Confirmed,
+    Unconfirmed,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DeviceResourceKind {
+    CaptureBackend,
+    InputBackend,
+    ProviderConnection,
+    VendorStdio,
+    ExternalChild,
+    InProcessWorker,
+    Library,
+    FileDescriptor,
+    TemporaryPath,
+    PipeReader,
+    FactoryCandidate,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DeviceResourceClosePhase {
+    Close,
+    AcquisitionCleanup,
+    DisconnectSymbol,
+    DisconnectCall,
+    WorkerSend,
+    WorkerReceive,
+    WorkerJoin,
+    InitialPoll,
+    Kill,
+    ExitPoll,
+    Deadline,
+    RestoreFlush,
+    RestoreWin32,
+    RestoreCrt,
+    SnapshotFlush,
+    SnapshotRead,
+    FileDescriptorClose,
+    Unlink,
+    LibraryUnload,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DeviceResourceCloseOutcome {
+    quiescence: DeviceResourceQuiescence,
+    resource_count: u16,
+}
+
+impl DeviceResourceCloseOutcome {
+    pub const fn confirmed(resource_count: u16) -> Self {
+        Self {
+            quiescence: DeviceResourceQuiescence::Confirmed,
+            resource_count,
+        }
+    }
+
+    pub const fn quiescence(self) -> DeviceResourceQuiescence {
+        self.quiescence
+    }
+
+    pub const fn resource_count(self) -> u16 {
+        self.resource_count
+    }
+
+    pub fn combine(self, other: Self) -> Self {
+        Self {
+            quiescence: if matches!(
+                (self.quiescence, other.quiescence),
+                (
+                    DeviceResourceQuiescence::Confirmed,
+                    DeviceResourceQuiescence::Confirmed
+                )
+            ) {
+                DeviceResourceQuiescence::Confirmed
+            } else {
+                DeviceResourceQuiescence::Unconfirmed
+            },
+            resource_count: self.resource_count.saturating_add(other.resource_count),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DeviceResourceCloseCause {
+    resource: DeviceResourceKind,
+    phase: DeviceResourceClosePhase,
+    backend: &'static str,
+    candidate_index: Option<u8>,
+    native_instance: Option<i32>,
+    severity: DeviceErrorSeverity,
+    detail: String,
+    detail_truncated: bool,
+    observation_count: u16,
+    dropped_count: u16,
+}
+
+impl DeviceResourceCloseCause {
+    pub const fn resource(&self) -> DeviceResourceKind {
+        self.resource
+    }
+
+    pub const fn phase(&self) -> DeviceResourceClosePhase {
+        self.phase
+    }
+
+    pub const fn backend(&self) -> &'static str {
+        self.backend
+    }
+
+    pub const fn candidate_index(&self) -> Option<u8> {
+        self.candidate_index
+    }
+
+    pub const fn native_instance(&self) -> Option<i32> {
+        self.native_instance
+    }
+
+    pub const fn severity(&self) -> DeviceErrorSeverity {
+        self.severity
+    }
+
+    pub fn detail(&self) -> &str {
+        &self.detail
+    }
+
+    pub const fn detail_truncated(&self) -> bool {
+        self.detail_truncated
+    }
+
+    pub const fn observation_count(&self) -> u16 {
+        self.observation_count
+    }
+
+    pub const fn dropped_count(&self) -> u16 {
+        self.dropped_count
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DeviceCloseCause {
     pub phase: DeviceClosePhase,
@@ -167,6 +313,9 @@ pub struct DeviceError {
     context: Option<Box<DeviceErrorContext>>,
     diagnostic_message: Option<Box<StoredDiagnosticMessage>>,
     close_causes: Box<[DeviceCloseCause]>,
+    resource_close_causes: Box<[DeviceResourceCloseCause]>,
+    resource_quiescence: Option<DeviceResourceQuiescence>,
+    resource_count: u16,
 }
 
 impl DeviceError {
@@ -178,6 +327,9 @@ impl DeviceError {
             context: None,
             diagnostic_message: None,
             close_causes: Box::default(),
+            resource_close_causes: Box::default(),
+            resource_quiescence: None,
+            resource_count: 0,
         }
     }
 
@@ -189,6 +341,9 @@ impl DeviceError {
             context: None,
             diagnostic_message: None,
             close_causes: Box::default(),
+            resource_close_causes: Box::default(),
+            resource_quiescence: None,
+            resource_count: 0,
         }
     }
 
@@ -200,6 +355,9 @@ impl DeviceError {
             context: None,
             diagnostic_message: None,
             close_causes: Box::default(),
+            resource_close_causes: Box::default(),
+            resource_quiescence: None,
+            resource_count: 0,
         }
     }
 
@@ -210,6 +368,108 @@ impl DeviceError {
 
     pub fn close_causes(&self) -> &[DeviceCloseCause] {
         &self.close_causes
+    }
+
+    pub fn resource_close_causes(&self) -> &[DeviceResourceCloseCause] {
+        &self.resource_close_causes
+    }
+
+    pub const fn resource_quiescence(&self) -> Option<DeviceResourceQuiescence> {
+        self.resource_quiescence
+    }
+
+    pub const fn resource_count(&self) -> u16 {
+        self.resource_count
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn with_resource_close_cause(
+        mut self,
+        resource: DeviceResourceKind,
+        phase: DeviceResourceClosePhase,
+        backend: &'static str,
+        candidate_index: Option<u8>,
+        native_instance: Option<i32>,
+        quiescence: DeviceResourceQuiescence,
+        resource_count: u16,
+    ) -> Self {
+        let mut end = self.message.len().min(1024);
+        while !self.message.is_char_boundary(end) {
+            end -= 1;
+        }
+        let cause = DeviceResourceCloseCause {
+            resource,
+            phase,
+            backend,
+            candidate_index,
+            native_instance,
+            severity: self.severity,
+            detail: self.message[..end].to_owned(),
+            detail_truncated: end < self.message.len(),
+            observation_count: 1,
+            dropped_count: 0,
+        };
+        let mut causes = self.resource_close_causes.into_vec();
+        causes.push(cause);
+        self.resource_close_causes = causes.into_boxed_slice();
+        self.resource_quiescence = Some(match (self.resource_quiescence, quiescence) {
+            (Some(DeviceResourceQuiescence::Unconfirmed), _)
+            | (_, DeviceResourceQuiescence::Unconfirmed) => DeviceResourceQuiescence::Unconfirmed,
+            _ => DeviceResourceQuiescence::Confirmed,
+        });
+        self.resource_count = self.resource_count.saturating_add(resource_count);
+        self
+    }
+
+    pub fn with_resource_quiescence(
+        mut self,
+        quiescence: DeviceResourceQuiescence,
+        resource_count: u16,
+    ) -> Self {
+        self.resource_quiescence = Some(quiescence);
+        self.resource_count = self.resource_count.max(resource_count);
+        self
+    }
+
+    pub fn with_resource_summary(
+        mut self,
+        quiescence: DeviceResourceQuiescence,
+        resource_count: u16,
+    ) -> Self {
+        self.resource_quiescence = Some(quiescence);
+        self.resource_count = resource_count;
+        self
+    }
+
+    pub fn with_resource_candidate_index(mut self, candidate_index: u8) -> Self {
+        for cause in &mut self.resource_close_causes {
+            if cause.candidate_index.is_none() {
+                cause.candidate_index = Some(candidate_index);
+            }
+        }
+        self
+    }
+
+    pub fn merge_resource_cleanup(mut self, cleanup: Self) -> Self {
+        let mut causes = self.resource_close_causes.into_vec();
+        causes.extend(cleanup.resource_close_causes);
+        self.resource_close_causes = causes.into_boxed_slice();
+        self.resource_quiescence = match (self.resource_quiescence, cleanup.resource_quiescence) {
+            (Some(DeviceResourceQuiescence::Unconfirmed), _)
+            | (_, Some(DeviceResourceQuiescence::Unconfirmed)) => {
+                Some(DeviceResourceQuiescence::Unconfirmed)
+            }
+            (Some(DeviceResourceQuiescence::Confirmed), _)
+            | (_, Some(DeviceResourceQuiescence::Confirmed)) => {
+                Some(DeviceResourceQuiescence::Confirmed)
+            }
+            (None, None) => None,
+        };
+        self.resource_count = self.resource_count.saturating_add(cleanup.resource_count);
+        if matches!(cleanup.severity, DeviceErrorSeverity::Fatal) {
+            self.severity = DeviceErrorSeverity::Fatal;
+        }
+        self
     }
 
     pub fn aggregate_close(backend: &'static str, phases: [Option<Self>; 4]) -> DeviceResult<()> {
@@ -244,6 +504,8 @@ impl DeviceError {
         }
         let mut error = Self::fatal(messages.join("; "));
         error.close_causes = causes.into_boxed_slice();
+        error.resource_quiescence = Some(DeviceResourceQuiescence::Unconfirmed);
+        error.resource_count = 1;
         Err(error)
     }
 
@@ -413,6 +675,9 @@ impl PartialEq for DeviceError {
         self.severity == other.severity
             && self.message == other.message
             && self.diagnostic == other.diagnostic
+            && self.resource_close_causes == other.resource_close_causes
+            && self.resource_quiescence == other.resource_quiescence
+            && self.resource_count == other.resource_count
     }
 }
 

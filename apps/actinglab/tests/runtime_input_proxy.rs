@@ -82,12 +82,17 @@ impl InputBackend for FakeBackend {
         Ok(())
     }
 
-    fn close(&mut self) -> DeviceResult<()> {
+    fn close_once(
+        &mut self,
+        _authority: actingcommand_device::DeviceCloseAuthority,
+    ) -> DeviceResult<actingcommand_device::DeviceResourceCloseOutcome> {
         if !self.closed {
             self.closed = true;
             self.state.closes.fetch_add(1, Ordering::AcqRel);
         }
-        Ok(())
+        Ok(actingcommand_device::DeviceResourceCloseOutcome::confirmed(
+            1,
+        ))
     }
 }
 
@@ -123,6 +128,14 @@ impl CaptureBackend for FakeCapture {
             PixelFormat::Rgb8,
             CaptureBackendName::AdbScreencap,
         )
+    }
+    fn close_once(
+        &mut self,
+        _authority: actingcommand_device::DeviceCloseAuthority,
+    ) -> DeviceResult<actingcommand_device::DeviceResourceCloseOutcome> {
+        Ok(actingcommand_device::DeviceResourceCloseOutcome::confirmed(
+            0,
+        ))
     }
 }
 

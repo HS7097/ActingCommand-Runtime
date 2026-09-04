@@ -130,6 +130,7 @@ impl ExecutionBackendProvider for FakeProvider {
         drop(state);
         Ok(Box::new(FakeCapture {
             state: Arc::clone(&self.state),
+            closed: false,
         }))
     }
 
@@ -202,19 +203,25 @@ impl InputBackend for FakeInput {
         self.execute()
     }
 
-    fn close(&mut self) -> DeviceResult<()> {
+    fn close_once(
+        &mut self,
+        _authority: actingcommand_device::DeviceCloseAuthority,
+    ) -> DeviceResult<actingcommand_device::DeviceResourceCloseOutcome> {
         let mut state = self.state.lock().expect("state");
         state.input_closes += 1;
         if state.fail_close {
             Err(DeviceError::fatal("private close failure detail"))
         } else {
-            Ok(())
+            Ok(actingcommand_device::DeviceResourceCloseOutcome::confirmed(
+                1,
+            ))
         }
     }
 }
 
 struct FakeCapture {
     state: Arc<Mutex<FakeState>>,
+    closed: bool,
 }
 
 impl CaptureBackend for FakeCapture {
@@ -234,11 +241,26 @@ impl CaptureBackend for FakeCapture {
             CaptureBackendName::AdbScreencap,
         )
     }
+
+    fn close_once(
+        &mut self,
+        _authority: actingcommand_device::DeviceCloseAuthority,
+    ) -> DeviceResult<actingcommand_device::DeviceResourceCloseOutcome> {
+        if !self.closed {
+            self.closed = true;
+            self.state.lock().expect("state").capture_closes += 1;
+        }
+        Ok(actingcommand_device::DeviceResourceCloseOutcome::confirmed(
+            1,
+        ))
+    }
 }
 
 impl Drop for FakeCapture {
     fn drop(&mut self) {
-        self.state.lock().expect("state").capture_closes += 1;
+        if !self.closed {
+            self.state.lock().expect("state").capture_closes += 1;
+        }
     }
 }
 

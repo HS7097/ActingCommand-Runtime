@@ -555,12 +555,18 @@ impl InputBackend for ObservedInputBackend {
         self.finish_operation(operation)
     }
 
-    fn close(&mut self) -> actingcommand_device::DeviceResult<()> {
+    fn close_once(
+        &mut self,
+        _authority: actingcommand_device::DeviceCloseAuthority,
+    ) -> actingcommand_device::DeviceResult<actingcommand_device::DeviceResourceCloseOutcome> {
         let close = self.proxy.close();
         let report = self
             .publish_report()
             .map_err(|error| DeviceError::fatal(error.to_string()));
-        combine_device_results(close, report)
+        combine_device_results(close, report)?;
+        Ok(actingcommand_device::DeviceResourceCloseOutcome::confirmed(
+            1,
+        ))
     }
 }
 

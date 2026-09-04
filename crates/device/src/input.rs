@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
-use crate::{DeviceError, DeviceResult};
+use crate::{DeviceCloseAuthority, DeviceError, DeviceResourceCloseOutcome, DeviceResult};
 use serde::{Deserialize, Serialize};
 
 pub const SEGMENTED_SWIPE_HORIZONTAL_DURATION_MS: u64 = 200;
@@ -156,7 +156,14 @@ pub trait InputBackend {
 
     fn reset(&mut self) -> DeviceResult<()>;
 
-    fn close(&mut self) -> DeviceResult<()>;
+    fn close_once(
+        &mut self,
+        authority: DeviceCloseAuthority,
+    ) -> DeviceResult<DeviceResourceCloseOutcome>;
+
+    fn close(&mut self) -> DeviceResult<()> {
+        self.close_once(DeviceCloseAuthority::LocalOnly).map(|_| ())
+    }
 }
 
 #[cfg(test)]

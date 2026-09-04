@@ -144,6 +144,7 @@ struct FakeState {
     capture_count: AtomicUsize,
     capture_delay_ms: AtomicU64,
     capture_close_count: AtomicUsize,
+    capture_close_error: std::sync::Mutex<Option<DeviceError>>,
     fail_capture: AtomicBool,
     transient_capture_failure: AtomicBool,
     fail_capture_on: AtomicUsize,
@@ -257,7 +258,10 @@ impl InputBackend for FakeBackend {
         self.input(InputAction::Reset)
     }
 
-    fn close(&mut self) -> DeviceResult<()> {
+    fn close_once(
+        &mut self,
+        _authority: actingcommand_device::DeviceCloseAuthority,
+    ) -> DeviceResult<actingcommand_device::DeviceResourceCloseOutcome> {
         if !self.closed {
             self.closed = true;
             self.state.close_count.fetch_add(1, Ordering::AcqRel);
@@ -265,7 +269,9 @@ impl InputBackend for FakeBackend {
                 return Err(error.clone());
             }
         }
-        Ok(())
+        Ok(actingcommand_device::DeviceResourceCloseOutcome::confirmed(
+            1,
+        ))
     }
 }
 
@@ -351,6 +357,30 @@ impl CaptureBackend for FakeCapture {
                 }
             },
         )
+    }
+
+    fn close_once(
+        &mut self,
+        _authority: actingcommand_device::DeviceCloseAuthority,
+    ) -> DeviceResult<actingcommand_device::DeviceResourceCloseOutcome> {
+        if !self.closed {
+            self.closed = true;
+            self.state
+                .capture_close_count
+                .fetch_add(1, Ordering::AcqRel);
+            if let Some(error) = self
+                .state
+                .capture_close_error
+                .lock()
+                .expect("capture close error")
+                .as_ref()
+            {
+                return Err(error.clone());
+            }
+        }
+        Ok(actingcommand_device::DeviceResourceCloseOutcome::confirmed(
+            1,
+        ))
     }
 }
 
@@ -1070,8 +1100,8 @@ fn shutdown_records_lifecycle_failures_before_writer_close() {
         .collect::<Vec<_>>();
     assert_eq!(
         failures.len(),
-        8,
-        "four actual phases for each failed instance"
+        10,
+        "four actual phases plus one typed resource-close cause for each failed instance"
     );
     for instance in [first, second] {
         let actual = failures
@@ -1086,7 +1116,14 @@ fn shutdown_records_lifecycle_failures_before_writer_close() {
                 (failure.instance_id() == Some(instance)).then_some((event, failure))
             })
             .collect::<Vec<_>>();
-        assert_eq!(actual.len(), 4);
+        assert_eq!(actual.len(), 5);
+        assert_eq!(
+            actual
+                .iter()
+                .filter(|(_, failure)| failure.cause().expect("phase").resource().is_some())
+                .count(),
+            1
+        );
         for (event, failure) in actual {
             assert_eq!(failure.stage(), "runtime.lifecycle.session_close");
             assert_eq!(
@@ -1112,11 +1149,11 @@ fn shutdown_records_lifecycle_failures_before_writer_close() {
         .iter()
         .filter(|event| event.event_type() == EventType::LeaseReleased)
         .collect::<Vec<_>>();
-    assert_eq!(releases.len(), 3);
+    assert!(releases.len() <= 1);
     assert!(
         releases
             .iter()
-            .all(|event| event.sequence() < failures[0].sequence())
+            .all(|event| event.links().instance_id() == Some(&successful))
     );
     assert!(events.iter().any(
         |event| event.event_type() == EventType::RuntimeLifecycleObserved
@@ -10952,6 +10989,145 @@ fn runtime_executes_neutral_contained_task_without_lab_ownership() {
     assert_eq!(summary.summary(), &summary_record);
     drop(replay_client);
     restarted.close().expect("close restarted host");
+}
+
+// Task Contract: Workflow #257 / C1B9. Test class: specification criterion.
+#[test]
+fn task_teardown_precedes_terminal_and_lease_release() {
+    let root = TempDir::new().expect("tempdir");
+    let package = root.path().join("resource-close-order-task.zip");
+    let bytes = neutral_contained_task_package();
+    fs::write(&package, &bytes).expect("write package");
+    let expected = actingcommand_pack_containment::Sha256Hash::digest(&bytes).to_string();
+    let state = Arc::new(FakeState::default());
+    state
+        .transition_capture_after_input
+        .store(true, Ordering::Release);
+    let host = host_with_state(&root, "neutral.instance", Arc::clone(&state));
+    let mut client = TestClient::connect(&host);
+    let correlation = client.ids.mint_correlation_id().expect("correlation");
+    let correlation_id = *correlation.transport();
+    let request = client.request_with_correlation(
+        correlation,
+        RuntimeOperation::run_contained_task(
+            "neutral.instance",
+            client.ids.mint_holder_id().expect("holder"),
+            ContainedTaskRequest::new(package.display().to_string(), expected)
+                .expect("task request"),
+        ),
+    );
+
+    let receipt = client.send(&request);
+
+    assert_eq!(receipt.state(), RuntimeReceiptState::Completed);
+    assert_eq!(state.close_count.load(Ordering::Acquire), 1);
+    assert_eq!(state.capture_close_count.load(Ordering::Acquire), 1);
+    let events = projected_events(
+        &mut client,
+        EventQuery {
+            correlation_id: Some(correlation_id),
+            ..EventQuery::default()
+        },
+    );
+    let resource_close = events
+        .iter()
+        .find(|event| event.event_type == EventType::RuntimeLifecycleObserved)
+        .expect("resource close lifecycle");
+    let task_terminal = events
+        .iter()
+        .find(|event| event.event_type == EventType::TaskCompleted)
+        .expect("task terminal");
+    let lease_release = events
+        .iter()
+        .find(|event| event.event_type == EventType::LeaseReleased)
+        .expect("lease release");
+    assert!(resource_close.sequence < task_terminal.sequence);
+    assert!(task_terminal.sequence < lease_release.sequence);
+    drop(client);
+    host.close().expect("close host");
+}
+
+// Task Contract: Workflow #257 / C1B9. Test class: specification criterion.
+#[test]
+fn unconfirmed_teardown_retains_owner_handle_and_rejects_work() {
+    let root = TempDir::new().expect("tempdir");
+    let package = root.path().join("unconfirmed-resource-close-task.zip");
+    let bytes = neutral_contained_task_package();
+    fs::write(&package, &bytes).expect("write package");
+    let expected = actingcommand_pack_containment::Sha256Hash::digest(&bytes).to_string();
+    let state = Arc::new(FakeState::default());
+    state
+        .transition_capture_after_input
+        .store(true, Ordering::Release);
+    *state
+        .capture_close_error
+        .lock()
+        .expect("capture close error") = Some(
+        DeviceError::fatal("injected unconfirmed capture close").with_resource_close_cause(
+            actingcommand_device::DeviceResourceKind::CaptureBackend,
+            actingcommand_device::DeviceResourceClosePhase::Close,
+            "fake_capture",
+            None,
+            None,
+            actingcommand_device::DeviceResourceQuiescence::Unconfirmed,
+            1,
+        ),
+    );
+    let host = host_with_state(&root, "neutral.instance", Arc::clone(&state));
+    let mut client = TestClient::connect(&host);
+    let correlation = client.ids.mint_correlation_id().expect("correlation");
+    let correlation_id = *correlation.transport();
+    let request = client.request_with_correlation(
+        correlation,
+        RuntimeOperation::run_contained_task(
+            "neutral.instance",
+            client.ids.mint_holder_id().expect("holder"),
+            ContainedTaskRequest::new(package.display().to_string(), expected)
+                .expect("task request"),
+        ),
+    );
+
+    let failed = client.send(&request);
+
+    assert_eq!(failed.state(), RuntimeReceiptState::Failed);
+    assert!(failed.terminal().is_none());
+    assert_eq!(state.capture_close_count.load(Ordering::Acquire), 1);
+    let events = host
+        .query_persisted_events_for_test(EventQuery {
+            correlation_id: Some(correlation_id),
+            ..EventQuery::default()
+        })
+        .expect("query unconfirmed lifecycle");
+    assert!(events.iter().any(|event| {
+        event.event_type() == EventType::RuntimeFailed
+            && serde_json::to_string(event.payload())
+                .expect("runtime failure JSON")
+                .contains("\"quiescence\":\"unconfirmed\"")
+    }));
+    assert!(!events.iter().any(|event| matches!(
+        event.event_type(),
+        EventType::TaskCompleted | EventType::LeaseReleased
+    )));
+    let status = client.request(RuntimeOperation::Status);
+    let rejected = host
+        .process_request_for_test(&status, ConnectionId::new(177).expect("connection"))
+        .expect("fatal receipt");
+    assert_eq!(rejected.state(), RuntimeReceiptState::Failed);
+    assert!(rejected.terminal().is_none());
+
+    let takeover = RuntimeHost::start(
+        config(&root),
+        Arc::new(FakeProvider::one(
+            "neutral.instance",
+            instance_id(),
+            Arc::new(FakeState::default()),
+        )),
+    )
+    .err()
+    .expect("retained owner blocks takeover");
+    assert_eq!(takeover.code(), "owner_conflict");
+    drop(client);
+    assert!(host.close().is_err());
 }
 
 // Task Contract: Workflow #241 / direct contained-task lease deadline v1.

@@ -1,13 +1,14 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 use crate::{
-    ExecutionBackendProvider, ExecutionKernelError, ExecutionKernelResult, ExecutionSession,
-    PreparedInputAction, ResolvedExecutionInstance,
+    ExecutionBackendProvider, ExecutionKernelError, ExecutionKernelResult,
+    ExecutionResourceCloseOutcome, ExecutionSession, PreparedInputAction,
+    ResolvedExecutionInstance,
 };
 use actingcommand_contract::{
     ApplicationLifecycleAction, InputAction, InstanceId, MonitorObservation,
 };
-use actingcommand_device::Frame;
+use actingcommand_device::{DeviceCloseAuthority, Frame};
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::thread;
@@ -114,7 +115,7 @@ impl ExecutionKernel {
         let mut failure = None;
         let mut closed_sessions = Vec::new();
         for (instance_id, session) in sessions {
-            if let Err(error) = session.close() {
+            if let Err(error) = session.close_with_authority(DeviceCloseAuthority::LocalOnly) {
                 closed_sessions.push((instance_id, error.clone()));
                 failure = Some(match failure {
                     Some(primary) => ExecutionKernelError::merge(primary, error),
@@ -125,6 +126,34 @@ impl ExecutionKernel {
         failure.map_or(Ok(()), |error| {
             Err(error.with_closed_sessions(closed_sessions))
         })
+    }
+
+    pub fn close_instance(
+        &self,
+        instance_id: InstanceId,
+        authority: DeviceCloseAuthority,
+    ) -> ExecutionKernelResult<ExecutionResourceCloseOutcome> {
+        let session = {
+            let mut state = self.lock_state()?;
+            if state.closed {
+                return Err(ExecutionKernelError::fatal("execution_kernel_closed"));
+            }
+            state.sessions.remove(&instance_id)
+        };
+        let Some(session) = session else {
+            return Ok(ExecutionResourceCloseOutcome::confirmed(0));
+        };
+        session
+            .close_with_authority(authority)
+            .map_err(|error| error.with_instance_id(instance_id))
+    }
+
+    pub fn has_session(&self, instance_id: InstanceId) -> ExecutionKernelResult<bool> {
+        Ok(self.lock_state()?.sessions.contains_key(&instance_id))
+    }
+
+    pub fn has_sessions(&self) -> ExecutionKernelResult<bool> {
+        Ok(!self.lock_state()?.sessions.is_empty())
     }
 
     fn session(&self, instance_alias: &str) -> ExecutionKernelResult<Arc<ExecutionSession>> {

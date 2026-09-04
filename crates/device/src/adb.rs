@@ -5,7 +5,10 @@ use crate::mumu::mumu_adb_candidates;
 use crate::mumu::{
     MumuInstallSource, MumuInstallation, resolve_mumu_adb, resolve_mumu_installation,
 };
-use crate::{DeviceError, DeviceErrorCategory, DeviceErrorDiagnosticMessage, DeviceResult};
+use crate::{
+    DeviceError, DeviceErrorCategory, DeviceErrorDiagnosticMessage, DeviceResourceCloseOutcome,
+    DeviceResourceClosePhase, DeviceResourceKind, DeviceResourceQuiescence, DeviceResult,
+};
 use std::io::{self, Read};
 use std::path::PathBuf;
 use std::process::ExitStatus;
@@ -297,6 +300,10 @@ impl Adb {
         self.run(&["-s", serial, "forward", local, remote])
     }
 
+    pub fn remove_forward(&self, serial: &str, local: &str) -> DeviceResult<CommandOutput> {
+        self.run(&["-s", serial, "forward", "--remove", local])
+    }
+
     pub fn shell_spawn(&self, serial: &str, args: &[&str]) -> DeviceResult<Child> {
         validate_adb_path(&self.config.adb_path)?;
         Command::new(&self.config.adb_path)
@@ -452,13 +459,14 @@ fn run_raw_with_timeout(
             return collect_raw_output(status, stdout_thread, stderr_thread);
         }
         if started.elapsed() >= timeout {
-            let stopped = stop_child(&mut child, Duration::from_millis(500));
-            if !stopped {
+            let stop_result = stop_child(&mut child, Duration::from_millis(500), "adb");
+            if let Err(cleanup) = stop_result {
                 return Err(DeviceError::fatal(format!(
-                    "adb {} timed out after {:?}; adb process did not exit after kill and pipe reader threads were detached to avoid a shutdown hang",
+                    "adb {} timed out after {:?}; adb process close was not clean and pipe reader threads were detached to avoid a shutdown hang",
                     args.join(" "),
                     timeout
-                )));
+                ))
+                .merge_resource_cleanup(cleanup));
             }
             let stdout = join_pipe_reader(stdout_thread, "stdout")?;
             let stderr = join_pipe_reader(stderr_thread, "stderr")?;
@@ -544,19 +552,99 @@ fn decode_adb_text(bytes: Vec<u8>, stream_name: &'static str, args: &[&str]) -> 
     }
 }
 
-pub fn stop_child(child: &mut Child, timeout: Duration) -> bool {
-    if matches!(child.try_wait(), Ok(Some(_))) {
-        return true;
+pub fn stop_child(
+    child: &mut Child,
+    timeout: Duration,
+    backend: &'static str,
+) -> DeviceResult<DeviceResourceCloseOutcome> {
+    let mut errors = Vec::new();
+    match child.try_wait() {
+        Ok(Some(_)) => return Ok(DeviceResourceCloseOutcome::confirmed(1)),
+        Ok(None) => {}
+        Err(error) => errors.push(child_close_error(
+            backend,
+            DeviceResourceClosePhase::InitialPoll,
+            error,
+            DeviceResourceQuiescence::Unconfirmed,
+        )),
     }
-    let _ = child.kill();
+    if let Err(error) = child.kill() {
+        errors.push(child_close_error(
+            backend,
+            DeviceResourceClosePhase::Kill,
+            error,
+            DeviceResourceQuiescence::Unconfirmed,
+        ));
+    }
     let started = Instant::now();
     while started.elapsed() < timeout {
-        if matches!(child.try_wait(), Ok(Some(_))) {
-            return true;
+        match child.try_wait() {
+            Ok(Some(_)) if errors.is_empty() => {
+                return Ok(DeviceResourceCloseOutcome::confirmed(1));
+            }
+            Ok(Some(_)) => {
+                return Err(aggregate_child_close_errors(
+                    errors,
+                    DeviceResourceQuiescence::Confirmed,
+                ));
+            }
+            Ok(None) => {}
+            Err(error) => errors.push(child_close_error(
+                backend,
+                DeviceResourceClosePhase::ExitPoll,
+                error,
+                DeviceResourceQuiescence::Unconfirmed,
+            )),
         }
         thread::sleep(Duration::from_millis(25));
     }
-    false
+    errors.push(
+        DeviceError::fatal(format!("{backend} child did not exit within {timeout:?}"))
+            .with_resource_close_cause(
+                DeviceResourceKind::ExternalChild,
+                DeviceResourceClosePhase::Deadline,
+                backend,
+                None,
+                None,
+                DeviceResourceQuiescence::Unconfirmed,
+                1,
+            ),
+    );
+    Err(aggregate_child_close_errors(
+        errors,
+        DeviceResourceQuiescence::Unconfirmed,
+    ))
+}
+
+fn child_close_error(
+    backend: &'static str,
+    phase: DeviceResourceClosePhase,
+    error: std::io::Error,
+    quiescence: DeviceResourceQuiescence,
+) -> DeviceError {
+    DeviceError::fatal(format!("{backend} child close {phase:?} failed: {error}"))
+        .with_resource_close_cause(
+            DeviceResourceKind::ExternalChild,
+            phase,
+            backend,
+            None,
+            None,
+            quiescence,
+            1,
+        )
+}
+
+fn aggregate_child_close_errors(
+    mut errors: Vec<DeviceError>,
+    quiescence: DeviceResourceQuiescence,
+) -> DeviceError {
+    let primary = errors.remove(0);
+    errors
+        .into_iter()
+        .fold(primary, |primary, cleanup| {
+            primary.merge_resource_cleanup(cleanup.with_resource_quiescence(quiescence, 1))
+        })
+        .with_resource_summary(quiescence, 1)
 }
 
 #[cfg(test)]

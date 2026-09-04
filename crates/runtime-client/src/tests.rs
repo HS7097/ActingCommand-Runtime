@@ -534,7 +534,10 @@ impl InputBackend for FakeBackend {
         self.input()
     }
 
-    fn close(&mut self) -> DeviceResult<()> {
+    fn close_once(
+        &mut self,
+        _authority: actingcommand_device::DeviceCloseAuthority,
+    ) -> DeviceResult<actingcommand_device::DeviceResourceCloseOutcome> {
         #[cfg(feature = "test-observation")]
         let _observation_owner = enter_observation_owner(self.state.observation_owner);
         if !self.closed {
@@ -551,7 +554,9 @@ impl InputBackend for FakeBackend {
             None,
             None,
         );
-        Ok(())
+        Ok(actingcommand_device::DeviceResourceCloseOutcome::confirmed(
+            1,
+        ))
     }
 }
 
@@ -598,6 +603,18 @@ impl CaptureBackend for FakeCapture {
             PixelFormat::Rgb8,
             CaptureBackendName::AdbScreencap,
         )
+    }
+
+    fn close_once(
+        &mut self,
+        _authority: actingcommand_device::DeviceCloseAuthority,
+    ) -> DeviceResult<actingcommand_device::DeviceResourceCloseOutcome> {
+        if !self.closed {
+            self.closed = true;
+        }
+        Ok(actingcommand_device::DeviceResourceCloseOutcome::confirmed(
+            1,
+        ))
     }
 }
 

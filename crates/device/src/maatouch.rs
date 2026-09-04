@@ -2,7 +2,10 @@
 
 use crate::adb::{Adb, AdbConfig, stop_child};
 use crate::input::{PreparedSegmentedSwipePlan, SegmentedSwipeEvent};
-use crate::{DeviceError, DeviceErrorCategory, DeviceErrorSeverity, DeviceResult, InputBackend};
+use crate::{
+    DeviceCloseAuthority, DeviceError, DeviceErrorCategory, DeviceErrorSeverity,
+    DeviceResourceCloseOutcome, DeviceResourceQuiescence, DeviceResult, InputBackend,
+};
 use std::fs;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
@@ -201,6 +204,7 @@ pub struct MaaTouchBackend {
     stderr_text: Arc<Mutex<String>>,
     stderr_thread: Option<JoinHandle<()>>,
     closed: bool,
+    close_result: Option<DeviceResult<DeviceResourceCloseOutcome>>,
 }
 
 impl MaaTouchBackend {
@@ -221,6 +225,7 @@ impl MaaTouchBackend {
             stderr_text: Arc::new(Mutex::new(String::new())),
             stderr_thread: None,
             closed: true,
+            close_result: Some(Ok(DeviceResourceCloseOutcome::confirmed(0))),
         }
     }
 
@@ -319,30 +324,37 @@ impl MaaTouchBackend {
         let handshake = match self.read_handshake(stdout, &mut child) {
             Ok(handshake) => handshake,
             Err(err) => {
-                stop_child(&mut child, self.maatouch_config.shutdown_timeout);
+                let stop_result = self.stop_unowned_child(child);
                 let join_result = self.join_stderr_thread();
-                return combine_operation_and_close(Err(err), join_result);
+                return combine_operation_and_close(
+                    combine_operation_and_close(Err(err), stop_result),
+                    join_result,
+                );
             }
         };
         if let Err(err) = validate_default_pressure(
             self.maatouch_config.default_pressure,
             handshake.max_pressure,
         ) {
-            stop_child(&mut child, self.maatouch_config.shutdown_timeout);
+            let stop_result = self.stop_unowned_child(child);
             let join_result = self.join_stderr_thread();
-            return combine_operation_and_close(Err(self.with_stderr(err)), join_result);
+            return combine_operation_and_close(
+                combine_operation_and_close(Err(self.with_stderr(err)), stop_result),
+                join_result,
+            );
         }
         self.child = Some(child);
         self.stdin = Some(stdin);
         self.handshake_info = Some(handshake);
         self.closed = false;
+        self.close_result = None;
         Ok(())
     }
 
     pub fn read_handshake<R: Read + Send + 'static>(
         &self,
         stdout: R,
-        child: &mut Child,
+        _child: &mut Child,
     ) -> DeviceResult<HandshakeInfo> {
         // MaaTouch/minitouch emits its startup handshake on stdout. After that
         // this backend only writes commands and does not expect stdout replies,
@@ -355,26 +367,20 @@ impl MaaTouchBackend {
 
         match rx.recv_timeout(self.maatouch_config.handshake_timeout) {
             Ok(result) => result.map_err(|err| self.with_stderr(err)),
-            Err(mpsc::RecvTimeoutError::Timeout) => {
-                stop_child(child, self.maatouch_config.shutdown_timeout);
-                Err(self.with_stderr(
-                    DeviceError::transient(format!(
-                        "timed out after {:?} waiting for MaaTouch handshake",
-                        self.maatouch_config.handshake_timeout
-                    ))
-                    .with_diagnostic(DeviceErrorCategory::Handshake, "maatouch.handshake.timeout"),
+            Err(mpsc::RecvTimeoutError::Timeout) => Err(self.with_stderr(
+                DeviceError::transient(format!(
+                    "timed out after {:?} waiting for MaaTouch handshake",
+                    self.maatouch_config.handshake_timeout
                 ))
-            }
-            Err(err) => {
-                stop_child(child, self.maatouch_config.shutdown_timeout);
-                Err(self.with_stderr(
-                    DeviceError::transient(format!("failed to receive MaaTouch handshake: {err}"))
-                        .with_diagnostic(
-                            DeviceErrorCategory::Response,
-                            "maatouch.handshake.channel_receive",
-                        ),
-                ))
-            }
+                .with_diagnostic(DeviceErrorCategory::Handshake, "maatouch.handshake.timeout"),
+            )),
+            Err(err) => Err(self.with_stderr(
+                DeviceError::transient(format!("failed to receive MaaTouch handshake: {err}"))
+                    .with_diagnostic(
+                        DeviceErrorCategory::Response,
+                        "maatouch.handshake.channel_receive",
+                    ),
+            )),
         }
     }
 
@@ -484,17 +490,40 @@ impl MaaTouchBackend {
         Ok(())
     }
 
+    fn stop_unowned_child(&self, mut child: Child) -> DeviceResult<()> {
+        match stop_child(
+            &mut child,
+            self.maatouch_config.shutdown_timeout,
+            "maatouch",
+        ) {
+            Ok(_) => Ok(()),
+            Err(error) => {
+                if error.resource_quiescence() == Some(DeviceResourceQuiescence::Unconfirmed) {
+                    std::mem::forget(child);
+                }
+                Err(error)
+            }
+        }
+    }
+
     fn shutdown(&mut self) -> [Option<DeviceError>; 2] {
         let mut errors = [None, None];
         self.stdin.take();
 
-        if let Some(mut child) = self.child.take()
-            && !stop_child(&mut child, self.maatouch_config.shutdown_timeout)
-        {
-            errors[0] = Some(DeviceError::fatal(format!(
-                "MaaTouch process did not exit within {:?}",
-                self.maatouch_config.shutdown_timeout
-            )));
+        if let Some(mut child) = self.child.take() {
+            match stop_child(
+                &mut child,
+                self.maatouch_config.shutdown_timeout,
+                "maatouch",
+            ) {
+                Ok(_) => {}
+                Err(error) => {
+                    if error.resource_quiescence() == Some(DeviceResourceQuiescence::Unconfirmed) {
+                        self.child = Some(child);
+                    }
+                    errors[0] = Some(error);
+                }
+            }
         }
 
         if let Err(err) = self.join_stderr_thread() {
@@ -595,9 +624,15 @@ impl InputBackend for MaaTouchBackend {
         self.write_and_flush("r\nc\n")
     }
 
-    fn close(&mut self) -> DeviceResult<()> {
+    fn close_once(
+        &mut self,
+        _authority: DeviceCloseAuthority,
+    ) -> DeviceResult<DeviceResourceCloseOutcome> {
+        if let Some(result) = &self.close_result {
+            return result.clone();
+        }
         if self.closed {
-            return Ok(());
+            return Ok(DeviceResourceCloseOutcome::confirmed(0));
         }
 
         let reset = self.reset().err();
@@ -612,17 +647,28 @@ impl InputBackend for MaaTouchBackend {
             .then(|| DeviceError::fatal(format!("MaaTouch stderr:\n{stderr}")));
 
         self.closed = true;
-        DeviceError::aggregate_close(
+        let result = DeviceError::aggregate_close(
             "maatouch",
             [reset, child_stop, stderr_join, unexpected_stderr],
         )
+        .map(|()| DeviceResourceCloseOutcome::confirmed(3));
+        self.close_result = Some(result.clone());
+        result
     }
 }
 
 impl Drop for MaaTouchBackend {
     fn drop(&mut self) {
-        if !self.closed {
-            let _ = self.shutdown();
+        if self.close_result.is_none()
+            && let Err(error) = self.close_once(DeviceCloseAuthority::LocalOnly)
+            && !thread::panicking()
+        {
+            if error.resource_quiescence() == Some(DeviceResourceQuiescence::Unconfirmed)
+                && let Some(child) = self.child.take()
+            {
+                std::mem::forget(child);
+            }
+            panic!("{error}");
         }
     }
 }
@@ -695,7 +741,9 @@ pub fn combine_operation_and_close(
         (Ok(()), Err(close)) => Err(close),
         (Err(operation), Err(close)) => {
             let message = format!("{operation}; additionally failed to close MaaTouch: {close}");
-            Err(operation.with_severity_and_message(DeviceErrorSeverity::Fatal, message))
+            Err(operation
+                .with_severity_and_message(DeviceErrorSeverity::Fatal, message)
+                .merge_resource_cleanup(close))
         }
     }
 }
