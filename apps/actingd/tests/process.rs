@@ -1722,7 +1722,7 @@ fn actingd_dispatcher_recovers_fake_backend_wake_and_replays_resume() {
 
 #[test]
 fn actingd_exposes_typed_planning_capabilities_to_a_separate_client_process() {
-    let root = TempDir::new().expect("tempdir");
+    let mut root = TempDir::new().expect("tempdir");
     let config_path = root.path().join("actingd.json");
     let instance_id = instance_id();
     let (base, evidence, evidence_sequence) = seed_planning_state(root.path(), instance_id);
@@ -1797,33 +1797,60 @@ fn actingd_exposes_typed_planning_capabilities_to_a_separate_client_process() {
             ForwardProjectionConfig::for_hours(1, 32).expect("forward config"),
         )
         .unwrap_or_else(|error| {
-            let events = RuntimeClient::connect(
-                RuntimeClientConfig::new(root.path(), EventActor::Agent, EventSource::Adapter)
-                    .with_io_timeout(Duration::from_millis(500)),
-            )
-            .and_then(|diagnostic_client| {
-                diagnostic_client.query_events(
-                    EventQuery {
+            root.disable_cleanup(true);
+            eprintln!("preserved actingd failure state root: {}", root.path().display());
+            let snapshot = actingcommand_ledger::GlobalLedger::open_read_only(
+                actingcommand_ledger::GlobalLedgerReadOnlyConfig::new(root.path().join("ledger")),
+                |reference| {
+                    match actingcommand_artifact_store::verify_projected_read_only(
+                        root.path(),
+                        reference,
+                    ) {
+                        Ok(verified) => Some(verified),
+                        Err(verify_error) => {
+                            eprintln!("ERROR verifying authoritative ledger artifact: {verify_error:?}");
+                            None
+                        }
+                    }
+                },
+            );
+            match snapshot {
+                Ok(snapshot) => {
+                    eprintln!(
+                        "authoritative ledger snapshot: latest_sequence={} listed_through_segment={:?} corrupt_tail={:?}",
+                        snapshot.latest_sequence(),
+                        snapshot.listed_through_segment(),
+                        snapshot.corrupt_tail(),
+                    );
+                    if snapshot.corrupt_tail().is_some() {
+                        eprintln!("ERROR authoritative ledger snapshot has a corrupt tail; matches cover only the readable prefix");
+                    }
+                    let query = EventQuery {
                         event_type: Some(EventType::RuntimeFailed),
                         ..EventQuery::default()
-                    },
-                    ProjectionProfile::Forensic,
-                )
-            });
-            match events {
-                Ok(events) => {
-                    eprintln!("authoritative runtime.failed count={}", events.len());
+                    };
+                    let events = snapshot.query(&query);
+                    eprintln!("authoritative runtime.failed snapshot count={}", events.len());
                     for event in events {
-                        match serde_json::to_string(&event) {
-                            Ok(event) => eprintln!("authoritative runtime.failed: {event}"),
-                            Err(query_error) => {
-                                eprintln!("ERROR serializing runtime.failed: {query_error}");
+                        match actingcommand_ledger::project_subscription_event(
+                            &event,
+                            &query,
+                            ProjectionProfile::Forensic,
+                        ) {
+                            Some(projected) => match serde_json::to_string(&projected) {
+                                Ok(projected) => eprintln!("authoritative runtime.failed: {projected}"),
+                                Err(project_error) => {
+                                    eprintln!("ERROR serializing runtime.failed: {project_error}");
+                                }
+                            },
+                            None => {
+                                eprintln!("ERROR projecting matched runtime.failed sequence={}", event.sequence());
                             }
                         }
                     }
                 }
-                Err(query_error) => {
-                    eprintln!("ERROR querying authoritative runtime.failed: {query_error:?}");
+                Err(reader_error) => {
+                    eprintln!("ERROR reading authoritative ledger snapshot: {reader_error:?}");
                 }
             }
             panic!("project policy through daemon IPC: {error:?}");

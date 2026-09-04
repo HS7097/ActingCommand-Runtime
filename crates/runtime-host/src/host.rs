@@ -15766,7 +15766,7 @@ struct ConnectionFailureContext {
 }
 
 fn connection_boundary(
-    stream: TcpStream,
+    mut stream: TcpStream,
     shared: Arc<HostShared>,
     connection_id: ConnectionId,
     connection_serial: u64,
@@ -15781,7 +15781,7 @@ fn connection_boundary(
     };
     let result = catch_unwind(AssertUnwindSafe(|| {
         connection_loop(
-            stream,
+            &mut stream,
             &shared,
             connection_id,
             maximum_frame_bytes,
@@ -15806,6 +15806,7 @@ fn connection_boundary(
     {
         failure = Some(append_error);
     }
+    drop(stream);
     let reason = if shared.fatal.is_shutdown_requested() {
         LeaseReleaseReason::HostShutdown
     } else {
@@ -15864,7 +15865,7 @@ fn reap_finished_connections(
 }
 
 fn connection_loop(
-    mut stream: TcpStream,
+    stream: &mut TcpStream,
     shared: &HostShared,
     connection_id: ConnectionId,
     maximum_frame_bytes: usize,
@@ -15885,7 +15886,7 @@ fn connection_loop(
         context.stage = Some(ConnectionFailureStage::RequestRead);
         context.request_decoded = false;
         context.links = EventLinksDraft::default();
-        let frame = match read_frame(&mut stream, maximum_frame_bytes) {
+        let frame = match read_frame(stream, maximum_frame_bytes) {
             Ok(FrameRead::Data(frame)) => frame,
             Ok(FrameRead::Idle) => continue,
             Ok(FrameRead::Closed) => {
@@ -15983,7 +15984,7 @@ fn connection_loop(
             &receipt,
         );
         context.stage = Some(ConnectionFailureStage::ReceiptWrite);
-        match write_frame(&mut stream, &receipt, maximum_frame_bytes) {
+        match write_frame(stream, &receipt, maximum_frame_bytes) {
             Ok(()) => {
                 #[cfg(feature = "test-observation")]
                 crate::test_observation::emit_receipt(
