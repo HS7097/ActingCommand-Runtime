@@ -19,7 +19,10 @@ mod resource_convert;
 pub use api::*;
 pub use authoring::*;
 pub use environment::AuthoringEnvironmentSnapshot;
-pub use maa_task_graph::{MaaTaskGraph, MaaTaskGraphStats, compile_maa_task_graph};
+pub use maa_task_graph::{
+    MaaFact, MaaFactOrigin, MaaFactSource, MaaFactValue, MaaTaskFacts, MaaTaskGraph,
+    MaaTaskGraphStats, compile_maa_task_graph,
+};
 pub use package_build::{
     PackageBuildCatalog, PreparedPackageBuildTask, prepare_package_build_task,
 };

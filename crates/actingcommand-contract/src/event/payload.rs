@@ -56,6 +56,8 @@ pub const LEDGER_PAYLOAD_SCHEMA: &str = "actingcommand.payload.ledger.v2";
 pub const MAX_CAPTURE_SUMMARY_COUNT: u64 = 1_000_000;
 pub const MAX_CAPTURE_SUMMARY_FRAMES: usize = 16_384;
 pub const MAX_CAPTURE_SUMMARY_PINS: usize = 65_536;
+const MAX_DIAGNOSTIC_DETAIL_TOKEN_BYTES: usize = 256;
+const MAX_DIAGNOSTIC_DETAIL_MESSAGE_BYTES: usize = 1_024;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SecretField {
@@ -471,6 +473,278 @@ impl InputIntentPayload {
     }
 }
 
+#[derive(Clone, PartialEq, Eq)]
+pub struct DiagnosticDetailDraft {
+    category: String,
+    stage: String,
+    backend: String,
+    operation: String,
+    message: String,
+    declared_sensitivity: Sensitivity,
+}
+
+impl DiagnosticDetailDraft {
+    pub fn new(
+        category: impl Into<String>,
+        stage: impl Into<String>,
+        backend: impl Into<String>,
+        operation: impl Into<String>,
+        message: impl Into<String>,
+        declared_sensitivity: Sensitivity,
+    ) -> Self {
+        Self {
+            category: category.into(),
+            stage: stage.into(),
+            backend: backend.into(),
+            operation: operation.into(),
+            message: message.into(),
+            declared_sensitivity,
+        }
+    }
+
+    pub fn category(&self) -> &str {
+        &self.category
+    }
+
+    pub fn stage(&self) -> &str {
+        &self.stage
+    }
+
+    pub fn backend(&self) -> &str {
+        &self.backend
+    }
+
+    pub fn operation(&self) -> &str {
+        &self.operation
+    }
+
+    pub fn message(&self) -> &str {
+        &self.message
+    }
+
+    pub const fn declared_sensitivity(&self) -> Sensitivity {
+        self.declared_sensitivity
+    }
+
+    fn sanitize(self) -> Result<DiagnosticDetailRecord, SanitizationError> {
+        validate_diagnostic_detail(
+            &self.category,
+            &self.stage,
+            &self.backend,
+            &self.operation,
+            &self.message,
+            self.declared_sensitivity,
+        )?;
+        Ok(DiagnosticDetailRecord {
+            category: self.category,
+            stage: self.stage,
+            backend: self.backend,
+            operation: self.operation,
+            message: self.message,
+            declared_sensitivity: self.declared_sensitivity,
+        })
+    }
+}
+
+impl fmt::Debug for DiagnosticDetailDraft {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("DiagnosticDetailDraft")
+            .field("category", &self.category)
+            .field("stage", &self.stage)
+            .field("backend", &self.backend)
+            .field("operation", &self.operation)
+            .field("message", &"<redacted>")
+            .field("declared_sensitivity", &self.declared_sensitivity)
+            .finish()
+    }
+}
+
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DiagnosticDetailRecord {
+    category: String,
+    stage: String,
+    backend: String,
+    operation: String,
+    message: String,
+    declared_sensitivity: Sensitivity,
+}
+
+impl DiagnosticDetailRecord {
+    pub fn category(&self) -> &str {
+        &self.category
+    }
+
+    pub fn stage(&self) -> &str {
+        &self.stage
+    }
+
+    pub fn backend(&self) -> &str {
+        &self.backend
+    }
+
+    pub fn operation(&self) -> &str {
+        &self.operation
+    }
+
+    pub fn message(&self) -> &str {
+        &self.message
+    }
+
+    pub const fn declared_sensitivity(&self) -> Sensitivity {
+        self.declared_sensitivity
+    }
+
+    fn validate(&self) -> Result<(), SanitizationError> {
+        validate_diagnostic_detail(
+            &self.category,
+            &self.stage,
+            &self.backend,
+            &self.operation,
+            &self.message,
+            self.declared_sensitivity,
+        )
+    }
+}
+
+impl fmt::Debug for DiagnosticDetailRecord {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("DiagnosticDetailRecord")
+            .field("category", &self.category)
+            .field("stage", &self.stage)
+            .field("backend", &self.backend)
+            .field("operation", &self.operation)
+            .field("message", &"<redacted>")
+            .field("declared_sensitivity", &self.declared_sensitivity)
+            .finish()
+    }
+}
+
+fn validate_diagnostic_detail(
+    category: &str,
+    stage: &str,
+    backend: &str,
+    operation: &str,
+    message: &str,
+    declared_sensitivity: Sensitivity,
+) -> Result<(), SanitizationError> {
+    validate_diagnostic_detail_token(category, "category")?;
+    validate_diagnostic_detail_stage(stage)?;
+    validate_diagnostic_detail_token(backend, "backend")?;
+    validate_diagnostic_detail_token(operation, "operation")?;
+    if message.is_empty()
+        || message.len() > MAX_DIAGNOSTIC_DETAIL_MESSAGE_BYTES
+        || message.chars().any(char::is_control)
+    {
+        return Err(SanitizationError::new(
+            "invalid_diagnostic_detail_message",
+            "message",
+        ));
+    }
+    if diagnostic_message_has_unsafe_shape(message) {
+        return Err(SanitizationError::new(
+            "unsafe_diagnostic_detail_message",
+            "message",
+        ));
+    }
+    let lower = message.to_ascii_lowercase();
+    let carries_native_output = ["stdout=", "stderr=", "exit_status="]
+        .iter()
+        .any(|marker| lower.contains(marker));
+    if declared_sensitivity == Sensitivity::Public
+        || (carries_native_output && declared_sensitivity < Sensitivity::Sensitive)
+    {
+        return Err(SanitizationError::new(
+            "invalid_diagnostic_detail_sensitivity",
+            "declared_sensitivity",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_diagnostic_detail_token(
+    value: &str,
+    field: &'static str,
+) -> Result<(), SanitizationError> {
+    if value.is_empty()
+        || value.len() > MAX_DIAGNOSTIC_DETAIL_TOKEN_BYTES
+        || !value.bytes().all(|byte| {
+            byte.is_ascii_lowercase() || byte.is_ascii_digit() || matches!(byte, b'_' | b'-')
+        })
+    {
+        Err(SanitizationError::new(
+            "invalid_diagnostic_detail_token",
+            field,
+        ))
+    } else {
+        Ok(())
+    }
+}
+
+fn validate_diagnostic_detail_stage(value: &str) -> Result<(), SanitizationError> {
+    let segments = value.split('.').collect::<Vec<_>>();
+    if value.len() > MAX_DIAGNOSTIC_DETAIL_TOKEN_BYTES
+        || !(2..=4).contains(&segments.len())
+        || segments.iter().any(|segment| {
+            segment.is_empty()
+                || !segment.bytes().all(|byte| {
+                    byte.is_ascii_lowercase()
+                        || byte.is_ascii_digit()
+                        || matches!(byte, b'_' | b'-')
+                })
+        })
+    {
+        Err(SanitizationError::new(
+            "invalid_diagnostic_detail_stage",
+            "stage",
+        ))
+    } else {
+        Ok(())
+    }
+}
+
+fn diagnostic_message_has_unsafe_shape(value: &str) -> bool {
+    let lower = value.to_ascii_lowercase();
+    if [
+        "authorization:",
+        "bearer ",
+        "password=",
+        "password:",
+        "secret=",
+        "secret:",
+        "token=",
+        "token:",
+    ]
+    .iter()
+    .any(|marker| lower.contains(marker))
+        || value.contains("\\\\")
+        || value.contains("//")
+        || value.as_bytes().windows(3).any(|window| {
+            window[0].is_ascii_alphabetic()
+                && window[1] == b':'
+                && matches!(window[2], b'\\' | b'/')
+        })
+    {
+        return true;
+    }
+    value
+        .split(|character: char| {
+            character.is_whitespace() || matches!(character, ',' | ';' | '(' | ')' | '"' | '\'')
+        })
+        .map(|candidate| candidate.trim_matches(|character| matches!(character, '.' | ':')))
+        .any(|candidate| {
+            (candidate.starts_with('/') && candidate.len() > 1)
+                || candidate.parse::<std::net::SocketAddr>().is_ok()
+                || candidate.rsplit_once(':').is_some_and(|(host, port)| {
+                    !host.is_empty()
+                        && port.parse::<u16>().is_ok()
+                        && (host == "localhost" || host.parse::<std::net::IpAddr>().is_ok())
+                })
+        })
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct DiagnosticPayload {
@@ -493,6 +767,8 @@ pub struct DiagnosticOutcomePayload {
     action: EventAction,
     diagnostic_code: DiagnosticCode,
     effect_disposition: EffectDisposition,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    detail: Option<DiagnosticDetailRecord>,
     audit: SanitizedAudit,
 }
 
@@ -2527,6 +2803,10 @@ trait PayloadDetail {
     fn diagnostic_code(&self) -> Option<DiagnosticCode>;
     fn effect_disposition(&self) -> Option<EffectDisposition>;
     fn audit(&self) -> &SanitizedAudit;
+
+    fn diagnostic_detail(&self) -> Option<&DiagnosticDetailRecord> {
+        None
+    }
 }
 
 macro_rules! common_detail_accessors {
@@ -2744,6 +3024,10 @@ impl DiagnosticOutcomePayload {
 
     pub const fn effect_disposition(&self) -> EffectDisposition {
         self.effect_disposition
+    }
+
+    pub const fn detail(&self) -> Option<&DiagnosticDetailRecord> {
+        self.detail.as_ref()
     }
 }
 
@@ -3028,6 +3312,10 @@ impl PayloadDetail for DiagnosticOutcomePayload {
 
     fn audit(&self) -> &SanitizedAudit {
         &self.audit
+    }
+
+    fn diagnostic_detail(&self) -> Option<&DiagnosticDetailRecord> {
+        self.detail.as_ref()
     }
 }
 
@@ -3415,6 +3703,7 @@ struct DiagnosticOutcomeDraft {
     action: EventAction,
     diagnostic_code: DiagnosticCode,
     effect_disposition: EffectDisposition,
+    detail: Option<DiagnosticDetailDraft>,
     audit: AuditInput,
 }
 
@@ -4857,6 +5146,23 @@ impl DiagnosticOutcomeDraft {
             action,
             diagnostic_code,
             effect_disposition,
+            detail: None,
+            audit,
+        }
+    }
+
+    fn new_with_detail(
+        action: EventAction,
+        diagnostic_code: DiagnosticCode,
+        effect_disposition: EffectDisposition,
+        detail: DiagnosticDetailDraft,
+        audit: AuditInput,
+    ) -> Self {
+        Self {
+            action,
+            diagnostic_code,
+            effect_disposition,
+            detail: Some(detail),
             audit,
         }
     }
@@ -4869,6 +5175,10 @@ impl DiagnosticOutcomeDraft {
             action: self.action,
             diagnostic_code: self.diagnostic_code,
             effect_disposition: self.effect_disposition,
+            detail: self
+                .detail
+                .map(DiagnosticDetailDraft::sanitize)
+                .transpose()?,
             audit: self.audit.sanitize(fingerprinter)?,
         })
     }
@@ -5598,6 +5908,18 @@ impl InputPayloadDraft {
             audit,
         )))
     }
+
+    pub fn failed_with_detail(
+        action: EventAction,
+        diagnostic_code: DiagnosticCode,
+        effect: EffectDisposition,
+        detail: DiagnosticDetailDraft,
+        audit: AuditInput,
+    ) -> Self {
+        Self(InputDraftKind::Failed(
+            DiagnosticOutcomeDraft::new_with_detail(action, diagnostic_code, effect, detail, audit),
+        ))
+    }
 }
 
 enum ApplicationDraftKind {
@@ -5684,6 +6006,18 @@ impl CapturePayloadDraft {
             effect,
             audit,
         )))
+    }
+
+    pub fn failed_with_detail(
+        action: EventAction,
+        diagnostic_code: DiagnosticCode,
+        effect: EffectDisposition,
+        detail: DiagnosticDetailDraft,
+        audit: AuditInput,
+    ) -> Self {
+        Self(CaptureDraftKind::Failed(
+            DiagnosticOutcomeDraft::new_with_detail(action, diagnostic_code, effect, detail, audit),
+        ))
     }
 
     pub fn pressure_changed(
@@ -7303,6 +7637,9 @@ impl EventPayload {
         if detail.diagnostic_code().is_some() {
             sensitivity = sensitivity.max(Sensitivity::Internal);
         }
+        if let Some(diagnostic_detail) = detail.diagnostic_detail() {
+            sensitivity = sensitivity.max(diagnostic_detail.declared_sensitivity());
+        }
         if matches!(self, Self::Performance(_)) {
             sensitivity = sensitivity.max(Sensitivity::Internal);
         }
@@ -7343,6 +7680,9 @@ impl EventPayload {
     pub fn validate(&self) -> Result<(), SanitizationError> {
         let detail = self.family_payload().detail();
         detail.audit().validate()?;
+        if let Some(diagnostic_detail) = detail.diagnostic_detail() {
+            diagnostic_detail.validate()?;
+        }
         if let Self::ResourceAuthoring(value) = self {
             validate_resource_authoring_fields(
                 value.phase,
