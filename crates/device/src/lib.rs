@@ -8,6 +8,7 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 
 pub mod adb;
+mod adb_bounds_diagnostic;
 pub mod capture;
 pub mod discovery;
 pub mod emulator;
@@ -22,6 +23,7 @@ pub mod touch;
 mod vendor_stdio;
 
 pub use adb::*;
+pub use adb_bounds_diagnostic::*;
 pub use capture::*;
 pub use discovery::*;
 pub use emulator::*;

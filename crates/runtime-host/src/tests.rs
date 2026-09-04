@@ -135,6 +135,7 @@ struct FakeState {
     input_count: AtomicUsize,
     close_count: AtomicUsize,
     fail_input: AtomicBool,
+    input_error: std::sync::Mutex<Option<DeviceError>>,
     block_input: AtomicBool,
     input_started: AtomicBool,
     capture_open_count: AtomicUsize,
@@ -186,6 +187,9 @@ impl FakeBackend {
         self.state.input_started.store(true, Ordering::Release);
         while self.state.block_input.load(Ordering::Acquire) {
             thread::sleep(Duration::from_millis(5));
+        }
+        if let Some(error) = self.state.input_error.lock().expect("input error").as_ref() {
+            return Err(error.clone());
         }
         if self.state.fail_input.load(Ordering::Acquire) {
             return Err(DeviceError::fatal("injected backend failure")
@@ -12950,6 +12954,116 @@ fn backend_failure_is_visible_and_revokes_the_guard() {
     drop(client);
     assert!(host.fatal_error().expect("health").is_none());
     host.close().expect("close host");
+}
+
+#[test]
+fn input_failure_persists_adb_bounds_context() {
+    use actingcommand_device::{
+        AdbBoundsAction, AdbBoundsCoordinate, AdbInputBoundsContext, AdbInputConnectGeometry,
+    };
+
+    let context = AdbInputBoundsContext::new(
+        AdbBoundsAction::Tap { x: 101, y: 50 },
+        AdbBoundsCoordinate::PointX,
+        (100, 200),
+        Some(AdbInputConnectGeometry::new(720, 1280, 90)),
+    );
+    let mut baseline_types = None;
+    for include_context in [false, true] {
+        let root = TempDir::new().expect("tempdir");
+        let state = Arc::new(FakeState::default());
+        let mut error = DeviceError::fatal("tap x 101 exceeds touch screen max 100");
+        if include_context {
+            error = error.with_adb_input_bounds_context_if_absent(context);
+        }
+        let expected_message = error
+            .diagnostic_message()
+            .unwrap_or(error.message())
+            .to_owned();
+        *state.input_error.lock().expect("input error") = Some(
+            error
+                .with_diagnostic(DeviceErrorCategory::Protocol, "adb.input.bounds_validate")
+                .with_diagnostic_context(
+                    "adb_shell_input",
+                    "tap",
+                    DeviceErrorSensitivity::Sensitive,
+                ),
+        );
+        let host = host_with_state(&root, "node.a", Arc::clone(&state));
+        let mut client = TestClient::connect(&host);
+        let (_, token) = client.acquire("node.a");
+        let correlation = client.ids.mint_correlation_id().expect("correlation");
+        let correlation_id = *correlation.transport();
+        let request = client.request_with_correlation(
+            correlation,
+            RuntimeOperation::Input {
+                token,
+                action: InputAction::Tap { x: 101, y: 50 },
+            },
+        );
+        let receipt = client.send(&request);
+        assert_eq!(receipt.state(), RuntimeReceiptState::Failed);
+        assert_eq!(
+            receipt.error_projection().expect("failure").code,
+            RuntimeErrorCode::BackendOperationFailed
+        );
+        let events = projected_events(
+            &mut client,
+            EventQuery {
+                correlation_id: Some(correlation_id),
+                ..EventQuery::default()
+            },
+        );
+        let types = events
+            .iter()
+            .map(|event| event.event_type)
+            .collect::<Vec<_>>();
+        if let Some(baseline) = &baseline_types {
+            assert_eq!(&types, baseline);
+        } else {
+            baseline_types = Some(types);
+        }
+        let flow = events
+            .iter()
+            .filter(|event| {
+                matches!(
+                    event.event_type,
+                    EventType::InputIntent | EventType::InputFailed
+                )
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            flow.iter()
+                .map(|event| event.event_type)
+                .collect::<Vec<_>>(),
+            vec![EventType::InputIntent, EventType::InputFailed]
+        );
+        assert_eq!(flow[0].links, flow[1].links);
+        assert_eq!(flow[1].links.request_id(), Some(&request.request_id()));
+        assert_eq!(flow[1].links.correlation_id(), Some(&correlation_id));
+        assert!(flow[1].links.action_id().is_some());
+        assert!(flow[1].links.lease_id().is_some());
+        assert_eq!(flow[1].sensitivity, Sensitivity::Sensitive);
+        let ProjectionPayload::Full(payload) = &flow[1].payload else {
+            panic!("full input failure")
+        };
+        let EventPayload::Input(InputPayload::Failed(outcome)) = payload.as_ref() else {
+            panic!("input failure")
+        };
+        let detail = outcome.detail().expect("bounds detail");
+        assert_eq!(detail.message(), expected_message);
+        assert_eq!(detail.category(), "protocol");
+        assert_eq!(detail.stage(), "adb.input.bounds_validate");
+        assert_eq!(detail.backend(), "adb_shell_input");
+        assert_eq!(detail.operation(), "tap");
+        assert_eq!(detail.declared_sensitivity(), Sensitivity::Sensitive);
+        assert_eq!(state.open_count.load(Ordering::Acquire), 1);
+        assert_eq!(state.input_count.load(Ordering::Acquire), 0);
+        assert_eq!(state.close_count.load(Ordering::Acquire), 1);
+        assert!(host.fatal_error().expect("health").is_none());
+        drop(client);
+        host.close().expect("close host");
+    }
 }
 
 #[test]
