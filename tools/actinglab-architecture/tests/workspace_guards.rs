@@ -4363,6 +4363,9 @@ fn actinglab_parse_touch_backend_override_glue_stays_out_of_main() {
     let root = workspace_root();
     let main =
         fs::read_to_string(root.join("apps/actinglab/src/main.rs")).expect("read ActingLab main");
+    let device_commands =
+        fs::read_to_string(root.join("apps/actinglab/src/commands/device_commands.rs"))
+            .expect("read ActingLab device commands module");
     let flag_values = fs::read_to_string(root.join("apps/actinglab/src/flag_values.rs"))
         .expect("read ActingLab flag values module");
 
@@ -4415,15 +4418,25 @@ fn actinglab_parse_touch_backend_override_glue_stays_out_of_main() {
     const CALL: &str =
         "if parse_touch_backend_override(&flags)?.is_some() || global.touch_backend.is_some() {";
     assert_eq!(
-        main.matches(CALL).count(),
+        device_commands.matches(CALL).count(),
         1,
-        "ActingLab main lost the exact touch-backend caller expression"
+        "ActingLab device commands lost the exact touch-backend caller expression"
     );
-    let caller_rows = main
-        .lines()
-        .filter(|line| line.contains("parse_touch_backend_override("))
-        .map(|line| semantic_caller_row("apps/actinglab/src/main.rs", line))
-        .collect::<Vec<_>>();
+    let caller_rows = [
+        ("apps/actinglab/src/main.rs", main.as_str()),
+        (
+            "apps/actinglab/src/commands/device_commands.rs",
+            device_commands.as_str(),
+        ),
+    ]
+    .into_iter()
+    .flat_map(|(path, source)| {
+        source
+            .lines()
+            .filter(|line| line.contains("parse_touch_backend_override("))
+            .map(move |line| semantic_caller_row(path, line))
+    })
+    .collect::<Vec<_>>();
     assert_eq!(
         caller_rows.len(),
         1,
@@ -4432,7 +4445,7 @@ fn actinglab_parse_touch_backend_override_glue_stays_out_of_main() {
     let caller_serialization = caller_rows.concat();
     assert_eq!(
         format!("{:x}", Sha256::digest(caller_serialization.as_bytes())),
-        "23d9edadec25f2d67a5c661471a3b911c3d9645c8de321030a05d7583bfe4b4d",
+        "3a84606d759d774ae7c61c67fefca89aa9afe445ff7a880a031372bd7daf5633",
         "touch-backend caller serialization changed"
     );
 
@@ -4792,6 +4805,9 @@ fn actinglab_stream_input_relay_action_glue_stays_out_of_main() {
     let root = workspace_root();
     let main =
         fs::read_to_string(root.join("apps/actinglab/src/main.rs")).expect("read ActingLab main");
+    let device_commands =
+        fs::read_to_string(root.join("apps/actinglab/src/commands/device_commands.rs"))
+            .expect("read ActingLab device commands module");
     let flag_values = fs::read_to_string(root.join("apps/actinglab/src/flag_values.rs"))
         .expect("read ActingLab flag values module");
 
@@ -4801,9 +4817,12 @@ fn actinglab_stream_input_relay_action_glue_stays_out_of_main() {
         "ActingLab main lost the sole private input-relay root import"
     );
     assert_eq!(
-        main.matches("stream_input_relay_action").count(),
+        main.matches("stream_input_relay_action").count()
+            + device_commands
+                .matches("stream_input_relay_action(")
+                .count(),
         2,
-        "ActingLab main changed the private import or production caller set"
+        "ActingLab changed the private root import or production caller set"
     );
     assert_eq!(
         flag_values.matches("fn stream_input_relay_action(").count(),
@@ -4841,15 +4860,25 @@ fn actinglab_stream_input_relay_action_glue_stays_out_of_main() {
 
     const CALL: &str = "if let Some((action, action_args)) = stream_input_relay_action(flags)? {";
     assert_eq!(
-        main.matches(CALL).count(),
+        device_commands.matches(CALL).count(),
         1,
-        "ActingLab main lost the exact input-relay caller expression"
+        "ActingLab device commands lost the exact input-relay caller expression"
     );
-    let caller_rows = main
-        .lines()
-        .filter(|line| line.contains("stream_input_relay_action("))
-        .map(|line| semantic_caller_row("apps/actinglab/src/main.rs", line))
-        .collect::<Vec<_>>();
+    let caller_rows = [
+        ("apps/actinglab/src/main.rs", main.as_str()),
+        (
+            "apps/actinglab/src/commands/device_commands.rs",
+            device_commands.as_str(),
+        ),
+    ]
+    .into_iter()
+    .flat_map(|(path, source)| {
+        source
+            .lines()
+            .filter(|line| line.contains("stream_input_relay_action("))
+            .map(move |line| semantic_caller_row(path, line))
+    })
+    .collect::<Vec<_>>();
     assert_eq!(
         caller_rows.len(),
         1,
@@ -4858,7 +4887,7 @@ fn actinglab_stream_input_relay_action_glue_stays_out_of_main() {
     let caller_serialization = caller_rows.concat();
     assert_eq!(
         format!("{:x}", Sha256::digest(caller_serialization.as_bytes())),
-        "633f19a920dbc9f4f13a7306df4b94429113db50917f0ef10a270e4a3a21b93d",
+        "ddd8768b246de0e186302dd907ec6393687697abd4b0b1f12e335f53e0aecc9a",
         "input-relay caller serialization changed"
     );
 
