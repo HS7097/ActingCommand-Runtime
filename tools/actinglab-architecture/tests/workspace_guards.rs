@@ -588,8 +588,9 @@ fn c5_production_run_ingress_requires_external_loaded_bundle() {
 #[test]
 fn c5_offline_package_simulation_reuses_the_contained_task_kernel_without_device_authority() {
     let root = workspace_root();
-    let main = fs::read_to_string(root.join("apps/actinglab/src/main.rs"))
-        .expect("read ActingLab CLI source");
+    let lab_package_control =
+        fs::read_to_string(root.join("apps/actinglab/src/lab_package_control.rs"))
+            .expect("read ActingLab Lab/package control source");
     let capabilities = fs::read_to_string(root.join("apps/actinglab/src/commands/capabilities.rs"))
         .expect("read ActingLab capability source");
     let package_cli = fs::read_to_string(root.join("apps/actinglab/src/package_cli.rs"))
@@ -610,7 +611,7 @@ fn c5_offline_package_simulation_reuses_the_contained_task_kernel_without_device
 
     for (source, required) in [
         (
-            &main,
+            &lab_package_control,
             "\"dry-run\" => package_cli::run_offline(global, &flags)",
         ),
         (&capabilities, "package_cli::offline_capability()"),
@@ -703,13 +704,13 @@ fn c5_offline_package_simulation_reuses_the_contained_task_kernel_without_device
         "production lab run must fail loud when the global dry-run flag is present"
     );
     assert!(
-        main.contains("\"package run requires an exclusive_drain LabLease")
-            && main.contains("\"lab_lease_required\""),
+        lab_package_control.contains("\"package run requires an exclusive_drain LabLease")
+            && lab_package_control.contains("\"lab_lease_required\""),
         "package run must remain a blocked compatibility boundary"
     );
     assert!(
-        main.contains("\"operation run requires Runtime scheduler admission")
-            && main.contains("\"lab_lease_required\""),
+        lab_package_control.contains("\"operation run requires Runtime scheduler admission")
+            && lab_package_control.contains("\"lab_lease_required\""),
         "operation run must remain behind Runtime scheduler admission"
     );
 }
@@ -1621,8 +1622,9 @@ fn c5_bounded_capture_sequences_are_runtime_owned_and_input_free() {
 #[test]
 fn c5_session_status_and_monitor_clients_use_runtime_without_legacy_file_authority() {
     let root = workspace_root();
-    let main =
-        fs::read_to_string(root.join("apps/actinglab/src/main.rs")).expect("read ActingLab main");
+    let session_management =
+        fs::read_to_string(root.join("apps/actinglab/src/session_management.rs"))
+            .expect("read ActingLab session management source");
     let adapter = fs::read_to_string(root.join("apps/actinglab/src/runtime_session_adapter.rs"))
         .expect("read Runtime session adapter");
 
@@ -1631,7 +1633,7 @@ fn c5_session_status_and_monitor_clients_use_runtime_without_legacy_file_authori
         "runtime_session_adapter::run_monitor_policy",
     ] {
         assert!(
-            main.contains(required),
+            session_management.contains(required),
             "ActingLab client cutover lost {required}"
         );
     }
@@ -1711,6 +1713,8 @@ fn c5_legacy_session_live_authority_is_retired() {
     let root = workspace_root();
     let main =
         fs::read_to_string(root.join("apps/actinglab/src/main.rs")).expect("read ActingLab main");
+    let monitor_stream = fs::read_to_string(root.join("apps/actinglab/src/monitor_stream.rs"))
+        .expect("read ActingLab monitor stream source");
     let lab2 = fs::read_to_string(root.join("apps/actinglab/src/lab2_cli.rs"))
         .expect("read ActingLab Lab2 adapter");
     let session = fs::read_to_string(root.join("apps/actinglab/src/runtime_session_adapter.rs"))
@@ -1718,18 +1722,42 @@ fn c5_legacy_session_live_authority_is_retired() {
     let stream = fs::read_to_string(root.join("apps/actinglab/src/runtime_stream_adapter.rs"))
         .expect("read Runtime stream adapter");
 
-    for required in [
-        "runtime_session_adapter::retired_authority(\"monitor\", args)",
-        "\"daemon\" => runtime_session_adapter::retired_authority(sub, args)",
-        "\"request\" => runtime_session_adapter::retired_authority(sub, args)",
-        "\"journal\" => runtime_session_adapter::retired_authority(sub, args)",
-        "\"events\" => runtime_session_adapter::retired_authority(sub, args)",
-        "\"response\" => runtime_session_adapter::retired_authority(sub, args)",
-        "\"request-state\" => runtime_session_adapter::retired_authority(sub, args)",
-        "\"lease\" => runtime_session_adapter::retired_authority(sub, args)",
+    for (source, required) in [
+        (
+            &monitor_stream,
+            "runtime_session_adapter::retired_authority(\"monitor\", args)",
+        ),
+        (
+            &main,
+            "\"daemon\" => runtime_session_adapter::retired_authority(sub, args)",
+        ),
+        (
+            &main,
+            "\"request\" => runtime_session_adapter::retired_authority(sub, args)",
+        ),
+        (
+            &main,
+            "\"journal\" => runtime_session_adapter::retired_authority(sub, args)",
+        ),
+        (
+            &main,
+            "\"events\" => runtime_session_adapter::retired_authority(sub, args)",
+        ),
+        (
+            &main,
+            "\"response\" => runtime_session_adapter::retired_authority(sub, args)",
+        ),
+        (
+            &main,
+            "\"request-state\" => runtime_session_adapter::retired_authority(sub, args)",
+        ),
+        (
+            &main,
+            "\"lease\" => runtime_session_adapter::retired_authority(sub, args)",
+        ),
     ] {
         assert!(
-            main.contains(required),
+            source.contains(required),
             "ActingLab lost retirement route {required}"
         );
     }
@@ -2972,15 +3000,19 @@ fn actinglab_user_config_store_glue_stays_out_of_main() {
     let user_config_store =
         fs::read_to_string(root.join("apps/actinglab/src/user_config_store.rs"))
             .expect("read ActingLab user config store module");
+    let cli_information = fs::read_to_string(root.join("apps/actinglab/src/cli_information.rs"))
+        .expect("read ActingLab CLI information source");
 
     const ROOT_DECLARATION: &str = "mod user_config_store;";
-    const ROOT_IMPORT: &str =
+    const OLD_ROOT_IMPORT: &str =
         "use user_config_store::{config_path, read_user_config, write_user_config};";
+    const OWNER_IMPORT: &str =
+        "use crate::user_config_store::{config_path, read_user_config, write_user_config};";
     let declarations = main
         .lines()
         .filter(|line| line.contains("mod user_config_store;"))
         .collect::<Vec<_>>();
-    let imports = main
+    let owner_imports = cli_information
         .lines()
         .filter(|line| line.contains("user_config_store::"))
         .collect::<Vec<_>>();
@@ -2990,9 +3022,13 @@ fn actinglab_user_config_store_glue_stays_out_of_main() {
         "ActingLab main lost the one private user config store module declaration"
     );
     assert_eq!(
-        imports,
-        vec![ROOT_IMPORT],
-        "ActingLab main lost the one private user config store import"
+        owner_imports,
+        vec![OWNER_IMPORT],
+        "ActingLab CLI information source lost the one private user config store import"
+    );
+    assert!(
+        !main.contains(OLD_ROOT_IMPORT),
+        "ActingLab main regained the moved user config store import"
     );
 
     for definition in [
@@ -3054,14 +3090,17 @@ fn actinglab_user_config_keys_glue_stays_out_of_main() {
         fs::read_to_string(root.join("apps/actinglab/src/main.rs")).expect("read ActingLab main");
     let user_config_keys = fs::read_to_string(root.join("apps/actinglab/src/user_config_keys.rs"))
         .expect("read ActingLab user config keys module");
+    let cli_information = fs::read_to_string(root.join("apps/actinglab/src/cli_information.rs"))
+        .expect("read ActingLab CLI information source");
 
     const ROOT_DECLARATION: &str = "mod user_config_keys;";
-    const ROOT_IMPORT: &str = "use user_config_keys::{config_get, config_set};";
+    const OLD_ROOT_IMPORT: &str = "use user_config_keys::{config_get, config_set};";
+    const OWNER_IMPORT: &str = "use crate::user_config_keys::{config_get, config_set};";
     let declarations = main
         .lines()
         .filter(|line| line.contains("mod user_config_keys;"))
         .collect::<Vec<_>>();
-    let imports = main
+    let owner_imports = cli_information
         .lines()
         .filter(|line| line.contains("user_config_keys::"))
         .collect::<Vec<_>>();
@@ -3071,9 +3110,13 @@ fn actinglab_user_config_keys_glue_stays_out_of_main() {
         "ActingLab main lost the one private user config keys module declaration"
     );
     assert_eq!(
-        imports,
-        vec![ROOT_IMPORT],
-        "ActingLab main lost the one private user config keys import"
+        owner_imports,
+        vec![OWNER_IMPORT],
+        "ActingLab CLI information source lost the one private user config keys import"
+    );
+    assert!(
+        !main.contains(OLD_ROOT_IMPORT),
+        "ActingLab main regained the moved user config keys import"
     );
 
     for definition in [
@@ -3286,14 +3329,18 @@ fn actinglab_zip_error_glue_stays_out_of_main() {
         fs::read_to_string(root.join("apps/actinglab/src/main.rs")).expect("read ActingLab main");
     let zip_error = fs::read_to_string(root.join("apps/actinglab/src/zip_error.rs"))
         .expect("read ActingLab ZIP error module");
+    let resource_runtime_support =
+        fs::read_to_string(root.join("apps/actinglab/src/resource_runtime_support.rs"))
+            .expect("read ActingLab resource Runtime support source");
 
     const ROOT_DECLARATION: &str = "mod zip_error;";
-    const ROOT_IMPORT: &str = "use zip_error::{zip_io_error, zip_write_error};";
+    const OLD_ROOT_IMPORT: &str = "use zip_error::{zip_io_error, zip_write_error};";
+    const OWNER_IMPORT: &str = "use super::zip_error::{zip_io_error, zip_write_error};";
     let declarations = main
         .lines()
         .filter(|line| line.contains("mod zip_error;"))
         .collect::<Vec<_>>();
-    let imports = main
+    let owner_imports = resource_runtime_support
         .lines()
         .filter(|line| line.contains("zip_error::"))
         .collect::<Vec<_>>();
@@ -3303,9 +3350,13 @@ fn actinglab_zip_error_glue_stays_out_of_main() {
         "ActingLab main lost the one private ZIP error module declaration"
     );
     assert_eq!(
-        imports,
-        vec![ROOT_IMPORT],
-        "ActingLab main lost the one private ZIP error import"
+        owner_imports,
+        vec![OWNER_IMPORT],
+        "ActingLab resource Runtime support source lost the one private ZIP error import"
+    );
+    assert!(
+        !main.contains(OLD_ROOT_IMPORT),
+        "ActingLab main regained the moved ZIP error import"
     );
 
     for definition in ["fn zip_write_error(", "fn zip_io_error("] {
@@ -3512,7 +3563,9 @@ fn actinglab_unix_time_glue_stays_out_of_main() {
 
     let caller_files = [
         ("apps/actinglab/src/env_detection.rs", 1_usize),
-        ("apps/actinglab/src/main.rs", 16_usize),
+        ("apps/actinglab/src/main.rs", 0_usize),
+        ("apps/actinglab/src/commands/session_contracts.rs", 4_usize),
+        ("apps/actinglab/src/commands/session_record.rs", 12_usize),
         ("apps/actinglab/src/tests/session_record.rs", 1_usize),
         ("apps/actinglab/src/runtime_session_adapter.rs", 1_usize),
         ("apps/actinglab/src/runtime_stream_adapter.rs", 1_usize),
@@ -3537,8 +3590,15 @@ fn actinglab_unix_time_glue_stays_out_of_main() {
                 .split_once(";\n")
                 .map(|(prefix, _)| prefix)
                 .expect("Unix time child import is missing");
+            let expected_import = if path == "apps/actinglab/src/commands/session_record.rs"
+                || path == "apps/actinglab/src/commands/session_contracts.rs"
+            {
+                "use crate::{"
+            } else {
+                "use super::{"
+            };
             assert!(
-                root_import.contains("use super::{") && root_import.contains("current_unix_ms"),
+                root_import.contains(expected_import) && root_import.contains("current_unix_ms"),
                 "Unix time child import changed in {path}"
             );
         }
@@ -3553,7 +3613,7 @@ fn actinglab_unix_time_glue_stays_out_of_main() {
     assert_eq!(call_count, 20, "Unix time caller closure changed");
     assert_eq!(
         format!("{:x}", Sha256::digest(caller_closure.as_bytes())),
-        "deb2351efe8036b14c7ef2979206337bac09ac6ea7858b83993bbaae71fed904",
+        "e36fc6e37d7b29437f1acc773220bcfb9da7f7a07707b57f82ebeeae66b8ce5b",
         "Unix time caller source changed"
     );
 }
@@ -3693,6 +3753,9 @@ fn actinglab_required_non_empty_flag_glue_stays_out_of_main() {
     let root = workspace_root();
     let main =
         fs::read_to_string(root.join("apps/actinglab/src/main.rs")).expect("read ActingLab main");
+    let session_record =
+        fs::read_to_string(root.join("apps/actinglab/src/commands/session_record.rs"))
+            .expect("read ActingLab session record commands");
     let flag_values = fs::read_to_string(root.join("apps/actinglab/src/flag_values.rs"))
         .expect("read ActingLab flag values module");
 
@@ -3738,19 +3801,19 @@ fn actinglab_required_non_empty_flag_glue_stays_out_of_main() {
     const ID_CALL: &str = "let id = required_non_empty_flag(flags, \"--id\")?;";
     const FROM_CALL: &str = "let from = required_non_empty_flag(flags, \"--from\")?;";
     assert_eq!(
-        main.matches("required_non_empty_flag(").count(),
+        session_record.matches("required_non_empty_flag(").count(),
         4,
-        "ActingLab main required-value caller set changed"
+        "ActingLab session-record required-value caller set changed"
     );
     assert_eq!(
-        main.matches(ID_CALL).count(),
+        session_record.matches(ID_CALL).count(),
         3,
-        "ActingLab main lost an exact --id required-value caller"
+        "ActingLab session-record lost an exact --id required-value caller"
     );
     assert_eq!(
-        main.matches(FROM_CALL).count(),
+        session_record.matches(FROM_CALL).count(),
         1,
-        "ActingLab main lost the exact --from required-value caller"
+        "ActingLab session-record lost the exact --from required-value caller"
     );
 
     let marker = "\npub(super) fn required_non_empty_flag(";
@@ -3783,6 +3846,9 @@ fn actinglab_optional_unit_f64_glue_stays_out_of_main() {
     let root = workspace_root();
     let main =
         fs::read_to_string(root.join("apps/actinglab/src/main.rs")).expect("read ActingLab main");
+    let session_record =
+        fs::read_to_string(root.join("apps/actinglab/src/commands/session_record.rs"))
+            .expect("read ActingLab session record commands");
     let flag_values = fs::read_to_string(root.join("apps/actinglab/src/flag_values.rs"))
         .expect("read ActingLab flag values module");
 
@@ -3826,24 +3892,24 @@ fn actinglab_optional_unit_f64_glue_stays_out_of_main() {
     const AMEND_CALL: &str =
         "*target.threshold = parse_optional_unit_f64(flags, \"--threshold\")?;";
     assert_eq!(
-        main.matches("parse_optional_unit_f64(").count(),
+        session_record.matches("parse_optional_unit_f64(").count(),
         5,
-        "ActingLab main unit-f64 caller set changed"
+        "ActingLab session-record unit-f64 caller set changed"
     );
     assert_eq!(
-        main.matches(DEFAULT_CALL).count(),
+        session_record.matches(DEFAULT_CALL).count(),
         1,
-        "ActingLab main lost the exact default-threshold caller"
+        "ActingLab session-record lost the exact default-threshold caller"
     );
     assert_eq!(
-        main.matches(NEW_STEP_CALL).count(),
+        session_record.matches(NEW_STEP_CALL).count(),
         2,
-        "ActingLab main lost an exact new-step threshold caller"
+        "ActingLab session-record lost an exact new-step threshold caller"
     );
     assert_eq!(
-        main.matches(AMEND_CALL).count(),
+        session_record.matches(AMEND_CALL).count(),
         2,
-        "ActingLab main lost an exact amend threshold caller"
+        "ActingLab session-record lost an exact amend threshold caller"
     );
 
     let marker = "\npub(super) fn parse_optional_unit_f64(";
@@ -3876,6 +3942,9 @@ fn actinglab_record_duration_flag_glue_stays_out_of_main() {
     let root = workspace_root();
     let main =
         fs::read_to_string(root.join("apps/actinglab/src/main.rs")).expect("read ActingLab main");
+    let session_record =
+        fs::read_to_string(root.join("apps/actinglab/src/commands/session_record.rs"))
+            .expect("read ActingLab session record commands");
     let flag_values = fs::read_to_string(root.join("apps/actinglab/src/flag_values.rs"))
         .expect("read ActingLab flag values module");
 
@@ -3921,19 +3990,19 @@ fn actinglab_record_duration_flag_glue_stays_out_of_main() {
     const SWIPE_CALL: &str = "duration_ms: parse_record_duration_ms(flags, 500)?,";
     const LONG_PRESS_CALL: &str = "duration_ms: parse_record_duration_ms(flags, 700)?,";
     assert_eq!(
-        main.matches("parse_record_duration_ms(").count(),
+        session_record.matches("parse_record_duration_ms(").count(),
         2,
-        "ActingLab main record-duration caller set changed"
+        "ActingLab session-record record-duration caller set changed"
     );
     assert_eq!(
-        main.matches(SWIPE_CALL).count(),
+        session_record.matches(SWIPE_CALL).count(),
         1,
-        "ActingLab main lost the exact swipe/drag duration caller"
+        "ActingLab session-record lost the exact swipe/drag duration caller"
     );
     assert_eq!(
-        main.matches(LONG_PRESS_CALL).count(),
+        session_record.matches(LONG_PRESS_CALL).count(),
         1,
-        "ActingLab main lost the exact long-press/long-tap duration caller"
+        "ActingLab session-record lost the exact long-press/long-tap duration caller"
     );
 
     let marker = "\npub(super) fn parse_record_duration_ms(";
@@ -3974,6 +4043,9 @@ fn actinglab_record_amend_step_id_glue_stays_out_of_main() {
     let root = workspace_root();
     let main =
         fs::read_to_string(root.join("apps/actinglab/src/main.rs")).expect("read ActingLab main");
+    let session_record =
+        fs::read_to_string(root.join("apps/actinglab/src/commands/session_record.rs"))
+            .expect("read ActingLab session record commands");
     let flag_values = fs::read_to_string(root.join("apps/actinglab/src/flag_values.rs"))
         .expect("read ActingLab flag values module");
 
@@ -4045,19 +4117,19 @@ fn actinglab_record_amend_step_id_glue_stays_out_of_main() {
         "            let Some(step) = record.steps.iter_mut().find(|step| step.step_id == step_id) else {",
     );
     assert_eq!(
-        main.matches("record_amend_step_id(").count(),
+        session_record.matches("record_amend_step_id(").count(),
         1,
-        "ActingLab main record-amend step-id caller set changed"
+        "ActingLab session-record record-amend step-id caller set changed"
     );
     assert_eq!(
-        main.matches(CALL).count(),
+        session_record.matches(CALL).count(),
         1,
-        "ActingLab main lost the exact record-amend step-id caller"
+        "ActingLab session-record lost the exact record-amend step-id caller"
     );
     assert_eq!(
-        main.matches(CALL_AND_LOOKUP).count(),
+        session_record.matches(CALL_AND_LOOKUP).count(),
         1,
-        "ActingLab main changed record-amend step-id caller order"
+        "ActingLab session-record changed record-amend step-id caller order"
     );
 
     let marker = "\npub(super) fn record_amend_step_id(";
@@ -4104,6 +4176,8 @@ fn actinglab_split_csv_glue_stays_out_of_main() {
     let root = workspace_root();
     let main =
         fs::read_to_string(root.join("apps/actinglab/src/main.rs")).expect("read ActingLab main");
+    let cli_parse = fs::read_to_string(root.join("apps/actinglab/src/cli_parse.rs"))
+        .expect("read ActingLab CLI parse owner");
     let lab2 = fs::read_to_string(root.join("apps/actinglab/src/lab2_cli.rs"))
         .expect("read ActingLab lab2 CLI");
     let flag_values = fs::read_to_string(root.join("apps/actinglab/src/flag_values.rs"))
@@ -4144,17 +4218,22 @@ fn actinglab_split_csv_glue_stays_out_of_main() {
         "flag values module visibility changed"
     );
 
-    const MAIN_CALL: &str =
+    const CLI_PARSE_CALL: &str =
         "global.instances = Some(split_csv(&require_raw(&raw, index, \"--instances\")?));";
     const TARGETS_CALL: &str = ".flat_map(|value| split_csv(&value))";
     assert_eq!(
         main.matches("split_csv(").count(),
-        1,
+        0,
         "ActingLab main split CSV caller set changed"
     );
+    assert_eq!(
+        cli_parse.matches("split_csv(").count(),
+        1,
+        "ActingLab CLI parse split CSV caller set changed"
+    );
     assert!(
-        main.contains(MAIN_CALL),
-        "ActingLab main lost the exact --instances split CSV caller"
+        cli_parse.contains(CLI_PARSE_CALL),
+        "ActingLab CLI parse owner lost the exact --instances split CSV caller"
     );
     assert_eq!(
         lab2.matches("split_csv(").count(),
@@ -4379,6 +4458,9 @@ fn actinglab_session_record_drift_diagnostics_path_glue_stays_out_of_main() {
     let root = workspace_root();
     let main =
         fs::read_to_string(root.join("apps/actinglab/src/main.rs")).expect("read ActingLab main");
+    let session_record =
+        fs::read_to_string(root.join("apps/actinglab/src/commands/session_record.rs"))
+            .expect("read ActingLab session record commands");
     let flag_values = fs::read_to_string(root.join("apps/actinglab/src/flag_values.rs"))
         .expect("read ActingLab flag values module");
 
@@ -4424,10 +4506,10 @@ fn actinglab_session_record_drift_diagnostics_path_glue_stays_out_of_main() {
         "flag values module visibility changed"
     );
 
-    let caller_rows = main
+    let caller_rows = session_record
         .lines()
         .filter(|line| line.contains("session_record_drift_diagnostics_path("))
-        .map(|line| semantic_caller_row("apps/actinglab/src/main.rs", line))
+        .map(|line| semantic_caller_row("apps/actinglab/src/commands/session_record.rs", line))
         .collect::<Vec<_>>();
     assert_eq!(
         caller_rows.len(),
@@ -4437,7 +4519,7 @@ fn actinglab_session_record_drift_diagnostics_path_glue_stays_out_of_main() {
     let caller_serialization = caller_rows.concat();
     assert_eq!(
         format!("{:x}", Sha256::digest(caller_serialization.as_bytes())),
-        "6918f8c77ee339b7561e6df8874a4a946e6814d9c9348854f5a7787366afefea",
+        "d2092a8c512b9f09a02f032255c37b0be206793f2262f12f715869a3e952c3fa",
         "drift-diagnostics path caller serialization changed"
     );
 
@@ -4497,6 +4579,9 @@ fn actinglab_parse_touch_backend_override_glue_stays_out_of_main() {
     let root = workspace_root();
     let main =
         fs::read_to_string(root.join("apps/actinglab/src/main.rs")).expect("read ActingLab main");
+    let device_commands =
+        fs::read_to_string(root.join("apps/actinglab/src/commands/device_commands.rs"))
+            .expect("read ActingLab device commands module");
     let flag_values = fs::read_to_string(root.join("apps/actinglab/src/flag_values.rs"))
         .expect("read ActingLab flag values module");
 
@@ -4549,15 +4634,25 @@ fn actinglab_parse_touch_backend_override_glue_stays_out_of_main() {
     const CALL: &str =
         "if parse_touch_backend_override(&flags)?.is_some() || global.touch_backend.is_some() {";
     assert_eq!(
-        main.matches(CALL).count(),
+        device_commands.matches(CALL).count(),
         1,
-        "ActingLab main lost the exact touch-backend caller expression"
+        "ActingLab device commands lost the exact touch-backend caller expression"
     );
-    let caller_rows = main
-        .lines()
-        .filter(|line| line.contains("parse_touch_backend_override("))
-        .map(|line| semantic_caller_row("apps/actinglab/src/main.rs", line))
-        .collect::<Vec<_>>();
+    let caller_rows = [
+        ("apps/actinglab/src/main.rs", main.as_str()),
+        (
+            "apps/actinglab/src/commands/device_commands.rs",
+            device_commands.as_str(),
+        ),
+    ]
+    .into_iter()
+    .flat_map(|(path, source)| {
+        source
+            .lines()
+            .filter(|line| line.contains("parse_touch_backend_override("))
+            .map(move |line| semantic_caller_row(path, line))
+    })
+    .collect::<Vec<_>>();
     assert_eq!(
         caller_rows.len(),
         1,
@@ -4566,7 +4661,7 @@ fn actinglab_parse_touch_backend_override_glue_stays_out_of_main() {
     let caller_serialization = caller_rows.concat();
     assert_eq!(
         format!("{:x}", Sha256::digest(caller_serialization.as_bytes())),
-        "23d9edadec25f2d67a5c661471a3b911c3d9645c8de321030a05d7583bfe4b4d",
+        "3a84606d759d774ae7c61c67fefca89aa9afe445ff7a880a031372bd7daf5633",
         "touch-backend caller serialization changed"
     );
 
@@ -4635,6 +4730,12 @@ fn actinglab_parse_match_metric_flag_glue_stays_out_of_main() {
     let root = workspace_root();
     let main =
         fs::read_to_string(root.join("apps/actinglab/src/main.rs")).expect("read ActingLab main");
+    let session_record =
+        fs::read_to_string(root.join("apps/actinglab/src/commands/session_record.rs"))
+            .expect("read ActingLab session record commands");
+    let navigation_recovery =
+        fs::read_to_string(root.join("apps/actinglab/src/commands/navigation_recovery.rs"))
+            .expect("read ActingLab navigation/recovery commands");
     let flag_values = fs::read_to_string(root.join("apps/actinglab/src/flag_values.rs"))
         .expect("read ActingLab flag values module");
 
@@ -4687,21 +4788,37 @@ fn actinglab_parse_match_metric_flag_glue_stays_out_of_main() {
     const AUTO_REGION_CALL: &str = "Some(parse_match_metric_flag(flags)?)";
     for (call, expected) in [(LOCATE_CALL, 1), (BACKTEST_CALL, 1), (AUTO_REGION_CALL, 1)] {
         assert_eq!(
-            main.matches(call).count(),
+            main.matches(call).count()
+                + session_record.matches(call).count()
+                + navigation_recovery.matches(call).count(),
             expected,
-            "ActingLab main changed an exact match-metric caller: {call}"
+            "ActingLab changed an exact match-metric caller: {call}"
         );
     }
-    let caller_rows = main
-        .lines()
-        .filter(|line| line.contains("parse_match_metric_flag("))
-        .map(|line| semantic_caller_row("apps/actinglab/src/main.rs", line))
-        .collect::<Vec<_>>();
+    let caller_rows = [
+        ("apps/actinglab/src/main.rs", main.as_str()),
+        (
+            "apps/actinglab/src/commands/session_record.rs",
+            session_record.as_str(),
+        ),
+        (
+            "apps/actinglab/src/commands/navigation_recovery.rs",
+            navigation_recovery.as_str(),
+        ),
+    ]
+    .iter()
+    .flat_map(|(path, source)| {
+        source
+            .lines()
+            .filter(|line| line.contains("parse_match_metric_flag("))
+            .map(move |line| semantic_caller_row(path, line))
+    })
+    .collect::<Vec<_>>();
     assert_eq!(caller_rows.len(), 3, "match-metric caller set changed");
     let caller_serialization = caller_rows.concat();
     assert_eq!(
         format!("{:x}", Sha256::digest(caller_serialization.as_bytes())),
-        "c015602ad2de55d4930f14e1bb68105a57693a094e43838609afc586a626273b",
+        "5690593f43ab1d12e73273c0c20f1bd5c64c60d4fa4047ab29591361df703bba",
         "match-metric caller serialization changed"
     );
 
@@ -4781,6 +4898,9 @@ fn actinglab_record_candidates_step_id_glue_stays_out_of_main() {
     let root = workspace_root();
     let main =
         fs::read_to_string(root.join("apps/actinglab/src/main.rs")).expect("read ActingLab main");
+    let session_record =
+        fs::read_to_string(root.join("apps/actinglab/src/commands/session_record.rs"))
+            .expect("read ActingLab session record commands");
     let flag_values = fs::read_to_string(root.join("apps/actinglab/src/flag_values.rs"))
         .expect("read ActingLab flag values module");
 
@@ -4790,9 +4910,10 @@ fn actinglab_record_candidates_step_id_glue_stays_out_of_main() {
         "ActingLab main lost the sole private record-candidates step-id root import"
     );
     assert_eq!(
-        main.matches("record_candidates_step_id").count(),
+        main.matches("record_candidates_step_id").count()
+            + session_record.matches("record_candidates_step_id(").count(),
         2,
-        "ActingLab main changed the private import or production caller set"
+        "ActingLab session-record changed the private import or production caller set"
     );
     assert_eq!(
         flag_values.matches("fn record_candidates_step_id(").count(),
@@ -4822,14 +4943,14 @@ fn actinglab_record_candidates_step_id_glue_stays_out_of_main() {
 
     const CALL: &str = "let step_id = record_candidates_step_id(&flags)?;";
     assert_eq!(
-        main.matches(CALL).count(),
+        session_record.matches(CALL).count(),
         1,
-        "ActingLab main lost the exact record-candidates step-id caller expression"
+        "ActingLab session-record lost the exact record-candidates step-id caller expression"
     );
-    let caller_rows = main
+    let caller_rows = session_record
         .lines()
         .filter(|line| line.contains("record_candidates_step_id("))
-        .map(|line| semantic_caller_row("apps/actinglab/src/main.rs", line))
+        .map(|line| semantic_caller_row("apps/actinglab/src/commands/session_record.rs", line))
         .collect::<Vec<_>>();
     assert_eq!(
         caller_rows.len(),
@@ -4839,7 +4960,7 @@ fn actinglab_record_candidates_step_id_glue_stays_out_of_main() {
     let caller_serialization = caller_rows.concat();
     assert_eq!(
         format!("{:x}", Sha256::digest(caller_serialization.as_bytes())),
-        "64cec85ea20fa591dea311cae584059f320bc6b693655d155cd6af6c44d52869",
+        "092a1d6d0e5de7d1820aa9581403b5199b8c1a857bb785f0d0faa307bf714d5e",
         "record-candidates step-id caller serialization changed"
     );
 
@@ -4926,6 +5047,9 @@ fn actinglab_stream_input_relay_action_glue_stays_out_of_main() {
     let root = workspace_root();
     let main =
         fs::read_to_string(root.join("apps/actinglab/src/main.rs")).expect("read ActingLab main");
+    let device_commands =
+        fs::read_to_string(root.join("apps/actinglab/src/commands/device_commands.rs"))
+            .expect("read ActingLab device commands module");
     let flag_values = fs::read_to_string(root.join("apps/actinglab/src/flag_values.rs"))
         .expect("read ActingLab flag values module");
 
@@ -4935,9 +5059,12 @@ fn actinglab_stream_input_relay_action_glue_stays_out_of_main() {
         "ActingLab main lost the sole private input-relay root import"
     );
     assert_eq!(
-        main.matches("stream_input_relay_action").count(),
+        main.matches("stream_input_relay_action").count()
+            + device_commands
+                .matches("stream_input_relay_action(")
+                .count(),
         2,
-        "ActingLab main changed the private import or production caller set"
+        "ActingLab changed the private root import or production caller set"
     );
     assert_eq!(
         flag_values.matches("fn stream_input_relay_action(").count(),
@@ -4975,15 +5102,25 @@ fn actinglab_stream_input_relay_action_glue_stays_out_of_main() {
 
     const CALL: &str = "if let Some((action, action_args)) = stream_input_relay_action(flags)? {";
     assert_eq!(
-        main.matches(CALL).count(),
+        device_commands.matches(CALL).count(),
         1,
-        "ActingLab main lost the exact input-relay caller expression"
+        "ActingLab device commands lost the exact input-relay caller expression"
     );
-    let caller_rows = main
-        .lines()
-        .filter(|line| line.contains("stream_input_relay_action("))
-        .map(|line| semantic_caller_row("apps/actinglab/src/main.rs", line))
-        .collect::<Vec<_>>();
+    let caller_rows = [
+        ("apps/actinglab/src/main.rs", main.as_str()),
+        (
+            "apps/actinglab/src/commands/device_commands.rs",
+            device_commands.as_str(),
+        ),
+    ]
+    .into_iter()
+    .flat_map(|(path, source)| {
+        source
+            .lines()
+            .filter(|line| line.contains("stream_input_relay_action("))
+            .map(move |line| semantic_caller_row(path, line))
+    })
+    .collect::<Vec<_>>();
     assert_eq!(
         caller_rows.len(),
         1,
@@ -4992,7 +5129,7 @@ fn actinglab_stream_input_relay_action_glue_stays_out_of_main() {
     let caller_serialization = caller_rows.concat();
     assert_eq!(
         format!("{:x}", Sha256::digest(caller_serialization.as_bytes())),
-        "633f19a920dbc9f4f13a7306df4b94429113db50917f0ef10a270e4a3a21b93d",
+        "ddd8768b246de0e186302dd907ec6393687697abd4b0b1f12e335f53e0aecc9a",
         "input-relay caller serialization changed"
     );
 
@@ -5086,6 +5223,9 @@ fn actinglab_parse_record_build_resolution_glue_stays_out_of_main() {
     let root = workspace_root();
     let main =
         fs::read_to_string(root.join("apps/actinglab/src/main.rs")).expect("read ActingLab main");
+    let session_record =
+        fs::read_to_string(root.join("apps/actinglab/src/commands/session_record.rs"))
+            .expect("read ActingLab session record commands");
     let flag_values = fs::read_to_string(root.join("apps/actinglab/src/flag_values.rs"))
         .expect("read ActingLab flag values module");
 
@@ -5095,9 +5235,12 @@ fn actinglab_parse_record_build_resolution_glue_stays_out_of_main() {
         "ActingLab main lost the sole private record-build resolution root import"
     );
     assert_eq!(
-        main.matches("parse_record_build_resolution").count(),
+        main.matches("parse_record_build_resolution").count()
+            + session_record
+                .matches("parse_record_build_resolution(")
+                .count(),
         2,
-        "ActingLab main changed the private import or production caller set"
+        "ActingLab session-record changed the private import or production caller set"
     );
     assert_eq!(
         flag_values
@@ -5137,14 +5280,14 @@ fn actinglab_parse_record_build_resolution_glue_stays_out_of_main() {
 
     const CALL: &str = "let mut resolution = parse_record_build_resolution(flags)?;";
     assert_eq!(
-        main.matches(CALL).count(),
+        session_record.matches(CALL).count(),
         1,
-        "ActingLab main lost the exact record-build resolution caller expression"
+        "ActingLab session-record lost the exact record-build resolution caller expression"
     );
-    let caller_rows = main
+    let caller_rows = session_record
         .lines()
         .filter(|line| line.contains("parse_record_build_resolution("))
-        .map(|line| semantic_caller_row("apps/actinglab/src/main.rs", line))
+        .map(|line| semantic_caller_row("apps/actinglab/src/commands/session_record.rs", line))
         .collect::<Vec<_>>();
     assert_eq!(
         caller_rows.len(),
@@ -5154,7 +5297,7 @@ fn actinglab_parse_record_build_resolution_glue_stays_out_of_main() {
     let caller_serialization = caller_rows.concat();
     assert_eq!(
         format!("{:x}", Sha256::digest(caller_serialization.as_bytes())),
-        "5ffbd7d309ecb43bde78a9d194d4fff18088ce1442b2b94f1cd292175e75f305",
+        "74453e9c995037e811e013a9185c0147dc80aded6e697ea2fbe1bfd39064b8fe",
         "record-build resolution caller serialization changed"
     );
 
@@ -5245,6 +5388,9 @@ fn actinglab_parse_session_record_region_glue_stays_out_of_main() {
     let root = workspace_root();
     let main =
         fs::read_to_string(root.join("apps/actinglab/src/main.rs")).expect("read ActingLab main");
+    let session_record =
+        fs::read_to_string(root.join("apps/actinglab/src/commands/session_record.rs"))
+            .expect("read ActingLab session record commands");
     let flag_values = fs::read_to_string(root.join("apps/actinglab/src/flag_values.rs"))
         .expect("read ActingLab flag values module");
 
@@ -5254,9 +5400,11 @@ fn actinglab_parse_session_record_region_glue_stays_out_of_main() {
         "ActingLab main lost the sole private session-record region root import"
     );
     assert_eq!(
-        main.matches("parse_session_record_region(").count(),
+        session_record
+            .matches("parse_session_record_region(")
+            .count(),
         6,
-        "ActingLab main changed the production caller set"
+        "ActingLab session-record changed the production caller set"
     );
     assert_eq!(
         flag_values
@@ -5294,14 +5442,18 @@ fn actinglab_parse_session_record_region_glue_stays_out_of_main() {
         );
     }
     assert_eq!(
-        main.matches("enum SessionRecordRegion {").count(),
+        session_record
+            .matches("pub(crate) enum SessionRecordRegion {")
+            .count(),
         1,
-        "session-record region root type changed"
+        "session-record region owner type changed"
     );
     assert_eq!(
-        main.matches("struct SessionRecordRect {").count(),
+        session_record
+            .matches("pub(crate) struct SessionRecordRect {")
+            .count(),
         1,
-        "session-record rectangle root type changed"
+        "session-record rectangle owner type changed"
     );
     assert!(
         !main.contains("pub enum SessionRecordRegion")
@@ -5315,19 +5467,19 @@ fn actinglab_parse_session_record_region_glue_stays_out_of_main() {
         "let region = parse_session_record_region(&flags.required(\"--region\")?)?;";
     const AMEND_CALL: &str = "*target.region = parse_session_record_region(&value)?;";
     assert_eq!(
-        main.matches(CREATE_CALL).count(),
+        session_record.matches(CREATE_CALL).count(),
         3,
-        "ActingLab main lost an exact session-record region create caller"
+        "ActingLab session-record lost an exact session-record region create caller"
     );
     assert_eq!(
-        main.matches(AMEND_CALL).count(),
+        session_record.matches(AMEND_CALL).count(),
         3,
-        "ActingLab main lost an exact session-record region amend caller"
+        "ActingLab session-record lost an exact session-record region amend caller"
     );
-    let caller_rows = main
+    let caller_rows = session_record
         .lines()
         .filter(|line| line.contains("parse_session_record_region("))
-        .map(|line| semantic_caller_row("apps/actinglab/src/main.rs", line))
+        .map(|line| semantic_caller_row("apps/actinglab/src/commands/session_record.rs", line))
         .collect::<Vec<_>>();
     assert_eq!(
         caller_rows.len(),
@@ -5337,7 +5489,7 @@ fn actinglab_parse_session_record_region_glue_stays_out_of_main() {
     let caller_serialization = caller_rows.concat();
     assert_eq!(
         format!("{:x}", Sha256::digest(caller_serialization.as_bytes())),
-        "9c6f8fc70ba1d882ff464aef6eebf6228e060bdc567411f020afab27143be9be",
+        "06df9132f13e50965f855efeab08cdf3f088f166ba97b68d17f439fba59de0d2",
         "session-record region caller serialization changed"
     );
 
@@ -5427,6 +5579,9 @@ fn actinglab_parse_session_record_rect_glue_stays_out_of_main() {
     let root = workspace_root();
     let main =
         fs::read_to_string(root.join("apps/actinglab/src/main.rs")).expect("read ActingLab main");
+    let session_record =
+        fs::read_to_string(root.join("apps/actinglab/src/commands/session_record.rs"))
+            .expect("read ActingLab session record commands");
     let flag_values = fs::read_to_string(root.join("apps/actinglab/src/flag_values.rs"))
         .expect("read ActingLab flag values module");
 
@@ -5481,9 +5636,11 @@ fn actinglab_parse_session_record_rect_glue_stays_out_of_main() {
         );
     }
     assert_eq!(
-        main.matches("struct SessionRecordRect {").count(),
+        session_record
+            .matches("pub(crate) struct SessionRecordRect {")
+            .count(),
         1,
-        "session-record rectangle root type changed"
+        "session-record rectangle owner type changed"
     );
     assert!(
         !main.contains("pub struct SessionRecordRect")
@@ -5603,6 +5760,9 @@ fn actinglab_parse_session_record_swipe_rects_glue_stays_out_of_main() {
     let root = workspace_root();
     let main =
         fs::read_to_string(root.join("apps/actinglab/src/main.rs")).expect("read ActingLab main");
+    let session_record =
+        fs::read_to_string(root.join("apps/actinglab/src/commands/session_record.rs"))
+            .expect("read ActingLab session record commands");
     let flag_values = fs::read_to_string(root.join("apps/actinglab/src/flag_values.rs"))
         .expect("read ActingLab flag values module");
 
@@ -5656,14 +5816,14 @@ fn actinglab_parse_session_record_swipe_rects_glue_stays_out_of_main() {
 
     const CALL: &str = "let (from, to) = parse_session_record_swipe_rects(&swipe)?;";
     assert_eq!(
-        main.matches(CALL).count(),
+        session_record.matches(CALL).count(),
         1,
-        "ActingLab main lost the sole exact session-record swipe caller"
+        "ActingLab session-record lost the sole exact session-record swipe caller"
     );
-    let semantic_callers = main
+    let semantic_callers = session_record
         .lines()
         .filter(|line| line.trim() == CALL)
-        .map(|line| semantic_caller_row("apps/actinglab/src/main.rs", line))
+        .map(|line| semantic_caller_row("apps/actinglab/src/commands/session_record.rs", line))
         .collect::<Vec<_>>();
     assert_eq!(
         semantic_callers.len(),
@@ -5672,7 +5832,7 @@ fn actinglab_parse_session_record_swipe_rects_glue_stays_out_of_main() {
     );
     assert_eq!(
         format!("{:x}", Sha256::digest(semantic_callers.concat().as_bytes())),
-        "c661e923e56cadcdae3681f46e4be3e065bc45d83f7599f47e58ac7e20478f55",
+        "a7f82fc131ff786b3b2b93222a395ee05301a3ffae8312ffa19bafa5a0d9d719",
         "session-record swipe semantic caller serialization changed"
     );
 
@@ -5754,6 +5914,9 @@ fn actinglab_parse_session_record_candidate_index_glue_stays_out_of_main() {
     let root = workspace_root();
     let main =
         fs::read_to_string(root.join("apps/actinglab/src/main.rs")).expect("read ActingLab main");
+    let session_record =
+        fs::read_to_string(root.join("apps/actinglab/src/commands/session_record.rs"))
+            .expect("read ActingLab session record commands");
     let flag_values = fs::read_to_string(root.join("apps/actinglab/src/flag_values.rs"))
         .expect("read ActingLab flag values module");
 
@@ -5792,12 +5955,13 @@ fn actinglab_parse_session_record_candidate_index_glue_stays_out_of_main() {
     const CALL: &str =
         "if let Some(candidate_index) = parse_session_record_candidate_index(flags)? {";
     assert_eq!(
-        main.matches(CALL).count(),
+        session_record.matches(CALL).count(),
         3,
-        "ActingLab main lost the three exact session-record candidate-index callers"
+        "ActingLab session-record lost the three exact session-record candidate-index callers"
     );
     assert_eq!(
-        main.matches("parse_session_record_candidate_index(")
+        session_record
+            .matches("parse_session_record_candidate_index(")
             .count(),
         3,
         "session-record candidate-index production caller set changed"
