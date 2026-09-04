@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
-use actingcommand_contract::{DiagnosticDetailDraft, RuntimeErrorCode, RuntimeErrorProjection};
+use actingcommand_contract::{
+    CleanupCauseDraft, DiagnosticDetailDraft, RuntimeErrorCode, RuntimeErrorProjection,
+};
 use actingcommand_execution_kernel::ExecutionKernelError;
 use actingcommand_runtime_state::RuntimeStateError;
 use actingcommand_scheduler::SchedulerError;
@@ -17,6 +19,7 @@ pub struct RuntimeHostError {
     operation: &'static str,
     projection: RuntimeErrorProjection,
     diagnostic_detail: Option<Box<DiagnosticDetailDraft>>,
+    cleanup_cause: Option<Box<CleanupCauseDraft>>,
 }
 
 impl RuntimeHostError {
@@ -40,6 +43,10 @@ impl RuntimeHostError {
         self.diagnostic_detail.as_deref()
     }
 
+    pub(crate) fn cleanup_cause(&self) -> Option<&CleanupCauseDraft> {
+        self.cleanup_cause.as_deref()
+    }
+
     pub(crate) const fn fatal(
         code: &'static str,
         operation: &'static str,
@@ -50,6 +57,7 @@ impl RuntimeHostError {
             operation,
             projection: RuntimeErrorProjection::new(runtime_code, true),
             diagnostic_detail: None,
+            cleanup_cause: None,
         }
     }
 
@@ -63,6 +71,7 @@ impl RuntimeHostError {
             operation,
             projection: RuntimeErrorProjection::new(runtime_code, false),
             diagnostic_detail: None,
+            cleanup_cause: None,
         }
     }
 
@@ -76,6 +85,7 @@ impl RuntimeHostError {
             operation,
             projection,
             diagnostic_detail: None,
+            cleanup_cause: None,
         }
     }
 
@@ -100,6 +110,7 @@ impl RuntimeHostError {
             operation,
             projection: RuntimeErrorProjection::new(runtime_code, error.is_fatal()),
             diagnostic_detail: error.diagnostic_detail().cloned().map(Box::new),
+            cleanup_cause: error.cleanup_cause().cloned().map(Box::new),
         }
     }
 
