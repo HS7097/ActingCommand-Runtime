@@ -86,7 +86,7 @@ use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use sha256::{file_sha256, hex_sha256};
 use state_roots::{app_state_root, runtime_state_root, session_state_dir_from_flags};
-use std::collections::{BTreeMap, BTreeSet, VecDeque};
+use std::collections::{BTreeMap, VecDeque};
 use std::env;
 #[cfg(test)]
 use std::ffi::OsString;
@@ -99,7 +99,7 @@ use std::process::ExitCode;
 #[cfg(test)]
 use std::sync::atomic::Ordering;
 use std::thread;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 use unix_time::current_unix_ms;
 use user_config_keys::{config_get, config_set};
 use user_config_store::{config_path, read_user_config, write_user_config};
