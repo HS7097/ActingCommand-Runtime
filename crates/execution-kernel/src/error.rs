@@ -1,16 +1,18 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
-use actingcommand_device::{DeviceError, DeviceErrorSeverity};
+use actingcommand_contract::{DiagnosticDetailDraft, Sensitivity};
+use actingcommand_device::{DeviceError, DeviceErrorSensitivity, DeviceErrorSeverity};
 use std::error::Error;
 use std::fmt;
 
 pub type ExecutionKernelResult<T> = Result<T, ExecutionKernelError>;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct ExecutionKernelError {
     code: &'static str,
     secondary_code: Option<&'static str>,
     device_severity: Option<DeviceErrorSeverity>,
+    diagnostic_detail: Option<Box<DiagnosticDetailDraft>>,
 }
 
 impl ExecutionKernelError {
@@ -19,6 +21,7 @@ impl ExecutionKernelError {
             code,
             secondary_code: None,
             device_severity: None,
+            diagnostic_detail: None,
         }
     }
 
@@ -27,17 +30,22 @@ impl ExecutionKernelError {
             code,
             secondary_code: None,
             device_severity: Some(error.severity()),
+            diagnostic_detail: device_diagnostic_detail(error),
         }
     }
 
     pub(crate) fn merge(primary: Self, secondary: Self) -> Self {
-        if primary == secondary {
+        if primary.code == secondary.code
+            && primary.secondary_code == secondary.secondary_code
+            && primary.device_severity == secondary.device_severity
+        {
             return primary;
         }
         Self {
             code: primary.code,
             secondary_code: Some(secondary.code),
             device_severity: merge_severity(primary.device_severity, secondary.device_severity),
+            diagnostic_detail: primary.diagnostic_detail,
         }
     }
 
@@ -53,8 +61,23 @@ impl ExecutionKernelError {
         self.device_severity
     }
 
+    pub fn diagnostic_detail(&self) -> Option<&DiagnosticDetailDraft> {
+        self.diagnostic_detail.as_deref()
+    }
+
     pub const fn is_fatal(&self) -> bool {
         !matches!(self.device_severity, Some(DeviceErrorSeverity::Transient))
+    }
+}
+
+impl fmt::Debug for ExecutionKernelError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("ExecutionKernelError")
+            .field("code", &self.code)
+            .field("secondary_code", &self.secondary_code)
+            .field("device_severity", &self.device_severity)
+            .finish()
     }
 }
 
@@ -72,6 +95,26 @@ impl fmt::Display for ExecutionKernelError {
 }
 
 impl Error for ExecutionKernelError {}
+
+fn device_diagnostic_detail(error: &DeviceError) -> Option<Box<DiagnosticDetailDraft>> {
+    let diagnostic = error.diagnostic()?;
+    let context = error.diagnostic_context()?;
+    Some(Box::new(DiagnosticDetailDraft::new(
+        diagnostic.category().as_str(),
+        diagnostic.stage(),
+        context.backend(),
+        context.operation(),
+        error
+            .diagnostic_message()
+            .unwrap_or_else(|| error.message()),
+        match context.declared_sensitivity() {
+            DeviceErrorSensitivity::Public => Sensitivity::Public,
+            DeviceErrorSensitivity::Internal => Sensitivity::Internal,
+            DeviceErrorSensitivity::Sensitive => Sensitivity::Sensitive,
+            DeviceErrorSensitivity::Secret => Sensitivity::Secret,
+        },
+    )))
+}
 
 const fn merge_severity(
     left: Option<DeviceErrorSeverity>,

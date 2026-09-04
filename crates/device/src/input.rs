@@ -48,7 +48,7 @@ impl SegmentedSwipeAction {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum SegmentedSwipeEvent {
+pub enum SegmentedSwipeEvent {
     Down((i32, i32)),
     Move {
         point: (i32, i32),
@@ -58,9 +58,25 @@ pub(crate) enum SegmentedSwipeEvent {
     Up,
 }
 
-pub(crate) fn segmented_swipe_events(
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PreparedSegmentedSwipePlan {
     action: SegmentedSwipeAction,
-) -> DeviceResult<Vec<SegmentedSwipeEvent>> {
+    events: Vec<SegmentedSwipeEvent>,
+}
+
+impl PreparedSegmentedSwipePlan {
+    pub const fn action(&self) -> SegmentedSwipeAction {
+        self.action
+    }
+
+    pub fn events(&self) -> &[SegmentedSwipeEvent] {
+        &self.events
+    }
+}
+
+pub fn prepare_segmented_swipe(
+    action: SegmentedSwipeAction,
+) -> DeviceResult<PreparedSegmentedSwipePlan> {
     action.validate()?;
     let [start, corner, end] = action.points;
     let mut events = Vec::with_capacity(32);
@@ -69,7 +85,23 @@ pub(crate) fn segmented_swipe_events(
     events.push(SegmentedSwipeEvent::Hold(action.corner_hold_ms));
     append_maa_2_0_segment(&mut events, corner, end, action.brake_duration_ms);
     events.push(SegmentedSwipeEvent::Up);
-    Ok(events)
+    Ok(PreparedSegmentedSwipePlan { action, events })
+}
+
+pub fn segmented_swipe_capability_error() -> DeviceError {
+    DeviceError::fatal("selected input backend does not support segmented swipe")
+        .with_diagnostic(
+            crate::DeviceErrorCategory::Protocol,
+            "input.segmented_swipe.capability",
+        )
+        .with_diagnostic_context(
+            "input_backend",
+            "segmented_swipe",
+            crate::DeviceErrorSensitivity::Internal,
+        )
+        .with_diagnostic_message(
+            crate::DeviceErrorDiagnosticMessage::SegmentedSwipeCapabilityUnsupported,
+        )
 }
 
 fn append_maa_2_0_segment(
@@ -107,7 +139,12 @@ pub trait InputBackend {
         false
     }
 
-    fn segmented_swipe(&mut self, _action: SegmentedSwipeAction) -> DeviceResult<()> {
+    fn segmented_swipe(&mut self, action: SegmentedSwipeAction) -> DeviceResult<()> {
+        let plan = prepare_segmented_swipe(action)?;
+        self.segmented_swipe_prepared(&plan)
+    }
+
+    fn segmented_swipe_prepared(&mut self, _plan: &PreparedSegmentedSwipePlan) -> DeviceResult<()> {
         Err(DeviceError::fatal(
             "selected input backend does not support single_touch_drag_with_vertical_brake_v1",
         ))
@@ -128,7 +165,7 @@ mod tests {
 
     #[test]
     fn segmented_swipe_plan_has_one_contact_and_exact_timing() {
-        let events = segmented_swipe_events(SegmentedSwipeAction {
+        let plan = prepare_segmented_swipe(SegmentedSwipeAction {
             points: [(1095, 355), (105, 357), (105, 257)],
             horizontal_duration_ms: 200,
             corner_hold_ms: 150,
@@ -138,6 +175,7 @@ mod tests {
             slope_out: 0,
         })
         .expect("valid plan");
+        let events = plan.events();
 
         assert_eq!(
             events.first(),
@@ -230,9 +268,9 @@ mod tests {
             slope_out: 0,
         };
         action.slope_in = 1;
-        assert!(segmented_swipe_events(action).is_err());
+        assert!(prepare_segmented_swipe(action).is_err());
         action.slope_in = 2;
         action.points[2].0 += 1;
-        assert!(segmented_swipe_events(action).is_err());
+        assert!(prepare_segmented_swipe(action).is_err());
     }
 }

@@ -2,7 +2,7 @@
 
 use crate::{
     ExecutionBackendProvider, ExecutionKernelError, ExecutionKernelResult, ExecutionSession,
-    ResolvedExecutionInstance,
+    PreparedInputAction, ResolvedExecutionInstance,
 };
 use actingcommand_contract::{
     ApplicationLifecycleAction, InputAction, InstanceId, MonitorObservation,
@@ -49,9 +49,22 @@ impl ExecutionKernel {
         self.provider.vision_provider()
     }
 
+    pub fn prepare_input(&self, action: InputAction) -> ExecutionKernelResult<PreparedInputAction> {
+        action.try_into()
+    }
+
     pub fn input(&self, instance_alias: &str, action: InputAction) -> ExecutionKernelResult<()> {
+        let action = self.prepare_input(action)?;
+        self.input_prepared(instance_alias, action)
+    }
+
+    pub fn input_prepared(
+        &self,
+        instance_alias: &str,
+        action: PreparedInputAction,
+    ) -> ExecutionKernelResult<()> {
         let session = self.session(instance_alias)?;
-        let result = session.input(action);
+        let result = session.input_prepared(action);
         self.finish_session_operation(&session, result)
     }
 

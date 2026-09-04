@@ -841,6 +841,365 @@ fn sanitize_error(payload: EventPayloadDraft) -> SanitizationError {
 }
 
 #[test]
+fn input_intent_execution_plan_is_bounded_and_backward_compatible() {
+    let exact_events = vec![
+        InputExecutionPlanEvent::Down { x: 0, y: 200 },
+        InputExecutionPlanEvent::Move {
+            x: 75,
+            y: 200,
+            delay_before_ms: 100,
+        },
+        InputExecutionPlanEvent::Move {
+            x: 100,
+            y: 200,
+            delay_before_ms: 100,
+        },
+        InputExecutionPlanEvent::Hold { duration_ms: 150 },
+        InputExecutionPlanEvent::Move {
+            x: 100,
+            y: 125,
+            delay_before_ms: 100,
+        },
+        InputExecutionPlanEvent::Move {
+            x: 100,
+            y: 100,
+            delay_before_ms: 100,
+        },
+        InputExecutionPlanEvent::Up,
+    ];
+    let plan = InputExecutionPlanRecord::new(exact_events.clone()).expect("exact Maa 2/0 plan");
+    let event = sanitize(
+        InputPayloadDraft::intent_with_execution_plan(
+            EventAction::InputSwipe,
+            plan,
+            AuditInput::new(),
+        )
+        .into(),
+        90,
+    );
+
+    assert_eq!(event.schema_version(), GLOBAL_EVENT_SCHEMA_VERSION);
+    assert_eq!(event.payload().sensitivity(), Sensitivity::Internal);
+    let EventPayload::Input(InputPayload::Intent(intent)) = event.payload() else {
+        panic!("typed input intent")
+    };
+    let recorded = intent.execution_plan().expect("execution plan");
+    assert_eq!(recorded.version(), INPUT_EXECUTION_PLAN_VERSION);
+    assert_eq!(recorded.profile(), INPUT_EXECUTION_PLAN_PROFILE_MAA_2_0);
+    assert_eq!(recorded.declared_sensitivity(), Sensitivity::Internal);
+    assert_eq!(recorded.events(), exact_events);
+    assert!(matches!(
+        recorded.events()[1],
+        InputExecutionPlanEvent::Move { x: 75, .. }
+    ));
+
+    let encoded = serde_json::to_string(event.payload()).expect("serialize plan payload");
+    let decoded: EventPayload = serde_json::from_str(&encoded).expect("deserialize plan payload");
+    decoded.validate().expect("validate plan payload");
+    let valid_value = serde_json::to_value(event.payload()).expect("plan payload value");
+    let mut invalid_profile = valid_value.clone();
+    invalid_profile["payload"]["data"]["execution_plan"]["profile"] =
+        serde_json::json!("t_squared");
+    serde_json::from_value::<EventPayload>(invalid_profile)
+        .expect("closed typed payload")
+        .validate()
+        .expect_err("unknown profile rejected");
+    let mut invalid_sensitivity = valid_value;
+    invalid_sensitivity["payload"]["data"]["execution_plan"]["declared_sensitivity"] =
+        serde_json::json!("public");
+    serde_json::from_value::<EventPayload>(invalid_sensitivity)
+        .expect("closed typed payload")
+        .validate()
+        .expect_err("non-internal plan rejected");
+
+    let old_payload = sanitize(
+        InputPayloadDraft::intent(EventAction::InputSwipe, AuditInput::new()).into(),
+        91,
+    );
+    let old_json =
+        serde_json::to_string(old_payload.payload()).expect("serialize old input intent");
+    assert!(!old_json.contains("execution_plan"));
+    let old_round_trip: EventPayload =
+        serde_json::from_str(&old_json).expect("deserialize old input intent");
+    let EventPayload::Input(InputPayload::Intent(old_intent)) = old_round_trip else {
+        panic!("old typed input intent")
+    };
+    assert!(old_intent.execution_plan().is_none());
+
+    let mut maximum = Vec::with_capacity(MAX_INPUT_EXECUTION_PLAN_EVENTS);
+    maximum.push(InputExecutionPlanEvent::Down { x: 0, y: 200 });
+    for index in 0..60 {
+        maximum.push(InputExecutionPlanEvent::Move {
+            x: 100,
+            y: 200,
+            delay_before_ms: if index == 59 { 23 } else { 3 },
+        });
+    }
+    maximum.push(InputExecutionPlanEvent::Hold { duration_ms: 150 });
+    for index in 0..60 {
+        maximum.push(InputExecutionPlanEvent::Move {
+            x: 100,
+            y: 100,
+            delay_before_ms: if index == 59 { 23 } else { 3 },
+        });
+    }
+    maximum.push(InputExecutionPlanEvent::Up);
+    assert_eq!(maximum.len(), MAX_INPUT_EXECUTION_PLAN_EVENTS);
+    InputExecutionPlanRecord::new(maximum.clone()).expect("maximum bounded plan");
+    maximum.insert(
+        maximum.len() - 1,
+        InputExecutionPlanEvent::Move {
+            x: 100,
+            y: 100,
+            delay_before_ms: 1,
+        },
+    );
+    assert!(InputExecutionPlanRecord::new(maximum).is_err());
+
+    assert!(
+        serde_json::from_value::<InputExecutionPlanEvent>(serde_json::json!({
+            "kind": "unknown"
+        }))
+        .is_err()
+    );
+    let invalid_order = vec![
+        InputExecutionPlanEvent::Down { x: 0, y: 200 },
+        InputExecutionPlanEvent::Hold { duration_ms: 150 },
+        InputExecutionPlanEvent::Move {
+            x: 100,
+            y: 200,
+            delay_before_ms: 200,
+        },
+        InputExecutionPlanEvent::Move {
+            x: 100,
+            y: 100,
+            delay_before_ms: 200,
+        },
+        InputExecutionPlanEvent::Up,
+    ];
+    assert!(InputExecutionPlanRecord::new(invalid_order).is_err());
+}
+
+#[test]
+fn diagnostic_detail_is_bounded_sensitive_and_backward_compatible() {
+    let failed = |detail| {
+        InputPayloadDraft::failed_with_detail(
+            EventAction::InputTap,
+            DiagnosticCode::InputFailed,
+            EffectDisposition::NotPerformed,
+            detail,
+            AuditInput::new(),
+        )
+        .into()
+    };
+    let detail = DiagnosticDetailDraft::new(
+        "native",
+        "device_registry.input.operation",
+        "adb_shell_input",
+        "tap",
+        "bounded native failure",
+        Sensitivity::Sensitive,
+    );
+    let sanitized = sanitize(failed(detail), 92);
+
+    assert_eq!(sanitized.payload().sensitivity(), Sensitivity::Sensitive);
+    let EventPayload::Input(InputPayload::Failed(outcome)) = sanitized.payload() else {
+        panic!("typed input failure")
+    };
+    let detail = outcome.detail().expect("diagnostic detail");
+    assert_eq!(detail.category(), "native");
+    assert_eq!(detail.stage(), "device_registry.input.operation");
+    assert_eq!(detail.backend(), "adb_shell_input");
+    assert_eq!(detail.operation(), "tap");
+    assert_eq!(detail.message(), "bounded native failure");
+    assert_eq!(detail.declared_sensitivity(), Sensitivity::Sensitive);
+
+    let stored = serde_json::to_value(sanitized.payload()).expect("detail payload JSON");
+    assert_eq!(
+        stored["payload"]["data"]["detail"],
+        serde_json::json!({
+            "category": "native",
+            "stage": "device_registry.input.operation",
+            "backend": "adb_shell_input",
+            "operation": "tap",
+            "message": "bounded native failure",
+            "declared_sensitivity": "sensitive",
+        })
+    );
+    assert!(stored["payload"]["data"]["detail"].get("module").is_none());
+    let public = serde_json::to_string(&sanitized.payload().public_projection())
+        .expect("public detail projection");
+    assert!(!public.contains("bounded native failure"));
+
+    let old = sanitize(
+        InputPayloadDraft::failed(
+            EventAction::InputTap,
+            DiagnosticCode::InputFailed,
+            EffectDisposition::NotPerformed,
+            AuditInput::new(),
+        )
+        .into(),
+        93,
+    );
+    let old_json = serde_json::to_value(old.payload()).expect("old failure JSON");
+    assert!(old_json["payload"]["data"].get("detail").is_none());
+    let old_round_trip: EventPayload =
+        serde_json::from_value(old_json).expect("old failure remains readable");
+    let EventPayload::Input(InputPayload::Failed(old_outcome)) = old_round_trip else {
+        panic!("old typed input failure")
+    };
+    assert!(old_outcome.detail().is_none());
+
+    let exact_token = "a".repeat(256);
+    let exact_stage = format!("{}.b", "a".repeat(254));
+    let exact_message = "é".repeat(512);
+    sanitize(
+        failed(DiagnosticDetailDraft::new(
+            exact_token.clone(),
+            exact_stage,
+            exact_token.clone(),
+            exact_token,
+            exact_message,
+            Sensitivity::Internal,
+        )),
+        94,
+    );
+
+    let assert_rejected = |detail, expected_code| {
+        assert_eq!(sanitize_error(failed(detail)).code(), expected_code);
+    };
+    for detail in [
+        DiagnosticDetailDraft::new(
+            "",
+            "device.input",
+            "adb",
+            "tap",
+            "failure",
+            Sensitivity::Internal,
+        ),
+        DiagnosticDetailDraft::new(
+            "Native",
+            "device.input",
+            "adb",
+            "tap",
+            "failure",
+            Sensitivity::Internal,
+        ),
+        DiagnosticDetailDraft::new(
+            "native",
+            "device.input",
+            "a".repeat(257),
+            "tap",
+            "failure",
+            Sensitivity::Internal,
+        ),
+    ] {
+        assert_rejected(detail, "invalid_diagnostic_detail_token");
+    }
+    for stage in ["device", "device..input", "Device.input", "a.b.c.d.e"] {
+        assert_rejected(
+            DiagnosticDetailDraft::new(
+                "native",
+                stage,
+                "adb",
+                "tap",
+                "failure",
+                Sensitivity::Internal,
+            ),
+            "invalid_diagnostic_detail_stage",
+        );
+    }
+    for message in ["", "line\nbreak"] {
+        assert_rejected(
+            DiagnosticDetailDraft::new(
+                "native",
+                "device.input",
+                "adb",
+                "tap",
+                message,
+                Sensitivity::Internal,
+            ),
+            "invalid_diagnostic_detail_message",
+        );
+    }
+    assert_rejected(
+        DiagnosticDetailDraft::new(
+            "native",
+            "device.input",
+            "adb",
+            "tap",
+            "é".repeat(513),
+            Sensitivity::Internal,
+        ),
+        "invalid_diagnostic_detail_message",
+    );
+    for message in [
+        r"failed at C:\private\device.log",
+        r"failed at \\server\share\device.log",
+        "failed at /var/log/device.log",
+        "device endpoint 127.0.0.1:16416",
+        "authorization: bearer-secret",
+    ] {
+        assert_rejected(
+            DiagnosticDetailDraft::new(
+                "native",
+                "device.input",
+                "adb",
+                "tap",
+                message,
+                Sensitivity::Sensitive,
+            ),
+            "unsafe_diagnostic_detail_message",
+        );
+    }
+    assert_rejected(
+        DiagnosticDetailDraft::new(
+            "native",
+            "device.input",
+            "adb",
+            "tap",
+            "failure",
+            Sensitivity::Public,
+        ),
+        "invalid_diagnostic_detail_sensitivity",
+    );
+    assert_rejected(
+        DiagnosticDetailDraft::new(
+            "native",
+            "device.input",
+            "adb",
+            "tap",
+            "stderr=permission_denied",
+            Sensitivity::Internal,
+        ),
+        "invalid_diagnostic_detail_sensitivity",
+    );
+    sanitize(
+        failed(DiagnosticDetailDraft::new(
+            "native",
+            "device.input",
+            "adb",
+            "tap",
+            "stderr=permission_denied",
+            Sensitivity::Sensitive,
+        )),
+        95,
+    );
+
+    let mut invalid_stored = stored;
+    invalid_stored["payload"]["data"]["detail"]["stage"] = serde_json::json!("Device.input");
+    let invalid_stored: EventPayload =
+        serde_json::from_value(invalid_stored).expect("typed stored detail");
+    assert_eq!(
+        invalid_stored
+            .validate()
+            .expect_err("stored detail validation")
+            .code(),
+        "invalid_diagnostic_detail_stage"
+    );
+}
+
+#[test]
 fn producer_cannot_select_redaction_policy() {
     let sanitized = sanitize(
         CommandPayloadDraft::received(EventAction::RuntimeStart, audit_all()).into(),

@@ -18,7 +18,9 @@ use crate::{
     PerformanceMonitorStateEventData, PerformancePressureEventData, PerformancePressureRecord,
     PerformanceStutterEventData, PerformanceSummaryEventData, ProjectedArtifactReference,
     ReleaseTransitionData, ReleaseTransitionKind, RequestId, RunId, RuntimeReleaseSet,
-    StateMigrationData, TaskId, validate_fact_invalidation, validate_performance_control,
+    SEGMENTED_SWIPE_BRAKE_DISTANCE_PX, SEGMENTED_SWIPE_BRAKE_DURATION_MS,
+    SEGMENTED_SWIPE_CORNER_HOLD_MS, SEGMENTED_SWIPE_HORIZONTAL_DURATION_MS, StateMigrationData,
+    TaskId, validate_fact_invalidation, validate_performance_control,
     validate_performance_monitor_state, validate_performance_stutter, validate_performance_summary,
 };
 use serde::de;
@@ -39,6 +41,9 @@ pub const LEASE_PAYLOAD_SCHEMA: &str = "actingcommand.payload.lease.v3";
 pub const TASK_PAYLOAD_SCHEMA: &str = "actingcommand.payload.task.v3";
 pub const APPLICATION_PAYLOAD_SCHEMA: &str = "actingcommand.payload.application.v1";
 pub const INPUT_PAYLOAD_SCHEMA: &str = "actingcommand.payload.input.v2";
+pub const INPUT_EXECUTION_PLAN_VERSION: &str = "actingcommand.input.execution_plan.v1";
+pub const INPUT_EXECUTION_PLAN_PROFILE_MAA_2_0: &str = "maa_2_0";
+pub const MAX_INPUT_EXECUTION_PLAN_EVENTS: usize = 123;
 pub const CAPTURE_PAYLOAD_SCHEMA: &str = "actingcommand.payload.capture.v1";
 pub const RECOGNITION_PAYLOAD_SCHEMA: &str = "actingcommand.payload.recognition.v1";
 pub const ARTIFACT_PAYLOAD_SCHEMA: &str = "actingcommand.payload.artifact.v1";
@@ -51,6 +56,8 @@ pub const LEDGER_PAYLOAD_SCHEMA: &str = "actingcommand.payload.ledger.v2";
 pub const MAX_CAPTURE_SUMMARY_COUNT: u64 = 1_000_000;
 pub const MAX_CAPTURE_SUMMARY_FRAMES: usize = 16_384;
 pub const MAX_CAPTURE_SUMMARY_PINS: usize = 65_536;
+const MAX_DIAGNOSTIC_DETAIL_TOKEN_BYTES: usize = 256;
+const MAX_DIAGNOSTIC_DETAIL_MESSAGE_BYTES: usize = 1_024;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SecretField {
@@ -258,6 +265,487 @@ pub struct ObservationPayload {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum InputExecutionPlanEvent {
+    Down {
+        x: i32,
+        y: i32,
+    },
+    Move {
+        x: i32,
+        y: i32,
+        delay_before_ms: u64,
+    },
+    Hold {
+        duration_ms: u64,
+    },
+    Up,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct InputExecutionPlanRecord {
+    version: String,
+    profile: String,
+    declared_sensitivity: Sensitivity,
+    events: Vec<InputExecutionPlanEvent>,
+}
+
+impl InputExecutionPlanRecord {
+    pub fn new(events: Vec<InputExecutionPlanEvent>) -> Result<Self, SanitizationError> {
+        let record = Self {
+            version: INPUT_EXECUTION_PLAN_VERSION.to_string(),
+            profile: INPUT_EXECUTION_PLAN_PROFILE_MAA_2_0.to_string(),
+            declared_sensitivity: Sensitivity::Internal,
+            events,
+        };
+        record.validate()?;
+        Ok(record)
+    }
+
+    pub fn version(&self) -> &str {
+        &self.version
+    }
+
+    pub fn profile(&self) -> &str {
+        &self.profile
+    }
+
+    pub const fn declared_sensitivity(&self) -> Sensitivity {
+        self.declared_sensitivity
+    }
+
+    pub fn events(&self) -> &[InputExecutionPlanEvent] {
+        &self.events
+    }
+
+    fn validate(&self) -> Result<(), SanitizationError> {
+        if self.version != INPUT_EXECUTION_PLAN_VERSION
+            || self.profile != INPUT_EXECUTION_PLAN_PROFILE_MAA_2_0
+            || self.declared_sensitivity != Sensitivity::Internal
+            || self.events.len() > MAX_INPUT_EXECUTION_PLAN_EVENTS
+            || !matches!(
+                self.events.first(),
+                Some(InputExecutionPlanEvent::Down { .. })
+            )
+            || !matches!(self.events.last(), Some(InputExecutionPlanEvent::Up))
+        {
+            return Err(SanitizationError::new(
+                "invalid_input_execution_plan",
+                "execution_plan",
+            ));
+        }
+
+        let holds = self
+            .events
+            .iter()
+            .enumerate()
+            .filter_map(|(index, event)| match event {
+                InputExecutionPlanEvent::Hold {
+                    duration_ms: SEGMENTED_SWIPE_CORNER_HOLD_MS,
+                } => Some(index),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        if holds.len() != 1 {
+            return Err(SanitizationError::new(
+                "invalid_input_execution_plan",
+                "events",
+            ));
+        }
+        let hold_index = holds[0];
+        if hold_index <= 1 || hold_index + 2 >= self.events.len() {
+            return Err(SanitizationError::new(
+                "invalid_input_execution_plan",
+                "events",
+            ));
+        }
+
+        let validate_moves = |events: &[InputExecutionPlanEvent], expected_duration_ms| {
+            let mut duration_ms = 0_u64;
+            for event in events {
+                let InputExecutionPlanEvent::Move {
+                    x,
+                    y,
+                    delay_before_ms,
+                } = event
+                else {
+                    return Err(SanitizationError::new(
+                        "invalid_input_execution_plan",
+                        "events",
+                    ));
+                };
+                if *x < 0 || *y < 0 || *delay_before_ms == 0 {
+                    return Err(SanitizationError::new(
+                        "invalid_input_execution_plan",
+                        "events",
+                    ));
+                }
+                duration_ms = duration_ms.checked_add(*delay_before_ms).ok_or_else(|| {
+                    SanitizationError::new("invalid_input_execution_plan", "events")
+                })?;
+            }
+            if duration_ms != expected_duration_ms {
+                return Err(SanitizationError::new(
+                    "invalid_input_execution_plan",
+                    "events",
+                ));
+            }
+            Ok(())
+        };
+        validate_moves(
+            &self.events[1..hold_index],
+            SEGMENTED_SWIPE_HORIZONTAL_DURATION_MS,
+        )?;
+        validate_moves(
+            &self.events[hold_index + 1..self.events.len() - 1],
+            SEGMENTED_SWIPE_BRAKE_DURATION_MS,
+        )?;
+
+        let InputExecutionPlanEvent::Down { x, y } = self.events[0] else {
+            unreachable!();
+        };
+        if x < 0 || y < 0 {
+            return Err(SanitizationError::new(
+                "invalid_input_execution_plan",
+                "events",
+            ));
+        }
+        let InputExecutionPlanEvent::Move {
+            x: corner_x,
+            y: corner_y,
+            ..
+        } = self.events[hold_index - 1]
+        else {
+            unreachable!();
+        };
+        let InputExecutionPlanEvent::Move {
+            x: end_x, y: end_y, ..
+        } = self.events[self.events.len() - 2]
+        else {
+            unreachable!();
+        };
+        if end_x != corner_x
+            || corner_y.checked_sub(SEGMENTED_SWIPE_BRAKE_DISTANCE_PX) != Some(end_y)
+        {
+            return Err(SanitizationError::new(
+                "invalid_input_execution_plan",
+                "events",
+            ));
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct InputIntentPayload {
+    action: EventAction,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    execution_plan: Option<InputExecutionPlanRecord>,
+    audit: SanitizedAudit,
+}
+
+impl InputIntentPayload {
+    pub const fn action(&self) -> EventAction {
+        self.action
+    }
+
+    pub const fn execution_plan(&self) -> Option<&InputExecutionPlanRecord> {
+        self.execution_plan.as_ref()
+    }
+
+    pub fn audit(&self) -> &SanitizedAudit {
+        &self.audit
+    }
+
+    fn validate(&self) -> Result<(), SanitizationError> {
+        if let Some(execution_plan) = &self.execution_plan {
+            if self.action != EventAction::InputSwipe {
+                return Err(SanitizationError::new(
+                    "invalid_input_execution_plan",
+                    "action",
+                ));
+            }
+            execution_plan.validate()?;
+        }
+        Ok(())
+    }
+}
+
+#[derive(Clone, PartialEq, Eq)]
+pub struct DiagnosticDetailDraft {
+    category: String,
+    stage: String,
+    backend: String,
+    operation: String,
+    message: String,
+    declared_sensitivity: Sensitivity,
+}
+
+impl DiagnosticDetailDraft {
+    pub fn new(
+        category: impl Into<String>,
+        stage: impl Into<String>,
+        backend: impl Into<String>,
+        operation: impl Into<String>,
+        message: impl Into<String>,
+        declared_sensitivity: Sensitivity,
+    ) -> Self {
+        Self {
+            category: category.into(),
+            stage: stage.into(),
+            backend: backend.into(),
+            operation: operation.into(),
+            message: message.into(),
+            declared_sensitivity,
+        }
+    }
+
+    pub fn category(&self) -> &str {
+        &self.category
+    }
+
+    pub fn stage(&self) -> &str {
+        &self.stage
+    }
+
+    pub fn backend(&self) -> &str {
+        &self.backend
+    }
+
+    pub fn operation(&self) -> &str {
+        &self.operation
+    }
+
+    pub fn message(&self) -> &str {
+        &self.message
+    }
+
+    pub const fn declared_sensitivity(&self) -> Sensitivity {
+        self.declared_sensitivity
+    }
+
+    fn sanitize(self) -> Result<DiagnosticDetailRecord, SanitizationError> {
+        validate_diagnostic_detail(
+            &self.category,
+            &self.stage,
+            &self.backend,
+            &self.operation,
+            &self.message,
+            self.declared_sensitivity,
+        )?;
+        Ok(DiagnosticDetailRecord {
+            category: self.category,
+            stage: self.stage,
+            backend: self.backend,
+            operation: self.operation,
+            message: self.message,
+            declared_sensitivity: self.declared_sensitivity,
+        })
+    }
+}
+
+impl fmt::Debug for DiagnosticDetailDraft {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("DiagnosticDetailDraft")
+            .field("category", &self.category)
+            .field("stage", &self.stage)
+            .field("backend", &self.backend)
+            .field("operation", &self.operation)
+            .field("message", &"<redacted>")
+            .field("declared_sensitivity", &self.declared_sensitivity)
+            .finish()
+    }
+}
+
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DiagnosticDetailRecord {
+    category: String,
+    stage: String,
+    backend: String,
+    operation: String,
+    message: String,
+    declared_sensitivity: Sensitivity,
+}
+
+impl DiagnosticDetailRecord {
+    pub fn category(&self) -> &str {
+        &self.category
+    }
+
+    pub fn stage(&self) -> &str {
+        &self.stage
+    }
+
+    pub fn backend(&self) -> &str {
+        &self.backend
+    }
+
+    pub fn operation(&self) -> &str {
+        &self.operation
+    }
+
+    pub fn message(&self) -> &str {
+        &self.message
+    }
+
+    pub const fn declared_sensitivity(&self) -> Sensitivity {
+        self.declared_sensitivity
+    }
+
+    fn validate(&self) -> Result<(), SanitizationError> {
+        validate_diagnostic_detail(
+            &self.category,
+            &self.stage,
+            &self.backend,
+            &self.operation,
+            &self.message,
+            self.declared_sensitivity,
+        )
+    }
+}
+
+impl fmt::Debug for DiagnosticDetailRecord {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("DiagnosticDetailRecord")
+            .field("category", &self.category)
+            .field("stage", &self.stage)
+            .field("backend", &self.backend)
+            .field("operation", &self.operation)
+            .field("message", &"<redacted>")
+            .field("declared_sensitivity", &self.declared_sensitivity)
+            .finish()
+    }
+}
+
+fn validate_diagnostic_detail(
+    category: &str,
+    stage: &str,
+    backend: &str,
+    operation: &str,
+    message: &str,
+    declared_sensitivity: Sensitivity,
+) -> Result<(), SanitizationError> {
+    validate_diagnostic_detail_token(category, "category")?;
+    validate_diagnostic_detail_stage(stage)?;
+    validate_diagnostic_detail_token(backend, "backend")?;
+    validate_diagnostic_detail_token(operation, "operation")?;
+    if message.is_empty()
+        || message.len() > MAX_DIAGNOSTIC_DETAIL_MESSAGE_BYTES
+        || message.chars().any(char::is_control)
+    {
+        return Err(SanitizationError::new(
+            "invalid_diagnostic_detail_message",
+            "message",
+        ));
+    }
+    if diagnostic_message_has_unsafe_shape(message) {
+        return Err(SanitizationError::new(
+            "unsafe_diagnostic_detail_message",
+            "message",
+        ));
+    }
+    let lower = message.to_ascii_lowercase();
+    let carries_native_output = ["stdout=", "stderr=", "exit_status="]
+        .iter()
+        .any(|marker| lower.contains(marker));
+    if declared_sensitivity == Sensitivity::Public
+        || (carries_native_output && declared_sensitivity < Sensitivity::Sensitive)
+    {
+        return Err(SanitizationError::new(
+            "invalid_diagnostic_detail_sensitivity",
+            "declared_sensitivity",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_diagnostic_detail_token(
+    value: &str,
+    field: &'static str,
+) -> Result<(), SanitizationError> {
+    if value.is_empty()
+        || value.len() > MAX_DIAGNOSTIC_DETAIL_TOKEN_BYTES
+        || !value.bytes().all(|byte| {
+            byte.is_ascii_lowercase() || byte.is_ascii_digit() || matches!(byte, b'_' | b'-')
+        })
+    {
+        Err(SanitizationError::new(
+            "invalid_diagnostic_detail_token",
+            field,
+        ))
+    } else {
+        Ok(())
+    }
+}
+
+fn validate_diagnostic_detail_stage(value: &str) -> Result<(), SanitizationError> {
+    let segments = value.split('.').collect::<Vec<_>>();
+    if value.len() > MAX_DIAGNOSTIC_DETAIL_TOKEN_BYTES
+        || !(2..=4).contains(&segments.len())
+        || segments.iter().any(|segment| {
+            segment.is_empty()
+                || !segment.bytes().all(|byte| {
+                    byte.is_ascii_lowercase()
+                        || byte.is_ascii_digit()
+                        || matches!(byte, b'_' | b'-')
+                })
+        })
+    {
+        Err(SanitizationError::new(
+            "invalid_diagnostic_detail_stage",
+            "stage",
+        ))
+    } else {
+        Ok(())
+    }
+}
+
+fn diagnostic_message_has_unsafe_shape(value: &str) -> bool {
+    let lower = value.to_ascii_lowercase();
+    if [
+        "authorization:",
+        "bearer ",
+        "password=",
+        "password:",
+        "secret=",
+        "secret:",
+        "token=",
+        "token:",
+    ]
+    .iter()
+    .any(|marker| lower.contains(marker))
+        || value.contains("\\\\")
+        || value.contains("//")
+        || value.as_bytes().windows(3).any(|window| {
+            window[0].is_ascii_alphabetic()
+                && window[1] == b':'
+                && matches!(window[2], b'\\' | b'/')
+        })
+    {
+        return true;
+    }
+    value
+        .split(|character: char| {
+            character.is_whitespace() || matches!(character, ',' | ';' | '(' | ')' | '"' | '\'')
+        })
+        .map(|candidate| candidate.trim_matches(|character| matches!(character, '.' | ':')))
+        .any(|candidate| {
+            (candidate.starts_with('/') && candidate.len() > 1)
+                || candidate.parse::<std::net::SocketAddr>().is_ok()
+                || candidate.rsplit_once(':').is_some_and(|(host, port)| {
+                    !host.is_empty()
+                        && port.parse::<u16>().is_ok()
+                        && (host == "localhost" || host.parse::<std::net::IpAddr>().is_ok())
+                })
+        })
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct DiagnosticPayload {
     action: EventAction,
@@ -279,6 +767,8 @@ pub struct DiagnosticOutcomePayload {
     action: EventAction,
     diagnostic_code: DiagnosticCode,
     effect_disposition: EffectDisposition,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    detail: Option<DiagnosticDetailRecord>,
     audit: SanitizedAudit,
 }
 
@@ -2313,6 +2803,10 @@ trait PayloadDetail {
     fn diagnostic_code(&self) -> Option<DiagnosticCode>;
     fn effect_disposition(&self) -> Option<EffectDisposition>;
     fn audit(&self) -> &SanitizedAudit;
+
+    fn diagnostic_detail(&self) -> Option<&DiagnosticDetailRecord> {
+        None
+    }
 }
 
 macro_rules! common_detail_accessors {
@@ -2531,6 +3025,10 @@ impl DiagnosticOutcomePayload {
     pub const fn effect_disposition(&self) -> EffectDisposition {
         self.effect_disposition
     }
+
+    pub const fn detail(&self) -> Option<&DiagnosticDetailRecord> {
+        self.detail.as_ref()
+    }
 }
 
 impl MonitorOutcomePayload {
@@ -2745,6 +3243,24 @@ impl PayloadDetail for ObservationPayload {
     }
 }
 
+impl PayloadDetail for InputIntentPayload {
+    fn action(&self) -> EventAction {
+        self.action
+    }
+
+    fn diagnostic_code(&self) -> Option<DiagnosticCode> {
+        None
+    }
+
+    fn effect_disposition(&self) -> Option<EffectDisposition> {
+        None
+    }
+
+    fn audit(&self) -> &SanitizedAudit {
+        &self.audit
+    }
+}
+
 impl PayloadDetail for DiagnosticPayload {
     fn action(&self) -> EventAction {
         self.action
@@ -2796,6 +3312,10 @@ impl PayloadDetail for DiagnosticOutcomePayload {
 
     fn audit(&self) -> &SanitizedAudit {
         &self.audit
+    }
+
+    fn diagnostic_detail(&self) -> Option<&DiagnosticDetailRecord> {
+        self.detail.as_ref()
     }
 }
 
@@ -3161,6 +3681,12 @@ struct ObservationDraft {
     audit: AuditInput,
 }
 
+struct InputIntentDraft {
+    action: EventAction,
+    execution_plan: Option<InputExecutionPlanRecord>,
+    audit: AuditInput,
+}
+
 struct DiagnosticDraft {
     action: EventAction,
     diagnostic_code: DiagnosticCode,
@@ -3177,6 +3703,7 @@ struct DiagnosticOutcomeDraft {
     action: EventAction,
     diagnostic_code: DiagnosticCode,
     effect_disposition: EffectDisposition,
+    detail: Option<DiagnosticDetailDraft>,
     audit: AuditInput,
 }
 
@@ -4532,6 +5059,40 @@ impl ObservationDraft {
     }
 }
 
+impl InputIntentDraft {
+    fn new(
+        action: EventAction,
+        execution_plan: Option<InputExecutionPlanRecord>,
+        audit: AuditInput,
+    ) -> Self {
+        Self {
+            action,
+            execution_plan,
+            audit,
+        }
+    }
+
+    fn sanitize(
+        self,
+        fingerprinter: &dyn SecretFingerprinter,
+    ) -> Result<InputIntentPayload, SanitizationError> {
+        if self.execution_plan.is_some() && self.action != EventAction::InputSwipe {
+            return Err(SanitizationError::new(
+                "invalid_input_execution_plan",
+                "action",
+            ));
+        }
+        if let Some(execution_plan) = &self.execution_plan {
+            execution_plan.validate()?;
+        }
+        Ok(InputIntentPayload {
+            action: self.action,
+            execution_plan: self.execution_plan,
+            audit: self.audit.sanitize(fingerprinter)?,
+        })
+    }
+}
+
 impl DiagnosticDraft {
     fn new(action: EventAction, diagnostic_code: DiagnosticCode, audit: AuditInput) -> Self {
         Self {
@@ -4585,6 +5146,23 @@ impl DiagnosticOutcomeDraft {
             action,
             diagnostic_code,
             effect_disposition,
+            detail: None,
+            audit,
+        }
+    }
+
+    fn new_with_detail(
+        action: EventAction,
+        diagnostic_code: DiagnosticCode,
+        effect_disposition: EffectDisposition,
+        detail: DiagnosticDetailDraft,
+        audit: AuditInput,
+    ) -> Self {
+        Self {
+            action,
+            diagnostic_code,
+            effect_disposition,
+            detail: Some(detail),
             audit,
         }
     }
@@ -4597,6 +5175,10 @@ impl DiagnosticOutcomeDraft {
             action: self.action,
             diagnostic_code: self.diagnostic_code,
             effect_disposition: self.effect_disposition,
+            detail: self
+                .detail
+                .map(DiagnosticDetailDraft::sanitize)
+                .transpose()?,
             audit: self.audit.sanitize(fingerprinter)?,
         })
     }
@@ -5274,7 +5856,7 @@ impl TaskPayloadDraft {
 }
 
 enum InputDraftKind {
-    Intent(ObservationDraft),
+    Intent(InputIntentDraft),
     Committed(OutcomeDraft),
     Completed(ObservationDraft),
     Failed(DiagnosticOutcomeDraft),
@@ -5284,7 +5866,21 @@ pub struct InputPayloadDraft(InputDraftKind);
 
 impl InputPayloadDraft {
     pub fn intent(action: EventAction, audit: AuditInput) -> Self {
-        Self(InputDraftKind::Intent(ObservationDraft::new(action, audit)))
+        Self(InputDraftKind::Intent(InputIntentDraft::new(
+            action, None, audit,
+        )))
+    }
+
+    pub fn intent_with_execution_plan(
+        action: EventAction,
+        execution_plan: InputExecutionPlanRecord,
+        audit: AuditInput,
+    ) -> Self {
+        Self(InputDraftKind::Intent(InputIntentDraft::new(
+            action,
+            Some(execution_plan),
+            audit,
+        )))
     }
 
     pub fn committed(action: EventAction, effect: EffectDisposition, audit: AuditInput) -> Self {
@@ -5311,6 +5907,18 @@ impl InputPayloadDraft {
             effect,
             audit,
         )))
+    }
+
+    pub fn failed_with_detail(
+        action: EventAction,
+        diagnostic_code: DiagnosticCode,
+        effect: EffectDisposition,
+        detail: DiagnosticDetailDraft,
+        audit: AuditInput,
+    ) -> Self {
+        Self(InputDraftKind::Failed(
+            DiagnosticOutcomeDraft::new_with_detail(action, diagnostic_code, effect, detail, audit),
+        ))
     }
 }
 
@@ -5398,6 +6006,18 @@ impl CapturePayloadDraft {
             effect,
             audit,
         )))
+    }
+
+    pub fn failed_with_detail(
+        action: EventAction,
+        diagnostic_code: DiagnosticCode,
+        effect: EffectDisposition,
+        detail: DiagnosticDetailDraft,
+        audit: AuditInput,
+    ) -> Self {
+        Self(CaptureDraftKind::Failed(
+            DiagnosticOutcomeDraft::new_with_detail(action, diagnostic_code, effect, detail, audit),
+        ))
     }
 
     pub fn pressure_changed(
@@ -6325,7 +6945,7 @@ pub enum ApplicationPayload {
     deny_unknown_fields
 )]
 pub enum InputPayload {
-    Intent(ObservationPayload),
+    Intent(InputIntentPayload),
     Committed(OutcomePayload),
     Completed(ObservationPayload),
     Failed(DiagnosticOutcomePayload),
@@ -7017,11 +7637,19 @@ impl EventPayload {
         if detail.diagnostic_code().is_some() {
             sensitivity = sensitivity.max(Sensitivity::Internal);
         }
+        if let Some(diagnostic_detail) = detail.diagnostic_detail() {
+            sensitivity = sensitivity.max(diagnostic_detail.declared_sensitivity());
+        }
         if matches!(self, Self::Performance(_)) {
             sensitivity = sensitivity.max(Sensitivity::Internal);
         }
         if matches!(self, Self::Capture(CapturePayload::SummaryCommitted(_))) {
             sensitivity = sensitivity.max(Sensitivity::Internal);
+        }
+        if let Self::Input(InputPayload::Intent(intent)) = self
+            && let Some(execution_plan) = intent.execution_plan()
+        {
+            sensitivity = sensitivity.max(execution_plan.declared_sensitivity());
         }
         if let Self::Fact(payload) = self {
             sensitivity = sensitivity.max(fact_sensitivity(payload));
@@ -7056,6 +7684,9 @@ impl EventPayload {
     pub fn validate(&self) -> Result<(), SanitizationError> {
         let detail = self.family_payload().detail();
         detail.audit().validate()?;
+        if let Some(diagnostic_detail) = detail.diagnostic_detail() {
+            diagnostic_detail.validate()?;
+        }
         if let Self::ResourceAuthoring(value) = self {
             validate_resource_authoring_fields(
                 value.phase,
@@ -7098,6 +7729,9 @@ impl EventPayload {
         }
         if let Self::Agent(value) = self {
             validate_agent_payload(value)?;
+        }
+        if let Self::Input(InputPayload::Intent(intent)) = self {
+            intent.validate()?;
         }
         match self {
             Self::Task(TaskPayload::Semantic(value)) if value.validate().is_err() => {

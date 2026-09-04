@@ -2,7 +2,7 @@
 
 use super::*;
 use actingcommand_contract::{
-    ApplicationLifecycleAction, IdentifierIssuer, InputAction, InstanceId,
+    ApplicationLifecycleAction, IdentifierIssuer, InputAction, InstanceId, Sensitivity,
 };
 use actingcommand_device::{
     CaptureBackend, CaptureBackendName, DeviceError, DeviceResult, Frame, InputBackend, PixelFormat,
@@ -329,6 +329,46 @@ fn input_failure_returns_original_error_then_later_input_uses_fresh_session() {
     drop(snapshot);
     kernel.close().expect("close replacement session");
     assert_eq!(state.lock().expect("state").input_closes, 2);
+}
+
+#[test]
+fn segmented_swipe_capability_failure_preserves_device_detail() {
+    let state = Arc::new(Mutex::new(FakeState::default()));
+    let kernel = kernel(Arc::clone(&state), &[("node.a", instance(), "private-a")]);
+    let error = kernel
+        .input(
+            "node.a",
+            InputAction::SingleTouchDragWithVerticalBrakeV1 {
+                x1: 10,
+                y1: 200,
+                x2: 100,
+                y2: 200,
+                x3: 100,
+                y3: 100,
+                horizontal_duration_ms: 200,
+                corner_hold_ms: 150,
+                brake_distance_px: 100,
+                brake_duration_ms: 200,
+                slope_in: 2,
+                slope_out: 0,
+            },
+        )
+        .expect_err("segmented swipe capability rejection");
+
+    assert_eq!(error.code(), "input_backend_operation_failed");
+    let detail = error.diagnostic_detail().expect("capability detail");
+    assert_eq!(detail.category(), "protocol");
+    assert_eq!(detail.stage(), "input.segmented_swipe.capability");
+    assert_eq!(detail.backend(), "input_backend");
+    assert_eq!(detail.operation(), "segmented_swipe");
+    assert_eq!(
+        detail.message(),
+        "selected input backend does not support segmented swipe"
+    );
+    assert_eq!(detail.declared_sensitivity(), Sensitivity::Internal);
+    let snapshot = state.lock().expect("state");
+    assert_eq!(snapshot.input_calls, 0);
+    assert_eq!(snapshot.input_closes, 1);
 }
 
 #[test]
