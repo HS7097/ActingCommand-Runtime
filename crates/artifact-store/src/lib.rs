@@ -9,17 +9,27 @@
 #![forbid(unsafe_code)]
 
 mod error;
+#[cfg(feature = "capture")]
 mod exporter;
+#[cfg(feature = "capture")]
 mod frame_store;
+#[cfg(feature = "capture")]
 mod naming;
+#[cfg(feature = "capture")]
 mod pipeline;
+#[cfg(feature = "capture")]
 mod portable_archive;
 mod store;
 
 pub use error::*;
+#[cfg(feature = "capture")]
 pub use exporter::*;
+#[cfg(feature = "capture")]
 pub use frame_store::*;
+#[cfg(feature = "capture")]
 pub use naming::*;
+#[cfg(feature = "capture")]
 pub use pipeline::*;
+#[cfg(feature = "capture")]
 pub use portable_archive::*;
 pub use store::*;
