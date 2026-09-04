@@ -16,7 +16,10 @@ pub(super) fn detect(
     let response = lab.current_page(CurrentPageRequest {
         input: ReadonlyRecognitionInput {
             resources,
-            scene: Some(scene.clone()),
+            scene: Some(
+                Scene::from_rgb8(scene.width(), scene.height(), scene.rgb8_pixels())
+                    .map_err(|error| CliError::device(error.to_string()))?,
+            ),
             scene_path: None,
             capture_config: None,
             require_fresh: false,

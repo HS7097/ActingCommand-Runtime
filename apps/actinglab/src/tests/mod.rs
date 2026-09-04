@@ -2906,9 +2906,7 @@ fn lab2_observe_reports_page_targets_actions_and_frame_path() {
 fn lab2_observe_projects_contained_page_elements() {
     let _guard = env_lock();
     let _app_env = set_isolated_app_env();
-    unsafe {
-        set_missing_config_env();
-    }
+    set_missing_config_env();
     let temp = TempDir::new().unwrap();
     let pack = temp.path().join("pack.json");
     let pages = temp.path().join("pages.json");
@@ -3009,9 +3007,7 @@ fn lab2_observe_projects_contained_page_elements() {
 fn lab2_observe_uses_unique_page_owner() {
     let _guard = env_lock();
     let _app_env = set_isolated_app_env();
-    unsafe {
-        set_missing_config_env();
-    }
+    set_missing_config_env();
     for (matching, conflict) in [(true, false), (false, false), (true, true)] {
         let temp = TempDir::new().unwrap();
         let pack = temp.path().join("pack.json");
@@ -3076,9 +3072,7 @@ fn lab2_observe_uses_unique_page_owner() {
 fn lab2_observe_bounds_observation_in_min() {
     let _guard = env_lock();
     let _app_env = set_isolated_app_env();
-    unsafe {
-        set_missing_config_env();
-    }
+    set_missing_config_env();
     for oversized_label in [false, true] {
         let temp = TempDir::new().unwrap();
         let pack = temp.path().join("pack.json");

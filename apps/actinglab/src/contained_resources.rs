@@ -72,7 +72,12 @@ pub(super) fn observation_resources(
         .collect::<CliOutcome<Vec<_>>>()?;
     // Read-only mapping validates declared forms without constructing execution exclusion rectangles.
     for value in array("destructive_actions")? {
-        super::parse_navigation_input(super::required_value_field(value, "click")?)?;
+        let click = super::required_value_field(value, "click")?;
+        if click.get("kind").is_none() {
+            super::parse_navigation_tap_rect(click)?;
+        } else {
+            super::parse_navigation_input(click)?;
+        }
     }
     let pages = bundle
         .pages_path()
