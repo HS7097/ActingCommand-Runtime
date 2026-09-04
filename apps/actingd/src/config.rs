@@ -3,8 +3,9 @@
 use actingcommand_contract::{ApplicationLifecycleAction, ContainedTaskRequest, InstanceId};
 use actingcommand_device::{
     AdbConfig, CaptureBackend, CaptureBackendChoice, CaptureBackendConfig, CaptureBackendName,
-    DeviceError, DeviceResult, DeviceTarget, Frame, InputBackend, MaaTouchConfig, MinitouchConfig,
-    PixelFormat, PreparedSegmentedSwipePlan, TouchBackendChoice, TouchBackendConfig,
+    DeviceError, DeviceErrorCategory, DeviceErrorDiagnosticMessage, DeviceErrorSensitivity,
+    DeviceResult, DeviceTarget, Frame, InputBackend, MaaTouchConfig, MinitouchConfig, PixelFormat,
+    PreparedSegmentedSwipePlan, TouchBackendChoice, TouchBackendConfig,
 };
 use actingcommand_policy::{
     CatalogDocumentSource, CatalogSources, EvaluationFacts, EvaluationResources, MAX_APPROVAL_REFS,
@@ -991,6 +992,25 @@ impl DeviceRegistryInputDiagnosticBackend {
                     &error,
                     self.audit_endpoint.as_deref(),
                 ));
+                let producer_complete =
+                    error.diagnostic().is_some() && error.diagnostic_context().is_some();
+                let error = error
+                    .with_diagnostic_if_absent(
+                        DeviceErrorCategory::Native,
+                        "device_registry.input.operation",
+                    )
+                    .with_diagnostic_context_if_absent(
+                        self.requested_backend.as_str(),
+                        operation,
+                        DeviceErrorSensitivity::Sensitive,
+                    );
+                let error = if producer_complete {
+                    error
+                } else {
+                    error.with_diagnostic_message(
+                        DeviceErrorDiagnosticMessage::DeviceRegistryInputOperationFailed,
+                    )
+                };
                 Err(error)
             }
         }
@@ -1063,6 +1083,27 @@ fn open_device_registry_input_with_diagnostic<T>(
                 &error,
                 audit_endpoint,
             ));
+            let producer_complete =
+                error.diagnostic().is_some() && error.diagnostic_context().is_some();
+            let error = error
+                .with_diagnostic_if_absent(
+                    DeviceErrorCategory::Native,
+                    "device_registry.input.open",
+                )
+                .with_diagnostic_context_if_absent(
+                    input_backend
+                        .map(TouchBackendChoice::as_str)
+                        .unwrap_or("unavailable"),
+                    "open_input",
+                    DeviceErrorSensitivity::Sensitive,
+                );
+            let error = if producer_complete {
+                error
+            } else {
+                error.with_diagnostic_message(
+                    DeviceErrorDiagnosticMessage::DeviceRegistryInputOpenFailed,
+                )
+            };
             Err(error)
         }
     }
@@ -1077,6 +1118,13 @@ fn open_device_registry_capture_with_diagnostic<T>(
     match open() {
         Ok(value) => Ok(value),
         Err(error) => {
+            let error = error.with_diagnostic_context(
+                capture_backend
+                    .map(CaptureBackendChoice::as_str)
+                    .unwrap_or("unavailable"),
+                "open_capture",
+                DeviceErrorSensitivity::Sensitive,
+            );
             emit(device_registry_capture_open_diagnostic_record(
                 instance_alias,
                 capture_backend,
@@ -1770,12 +1818,27 @@ mod tests {
                 .invoke(&mut backend)
                 .expect_err("configured operation failure");
 
-            assert_eq!(returned, original);
             assert_eq!(returned.severity(), original.severity());
             assert_eq!(returned.message(), original.message());
             assert_eq!(
+                returned.diagnostic_message(),
+                Some("device registry input operation failed")
+            );
+            assert_eq!(
                 returned.is_fallback_eligible(),
                 original.is_fallback_eligible()
+            );
+            let diagnostic = returned.diagnostic().expect("adapter diagnostic");
+            assert_eq!(diagnostic.category(), DeviceErrorCategory::Native);
+            assert_eq!(diagnostic.stage(), "device_registry.input.operation");
+            let context = returned
+                .diagnostic_context()
+                .expect("adapter diagnostic context");
+            assert_eq!(context.backend(), "adb_shell_input");
+            assert_eq!(context.operation(), operation.name());
+            assert_eq!(
+                context.declared_sensitivity(),
+                DeviceErrorSensitivity::Sensitive
             );
             assert_eq!(*calls.lock().expect("input calls"), [operation.name()]);
             let records = records.lock().expect("diagnostic records");
@@ -1805,6 +1868,63 @@ mod tests {
                 })
             );
         }
+
+        let original = DeviceError::transient("producer-owned private input failure")
+            .with_diagnostic(DeviceErrorCategory::CommandWrite, "maatouch.stdin.write")
+            .with_diagnostic_context("maatouch", "child_write", DeviceErrorSensitivity::Internal);
+        let DiagnosticInputBackendFixture {
+            mut backend,
+            calls,
+            records,
+            ..
+        } = diagnostic_input_backend(Err(original.clone()));
+
+        let returned = TestInputOperation::Reset
+            .invoke(&mut backend)
+            .expect_err("producer-classified operation failure");
+
+        assert_eq!(returned, original);
+        assert_eq!(returned.message(), original.message());
+        assert_eq!(returned.diagnostic_message(), None);
+        let diagnostic = returned.diagnostic().expect("producer diagnostic");
+        assert_eq!(diagnostic.category(), DeviceErrorCategory::CommandWrite);
+        assert_eq!(diagnostic.stage(), "maatouch.stdin.write");
+        let context = returned
+            .diagnostic_context()
+            .expect("producer diagnostic context");
+        assert_eq!(context.backend(), "maatouch");
+        assert_eq!(context.operation(), "child_write");
+        assert_eq!(
+            context.declared_sensitivity(),
+            DeviceErrorSensitivity::Internal
+        );
+        assert_eq!(*calls.lock().expect("input calls"), ["reset"]);
+        let records = records.lock().expect("diagnostic records");
+        assert_eq!(records.len(), 1);
+        assert!(!records[0].contains('\n'));
+        let payload = records[0]
+            .strip_prefix("ERROR actingd ")
+            .expect("private diagnostic prefix");
+        let payload =
+            serde_json::from_str::<serde_json::Value>(payload).expect("private diagnostic json");
+        assert_eq!(
+            payload,
+            json!({
+                "diagnostic": "device_registry_input_operation_failed",
+                "instance_alias": "neutral.device",
+                "requested_backend": "adb_shell_input",
+                "factory": "AdbShellInputFactory",
+                "operation": "reset",
+                "device_error": {
+                    "severity": "Transient",
+                    "category": "command_write",
+                    "stage": "maatouch.stdin.write",
+                    "detail": original.message(),
+                    "detail_utf8_bytes": original.message().len(),
+                    "detail_truncated": false,
+                },
+            })
+        );
     }
 
     // Test class: specification criterion.

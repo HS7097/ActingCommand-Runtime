@@ -97,6 +97,24 @@
     }
 
     #[test]
+    fn resource_compile_maa_capability_is_offline_and_available() {
+        let command = command_capabilities()
+            .into_iter()
+            .find(|command| {
+                command.get("command").and_then(Value::as_str) == Some("resource compile-maa")
+            })
+            .expect("resource compile-maa capability");
+        assert_eq!(
+            command.get("status").and_then(Value::as_str),
+            Some("available")
+        );
+        assert_eq!(
+            command.get("needs").and_then(Value::as_array),
+            Some(&vec![Value::String("offline".to_string())])
+        );
+    }
+
+    #[test]
     fn config_set_and_get_round_trip() {
         let _guard = env_lock();
         let temp = TempDir::new().unwrap();
