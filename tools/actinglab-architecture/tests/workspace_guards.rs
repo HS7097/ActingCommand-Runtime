@@ -3991,6 +3991,8 @@ fn actinglab_split_csv_glue_stays_out_of_main() {
     let root = workspace_root();
     let main =
         fs::read_to_string(root.join("apps/actinglab/src/main.rs")).expect("read ActingLab main");
+    let cli_parse = fs::read_to_string(root.join("apps/actinglab/src/cli_parse.rs"))
+        .expect("read ActingLab CLI parse owner");
     let lab2 = fs::read_to_string(root.join("apps/actinglab/src/lab2_cli.rs"))
         .expect("read ActingLab lab2 CLI");
     let flag_values = fs::read_to_string(root.join("apps/actinglab/src/flag_values.rs"))
@@ -4031,17 +4033,22 @@ fn actinglab_split_csv_glue_stays_out_of_main() {
         "flag values module visibility changed"
     );
 
-    const MAIN_CALL: &str =
+    const CLI_PARSE_CALL: &str =
         "global.instances = Some(split_csv(&require_raw(&raw, index, \"--instances\")?));";
     const TARGETS_CALL: &str = ".flat_map(|value| split_csv(&value))";
     assert_eq!(
         main.matches("split_csv(").count(),
-        1,
+        0,
         "ActingLab main split CSV caller set changed"
     );
+    assert_eq!(
+        cli_parse.matches("split_csv(").count(),
+        1,
+        "ActingLab CLI parse split CSV caller set changed"
+    );
     assert!(
-        main.contains(MAIN_CALL),
-        "ActingLab main lost the exact --instances split CSV caller"
+        cli_parse.contains(CLI_PARSE_CALL),
+        "ActingLab CLI parse owner lost the exact --instances split CSV caller"
     );
     assert_eq!(
         lab2.matches("split_csv(").count(),
