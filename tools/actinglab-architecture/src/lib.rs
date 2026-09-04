@@ -2,6 +2,8 @@
 
 //! Source-derived architecture guards for ActingCommand Runtime ownership rules.
 
+pub mod trusted_provenance;
+
 use std::collections::{HashMap, HashSet, VecDeque};
 
 use syn::visit::Visit;
