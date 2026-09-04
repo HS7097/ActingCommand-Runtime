@@ -588,8 +588,9 @@ fn c5_production_run_ingress_requires_external_loaded_bundle() {
 #[test]
 fn c5_offline_package_simulation_reuses_the_contained_task_kernel_without_device_authority() {
     let root = workspace_root();
-    let main = fs::read_to_string(root.join("apps/actinglab/src/main.rs"))
-        .expect("read ActingLab CLI source");
+    let lab_package_control =
+        fs::read_to_string(root.join("apps/actinglab/src/lab_package_control.rs"))
+            .expect("read ActingLab Lab/package control source");
     let capabilities = fs::read_to_string(root.join("apps/actinglab/src/commands/capabilities.rs"))
         .expect("read ActingLab capability source");
     let package_cli = fs::read_to_string(root.join("apps/actinglab/src/package_cli.rs"))
@@ -610,7 +611,7 @@ fn c5_offline_package_simulation_reuses_the_contained_task_kernel_without_device
 
     for (source, required) in [
         (
-            &main,
+            &lab_package_control,
             "\"dry-run\" => package_cli::run_offline(global, &flags)",
         ),
         (&capabilities, "package_cli::offline_capability()"),
@@ -703,13 +704,13 @@ fn c5_offline_package_simulation_reuses_the_contained_task_kernel_without_device
         "production lab run must fail loud when the global dry-run flag is present"
     );
     assert!(
-        main.contains("\"package run requires an exclusive_drain LabLease")
-            && main.contains("\"lab_lease_required\""),
+        lab_package_control.contains("\"package run requires an exclusive_drain LabLease")
+            && lab_package_control.contains("\"lab_lease_required\""),
         "package run must remain a blocked compatibility boundary"
     );
     assert!(
-        main.contains("\"operation run requires Runtime scheduler admission")
-            && main.contains("\"lab_lease_required\""),
+        lab_package_control.contains("\"operation run requires Runtime scheduler admission")
+            && lab_package_control.contains("\"lab_lease_required\""),
         "operation run must remain behind Runtime scheduler admission"
     );
 }
@@ -1621,8 +1622,9 @@ fn c5_bounded_capture_sequences_are_runtime_owned_and_input_free() {
 #[test]
 fn c5_session_status_and_monitor_clients_use_runtime_without_legacy_file_authority() {
     let root = workspace_root();
-    let main =
-        fs::read_to_string(root.join("apps/actinglab/src/main.rs")).expect("read ActingLab main");
+    let session_management =
+        fs::read_to_string(root.join("apps/actinglab/src/session_management.rs"))
+            .expect("read ActingLab session management source");
     let adapter = fs::read_to_string(root.join("apps/actinglab/src/runtime_session_adapter.rs"))
         .expect("read Runtime session adapter");
 
@@ -1631,7 +1633,7 @@ fn c5_session_status_and_monitor_clients_use_runtime_without_legacy_file_authori
         "runtime_session_adapter::run_monitor_policy",
     ] {
         assert!(
-            main.contains(required),
+            session_management.contains(required),
             "ActingLab client cutover lost {required}"
         );
     }
@@ -1711,6 +1713,8 @@ fn c5_legacy_session_live_authority_is_retired() {
     let root = workspace_root();
     let main =
         fs::read_to_string(root.join("apps/actinglab/src/main.rs")).expect("read ActingLab main");
+    let monitor_stream = fs::read_to_string(root.join("apps/actinglab/src/monitor_stream.rs"))
+        .expect("read ActingLab monitor stream source");
     let lab2 = fs::read_to_string(root.join("apps/actinglab/src/lab2_cli.rs"))
         .expect("read ActingLab Lab2 adapter");
     let session = fs::read_to_string(root.join("apps/actinglab/src/runtime_session_adapter.rs"))
@@ -1718,18 +1722,42 @@ fn c5_legacy_session_live_authority_is_retired() {
     let stream = fs::read_to_string(root.join("apps/actinglab/src/runtime_stream_adapter.rs"))
         .expect("read Runtime stream adapter");
 
-    for required in [
-        "runtime_session_adapter::retired_authority(\"monitor\", args)",
-        "\"daemon\" => runtime_session_adapter::retired_authority(sub, args)",
-        "\"request\" => runtime_session_adapter::retired_authority(sub, args)",
-        "\"journal\" => runtime_session_adapter::retired_authority(sub, args)",
-        "\"events\" => runtime_session_adapter::retired_authority(sub, args)",
-        "\"response\" => runtime_session_adapter::retired_authority(sub, args)",
-        "\"request-state\" => runtime_session_adapter::retired_authority(sub, args)",
-        "\"lease\" => runtime_session_adapter::retired_authority(sub, args)",
+    for (source, required) in [
+        (
+            &monitor_stream,
+            "runtime_session_adapter::retired_authority(\"monitor\", args)",
+        ),
+        (
+            &main,
+            "\"daemon\" => runtime_session_adapter::retired_authority(sub, args)",
+        ),
+        (
+            &main,
+            "\"request\" => runtime_session_adapter::retired_authority(sub, args)",
+        ),
+        (
+            &main,
+            "\"journal\" => runtime_session_adapter::retired_authority(sub, args)",
+        ),
+        (
+            &main,
+            "\"events\" => runtime_session_adapter::retired_authority(sub, args)",
+        ),
+        (
+            &main,
+            "\"response\" => runtime_session_adapter::retired_authority(sub, args)",
+        ),
+        (
+            &main,
+            "\"request-state\" => runtime_session_adapter::retired_authority(sub, args)",
+        ),
+        (
+            &main,
+            "\"lease\" => runtime_session_adapter::retired_authority(sub, args)",
+        ),
     ] {
         assert!(
-            main.contains(required),
+            source.contains(required),
             "ActingLab lost retirement route {required}"
         );
     }
@@ -2972,15 +3000,19 @@ fn actinglab_user_config_store_glue_stays_out_of_main() {
     let user_config_store =
         fs::read_to_string(root.join("apps/actinglab/src/user_config_store.rs"))
             .expect("read ActingLab user config store module");
+    let cli_information = fs::read_to_string(root.join("apps/actinglab/src/cli_information.rs"))
+        .expect("read ActingLab CLI information source");
 
     const ROOT_DECLARATION: &str = "mod user_config_store;";
-    const ROOT_IMPORT: &str =
+    const OLD_ROOT_IMPORT: &str =
         "use user_config_store::{config_path, read_user_config, write_user_config};";
+    const OWNER_IMPORT: &str =
+        "use crate::user_config_store::{config_path, read_user_config, write_user_config};";
     let declarations = main
         .lines()
         .filter(|line| line.contains("mod user_config_store;"))
         .collect::<Vec<_>>();
-    let imports = main
+    let owner_imports = cli_information
         .lines()
         .filter(|line| line.contains("user_config_store::"))
         .collect::<Vec<_>>();
@@ -2990,9 +3022,13 @@ fn actinglab_user_config_store_glue_stays_out_of_main() {
         "ActingLab main lost the one private user config store module declaration"
     );
     assert_eq!(
-        imports,
-        vec![ROOT_IMPORT],
-        "ActingLab main lost the one private user config store import"
+        owner_imports,
+        vec![OWNER_IMPORT],
+        "ActingLab CLI information source lost the one private user config store import"
+    );
+    assert!(
+        !main.contains(OLD_ROOT_IMPORT),
+        "ActingLab main regained the moved user config store import"
     );
 
     for definition in [
@@ -3054,14 +3090,17 @@ fn actinglab_user_config_keys_glue_stays_out_of_main() {
         fs::read_to_string(root.join("apps/actinglab/src/main.rs")).expect("read ActingLab main");
     let user_config_keys = fs::read_to_string(root.join("apps/actinglab/src/user_config_keys.rs"))
         .expect("read ActingLab user config keys module");
+    let cli_information = fs::read_to_string(root.join("apps/actinglab/src/cli_information.rs"))
+        .expect("read ActingLab CLI information source");
 
     const ROOT_DECLARATION: &str = "mod user_config_keys;";
-    const ROOT_IMPORT: &str = "use user_config_keys::{config_get, config_set};";
+    const OLD_ROOT_IMPORT: &str = "use user_config_keys::{config_get, config_set};";
+    const OWNER_IMPORT: &str = "use crate::user_config_keys::{config_get, config_set};";
     let declarations = main
         .lines()
         .filter(|line| line.contains("mod user_config_keys;"))
         .collect::<Vec<_>>();
-    let imports = main
+    let owner_imports = cli_information
         .lines()
         .filter(|line| line.contains("user_config_keys::"))
         .collect::<Vec<_>>();
@@ -3071,9 +3110,13 @@ fn actinglab_user_config_keys_glue_stays_out_of_main() {
         "ActingLab main lost the one private user config keys module declaration"
     );
     assert_eq!(
-        imports,
-        vec![ROOT_IMPORT],
-        "ActingLab main lost the one private user config keys import"
+        owner_imports,
+        vec![OWNER_IMPORT],
+        "ActingLab CLI information source lost the one private user config keys import"
+    );
+    assert!(
+        !main.contains(OLD_ROOT_IMPORT),
+        "ActingLab main regained the moved user config keys import"
     );
 
     for definition in [
@@ -3286,14 +3329,18 @@ fn actinglab_zip_error_glue_stays_out_of_main() {
         fs::read_to_string(root.join("apps/actinglab/src/main.rs")).expect("read ActingLab main");
     let zip_error = fs::read_to_string(root.join("apps/actinglab/src/zip_error.rs"))
         .expect("read ActingLab ZIP error module");
+    let resource_runtime_support =
+        fs::read_to_string(root.join("apps/actinglab/src/resource_runtime_support.rs"))
+            .expect("read ActingLab resource Runtime support source");
 
     const ROOT_DECLARATION: &str = "mod zip_error;";
-    const ROOT_IMPORT: &str = "use zip_error::{zip_io_error, zip_write_error};";
+    const OLD_ROOT_IMPORT: &str = "use zip_error::{zip_io_error, zip_write_error};";
+    const OWNER_IMPORT: &str = "use super::zip_error::{zip_io_error, zip_write_error};";
     let declarations = main
         .lines()
         .filter(|line| line.contains("mod zip_error;"))
         .collect::<Vec<_>>();
-    let imports = main
+    let owner_imports = resource_runtime_support
         .lines()
         .filter(|line| line.contains("zip_error::"))
         .collect::<Vec<_>>();
@@ -3303,9 +3350,13 @@ fn actinglab_zip_error_glue_stays_out_of_main() {
         "ActingLab main lost the one private ZIP error module declaration"
     );
     assert_eq!(
-        imports,
-        vec![ROOT_IMPORT],
-        "ActingLab main lost the one private ZIP error import"
+        owner_imports,
+        vec![OWNER_IMPORT],
+        "ActingLab resource Runtime support source lost the one private ZIP error import"
+    );
+    assert!(
+        !main.contains(OLD_ROOT_IMPORT),
+        "ActingLab main regained the moved ZIP error import"
     );
 
     for definition in ["fn zip_write_error(", "fn zip_io_error("] {
