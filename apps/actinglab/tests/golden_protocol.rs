@@ -196,40 +196,43 @@ fn observe_success_projection_is_invariant_to_fixture_root_length() {
         Some(&json!("observe.png"))
     );
     assert_eq!(
-        short.envelope.pointer("/data/frame_source/path"),
-        Some(&json!("red.png"))
+        short.envelope.pointer("/data/observation"),
+        Some(&json!({
+            "elements": [{
+                "actionable": true,
+                "availability": "available",
+                "blocked_reason": null,
+                "id": "[\"navigate\",\"\",\"navigation\",\"home_to_target\"]",
+                "label": "home_to_target",
+                "resource_id": "home_to_target",
+                "role": "navigate",
+                "safety": "unclassified"
+            }],
+            "matched": true,
+            "metrics": {
+                "emitted_count": 1,
+                "entry_count": 1,
+                "matched_page_count": 1,
+                "recognized_count": 1,
+                "sample_scope": "single_offline_observation"
+            },
+            "omitted_count": 0,
+            "page": "arknights/home",
+            "page_window_completeness": "unknown",
+            "schema_version": "actingcommand.lab.offline_observation.v1",
+            "standby": false,
+            "truncated": false
+        }))
     );
     assert_eq!(
         short.envelope.pointer("/data/actions"),
         Some(&json!([{
-            "from_page": "arknights/home",
-            "id": "home_to_target",
-            "input": {
-                "point": {"x": 12, "y": 23},
-                "rect": {"height": 6, "width": 4, "x": 10, "y": 20},
-                "type": "tap"
-            },
-            "source": null,
-            "to_page": "arknights/target"
+            "id": "home_to_target"
         }]))
     );
     assert_eq!(
         short.envelope.pointer("/data/targets"),
         Some(&json!([{
-            "evaluation": {
-                "color": {
-                    "distance": 0.0,
-                    "expected": [255, 0, 0],
-                    "max_distance": 20.0,
-                    "mean": [255, 0, 0]
-                },
-                "kind": "Color",
-                "matched_rect": null,
-                "message": "color passed",
-                "passed": true,
-                "target": "home_button",
-                "template": null
-            },
             "id": "home_button",
             "passed": true,
             "score": 1.0
