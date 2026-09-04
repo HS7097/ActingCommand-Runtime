@@ -11,6 +11,92 @@ use actingcommand_resource_tooling::open_published_package;
 use std::path::PathBuf;
 use std::sync::Arc;
 
+pub(super) struct ObservationResources {
+    pub edges: Vec<super::NavigationEdge>,
+    pub operations: Vec<PageOperation>,
+    pub controls: Vec<super::ControlPoint>,
+    pub pages: actingcommand_page_detector::PageSet,
+}
+
+pub(super) struct PageOperation {
+    pub id: String,
+    pub task_id: String,
+    pub page: String,
+    pub purpose: String,
+    pub input: super::SemanticInput,
+}
+
+pub(super) fn observation_resources(
+    resources: &ExternallyVerifiedBundle,
+) -> CliOutcome<ObservationResources> {
+    let bundle = resources.loaded_bundle();
+    let navigation = bundle.navigation().ok_or_else(|| {
+        CliError::package_invalid("externally verified resource bundle has no navigation graph")
+    })?;
+    let array = |name: &str| -> CliOutcome<&[serde_json::Value]> {
+        match navigation.get(name) {
+            None if name != "navigation" => Ok(&[]),
+            Some(serde_json::Value::Array(values)) => Ok(values),
+            _ => Err(CliError::package_invalid(format!(
+                "navigation resource requires {name}[]"
+            ))),
+        }
+    };
+    let edges = array("navigation")?
+        .iter()
+        .map(super::parse_navigation_edge)
+        .collect::<CliOutcome<Vec<_>>>()?;
+    let operations = array("page_operations")?
+        .iter()
+        .map(|value| {
+            Ok(PageOperation {
+                id: super::required_string_field(value, "id")?.to_string(),
+                task_id: super::required_string_field(value, "task_id")?.to_string(),
+                page: super::required_string_field(value, "page")?.to_string(),
+                purpose: match value.get("purpose") {
+                    None | Some(serde_json::Value::Null) => String::new(),
+                    Some(serde_json::Value::String(value)) => value.clone(),
+                    _ => {
+                        return Err(CliError::package_invalid(
+                            "page operation purpose must be text",
+                        ));
+                    }
+                },
+                input: super::parse_navigation_input(super::required_value_field(value, "click")?)?,
+            })
+        })
+        .collect::<CliOutcome<Vec<_>>>()?;
+    let controls = array("control_points")?
+        .iter()
+        .map(super::parse_control_point)
+        .collect::<CliOutcome<Vec<_>>>()?;
+    // Read-only mapping validates declared forms without constructing execution exclusion rectangles.
+    for value in array("destructive_actions")? {
+        let click = super::required_value_field(value, "click")?;
+        if click.get("kind").is_none() {
+            super::parse_navigation_tap_rect(click)?;
+        } else {
+            super::parse_navigation_input(click)?;
+        }
+    }
+    let pages = bundle
+        .pages_path()
+        .and_then(|path| bundle.entry(path))
+        .ok_or_else(|| CliError::package_invalid("contained page definitions are missing"))?;
+    let pages =
+        std::str::from_utf8(pages).map_err(|error| CliError::package_invalid(error.to_string()))?;
+    let pages = actingcommand_page_detector::load_page_set_from_json_str(
+        pages.trim_start_matches('\u{feff}'),
+    )
+    .map_err(|error| CliError::package_invalid(error.to_string()))?;
+    Ok(ObservationResources {
+        edges,
+        operations,
+        controls,
+        pages,
+    })
+}
+
 pub(super) fn load(flags: &FlagArgs, command: &str) -> CliOutcome<Arc<ExternallyVerifiedBundle>> {
     let logical_zip = explicit_path(flags, "--zip")?;
     let zip = open_published_package(&logical_zip)?;
