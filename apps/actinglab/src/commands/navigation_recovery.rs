@@ -423,8 +423,8 @@ pub(crate) struct DestructiveClick {
 
 #[derive(Debug, Clone)]
 pub(crate) struct ControlPoint {
-    name: String,
-    input: SemanticInput,
+    pub(crate) name: String,
+    pub(crate) input: SemanticInput,
     note: Option<String>,
 }
 
