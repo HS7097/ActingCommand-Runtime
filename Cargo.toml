@@ -6,6 +6,7 @@ members = [
     "apps/actingd",
     "apps/actinglab",
     "apps/device-test",
+    "apps/ledger-forensics",
     "apps/vision-provider-check",
     "benchmarks/rust",
     "crates/actingcommand-contract",
@@ -14,6 +15,7 @@ members = [
     "crates/execution-kernel",
     "crates/host-metrics",
     "crates/ledger",
+    "crates/ledger-forensics",
     "crates/lab",
     "crates/page-detector",
     "crates/pack-containment",
@@ -45,6 +47,7 @@ actingcommand-device = { path = "crates/device" }
 actingcommand-execution-kernel = { path = "crates/execution-kernel" }
 actingcommand-host-metrics = { path = "crates/host-metrics" }
 actingcommand-ledger = { path = "crates/ledger" }
+actingcommand-ledger-forensics = { path = "crates/ledger-forensics" }
 actingcommand-lab = { path = "crates/lab" }
 actingcommand-onnx-provider-support = { path = "crates/onnx-provider-support" }
 actingcommand-page-detector = { path = "crates/page-detector" }

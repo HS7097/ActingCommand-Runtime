@@ -313,6 +313,7 @@ impl ArtifactStore {
             })
     }
 
+    #[cfg(feature = "capture")]
     pub(crate) fn rollback_stored(
         &self,
         stored: &StoredArtifact,
