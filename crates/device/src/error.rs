@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
+use crate::{AdbInputBoundsContext, NemuConfiguredAdbClass, NemuResolutionContext};
 use std::error::Error;
 use std::fmt;
 
@@ -9,6 +10,23 @@ pub type DeviceResult<T> = Result<T, DeviceError>;
 pub enum DeviceErrorSeverity {
     Transient,
     Fatal,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DeviceClosePhase {
+    Reset,
+    ChildStop,
+    StderrReaderJoin,
+    UnexpectedStderr,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DeviceCloseCause {
+    pub phase: DeviceClosePhase,
+    pub backend: &'static str,
+    pub severity: DeviceErrorSeverity,
+    pub detail: String,
+    pub detail_truncated: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -135,12 +153,20 @@ impl DeviceErrorContext {
 }
 
 #[derive(Clone)]
+enum StoredDiagnosticMessage {
+    Fixed(DeviceErrorDiagnosticMessage),
+    NemuResolution(NemuResolutionContext, String),
+    AdbInputBounds(AdbInputBoundsContext, String),
+}
+
+#[derive(Clone)]
 pub struct DeviceError {
     severity: DeviceErrorSeverity,
     message: String,
     diagnostic: Option<DeviceErrorDiagnostic>,
-    context: Option<DeviceErrorContext>,
-    diagnostic_message: Option<DeviceErrorDiagnosticMessage>,
+    context: Option<Box<DeviceErrorContext>>,
+    diagnostic_message: Option<Box<StoredDiagnosticMessage>>,
+    close_causes: Box<[DeviceCloseCause]>,
 }
 
 impl DeviceError {
@@ -151,6 +177,7 @@ impl DeviceError {
             diagnostic: None,
             context: None,
             diagnostic_message: None,
+            close_causes: Box::default(),
         }
     }
 
@@ -161,6 +188,7 @@ impl DeviceError {
             diagnostic: None,
             context: None,
             diagnostic_message: None,
+            close_causes: Box::default(),
         }
     }
 
@@ -171,12 +199,52 @@ impl DeviceError {
             diagnostic: None,
             context: None,
             diagnostic_message: None,
+            close_causes: Box::default(),
         }
     }
 
     pub fn with_diagnostic(mut self, category: DeviceErrorCategory, stage: &'static str) -> Self {
         self.diagnostic = Some(DeviceErrorDiagnostic::new(category, stage));
         self
+    }
+
+    pub fn close_causes(&self) -> &[DeviceCloseCause] {
+        &self.close_causes
+    }
+
+    pub fn aggregate_close(backend: &'static str, phases: [Option<Self>; 4]) -> DeviceResult<()> {
+        let mut messages = Vec::new();
+        let mut causes = Vec::new();
+        for (phase, error) in [
+            DeviceClosePhase::Reset,
+            DeviceClosePhase::ChildStop,
+            DeviceClosePhase::StderrReaderJoin,
+            DeviceClosePhase::UnexpectedStderr,
+        ]
+        .into_iter()
+        .zip(phases)
+        {
+            if let Some(error) = error {
+                messages.push(error.to_string());
+                let mut end = error.message.len().min(1024);
+                while !error.message.is_char_boundary(end) {
+                    end -= 1;
+                }
+                causes.push(DeviceCloseCause {
+                    phase,
+                    backend,
+                    severity: error.severity,
+                    detail: error.message[..end].to_owned(),
+                    detail_truncated: end < error.message.len(),
+                });
+            }
+        }
+        if causes.is_empty() {
+            return Ok(());
+        }
+        let mut error = Self::fatal(messages.join("; "));
+        error.close_causes = causes.into_boxed_slice();
+        Err(error)
     }
 
     pub fn with_diagnostic_if_absent(
@@ -196,11 +264,11 @@ impl DeviceError {
         operation: impl Into<String>,
         declared_sensitivity: DeviceErrorSensitivity,
     ) -> Self {
-        self.context = Some(DeviceErrorContext {
+        self.context = Some(Box::new(DeviceErrorContext {
             backend: backend.into(),
             operation: operation.into(),
             declared_sensitivity,
-        });
+        }));
         self
     }
 
@@ -211,11 +279,11 @@ impl DeviceError {
         declared_sensitivity: DeviceErrorSensitivity,
     ) -> Self {
         if self.context.is_none() {
-            self.context = Some(DeviceErrorContext {
+            self.context = Some(Box::new(DeviceErrorContext {
                 backend: backend.into(),
                 operation: operation.into(),
                 declared_sensitivity,
-            });
+            }));
         }
         self
     }
@@ -226,8 +294,67 @@ impl DeviceError {
     }
 
     pub fn with_diagnostic_message(mut self, message: DeviceErrorDiagnosticMessage) -> Self {
-        self.diagnostic_message = Some(message);
+        self.diagnostic_message = Some(Box::new(StoredDiagnosticMessage::Fixed(message)));
         self
+    }
+
+    pub fn with_nemu_resolution_context_if_absent(
+        mut self,
+        context: NemuResolutionContext,
+    ) -> Self {
+        if self.diagnostic_message.is_none()
+            && !(self.diagnostic.is_some() && self.context.is_some())
+        {
+            self.diagnostic_message = Some(Box::new(StoredDiagnosticMessage::NemuResolution(
+                context,
+                context.render(),
+            )));
+        }
+        self
+    }
+
+    pub(crate) fn with_nemu_resolution_provenance(
+        mut self,
+        configured_adb: Option<NemuConfiguredAdbClass>,
+        explicit_root: bool,
+        explicit_dll: bool,
+    ) -> Self {
+        if let Some(StoredDiagnosticMessage::NemuResolution(context, rendered)) =
+            self.diagnostic_message.as_deref_mut()
+        {
+            *context = context.with_provenance(configured_adb, explicit_root, explicit_dll);
+            *rendered = context.render();
+        }
+        self
+    }
+
+    pub fn with_adb_input_bounds_context_if_absent(
+        mut self,
+        context: AdbInputBoundsContext,
+    ) -> Self {
+        if self.diagnostic_message.is_none()
+            && !(self.diagnostic.is_some() && self.context.is_some())
+        {
+            self.diagnostic_message = Some(Box::new(StoredDiagnosticMessage::AdbInputBounds(
+                context,
+                context.render(),
+            )));
+        }
+        self
+    }
+
+    pub fn adb_input_bounds_context(&self) -> Option<AdbInputBoundsContext> {
+        match self.diagnostic_message.as_deref() {
+            Some(StoredDiagnosticMessage::AdbInputBounds(context, _)) => Some(*context),
+            _ => None,
+        }
+    }
+
+    pub fn nemu_resolution_context(&self) -> Option<NemuResolutionContext> {
+        match self.diagnostic_message.as_deref() {
+            Some(StoredDiagnosticMessage::NemuResolution(context, _)) => Some(*context),
+            _ => None,
+        }
     }
 
     pub fn with_severity_and_message(
@@ -256,13 +383,17 @@ impl DeviceError {
         self.diagnostic
     }
 
-    pub const fn diagnostic_context(&self) -> Option<&DeviceErrorContext> {
-        self.context.as_ref()
+    pub fn diagnostic_context(&self) -> Option<&DeviceErrorContext> {
+        self.context.as_deref()
     }
 
     pub fn diagnostic_message(&self) -> Option<&str> {
-        self.diagnostic_message
-            .map(DeviceErrorDiagnosticMessage::as_str)
+        match self.diagnostic_message.as_deref() {
+            Some(StoredDiagnosticMessage::Fixed(message)) => Some(message.as_str()),
+            Some(StoredDiagnosticMessage::NemuResolution(_, rendered)) => Some(rendered),
+            Some(StoredDiagnosticMessage::AdbInputBounds(_, rendered)) => Some(rendered),
+            None => None,
+        }
     }
 }
 

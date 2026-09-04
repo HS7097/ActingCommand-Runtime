@@ -2,7 +2,8 @@
 
 use crate::capture::{DeviceRotation, display_size_from_natural, read_device_rotation};
 use crate::{
-    Adb, AdbConfig, DeviceError, DeviceErrorCategory, DeviceErrorDiagnosticMessage,
+    Adb, AdbBoundsAction, AdbBoundsCoordinate, AdbConfig, AdbInputBoundsContext,
+    AdbInputConnectGeometry, DeviceError, DeviceErrorCategory, DeviceErrorDiagnosticMessage,
     DeviceErrorSensitivity, DeviceInfo, DeviceResult, DeviceTarget, HandshakeInfo, InputBackend,
     MaaTouchBackend, MaaTouchConfig, MinitouchBackend, MinitouchConfig, PreparedSegmentedSwipePlan,
 };
@@ -823,6 +824,7 @@ pub struct AdbShellInputBackend {
     target: DeviceTarget,
     serial: String,
     bounds: Option<TouchBounds>,
+    connect_geometry: Option<AdbInputConnectGeometry>,
     connected: bool,
 }
 
@@ -834,6 +836,7 @@ impl AdbShellInputBackend {
             target,
             serial,
             bounds: None,
+            connect_geometry: None,
             connected: false,
         }
     }
@@ -905,6 +908,16 @@ impl AdbShellInputBackend {
             max_y: max_y as i32,
         };
         self.bounds = Some(bounds);
+        self.connect_geometry = Some(AdbInputConnectGeometry::new(
+            natural_bounds.max_x,
+            natural_bounds.max_y,
+            match rotation {
+                DeviceRotation::R0 => 0,
+                DeviceRotation::R90 => 90,
+                DeviceRotation::R180 => 180,
+                DeviceRotation::R270 => 270,
+            },
+        ));
         self.connected = true;
         Ok(DeviceInfo {
             serial: self.serial.clone(),
@@ -942,10 +955,37 @@ impl AdbShellInputBackend {
         child: impl FnOnce(i32, i32) -> DeviceResult<()>,
     ) -> DeviceResult<()> {
         let bounds = self.bounds()?;
-        validate_touch_coordinate("tap x", x, bounds.max_x)?;
-        validate_touch_coordinate("tap y", y, bounds.max_y)?;
+        let action = AdbBoundsAction::Tap { x, y };
+        validate_touch_coordinate("tap x", x, bounds.max_x).map_err(|error| {
+            self.bounds_failure(error, action, AdbBoundsCoordinate::PointX, bounds)
+        })?;
+        validate_touch_coordinate("tap y", y, bounds.max_y).map_err(|error| {
+            self.bounds_failure(error, action, AdbBoundsCoordinate::PointY, bounds)
+        })?;
         self.ensure_connected()?;
         child(x, y)
+    }
+
+    fn bounds_failure(
+        &self,
+        error: DeviceError,
+        action: AdbBoundsAction,
+        rejected: AdbBoundsCoordinate,
+        bounds: TouchBounds,
+    ) -> DeviceError {
+        error
+            .with_adb_input_bounds_context_if_absent(AdbInputBoundsContext::new(
+                action,
+                rejected,
+                (bounds.max_x, bounds.max_y),
+                self.connect_geometry,
+            ))
+            .with_diagnostic_if_absent(DeviceErrorCategory::Protocol, "adb.input.bounds_validate")
+            .with_diagnostic_context_if_absent(
+                "adb_shell_input",
+                action.operation(),
+                DeviceErrorSensitivity::Sensitive,
+            )
     }
 }
 
@@ -997,10 +1037,19 @@ impl InputBackend for AdbShellInputBackend {
 
     fn swipe(&mut self, x1: i32, y1: i32, x2: i32, y2: i32, duration_ms: u64) -> DeviceResult<()> {
         let bounds = self.bounds()?;
-        validate_touch_coordinate("swipe x1", x1, bounds.max_x)?;
-        validate_touch_coordinate("swipe y1", y1, bounds.max_y)?;
-        validate_touch_coordinate("swipe x2", x2, bounds.max_x)?;
-        validate_touch_coordinate("swipe y2", y2, bounds.max_y)?;
+        let action = AdbBoundsAction::Swipe { x1, y1, x2, y2 };
+        validate_touch_coordinate("swipe x1", x1, bounds.max_x).map_err(|error| {
+            self.bounds_failure(error, action, AdbBoundsCoordinate::StartX, bounds)
+        })?;
+        validate_touch_coordinate("swipe y1", y1, bounds.max_y).map_err(|error| {
+            self.bounds_failure(error, action, AdbBoundsCoordinate::StartY, bounds)
+        })?;
+        validate_touch_coordinate("swipe x2", x2, bounds.max_x).map_err(|error| {
+            self.bounds_failure(error, action, AdbBoundsCoordinate::EndX, bounds)
+        })?;
+        validate_touch_coordinate("swipe y2", y2, bounds.max_y).map_err(|error| {
+            self.bounds_failure(error, action, AdbBoundsCoordinate::EndY, bounds)
+        })?;
         self.ensure_connected()?;
         let duration_ms = duration_ms.clamp(1, MAX_ADB_INPUT_GESTURE_MS);
         let adb = self.adb_for_duration(duration_ms);
@@ -1265,6 +1314,223 @@ mod tests {
             })
             .expect_err("rotation failure must leave input closed");
         assert_eq!(child_calls.get(), 0);
+    }
+
+    #[test]
+    fn adb_input_bounds_diagnostic_preserves_actual_geometry() {
+        let mut backend = adb_shell_input_test_backend();
+        backend.adb_config.adb_path = std::env::temp_dir()
+            .join("c1b6-unavailable-adb.exe")
+            .to_string_lossy()
+            .into_owned();
+        let connect_calls = RefCell::new(Vec::new());
+        backend
+            .connect_with_steps(
+                || {
+                    connect_calls.borrow_mut().push("state");
+                    Ok("device".to_owned())
+                },
+                || {
+                    connect_calls.borrow_mut().push("size");
+                    Ok("Physical size: 720x1280".to_owned())
+                },
+                || {
+                    connect_calls.borrow_mut().push("rotation");
+                    Ok(DeviceRotation::R90)
+                },
+            )
+            .expect("synthetic connect");
+        assert_eq!(*connect_calls.borrow(), ["state", "size", "rotation"]);
+        let observed = AdbInputConnectGeometry::new(720, 1280, 90);
+        assert_eq!(backend.connect_geometry, Some(observed));
+        assert_eq!(
+            backend.bounds,
+            Some(TouchBounds {
+                max_x: 1280,
+                max_y: 720
+            })
+        );
+        backend.bounds = Some(TouchBounds {
+            max_x: 100,
+            max_y: 200,
+        });
+        let child_calls = Cell::new(0);
+        for (x, y, rejected, human) in [
+            (
+                101,
+                -1,
+                AdbBoundsCoordinate::PointX,
+                "tap x 101 exceeds touch screen max 100",
+            ),
+            (
+                -1,
+                201,
+                AdbBoundsCoordinate::PointX,
+                "tap x must be non-negative for touch input, got -1",
+            ),
+            (
+                50,
+                201,
+                AdbBoundsCoordinate::PointY,
+                "tap y 201 exceeds touch screen max 200",
+            ),
+        ] {
+            let error = backend
+                .tap_with_child(x, y, |_, _| {
+                    child_calls.set(child_calls.get() + 1);
+                    Ok(())
+                })
+                .expect_err("coordinate rejection");
+            assert_eq!(error.message(), human);
+            assert_eq!(error.severity(), crate::DeviceErrorSeverity::Fatal);
+            assert!(!error.is_fallback_eligible());
+            assert_eq!(
+                error.adb_input_bounds_context(),
+                Some(AdbInputBoundsContext::new(
+                    AdbBoundsAction::Tap { x, y },
+                    rejected,
+                    (100, 200),
+                    Some(observed),
+                ))
+            );
+            let detail = error.diagnostic_message().expect("bounded geometry");
+            assert!(detail.contains("validation_max_x=100 validation_max_y=200"));
+            assert!(detail.contains("connect_observation=connect_time"));
+            assert!(detail.contains(
+                "connect_natural_max_x=720 connect_natural_max_y=1280 connect_rotation_degrees=90"
+            ));
+            assert!(detail.len() <= 1_024);
+            assert!(!detail.contains(['/', '\\', ':']));
+            assert!(!detail.chars().any(char::is_control));
+            assert_eq!(
+                error.diagnostic().expect("diagnostic").stage(),
+                "adb.input.bounds_validate"
+            );
+            assert_eq!(
+                error
+                    .diagnostic_context()
+                    .expect("context")
+                    .declared_sensitivity(),
+                DeviceErrorSensitivity::Sensitive
+            );
+        }
+        assert_eq!(child_calls.get(), 0);
+        backend
+            .tap_with_child(100, 200, |x, y| {
+                assert_eq!((x, y), (100, 200));
+                child_calls.set(child_calls.get() + 1);
+                Ok(())
+            })
+            .expect("inclusive bounds retained");
+        assert_eq!(child_calls.get(), 1);
+        for (points, rejected, human) in [
+            (
+                (-1, 201, 101, 201),
+                AdbBoundsCoordinate::StartX,
+                "swipe x1 must be non-negative for touch input, got -1",
+            ),
+            (
+                (0, 201, 101, 201),
+                AdbBoundsCoordinate::StartY,
+                "swipe y1 201 exceeds touch screen max 200",
+            ),
+            (
+                (0, 0, 101, 201),
+                AdbBoundsCoordinate::EndX,
+                "swipe x2 101 exceeds touch screen max 100",
+            ),
+            (
+                (0, 0, 100, 201),
+                AdbBoundsCoordinate::EndY,
+                "swipe y2 201 exceeds touch screen max 200",
+            ),
+        ] {
+            let (x1, y1, x2, y2) = points;
+            let error = backend
+                .swipe(x1, y1, x2, y2, 500)
+                .expect_err("swipe rejection before child");
+            assert_eq!(error.message(), human);
+            assert_eq!(
+                error.adb_input_bounds_context(),
+                Some(AdbInputBoundsContext::new(
+                    AdbBoundsAction::Swipe { x1, y1, x2, y2 },
+                    rejected,
+                    (100, 200),
+                    Some(observed),
+                ))
+            );
+            assert_eq!(
+                error.diagnostic_context().expect("context").operation(),
+                "swipe"
+            );
+        }
+        let long_tap = backend
+            .long_tap(101, 50, 500)
+            .expect_err("delegated long tap rejection");
+        assert_eq!(
+            long_tap.adb_input_bounds_context(),
+            Some(AdbInputBoundsContext::new(
+                AdbBoundsAction::Swipe {
+                    x1: 101,
+                    y1: 50,
+                    x2: 101,
+                    y2: 50
+                },
+                AdbBoundsCoordinate::StartX,
+                (100, 200),
+                Some(observed),
+            ))
+        );
+        backend.close().expect("close");
+        assert!(!backend.connected);
+        assert_eq!(backend.connect_geometry, Some(observed));
+        let closed = backend
+            .tap_with_child(100, 200, |_, _| {
+                child_calls.set(child_calls.get() + 1);
+                Ok(())
+            })
+            .expect_err("connected check retained after coordinate validation");
+        assert_eq!(closed.message(), "AdbShellInputBackend is not connected");
+        assert_eq!(closed.adb_input_bounds_context(), None);
+        assert_eq!(child_calls.get(), 1);
+
+        let mut unavailable = adb_shell_input_test_backend();
+        unavailable.bounds = Some(TouchBounds {
+            max_x: 10,
+            max_y: 20,
+        });
+        let error = unavailable
+            .tap_with_child(11, 0, |_, _| panic!("no rejected input child"))
+            .expect_err("unobserved connect geometry");
+        assert_eq!(
+            error.adb_input_bounds_context(),
+            Some(AdbInputBoundsContext::new(
+                AdbBoundsAction::Tap { x: 11, y: 0 },
+                AdbBoundsCoordinate::PointX,
+                (10, 20),
+                None,
+            ))
+        );
+        assert!(error.diagnostic_message().expect("message").contains("connect_observation=unavailable connect_natural_max_x=unavailable connect_natural_max_y=unavailable connect_rotation_degrees=unavailable"));
+        let lower = DeviceError::transient("complete lower geometry error")
+            .with_diagnostic(DeviceErrorCategory::Native, "adb.lower.failure")
+            .with_diagnostic_context(
+                "adb_shell_input",
+                "lower",
+                DeviceErrorSensitivity::Sensitive,
+            );
+        let preserved = unavailable.bounds_failure(
+            lower.clone(),
+            AdbBoundsAction::Tap { x: 11, y: 0 },
+            AdbBoundsCoordinate::PointX,
+            TouchBounds {
+                max_x: 10,
+                max_y: 20,
+            },
+        );
+        assert_eq!(preserved, lower);
+        assert_eq!(preserved.diagnostic_context(), lower.diagnostic_context());
+        assert_eq!(preserved.diagnostic_message(), None);
     }
 
     #[test]

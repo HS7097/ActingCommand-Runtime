@@ -2,12 +2,14 @@
 
 use crate::adb::{ACTINGCOMMAND_NEMU_FOLDER_ENV, Adb, AdbConfig, stop_child};
 use crate::mumu::{
-    mumu_root_from_path, resolve_mumu_backend_paths, resolve_mumu_backend_paths_for_running_target,
+    mumu_root_from_path, nemu_configured_adb_class, resolve_mumu_backend_paths,
+    resolve_mumu_backend_paths_for_running_target,
 };
 use crate::vendor_stdio::{VendorStdioCapture, VendorStdioSession};
 use crate::{
     DeviceError, DeviceErrorCategory, DeviceErrorDiagnosticMessage, DeviceErrorSensitivity,
-    DeviceResult, DeviceTarget,
+    DeviceResult, DeviceTarget, NemuResolutionContext, NemuResolutionCountKind,
+    NemuResolutionReason,
 };
 use image::{
     ColorType, ImageEncoder,
@@ -392,6 +394,9 @@ where
     {
         let configured_adb = (!config.adb_config.adb_path.trim().is_empty())
             .then(|| PathBuf::from(&config.adb_config.adb_path));
+        let adb_class = Some(nemu_configured_adb_class(configured_adb.as_deref()));
+        let has_root = explicit_root.is_some();
+        let has_dll = explicit_dll.is_some();
         let explicit_capture_identity = config.requested == CaptureBackendChoice::NemuIpc
             && configured_adb
                 .as_deref()
@@ -412,6 +417,9 @@ where
                     config.adb_config.adb_path
                 ),
                 NemuCaptureResolutionDetail::Identity,
+            ).with_context(
+                NemuResolutionContext::new(NemuResolutionReason::ConfiguredAdbIdentityUnrecognized)
+                    .with_provenance(adb_class, has_root, has_dll),
             ));
         } else {
             let resolved = if explicit_capture_identity
@@ -436,7 +444,7 @@ where
                     )
                     .map_err(|error| {
                         with_nemu_capture_resolution_detail(
-                            error,
+                            error.with_nemu_resolution_provenance(adb_class, has_root, has_dll),
                             NemuCaptureResolutionDetail::Target,
                         )
                     })?,
@@ -453,7 +461,10 @@ where
                     NemuCaptureResolutionDetail::Installation
                 };
                 resolve_mumu(resolver_adb, explicit_root, explicit_dll).map_err(|error| {
-                    with_nemu_capture_resolution_detail(error, resolution_detail)
+                    with_nemu_capture_resolution_detail(
+                        error.with_nemu_resolution_provenance(adb_class, has_root, has_dll),
+                        resolution_detail,
+                    )
                 })?
             };
             match resolved {
@@ -470,6 +481,10 @@ where
                         "Nemu IPC unavailable: no coordinated MuMu installation identity was resolved"
                             .to_string(),
                         NemuCaptureResolutionDetail::Installation,
+                    ).with_context(
+                        NemuResolutionContext::new(NemuResolutionReason::InstallationAbsent)
+                            .with_count(NemuResolutionCountKind::InstallationRoots, 0, false)
+                            .with_provenance(adb_class, has_root, has_dll),
                     ));
                 }
             }
@@ -1075,11 +1090,21 @@ fn with_nemu_capture_resolution_detail(
 struct NemuIdentityUnavailable {
     message: String,
     detail: NemuCaptureResolutionDetail,
+    context: Option<NemuResolutionContext>,
 }
 
 impl NemuIdentityUnavailable {
     fn new(message: String, detail: NemuCaptureResolutionDetail) -> Self {
-        Self { message, detail }
+        Self {
+            message,
+            detail,
+            context: None,
+        }
+    }
+
+    fn with_context(mut self, context: NemuResolutionContext) -> Self {
+        self.context = Some(context);
+        self
     }
 }
 
@@ -1119,10 +1144,11 @@ impl NemuIpcBackend {
         capture_timeout: Duration,
     ) -> DeviceResult<Self> {
         if let Some(reason) = &config.mumu_identity_unavailable {
-            return Err(with_nemu_capture_resolution_detail(
-                DeviceError::fatal(reason.message.clone()),
-                reason.detail,
-            ));
+            let mut error = DeviceError::fatal(reason.message.clone());
+            if let Some(context) = reason.context {
+                error = error.with_nemu_resolution_context_if_absent(context);
+            }
+            return Err(with_nemu_capture_resolution_detail(error, reason.detail));
         }
         if std::env::consts::OS != "windows" {
             return Err(DeviceError::fatal(
@@ -1137,7 +1163,10 @@ impl NemuIpcBackend {
                 with_nemu_capture_resolution_detail(
                     DeviceError::fatal(format!(
                         "Nemu IPC unavailable: cannot derive MuMu instance id from serial {serial}"
-                    )),
+                    ))
+                    .with_nemu_resolution_context_if_absent(
+                        NemuResolutionContext::new(NemuResolutionReason::TargetIdentityUnavailable),
+                    ),
                     NemuCaptureResolutionDetail::Target,
                 )
             })?;
@@ -1148,6 +1177,8 @@ impl NemuIpcBackend {
                     return Err(with_nemu_capture_resolution_detail(
                         DeviceError::fatal(
                             "Nemu IPC unavailable: no coordinated MuMu installation identity was resolved",
+                        ).with_nemu_resolution_context_if_absent(
+                            NemuResolutionContext::new(NemuResolutionReason::CaptureIdentityUncoordinated),
                         ),
                         NemuCaptureResolutionDetail::Identity,
                     ));

@@ -32,6 +32,52 @@ struct FakeState {
     panic_capture: bool,
 }
 
+#[test]
+fn kernel_close_preserves_each_failed_instance() {
+    let state = Arc::new(Mutex::new(FakeState {
+        fail_close: true,
+        ..FakeState::default()
+    }));
+    let first = instance();
+    let second = instance();
+    let kernel = kernel(
+        Arc::clone(&state),
+        &[
+            ("node.a", first, "private-a"),
+            ("node.b", second, "private-b"),
+        ],
+    );
+    kernel
+        .input("node.a", InputAction::Reset)
+        .expect("first input");
+    kernel
+        .input("node.b", InputAction::Reset)
+        .expect("second input");
+    let mut error = kernel.close().expect_err("two close failures");
+    assert_eq!(error.code(), "input_backend_close_failed");
+    assert!(error.is_fatal());
+    assert_eq!(error.secondary_code(), None);
+    let outcomes = error.take_closed_sessions();
+    assert_eq!(outcomes.len(), 2);
+    assert!(outcomes.iter().any(|(id, _)| *id == first));
+    assert!(outcomes.iter().any(|(id, _)| *id == second));
+    assert!(
+        outcomes
+            .iter()
+            .all(|(_, result)| result.code() == error.code())
+    );
+    assert!(!Arc::ptr_eq(
+        outcomes[0].1.recorded_event(),
+        outcomes[1].1.recorded_event()
+    ));
+    assert!(error.take_closed_sessions().is_empty());
+    kernel.close().expect("already drained");
+    drop(kernel);
+    let state = state.lock().expect("state");
+    assert_eq!(state.input_calls, 2);
+    assert_eq!(state.input_closes, 2);
+}
+
 struct FakeProvider {
     state: Arc<Mutex<FakeState>>,
     instances: BTreeMap<String, ResolvedExecutionInstance>,
@@ -525,6 +571,118 @@ fn backend_open_and_close_failures_surface_without_private_details() {
     let error = close_kernel.close().expect_err("close failure");
     assert_eq!(error.code(), "input_backend_close_failed");
     assert!(!format!("{error:?} {error}").contains("private close failure detail"));
+}
+
+// Task Contract: Workflow #257 / C1B7. Test class: specification criterion.
+#[test]
+fn execution_error_preserves_secondary_cleanup_detail() {
+    use actingcommand_contract::CleanupCauseSeverity;
+    use actingcommand_device::{DeviceErrorCategory, DeviceErrorSensitivity, DeviceErrorSeverity};
+
+    let primary = ExecutionKernelError::device(
+        "input_backend_operation_failed",
+        &DeviceError::transient("primary bounded context")
+            .with_diagnostic(DeviceErrorCategory::Protocol, "adb.input.operation")
+            .with_diagnostic_context("adb_shell_input", "reset", DeviceErrorSensitivity::Internal),
+    );
+    let cleanup = ExecutionKernelError::device(
+        "input_backend_close_failed",
+        &DeviceError::fatal("exit_status=1 stderr=cleanup_failed")
+            .with_diagnostic(DeviceErrorCategory::CommandFlush, "maatouch.stdin.flush")
+            .with_diagnostic_context("maatouch", "close", DeviceErrorSensitivity::Secret),
+    );
+    let merged = ExecutionKernelError::merge_cleanup(primary.clone(), cleanup.clone());
+    assert_eq!(merged.code(), primary.code());
+    assert_eq!(merged.secondary_code(), Some(cleanup.code()));
+    assert_eq!(merged.device_severity(), Some(DeviceErrorSeverity::Fatal));
+    assert_eq!(merged.diagnostic_detail(), primary.diagnostic_detail());
+    let cause = merged.cleanup_cause().expect("real cleanup cause");
+    assert_eq!(cause.code(), cleanup.code());
+    assert_eq!(cause.severity(), CleanupCauseSeverity::Fatal);
+    assert_eq!(cause.detail(), cleanup.diagnostic_detail());
+    let detail = cause.detail().expect("cleanup producer detail");
+    assert_eq!(detail.stage(), "maatouch.stdin.flush");
+    assert_eq!(detail.backend(), "maatouch");
+    assert_eq!(detail.operation(), "close");
+    assert_eq!(detail.declared_sensitivity(), Sensitivity::Secret);
+    assert_eq!(detail.message(), "exit_status=1 stderr=cleanup_failed");
+    let repeated = ExecutionKernelError::merge(merged.clone(), merged.clone());
+    assert_eq!(repeated, merged);
+    let retired = ExecutionKernelError::merge(
+        repeated,
+        ExecutionKernelError::fatal("execution_kernel_state_poisoned"),
+    );
+    assert_eq!(retired.code(), primary.code());
+    assert_eq!(
+        retired.secondary_code(),
+        Some("execution_kernel_state_poisoned")
+    );
+    assert_eq!(retired.cleanup_cause(), merged.cleanup_cause());
+    assert_eq!(retired.diagnostic_detail(), primary.diagnostic_detail());
+    let returned = ExecutionKernelError::merge(primary.clone(), merged.clone());
+    assert_eq!(returned.cleanup_cause(), merged.cleanup_cause());
+    assert_eq!(returned.diagnostic_detail(), primary.diagnostic_detail());
+    for error in [&merged, &retired, &returned] {
+        let text = format!("{error:?} {error}");
+        assert!(!text.contains("primary bounded context"));
+        assert!(!text.contains("cleanup_failed"));
+    }
+
+    for capture in [false, true] {
+        let state = Arc::new(Mutex::new(FakeState {
+            fail_input: !capture,
+            fail_capture: capture,
+            fail_close: true,
+            ..FakeState::default()
+        }));
+        let kernel = kernel(Arc::clone(&state), &[("node.a", instance(), "private-a")]);
+        let error = if capture {
+            kernel
+                .input("node.a", InputAction::Reset)
+                .expect("open input session");
+            kernel
+                .capture("node.a")
+                .expect_err("capture then close failure")
+        } else {
+            kernel
+                .input("node.a", InputAction::Reset)
+                .expect_err("input then close failure")
+        };
+        assert_eq!(
+            error.code(),
+            if capture {
+                "capture_backend_operation_failed"
+            } else {
+                "input_backend_operation_failed"
+            }
+        );
+        let cause = error.cleanup_cause().expect("session cleanup cause");
+        assert_eq!(cause.code(), "input_backend_close_failed");
+        assert_eq!(cause.severity(), CleanupCauseSeverity::Fatal);
+        assert!(
+            cause.detail().is_none(),
+            "missing context remains unavailable"
+        );
+        kernel.close().expect("failed session is already retired");
+        let snapshot = state.lock().expect("state");
+        assert_eq!(snapshot.input_opens, 1);
+        assert_eq!(snapshot.input_calls, 1);
+        assert_eq!(snapshot.input_closes, 1);
+        assert_eq!(snapshot.capture_calls, usize::from(capture));
+        assert_eq!(snapshot.capture_closes, usize::from(capture));
+    }
+    let state = Arc::new(Mutex::new(FakeState {
+        fail_capture: true,
+        fail_close: true,
+        ..FakeState::default()
+    }));
+    let kernel = kernel(Arc::clone(&state), &[("node.a", instance(), "private-a")]);
+    let error = kernel
+        .capture("node.a")
+        .expect_err("capture without input session");
+    assert!(error.cleanup_cause().is_none());
+    assert_eq!(state.lock().expect("state").input_closes, 0);
+    kernel.close().expect("close capture-only kernel");
 }
 
 #[test]

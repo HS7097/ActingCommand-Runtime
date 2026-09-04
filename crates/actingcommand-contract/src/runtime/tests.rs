@@ -11,6 +11,155 @@ use crate::{
 
 struct RejectSecrets;
 
+#[test]
+fn runtime_lifecycle_causes_roundtrip_and_project() {
+    use crate::{
+        CleanupCauseDraft, CleanupCauseSeverity, DiagnosticDetailDraft, EventPayload,
+        LifecycleCauseDraft, LifecycleFailurePhase, LifecycleNativeDetail, ProjectionPayload,
+        RuntimeLifecycleFailureDraft, RuntimePayload, Sensitivity,
+    };
+    let ids = issuer();
+    let epoch = *ids.mint_owner_epoch().expect("epoch").transport();
+    let instance = *ids.mint_instance_id().expect("instance").transport();
+    let entered = *ids.mint_event_id().expect("entered").transport();
+    let detail = DiagnosticDetailDraft::new(
+        "native",
+        "runtime.lifecycle.close",
+        "maatouch",
+        "close",
+        "original primary detail",
+        Sensitivity::Sensitive,
+    );
+    let lifecycle = RuntimeLifecycleFailureDraft::new(
+        epoch,
+        "runtime.lifecycle.session_close",
+        "runtime_host",
+        "input_backend_close_failed",
+    )
+    .with_operation(Some("close_execution_kernel"))
+    .with_projection(Some(true), Some(RuntimeErrorCode::RuntimeFatal))
+    .with_instance_id(Some(instance))
+    .with_entered_event_id(Some(entered))
+    .with_primary_detail(Some(detail.clone()))
+    .with_cleanup_cause(Some(CleanupCauseDraft::new(
+        "input_backend_close_failed",
+        CleanupCauseSeverity::Fatal,
+        Some(detail.clone()),
+    )))
+    .with_cause(Some(
+        LifecycleCauseDraft::new(
+            LifecycleFailurePhase::Reset,
+            "maatouch",
+            "input_backend_close_failed",
+            CleanupCauseSeverity::Transient,
+        )
+        .with_native_detail(LifecycleNativeDetail::new(
+            "stderr C:\\private\\native.log\nreset failed",
+            false,
+        )),
+    ));
+    let sanitize = |lifecycle| {
+        EventDraft::new(
+            ids.mint_event_id().expect("event"),
+            1,
+            EventSeverity::Fatal,
+            EventOrigin::new(
+                EventSource::Runtime,
+                OriginModule::Runtime,
+                EventActor::Runtime,
+            ),
+            EventLinksDraft::default(),
+            RuntimePayloadDraft::failed_with_lifecycle(
+                crate::DiagnosticCode::RuntimeDiagnostic,
+                EffectDisposition::Indeterminate,
+                DiagnosticDetailDraft::new(
+                    "runtime_lifecycle",
+                    "runtime.lifecycle.session_close",
+                    "runtime_host",
+                    "close_execution_kernel",
+                    "lifecycle failure",
+                    Sensitivity::Internal,
+                ),
+                lifecycle,
+                AuditInput::new(),
+            )
+            .into(),
+        )
+        .sanitize(&RejectSecrets)
+    };
+    let draft = sanitize(lifecycle.clone()).expect("valid lifecycle");
+    let wire = serde_json::to_string(draft.payload()).expect("wire");
+    let restored: EventPayload = serde_json::from_str(&wire).expect("round trip");
+    restored.validate().expect("validated round trip");
+    assert_eq!(restored, *draft.payload());
+    assert_eq!(restored.sensitivity(), Sensitivity::Sensitive);
+    let EventPayload::Runtime(RuntimePayload::Failed(outcome)) = &restored else {
+        panic!("runtime failed");
+    };
+    let record = outcome.lifecycle_failure().expect("lifecycle metadata");
+    assert_eq!(record.owner_epoch(), epoch);
+    assert_eq!(record.instance_id(), Some(instance));
+    assert_eq!(record.entered_event_id(), Some(entered));
+    assert_eq!(
+        record.cause().expect("cause").severity(),
+        CleanupCauseSeverity::Transient
+    );
+    let full =
+        serde_json::to_string(&ProjectionPayload::Full(Box::new(restored.clone()))).expect("full");
+    let public = serde_json::to_string(&restored.public_projection()).expect("public");
+    assert!(full.contains("private"));
+    assert!(full.contains("original primary detail"));
+    assert!(!public.contains("private"));
+    assert!(!public.contains("original primary detail"));
+    assert!(public.contains("reset"));
+    assert!(public.contains("close_execution_kernel"));
+    let forged = wire.replace(
+        "\"declared_sensitivity\":\"sensitive\"",
+        "\"declared_sensitivity\":\"public\"",
+    );
+    let forged: EventPayload = serde_json::from_str(&forged).expect("syntactic forged record");
+    assert!(forged.validate().is_err());
+    for invalid in [
+        "x".repeat(1025),
+        "token=private".to_owned(),
+        "bad\0detail".to_owned(),
+    ] {
+        assert!(
+            sanitize(
+                lifecycle
+                    .clone()
+                    .with_native_detail(Some(LifecycleNativeDetail::new(invalid, false)))
+            )
+            .is_err()
+        );
+    }
+    assert!(sanitize(lifecycle.clone().with_operation(Some("invalid operation"))).is_err());
+    let old = EventDraft::new(
+        ids.mint_event_id().expect("old event"),
+        1,
+        EventSeverity::Error,
+        EventOrigin::new(
+            EventSource::Runtime,
+            OriginModule::Runtime,
+            EventActor::Runtime,
+        ),
+        EventLinksDraft::default(),
+        RuntimePayloadDraft::failed(
+            crate::DiagnosticCode::RuntimeDiagnostic,
+            EffectDisposition::Indeterminate,
+            detail,
+            AuditInput::new(),
+        )
+        .into(),
+    )
+    .sanitize(&RejectSecrets)
+    .expect("old shape");
+    let old_wire = serde_json::to_string(old.payload()).expect("old wire");
+    assert!(!old_wire.contains("lifecycle_failure"));
+    let old_restored: EventPayload = serde_json::from_str(&old_wire).expect("old record read");
+    old_restored.validate().expect("old record valid");
+}
+
 impl SecretFingerprinter for RejectSecrets {
     fn fingerprint(
         &self,

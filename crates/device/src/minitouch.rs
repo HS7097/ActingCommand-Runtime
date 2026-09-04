@@ -358,21 +358,21 @@ impl MinitouchBackend {
         Ok(())
     }
 
-    fn shutdown(&mut self) -> Vec<DeviceError> {
-        let mut errors = Vec::new();
+    fn shutdown(&mut self) -> [Option<DeviceError>; 2] {
+        let mut errors = [None, None];
         self.stdin.take();
 
         if let Some(mut child) = self.child.take()
             && !stop_child(&mut child, self.minitouch_config.shutdown_timeout)
         {
-            errors.push(DeviceError::fatal(format!(
+            errors[0] = Some(DeviceError::fatal(format!(
                 "minitouch process did not exit within {:?}",
                 self.minitouch_config.shutdown_timeout
             )));
         }
 
         if let Err(err) = self.join_stderr_thread() {
-            errors.push(err);
+            errors[1] = Some(err);
         }
 
         self.closed = true;
@@ -493,33 +493,22 @@ impl InputBackend for MinitouchBackend {
             return Ok(());
         }
 
-        let mut errors = Vec::new();
-        if let Err(err) = self.reset() {
-            errors.push(err);
-        }
-        errors.extend(self.shutdown());
+        let reset = self.reset().err();
+        let [child_stop, stderr_join] = self.shutdown();
 
         let stderr = self
             .stderr_text
             .lock()
             .map(|value| value.trim().to_string())
             .unwrap_or_default();
-        if !stderr.is_empty() && stderr != "Killed" {
-            errors.push(DeviceError::fatal(format!("minitouch stderr:\n{stderr}")));
-        }
+        let unexpected_stderr = (!stderr.is_empty() && stderr != "Killed")
+            .then(|| DeviceError::fatal(format!("minitouch stderr:\n{stderr}")));
 
         self.closed = true;
-        if errors.is_empty() {
-            Ok(())
-        } else {
-            Err(DeviceError::fatal(
-                errors
-                    .into_iter()
-                    .map(|err| err.to_string())
-                    .collect::<Vec<_>>()
-                    .join("; "),
-            ))
-        }
+        DeviceError::aggregate_close(
+            "minitouch",
+            [reset, child_stop, stderr_join, unexpected_stderr],
+        )
     }
 }
 
