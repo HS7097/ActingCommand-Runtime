@@ -135,6 +135,18 @@ pub enum EventSeverity {
     Fatal,
 }
 
+impl EventSeverity {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Debug => "debug",
+            Self::Info => "info",
+            Self::Warning => "warning",
+            Self::Error => "error",
+            Self::Fatal => "fatal",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Sensitivity {
@@ -177,6 +189,10 @@ pub enum EventType {
     RuntimeStarted,
     #[serde(rename = "runtime.takeover")]
     RuntimeTakeover,
+    #[serde(rename = "runtime.failed")]
+    RuntimeFailed,
+    #[serde(rename = "runtime.lifecycle_observed")]
+    RuntimeLifecycleObserved,
     #[serde(rename = "monitor.probe_requested")]
     MonitorProbeRequested,
     #[serde(rename = "monitor.probe_started")]
@@ -388,7 +404,10 @@ pub enum EventType {
 impl EventType {
     pub fn family(self) -> EventFamily {
         match self {
-            Self::RuntimeStarted | Self::RuntimeTakeover => EventFamily::Runtime,
+            Self::RuntimeStarted
+            | Self::RuntimeTakeover
+            | Self::RuntimeFailed
+            | Self::RuntimeLifecycleObserved => EventFamily::Runtime,
             Self::MonitorProbeRequested
             | Self::MonitorProbeStarted
             | Self::MonitorProbeCompleted

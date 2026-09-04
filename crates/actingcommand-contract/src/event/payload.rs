@@ -13,7 +13,7 @@ use crate::{
     CorrelationId, EventId, FactInvalidationEventData, FactRecord, FactScope, HolderId,
     InputAction, InstanceId, LeaseId, LeasePriority, MonitorDecision, MonitorDiagnosis,
     MonitorDisposition, MonitorObservation, MonitorRecoveryCoordinationReason, MonitorRecoveryKind,
-    PerformanceContext, PerformanceControlEventData, PerformanceControlLevel,
+    OwnerEpoch, PerformanceContext, PerformanceControlEventData, PerformanceControlLevel,
     PerformanceControlReason, PerformanceDeadlineDisposition, PerformanceMonitorHealth,
     PerformanceMonitorStateEventData, PerformancePressureEventData, PerformancePressureRecord,
     PerformanceStutterEventData, PerformanceSummaryEventData, ProjectedArtifactReference,
@@ -770,6 +770,35 @@ pub struct DiagnosticOutcomePayload {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     detail: Option<DiagnosticDetailRecord>,
     audit: SanitizedAudit,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum RuntimeLifecyclePhase {
+    PolicyForwardEntered,
+    PolicyForwardReturned { entered_event_id: EventId },
+    StrategicReportEntered,
+    StrategicReportReturned { entered_event_id: EventId },
+    ShutdownRequested,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RuntimeLifecyclePayload {
+    action: EventAction,
+    owner_epoch: OwnerEpoch,
+    phase: RuntimeLifecyclePhase,
+    audit: SanitizedAudit,
+}
+
+impl RuntimeLifecyclePayload {
+    pub const fn owner_epoch(&self) -> OwnerEpoch {
+        self.owner_epoch
+    }
+
+    pub const fn phase(&self) -> RuntimeLifecyclePhase {
+        self.phase
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -2827,6 +2856,7 @@ common_detail_accessors!(ObservationPayload);
 common_detail_accessors!(DiagnosticPayload);
 common_detail_accessors!(OutcomePayload);
 common_detail_accessors!(DiagnosticOutcomePayload);
+common_detail_accessors!(RuntimeLifecyclePayload);
 common_detail_accessors!(MonitorOutcomePayload);
 common_detail_accessors!(MonitorRecoveryCoordinationPayload);
 common_detail_accessors!(PerformancePressurePayload);
@@ -2874,6 +2904,7 @@ macro_rules! plain_payload_detail {
 }
 
 plain_payload_detail!(
+    RuntimeLifecyclePayload,
     PerformancePressurePayload,
     PerformanceStutterPayload,
     PerformanceSummaryPayload,
@@ -5474,11 +5505,45 @@ enum CommandDraftKind {
 enum RuntimeDraftKind {
     Started(ObservationDraft),
     Takeover(ObservationDraft),
+    Failed(DiagnosticOutcomeDraft),
+    LifecycleObserved(RuntimeLifecycleDraft),
+}
+
+struct RuntimeLifecycleDraft {
+    owner_epoch: OwnerEpoch,
+    phase: RuntimeLifecyclePhase,
+    audit: AuditInput,
+}
+
+impl RuntimeLifecycleDraft {
+    fn sanitize(
+        self,
+        fingerprinter: &dyn SecretFingerprinter,
+    ) -> Result<RuntimeLifecyclePayload, SanitizationError> {
+        Ok(RuntimeLifecyclePayload {
+            action: EventAction::RuntimeAction,
+            owner_epoch: self.owner_epoch,
+            phase: self.phase,
+            audit: self.audit.sanitize(fingerprinter)?,
+        })
+    }
 }
 
 pub struct RuntimePayloadDraft(RuntimeDraftKind);
 
 impl RuntimePayloadDraft {
+    pub fn lifecycle_observed(
+        owner_epoch: OwnerEpoch,
+        phase: RuntimeLifecyclePhase,
+        audit: AuditInput,
+    ) -> Self {
+        Self(RuntimeDraftKind::LifecycleObserved(RuntimeLifecycleDraft {
+            owner_epoch,
+            phase,
+            audit,
+        }))
+    }
+
     pub fn started(action: EventAction, audit: AuditInput) -> Self {
         Self(RuntimeDraftKind::Started(ObservationDraft::new(
             action, audit,
@@ -5489,6 +5554,23 @@ impl RuntimePayloadDraft {
         Self(RuntimeDraftKind::Takeover(ObservationDraft::new(
             action, audit,
         )))
+    }
+
+    pub fn failed(
+        diagnostic_code: DiagnosticCode,
+        effect: EffectDisposition,
+        detail: DiagnosticDetailDraft,
+        audit: AuditInput,
+    ) -> Self {
+        Self(RuntimeDraftKind::Failed(
+            DiagnosticOutcomeDraft::new_with_detail(
+                EventAction::RuntimeAction,
+                diagnostic_code,
+                effect,
+                detail,
+                audit,
+            ),
+        ))
     }
 }
 
@@ -6742,6 +6824,8 @@ pub enum CommandPayload {
 pub enum RuntimePayload {
     Started(ObservationPayload),
     Takeover(ObservationPayload),
+    Failed(DiagnosticOutcomePayload),
+    LifecycleObserved(RuntimeLifecyclePayload),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -7070,6 +7154,8 @@ family_payload!(CommandPayload, {
 family_payload!(RuntimePayload, {
     Started => EventType::RuntimeStarted,
     Takeover => EventType::RuntimeTakeover,
+    Failed => EventType::RuntimeFailed,
+    LifecycleObserved => EventType::RuntimeLifecycleObserved,
 });
 family_payload!(MonitorPayload, {
     Requested => EventType::MonitorProbeRequested,
@@ -7273,6 +7359,12 @@ impl EventPayloadDraft {
                 }
                 RuntimeDraftKind::Takeover(detail) => {
                     RuntimePayload::Takeover(detail.sanitize(fingerprinter)?)
+                }
+                RuntimeDraftKind::Failed(detail) => {
+                    RuntimePayload::Failed(detail.sanitize(fingerprinter)?)
+                }
+                RuntimeDraftKind::LifecycleObserved(detail) => {
+                    RuntimePayload::LifecycleObserved(detail.sanitize(fingerprinter)?)
                 }
             }),
             Self::Monitor(value) => EventPayload::Monitor(match value.0 {
@@ -7640,7 +7732,10 @@ impl EventPayload {
         if let Some(diagnostic_detail) = detail.diagnostic_detail() {
             sensitivity = sensitivity.max(diagnostic_detail.declared_sensitivity());
         }
-        if matches!(self, Self::Performance(_)) {
+        if matches!(
+            self,
+            Self::Performance(_) | Self::Runtime(RuntimePayload::LifecycleObserved(_))
+        ) {
             sensitivity = sensitivity.max(Sensitivity::Internal);
         }
         if matches!(self, Self::Capture(CapturePayload::SummaryCommitted(_))) {
@@ -7677,11 +7772,23 @@ impl EventPayload {
         self.family_payload().detail().effect_disposition()
     }
 
+    pub fn diagnostic_code(&self) -> Option<DiagnosticCode> {
+        self.family_payload().detail().diagnostic_code()
+    }
+
     pub fn validate(&self) -> Result<(), SanitizationError> {
         let detail = self.family_payload().detail();
         detail.audit().validate()?;
         if let Some(diagnostic_detail) = detail.diagnostic_detail() {
             diagnostic_detail.validate()?;
+        }
+        if let Self::Runtime(RuntimePayload::LifecycleObserved(value)) = self
+            && value.action != EventAction::RuntimeAction
+        {
+            return Err(SanitizationError::new(
+                "invalid_runtime_lifecycle_action",
+                "runtime_payload",
+            ));
         }
         if let Self::ResourceAuthoring(value) = self {
             validate_resource_authoring_fields(

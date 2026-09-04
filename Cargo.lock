@@ -37,8 +37,10 @@ dependencies = [
 name = "actingcommand-actingd"
 version = "0.1.0"
 dependencies = [
+ "actingcommand-artifact-store",
  "actingcommand-contract",
  "actingcommand-device",
+ "actingcommand-ledger",
  "actingcommand-policy",
  "actingcommand-runtime-client",
  "actingcommand-runtime-host",
@@ -184,6 +186,18 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
+ "tempfile",
+]
+
+[[package]]
+name = "actingcommand-ledger-forensics"
+version = "0.1.0"
+dependencies = [
+ "actingcommand-artifact-store",
+ "actingcommand-contract",
+ "actingcommand-ledger",
+ "serde",
+ "serde_json",
  "tempfile",
 ]
 
@@ -366,6 +380,18 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
+]
+
+[[package]]
+name = "actingledger"
+version = "0.1.0"
+dependencies = [
+ "actingcommand-artifact-store",
+ "actingcommand-contract",
+ "actingcommand-ledger",
+ "actingcommand-ledger-forensics",
+ "serde_json",
+ "tempfile",
 ]
 
 [[package]]
