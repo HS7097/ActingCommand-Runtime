@@ -18,6 +18,8 @@ use std::time::{Duration, Instant, SystemTime};
 
 use super::*;
 
+mod observation;
+
 struct Lab2Ids {
     issuer: IdIssuer,
     req_id: String,
@@ -78,13 +80,19 @@ pub(crate) fn run_observe(global: &GlobalOptions, args: &[String]) -> CliOutcome
     let ids = Lab2Ids::new();
     let instance = lab2_instance(global, &flags);
     let resources = super::contained_resources::load(&flags, "observe")?;
-    let (evaluator, detector) = super::contained_resources::recognition_pipeline(&resources)?;
-    let graph = super::contained_resources::navigation_graph(&resources)?;
+    let (evaluator, _) = super::contained_resources::recognition_pipeline(&resources)?;
+    let view = super::contained_resources::observation_resources(&resources)?;
     let loaded_scene = load_lab2_scene(global, &flags)?;
-    let outcome = detect_current_page(&evaluator, &detector, &loaded_scene.scene)?;
+    let (outcome, recovery_hint) = observation::detect(resources, &loaded_scene.scene)?;
     let frame_path = write_frame_if_requested(&flags, &loaded_scene)?;
     let targets = observe_targets(&evaluator, &loaded_scene.scene, &flags, &outcome)?;
-    let actions = observe_actions(&graph, &outcome);
+    let actions = view
+        .edges
+        .iter()
+        .filter(|edge| outcome.matched && edge.from_page == outcome.page)
+        .map(navigation_edge_json)
+        .collect::<Vec<_>>();
+    let observation = observation::build(&view, &evaluator, &loaded_scene.scene, &outcome)?;
     let mut payload = json!({
         "req_id": ids.req_id,
         "state": if outcome.matched { "observed" } else { "unknown" },
@@ -102,13 +110,16 @@ pub(crate) fn run_observe(global: &GlobalOptions, args: &[String]) -> CliOutcome
     if !outcome.matched {
         payload["candidates"] = json!(lab2_page_candidates(&outcome));
     }
+    if let Some(hint) = recovery_hint {
+        payload["recovery_hint"] = json!(hint);
+    }
     if let Some(suspicion) = lab2_observation_suspicion(&outcome, loaded_scene.frame_age_ms) {
         payload["suspicion"] = suspicion;
     }
     if let Some(path) = frame_path {
         payload["frame_path"] = json!(path.display().to_string());
     }
-    project_lab2_payload(&payload, &flags)
+    observation::project(payload, observation, &flags)
 }
 
 fn run_runtime_observe(global: &GlobalOptions, flags: &FlagArgs) -> CliOutcome<Value> {
@@ -1273,7 +1284,7 @@ fn lab2_command_contracts() -> Vec<Lab2CommandContract> {
     vec![
         Lab2CommandContract {
             name: "observe",
-            summary: "read one frame, detect page, evaluate visible targets, and list navigation actions",
+            summary: "detect a page and project bounded offline elements or Runtime-backed navigation actions",
             required: &["--scene <png> or --capture"],
             optional: &[
                 "--targets <id,id>",
@@ -1290,6 +1301,7 @@ fn lab2_command_contracts() -> Vec<Lab2CommandContract> {
                 "page",
                 "targets",
                 "actions",
+                "observation",
                 "frame_age_ms",
                 "backend",
             ],

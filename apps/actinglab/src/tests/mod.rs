@@ -2903,6 +2903,252 @@ fn lab2_observe_reports_page_targets_actions_and_frame_path() {
 }
 
 #[test]
+fn lab2_observe_projects_contained_page_elements() {
+    let _guard = env_lock();
+    let _app_env = set_isolated_app_env();
+    unsafe {
+        set_missing_config_env();
+    }
+    let temp = TempDir::new().unwrap();
+    let pack = temp.path().join("pack.json");
+    let pages = temp.path().join("pages.json");
+    let navigation = temp.path().join("navigation.json");
+    let scene = temp.path().join("scene.png");
+    fs::write(&scene, encode_png(1, 1, [255, 0, 0])).unwrap();
+    fs::write(
+        temp.path().join("anchor.png"),
+        encode_png(1, 1, [255, 0, 0]),
+    )
+    .unwrap();
+    fs::write(&pack, serde_json::to_vec(&json!({
+        "schema_version":"0.3", "coordinate_space":{"width":1,"height":1},
+        "targets":[
+            {"type":"color","id":"anchor","region":{"x":0,"y":0,"width":1,"height":1},"expected":[255,0,0]},
+            {"type":"template","id":"visible","template_path":"anchor.png","region":{"x":0,"y":0,"width":1,"height":1},"threshold":0.8},
+            {"type":"color","id":"alternative","region":{"x":0,"y":0,"width":1,"height":1},"expected":[0,0,255]},
+            {"type":"color","id":"optional","region":{"x":0,"y":0,"width":1,"height":1},"expected":[0,0,255]},
+            {"type":"color","id":"forbidden","region":{"x":0,"y":0,"width":1,"height":1},"expected":[0,0,255]}
+        ]
+    })).unwrap()).unwrap();
+    fs::write(
+        &pages,
+        serde_json::to_vec(&json!({"schema_version":"0.3","pages":[{
+            "id":"fixture/home","required":["anchor"],"any_of":[["visible","alternative"]],
+            "optional":["optional"],"forbidden":["forbidden"]
+        }]}))
+        .unwrap(),
+    )
+    .unwrap();
+    fs::write(&navigation, serde_json::to_vec(&json!({
+        "navigation":[{"id":"open","from_page":"fixture/home","to_page":"fixture/next","source":"mapping/open","click":{"kind":"target_center","target_id":"visible"}}],
+        "page_operations":[
+            {"id":"claim","task_id":"task","page":"fixture/home","purpose":"Claim visible reward","click":{"kind":"rect","x":0,"y":0,"width":1,"height":1}},
+            {"id":"color","task_id":"task","page":"fixture/home","purpose":"Color anchor","click":{"kind":"target","target_id":"anchor"}},
+            {"id":"absent","task_id":"task","page":"fixture/home","purpose":"Absent option","click":{"kind":"target","target_id":"optional"}},
+            {"id":"elsewhere","task_id":"task","page":"fixture/other","purpose":"Other page","click":{"kind":"point","point":[0,0]}}
+        ],
+        "destructive_actions":[{"id":"claim","click":{"kind":"target","target_id":"visible"}}],
+        "control_points":[{"name":"back","point":[0,0]}]
+    })).unwrap()).unwrap();
+    let fixture = seal_semantic_fixture(temp, "fixture", "test", &pack, &pages, Some(&navigation));
+    let result = run_semantic_cli(
+        &fixture,
+        [
+            "--json",
+            "observe",
+            "--scene",
+            scene.to_str().unwrap(),
+            "--verbose",
+        ],
+        true,
+    );
+    assert_eq!(result.exit_code(), 0, "{}", result.envelope_json());
+    let observation = &result.envelope.data.as_ref().unwrap()["observation"];
+    let elements = observation["elements"].as_array().unwrap();
+    assert_eq!(elements.len(), 3);
+    assert_eq!(elements[0]["role"], "navigate");
+    assert_eq!(elements[0]["input"]["point"], json!({"x":0,"y":0}));
+    assert_eq!(elements[0]["actionable"], true);
+    assert_eq!(elements[1]["label"], "Claim visible reward");
+    assert_eq!(elements[1]["role"], "page_op");
+    assert_eq!(elements[1]["safety"], "unclassified");
+    assert_eq!(elements[1]["actionable"], true);
+    assert_eq!(elements[2]["recognized"], true);
+    assert_eq!(elements[2]["actionable"], false);
+    assert_eq!(
+        elements[2]["blocked_reason"],
+        "matched_template_rect_unavailable"
+    );
+    let control = &observation["unscoped_controls"][0];
+    assert_eq!(control["scope"], "unscoped");
+    assert_eq!(control["availability"], "unknown");
+    assert_eq!(control["recognized"], false);
+    assert_eq!(control["actionable"], true);
+    let missing = observation["missing"].as_array().unwrap();
+    assert_eq!(missing.len(), 3);
+    assert!(
+        missing
+            .iter()
+            .any(|entry| entry["resource_id"] == "absent" && entry["recognized"] == false)
+    );
+    assert!(missing.iter().any(|entry| entry["id"] == "alternative"
+        && entry["role"] == "any_of"
+        && entry["group_satisfied"] == true));
+    assert!(
+        missing
+            .iter()
+            .any(|entry| entry["id"] == "optional" && entry["role"] == "optional")
+    );
+    assert!(!missing.iter().any(|entry| entry["id"] == "forbidden"));
+    assert_eq!(observation["metrics"]["recognized_count"], 3);
+    assert_eq!(observation["metrics"]["entry_count"], 7);
+    assert_eq!(observation["page_window_completeness"], "unknown");
+}
+
+#[test]
+fn lab2_observe_uses_unique_page_owner() {
+    let _guard = env_lock();
+    let _app_env = set_isolated_app_env();
+    unsafe {
+        set_missing_config_env();
+    }
+    for (matching, conflict) in [(true, false), (false, false), (true, true)] {
+        let temp = TempDir::new().unwrap();
+        let pack = temp.path().join("pack.json");
+        let pages = temp.path().join("pages.json");
+        let navigation = temp.path().join("navigation.json");
+        let scene = temp.path().join("scene.png");
+        fs::write(
+            &scene,
+            encode_png(1, 1, if matching { [255, 0, 0] } else { [0, 0, 255] }),
+        )
+        .unwrap();
+        fs::write(&pack, serde_json::to_vec(&json!({
+            "schema_version":"0.3", "coordinate_space":{"width":1,"height":1},
+            "targets":[{"type":"color","id":"anchor","region":{"x":0,"y":0,"width":1,"height":1},"expected":[255,0,0]}]
+        })).unwrap()).unwrap();
+        let mut definitions = vec![json!({"id":"fixture/home","required":["anchor"]})];
+        if conflict {
+            definitions.push(json!({"id":"fixture/also_home","required":["anchor"]}));
+        }
+        fs::write(
+            &pages,
+            serde_json::to_vec(&json!({"schema_version":"0.3","pages":definitions})).unwrap(),
+        )
+        .unwrap();
+        fs::write(&navigation, br#"{"navigation":[]}"#).unwrap();
+        let fixture =
+            seal_semantic_fixture(temp, "fixture", "test", &pack, &pages, Some(&navigation));
+        let result = run_semantic_cli(
+            &fixture,
+            ["--json", "observe", "--scene", scene.to_str().unwrap()],
+            true,
+        );
+        if conflict {
+            assert_eq!(result.exit_code(), 2, "{}", result.envelope_json());
+            let error = result.envelope.error.as_ref().unwrap();
+            assert_eq!(error.code, "page_recognition_conflict");
+            assert!(result.envelope_json().contains("fixture/also_home"));
+            assert!(result.envelope.data.is_none());
+        } else {
+            assert_eq!(result.exit_code(), 0, "{}", result.envelope_json());
+            let data = result.envelope.data.as_ref().unwrap();
+            assert_eq!(data["observation"]["matched"], matching);
+            assert_eq!(data["observation"]["standby"], !matching);
+            assert_eq!(
+                data["observation"]["page"],
+                if matching { "fixture/home" } else { "unknown" }
+            );
+            if !matching {
+                assert!(
+                    data["candidates"]
+                        .as_array()
+                        .is_some_and(|items| !items.is_empty())
+                );
+                assert_eq!(data["recovery_hint"]["action"], "wake_safe_point");
+                assert_eq!(data["observation"]["metrics"]["matched_page_count"], 0);
+            }
+        }
+    }
+}
+
+#[test]
+fn lab2_observe_bounds_observation_in_min() {
+    let _guard = env_lock();
+    let _app_env = set_isolated_app_env();
+    unsafe {
+        set_missing_config_env();
+    }
+    for oversized_label in [false, true] {
+        let temp = TempDir::new().unwrap();
+        let pack = temp.path().join("pack.json");
+        let pages = temp.path().join("pages.json");
+        let navigation = temp.path().join("navigation.json");
+        let scene = temp.path().join("scene.png");
+        fs::write(&scene, encode_png(1, 1, [255, 0, 0])).unwrap();
+        fs::write(&pack, serde_json::to_vec(&json!({
+            "schema_version":"0.3", "coordinate_space":{"width":1,"height":1},
+            "targets":[{"type":"color","id":"anchor","region":{"x":0,"y":0,"width":1,"height":1},"expected":[255,0,0]}]
+        })).unwrap()).unwrap();
+        fs::write(
+            &pages,
+            br#"{"schema_version":"0.3","pages":[{"id":"fixture/home","required":["anchor"]}]}"#,
+        )
+        .unwrap();
+        let count = if oversized_label { 2 } else { 80 };
+        let operations = (0..count).map(|index| json!({
+            "id":format!("op-{index}"), "task_id":"task", "page":"fixture/home",
+            "purpose":if oversized_label && index == 0 { "x".repeat(40 * 1024) } else { format!("Label {index}") },
+            "click":{"kind":"point","point":[0,0]}
+        })).collect::<Vec<_>>();
+        fs::write(
+            &navigation,
+            serde_json::to_vec(&json!({"navigation":[],"page_operations":operations})).unwrap(),
+        )
+        .unwrap();
+        let fixture =
+            seal_semantic_fixture(temp, "fixture", "test", &pack, &pages, Some(&navigation));
+        for verbosity in [None, Some("--verbose"), Some("--pretty")] {
+            let mut args = vec!["--json", "observe", "--scene", scene.to_str().unwrap()];
+            args.extend(verbosity);
+            let result = run_semantic_cli(&fixture, args, true);
+            assert_eq!(result.exit_code(), 0, "{}", result.envelope_json());
+            let data = result.envelope.data.as_ref().unwrap();
+            let observation = &data["observation"];
+            let entries = observation["elements"].as_array().unwrap();
+            assert!(!entries.is_empty());
+            assert!(entries.len() <= 64);
+            assert!(serde_json::to_vec(observation).unwrap().len() <= 32 * 1024);
+            if verbosity.is_none() {
+                assert!(serde_json::to_vec(data).unwrap().len() <= 2048);
+            }
+            assert_eq!(observation["metrics"]["recognized_count"], count);
+            assert_eq!(observation["metrics"]["entry_count"], count);
+            assert_eq!(observation["metrics"]["emitted_count"], entries.len());
+            assert_eq!(observation["omitted_count"], count - entries.len());
+            assert_eq!(observation["truncated"], true);
+            assert_eq!(observation["page_window_completeness"], "unknown");
+            assert_eq!(
+                observation["metrics"]["sample_scope"],
+                "single_offline_observation"
+            );
+            for (index, entry) in entries.iter().enumerate() {
+                let declaration = if oversized_label { 1 } else { index };
+                assert_eq!(entry["resource_id"], format!("op-{declaration}"));
+                assert_eq!(entry["label"], format!("Label {declaration}"));
+                assert_eq!(entry["role"], "page_op");
+                assert_eq!(entry["availability"], "available");
+                assert_eq!(entry["actionable"], true);
+                assert_eq!(entry["safety"], "unclassified");
+                assert!(entry["blocked_reason"].is_null());
+                assert!(entry.get("ocr").is_none());
+                assert!(entry.get("frame_pixels").is_none());
+            }
+        }
+    }
+}
+
+#[test]
 fn lab2_do_dry_run_reports_guard_and_actual_click() {
     let _guard = env_lock();
     let _app_env = set_isolated_app_env();
