@@ -25,6 +25,7 @@ use crate::{
 };
 use serde::de;
 use serde::{Deserialize, Deserializer, Serialize};
+use sha2::{Digest, Sha256};
 use std::collections::BTreeSet;
 use std::fmt;
 
@@ -58,6 +59,8 @@ pub const MAX_CAPTURE_SUMMARY_FRAMES: usize = 16_384;
 pub const MAX_CAPTURE_SUMMARY_PINS: usize = 65_536;
 const MAX_DIAGNOSTIC_DETAIL_TOKEN_BYTES: usize = 256;
 const MAX_DIAGNOSTIC_DETAIL_MESSAGE_BYTES: usize = 1_024;
+const MAX_MACHINE_PATH_BASENAME_BYTES: usize = 255;
+const LEGACY_REDACTED_MACHINE_PATH: &str = "[redacted]";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SecretField {
@@ -171,7 +174,7 @@ impl AuditInput {
         Ok(SanitizedAudit {
             account_fingerprint,
             authentication_redacted: self.authentication.is_some(),
-            machine_path: self.machine_path.map(|_| "[redacted]".to_string()),
+            machine_path: self.machine_path.map(sanitize_machine_path).transpose()?,
             device_endpoint: self.device_endpoint.map(|_| "[redacted]".to_string()),
         })
     }
@@ -237,7 +240,7 @@ impl SanitizedAudit {
             || self
                 .machine_path
                 .as_deref()
-                .is_some_and(|value| value != "[redacted]")
+                .is_some_and(|value| !valid_stored_machine_path(value))
             || self
                 .device_endpoint
                 .as_deref()
@@ -247,6 +250,53 @@ impl SanitizedAudit {
         }
         Ok(())
     }
+}
+
+fn sanitize_machine_path(original: String) -> Result<String, SanitizationError> {
+    let basename = original
+        .rsplit(['/', '\\'])
+        .next()
+        .filter(|value| valid_machine_path_basename(value))
+        .ok_or_else(|| SanitizationError::new("invalid_machine_path", "machine_path"))?;
+    let encoded_basename = serde_json::to_string(basename)
+        .map_err(|_| SanitizationError::new("invalid_machine_path", "machine_path"))?;
+    Ok(format!(
+        "basename:{encoded_basename}|sha256:{:x}",
+        Sha256::digest(original.as_bytes())
+    ))
+}
+
+fn valid_stored_machine_path(value: &str) -> bool {
+    if value == LEGACY_REDACTED_MACHINE_PATH {
+        return true;
+    }
+    let Some(encoded) = value.strip_prefix("basename:") else {
+        return false;
+    };
+    let Some((encoded_basename, digest)) = encoded.rsplit_once("|sha256:") else {
+        return false;
+    };
+    if digest.len() != 64
+        || !digest
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
+    {
+        return false;
+    }
+    let Ok(basename) = serde_json::from_str::<String>(encoded_basename) else {
+        return false;
+    };
+    valid_machine_path_basename(&basename)
+        && serde_json::to_string(&basename).is_ok_and(|canonical| canonical == encoded_basename)
+}
+
+fn valid_machine_path_basename(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= MAX_MACHINE_PATH_BASENAME_BYTES
+        && !matches!(value, "." | "..")
+        && !value
+            .chars()
+            .any(|character| character.is_control() || matches!(character, '/' | '\\'))
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
