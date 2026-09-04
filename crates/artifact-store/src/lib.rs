@@ -9,6 +9,8 @@
 #![forbid(unsafe_code)]
 
 mod error;
+#[cfg(feature = "evidence-archive")]
+mod evidence_archive;
 #[cfg(feature = "capture")]
 mod exporter;
 #[cfg(feature = "capture")]
@@ -22,6 +24,8 @@ mod portable_archive;
 mod store;
 
 pub use error::*;
+#[cfg(feature = "evidence-archive")]
+pub use evidence_archive::*;
 #[cfg(feature = "capture")]
 pub use exporter::*;
 #[cfg(feature = "capture")]

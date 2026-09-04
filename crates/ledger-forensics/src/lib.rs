@@ -2,7 +2,9 @@
 
 #![forbid(unsafe_code)]
 
-use actingcommand_artifact_store::verify_projected_read_only;
+use actingcommand_artifact_store::{
+    ArtifactStoreError, EvidenceManifest, verify_evidence_archive, verify_projected_read_only,
+};
 use actingcommand_ledger::{
     GlobalLedger, GlobalLedgerCorruptTail, GlobalLedgerError, GlobalLedgerReadOnly,
     GlobalLedgerReadOnlyConfig, GlobalLedgerRepairRecord, GlobalLedgerWriterMetadataObservation,
@@ -16,6 +18,7 @@ use std::path::{Path, PathBuf};
 
 pub const MAX_FORENSIC_EVENTS: usize = 1_024;
 pub const MAX_FORENSIC_REPAIRS: usize = 1_024;
+pub const EVIDENCE_ARCHIVE_VERIFIER: &str = "actingcommand_artifact_store::verify_evidence_archive";
 const MAX_REQUEST_ID_BYTES: usize = 256;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -26,6 +29,21 @@ pub enum ForensicCommand {
     Tail,
     Repairs,
     Export,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ForensicReplayRequest {
+    zip_path: PathBuf,
+    expected_sha256: String,
+}
+
+impl ForensicReplayRequest {
+    pub fn new(zip_path: impl AsRef<Path>, expected_sha256: impl Into<String>) -> Self {
+        Self {
+            zip_path: zip_path.as_ref().to_path_buf(),
+            expected_sha256: expected_sha256.into(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
@@ -149,6 +167,7 @@ pub enum ForensicReport {
     Chain(ChainReport),
     Tail(TailReport),
     Repairs(RepairsReport),
+    Replay(Box<ReplayReport>),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -227,6 +246,15 @@ pub struct TailReport {
 pub struct RepairsReport {
     pub limit: usize,
     pub repairs: Vec<RepairReport>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ReplayReport {
+    pub verifier: &'static str,
+    pub zip_byte_count: u64,
+    pub zip_sha256: String,
+    pub manifest_sha256: String,
+    pub manifest: EvidenceManifest,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -333,6 +361,27 @@ pub fn run(request: ForensicRequest) -> ForensicResult<ForensicOutput> {
         ))),
         ForensicCommand::Export => Ok(ForensicOutput::Human(render_export(&snapshot)?)),
     }
+}
+
+pub fn replay(request: ForensicReplayRequest) -> ForensicResult<ForensicOutput> {
+    if request.zip_path.as_os_str().is_empty() {
+        return Err(ForensicError::new(
+            "invalid_evidence_archive_path",
+            "validate_forensic_replay",
+            "evidence archive path is empty",
+        ));
+    }
+    let verification = verify_evidence_archive(&request.zip_path, &request.expected_sha256)
+        .map_err(map_artifact_store_error)?;
+    Ok(ForensicOutput::Machine(ForensicReport::Replay(Box::new(
+        ReplayReport {
+            verifier: EVIDENCE_ARCHIVE_VERIFIER,
+            zip_byte_count: verification.zip_byte_count,
+            zip_sha256: verification.zip_sha256,
+            manifest_sha256: verification.manifest_sha256,
+            manifest: verification.manifest,
+        },
+    ))))
 }
 
 fn events_report(
@@ -616,6 +665,10 @@ fn render_export(snapshot: &GlobalLedgerReadOnly) -> ForensicResult<String> {
 }
 
 fn map_ledger_error(error: GlobalLedgerError) -> ForensicError {
+    ForensicError::new(error.code(), error.operation(), error.to_string())
+}
+
+fn map_artifact_store_error(error: ArtifactStoreError) -> ForensicError {
     ForensicError::new(error.code(), error.operation(), error.to_string())
 }
 
