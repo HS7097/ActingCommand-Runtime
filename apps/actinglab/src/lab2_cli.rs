@@ -119,7 +119,7 @@ pub(crate) fn run_observe(global: &GlobalOptions, args: &[String]) -> CliOutcome
     if let Some(path) = frame_path {
         payload["frame_path"] = json!(path.display().to_string());
     }
-    observation::project(payload, observation, &flags)
+    observation::project(payload, observation, &flags, global.verbose)
 }
 
 fn run_runtime_observe(global: &GlobalOptions, flags: &FlagArgs) -> CliOutcome<Value> {

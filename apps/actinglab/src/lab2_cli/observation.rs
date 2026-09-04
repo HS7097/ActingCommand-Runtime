@@ -425,9 +425,13 @@ pub(super) fn project(
     mut payload: Value,
     mut observation: Observation,
     flags: &FlagArgs,
+    verbose: bool,
 ) -> CliOutcome<Value> {
     let mut request =
         lab2_projection_request(flags, payload["req_id"].as_str().map(str::to_string));
+    if verbose && request.verbosity == ProjectionVerbosity::Min {
+        request.verbosity = ProjectionVerbosity::Normal;
+    }
     request.fields.extend(
         [
             "observation",
@@ -445,8 +449,7 @@ pub(super) fn project(
         })?;
         let projected = project_record(&payload, &request)
             .map_err(|error| CliError::device(error.to_string()))?;
-        if flags.bool("--verbose")
-            || flags.bool("--pretty")
+        if request.verbosity != ProjectionVerbosity::Min
             || serialized_len(&projected)? <= actingcommand_ledger::MIN_PROJECTION_HARD_LIMIT_BYTES
         {
             return Ok(projected);
