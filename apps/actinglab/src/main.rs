@@ -6,10 +6,11 @@ use actingcommand_contract::{
     ApplicationLifecycleAction, CLI_SCHEMA_VERSION, EventActor, EventSource, LabError as CliError,
     LabErrorClass as ErrorKind,
 };
+#[cfg(test)]
+use actingcommand_device::CaptureBackendName;
 use actingcommand_device::{
-    AdbPathSource, CaptureBackendChoice, CaptureBackendName, Frame, InputBackend, PixelFormat,
-    TouchBackendChoice, combine_operation_and_close, resolve_adb_path,
-    vendor_stdio_session_diagnostic,
+    AdbPathSource, CaptureBackendChoice, Frame, InputBackend, PixelFormat, TouchBackendChoice,
+    combine_operation_and_close, resolve_adb_path, vendor_stdio_session_diagnostic,
 };
 use actingcommand_lab::{
     InstanceConfig, PackageValidationResponse, UserConfig,

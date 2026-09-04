@@ -194,7 +194,7 @@ pub(crate) struct SessionRecordAnchorContrastBacktest {
 pub(crate) struct SessionRecordFrameProvenance {
     pub(crate) source: String,
     pub(crate) path: String,
-    sha256: String,
+    pub(crate) sha256: String,
     pub(crate) width: u32,
     pub(crate) height: u32,
     pub(crate) recorded_at_unix_ms: u64,
@@ -210,7 +210,7 @@ pub(crate) struct SessionRecordFrameProvenance {
 pub(crate) struct SessionRecordAnchorArtifact {
     pub(crate) kind: String,
     pub(crate) path: String,
-    sha256: String,
+    pub(crate) sha256: String,
     pub(crate) width: u32,
     pub(crate) height: u32,
     pub(crate) region: SessionRecordRect,
