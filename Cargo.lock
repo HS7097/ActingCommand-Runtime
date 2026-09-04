@@ -37,8 +37,10 @@ dependencies = [
 name = "actingcommand-actingd"
 version = "0.1.0"
 dependencies = [
+ "actingcommand-artifact-store",
  "actingcommand-contract",
  "actingcommand-device",
+ "actingcommand-ledger",
  "actingcommand-policy",
  "actingcommand-runtime-client",
  "actingcommand-runtime-host",

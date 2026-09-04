@@ -1723,7 +1723,7 @@ fn resource_authoring_event_revalidates_deserialized_fields_and_receipt_phase() 
 #[test]
 fn c3a_runtime_and_lease_renewal_events_are_typed() {
     let ids = issuer();
-    let cases: [(EventPayloadDraft, EventType); 3] = [
+    let cases: [(EventPayloadDraft, EventType); 4] = [
         (
             RuntimePayloadDraft::started(crate::EventAction::RuntimeStart, AuditInput::new())
                 .into(),
@@ -1733,6 +1733,23 @@ fn c3a_runtime_and_lease_renewal_events_are_typed() {
             RuntimePayloadDraft::takeover(crate::EventAction::RuntimeTakeover, AuditInput::new())
                 .into(),
             EventType::RuntimeTakeover,
+        ),
+        (
+            RuntimePayloadDraft::failed(
+                crate::DiagnosticCode::RuntimeProtocolInvalid,
+                EffectDisposition::Indeterminate,
+                crate::DiagnosticDetailDraft::new(
+                    "runtime_connection",
+                    "runtime.ipc.receipt_write",
+                    "local_ipc",
+                    "runtime_local_ipc",
+                    "host_code=runtime_frame_write_failed fatal=false connection_id=1 request_decoded=true",
+                    crate::Sensitivity::Internal,
+                ),
+                AuditInput::new(),
+            )
+            .into(),
+            EventType::RuntimeFailed,
         ),
         (
             LeasePayloadDraft::renewed(
@@ -1761,5 +1778,138 @@ fn c3a_runtime_and_lease_renewal_events_are_typed() {
         .expect("sanitize typed event");
         assert_eq!(draft.event_type(), expected);
         serde_json::to_string(&draft).expect("serialize typed event");
+        if expected == EventType::RuntimeFailed {
+            assert_eq!(draft.payload().sensitivity(), crate::Sensitivity::Internal);
+            let crate::EventPayload::Runtime(crate::RuntimePayload::Failed(outcome)) =
+                draft.payload()
+            else {
+                panic!("typed runtime failure")
+            };
+            assert_eq!(outcome.action(), crate::EventAction::RuntimeAction);
+            assert_eq!(
+                outcome.diagnostic_code(),
+                crate::DiagnosticCode::RuntimeProtocolInvalid
+            );
+            assert_eq!(
+                outcome.effect_disposition(),
+                EffectDisposition::Indeterminate
+            );
+            let detail = outcome.detail().expect("runtime failure detail");
+            assert_eq!(detail.category(), "runtime_connection");
+            assert_eq!(detail.stage(), "runtime.ipc.receipt_write");
+            assert_eq!(detail.backend(), "local_ipc");
+            assert_eq!(detail.operation(), "runtime_local_ipc");
+            assert_eq!(detail.declared_sensitivity(), crate::Sensitivity::Internal);
+            assert_eq!(
+                detail.message(),
+                "host_code=runtime_frame_write_failed fatal=false connection_id=1 request_decoded=true"
+            );
+            let stored = serde_json::to_value(draft.payload()).expect("runtime failure JSON");
+            let restored: crate::EventPayload =
+                serde_json::from_value(stored).expect("runtime failure round trip");
+            assert_eq!(&restored, draft.payload());
+            let public = serde_json::to_string(&draft.payload().public_projection())
+                .expect("runtime failure public projection");
+            assert!(public.contains("runtime.failed"));
+            assert!(!public.contains("runtime_connection"));
+            assert!(!public.contains(detail.message()));
+        }
+    }
+
+    let owner_epoch = *ids.mint_owner_epoch().expect("owner epoch").transport();
+    let forward_entered = ids.mint_event_id().expect("forward entered event");
+    let strategic_entered = ids.mint_event_id().expect("strategic entered event");
+    let causation = ids.mint_causation_id().expect("causation");
+    let request = RuntimeRequest::new(
+        ids.mint_request_id().expect("request id"),
+        ids.mint_correlation_id().expect("correlation id"),
+        Some(causation),
+        EventActor::Cli,
+        EventSource::Cli,
+        1,
+        RuntimeOperation::Health,
+    )
+    .expect("runtime request");
+    let validated = request.validate().expect("validated request");
+    for phase in [
+        crate::RuntimeLifecyclePhase::PolicyForwardEntered,
+        crate::RuntimeLifecyclePhase::PolicyForwardReturned {
+            entered_event_id: *forward_entered.transport(),
+        },
+        crate::RuntimeLifecyclePhase::StrategicReportEntered,
+        crate::RuntimeLifecyclePhase::StrategicReportReturned {
+            entered_event_id: *strategic_entered.transport(),
+        },
+        crate::RuntimeLifecyclePhase::ShutdownRequested,
+    ] {
+        let event_id = match phase {
+            crate::RuntimeLifecyclePhase::PolicyForwardEntered => forward_entered,
+            crate::RuntimeLifecyclePhase::StrategicReportEntered => strategic_entered,
+            _ => ids.mint_event_id().expect("lifecycle event"),
+        };
+        let shutdown = phase == crate::RuntimeLifecyclePhase::ShutdownRequested;
+        let draft = EventDraft::new(
+            event_id,
+            1,
+            EventSeverity::Info,
+            EventOrigin::new(
+                EventSource::Runtime,
+                OriginModule::Runtime,
+                EventActor::Runtime,
+            ),
+            if shutdown {
+                EventLinksDraft::default()
+            } else {
+                validated.event_links(None, None, None)
+            },
+            RuntimePayloadDraft::lifecycle_observed(owner_epoch, phase, AuditInput::new()).into(),
+        )
+        .sanitize(&RejectSecrets)
+        .expect("sanitize lifecycle event");
+        assert_eq!(draft.event_type(), EventType::RuntimeLifecycleObserved);
+        assert_eq!(draft.event_type().family(), crate::EventFamily::Runtime);
+        assert_eq!(draft.payload().schema(), crate::RUNTIME_PAYLOAD_SCHEMA);
+        assert_eq!(draft.payload().sensitivity(), crate::Sensitivity::Internal);
+        assert_eq!(draft.payload().action(), crate::EventAction::RuntimeAction);
+        draft.payload().validate().expect("valid lifecycle payload");
+        if shutdown {
+            assert_eq!(draft.links(), &crate::EventLinks::default());
+        } else {
+            assert_eq!(draft.links().request_id(), Some(&request.request_id()));
+            assert_eq!(
+                draft.links().correlation_id(),
+                Some(&request.correlation_id())
+            );
+            assert_eq!(draft.links().causation_id(), Some(causation.transport()));
+        }
+        let crate::EventPayload::Runtime(crate::RuntimePayload::LifecycleObserved(payload)) =
+            draft.payload()
+        else {
+            panic!("typed lifecycle payload")
+        };
+        assert_eq!(payload.owner_epoch(), owner_epoch);
+        assert_eq!(payload.phase(), phase);
+        let wire = serde_json::to_value(&draft).expect("lifecycle event JSON");
+        assert_eq!(wire["event_type"], "runtime.lifecycle_observed");
+        assert_eq!(wire["severity"], "info");
+        let restored: crate::EventPayload =
+            serde_json::from_value(wire["payload"].clone()).expect("lifecycle round trip");
+        assert_eq!(&restored, draft.payload());
+        match phase {
+            crate::RuntimeLifecyclePhase::PolicyForwardReturned { entered_event_id }
+            | crate::RuntimeLifecyclePhase::StrategicReportReturned { entered_event_id } => {
+                assert_eq!(
+                    wire["payload"]["payload"]["data"]["phase"]["entered_event_id"],
+                    serde_json::to_value(entered_event_id).expect("entered id JSON"),
+                );
+            }
+            _ => {}
+        }
+        let public = serde_json::to_string(&draft.payload().public_projection())
+            .expect("lifecycle public projection");
+        assert!(public.contains("runtime.lifecycle_observed"));
+        assert!(!public.contains("owner_epoch"));
+        assert!(!public.contains("phase"));
+        assert!(!public.contains("entered_event_id"));
     }
 }
