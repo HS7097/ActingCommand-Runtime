@@ -71,15 +71,16 @@ use actingcommand_contract::{
     RuntimeDebugOperation, RuntimeDebugPhase, RuntimeErrorCode, RuntimeErrorProjection,
     RuntimeEventBatch, RuntimeEventQueryCursor, RuntimeEventQueryPage,
     RuntimeEventQueryPageRequest, RuntimeEvidenceExportRequest, RuntimeEvidenceExportSummary,
-    RuntimeEvidenceScreenshotCounts, RuntimeInfo, RuntimeInstanceStatus, RuntimeMaintenanceQuery,
-    RuntimeMonitorPolicy, RuntimeOperation, RuntimePayloadDraft, RuntimePlanningDocument,
-    RuntimePlanningDocumentKind, RuntimePolicyInputIdentity, RuntimeReceipt, RuntimeReceiptState,
-    RuntimeReleaseSet, RuntimeRequest, RuntimeResult, RuntimeStrategicPlanResult,
-    RuntimeSubscriptionRequest, SchedulerPayloadDraft, SchedulingDisposition,
-    SchedulingEffectCondition, SchedulingEffectEvidence, SchedulingOutcomeDeclaration,
-    SchedulingOutcomeIdentity, SchedulingOutcomeProjection, Sensitivity, StatePayload,
-    StatePayloadDraft, TaskEntryRecognitionPhase, TaskEntryTargetDisposition, TaskId, TaskOutcome,
-    TaskPayload, TaskPayloadDraft, TaskSemanticFact, TerminalEvent, ValidatedRuntimeRequest,
+    RuntimeEvidenceScreenshotCounts, RuntimeForwardProjectionRequest, RuntimeInfo,
+    RuntimeInstanceStatus, RuntimeLifecyclePhase, RuntimeMaintenanceQuery, RuntimeMonitorPolicy,
+    RuntimeOperation, RuntimePayloadDraft, RuntimePlanningDocument, RuntimePlanningDocumentKind,
+    RuntimePolicyInputIdentity, RuntimeReceipt, RuntimeReceiptState, RuntimeReleaseSet,
+    RuntimeRequest, RuntimeResult, RuntimeStrategicPlanResult, RuntimeSubscriptionRequest,
+    SchedulerPayloadDraft, SchedulingDisposition, SchedulingEffectCondition,
+    SchedulingEffectEvidence, SchedulingOutcomeDeclaration, SchedulingOutcomeIdentity,
+    SchedulingOutcomeProjection, Sensitivity, StatePayload, StatePayloadDraft,
+    TaskEntryRecognitionPhase, TaskEntryTargetDisposition, TaskId, TaskOutcome, TaskPayload,
+    TaskPayloadDraft, TaskSemanticFact, TerminalEvent, ValidatedRuntimeRequest,
 };
 use actingcommand_device::{CaptureBackendName, Frame, SegmentedSwipeEvent};
 use actingcommand_execution_kernel::{
@@ -140,6 +141,38 @@ const MAX_MONITOR_PROBES_PER_TICK: usize = 16;
 const MAX_CONTAINED_TASK_OCR_FAILURE_DETAIL_BYTES: usize = 64 * 1024;
 const CONTAINED_TASK_POST_ADMISSION_OCR_FAILED: &str = "contained_task_post_admission_ocr_failed";
 const POLICY_CONNECTION_VALUE: u64 = u64::MAX;
+
+#[derive(Clone, Copy)]
+pub enum RuntimeLifecycleFailureStage {
+    PolicyInitialization,
+    PolicyMonitor,
+    PolicyForward,
+    StrategicReport,
+}
+
+impl RuntimeLifecycleFailureStage {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::PolicyInitialization => "runtime.lifecycle.policy_initialization",
+            Self::PolicyMonitor => "runtime.lifecycle.policy_monitor",
+            Self::PolicyForward => "runtime.lifecycle.policy_forward",
+            Self::StrategicReport => "runtime.lifecycle.strategic_report",
+        }
+    }
+}
+
+pub enum RuntimeLifecycleFailure<'a> {
+    Host(&'a RuntimeHostError),
+    Client {
+        code: &'static str,
+        operation: &'static str,
+        fatal: bool,
+        runtime_code: Option<RuntimeErrorCode>,
+    },
+    Process {
+        code: &'static str,
+    },
+}
 
 /// Runtime-owned policy inputs supplied by trusted host integrations.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1507,6 +1540,15 @@ impl RuntimeHost {
         self.shutdown()
     }
 
+    pub fn record_lifecycle_failure(
+        &self,
+        stage: RuntimeLifecycleFailureStage,
+        failure: RuntimeLifecycleFailure<'_>,
+    ) -> RuntimeHostResult<()> {
+        self.shared_ref("record_runtime_lifecycle_failure")?
+            .append_lifecycle_failure(stage, failure, EventLinksDraft::default(), None)
+    }
+
     fn shared_ref(&self, operation: &'static str) -> RuntimeHostResult<&HostShared> {
         self.shared.as_deref().ok_or_else(|| {
             RuntimeHostError::fatal(
@@ -1522,8 +1564,16 @@ impl RuntimeHost {
             return Ok(());
         };
         shared.fatal.request_shutdown();
-        let mut failure =
-            join_runtime_thread(self.accept_thread.take(), "join_runtime_accept").err();
+        let mut failure = shared
+            .append_lifecycle_observed(
+                RuntimeLifecyclePhase::ShutdownRequested,
+                EventLinksDraft::default(),
+            )
+            .err();
+        record_failure(
+            &mut failure,
+            join_runtime_thread(self.accept_thread.take(), "join_runtime_accept"),
+        );
         record_failure(
             &mut failure,
             join_runtime_thread(self.sweep_thread.take(), "join_runtime_sweeper"),
@@ -5363,15 +5413,11 @@ impl HostShared {
                 self.record_agent_response(request, validated, response)
             }
             RuntimeOperation::PrepareStrategicReport { request } => {
-                self.prepare_strategic_report_ipc(request.report(), request.evidence())
+                self.prepare_strategic_report_ipc(validated, request.report(), request.evidence())
             }
-            RuntimeOperation::ProjectPolicyForward { request } => self.project_policy_forward_ipc(
-                request.facts(),
-                request.resources(),
-                request.time(),
-                request.seed(),
-                request.config(),
-            ),
+            RuntimeOperation::ProjectPolicyForward { request } => {
+                self.project_policy_forward_ipc(validated, request)
+            }
             RuntimeOperation::AssessPredictiveMaintenance { query } => {
                 self.assess_predictive_maintenance_ipc(query)
             }
@@ -6648,6 +6694,7 @@ impl HostShared {
 
     fn prepare_strategic_report_ipc(
         &self,
+        validated: &ValidatedRuntimeRequest<'_>,
         report: &RuntimePlanningDocument,
         evidence: &[ProjectedArtifactReference],
     ) -> Result<OperationSuccess, RequestFailure> {
@@ -6656,18 +6703,32 @@ impl HostShared {
             RuntimePlanningDocumentKind::StrategicReport,
             "prepare_strategic_report",
         )?;
-        let plan = self
+        let links = validated.event_links(None, None, None);
+        let entered = self
+            .append_lifecycle_observed(RuntimeLifecyclePhase::StrategicReportEntered, links.clone())
+            .map_err(RequestFailure::poison_without_terminal)?;
+        let result = self
             .prepare_strategic_report_with(&report, evidence, |_, transport_plan| {
                 Ok(transport_plan)
             })
-            .map_err(planning_request_failure)?;
-        Ok(OperationSuccess {
-            state: RuntimeReceiptState::Completed,
-            terminal: None,
-            result: RuntimeResult::StrategicPlanPrepared {
-                plan: Box::new(plan),
+            .map(|plan| OperationSuccess {
+                state: RuntimeReceiptState::Completed,
+                terminal: None,
+                result: RuntimeResult::StrategicPlanPrepared {
+                    plan: Box::new(plan),
+                },
+            })
+            .map_err(planning_request_failure);
+        self.record_planning_result(
+            &result,
+            links,
+            RuntimeLifecycleFailureStage::StrategicReport,
+            entered,
+            RuntimeLifecyclePhase::StrategicReportReturned {
+                entered_event_id: entered,
             },
-        })
+        )?;
+        result
     }
 
     fn project_policy_input_identity(
@@ -6714,48 +6775,81 @@ impl HostShared {
 
     fn project_policy_forward_ipc(
         &self,
-        facts: &RuntimePlanningDocument,
-        resources: &RuntimePlanningDocument,
-        time: &RuntimePlanningDocument,
-        seed: u64,
-        config: &RuntimePlanningDocument,
+        validated: &ValidatedRuntimeRequest<'_>,
+        request: &RuntimeForwardProjectionRequest,
     ) -> Result<OperationSuccess, RequestFailure> {
         let facts: EvaluationFacts = decode_planning_document(
-            facts,
+            request.facts(),
             RuntimePlanningDocumentKind::EvaluationFacts,
             "project_policy_forward",
         )?;
         let resources: EvaluationResources = decode_planning_document(
-            resources,
+            request.resources(),
             RuntimePlanningDocumentKind::EvaluationResources,
             "project_policy_forward",
         )?;
         let time: EvaluationTime = decode_planning_document(
-            time,
+            request.time(),
             RuntimePlanningDocumentKind::EvaluationTime,
             "project_policy_forward",
         )?;
         let config: ForwardProjectionConfig = decode_planning_document(
-            config,
+            request.config(),
             RuntimePlanningDocumentKind::ForwardProjectionConfig,
             "project_policy_forward",
         )?;
-        let projection = self
-            .project_policy_forward(&facts, &resources, time, seed, config)
+        let links = validated.event_links(None, None, None);
+        let entered = self
+            .append_lifecycle_observed(RuntimeLifecyclePhase::PolicyForwardEntered, links.clone())
+            .map_err(RequestFailure::poison_without_terminal)?;
+        let result = (|| {
+            let projection = self
+                .project_policy_forward(&facts, &resources, time, request.seed(), config)
+                .map_err(planning_request_failure)?;
+            let projection = encode_planning_document(
+                RuntimePlanningDocumentKind::ForwardProjection,
+                &projection,
+                "project_policy_forward",
+            )
             .map_err(planning_request_failure)?;
-        let projection = encode_planning_document(
-            RuntimePlanningDocumentKind::ForwardProjection,
-            &projection,
-            "project_policy_forward",
-        )
-        .map_err(planning_request_failure)?;
-        Ok(OperationSuccess {
-            state: RuntimeReceiptState::Completed,
-            terminal: None,
-            result: RuntimeResult::PolicyForwardProjected {
-                projection: Box::new(projection),
+            Ok(OperationSuccess {
+                state: RuntimeReceiptState::Completed,
+                terminal: None,
+                result: RuntimeResult::PolicyForwardProjected {
+                    projection: Box::new(projection),
+                },
+            })
+        })();
+        self.record_planning_result(
+            &result,
+            links,
+            RuntimeLifecycleFailureStage::PolicyForward,
+            entered,
+            RuntimeLifecyclePhase::PolicyForwardReturned {
+                entered_event_id: entered,
             },
-        })
+        )?;
+        result
+    }
+
+    fn record_planning_result(
+        &self,
+        result: &Result<OperationSuccess, RequestFailure>,
+        links: EventLinksDraft,
+        stage: RuntimeLifecycleFailureStage,
+        entered_event_id: EventId,
+        returned: RuntimeLifecyclePhase,
+    ) -> Result<(), RequestFailure> {
+        match result {
+            Ok(_) => self.append_lifecycle_observed(returned, links).map(|_| ()),
+            Err(failure) => self.append_lifecycle_failure(
+                stage,
+                RuntimeLifecycleFailure::Host(&failure.error),
+                links,
+                Some(entered_event_id),
+            ),
+        }
+        .map_err(RequestFailure::poison_without_terminal)
     }
 
     fn assess_predictive_maintenance_ipc(
@@ -13492,6 +13586,94 @@ impl HostShared {
                     RuntimeErrorCode::InvalidRequest,
                 ))
             })
+    }
+
+    fn append_lifecycle_observed(
+        &self,
+        phase: RuntimeLifecyclePhase,
+        links: EventLinksDraft,
+    ) -> RuntimeHostResult<EventId> {
+        self.append_event_raw(
+            EventSeverity::Info,
+            EventSource::Runtime,
+            OriginModule::Runtime,
+            EventActor::Runtime,
+            links,
+            RuntimePayloadDraft::lifecycle_observed(self.owner_epoch, phase, AuditInput::new()),
+        )
+        .map(|event| *event.event_id())
+        .map_err(|_| ledger_error("append_runtime_lifecycle_observed"))
+    }
+
+    fn append_lifecycle_failure(
+        &self,
+        stage: RuntimeLifecycleFailureStage,
+        failure: RuntimeLifecycleFailure<'_>,
+        links: EventLinksDraft,
+        entered_event_id: Option<EventId>,
+    ) -> RuntimeHostResult<()> {
+        let (origin, code, operation, fatal, runtime_code) = match failure {
+            RuntimeLifecycleFailure::Host(error) => (
+                "runtime_host",
+                error.code(),
+                Some(error.operation()),
+                Some(error.is_fatal()),
+                Some(error.projection().code),
+            ),
+            RuntimeLifecycleFailure::Client {
+                code,
+                operation,
+                fatal,
+                runtime_code,
+            } => (
+                "runtime_client",
+                code,
+                Some(operation),
+                Some(fatal),
+                runtime_code,
+            ),
+            RuntimeLifecycleFailure::Process { code } => ("actingd", code, None, None, None),
+        };
+        let message = serde_json::to_string(&serde_json::json!({
+            "origin": origin,
+            "code": code,
+            "operation": operation,
+            "fatal": fatal,
+            "runtime_code": runtime_code,
+            "owner_epoch": self.owner_epoch,
+            "entered_event_id": entered_event_id,
+        }))
+        .map_err(|_| ledger_error("encode_runtime_lifecycle_failure"))?;
+        self.append_event_raw(
+            if fatal == Some(true) {
+                EventSeverity::Fatal
+            } else {
+                EventSeverity::Error
+            },
+            EventSource::Runtime,
+            OriginModule::Runtime,
+            EventActor::Runtime,
+            links,
+            RuntimePayloadDraft::failed(
+                if runtime_code == Some(RuntimeErrorCode::ProtocolInvalid) {
+                    DiagnosticCode::RuntimeProtocolInvalid
+                } else {
+                    DiagnosticCode::RuntimeDiagnostic
+                },
+                EffectDisposition::Indeterminate,
+                DiagnosticDetailDraft::new(
+                    "runtime_lifecycle",
+                    stage.as_str(),
+                    origin,
+                    operation.unwrap_or("actingd_process"),
+                    message,
+                    Sensitivity::Internal,
+                ),
+                AuditInput::new(),
+            ),
+        )
+        .map(|_| ())
+        .map_err(|_| ledger_error("append_runtime_lifecycle_failure"))
     }
 
     fn append_connection_failure(

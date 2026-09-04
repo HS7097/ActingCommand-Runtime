@@ -1767,75 +1767,117 @@ fn actingd_exposes_typed_planning_capabilities_to_a_separate_client_process() {
 
     let child = start_actingd(&config_path);
     let mut child = ChildGuard(child);
-    wait_for_runtime_info(&mut child.0, root.path());
-    let client = RuntimeClient::connect(RuntimeClientConfig::new(
-        root.path(),
-        EventActor::Agent,
-        EventSource::Adapter,
-    ))
-    .expect("connect agent runtime");
-    let identity = client
-        .project_policy_input_identity(evidence_sequence)
-        .expect("project policy input identity through daemon IPC");
-    let report = strategic_report(
-        &base,
-        &evidence,
-        identity.ledger_position(),
-        identity.fact_snapshot_id(),
-    );
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        wait_for_runtime_info(&mut child.0, root.path());
+        let client = RuntimeClient::connect(RuntimeClientConfig::new(
+            root.path(),
+            EventActor::Agent,
+            EventSource::Adapter,
+        ))
+        .expect("connect agent runtime");
+        let identity = client
+            .project_policy_input_identity(evidence_sequence)
+            .expect("project policy input identity through daemon IPC");
+        let report = strategic_report(
+            &base,
+            &evidence,
+            identity.ledger_position(),
+            identity.fact_snapshot_id(),
+        );
 
-    let plan = client
-        .prepare_strategic_report(&report, vec![evidence])
-        .expect("prepare strategic report through daemon IPC");
-    assert_eq!(plan.projection().catalog_version, base.catalog_version());
-    assert_eq!(plan.projection().instances.len(), 1);
+        let plan = client
+            .prepare_strategic_report(&report, vec![evidence])
+            .expect("prepare strategic report through daemon IPC");
+        assert_eq!(plan.projection().catalog_version, base.catalog_version());
+        assert_eq!(plan.projection().instances.len(), 1);
 
-    let forward = client
-        .project_policy_forward(
-            &policy_facts(),
-            &policy_resources(),
-            EvaluationTime {
-                unix_ms: POLICY_NOW_UNIX_MS,
-                monotonic_ms: POLICY_NOW_UNIX_MS,
-            },
-            17,
-            ForwardProjectionConfig::for_hours(1, 32).expect("forward config"),
-        )
-        .unwrap_or_else(|error| {
-            root.disable_cleanup(true);
-            eprintln!("preserved actingd failure state root: {}", root.path().display());
-            let snapshot = actingcommand_ledger::GlobalLedger::open_read_only(
-                actingcommand_ledger::GlobalLedgerReadOnlyConfig::new(root.path().join("ledger")),
-                |reference| {
-                    match actingcommand_artifact_store::verify_projected_read_only(
-                        root.path(),
-                        reference,
-                    ) {
-                        Ok(verified) => Some(verified),
-                        Err(verify_error) => {
-                            eprintln!("ERROR verifying authoritative ledger artifact: {verify_error:?}");
-                            None
-                        }
-                    }
+        let forward = client
+            .project_policy_forward(
+                &policy_facts(),
+                &policy_resources(),
+                EvaluationTime {
+                    unix_ms: POLICY_NOW_UNIX_MS,
+                    monotonic_ms: POLICY_NOW_UNIX_MS,
                 },
-            );
-            match snapshot {
-                Ok(snapshot) => {
+                17,
+                ForwardProjectionConfig::for_hours(1, 32).expect("forward config"),
+            )
+            .expect("project policy through daemon IPC");
+        assert_eq!(forward.catalog_version, base.catalog_version());
+
+        let as_of_ledger_position = client
+            .project_snapshot(ProjectInterfaceRequest::current())
+            .expect("project ledger position")
+            .ledger_position;
+        let maintenance = client
+            .assess_predictive_maintenance(
+                PredictiveMaintenanceRequest::new(
+                    INSTANCE_ALIAS,
+                    "fixture.observe",
+                    FactScope::Instance {
+                        instance_id: INSTANCE_ALIAS.to_owned(),
+                    },
+                    "resource.primary",
+                    as_of_ledger_position,
+                    POLICY_NOW_UNIX_MS,
+                    MaintenanceTrendPolicy::default(),
+                )
+                .expect("maintenance request"),
+            )
+            .expect("assess maintenance through daemon IPC");
+        assert_eq!(
+            maintenance.disposition,
+            MaintenanceDisposition::EvidenceInsufficient
+        );
+        assert!(child.0.try_wait().expect("process state").is_none());
+
+        drop(client);
+    }));
+    if let Err(original) = result {
+        root.disable_cleanup(true);
+        eprintln!(
+            "preserved actingd failure state root: {}",
+            root.path().display()
+        );
+        let snapshot = actingcommand_ledger::GlobalLedger::open_read_only(
+            actingcommand_ledger::GlobalLedgerReadOnlyConfig::new(root.path().join("ledger")),
+            |reference| match actingcommand_artifact_store::verify_projected_read_only(
+                root.path(),
+                reference,
+            ) {
+                Ok(verified) => Some(verified),
+                Err(verify_error) => {
+                    eprintln!("ERROR verifying authoritative ledger artifact: {verify_error:?}");
+                    None
+                }
+            },
+        );
+        match snapshot {
+            Ok(snapshot) => {
+                eprintln!(
+                    "authoritative ledger snapshot: latest_sequence={} listed_through_segment={:?} corrupt_tail={:?}",
+                    snapshot.latest_sequence(),
+                    snapshot.listed_through_segment(),
+                    snapshot.corrupt_tail(),
+                );
+                if snapshot.corrupt_tail().is_some() {
                     eprintln!(
-                        "authoritative ledger snapshot: latest_sequence={} listed_through_segment={:?} corrupt_tail={:?}",
-                        snapshot.latest_sequence(),
-                        snapshot.listed_through_segment(),
-                        snapshot.corrupt_tail(),
+                        "ERROR authoritative ledger snapshot has a corrupt tail; matches cover only the readable prefix"
                     );
-                    if snapshot.corrupt_tail().is_some() {
-                        eprintln!("ERROR authoritative ledger snapshot has a corrupt tail; matches cover only the readable prefix");
-                    }
+                }
+                for event_type in [
+                    EventType::RuntimeFailed,
+                    EventType::RuntimeLifecycleObserved,
+                ] {
                     let query = EventQuery {
-                        event_type: Some(EventType::RuntimeFailed),
+                        event_type: Some(event_type),
                         ..EventQuery::default()
                     };
                     let events = snapshot.query(&query);
-                    eprintln!("authoritative runtime.failed snapshot count={}", events.len());
+                    eprintln!(
+                        "authoritative {event_type:?} snapshot count={}",
+                        events.len()
+                    );
                     for event in events {
                         match actingcommand_ledger::project_subscription_event(
                             &event,
@@ -1843,52 +1885,27 @@ fn actingd_exposes_typed_planning_capabilities_to_a_separate_client_process() {
                             ProjectionProfile::Forensic,
                         ) {
                             Some(projected) => match serde_json::to_string(&projected) {
-                                Ok(projected) => eprintln!("authoritative runtime.failed: {projected}"),
+                                Ok(projected) => {
+                                    eprintln!("authoritative {event_type:?}: {projected}")
+                                }
                                 Err(project_error) => {
-                                    eprintln!("ERROR serializing runtime.failed: {project_error}");
+                                    eprintln!("ERROR serializing {event_type:?}: {project_error}")
                                 }
                             },
-                            None => {
-                                eprintln!("ERROR projecting matched runtime.failed sequence={}", event.sequence());
-                            }
+                            None => eprintln!(
+                                "ERROR projecting matched {event_type:?} sequence={}",
+                                event.sequence()
+                            ),
                         }
                     }
                 }
-                Err(reader_error) => {
-                    eprintln!("ERROR reading authoritative ledger snapshot: {reader_error:?}");
-                }
             }
-            panic!("project policy through daemon IPC: {error:?}");
-        });
-    assert_eq!(forward.catalog_version, base.catalog_version());
-
-    let as_of_ledger_position = client
-        .project_snapshot(ProjectInterfaceRequest::current())
-        .expect("project ledger position")
-        .ledger_position;
-    let maintenance = client
-        .assess_predictive_maintenance(
-            PredictiveMaintenanceRequest::new(
-                INSTANCE_ALIAS,
-                "fixture.observe",
-                FactScope::Instance {
-                    instance_id: INSTANCE_ALIAS.to_owned(),
-                },
-                "resource.primary",
-                as_of_ledger_position,
-                POLICY_NOW_UNIX_MS,
-                MaintenanceTrendPolicy::default(),
-            )
-            .expect("maintenance request"),
-        )
-        .expect("assess maintenance through daemon IPC");
-    assert_eq!(
-        maintenance.disposition,
-        MaintenanceDisposition::EvidenceInsufficient
-    );
-    assert!(child.0.try_wait().expect("process state").is_none());
-
-    drop(client);
+            Err(reader_error) => {
+                eprintln!("ERROR reading authoritative ledger snapshot: {reader_error:?}")
+            }
+        }
+        std::panic::resume_unwind(original);
+    }
     child.0.kill().expect("kill actingd");
     child.0.wait().expect("wait actingd");
 }
