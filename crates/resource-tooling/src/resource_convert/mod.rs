@@ -6,6 +6,7 @@ use actingcommand_contract::{
 };
 use actingcommand_pack_containment::validate_recognition_metadata;
 use actingcommand_recognition_pack::FsAssetResolver;
+use serde::Deserialize;
 use serde_json::{Map, Value, json};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
@@ -20,6 +21,67 @@ const FULL_FRAME_SENTINEL: &str = "full_frame";
 const MAX_TASK_TIMEOUT_MS: u64 = 600_000;
 const MAX_TASK_STEPS: u32 = 1_000;
 const MAX_POST_ADMISSION_OCR_TARGETS: usize = 32;
+const MAA_SEMANTIC_MAPPING_PATH: &str = "tasks/maa-semantic-mapping.json";
+const MAA_TASK_FACTS_PATH: &str = "upstream-sync/maa.tasks.json";
+const MAA_TASK_FACTS_DECLARED_PATH: &str = "ours/upstream-sync/maa.tasks.json";
+const MAA_SEMANTIC_MAPPING_SCHEMA: &str = "actingcommand.maa-semantic-mapping.v1";
+const MAA_TASK_FACTS_SCHEMA: &str = "actingcommand.maa-task-facts-set.v1";
+const MAA_SEMANTIC_MAPPING_COUNT: usize = 64;
+const MAA_PRODUCT_HEADINGS: [&str; 3] = ["warehouse", "home_sanity", "stage_proxy_settlement"];
+const MAA_SEMANTIC_ROLES: [&str; 5] = [
+    "page_anchor",
+    "page_transition",
+    "page_operation",
+    "observation",
+    "topology",
+];
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct MaaSemanticMappingDocument {
+    schema_version: String,
+    facts_container: MaaFactsContainerBinding,
+    mappings: Vec<MaaSemanticMappingRow>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct MaaFactsContainerBinding {
+    path: String,
+    sha256: String,
+    data_schema_version: String,
+    task_count: usize,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct MaaSemanticMappingRow {
+    source_task_id: String,
+    product_heading: String,
+    page_id: String,
+    role: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct MaaTaskFactsEnvelope {
+    data: MaaTaskFactsData,
+}
+
+#[derive(Debug, Deserialize)]
+struct MaaTaskFactsData {
+    schema_version: String,
+    tasks: Vec<MaaTaskFactsEntry>,
+}
+
+#[derive(Debug, Deserialize)]
+struct MaaTaskFactsEntry {
+    task_id: MaaTaskFactsId,
+}
+
+#[derive(Debug, Deserialize)]
+struct MaaTaskFactsId {
+    value: String,
+}
 
 pub fn resource_convert(request: ResourceConvertRequest) -> CliOutcome<ResourceConvertResponse> {
     let resource_root = resolve_resource_root(&request.repo);
@@ -31,6 +93,7 @@ pub fn resource_convert(request: ResourceConvertRequest) -> CliOutcome<ResourceC
         request.server.as_deref(),
         request.locale.as_deref(),
     )?;
+    let maa_semantic_mappings = admit_maa_semantic_mapping(repo, &converter.game)?;
     let maa_tasks_root = request.maa_tasks_root;
     if let Some(tasks_root) = maa_tasks_root.as_deref() {
         converter.load_maa_task_overlays(tasks_root)?;
@@ -51,6 +114,7 @@ pub fn resource_convert(request: ResourceConvertRequest) -> CliOutcome<ResourceC
         server: converter.server,
         locale: converter.locale,
         dry_run,
+        maa_semantic_mappings,
         bundles: converter.bundles.len(),
         targets: outputs
             .pack
@@ -93,6 +157,177 @@ pub fn resource_convert(request: ResourceConvertRequest) -> CliOutcome<ResourceC
         maa_tasks_root: maa_tasks_root.map(|path| path.display().to_string()),
         maa_compiled_tasks,
     })
+}
+
+fn admit_maa_semantic_mapping(root: &Path, game: &str) -> CliOutcome<usize> {
+    let mapping_path = root.join(MAA_SEMANTIC_MAPPING_PATH);
+    let mapping_bytes = fs::read(&mapping_path).map_err(|error| {
+        CliError::package_invalid(format!(
+            "failed to read {}: {error}",
+            mapping_path.display()
+        ))
+    })?;
+    let mapping: MaaSemanticMappingDocument =
+        serde_json::from_slice(&mapping_bytes).map_err(|error| {
+            CliError::package_invalid(format!(
+                "failed to parse {}: {error}",
+                mapping_path.display()
+            ))
+        })?;
+    if mapping.schema_version != MAA_SEMANTIC_MAPPING_SCHEMA {
+        return Err(CliError::package_invalid(format!(
+            "{}: mapping schema must be {MAA_SEMANTIC_MAPPING_SCHEMA}",
+            mapping_path.display()
+        )));
+    }
+    if mapping.facts_container.path != MAA_TASK_FACTS_DECLARED_PATH {
+        return Err(CliError::package_invalid(format!(
+            "{}: facts_container.path must be {MAA_TASK_FACTS_DECLARED_PATH}",
+            mapping_path.display()
+        )));
+    }
+    if mapping.facts_container.data_schema_version != MAA_TASK_FACTS_SCHEMA {
+        return Err(CliError::package_invalid(format!(
+            "{}: facts_container data schema must be {MAA_TASK_FACTS_SCHEMA}",
+            mapping_path.display()
+        )));
+    }
+    if mapping.facts_container.task_count != MAA_SEMANTIC_MAPPING_COUNT {
+        return Err(CliError::package_invalid(format!(
+            "{}: facts_container.task_count must be {MAA_SEMANTIC_MAPPING_COUNT}",
+            mapping_path.display()
+        )));
+    }
+    if mapping.mappings.len() != MAA_SEMANTIC_MAPPING_COUNT {
+        return Err(CliError::package_invalid(format!(
+            "{}: expected exactly {MAA_SEMANTIC_MAPPING_COUNT} mapping rows, found {}",
+            mapping_path.display(),
+            mapping.mappings.len()
+        )));
+    }
+
+    let facts_path = root.join(MAA_TASK_FACTS_PATH);
+    let facts_bytes = fs::read(&facts_path).map_err(|error| {
+        CliError::package_invalid(format!("failed to read {}: {error}", facts_path.display()))
+    })?;
+    let actual_sha256 = format!("{:x}", Sha256::digest(&facts_bytes));
+    if actual_sha256 != mapping.facts_container.sha256 {
+        return Err(CliError::package_invalid(format!(
+            "{}: A1 facts container SHA-256 mismatch",
+            facts_path.display()
+        )));
+    }
+    let facts: MaaTaskFactsEnvelope = serde_json::from_slice(&facts_bytes).map_err(|error| {
+        CliError::package_invalid(format!("failed to parse {}: {error}", facts_path.display()))
+    })?;
+    if facts.data.schema_version != MAA_TASK_FACTS_SCHEMA {
+        return Err(CliError::package_invalid(format!(
+            "{}: facts data schema must be {MAA_TASK_FACTS_SCHEMA}",
+            facts_path.display()
+        )));
+    }
+    if facts.data.tasks.len() != mapping.facts_container.task_count {
+        return Err(CliError::package_invalid(format!(
+            "{}: actual task count {} does not match facts_container.task_count {}",
+            facts_path.display(),
+            facts.data.tasks.len(),
+            mapping.facts_container.task_count
+        )));
+    }
+
+    let mut fact_ids = Vec::with_capacity(facts.data.tasks.len());
+    let mut unique_fact_ids = HashSet::with_capacity(facts.data.tasks.len());
+    for task in &facts.data.tasks {
+        let task_id = task.task_id.value.as_str();
+        if task_id.is_empty() {
+            return Err(CliError::package_invalid(format!(
+                "{}: A1 source_task_id must be non-empty",
+                facts_path.display()
+            )));
+        }
+        if !unique_fact_ids.insert(task_id) {
+            return Err(CliError::package_invalid(format!(
+                "{}: duplicate A1 source_task_id '{task_id}'",
+                facts_path.display()
+            )));
+        }
+        fact_ids.push(task_id);
+    }
+
+    let mut mapping_ids = HashSet::with_capacity(mapping.mappings.len());
+    for row in &mapping.mappings {
+        if !mapping_ids.insert(row.source_task_id.as_str()) {
+            return Err(CliError::package_invalid(format!(
+                "{}: duplicate source_task_id '{}'",
+                mapping_path.display(),
+                row.source_task_id
+            )));
+        }
+        if !unique_fact_ids.contains(row.source_task_id.as_str()) {
+            return Err(CliError::package_invalid(format!(
+                "{}: unknown source_task_id '{}'",
+                mapping_path.display(),
+                row.source_task_id
+            )));
+        }
+        if !MAA_PRODUCT_HEADINGS.contains(&row.product_heading.as_str()) {
+            return Err(CliError::package_invalid(format!(
+                "{}: unknown product_heading '{}'",
+                mapping_path.display(),
+                row.product_heading
+            )));
+        }
+        if !MAA_SEMANTIC_ROLES.contains(&row.role.as_str()) {
+            return Err(CliError::package_invalid(format!(
+                "{}: unknown role '{}'",
+                mapping_path.display(),
+                row.role
+            )));
+        }
+        if !is_exact_mapping_page_id(&row.page_id, game) {
+            return Err(CliError::package_invalid(format!(
+                "{}: invalid page_id '{}' for converter game '{game}'",
+                mapping_path.display(),
+                row.page_id
+            )));
+        }
+    }
+
+    if fact_ids
+        .iter()
+        .any(|task_id| !mapping_ids.contains(task_id))
+    {
+        return Err(CliError::package_invalid(format!(
+            "{}: mapping is missing an A1 source_task_id",
+            mapping_path.display()
+        )));
+    }
+    if let Some((index, (mapping_row, fact_id))) = mapping
+        .mappings
+        .iter()
+        .zip(fact_ids.iter())
+        .enumerate()
+        .find(|(_, (mapping_row, fact_id))| mapping_row.source_task_id.as_str() != **fact_id)
+    {
+        return Err(CliError::package_invalid(format!(
+            "{}: source_task_id ordinal order mismatch at row {index}: found '{}', expected '{}'",
+            mapping_path.display(),
+            mapping_row.source_task_id,
+            fact_id
+        )));
+    }
+    Ok(mapping.mappings.len())
+}
+
+fn is_exact_mapping_page_id(page_id: &str, game: &str) -> bool {
+    let Some((page_game, page)) = page_id.split_once('/') else {
+        return false;
+    };
+    !page.contains('/')
+        && page_game == game
+        && canonical_resource_identifier("mapping page game", page_game)
+            .is_ok_and(|value| value == page_game)
+        && canonical_resource_identifier("mapping page", page).is_ok_and(|value| value == page)
 }
 
 #[derive(Debug, Clone)]
