@@ -3378,7 +3378,8 @@ fn actinglab_unix_time_glue_stays_out_of_main() {
 
     let caller_files = [
         ("apps/actinglab/src/env_detection.rs", 1_usize),
-        ("apps/actinglab/src/main.rs", 4_usize),
+        ("apps/actinglab/src/main.rs", 0_usize),
+        ("apps/actinglab/src/commands/session_contracts.rs", 4_usize),
         ("apps/actinglab/src/commands/session_record.rs", 12_usize),
         ("apps/actinglab/src/tests/session_record.rs", 1_usize),
         ("apps/actinglab/src/runtime_session_adapter.rs", 1_usize),
@@ -3404,7 +3405,9 @@ fn actinglab_unix_time_glue_stays_out_of_main() {
                 .split_once(";\n")
                 .map(|(prefix, _)| prefix)
                 .expect("Unix time child import is missing");
-            let expected_import = if path == "apps/actinglab/src/commands/session_record.rs" {
+            let expected_import = if path == "apps/actinglab/src/commands/session_record.rs"
+                || path == "apps/actinglab/src/commands/session_contracts.rs"
+            {
                 "use crate::{"
             } else {
                 "use super::{"
@@ -3425,7 +3428,7 @@ fn actinglab_unix_time_glue_stays_out_of_main() {
     assert_eq!(call_count, 20, "Unix time caller closure changed");
     assert_eq!(
         format!("{:x}", Sha256::digest(caller_closure.as_bytes())),
-        "8d4d256c038e1e4a338c326a768400b8aecb79e2309b7efb3771363c7399ef52",
+        "e36fc6e37d7b29437f1acc773220bcfb9da7f7a07707b57f82ebeeae66b8ce5b",
         "Unix time caller source changed"
     );
 }

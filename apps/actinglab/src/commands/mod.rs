@@ -4,6 +4,7 @@ pub(super) mod environment_report;
 pub(super) mod navigation_recovery;
 pub(super) mod path_io;
 pub(super) mod semantic_ledger;
+pub(super) mod session_contracts;
 pub(super) mod session_record;
 
 #[cfg(test)]
@@ -40,6 +41,15 @@ pub(crate) use navigation_recovery::{
 pub(crate) use path_io::{JSON_TMP_SEQ, write_json_file};
 pub(crate) use path_io::{ensure_path_within, read_json_file, write_json_file_atomic};
 pub(crate) use semantic_ledger::{finish_semantic_result_with_ledger, semantic_ledger_context};
+#[cfg(test)]
+pub(crate) use session_contracts::{
+    SESSION_DAEMON_REQUEST_TIMEOUT_MS, SESSION_LEASE_STALE_MS, session_access_contract,
+    session_api_contract, session_capture_policy_payload, session_self_heal_policy_payload,
+};
+pub(crate) use session_contracts::{
+    run_session_api, run_session_capture_policy, run_session_contract, run_session_record_policy,
+    run_session_self_heal_policy, run_session_throat_policy,
+};
 #[cfg(test)]
 pub(crate) use session_record::{
     SessionRecordAnchorArtifact, SessionRecordAnchorBacktest, SessionRecordAnchorRegionResolution,
