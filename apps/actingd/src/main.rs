@@ -32,7 +32,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 const HEALTH_POLL_INTERVAL: Duration = Duration::from_millis(100);
 const POLICY_EVENT_WAIT_MS: u64 = 250;
-const POLICY_CLIENT_IO_TIMEOUT: Duration = Duration::from_secs(1);
+const POLICY_CLIENT_IO_TIMEOUT: Duration = Duration::from_secs(5);
 const MAX_POLICY_CYCLE_DURATION: Duration = Duration::from_secs(10 * 60);
 
 fn main() -> ExitCode {

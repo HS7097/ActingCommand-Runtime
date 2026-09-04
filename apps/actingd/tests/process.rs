@@ -1768,7 +1768,12 @@ fn actingd_exposes_typed_planning_capabilities_to_a_separate_client_process() {
     let child = start_actingd(&config_path);
     let mut child = ChildGuard(child);
     wait_for_runtime_info(&mut child.0, root.path());
-    let client = connect_agent(root.path());
+    let client = RuntimeClient::connect(RuntimeClientConfig::new(
+        root.path(),
+        EventActor::Agent,
+        EventSource::Adapter,
+    ))
+    .expect("connect agent runtime");
     let identity = client
         .project_policy_input_identity(evidence_sequence)
         .expect("project policy input identity through daemon IPC");
