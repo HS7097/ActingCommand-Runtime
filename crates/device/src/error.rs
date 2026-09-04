@@ -138,7 +138,7 @@ impl DeviceErrorContext {
 #[derive(Clone)]
 enum StoredDiagnosticMessage {
     Fixed(DeviceErrorDiagnosticMessage),
-    NemuResolution(Box<(NemuResolutionContext, String)>),
+    NemuResolution(NemuResolutionContext, String),
 }
 
 #[derive(Clone)]
@@ -147,7 +147,7 @@ pub struct DeviceError {
     message: String,
     diagnostic: Option<DeviceErrorDiagnostic>,
     context: Option<DeviceErrorContext>,
-    diagnostic_message: Option<StoredDiagnosticMessage>,
+    diagnostic_message: Option<Box<StoredDiagnosticMessage>>,
 }
 
 impl DeviceError {
@@ -233,7 +233,7 @@ impl DeviceError {
     }
 
     pub fn with_diagnostic_message(mut self, message: DeviceErrorDiagnosticMessage) -> Self {
-        self.diagnostic_message = Some(StoredDiagnosticMessage::Fixed(message));
+        self.diagnostic_message = Some(Box::new(StoredDiagnosticMessage::Fixed(message)));
         self
     }
 
@@ -244,10 +244,10 @@ impl DeviceError {
         if self.diagnostic_message.is_none()
             && !(self.diagnostic.is_some() && self.context.is_some())
         {
-            self.diagnostic_message = Some(StoredDiagnosticMessage::NemuResolution(Box::new((
+            self.diagnostic_message = Some(Box::new(StoredDiagnosticMessage::NemuResolution(
                 context,
                 context.render(),
-            ))));
+            )));
         }
         self
     }
@@ -258,9 +258,9 @@ impl DeviceError {
         explicit_root: bool,
         explicit_dll: bool,
     ) -> Self {
-        if let Some(StoredDiagnosticMessage::NemuResolution(stored)) = &mut self.diagnostic_message
+        if let Some(StoredDiagnosticMessage::NemuResolution(context, rendered)) =
+            self.diagnostic_message.as_deref_mut()
         {
-            let (context, rendered) = stored.as_mut();
             *context = context.with_provenance(configured_adb, explicit_root, explicit_dll);
             *rendered = context.render();
         }
@@ -268,8 +268,8 @@ impl DeviceError {
     }
 
     pub fn nemu_resolution_context(&self) -> Option<NemuResolutionContext> {
-        match &self.diagnostic_message {
-            Some(StoredDiagnosticMessage::NemuResolution(stored)) => Some(stored.0),
+        match self.diagnostic_message.as_deref() {
+            Some(StoredDiagnosticMessage::NemuResolution(context, _)) => Some(*context),
             _ => None,
         }
     }
@@ -305,9 +305,9 @@ impl DeviceError {
     }
 
     pub fn diagnostic_message(&self) -> Option<&str> {
-        match &self.diagnostic_message {
+        match self.diagnostic_message.as_deref() {
             Some(StoredDiagnosticMessage::Fixed(message)) => Some(message.as_str()),
-            Some(StoredDiagnosticMessage::NemuResolution(stored)) => Some(&stored.1),
+            Some(StoredDiagnosticMessage::NemuResolution(_, rendered)) => Some(rendered),
             None => None,
         }
     }
