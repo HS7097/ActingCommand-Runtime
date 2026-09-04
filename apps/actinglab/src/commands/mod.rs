@@ -4,6 +4,7 @@ pub(super) mod environment_report;
 pub(super) mod navigation_recovery;
 pub(super) mod path_io;
 pub(super) mod semantic_ledger;
+pub(super) mod session_record;
 
 #[cfg(test)]
 pub(crate) use capabilities::session_layer_capability_contract;
@@ -39,3 +40,12 @@ pub(crate) use navigation_recovery::{
 pub(crate) use path_io::{JSON_TMP_SEQ, write_json_file};
 pub(crate) use path_io::{ensure_path_within, read_json_file, write_json_file_atomic};
 pub(crate) use semantic_ledger::{finish_semantic_result_with_ledger, semantic_ledger_context};
+#[cfg(test)]
+pub(crate) use session_record::{
+    SessionRecordAnchorArtifact, SessionRecordAnchorBacktest, SessionRecordAnchorRegionResolution,
+    SessionRecordContext, SessionRecordFrameProvenance, SessionRecordSourceFrame,
+    SessionRecordStep, SessionRecordStepData, SessionRecordStepEvaluation, find_drift_amend_step,
+    materialize_anchor_artifact_from_source, parse_session_record_drift_diagnostics,
+    session_record_build_draft,
+};
+pub(crate) use session_record::{SessionRecordRect, SessionRecordRegion, run_session_record};
