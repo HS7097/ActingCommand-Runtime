@@ -182,6 +182,14 @@ impl EventIndexes {
 pub(super) fn project(event: &PersistedEvent, profile: ProjectionProfile) -> ProjectedEvent {
     let (payload, include_object_key) = match profile {
         ProjectionProfile::Cli | ProjectionProfile::Concise => (ProjectionPayload::Omitted, false),
+        ProjectionProfile::Lab | ProjectionProfile::Verbose
+            if event.event_type() == EventType::RuntimeLifecycleObserved =>
+        {
+            (
+                ProjectionPayload::Public(Box::new(event.payload().public_projection())),
+                false,
+            )
+        }
         ProjectionProfile::Ui | ProjectionProfile::Normal => (
             ProjectionPayload::Public(Box::new(event.payload().public_projection())),
             false,
