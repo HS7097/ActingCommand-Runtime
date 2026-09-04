@@ -134,6 +134,7 @@ struct FakeState {
     open_count: AtomicUsize,
     input_count: AtomicUsize,
     close_count: AtomicUsize,
+    close_error: std::sync::Mutex<Option<DeviceError>>,
     fail_input: AtomicBool,
     input_error: std::sync::Mutex<Option<DeviceError>>,
     block_input: AtomicBool,
@@ -260,6 +261,9 @@ impl InputBackend for FakeBackend {
         if !self.closed {
             self.closed = true;
             self.state.close_count.fetch_add(1, Ordering::AcqRel);
+            if let Some(error) = self.state.close_error.lock().expect("close error").as_ref() {
+                return Err(error.clone());
+            }
         }
         Ok(())
     }
@@ -13182,6 +13186,285 @@ fn input_failure_preserves_device_diagnostic_detail_in_global_ledger() {
     drop(client);
     assert!(host.fatal_error().expect("runtime health").is_none());
     host.close().expect("close host");
+}
+
+// Task Contract: Workflow #257 / C1B7. Test class: specification criterion.
+#[test]
+fn required_failure_events_preserve_cleanup_detail() {
+    use actingcommand_contract::{
+        CleanupCauseSeverity, DiagnosticOutcomePayload, PublicEventPayload,
+    };
+
+    for capture in [false, true] {
+        let mut baseline_types = None;
+        let mut baseline_outcome = None;
+        for cleanup_detail in [None, Some(false), Some(true)] {
+            let root = TempDir::new().expect("tempdir");
+            let state = Arc::new(FakeState::default());
+            let host = host_with_state(&root, "node.a", Arc::clone(&state));
+            let mut client = TestClient::connect(&host);
+            let (_, token) = client.acquire("node.a");
+            if capture {
+                let prime = client.request(RuntimeOperation::Input {
+                    token: token.clone(),
+                    action: InputAction::Reset,
+                });
+                assert_eq!(client.send(&prime).state(), RuntimeReceiptState::Completed);
+                state.fail_capture.store(true, Ordering::Release);
+                state
+                    .transient_capture_failure
+                    .store(true, Ordering::Release);
+            } else {
+                *state.input_error.lock().expect("input error") = Some(
+                    DeviceError::transient("primary bounded input context")
+                        .with_diagnostic(DeviceErrorCategory::Protocol, "adb.input.operation")
+                        .with_diagnostic_context(
+                            "adb_shell_input",
+                            "reset",
+                            DeviceErrorSensitivity::Internal,
+                        ),
+                );
+            }
+            if let Some(has_detail) = cleanup_detail {
+                let mut error = DeviceError::transient("unavailable private close text");
+                if has_detail {
+                    error = DeviceError::transient("exit_status=1 stderr=cleanup_failed")
+                        .with_diagnostic(DeviceErrorCategory::CommandFlush, "maatouch.stdin.flush")
+                        .with_diagnostic_context(
+                            "maatouch",
+                            "close",
+                            DeviceErrorSensitivity::Secret,
+                        );
+                }
+                *state.close_error.lock().expect("close error") = Some(error);
+            }
+            let correlation = client.ids.mint_correlation_id().expect("correlation");
+            let correlation_id = *correlation.transport();
+            let request = client.request_with_correlation(
+                correlation,
+                if capture {
+                    RuntimeOperation::ObserveReadonly {
+                        instance_alias: "node.a".to_owned(),
+                    }
+                } else {
+                    RuntimeOperation::Input {
+                        token,
+                        action: InputAction::Reset,
+                    }
+                },
+            );
+            let receipt = client.send(&request);
+            assert_eq!(receipt.state(), RuntimeReceiptState::Failed);
+            assert_eq!(
+                receipt.error_projection().expect("primary error").code,
+                if capture {
+                    RuntimeErrorCode::CaptureFailed
+                } else {
+                    RuntimeErrorCode::BackendOperationFailed
+                }
+            );
+            assert!(!receipt.error_projection().expect("transient failure").fatal);
+            let receipt_text = format!(
+                "{} {receipt:?}",
+                serde_json::to_string(&receipt).expect("receipt")
+            );
+            for private in [
+                "primary bounded input context",
+                "injected capture failure",
+                "cleanup_failed",
+                "unavailable private close text",
+            ] {
+                assert!(!receipt_text.contains(private));
+            }
+            let events = projected_events(
+                &mut client,
+                EventQuery {
+                    correlation_id: Some(correlation_id),
+                    ..EventQuery::default()
+                },
+            );
+            let types = events
+                .iter()
+                .map(|event| event.event_type)
+                .collect::<Vec<_>>();
+            if let Some(baseline) = &baseline_types {
+                assert_eq!(&types, baseline);
+            } else {
+                baseline_types = Some(types);
+            }
+            let requested = if capture {
+                EventType::CaptureRequested
+            } else {
+                EventType::InputIntent
+            };
+            let failed = if capture {
+                EventType::CaptureFailed
+            } else {
+                EventType::InputFailed
+            };
+            let flow = events
+                .iter()
+                .filter(|event| event.event_type == requested || event.event_type == failed)
+                .collect::<Vec<_>>();
+            assert_eq!(
+                flow.iter()
+                    .map(|event| event.event_type)
+                    .collect::<Vec<_>>(),
+                [requested, failed]
+            );
+            assert_eq!(flow[0].links, flow[1].links);
+            assert_eq!(flow[1].links.request_id(), Some(&request.request_id()));
+            assert_eq!(flow[1].links.correlation_id(), Some(&correlation_id));
+            if capture {
+                assert!(flow[1].links.frame_id().is_some());
+                let terminal = events
+                    .iter()
+                    .find(|event| event.event_type == EventType::RecognitionFailed)
+                    .expect("recognition terminal");
+                assert_eq!(
+                    receipt.terminal().expect("terminal").sequence,
+                    terminal.sequence
+                );
+            } else {
+                assert!(flow[1].links.action_id().is_some());
+                assert!(flow[1].links.lease_id().is_some());
+                assert_eq!(
+                    receipt.terminal().expect("terminal").sequence,
+                    flow[1].sequence
+                );
+            }
+            let ProjectionPayload::Full(payload) = &flow[1].payload else {
+                panic!("full failure payload")
+            };
+            payload.validate().expect("validated failure payload");
+            let outcome = match payload.as_ref() {
+                EventPayload::Input(InputPayload::Failed(outcome))
+                | EventPayload::Capture(CapturePayload::Failed(outcome)) => outcome,
+                _ => panic!("input or capture failure"),
+            };
+            let primary = outcome.detail().expect("primary detail");
+            assert_eq!(
+                primary.stage(),
+                if capture {
+                    "device_registry.capture.operation"
+                } else {
+                    "adb.input.operation"
+                }
+            );
+            assert_eq!(
+                primary.backend(),
+                if capture {
+                    "nemu_ipc"
+                } else {
+                    "adb_shell_input"
+                }
+            );
+            assert_eq!(
+                primary.operation(),
+                if capture { "capture" } else { "reset" }
+            );
+            assert_eq!(
+                outcome.effect_disposition(),
+                if capture {
+                    EffectDisposition::NotPerformed
+                } else {
+                    EffectDisposition::Indeterminate
+                }
+            );
+            assert_eq!(outcome.cleanup_cause().is_some(), cleanup_detail.is_some());
+            if let Some(cause) = outcome.cleanup_cause() {
+                assert_eq!(cause.code(), "input_backend_close_failed");
+                assert_eq!(cause.severity(), CleanupCauseSeverity::Transient);
+                assert_eq!(cause.detail().is_some(), cleanup_detail == Some(true));
+                if let Some(detail) = cause.detail() {
+                    assert_eq!(detail.category(), "command_flush");
+                    assert_eq!(detail.stage(), "maatouch.stdin.flush");
+                    assert_eq!(detail.backend(), "maatouch");
+                    assert_eq!(detail.operation(), "close");
+                    assert_eq!(detail.message(), "exit_status=1 stderr=cleanup_failed");
+                    assert_eq!(detail.declared_sensitivity(), Sensitivity::Secret);
+                    assert_eq!(flow[1].sensitivity, Sensitivity::Secret);
+                }
+            }
+            let mut serialized = serde_json::to_value(outcome).expect("outcome serialization");
+            let decoded: DiagnosticOutcomePayload =
+                serde_json::from_value(serialized.clone()).expect("typed reader");
+            assert_eq!(&decoded, outcome);
+            if cleanup_detail.is_none() {
+                assert!(serialized.get("cleanup_cause").is_none());
+                baseline_outcome = Some(serialized);
+            } else {
+                serialized
+                    .as_object_mut()
+                    .expect("outcome object")
+                    .remove("cleanup_cause");
+                assert_eq!(Some(&serialized), baseline_outcome.as_ref());
+            }
+            assert!(!format!("{outcome:?}").contains("cleanup_failed"));
+            let normal = client.request(RuntimeOperation::QueryEvents {
+                query: EventQuery {
+                    correlation_id: Some(correlation_id),
+                    ..EventQuery::default()
+                },
+                profile: ProjectionProfile::Normal,
+                page: RuntimeEventQueryPageRequest::new(128, None).expect("normal page"),
+            });
+            let normal_receipt = client.send(&normal);
+            let RuntimeResult::EventPage { page } = normal_receipt.result().expect("normal events")
+            else {
+                panic!("normal page")
+            };
+            let normal_failure = page
+                .events()
+                .iter()
+                .find(|event| event.event_type == failed)
+                .expect("normal failure");
+            let ProjectionPayload::Public(public) = &normal_failure.payload else {
+                panic!("normal public projection")
+            };
+            let public = match public.as_ref() {
+                PublicEventPayload::Input(value) | PublicEventPayload::Capture(value) => value,
+                _ => panic!("normal input/capture"),
+            };
+            assert_eq!(public.cleanup_cause().is_some(), cleanup_detail.is_some());
+            if let Some(cause) = public.cleanup_cause() {
+                assert_eq!(cause.code(), "input_backend_close_failed");
+                assert_eq!(cause.severity(), CleanupCauseSeverity::Transient);
+                assert!(cause.detail().is_none());
+            }
+            let normal_json = serde_json::to_string(&normal_receipt).expect("normal JSON");
+            for private in [
+                "primary bounded input context",
+                "injected capture failure",
+                "cleanup_failed",
+                "unavailable private close text",
+            ] {
+                assert!(!normal_json.contains(private));
+            }
+            assert_eq!(state.open_count.load(Ordering::Acquire), 1);
+            assert_eq!(state.input_actions.lock().expect("input calls").len(), 1);
+            assert_eq!(
+                state.input_count.load(Ordering::Acquire),
+                usize::from(capture)
+            );
+            assert_eq!(state.close_count.load(Ordering::Acquire), 1);
+            assert_eq!(
+                state.capture_open_count.load(Ordering::Acquire),
+                usize::from(capture)
+            );
+            assert_eq!(
+                state.capture_count.load(Ordering::Acquire),
+                usize::from(capture)
+            );
+            assert_eq!(
+                state.capture_close_count.load(Ordering::Acquire),
+                usize::from(capture)
+            );
+            assert!(host.fatal_error().expect("runtime health").is_none());
+            drop(client);
+            host.close().expect("close host");
+        }
+    }
 }
 
 #[test]

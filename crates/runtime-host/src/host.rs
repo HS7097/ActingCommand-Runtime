@@ -8013,21 +8013,14 @@ impl HostShared {
             DiagnosticCode::RecognitionFailed
         };
         if capture_failed {
-            let payload = match error.diagnostic_detail().cloned() {
-                Some(detail) => CapturePayloadDraft::failed_with_detail(
-                    EventAction::CaptureObserve,
-                    diagnostic,
-                    EffectDisposition::NotPerformed,
-                    detail,
-                    AuditInput::new(),
-                ),
-                None => CapturePayloadDraft::failed(
-                    EventAction::CaptureObserve,
-                    diagnostic,
-                    EffectDisposition::NotPerformed,
-                    AuditInput::new(),
-                ),
-            };
+            let payload = CapturePayloadDraft::failed_with_causes(
+                EventAction::CaptureObserve,
+                diagnostic,
+                EffectDisposition::NotPerformed,
+                error.diagnostic_detail().cloned(),
+                error.cleanup_cause().cloned(),
+                AuditInput::new(),
+            );
             self.append_event_raw(
                 EventSeverity::Error,
                 EventSource::Device,
@@ -9829,21 +9822,14 @@ impl HostShared {
             Ok(frame) => frame,
             Err(error) => {
                 let runtime_error = RuntimeHostError::execution("execute_capture_backend", &error);
-                let payload = match runtime_error.diagnostic_detail().cloned() {
-                    Some(detail) => CapturePayloadDraft::failed_with_detail(
-                        EventAction::CaptureObserve,
-                        DiagnosticCode::CaptureFailed,
-                        EffectDisposition::NotPerformed,
-                        detail,
-                        AuditInput::new(),
-                    ),
-                    None => CapturePayloadDraft::failed(
-                        EventAction::CaptureObserve,
-                        DiagnosticCode::CaptureFailed,
-                        EffectDisposition::NotPerformed,
-                        AuditInput::new(),
-                    ),
-                };
+                let payload = CapturePayloadDraft::failed_with_causes(
+                    EventAction::CaptureObserve,
+                    DiagnosticCode::CaptureFailed,
+                    EffectDisposition::NotPerformed,
+                    runtime_error.diagnostic_detail().cloned(),
+                    runtime_error.cleanup_cause().cloned(),
+                    AuditInput::new(),
+                );
                 self.append_event(
                     EventSeverity::Error,
                     EventSource::Device,
@@ -12269,18 +12255,14 @@ impl HostShared {
             },
             |error, effect| {
                 let audit = execution_audit(execution_provenance, &endpoint);
-                let payload = match error.error.diagnostic_detail().cloned() {
-                    Some(detail) => InputPayloadDraft::failed_with_detail(
-                        event_action,
-                        error.diagnostic,
-                        effect,
-                        detail,
-                        audit,
-                    ),
-                    None => {
-                        InputPayloadDraft::failed(event_action, error.diagnostic, effect, audit)
-                    }
-                };
+                let payload = InputPayloadDraft::failed_with_causes(
+                    event_action,
+                    error.diagnostic,
+                    effect,
+                    error.error.diagnostic_detail().cloned(),
+                    error.error.cleanup_cause().cloned(),
+                    audit,
+                );
                 self.events
                     .draft(
                         EventSeverity::Error,
@@ -15126,21 +15108,14 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
             Err(error) => {
                 let runtime_error =
                     RuntimeHostError::execution("run_contained_task_capture", &error);
-                let payload = match runtime_error.diagnostic_detail().cloned() {
-                    Some(detail) => CapturePayloadDraft::failed_with_detail(
-                        EventAction::CaptureObserve,
-                        DiagnosticCode::CaptureFailed,
-                        EffectDisposition::NotPerformed,
-                        detail,
-                        AuditInput::new(),
-                    ),
-                    None => CapturePayloadDraft::failed(
-                        EventAction::CaptureObserve,
-                        DiagnosticCode::CaptureFailed,
-                        EffectDisposition::NotPerformed,
-                        AuditInput::new(),
-                    ),
-                };
+                let payload = CapturePayloadDraft::failed_with_causes(
+                    EventAction::CaptureObserve,
+                    DiagnosticCode::CaptureFailed,
+                    EffectDisposition::NotPerformed,
+                    runtime_error.diagnostic_detail().cloned(),
+                    runtime_error.cleanup_cause().cloned(),
+                    AuditInput::new(),
+                );
                 let failed = self.host.append_event(
                     EventSeverity::Error,
                     source,

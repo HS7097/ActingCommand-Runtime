@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
-use actingcommand_contract::{DiagnosticDetailDraft, Sensitivity};
+use actingcommand_contract::{
+    CleanupCauseDraft, CleanupCauseSeverity, DiagnosticDetailDraft, Sensitivity,
+};
 use actingcommand_device::{DeviceError, DeviceErrorSensitivity, DeviceErrorSeverity};
 use std::error::Error;
 use std::fmt;
@@ -13,6 +15,7 @@ pub struct ExecutionKernelError {
     secondary_code: Option<&'static str>,
     device_severity: Option<DeviceErrorSeverity>,
     diagnostic_detail: Option<Box<DiagnosticDetailDraft>>,
+    cleanup_cause: Option<Box<CleanupCauseDraft>>,
 }
 
 impl ExecutionKernelError {
@@ -22,6 +25,7 @@ impl ExecutionKernelError {
             secondary_code: None,
             device_severity: None,
             diagnostic_detail: None,
+            cleanup_cause: None,
         }
     }
 
@@ -31,10 +35,14 @@ impl ExecutionKernelError {
             secondary_code: None,
             device_severity: Some(error.severity()),
             diagnostic_detail: device_diagnostic_detail(error),
+            cleanup_cause: None,
         }
     }
 
-    pub(crate) fn merge(primary: Self, secondary: Self) -> Self {
+    pub(crate) fn merge(mut primary: Self, mut secondary: Self) -> Self {
+        if primary.cleanup_cause.is_none() {
+            primary.cleanup_cause = secondary.cleanup_cause.take();
+        }
         if primary.code == secondary.code
             && primary.secondary_code == secondary.secondary_code
             && primary.device_severity == secondary.device_severity
@@ -46,7 +54,23 @@ impl ExecutionKernelError {
             secondary_code: Some(secondary.code),
             device_severity: merge_severity(primary.device_severity, secondary.device_severity),
             diagnostic_detail: primary.diagnostic_detail,
+            cleanup_cause: primary.cleanup_cause,
         }
+    }
+
+    pub(crate) fn merge_cleanup(mut primary: Self, secondary: Self) -> Self {
+        if primary.cleanup_cause.is_none() {
+            primary.cleanup_cause = Some(Box::new(CleanupCauseDraft::new(
+                secondary.code,
+                if secondary.is_fatal() {
+                    CleanupCauseSeverity::Fatal
+                } else {
+                    CleanupCauseSeverity::Transient
+                },
+                secondary.diagnostic_detail().cloned(),
+            )));
+        }
+        Self::merge(primary, secondary)
     }
 
     pub const fn code(&self) -> &'static str {
@@ -63,6 +87,10 @@ impl ExecutionKernelError {
 
     pub fn diagnostic_detail(&self) -> Option<&DiagnosticDetailDraft> {
         self.diagnostic_detail.as_deref()
+    }
+
+    pub fn cleanup_cause(&self) -> Option<&CleanupCauseDraft> {
+        self.cleanup_cause.as_deref()
     }
 
     pub const fn is_fatal(&self) -> bool {

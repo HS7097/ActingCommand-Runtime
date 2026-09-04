@@ -714,6 +714,89 @@ fn validate_diagnostic_detail(
     Ok(())
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CleanupCauseSeverity {
+    Transient,
+    Fatal,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CleanupCauseDraft {
+    code: String,
+    severity: CleanupCauseSeverity,
+    detail: Option<DiagnosticDetailDraft>,
+}
+
+impl CleanupCauseDraft {
+    pub fn new(
+        code: impl Into<String>,
+        severity: CleanupCauseSeverity,
+        detail: Option<DiagnosticDetailDraft>,
+    ) -> Self {
+        Self {
+            code: code.into(),
+            severity,
+            detail,
+        }
+    }
+
+    pub fn code(&self) -> &str {
+        &self.code
+    }
+
+    pub const fn severity(&self) -> CleanupCauseSeverity {
+        self.severity
+    }
+
+    pub const fn detail(&self) -> Option<&DiagnosticDetailDraft> {
+        self.detail.as_ref()
+    }
+
+    fn sanitize(self) -> Result<CleanupCauseRecord, SanitizationError> {
+        validate_diagnostic_detail_token(&self.code, "cleanup_code")?;
+        Ok(CleanupCauseRecord {
+            code: self.code,
+            severity: self.severity,
+            detail: self
+                .detail
+                .map(DiagnosticDetailDraft::sanitize)
+                .transpose()?,
+        })
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CleanupCauseRecord {
+    code: String,
+    severity: CleanupCauseSeverity,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    detail: Option<DiagnosticDetailRecord>,
+}
+
+impl CleanupCauseRecord {
+    pub fn code(&self) -> &str {
+        &self.code
+    }
+
+    pub const fn severity(&self) -> CleanupCauseSeverity {
+        self.severity
+    }
+
+    pub const fn detail(&self) -> Option<&DiagnosticDetailRecord> {
+        self.detail.as_ref()
+    }
+
+    fn validate(&self) -> Result<(), SanitizationError> {
+        validate_diagnostic_detail_token(&self.code, "cleanup_code")?;
+        if let Some(detail) = &self.detail {
+            detail.validate()?;
+        }
+        Ok(())
+    }
+}
+
 fn validate_diagnostic_detail_token(
     value: &str,
     field: &'static str,
@@ -819,6 +902,8 @@ pub struct DiagnosticOutcomePayload {
     effect_disposition: EffectDisposition,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     detail: Option<DiagnosticDetailRecord>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    cleanup_cause: Option<Box<CleanupCauseRecord>>,
     audit: SanitizedAudit,
 }
 
@@ -2886,6 +2971,10 @@ trait PayloadDetail {
     fn diagnostic_detail(&self) -> Option<&DiagnosticDetailRecord> {
         None
     }
+
+    fn cleanup_cause(&self) -> Option<&CleanupCauseRecord> {
+        None
+    }
 }
 
 macro_rules! common_detail_accessors {
@@ -3109,6 +3198,10 @@ impl DiagnosticOutcomePayload {
 
     pub const fn detail(&self) -> Option<&DiagnosticDetailRecord> {
         self.detail.as_ref()
+    }
+
+    pub fn cleanup_cause(&self) -> Option<&CleanupCauseRecord> {
+        self.cleanup_cause.as_deref()
     }
 }
 
@@ -3397,6 +3490,10 @@ impl PayloadDetail for DiagnosticOutcomePayload {
 
     fn diagnostic_detail(&self) -> Option<&DiagnosticDetailRecord> {
         self.detail.as_ref()
+    }
+
+    fn cleanup_cause(&self) -> Option<&CleanupCauseRecord> {
+        self.cleanup_cause.as_deref()
     }
 }
 
@@ -3785,6 +3882,7 @@ struct DiagnosticOutcomeDraft {
     diagnostic_code: DiagnosticCode,
     effect_disposition: EffectDisposition,
     detail: Option<DiagnosticDetailDraft>,
+    cleanup_cause: Option<Box<CleanupCauseDraft>>,
     audit: AuditInput,
 }
 
@@ -5228,6 +5326,7 @@ impl DiagnosticOutcomeDraft {
             diagnostic_code,
             effect_disposition,
             detail: None,
+            cleanup_cause: None,
             audit,
         }
     }
@@ -5244,6 +5343,25 @@ impl DiagnosticOutcomeDraft {
             diagnostic_code,
             effect_disposition,
             detail: Some(detail),
+            cleanup_cause: None,
+            audit,
+        }
+    }
+
+    fn new_with_causes(
+        action: EventAction,
+        diagnostic_code: DiagnosticCode,
+        effect_disposition: EffectDisposition,
+        detail: Option<DiagnosticDetailDraft>,
+        cleanup_cause: Option<CleanupCauseDraft>,
+        audit: AuditInput,
+    ) -> Self {
+        Self {
+            action,
+            diagnostic_code,
+            effect_disposition,
+            detail,
+            cleanup_cause: cleanup_cause.map(Box::new),
             audit,
         }
     }
@@ -5259,6 +5377,10 @@ impl DiagnosticOutcomeDraft {
             detail: self
                 .detail
                 .map(DiagnosticDetailDraft::sanitize)
+                .transpose()?,
+            cleanup_cause: self
+                .cleanup_cause
+                .map(|cause| cause.sanitize().map(Box::new))
                 .transpose()?,
             audit: self.audit.sanitize(fingerprinter)?,
         })
@@ -6052,6 +6174,26 @@ impl InputPayloadDraft {
             DiagnosticOutcomeDraft::new_with_detail(action, diagnostic_code, effect, detail, audit),
         ))
     }
+
+    pub fn failed_with_causes(
+        action: EventAction,
+        diagnostic_code: DiagnosticCode,
+        effect: EffectDisposition,
+        detail: Option<DiagnosticDetailDraft>,
+        cleanup_cause: Option<CleanupCauseDraft>,
+        audit: AuditInput,
+    ) -> Self {
+        Self(InputDraftKind::Failed(
+            DiagnosticOutcomeDraft::new_with_causes(
+                action,
+                diagnostic_code,
+                effect,
+                detail,
+                cleanup_cause,
+                audit,
+            ),
+        ))
+    }
 }
 
 enum ApplicationDraftKind {
@@ -6149,6 +6291,26 @@ impl CapturePayloadDraft {
     ) -> Self {
         Self(CaptureDraftKind::Failed(
             DiagnosticOutcomeDraft::new_with_detail(action, diagnostic_code, effect, detail, audit),
+        ))
+    }
+
+    pub fn failed_with_causes(
+        action: EventAction,
+        diagnostic_code: DiagnosticCode,
+        effect: EffectDisposition,
+        detail: Option<DiagnosticDetailDraft>,
+        cleanup_cause: Option<CleanupCauseDraft>,
+        audit: AuditInput,
+    ) -> Self {
+        Self(CaptureDraftKind::Failed(
+            DiagnosticOutcomeDraft::new_with_causes(
+                action,
+                diagnostic_code,
+                effect,
+                detail,
+                cleanup_cause,
+                audit,
+            ),
         ))
     }
 
@@ -7782,6 +7944,9 @@ impl EventPayload {
         if let Some(diagnostic_detail) = detail.diagnostic_detail() {
             sensitivity = sensitivity.max(diagnostic_detail.declared_sensitivity());
         }
+        if let Some(cleanup_detail) = detail.cleanup_cause().and_then(CleanupCauseRecord::detail) {
+            sensitivity = sensitivity.max(cleanup_detail.declared_sensitivity());
+        }
         if matches!(
             self,
             Self::Performance(_) | Self::Runtime(RuntimePayload::LifecycleObserved(_))
@@ -7827,6 +7992,18 @@ impl EventPayload {
         detail.audit().validate()?;
         if let Some(diagnostic_detail) = detail.diagnostic_detail() {
             diagnostic_detail.validate()?;
+        }
+        if let Some(cleanup_cause) = detail.cleanup_cause() {
+            if !matches!(
+                self.event_type(),
+                EventType::InputFailed | EventType::CaptureFailed
+            ) {
+                return Err(SanitizationError::new(
+                    "invalid_cleanup_cause_owner",
+                    "cleanup_cause",
+                ));
+            }
+            cleanup_cause.validate()?;
         }
         if let Self::Runtime(RuntimePayload::LifecycleObserved(value)) = self
             && value.action != EventAction::RuntimeAction
@@ -7999,6 +8176,13 @@ impl EventPayload {
             event_type,
             action: detail.action(),
             effect_disposition: detail.effect_disposition(),
+            cleanup_cause: detail.cleanup_cause().map(|cause| {
+                Box::new(CleanupCauseRecord {
+                    code: cause.code.clone(),
+                    severity: cause.severity,
+                    detail: None,
+                })
+            }),
             segment_index: match self {
                 Self::Ledger(LedgerPayload::Recovered(value)) => value.segment_index,
                 _ => None,
@@ -8401,6 +8585,8 @@ pub struct PublicPayload {
     action: EventAction,
     #[serde(skip_serializing_if = "Option::is_none")]
     effect_disposition: Option<EffectDisposition>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    cleanup_cause: Option<Box<CleanupCauseRecord>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     segment_index: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -8538,6 +8724,10 @@ pub struct PublicPayload {
 }
 
 impl PublicPayload {
+    pub fn cleanup_cause(&self) -> Option<&CleanupCauseRecord> {
+        self.cleanup_cause.as_deref()
+    }
+
     pub const fn event_type(&self) -> EventType {
         self.event_type
     }
