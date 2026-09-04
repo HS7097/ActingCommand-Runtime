@@ -4514,6 +4514,9 @@ fn actinglab_parse_match_metric_flag_glue_stays_out_of_main() {
     let root = workspace_root();
     let main =
         fs::read_to_string(root.join("apps/actinglab/src/main.rs")).expect("read ActingLab main");
+    let navigation_recovery =
+        fs::read_to_string(root.join("apps/actinglab/src/commands/navigation_recovery.rs"))
+            .expect("read ActingLab navigation/recovery commands");
     let flag_values = fs::read_to_string(root.join("apps/actinglab/src/flag_values.rs"))
         .expect("read ActingLab flag values module");
 
@@ -4566,21 +4569,31 @@ fn actinglab_parse_match_metric_flag_glue_stays_out_of_main() {
     const AUTO_REGION_CALL: &str = "Some(parse_match_metric_flag(flags)?)";
     for (call, expected) in [(LOCATE_CALL, 1), (BACKTEST_CALL, 1), (AUTO_REGION_CALL, 1)] {
         assert_eq!(
-            main.matches(call).count(),
+            main.matches(call).count() + navigation_recovery.matches(call).count(),
             expected,
-            "ActingLab main changed an exact match-metric caller: {call}"
+            "ActingLab changed an exact match-metric caller: {call}"
         );
     }
-    let caller_rows = main
-        .lines()
-        .filter(|line| line.contains("parse_match_metric_flag("))
-        .map(|line| semantic_caller_row("apps/actinglab/src/main.rs", line))
-        .collect::<Vec<_>>();
+    let caller_rows = [
+        ("apps/actinglab/src/main.rs", main.as_str()),
+        (
+            "apps/actinglab/src/commands/navigation_recovery.rs",
+            navigation_recovery.as_str(),
+        ),
+    ]
+    .iter()
+    .flat_map(|(path, source)| {
+        source
+            .lines()
+            .filter(|line| line.contains("parse_match_metric_flag("))
+            .map(move |line| semantic_caller_row(path, line))
+    })
+    .collect::<Vec<_>>();
     assert_eq!(caller_rows.len(), 3, "match-metric caller set changed");
     let caller_serialization = caller_rows.concat();
     assert_eq!(
         format!("{:x}", Sha256::digest(caller_serialization.as_bytes())),
-        "c015602ad2de55d4930f14e1bb68105a57693a094e43838609afc586a626273b",
+        "c9fc27babc77604fa25ecf0b9037a9849cb0399d7c3176d154d3ef8d0d31e850",
         "match-metric caller serialization changed"
     );
 
