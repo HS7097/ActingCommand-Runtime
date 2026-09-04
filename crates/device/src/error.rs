@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
+use crate::{NemuConfiguredAdbClass, NemuResolutionContext};
 use std::error::Error;
 use std::fmt;
 
@@ -135,12 +136,18 @@ impl DeviceErrorContext {
 }
 
 #[derive(Clone)]
+enum StoredDiagnosticMessage {
+    Fixed(DeviceErrorDiagnosticMessage),
+    NemuResolution(NemuResolutionContext, String),
+}
+
+#[derive(Clone)]
 pub struct DeviceError {
     severity: DeviceErrorSeverity,
     message: String,
     diagnostic: Option<DeviceErrorDiagnostic>,
     context: Option<DeviceErrorContext>,
-    diagnostic_message: Option<DeviceErrorDiagnosticMessage>,
+    diagnostic_message: Option<StoredDiagnosticMessage>,
 }
 
 impl DeviceError {
@@ -226,8 +233,45 @@ impl DeviceError {
     }
 
     pub fn with_diagnostic_message(mut self, message: DeviceErrorDiagnosticMessage) -> Self {
-        self.diagnostic_message = Some(message);
+        self.diagnostic_message = Some(StoredDiagnosticMessage::Fixed(message));
         self
+    }
+
+    pub fn with_nemu_resolution_context_if_absent(
+        mut self,
+        context: NemuResolutionContext,
+    ) -> Self {
+        if self.diagnostic_message.is_none()
+            && !(self.diagnostic.is_some() && self.context.is_some())
+        {
+            self.diagnostic_message = Some(StoredDiagnosticMessage::NemuResolution(
+                context,
+                context.render(),
+            ));
+        }
+        self
+    }
+
+    pub(crate) fn with_nemu_resolution_provenance(
+        mut self,
+        configured_adb: Option<NemuConfiguredAdbClass>,
+        explicit_root: bool,
+        explicit_dll: bool,
+    ) -> Self {
+        if let Some(StoredDiagnosticMessage::NemuResolution(context, rendered)) =
+            &mut self.diagnostic_message
+        {
+            *context = context.with_provenance(configured_adb, explicit_root, explicit_dll);
+            *rendered = context.render();
+        }
+        self
+    }
+
+    pub fn nemu_resolution_context(&self) -> Option<NemuResolutionContext> {
+        match &self.diagnostic_message {
+            Some(StoredDiagnosticMessage::NemuResolution(context, _)) => Some(*context),
+            _ => None,
+        }
     }
 
     pub fn with_severity_and_message(
@@ -261,8 +305,11 @@ impl DeviceError {
     }
 
     pub fn diagnostic_message(&self) -> Option<&str> {
-        self.diagnostic_message
-            .map(DeviceErrorDiagnosticMessage::as_str)
+        match &self.diagnostic_message {
+            Some(StoredDiagnosticMessage::Fixed(message)) => Some(message.as_str()),
+            Some(StoredDiagnosticMessage::NemuResolution(_, rendered)) => Some(rendered),
+            None => None,
+        }
     }
 }
 
