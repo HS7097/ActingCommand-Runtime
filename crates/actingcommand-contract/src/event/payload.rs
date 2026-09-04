@@ -5474,6 +5474,7 @@ enum CommandDraftKind {
 enum RuntimeDraftKind {
     Started(ObservationDraft),
     Takeover(ObservationDraft),
+    Failed(DiagnosticOutcomeDraft),
 }
 
 pub struct RuntimePayloadDraft(RuntimeDraftKind);
@@ -5489,6 +5490,23 @@ impl RuntimePayloadDraft {
         Self(RuntimeDraftKind::Takeover(ObservationDraft::new(
             action, audit,
         )))
+    }
+
+    pub fn failed(
+        diagnostic_code: DiagnosticCode,
+        effect: EffectDisposition,
+        detail: DiagnosticDetailDraft,
+        audit: AuditInput,
+    ) -> Self {
+        Self(RuntimeDraftKind::Failed(
+            DiagnosticOutcomeDraft::new_with_detail(
+                EventAction::RuntimeAction,
+                diagnostic_code,
+                effect,
+                detail,
+                audit,
+            ),
+        ))
     }
 }
 
@@ -6742,6 +6760,7 @@ pub enum CommandPayload {
 pub enum RuntimePayload {
     Started(ObservationPayload),
     Takeover(ObservationPayload),
+    Failed(DiagnosticOutcomePayload),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -7070,6 +7089,7 @@ family_payload!(CommandPayload, {
 family_payload!(RuntimePayload, {
     Started => EventType::RuntimeStarted,
     Takeover => EventType::RuntimeTakeover,
+    Failed => EventType::RuntimeFailed,
 });
 family_payload!(MonitorPayload, {
     Requested => EventType::MonitorProbeRequested,
@@ -7273,6 +7293,9 @@ impl EventPayloadDraft {
                 }
                 RuntimeDraftKind::Takeover(detail) => {
                     RuntimePayload::Takeover(detail.sanitize(fingerprinter)?)
+                }
+                RuntimeDraftKind::Failed(detail) => {
+                    RuntimePayload::Failed(detail.sanitize(fingerprinter)?)
                 }
             }),
             Self::Monitor(value) => EventPayload::Monitor(match value.0 {

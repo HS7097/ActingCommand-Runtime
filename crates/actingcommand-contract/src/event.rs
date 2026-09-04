@@ -177,6 +177,8 @@ pub enum EventType {
     RuntimeStarted,
     #[serde(rename = "runtime.takeover")]
     RuntimeTakeover,
+    #[serde(rename = "runtime.failed")]
+    RuntimeFailed,
     #[serde(rename = "monitor.probe_requested")]
     MonitorProbeRequested,
     #[serde(rename = "monitor.probe_started")]
@@ -388,7 +390,9 @@ pub enum EventType {
 impl EventType {
     pub fn family(self) -> EventFamily {
         match self {
-            Self::RuntimeStarted | Self::RuntimeTakeover => EventFamily::Runtime,
+            Self::RuntimeStarted | Self::RuntimeTakeover | Self::RuntimeFailed => {
+                EventFamily::Runtime
+            }
             Self::MonitorProbeRequested
             | Self::MonitorProbeStarted
             | Self::MonitorProbeCompleted

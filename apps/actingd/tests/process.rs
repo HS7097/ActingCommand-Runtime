@@ -1796,7 +1796,38 @@ fn actingd_exposes_typed_planning_capabilities_to_a_separate_client_process() {
             17,
             ForwardProjectionConfig::for_hours(1, 32).expect("forward config"),
         )
-        .expect("project policy through daemon IPC");
+        .unwrap_or_else(|error| {
+            let events = RuntimeClient::connect(
+                RuntimeClientConfig::new(root.path(), EventActor::Agent, EventSource::Adapter)
+                    .with_io_timeout(Duration::from_millis(500)),
+            )
+            .and_then(|diagnostic_client| {
+                diagnostic_client.query_events(
+                    EventQuery {
+                        event_type: Some(EventType::RuntimeFailed),
+                        ..EventQuery::default()
+                    },
+                    ProjectionProfile::Forensic,
+                )
+            });
+            match events {
+                Ok(events) => {
+                    eprintln!("authoritative runtime.failed count={}", events.len());
+                    for event in events {
+                        match serde_json::to_string(&event) {
+                            Ok(event) => eprintln!("authoritative runtime.failed: {event}"),
+                            Err(query_error) => {
+                                eprintln!("ERROR serializing runtime.failed: {query_error}");
+                            }
+                        }
+                    }
+                }
+                Err(query_error) => {
+                    eprintln!("ERROR querying authoritative runtime.failed: {query_error:?}");
+                }
+            }
+            panic!("project policy through daemon IPC: {error:?}");
+        });
     assert_eq!(forward.catalog_version, base.catalog_version());
 
     let as_of_ledger_position = client

@@ -1723,7 +1723,7 @@ fn resource_authoring_event_revalidates_deserialized_fields_and_receipt_phase() 
 #[test]
 fn c3a_runtime_and_lease_renewal_events_are_typed() {
     let ids = issuer();
-    let cases: [(EventPayloadDraft, EventType); 3] = [
+    let cases: [(EventPayloadDraft, EventType); 4] = [
         (
             RuntimePayloadDraft::started(crate::EventAction::RuntimeStart, AuditInput::new())
                 .into(),
@@ -1733,6 +1733,23 @@ fn c3a_runtime_and_lease_renewal_events_are_typed() {
             RuntimePayloadDraft::takeover(crate::EventAction::RuntimeTakeover, AuditInput::new())
                 .into(),
             EventType::RuntimeTakeover,
+        ),
+        (
+            RuntimePayloadDraft::failed(
+                crate::DiagnosticCode::RuntimeProtocolInvalid,
+                EffectDisposition::Indeterminate,
+                crate::DiagnosticDetailDraft::new(
+                    "runtime_connection",
+                    "runtime.ipc.receipt_write",
+                    "local_ipc",
+                    "runtime_local_ipc",
+                    "host_code=runtime_frame_write_failed fatal=false connection_id=1 request_decoded=true",
+                    crate::Sensitivity::Internal,
+                ),
+                AuditInput::new(),
+            )
+            .into(),
+            EventType::RuntimeFailed,
         ),
         (
             LeasePayloadDraft::renewed(
@@ -1761,5 +1778,41 @@ fn c3a_runtime_and_lease_renewal_events_are_typed() {
         .expect("sanitize typed event");
         assert_eq!(draft.event_type(), expected);
         serde_json::to_string(&draft).expect("serialize typed event");
+        if expected == EventType::RuntimeFailed {
+            assert_eq!(draft.payload().sensitivity(), crate::Sensitivity::Internal);
+            let crate::EventPayload::Runtime(crate::RuntimePayload::Failed(outcome)) =
+                draft.payload()
+            else {
+                panic!("typed runtime failure")
+            };
+            assert_eq!(outcome.action(), crate::EventAction::RuntimeAction);
+            assert_eq!(
+                outcome.diagnostic_code(),
+                crate::DiagnosticCode::RuntimeProtocolInvalid
+            );
+            assert_eq!(
+                outcome.effect_disposition(),
+                EffectDisposition::Indeterminate
+            );
+            let detail = outcome.detail().expect("runtime failure detail");
+            assert_eq!(detail.category(), "runtime_connection");
+            assert_eq!(detail.stage(), "runtime.ipc.receipt_write");
+            assert_eq!(detail.backend(), "local_ipc");
+            assert_eq!(detail.operation(), "runtime_local_ipc");
+            assert_eq!(detail.declared_sensitivity(), crate::Sensitivity::Internal);
+            assert_eq!(
+                detail.message(),
+                "host_code=runtime_frame_write_failed fatal=false connection_id=1 request_decoded=true"
+            );
+            let stored = serde_json::to_value(draft.payload()).expect("runtime failure JSON");
+            let restored: crate::EventPayload =
+                serde_json::from_value(stored).expect("runtime failure round trip");
+            assert_eq!(&restored, draft.payload());
+            let public = serde_json::to_string(&draft.payload().public_projection())
+                .expect("runtime failure public projection");
+            assert!(public.contains("runtime.failed"));
+            assert!(!public.contains("runtime_connection"));
+            assert!(!public.contains(detail.message()));
+        }
     }
 }

@@ -50,36 +50,36 @@ use actingcommand_contract::{
     CatalogPromotionAuthorization, CatalogProposal, CatalogTransitionEventData, ClientActionRecord,
     ClientPayload, ClientPayloadDraft, CommandPayloadDraft, ContainedTaskCancellationReason,
     ContainedTaskCancellationStatus, ContainedTaskLeaseTerminal, ContainedTaskRequest,
-    CorrelationId, DiagnosticCode, EffectDisposition, EventAction, EventActor, EventDraft, EventId,
-    EventLinksDraft, EventPayload, EventQuery, EventSeverity, EventSource, EventType,
-    FactPayloadDraft, FactRecord, FrameId, InputAction, InputExecutionPlanEvent,
-    InputExecutionPlanRecord, InputPayload, InputPayloadDraft, InstanceFactContext,
-    InstanceFactSnapshot, InstanceId, IssuedActionId, IssuedFrameId, IssuedMonitorProbe,
-    IssuedReadOnlyCaptureCapability, IssuedRecognitionId, IssuedRunId, IssuedTaskId, LeaseId,
-    LeasePayloadDraft, LeaseQueuePolicy, LeaseToken, MAX_GOVERNANCE_CAPABILITY_BYTES,
-    MAX_INSTANCE_ALIAS_BYTES, MIN_GOVERNANCE_CAPABILITY_BYTES, MonitorPayloadDraft,
-    MonitorRecoveryCoordinationReason, OriginModule, PackageDebugLayout, PackageDebugRequest,
-    PackageDebugSummary, PerformanceContext, PerformancePayloadDraft, PinnedFrameReason,
-    PolicyDispatchEventData, PolicyExecutionEventData, PolicyExecutionOutcome, PolicyFailureClass,
-    PolicyPayload, PolicyPayloadDraft, PolicyPlanningSignalEventData, PolicyReasonRecord,
-    ProjectDecisionPageRequest, ProjectInterfaceRequest, ProjectedArtifactReference,
-    ProjectionPayload, ProposalClass, ProposalPromotion, RUNTIME_INFO_FILE, ReadonlyObservation,
-    RecognitionPayloadDraft, RecognitionVerdict, ReleasePayload, ReleasePayloadDraft,
-    ReleaseTransitionKind, RequestId, ResourceAuthoringEvent, ResourceAuthoringPayloadDraft,
-    ResourceAuthoringPhase, RetentionClass, RunId, RuntimeCaptureBackend, RuntimeContractError,
-    RuntimeControlPlaneStatus, RuntimeDebugEvent, RuntimeDebugOperation, RuntimeDebugPhase,
-    RuntimeErrorCode, RuntimeErrorProjection, RuntimeEventBatch, RuntimeEventQueryCursor,
-    RuntimeEventQueryPage, RuntimeEventQueryPageRequest, RuntimeEvidenceExportRequest,
-    RuntimeEvidenceExportSummary, RuntimeEvidenceScreenshotCounts, RuntimeInfo,
-    RuntimeInstanceStatus, RuntimeMaintenanceQuery, RuntimeMonitorPolicy, RuntimeOperation,
-    RuntimePayloadDraft, RuntimePlanningDocument, RuntimePlanningDocumentKind,
-    RuntimePolicyInputIdentity, RuntimeReceipt, RuntimeReceiptState, RuntimeReleaseSet,
-    RuntimeRequest, RuntimeResult, RuntimeStrategicPlanResult, RuntimeSubscriptionRequest,
-    SchedulerPayloadDraft, SchedulingDisposition, SchedulingEffectCondition,
-    SchedulingEffectEvidence, SchedulingOutcomeDeclaration, SchedulingOutcomeIdentity,
-    SchedulingOutcomeProjection, StatePayload, StatePayloadDraft, TaskEntryRecognitionPhase,
-    TaskEntryTargetDisposition, TaskId, TaskOutcome, TaskPayload, TaskPayloadDraft,
-    TaskSemanticFact, TerminalEvent, ValidatedRuntimeRequest,
+    CorrelationId, DiagnosticCode, DiagnosticDetailDraft, EffectDisposition, EventAction,
+    EventActor, EventDraft, EventId, EventLinksDraft, EventPayload, EventQuery, EventSeverity,
+    EventSource, EventType, FactPayloadDraft, FactRecord, FrameId, InputAction,
+    InputExecutionPlanEvent, InputExecutionPlanRecord, InputPayload, InputPayloadDraft,
+    InstanceFactContext, InstanceFactSnapshot, InstanceId, IssuedActionId, IssuedFrameId,
+    IssuedMonitorProbe, IssuedReadOnlyCaptureCapability, IssuedRecognitionId, IssuedRunId,
+    IssuedTaskId, LeaseId, LeasePayloadDraft, LeaseQueuePolicy, LeaseToken,
+    MAX_GOVERNANCE_CAPABILITY_BYTES, MAX_INSTANCE_ALIAS_BYTES, MIN_GOVERNANCE_CAPABILITY_BYTES,
+    MonitorPayloadDraft, MonitorRecoveryCoordinationReason, OriginModule, PackageDebugLayout,
+    PackageDebugRequest, PackageDebugSummary, PerformanceContext, PerformancePayloadDraft,
+    PinnedFrameReason, PolicyDispatchEventData, PolicyExecutionEventData, PolicyExecutionOutcome,
+    PolicyFailureClass, PolicyPayload, PolicyPayloadDraft, PolicyPlanningSignalEventData,
+    PolicyReasonRecord, ProjectDecisionPageRequest, ProjectInterfaceRequest,
+    ProjectedArtifactReference, ProjectionPayload, ProposalClass, ProposalPromotion,
+    RUNTIME_INFO_FILE, ReadonlyObservation, RecognitionPayloadDraft, RecognitionVerdict,
+    ReleasePayload, ReleasePayloadDraft, ReleaseTransitionKind, RequestId, ResourceAuthoringEvent,
+    ResourceAuthoringPayloadDraft, ResourceAuthoringPhase, RetentionClass, RunId,
+    RuntimeCaptureBackend, RuntimeContractError, RuntimeControlPlaneStatus, RuntimeDebugEvent,
+    RuntimeDebugOperation, RuntimeDebugPhase, RuntimeErrorCode, RuntimeErrorProjection,
+    RuntimeEventBatch, RuntimeEventQueryCursor, RuntimeEventQueryPage,
+    RuntimeEventQueryPageRequest, RuntimeEvidenceExportRequest, RuntimeEvidenceExportSummary,
+    RuntimeEvidenceScreenshotCounts, RuntimeInfo, RuntimeInstanceStatus, RuntimeMaintenanceQuery,
+    RuntimeMonitorPolicy, RuntimeOperation, RuntimePayloadDraft, RuntimePlanningDocument,
+    RuntimePlanningDocumentKind, RuntimePolicyInputIdentity, RuntimeReceipt, RuntimeReceiptState,
+    RuntimeReleaseSet, RuntimeRequest, RuntimeResult, RuntimeStrategicPlanResult,
+    RuntimeSubscriptionRequest, SchedulerPayloadDraft, SchedulingDisposition,
+    SchedulingEffectCondition, SchedulingEffectEvidence, SchedulingOutcomeDeclaration,
+    SchedulingOutcomeIdentity, SchedulingOutcomeProjection, Sensitivity, StatePayload,
+    StatePayloadDraft, TaskEntryRecognitionPhase, TaskEntryTargetDisposition, TaskId, TaskOutcome,
+    TaskPayload, TaskPayloadDraft, TaskSemanticFact, TerminalEvent, ValidatedRuntimeRequest,
 };
 use actingcommand_device::{CaptureBackendName, Frame, SegmentedSwipeEvent};
 use actingcommand_execution_kernel::{
@@ -13494,6 +13494,51 @@ impl HostShared {
             })
     }
 
+    fn append_connection_failure(
+        &self,
+        context: &ConnectionFailureContext,
+        stage: ConnectionFailureStage,
+        error: &RuntimeHostError,
+    ) -> RuntimeHostResult<()> {
+        let diagnostic = if error.projection().code == RuntimeErrorCode::ProtocolInvalid {
+            DiagnosticCode::RuntimeProtocolInvalid
+        } else {
+            DiagnosticCode::RuntimeDiagnostic
+        };
+        self.append_event_raw(
+            if error.is_fatal() {
+                EventSeverity::Fatal
+            } else {
+                EventSeverity::Error
+            },
+            EventSource::Runtime,
+            OriginModule::Runtime,
+            EventActor::Runtime,
+            context.links.clone(),
+            RuntimePayloadDraft::failed(
+                diagnostic,
+                stage.effect(),
+                DiagnosticDetailDraft::new(
+                    "runtime_connection",
+                    stage.as_str(),
+                    "local_ipc",
+                    error.operation(),
+                    format!(
+                        "host_code={} fatal={} connection_id={} request_decoded={}",
+                        error.code(),
+                        error.is_fatal(),
+                        context.connection_serial,
+                        context.request_decoded,
+                    ),
+                    Sensitivity::Internal,
+                ),
+                AuditInput::new(),
+            ),
+        )
+        .map(|_| ())
+        .map_err(|_| ledger_error("append_runtime_connection_failure"))
+    }
+
     fn append_event_raw(
         &self,
         severity: EventSeverity,
@@ -15603,8 +15648,8 @@ fn accept_loop(
         }
         match listener.accept() {
             Ok((stream, _)) => {
-                let connection_id = shared.next_connection_id.fetch_add(1, Ordering::Relaxed);
-                let connection_id = match ConnectionId::new(connection_id) {
+                let connection_serial = shared.next_connection_id.fetch_add(1, Ordering::Relaxed);
+                let connection_id = match ConnectionId::new(connection_serial) {
                     Ok(connection_id) => connection_id,
                     Err(error) => {
                         let error =
@@ -15629,6 +15674,7 @@ fn accept_loop(
                             stream,
                             connection_shared,
                             connection_id,
+                            connection_serial,
                             maximum_frame_bytes,
                             io_timeout,
                         )
@@ -15676,13 +15722,63 @@ fn accept_loop(
     failure.map_or(Ok(()), Err)
 }
 
+#[derive(Clone, Copy)]
+enum ConnectionFailureStage {
+    RequestRead,
+    RequestDecode,
+    RequestCache,
+    Dispatch,
+    ReceiptBuild,
+    ReceiptWrite,
+    ConnectionPanic,
+}
+
+impl ConnectionFailureStage {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::RequestRead => "runtime.ipc.request_read",
+            Self::RequestDecode => "runtime.ipc.request_decode",
+            Self::RequestCache => "runtime.ipc.request_cache",
+            Self::Dispatch => "runtime.ipc.dispatch",
+            Self::ReceiptBuild => "runtime.ipc.receipt_build",
+            Self::ReceiptWrite => "runtime.ipc.receipt_write",
+            Self::ConnectionPanic => "runtime.ipc.connection_panic",
+        }
+    }
+
+    const fn effect(self) -> EffectDisposition {
+        match self {
+            Self::RequestRead | Self::RequestDecode | Self::RequestCache => {
+                EffectDisposition::NotPerformed
+            }
+            Self::Dispatch | Self::ReceiptBuild | Self::ReceiptWrite | Self::ConnectionPanic => {
+                EffectDisposition::Indeterminate
+            }
+        }
+    }
+}
+
+struct ConnectionFailureContext {
+    connection_serial: u64,
+    stage: Option<ConnectionFailureStage>,
+    request_decoded: bool,
+    links: EventLinksDraft,
+}
+
 fn connection_boundary(
     stream: TcpStream,
     shared: Arc<HostShared>,
     connection_id: ConnectionId,
+    connection_serial: u64,
     maximum_frame_bytes: usize,
     io_timeout: Duration,
 ) -> RuntimeHostResult<()> {
+    let mut context = ConnectionFailureContext {
+        connection_serial,
+        stage: None,
+        request_decoded: false,
+        links: EventLinksDraft::default(),
+    };
     let result = catch_unwind(AssertUnwindSafe(|| {
         connection_loop(
             stream,
@@ -15690,17 +15786,26 @@ fn connection_boundary(
             connection_id,
             maximum_frame_bytes,
             io_timeout,
+            &mut context,
         )
     }));
     let mut failure = match result {
         Ok(Ok(())) => None,
         Ok(Err(error)) => Some(error),
-        Err(_) => Some(RuntimeHostError::fatal(
-            "runtime_connection_panicked",
-            "serve_runtime_connection",
-            RuntimeErrorCode::RuntimeFatal,
-        )),
+        Err(_) => {
+            context.stage = Some(ConnectionFailureStage::ConnectionPanic);
+            Some(RuntimeHostError::fatal(
+                "runtime_connection_panicked",
+                "serve_runtime_connection",
+                RuntimeErrorCode::RuntimeFatal,
+            ))
+        }
     };
+    if let (Some(error), Some(stage)) = (&failure, context.stage)
+        && let Err(append_error) = shared.append_connection_failure(&context, stage, error)
+    {
+        failure = Some(append_error);
+    }
     let reason = if shared.fatal.is_shutdown_requested() {
         LeaseReleaseReason::HostShutdown
     } else {
@@ -15764,6 +15869,7 @@ fn connection_loop(
     connection_id: ConnectionId,
     maximum_frame_bytes: usize,
     io_timeout: Duration,
+    context: &mut ConnectionFailureContext,
 ) -> RuntimeHostResult<()> {
     stream
         .set_read_timeout(Some(io_timeout))
@@ -15776,6 +15882,9 @@ fn connection_loop(
         .map_err(|_| protocol_error("set_tcp_nodelay"))?;
     let mut cache = RequestCache::default();
     while !shared.fatal.is_shutdown_requested() {
+        context.stage = Some(ConnectionFailureStage::RequestRead);
+        context.request_decoded = false;
+        context.links = EventLinksDraft::default();
         let frame = match read_frame(&mut stream, maximum_frame_bytes) {
             Ok(FrameRead::Data(frame)) => frame,
             Ok(FrameRead::Idle) => continue,
@@ -15796,6 +15905,7 @@ fn connection_loop(
                 return Err(error);
             }
         };
+        context.stage = Some(ConnectionFailureStage::RequestDecode);
         let request = match serde_json::from_slice::<RuntimeRequest>(&frame) {
             Ok(request) => request,
             Err(_) => {
@@ -15807,6 +15917,10 @@ fn connection_loop(
                 return Err(protocol_error("runtime_request_decode_failed"));
             }
         };
+        context.request_decoded = true;
+        if let Ok(validated) = request.validate() {
+            context.links = validated.event_links(None, None, None);
+        }
         #[cfg(feature = "test-observation")]
         crate::test_observation::emit_request(
             crate::test_observation::HostTestObservationPoint::FrameReceived,
@@ -15819,13 +15933,17 @@ fn connection_loop(
             crate::test_observation::HostTestObservationOutcome::Started,
             &request,
         );
+        context.stage = Some(ConnectionFailureStage::RequestCache);
         let receipt = match cache.get(&request) {
             Ok(Some(receipt)) => Ok(receipt),
-            Ok(None) => shared
-                .process_request(&request, connection_id)
-                .inspect(|receipt| {
-                    cache.insert(request.clone(), receipt.clone());
-                }),
+            Ok(None) => {
+                context.stage = Some(ConnectionFailureStage::Dispatch);
+                shared
+                    .process_request(&request, connection_id)
+                    .inspect(|receipt| {
+                        cache.insert(request.clone(), receipt.clone());
+                    })
+            }
             Err(error) => Err(error),
         };
         let receipt = match receipt {
@@ -15840,6 +15958,9 @@ fn connection_loop(
                 receipt
             }
             Err(error) => {
+                if error.operation() == "build_runtime_receipt" {
+                    context.stage = Some(ConnectionFailureStage::ReceiptBuild);
+                }
                 #[cfg(feature = "test-observation")]
                 crate::test_observation::emit_request(
                     crate::test_observation::HostTestObservationPoint::DispatchResult,
@@ -15861,6 +15982,7 @@ fn connection_loop(
             &request,
             &receipt,
         );
+        context.stage = Some(ConnectionFailureStage::ReceiptWrite);
         match write_frame(&mut stream, &receipt, maximum_frame_bytes) {
             Ok(()) => {
                 #[cfg(feature = "test-observation")]
