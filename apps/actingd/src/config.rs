@@ -1118,18 +1118,33 @@ fn open_device_registry_capture_with_diagnostic<T>(
     match open() {
         Ok(value) => Ok(value),
         Err(error) => {
-            let error = error.with_diagnostic_context(
-                capture_backend
-                    .map(CaptureBackendChoice::as_str)
-                    .unwrap_or("unavailable"),
-                "open_capture",
-                DeviceErrorSensitivity::Sensitive,
-            );
             emit(device_registry_capture_open_diagnostic_record(
                 instance_alias,
                 capture_backend,
                 &error,
             ));
+            let producer_complete =
+                error.diagnostic().is_some() && error.diagnostic_context().is_some();
+            let producer_message = error.diagnostic_message().is_some();
+            let error = error
+                .with_diagnostic_if_absent(
+                    DeviceErrorCategory::Native,
+                    "device_registry.capture.open",
+                )
+                .with_diagnostic_context_if_absent(
+                    capture_backend
+                        .map(CaptureBackendChoice::as_str)
+                        .unwrap_or("unavailable"),
+                    "open_capture",
+                    DeviceErrorSensitivity::Sensitive,
+                );
+            let error = if producer_complete || producer_message {
+                error
+            } else {
+                error.with_diagnostic_message(
+                    DeviceErrorDiagnosticMessage::DeviceRegistryCaptureOpenFailed,
+                )
+            };
             Err(error)
         }
     }
@@ -2319,9 +2334,24 @@ mod tests {
         )
         .expect_err("capture open failure");
 
-        assert_eq!(returned, original);
         assert_eq!(returned.severity(), original.severity());
         assert_eq!(returned.message(), original.message());
+        assert_eq!(
+            returned.diagnostic_message(),
+            Some("device registry capture open failed")
+        );
+        let diagnostic = returned.diagnostic().expect("capture adapter diagnostic");
+        assert_eq!(diagnostic.category(), DeviceErrorCategory::Native);
+        assert_eq!(diagnostic.stage(), "device_registry.capture.open");
+        let context = returned
+            .diagnostic_context()
+            .expect("capture adapter diagnostic context");
+        assert_eq!(context.backend(), "nemu_ipc");
+        assert_eq!(context.operation(), "open_capture");
+        assert_eq!(
+            context.declared_sensitivity(),
+            DeviceErrorSensitivity::Sensitive
+        );
         assert_eq!(records.len(), 1);
         assert!(!records[0].contains('\n'));
         let payload = records[0]
@@ -2339,6 +2369,58 @@ mod tests {
                 "device_error": {
                     "severity": "Transient",
                     "text": "synthetic capture open failure",
+                },
+            })
+        );
+
+        let producer = DeviceError::fatal("producer capture failure")
+            .with_diagnostic(DeviceErrorCategory::Protocol, "nemu.target.resolve")
+            .with_diagnostic_context(
+                "nemu_ipc",
+                "target_resolve",
+                DeviceErrorSensitivity::Internal,
+            );
+        let mut producer_records = Vec::new();
+        let returned = open_device_registry_capture_with_diagnostic(
+            "neutral.device",
+            Some(CaptureBackendChoice::Adb),
+            || Err::<u8, _>(producer.clone()),
+            |record| producer_records.push(record),
+        )
+        .expect_err("producer-classified capture failure");
+
+        assert_eq!(returned, producer);
+        assert_eq!(returned.message(), producer.message());
+        assert_eq!(returned.diagnostic_message(), None);
+        let diagnostic = returned.diagnostic().expect("producer diagnostic");
+        assert_eq!(diagnostic.category(), DeviceErrorCategory::Protocol);
+        assert_eq!(diagnostic.stage(), "nemu.target.resolve");
+        let context = returned
+            .diagnostic_context()
+            .expect("producer diagnostic context");
+        assert_eq!(context.backend(), "nemu_ipc");
+        assert_eq!(context.operation(), "target_resolve");
+        assert_eq!(
+            context.declared_sensitivity(),
+            DeviceErrorSensitivity::Internal
+        );
+        assert_eq!(producer_records.len(), 1);
+        assert!(!producer_records[0].contains('\n'));
+        let payload = producer_records[0]
+            .strip_prefix("ERROR actingd ")
+            .expect("private diagnostic prefix");
+        let payload =
+            serde_json::from_str::<serde_json::Value>(payload).expect("private diagnostic json");
+        assert_eq!(
+            payload,
+            json!({
+                "diagnostic": "device_registry_capture_open_failed",
+                "instance_alias": "neutral.device",
+                "requested_backend": "adb",
+                "factory": "ScreencapBackend",
+                "device_error": {
+                    "severity": "Fatal",
+                    "text": "producer capture failure",
                 },
             })
         );
