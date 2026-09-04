@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
-use crate::{NemuConfiguredAdbClass, NemuResolutionContext};
+use crate::{AdbInputBoundsContext, NemuConfiguredAdbClass, NemuResolutionContext};
 use std::error::Error;
 use std::fmt;
 
@@ -139,6 +139,7 @@ impl DeviceErrorContext {
 enum StoredDiagnosticMessage {
     Fixed(DeviceErrorDiagnosticMessage),
     NemuResolution(NemuResolutionContext, String),
+    AdbInputBounds(AdbInputBoundsContext, String),
 }
 
 #[derive(Clone)]
@@ -267,6 +268,28 @@ impl DeviceError {
         self
     }
 
+    pub fn with_adb_input_bounds_context_if_absent(
+        mut self,
+        context: AdbInputBoundsContext,
+    ) -> Self {
+        if self.diagnostic_message.is_none()
+            && !(self.diagnostic.is_some() && self.context.is_some())
+        {
+            self.diagnostic_message = Some(Box::new(StoredDiagnosticMessage::AdbInputBounds(
+                context,
+                context.render(),
+            )));
+        }
+        self
+    }
+
+    pub fn adb_input_bounds_context(&self) -> Option<AdbInputBoundsContext> {
+        match self.diagnostic_message.as_deref() {
+            Some(StoredDiagnosticMessage::AdbInputBounds(context, _)) => Some(*context),
+            _ => None,
+        }
+    }
+
     pub fn nemu_resolution_context(&self) -> Option<NemuResolutionContext> {
         match self.diagnostic_message.as_deref() {
             Some(StoredDiagnosticMessage::NemuResolution(context, _)) => Some(*context),
@@ -308,6 +331,7 @@ impl DeviceError {
         match self.diagnostic_message.as_deref() {
             Some(StoredDiagnosticMessage::Fixed(message)) => Some(message.as_str()),
             Some(StoredDiagnosticMessage::NemuResolution(_, rendered)) => Some(rendered),
+            Some(StoredDiagnosticMessage::AdbInputBounds(_, rendered)) => Some(rendered),
             None => None,
         }
     }
