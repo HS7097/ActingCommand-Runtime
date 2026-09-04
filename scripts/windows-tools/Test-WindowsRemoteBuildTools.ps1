@@ -223,6 +223,7 @@ function New-ArtifactFixture {
     } else {
         @(
             @{ name = 'actinglab.exe'; content = 'synthetic actinglab payload' },
+            @{ name = 'actingledger.exe'; content = 'synthetic actingledger payload' },
             @{ name = 'actingcommand-vision-provider-check.exe'; content = 'synthetic provider-check payload' },
             @{ name = 'actingcommand-device-test.exe'; content = 'synthetic device-test payload' },
             @{ name = 'ac_fastdeploy_ppocr.dll'; content = 'synthetic nonempty provider payload' }
@@ -373,7 +374,7 @@ try {
         Assert-True -Condition $workflowText.Contains($required) -Message "workflow is missing '$required'"
     }
     $runtimeSplit = '\$runtimeFiles\s*=\s*@\(\s*''actingcommand-actingd\.exe'',\s*''actingctl\.exe''\s*\)'
-    $toolsSplit = '\$toolFiles\s*=\s*@\(\s*''actinglab\.exe'',\s*''actingcommand-vision-provider-check\.exe'',\s*''actingcommand-device-test\.exe'',\s*''ac_fastdeploy_ppocr\.dll''\s*\)'
+    $toolsSplit = '\$toolFiles\s*=\s*@\(\s*''actinglab\.exe'',\s*''actingledger\.exe'',\s*''actingcommand-vision-provider-check\.exe'',\s*''actingcommand-device-test\.exe'',\s*''ac_fastdeploy_ppocr\.dll''\s*\)'
     Assert-True -Condition ([regex]::IsMatch($workflowText, $runtimeSplit)) -Message 'workflow Runtime artifact split is not exact'
     Assert-True -Condition ([regex]::IsMatch($workflowText, $toolsSplit)) -Message 'workflow Tools artifact split is not exact'
     foreach ($required in @(
@@ -444,7 +445,7 @@ try {
     $toolsJson = & $downloader -Repository $repository -SourceSha $sourceSha -ArtifactKind Tools -TaskRoot $testRootFull -OutputPath $toolsOutput -GhExecutable $fakeGh
     $tools = $toolsJson | ConvertFrom-Json -Depth 20
     Assert-True -Condition ($tools.status -ceq 'PASS') -Message 'Tools artifact verification did not report PASS'
-    Assert-True -Condition (@($tools.verified_files).Count -eq 4) -Message 'Tools artifact verifier did not freeze exactly four payloads'
+    Assert-True -Condition (@($tools.verified_files).Count -eq 5) -Message 'Tools artifact verifier did not freeze exactly five payloads'
     $providerFixture = Get-Item -LiteralPath (Join-Path $toolsOutput 'ac_fastdeploy_ppocr.dll') -ErrorAction Stop
     Assert-True -Condition ($providerFixture.Length -gt 0) -Message 'Tools artifact provider payload is missing or empty'
     Complete-Case -Name $script:CurrentCase
