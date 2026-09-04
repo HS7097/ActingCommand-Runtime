@@ -138,7 +138,7 @@ impl DeviceErrorContext {
 #[derive(Clone)]
 enum StoredDiagnosticMessage {
     Fixed(DeviceErrorDiagnosticMessage),
-    NemuResolution(NemuResolutionContext, String),
+    NemuResolution(Box<(NemuResolutionContext, String)>),
 }
 
 #[derive(Clone)]
@@ -244,10 +244,10 @@ impl DeviceError {
         if self.diagnostic_message.is_none()
             && !(self.diagnostic.is_some() && self.context.is_some())
         {
-            self.diagnostic_message = Some(StoredDiagnosticMessage::NemuResolution(
+            self.diagnostic_message = Some(StoredDiagnosticMessage::NemuResolution(Box::new((
                 context,
                 context.render(),
-            ));
+            ))));
         }
         self
     }
@@ -258,9 +258,9 @@ impl DeviceError {
         explicit_root: bool,
         explicit_dll: bool,
     ) -> Self {
-        if let Some(StoredDiagnosticMessage::NemuResolution(context, rendered)) =
-            &mut self.diagnostic_message
+        if let Some(StoredDiagnosticMessage::NemuResolution(stored)) = &mut self.diagnostic_message
         {
+            let (context, rendered) = stored.as_mut();
             *context = context.with_provenance(configured_adb, explicit_root, explicit_dll);
             *rendered = context.render();
         }
@@ -269,7 +269,7 @@ impl DeviceError {
 
     pub fn nemu_resolution_context(&self) -> Option<NemuResolutionContext> {
         match &self.diagnostic_message {
-            Some(StoredDiagnosticMessage::NemuResolution(context, _)) => Some(*context),
+            Some(StoredDiagnosticMessage::NemuResolution(stored)) => Some(stored.0),
             _ => None,
         }
     }
@@ -307,7 +307,7 @@ impl DeviceError {
     pub fn diagnostic_message(&self) -> Option<&str> {
         match &self.diagnostic_message {
             Some(StoredDiagnosticMessage::Fixed(message)) => Some(message.as_str()),
-            Some(StoredDiagnosticMessage::NemuResolution(_, rendered)) => Some(rendered),
+            Some(StoredDiagnosticMessage::NemuResolution(stored)) => Some(&stored.1),
             None => None,
         }
     }
