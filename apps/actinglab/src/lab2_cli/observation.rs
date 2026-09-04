@@ -432,6 +432,7 @@ pub(super) fn project(
     if verbose && request.verbosity == ProjectionVerbosity::Min {
         request.verbosity = ProjectionVerbosity::Normal;
     }
+    let requested_fields = request.fields.clone();
     request.fields.extend(
         [
             "observation",
@@ -443,21 +444,106 @@ pub(super) fn project(
         ]
         .map(str::to_string),
     );
+    let mut compact = false;
     loop {
         payload["observation"] = serde_json::to_value(&observation).map_err(|error| {
             CliError::device(format!("observation serialization failed: {error}"))
         })?;
+        if compact {
+            if let Some(object) = payload.as_object_mut() {
+                for key in [
+                    "instance",
+                    "arbitration",
+                    "matched",
+                    "standby",
+                    "frame_age_ms",
+                ] {
+                    if !requested_fields.contains(key) {
+                        object.remove(key);
+                    }
+                }
+                if object.contains_key("frame_path") && !requested_fields.contains("frame_source") {
+                    object.remove("frame_source");
+                } else if !requested_fields.contains("frame_source")
+                    && let Some(source) = object
+                        .get_mut("frame_source")
+                        .and_then(Value::as_object_mut)
+                {
+                    source.retain(|_, value| !value.is_null());
+                }
+            }
+            if !requested_fields.contains("observation") {
+                let projected_observation = &mut payload["observation"];
+                if let Some(object) = projected_observation.as_object_mut() {
+                    object.remove("state");
+                    for key in ["missing", "unscoped_controls"] {
+                        if object
+                            .get(key)
+                            .and_then(Value::as_array)
+                            .is_some_and(Vec::is_empty)
+                        {
+                            object.remove(key);
+                        }
+                    }
+                }
+                if let Some(metrics) = projected_observation["metrics"].as_object_mut() {
+                    for key in [
+                        "omitted_count",
+                        "empty_list",
+                        "missing_count",
+                        "unscoped_control_count",
+                    ] {
+                        metrics.remove(key);
+                    }
+                }
+                for key in ["elements", "unscoped_controls", "missing"] {
+                    if let Some(entries) = projected_observation
+                        .get_mut(key)
+                        .and_then(Value::as_array_mut)
+                    {
+                        for entry in entries {
+                            if let Some(object) = entry.as_object_mut() {
+                                for key in [
+                                    "task_id",
+                                    "source",
+                                    "recognized",
+                                    "recognition_basis",
+                                    "input",
+                                ] {
+                                    object.remove(key);
+                                }
+                                if object.get("target_id").is_some_and(Value::is_null) {
+                                    object.remove("target_id");
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
         let projected = project_record(&payload, &request)
             .map_err(|error| CliError::device(error.to_string()))?;
         if request.verbosity != ProjectionVerbosity::Min
-            || serialized_len(&projected)? <= actingcommand_ledger::MIN_PROJECTION_HARD_LIMIT_BYTES
+            || serialized_len(&projected)? <= actingcommand_ledger::MIN_PROJECTION_SOFT_LIMIT_BYTES
         {
             return Ok(projected);
         }
-        if !observation.omit_last() {
-            return Err(CliError::package_invalid(
-                "observation result exceeds the Min byte limit without removable entries",
-            ));
+        if !compact {
+            compact = true;
+            continue;
         }
+        if (!observation.missing.is_empty()
+            || !observation.unscoped_controls.is_empty()
+            || observation.elements.len() > 1)
+            && observation.omit_last()
+        {
+            continue;
+        }
+        if serialized_len(&projected)? <= actingcommand_ledger::MIN_PROJECTION_HARD_LIMIT_BYTES {
+            return Ok(projected);
+        }
+        return Err(CliError::package_invalid(
+            "observation result exceeds the Min byte limit without removable entries",
+        ));
     }
 }
