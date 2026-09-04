@@ -1,6 +1,7 @@
 pub(super) mod capabilities;
 pub(super) mod device_commands;
 pub(super) mod environment_report;
+pub(super) mod navigation_recovery;
 pub(super) mod path_io;
 pub(super) mod semantic_ledger;
 
@@ -22,6 +23,17 @@ pub(crate) use device_commands::{
 pub(crate) use environment_report::env_needs_detection_json;
 pub(crate) use environment_report::{
     attach_env_resolved, record_env_needs_detection, record_env_resolved,
+};
+#[cfg(test)]
+pub(crate) use navigation_recovery::stale_capture_recovery_json;
+pub(crate) use navigation_recovery::{
+    DestructiveClick, NavigationEdge, NavigationGraph, PageDetectionOutcome, SemanticInput,
+    canonical_navigation_page, detect_current_page, find_navigation_route, navigation_edge_json,
+    page_detection_json, parse_navigation_graph_value, parse_point_pair, point_json, rect_center,
+    rect_json, rects_intersect, reject_dangerous_semantic_id, reject_destructive_overlap,
+    reject_destructive_overlap_input, run_current_page, run_detect_page, run_is_visible,
+    run_locate, run_navigate, run_recognize, run_session_recover, run_tap_target,
+    semantic_input_json, target_eval_json, target_evaluation_rect,
 };
 #[cfg(test)]
 pub(crate) use path_io::{JSON_TMP_SEQ, write_json_file};
