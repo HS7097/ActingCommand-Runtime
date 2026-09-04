@@ -6,6 +6,7 @@ pub(super) mod path_io;
 pub(super) mod semantic_ledger;
 pub(super) mod session_contracts;
 pub(super) mod session_record;
+pub(super) mod session_transport;
 
 #[cfg(test)]
 pub(crate) use capabilities::session_layer_capability_contract;
@@ -59,3 +60,4 @@ pub(crate) use session_record::{
     session_record_build_draft,
 };
 pub(crate) use session_record::{SessionRecordRect, SessionRecordRegion, run_session_record};
+pub(crate) use session_transport::run_session_transport;
