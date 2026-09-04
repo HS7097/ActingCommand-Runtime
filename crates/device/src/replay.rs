@@ -7,7 +7,9 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::{DeviceError, DeviceResult, InputBackend, SegmentedSwipeAction};
+use crate::{
+    DeviceError, DeviceResult, InputBackend, PreparedSegmentedSwipePlan, SegmentedSwipeAction,
+};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RecordedInputEvent {
@@ -215,9 +217,11 @@ impl<B: InputBackend> InputBackend for RecordingInputBackend<B> {
         self.inner.supports_segmented_swipe()
     }
 
-    fn segmented_swipe(&mut self, action: SegmentedSwipeAction) -> DeviceResult<()> {
-        self.inner.segmented_swipe(action)?;
-        self.record(RecordedInputAction::SingleTouchDragWithVerticalBrakeV1 { action });
+    fn segmented_swipe_prepared(&mut self, plan: &PreparedSegmentedSwipePlan) -> DeviceResult<()> {
+        self.inner.segmented_swipe_prepared(plan)?;
+        self.record(RecordedInputAction::SingleTouchDragWithVerticalBrakeV1 {
+            action: plan.action(),
+        });
         Ok(())
     }
 

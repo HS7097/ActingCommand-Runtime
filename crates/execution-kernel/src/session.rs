@@ -6,7 +6,8 @@ use crate::{
 };
 use actingcommand_contract::{ApplicationLifecycleAction, InputAction};
 use actingcommand_device::{
-    CaptureBackend, DeviceError, DeviceResult, Frame, InputBackend, SegmentedSwipeAction,
+    CaptureBackend, DeviceError, DeviceResult, Frame, InputBackend, PreparedSegmentedSwipePlan,
+    SegmentedSwipeAction, prepare_segmented_swipe, segmented_swipe_capability_error,
 };
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::mpsc::{self, Receiver, SyncSender};
@@ -15,9 +16,59 @@ use std::thread::{self, JoinHandle};
 
 const SESSION_CHANNEL_CAPACITY: usize = 8;
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PreparedInputAction {
+    Direct(InputAction),
+    SegmentedSwipe(PreparedSegmentedSwipePlan),
+}
+
+impl PreparedInputAction {
+    pub fn segmented_swipe_plan(&self) -> Option<&PreparedSegmentedSwipePlan> {
+        match self {
+            Self::Direct(_) => None,
+            Self::SegmentedSwipe(plan) => Some(plan),
+        }
+    }
+}
+
+impl TryFrom<InputAction> for PreparedInputAction {
+    type Error = ExecutionKernelError;
+
+    fn try_from(action: InputAction) -> Result<Self, Self::Error> {
+        let InputAction::SingleTouchDragWithVerticalBrakeV1 {
+            x1,
+            y1,
+            x2,
+            y2,
+            x3,
+            y3,
+            horizontal_duration_ms,
+            corner_hold_ms,
+            brake_distance_px,
+            brake_duration_ms,
+            slope_in,
+            slope_out,
+        } = action
+        else {
+            return Ok(Self::Direct(action));
+        };
+        let plan = prepare_segmented_swipe(SegmentedSwipeAction {
+            points: [(x1, y1), (x2, y2), (x3, y3)],
+            horizontal_duration_ms,
+            corner_hold_ms,
+            brake_distance_px,
+            brake_duration_ms,
+            slope_in,
+            slope_out,
+        })
+        .map_err(|error| ExecutionKernelError::device("input_plan_preparation_failed", &error))?;
+        Ok(Self::SegmentedSwipe(plan))
+    }
+}
+
 enum SessionCommand {
     Input {
-        action: InputAction,
+        action: PreparedInputAction,
         response: SyncSender<ExecutionKernelResult<()>>,
     },
     Capture {
@@ -75,6 +126,10 @@ impl ExecutionSession {
     }
 
     pub fn input(&self, action: InputAction) -> ExecutionKernelResult<()> {
+        self.input_prepared(action.try_into()?)
+    }
+
+    pub(crate) fn input_prepared(&self, action: PreparedInputAction) -> ExecutionKernelResult<()> {
         let mut state = self.lock_state("execution_session_state_poisoned")?;
         ensure_open(&state)?;
         let (response, receiver) = mpsc::sync_channel(1);
@@ -307,7 +362,7 @@ fn execute_input(
     provider: &dyn ExecutionBackendProvider,
     instance_alias: &str,
     backend: &mut Option<Box<dyn InputBackend>>,
-    action: InputAction,
+    action: PreparedInputAction,
 ) -> ExecutionKernelResult<()> {
     if backend.is_none() {
         *backend =
@@ -339,49 +394,34 @@ fn execute_capture(
         .map_err(|error| ExecutionKernelError::device("capture_backend_operation_failed", &error))
 }
 
-fn execute_action(backend: &mut dyn InputBackend, action: &InputAction) -> DeviceResult<()> {
+fn execute_action(
+    backend: &mut dyn InputBackend,
+    action: &PreparedInputAction,
+) -> DeviceResult<()> {
     match action {
-        InputAction::Tap { x, y } => backend.tap(*x, *y),
-        InputAction::LongTap { x, y, duration_ms } => backend.long_tap(*x, *y, *duration_ms),
-        InputAction::Swipe {
+        PreparedInputAction::Direct(InputAction::Tap { x, y }) => backend.tap(*x, *y),
+        PreparedInputAction::Direct(InputAction::LongTap { x, y, duration_ms }) => {
+            backend.long_tap(*x, *y, *duration_ms)
+        }
+        PreparedInputAction::Direct(InputAction::Swipe {
             x1,
             y1,
             x2,
             y2,
             duration_ms,
-        } => backend.swipe(*x1, *y1, *x2, *y2, *duration_ms),
-        InputAction::SingleTouchDragWithVerticalBrakeV1 {
-            x1,
-            y1,
-            x2,
-            y2,
-            x3,
-            y3,
-            horizontal_duration_ms,
-            corner_hold_ms,
-            brake_distance_px,
-            brake_duration_ms,
-            slope_in,
-            slope_out,
-        } => {
+        }) => backend.swipe(*x1, *y1, *x2, *y2, *duration_ms),
+        PreparedInputAction::SegmentedSwipe(plan) => {
             if !backend.supports_segmented_swipe() {
-                return Err(DeviceError::fatal(
-                    "selected input backend does not support single_touch_drag_with_vertical_brake_v1",
-                ));
+                return Err(segmented_swipe_capability_error());
             }
-            backend.segmented_swipe(SegmentedSwipeAction {
-                points: [(*x1, *y1), (*x2, *y2), (*x3, *y3)],
-                horizontal_duration_ms: *horizontal_duration_ms,
-                corner_hold_ms: *corner_hold_ms,
-                brake_distance_px: *brake_distance_px,
-                brake_duration_ms: *brake_duration_ms,
-                slope_in: *slope_in,
-                slope_out: *slope_out,
-            })
+            backend.segmented_swipe_prepared(plan)
         }
-        InputAction::Key { key } => backend.key(key),
-        InputAction::Text { text } => backend.text(text),
-        InputAction::Reset => backend.reset(),
+        PreparedInputAction::Direct(InputAction::Key { key }) => backend.key(key),
+        PreparedInputAction::Direct(InputAction::Text { text }) => backend.text(text),
+        PreparedInputAction::Direct(InputAction::Reset) => backend.reset(),
+        PreparedInputAction::Direct(InputAction::SingleTouchDragWithVerticalBrakeV1 { .. }) => Err(
+            DeviceError::fatal("segmented input action was not prepared"),
+        ),
     }
 }
 

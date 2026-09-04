@@ -5,7 +5,7 @@ use crate::mumu::mumu_adb_candidates;
 use crate::mumu::{
     MumuInstallSource, MumuInstallation, resolve_mumu_adb, resolve_mumu_installation,
 };
-use crate::{DeviceError, DeviceResult};
+use crate::{DeviceError, DeviceErrorCategory, DeviceErrorDiagnosticMessage, DeviceResult};
 use std::io::{self, Read};
 use std::path::PathBuf;
 use std::process::ExitStatus;
@@ -332,6 +332,11 @@ fn device_state_error(
     state: DeviceResult<String>,
     connect_result: Option<DeviceResult<()>>,
 ) -> DeviceError {
+    let diagnostic_message = match &connect_result {
+        Some(Ok(())) => DeviceErrorDiagnosticMessage::AdbDeviceStateAfterConnectAttempt,
+        Some(Err(_)) => DeviceErrorDiagnosticMessage::AdbDeviceStateConnectFailed,
+        None => DeviceErrorDiagnosticMessage::AdbDeviceStateConnectDisabled,
+    };
     let state_text = match state {
         Ok(state) => format!("state={state:?}"),
         Err(err) => format!("get-state failed: {err}"),
@@ -344,6 +349,8 @@ fn device_state_error(
     DeviceError::fatal(format!(
         "target device {serial} is not available in device state ({state_text}{connect_attempt_text})"
     ))
+        .with_diagnostic(DeviceErrorCategory::Native, "adb.ensure_device.get_state")
+        .with_diagnostic_message(diagnostic_message)
 }
 
 struct RawCommandOutput {
@@ -590,6 +597,43 @@ mod tests {
 
         assert!(config.adb_path.is_empty());
         assert_eq!(config.command_timeout, Duration::from_secs(12));
+    }
+
+    #[test]
+    fn device_state_error_carries_bounded_native_stage() {
+        let error = device_state_error(
+            "private-device",
+            Err(DeviceError::fatal("raw device state failure")),
+            Some(Err(DeviceError::fatal("raw connect failure"))),
+        );
+
+        let debug = format!("{error:?}");
+        assert_eq!(
+            debug,
+            format!(
+                "DeviceError {{ severity: Fatal, message: {:?}, diagnostic: Some(DeviceErrorDiagnostic {{ category: Native, stage: \"adb.ensure_device.get_state\" }}), context: None }}",
+                error.message()
+            )
+        );
+        assert!(!debug.contains("diagnostic_message"));
+        assert!(!debug.contains("AdbDeviceStateConnectFailed"));
+        assert!(error.message().contains("private-device"));
+        assert!(error.message().contains("raw device state failure"));
+        assert!(error.message().contains("raw connect failure"));
+        let diagnostic_message = error
+            .diagnostic_message()
+            .expect("bounded diagnostic message");
+        assert_eq!(
+            diagnostic_message,
+            "adb device state and one connect attempt failed"
+        );
+        assert!(diagnostic_message.len() <= 1_024);
+        assert!(!diagnostic_message.contains("private-device"));
+        assert!(!diagnostic_message.contains("raw device state failure"));
+        assert!(!diagnostic_message.contains("raw connect failure"));
+        let diagnostic = error.diagnostic().expect("device state diagnostic");
+        assert_eq!(diagnostic.category(), DeviceErrorCategory::Native);
+        assert_eq!(diagnostic.stage(), "adb.ensure_device.get_state");
     }
 
     #[test]

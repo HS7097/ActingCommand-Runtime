@@ -1,0 +1,292 @@
+    #[test]
+    fn doctor_reports_path_adb_baseline_warning() {
+        let adb = resolved_adb_json_from(Ok(path_baseline_adb()));
+        assert_eq!(
+            adb.get("source").and_then(Value::as_str),
+            Some("path_adb_baseline")
+        );
+        assert!(
+            adb.get("warning")
+                .and_then(Value::as_str)
+                .is_some_and(|warning| warning.contains("non-MuMu baseline"))
+        );
+    }
+
+    #[test]
+    fn device_config_rejects_path_adb_for_nemu_ipc_without_opt_in() {
+        let _guard = env_lock();
+        unsafe {
+            env::remove_var(ALLOW_PATH_ADB_FOR_MUMU_ENV);
+        }
+        let instance = InstanceConfig {
+            capture_backend: Some("nemu_ipc".to_string()),
+            ..Default::default()
+        };
+
+        let error = enforce_path_adb_target_boundary(
+            &path_baseline_adb(),
+            Some(&instance),
+            CaptureBackendChoice::NemuIpc,
+        )
+        .expect_err("MuMu/Nemu IPC must not use PATH baseline by default");
+
+        assert_eq!(error.code, "device_error");
+        assert!(error.message.contains(ALLOW_PATH_ADB_FOR_MUMU_ENV));
+    }
+
+    #[test]
+    fn device_config_allows_path_adb_for_nemu_ipc_with_explicit_opt_in() {
+        let _guard = env_lock();
+        unsafe {
+            env::set_var(ALLOW_PATH_ADB_FOR_MUMU_ENV, "1");
+        }
+        let instance = InstanceConfig {
+            capture_backend: Some("nemu_ipc".to_string()),
+            ..Default::default()
+        };
+        let resolved = path_baseline_adb();
+
+        enforce_path_adb_target_boundary(&resolved, Some(&instance), CaptureBackendChoice::NemuIpc)
+            .expect("explicit opt-in allows PATH baseline");
+
+        assert_eq!(resolved.source, AdbPathSource::PathBaseline);
+        assert!(
+            resolved
+                .warning
+                .as_deref()
+                .is_some_and(|warning| warning.contains("non-MuMu baseline"))
+        );
+        unsafe {
+            env::remove_var(ALLOW_PATH_ADB_FOR_MUMU_ENV);
+        }
+    }
+
+    #[test]
+    fn scheduler_stub_is_exit_six() {
+        let result = run_cli(["--json", "scheduler", "status"], true);
+        assert_eq!(result.exit_code(), 6);
+        assert_eq!(
+            result.envelope.error.as_ref().unwrap().code,
+            "scheduler_not_available"
+        );
+    }
+
+    #[test]
+    fn run_summary_capability_is_read_only_and_available() {
+        let command = command_capabilities()
+            .into_iter()
+            .find(|command| command.get("command").and_then(Value::as_str) == Some("run summary"))
+            .expect("run summary capability");
+        assert_eq!(
+            command.get("status").and_then(Value::as_str),
+            Some("available")
+        );
+        assert_eq!(
+            command.get("needs").and_then(Value::as_array),
+            Some(&vec![
+                Value::String("running_runtime".to_string()),
+                Value::String("read_only".to_string()),
+            ])
+        );
+        assert!(
+            command
+                .get("needs")
+                .and_then(Value::as_array)
+                .is_some_and(|needs| needs.iter().all(Value::is_string))
+        );
+    }
+
+    #[test]
+    fn resource_compile_maa_capability_is_offline_and_available() {
+        let command = command_capabilities()
+            .into_iter()
+            .find(|command| {
+                command.get("command").and_then(Value::as_str) == Some("resource compile-maa")
+            })
+            .expect("resource compile-maa capability");
+        assert_eq!(
+            command.get("status").and_then(Value::as_str),
+            Some("available")
+        );
+        assert_eq!(
+            command.get("needs").and_then(Value::as_array),
+            Some(&vec![Value::String("offline".to_string())])
+        );
+    }
+
+    #[test]
+    fn config_set_and_get_round_trip() {
+        let _guard = env_lock();
+        let temp = TempDir::new().unwrap();
+        let config = temp.path().join("config.json");
+        set_config_env(&config);
+
+        let set = run_cli(
+            [
+                "--json",
+                "config",
+                "set",
+                "instance.ba.serial",
+                "127.0.0.1:16448",
+            ],
+            true,
+        );
+        assert_eq!(set.exit_code(), 0);
+        let get = run_cli(["--json", "config", "get", "instance.ba.serial"], true);
+        set_missing_config_env();
+
+        assert_eq!(get.exit_code(), 0);
+        assert_eq!(
+            get.envelope
+                .data
+                .as_ref()
+                .unwrap()
+                .get("value")
+                .and_then(Value::as_str),
+            Some("127.0.0.1:16448")
+        );
+    }
+
+    #[test]
+    fn config_set_and_get_instance_package() {
+        let _guard = env_lock();
+        let temp = TempDir::new().unwrap();
+        let config = temp.path().join("config.json");
+        set_config_env(&config);
+
+        let set = run_cli(
+            [
+                "--json",
+                "config",
+                "set",
+                "instance.ak.package",
+                "com.hypergryph.arknights.bilibili",
+            ],
+            true,
+        );
+        assert_eq!(set.exit_code(), 0);
+        let get = run_cli(["--json", "config", "get", "instance.ak.package"], true);
+        set_missing_config_env();
+
+        assert_eq!(get.exit_code(), 0);
+        assert_eq!(
+            get.envelope
+                .data
+                .as_ref()
+                .unwrap()
+                .get("value")
+                .and_then(Value::as_str),
+            Some("com.hypergryph.arknights.bilibili")
+        );
+    }
+
+    #[test]
+    fn config_set_and_get_instance_adb_and_capture_backend() {
+        let _guard = env_lock();
+        let temp = TempDir::new().unwrap();
+        let config = temp.path().join("config.json");
+        set_config_env(&config);
+
+        let adb = run_cli(
+            [
+                "--json",
+                "config",
+                "set",
+                "instance.ak-b.adb_path",
+                "C:\\Tools\\adb.exe",
+            ],
+            true,
+        );
+        let backend = run_cli(
+            [
+                "--json",
+                "config",
+                "set",
+                "instance.ak-b.capture_backend",
+                "nemu_ipc",
+            ],
+            true,
+        );
+        let get_adb = run_cli(["--json", "config", "get", "instance.ak-b.adb_path"], true);
+        let get_backend = run_cli(
+            ["--json", "config", "get", "instance.ak-b.capture_backend"],
+            true,
+        );
+        set_missing_config_env();
+
+        assert_eq!(adb.exit_code(), 0);
+        assert_eq!(backend.exit_code(), 0);
+        assert_eq!(
+            get_adb
+                .envelope
+                .data
+                .as_ref()
+                .unwrap()
+                .get("value")
+                .and_then(Value::as_str),
+            Some("C:\\Tools\\adb.exe")
+        );
+        assert_eq!(
+            get_backend
+                .envelope
+                .data
+                .as_ref()
+                .unwrap()
+                .get("value")
+                .and_then(Value::as_str),
+            Some("nemu_ipc")
+        );
+    }
+
+    #[test]
+    fn config_set_rejects_invalid_instance_capture_backend() {
+        let _guard = env_lock();
+        let temp = TempDir::new().unwrap();
+        let config = temp.path().join("config.json");
+        set_config_env(&config);
+
+        let result = run_cli(
+            [
+                "--json",
+                "config",
+                "set",
+                "instance.ak-b.capture_backend",
+                "not-a-backend",
+            ],
+            true,
+        );
+        set_missing_config_env();
+
+        assert_eq!(result.exit_code(), 2);
+        assert_eq!(
+            result.envelope.error.as_ref().unwrap().code,
+            "validation_failed"
+        );
+    }
+
+    #[test]
+    fn write_json_file_atomic_uses_unique_tmp_and_publishes_complete_json() {
+        let temp = TempDir::new().unwrap();
+        let path = temp.path().join("state.json");
+        let stale_tmp = path.with_extension(format!("tmp-{}-stale", std::process::id()));
+        fs::write(&stale_tmp, "stale").unwrap();
+
+        for value in [
+            json!({"value": 1}),
+            json!({"value": 2}),
+            json!({"value": 3}),
+        ] {
+            write_json_file_atomic(&path, &value).unwrap();
+        }
+
+        let stored = fs::read_to_string(&path).unwrap();
+        let parsed: Value = serde_json::from_str(&stored).unwrap();
+        assert_eq!(parsed.get("value").and_then(Value::as_u64), Some(3));
+        assert!(!stale_tmp.exists());
+        let leftovers = fs::read_dir(temp.path())
+            .unwrap()
+            .filter_map(|entry| entry.ok())
+            .filter(|entry| entry.file_name().to_string_lossy().contains("tmp-"))
+            .count();
+        assert_eq!(leftovers, 0);
+    }
